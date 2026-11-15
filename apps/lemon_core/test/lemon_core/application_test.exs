@@ -55,14 +55,38 @@ defmodule LemonCore.ApplicationTest do
   end
 
   describe "supervisor children specification" do
-    test "supervisor has exactly 13 children" do
+    test "supervisor has exactly 15 children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
-      # Includes LemonCore.UsageLedger, which records finished-run usage,
-      # LemonCore.ExecApprovalExpiry, which expires approvals of ended owners,
-      # and LemonCore.Drain, which drains participants before a graceful stop.
-      assert length(children) == 13
+      # RuntimeCache and the dynamic dedupe owner supervisor precede consumers.
+      assert length(children) == 15
+    end
+
+    test "named core cache tables belong to supervised services" do
+      root_children = Supervisor.which_children(LemonCore.Supervisor)
+
+      for owner <- [LemonCore.RuntimeCache, LemonCore.Drain, LemonCore.ConfigCache] do
+        pid = Process.whereis(owner)
+        assert is_pid(pid)
+        assert Enum.any?(root_children, fn {_, child, _, _} -> child == pid end)
+      end
+
+      assert :ets.info(LemonCore.RuntimeCache, :owner) == Process.whereis(LemonCore.RuntimeCache)
+      assert :ets.info(LemonCore.Drain, :owner) == Process.whereis(LemonCore.Drain)
+      assert :ets.info(:lemon_core_config_cache, :owner) == Process.whereis(LemonCore.ConfigCache)
+
+      generations = LemonCore.NodeRegistry.Generations
+      assert :ets.info(generations, :owner) == Process.whereis(generations)
+
+      assert Enum.any?(Supervisor.which_children(LemonCore.NodeRegistry), fn
+               {^generations, pid, :worker, _} -> pid == Process.whereis(generations)
+               _ -> false
+             end)
+
+      for {_domain, table} <- LemonCore.Store.ReadCache.tables(Store) do
+        assert :ets.info(table, :owner) == Process.whereis(Store)
+      end
     end
   end
 

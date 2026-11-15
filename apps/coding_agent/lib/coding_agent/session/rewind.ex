@@ -5,8 +5,9 @@ defmodule CodingAgent.Session.Rewind do
   Rewind moves the cursor to immediately before a selected user message. The
   abandoned suffix remains in the session tree, but is no longer sent to the
   model. Recorded mutations restore in reverse chronological order, including
-  overlapping file and directory snapshots. Confirmation binds the branch revision
-  and current tree contents; it expires after five minutes and is single use.
+  overlapping file and directory snapshots. Confirmation binds the exact journal
+  bytes (including checkpoint markers) and full in-memory tree and selection;
+  it expires after five minutes and is single use.
   Arbitrary eval and executing/unknown debug actions remain unrestorable even when
   they fail or are interrupted. Only explicit debug inspection is exempt; shell-only
   partial consent does not cover arbitrary code execution.
@@ -168,12 +169,13 @@ defmodule CodingAgent.Session.Rewind do
     allow_partial = Keyword.get(opts, :allow_partial_restore, false)
     {plan, unavailable, review} = restoration_review(session, suffix)
 
-    with {:ok, fingerprints} <- fingerprints(plan, restore_files) do
+    with {:ok, journal_revision} <- revision(session),
+         {:ok, fingerprints} <- fingerprints(plan, restore_files) do
       token = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
 
       confirmation = %{
         token: token,
-        revision: revision(session),
+        revision: journal_revision,
         entry_id: target.id,
         restore_files: restore_files,
         allow_partial_restore: allow_partial,
@@ -212,6 +214,7 @@ defmodule CodingAgent.Session.Rewind do
     restore_files = Keyword.get(opts, :restore_files, false)
     allow_partial = Keyword.get(opts, :allow_partial_restore, false)
     {plan, unavailable, review} = restoration_review(session, suffix)
+    journal_revision = revision(session)
 
     cond do
       not is_binary(token) or token == "" ->
@@ -219,7 +222,7 @@ defmodule CodingAgent.Session.Rewind do
 
       not is_map(confirmation) or confirmation.token != token or
         confirmation.expires_at < System.system_time(:millisecond) or
-        confirmation.revision != revision(session) or confirmation.entry_id != target.id or
+        {:ok, confirmation.revision} != journal_revision or confirmation.entry_id != target.id or
         confirmation.restore_files != restore_files or confirmation.plan != plan or
         Map.get(confirmation, :allow_partial_restore) != allow_partial or
         Map.get(confirmation, :review) != review or confirmation.unavailable != unavailable ->
@@ -604,8 +607,21 @@ defmodule CodingAgent.Session.Rewind do
 
   defp file_fingerprint(path), do: Checkpoint.filesystem_fingerprint(path)
 
-  defp revision(session),
-    do: {session.header.id, session.leaf_id, SessionManager.entry_count(session)}
+  defp revision(session) do
+    state = {session.header, session.leaf_id, SessionManager.entries(session)}
+
+    case session.file_path do
+      nil ->
+        {:ok, digest(state)}
+
+      path ->
+        with {:ok, content} <- File.read(path) do
+          # Checkpoints and same-count edits are revisions too. This work belongs
+          # to the destructive preview/confirm boundary, never the append path.
+          {:ok, digest({state, :crypto.hash(:sha256, content)})}
+        end
+    end
+  end
 
   defp digest(value), do: :crypto.hash(:sha256, :erlang.term_to_binary(value))
 

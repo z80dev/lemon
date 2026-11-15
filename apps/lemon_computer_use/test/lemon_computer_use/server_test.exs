@@ -6,7 +6,7 @@ defmodule LemonComputerUse.ServerTest do
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.{ImageContent, TextContent}
   alias LemonComputerUse.{ContextContributor, Server}
-  alias LemonComputerUse.Tools.{Js, JsReset}
+  alias LemonComputerUse.Tools.{Common, Js, JsReset}
   alias LemonCore.Events.RunCompleted
 
   setup context do
@@ -21,6 +21,53 @@ defmodule LemonComputerUse.ServerTest do
   end
 
   defp run(tool, params, signal \\ nil), do: tool.execute.("call-1", params, signal, nil)
+
+  test "concurrent first callers share the supervised nonce", %{server: server} do
+    session = self()
+
+    tasks =
+      for index <- 1..32 do
+        Task.async(fn ->
+          Common.call_context([session_id: "concurrent", session_pid: session], "call-#{index}")
+        end)
+      end
+
+    turns =
+      Enum.map(tasks, fn task ->
+        assert {:ok, context} = Task.await(task)
+        context.turn_id
+      end)
+
+    assert length(Enum.uniq(turns)) == 1
+    assert :ets.info(Server, :owner) == server
+    assert {:ok, nonce} = Server.boot_nonce()
+    assert byte_size(nonce) == 16
+  end
+
+  test "catalog and nonce disappear with their owner and rebuild on restart", %{server: server} do
+    assert {:ok, nonce} = Server.boot_nonce()
+    task = Task.async(fn -> Server.catalog() end)
+    assert {:ok, catalog} = Task.await(task, 10_000)
+    assert Server.cached_catalog() == catalog
+    assert :ets.info(Server, :owner) == server
+
+    stop_supervised!(Server)
+    assert Server.cached_catalog() == nil
+    assert Server.boot_nonce() == {:error, :unavailable}
+
+    assert {:error, "Computer use is not running in this Lemon runtime."} =
+             Common.call_context([session_id: "absent", session_pid: self()], "call")
+
+    assert :ets.whereis(Server) == :undefined
+
+    restarted = start_supervised!({Server, []})
+    assert Server.cached_catalog() == nil
+    assert :ets.info(Server, :owner) == restarted
+    assert {:ok, fresh_nonce} = Server.boot_nonce()
+    refute fresh_nonce == nonce
+    assert {:ok, ^catalog} = Server.catalog()
+    assert Server.cached_catalog() == catalog
+  end
 
   test "builds the tools from the runtime's own descriptors and exposes its instructions" do
     assert ContextContributor.contribute(%{}) == :skip
@@ -239,9 +286,32 @@ defmodule LemonComputerUse.ServerTest do
 
     assert text =~ "may already have taken effect"
     assert Server.status().last_error == :bridge_exited
+    assert Server.cached_catalog() == nil
 
     assert %AgentToolResult{content: [%TextContent{text: "again"}]} =
              run(js, %{"code" => "text:again"})
+
+    assert %{tools: [_ | _]} = Server.cached_catalog()
+  end
+
+  test "stop synchronously kills the bridge group including orphaned grandchildren", %{
+    server: server
+  } do
+    pids = start_process_tree()
+
+    :ok = GenServer.stop(server)
+
+    assert_processes_stopped(pids)
+  end
+
+  test "bridge exit kills orphaned grandchildren before reporting an unknown outcome" do
+    pids = start_process_tree()
+
+    assert {:error, {:bridge_exited, 3}} =
+             Server.call("js", %{"code" => "crash"}, %{session_id: "tree", turn_id: "tree"})
+
+    assert_processes_stopped(pids)
+    assert Server.status().bridge == :stopped
   end
 
   @tag connect_fail: true
@@ -266,5 +336,38 @@ defmodule LemonComputerUse.ServerTest do
     assert {:error, message} = run(js, %{"code" => "text:x"})
     assert message =~ "needs a Lemon session"
     refute Enum.any?(requests(log), &(&1["type"] == "call"))
+  end
+
+  defp start_process_tree do
+    assert {:ok, %{"content" => [%{"text" => encoded}]}} =
+             Server.call("js", %{"code" => "process_tree"}, %{session_id: "tree", turn_id: "tree"})
+
+    [root, grandchild] = pids = Jason.decode!(encoded)
+    assert root > 1
+    assert grandchild > 1
+
+    on_exit(fn ->
+      if os_process_alive?(grandchild), do: LemonCore.ProcessGroup.terminate(root, grace_ms: 0)
+    end)
+
+    assert Enum.all?(pids, &os_process_alive?/1)
+    pids
+  end
+
+  defp assert_processes_stopped(pids) do
+    Enum.each(pids, fn pid ->
+      refute os_process_alive?(pid), "OS process #{pid} survived cleanup"
+    end)
+  end
+
+  defp os_process_alive?(pid) do
+    case System.cmd("ps", ["-o", "stat=", "-p", to_string(pid)], stderr_to_stdout: true) do
+      {status, 0} ->
+        status = String.trim(status)
+        status != "" and not String.starts_with?(status, "Z")
+
+      {_output, _status} ->
+        false
+    end
   end
 end

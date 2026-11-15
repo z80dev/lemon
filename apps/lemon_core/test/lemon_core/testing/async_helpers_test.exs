@@ -48,23 +48,33 @@ defmodule LemonCore.Testing.AsyncHelpersTest do
     test "barrier opens when all participants arrive" do
       barrier = AsyncHelpers.barrier(2)
 
-      Task.async(fn ->
-        Process.sleep(10)
-        AsyncHelpers.arrive(barrier)
-      end)
+      task = Task.async(fn -> AsyncHelpers.arrive(barrier) end)
 
       AsyncHelpers.arrive(barrier)
       assert :ok = AsyncHelpers.await_barrier(barrier, timeout: 2_000)
+      assert :ok = Task.await(task)
+      assert :ets.info(barrier, :named_table) == false
+      assert :ets.info(barrier, :owner) == self()
+    end
+
+    test "distinct barriers use distinct table references" do
+      first = AsyncHelpers.barrier(1)
+      second = AsyncHelpers.barrier(1)
+      refute first == second
+      AsyncHelpers.arrive(first)
+      assert :ets.lookup(first, :count) == [{:count, 1, 1}]
+      assert :ets.lookup(second, :count) == [{:count, 0, 1}]
     end
   end
 
   describe "with_ordered_tasks/1" do
     test "runs tasks and returns results in order" do
-      results = AsyncHelpers.with_ordered_tasks([
-        fn -> :first end,
-        fn -> :second end,
-        fn -> :third end
-      ])
+      results =
+        AsyncHelpers.with_ordered_tasks([
+          fn -> :first end,
+          fn -> :second end,
+          fn -> :third end
+        ])
 
       assert results == [:first, :second, :third]
     end

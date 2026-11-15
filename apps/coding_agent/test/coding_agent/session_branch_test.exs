@@ -145,7 +145,7 @@ defmodule CodingAgent.SessionBranchTest do
 
   defp wait_for_agent_end(session) do
     session_id = Session.get_state(session).session_manager.header.id
-    assert_receive {:session_event, ^session_id, {:agent_end, _messages}}, 5000
+    assert_receive {:session_event, ^session_id, {:agent_end, _messages}, _}, 5000
     wait_for_streaming_complete(session)
   end
 
@@ -154,7 +154,7 @@ defmodule CodingAgent.SessionBranchTest do
   defp await_prompt_persisted(session) do
     session_id = Session.get_state(session).session_manager.header.id
 
-    assert_receive {:session_event, ^session_id, {:message_end, %LemonAi.Types.UserMessage{}}},
+    assert_receive {:session_event, ^session_id, {:message_end, %LemonAi.Types.UserMessage{}}, _},
                    5000
   end
 
@@ -918,11 +918,12 @@ defmodule CodingAgent.SessionBranchTest do
 
       # First prompt will error
       :ok = Session.prompt(session, "Will error")
-      assert_receive {:session_event, _id, {:error, _reason, _partial}}, 5000
+      assert_receive {:session_event, _id, {:error, _reason, _partial}, _}, 5000
 
       assert_receive {:session_event, _id,
                       {:message_end,
-                       %AssistantMessage{stop_reason: :error, error_message: "Simulated error"}}},
+                       %AssistantMessage{stop_reason: :error, error_message: "Simulated error"}},
+                      _},
                      5000
 
       wait_for_streaming_complete(session)

@@ -211,7 +211,11 @@ defmodule LemonEvals.PairedCleanup do
             :ok
           end
 
-          case ProcessGroup.signal_workload_group(observed, :sigkill, root_exited, persist) do
+          case ProcessGroup.terminate(observed,
+                 signal: :sigkill,
+                 root_exited: root_exited,
+                 before_signal: persist
+               ) do
             {:terminated, _} ->
               :ok
 

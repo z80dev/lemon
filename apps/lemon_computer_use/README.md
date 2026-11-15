@@ -17,4 +17,11 @@ stdio MCP server. Opt-in (`LEMON_COMPUTER_USE_ENABLED=true`).
   derive these origins from runtime configuration rather than assuming defaults.
 - `LemonComputerUse.Config` / `Env` — settings.
 
+The supervised server owns its catalog and session-turn nonce in ETS. The
+nonce is published before the server accepts calls, so concurrent first tool
+calls share a session-turn identity. A bridge disconnect clears the catalog;
+owner death removes the whole table. A restarted owner publishes a fresh nonce
+and reconnects for a new catalog. Readers never create tables, and missing
+ownership reports unavailable rather than inventing a session turn.
+
 See the [tool reference](../../docs/tools/computer-use.md).

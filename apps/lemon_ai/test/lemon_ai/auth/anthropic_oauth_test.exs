@@ -2,7 +2,7 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
   # Swaps Req's global default plug and process environment.
   use ExUnit.Case, async: false
 
-  alias LemonAi.Auth.AnthropicOAuth
+  alias LemonAi.Auth.{AnthropicOAuth, Cache}
 
   @client_id "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
   @code_page "https://platform.claude.com/oauth/code/callback"
@@ -506,11 +506,20 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
       File.chmod!(script, 0o755)
       System.put_env("PATH", bin_dir)
 
-      headers = Map.new(AnthropicOAuth.oauth_headers())
+      task = Task.async(fn -> AnthropicOAuth.oauth_headers() end)
+      headers = task |> Task.await() |> Map.new()
+      monitor = Process.monitor(task.pid)
+      assert_receive {:DOWN, ^monitor, :process, _, _}
+      assert Cache.get({AnthropicOAuth, :claude_code_version, bin_dir}) == "9.9.9"
+
+      assert :persistent_term.get({AnthropicOAuth, :claude_code_version, bin_dir}, :missing) ==
+               :missing
+
       assert headers["user-agent"] == "claude-cli/9.9.9 (external, cli)"
       assert headers["x-app"] == "cli"
 
       File.write!(script, "#!/bin/sh\necho \"1.0.0 (Claude Code)\"\n")
+      assert Map.new(AnthropicOAuth.oauth_headers()) == headers
       System.put_env("PATH", bin_dir <> ":")
       assert {"user-agent", "claude-cli/2.1." <> _} = hd(AnthropicOAuth.oauth_headers())
     end

@@ -72,7 +72,7 @@ defmodule CodingAgent.Session.ContextUsageSessionTest do
 
     Session.subscribe(session)
     assert :ok = Session.prompt(session, "How many lines does a.txt have?")
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
 
     assert {:ok, live} = ControlPlaneProvider.session_context_usage(key, root)
     assert live.live

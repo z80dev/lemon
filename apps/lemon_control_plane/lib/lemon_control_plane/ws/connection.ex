@@ -670,6 +670,7 @@ defmodule LemonControlPlane.WS.Connection do
       pid when is_pid(pid) ->
         LemonControlPlane.Connections.register(state.conn_id, %{
           role: state.auth.role,
+          auth: Map.take(state.auth, [:role, :scopes]),
           client_id: state.auth.client_id,
           pid: self(),
           delivery: state.delivery

@@ -1020,36 +1020,15 @@ defmodule CodingAgent.Extensions do
   # Private Functions
   # ============================================================================
 
-  # Ensure the ETS table for source paths exists
   @spec ensure_source_path_table() :: :ok
   defp ensure_source_path_table do
-    case :ets.whereis(@source_path_table) do
-      :undefined ->
-        try do
-          :ets.new(@source_path_table, [:set, :public, :named_table])
-          :ok
-        rescue
-          ArgumentError -> :ok
-        end
-
-      _tid ->
-        :ok
-    end
+    CodingAgent.RuntimeTables.ensure_table(@source_path_table)
+    :ok
   end
 
   defp ensure_load_error_table do
-    case :ets.whereis(@load_error_table) do
-      :undefined ->
-        try do
-          :ets.new(@load_error_table, [:set, :public, :named_table])
-          :ok
-        rescue
-          ArgumentError -> :ok
-        end
-
-      _tid ->
-        :ok
-    end
+    CodingAgent.RuntimeTables.ensure_table(@load_error_table)
+    :ok
   end
 
   defp store_load_errors(errors) do

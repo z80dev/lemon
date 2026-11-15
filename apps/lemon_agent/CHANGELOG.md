@@ -8,6 +8,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonAgent.InterruptedToolResult`: one builder for interrupted tool results
+  with structured `outcome` (`:unknown | :not_started`) and `reason` (#552).
+- `LemonAgent.AbortSignal.subscribe/1`: abort and redirect are delivered as
+  `{:lemon_abort, ref, kind}` messages to subscribers (#549).
+- Optional GenAI span exporter behaviour with an OpenTelemetry adapter
+  (`opentelemetry_api` is optional) (#594).
+- `KanbanStore.renew_task_lease/3`: exact-lease guarded lease renewal (#596).
+
 - `auth_source = "omp_broker"` resolves any provider's credential from omp's
   auth broker (`LemonAgent.ModelRuntime.OmpBroker`), authoritative and
   fail-closed, with broker-side auth recovery after a rejected token. The
@@ -31,6 +39,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   thinking-output expansion). Explicit model selection always bypasses it.
 
 ### Changed
+
+- `AbortSignal` levels live in `:atomics` and are garbage-collected with their
+  holders; `AbortSignal.TableOwner` and `AbortSignal.clear/1` are removed (#549).
 
 - Queues always consume one message per turn; removed queue mode options,
   mode accessors, queue-clearing helpers, and `Agent.set_session_id/2`.

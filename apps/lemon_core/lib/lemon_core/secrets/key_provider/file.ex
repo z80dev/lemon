@@ -169,11 +169,7 @@ defmodule LemonCore.Secrets.KeyProvider.File do
          group_or_world when group_or_world != 0 <- Bitwise.band(mode, 0o077) do
       key = {__MODULE__, :warned_permissions, path}
 
-      if :persistent_term.get(key, false) do
-        :ok
-      else
-        :persistent_term.put(key, true)
-
+      if LemonCore.RuntimeCache.warn_once?(key) do
         Logger.warning(
           "Secrets master key file #{path} is readable beyond its owner " <>
             "(mode #{Integer.to_string(Bitwise.band(mode, 0o777), 8)}). It is being used " <>

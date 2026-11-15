@@ -34,6 +34,57 @@ defmodule LemonOmp.SessionLifecycleTest do
       assert status["maxSessions"] == LemonOmp.Config.max_sessions()
     end
 
+    test "version cache ownership resets with the manager and never moves to a caller" do
+      executable = LemonOmp.Config.executable()
+      assert :ok = LemonOmp.Manager.cache_version(executable, 123, nil)
+      assert LemonOmp.Manager.cached_version(executable, 123) == {:ok, nil}
+      assert :ets.info(:lemon_omp_versions, :owner) == Process.whereis(LemonOmp.Manager)
+
+      :ok = Supervisor.terminate_child(LemonOmp.Supervisor, LemonOmp.Manager)
+
+      try do
+        tasks =
+          for _ <- 1..16 do
+            Task.async(fn ->
+              :ok = LemonOmp.Manager.cache_version(executable, 123, "unowned")
+              LemonOmp.Manager.cached_version(executable, 123)
+            end)
+          end
+
+        assert Enum.map(tasks, &Task.await/1) == List.duplicate(:miss, 16)
+        assert :ets.whereis(:lemon_omp_versions) == :undefined
+      after
+        {:ok, _} = Supervisor.restart_child(LemonOmp.Supervisor, LemonOmp.Manager)
+      end
+
+      assert LemonOmp.Manager.cached_version(executable, 123) == :miss
+      assert :ets.info(:lemon_omp_versions, :owner) == Process.whereis(LemonOmp.Manager)
+      assert %{"version" => "omp 0.0.0-fake (test double)"} = LemonOmp.status()
+    end
+
+    test "version cache survives callers and invalidates when the executable changes" do
+      executable = Path.join(tmp_dir!(), "version-probe")
+      File.write!(executable, "#!/bin/sh\nprintf 'omp first\\n'\n")
+      File.chmod!(executable, 0o700)
+      File.touch!(executable, 1_700_000_000)
+      put_app_env(:executable, executable)
+
+      task = Task.async(fn -> LemonOmp.status() end)
+      assert %{"version" => "omp first"} = Task.await(task, 10_000)
+      assert :ets.info(:lemon_omp_versions, :owner) == Process.whereis(LemonOmp.Manager)
+
+      # Changing contents without changing mtime must still read the cache.
+      File.write!(executable, "#!/bin/sh\nprintf 'omp second\\n'\n")
+      File.touch!(executable, 1_700_000_000)
+      assert %{"version" => "omp first"} = LemonOmp.status()
+
+      File.touch!(executable, 1_700_000_001)
+      assert %{"version" => "omp second"} = LemonOmp.status()
+
+      assert [{^executable, 1_700_000_001, "omp second"}] =
+               :ets.lookup(:lemon_omp_versions, executable)
+    end
+
     test "a missing binary is not installed" do
       put_app_env(:executable, Path.join(tmp_dir!(), "no/omp"))
 

@@ -92,7 +92,7 @@ defmodule LemonPlatformTest do
 
       iex> %{optional: optional} = LemonPlatformTest.callbacks(LemonCore.Store.Backend)
       iex> Enum.sort(optional)
-      [compare_and_delete_many: 2, compare_and_swap: 5, list_recent: 3, ping: 1, sync: 1]
+      [compare_and_delete_many: 2, compare_and_swap: 5, confirm_durable: 1, list_recent: 3, ping: 1, sync: 1, with_durability: 2]
   """
   @spec callbacks(module()) :: %{required: [{atom(), arity()}], optional: [{atom(), arity()}]}
   def callbacks(behaviour) do
