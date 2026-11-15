@@ -60,6 +60,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Reconnect581Test do
     # The fault is injected at the Port exit-status boundary, without Node or a race.
     state = %{
       port: nil,
+      os_pid: nil,
       buffer: "partial",
       unavailable_reason: nil,
       bridge: bridge,

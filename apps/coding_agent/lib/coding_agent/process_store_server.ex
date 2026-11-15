@@ -859,6 +859,8 @@ defmodule CodingAgent.ProcessStoreServer do
                   record
               end
 
+            record = reconcile_boot_workload(process_id, record)
+
             :ets.insert(@table, {process_id, record, logs})
             :ok
           end,
@@ -879,6 +881,23 @@ defmodule CodingAgent.ProcessStoreServer do
   catch
     _, _ -> exit(:process_store_unavailable)
   end
+
+  defp reconcile_boot_workload(id, %{status: :lost, workload_identity: identity} = record)
+       when is_map(identity) do
+    if session_alive?(id) do
+      record
+    else
+      case LemonCore.ProcessGroup.workload_group_status(
+             identity,
+             Map.get(record, :root_exited, false)
+           ) do
+        :terminated -> confirmed_record(record, :workload_empty)
+        {_status, observed} -> Map.put(record, :workload_identity, observed)
+      end
+    end
+  end
+
+  defp reconcile_boot_workload(_id, record), do: record
 
   defp maybe_reset_loaded_from_dets(state) do
     if state.loaded_from_dets and state.dets_initialized and state.ets_initialized do

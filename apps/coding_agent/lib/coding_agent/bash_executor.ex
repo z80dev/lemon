@@ -2,12 +2,10 @@ defmodule CodingAgent.BashExecutor do
   @moduledoc """
   Handles streaming shell command execution with output sanitization,
   truncation, and abort signal support. The shell runs as leader of its own
-  process group (an Erlang Port child is a group leader). A Port-owning guardian
-  stops that whole group (SIGTERM, bounded grace, SIGKILL) if the tool worker
-  exits, including forced cancellation/crashes, and the same group stop serves
-  abort and timeout. Descendants reparented to init stay in the group and are
-  reached; a `pgrep -P` descendant walk remains only as a fallback for processes
-  that deliberately left the group (for example behind a PTY wrapper's session).
+  process group (an Erlang Port child is a group leader). A one-shot
+  `CodingAgent.ProcessSession` owns the Port and stops the whole group if the
+  tool worker exits. Abort and timeout use the same group termination path.
+  Descendants reparented to init remain covered; escaped sessions are unsupported.
   UTF-8 is decoded across stream chunks; invalid bytes do not discard later
   output. Large output is archived privately, and only bounded head and tail
   windows are read back into memory when execution completes.
@@ -49,8 +47,6 @@ defmodule CodingAgent.BashExecutor do
   # explicitly (or abort via AbortSignal).
   @default_timeout :infinity
   @default_max_lines 2000
-  # Grace between SIGTERM and SIGKILL when stopping a command's process group.
-  @term_grace_ms 500
 
   # ANSI escape sequence pattern
   @ansi_regex ~r/\e\[[0-9;]*[a-zA-Z]/
@@ -111,7 +107,8 @@ defmodule CodingAgent.BashExecutor do
     AbortSignal.subscribe(signal)
 
     try do
-      {port, os_pid, guardian} = start_guarded_port(spawn_path, port_opts, use_pty)
+      {port, _os_pid, owner} =
+        CodingAgent.ProcessSession.start_oneshot(spawn_path, port_opts, use_pty)
 
       try do
         # Set up timeout (optional). `Process.send_after/3` requires an integer timeout.
@@ -132,7 +129,7 @@ defmodule CodingAgent.BashExecutor do
 
         state = %{
           port: port,
-          os_pid: os_pid,
+          owner: owner,
           signal: signal,
           on_chunk: on_chunk,
           max_bytes: max_bytes,
@@ -156,7 +153,7 @@ defmodule CodingAgent.BashExecutor do
 
         {:ok, result}
       after
-        send(guardian, :finish)
+        CodingAgent.ProcessSession.stop_oneshot(owner)
       end
     rescue
       e -> {:error, e}
@@ -165,74 +162,6 @@ defmodule CodingAgent.BashExecutor do
     after
       AbortSignal.unsubscribe(signal)
     end
-  end
-
-  # The guardian, not the killable tool worker, owns the Port. If the worker
-  # disappears, the shell may still be alive while its process group is
-  # signalled. The shell is the leader of its own process group, so the group
-  # (SIGTERM, bounded grace, SIGKILL) reaches backgrounded children that were
-  # reparented to init, which a parent-child walk cannot see. Closing a
-  # worker-owned Port first would orphan them before we could signal.
-  defp start_guarded_port(path, opts, use_pty) do
-    caller = self()
-    ref = make_ref()
-
-    guardian =
-      spawn(fn ->
-        Process.flag(:trap_exit, true)
-        monitor = Process.monitor(caller)
-
-        try do
-          # PTY helpers may start a separate session: their wrapper group is not
-          # proof of whole-workload ownership.
-          if use_pty, do: LemonCore.NativeProcess.unsupported!()
-          port = LemonCore.NativeProcess.open({:spawn_executable, path}, opts)
-          os_pid = get_os_pid(port)
-          send(caller, {ref, :started, port, os_pid})
-          relay_port(port, os_pid, caller, monitor)
-        rescue
-          error -> send(caller, {ref, :error, error})
-        catch
-          kind, reason ->
-            send(caller, {ref, :error, RuntimeError.exception("#{kind}: #{inspect(reason)}")})
-        end
-      end)
-
-    receive do
-      {^ref, :started, port, os_pid} -> {port, os_pid, guardian}
-      {^ref, :error, error} -> raise error
-    end
-  end
-
-  defp relay_port(port, os_pid, caller, monitor) do
-    receive do
-      {^port, {:data, _data}} = event ->
-        send(caller, event)
-        relay_port(port, os_pid, caller, monitor)
-
-      {^port, {:exit_status, _code}} = event ->
-        send(caller, event)
-        Process.demonitor(monitor, [:flush])
-
-      {:DOWN, ^monitor, :process, ^caller, _reason} ->
-        if Port.info(port) && os_pid, do: terminate_process_tree(os_pid)
-        safe_close_port(port)
-
-      :finish ->
-        Process.demonitor(monitor, [:flush])
-        if Port.info(port) && os_pid, do: terminate_process_tree(os_pid)
-        safe_close_port(port)
-
-      {:EXIT, ^port, reason} ->
-        Process.demonitor(monitor, [:flush])
-        if reason != :normal, do: send(caller, {port, {:exit_status, 1}})
-    end
-  end
-
-  defp safe_close_port(port) do
-    Port.close(port)
-  catch
-    :error, _ -> :ok
   end
 
   defp collect_output(state) do
@@ -317,16 +246,8 @@ defmodule CodingAgent.BashExecutor do
   # Kill the process tree, keep any output already delivered to the mailbox
   # (partial output is part of an aborted/timed-out result), then close the port.
   defp stop_process(state) do
-    if state.os_pid, do: terminate_process_tree(state.os_pid)
-    state = drain_output(state)
-
-    try do
-      Port.close(state.port)
-    catch
-      :error, _ -> :ok
-    end
-
-    state
+    CodingAgent.ProcessSession.stop_oneshot(state.owner)
+    drain_output(state)
   end
 
   defp drain_output(%{port: port} = state) do
@@ -619,109 +540,6 @@ defmodule CodingAgent.BashExecutor do
           path ->
             {path, ["-c"]}
         end
-    end
-  end
-
-  @doc """
-  Kill a process and all of its descendants immediately.
-
-  On Unix the process is the leader of its own process group (an Erlang Port
-  child is started as a group leader), so the whole group `-os_pid` is
-  signalled. That covers descendants reparented to init after their parent exited
-  and processes forked while we were signalling, neither of which a recursive
-  `pgrep -P` walk can see. The walk is kept only as a fallback for descendants
-  that deliberately left the group (for example behind a PTY wrapper's session);
-  it is collected before signalling. `signal` is `:sigkill` (default) or
-  `:sigterm`. On Windows, uses `taskkill /T` to kill the tree.
-  """
-  @spec kill_process_tree(os_pid :: integer(), signal :: :sigkill | :sigterm) :: :ok
-  def kill_process_tree(os_pid, signal \\ :sigkill) when is_integer(os_pid) do
-    case :os.type() do
-      {:unix, _} when os_pid <= 1 ->
-        :ok
-
-      {:unix, _} ->
-        escapees = descendant_pids(os_pid)
-        LemonCore.ProcessGroup.signal_group(os_pid, signal)
-        LemonCore.ProcessGroup.signal_pids(escapees, signal)
-        :ok
-
-      {:win32, _} ->
-        taskkill_tree(os_pid)
-    end
-  end
-
-  @doc """
-  Gracefully stop a process and all of its descendants.
-
-  On Unix: SIGTERM to the process group (and to descendants that left it), a
-  bounded grace period (`grace_ms`, default #{@term_grace_ms}) polling for the group to
-  empty, then SIGKILL to the group until it is empty. On Windows this is
-  `kill_process_tree/1`.
-  """
-  @spec terminate_process_tree(os_pid :: integer(), grace_ms :: non_neg_integer()) :: :ok
-  def terminate_process_tree(os_pid, grace_ms \\ @term_grace_ms) when is_integer(os_pid) do
-    case :os.type() do
-      {:unix, _} when os_pid <= 1 ->
-        :ok
-
-      {:unix, _} ->
-        escapees = descendant_pids(os_pid)
-        # Signal the group first, in one kill(2): TERMing a child alone lets the
-        # shell reap it and run the next command before its own signal arrives.
-        LemonCore.ProcessGroup.signal_group(os_pid, :sigterm)
-        LemonCore.ProcessGroup.signal_pids(escapees, :sigterm)
-        LemonCore.ProcessGroup.terminate(os_pid, grace_ms: grace_ms)
-        LemonCore.ProcessGroup.signal_pids(escapees, :sigkill)
-        :ok
-
-      {:win32, _} ->
-        taskkill_tree(os_pid)
-    end
-  end
-
-  defp taskkill_tree(os_pid) do
-    try do
-      # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
-      # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-      :os.cmd(~c"taskkill /F /T /PID #{os_pid}")
-    catch
-      _, _ -> :ok
-    end
-
-    :ok
-  end
-
-  defp descendant_pids(os_pid) do
-    case System.find_executable("pgrep") do
-      nil ->
-        []
-
-      pgrep ->
-        {output, _status} =
-          System.cmd(pgrep, ["-P", Integer.to_string(os_pid)], stderr_to_stdout: true)
-
-        children =
-          output
-          |> String.split()
-          |> Enum.flat_map(fn token ->
-            case Integer.parse(token) do
-              {pid, ""} -> [pid]
-              _ -> []
-            end
-          end)
-
-        children ++ Enum.flat_map(children, &descendant_pids/1)
-    end
-  rescue
-    _ -> []
-  end
-
-  # Get the OS PID from a port
-  defp get_os_pid(port) do
-    case Port.info(port, :os_pid) do
-      {:os_pid, pid} -> pid
-      nil -> nil
     end
   end
 

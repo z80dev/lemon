@@ -1,6 +1,11 @@
 defmodule LemonLsp.ServerManager do
   @moduledoc """
   Supervised status manager for Lemon language-server capability metadata.
+
+  Sessions own the process group created by their native port. Explicit stop,
+  request timeout, idle release, manager shutdown and port exit all terminate
+  that group through `LemonCore.ProcessGroup.terminate/2` before closing the port.
+  Group cleanup is immediate; OS pids are never retained for delayed signalling.
   """
 
   use GenServer
@@ -581,6 +586,7 @@ defmodule LemonLsp.ServerManager do
 
       {session, sessions} ->
         demonitor_owner(session)
+        terminate_port(session)
         reply_pending(session, {:error, :session_exited})
 
         info =
@@ -691,6 +697,17 @@ defmodule LemonLsp.ServerManager do
             {:noreply, state}
         end
     end
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    Enum.each(state.sessions, fn {_id, session} ->
+      demonitor_owner(session)
+      terminate_port(session)
+      reply_pending(session, {:error, :session_stopped})
+    end)
+
+    :ok
   end
 
   defp initialize_request(session, "initialize", from) do
@@ -970,8 +987,9 @@ defmodule LemonLsp.ServerManager do
   end
 
   defp terminate_port(session) do
-    _ = terminate_descendants(Map.get(session, :os_pid))
-    _ = terminate_os_pid(Map.get(session, :os_pid))
+    if is_integer(session.os_pid) do
+      LemonCore.ProcessGroup.terminate(session.os_pid, grace_ms: 25)
+    end
 
     try do
       Port.close(session.port)
@@ -979,77 +997,6 @@ defmodule LemonLsp.ServerManager do
       ArgumentError -> :ok
     catch
       :exit, _reason -> :ok
-    end
-
-    _ = terminate_descendants(Map.get(session, :os_pid))
-    _ = terminate_os_pid(Map.get(session, :os_pid))
-  end
-
-  defp terminate_descendants(os_pid) when is_integer(os_pid) and os_pid > 0 do
-    os_pid
-    |> descendant_pids()
-    |> Enum.reverse()
-    |> Enum.each(&terminate_os_pid/1)
-
-    :ok
-  end
-
-  defp terminate_descendants(_os_pid), do: :ok
-
-  defp descendant_pids(parent_pid) do
-    case System.find_executable("pgrep") do
-      nil ->
-        []
-
-      pgrep ->
-        case System.cmd(pgrep, ["-P", to_string(parent_pid)], stderr_to_stdout: true) do
-          {output, 0} ->
-            child_pids = parse_pids(output)
-            Enum.uniq(child_pids ++ Enum.flat_map(child_pids, &descendant_pids/1))
-
-          {_output, _status} ->
-            []
-        end
-    end
-  end
-
-  defp parse_pids(output) do
-    output
-    |> String.split()
-    |> Enum.flat_map(fn value ->
-      case Integer.parse(value) do
-        {pid, ""} when pid > 0 -> [pid]
-        _ -> []
-      end
-    end)
-  end
-
-  defp terminate_os_pid(pid) when is_integer(pid) and pid > 0 do
-    terminate_os_target(to_string(pid))
-  end
-
-  defp terminate_os_pid(_pid), do: :ok
-
-  defp terminate_os_target(target) do
-    kill = System.find_executable("kill")
-
-    _ =
-      if kill do
-        _ = System.cmd(kill, ["-TERM", target], stderr_to_stdout: true)
-        Process.sleep(25)
-
-        if os_process_alive?(kill, target) do
-          _ = System.cmd(kill, ["-KILL", target], stderr_to_stdout: true)
-        end
-      end
-
-    :ok
-  end
-
-  defp os_process_alive?(kill, target) do
-    case System.cmd(kill, ["-0", target], stderr_to_stdout: true) do
-      {_output, 0} -> true
-      {_output, _status} -> false
     end
   end
 
