@@ -76,10 +76,10 @@ defmodule CodingAgent.Session.PromptJournalSessionTest do
     assert :ok = Session.prompt(session, "Echo hello.")
     assert_receive {:request_prompt, first}, 5_000
     assert_receive {:request_prompt, second}, 5_000
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     assert is_list(first)
     assert first == second
-    refute_receive {:session_event, _, {:system_prompt, _}}, 0
+    refute_receive {:session_event, _, {:system_prompt, _}, _}, 0
     assert {:ok, journal} = SessionManager.load_from_file(path)
     replies = assistant_entries(journal)
     assert length(replies) == 2
@@ -98,7 +98,7 @@ defmodule CodingAgent.Session.PromptJournalSessionTest do
     session = start_session(dir, path, capture_stream(self(), [Mocks.assistant_message("first")]))
     assert :ok = Session.prompt(session, "First reply.")
     assert_receive {:request_prompt, original}, 5_000
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     stop_supervised!(Session)
 
     matched =
@@ -122,7 +122,7 @@ defmodule CodingAgent.Session.PromptJournalSessionTest do
 
     assert :ok = Session.prompt(resumed, "Continue after resume.")
     assert_receive {:request_prompt, ^original}, 5_000
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     assert {:ok, journal} = SessionManager.load_from_file(path)
     assert PromptJournal.latest(journal).prompt == original
   end
@@ -143,11 +143,11 @@ defmodule CodingAgent.Session.PromptJournalSessionTest do
 
     assert :ok = Session.prompt(session, "First reply.")
     assert_receive {:request_prompt, first}, 5_000
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     File.write!(Path.join(dir, "AGENTS.md"), "Changed repository instructions.")
     assert :ok = Session.prompt(session, "Second reply.")
     assert_receive {:request_prompt, second}, 5_000
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     refute first == second
     assert {:ok, usage} = Session.context_usage(session)
     assert usage.prompt_cache.status == :digest_changed

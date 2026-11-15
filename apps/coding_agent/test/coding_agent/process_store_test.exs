@@ -352,6 +352,7 @@ defmodule CodingAgent.ProcessStoreTest do
 
       for {id, pid, state} <- sessions do
         send(pid, {state.port, {:data, String.duplicate("x", 60)}})
+        ProcessSession.get_process_id(pid)
         assert {:ok, %{output: output}} = ProcessSession.poll(id)
         assert output.artifact_bytes == state.artifact_capacity
         assert output.artifact_discarded_bytes == 60 - state.artifact_capacity
@@ -371,6 +372,7 @@ defmodule CodingAgent.ProcessStoreTest do
       {:ok, %{port: port, full_output_path: first_path}} = ProcessSession.get_state(first)
       [{pid, _}] = Registry.lookup(CodingAgent.ProcessRegistry, first)
       send(pid, {port, {:data, String.duplicate("x", 40)}})
+      ProcessSession.get_process_id(pid)
       assert {:ok, %{output: %{artifact_bytes: 40}}} = ProcessSession.poll(first)
       ProcessSession.stop(first)
       assert File.stat!(first_path).size == 40
@@ -387,6 +389,7 @@ defmodule CodingAgent.ProcessStoreTest do
       {:ok, %{port: port, full_output_path: path}} = ProcessSession.get_state(first)
       [{pid, _}] = Registry.lookup(CodingAgent.ProcessRegistry, first)
       send(pid, {port, {:data, "diagnostic"}})
+      ProcessSession.get_process_id(pid)
       assert {:ok, %{output: %{artifact_bytes: 10}}} = ProcessSession.poll(first)
       :ok = ProcessSession.write_stdin(first, "\n")
 

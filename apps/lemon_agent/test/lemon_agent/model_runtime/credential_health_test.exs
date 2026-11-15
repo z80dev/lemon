@@ -11,6 +11,39 @@ defmodule LemonAgent.ModelRuntime.CredentialHealthTest do
     :ok
   end
 
+  test "short-lived callers do not own the table and an absent owner is not recreated" do
+    table = :lemon_agent_credential_health
+    owner = Process.whereis(CredentialHealth)
+    assert :ets.info(table, :owner) == owner
+
+    task = Task.async(fn -> CredentialHealth.record_failure(:openai, "caller", :auth) end)
+    monitor = Process.monitor(task.pid)
+    assert :ok = Task.await(task)
+    assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
+    assert CredentialHealth.in_cooldown?(:openai, "caller")
+    assert :ets.info(table, :owner) == owner
+
+    :ok = Supervisor.terminate_child(LemonAgent.Supervisor, CredentialHealth)
+
+    try do
+      tasks =
+        for _ <- 1..16 do
+          Task.async(fn ->
+            :ok = CredentialHealth.record_failure(:openai, "absent", :auth)
+            CredentialHealth.cooldown_until(:openai, "absent")
+          end)
+        end
+
+      assert Enum.map(tasks, &Task.await/1) == List.duplicate(nil, 16)
+      assert :ets.whereis(table) == :undefined
+    after
+      {:ok, _} = Supervisor.restart_child(LemonAgent.Supervisor, CredentialHealth)
+    end
+
+    assert :ets.info(table, :owner) == Process.whereis(CredentialHealth)
+    refute CredentialHealth.in_cooldown?(:openai, "caller")
+  end
+
   test "no recorded state means no cooldown" do
     refute CredentialHealth.in_cooldown?(:openai, "default")
     assert CredentialHealth.cooldown_until(:openai, "default") == nil

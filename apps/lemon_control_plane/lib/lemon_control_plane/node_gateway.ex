@@ -2,28 +2,31 @@ defmodule LemonControlPlane.NodeGateway do
   @moduledoc """
   Optional node-only listener. A disabled or occupied port does not prevent the
   local controller from starting. `status/0` exposes availability for enrollment.
+  Availability is read directly from ETS owned by this supervised listener.
   """
   use GenServer
   require Logger
 
-  @status_key {__MODULE__, :status}
+  @table __MODULE__
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   def status do
-    case :persistent_term.get(@status_key, nil) do
-      %{pid: pid, port: port} when is_pid(pid) ->
+    case :ets.lookup(@table, :status) do
+      [{:status, %{pid: pid, port: port}}] when is_pid(pid) ->
         if Process.alive?(pid), do: %{available: true, port: port}, else: unavailable()
 
       _ ->
         unavailable()
     end
+  rescue
+    ArgumentError -> unavailable()
   end
 
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    :persistent_term.put(@status_key, unavailable())
+    :ets.new(@table, [:named_table, :protected, :set, read_concurrency: true])
     port = Keyword.get(opts, :port, 4044)
 
     if port == 0 do
@@ -37,7 +40,7 @@ defmodule LemonControlPlane.NodeGateway do
              scheme: :http
            ) do
         {:ok, pid} ->
-          :persistent_term.put(@status_key, %{pid: pid, port: port})
+          :ets.insert(@table, {:status, %{pid: pid, port: port}})
           {:ok, pid}
 
         {:error, reason} ->
@@ -56,7 +59,7 @@ defmodule LemonControlPlane.NodeGateway do
 
   @impl true
   def terminate(_reason, pid) do
-    :persistent_term.put(@status_key, unavailable())
+    :ets.delete(@table, :status)
     if Process.alive?(pid), do: Supervisor.stop(pid)
   end
 

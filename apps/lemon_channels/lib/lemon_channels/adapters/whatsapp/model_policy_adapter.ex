@@ -6,11 +6,34 @@ defmodule LemonChannels.Adapters.WhatsApp.ModelPolicyAdapter do
   Uses session overrides (ephemeral, stored in ETS) and persistent policy
   storage via `LemonChannels.ModelPolicy`. No legacy fallback needed — WhatsApp
   is a new channel with no pre-ModelPolicy data to migrate.
+
+  This application's supervised child owns the ETS table. Reads and writes do
+  not call the owner, and short-lived command callers cannot destroy overrides.
+  Overrides are volatile and reset when the owner or application restarts.
   """
+
+  use GenServer
 
   use LemonChannels.Adapters.ModelPolicyShared
 
   @session_table :whatsapp_session_models
+
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @impl true
+  def init(_opts) do
+    :ets.new(@session_table, [
+      :set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
+    {:ok, nil}
+  end
 
   @impl true
   def channel_name, do: "whatsapp"
@@ -23,8 +46,6 @@ defmodule LemonChannels.Adapters.WhatsApp.ModelPolicyAdapter do
 
   @impl true
   def session_get(session_key) do
-    ensure_session_table()
-
     case :ets.lookup(@session_table, {:model, session_key}) do
       [{_, model}] when is_binary(model) and model != "" -> model
       _ -> nil
@@ -33,26 +54,10 @@ defmodule LemonChannels.Adapters.WhatsApp.ModelPolicyAdapter do
 
   @impl true
   def session_put(session_key, model) do
-    ensure_session_table()
     :ets.insert(@session_table, {{:model, session_key}, model})
     :ok
   end
 
   @impl true
   def format_source_labels, do: %{topic: "topic default", chat: "chat default"}
-
-  # WhatsApp-specific: ETS session table management
-
-  def ensure_session_table do
-    if :ets.whereis(@session_table) == :undefined do
-      :ets.new(@session_table, [:set, :public, :named_table, read_concurrency: true])
-    end
-
-    :ok
-  rescue
-    error in ArgumentError ->
-      # Another process may have created this named table after the lookup.
-      if :ets.whereis(@session_table) == :undefined, do: reraise(error, __STACKTRACE__)
-      :ok
-  end
 end

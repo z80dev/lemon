@@ -1,9 +1,10 @@
 defmodule LemonAi.EventStream do
   @moduledoc """
-  Async event stream for streaming LLM responses with OTP-compliant lifecycle management.
+  Shared bounded event stream for provider responses and agent execution.
 
-  This module provides a producer/consumer pattern for streaming events
-  from LLM providers with the following BEAM/OTP guarantees:
+  This is the sole queue/lifecycle implementation. The published
+  `LemonAgent.EventStream` facade selects agent terminal/result semantics without
+  introducing a dependency from this package to the agent package.
 
   ## Features
 
@@ -36,6 +37,7 @@ defmodule LemonAi.EventStream do
       case EventStream.push(stream, {:text_delta, 0, "Hello", partial}) do
         :ok -> :continue
         {:error, :overflow} -> :stop_producing
+        {:error, :canceled} -> :stop_producing
       end
 
       # Consumer reads events
@@ -45,6 +47,19 @@ defmodule LemonAi.EventStream do
 
       # Or cancel explicitly
       EventStream.cancel(stream, :user_requested)
+
+  Provider completion returns `{:ok, message}` and emits
+  `{:done, stop_reason, message}`. List completion emits `{:agent_end, messages}`;
+  `error/3` preserves the agent reason and partial-state result. Result subscribers
+  and first-content timing work for either event format.
+
+  Synchronous pushes have no call timeout. Producers must handle rejected pushes,
+  or use `push!/2` with an explicit tagged-throw boundary. A slow server must not
+  turn into a producer exit merely because its mailbox takes five seconds to run.
+
+  In agent format explicit cancellation drains accepted events before one
+  cancellation terminal, and rejects subsequent pushes. Owner death and timeout
+  always tear down the stream and attached task immediately.
   """
 
   use GenServer
@@ -60,6 +75,7 @@ defmodule LemonAi.EventStream do
   @default_max_queue 10_000
   @default_timeout 1_800_000
   @default_idle_timeout 300_000
+  @resync_retention_ms 30_000
 
   # ============================================================================
   # Event Types
@@ -81,7 +97,7 @@ defmodule LemonAi.EventStream do
 
   @type t :: pid()
 
-  @type drop_strategy :: :drop_oldest | :drop_newest | :error
+  @type drop_strategy :: :drop_oldest | :drop_newest | :error | :resync
 
   @type option ::
           {:owner, pid()}
@@ -89,6 +105,11 @@ defmodule LemonAi.EventStream do
           | {:drop_strategy, drop_strategy()}
           | {:timeout, timeout()}
           | {:idle_timeout, timeout()}
+          | {:runner, pid()}
+          | {:event_format, :agent | :provider}
+          | {:on_cancel, (-> term())}
+          | {:task_shutdown_grace_ms, pos_integer()}
+          | {:overflow_event, term()}
 
   # ============================================================================
   # Client API
@@ -103,6 +124,14 @@ defmodule LemonAi.EventStream do
   - `:max_queue` - Maximum events to buffer. Default: #{@default_max_queue}
   - `:drop_strategy` - What to do on overflow: `:drop_oldest`, `:drop_newest`, or `:error`.
     Default: `:error`
+  - `:runner` - Optional producer monitor; producer death emits a terminal error.
+  - `:event_format` - `:provider` (default) or `:agent`; selects task-crash
+    results and cancellation draining. The published agent facade supplies this.
+  - `:on_cancel` - Optional zero-arity cooperative cancellation callback.
+  - `:task_shutdown_grace_ms` - Grace before force-killing a task that ignores
+    shutdown; default 100ms, preserving the former agent caller policy.
+  - `:drop_strategy` also accepts `:resync`, retaining accepted events and one
+    `:overflow_event` marker for up to 30 seconds, then releasing the stream.
   - `:timeout` - Hard ceiling in milliseconds. Default: #{@default_timeout}ms.
     Cancels with `:timeout`. `:infinity` disables this limit.
   - `:idle_timeout` - Maximum silence between events. Default: #{@default_idle_timeout}ms.
@@ -111,14 +140,20 @@ defmodule LemonAi.EventStream do
   """
   @spec start_link([option()]) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts)
+    GenServer.start_link(__MODULE__, Keyword.put_new(opts, :owner, self()))
+  end
+
+  @doc "Start an unlinked stream, monitoring the caller unless an owner is supplied."
+  @spec start([option()]) :: GenServer.on_start()
+  def start(opts \\ []) do
+    GenServer.start(__MODULE__, Keyword.put_new(opts, :owner, self()))
   end
 
   @doc """
   Attach a streaming task to this event stream.
 
-  When the stream is canceled or the owner dies, the attached task will be
-  shutdown using `Task.shutdown/2`.
+  When the stream is canceled or the owner dies, the attached task receives
+  shutdown, followed by a bounded grace period before forced termination.
   """
   @spec attach_task(t(), pid()) :: :ok
   def attach_task(stream, task_pid) when is_pid(task_pid) do
@@ -132,14 +167,39 @@ defmodule LemonAi.EventStream do
   (when using `:error` drop strategy) or `{:error, :canceled}` if the
   stream has been canceled.
 
+  The call waits without a timeout; stream lifecycle timers still apply.
   Use `push_async/2` if you don't need backpressure feedback.
   """
   @spec push(t(), event()) :: :ok | {:error, :overflow | :canceled}
   def push(stream, event) do
-    GenServer.call(stream, {:push, event})
+    GenServer.call(stream, {:push, event}, :infinity)
   catch
     :exit, {:noproc, _} -> {:error, :canceled}
     :exit, {:normal, _} -> {:error, :canceled}
+    :exit, {:shutdown, _} -> {:error, :canceled}
+  end
+
+  @doc """
+  Push or stop a producer at its explicit failure boundary.
+
+  Overflow finishes the stream with an error instead of silently losing output.
+  Failure throws `{:event_stream_push_failed, reason}`; producer entry points must
+  catch that tag and stop producing. Cancellation never replaces a terminal result.
+  Like `push/2`, this waits without a call timeout.
+  """
+  @spec push!(t(), term()) :: :ok
+  def push!(stream, event) do
+    case push(stream, event) do
+      :ok ->
+        :ok
+
+      {:error, :overflow} ->
+        GenServer.cast(stream, :producer_overflow)
+        throw({:event_stream_push_failed, :overflow})
+
+      {:error, :canceled} ->
+        throw({:event_stream_push_failed, :canceled})
+    end
   end
 
   @doc """
@@ -160,7 +220,7 @@ defmodule LemonAi.EventStream do
   @doc """
   Complete the stream with a final message.
   """
-  @spec complete(t(), AssistantMessage.t()) :: :ok
+  @spec complete(t(), AssistantMessage.t() | list()) :: :ok
   def complete(stream, message) do
     GenServer.cast(stream, {:complete, message})
   end
@@ -176,6 +236,12 @@ defmodule LemonAi.EventStream do
 
   def error(stream, message) do
     GenServer.cast(stream, {:error, message})
+  end
+
+  @doc "Finish an agent stream with a reason and partial state."
+  @spec error(t(), term(), term()) :: :ok
+  def error(stream, reason, partial_state) do
+    GenServer.cast(stream, {:error, reason, partial_state})
   end
 
   @doc """
@@ -208,11 +274,12 @@ defmodule LemonAi.EventStream do
           {:halt, nil}
 
         {:active, stream} ->
-          case GenServer.call(stream, :take, :infinity) do
+          case safe_take(stream) do
             {:event, event} ->
               is_terminal =
                 match?({:done, _, _}, event) or
                   match?({:error, _, _}, event) or
+                  match?({:agent_end, _}, event) or
                   match?({:canceled, _}, event)
 
               if is_terminal do
@@ -234,7 +301,7 @@ defmodule LemonAi.EventStream do
   Get the final result of the stream, blocking until complete.
   """
   @spec result(t(), timeout()) ::
-          {:ok, AssistantMessage.t()} | {:error, AssistantMessage.t() | term()}
+          {:ok, AssistantMessage.t() | list()} | {:error, term()} | {:error, term(), term()}
   def result(stream, timeout \\ :infinity) do
     GenServer.call(stream, :result, timeout)
   catch
@@ -326,6 +393,7 @@ defmodule LemonAi.EventStream do
     idle_timeout = Keyword.get(opts, :idle_timeout, @default_idle_timeout)
     now = System.monotonic_time(:millisecond)
 
+    runner = Keyword.get(opts, :runner)
     # Monitor the owner process
     owner_ref = if owner != self(), do: Process.monitor(owner), else: nil
 
@@ -337,6 +405,12 @@ defmodule LemonAi.EventStream do
       queue_size: 0,
       max_queue: max_queue,
       drop_strategy: drop_strategy,
+      event_format: Keyword.get(opts, :event_format, :provider),
+      runner_ref: if(runner, do: Process.monitor(runner), else: nil),
+      on_cancel: Keyword.get(opts, :on_cancel),
+      task_shutdown_grace_ms: Keyword.get(opts, :task_shutdown_grace_ms, 100),
+      overflow_event: Keyword.get(opts, :overflow_event, {:stream_resync, %{reason: :overflow}}),
+      resync_fenced: false,
       dropped: 0,
       take_waiters: :queue.new(),
       result_waiters: :queue.new(),
@@ -367,6 +441,10 @@ defmodule LemonAi.EventStream do
     {:reply, {:error, :canceled}, state}
   end
 
+  def handle_call({:push, _event}, _from, %{done: true} = state) do
+    {:reply, {:error, :canceled}, state}
+  end
+
   def handle_call({:push, event}, _from, state) do
     case handle_push(event, state, log_on_overflow: false) do
       {:ok, new_state} ->
@@ -380,7 +458,13 @@ defmodule LemonAi.EventStream do
   def handle_call(:take, from, state) do
     case :queue.out(state.events) do
       {{:value, event}, remaining} ->
-        {:reply, {:event, event}, %{state | events: remaining, queue_size: state.queue_size - 1}}
+        state = %{state | events: remaining, queue_size: state.queue_size - 1}
+
+        if state.canceled and state.queue_size == 0 do
+          {:stop, :normal, {:event, event}, state}
+        else
+          {:reply, {:event, event}, state}
+        end
 
       {:empty, _} ->
         if state.done or state.canceled do
@@ -468,12 +552,41 @@ defmodule LemonAi.EventStream do
     {:noreply, %{state | task_pid: task_pid, task_ref: task_ref}}
   end
 
+  def handle_cast(:producer_overflow, %{done: true} = state), do: {:noreply, state}
+
+  def handle_cast(:producer_overflow, %{event_format: :agent} = state) do
+    finish(state, {:error, :overflow, nil}, {:error, :overflow, nil})
+  end
+
+  def handle_cast(:producer_overflow, state) do
+    message = %AssistantMessage{
+      role: :assistant,
+      content: [],
+      stop_reason: :error,
+      error_message: "Event stream queue overflow",
+      error_details: LemonAi.Error.to_error_details(:overflow),
+      timestamp: System.system_time(:millisecond)
+    }
+
+    finish(state, {:error, :error, message}, {:error, message})
+  end
+
+  def handle_cast(:transport_overflow, state), do: {:noreply, resync_overflow(state)}
+
+  def handle_cast({:push, _event}, %{done: true} = state), do: {:noreply, state}
+
   def handle_cast({:push, event}, state) do
     # Async push for backward compatibility - ignores backpressure
     case handle_push(event, state, log_on_overflow: true) do
       {:ok, new_state} -> {:noreply, new_state}
       {:overflow, new_state} -> {:noreply, new_state}
     end
+  end
+
+  def handle_cast({:complete, _message}, %{done: true} = state), do: {:noreply, state}
+
+  def handle_cast({:complete, messages}, state) when is_list(messages) do
+    finish(state, {:agent_end, messages}, {:ok, messages})
   end
 
   def handle_cast({:complete, message}, state) do
@@ -493,6 +606,14 @@ defmodule LemonAi.EventStream do
     {:noreply, state}
   end
 
+  def handle_cast({:error, _message}, %{done: true} = state), do: {:noreply, state}
+
+  def handle_cast({:error, _reason, _partial}, %{done: true} = state), do: {:noreply, state}
+
+  def handle_cast({:error, reason, partial}, state) do
+    finish(state, {:error, reason, partial}, {:error, reason, partial})
+  end
+
   def handle_cast({:error, message}, state) do
     stop_reason = Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
 
@@ -510,9 +631,16 @@ defmodule LemonAi.EventStream do
     {:noreply, state}
   end
 
+  def handle_cast({:cancel, _reason}, %{done: true} = state), do: {:noreply, state}
+
   def handle_cast({:cancel, reason}, state) do
     state = do_cancel(state, reason)
-    {:stop, :normal, state}
+
+    if state.event_format == :agent and state.queue_size > 0 do
+      {:noreply, state}
+    else
+      {:stop, :normal, state}
+    end
   end
 
   @impl true
@@ -531,6 +659,38 @@ defmodule LemonAi.EventStream do
 
     state = do_cancel(state, cancel_reason)
     {:stop, :normal, state}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{runner_ref: ref} = state)
+      when not is_nil(ref) do
+    state = %{state | runner_ref: nil}
+
+    if state.done do
+      {:noreply, state}
+    else
+      finish(
+        state,
+        {:error, {:runner_crashed, reason}, nil},
+        {:error, {:runner_crashed, reason}, nil}
+      )
+    end
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, pid, reason},
+        %{task_pid: pid, task_ref: ref, event_format: :agent} = state
+      ) do
+    state = %{state | task_pid: nil, task_ref: nil}
+
+    if state.done do
+      {:noreply, state}
+    else
+      finish(
+        state,
+        {:error, {:task_crashed, reason}, nil},
+        {:error, {:task_crashed, reason}, nil}
+      )
+    end
   end
 
   def handle_info({:DOWN, ref, :process, pid, reason}, %{task_pid: pid, task_ref: ref} = state) do
@@ -607,6 +767,10 @@ defmodule LemonAi.EventStream do
 
   def handle_info({:timeout, _ref, _kind}, state), do: {:noreply, state}
 
+  def handle_info(:stream_timeout, %{resync_fenced: true} = state) do
+    {:stop, :normal, state}
+  end
+
   def handle_info(:stream_timeout, %{done: true} = state), do: {:noreply, state}
 
   def handle_info(:stream_timeout, state) do
@@ -614,6 +778,8 @@ defmodule LemonAi.EventStream do
     state = do_cancel(state, state.timeout_reason)
     {:stop, :normal, state}
   end
+
+  def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
   def terminate(reason, state) do
@@ -643,6 +809,20 @@ defmodule LemonAi.EventStream do
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  defp finish(state, event, result) do
+    state = push_terminal(event, state)
+    cancel_timeouts(state)
+    {:noreply, notify_result_waiters(%{state | done: true, result: result})}
+  end
+
+  defp safe_take(stream) do
+    GenServer.call(stream, :take, :infinity)
+  catch
+    :exit, {:noproc, _} -> {:event, {:canceled, :stream_closed}}
+    :exit, {:normal, _} -> {:event, {:canceled, :stream_closed}}
+    :exit, {:shutdown, _} -> {:event, {:canceled, :stream_closed}}
+  end
 
   defp start_timeout(:infinity, _kind), do: nil
   defp start_timeout(timeout, kind), do: :erlang.start_timer(timeout, self(), kind)
@@ -707,6 +887,10 @@ defmodule LemonAi.EventStream do
     tuple_size(event) > 0 and elem(event, 0) in [:text_delta, :thinking_delta, :tool_call_delta]
   end
 
+  defp push_terminal(event, %{drop_strategy: :resync} = state) do
+    deliver_or_buffer(event, state)
+  end
+
   defp push_terminal(event, state) do
     case :queue.out(state.take_waiters) do
       {{:value, from}, remaining} ->
@@ -740,6 +924,10 @@ defmodule LemonAi.EventStream do
     end
   end
 
+  defp handle_overflow(_event, %{drop_strategy: :resync} = state, _log) do
+    {:overflow, resync_overflow(state)}
+  end
+
   defp handle_overflow(event, %{drop_strategy: :drop_oldest} = state, _log_on_overflow) do
     # Drop the oldest event and add the new one
     case :queue.out(state.events) do
@@ -766,6 +954,24 @@ defmodule LemonAi.EventStream do
     end
 
     {:overflow, %{state | dropped: state.dropped + 1}}
+  end
+
+  defp resync_overflow(%{done: true} = state), do: state
+
+  defp resync_overflow(state) do
+    cancel_timeouts(state)
+    state = deliver_or_buffer(state.overflow_event, state)
+
+    state = %{
+      state
+      | done: true,
+        resync_fenced: true,
+        result: {:error, :overflow},
+        dropped: state.dropped + 1,
+        timeout_ref: Process.send_after(self(), :stream_timeout, @resync_retention_ms)
+    }
+
+    notify_result_waiters(state)
   end
 
   defp deliver_or_buffer(event, state) do
@@ -799,13 +1005,14 @@ defmodule LemonAi.EventStream do
     send(subscriber, {:event_stream_result, reference, result})
   end
 
+  defp do_cancel(%{canceled: true} = state, _reason), do: state
+
   defp do_cancel(state, reason) do
     cancel_timeouts(state)
 
-    # Shutdown attached task
-    if state.task_pid && Process.alive?(state.task_pid) do
-      Process.exit(state.task_pid, :shutdown)
-    end
+    if state.on_cancel, do: state.on_cancel.()
+    shutdown_attached_task(state.task_pid, state.task_shutdown_grace_ms)
+    if state.task_ref, do: Process.demonitor(state.task_ref, [:flush])
 
     # Push a canceled event if not already done
     cancel_event = {:canceled, reason}
@@ -818,7 +1025,14 @@ defmodule LemonAi.EventStream do
       end
 
     # Set canceled state
-    state = %{state | canceled: true, cancel_reason: reason, done: true}
+    state = %{
+      state
+      | canceled: true,
+        cancel_reason: reason,
+        done: true,
+        task_pid: nil,
+        task_ref: nil
+    }
 
     # If no result set, set a cancel result
     state =
@@ -831,4 +1045,26 @@ defmodule LemonAi.EventStream do
     # Wake up all waiters
     notify_result_waiters(state)
   end
+
+  defp shutdown_attached_task(pid, grace_ms) when is_pid(pid) do
+    if Process.alive?(pid) do
+      Process.exit(pid, :shutdown)
+
+      spawn(fn ->
+        ref = Process.monitor(pid)
+
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+        after
+          grace_ms ->
+            Process.exit(pid, :kill)
+            Process.demonitor(ref, [:flush])
+        end
+      end)
+    end
+
+    :ok
+  end
+
+  defp shutdown_attached_task(nil, _grace_ms), do: :ok
 end

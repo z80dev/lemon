@@ -63,6 +63,10 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
   setup do
+    unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
+      start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor})
+    end
+
     FileTransferMockAPI.register_sent(self())
     previous_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
     default_cwd = fresh_root!("lemon-telegram-default-cwd")
@@ -75,7 +79,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       Map.merge(existing, %{
         default_cwd: default_cwd,
         telegram: %{
-          bot_token: "token",
+          bot_token: "file-test-#{System.pid()}-#{System.unique_integer([:positive])}",
           api_mod: FileTransferMockAPI
         }
       })
@@ -196,7 +200,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -231,7 +234,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -256,7 +258,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -299,7 +300,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -333,7 +333,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -358,7 +357,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -504,7 +502,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -531,7 +528,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -554,7 +550,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -581,7 +576,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -610,7 +604,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -688,7 +681,6 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,

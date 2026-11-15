@@ -161,7 +161,7 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
     events = prompt(session)
 
     assert Enum.any?(events, fn
-             {:session_event, _, {:budget_warning, %{message: message}}} ->
+             {:session_event, _, {:budget_warning, %{message: message}}, _} ->
                message =~ "no known catalog price"
 
              _ ->

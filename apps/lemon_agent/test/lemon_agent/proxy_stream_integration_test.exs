@@ -119,6 +119,43 @@ defmodule LemonAgent.ProxyStreamIntegrationTest do
   end
 
   describe "stream_proxy/3" do
+    test "a slow consumer receives an overflow error instead of a successful truncated response" do
+      parent = self()
+
+      chunks =
+        Stream.map([:emit], fn _ ->
+          send(parent, {:sse_ready, self()})
+
+          receive do
+            {:capacity, capacity} ->
+              String.duplicate(sse_event(%{"type" => "start"}), capacity + 1) <>
+                sse_event(%{"type" => "done", "reason" => "stop", "usage" => %{}})
+          end
+        end)
+
+      port = start_sse_server(chunks)
+
+      stream =
+        Proxy.stream_proxy(
+          Mocks.mock_model(),
+          LemonAi.Types.Context.new(),
+          %ProxyStreamOptions{
+            auth_token: "offline-fixture",
+            proxy_url: "http://127.0.0.1:#{port}"
+          }
+        )
+
+      assert_receive {:sse_ready, server}, @receive_timeout
+      send(server, {:capacity, EventStream.stats(stream).max_queue})
+
+      assert {:error, %AssistantMessage{stop_reason: :error}} =
+               EventStream.result(stream, @receive_timeout)
+
+      assert EventStream.stats(stream).dropped > 0
+      refute Enum.any?(EventStream.events(stream), &match?({:done, _, _}, &1))
+      assert_receive :sse_server_done, @receive_timeout
+    end
+
     test "nullable history costs encode safely and partial replies remain unknown" do
       for usage <- [
             nil,

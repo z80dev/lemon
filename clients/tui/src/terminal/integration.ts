@@ -152,7 +152,7 @@ export class TerminalIntegration {
 				}
 				this.update();
 			}),
-			this.#client.events.on("agent", (event) => {
+			this.#client.events.on("agent-applied", (event) => {
 				const session = event.sessionKey ?? this.#store.focusedKey;
 				if (event.type === "started") {
 					this.#runs.add(event.runId);

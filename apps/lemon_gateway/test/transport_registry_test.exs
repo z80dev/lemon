@@ -245,7 +245,54 @@ defmodule LemonGateway.TransportRegistryTest do
     Application.put_env(:lemon_gateway, :transports, [MockTransport])
     {:ok, _} = restart_registry()
 
-    assert catch_exit(TransportRegistry.get_transport!("unknown"))
+    assert_raise ArgumentError, ~s(unknown transport id: "unknown"), fn ->
+      TransportRegistry.get_transport!("unknown")
+    end
+
+    assert TransportRegistry.get_transport("mock") == MockTransport
+  end
+
+  test "immutable lookups do not call the registry or config processes" do
+    Application.put_env(:lemon_gateway, :transports, [MockTransport, MockWebhookTransport])
+    {:ok, registry} = restart_registry()
+    config = Process.whereis(LemonGateway.Config)
+    :ok = :sys.suspend(registry)
+    :ok = :sys.suspend(config)
+
+    try do
+      task =
+        Task.async(fn ->
+          {
+            TransportRegistry.list_transports() |> Enum.sort(),
+            TransportRegistry.get_transport("mock"),
+            TransportRegistry.get_transport!("mock"),
+            TransportRegistry.get_transport("missing"),
+            TransportRegistry.enabled_transports()
+          }
+        end)
+
+      assert Task.await(task, 1_000) ==
+               {["mock", "webhook"], MockTransport, MockTransport, nil, [{"mock", MockTransport}]}
+    after
+      :sys.resume(config)
+      :sys.resume(registry)
+    end
+  end
+
+  test "stopping and reloading the registry never exposes the previous snapshot" do
+    Application.put_env(:lemon_gateway, :transports, [MockTransport])
+    {:ok, _} = restart_registry()
+    assert TransportRegistry.get_transport("mock") == MockTransport
+
+    :ok = Supervisor.terminate_child(LemonGateway.IngressSupervisor, TransportRegistry)
+    assert TransportRegistry.list_transports() == []
+    assert TransportRegistry.get_transport("mock") == nil
+    assert TransportRegistry.enabled_transports() == []
+
+    Application.put_env(:lemon_gateway, :transports, [AnotherTransport])
+    {:ok, _} = Supervisor.restart_child(LemonGateway.IngressSupervisor, TransportRegistry)
+    assert TransportRegistry.list_transports() == ["another"]
+    assert TransportRegistry.get_transport("mock") == nil
   end
 
   test "rejects invalid transport id format" do

@@ -15,6 +15,41 @@ import type { UserPromptResolved } from "./user-prompt.ts";
 
 export type Nullable<T> = T | null | undefined;
 
+/** Gap-free session sequence; streamId fences owner incarnation and branch epoch. */
+export interface SessionEventCursor {
+	version: 1;
+	sessionId: string;
+	streamId: string;
+	seq: number;
+}
+
+export interface SessionEventBatch {
+	cursor: SessionEventCursor;
+	eventId?: string;
+	/** An empty projection still advances the session sequence. */
+	events: Array<{ event: string; payload: Record<string, unknown> }>;
+}
+
+export interface SessionEvent extends SessionEventBatch {
+	sessionKey: string;
+}
+
+export interface SessionsEventsParams {
+	sessionKey: string;
+	cursor: SessionEventCursor;
+	limit?: number;
+}
+
+export type SessionsEventsResult =
+	| {
+			status: "ok";
+			sessionKey: string;
+			events: SessionEventBatch[];
+			cursor: SessionEventCursor;
+			hasMore: boolean;
+	  }
+	| { status: "cursor_expired"; sessionKey: string };
+
 export interface SessionSnapshotIdentity {
 	sessionKey: string;
 	sessionId: string | null;
@@ -51,6 +86,7 @@ export type SessionsSnapshotResult =
 			status: "ok";
 			sessionKey: string;
 			identity: SessionSnapshotIdentity;
+			eventCursor?: SessionEventCursor | null;
 			/** Owner-verified terminal continuity for this request's continuationFrom. */
 			continuation?: boolean;
 			consistency: {
@@ -336,6 +372,7 @@ export interface ChannelDeliveryEvent {
 // ---------------------------------------------------------------------------
 
 export interface ProtocolEventMap {
+	"session.event": SessionEvent;
 	"stream.resync": { reason: "overflow"; sessionKey?: Nullable<string>; runId?: Nullable<string> };
 	chat: ChatEvent;
 	agent: AgentEvent;
@@ -372,6 +409,8 @@ export type ProtocolEventName = keyof ProtocolEventMap & string;
 
 /** Client-side lifecycle notifications, emitted on the same bus as events. */
 export interface ClientLifecycleMap {
+	/** Accepted by the transcript writer, never a legacy duplicate or rejected preview. */
+	"agent-applied": AgentEvent;
 	/** Connection state transitions. */
 	state: { state: ConnectionState; previous: ConnectionState };
 	/** A completed handshake. `resumed` is true for every hello-ok after the first. */

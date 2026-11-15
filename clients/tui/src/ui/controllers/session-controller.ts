@@ -29,10 +29,16 @@ import {
 } from "../../protocol/errors.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import { METHOD } from "../../protocol/methods.ts";
+import {
+	parseSessionEventCursor,
+	sameSessionEventStream,
+	SessionEventCursorError,
+} from "../../protocol/session-events.ts";
 import type {
 	ApprovalRequestedEvent,
 	ChatHistoryMessage,
 	ExecPendingApproval,
+	SessionEventCursor,
 	SessionSummary,
 	SessionsSnapshotResult,
 } from "../../protocol/types.ts";
@@ -48,6 +54,9 @@ export const HYDRATE_LIMIT = 100;
 
 /** Owner/event races get at most three read-only attempts per recovery. */
 export const SNAPSHOT_RETRY_LIMIT = 3;
+
+/** Client paging policy, independent of the server's retained ring size. */
+export const EVENT_REPLAY_LIMIT = 100;
 
 /** The slice of the editor a switch needs. */
 export interface DraftEditor {
@@ -71,8 +80,9 @@ export interface SessionControllerOptions {
 	onSnapshot?: (
 		result: Extract<SessionsSnapshotResult, { status: "ok" }>,
 		branchChanged: boolean,
-		terminalAdvance: boolean,
 	) => void;
+	/** Queue authority is emitted only after snapshot/replay and the buffered tail settle. */
+	onTerminalRecovered?: (sessionKey: string) => void;
 }
 
 export interface ConfirmSpec {
@@ -94,6 +104,7 @@ export class SessionController {
 	readonly #refreshStatus: (() => void) | undefined;
 	readonly #confirm: ((spec: ConfirmSpec) => void) | undefined;
 	readonly #onSnapshot: SessionControllerOptions["onSnapshot"];
+	readonly #onTerminalRecovered: SessionControllerOptions["onTerminalRecovered"];
 	#selectionGeneration = 0;
 	#recoveryGeneration = 0;
 	/** Coalesce owner reads per session; background recovery must not cancel focus recovery. */
@@ -123,6 +134,7 @@ export class SessionController {
 		this.#refreshStatus = options.refreshStatus;
 		this.#confirm = options.confirm;
 		this.#onSnapshot = options.onSnapshot;
+		this.#onTerminalRecovered = options.onTerminalRecovered;
 	}
 
 	/** Sessions this client has already hydrated (or minted, so never will). */
@@ -185,9 +197,10 @@ export class SessionController {
 		const selection = ++this.#selectionGeneration;
 		const previous = this.#store.sessions.get(previousKey);
 		if (
-			previous?.snapshotIdentity &&
-			previous.busy &&
-			this.#store.queue.items(previousKey)[0]?.state === "queued-local"
+			previous?.eventCursor ||
+			(previous?.snapshotIdentity &&
+				previous.busy &&
+				this.#store.queue.items(previousKey)[0]?.state === "queued-local")
 		)
 			void this.resync(previousKey);
 		if (this.#methods.supports(METHOD.sessionsSnapshot)) {
@@ -284,6 +297,13 @@ export class SessionController {
 		const session = this.#store.sessions.get(key);
 		if (!session) return;
 		this.#recoveryInFlight.delete(key);
+		const canonical = Boolean(session.eventCursor || this.#methods.supports(METHOD.sessionsEvents));
+		session.eventCursor = undefined;
+		session.eventSnapshotRequired = canonical;
+		session.eventRecovery = canonical;
+		session.pendingSessionEvents.clear();
+		session.recoveredCompletion = undefined;
+		session.recoveredSnapshotRunId = undefined;
 		session.resetTranscript();
 		// The transcript is gone, so the stored history may legitimately be
 		// re-pulled on a later switch.
@@ -298,6 +318,7 @@ export class SessionController {
 		if (this.#methods.supports(METHOD.sessionsSnapshot)) {
 			if (key !== this.#store.focusedKey) return;
 			++this.#selectionGeneration;
+			this.#store.session(key).eventSnapshotRequired = true;
 			await this.resync();
 			return;
 		}
@@ -425,9 +446,9 @@ export class SessionController {
 	// -- reconnect recovery --------------------------------------------------
 
 	/**
-	 * Compose only owner truth. Failed reads never mean idle or empty approvals.
-	 * There is no snapshot text cursor: recovered runs refresh instead of
-	 * appending deltas whose relationship to answer-so-far is unknowable.
+	 * Recover from the retained owner cursor before replacing any projection.
+	 * Only explicit expiry or an incompatible cursor falls back to a snapshot;
+	 * failed replay reads retain the cursor and keep live application paused.
 	 * Reads coalesce per session. Focused reads retain selection fencing; a
 	 * background read is superseded if that session is selected or removed.
 	 */
@@ -461,11 +482,87 @@ export class SessionController {
 		);
 	}
 
+	#finishEventRecovery(session: SessionStore): boolean {
+		if (!this.#events.finishEventRecovery(session)) return false;
+		const terminalRun = session.recoveredSnapshotRunId;
+		session.recoveredSnapshotRunId = undefined;
+		if (terminalRun && !session.busy) this.#onTerminalRecovered?.(session.key);
+		return true;
+	}
+
+	async #replay(
+		session: SessionStore,
+		selection: number | undefined,
+		generation: number,
+	): Promise<"complete" | "snapshot" | "stopped"> {
+		while (session.eventCursor && !session.eventSnapshotRequired) {
+			const cursor = session.eventCursor;
+			const eventVersion = session.recoveryEventVersion;
+			try {
+				const result = await this.#methods.sessionsEvents({
+					sessionKey: session.key,
+					cursor,
+					limit: EVENT_REPLAY_LIMIT,
+				});
+				if (!this.#isCurrentRecovery(session, selection, generation)) return "stopped";
+				if (session.eventSnapshotRequired) return "snapshot";
+				if (result.sessionKey !== session.key) throw new Error("foreign sessions.events response");
+				if (result.status === "cursor_expired") {
+					session.eventSnapshotRequired = true;
+					session.markCostUnobserved();
+					return "snapshot";
+				}
+				// Validate the whole page before committing any of its projection.
+				let seq = cursor.seq;
+				for (const batch of result.events) {
+					if (!sameSessionEventStream(cursor, batch.cursor))
+						throw new SessionEventCursorError("session event owner incarnation changed");
+					if (batch.cursor.seq !== seq + 1) throw new Error("noncontiguous session event replay");
+					seq = batch.cursor.seq;
+				}
+				if (!sameSessionEventStream(cursor, result.cursor))
+					throw new SessionEventCursorError("session event owner incarnation changed");
+				if (result.cursor.seq !== seq || (result.hasMore && result.events.length === 0))
+					throw new Error("invalid session event replay continuation");
+				const raced = eventVersion !== session.recoveryEventVersion;
+				for (const batch of result.events) {
+					if (!this.#events.applySessionBatch(session, batch))
+						throw new Error("session event replay lost its cursor");
+				}
+				if (result.hasMore || raced) continue;
+				if (this.#finishEventRecovery(session)) return "complete";
+				if (session.eventSnapshotRequired) return "snapshot";
+				if (session.eventCursor.seq === cursor.seq)
+					throw new Error("session event replay did not fill the live gap");
+			} catch (error) {
+				if (!this.#isCurrentRecovery(session, selection, generation)) return "stopped";
+				this.#notice(`could not replay ${session.key}: ${describeError(error)}`, "warning", session);
+				if (error instanceof SessionEventCursorError) {
+					session.eventSnapshotRequired = true;
+					return "snapshot";
+				}
+				if (error instanceof ControlPlaneError && ["FORBIDDEN", "UNAUTHORIZED"].includes(error.code))
+					this.#replaceApprovals(session.key, []);
+				return "stopped";
+			}
+		}
+		return "snapshot";
+	}
+
 	async #recover(
 		session: SessionStore,
 		selection: number | undefined,
 		generation: number,
 	): Promise<void> {
+		session.eventRecovery = Boolean(
+			session.eventCursor ||
+				session.eventSnapshotRequired ||
+				this.#methods.supports(METHOD.sessionsEvents),
+		);
+		if (session.eventCursor && !session.eventSnapshotRequired) {
+			const replay = await this.#replay(session, selection, generation);
+			if (replay !== "snapshot") return;
+		}
 		if (!this.#methods.supports(METHOD.sessionsSnapshot)) return;
 		for (let attempt = 0; attempt < SNAPSHOT_RETRY_LIMIT; attempt++) {
 			const eventVersion = session.recoveryEventVersion;
@@ -518,6 +615,18 @@ export class SessionController {
 			)
 				return;
 			if (result.status === "retry" || eventVersion !== session.recoveryEventVersion) continue;
+			let eventCursor: SessionEventCursor | undefined;
+			try {
+				eventCursor =
+					result.eventCursor == null ? undefined : parseSessionEventCursor(result.eventCursor);
+				if (eventCursor && eventCursor.sessionId !== result.identity.sessionId)
+					throw new SessionEventCursorError("snapshot event cursor belongs to another session");
+			} catch (error) {
+				session.eventSnapshotRequired = true;
+				session.eventRecovery = true;
+				this.#notice(`could not recover ${session.key}: ${describeError(error)}`, "warning", session);
+				return;
+			}
 			// A send receipt can move the active run without a protocol event.
 			// Fence that local projection just as strictly as events and selection.
 			if (
@@ -563,7 +672,11 @@ export class SessionController {
 			const branchChanged =
 				session.snapshotIdentity?.sessionId !== result.identity.sessionId ||
 				session.snapshotIdentity?.revision !== result.identity.revision ||
-				session.snapshotIdentity?.branchId !== result.identity.branchId;
+				session.snapshotIdentity?.branchId !== result.identity.branchId ||
+				Boolean(
+					session.eventCursor && eventCursor &&
+						!sameSessionEventStream(session.eventCursor, eventCursor),
+				);
 			if (branchChanged) {
 				session.planMode = undefined;
 				session.planPath = undefined;
@@ -578,7 +691,15 @@ export class SessionController {
 			}
 			session.snapshotIdentity = result.identity;
 			session.snapshotRunId = result.identity.runId ?? undefined;
+			session.eventCursor = eventCursor;
+			session.eventSnapshotRequired = false;
+			session.recoveredCompletion = undefined;
 			const runId = result.identity.runId;
+			session.recoveredSnapshotRunId = terminalAdvance
+				? runId ?? undefined
+				: !branchChanged && session.recoveredSnapshotRunId === runId
+					? session.recoveredSnapshotRunId
+					: undefined;
 			synthesizeHistory(
 				session,
 				snapshot.messages.filter(
@@ -693,13 +814,18 @@ export class SessionController {
 			this.#hydrated.add(session.key);
 			// Replacing historical rows is not new background activity.
 			if (selection === undefined) session.unread = previousUnread + (terminalAdvance ? 1 : 0);
-			this.#onSnapshot?.(result, branchChanged, terminalAdvance);
+			this.#onSnapshot?.(result, branchChanged);
 			if (session === this.#store.focused) {
 				this.#events.rebuildFocused();
 				this.#tui.requestRender(true, { clearScrollback: true });
 			}
 			this.#refreshStatus?.();
 			void this.seedContext(session);
+			if (!this.#finishEventRecovery(session)) {
+				const replay = await this.#replay(session, selection, generation);
+				if (replay === "snapshot") continue;
+				if (replay !== "complete") return;
+			}
 			return;
 		}
 		if (this.#isCurrentRecovery(session, selection, generation)) {

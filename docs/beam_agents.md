@@ -36,20 +36,47 @@ provider stream → agent loop → coding session → runtime bus
 
 The agent emits turn/message/tool events and a terminal result. The terminal
 `agent_end` carries newly produced messages, not the entire conversation.
-Session notifications use `{:session_event, session_id, event}`.
+Session notifications use `{:session_event, session_id, event, cursor}`.
 
-`CodingAgent.Session.Notifier` owns subscriber bookkeeping. It has two deliberately
-different paths:
+`CodingAgent.Session.Notifier` assigns one gap-free per-session `seq` at the
+broadcast point, before fanout. Its session-owned protected ETS `ordered_set`
+retains events under both count and encoded-term byte budgets (caller policy:
+1,000 events / 1 MiB by default, `:event_log_max_count` / `:event_log_max_bytes`).
+An oversized event is delivered live but evicts its own replay entry; replay
+never silently skips it.
+
+Version-1 cursors contain `sessionId`, opaque `streamId`, and `seq`. The stream
+identifies an owner/selected-branch epoch, not a global or run-local order. The
+stable event identity is `streamId:seq`, shared by live delivery and replay.
+Run IDs remain run identity; the existing chat delta `seq` remains run-local.
+Branch selection/reset rotates the stream and expires old cursors without
+reusing the session sequence. Owner death destroys the ring, so restart requires
+snapshot recovery, not automatic side-effect replay. Unsupported cursor
+versions are rejected explicitly.
 
 | Subscription | Delivery | Limit |
 | --- | --- | --- |
-| Direct | Fire-and-forget `send/2` | No mailbox backpressure; trusted consumers must keep up |
-| EventStream | Bounded stream with configured drop/timeout policy | Queue bounds do not guarantee lossless replay |
+| Direct | Nonblocking `Bus.Delivery` admission | Count/byte admission fences overflow |
+| EventStream | Bounded subscriber queue | Overflow fence, then cursor recovery |
 
-Prefer the stream path for consumers that may fall behind. Stream owner death
-cancels its attached task. Subscriber monitoring removes dead direct listeners
-and cancels/demonitors owned streams. Every terminal/error path must release
-subscriptions and resources without inventing a successful result.
+The authenticated `sessions.events` method returns ordered batches strictly
+after a cursor, or explicit `cursor_expired`. Authorization is checked again for
+each replay, including after reading the owner. The TUI deduplicates the same
+canonical `session.event` batches live and on reconnect, fetching missed pages
+from its cursor and falling back to `sessions.snapshot` only on expiry. Snapshot
+collection includes the native cursor so replacement text and later deltas have
+an explicit boundary. Failed reads never imply an empty/idle session.
+
+Subscriber monitoring removes dead listeners and cancels/demonitors owned
+streams. Fences are transport control messages, not sequenced session events.
+Every terminal/error path releases subscriptions without inventing success.
+
+`LemonAgent.EventStream` still serves non-session/provider streams with no native
+session cursor. Its bounded overflow fence/retirement buffer is therefore retained
+here, not treated as a second replay authority. Session clients no longer need
+it to replay missed events; the EventStream unification owner can remove the
+session-specific resync buffering once the generic fence/terminal contract is
+preserved for cursorless consumers.
 
 ## Failure and mutation semantics
 
@@ -59,11 +86,10 @@ fabricated empty/unchanged state. Boundary code distinguishes definite rejection
 from an unknown mutation outcome: a timeout or exit can happen after acceptance.
 Retain fixed run identity and reconcile unknown outcomes; do not duplicate work.
 
-Session direct fanout remains fire-and-forget and events are not batched. There
-is no universal lossless replay protocol for transient subscribers. Supervision
-recovers a process, not arbitrary in-flight remote effects. Durable lifecycle
-stores and explicit idempotency/lease contracts provide those guarantees where
-implemented.
+Supervision recovers a process, not arbitrary in-flight remote effects. Cursor
+replay recovers transient session observation only within a live ring window.
+Durable lifecycle stores and explicit idempotency/lease contracts provide
+cross-restart and side-effect guarantees where implemented.
 
 ## Verification
 

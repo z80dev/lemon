@@ -22,6 +22,7 @@ defmodule LemonBrowser.LocalServer do
 
   alias LemonCore.Env
   alias LemonCore.Id
+  alias LemonCore.ProcessGroup
 
   @name __MODULE__
 
@@ -245,11 +246,7 @@ defmodule LemonBrowser.LocalServer do
   end
 
   defp signal_os_process(pid) when is_integer(pid) do
-    _ =
-      case System.find_executable("kill") do
-        nil -> :ok
-        _ -> System.cmd("kill", ["-TERM", Integer.to_string(pid)], stderr_to_stdout: true)
-      end
+    _ = ProcessGroup.terminate(pid)
 
     :ok
   catch

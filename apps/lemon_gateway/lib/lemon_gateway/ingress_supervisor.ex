@@ -28,6 +28,7 @@ defmodule LemonGateway.IngressSupervisor do
     children =
       [
         LemonGateway.TransportRegistry,
+        LemonGateway.Transports.Webhook.Idempotency,
         LemonGateway.TransportSupervisor,
         LemonGateway.Sms.Inbox,
         LemonGateway.Sms.WebhookServer,

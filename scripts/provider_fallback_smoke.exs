@@ -113,13 +113,13 @@ defmodule LemonScripts.ProviderFallbackSmoke do
       {:http_attempt, model} ->
         await_completion(deadline, attempts ++ [model])
 
-      {:session_event, _id, {:agent_end, messages}} ->
+      {:session_event, _id, {:agent_end, messages}, _cursor} ->
         {messages, attempts}
 
-      {:session_event, _id, {:error, reason, _partial}} ->
+      {:session_event, _id, {:error, reason, _partial}, _cursor} ->
         raise "fixture session failed: #{inspect(reason)}"
 
-      {:session_event, _id, _event} ->
+      {:session_event, _id, _event, _cursor} ->
         await_completion(deadline, attempts)
     after
       remaining -> raise "fixture session did not complete"

@@ -148,7 +148,12 @@ defmodule CodingAgent.Session.Persistence do
       state.session_file ||
         SessionManager.session_file_path(state.cwd, state.session_manager.header.id)
 
-    case SessionManager.checkpoint(state.session_manager) do
+    result =
+      if is_nil(state.session_manager.append_device),
+        do: SessionManager.save_to_file(path, state.session_manager),
+        else: SessionManager.checkpoint(state.session_manager)
+
+    case result do
       :ok ->
         {:ok, %{state | session_file: path}}
 

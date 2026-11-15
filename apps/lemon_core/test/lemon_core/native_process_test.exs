@@ -18,7 +18,7 @@ defmodule LemonCore.NativeProcessTest do
       if pid = Process.whereis(NativeProcess) do
         for {_id, record, %{}} <- NativeProcess.snapshot() do
           if ProcessGroup.valid_identity?(record.workload_identity) do
-            ProcessGroup.signal_workload_group(record.workload_identity, :sigkill)
+            ProcessGroup.terminate(record.workload_identity, signal: :sigkill)
           end
         end
 

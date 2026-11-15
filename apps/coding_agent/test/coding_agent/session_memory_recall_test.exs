@@ -143,7 +143,9 @@ defmodule CodingAgent.SessionMemoryRecallTest do
     refute system_prompt =~ "March 14th"
   end
 
-  test "[memory] auto_recall = false attaches nothing", %{agent_id: agent_id} do
+  test "[memory] auto_recall = false excludes memory but keeps turn environment", %{
+    agent_id: agent_id
+  } do
     cwd = Process.get(:recall_cwd)
     File.mkdir_p!(Path.join(cwd, ".lemon"))
 
@@ -157,7 +159,14 @@ defmodule CodingAgent.SessionMemoryRecallTest do
     :ok = Session.prompt(session, "What could I get Priya for her birthday?")
     {text, _system_prompt} = sent_user_text()
 
-    assert text == "What could I get Priya for her birthday?"
+    assert String.starts_with?(
+             text,
+             "What could I get Priya for her birthday?\n\n<recalled-context>"
+           )
+
+    assert text =~ "## Current environment"
+    refute text =~ "Relevant memory"
+    refute text =~ "March 14th"
   end
 
   test "remembered USER.md facts accompany scoped recall without another tool call", %{

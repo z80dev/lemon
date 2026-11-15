@@ -107,7 +107,7 @@ defmodule CodingAgent.Security.SecretObfuscationSessionTest do
 
     Session.subscribe(session)
     assert :ok = Session.prompt(session, "deploy with #{secret}")
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
 
     assert_receive {:provider_context, first}
     refute inspect(first, limit: :infinity, printable_limit: :infinity) =~ secret
@@ -129,6 +129,11 @@ defmodule CodingAgent.Security.SecretObfuscationSessionTest do
     assert :ok = Session.compact(session, keep_recent_tokens: 1)
     assert_receive {:summary_request, summary_context}
     refute inspect(summary_context, limit: :infinity, printable_limit: :infinity) =~ secret
+
+    # A persisted session's compaction worker must only preview the new context;
+    # the owning session appends exactly one accepted compaction to its journal.
+    entries = Session.get_state(session).session_manager |> SessionManager.entries()
+    assert Enum.count(entries, &(&1.type == :compaction)) == 1
   end
 
   defp user_text(context) do

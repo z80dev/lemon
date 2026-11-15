@@ -218,8 +218,18 @@ defmodule LemonRouter.ResumeResolverTest do
       tool_policy: policy
     }
 
-    assert {:error, :sync_refused} = ResumeResolver.bind(token, request, store)
-    assert {:error, :sync_refused} = ResumeResolver.bind_run(request, store)
+    # The mutation may be visible even though its durability acknowledgement failed.
+    # Preserve the unknown outcome instead of exposing a retry-looking backend error.
+    assert {:error, :outcome_unknown} = ResumeResolver.bind(token, request, store)
+    assert {:error, :outcome_unknown} = ResumeResolver.bind_run(request, store)
+
+    assert {:ok, digest} =
+             LemonCore.Store.fetch(store, :native_resume_contexts, {token.engine, token.value})
+
+    assert is_binary(digest)
+
+    assert {:ok, ^digest} =
+             LemonCore.Store.fetch(store, :native_resume_contexts, {:run, request.run_id})
 
     assert :ok =
              ChatStateStore.put(store, session_key, %{

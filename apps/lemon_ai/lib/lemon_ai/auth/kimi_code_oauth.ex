@@ -19,7 +19,7 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
   persistence. Tests may pass `:req_options` and `:sleep`.
   """
 
-  alias LemonAi.Auth.{OAuthFlow, OAuthSecret}
+  alias LemonAi.Auth.{Cache, OAuthFlow, OAuthSecret}
 
   @client_id "17e5f671-d194-4dfb-9706-5516cb48c098"
   @default_base_url "https://auth.kimi.com"
@@ -148,15 +148,15 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
 
   def oauth_token?(_), do: false
 
-  @doc "Kimi CLI fingerprint headers (lower-case names), built once per VM."
+  @doc "Kimi CLI fingerprint headers (lower-case names), cached for the auth cache owner's lifetime."
   @spec request_headers() :: [{String.t(), String.t()}]
   def request_headers do
     key = {__MODULE__, :request_headers}
 
-    case :persistent_term.get(key, nil) do
+    case Cache.get(key) do
       nil ->
         headers = build_request_headers()
-        :persistent_term.put(key, headers)
+        Cache.put(key, headers)
         headers
 
       headers ->
