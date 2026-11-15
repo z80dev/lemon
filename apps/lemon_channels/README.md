@@ -106,6 +106,20 @@ side effects. Internal routing, rendering, and state-write failures are not
 converted into successful deliveries or permissive authorization decisions.
 Pairing, binding, group/admin, and file-access checks remain fail-closed.
 
+Telegram HTTP long polls run as monitored, unlinked tasks under the adapter's
+`AsyncSupervisor`, so live allowlist and drain calls do not wait for Telegram.
+Fetched updates are applied to the current state; drain discards an in-flight
+batch without advancing its offset. Startup probes and poller-lock acquisition
+are deferred to `handle_continue`, leaving `init` probe-free. A supervised lock
+holder uses `LemonCore.Service.Lock` with process identity checks and excludes
+the same bot token across accounts and OS processes. `LEMON_LOCK_DIR` overrides
+the shared service lock directory (default `~/.lemon/run/service`). Lock age
+never permits stealing from a live process; the old poller stale-ms setting is
+removed. Async work fails closed if its supervisor is unavailable.
+Telegram outbound attempts sends once, without adapter sleeps or retry loops;
+only the outbox retries transient errors and honors rate-limit hints. Direct
+script sends return those errors to the caller.
+
 **Script send**: `LemonChannels.ScriptSend` gives shell scripts, cron jobs, and CI a Hermes-style notification path for the promoted Telegram and Discord platforms. It builds direct text or file `OutboundPayload` structs and calls the platform outbound adapter directly without starting inbound transports.
 
 **Command discovery**: `LemonChannels.CommandCatalog` is the portable,

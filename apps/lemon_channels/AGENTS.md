@@ -74,6 +74,13 @@ and script notifications.
 - Transport GenServers remain lifecycle shells; add behavior to existing local
   normalization/pipeline/command/action helpers. Async Telegram work uses its
   task supervisor. Picker/system traffic should use the delivery/outbox path.
+  Telegram long polls run in `AsyncSupervisor` via `async_nolink`; apply replies
+  to current transport state, never overwrite live allowlist/drain changes with
+  a task's old snapshot. Drain discards an in-flight batch without confirming
+  its offset. Bootstrap probes and token-scoped service-lock acquisition happen
+  in `handle_continue`, not `init`. Missing supervision fails closed.
+  Outbound sends never sleep or retry; the outbox owns transient/rate-limit
+  retry budgets and backoff, including media sends.
 - `/model` scope is deliberate: session choices stay session-local, while
   future-session defaults are chat-wide even when selected from a topic. Accept
   exact labels and plain provider/model IDs; selections are not ordinary prompts.

@@ -32,6 +32,8 @@ defmodule LemonChannels.OutboxReliabilityTest do
   end
 
   setup do
+    original_config = Application.fetch_env(:lemon_channels, Outbox)
+
     for module <- [Registry, RateLimiter, Dedupe, Outbox] do
       if is_nil(Process.whereis(module)), do: start_supervised!(module)
     end
@@ -39,7 +41,11 @@ defmodule LemonChannels.OutboxReliabilityTest do
     Registry.register(ControlledPlugin)
 
     on_exit(fn ->
-      Application.delete_env(:lemon_channels, Outbox)
+      case original_config do
+        {:ok, config} -> Application.put_env(:lemon_channels, Outbox, config)
+        :error -> Application.delete_env(:lemon_channels, Outbox)
+      end
+
       if Process.whereis(Registry), do: Registry.unregister(ControlledPlugin.id())
     end)
 
@@ -97,13 +103,16 @@ defmodule LemonChannels.OutboxReliabilityTest do
     end
   end
 
-  test "every unknown-outcome shape is retried at-least-once with the same key", ctx do
+  test "unknown outcomes and pre-write transient failures retry with the same key", ctx do
     reasons = [
       :outcome_unknown,
       {:outcome_unknown, :connection_lost},
       :timeout,
       {:closed, :socket},
       {:http_error, 503, ""},
+      {:failed_connect, :econnrefused},
+      :econnrefused,
+      :nxdomain,
       {:discord_send_crashed, RuntimeError.exception("lost acknowledgement")}
     ]
 

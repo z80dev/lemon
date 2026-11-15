@@ -3,7 +3,7 @@ defmodule LemonCore.Service.Lock do
   alias LemonCore.Service.{Identity, Role, Unit}
 
   def with_lock(label, opts, fun) do
-    dir = Role.run_dir(opts)
+    dir = Keyword.get_lazy(opts, :run_dir, fn -> Role.run_dir(opts) end)
     path = Path.join(dir, label <> ".lock")
 
     with :ok <- File.mkdir_p(dir),

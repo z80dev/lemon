@@ -70,21 +70,19 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     end
   end
 
-  test "pre-write failures and rate limits retry with their delay" do
+  test "pre-write failures and rate limits return once for outbox retry" do
     put_telegram_config(%{bot_token: "token", api_mod: ScriptedApi})
 
     payload =
       OutboundPayload.text("telegram", "acct", %{kind: :dm, id: "123", thread_id: nil}, "hello")
 
-    for {reason, delay} <- [
-          {{:failed_connect, :econnrefused}, 400},
-          {{:http_error, 429, ~s({"parameters":{"retry_after":1.2}})}, 1200}
+    for reason <- [
+          {:failed_connect, :econnrefused},
+          {:http_error, 429, ~s({"parameters":{"retry_after":1.2}})}
         ] do
       Process.put(:send_results, [{:error, reason}, {:ok, %{}}])
-      assert {:ok, _} = Outbound.deliver(payload)
-      assert_receive {:accepted_write, :send_message, first}
-      assert_receive {:accepted_write, :send_message, second}
-      assert second - first >= delay
+      assert {:error, ^reason} = Outbound.deliver(payload)
+      assert_receive {:accepted_write, :send_message, _}
       refute_receive {:accepted_write, _, _}, 0
     end
   end
@@ -619,7 +617,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     assert second_opts[:message_thread_id] == 777
   end
 
-  test "file: retries send_photo when Telegram responds with 429 retry_after" do
+  test "file: returns rate limits without retrying send_photo" do
     put_telegram_config(%{bot_token: "token", api_mod: MockApiPhotoRateLimitedOnce})
 
     path =
@@ -641,19 +639,17 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
         reply_to: "456"
       }
 
-    assert {:ok, _} = Outbound.deliver(payload)
+    assert {:error, {:http_error, 429, _}} = Outbound.deliver(payload)
 
     assert_receive {:send_photo_attempt, 1, 123, ^path, first_opts}
     assert first_opts[:reply_to_message_id] == 456
     assert first_opts[:caption] == "Retry me"
 
-    assert_receive {:send_photo_attempt, 2, 123, ^path, second_opts}, 2_000
-    assert second_opts[:reply_to_message_id] == 456
-    assert second_opts[:caption] == "Retry me"
+    refute_receive {:send_photo_attempt, 2, _, _, _}, 0
   end
 
   defp put_telegram_config(config) when is_map(config) do
-    base = %{account_id: "acct", files: %{outbound_send_delay_ms: 0}}
+    base = %{account_id: "acct"}
     telegram = deep_merge(base, config)
     existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
 

@@ -116,18 +116,6 @@ defmodule LemonChannels.Env do
       required?: false,
       area: :gateway,
       apps: [:lemon_channels]
-    },
-    %{
-      name: :lemon_telegram_poller_lock_stale_ms,
-      env_var: "LEMON_TELEGRAM_POLLER_LOCK_STALE_MS",
-      aliases: [],
-      type: :integer,
-      default: nil,
-      doc: "Age (ms) after which a Telegram poller lock is considered stale and reclaimed.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_channels]
     }
   ]
 end

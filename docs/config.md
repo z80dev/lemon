@@ -2986,7 +2986,6 @@ allowed_user_ids = [123456789]  # if empty, group uploads require admin
 deny_globs = [".git/**", ".env", ".envrc", "**/*.pem", "**/.ssh/**"]
 max_upload_bytes = 20971520     # optional (default: 20MB)
 max_download_bytes = 52428800   # optional (default: 50MB)
-outbound_send_delay_ms = 1000   # optional: delay between auto-sent files/batches to reduce 429s
 ```
 
 Commands:

@@ -113,8 +113,7 @@ defmodule LemonGateway.ConfigLoaderTest do
             "enabled" => true,
             "auto_send_generated_files" => true,
             "auto_send_generated_images" => true,
-            "auto_send_generated_max_files" => 4,
-            "outbound_send_delay_ms" => 800
+            "auto_send_generated_max_files" => 4
           }
         },
         "discord" => %{
@@ -138,7 +137,6 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert config.telegram.files.auto_send_generated_files == true
     assert config.telegram.files.auto_send_generated_images == true
     assert config.telegram.files.auto_send_generated_max_files == 4
-    assert config.telegram.files.outbound_send_delay_ms == 800
     assert config.discord.files.enabled == true
     assert config.discord.files.auto_send_generated_files == true
     assert config.discord.files.auto_send_generated_max_files == 2

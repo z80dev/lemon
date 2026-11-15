@@ -13,8 +13,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
     UpdateProcessor
   }
 
-  alias LemonChannels.Telegram.PollerLock
-
   @webhook_clear_retry_ms 5 * 60 * 1000
 
   @type callbacks :: %{
@@ -33,11 +31,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
           submit_buffer: (map(), map() -> map())
         }
 
-  @spec poll_updates(map(), callbacks()) :: map()
-  def poll_updates(state, callbacks) when is_map(state) and is_map(callbacks) do
-    _ = PollerLock.heartbeat(state.account_id, state.token)
+  def fetch(state), do: safe_get_updates(state)
 
-    case safe_get_updates(state) do
+  def apply_result(state, result, callbacks) do
+    case result do
       {:ok, %{"ok" => true, "result" => updates}} ->
         LemonChannels.Registry.record_status("telegram", :connected)
 
