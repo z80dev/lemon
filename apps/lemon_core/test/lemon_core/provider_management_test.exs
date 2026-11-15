@@ -243,7 +243,7 @@ defmodule LemonCore.ProviderManagementTest do
     secret = "OFFLINE_MOCK_SECRET_CRASH_DIAGNOSTIC"
 
     status =
-      LemonCore.NodeRegistry.format_status(%{
+      LemonCore.NodeInvocation.format_status(%{
         state: %{private: secret},
         message: {:invoke, "node.providers.management.api_key.set", %{"value" => secret}},
         reason: {:unexpected, secret},
@@ -251,6 +251,7 @@ defmodule LemonCore.ProviderManagementTest do
       })
 
     refute inspect(status) =~ secret
+    assert status.state == :private_node_transport
     assert status.message == :redacted
     assert status.reason == :redacted
     assert status.log == []
