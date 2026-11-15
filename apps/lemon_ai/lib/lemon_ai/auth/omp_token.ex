@@ -2,13 +2,15 @@ defmodule LemonAi.Auth.OmpToken do
   @moduledoc """
   Access-only bridge to omp's Kimi Code login. omp owns refresh and its leases;
   Lemon never reads or stores omp's refresh credentials. Access tokens are cached
-  only in this BEAM node's memory, until two minutes before their JWT expiry.
+  in the supervised `LemonAi.Auth.Cache` ETS table until two minutes before their
+  JWT expiry. Owner restarts discard the cache; without the owner each resolution
+  fetches from omp without creating a table in the calling process.
 
   Execution is argv-only, with closed stdin, a 20-second deadline and a 64 KiB
   combined-output limit. Only stable, credential-free errors leave the adapter.
   """
 
-  alias LemonAi.Auth.{KimiCodeOAuth, OAuthFlow}
+  alias LemonAi.Auth.{Cache, KimiCodeOAuth, OAuthFlow}
 
   @timeout_ms 20_000
   @max_output_bytes 65_536
@@ -54,13 +56,13 @@ defmodule LemonAi.Auth.OmpToken do
   # cannot restore a rejected token after another caller's forced refresh.
   defp resolve_cached(key, executable, opts) do
     now = System.system_time(:second)
-    cached = :persistent_term.get(key, nil)
+    cached = Cache.get(key)
 
     if not Keyword.get(opts, :force_refresh, false) and fresh?(cached, now) do
       {token, _exp} = cached
       {:ok, token}
     else
-      :persistent_term.erase(key)
+      Cache.delete(key)
 
       args =
         ["token", "kimi-code"] ++ if(opts[:force_refresh], do: ["--force-refresh"], else: [])
@@ -68,7 +70,7 @@ defmodule LemonAi.Auth.OmpToken do
       with {:ok, output} <- run(executable, args),
            {:ok, token, exp} <- parse(output, System.system_time(:second)) do
         if exp > System.system_time(:second) + @skew_s,
-          do: :persistent_term.put(key, {token, exp})
+          do: Cache.put(key, {token, exp})
 
         {:ok, token}
       end

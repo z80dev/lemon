@@ -307,17 +307,17 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
     assert_receive {:streaming, provider}, 5_000
     assert_receive {:started, first, prompt}, 5_000
     assert prompt =~ "first"
-    refute_received {:session_event, _, {:tool_execution_start, "call-session", _, _}}
+    refute_received {:session_event, _, {:tool_execution_start, "call-session", _, _}, _}
 
     send(provider, :continue)
     assert_receive {:started, second, _}, 5_000
 
     assert_receive {:session_event, _,
-                    {:tool_execution_end, "call-session", "task", result, false}},
+                    {:tool_execution_end, "call-session", "task", result, false}, _},
                    5_000
 
     assert result.details.task_ids == [first, second]
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     refute_received {:started, _, _}
 
     CodingAgent.Tools.Task.Control.cancel_parent(session)

@@ -363,7 +363,7 @@ defmodule CodingAgent.Tools.AskParentTest do
     assert_receive {:join_model_context, _initial}, 2_000
 
     assert_receive {:session_event, _session_id,
-                    {:tool_execution_start, ^join_call_id, "task", _args}},
+                    {:tool_execution_start, ^join_call_id, "task", _args}, _},
                    2_000
 
     child =
@@ -387,10 +387,10 @@ defmodule CodingAgent.Tools.AskParentTest do
     assert_receive {:join_model_context, question_context}, 2_000
     assert Enum.any?(question_context, &(message_text(&1) =~ "Which boundary?"))
 
-    assert_receive {:session_event, _session_id, {:agent_end, messages}}, 2_000
+    assert_receive {:session_event, _session_id, {:agent_end, messages}, _}, 2_000
     assert Enum.any?(messages, &(message_text(&1) =~ "address the child's question"))
     refute Session.get_state(parent_session).is_streaming
-    refute_received {:session_event, _session_id, {:agent_end, _messages}}
+    refute_received {:session_event, _session_id, {:agent_end, _messages}, _}
 
     [{request_id, _record}] = ParentQuestions.list_for_parent("agent:main:main", "main")
 
@@ -519,7 +519,7 @@ defmodule CodingAgent.Tools.AskParentTest do
                     {:tool_execution_end, _call_id, "task",
                      %AgentToolResult{
                        details: %{status: "needs_parent_answer", request_id: request_id}
-                     }, false}},
+                     }, false}, _},
                    2_000
 
     assert_receive {:model_request, question_model, context}, 2_000
@@ -530,8 +530,8 @@ defmodule CodingAgent.Tools.AskParentTest do
              &match?(%{tool_call_id: "question-sibling", is_error: false}, &1)
            )
 
-    assert_receive {:session_event, _session_id, {:agent_start}}, 2_000
-    refute_received {:session_event, _session_id, {:agent_end, _messages}}
+    assert_receive {:session_event, _session_id, {:agent_start}, _}, 2_000
+    refute_received {:session_event, _session_id, {:agent_end, _messages}, _}
     assert Session.get_state(parent_session).is_streaming
 
     send(
@@ -539,10 +539,10 @@ defmodule CodingAgent.Tools.AskParentTest do
       {:respond, Mocks.assistant_message("I can now address the child's question.")}
     )
 
-    assert_receive {:session_event, _session_id, {:agent_end, messages}}, 2_000
+    assert_receive {:session_event, _session_id, {:agent_end, messages}, _}, 2_000
     assert Enum.any?(messages, &(message_text(&1) =~ "address the child's question"))
     assert Enum.count(messages, &match?(%LemonAi.Types.AssistantMessage{}, &1)) == 2
-    refute_received {:session_event, _session_id, {:agent_end, _messages}}
+    refute_received {:session_event, _session_id, {:agent_end, _messages}, _}
     refute Session.get_state(parent_session).is_streaming
 
     assert :ok =

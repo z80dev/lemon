@@ -283,7 +283,8 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
     } do
       {id, pid, state} = start_capped(owner, max_retained_bytes: 32, max_artifact_bytes: 5)
       send(pid, {state.port, {:data, "one\ntwo\n"}})
-      {:ok, _} = ProcessSession.poll(id)
+      # A direct ETS read is not a mailbox barrier for synthetic port output.
+      ProcessSession.get_process_id(pid)
       opts = [session_id: owner, context_guardrails: [spill_dir: Path.join(cwd, "spill")]]
 
       assert %AgentToolResult{details: details, content: content} =
@@ -330,6 +331,7 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
         )
 
       send(pid, {state.port, {:data, "first\nlast\n"}})
+      ProcessSession.get_process_id(pid)
       assert {:ok, %{output: %{received_bytes: 11}}} = ProcessSession.poll(id)
       ProcessSession.stop(id)
 

@@ -232,7 +232,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     assert {:ok, %{approval_id: ^approval_id, outcome: :approved}} =
              LemonCore.ExecApprovals.resolve(approval_id, :approve_once)
 
-    assert_receive {:session_event, ^root_owner, {:agent_end, messages}}, 5_000
+    assert_receive {:session_event, ^root_owner, {:agent_end, messages}, _}, 5_000
     answer = messages |> Enum.filter(&match?(%{role: :assistant}, &1)) |> List.last()
     assert LemonAi.get_text(answer) == "Root completed"
   end

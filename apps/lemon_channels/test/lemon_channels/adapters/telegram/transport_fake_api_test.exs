@@ -103,6 +103,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
   end
 
   setup do
+    unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
+      start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor})
+    end
+
     stop_transport()
     FakeAPI.reset()
 
@@ -545,7 +549,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
   end
 
   defp start_transport(overrides) when is_map(overrides) do
-    token = "fake-token-" <> Integer.to_string(System.unique_integer([:positive]))
+    token = "fake-api-test-#{System.pid()}-#{System.unique_integer([:positive])}"
 
     config =
       %{

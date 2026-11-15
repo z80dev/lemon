@@ -49,6 +49,14 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 - **LoopTaskSupervisor** -- A `Task.Supervisor` for spawning agent loop tasks via `Task.Supervisor.async_nolink/2`.
 - **ToolTaskSupervisor** -- A `Task.Supervisor` for spawning concurrent tool execution tasks.
 
+Credential cooldowns and fallback session pins live in public ETS tables
+created only by their supervised `ModelRuntime.CredentialHealth` and
+`ModelRuntime.SessionPins` owners. Caller exit does not discard the rows.
+Owner restart clears these volatile hints; calls during an outage do not
+create replacement tables and retain the documented no-cooldown/no-pin behavior.
+`ToolRegistry` and `ContextRegistry` retain `persistent_term` for boot-time
+integration registrations only, not per-request state or lazy caches.
+
 ## Module Inventory
 
 ### Core Agent
@@ -92,7 +100,7 @@ Ordinary text-only final answers are not classified as unexpected stops.
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonAgent.EventStream` | `lib/agent_core/event_stream.ex` | GenServer-based async event producer/consumer. Bounded queue with backpressure (`push/2` returns `:ok` or `{:error, :overflow}`). Owner monitoring, task linking, configurable timeout. Drop strategies: `:error`, `:drop_oldest`, `:drop_newest`. |
+| `LemonAgent.EventStream` | `lib/lemon_agent/event_stream.ex` | Published API facade over the single `LemonAi.EventStream` implementation. Preserves agent terminal events, cooperative abort and cancellation draining; no separate queue or process implementation. |
 | `LemonAgent.Context` | `lib/agent_core/context.ex` | Context window management. `truncate/2` keeps retained messages chronological, enforces both bookends limits, and treats assistant tool-call/result transcripts atomically; also provides `estimate_size/2`, `estimate_tokens/1`, `make_transform/1`, `stats/2`, and `check_size/3`. |
 | `LemonAgent.AbortSignal` | `lib/lemon_agent/abort_signal.ex` | Atomics-backed cooperative cancellation. `new/0`, `abort/1`, `aborted?/1`, `subscribe/1`, `unsubscribe/1`. Abort is monotonic; signals are garbage collected when no longer referenced, with no explicit cleanup. Subscribers receive `{:lemon_abort, signal, :abort \| :redirect}` notifications. |
 | `LemonAgent.Proxy` | `lib/agent_core/proxy.ex` | SSE proxy stream function for routing LLM calls through a server. Reconstructs partial `AssistantMessage` from bandwidth-optimized SSE events. Includes `ProxyStreamOptions` struct. |
@@ -220,7 +228,12 @@ LemonAgent.AgentRegistry.list()
 
 ### Backpressure
 
-`EventStream.push/2` is synchronous and returns `:ok | {:error, :overflow | :canceled}`. Producers can use this for flow control. `push_async/2` is fire-and-forget. Drop strategies (`:error`, `:drop_oldest`, `:drop_newest`) control overflow behavior.
+`EventStream.push/2` is synchronous and returns `:ok | {:error, :overflow | :canceled}`. It waits without a GenServer call timeout; producers must handle rejection. Internal producers use `push!/2`, which terminates an overflowing stream with an error and throws `{:event_stream_push_failed, reason}` to their producer boundary. `push_async/2` is fire-and-forget. Drop strategies (`:error`, `:drop_oldest`, `:drop_newest`, `:resync`) control overflow behavior.
+
+The published `LemonAgent.EventStream` API remains a thin facade: all streams run
+`LemonAi.EventStream`. Agent results and `{:agent_end, messages}` are unchanged;
+provider streams retain `{:done, stop_reason, message}`. The facade injects the
+abort callback, keeping `lemon_ai` independent of `lemon_agent`.
 
 ### Introspection
 

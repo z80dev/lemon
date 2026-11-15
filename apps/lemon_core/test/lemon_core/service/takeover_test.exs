@@ -62,7 +62,7 @@ defmodule LemonCore.Service.TakeoverTest do
       "ps", _, _ ->
         {"501 #{@started} /bin/backend\n", 0}
 
-      "kill", args, _ ->
+      executable, args, _ when executable in ["/bin/kill", "/usr/bin/kill"] ->
         Agent.update(state, &%{&1 | alive: false, signals: [args | &1.signals]})
         {"", 0}
     end
@@ -95,7 +95,7 @@ defmodule LemonCore.Service.TakeoverTest do
         "ps", _, _ ->
           {"#{uid} #{@started} #{program}\n", 0}
 
-        "kill", _, _ ->
+        executable, _, _ when executable in ["/bin/kill", "/usr/bin/kill"] ->
           send(parent, :signalled)
           {"", 0}
       end
@@ -172,7 +172,7 @@ defmodule LemonCore.Service.TakeoverTest do
       "ps", _, _ ->
         {"501 Tue Nov 10 13:00:00 2026 /bin/worker\n", 0}
 
-      "kill", _, _ ->
+      executable, _, _ when executable in ["/bin/kill", "/usr/bin/kill"] ->
         send(parent, :signalled)
         {"", 0}
     end
@@ -183,5 +183,44 @@ defmodule LemonCore.Service.TakeoverTest do
              Identity.terminate(identity, uid: "501", command_runner: runner)
 
     refute_received :signalled
+  end
+
+  test "service termination sends only TERM and retains a surviving process" do
+    parent = self()
+
+    runner = fn
+      "ps", ["-p", "123", "-o", "lstart="], _ ->
+        {@started, 0}
+
+      "ps", _, _ ->
+        {"501 #{@started} /bin/worker\n", 0}
+
+      executable, args, _ when executable in ["/bin/kill", "/usr/bin/kill"] ->
+        send(parent, {:signal, args})
+        {"", 0}
+    end
+
+    identity = %{pid: 123, started_at: @started, executable: "/bin/worker"}
+
+    assert {:error, :stop_timeout} =
+             Identity.terminate(identity, uid: "501", command_runner: runner, stop_timeout: 0)
+
+    assert_receive {:signal, ["-TERM", "123"]}
+    refute_received {:signal, _}
+  end
+
+  test "service signal failure remains a structured service error" do
+    runner = fn
+      "ps", _, _ ->
+        {"501 #{@started} /bin/worker\n", 0}
+
+      executable, ["-TERM", "123"], _ when executable in ["/bin/kill", "/usr/bin/kill"] ->
+        {"permission denied", 1}
+    end
+
+    identity = %{pid: 123, started_at: @started, executable: "/bin/worker"}
+
+    assert {:error, :service_command_failed} =
+             Identity.terminate(identity, uid: "501", command_runner: runner)
   end
 end

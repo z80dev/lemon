@@ -1,7 +1,13 @@
 defmodule LemonGateway.Transports.Webhook.Idempotency do
   @moduledoc """
   Idempotency-key reservation and response persistence for webhook submissions.
+
+  The ingress supervisor owns the volatile ETS sweep watermark through this
+  module. Request processes may advance it only after successful cleanup; their
+  exit cannot delete it. Owner restart resets the schedule, not durable receipts.
   """
+
+  use GenServer
 
   require Logger
 
@@ -13,7 +19,19 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   @reservation_lease_ms 60_000
   @response_retention_ms 86_400_000
   @sweep_interval_ms 60_000
-  @last_sweep_key {__MODULE__, :last_response_sweep_ms}
+  @sweep_table __MODULE__
+  @last_sweep_key :last_response_sweep_ms
+
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @impl true
+  def init(_opts) do
+    :ets.new(@sweep_table, [:named_table, :public, :set, read_concurrency: true])
+    :ets.insert(@sweep_table, {@last_sweep_key, 0})
+    {:ok, nil}
+  end
 
   @spec table() :: atom()
   def table, do: @table
@@ -574,17 +592,18 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
   defp maybe_sweep_expired do
     now_ms = System.system_time(:millisecond)
-    last_ms = :persistent_term.get(@last_sweep_key, 0)
+    table = :ets.whereis(@sweep_table)
+    last_ms = :ets.lookup_element(table, @last_sweep_key, 2)
 
     if now_ms - last_ms >= @sweep_interval_ms do
       case :global.trans(
              {{__MODULE__, :response_sweep}, self()},
              fn ->
-               current = :persistent_term.get(@last_sweep_key, 0)
+               current = :ets.lookup_element(table, @last_sweep_key, 2)
 
                if now_ms - current >= @sweep_interval_ms do
                  result = sweep_expired(now_ms, @response_retention_ms)
-                 if result == :ok, do: :persistent_term.put(@last_sweep_key, now_ms)
+                 if result == :ok, do: :ets.insert(table, {@last_sweep_key, now_ms})
                  result
                else
                  :ok

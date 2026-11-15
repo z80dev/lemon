@@ -463,9 +463,9 @@ defmodule LemonCore.Store do
   @doc """
   Mirror `table` into this store's read cache from now on.
 
-  Registration is remembered in `:persistent_term`, so it survives a store
-  restart and may be made before the store boots. Collaborators that own a
-  generic table call this at startup rather than the store hard-coding it:
+  Registration is remembered in supervised runtime ETS storage, so it survives
+  a store restart and may be made before that store boots (after `:lemon_core`
+  has started). Collaborators that own a generic table call this at startup:
 
       LemonCore.Store.register_cached_table(:my_hot_index)
   """

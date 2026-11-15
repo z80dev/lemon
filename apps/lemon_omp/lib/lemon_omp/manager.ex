@@ -20,6 +20,7 @@ defmodule LemonOmp.Manager do
   alias LemonCore.{Bus, Event}
 
   @table :lemon_omp_sessions
+  @version_table :lemon_omp_versions
   @topic "omp"
   @max_ended 50
 
@@ -87,11 +88,30 @@ defmodule LemonOmp.Manager do
   @spec live?(pid(), map()) :: boolean()
   def live?(pid, wire), do: wire["status"] not in ["closed", "failed"] and Process.alive?(pid)
 
+  @doc false
+  def cached_version(executable, mtime) do
+    case :ets.lookup(@version_table, executable) do
+      [{^executable, ^mtime, value}] -> {:ok, value}
+      _ -> :miss
+    end
+  rescue
+    ArgumentError -> :miss
+  end
+
+  @doc false
+  def cache_version(executable, mtime, value) do
+    :ets.insert(@version_table, {executable, mtime, value})
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
   defp table?, do: :ets.whereis(@table) != :undefined
 
   @impl true
   def init(_opts) do
     :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
+    :ets.new(@version_table, [:named_table, :public, :set, read_concurrency: true])
     {:ok, %{monitors: %{}}}
   end
 

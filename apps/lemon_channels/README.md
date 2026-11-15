@@ -97,8 +97,10 @@ and rate limits honor `retry_after`.
 An enqueue acknowledgement means **durably queued**, not delivered: every physical
 chunk is recorded in the channels-owned Store table and crosses `Store.sync/1`
 before the caller receives `{:ok, ref}`. On restart, pending records recover
-their original FIFO sequence, retry window/budget and idempotency keys. Missing
-keys (including continuation chunks) receive stable outbox-generated keys.
+their original FIFO sequence, retry window/budget and idempotency keys, including
+`nil`. A record's durable ID supplies a private dedupe identity when its payload
+has no key; the outbox never injects that identity into adapter payloads or
+continuation chunks.
 Confirmed sends replace pending message content with a content-free durable
 dedupe receipt, so restarting the queue or Store does not forget confirmed keys.
 Use a persistent Store backend (normally SQLite) for hard-crash recovery; the
@@ -206,6 +208,9 @@ LemonChannels.Application
 +-- LemonChannels.Outbox.Dedupe           (GenServer - confirmed-key ETS table owner)
 +-- Outbox.WorkerSupervisor               (Task.Supervisor - max_children delivery cap)
 +-- LemonChannels.Outbox                  (GenServer - delivery queue)
++-- WhatsApp.ModelPolicyAdapter           (GenServer - session-override ETS owner)
++-- LemonChannels.InboundHttp             (Supervisor - optional HTTP listener)
+|   +-- InboundHttp.Routes                (GenServer - config registration only)
 +-- LemonChannels.AdapterSupervisor       (DynamicSupervisor)
     +-- Telegram.Supervisor               (if configured)
     |   +-- Telegram.AsyncSupervisor      (Task.Supervisor)
@@ -222,6 +227,13 @@ LemonChannels.Application
 ```
 
 Adapters are selected from `config :lemon_channels, :adapters` during application boot. Each adapter runs under the `AdapterSupervisor` DynamicSupervisor; adapter modules may still no-op internally when credentials or transport-specific enablement are absent.
+
+Named volatile tables have supervised owners: the outbox dedupe and rate-limit
+children own their tables, WhatsApp's transport owns its inbound dedupe table,
+and the application-owned `WhatsApp.ModelPolicyAdapter` child owns session model
+overrides. Session override reads/writes use ETS directly; they never create a
+table in a short-lived command process. An unavailable owner is an explicit
+failure, and owner restart clears those ephemeral overrides.
 
 ```elixir
 config :lemon_channels,
@@ -979,6 +991,20 @@ LemonChannels.Application.stop_adapter(MyAdapter)
 ```
 
 Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
+
+### Inbound HTTP registration
+
+`LemonChannels.InboundHttp` starts its route-registration child even when the
+optional HTTP listener is disabled. Adapters call `InboundHttp.register/2` at
+boot or configuration registration. Those writes are serialized and publish one
+immutable persistent-term snapshot; registering the same handler again does not
+rewrite it. `handler_for/1`, `handlers/0` and request dispatch never call the
+registration process. Concurrent registrations retain distinct segments, and a
+replacement for an existing segment logs a warning.
+
+A stopped route-registration owner exposes no stale handlers. Restart clears
+registrations, so adapters must register again before receiving requests. No
+per-request state or mutable cache is written to persistent-term.
 
 ## Telemetry Events
 

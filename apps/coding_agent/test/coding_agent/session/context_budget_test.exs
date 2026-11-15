@@ -60,9 +60,10 @@ defmodule CodingAgent.Session.ContextBudgetTest do
     assert budget.tokens == 1_050
     assert budget.source == "usage"
     assert budget.window == 10_000
-    assert budget.reserve_tokens == 512
-    assert budget.threshold_tokens == 9_488
-    assert budget.headroom_tokens == 8_438
+    # The configured reserve is a minimum; the 15% safety floor still applies.
+    assert budget.reserve_tokens == 1_500
+    assert budget.threshold_tokens == 8_500
+    assert budget.headroom_tokens == 7_450
     {:ok, _, manager} = Planning.transition(manager, :enter, [])
     estimate = ContextBudget.measure(%{state | session_manager: manager}, agent)
     assert estimate.source == "estimate"

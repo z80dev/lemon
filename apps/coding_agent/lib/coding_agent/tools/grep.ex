@@ -266,20 +266,12 @@ defmodule CodingAgent.Tools.Grep do
   defp pcre2_available? do
     key = {__MODULE__, :pcre2, System.find_executable("rg")}
 
-    case :persistent_term.get(key, :unknown) do
-      :unknown ->
-        supported? =
-          case LemonCore.NativeProcess.cmd("rg", ["--pcre2-version"], stderr_to_stdout: true) do
-            {_, 0} -> true
-            _ -> false
-          end
-
-        :persistent_term.put(key, supported?)
-        supported?
-
-      supported? ->
-        supported?
-    end
+    CodingAgent.RuntimeTables.fetch(key, fn ->
+      case LemonCore.NativeProcess.cmd("rg", ["--pcre2-version"], stderr_to_stdout: true) do
+        {_, 0} -> true
+        _ -> false
+      end
+    end)
   end
 
   defp regex_engine(%{literal: true}), do: {:ok, false}

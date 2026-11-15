@@ -40,14 +40,11 @@ config :logger, :default_formatter,
     :turn
   ]
 
-# Lane concurrency caps for CodingAgent.LaneQueue
-# Keep main cap at 4 to stay within Telegram's per-chat rate limits.
-# Subagent and background_exec can be higher since they don't all
-# route through the same Telegram chat.
-config :coding_agent, :lane_caps,
-  main: 8,
-  subagent: 16,
-  background_exec: 8
+# Shared native task/background-session capacity.
+config :coding_agent, :task_max_concurrency, 8
+
+# Background process launch callbacks (not live process lifetimes).
+config :coding_agent, :lane_caps, background_exec: 8
 
 config :coding_agent, :async_followups, default_queue_mode: :followup
 

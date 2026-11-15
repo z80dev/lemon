@@ -60,12 +60,15 @@ defmodule LemonChannels.InboundHttpTest do
   end
 
   setup do
-    # The Agent is started by the InboundHttp supervisor; registrations are
-    # global, so clean up whatever a test adds.
+    original_handlers = InboundHttp.handlers()
+
     on_exit(fn ->
-      if pid = Process.whereis(LemonChannels.InboundHttp.Routes) do
-        Agent.update(pid, fn _ -> %{} end)
-      end
+      :ok = Supervisor.terminate_child(InboundHttp, InboundHttp.Routes)
+      {:ok, _} = Supervisor.restart_child(InboundHttp, InboundHttp.Routes)
+
+      Enum.each(original_handlers, fn {segment, handler} ->
+        :ok = InboundHttp.register(segment, handler)
+      end)
     end)
 
     :ok
@@ -116,6 +119,43 @@ defmodule LemonChannels.InboundHttpTest do
 
     test "re-registering a segment replaces the handler" do
       assert :ok = InboundHttp.register("echo", EchoHandler)
+      assert :ok = InboundHttp.register("echo", CrashHandler)
+      assert InboundHttp.handler_for("echo") == CrashHandler
+    end
+
+    test "request dispatch and lookups do not call the registration process" do
+      :ok = InboundHttp.register("echo", EchoHandler)
+      routes = Process.whereis(InboundHttp.Routes)
+      :ok = :sys.suspend(routes)
+
+      try do
+        task =
+          Task.async(fn ->
+            assert InboundHttp.handler_for("echo") == EchoHandler
+            assert InboundHttp.handlers()["echo"] == EchoHandler
+
+            :post
+            |> conn("/echo", Jason.encode!(%{"hello" => "snapshot"}))
+            |> put_req_header("content-type", "application/json")
+            |> Router.call(Router.init([]))
+          end)
+
+        assert %{status: 200, resp_body: ~s(echo:"snapshot")} = Task.await(task, 1_000)
+      after
+        :sys.resume(routes)
+      end
+    end
+
+    test "an unavailable or restarted writer does not expose stale routes" do
+      :ok = InboundHttp.register("echo", EchoHandler)
+      :ok = Supervisor.terminate_child(InboundHttp, InboundHttp.Routes)
+
+      assert InboundHttp.handlers() == %{}
+      assert InboundHttp.handler_for("echo") == nil
+      assert InboundHttp.register("echo", EchoHandler) == {:error, :not_running}
+
+      {:ok, _} = Supervisor.restart_child(InboundHttp, InboundHttp.Routes)
+      assert InboundHttp.handlers() == %{}
       assert :ok = InboundHttp.register("echo", CrashHandler)
       assert InboundHttp.handler_for("echo") == CrashHandler
     end
@@ -378,8 +418,8 @@ defmodule LemonChannels.InboundHttpTest do
     end
 
     test "two handlers racing the same segment leave it resolvable and consistent" do
-      # Agent.update serialises the writes, so the table can never be left in a
-      # half-written state; the winner is simply whichever update ran last.
+      # Config registrations serialize writes and publish one complete snapshot;
+      # the winner is simply whichever registration ran last.
       task_a = Task.async(fn -> InboundHttp.register("race", EchoHandler) end)
       task_b = Task.async(fn -> InboundHttp.register("race", CrashHandler) end)
 

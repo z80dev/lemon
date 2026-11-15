@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
 
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
-  alias CodingAgent.BashExecutor
+  alias LemonCore.ProcessGroup
 
   # PATH is operator configuration, but relative entries and workspace binaries
   # are not an implicit grant to execute project code for a fetch-only tool.
@@ -220,7 +220,7 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
   end
 
   defp stop_backend(port, group, root_exited) do
-    if group, do: LemonCore.ProcessGroup.signal_workload_group(group, :sigkill, root_exited)
+    if group, do: ProcessGroup.terminate(group, signal: :sigkill, root_exited: root_exited)
     close(port)
   end
 
@@ -256,9 +256,9 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
 
   # The guardian owns the port from creation, so caller death cannot close it
   # before the process-group witness is checked and surviving children stopped.
-  # On Unix an unwitnessed backend is killed through its still-open port and refused.
+  # On Unix an unwitnessed backend's fresh port group is killed and refused.
   defp guard_backend(port, opts) do
-    capture = Keyword.get(opts, :capture_group, &LemonCore.ProcessGroup.capture_workload_group/1)
+    capture = Keyword.get(opts, :capture_group, &ProcessGroup.capture_workload_group/1)
 
     with {:os_pid, os_pid} <- Port.info(port, :os_pid),
          {:ok, group} <- capture.(os_pid) do
@@ -273,7 +273,7 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
 
   defp unguarded_backend(port, _unix) do
     with {:os_pid, os_pid} <- Port.info(port, :os_pid),
-         do: BashExecutor.kill_process_tree(os_pid)
+         do: ProcessGroup.terminate(os_pid, signal: :sigkill)
 
     close(port)
 

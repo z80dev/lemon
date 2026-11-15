@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ompSessionWire } from "../../src/dev/fixtures/omp-fixtures.ts";
 import { parseOmpSession } from "../../src/protocol/omp.ts";
-import { ompAgentNode, ompDetailNodes } from "../../src/ui/omp-nodes.ts";
+import { ompAgentNode, ompDetailNodes, ompTodoChecklist } from "../../src/ui/omp-nodes.ts";
 import { TERMINAL_CONTROLS } from "../helpers/memory-terminal.ts";
 
 test("semantic nodes prominently show approvals, worktree and child activity", () => {
@@ -31,4 +31,16 @@ test("semantic nodes prominently show approvals, worktree and child activity", (
 	expect(body).toContain("Reading files");
 	expect(header + body).not.toMatch(TERMINAL_CONTROLS);
 	expect(header + body).not.toContain("\\u001b");
+});
+
+test("blocked delegate todos remain visibly blocked with upstream's pending status", () => {
+	const parsed = parseOmpSession(ompSessionWire());
+	if (!parsed) throw new Error("fixture");
+	const checklist = ompTodoChecklist({
+		...parsed,
+		todos: [{ content: "Wait for access", status: "blocked", phase: "Release" }],
+	});
+	const description = JSON.stringify(checklist);
+	expect(description).toContain("Wait for access — blocked");
+	expect(description).toContain("pending");
 });

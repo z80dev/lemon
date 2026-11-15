@@ -17,9 +17,15 @@ defmodule LemonAutomation.KanbanGitWorkflow do
   All operations accept optional trailing keyword options. `:runner` is a test
   seam of arity three `(program, argv, options)`, returning `{:ok, stdout}` or
   `{:error, atom}`. Production uses supervised bounded ports, never a shell.
+  Timeout, output overflow and caller death terminate the owned local process
+  group through `LemonCore.ProcessGroup.terminate/2` before closing the port,
+  including descendants that ignore stdin EOF. Descendants that deliberately
+  leave the group are not contained.
   Options include `:task_supervisor` (default LemonAutomation.TaskSupervisor)
   and `:timeout_ms` (default 30 seconds, capped at 120 seconds).
   """
+
+  alias LemonCore.ProcessGroup
 
   @diff_limit 128 * 1024
   @git_options [
@@ -727,7 +733,7 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     _ -> {:error, :command_failed}
   end
 
-  defp collect(port, deadline, limit, chunks, size, monitor \\ nil) do
+  defp collect(port, deadline, limit, chunks, size, monitor) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
@@ -751,15 +757,12 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     end
   end
 
-  # A port close is not an OS-process kill. Keep the supervised command task
-  # alive long enough to kill its process group and observed descendants, then
+  # Keep the supervised command task alive for bounded group termination and
   # consume the exit event. The caller monitor also handles abrupt worker death.
   defp terminate_port(port) do
     case Port.info(port, :os_pid) do
       {:os_pid, pid} ->
-        descendants = descendants(pid)
-        signal_processes(["-#{pid}"])
-        signal_processes(Enum.map(Enum.reverse(descendants) ++ [pid], &Integer.to_string/1))
+        ProcessGroup.terminate(pid, [])
         reap(port, System.monotonic_time(:millisecond) + 1000)
         if Port.info(port), do: Port.close(port)
 
@@ -768,64 +771,6 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     end
   rescue
     _ -> if Port.info(port), do: Port.close(port)
-  end
-
-  defp descendants(pid) do
-    case cleanup_command("ps", ["-axo", "pid=,ppid="], 1024 * 1024) do
-      {:ok, output} ->
-        children =
-          output
-          |> String.split("\n", trim: true)
-          |> Enum.reduce(%{}, fn line, acc ->
-            case String.split(line) do
-              [child, parent] ->
-                with {child, ""} <- Integer.parse(child),
-                     {parent, ""} <- Integer.parse(parent) do
-                  Map.update(acc, parent, [child], &[child | &1])
-                else
-                  _ -> acc
-                end
-
-              _ ->
-                acc
-            end
-          end)
-
-        descendants([pid], children, [])
-
-      _ ->
-        []
-    end
-  end
-
-  defp descendants([], _children, result), do: result
-
-  defp descendants([pid | rest], children, result) do
-    next = Map.get(children, pid, [])
-    descendants(rest ++ next, children, result ++ next)
-  end
-
-  defp signal_processes([]), do: :ok
-  defp signal_processes(pids), do: cleanup_command("kill", ["-KILL", "--" | pids], 4096)
-
-  defp cleanup_command(program, args, limit) do
-    case System.find_executable(program) do
-      nil ->
-        {:error, :command_unavailable}
-
-      executable ->
-        port =
-          Port.open(
-            {:spawn_executable, executable},
-            [:binary, :exit_status, :stderr_to_stdout, args: args]
-          )
-
-        try do
-          collect(port, System.monotonic_time(:millisecond) + 1000, limit, [], 0)
-        after
-          if Port.info(port), do: Port.close(port)
-        end
-    end
   end
 
   defp reap(port, deadline) do
