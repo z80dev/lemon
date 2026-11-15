@@ -24,6 +24,7 @@ defmodule LemonChannels.MixProject do
   def application do
     [
       extra_applications: [:logger],
+      included_applications: [:nostrum],
       mod: {LemonChannels.Application, []}
     ]
   end
@@ -43,7 +44,7 @@ defmodule LemonChannels.MixProject do
       {:gen_smtp, "~> 1.2"},
       {:mail, "~> 0.4"},
       {:req, "~> 0.5"},
-      {:nostrum, "~> 0.9", runtime: false}
+      {:nostrum, "~> 0.9"}
     ]
   end
 end

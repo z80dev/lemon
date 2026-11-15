@@ -2,7 +2,7 @@
 
 Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, XMTP, WhatsApp, and email), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
 
-This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_parser`, `req`, and `nostrum` (runtime: false).
+Nostrum is an included application: its dependencies are loaded normally, while the configured Discord adapter owns and supervises its process tree.
 
 ## Architecture Overview
 
@@ -172,7 +172,10 @@ LemonChannels.Application
     |   +-- Telegram.AsyncSupervisor      (Task.Supervisor)
     |   +-- Telegram.Transport            (GenServer - long-polling)
     +-- Discord.Supervisor                (if configured)
-    |   +-- Discord.Transport             (Nostrum consumer)
+    |   +-- Nostrum.Supervisor             (included application)
+    |   +-- Discord.AsyncSupervisor       (Task.Supervisor)
+    |   +-- Discord.Transport             (GenServer - event lifecycle)
+    |   +-- Discord.Transport.Consumer    (Nostrum consumer)
     +-- XMTP.Transport                    (if configured, GenServer + Port)
     +-- WhatsApp.Supervisor               (if configured)
         +-- WhatsApp.AsyncSupervisor      (Task.Supervisor)
@@ -712,8 +715,8 @@ See [pairing security and limits](../../docs/config.md#telegram-and-discord-dm-p
 | Module | Purpose |
 |--------|---------|
 | `Discord` (plugin) | Plugin behaviour implementation |
-| `Discord.Supervisor` | Starts transport if bot_token is configured |
-| `Discord.Transport` | Nostrum consumer, slash command handling, component interactions, and inbound RunRequest submission |
+| `Discord.Supervisor` | Boots and supervises Nostrum, the event task supervisor, transport and consumer when a token is configured |
+| `Discord.Transport` | Ordered supervised event tasks for slash commands, component interactions, and inbound RunRequest submission |
 | `Discord.Inbound` | Normalizes Discord message events to `InboundMessage`, handles attachments |
 | `Discord.Renderer` | Semantic renderer for status controls, thread-aware replies, and finalize-time auto-send files |
 | `Discord.StatusRenderer` | Builds Discord button rows for cancel/keep-waiting UX |
@@ -773,7 +776,18 @@ The shared implementation is `LemonChannels.VoiceTranscriber`.
 
 #### Configuration
 
-Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`. Required: Discord bot token. Uses the `nostrum` library (declared as `runtime: false` dep; runtime availability is expected from the deployment environment).
+Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`. Required: Discord bot token. Nostrum is shipped as an included application and starts as a child of the Discord supervisor, not from transport init.
+
+Nostrum 0.10.4 accepts token/intents only through global application configuration.
+The Discord supervisor sets those once at adapter boot; the transport never
+mutates them. This version supports **one Discord account per node**. Upstream
+`Nostrum.Bot` provides per-bot startup options and would lift that constraint.
+
+Each event runs in a temporary supervised task, preserving arrival order and
+transport-owned debounce timers/subscriptions. Slow authorization, transcription,
+downloads and replies do not block the transport mailbox. An event task failure
+is recorded in health and is not replayed automatically. Restarting the adapter
+tears down its client, consumer and tasks together.
 
 ### XMTP
 
@@ -806,6 +820,19 @@ Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`. The XM
 **Plugin ID**: `"whatsapp"` | **Chunk limit**: 4096
 
 The WhatsApp adapter uses its own Node.js bridge script and event tag behind the same internal port lifecycle as XMTP.
+
+WhatsApp's transport is the sole reconnect authority for both socket disconnects
+and bridge port failures. Its existing twelve-attempt backoff budget is shared
+across those failures; duplicate disconnect notifications do not add a timer or
+consume another attempt. `PortBridge` runs in manual restart mode for WhatsApp;
+XMTP retains automatic port restart/replay.
+
+Exhaustion records an explicit reconnect-budget error in `Registry.status/0` and
+stops the transient transport child with `{:shutdown, :reconnect_exhausted}`.
+The supervisor retains a stopped child instead of resetting its retry budget.
+Logout and connection replacement also stop with explicit health errors.
+Re-link the account when required, then restart the adapter to recover. Stopping
+the transport closes its bridge and cancels outstanding reconnect/command timers.
 
 #### Module Layout
 
@@ -991,8 +1018,8 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | Module | Purpose |
 |--------|---------|
 | `Adapters.Discord` | Plugin behaviour implementation |
-| `Adapters.Discord.Supervisor` | Starts transport if configured |
-| `Adapters.Discord.Transport` | Nostrum consumer, slash commands, component interactions, debounce buffering |
+| `Adapters.Discord.Supervisor` | Owns the included Nostrum tree, task supervisor, transport and consumer |
+| `Adapters.Discord.Transport` | Ordered supervised event handling, slash commands, interactions, debounce buffering |
 | `Adapters.Discord.Inbound` | Normalize to InboundMessage |
 | `Adapters.Discord.Renderer` | Semantic delivery renderer |
 | `Adapters.Discord.StatusRenderer` | Button/control rendering helpers |
@@ -1075,7 +1102,7 @@ end
 | `jason` | ~> 1.4 | JSON encoding/decoding |
 | `earmark_parser` | ~> 1.4 | Markdown parsing (used by `Telegram.Markdown` for rendering to Telegram entities) |
 | `req` | ~> 0.5.0 | HTTP client (used by Telegram API and voice transcription) |
-| `nostrum` | ~> 0.9 | Discord library (`runtime: false` -- expected from deployment environment) |
+| `nostrum` | ~> 0.9 (locked 0.10.4) | Included Discord application, supervised by the configured adapter |
 
 ## Important Notes
 
@@ -1092,4 +1119,4 @@ end
 - The Telegram formatter avoids MarkdownV2 entirely, rendering to plain text + entity arrays instead
 - Transport-level known-target indexing throttles writes to 30s per target to avoid Store overload
 - Non-retryable delivery errors (`:unknown_channel`, client 4xx except 429, worker exits) are not retried
-- `nostrum` is declared `runtime: false` -- the runtime library must be available in the deployment environment for Discord support
+- Nostrum 0.10.x permits one Discord account per node; only the adapter supervisor configures its global token/intents at boot

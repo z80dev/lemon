@@ -1,6 +1,11 @@
 defmodule LemonChannels.Adapters.Discord.Supervisor do
   @moduledoc """
   Supervisor for Discord adapter processes.
+
+  Nostrum 0.10.x reads token and intents only from application configuration.
+  Configure it once here at adapter boot, then supervise its included-application
+  tree directly. Discord supports one account per node with this version;
+  upstream `Nostrum.Bot` would remove that limitation.
   """
 
   use Supervisor
@@ -23,15 +28,29 @@ defmodule LemonChannels.Adapters.Discord.Supervisor do
 
     children =
       if is_binary(token) and String.trim(token) != "" do
-        # The child spec must not freeze the gateway config: the transport merges
-        # the persisted policy (including the allowlist) fresh on every start, so
-        # a supervised restart keeps approvals and revocations made since boot.
-        [{LemonChannels.Adapters.Discord.Transport, [config: merge_config(%{}, explicit)]}]
+        Application.put_env(:nostrum, :token, token)
+
+        Application.put_env(:nostrum, :gateway_intents, [
+          :guilds,
+          :guild_messages,
+          :guild_message_reactions,
+          :direct_messages,
+          :direct_message_reactions,
+          :message_content
+        ])
+
+        [
+          Nostrum.Application,
+          {Task.Supervisor, name: LemonChannels.Adapters.Discord.AsyncSupervisor},
+          # Read persisted allowlists afresh on every transport restart.
+          {LemonChannels.Adapters.Discord.Transport, [config: merge_config(%{}, explicit)]},
+          LemonChannels.Adapters.Discord.Transport.Consumer
+        ]
       else
         []
       end
 
-    Supervisor.init(children, strategy: :one_for_one)
+    Supervisor.init(children, strategy: :one_for_all)
   end
 
   defp merge_config(base, opts), do: LemonCore.MapHelpers.merge_config(base, opts)

@@ -301,6 +301,16 @@ defmodule LemonChannels.Registry do
 
   defp error_message(:timeout), do: "Channel connection timed out."
   defp error_message(:disconnected), do: "Channel disconnected. Check the Lemon host."
+
+  defp error_message(:reconnect_exhausted),
+    do: "Channel reconnect budget exhausted. Restart the adapter on the Lemon host."
+
+  defp error_message(:logged_out),
+    do: "Channel logged out. Re-link the account on the Lemon host."
+
+  defp error_message(:connection_replaced),
+    do: "Channel connection replaced by another client. Check the Lemon host."
+
   defp error_message(_), do: "Channel connection failed. Check the Lemon host logs."
 
   defp adapter_running_by_id?(state, channel_id) do

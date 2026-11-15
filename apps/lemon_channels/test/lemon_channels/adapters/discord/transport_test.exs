@@ -135,6 +135,11 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
+  setup do
+    start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Discord.AsyncSupervisor})
+    :ok
+  end
+
   test "pairing API exits cannot put plaintext codes into crash logs" do
     with_discord_api(fn ->
       Application.put_env(:lemon_gateway, @gateway_config_key, %{
@@ -147,7 +152,10 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       log =
         capture_log(fn ->
           assert {:noreply, ^state} =
-                   Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+                   Transport.process_event(
+                     {:discord_event, {:MESSAGE_CREATE, message, nil}},
+                     state
+                   )
         end)
 
       assert_receive {:failed_pairing_reply, reply}
@@ -168,7 +176,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       message = discord_message("1503803470493257895", "hello") |> Map.delete("guild_id")
 
       assert {:noreply, ^state} =
-               Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+               Transport.process_event({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
 
       refute_receive {:discord_create, _, _}, 50
     end)
@@ -180,11 +188,11 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         state = Map.put(discord_message_state(), :unauthorized_dm_behavior, "pair")
         message = discord_message("1503803470493257893", "hello") |> Map.delete("guild_id")
         event = {:discord_event, {:MESSAGE_CREATE, message, nil}}
-        assert {:noreply, ^state} = Transport.handle_info(event, state)
+        assert {:noreply, ^state} = Transport.process_event(event, state)
         assert_receive {:discord_create, _, %{content: reply}}
         assert [_, code] = Regex.run(~r/Pairing code: ([A-HJ-NP-Z2-9]{8})/, reply)
         assert reply =~ "lemon pairing approve discord #{code}"
-        assert {:noreply, ^state} = Transport.handle_info(event, state)
+        assert {:noreply, ^state} = Transport.process_event(event, state)
         refute_receive {:discord_create, _, _}, 50
         refute_receive {:submit_run, _}, 50
         assert {:ok, %{platform: "discord"}} = LemonChannels.Pairing.consume("discord", code)
@@ -202,7 +210,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       message = discord_message("1503803470493257894", "hello")
 
       assert {:noreply, ^state} =
-               Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+               Transport.process_event({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
 
       refute_receive {:discord_create, _, _}, 50
     end)
@@ -230,20 +238,20 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         guild = discord_message(id.(), mention)
 
         assert {:noreply, ^state} =
-                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, guild, nil}}, state)
+                 Transport.process_event({:discord_event, {:MESSAGE_CREATE, guild, nil}}, state)
 
         # So do DMs outside pairing mode.
         dm = discord_message(id.(), "hello") |> Map.delete("guild_id")
 
         assert {:noreply, ^state} =
-                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, dm, nil}}, state)
+                 Transport.process_event({:discord_event, {:MESSAGE_CREATE, dm, nil}}, state)
 
         # Control: an allowlisted channel still routes through the same path.
         open = %{state | allowed_channel_ids: MapSet.new([1_475_727_417_372_049_419])}
         allowed = discord_message(id.(), mention)
 
         assert {:noreply, %{buffers: buffers}} =
-                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, allowed, nil}}, open)
+                 Transport.process_event({:discord_event, {:MESSAGE_CREATE, allowed, nil}}, open)
 
         assert map_size(buffers) == 1
       end)
@@ -262,7 +270,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
     assert capture_log(fn ->
              assert {:noreply, ^state} =
-                      Transport.handle_info(
+                      Transport.process_event(
                         {:discord_event, {:MESSAGE_CREATE, message, nil}},
                         state
                       )
@@ -282,7 +290,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
     assert capture_log(fn ->
              assert {:noreply, ^state} =
-                      Transport.handle_info(
+                      Transport.process_event(
                         {:discord_event, {:MESSAGE_CREATE, message, nil}},
                         state
                       )
@@ -311,7 +319,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         state = discord_message_state()
 
         assert {:noreply, routed_state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:MESSAGE_CREATE, message, nil}},
                    state
                  )
@@ -319,7 +327,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         assert [{scope_key, buffer}] = Map.to_list(routed_state.buffers)
 
         assert {:noreply, _flushed_state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:debounce_flush, scope_key, buffer.debounce_ref},
                    routed_state
                  )
@@ -349,7 +357,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     state = discord_message_state()
 
     assert {:noreply, _state} =
-             Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+             Transport.process_event({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
 
     assert {_, entry} =
              Enum.find(KnownTargetStore.list(), fn {key, _value} ->
@@ -514,7 +522,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       message = discord_message("1503803470493299991", "/deny #{pending.id}", channel_id)
 
       assert {:noreply, ^state} =
-               Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+               Transport.process_event({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
 
       assert_receive {:discord_create, ^channel_id, %{content: "Approval: Denied"}}
       assert {:ok, nil} = LemonCore.ExecApprovalStore.fetch_pending(pending.id)
@@ -528,7 +536,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       pending = text_approval(String.to_integer(slash.channel_id))
 
       assert {:noreply, ^state} =
-               Transport.handle_info({:discord_event, {:INTERACTION_CREATE, slash, nil}}, state)
+               Transport.process_event({:discord_event, {:INTERACTION_CREATE, slash, nil}}, state)
 
       assert_receive {:interaction_response, ^slash,
                       %{type: 4, data: %{content: "Approval: Approved (once)", flags: 64}}}
@@ -631,7 +639,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         state = Map.merge(discord_message_state(), policy)
 
         assert {:noreply, ^state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
                    state
                  )
@@ -657,7 +665,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         state = discord_message_state()
 
         assert {:noreply, ^state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:INTERACTION_CREATE, start_interaction, nil}},
                    state
                  )
@@ -674,7 +682,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           interaction("bg", option("prompt", "result bg_discord_full_identifier"))
 
         assert {:noreply, ^state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:INTERACTION_CREATE, result_interaction, nil}},
                    state
                  )
@@ -697,7 +705,10 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         state = discord_message_state()
 
         assert {:noreply, ^state} =
-                 Transport.handle_info({:discord_event, {:INTERACTION_CREATE, owner, nil}}, state)
+                 Transport.process_event(
+                   {:discord_event, {:INTERACTION_CREATE, owner, nil}},
+                   state
+                 )
 
         assert_receive {:background_start, _}
         assert_receive {:interaction_response, ^owner, %{type: 4}}
@@ -714,7 +725,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
             interaction("bg", option("prompt", prompt), %{member: foreign_user})
 
           assert {:noreply, ^state} =
-                   Transport.handle_info(
+                   Transport.process_event(
                      {:discord_event, {:INTERACTION_CREATE, foreign, nil}},
                      state
                    )
@@ -804,7 +815,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     state = %{}
 
     assert {:noreply, ^state} =
-             Transport.handle_info(
+             Transport.process_event(
                {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
                state
              )
@@ -892,7 +903,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     state = discord_message_state()
 
     assert {:noreply, ^state} =
-             Transport.handle_info(
+             Transport.process_event(
                {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
                state
              )
@@ -912,7 +923,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       state = discord_message_state()
 
       assert {:noreply, ^state} =
-               Transport.handle_info(
+               Transport.process_event(
                  {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
                  state
                )
@@ -932,7 +943,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         state = %{}
 
         assert {:noreply, ^state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
                    state
                  )
@@ -962,7 +973,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         log =
           capture_warning_log(fn ->
             assert {:noreply, ^state} =
-                     Transport.handle_info(
+                     Transport.process_event(
                        {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
                        state
                      )
@@ -991,7 +1002,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         state = %{}
 
         assert {:noreply, ^state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:INTERACTION_CREATE, continue_interaction, nil}},
                    state
                  )
@@ -1002,7 +1013,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
                         %{type: 7, data: %{content: "Continuing run."}}}
 
         assert {:noreply, ^state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:INTERACTION_CREATE, cancel_interaction, nil}},
                    state
                  )
@@ -1031,7 +1042,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         log =
           capture_warning_log(fn ->
             assert {:noreply, ^state} =
-                     Transport.handle_info(
+                     Transport.process_event(
                        {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
                        state
                      )
@@ -1073,7 +1084,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         cancel_interaction = interaction(command, [])
 
         assert {:noreply, ^state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:INTERACTION_CREATE, cancel_interaction, nil}},
                    state
                  )
@@ -1085,7 +1096,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           )
 
         assert {:noreply, next_state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:MESSAGE_CREATE, next_message, nil}},
                    state
                  )
@@ -1107,12 +1118,12 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         message = discord_message(Integer.to_string(message_id), "<@#{@bot_user_id}> retry me")
 
         assert {:noreply, buffered} =
-                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+                 Transport.process_event({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
 
         assert [{scope_key, buffer}] = Map.to_list(buffered.buffers)
 
         assert {:noreply, failed_state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:debounce_flush, scope_key, buffer.debounce_ref},
                    buffered
                  )
@@ -1128,7 +1139,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         :persistent_term.put({FakeRouter, :submit_result}, {:ok, "run-after-redelivery"})
 
         assert {:noreply, redelivered} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:MESSAGE_CREATE, message, nil}},
                    failed_state
                  )
@@ -1136,7 +1147,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         assert [{scope_key, buffer}] = Map.to_list(redelivered.buffers)
 
         assert {:noreply, _accepted_state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:debounce_flush, scope_key, buffer.debounce_ref},
                    redelivered
                  )
@@ -1165,12 +1176,12 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         message = discord_message(Integer.to_string(message_id), prompt)
 
         assert {:noreply, buffered} =
-                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+                 Transport.process_event({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
 
         assert [{scope_key, buffer}] = Map.to_list(buffered.buffers)
 
         assert {:noreply, failed_state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:debounce_flush, scope_key, buffer.debounce_ref},
                    buffered
                  )
@@ -1184,7 +1195,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         :persistent_term.put({FakeRouter, :submit_result}, {:ok, "would-duplicate"})
 
         assert {:noreply, ^failed_state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:MESSAGE_CREATE, message, nil}},
                    failed_state
                  )
@@ -1202,7 +1213,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         state = discord_message_state()
 
         assert {:noreply, ^state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:INTERACTION_CREATE, slash, nil}},
                    state
                  )
@@ -1238,7 +1249,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           })
 
         assert {:noreply, state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:MESSAGE_CREATE, message, nil}},
                    discord_message_state()
                  )
@@ -1246,7 +1257,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         assert [{scope_key, buffer}] = Map.to_list(state.buffers)
 
         assert {:noreply, _state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:debounce_flush, scope_key, buffer.debounce_ref},
                    state
                  )
@@ -1278,7 +1289,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           discord_message(Integer.to_string(message_id), "<@#{@bot_user_id}> dedupe proof")
 
         assert {:noreply, state_after_first} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:MESSAGE_CREATE, message, nil}},
                    state
                  )
@@ -1286,7 +1297,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         assert [{scope_key, buffer}] = Map.to_list(state_after_first.buffers)
 
         assert {:noreply, state_after_duplicate} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:MESSAGE_CREATE, message, nil}},
                    state_after_first
                  )
@@ -1294,7 +1305,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         assert state_after_duplicate.buffers == state_after_first.buffers
 
         assert {:noreply, state_after_flush} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:debounce_flush, scope_key, buffer.debounce_ref},
                    state_after_duplicate
                  )
@@ -1308,7 +1319,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
 
         assert {:noreply, _state_after_restart_replay} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:MESSAGE_CREATE, message, nil}},
                    state_after_flush
                  )
@@ -1336,7 +1347,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
             )
 
           assert {:noreply, ignored_state} =
-                   Transport.handle_info(
+                   Transport.process_event(
                      {:discord_event, {:MESSAGE_CREATE, ignored_message, nil}},
                      state
                    )
@@ -1350,7 +1361,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
             })
 
           assert {:noreply, ^ignored_state} =
-                   Transport.handle_info(
+                   Transport.process_event(
                      {:discord_event, {:INTERACTION_CREATE, trigger_interaction, nil}},
                      ignored_state
                    )
@@ -1371,7 +1382,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
             discord_message(Integer.to_string(message_id), "free response now routes", channel_id)
 
           assert {:noreply, routed_state} =
-                   Transport.handle_info(
+                   Transport.process_event(
                      {:discord_event, {:MESSAGE_CREATE, free_message, nil}},
                      ignored_state
                    )
@@ -1379,7 +1390,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           assert [{scope_key, buffer}] = Map.to_list(routed_state.buffers)
 
           assert {:noreply, flushed_state} =
-                   Transport.handle_info(
+                   Transport.process_event(
                      {:debounce_flush, scope_key, buffer.debounce_ref},
                      routed_state
                    )
@@ -1396,7 +1407,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
             })
 
           assert {:noreply, ^flushed_state} =
-                   Transport.handle_info(
+                   Transport.process_event(
                      {:discord_event, {:INTERACTION_CREATE, trigger_mentions_interaction, nil}},
                      flushed_state
                    )
@@ -1419,7 +1430,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
             )
 
           assert {:noreply, suppressed_state} =
-                   Transport.handle_info(
+                   Transport.process_event(
                      {:discord_event, {:MESSAGE_CREATE, suppressed_message, nil}},
                      flushed_state
                    )
@@ -1459,7 +1470,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           )
 
         assert {:noreply, routed_state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:MESSAGE_CREATE, message, nil}},
                    state
                  )
@@ -1467,7 +1478,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         assert [{scope_key, buffer}] = Map.to_list(routed_state.buffers)
 
         assert {:noreply, _flushed_state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:debounce_flush, scope_key, buffer.debounce_ref},
                    routed_state
                  )
@@ -1514,7 +1525,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       meta: %{session_key: "session:checkpoint"}
     }
 
-    assert {:noreply, returned} = Transport.handle_info(event, state)
+    assert {:noreply, returned} = Transport.process_event(event, state)
     assert returned == state
     refute_receive {:checkpoint_notice, _, _}
   end
@@ -1582,7 +1593,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           message = discord_message(Integer.to_string(message_id), text, thread_id)
 
           assert {:noreply, routed_state} =
-                   Transport.handle_info(
+                   Transport.process_event(
                      {:discord_event, {:MESSAGE_CREATE, message, nil}},
                      discord_message_state()
                    )
@@ -1590,7 +1601,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           assert [{scope_key, buffer}] = Map.to_list(routed_state.buffers)
 
           assert {:noreply, _flushed_state} =
-                   Transport.handle_info(
+                   Transport.process_event(
                      {:debounce_flush, scope_key, buffer.debounce_ref},
                      routed_state
                    )
@@ -1673,7 +1684,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         state = Map.merge(discord_message_state(), state_overrides)
 
         assert {:noreply, ^state} =
-                 Transport.handle_info(
+                 Transport.process_event(
                    {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
                    state
                  )
