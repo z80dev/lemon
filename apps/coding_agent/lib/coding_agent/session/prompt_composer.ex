@@ -26,9 +26,9 @@ defmodule CodingAgent.Session.PromptComposer do
   5. The session's environment block (`build_opts[:environment]`, captured once
      per session by `CodingAgent.SystemPrompt.Environment`)
 
-  The environment block goes last on purpose: it holds the most volatile text
-  (date, git status), and provider prompt caches keep every byte before the
-  first difference.
+  The journaled orientation block goes last and stays byte-identical on resume.
+  Layout and instruction paths are deliberately stable session-start snapshots;
+  current date and Git status belong in user-turn context, not this prefix.
 
   `build_opts` is merged into the map handed to `CodingAgent.SystemPrompt.build/2`.
   It carries the run identifiers used for skill-resolution tracing, and — from a
@@ -128,7 +128,7 @@ defmodule CodingAgent.Session.PromptComposer do
         |> Map.merge(build_opts)
       )
 
-    # Static first, volatile last: explicit > template > base > instructions > rules > environment
+    # Explicit > template > base > instructions > rules > journaled environment.
     [
       top_level(:system_prompt, "Custom system prompt", explicit_prompt),
       top_level(:system_prompt, "Prompt template", template_content),

@@ -2309,6 +2309,11 @@ defmodule CodingAgent.Session do
     }
     |> Map.merge(trusted_memory_context(state))
     |> ContextRegistry.collect()
+    |> then(fn sections ->
+      if user_turn,
+        do: [CodingAgent.SystemPrompt.Environment.turn_section(state.cwd) | sections],
+        else: sections
+    end)
   rescue
     _error ->
       Logger.debug("Contributed context unavailable")
