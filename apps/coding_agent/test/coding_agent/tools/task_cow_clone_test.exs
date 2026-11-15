@@ -58,7 +58,7 @@ defmodule CodingAgent.Tools.Task.CowCloneTest do
     assert %{status: "no_changes"} = Worktree.finalize(prepared, repo, "oversized", "")
   end
 
-  @tag skip: :os.type() != {:unix, :darwin}
+  @tag :apfs_clone
   test "ignored symlinks are not followed", %{repo: repo, tmp_dir: tmp_dir} do
     File.write!(Path.join(tmp_dir, "outside"), "private\n")
     File.ln_s!(Path.join(tmp_dir, "outside"), Path.join(repo, ".env"))
@@ -69,7 +69,7 @@ defmodule CodingAgent.Tools.Task.CowCloneTest do
     refute File.exists?(prepared.worktree_path)
   end
 
-  @tag skip: :os.type() != {:unix, :darwin}
+  @tag :apfs_clone
   test "every merge mode warms only ignored allowlisted directories", %{git: git, repo: repo} do
     File.write!(Path.join(repo, ".gitignore"), ".env\n_build/\ncustom-cache/\n")
     git!(git, repo, ["add", ".gitignore"])
@@ -97,7 +97,7 @@ defmodule CodingAgent.Tools.Task.CowCloneTest do
     refute File.exists?(Path.join(prepared.cwd, "_build"))
   end
 
-  @tag skip: :os.type() != {:unix, :darwin}
+  @tag :apfs_clone
   test "APFS clones ignored artifacts without patch noise and cleans up", %{git: git, repo: repo} do
     File.write!(Path.join(repo, ".gitignore"), "deps/\n_build/\nnode_modules/\n")
     git!(git, repo, ["add", ".gitignore"])
