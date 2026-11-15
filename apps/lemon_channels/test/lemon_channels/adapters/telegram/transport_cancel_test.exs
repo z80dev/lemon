@@ -107,11 +107,32 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     end
 
     def flush_updates(pid) do
-      # Polling is synchronous in the transport. Queue enough polls to consume
-      # the fixture and use a state barrier instead of racing its next timer.
-      for _ <- :persistent_term.get(@updates_key, []), do: send(pid, :poll)
-      :sys.get_state(pid)
-      :ok
+      send(pid, :poll)
+      await_updates(pid)
+    end
+
+    defp await_updates(pid) do
+      state = :sys.get_state(pid)
+
+      case {state[:poll_task], :persistent_term.get(@updates_key, [])} do
+        {nil, []} ->
+          :ok
+
+        {%Task{pid: worker}, _updates} ->
+          monitor = Process.monitor(worker)
+
+          receive do
+            {:DOWN, ^monitor, :process, ^worker, _reason} -> await_updates(pid)
+          after
+            1_000 ->
+              Process.demonitor(monitor, [:flush])
+              raise "fake Telegram poll did not finish"
+          end
+
+        {nil, _updates} ->
+          send(pid, :poll)
+          await_updates(pid)
+      end
     end
 
     def register_test(pid), do: :persistent_term.put(@pid_key, pid)
@@ -164,6 +185,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   setup do
+    unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
+      start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor})
+    end
+
     stop_transport()
 
     ModelPolicy.list()
@@ -1105,7 +1130,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   defp start_transport(overrides) when is_map(overrides) do
-    token = "token-" <> Integer.to_string(System.unique_integer([:positive]))
+    token = "cancel-test-#{System.pid()}-#{System.unique_integer([:positive])}"
 
     config =
       %{
