@@ -72,9 +72,12 @@ and deliver. Suppressed runs remain in history.
   guard into an error state requiring explicit restart, not another automatic tick.
 - Judge failures pause by default; `continue_once` is an explicit policy choice.
 - Kanban task terminal writes require the exact lease ID. Stale results cannot
-  overwrite a re-leased task. Restart reclaims only unsubmitted old leases;
-  tracked router invocations must reconcile before re-leasing. Hard stop kills
-  owned waiters, aborts claimed runs once, and retains ambiguous run ownership.
+  overwrite a re-leased task. Lease renewal uses only monitored live in-VM
+  workers and the exact lease ID. Persisted expiry still governs orphan recovery;
+  never renew recovered or ambiguous invocations merely because their durable
+  run is active. Restart reclaims only unsubmitted old leases; tracked router
+  invocations must reconcile before re-leasing. Hard stop kills owned waiters,
+  aborts claimed runs once, and retains ambiguous run ownership.
 - Git-backed board workers use isolated `.worktrees/kanban-<task_id>` checkouts
   and `lemon-kanban/<task_id>` branches. Never run concurrent editors in one cwd.
 

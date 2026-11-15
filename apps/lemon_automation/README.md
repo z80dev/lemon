@@ -30,12 +30,16 @@ LemonAutomation.Supervisor
 
 ### Execution Flow
 
-The CronManager ticks every 60 seconds, identifies due jobs, and spawns supervised tasks that submit prompt runs to `LemonRouter` or run operator-owned local commands directly:
+CronManager arms one timer for the earliest enabled job's next run, re-arming on
+job creation, update, removal and dispatch. A five-minute safety sweep catches
+wall-clock changes and recovers orphaned runs; it is not the normal scheduling
+cadence. Due jobs spawn supervised tasks that submit prompt runs to `LemonRouter`
+or run operator-owned local commands directly:
 
 ```
-CronManager (tick every 60s)
+CronManager (earliest next-run timer; five-minute safety sweep)
     |
-    +-- finds due jobs via CronJob.due?/1
+    +-- finds enabled jobs due at the injected clock's current time
     +-- applies jitter delay if configured
     +-- atomically claims scheduled CronRun slot in CronStore
     +-- emits :cron_run_started event
@@ -169,6 +173,12 @@ agent to use the `kanban` tool:
 4. `dispatch_stop` to stop leasing and cancel the board's router runs.
 
 Workers lease dependency-unblocked cards and execute with `origin: :kanban`.
+While a monitored in-VM worker lives, the dispatcher renews its exact lease
+before reclaiming expired work. Dispatch checks run at most one third of the
+lease duration apart (or the configured board interval, whichever is shorter).
+Dead workers are never renewed. Persisted expiry remains the restart-recovery
+boundary: unsubmitted work is reclaimable, but tracked router invocations still
+require reconciliation even after expiry.
 The `kanban` tool is blocked inside workers to prevent recursive dispatch. A
 Git-backed board gets a separate `<repo>/.worktrees/kanban-<task_id>` checkout
 on `lemon-kanban/<task_id>` for each task. By default, changes stay there for
@@ -374,7 +384,7 @@ and the harmless disabled example under
 
 LemonAutomation behavior is controlled through cron job fields plus a small application-level curator config:
 
-- **Tick interval**: Hardcoded at 60,000ms (`@tick_interval_ms` in CronManager)
+- **Scheduling**: One earliest-next-run timer plus a five-minute safety sweep for wall-clock drift/orphan recovery. `CronManager.start_link/1` accepts a `:clock` module implementing `now_ms/0` for deterministic scheduling tests.
 - **Default timeout**: 300,000ms (5 minutes) per job, overridable per-job via `timeout_ms`
 - **Retry policy**: `max_retries` defaults to `0`; `retry_backoff_ms` defaults to `30_000` and applies to scheduled failure/timeout retries
 - **Output truncation**: Run output capped at 1,000 characters in CronStore; forwarded summaries capped at 12,000 bytes
@@ -594,7 +604,7 @@ All events are broadcast on the `"cron"` bus topic as `%LemonCore.Event{}` struc
 
 | Event | Emitted By | When |
 |-------|-----------|------|
-| `:cron_tick` | CronManager | Every 60s tick |
+| `:cron_tick` | CronManager | Scheduled deadline, explicit tick, or five-minute safety sweep |
 | `:cron_job_created` | CronManager | Job added |
 | `:cron_job_updated` | CronManager | Job updated |
 | `:cron_job_deleted` | CronManager | Job removed |
