@@ -25,11 +25,13 @@ See [README](README.md) for usage and [BEAM invariants](../../docs/beam_agents.m
 - `AgentTool.on_stream` runs synchronously in the loop process while arguments
   stream. Every observed call is settled once after it executes or is discarded,
   including before the loop cancels its own event stream (which kills the task).
-- Abort is cooperative: tools check `AbortSignal.aborted?/1`; loops check before
-  model calls and tool batches. Cleanup must account for external work that can
-  briefly outlive the signal.
-- `AbortSignal.TableOwner` owns the ETS table; preserve table ownership across
-  restart rather than letting an arbitrary short-lived caller own it.
+- Abort is cooperative and monotonic: tools check `AbortSignal.aborted?/1`;
+  loops check before model calls and tool batches. Signals are atomics references
+  reclaimed by garbage collection once no process retains them; never clear an
+  abort to reuse a signal.
+- Blocking waiters subscribe through the duplicate-key
+  `AbortSignal.Registry` and unsubscribe when done. Subscriptions are idempotent
+  per process; notifications are `{:lemon_abort, signal, :abort | :redirect}`.
 - Event streams are bounded and owned. Owner death cancels the attached task;
   consumers that outlive a producer must choose the caller as owner.
 - `{:agent_end, messages}` contains only the new messages, not full history.

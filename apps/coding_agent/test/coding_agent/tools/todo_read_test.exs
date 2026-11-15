@@ -522,8 +522,6 @@ defmodule CodingAgent.Tools.TodoReadTest do
 
       result = TodoRead.execute("call_1", %{}, signal, nil, session_pid)
 
-      AbortSignal.clear(signal)
-
       assert {:error, "Operation aborted"} = result
     end
 
@@ -531,8 +529,6 @@ defmodule CodingAgent.Tools.TodoReadTest do
       signal = AbortSignal.new()
 
       result = TodoRead.execute("call_1", %{}, signal, nil, session_pid)
-
-      AbortSignal.clear(signal)
 
       assert %AgentToolResult{} = result
     end
@@ -542,8 +538,6 @@ defmodule CodingAgent.Tools.TodoReadTest do
       AbortSignal.abort(signal)
 
       result = TodoRead.execute("call_1", %{}, signal, nil, nil)
-
-      AbortSignal.clear(signal)
 
       assert {:error, "Operation aborted"} = result
     end

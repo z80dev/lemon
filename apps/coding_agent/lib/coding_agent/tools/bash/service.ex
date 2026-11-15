@@ -153,6 +153,16 @@ defmodule CodingAgent.Tools.Bash.Service do
   end
 
   defp await_ready(id, name, ready, signal, deadline) do
+    AbortSignal.subscribe(signal)
+
+    try do
+      do_await_ready(id, name, ready, signal, deadline)
+    after
+      AbortSignal.unsubscribe(signal)
+    end
+  end
+
+  defp do_await_ready(id, name, ready, signal, deadline) do
     {:ok, state} = ProcessManager.poll(id, lines: 1000)
 
     output =
@@ -197,8 +207,13 @@ defmodule CodingAgent.Tools.Bash.Service do
         )
 
       true ->
-        Process.sleep(20)
-        await_ready(id, name, ready, signal, deadline)
+        receive do
+          {:lemon_abort, ^signal, _kind} -> :ok
+        after
+          20 -> :ok
+        end
+
+        do_await_ready(id, name, ready, signal, deadline)
     end
   rescue
     SystemLimitError ->

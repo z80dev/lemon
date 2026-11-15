@@ -22,7 +22,6 @@ defmodule CodingAgent.Search.SingleFlight do
   alias LemonAgent.AbortSignal
 
   @default_timeout_ms 30_000
-  @abort_poll_ms 50
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, %{}, name: Keyword.get(opts, :name, __MODULE__))
@@ -67,12 +66,12 @@ defmodule CodingAgent.Search.SingleFlight do
   end
 
   @impl true
-  def init(_opts), do: {:ok, %{by_key: %{}, by_ref: %{}, abandoned: %{}, abort_timer: nil}}
+  def init(_opts), do: {:ok, %{by_key: %{}, by_ref: %{}, abandoned: %{}}}
 
   @impl true
   def handle_call({:run, key, fun, timeout_ms, signal}, from, state) do
-    # Admission must observe cancellation too: the poll may not have detached
-    # a flight whose last caller aborted before this new request arrived.
+    AbortSignal.subscribe(signal)
+    # Admission also observes aborts whose messages are still queued.
     state =
       case Map.fetch(state.by_key, key) do
         {:ok, flight} -> release_aborted_callers(state, key, flight)
@@ -81,15 +80,13 @@ defmodule CodingAgent.Search.SingleFlight do
 
     cond do
       aborted?(signal) ->
+        unsubscribe_unused(signal, state)
         {:reply, {:error, "Operation aborted"}, state}
 
       Map.has_key?(state.by_key, key) ->
         caller = %{from: from, signal: signal}
 
-        {:noreply,
-         state
-         |> update_in([:by_key, key, :callers], &[caller | &1])
-         |> schedule_abort_check()}
+        {:noreply, update_in(state, [:by_key, key, :callers], &[caller | &1])}
 
       true ->
         start_flight(key, fun, timeout_ms, signal, from, state)
@@ -158,8 +155,7 @@ defmodule CodingAgent.Search.SingleFlight do
     {:noreply,
      state
      |> put_in([:by_key, key], flight)
-     |> put_in([:by_ref, task.ref], key)
-     |> schedule_abort_check()}
+     |> put_in([:by_ref, task.ref], key)}
   end
 
   @impl true
@@ -182,13 +178,14 @@ defmodule CodingAgent.Search.SingleFlight do
     end
   end
 
-  def handle_info(:check_aborts, state) do
+  def handle_info({:lemon_abort, signal, _kind}, state) do
     state =
-      Enum.reduce(state.by_key, %{state | abort_timer: nil}, fn {key, flight}, acc ->
+      Enum.reduce(state.by_key, state, fn {key, flight}, acc ->
         release_aborted_callers(acc, key, flight)
       end)
 
-    {:noreply, schedule_abort_check(state)}
+    unsubscribe_unused(signal, state)
+    {:noreply, state}
   end
 
   defp release_aborted_callers(state, key, flight) do
@@ -197,35 +194,36 @@ defmodule CodingAgent.Search.SingleFlight do
     if abandon?, do: AbortSignal.abort(flight.signal)
     Enum.each(aborted, &GenServer.reply(&1.from, {:error, "Operation aborted"}))
 
-    cond do
-      aborted == [] ->
-        state
-
-      abandon? ->
-        %{
+    state =
+      cond do
+        aborted == [] ->
           state
-          | by_key: Map.delete(state.by_key, key),
-            by_ref: Map.delete(state.by_ref, flight.task.ref),
-            abandoned: Map.put(state.abandoned, flight.task.ref, %{flight | callers: []})
-        }
 
-      true ->
-        put_in(state, [:by_key, key, :callers], waiting)
+        abandon? ->
+          %{
+            state
+            | by_key: Map.delete(state.by_key, key),
+              by_ref: Map.delete(state.by_ref, flight.task.ref),
+              abandoned: Map.put(state.abandoned, flight.task.ref, %{flight | callers: []})
+          }
+
+        true ->
+          put_in(state, [:by_key, key, :callers], waiting)
+      end
+
+    Enum.each(aborted, &unsubscribe_unused(&1.signal, state))
+    state
+  end
+
+  defp unsubscribe_unused(nil, _state), do: :ok
+
+  defp unsubscribe_unused(signal, state) do
+    unless Enum.any?(state.by_key, fn {_key, flight} ->
+             Enum.any?(flight.callers, &(&1.signal == signal))
+           end) do
+      AbortSignal.unsubscribe(signal)
     end
   end
-
-  defp schedule_abort_check(%{abort_timer: nil} = state) do
-    watched? =
-      Enum.any?(state.by_key, fn {_key, flight} ->
-        Enum.any?(flight.callers, &(&1.signal != nil))
-      end)
-
-    if watched?,
-      do: %{state | abort_timer: Process.send_after(self(), :check_aborts, @abort_poll_ms)},
-      else: state
-  end
-
-  defp schedule_abort_check(state), do: state
 
   defp finish_publication_or_flight(ref, result, state) do
     case Enum.find(state.by_key, fn {_key, flight} ->
@@ -257,11 +255,11 @@ defmodule CodingAgent.Search.SingleFlight do
         stop_publication(flight)
         Process.demonitor(ref, [:flush])
         Process.cancel_timer(flight.timer)
-        AbortSignal.clear(flight.signal)
 
         Enum.each(flight.callers, fn caller ->
           reply = if aborted?(caller.signal), do: {:error, "Operation aborted"}, else: result
           GenServer.reply(caller.from, reply)
+          unsubscribe_unused(caller.signal, state)
         end)
 
         {:noreply, state}

@@ -66,9 +66,6 @@ defmodule CodingAgent.BashExecutorTest do
 
       assert result.cancelled == true
       assert result.exit_code == nil
-
-      # Cleanup
-      AbortSignal.clear(signal)
     end
 
     test "calls on_chunk callback for streaming" do
@@ -561,7 +558,6 @@ if match?({:unix, _}, :os.type()) do
       assert result.cancelled == true
 
       await_gone(child)
-      AbortSignal.clear(signal)
     end
 
     test "killing the tool worker stops a backgrounded child that outlived its parent shell",

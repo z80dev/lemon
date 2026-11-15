@@ -36,7 +36,7 @@ LemonAgent sits between application code and the low-level `LemonAi` library. Ap
 
 ```
 LemonAgent.Supervisor (:one_for_one)
-|-- LemonAgent.AbortSignal.TableOwner   (GenServer, owns the abort ETS table)
+|-- LemonAgent.AbortSignal.Registry     (Registry, :duplicate keys)
 |-- LemonAgent.AgentRegistry            (Registry, :unique keys)
 |-- LemonAgent.LoopTaskSupervisor       (Task.Supervisor for loop tasks)
 +-- LemonAgent.ToolTaskSupervisor       (Task.Supervisor for tool execution)
@@ -44,7 +44,7 @@ LemonAgent.Supervisor (:one_for_one)
 
 The supervisor uses a `:one_for_one` strategy. Each child is independent:
 
-- **AbortSignal.TableOwner** -- A long-lived GenServer that owns the `:agent_core_abort_signals` ETS table and acts as heir so the table survives process restarts.
+- **AbortSignal.Registry** -- A duplicate-key Registry for cancellation and redirect subscriptions. Each process subscribes idempotently per signal and unsubscribes when its wait finishes.
 - **AgentRegistry** -- An Elixir `Registry` with `:unique` keys. Agents register under `{session_id, role, index}` tuples.
 - **LoopTaskSupervisor** -- A `Task.Supervisor` for spawning agent loop tasks via `Task.Supervisor.async_nolink/2`.
 - **ToolTaskSupervisor** -- A `Task.Supervisor` for spawning concurrent tool execution tasks.
@@ -94,8 +94,7 @@ Ordinary text-only final answers are not classified as unexpected stops.
 |--------|------|---------|
 | `LemonAgent.EventStream` | `lib/agent_core/event_stream.ex` | GenServer-based async event producer/consumer. Bounded queue with backpressure (`push/2` returns `:ok` or `{:error, :overflow}`). Owner monitoring, task linking, configurable timeout. Drop strategies: `:error`, `:drop_oldest`, `:drop_newest`. |
 | `LemonAgent.Context` | `lib/agent_core/context.ex` | Context window management. `truncate/2` keeps retained messages chronological, enforces both bookends limits, and treats assistant tool-call/result transcripts atomically; also provides `estimate_size/2`, `estimate_tokens/1`, `make_transform/1`, `stats/2`, and `check_size/3`. |
-| `LemonAgent.AbortSignal` | `lib/agent_core/abort_signal.ex` | ETS-based cooperative abort signaling. `new/0`, `abort/1`, `aborted?/1`, `clear/1`. Used by the loop and tool execution to check for cancellation. |
-| LemonAgent.AbortSignal.TableOwner (internal) | `lib/agent_core/abort_signal/table_owner.ex` | GenServer that owns the abort signal ETS table and acts as heir for table survival. |
+| `LemonAgent.AbortSignal` | `lib/lemon_agent/abort_signal.ex` | Atomics-backed cooperative cancellation. `new/0`, `abort/1`, `aborted?/1`, `subscribe/1`, `unsubscribe/1`. Abort is monotonic; signals are garbage collected when no longer referenced, with no explicit cleanup. Subscribers receive `{:lemon_abort, signal, :abort \| :redirect}` notifications. |
 | `LemonAgent.Proxy` | `lib/agent_core/proxy.ex` | SSE proxy stream function for routing LLM calls through a server. Reconstructs partial `AssistantMessage` from bandwidth-optimized SSE events. Includes `ProxyStreamOptions` struct. |
 | `LemonAgent.ModelRuntime.ProviderConfiguration` | `lib/lemon_agent/model_runtime/provider_configuration.ex` | Shared comment-preserving provider fallback/pool mutation boundary. Preview results carry an opaque config revision; applies can reject concurrent edits, and destructive operations require exact confirmation without returning credential references. |
 
@@ -141,7 +140,7 @@ The `{:agent_end, new_messages}` event contains only messages created during the
 
 ### Cooperative Abort
 
-`LemonAgent.AbortSignal` uses an ETS table with `read_concurrency: true`. Tools check `AbortSignal.aborted?(signal)` in their execute functions. The loop checks before each LLM call, during retry backoff, while waiting for idle provider streams, and during tool execution. On cancellation, supervised tool workers get up to 250ms to observe the signal and finish resource cleanup before remaining workers are terminated. The abort signal stays set until this drain finishes. Cancellation also stops provider streams, cancels tool timers, and leaves queued steering and follow-up messages available for the next run. Tools owning external processes must additionally clean them up on worker death. Incomplete assistant tool calls are removed from canceled model responses so continuing never sends an unpaired tool transcript.
+`LemonAgent.AbortSignal` uses an atomics reference with separate abort and redirect slots. Abort is monotonic; references are garbage collected when no longer retained, without explicit cleanup. Blocking waiters subscribe idempotently per process through the duplicate-key `LemonAgent.AbortSignal.Registry`, receive `{:lemon_abort, signal, :abort \| :redirect}` notifications, and unsubscribe when done. Tools check `AbortSignal.aborted?(signal)` in their execute functions. The loop checks before each LLM call, during retry backoff, while waiting for idle provider streams, and during tool execution. On cancellation, supervised tool workers get up to 250ms to observe the signal and finish resource cleanup before remaining workers are terminated. The abort signal remains set throughout and after this drain. Cancellation also stops provider streams, cancels tool timers, and leaves queued steering and follow-up messages available for the next run. Tools owning external processes must additionally clean them up on worker death. Incomplete assistant tool calls are removed from canceled model responses so continuing never sends an unpaired tool transcript.
 
 Every started or queued tool call receives a paired terminal result before the canceled event. Cooperative tools retain their actual final output, trust and details. If a worker must be terminated without returning a final result, its last observed output snapshot is preserved and the result explicitly states that the mutation outcome is unknown (`details.cancelled: true`, `details.outcome: :unknown`). Calls that never started use `outcome: :not_started`. Cancellation is not evidence that a mutation was rolled back.
 

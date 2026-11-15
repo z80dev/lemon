@@ -9,7 +9,7 @@ defmodule LemonAgent.ModelRuntime.SessionPins do
 
   Pins are advisory ordering hints, never gates: a missing table or a `nil` /
   `:global` scope simply means no pin. State lives in a public named ETS table
-  owned by this process (same pattern as `LemonAgent.AbortSignal.TableOwner`).
+  owned by this process.
 
   Pins deliberately outlive the session process (they are keyed by the
   persisted session id so resumed sessions keep their stickiness), so nothing

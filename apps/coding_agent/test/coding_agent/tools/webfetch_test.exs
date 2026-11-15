@@ -576,21 +576,19 @@ defmodule CodingAgent.Tools.WebFetchTest do
 
   for outcome <- [:success, :failure] do
     @tag provider_outcome: outcome
-    test "aborted callers cannot publish or fall back before the next poll (#{outcome})",
+    test "aborted callers cannot publish or fall back before notification handling (#{outcome})",
          %{provider_outcome: outcome} do
       parent = self()
       tool = blocking_fetch_tool(parent)
       args = %{"url" => "https://8.8.8.8/abort-before-poll-#{outcome}"}
       signals = [AbortSignal.new(), AbortSignal.new()]
-      on_exit(fn -> Enum.each(signals, &AbortSignal.clear/1) end)
       first = Task.async(fn -> tool.execute.("first", args, hd(signals), nil) end)
       assert_receive {:blocked_http, upstream}, 5_000
       second = Task.async(fn -> tool.execute.("second", args, List.last(signals), nil) end)
       flight = await_fetch_callers([first.pid, second.pid])
       flight_ref = Process.monitor(flight.task.pid)
 
-      abort_fetch_before_poll(signals)
-      refute AbortSignal.aborted?(flight.signal)
+      abort_fetch_before_notifications(signals)
       send(upstream, if(outcome == :success, do: :complete_http, else: :fail_http))
 
       assert Task.await(first, 5_000) == {:error, "Operation aborted"}
@@ -1109,24 +1107,10 @@ defmodule CodingAgent.Tools.WebFetchTest do
     )
   end
 
-  defp abort_fetch_before_poll(signals) do
+  defp abort_fetch_before_notifications(signals) do
     :sys.replace_state(CodingAgent.Search.SingleFlight, fn state ->
-      if state.abort_timer do
-        case Process.cancel_timer(state.abort_timer) do
-          false ->
-            receive do
-              :check_aborts -> :ok
-            after
-              5_000 -> raise "abort timer notification was not delivered"
-            end
-
-          _remaining_ms ->
-            :ok
-        end
-      end
-
       Enum.each(signals, &AbortSignal.abort/1)
-      %{state | abort_timer: nil}
+      state
     end)
   end
 

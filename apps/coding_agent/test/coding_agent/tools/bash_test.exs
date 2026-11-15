@@ -274,8 +274,6 @@ defmodule CodingAgent.Tools.BashTest do
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "cancelled"
-
-      AbortSignal.clear(signal)
     end
 
     test "abort signal during execution stops command", %{tmp_dir: tmp_dir} do
@@ -310,8 +308,6 @@ defmodule CodingAgent.Tools.BashTest do
       assert text =~ "started"
       refute text =~ "finished"
       assert details.exit_code == nil
-
-      AbortSignal.clear(signal)
     end
 
     test "timeout detaches without rerunning or losing output", %{tmp_dir: tmp_dir} do
@@ -371,7 +367,6 @@ defmodule CodingAgent.Tools.BashTest do
         assert_receive ^started, 5_000
         AbortSignal.abort(signal)
         assert %AgentToolResult{details: %{exit_code: nil}, is_error: true} = Task.await(task)
-        AbortSignal.clear(signal)
 
         assert_eventually(fn ->
           processes = CodingAgent.ProcessManager.list()
@@ -420,8 +415,6 @@ defmodule CodingAgent.Tools.BashTest do
       # Result should indicate cancellation
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "cancelled"
-
-      AbortSignal.clear(signal)
     end
   end
 
@@ -846,8 +839,6 @@ defmodule CodingAgent.Tools.BashTest do
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "cancelled"
-
-      AbortSignal.clear(signal)
     end
   end
 

@@ -789,8 +789,6 @@ defmodule CodingAgent.Tools.WriteTest do
           []
         )
 
-      AbortSignal.clear(signal)
-
       assert {:error, :aborted} = result
       refute File.exists?(path)
     end
@@ -809,8 +807,6 @@ defmodule CodingAgent.Tools.WriteTest do
           tmp_dir,
           []
         )
-
-      AbortSignal.clear(signal)
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "content"

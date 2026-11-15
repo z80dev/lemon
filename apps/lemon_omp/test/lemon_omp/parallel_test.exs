@@ -169,6 +169,37 @@ defmodule LemonOmp.ParallelTest do
     end
   end
 
+  test "single and batch waits receive cancellation without changing the signal level", ctx do
+    [wire] = workers(ctx, 1)
+    id = wire["id"]
+
+    for mode <- [:single, :many], kind <- [:abort, :redirect] do
+      signal = LemonAgent.AbortSignal.new()
+
+      task =
+        Task.async(fn ->
+          case mode do
+            :single -> LemonOmp.wait(id, 30_000, signal: signal)
+            :many -> LemonOmp.wait_many([id], 30_000, signal: signal)
+          end
+        end)
+
+      wait_until(fn ->
+        Enum.any?(Registry.lookup(LemonAgent.AbortSignal.Registry, signal), fn {pid, _} ->
+          pid == task.pid
+        end)
+      end)
+
+      send(task.pid, {:lemon_abort, signal, kind})
+      assert {:ok, _, :aborted} = Task.await(task, 1_000)
+      refute LemonAgent.AbortSignal.aborted?(signal)
+      assert Registry.lookup(LemonAgent.AbortSignal.Registry, signal) == []
+    end
+
+    assert {:ok, %{"status" => "running"}} = LemonOmp.get(id)
+    refute Enum.any?(received(wire["cwd"]), &(&1["type"] == "abort"))
+  end
+
   test "missing and foreign ids fail closed without callbacks", ctx do
     [wire] = workers(ctx, 1)
     assert {:error, :not_found} = LemonOmp.wait_many([wire["id"], "omp_missing"], 1, ctx.scope)

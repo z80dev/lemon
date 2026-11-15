@@ -108,7 +108,11 @@ LemonAi.complete(model, context, retry: [max_attempts: 1])
 ```
 
 `LemonAi.OneshotRetry.run/2` provides the same bounded policy for side-effect-free
-completion callbacks, with per-call `sleep_fun` and `cancelled?` hooks. Do not use
+completion callbacks, with per-call `sleep_fun`, `cancelled?` and
+`subscribe_cancel` hooks. A subscription returns
+`{:message, cancellation_message, unsubscribe_fun}`; backoff waits receive that
+message without polling, and cleanup runs on every exit. Without a subscription,
+the cancellation predicate is checked only at attempt/wait boundaries. Do not use
 it around tool execution or externally consumed streams. `LemonAi.stream/3` does
 not acquire oneshot retries; the agent loop refuses replay after any text,
 thinking or tool update, even if later partials erase the content. Metadata-only

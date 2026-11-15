@@ -113,6 +113,7 @@ defmodule LemonAgent.EventStream do
   @type option ::
           {:owner, pid()}
           | {:runner, pid()}
+          | {:abort_signal, reference()}
           | {:max_queue, pos_integer()}
           | {:drop_strategy, drop_strategy()}
           | {:overflow_event, term()}
@@ -131,6 +132,7 @@ defmodule LemonAgent.EventStream do
   - `:owner` - Process to monitor. Stream cancels if owner dies. Default: `self()`
   - `:runner` - Process producing events (e.g., CLI runner). Stream errors if runner dies.
     This ensures consumers are woken up if the producer crashes.
+  - `:abort_signal` - Explicit cooperative signal for the attached task.
   - `:max_queue` - Maximum events to buffer. Default: #{@default_max_queue}
   - `:drop_strategy` - What to do on overflow: `:drop_oldest`, `:drop_newest`, `:error`,
     or `:resync` (fence the stream with one `:overflow_event`). Default: `:error`.
@@ -413,6 +415,7 @@ defmodule LemonAgent.EventStream do
       owner_ref: owner_ref,
       runner: runner,
       runner_ref: runner_ref,
+      abort_signal: Keyword.get(opts, :abort_signal),
       task_pid: nil,
       task_ref: nil,
       timeout_ref: timeout_ref,
@@ -829,9 +832,8 @@ defmodule LemonAgent.EventStream do
     if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
     cancel_idle_timeout(state)
 
-    # Signal cancellation to attached task first (if it exposed an abort signal),
-    # then ask it to shutdown gracefully before forcing exit after a short grace period.
-    maybe_abort_attached_task(state.task_pid)
+    # Signal cancellation before shutting down the attached task.
+    maybe_abort_attached_task(state.abort_signal)
     shutdown_attached_task(state.task_pid, state.task_ref)
 
     # Push a canceled event if not already done
@@ -874,26 +876,8 @@ defmodule LemonAgent.EventStream do
   defp terminal?({:canceled, _reason}), do: true
   defp terminal?(_event), do: false
 
-  defp maybe_abort_attached_task(task_pid) when is_pid(task_pid) do
-    case Process.info(task_pid, :dictionary) do
-      {:dictionary, dictionary} ->
-        case List.keyfind(dictionary, :agent_abort_signal, 0) do
-          {:agent_abort_signal, abort_ref} when is_reference(abort_ref) ->
-            LemonAgent.AbortSignal.abort(abort_ref)
-
-          _ ->
-            :ok
-        end
-
-      _ ->
-        :ok
-    end
-  rescue
-    ArgumentError ->
-      :ok
-  end
-
-  defp maybe_abort_attached_task(_task_pid), do: :ok
+  defp maybe_abort_attached_task(nil), do: :ok
+  defp maybe_abort_attached_task(signal), do: LemonAgent.AbortSignal.abort(signal)
 
   defp shutdown_attached_task(task_pid, task_ref) do
     if is_pid(task_pid) and Process.alive?(task_pid) do

@@ -44,9 +44,15 @@ defmodule LemonAgent.Loop.ToolCalls do
           {[ToolResultMessage.t()], LemonAgent.Types.AgentContext.t(),
            [LemonAgent.Types.agent_message()]}
   def execute_and_collect_tools(context, new_messages, tool_calls, config, signal, stream) do
-    # Queue consumption belongs to the loop, after it decides whether another
-    # turn is allowed. A terminal tool-turn budget must not discard queued input.
-    execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream)
+    AbortSignal.subscribe(signal)
+
+    try do
+      # Queue consumption belongs to the loop, after it decides whether another
+      # turn is allowed. A terminal tool-turn budget must not discard queued input.
+      execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream)
+    after
+      AbortSignal.unsubscribe(signal)
+    end
   end
 
   defp execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream) do
@@ -207,6 +213,9 @@ defmodule LemonAgent.Loop.ToolCalls do
             {context, new_messages, pending_by_ref, pending_by_mon, results}
           else
             receive do
+              {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
+                {context, new_messages, pending_by_ref, pending_by_mon, results}
+
               {:tool_task_update, ref, partial} ->
                 pending_by_ref = remember_partial(pending_by_ref, ref, partial)
                 {context, new_messages, pending_by_ref, pending_by_mon, results}
@@ -317,9 +326,8 @@ defmodule LemonAgent.Loop.ToolCalls do
                     {context, new_messages, pending_by_ref, pending_by_mon, results}
                 end
             after
-              100 ->
-                # Poll steering without draining it, and abort without waiting
-                # for a running tool to produce another event.
+              steering_poll_timeout(remaining_tool_calls, config) ->
+                # Steering is a callback-based queue, not an abort timer.
                 {context, new_messages, pending_by_ref, pending_by_mon, results}
             end
           end
@@ -344,6 +352,11 @@ defmodule LemonAgent.Loop.ToolCalls do
         )
     end
   end
+
+  defp steering_poll_timeout([_ | _], %AgentLoopConfig{has_steering_messages: callback})
+       when not is_nil(callback), do: 100
+
+  defp steering_poll_timeout(_remaining_tool_calls, _config), do: :infinity
 
   defp tool_call_order(tool_calls) do
     tool_calls

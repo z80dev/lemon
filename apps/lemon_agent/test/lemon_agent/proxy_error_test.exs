@@ -550,8 +550,6 @@ defmodule LemonAgent.ProxyErrorTest do
       {:error, %AssistantMessage{} = message} = EventStream.result(stream, @receive_timeout)
       assert message.stop_reason == :aborted
       assert message.error_message =~ "aborted"
-
-      AbortSignal.clear(signal)
     end
 
     test "aborts stream when signal is triggered during streaming" do
@@ -589,8 +587,6 @@ defmodule LemonAgent.ProxyErrorTest do
 
       {:error, %AssistantMessage{} = message} = EventStream.result(stream, @receive_timeout)
       assert message.stop_reason == :aborted
-
-      AbortSignal.clear(signal)
     end
 
     test "nil signal does not cause abort" do
@@ -913,8 +909,6 @@ defmodule LemonAgent.ProxyErrorTest do
 
       {:error, %AssistantMessage{} = message} = EventStream.result(stream, @receive_timeout)
       assert message.stop_reason == :aborted
-
-      AbortSignal.clear(signal)
     end
   end
 

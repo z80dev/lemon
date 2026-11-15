@@ -267,8 +267,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
       # Should abort well before the ~10s the loop would otherwise run
       assert elapsed < 5_000
       assert result.cancelled == true
-
-      AbortSignal.clear(signal)
     end
 
     test "abort signal checked during receive timeout", %{tmp_dir: tmp_dir} do
@@ -286,8 +284,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
       {:ok, result} = Task.await(task, 10_000)
       assert result.cancelled == true
-
-      AbortSignal.clear(signal)
     end
 
     test "multiple abort calls are idempotent", %{tmp_dir: tmp_dir} do
@@ -307,8 +303,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
       {:ok, result} = Task.await(task, 10_000)
       assert result.cancelled == true
-
-      AbortSignal.clear(signal)
     end
 
     test "abort with nil signal is ignored", %{tmp_dir: tmp_dir} do
@@ -340,8 +334,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
       assert elapsed < 5_000
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "cancelled"
-
-      AbortSignal.clear(signal)
     end
 
     test "abort preserves partial output", %{tmp_dir: tmp_dir} do
@@ -368,32 +360,24 @@ defmodule CodingAgent.BashEdgeCasesTest do
       assert result.cancelled == true
       assert result.output =~ "before_abort"
       refute result.output =~ "after_abort"
-
-      AbortSignal.clear(signal)
     end
 
-    test "abort signal cleanup prevents resource leaks", %{tmp_dir: tmp_dir} do
-      signals =
-        for _ <- 1..10 do
-          signal = AbortSignal.new()
+    test "abort from the first output callback is observed without another chunk", %{
+      tmp_dir: tmp_dir
+    } do
+      signal = AbortSignal.new()
+      on_chunk = fn _chunk -> AbortSignal.abort(signal) end
 
-          task =
-            Task.async(fn ->
-              BashExecutor.execute("sleep 1", tmp_dir, signal: signal)
-            end)
+      assert {:ok, result} =
+               BashExecutor.execute("printf ready; sleep 30", tmp_dir,
+                 signal: signal,
+                 on_chunk: on_chunk,
+                 timeout: 5_000
+               )
 
-          Process.sleep(10)
-          AbortSignal.abort(signal)
-          Task.await(task, 5_000)
-
-          signal
-        end
-
-      # Clean up all signals
-      Enum.each(signals, &AbortSignal.clear/1)
-
-      # If we get here without issues, cleanup worked
-      assert true
+      assert result.cancelled
+      refute result.timed_out
+      assert result.output =~ "ready"
     end
   end
 
@@ -489,8 +473,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
       assert result.cancelled == true
       assert result.exit_code == nil
-
-      AbortSignal.clear(signal)
     end
   end
 
@@ -650,8 +632,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text == "Command cancelled."
-
-      AbortSignal.clear(signal)
     end
 
     test "cancelled error formatting with partial output", %{tmp_dir: tmp_dir} do
@@ -683,8 +663,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "cancelled"
       assert text =~ "partial"
-
-      AbortSignal.clear(signal)
     end
 
     test "error result from BashExecutor", %{tmp_dir: _tmp_dir} do
@@ -776,9 +754,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
       assert result1.cancelled == true
       assert result2.cancelled == false
       assert result2.exit_code == 0
-
-      AbortSignal.clear(signal1)
-      AbortSignal.clear(signal2)
     end
 
     test "concurrent streaming callbacks are isolated", %{tmp_dir: tmp_dir} do

@@ -188,6 +188,31 @@ defmodule LemonComputerUse.ServerTest do
     refute_received :asked_for_lemon
   end
 
+  test "call cancellation is delivered by a message without a polling tick" do
+    signal = LemonAgent.AbortSignal.new()
+    parent = self()
+
+    server =
+      spawn_link(fn ->
+        receive do
+          {:"$gen_cast", {:call, caller, ref, "js", %{}, %{}}} ->
+            send(parent, {:waiting, caller})
+
+            receive do
+              {:"$gen_cast", {:cancel, ^ref}} ->
+                send(caller, {ref, {:error, :aborted}})
+            end
+        end
+      end)
+
+    task = Task.async(fn -> Server.call("js", %{}, %{}, signal, server) end)
+    assert_receive {:waiting, caller}
+    assert [{^caller, _}] = Registry.lookup(LemonAgent.AbortSignal.Registry, signal)
+    send(caller, {:lemon_abort, signal, :abort})
+    assert Task.await(task) == {:error, :aborted}
+    assert Registry.lookup(LemonAgent.AbortSignal.Registry, signal) == []
+  end
+
   test "an abort cancels the call in flight and its pending approval" do
     signal = LemonAgent.AbortSignal.new()
     js = Js.tool("/tmp", opts())

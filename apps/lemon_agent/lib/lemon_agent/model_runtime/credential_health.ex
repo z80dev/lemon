@@ -14,8 +14,7 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
     * anything else (`:transient`, `:server`, `:unknown`, ...) - short backoff.
 
   `record_success/2` clears the credential's state. State lives in a public
-  named ETS table owned by this process (same pattern as
-  `LemonAgent.AbortSignal.TableOwner`); every call degrades safely when the
+  named ETS table owned by this process; every call degrades safely when the
   table is missing - no cooldowns, never a crash on the call path.
   """
 

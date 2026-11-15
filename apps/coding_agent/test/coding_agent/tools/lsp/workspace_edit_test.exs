@@ -331,7 +331,6 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
 
     on_exit(fn -> Application.put_env(:lemon_core, :paths, paths) end)
     signal = LemonAgent.AbortSignal.new()
-    on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
     parent = self()
 
     opts = [

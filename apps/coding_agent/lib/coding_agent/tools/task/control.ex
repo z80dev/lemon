@@ -156,7 +156,6 @@ defmodule CodingAgent.Tools.Task.Control do
 
   @impl true
   def init(_opts) do
-    Process.send_after(self(), :check_signals, 50)
     {:ok, %{}}
   end
 
@@ -166,6 +165,8 @@ defmodule CodingAgent.Tools.Task.Control do
         _from,
         state
       ) do
+    AbortSignal.subscribe(parent_signal)
+
     metadata =
       case TaskStore.get_record(id) do
         {:ok, record} ->
@@ -205,6 +206,7 @@ defmodule CodingAgent.Tools.Task.Control do
       on_failure: on_failure
     }
 
+    entry = if AbortSignal.aborted?(parent_signal), do: cancel(id, entry), else: entry
     {:reply, :ok, Map.put(state, id, entry)}
   end
 
@@ -390,13 +392,12 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   @impl true
-  def handle_info(:check_signals, state) do
+  def handle_info({:lemon_abort, signal, _kind}, state) do
     state =
       Map.new(state, fn {id, entry} ->
-        {id, if(AbortSignal.aborted?(entry.parent_signal), do: cancel(id, entry), else: entry)}
+        {id, if(entry.parent_signal == signal, do: cancel(id, entry), else: entry)}
       end)
 
-    Process.send_after(self(), :check_signals, 50)
     {:noreply, state}
   end
 
@@ -838,7 +839,12 @@ defmodule CodingAgent.Tools.Task.Control do
             is_reference(ref),
             do: Process.demonitor(ref, [:flush])
 
-        AbortSignal.clear(entry.signal)
+        unless Enum.any?(state, fn {_id, other} ->
+                 other.parent_signal == entry.parent_signal
+               end) do
+          AbortSignal.unsubscribe(entry.parent_signal)
+        end
+
         state
     end
   end

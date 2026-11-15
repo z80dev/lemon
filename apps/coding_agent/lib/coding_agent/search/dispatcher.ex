@@ -17,7 +17,6 @@ defmodule CodingAgent.Search.Dispatcher do
   alias CodingAgent.Search.Registry
 
   @default_timeout_ms 30_000
-  @abort_poll_ms 50
   @abort_grace_ms 250
 
   @type metadata :: %{
@@ -156,34 +155,40 @@ defmodule CodingAgent.Search.Dispatcher do
   end
 
   defp invoke(module, capability, request, context, timeout_ms, signal) do
-    with :ok <- check_abort(signal) do
-      caller = self()
-      token = make_ref()
-      deadline = System.monotonic_time(:millisecond) + timeout_ms
+    LemonAgent.AbortSignal.subscribe(signal)
 
-      {owner, monitor} =
-        spawn_monitor(fn ->
-          caller_monitor = Process.monitor(caller)
-          owner = self()
+    try do
+      with :ok <- check_abort(signal) do
+        caller = self()
+        token = make_ref()
+        deadline = System.monotonic_time(:millisecond) + timeout_ms
 
-          {provider, provider_monitor} =
-            spawn_monitor(fn ->
-              result =
-                try do
-                  apply(module, capability, [request, context])
-                rescue
-                  error -> {:error, {:provider_exception, Exception.message(error)}}
-                catch
-                  kind, reason -> {:error, {:provider_throw, kind, reason}}
-                end
+        {owner, monitor} =
+          spawn_monitor(fn ->
+            caller_monitor = Process.monitor(caller)
+            owner = self()
 
-              send(owner, {token, result})
-            end)
+            {provider, provider_monitor} =
+              spawn_monitor(fn ->
+                result =
+                  try do
+                    apply(module, capability, [request, context])
+                  rescue
+                    error -> {:error, {:provider_exception, Exception.message(error)}}
+                  catch
+                    kind, reason -> {:error, {:provider_throw, kind, reason}}
+                  end
 
-          guard_provider(caller, caller_monitor, provider, provider_monitor, token)
-        end)
+                send(owner, {token, result})
+              end)
 
-      await_provider(owner, monitor, token, signal, deadline)
+            guard_provider(caller, caller_monitor, provider, provider_monitor, token)
+          end)
+
+        await_provider(owner, monitor, token, signal, deadline)
+      end
+    after
+      LemonAgent.AbortSignal.unsubscribe(signal)
     end
   end
 
@@ -220,7 +225,6 @@ defmodule CodingAgent.Search.Dispatcher do
       {:error, "Operation aborted"}
     else
       remaining = max(deadline - System.monotonic_time(:millisecond), 0)
-      wait_ms = if is_nil(signal), do: remaining, else: min(remaining, @abort_poll_ms)
 
       receive do
         {^token, result} ->
@@ -229,8 +233,11 @@ defmodule CodingAgent.Search.Dispatcher do
 
         {:DOWN, ^monitor, :process, ^owner, reason} ->
           with :ok <- check_abort(signal), do: {:error, {:provider_exit, reason}}
+
+        {:lemon_abort, ^signal, _kind} ->
+          await_provider(owner, monitor, token, signal, deadline)
       after
-        wait_ms ->
+        remaining ->
           if System.monotonic_time(:millisecond) >= deadline do
             stop_provider(owner, monitor, token, :timeout)
             with :ok <- check_abort(signal), do: {:error, :provider_timeout}

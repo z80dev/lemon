@@ -292,7 +292,16 @@ defmodule CodingAgent.Tools.AskTest do
           :ok
 
         :cancelled ->
-          LemonAgent.AbortSignal.abort(signal)
+          server = Process.whereis(UserPrompt)
+          :ok = :sys.suspend(server)
+
+          try do
+            LemonAgent.AbortSignal.abort(signal)
+            assert {:messages, messages} = Process.info(server, :messages)
+            assert {:lemon_abort, signal, :abort} in messages
+          after
+            :ok = :sys.resume(server)
+          end
 
         :client_down ->
           assert :ok = UserPrompt.unbind(key, self())
@@ -309,8 +318,6 @@ defmodule CodingAgent.Tools.AskTest do
 
       assert {:error, :not_found} =
                UserPrompt.resolve(id, key, nil, %{"action" => "accept"}, self())
-
-      LemonAgent.AbortSignal.clear(signal)
     end
   end
 

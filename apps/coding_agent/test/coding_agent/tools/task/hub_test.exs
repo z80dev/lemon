@@ -274,8 +274,7 @@ defmodule CodingAgent.Tools.Task.HubTest do
                    nil,
                    nil,
                    task_id: id,
-                   idle_ttl_ms: 0,
-                   task_session_poll_ms: 10
+                   idle_ttl_ms: 0
                  )
                end,
                followup,

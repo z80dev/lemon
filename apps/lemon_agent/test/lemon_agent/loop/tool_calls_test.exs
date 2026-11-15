@@ -1354,14 +1354,13 @@ defmodule LemonAgent.Loop.ToolCallsTest do
   test "abort lets cooperative tools finish resource cleanup before returning" do
     parent = self()
     signal = AbortSignal.new()
-    on_exit(fn -> AbortSignal.clear(signal) end)
 
     wait_for_abort = fn wait_for_abort ->
       if AbortSignal.aborted?(signal) do
         send(parent, :abort_observed)
 
         # Cleanup only finishes once the test says so (after the loop has begun
-        # draining aborted tools), instead of racing the loop's abort poll.
+        # draining aborted tools), instead of racing the loop's abort delivery.
         receive do
           :finish_cleanup -> :ok
         after

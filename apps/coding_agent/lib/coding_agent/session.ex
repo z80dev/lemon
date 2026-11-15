@@ -1723,6 +1723,10 @@ defmodule CodingAgent.Session do
     {:noreply, WasmBridge.check_host_call(state, ref)}
   end
 
+  def handle_info({:lemon_abort, signal, _kind}, state) do
+    {:noreply, WasmBridge.abort_host_calls(state, signal)}
+  end
+
   def handle_info({:DOWN, ref, :process, pid, reason}, state)
       when map_size(state.wasm_host_calls) > 0 do
     case WasmBridge.host_call_down(state, ref) do

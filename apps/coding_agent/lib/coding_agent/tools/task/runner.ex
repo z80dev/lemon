@@ -7,7 +7,6 @@ defmodule CodingAgent.Tools.Task.Runner do
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
-  @await_poll_ms 200
   @default_task_session_timeout_ms nil
   @output_retries 2
   @max_correction_error_chars 1_000
@@ -71,6 +70,7 @@ defmodule CodingAgent.Tools.Task.Runner do
     session_ref = Process.monitor(session)
     timeout_ms = task_session_timeout_ms(opts)
     deadline_ms = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
+    AbortSignal.subscribe(signal)
 
     try do
       result =
@@ -97,7 +97,6 @@ defmodule CodingAgent.Tools.Task.Runner do
                   role_id,
                   timeout_ms,
                   deadline_ms,
-                  task_session_poll_ms(opts),
                   budget
                 )
               end
@@ -138,6 +137,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         stop_session(session)
         :erlang.raise(kind, reason, __STACKTRACE__)
     after
+      AbortSignal.unsubscribe(signal)
       Process.demonitor(session_ref, [:flush])
     end
   end
@@ -227,7 +227,7 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
-  defp await_session_event(session_ref, delivery_gate, session_id, timeout) do
+  defp await_session_event(session_ref, delivery_gate, session_id, signal, timeout) do
     receive do
       {:lemon_bus_delivery, ^delivery_gate, {:session_event, ^session_id, _event} = event} ->
         event
@@ -237,6 +237,9 @@ defmodule CodingAgent.Tools.Task.Runner do
 
       {:DOWN, ^session_ref, :process, _pid, _reason} = event ->
         event
+
+      {:lemon_abort, ^signal, _kind} ->
+        :timeout
     after
       timeout -> :timeout
     end
@@ -294,15 +297,22 @@ defmodule CodingAgent.Tools.Task.Runner do
          role_id,
          timeout_ms,
          deadline_ms,
-         poll_ms,
          budget
        ) do
-    case await_session_event(
-           session_ref,
-           delivery_gate,
-           session_id,
-           await_timeout(deadline_ms, poll_ms)
-         ) do
+    event =
+      if AbortSignal.aborted?(signal) do
+        :timeout
+      else
+        await_session_event(
+          session_ref,
+          delivery_gate,
+          session_id,
+          signal,
+          await_timeout(deadline_ms)
+        )
+      end
+
+    case event do
       {:session_terminal, ^session_id, status} ->
         case Session.get_state(session).terminal_event do
           {:agent_end, messages} ->
@@ -359,7 +369,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           role_id,
           timeout_ms,
           deadline_ms,
-          poll_ms,
           budget
         )
 
@@ -388,7 +397,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           role_id,
           timeout_ms,
           deadline_ms,
-          poll_ms,
           budget
         )
 
@@ -415,7 +423,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           role_id,
           timeout_ms,
           deadline_ms,
-          poll_ms,
           budget
         )
 
@@ -449,7 +456,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           role_id,
           timeout_ms,
           deadline_ms,
-          poll_ms,
           budget
         )
 
@@ -510,7 +516,6 @@ defmodule CodingAgent.Tools.Task.Runner do
             role_id,
             timeout_ms,
             deadline_ms,
-            poll_ms,
             budget
           )
         end
@@ -538,7 +543,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           role_id,
           timeout_ms,
           deadline_ms,
-          poll_ms,
           budget
         )
 
@@ -566,7 +570,6 @@ defmodule CodingAgent.Tools.Task.Runner do
                 role_id,
                 timeout_ms,
                 deadline_ms,
-                poll_ms,
                 budget
               )
           end
@@ -602,24 +605,16 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
-  defp task_session_poll_ms(opts) do
-    case Keyword.get(opts, :task_session_poll_ms) do
-      timeout when is_integer(timeout) and timeout > 0 -> timeout
-      _ -> @await_poll_ms
-    end
-  end
-
   defp remaining_task_session_ms(nil), do: :infinity
 
   defp remaining_task_session_ms(deadline_ms) do
     deadline_ms - System.monotonic_time(:millisecond)
   end
 
-  defp await_timeout(nil, poll_ms), do: poll_ms
+  defp await_timeout(nil), do: :infinity
 
-  defp await_timeout(deadline_ms, poll_ms) do
+  defp await_timeout(deadline_ms) do
     remaining_task_session_ms(deadline_ms)
-    |> min(poll_ms)
     |> max(0)
   end
 
@@ -739,7 +734,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   defp await_shutdown(session_ref, session_id, delivery_gate, deadline) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
-    case await_session_event(session_ref, delivery_gate, session_id, remaining) do
+    case await_session_event(session_ref, delivery_gate, session_id, nil, remaining) do
       {:DOWN, ^session_ref, :process, _, _} ->
         :ok
 

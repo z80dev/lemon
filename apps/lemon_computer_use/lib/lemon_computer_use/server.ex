@@ -35,7 +35,6 @@ defmodule LemonComputerUse.Server do
   @catalog_key {__MODULE__, :catalog}
   @line_bytes 65_536
   @kill_grace_ms 3_000
-  @abort_poll_ms 200
 
   @passthrough_env ~w(HOME USER LOGNAME PATH TMPDIR LANG LC_ALL LC_CTYPE SHELL DISPLAY
                       WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XAUTHORITY)
@@ -98,8 +97,16 @@ defmodule LemonComputerUse.Server do
       pid ->
         ref = make_ref()
         monitor = Process.monitor(pid)
-        GenServer.cast(pid, {:call, self(), ref, name, arguments, context})
-        await_call(pid, ref, monitor, signal, false)
+        LemonAgent.AbortSignal.subscribe(signal)
+
+        try do
+          GenServer.cast(pid, {:call, self(), ref, name, arguments, context})
+          cancelled? = LemonAgent.AbortSignal.aborted?(signal)
+          if cancelled?, do: GenServer.cast(pid, {:cancel, ref})
+          await_call(pid, ref, monitor, signal, cancelled?)
+        after
+          LemonAgent.AbortSignal.unsubscribe(signal)
+        end
     end
   end
 
@@ -111,14 +118,10 @@ defmodule LemonComputerUse.Server do
 
       {:DOWN, ^monitor, :process, _pid, _reason} ->
         {:error, {:bridge_exited, :server_down}}
-    after
-      @abort_poll_ms ->
-        if not cancelled? and LemonAgent.AbortSignal.aborted?(signal) do
-          GenServer.cast(pid, {:cancel, ref})
-          await_call(pid, ref, monitor, signal, true)
-        else
-          await_call(pid, ref, monitor, signal, cancelled?)
-        end
+
+      {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
+        if not cancelled?, do: GenServer.cast(pid, {:cancel, ref})
+        await_call(pid, ref, monitor, signal, true)
     end
   end
 
