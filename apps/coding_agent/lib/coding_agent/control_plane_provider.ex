@@ -30,6 +30,12 @@ defmodule CodingAgent.ControlPlaneProvider do
   alias CodingAgent.Tools.Task.Hub
   alias CodingAgent.Tools.TodoStore
 
+  def session_maintenance_plan(older_than_ms),
+    do: CodingAgent.SessionMaintenance.plan(older_than_ms)
+
+  def session_maintenance_execute(plan),
+    do: CodingAgent.SessionMaintenance.execute(plan)
+
   def user_prompt_bind(session_key, connection, enabled, opts \\ []) do
     if enabled,
       do: UserPrompt.bind(session_key, connection, opts),

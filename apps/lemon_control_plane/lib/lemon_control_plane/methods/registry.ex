@@ -149,6 +149,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsMetadataPatch,
     LemonControlPlane.Methods.SessionsExport,
     LemonControlPlane.Methods.SessionsPrune,
+    LemonControlPlane.Methods.SessionsMaintain,
     LemonControlPlane.Methods.SessionsReset,
     LemonControlPlane.Methods.SessionsCompact,
     LemonControlPlane.Methods.SessionsTree,
