@@ -181,12 +181,11 @@ defmodule LemonCore.Bus do
   @doc """
   Which backend is in use: `:pubsub` or `:registry`.
 
-  Detected at runtime on first use and memoized, because `phoenix_pubsub` being
-  compiled alongside lemon_core does not mean it is on the code path of every
-  app that depends on lemon_core — optional dependencies are not inherited
-  transitively. `config :lemon_core, :bus_backend, :registry` forces the
-  fallback even where `Phoenix.PubSub` is available, which is how tests
-  exercise it.
+  Selected and published at application boot, because `phoenix_pubsub` being
+  compiled alongside lemon_core does not mean it is on every consumer's code
+  path. Before boot, detection is read-only. Optional dependencies are not
+  inherited transitively. `config :lemon_core, :bus_backend, :registry`
+  forces the fallback even where `Phoenix.PubSub` is available.
   """
   @spec backend() :: :pubsub | :registry
   def backend do
@@ -218,16 +217,23 @@ defmodule LemonCore.Bus do
   @doc false
   @spec child_spec_for_backend() :: Supervisor.child_spec() | {module(), keyword()}
   def child_spec_for_backend do
-    case backend() do
+    backend =
+      case Application.get_env(:lemon_core, :bus_backend, :auto) do
+        :registry -> :registry
+        :pubsub -> :pubsub
+        _auto -> detect_backend()
+      end
+
+    :persistent_term.put(@backend_key, backend)
+
+    case backend do
       :pubsub -> {Phoenix.PubSub, name: @pubsub}
       :registry -> {Registry, keys: :duplicate, name: @registry}
     end
   end
 
   defp detect_backend do
-    backend = if Code.ensure_loaded?(Phoenix.PubSub), do: :pubsub, else: :registry
-    :persistent_term.put(@backend_key, backend)
-    backend
+    if Code.ensure_loaded?(Phoenix.PubSub), do: :pubsub, else: :registry
   end
 
   # Phoenix dispatch runs on the subscriber's node, where the metadata/atomics

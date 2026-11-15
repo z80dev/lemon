@@ -4,14 +4,16 @@ defmodule LemonCore.BrowserProvider.Command do
 
   A separate, unlinked owner monitors the caller and owns the OS port. Killing
   a resolver callback therefore cannot orphan its command. Timeout, output
-  overflow, and caller death kill the command's process tree before closing the
-  port. Output is private to probes and must not enter diagnostics.
+  overflow, and caller death kill the command's process group before closing the
+  port. Escaped sessions are unsupported. Output is private to probes and must
+  not enter diagnostics.
 
   `:input` is written verbatim (line-oriented helpers need a trailing newline).
   `:env` overrides selected inherited variables. `:accept_nonzero` returns a map
   with `:output` and `:status` instead of treating a nonzero exit as an error.
   """
 
+  alias LemonCore.ProcessGroup
   alias LemonCore.Secrets.SourceRunner
 
   @spec run([String.t()], keyword()) ::
@@ -130,13 +132,8 @@ defmodule LemonCore.BrowserProvider.Command do
   defp output(chunks), do: chunks |> Enum.reverse() |> IO.iodata_to_binary()
 
   defp terminate(port) do
-    # OTP's Unix child setup creates a new process group/session before exec.
-    # Signal that group directly: a ps snapshot can time out or miss children
-    # during spawn, leaving a live diagnostic subprocess behind. Also signal
-    # the PID in case cancellation arrived before child setup made the group.
-    with {:os_pid, pid} when pid > 1 <- Port.info(port, :os_pid),
-         {:ok, kill} <- SourceRunner.resolve_executable("/bin/kill") do
-      System.cmd(kill, ["-KILL", "--", "-#{pid}", Integer.to_string(pid)], stderr_to_stdout: true)
+    with {:os_pid, pid} when pid > 1 <- Port.info(port, :os_pid) do
+      ProcessGroup.terminate(pid, signal: :sigkill)
     end
 
     close(port)

@@ -642,7 +642,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       :ok = Session.prompt(pid2, "Hello!")
 
       # Should not receive events from session 2
-      refute_receive {:session_event, _, _}, 200
+      refute_receive {:session_event, _, _, _}, 200
     end
 
     test "stopping one session does not affect others" do

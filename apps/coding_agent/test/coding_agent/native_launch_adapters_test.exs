@@ -116,14 +116,14 @@ defmodule CodingAgent.NativeLaunchAdaptersTest do
       kill = Enum.find(["/bin/kill", "/usr/bin/kill"], &File.regular?/1)
       assert {_, 0} = System.cmd(kill, ["-STOP", Integer.to_string(kernel.root_pid)])
 
-      on_exit(fn -> ProcessGroup.signal_workload_group(kernel, :sigkill) end)
+      on_exit(fn -> ProcessGroup.terminate(kernel, signal: :sigkill) end)
 
       rows = NativeProcess.snapshot()
 
       assert {local_id, %{backend: :local, workload_identity: host}, _} =
                Enum.find(rows, fn {_, record, _} -> record.backend == :local end)
 
-      assert {:ok, _} = ProcessGroup.signal_workload_group(host, :sigkill)
+      assert {:terminated, _} = ProcessGroup.terminate(host, signal: :sigkill)
 
       rows =
         Enum.reduce_while(1..100, rows, fn _, _ ->
@@ -150,7 +150,7 @@ defmodule CodingAgent.NativeLaunchAdaptersTest do
                  not record.termination_confirmed
              end)
     after
-      ProcessGroup.signal_workload_group(kernel, :sigkill)
+      ProcessGroup.terminate(kernel, signal: :sigkill)
       :sys.resume(slot)
     end
   end

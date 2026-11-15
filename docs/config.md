@@ -865,7 +865,9 @@ config :coding_agent,
 
 The process limit holds capacity for the managed command's live lifetime, not
 just the launch callback. `lane_caps.background_exec` remains a separate launch
-concurrency cap; main/subagent lanes retain their existing callback semantics.
+concurrency cap. `:coding_agent, :task_max_concurrency` (default `8`) is the
+single shared cap for native task children and background sessions. They acquire
+the same monitored semaphore; the unused main/subagent lanes no longer exist.
 The pending limit bounds waiting admissions per LaneQueue; the acceptance ledger
 also bounds in-flight registrations. Process/pending limits are integers up to
 1,000,000 (process minimum 1, pending minimum 0). Admission deadline/wait values
@@ -931,10 +933,11 @@ capacity and live owner monitors before permitting a new admission.
 Cleared identity tombstones and historical unknown receipts do not expire.
 The default finished-process TTL (86,400 seconds) and cleanup interval
 (300 seconds) do not bound ledger rows; recovery, count and artifact scans grow
-with that history. Observable retained local workloads reconcile after 100 ms
-plus scan cost using a system-wide `ps` snapshot. Ownership-lost and nonlocal
-unknown workloads do not schedule this polling. These are local containment
-contracts, not proof of remote workload termination.
+with that history. Local workload liveness is reconciled on the root Port's
+exit-status event, explicit cancellation and boot recovery, not a periodic
+system-wide `ps` timer. Retained unknown workloads remain charged until verified
+termination. These are local containment contracts, not proof of remote workload
+termination.
 
 The internal evaluation harness can additionally opt into
 `LemonCore.NativeProcess` tracking by calling `configure!/1` with a fresh private
@@ -2730,6 +2733,15 @@ suppresses bootstrap even when resuming an assistant session.
   valid tail. If that still cannot fit, `compaction_recovery_band` is reported
   and unchanged history is not compacted again each turn; reduce request
   overhead, manually compact, or start a new session.
+  Before calling the summary model, Lemon spills old tool-result bodies to
+  session-scoped `artifact://` handles. It protects the newest 40,000 estimated
+  tokens and skips results below 50 tokens (omp's `docs/compaction.md` policy).
+  References recover the original JSON content blocks through `read`; tool
+  call IDs, result IDs, ordering and error status remain unchanged for every
+  provider. A branch-local journal marker retains these projections across
+  resume without rewriting original output. Failed spills leave output intact.
+  When pruning alone reaches the recovery band, no summary call is made;
+  message-count pressure still requires summarization.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `runtime.secret_obfuscation`: opt-in placeholder obfuscation of secrets in provider-visible text ([details](security/secret-obfuscation.md)).

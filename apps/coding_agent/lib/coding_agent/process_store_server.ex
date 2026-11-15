@@ -501,7 +501,8 @@ defmodule CodingAgent.ProcessStoreServer do
   # Private Functions
   defp persist_launch(id, record, logs) do
     # No external start may be acknowledged with only volatile provenance.
-    DurableTable.put(@table, {id, record, logs}, :sync)
+    :ok = DurableTable.put(@table, {id, record, logs}, :sync)
+    CodingAgent.ProcessStore.notify_change(id)
   rescue
     _ -> exit(:launch_store_unavailable)
   catch
@@ -762,8 +763,25 @@ defmodule CodingAgent.ProcessStoreServer do
           record
       end
 
-    {process_id, record, logs}
+    {process_id, reconcile_boot_workload(process_id, record), logs}
   end
+
+  defp reconcile_boot_workload(id, %{status: :lost, workload_identity: identity} = record)
+       when is_map(identity) do
+    if session_alive?(id) do
+      record
+    else
+      case LemonCore.ProcessGroup.workload_group_status(
+             identity,
+             Map.get(record, :root_exited, false)
+           ) do
+        :terminated -> confirmed_record(record, :workload_empty)
+        {_status, observed} -> Map.put(record, :workload_identity, observed)
+      end
+    end
+  end
+
+  defp reconcile_boot_workload(_id, record), do: record
 
   @doc false
   def restore_capacity(state) do

@@ -110,6 +110,14 @@ defmodule CodingAgent.ParentQuestionStoreServer do
         [{^request_id, %{status: :waiting} = record, events}] ->
           updated = %{record | delivery_pending: false, updated_at: System.system_time(:second)}
           do_insert_record(request_id, updated, events)
+
+          if is_binary(updated[:child_run_id]) do
+            LemonCore.Bus.broadcast(
+              LemonCore.Bus.run_topic(updated.child_run_id),
+              {:parent_question, :delivered, request_id}
+            )
+          end
+
           :ok
 
         [{^request_id, _terminal_record, _events}] ->

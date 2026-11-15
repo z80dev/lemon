@@ -526,14 +526,16 @@ defmodule CodingAgent.ProcessStore do
           |> Map.put(:launch_terminal_status, Map.get(record, :status))
           |> Map.put(:status, :cleared)
 
-        DurableTable.put(@table, {process_id, tombstone, []}, :sync)
+        :ok = DurableTable.put(@table, {process_id, tombstone, []}, :sync)
+        notify_change(process_id)
       end
     end
   end
 
   defp delete_record(process_id, record) do
     with :ok <- remove_output(record) do
-      DurableTable.delete(@table, process_id)
+      :ok = DurableTable.delete(@table, process_id)
+      notify_change(process_id)
     end
   end
 
@@ -572,7 +574,8 @@ defmodule CodingAgent.ProcessStore do
           :ok
 
         _ ->
-          DurableTable.put(@table, {process_id, record, logs})
+          :ok = DurableTable.put(@table, {process_id, record, logs})
+          notify_change(process_id)
       end
     end)
   end
@@ -640,7 +643,8 @@ defmodule CodingAgent.ProcessStore do
           if durable and is_binary(Map.get(updated, :launch_fingerprint)) do
             # Owned workload provenance must survive a crash before the command
             # is unblocked; do not publish a volatile identity before syncing it.
-            DurableTable.put(@table, {process_id, updated, logs}, :sync)
+            :ok = DurableTable.put(@table, {process_id, updated, logs}, :sync)
+            notify_change(process_id)
           else
             insert_record(process_id, updated, logs)
           end
@@ -651,6 +655,12 @@ defmodule CodingAgent.ProcessStore do
           :ok
       end
     end)
+  end
+
+  @doc false
+  def notify_change(process_id) do
+    LemonCore.Bus.broadcast("process_state:#{process_id}", {:process_state, :changed, process_id})
+    :ok
   end
 
   defp capture_open?(process_id, record) do

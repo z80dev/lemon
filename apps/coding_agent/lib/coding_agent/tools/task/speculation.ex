@@ -33,6 +33,16 @@ defmodule CodingAgent.Tools.Task.Speculation do
   extension tool hooks and plan mode remove the callback. Before adoption a
   child's progress reaches the parent session directly, not the call's
   `on_update`.
+
+  Parser state is already local to each streaming loop. The small receipt
+  registry remains node-local and keyed by `{Control.owner(opts), call_id}`:
+  streaming callbacks and dispatch/adoption run in different processes, and
+  abandoned receipts must outlive the streaming process long enough for its
+  monitor to cancel the children. Moving it into the parent Session would
+  require new stream-to-executor handoff and Session lifecycle APIs, not merely
+  changing a registered name. The registry does not hold message bodies or
+  wait for child execution; per-parent process partitioning is intentionally
+  deferred rather than changing that cross-process ownership contract here.
   """
   use GenServer
 

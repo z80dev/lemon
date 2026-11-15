@@ -631,7 +631,7 @@ defmodule LemonAutomation.Tools.CronTest do
       if pid = Process.whereis(LemonCore.NativeProcess) do
         for {_id, record, %{}} <- LemonCore.NativeProcess.snapshot() do
           if LemonCore.ProcessGroup.valid_identity?(record.workload_identity) do
-            LemonCore.ProcessGroup.signal_workload_group(record.workload_identity, :sigkill)
+            LemonCore.ProcessGroup.terminate(record.workload_identity, signal: :sigkill)
           end
         end
 

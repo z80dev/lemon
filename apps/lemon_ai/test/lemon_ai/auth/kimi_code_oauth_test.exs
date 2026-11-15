@@ -2,7 +2,7 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
   # The provider-header test swaps Req's global default plug.
   use ExUnit.Case, async: false
 
-  alias LemonAi.Auth.{KimiCodeOAuth, OAuthSecretResolver}
+  alias LemonAi.Auth.{Cache, KimiCodeOAuth, OAuthSecretResolver}
   alias LemonAi.EventStream
   alias LemonAi.Providers.Anthropic
   alias LemonAi.Types.{Context, StreamOptions, UserMessage}
@@ -291,6 +291,42 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
       File.mkdir_p!(home)
       on_exit(fn -> File.rm_rf!(home) end)
       {:ok, home: home, path: Path.join([home, ".lemon", "kimi-device-id"])}
+    end
+
+    test "fingerprints stay in the supervised cache after the first caller exits", %{
+      home: home,
+      path: path
+    } do
+      key = {KimiCodeOAuth, :request_headers}
+      previous_home = System.get_env("HOME")
+      previous_headers = Cache.get(key)
+      System.put_env("HOME", home)
+      Cache.delete(key)
+
+      on_exit(fn ->
+        if previous_home,
+          do: System.put_env("HOME", previous_home),
+          else: System.delete_env("HOME")
+
+        if previous_headers,
+          do: Cache.put(key, previous_headers),
+          else: Cache.delete(key)
+      end)
+
+      task = Task.async(fn -> KimiCodeOAuth.request_headers() end)
+      headers = Task.await(task)
+      monitor = Process.monitor(task.pid)
+      assert_receive {:DOWN, ^monitor, :process, _, _}
+      assert Cache.get(key) == headers
+      assert :persistent_term.get(key, :missing) == :missing
+
+      File.write!(path, "replacement-device-id\n")
+      assert KimiCodeOAuth.request_headers() == headers
+
+      Cache.delete(key)
+
+      assert Map.new(KimiCodeOAuth.request_headers())["x-msh-device-id"] ==
+               "replacement-device-id"
     end
 
     test "seeds the pre-persistence identity privately and keeps it across host renames",

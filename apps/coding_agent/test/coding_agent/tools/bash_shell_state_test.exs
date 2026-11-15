@@ -62,6 +62,11 @@ defmodule CodingAgent.Tools.BashShellStateTest do
     assert details.timed_out
     assert Enum.map_join(content, "", & &1.text) =~ "Foreground wait timed out after 100 ms"
     refute File.exists?(Path.join(ws, "count"))
+    # The owner is registered but still inside init, before its first live
+    # snapshot exists. Reads must use its durable launch receipt, not exit.
+    assert {:ok, %{status: :starting}} = ProcessManager.poll(id)
+    assert {:ok, []} = ProcessManager.logs(id)
+    assert {:ok, %{lines: []}} = ProcessManager.read_output(id)
 
     send(starter, :start)
 

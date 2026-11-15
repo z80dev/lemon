@@ -2,9 +2,10 @@ defmodule CodingAgent.Session.Recovery do
   @moduledoc """
   Read-only selected-branch input for control-plane reconciliation.
 
-  The live session serializes the journal read, but its agent and other domain
-  owners are independent. Consumers must compare reads and fence events arriving
-  during reconciliation; this is not a cross-owner transaction or replay cursor.
+  The live session receives its agent-state response in normal mailbox order,
+  after preceding agent broadcasts, and adds the matching native event cursor.
+  Other domain owners remain independent: consumers compare reads and fence
+  concurrent events; this is not a cross-owner transaction.
 
   The control-plane JSON response is bounded, not this internal owner read.
   Journal entries remain complete so interrupted tools and the selected turn's

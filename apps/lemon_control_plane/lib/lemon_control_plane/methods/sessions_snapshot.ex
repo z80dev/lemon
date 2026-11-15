@@ -5,10 +5,10 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   `status: "ok"` contains an opaque identity and a snapshot. `status: "retry"`
   contains no snapshot: an owner changed during collection, or expectedIdentity
   no longer matches. Reconciliation compares two complete collections; it is not
-  a transaction across owners. There is no durable/global event cursor. Clients
-  must fence the selected session/request generation and retry when relevant
-  connection events arrive while the request is pending. Never append subsequent
-  unsequenced text deltas to a replacement answer; refresh it from this authority.
+  a transaction across owners. The live native event cursor is owner-scoped, not
+  durable/global. Clients must fence the selected session/request generation and
+  replay subsequent sequenced events. Never append unsequenced text deltas to a
+  replacement answer; refresh it from this authority.
 
   Revision is an equality token, not an ordered counter. A live attempt is an
   opaque native execution-instance token; retained attempts use their fixed run
@@ -207,7 +207,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
       "consistency" => %{
         "boundary" => "stable_owner_reads",
         "atomic" => false,
-        "eventCursor" => nil,
+        "eventCursor" => if(Map.get(native, :live), do: Map.get(native, :event_cursor)),
         "runStatus" => run_status
       },
       "snapshot" => %{

@@ -281,14 +281,17 @@ defmodule CodingAgent.TaskStoreServer do
 
   def handle_call({:delete_task, task_id}, _from, state) do
     state = ensure_tables(state)
+    record = :ets.lookup_element(state.table, task_id, 2, %{})
     DurableTable.delete(state.table, task_id)
+
+    notify_change(task_id, record)
 
     {:reply, :ok, state}
   end
 
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
-    deleted_count = DurableTable.cleanup(state, ttl_seconds)
+    deleted_count = DurableTable.cleanup(state, ttl_seconds, &delete_expired_task/1)
     {:reply, {:ok, deleted_count}, state}
   end
 
@@ -311,7 +314,7 @@ defmodule CodingAgent.TaskStoreServer do
   @impl true
   def handle_info(:cleanup, state) do
     state = ensure_tables(state)
-    DurableTable.periodic_cleanup(state)
+    DurableTable.periodic_cleanup(state, &delete_expired_task/1)
     {:noreply, state}
   end
 
@@ -368,8 +371,29 @@ defmodule CodingAgent.TaskStoreServer do
     {task_id, record, events}
   end
 
-  defp do_insert_record(task_id, record, events),
-    do: DurableTable.put(@table, {task_id, record, events})
+  defp do_insert_record(task_id, record, events) do
+    :ok = DurableTable.put(@table, {task_id, record, events})
+    notify_change(task_id, record)
+  end
+
+  defp delete_expired_task(task_id) do
+    record = :ets.lookup_element(@table, task_id, 2, %{})
+    :ok = DurableTable.delete(@table, task_id)
+    notify_change(task_id, record)
+  end
+
+  defp notify_change(task_id, record) do
+    LemonCore.Bus.broadcast("task_state:#{task_id}", {:task_state, :changed, task_id})
+
+    if is_binary(record[:parent_run_id]) do
+      LemonCore.Bus.broadcast(
+        LemonCore.Bus.run_topic(record.parent_run_id),
+        {:task_state, :changed, task_id}
+      )
+    end
+
+    :ok
+  end
 
   defp update_task_record(task_id, update_fn) do
     case :ets.lookup(@table, task_id) do

@@ -1,22 +1,23 @@
 defmodule CodingAgent.LaneQueue do
   @moduledoc """
-  Lane-aware FIFO queue with concurrency caps per lane.
+  FIFO admission for background process launch callbacks.
 
-  Intended for scheduling subagent and background work with separate caps.
-  Optimized with O(1) task_ref to job_id lookup.
+  Only the background_exec lane exists. Live-process capacity and durable
+  receipts remain owned by ProcessStore; this queue bounds launch callbacks.
+  Native task and background-session concurrency belongs to TaskSemaphore.
   """
 
   use GenServer
   require Logger
 
-  @type lane :: atom() | {:session, term()}
+  @type lane :: :background_exec
 
   @doc """
   Start a LaneQueue process.
 
   Options:
   - `:name` - registered name (defaults to `__MODULE__`)
-  - `:caps` - map or keyword list of `lane => max_concurrency` (required)
+  - `:caps` - map or keyword list with `:background_exec` launch concurrency (required)
   - `:task_supervisor` - PID or name of a `Task.Supervisor` (required)
   """
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -26,14 +27,14 @@ defmodule CodingAgent.LaneQueue do
   end
 
   @doc """
-  Enqueue a 0-arity function to run under a lane cap.
+  Enqueue a background launch callback under the launch cap.
 
   Returns {:ok, result} or {:error, reason}.
   """
   @spec run(GenServer.server(), lane(), (-> term()), map()) ::
           {:ok, term()} | {:error, term()}
-  def run(server \\ __MODULE__, lane, fun, meta \\ %{}) when is_function(fun, 0) do
-    GenServer.call(server, {:enqueue, lane, fun, meta}, :infinity)
+  def run(server \\ __MODULE__, :background_exec, fun, meta \\ %{}) when is_function(fun, 0) do
+    GenServer.call(server, {:enqueue, :background_exec, fun, meta}, :infinity)
   end
 
   @doc false
@@ -58,9 +59,9 @@ defmodule CodingAgent.LaneQueue do
   end
 
   defp init_queue(opts, limits) do
-    caps = opts |> Keyword.fetch!(:caps) |> normalize_caps()
+    cap = opts |> Keyword.fetch!(:caps) |> Map.new() |> Map.get(:background_exec, 1)
+    caps = %{background_exec: cap}
     task_sup = Keyword.fetch!(opts, :task_supervisor)
-    cap = Map.get(caps, :background_exec, 1)
 
     if is_integer(cap) and cap > 0 do
       init_queue_state(caps, task_sup, limits)
@@ -131,8 +132,8 @@ defmodule CodingAgent.LaneQueue do
   end
 
   @impl true
-  def handle_call({:enqueue, lane, fun, meta}, from, st) do
-    {:noreply, enqueue_job(lane, fun, meta, from, st)}
+  def handle_call({:enqueue, :background_exec, fun, meta}, from, st) do
+    {:noreply, enqueue_job(:background_exec, fun, meta, from, st)}
   end
 
   @impl true
@@ -347,19 +348,7 @@ defmodule CodingAgent.LaneQueue do
     Map.get(st.lanes, lane, %{running: 0, q: :queue.new()})
   end
 
-  defp cap_for_lane(st, lane) do
-    caps = st.caps
-
-    cond do
-      is_map(caps) -> Map.get(caps, lane, 1)
-      is_list(caps) -> Keyword.get(caps, lane, 1)
-      true -> 1
-    end
-  end
-
-  defp normalize_caps(caps) when is_map(caps), do: caps
-  defp normalize_caps(caps) when is_list(caps), do: Map.new(caps)
-  defp normalize_caps(_), do: %{}
+  defp cap_for_lane(st, :background_exec), do: st.caps.background_exec
 
   defp lane_enqueue(st, lane, job_id) do
     ls = lane_state(st, lane)

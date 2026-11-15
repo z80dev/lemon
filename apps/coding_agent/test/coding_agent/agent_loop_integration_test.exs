@@ -70,13 +70,13 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
 
   defp collect_events(events, timeout) do
     receive do
-      {:session_event, _session_id, {:agent_end, _messages}} ->
+      {:session_event, _session_id, {:agent_end, _messages}, _} ->
         Enum.reverse(events)
 
-      {:session_event, _session_id, {:error, reason, _partial}} ->
+      {:session_event, _session_id, {:error, reason, _partial}, _} ->
         Enum.reverse([{:error, reason} | events])
 
-      {:session_event, _session_id, event} ->
+      {:session_event, _session_id, event, _} ->
         collect_events([event | events], timeout)
     after
       timeout ->

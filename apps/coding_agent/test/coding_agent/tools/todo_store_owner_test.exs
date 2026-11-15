@@ -1,174 +1,60 @@
 defmodule CodingAgent.Tools.TodoStoreOwnerTest do
-  @moduledoc """
-  Tests for the TodoStoreOwner module.
-
-  TodoStoreOwner is a GenServer that owns the ETS table used by TodoStore.
-  It ensures the table persists even when client processes exit.
-  """
-
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Tools.TodoStoreOwner
+  alias CodingAgent.Tools.{TodoStore, TodoStoreOwner}
 
-  @table :coding_agent_todos
+  @table :coding_agent_todo_store_owner_test
+  @owner __MODULE__.Owner
 
   setup do
-    # Generate a unique name for each test to avoid conflicts
-    test_name = :"todo_store_owner_#{System.unique_integer([:positive])}"
-
-    %{test_name: test_name}
+    owner = start_supervised!({TodoStoreOwner, name: @owner, table: @table})
+    %{owner: owner}
   end
 
-  # ============================================================================
-  # start_link/1 Tests
-  # ============================================================================
+  test "the supervised process owns its named public set", %{owner: owner} do
+    assert Process.whereis(@owner) == owner
+    assert :ets.info(@table, :owner) == owner
+    assert :ets.info(@table, :named_table)
+    assert :ets.info(@table, :protection) == :public
+    assert :ets.info(@table, :type) == :set
+    assert :ets.info(@table, :read_concurrency)
+    assert :ets.info(@table, :write_concurrency)
 
-  describe "start_link/1" do
-    test "starts server successfully", %{test_name: test_name} do
-      assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
-      assert is_pid(pid)
-      assert Process.alive?(pid)
-
-      GenServer.stop(pid)
-    end
-
-    test "accepts custom name option", %{test_name: test_name} do
-      assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
-
-      # Should be registered under the custom name
-      assert Process.whereis(test_name) == pid
-
-      GenServer.stop(pid)
-    end
-
-    test "returns already_started error when name is taken", %{test_name: test_name} do
-      assert {:ok, pid1} = TodoStoreOwner.start_link(name: test_name)
-      assert {:error, {:already_started, pid2}} = TodoStoreOwner.start_link(name: test_name)
-
-      # Should return the same pid
-      assert pid1 == pid2
-
-      GenServer.stop(pid1)
-    end
+    assert {:error, {:already_started, ^owner}} =
+             TodoStoreOwner.start_link(name: @owner, table: @table)
   end
 
-  # ============================================================================
-  # init/1 Tests
-  # ============================================================================
+  test "the table outlives a monitored client", %{owner: owner} do
+    {client, ref} =
+      spawn_monitor(fn -> :ets.insert(@table, {"session", [%{content: "retained"}]}) end)
 
-  describe "init/1" do
-    test "creates the ETS table on startup", %{test_name: test_name} do
-      # Clean up table if it exists from previous tests/app
-      case :ets.whereis(@table) do
-        :undefined -> :ok
-        _tid -> :ets.delete(@table)
-      end
-
-      assert :ets.whereis(@table) == :undefined
-
-      assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
-
-      # Table should exist after starting
-      assert :ets.whereis(@table) != :undefined
-
-      GenServer.stop(pid)
-    end
-
-    test "does not recreate table if it already exists", %{test_name: test_name} do
-      # Clean up first
-      case :ets.whereis(@table) do
-        :undefined -> :ok
-        _tid -> :ets.delete(@table)
-      end
-
-      # Create the table first
-      :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
-      assert :ets.whereis(@table) != :undefined
-
-      # Starting the server should not fail
-      assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
-      assert Process.alive?(pid)
-
-      # Table should still exist
-      assert :ets.whereis(@table) != :undefined
-
-      GenServer.stop(pid)
-    end
-
-    test "creates table as named table", %{test_name: test_name} do
-      # Clean up first
-      case :ets.whereis(@table) do
-        :undefined -> :ok
-        _tid -> :ets.delete(@table)
-      end
-
-      assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
-
-      info = :ets.info(@table)
-      assert info[:named_table] == true
-
-      GenServer.stop(pid)
-    end
-
-    test "creates table as public", %{test_name: test_name} do
-      # Clean up first
-      case :ets.whereis(@table) do
-        :undefined -> :ok
-        _tid -> :ets.delete(@table)
-      end
-
-      assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
-
-      info = :ets.info(@table)
-      assert info[:protection] == :public
-
-      GenServer.stop(pid)
-    end
-
-    test "creates table as set", %{test_name: test_name} do
-      # Clean up first
-      case :ets.whereis(@table) do
-        :undefined -> :ok
-        _tid -> :ets.delete(@table)
-      end
-
-      assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
-
-      info = :ets.info(@table)
-      assert info[:type] == :set
-
-      GenServer.stop(pid)
-    end
+    assert_receive {:DOWN, ^ref, :process, ^client, :normal}
+    assert :ets.lookup(@table, "session") == [{"session", [%{content: "retained"}]}]
+    assert :ets.info(@table, :owner) == owner
   end
 
-  # ============================================================================
-  # Server Lifecycle Tests
-  # ============================================================================
+  test "restart recreates the disposable projection under the new owner", %{owner: owner} do
+    :ets.insert(@table, {"session", []})
+    {:ok, supervisor} = ExUnit.fetch_test_supervisor()
+    ref = Process.monitor(owner)
 
-  describe "server lifecycle" do
-    test "ETS table survives client process exits", %{test_name: test_name} do
-      # Clean up first
-      case :ets.whereis(@table) do
-        :undefined -> :ok
-        _tid -> :ets.delete(@table)
-      end
+    assert :ok = Supervisor.terminate_child(supervisor, TodoStoreOwner)
+    assert_receive {:DOWN, ^ref, :process, ^owner, :shutdown}
+    assert :ets.whereis(@table) == :undefined
+    assert {:ok, restarted} = Supervisor.restart_child(supervisor, TodoStoreOwner)
+    assert :ets.info(@table, :owner) == restarted
+    assert :ets.lookup(@table, "session") == []
+  end
 
-      assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
+  test "the public store writes to the application owner, never to a client" do
+    session_id = "todo-owner-#{System.unique_integer([:positive])}"
+    on_exit(fn -> :ets.delete(:coding_agent_todos, session_id) end)
 
-      # Simulate a client process that uses the table
-      client =
-        Task.async(fn ->
-          :ets.insert(@table, {"test_key", "test_value"})
-          :ok
-        end)
+    {client, ref} =
+      spawn_monitor(fn -> TodoStore.put(session_id, [%{content: "retained"}]) end)
 
-      assert Task.await(client) == :ok
-
-      # Table should still exist and have the data
-      assert :ets.whereis(@table) != :undefined
-      assert :ets.lookup(@table, "test_key") == [{"test_key", "test_value"}]
-
-      GenServer.stop(pid)
-    end
+    assert_receive {:DOWN, ^ref, :process, ^client, :normal}
+    assert TodoStore.get(session_id) == [%{content: "retained"}]
+    assert :ets.info(:coding_agent_todos, :owner) == Process.whereis(TodoStoreOwner)
   end
 end

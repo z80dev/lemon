@@ -9,6 +9,11 @@ defmodule LemonRouter.ResumeResolver do
   previous one. Unbound legacy journals remain usable by unscoped callers that
   do not explicitly override policy or MCP capabilities.
 
+  Binding writes use the Store's durable mutation contract. A failed write or
+  durability acknowledgement returns `{:error, :outcome_unknown}` because the
+  binding may already be visible; it is not permission to retry automatically.
+  Unconfirmed bindings still cannot authorize resume or history access.
+
   Context comparisons use `LemonCore.InvocationProof` to project only a valid,
   factory-attested, fixed-run proof header. All other MCP configuration remains
   exact, and the transport configuration is never rewritten.

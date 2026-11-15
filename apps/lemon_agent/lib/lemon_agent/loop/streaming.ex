@@ -176,7 +176,7 @@ defmodule LemonAgent.Loop.Streaming do
       empty = message.error_message == "empty_assistant_response"
       reason = if empty, do: "empty reply", else: "malformed tool arguments"
 
-      EventStream.push(
+      EventStream.push!(
         stream,
         {:provider_retry,
          %{
@@ -267,7 +267,7 @@ defmodule LemonAgent.Loop.Streaming do
   defp retry_attempt(context, config, signal, stream_fn, stream, retries_done, error, delay_ms) do
     attempt = retries_done + 1
 
-    EventStream.push(
+    EventStream.push!(
       stream,
       {:provider_retry,
        %{
@@ -399,7 +399,7 @@ defmodule LemonAgent.Loop.Streaming do
   defp finish_retry(_stream, 0, _success, _canceled), do: :ok
 
   defp finish_retry(stream, attempt, success, canceled) do
-    EventStream.push(
+    EventStream.push!(
       stream,
       {:provider_retry_end, %{attempt: attempt, success: success, canceled: canceled}}
     )
@@ -659,6 +659,10 @@ defmodule LemonAgent.Loop.Streaming do
         Loop.record_budget_usage(config, nil, stream)
         {:error, :no_response}
     end
+  catch
+    :throw, {:event_stream_push_failed, reason} = failure ->
+      LemonAi.EventStream.cancel(response_stream, reason)
+      throw(failure)
   end
 
   defp process_stream_event({:start, partial}, _partial, context, added, _stream, _config) do
@@ -686,11 +690,11 @@ defmodule LemonAgent.Loop.Streaming do
         if added do
           update_last_message(context, updated_partial)
         else
-          EventStream.push(stream, {:message_start, copy_message(updated_partial)})
+          EventStream.push!(stream, {:message_start, copy_message(updated_partial)})
           %{context | messages: context.messages ++ [updated_partial]}
         end
 
-      EventStream.push(stream, {:message_update, copy_message(updated_partial), event})
+      EventStream.push!(stream, {:message_update, copy_message(updated_partial), event})
       {:continue, updated_partial, context, true}
     else
       {:continue, partial, context, added}
@@ -1013,10 +1017,10 @@ defmodule LemonAgent.Loop.Streaming do
       end
 
     if not added do
-      EventStream.push(stream, {:message_start, copy_message(final_message)})
+      EventStream.push!(stream, {:message_start, copy_message(final_message)})
     end
 
-    EventStream.push(stream, {:message_end, final_message})
+    EventStream.push!(stream, {:message_end, final_message})
     {final_message, context}
   end
 
