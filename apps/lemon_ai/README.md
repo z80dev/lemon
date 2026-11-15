@@ -311,6 +311,46 @@ context limits include current 1M-context Claude models without adding an obsole
 context beta. Provider conversion preserves full history; preflight compaction is
 the caller's responsibility rather than silent wire truncation.
 
+### Ordered system prompts (Hex API addition)
+
+`Context.system_prompt` continues to accept a binary or `nil`, and now also accepts
+ordered `%{text: binary, directory_derived: boolean}` blocks. This extends the
+published `lemon_ai` package API; existing binary callers need no migration.
+
+```elixir
+prompt = [
+  %{text: "You are a helpful assistant.\n\n", directory_derived: false},
+  %{text: "Project directory: /worktrees/example", directory_derived: true}
+]
+
+context = LemonAi.new_context(system_prompt: prompt)
+text = LemonAi.SystemPrompt.text(prompt)
+digest = LemonAi.SystemPrompt.digest(prompt)
+```
+
+Put directory-independent blocks first. Anthropic places one system cache marker
+on the last non-empty block before the **first** directory-derived block (or the
+last block when none is directory-derived). Later non-directory blocks do not
+move that boundary. OAuth retains its Claude Code prefix and existing text
+sanitization; the prefix itself is cacheable when no other static block exists.
+Empty/whitespace-only blocks are omitted from Anthropic requests. With no static
+prefix, API-key requests omit the system marker. Together with the last-user
+marker this uses at most two of Anthropic's four permitted breakpoints, regardless
+of block count. `cache_retention: :none` removes both markers.
+
+Every other transport concatenates the block texts into its existing binary
+system-prompt shape, retaining existing provider-specific sanitization, defaults,
+and cache controls. **No separator is inserted**: include newlines or spaces in
+the block text. `SystemPrompt.text(nil)` returns `""`.
+
+`SystemPrompt.digest/1` returns lowercase SHA-256 of the canonical Erlang external
+term `{:system_prompt, 1, [{text, directory_derived}, ...]}`. Text bytes, block order,
+boundaries, and directory flags all participate; map key order does not. A binary
+normalizes to one directory-independent block, and `nil` normalizes to `[]`.
+The digest identifies the supplied prompt, not provider wire transformations or
+a guaranteed cache hit. `PromptDiagnostics.stats/1` retains its concatenated-text
+byte count and `system_prompt_sha256`, and adds `system_prompt_digest` for this
+block-aware identity. Diagnostics still contain no raw prompt text.
 
 The 27 registered provider IDs: `:anthropic`, `:openai`, `:openai_codex`,
 `:amazon_bedrock`, `:google`, `:google_antigravity`, `:kimi`, `:kimi_coding`,
@@ -627,7 +667,7 @@ All defined in `LemonAi.Types`:
 }
 
 %LemonAi.Types.Context{
-  system_prompt: String.t() | nil,
+  system_prompt: LemonAi.SystemPrompt.t(),  # binary | ordered blocks | nil
   messages: [message()],       # stored newest-first for O(1) append
   tools: [Tool.t()]
 }

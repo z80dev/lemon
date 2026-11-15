@@ -28,7 +28,9 @@ defmodule CodingAgent.Session.Persistence do
         %LemonAi.Types.AssistantMessage{} ->
           SessionManager.append_message(
             state.session_manager,
-            MessageSerialization.serialize_message(message)
+            message
+            |> MessageSerialization.serialize_message()
+            |> CodingAgent.Session.PromptJournal.attach(state)
           )
 
         %LemonAi.Types.ToolResultMessage{} ->

@@ -76,7 +76,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
     inner = Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))
 
     stream_fn = fn model, context, options ->
-      send(owner, {:sent, context.messages, context.system_prompt})
+      send(owner, {:sent, context.messages, LemonAi.SystemPrompt.text(context.system_prompt)})
       inner.(model, context, options)
     end
 

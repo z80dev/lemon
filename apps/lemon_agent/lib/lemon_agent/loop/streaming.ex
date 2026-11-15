@@ -109,13 +109,13 @@ defmodule LemonAgent.Loop.Streaming do
             finish_retry(stream, retries_done, false, false)
             # Keep the reported tool calls: the outer loop pairs them with
             # explicit budget rejection results, never executing them.
-            {message, context} = finalize_message(message, failed_context, added, stream)
+            {message, context} = finalize_message(message, failed_context, added, stream, config)
             {:ok, message, context}
 
           :stop ->
             finish_retry(stream, retries_done, false, false)
             message = strip_tool_calls(message)
-            {message, context} = finalize_message(message, failed_context, added, stream)
+            {message, context} = finalize_message(message, failed_context, added, stream, config)
             {:ok, message, context}
         end
 
@@ -203,7 +203,7 @@ defmodule LemonAgent.Loop.Streaming do
               error_details: nil
           }
 
-          {_retained, updated} = finalize_message(retained, failed_context, added, stream)
+          {_retained, updated} = finalize_message(retained, failed_context, added, stream, config)
           updated
         else
           context
@@ -219,14 +219,20 @@ defmodule LemonAgent.Loop.Streaming do
 
       # Request-local system guidance is neither a human message nor persisted
       # transcript content. Committed text remains in the assistant history.
-      context = %{
-        context
-        | system_prompt:
-            (context.system_prompt || "") <>
-              "\n\n[Internal continuation]\n" <>
-              nudge <>
-              "\nAppend to any previous output; do not repeat it."
-      }
+      suffix =
+        "\n\n[Internal continuation]\n" <>
+          nudge <> "\nAppend to any previous output; do not repeat it."
+
+      prompt =
+        case context.system_prompt do
+          blocks when is_list(blocks) ->
+            blocks ++ [%{text: suffix, directory_derived: true}]
+
+          text ->
+            (text || "") <> suffix
+        end
+
+      context = %{context | system_prompt: prompt}
 
       result = retry_response(context, config, signal, stream_fn, stream, retries_done)
 
@@ -249,7 +255,7 @@ defmodule LemonAgent.Loop.Streaming do
           _ -> strip_tool_calls(message)
         end
 
-      {message, context} = finalize_message(message, failed_context, added, stream)
+      {message, context} = finalize_message(message, failed_context, added, stream, config)
       {:ok, message, context}
     end
   end
@@ -408,10 +414,11 @@ defmodule LemonAgent.Loop.Streaming do
   defp stream_once(context, config, signal, stream_fn, stream) do
     # Calls streamed by an earlier attempt or turn will never execute now.
     ToolStream.settle()
+    record_system_prompt(context, config, stream)
 
     if aborted?(signal) do
       abort_message = build_error_message(config, :aborted, "Request was aborted")
-      {abort_message, context} = finalize_message(abort_message, context, false, stream)
+      {abort_message, context} = finalize_message(abort_message, context, false, stream, config)
       {:ok, abort_message, context}
     else
       config = Loop.refresh_model(config)
@@ -641,7 +648,7 @@ defmodule LemonAgent.Loop.Streaming do
           if partial.stop_reason == :error do
             {:failed, partial, ctx, added, committed}
           else
-            {final_message, final_ctx} = finalize_message(partial, ctx, added, stream)
+            {final_message, final_ctx} = finalize_message(partial, ctx, added, stream, config)
             {:ok, final_message, final_ctx}
           end
 
@@ -712,7 +719,7 @@ defmodule LemonAgent.Loop.Streaming do
     if final_message.stop_reason == :error do
       {:failed, final_message, context, added}
     else
-      {final_message, context} = finalize_message(final_message, context, added, stream)
+      {final_message, context} = finalize_message(final_message, context, added, stream, config)
       {:done, final_message, context}
     end
   end
@@ -1004,7 +1011,15 @@ defmodule LemonAgent.Loop.Streaming do
     end
   end
 
-  defp finalize_message(final_message, context, added, stream) do
+  @doc false
+  def record_system_prompt(context, config, stream) do
+    if config.emit_system_prompt,
+      do: EventStream.push(stream, {:system_prompt, context.system_prompt})
+
+    :ok
+  end
+
+  defp finalize_message(final_message, context, added, stream, config) do
     context =
       if added do
         update_last_message(context, final_message)
@@ -1016,6 +1031,7 @@ defmodule LemonAgent.Loop.Streaming do
       EventStream.push(stream, {:message_start, copy_message(final_message)})
     end
 
+    record_system_prompt(context, config, stream)
     EventStream.push(stream, {:message_end, final_message})
     {final_message, context}
   end
@@ -1046,7 +1062,7 @@ defmodule LemonAgent.Loop.Streaming do
       end
 
     Loop.record_budget_usage(config, final_message, stream)
-    finalize_message(final_message, context, added, stream)
+    finalize_message(final_message, context, added, stream, config)
   end
 
   # A canceled response may contain tool calls that will never receive results.

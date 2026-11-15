@@ -17,6 +17,7 @@ defmodule CodingAgent.Session.Lifecycle do
     OverflowRecovery,
     Persistence,
     PromptComposer,
+    PromptJournal,
     ProviderFallback,
     State,
     WasmBridge
@@ -374,8 +375,10 @@ defmodule CodingAgent.Session.Lifecycle do
         nil -> CodingAgent.SystemPrompt.join_sections(prompt_sections)
       end
 
-    system_prompt =
-      Planning.system_prompt(base_system_prompt, session_manager)
+    prompt_state = PromptJournal.restore(session_manager, base_system_prompt, prompt_sections)
+    system_prompt = prompt_state.system_prompt
+    base_system_prompt = prompt_state.base_system_prompt
+    prompt_sections = prompt_state.prompt_sections
 
     emit_start_stage(:prompt_composition, stage_started, session_manager.header.id)
 
@@ -503,7 +506,7 @@ defmodule CodingAgent.Session.Lifecycle do
     {:ok, agent} =
       LemonAgent.Agent.start_link(
         initial_state: %{
-          system_prompt: system_prompt,
+          system_prompt: PromptJournal.blocks(prompt_state),
           model: model,
           tools: tools,
           thinking_level: thinking_level,
@@ -511,6 +514,7 @@ defmodule CodingAgent.Session.Lifecycle do
         },
         convert_to_llm: convert_to_llm,
         stream_fn: stream_fn,
+        system_prompt_observer: session_pid,
         stream_options: stream_options,
         transform_context: transform_context,
         get_api_key: get_api_key,
@@ -569,6 +573,7 @@ defmodule CodingAgent.Session.Lifecycle do
       system_prompt: system_prompt,
       base_system_prompt: base_system_prompt,
       prompt_sections: prompt_sections,
+      journaled_prompt: prompt_state.journaled_prompt,
       base_tools: lifecycle.tools,
       prompt_environment: prompt_environment,
       explicit_system_prompt: explicit_system_prompt,
@@ -725,7 +730,8 @@ defmodule CodingAgent.Session.Lifecycle do
         extension_status_report: lifecycle.extension_status_report,
         wasm_sidecar_pid: wasm_reload.sidecar_pid,
         wasm_tool_names: wasm_reload.wasm_tool_names,
-        wasm_status: wasm_reload.wasm_status
+        wasm_status: wasm_reload.wasm_status,
+        journaled_prompt: nil
     }
 
     {:ok, lifecycle.extension_status_report, new_state}
@@ -810,6 +816,8 @@ defmodule CodingAgent.Session.Lifecycle do
         state =
           State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))
           |> Map.put(:session_file, new_path)
+          |> Map.put(:journaled_prompt, nil)
+          |> Map.put(:response_system_prompt, nil)
           |> rebuild_tools(previous_session_id)
           |> BranchState.restore()
 

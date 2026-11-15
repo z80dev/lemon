@@ -1951,5 +1951,15 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
 
     assert body == expected
     assert {:error, _} = EventStream.result(stream, 1000)
+
+    blocks = [
+      %{text: "Sys", directory_derived: false},
+      %{text: "tem", directory_derived: true}
+    ]
+
+    {:ok, stream} = AzureOpenAIResponses.stream(model, %{context | system_prompt: blocks}, opts)
+    assert_receive {:request_body, block_body}, 1000
+    assert block_body == expected
+    assert {:error, _} = EventStream.result(stream, 1000)
   end
 end

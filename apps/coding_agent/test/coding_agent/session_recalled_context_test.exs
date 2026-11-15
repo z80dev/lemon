@@ -242,7 +242,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
     {messages, system_prompt} = await_sent()
     assert last_user_content(messages) =~ "Learning reminder"
     assert last_user_content(messages) =~ "durable facts/preferences with remember"
-    refute system_prompt =~ "Learning reminder"
+    refute LemonAi.SystemPrompt.text(system_prompt) =~ "Learning reminder"
     assert_receive {:session_event, _, {:agent_end, _}}, 2_000
     assert transcript_contents(session) == ["first", "second"]
 
@@ -261,6 +261,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       :ok = Session.prompt(session, "why is the build slow?")
       {messages, system_prompt} = await_sent()
+      system_prompt = LemonAi.SystemPrompt.text(system_prompt)
 
       content = last_user_content(messages)
 
@@ -375,6 +376,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
       eventually_idle(session)
 
       assert first_system_prompt == second_system_prompt
+      first_system_prompt = LemonAi.SystemPrompt.text(first_system_prompt)
       refute first_system_prompt =~ "<relevant-skills>"
       assert first_system_prompt =~ "<key>cache-probe</key>"
       refute "cache-probe" in Session.get_state(session).relevant_skill_keys
@@ -454,6 +456,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       :ok = Session.prompt(session, "why is the build slow?")
       {messages, system_prompt} = await_sent()
+      system_prompt = LemonAi.SystemPrompt.text(system_prompt)
 
       assert last_user_content(messages) == "why is the build slow?"
       assert system_prompt =~ @stable.body
@@ -543,7 +546,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       assert content =~ "the build finished"
       assert content =~ @volatile.body
-      refute system_prompt =~ @volatile.body
+      refute LemonAi.SystemPrompt.text(system_prompt) =~ @volatile.body
 
       # This site builds its message before it refreshes and persists that
       # message directly, so it is the site where an attachment would most

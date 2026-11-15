@@ -115,7 +115,7 @@ defmodule CodingAgent.Session.PlanningTest do
     assert_receive {:session_event, _, {:agent_end, _}}, 5_000
 
     assert_receive {:provider_context, 1, planning}
-    assert planning.system_prompt =~ "Plan mode is active"
+    assert LemonAi.SystemPrompt.text(planning.system_prompt) =~ "Plan mode is active"
     assert ~w(read write bash propose_plan) -- Enum.map(planning.tools, & &1.name) == []
 
     errors = tool_errors(Session.get_messages(session))
@@ -134,9 +134,9 @@ defmodule CodingAgent.Session.PlanningTest do
     refute String.starts_with?(plan_file, root <> "/")
 
     assert_receive {:provider_context, 5, executing}
-    refute executing.system_prompt =~ "Plan mode is active"
-    assert executing.system_prompt =~ "## Approved plan"
-    assert executing.system_prompt =~ plan_text
+    refute LemonAi.SystemPrompt.text(executing.system_prompt) =~ "Plan mode is active"
+    assert LemonAi.SystemPrompt.text(executing.system_prompt) =~ "## Approved plan"
+    assert LemonAi.SystemPrompt.text(executing.system_prompt) =~ plan_text
     assert File.read!(target) == "EXECUTED"
 
     assert {:ok, %{"mode" => "code", "path" => ^plan_file, "content" => ^plan_text}} =
@@ -1379,7 +1379,7 @@ defmodule CodingAgent.Session.PlanningTest do
 
   # Plan-mode prompts name the plan directory; later (code-mode) calls do not.
   defp plan_dir(system_prompt) do
-    case Regex.run(~r/The plan directory `([^`]+)`/, system_prompt) do
+    case Regex.run(~r/The plan directory `([^`]+)`/, LemonAi.SystemPrompt.text(system_prompt)) do
       [_, dir] -> dir
       nil -> ""
     end

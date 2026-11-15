@@ -589,6 +589,60 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
 
     assert body == expected
     assert {:error, _} = EventStream.result(stream, 1000)
+
+    blocks = [
+      %{text: "Sys", directory_derived: false},
+      %{text: "tem", directory_derived: true}
+    ]
+
+    {:ok, stream} = OpenAICompletions.stream(model, %{context | system_prompt: blocks}, opts)
+    assert_receive {:request_body, block_body}, 1000
+    assert block_body == expected
+    assert {:error, _} = EventStream.result(stream, 1000)
+  end
+
+  test "Mistral block prompts preserve the binary request shape" do
+    owner = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(owner, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 400, "bad request")
+    end)
+
+    model = %Model{
+      id: "mistral-test",
+      name: "Mistral Test",
+      api: :mistral_conversations,
+      provider: :mistral,
+      base_url: "https://example.test"
+    }
+
+    blocks = [
+      %{text: "Static\n\n", directory_derived: false},
+      %{text: "Directory: /worktree", directory_derived: true}
+    ]
+
+    bodies =
+      for prompt <- ["Static\n\nDirectory: /worktree", blocks] do
+        context = Context.new(system_prompt: prompt, messages: [%UserMessage{content: "Hi"}])
+
+        {:ok, stream} =
+          LemonAi.Providers.MistralConversations.stream(model, context, %StreamOptions{
+            api_key: "test-key"
+          })
+
+        assert_receive {:request_body, body}, 1000
+        assert {:error, _} = EventStream.result(stream, 1000)
+        body
+      end
+
+    assert [body, body] = bodies
+
+    assert hd(body["messages"]) == %{
+             "role" => "system",
+             "content" => "Static\n\nDirectory: /worktree"
+           }
   end
 
   test "honors max_tokens_field loaded from a JSON catalog" do

@@ -39,8 +39,8 @@ defmodule LemonAi.Providers.OpenCodeGoSession do
 
   defp session_id(%Context{system_prompt: prompt}, _opts) do
     digest =
-      (prompt || "")
-      |> to_string()
+      prompt
+      |> LemonAi.SystemPrompt.text()
       |> then(&:erlang.md5/1)
       |> Base.encode16(case: :lower)
 
