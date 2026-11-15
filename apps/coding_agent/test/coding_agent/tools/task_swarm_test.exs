@@ -9,6 +9,9 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
   alias LemonAi.Types.{TextContent, ThinkingContent}
   alias LemonCore.{ExecutionContext, ToolPolicy}
 
+  def record_task_action(_event, measurements, metadata, owner),
+    do: send(owner, {:task_action, measurements, metadata})
+
   setup do
     parent = self()
 
@@ -30,6 +33,18 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
   test "two dependency waves honor the cap and expose only visible dependency output", %{
     opts: opts
   } do
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:coding_agent, :task, :action],
+        &__MODULE__.record_task_action/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
     tasks = [
       task_node("a"),
       task_node("b"),
@@ -38,6 +53,8 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
     ]
 
     receipt = launch(tasks, opts, concurrency: 2)
+    assert_receive {:task_action, %{count: 1}, %{action: "swarm", kind: :dispatch, outcome: :ok}}
+    refute_received {:task_action, _, _}
 
     assert_receive {:started, "a", a, _, a_context}, 2_000
     assert_receive {:started, "b", b, _, b_context}, 2_000

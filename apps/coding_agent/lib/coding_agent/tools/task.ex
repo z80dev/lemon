@@ -14,6 +14,7 @@ defmodule CodingAgent.Tools.Task do
     Result,
     Speculation,
     Swarm,
+    Telemetry,
     Wait
   }
 
@@ -202,6 +203,12 @@ defmodule CodingAgent.Tools.Task do
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
   def execute(tool_call_id, params, signal, on_update, cwd, opts) do
+    Telemetry.observe(params, opts, signal, fn ->
+      execute_action(tool_call_id, params, signal, on_update, cwd, opts)
+    end)
+  end
+
+  defp execute_action(tool_call_id, params, signal, on_update, cwd, opts) do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else

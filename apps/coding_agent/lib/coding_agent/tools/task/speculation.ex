@@ -40,7 +40,7 @@ defmodule CodingAgent.Tools.Task.Speculation do
 
   alias CodingAgent.{BudgetEnforcer, Subagents, TaskStore}
   alias CodingAgent.Tools.Task, as: TaskTool
-  alias CodingAgent.Tools.Task.{Control, Execution, Params, StreamItems}
+  alias CodingAgent.Tools.Task.{Control, Execution, Params, StreamItems, Telemetry}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
 
@@ -149,7 +149,9 @@ defmodule CodingAgent.Tools.Task.Speculation do
          true <- read_only?(validated),
          :ok <- Params.check_budget_and_policy(validated, opts),
          %AgentToolResult{details: %{task_id: task_id} = details} = result <-
-           Execution.run(id, %{validated | async: true}, signal, nil, cwd, opts) do
+           Telemetry.speculative_launch(opts, fn ->
+             Execution.run(id, %{validated | async: true}, signal, nil, cwd, opts)
+           end) do
       launch = %{
         child: child,
         result: result,

@@ -272,6 +272,91 @@ results, exception reasons, stacktraces, prompts or intent strings. Duration
 starts at admission (including argument preparation), not time spent queued
 behind earlier calls. Existing `tool_task` and `tool_result` events are unchanged.
 
+### Task action usage — `[:coding_agent, :task, :action]`
+
+The native task tool emits `%{count: 1}` after dispatch returns or raises.
+Metadata is an allowlist: `action`, `kind`, `outcome`, `model`, `depth`, and
+`run_id`. No prompt, steps text, task descriptions, messages, tool arguments,
+results, paths, credentials, exceptions or stacktraces are included.
+
+| `kind` | `action` | Counting unit |
+| --- | --- | --- |
+| `:dispatch` | `"run"`, `"swarm"`, `"poll"`, `"join"`, `"wait"`, `"get"`, `"message"`, `"steer"`, `"cancel"`, `"unknown"` | Exactly one per executed `task` call, including validation/policy refusals and calls already aborted |
+| `:feature` | `"batch"` | Once per `run` call containing `tasks[]`, even if invalid |
+| `:feature` | `"steps"` | Once per `run` or `swarm` call containing `steps`, at top level or in any task item, even if invalid; not once per stage or child |
+| `:launch` | `"speculative_launch"` | Once per early `Execution.run/6` attempt after read-only/policy/budget preflight; streaming fragments and adoption do not count again |
+
+Feature counts overlap dispatch counts: a batch with several stepped children
+counts one `run`, one `batch`, and one `steps`. They measure caller usage, not
+child-session count. Speculative attempts count separately even when later
+discarded; ineligible items that never attempt an early launch do not count.
+The separately exposed `wait` tool is not a `task` action and is not counted.
+Emit sites are [`Task`](../apps/coding_agent/lib/coding_agent/tools/task.ex)
+and [`Speculation`](../apps/coding_agent/lib/coding_agent/tools/task/speculation.ex),
+through the bounded task telemetry helper.
+
+`outcome` is `:ok` for a normal return, `:error` for a returned error or an
+`AgentToolResult` marked `is_error`, `:aborted` if the dispatch's signal is
+aborted, or `:exception` for a raised/thrown/exited dispatch (propagated unchanged).
+An async receipt means **launch accepted**, not eventual child success. A batch
+receipt may contain sibling failures without being marked as an overall error;
+these are not child-outcome counters. Hard-killed emitters cannot emit a terminal
+observation. Tool calls blocked before task dispatch are not counted.
+
+`model` is the **calling session's** model (`provider/id` for model structs),
+not an inferred effective child model: one batch may use several child models.
+`depth` is the caller's nonnegative task nesting depth (root `0`); unknown
+subagent depth is `nil`. `run_id` is the caller's `parent_run_id`/`run_id` option,
+not the new child's run. Missing identity/model stays `nil`.
+
+#### Capturing and reporting eval/arena usage
+
+Telemetry itself persists nothing. In the dedicated **source-development
+runtime executing the tools**, install the optional eval recorder before
+starting an eval or arena trial:
+
+```elixir
+{:ok, recorder} = LemonEvals.TaskActions.start_link("/tmp/task-actions.jsonl")
+# Run the eval/trials against this runtime, then wait for their dispatches to settle.
+:ok = LemonEvals.TaskActions.flush(recorder)
+GenServer.stop(recorder)
+```
+
+The file must not already exist. The recorder makes it owner-only, writes only
+the allowlisted event/measurement/metadata envelope, and detaches on stop.
+Handlers only enqueue records; JSON encoding and file I/O run in the recorder.
+`flush/1` waits for already queued records and syncs the file; it is not a barrier
+for still-running emitters. Stop the recorder normally before its owning process
+exits. `lemon_evals` is not shipped in runtime releases: a packaged arena runtime
+must use its own telemetry attachment/exporter with this same JSONL envelope,
+not expect a recorder on the separate host/client to observe remote events:
+
+```json
+{"event":["coding_agent","task","action"],"measurements":{"count":1},"metadata":{"action":"swarm","kind":"dispatch","outcome":"ok","model":"provider/model","depth":0,"run_id":"run-id"}}
+```
+
+Aggregate offline, without running a model or starting runtime apps:
+
+```bash
+mix lemon.eval.task_actions --input /tmp/task-actions.jsonl \
+  --output /tmp/task-action-counts.json
+```
+
+The helper reports `total_dispatches`, `event_count`, `per_action`, `per_run`,
+and a run/action/kind/outcome/model/depth `breakdown`. A `null` run bucket is
+unattributed evidence, not proof of a single run. Unrelated event envelopes are
+ignored; invalid JSON or malformed task-action records fail rather than silently
+undercount. An empty file means zero **observations**, not verified non-use.
+Use one recorder per emitting runtime and avoid duplicate ingestion. Include
+zero-action runs, observation dates, exact runtime revisions, missing capture
+intervals and trial identities separately in the experiment manifest; this
+helper cannot infer them. Only explicit run/model/depth labels survive into its
+report; raw extra fields are never copied.
+
+This instrumentation does not change task defaults or remove/move actions.
+Two weeks of production usage, arena evidence, the posted usage report, and
+the per-action keep/move/delete decisions in #604 remain operator/user work.
+
 ### Heartbeats — `[:lemon, :heartbeat, ...]`
 
 | Event | Measurements | Metadata | Emitter |
