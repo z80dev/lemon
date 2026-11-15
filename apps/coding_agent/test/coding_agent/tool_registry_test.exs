@@ -22,6 +22,8 @@ defmodule CodingAgent.ToolRegistryTest do
     :ok
   end
 
+  defp intent_recorder(cwd), do: CodingAgent.Test.ToolIntentRecorder.new(cwd)
+
   # F-0107 also records confirmed local launches during discovery. These tests
   # observe arbitrary-code ownership, not those unrelated launch witnesses.
   def ownership_records do
@@ -40,6 +42,7 @@ defmodule CodingAgent.ToolRegistryTest do
         label: "Ownership probe",
         description: "Ownership probe",
         parameters: %{},
+        effect: :none,
         execute: fn _, _, _, _ ->
           send(self(), {:execute_ownership, length(ownership_records())})
           {:error, :callback_failed}
@@ -234,6 +237,7 @@ defmodule CodingAgent.ToolRegistryTest do
         [
           include_extensions: false,
           include_mcp: false,
+          tool_intent_recorder: intent_recorder(tmp_dir),
           approval_request_fun: fn _ ->
             flunk("optional policy unexpectedly requested approval")
           end
@@ -749,7 +753,8 @@ defmodule CodingAgent.ToolRegistryTest do
 
       assert {:ok, tool} =
                ToolRegistry.get_tool(tmp_dir, "telemetry_path_tool",
-                 extension_paths: [custom_ext_dir]
+                 extension_paths: [custom_ext_dir],
+                 tool_intent_recorder: intent_recorder(tmp_dir)
                )
 
       _result = tool.execute.("raw-call-id", %{"secret" => "do-not-leak"}, nil, nil)

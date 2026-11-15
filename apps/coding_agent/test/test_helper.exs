@@ -96,6 +96,7 @@ Application.ensure_all_started(:lemon_skills)
 # Compile test support files
 Code.require_file("support/permission_helpers.ex", __DIR__)
 Code.require_file("support/async_helpers.ex", __DIR__)
+Code.require_file("support/tool_intent_recorder.ex", __DIR__)
 
 # Load shared test support from the lemon_agent and lemon_ai apps. These are
 # required unconditionally on purpose: an `if File.exists?` guard turns a moved

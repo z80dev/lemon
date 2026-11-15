@@ -39,10 +39,14 @@ defmodule CodingAgent.McpApprovalTest do
     owner = self()
 
     tool =
-      resolved_tool(cwd, :always, %{approvals: %{"mcp_test" => :always}}, fn _ ->
-        send(owner, :approval)
-        {:ok, :approved, :once}
-      end)
+      resolved_tool(
+        cwd,
+        :always,
+        %{approvals: %{"mcp_test" => :always}},
+        fn _ ->
+          send(owner, :approval)
+          {:ok, :approved, :once}
+        end, tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(cwd))
 
     assert %AgentToolResult{content: [%TextContent{text: "remote result"}]} =
              tool.execute.("approved", %{}, nil, nil)
@@ -54,7 +58,11 @@ defmodule CodingAgent.McpApprovalTest do
   end
 
   test "never invokes directly when neither policy requires approval", %{tmp_dir: cwd} do
-    tool = resolved_tool(cwd, :never, nil, fn _ -> flunk("approval was not required") end)
+    tool =
+      resolved_tool(cwd, :never, nil, fn _ -> flunk("approval was not required") end,
+        tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(cwd)
+      )
+
     assert %AgentToolResult{} = tool.execute.("allowed", %{}, nil, nil)
     assert_receive :mcp_executed
   end
@@ -78,7 +86,7 @@ defmodule CodingAgent.McpApprovalTest do
     refute_receive :mcp_executed
   end
 
-  defp resolved_tool(cwd, mode, policy, request) do
+  defp resolved_tool(cwd, mode, policy, request, opts \\ []) do
     owner = self()
 
     tool = %AgentTool{
@@ -93,12 +101,15 @@ defmodule CodingAgent.McpApprovalTest do
     }
 
     [resolved] =
-      ToolRegistry.get_tools(cwd,
-        include_extensions: false,
-        enabled_only: [tool.name],
-        mcp_tools: [{tool.name, tool, {:mcp, %{approval: mode}}}],
-        tool_policy: policy,
-        approval_context: %{session_id: "policy-test", approval_request_fun: request}
+      ToolRegistry.get_tools(
+        cwd,
+        [
+          include_extensions: false,
+          enabled_only: [tool.name],
+          mcp_tools: [{tool.name, tool, {:mcp, %{approval: mode}}}],
+          tool_policy: policy,
+          approval_context: %{session_id: "policy-test", approval_request_fun: request}
+        ] ++ opts
       )
 
     resolved

@@ -223,6 +223,7 @@ defmodule CodingAgent.ProfileMcpPolicyTest do
       registry_opts(ctx, policy, fn _ ->
         flunk("explicitly allowed tool needs no extra MCP approval")
       end)
+      |> Keyword.put(:tool_intent_recorder, CodingAgent.Test.ToolIntentRecorder.new(ctx.root))
 
     assert {:ok, tool} = ToolRegistry.get_tool(ctx.root, ctx.name, opts)
     assert {:ok, result} = tool.execute.("registry-allowed", %{}, nil, nil)

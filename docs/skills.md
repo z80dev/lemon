@@ -467,6 +467,16 @@ ASCII and at most 64 characters. The suffix distinguishes server configurations,
 raw tool names that normalize identically, and remote tools from built-in MCP
 resource/prompt utilities.
 
+MCP tools are conservatively `effect: :external` unless their annotation
+contains the boolean `readOnlyHint: true`; missing, false and non-boolean hints
+do not opt out. Resource/prompt utilities are read-only (`:none`). Hints are
+advisory, not permission or retry authority. Do not mark a server tool read-only
+if it mutates external state. Coding sessions sync an intent before invoking
+effectful MCP tools and refuse to run if recording fails; final results are
+appended without a per-result sync. Recovery distinguishes recorded intent
+(`:unknown`) from absent intent (`:not_started`).
+See [effect classes for tool authors](extensions.md#effect-classes-and-crash-recovery).
+
 ### Manage named MCP servers
 
 The same commands work in installed releases (`lemon`) and source checkouts

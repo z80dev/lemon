@@ -139,7 +139,9 @@ defmodule CodingAgent.ToolApprovalTiersTest do
       ToolRegistry.get_tool(
         "/tmp",
         fake.name,
-        Keyword.put(opts, :tool_policy, %{approval_mode: :yolo})
+        opts
+        |> Keyword.put(:tool_policy, %{approval_mode: :yolo})
+        |> Keyword.put(:tool_intent_recorder, CodingAgent.Test.ToolIntentRecorder.new("/tmp"))
       )
 
     assert tool.execute.("wasm", %{}, nil, nil) == :executed
