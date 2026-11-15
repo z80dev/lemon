@@ -399,7 +399,6 @@ defmodule LemonCore.Secrets.KeyRotation do
     with :ok <- prune_expired(plan.expired),
          {:ok, staged} <- stage(plan, new_key),
          :ok <- verify_staged(staged, new_key),
-         :ok <- persist_staged(staged),
          :ok <- switch_key(plan, encoded, new_key),
          :ok <- converge(plan.key, new_key, @converge_passes) do
       {:ok,
@@ -424,8 +423,14 @@ defmodule LemonCore.Secrets.KeyRotation do
 
   defp prune_record(ref, entry) do
     if LemonCore.Secrets.Receipts.entries(entry) == [],
-      do: Store.compare_and_delete(Secrets.table(), ref, entry),
-      else: Store.compare_and_swap(Secrets.table(), ref, entry, Secrets.receipt_only_entry(entry))
+      do: Store.compare_and_delete(Store, Secrets.table(), ref, entry, durable: true),
+      else:
+        Store.compare_and_swap(
+          Store,
+          Secrets.table(),
+          ref,
+          entry,
+          Secrets.receipt_only_entry(entry), durable: true)
   end
 
   defp stage(plan, new_key) do
@@ -499,19 +504,6 @@ defmodule LemonCore.Secrets.KeyRotation do
     end
   end
 
-  # Durability barrier: the key must not move before every staged copy would
-  # survive a host crash. The key is untouched here, so dropping them is safe.
-  defp persist_staged(staged) do
-    case Store.sync() do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        unstage(staged)
-        {:error, {:store_not_durable, safe_reason(reason)}}
-    end
-  end
-
   # Staged copies are never dropped once `put/2` has been attempted: a write
   # that reported failure or timed out may still land, and the staged copies
   # are what keep every record readable if it does. The switch counts only
@@ -549,12 +541,10 @@ defmodule LemonCore.Secrets.KeyRotation do
 
       pending = Enum.count(outcomes, &(&1 in [:staged, :failed]))
 
-      with :ok <- sync_if(Enum.any?(outcomes, &(&1 in [:changed, :staged]))) do
-        cond do
-          pending == 0 -> :ok
-          passes > 1 -> converge(old_key, new_key, passes - 1)
-          true -> {:error, {:promotion_incomplete, pending}}
-        end
+      cond do
+        pending == 0 -> :ok
+        passes > 1 -> converge(old_key, new_key, passes - 1)
+        true -> {:error, {:promotion_incomplete, pending}}
       end
     end
   end
@@ -586,15 +576,6 @@ defmodule LemonCore.Secrets.KeyRotation do
     end
   end
 
-  defp sync_if(false), do: :ok
-
-  defp sync_if(true) do
-    case Store.sync() do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:store_failed, safe_reason(reason)}}
-    end
-  end
-
   defp opens?(payload, key), do: match?({:ok, _}, Crypto.decrypt(payload, key))
 
   defp promoted(entry), do: entry |> put_cipher(staged(entry)) |> drop_staged()
@@ -616,7 +597,7 @@ defmodule LemonCore.Secrets.KeyRotation do
   # secret), so a concurrent usage-count update does not abort the step.
   defp swap(ref, entry, change, attempts \\ @swap_attempts) do
     with {:ok, replacement} <- change.(entry) do
-      case Store.compare_and_swap(Secrets.table(), ref, entry, replacement) do
+      case Store.compare_and_swap(Store, Secrets.table(), ref, entry, replacement, durable: true) do
         :ok ->
           {:ok, replacement}
 

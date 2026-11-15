@@ -203,9 +203,21 @@ defmodule LemonCore.Store.Backend do
   """
   @callback sync(state()) :: {:ok, state()} | {:error, error_reason()}
 
+  @doc """
+  Runs one serialized Store mutation with a transaction-level durability barrier.
+  Optional; backends without it use `sync/1` after the mutation instead.
+  The callback must restore its ordinary write mode even on failure.
+  """
+  @callback with_durability(state(), (-> term())) :: term()
+
+  @doc "Confirms visible authority; transaction-durable backends need no additional barrier."
+  @callback confirm_durable(state()) :: {:ok, state()} | {:error, error_reason()}
+
   @optional_callbacks list_recent: 3,
                       ping: 1,
                       compare_and_delete_many: 2,
                       compare_and_swap: 5,
+                      with_durability: 2,
+                      confirm_durable: 1,
                       sync: 1
 end

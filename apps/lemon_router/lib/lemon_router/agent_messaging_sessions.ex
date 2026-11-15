@@ -79,8 +79,7 @@ defmodule LemonRouter.AgentMessagingSessions do
     with :ok <- ensure_index(context),
          {:ok, index} <- RunStore.ensure_session_incarnation(command.session_key),
          context <- Map.put(context, :incarnation, index.incarnation),
-         :ok <- Store.put(@table, command.session_key, context),
-         :ok <- Store.sync() do
+         :ok <- Store.put(Store, @table, command.session_key, context, durable: true) do
       :ok
     else
       _ -> {:error, :outcome_unknown}

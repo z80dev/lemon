@@ -195,6 +195,63 @@ defmodule LemonCore.Store do
   end
 
   @doc """
+  Confirms previously visible writes without forcing a SQLite checkpoint.
+  SQLite durable transactions already committed with FULL; ordered backends
+  still need their sync barrier before a visible row proves durable authority.
+  """
+  @spec confirm_durable(server()) :: :ok | {:error, term()}
+  def confirm_durable(server \\ __MODULE__) do
+    safe_store_call(server, :confirm_durable, {:error, :store_unavailable},
+      op: :confirm_durable,
+      table: :store,
+      key: :confirm_durable
+    )
+  end
+
+  @doc """
+  Writes with a power-loss barrier before acknowledgement.
+
+  Pass `durable: true` to the explicit-server mutation arities below. SQLite
+  temporarily uses FULL synchronization for that transaction (F_FULLFSYNC on
+  Darwin); ordinary writes remain NORMAL. Other backends use their sync barrier.
+  A failed write/barrier is outcome-unknown, except confirmed exists/mismatch.
+  Reads never need a checkpoint. `sync/1` remains the explicit drain seal.
+  """
+  @spec put(server(), atom(), term(), term(), keyword()) :: :ok | {:error, term()}
+  def put(server, table, key, value, durable: true),
+    do: durable_call(server, {:generic_put, table, key, value})
+
+  @spec put_new(server(), atom(), term(), term(), keyword()) :: :ok | {:error, term()}
+  def put_new(server, table, key, value, durable: true),
+    do: durable_call(server, {:generic_put_new, table, key, value})
+
+  @spec compare_and_swap(server(), atom(), term(), term(), term(), keyword()) ::
+          :ok | {:error, term()}
+  def compare_and_swap(server, table, key, expected, replacement, durable: true),
+    do: durable_call(server, {:generic_compare_and_swap, table, key, expected, replacement})
+
+  @spec delete(server(), atom(), term(), keyword()) :: :ok | {:error, term()}
+  def delete(server, table, key, durable: true),
+    do: durable_call(server, {:generic_delete, table, key})
+
+  @spec compare_and_delete(server(), atom(), term(), term(), keyword()) :: :ok | {:error, term()}
+  def compare_and_delete(server, table, key, expected, durable: true),
+    do: durable_call(server, {:generic_compare_and_delete, table, key, expected})
+
+  @spec compare_and_delete_many(server(), [{atom(), term(), term()}], keyword()) ::
+          :ok | {:error, term()}
+  def compare_and_delete_many(server, entries, durable: true),
+    do: durable_call(server, {:generic_compare_and_delete_many, entries})
+
+  defp durable_call(server, request) do
+    safe_store_call(server, {:durable_write, request}, {:error, :outcome_unknown},
+      op: :durable_write,
+      table: :store,
+      key: :durable_write
+    )
+  end
+
+  @doc """
   Put a value into a named table.
 
   This is a generic API for use by other apps (e.g., lemon_core, lemon_automation).
@@ -953,9 +1010,36 @@ defmodule LemonCore.Store do
     end
   end
 
-  def handle_call(:sync, _from, state) do
-    if function_exported?(state.backend, :sync, 1) do
-      case state.backend.sync(state.backend_state) do
+  def handle_call({:durable_write, request}, from, state) do
+    result =
+      if function_exported?(state.backend, :with_durability, 2) do
+        state.backend.with_durability(state.backend_state, fn ->
+          handle_call(request, from, state)
+        end)
+      else
+        case handle_call(request, from, state) do
+          {:reply, :ok, next_state} -> handle_call(:sync, from, next_state)
+          other -> other
+        end
+      end
+
+    case result do
+      {:reply, {:error, reason}, next_state} when reason not in [:exists, :mismatch] ->
+        {:reply, {:error, :outcome_unknown}, next_state}
+
+      other ->
+        other
+    end
+  end
+
+  def handle_call(operation, _from, state) when operation in [:sync, :confirm_durable] do
+    callback =
+      if operation == :confirm_durable and function_exported?(state.backend, :confirm_durable, 1),
+        do: :confirm_durable,
+        else: :sync
+
+    if function_exported?(state.backend, callback, 1) do
+      case apply(state.backend, callback, [state.backend_state]) do
         {:ok, backend_state} ->
           {:reply, :ok, %{state | backend_state: backend_state}}
 
