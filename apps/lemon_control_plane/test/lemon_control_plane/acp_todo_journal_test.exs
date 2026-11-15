@@ -98,8 +98,9 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
       )
 
     assert plans(late_updates) == []
-    manager = Session.get_state(pid).session_manager
+    assert :ok = Session.save(pid)
     stop_supervised!(Session)
+    {:ok, manager} = SessionManager.load_from_file(path)
 
     # A historical read receipt can carry stale branch-global cache data. It is
     # still a transcript receipt, but must never govern the client plan.

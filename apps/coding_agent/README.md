@@ -784,6 +784,12 @@ Each live session owns one raw append descriptor, closed at stop. Turn-end
 it never rewrites prior history. Latest markers override legacy header
 checkpoints, and header-only journals remain readable. Resume shares one parsed
 journal across execution-authority validation and session initialization.
+A cached parse is rechecked against its file revision after startup admission;
+a stopped mutation queued ahead of startup invalidates that snapshot. Stopped
+navigation, labels and planning open their own append descriptor under file
+admission, sync their changes, and close it before returning. Raw descriptors
+belong to their opening process: detached readers reload journal data rather
+than reusing a retired live session's handle.
 Migration and torn-tail repair still use atomic snapshots: the temporary file
 is synced before rename, then the containing directory is synced. Ordinary
 turn barriers use datasync (not Darwin device-wide F_FULLFSYNC).
