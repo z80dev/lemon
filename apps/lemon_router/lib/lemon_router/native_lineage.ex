@@ -91,27 +91,33 @@ defmodule LemonRouter.NativeLineage do
           |> Map.put(:scope, scope)
           |> maybe_bind_root(command, destination, binding, true)
 
-        with :ok <-
-               Store.compare_and_swap(Store, @table, command.run_id, admission, replacement,
-                 durable: true
-               ) do
-          private_meta =
-            meta
-            |> Map.reject(fn {key, _} -> to_string(key) in @owner_fields end)
-            |> Map.put(:native_lineage_handle, handle)
-            |> Map.put(:native_lineage_run_id, command.run_id)
-            |> Map.put(:native_destination_pid, destination.pid)
-            |> Map.put(:native_destination_generation, destination.generation)
-            |> put_destination_node(destination)
+        case Store.compare_and_swap(
+               Store,
+               @table,
+               command.run_id,
+               admission,
+               replacement,
+               durable: true
+             ) do
+          :ok ->
+            private_meta =
+              meta
+              |> Map.reject(fn {key, _} -> to_string(key) in @owner_fields end)
+              |> Map.put(:native_lineage_handle, handle)
+              |> Map.put(:native_lineage_run_id, command.run_id)
+              |> Map.put(:native_destination_pid, destination.pid)
+              |> Map.put(:native_destination_generation, destination.generation)
+              |> put_destination_node(destination)
 
-          {:ok,
-           %{
-             submission
-             | execution_request: %{command | meta: private_meta},
-               meta: LemonCore.RunStore.execution_projection(private_meta)
-           }}
-        else
-          _ -> {:error, :outcome_unknown}
+            {:ok,
+             %{
+               submission
+               | execution_request: %{command | meta: private_meta},
+                 meta: LemonCore.RunStore.execution_projection(private_meta)
+             }}
+
+          _ ->
+            {:error, :outcome_unknown}
         end
       else
         {:error, :admission_unavailable} -> {:error, :admission_unavailable}
@@ -226,7 +232,9 @@ defmodule LemonRouter.NativeLineage do
              @table,
              run_id,
              entry,
-             Map.put(entry, :native_root_binding, sealed), durable: true) do
+             Map.put(entry, :native_root_binding, sealed),
+             durable: true
+           ) do
         :ok ->
           :ok
 
@@ -874,10 +882,8 @@ defmodule LemonRouter.NativeLineage do
           )
           |> Map.put(:terminal, status != :outcome_unknown)
 
-        with :ok <-
-               Store.compare_and_swap(Store, @table, run_id, entry, replacement, durable: true) do
-          :ok
-        else
+        case Store.compare_and_swap(Store, @table, run_id, entry, replacement, durable: true) do
+          :ok -> :ok
           _ -> {:error, :outcome_unknown}
         end
 

@@ -126,33 +126,35 @@ defmodule LemonChannels.Outbox do
     store = Keyword.get(opts, :store, LemonCore.Store)
     receipt_limit = positive_option(:max_dedupe_entries, @default_max_dedupe_entries, opts)
 
-    with {:ok, entries, receipts, sequence} <- QueueStore.load(store, receipt_limit) do
-      send(self(), :process_queue)
-      Process.send_after(self(), :prune, @cleanup_interval_ms)
+    case QueueStore.load(store, receipt_limit) do
+      {:ok, entries, receipts, sequence} ->
+        send(self(), :process_queue)
+        Process.send_after(self(), :prune, @cleanup_interval_ms)
 
-      {:ok,
-       %{
-         queue: :queue.from_list(entries),
-         processing: %{},
-         processing_groups: %{},
-         enqueued_total: 0,
-         max_queue_size: max_queue_size(opts),
-         max_concurrency: max_concurrency(opts),
-         retention_ms: positive_option(:retention_ms, @default_retention_ms, opts),
-         worker_supervisor: Keyword.get(opts, :worker_supervisor, @worker_supervisor),
-         max_attempts:
-           if(Keyword.has_key?(opts, :max_attempts), do: max_attempts(opts), else: nil),
-         store: store,
-         sequence: sequence,
-         pending_count: 0,
-         storage_queue: :queue.new(),
-         storage_current: nil,
-         storage_task: nil,
-         receipts: receipts,
-         receipt_limit: receipt_limit
-       }}
-    else
-      _ -> {:stop, :outbox_store_unavailable}
+        {:ok,
+         %{
+           queue: :queue.from_list(entries),
+           processing: %{},
+           processing_groups: %{},
+           enqueued_total: 0,
+           max_queue_size: max_queue_size(opts),
+           max_concurrency: max_concurrency(opts),
+           retention_ms: positive_option(:retention_ms, @default_retention_ms, opts),
+           worker_supervisor: Keyword.get(opts, :worker_supervisor, @worker_supervisor),
+           max_attempts:
+             if(Keyword.has_key?(opts, :max_attempts), do: max_attempts(opts), else: nil),
+           store: store,
+           sequence: sequence,
+           pending_count: 0,
+           storage_queue: :queue.new(),
+           storage_current: nil,
+           storage_task: nil,
+           receipts: receipts,
+           receipt_limit: receipt_limit
+         }}
+
+      _ ->
+        {:stop, :outbox_store_unavailable}
     end
   end
 

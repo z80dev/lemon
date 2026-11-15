@@ -331,9 +331,8 @@ defmodule CodingAgent.Tools.Task.Worktree do
       target = Path.join(directory, "target")
 
       try do
-        with :ok <- File.write(source, "probe", [:exclusive]) do
-          clone_command(cp, flags ++ [source, target], 1_000)
-        else
+        case File.write(source, "probe", [:exclusive]) do
+          :ok -> clone_command(cp, flags ++ [source, target], 1_000)
           _ -> false
         end
       after

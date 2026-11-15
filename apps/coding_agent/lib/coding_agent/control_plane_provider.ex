@@ -391,13 +391,17 @@ defmodule CodingAgent.ControlPlaneProvider do
       cwd,
       &CodingAgent.Session.label_entry_receipt(&1, entry_id, label),
       fn session ->
-        with %{} <- CodingAgent.SessionManager.get_entry(session, entry_id) || :missing do
-          session = CodingAgent.SessionManager.append_label(session, entry_id, label)
+        case CodingAgent.SessionManager.get_entry(session, entry_id) || :missing do
+          %{} ->
+            session = CodingAgent.SessionManager.append_label(session, entry_id, label)
 
-          {:ok, Rewind.label_receipt(session, entry_id), session}
-        else
-          :missing -> {:error, :entry_not_found}
-          {:error, _} = error -> error
+            {:ok, Rewind.label_receipt(session, entry_id), session}
+
+          :missing ->
+            {:error, :entry_not_found}
+
+          {:error, _} = error ->
+            error
         end
       end
     )

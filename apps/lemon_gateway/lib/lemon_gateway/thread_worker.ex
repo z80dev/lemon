@@ -168,8 +168,12 @@ defmodule LemonGateway.ThreadWorker do
       )
     )
 
-    if is_pid(notify_pid = meta_field(request.meta, :notify_pid)) do
-      send(notify_pid, {:lemon_gateway_run_completed, request, completed})
+    case meta_field(request.meta, :notify_pid) do
+      notify_pid when is_pid(notify_pid) ->
+        send(notify_pid, {:lemon_gateway_run_completed, request, completed})
+
+      _ ->
+        nil
     end
   end
 
