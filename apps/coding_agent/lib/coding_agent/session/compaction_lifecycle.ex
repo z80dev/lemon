@@ -27,7 +27,8 @@ defmodule CodingAgent.Session.CompactionLifecycle do
             task_pid: pid() | nil,
             task_monitor_ref: reference() | nil,
             task_timeout_ref: reference() | nil,
-            pending_prompt: tuple() | nil
+            pending_prompt: tuple() | nil,
+            blocked_signature: term()
           }
 
     defstruct in_progress: false,
@@ -35,7 +36,8 @@ defmodule CodingAgent.Session.CompactionLifecycle do
               task_pid: nil,
               task_monitor_ref: nil,
               task_timeout_ref: nil,
-              pending_prompt: nil
+              pending_prompt: nil,
+              blocked_signature: nil
   end
 
   @type callbacks(state) :: %{
@@ -71,13 +73,22 @@ defmodule CodingAgent.Session.CompactionLifecycle do
 
   @doc false
   def before_prompt(state, message, system_prompt) do
-    state = maybe_trigger(state, self(), {message, system_prompt})
+    if state.auto_compaction.blocked_signature == {:blocked, state.session_manager.leaf_id} do
+      CodingAgent.Session.Notifier.broadcast_event(
+        state,
+        {:error, :compaction_recovery_band, nil}
+      )
 
-    if not state.auto_compaction.in_progress do
-      send(self(), {:dispatch_prompt, message, system_prompt})
+      %{state | is_streaming: false}
+    else
+      state = maybe_trigger(state, self(), {message, system_prompt})
+
+      if not state.auto_compaction.in_progress do
+        send(self(), {:dispatch_prompt, message, system_prompt})
+      end
+
+      state
     end
-
-    state
   end
 
   @doc false
@@ -92,6 +103,16 @@ defmodule CodingAgent.Session.CompactionLifecycle do
 
   @spec maybe_trigger(map(), pid()) :: map()
   def maybe_trigger(state, session_pid), do: maybe_trigger(state, session_pid, nil)
+
+  defp maybe_trigger(
+         %{
+           auto_compaction: %State{blocked_signature: {:blocked, leaf}},
+           session_manager: %{leaf_id: leaf}
+         } = state,
+         _session_pid,
+         _prompt
+       ),
+       do: state
 
   defp maybe_trigger(
          %{auto_compaction: %State{in_progress: true}} = state,
@@ -130,10 +151,31 @@ defmodule CodingAgent.Session.CompactionLifecycle do
         compaction_settings
       )
 
-    if should_compact_by_tokens or should_compact_by_message_limit do
+    if (should_compact_by_tokens or should_compact_by_message_limit) and
+         state.auto_compaction.blocked_signature != {:blocked, state.session_manager.leaf_id} do
       signature = CompactionManager.session_signature(state)
       session_manager = state.session_manager
       compaction_opts = CompactionManager.normalize_compaction_opts(state, force: true)
+
+      overhead =
+        CodingAgent.Compaction.estimate_request_context_tokens(
+          [],
+          agent_state.system_prompt,
+          agent_state.tools
+        ) +
+          case pending_prompt do
+            {message, _} -> CodingAgent.Compaction.estimate_message_tokens(message)
+            nil -> 0
+          end
+
+      compaction_opts =
+        compaction_opts
+        |> Keyword.put(
+          :recovery_target,
+          CodingAgent.Compaction.recovery_threshold(context_window, compaction_settings)
+        )
+        |> Keyword.put(:request_overhead_tokens, overhead)
+
       model = Keyword.fetch!(compaction_opts, :model)
 
       CodingAgent.Session.Notifier.broadcast_event(
@@ -186,12 +228,35 @@ defmodule CodingAgent.Session.CompactionLifecycle do
         state |> resume_pending_prompt() |> CompactionManager.clear_auto_compaction_state()
 
       true ->
-        state =
-          state |> resume_pending_prompt() |> CompactionManager.clear_auto_compaction_state()
+        pending_prompt = state.auto_compaction.pending_prompt
+        state = CompactionManager.clear_auto_compaction_state(state)
 
         case apply_result(state, result, nil, callbacks) do
-          {:ok, new_state} -> new_state
-          {:error, _reason, new_state} -> new_state
+          {:ok, new_state} ->
+            resume_pending_prompt(%{
+              new_state
+              | auto_compaction: %{new_state.auto_compaction | pending_prompt: pending_prompt}
+            })
+            |> CompactionManager.clear_auto_compaction_state()
+
+          {:error, :compaction_recovery_band, new_state} ->
+            callbacks.broadcast_event.(new_state, {:error, :compaction_recovery_band, nil})
+
+            %{
+              new_state
+              | is_streaming: false,
+                auto_compaction: %{
+                  new_state.auto_compaction
+                  | blocked_signature: {:blocked, new_state.session_manager.leaf_id}
+                }
+            }
+
+          {:error, _reason, new_state} ->
+            resume_pending_prompt(%{
+              new_state
+              | auto_compaction: %{new_state.auto_compaction | pending_prompt: pending_prompt}
+            })
+            |> CompactionManager.clear_auto_compaction_state()
         end
     end
   end
