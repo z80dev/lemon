@@ -23,6 +23,8 @@ export interface HistorySourceOptions {
 	store?: PromptHistoryStore;
 	/** The editor's recall ring, oldest first. */
 	memory: () => readonly string[];
+	/** Remove a selected prompt from the editor's recall ring as well. */
+	onDeleteMemory?: (prompt: string) => void;
 	/** Called once if storage fails, before the ring is used instead. */
 	onStorageError?: (error: unknown) => void;
 }
@@ -40,6 +42,9 @@ function tokenize(query: string): string[] {
 /** Newest-first search over saved prompts, or over the ring when nothing is saved. */
 export function createHistorySource(options: HistorySourceOptions): HistorySource {
 	let storageFailed = false;
+	const entriesById = new Map<number, HistorySearchEntry>();
+	const memoryIds = new Map<string, number>();
+	const removedMemory = new Set<string>();
 	const useStore = (): PromptHistoryStore | undefined =>
 		options.store?.enabled && !storageFailed ? options.store : undefined;
 
@@ -49,9 +54,17 @@ export function createHistorySource(options: HistorySourceOptions): HistorySourc
 		const ring = options.memory();
 		for (let index = ring.length - 1; index >= 0 && entries.length < limit; index--) {
 			const prompt = ring[index]!;
+			if (removedMemory.has(prompt)) continue;
 			const text = prompt.toLowerCase();
 			if (tokens.every((token) => text.includes(token))) {
-				entries.push({ prompt, created_at: PROCESS_START_SECONDS });
+				let id = memoryIds.get(prompt);
+				if (id === undefined) {
+					id = -(memoryIds.size + 1);
+					memoryIds.set(prompt, id);
+				}
+				const entry = { id, prompt, created_at: PROCESS_START_SECONDS };
+				entriesById.set(id, entry);
+				entries.push(entry);
 			}
 		}
 		return entries;
@@ -61,7 +74,9 @@ export function createHistorySource(options: HistorySourceOptions): HistorySourc
 		const store = useStore();
 		if (!store) return fromMemory(text, limit);
 		try {
-			return store.search(text, limit);
+			const entries = store.search(text, limit);
+			for (const entry of entries) entriesById.set(entry.id, entry);
+			return entries;
 		} catch (error) {
 			// One notice, then the ring: a busy or unwritable database must not break typing.
 			storageFailed = true;
@@ -73,6 +88,24 @@ export function createHistorySource(options: HistorySourceOptions): HistorySourc
 	return {
 		search: (text, limit) => query(text, limit),
 		getRecent: (limit) => query("", limit),
+		delete: (id) => {
+			const entry = entriesById.get(id);
+			if (!entry) return;
+			if (id > 0) {
+				const store = useStore();
+				if (!store) return;
+				try {
+					store.delete(entry);
+				} catch (error) {
+					storageFailed = true;
+					options.onStorageError?.(error);
+					return;
+				}
+			}
+			removedMemory.add(entry.prompt);
+			options.onDeleteMemory?.(entry.prompt);
+			entriesById.delete(id);
+		},
 	};
 }
 

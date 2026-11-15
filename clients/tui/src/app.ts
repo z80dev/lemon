@@ -1003,6 +1003,7 @@ export class AppShell {
 		const source = createHistorySource({
 			store: this.#promptHistory,
 			memory: () => this.#editor.history,
+			onDeleteMemory: (prompt) => this.#editor.forgetPrompt(prompt),
 			onStorageError: (error) =>
 				this.events.notice(
 					`prompt history search fell back to this session's prompts (${describeError(error)})`,

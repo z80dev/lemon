@@ -26,7 +26,7 @@ const TODO_STATUS: Record<string, TodoStatus> = {
 	completed: "completed",
 	done: "completed",
 	abandoned: "abandoned",
-	blocked: "blocked",
+	blocked: "pending",
 };
 
 const SUBAGENT_STATUS: Record<string, AgentProps["status"]> = {
@@ -132,7 +132,10 @@ export function ompTodoChecklist(session: OmpSession): NativeNode | undefined {
 		const name = todo.phase ? safeLine(todo.phase, 60) : "";
 		const tasks = phases.get(name) ?? [];
 		const status = Object.hasOwn(TODO_STATUS, todo.status) ? TODO_STATUS[todo.status] : "pending";
-		tasks.push({ content: safeLine(todo.content), status: status ?? "pending" });
+		tasks.push({
+			content: safeLine(todo.status === "blocked" ? `${todo.content} — blocked` : todo.content),
+			status: status ?? "pending",
+		});
 		phases.set(name, tasks);
 	}
 	return node(
