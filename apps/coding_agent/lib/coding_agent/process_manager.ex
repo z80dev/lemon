@@ -410,6 +410,7 @@ defmodule CodingAgent.ProcessManager do
             exit_code: Map.get(record, :exit_code),
             os_pid: Map.get(record, :os_pid),
             logs: Enum.take(logs, -line_count),
+            partial_line: Map.get(record, :partial_line, ""),
             command: Map.get(record, :command),
             cwd: Map.get(record, :cwd),
             backend: Map.get(record, :backend, :local),
@@ -454,11 +455,8 @@ defmodule CodingAgent.ProcessManager do
     line_count = Keyword.get(opts, :lines, 100)
 
     if ProcessSession.alive?(process_id) do
-      ProcessSession.poll(process_id, line_count)
-      |> case do
-        {:ok, result} -> {:ok, result.logs}
-        error -> error
-      end
+      {:ok, result} = ProcessSession.poll(process_id, line_count)
+      {:ok, result.logs}
     else
       ProcessStore.get_logs(process_id, line_count)
     end

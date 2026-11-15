@@ -41,6 +41,57 @@ defmodule CodingAgent.ProcessStoreServerTest do
     {:ok, name: name, tmp_dir: tmp_dir, dets_path: dets_path}
   end
 
+  test "restart marks a flushed running tail lost without losing capture metadata", %{
+    name: name,
+    dets_path: dets_path
+  } do
+    id = "flushed-tail"
+    path = Path.join(Path.dirname(dets_path), "output.log")
+    File.write!(path, "head")
+
+    output = %{
+      received_bytes: 12,
+      retained_bytes: 6,
+      discarded_bytes: 6,
+      artifact_bytes: 4,
+      artifact_discarded_bytes: 8,
+      artifact_truncated: true
+    }
+
+    {:ok, first} = ProcessStoreServer.start_link(name: name, dets_path: dets_path)
+
+    ProcessStoreServer.transaction(first, fn ->
+      CodingAgent.ProcessStore.new_process(%{
+        id: id,
+        status: :running,
+        command: "test",
+        full_output_path: path
+      })
+
+      CodingAgent.ProcessStore.append_logs(id, ["cc", "dd"],
+        keep: 2,
+        total_lines: 4,
+        output: output,
+        partial_line: "",
+        read_cursor: 0
+      )
+    end)
+
+    GenServer.stop(first)
+
+    {:ok, second} = ProcessStoreServer.start_link(name: name, dets_path: dets_path)
+
+    try do
+      assert [{^id, record, ["dd", "cc"]}] = :ets.lookup(:coding_agent_processes, id)
+      assert record.status == :lost
+      assert record.output == output
+      assert record.full_output_path == path
+      assert File.read!(path) == "head"
+    after
+      GenServer.stop(second)
+    end
+  end
+
   describe "start_link/1" do
     test "starts the server with a custom name", %{name: name, dets_path: dets_path} do
       assert {:ok, pid} = ProcessStoreServer.start_link(name: name, dets_path: dets_path)

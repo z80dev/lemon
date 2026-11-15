@@ -408,7 +408,13 @@ defmodule CodingAgent.ProcessAdmissionTest do
     {id, _, _, session} = start_blocking(context, "attachment")
     assert {:ok, %{port: port}} = ProcessSession.get_state(id)
     send(session, {port, {:data, "retained\n"}})
+    # Direct ETS reads do not drain queued synthetic port messages.
+    ProcessSession.get_process_id(session)
     assert {:ok, %{logs: ["retained"]}} = ProcessSession.poll(id)
+    # Attachment preserves the durable snapshot, so establish that snapshot
+    # explicitly rather than relying on the output debounce deadline.
+    send(session, :flush_output)
+    ProcessSession.get_process_id(session)
     assert :ok = ProcessStore.put_read_cursor(id, 1)
     service = %{id: "attachment-service"}
     assert :ok = ProcessStore.put_service(id, service)
@@ -440,6 +446,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
     assert ^id = ProcessStore.new_process(attrs)
     assert {:ok, after_attachment, ["retained"]} = ProcessStore.get(id)
     assert Map.delete(after_attachment, :updated_at) == Map.delete(before, :updated_at)
+    assert {:ok, %{logs: ["retained"]}} = ProcessSession.poll(id)
 
     assert [{^id, ^after_attachment, ["retained"]}] =
              ProcessStoreServer.transaction(ProcessStoreServer, fn ->
@@ -1073,6 +1080,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
     File.ln_s!(path, path)
     on_exit(fn -> File.rm_rf!(path) end)
     send(session, {port, {:data, "diagnostic\n"}})
+    ProcessSession.get_process_id(session)
 
     assert {:ok,
             %{
@@ -1085,6 +1093,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
             }} = ProcessSession.poll(id)
 
     send(session, {port, {:data, "tail\n"}})
+    ProcessSession.get_process_id(session)
 
     assert {:ok, %{output: %{received_bytes: 16, artifact_discarded_bytes: nil}}} =
              ProcessSession.poll(id)

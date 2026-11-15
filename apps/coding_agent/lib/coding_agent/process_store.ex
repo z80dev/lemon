@@ -292,6 +292,11 @@ defmodule CodingAgent.ProcessStore do
             |> Map.put(:log_line_count, length(logs))
             |> Map.put(:total_lines, Keyword.get(opts, :total_lines, total))
             |> Map.put(:output, Keyword.get(opts, :output, Map.get(record, :output)))
+            |> Map.put(:partial_line, Keyword.get(opts, :partial_line, ""))
+            |> Map.put(
+              :read_cursor,
+              Keyword.get(opts, :read_cursor, Map.get(record, :read_cursor, 0))
+            )
 
           insert_record(process_id, record, logs)
 
