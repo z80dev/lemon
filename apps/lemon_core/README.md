@@ -58,7 +58,7 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 |---|-------|---------|
 | 1 | `Phoenix.PubSub` (name: `LemonCore.PubSub`), or a `Registry` | Backbone for the Bus; see `LemonCore.Bus` for which one is used |
 | 2 | `LemonCore.ACPClientBridge` | Registry for direct ACP client request/reply |
-| 3 | `LemonCore.NodeRegistry` | Live named-node registry and targeted invocation broker |
+| 3 | `LemonCore.NodeRegistry` | Socket-owned unique Registry, retained generation floors and temporary per-invocation processes |
 | 4 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
 | 5 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends |
 | 6 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
@@ -66,6 +66,14 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | 8 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
 | 9 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
 | 10 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+
+Named-node sockets register themselves, so Registry removes dead connections
+without node-monitor bookkeeping. Each temporary `LemonCore.NodeInvocation` owns
+its timeout, recipient/socket monitors, sequence validation and controls.
+Streamed events and shell frames go directly to it rather than through a shared
+GenServer. Disconnect, replacement, timeout and caller death remain terminal;
+the authenticated connection generation and retained generation floor prevent
+stale frames or controls from crossing a reconnect. WebSocket/JSON is unchanged.
 
 Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
 and provider credential-pool rotation to `lemon_agent`

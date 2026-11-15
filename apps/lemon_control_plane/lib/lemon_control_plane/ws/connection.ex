@@ -167,6 +167,11 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   @impl WebSock
+  def handle_info({:node_registry_owner, _, _, _, _} = message, state) do
+    :ok = LemonCore.NodeRegistry.handle_owner_message(message)
+    {:ok, state}
+  end
+
   def handle_info({:stream_resync, :overflow}, state) do
     send(self(), :stream_overflow_disconnect)
     state = %{state | resync_required: true}

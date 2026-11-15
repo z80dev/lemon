@@ -1,7 +1,7 @@
 defmodule CodingAgent.ExecutionNode.SocketTest do
   use ExUnit.Case, async: true
 
-  alias CodingAgent.ExecutionNode.Socket
+  alias CodingAgent.ExecutionNode.Socket.Transport, as: Socket
 
   test "authenticates every connection and routes responses and targeted events" do
     state = %Socket{
@@ -51,7 +51,7 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
                     {:event, "node.invoke.request", %{"nodeId" => "node-1"}}}
   end
 
-  test "reports disconnects and requests an authenticated reconnect" do
+  test "reports disconnects and delegates reconnect scheduling to its owner" do
     state = %Socket{
       owner: self(),
       url: "ws://controller:4040/ws",
@@ -59,11 +59,12 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
       reconnect_delay_ms: 0
     }
 
-    assert {:reconnect, reconnecting} =
+    assert {:ok, reconnecting} =
              Socket.handle_disconnect(%{reason: :closed, attempt_number: 1}, state)
 
     assert reconnecting.connect_id == nil
     assert_receive {:execution_node_socket, _pid, {:disconnected, :closed}}
+    assert_receive {:execution_node_reconnect, _pid, 0, 0, 1}
 
     assert {:ok, connected_state} = Socket.handle_connect(:ignored, reconnecting)
     connect_id = connected_state.connect_id

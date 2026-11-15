@@ -2,6 +2,7 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.ExecutionNode.Socket
+  alias CodingAgent.ExecutionNode.Socket.Transport
 
   setup do
     original = Application.fetch_env(:lemon_core, :require_owned_loopback)
@@ -20,14 +21,15 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
       state = state("ws://127.0.0.1:4044/ws", fn 4044 -> ownership end)
 
       assert {:close, blocked} =
-               Socket.handle_info({:execution_node_send_connect, "connect"}, state)
+               Transport.handle_info({:execution_node_send_connect, "connect"}, state)
 
       assert_receive {:execution_node_socket, _, {:connect_retry, :loopback_listener_not_owned}}
       refute blocked.stopping
 
-      assert {:reconnect, retrying} = Socket.handle_disconnect(%{reason: :closed}, blocked)
+      assert {:ok, retrying} = Transport.handle_disconnect(%{reason: :closed}, blocked)
+      assert_receive {:execution_node_reconnect, _, 0, 0, 1}
       refute_receive {:execution_node_socket, _, {:disconnected, _}}
-      assert {:ok, connected} = Socket.handle_connect(:ignored, retrying)
+      assert {:ok, connected} = Transport.handle_connect(:ignored, retrying)
       assert connected.connect_blocked_reason == nil
       assert_receive {:execution_node_send_connect, _}
     end
@@ -38,7 +40,7 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
       state = state("ws://#{host}:4044/ws", fn 4044 -> :owned end)
 
       assert {:reply, {:text, frame}, ^state} =
-               Socket.handle_info({:execution_node_send_connect, "connect"}, state)
+               Transport.handle_info({:execution_node_send_connect, "connect"}, state)
 
       assert Jason.decode!(frame)["params"]["auth"]["token"] == "private-node-token"
     end
@@ -55,7 +57,9 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
     state = state("ws://127.0.0.1:4044/ws", check)
 
     for _ <- 1..2 do
-      assert {:reply, _, _} = Socket.handle_info({:execution_node_send_connect, "connect"}, state)
+      assert {:reply, _, _} =
+               Transport.handle_info({:execution_node_send_connect, "connect"}, state)
+
       assert_receive :checked
     end
   end
@@ -67,21 +71,25 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
           "ws://192.168.1.2:4044/ws"
         ] do
       state = state(url, fn _ -> flunk("not a literal loopback host") end)
-      assert {:reply, _, _} = Socket.handle_info({:execution_node_send_connect, "connect"}, state)
+
+      assert {:reply, _, _} =
+               Transport.handle_info({:execution_node_send_connect, "connect"}, state)
     end
   end
 
   test "explicit opt-out preserves trusted cross-uid loopback controllers" do
     Application.put_env(:lemon_core, :require_owned_loopback, false)
     state = state("ws://127.0.0.1:4044/ws", fn _ -> flunk("guard is disabled") end)
-    assert {:reply, _, _} = Socket.handle_info({:execution_node_send_connect, "connect"}, state)
+
+    assert {:reply, _, _} =
+             Transport.handle_info({:execution_node_send_connect, "connect"}, state)
   end
 
   test "an owned replacement listener cannot authorize an unknown established connection" do
     state = state("ws://127.0.0.1:4044/ws", fn _ -> flunk("no established socket") end)
 
     assert {:close, _} =
-             Socket.handle_info({:execution_node_send_connect, "connect"}, %{
+             Transport.handle_info({:execution_node_send_connect, "connect"}, %{
                state
                | connection: nil
              })
@@ -143,7 +151,7 @@ defmodule CodingAgent.ExecutionNode.SocketLoopbackTest do
   end
 
   defp state(url, check) do
-    %Socket{
+    %Transport{
       owner: self(),
       url: url,
       connect_id: "connect",

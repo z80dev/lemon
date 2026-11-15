@@ -8,7 +8,7 @@ defmodule LemonCore.Application do
   - The `LemonCore.Bus` backend - Phoenix.PubSub, or a Registry when
     `phoenix_pubsub` is not available
   - `LemonCore.ACPClientBridge` - Registry for direct ACP client request/reply
-  - `LemonCore.NodeRegistry` - Live named execution-node registry and invocation broker
+  - `LemonCore.NodeRegistry` - Socket-owned Registry and temporary invocation supervisors
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
   - `LemonCore.UsageLedger` - Serialized per-run usage/cost aggregation (finalize-run hook)
