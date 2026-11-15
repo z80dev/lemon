@@ -525,6 +525,19 @@ Progress includes graph counts and node identities alongside normal child tool u
 
 Set `worktree: true` per child (or on the batch) to create a git branch `lemon/task-<task_id>` from the current checkout's HEAD. Worktrees live beneath the repository's common git directory in `lemon-task-worktrees/<task_id>` and retain the source cwd's relative subdirectory. `merge` (default `[runtime.task].worktree_merge`, itself defaulting to `"none"`) selects what happens after the child **succeeds**; it requires `worktree: true`:
 
+Isolated workspaces warm Git-ignored build directories using APFS clones or
+Linux reflinks when a filesystem probe succeeds. The default allowlist is
+`deps`, `_build`, `node_modules`, `target`, `.venv`; customize it with application
+environment `:coding_agent, :task_clone_directories` (top-level directory names).
+Only existing ignored directories are copied; ignored `.env` and configuration
+outside the allowlist remain private in every merge mode. Build artifacts stay
+out of the baseline and merge patch and are removed with the child checkout.
+Set `:coding_agent, :task_workspace_backend` to `:git_worktree` to force the cold
+fallback. Caller safety policy caps cloning at 100,000 entries, 64 GiB logical
+bytes and ten seconds. Unsupported filesystems or exhausted limits retain the
+ordinary Git behavior. Symlinks are preserved without following their targets.
+Warm-build performance still requires measurement.
+
 - `none`: uncommitted changes and local credentials/config are not copied, and the worktree and branch are retained, not merged or deleted. Review or cherry-pick the child's commits, then remove the worktree with `git worktree remove`.
 - `patch` (omp's default): the parent checkout's uncommitted work — tracked changes plus untracked, non-ignored files (at most 64 MiB; symlinks only when they stay inside the repository) — is replayed into the worktree and committed as a baseline. On success, the child's committed and uncommitted changes relative to that baseline are applied to the parent working tree with `git apply` (not staged or committed), serialized per repository; the worktree and branch are then removed. If the patch does not apply cleanly the parent is left untouched and the worktree, branch and `lemon-task-worktrees/<task_id>.patch` are kept (`status: "conflict"`).
 - `branch`: the child's changes are committed on its branch and the worktree is removed; the branch is kept for review. Unlike omp, Lemon never merges it into your branch.
