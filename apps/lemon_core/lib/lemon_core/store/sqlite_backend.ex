@@ -271,6 +271,37 @@ defmodule LemonCore.Store.SqliteBackend do
     end
   end
 
+  @impl true
+  def confirm_durable(state) do
+    reset_statements(state)
+    {:ok, state}
+  end
+
+  @doc false
+  @impl true
+  def with_durability(state, operation) do
+    reset_statements(state)
+    :ok = Sqlite3.execute(state.conn, "PRAGMA synchronous=FULL")
+
+    try do
+      if match?({:unix, :darwin}, :os.type()) do
+        :ok = Sqlite3.execute(state.conn, "PRAGMA fullfsync=ON")
+      end
+
+      :telemetry.execute([:lemon, :store, :sqlite, :durable_write], %{count: 1}, %{
+        conn: state.conn
+      })
+
+      operation.()
+    after
+      reset_statements(state)
+      # The Store serializes the whole scope. Never leak FULL to ordinary writes,
+      # even when a transaction fails; a restore failure crashes the owner.
+      :ok = Sqlite3.execute(state.conn, "PRAGMA synchronous=NORMAL")
+      :ok = Sqlite3.execute(state.conn, "PRAGMA fullfsync=OFF")
+    end
+  end
+
   @doc """
   Checkpoints the write-ahead log into the database file with `TRUNCATE`.
 
@@ -285,6 +316,7 @@ defmodule LemonCore.Store.SqliteBackend do
   """
   @impl true
   def sync(state) do
+    :telemetry.execute([:lemon, :store, :sqlite, :checkpoint], %{count: 1}, %{})
     reset_statements(state)
 
     with {:ok, statement} <- Sqlite3.prepare(state.conn, "PRAGMA wal_checkpoint(TRUNCATE)") do

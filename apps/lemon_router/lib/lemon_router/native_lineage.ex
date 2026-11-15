@@ -91,8 +91,10 @@ defmodule LemonRouter.NativeLineage do
           |> Map.put(:scope, scope)
           |> maybe_bind_root(command, destination, binding, true)
 
-        with :ok <- Store.compare_and_swap(@table, command.run_id, admission, replacement),
-             :ok <- Store.sync() do
+        with :ok <-
+               Store.compare_and_swap(Store, @table, command.run_id, admission, replacement,
+                 durable: true
+               ) do
           private_meta =
             meta
             |> Map.reject(fn {key, _} -> to_string(key) in @owner_fields end)
@@ -220,16 +222,13 @@ defmodule LemonRouter.NativeLineage do
         |> Map.put(:native_floor_verified, true)
 
       case Store.compare_and_swap(
+             Store,
              @table,
              run_id,
              entry,
-             Map.put(entry, :native_root_binding, sealed)
-           ) do
+             Map.put(entry, :native_root_binding, sealed), durable: true) do
         :ok ->
-          case Store.sync() do
-            :ok -> :ok
-            _ -> {:error, :outcome_unknown}
-          end
+          :ok
 
         {:error, :mismatch} when attempts_left > 0 ->
           persist_proofless_floor(run_id, floor, transport, attempts_left - 1)
@@ -256,12 +255,9 @@ defmodule LemonRouter.NativeLineage do
 
       replacement = Map.put(entry, :native_source, sealed)
 
-      case Store.compare_and_swap(@table, source.run_id, entry, replacement) do
+      case Store.compare_and_swap(Store, @table, source.run_id, entry, replacement, durable: true) do
         :ok ->
-          case Store.sync() do
-            :ok -> :ok
-            _ -> {:error, :outcome_unknown}
-          end
+          :ok
 
         {:error, :mismatch} when attempts_left > 0 ->
           persist_source_floor(captured, floor, transport, attempts_left - 1)
@@ -452,12 +448,9 @@ defmodule LemonRouter.NativeLineage do
       }
     }
 
-    case Store.put_new(@table, request.run_id, entry) do
+    case Store.put_new(Store, @table, request.run_id, entry, durable: true) do
       :ok ->
-        case Store.sync() do
-          :ok -> {:ok, entry, :new}
-          _ -> {:error, :outcome_unknown}
-        end
+        {:ok, entry, :new}
 
       {:error, :exists} ->
         case Store.fetch(@table, request.run_id) do
@@ -704,8 +697,10 @@ defmodule LemonRouter.NativeLineage do
            true <- selected_destination?(command.meta[:node], profile, destination),
            {:ok, %{} = entry} <- Store.fetch(@table, command.run_id),
            replacement = maybe_bind_root(entry, command, destination, binding, false),
-           :ok <- Store.compare_and_swap(@table, command.run_id, entry, replacement),
-           :ok <- Store.sync() do
+           :ok <-
+             Store.compare_and_swap(Store, @table, command.run_id, entry, replacement,
+               durable: true
+             ) do
         {:ok, destination}
       else
         _ -> {:error, :admission_unavailable}
@@ -879,8 +874,8 @@ defmodule LemonRouter.NativeLineage do
           )
           |> Map.put(:terminal, status != :outcome_unknown)
 
-        with :ok <- Store.compare_and_swap(@table, run_id, entry, replacement),
-             :ok <- Store.sync() do
+        with :ok <-
+               Store.compare_and_swap(Store, @table, run_id, entry, replacement, durable: true) do
           :ok
         else
           _ -> {:error, :outcome_unknown}
@@ -900,8 +895,7 @@ defmodule LemonRouter.NativeLineage do
              do: replacement |> Map.put(:terminal, true) |> Map.put(:state, "native_rejected"),
              else: replacement
            ),
-         :ok <- Store.compare_and_swap(@table, run_id, entry, replacement),
-         :ok <- Store.sync() do
+         :ok <- Store.compare_and_swap(Store, @table, run_id, entry, replacement, durable: true) do
       :ok
     else
       _ -> {:error, :outcome_unknown}

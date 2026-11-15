@@ -248,14 +248,10 @@ defmodule CodingAgent.ExecutionNode.ProcessService do
           metadata(args, opts, "running")
           |> Map.put(:intent, intent(args, Keyword.fetch!(opts, :session_generation)))
 
-        case Store.put_new(state.store, @table, key, receipt) do
+        case Store.put_new(state.store, @table, key, receipt, durable: true) do
           :ok ->
             state = %{state | receipts: Map.put(state.receipts, key, receipt)}
-
-            case Store.sync(state.store) do
-              :ok -> start_job(args, opts, from, key, receipt, state)
-              _ -> fail_admission(key, receipt, :store_unavailable, state)
-            end
+            start_job(args, opts, from, key, receipt, state)
 
           {:error, :exists} ->
             case fetch_receipt(state, key) do
@@ -295,14 +291,10 @@ defmodule CodingAgent.ExecutionNode.ProcessService do
       true ->
         receipt = metadata(args, opts, "cancelled")
 
-        case Store.put_new(state.store, @table, key, receipt) do
+        case Store.put_new(state.store, @table, key, receipt, durable: true) do
           :ok ->
             state = %{state | receipts: Map.put(state.receipts, key, receipt)}
-
-            case Store.sync(state.store) do
-              :ok -> {:reply, {:ok, dto(args, "cancelled", nil)}, state}
-              _ -> {:reply, {:error, :store_unavailable}, state}
-            end
+            {:reply, {:ok, dto(args, "cancelled", nil)}, state}
 
           {:error, :exists} ->
             case fetch_receipt(state, key) do
@@ -533,9 +525,7 @@ defmodule CodingAgent.ExecutionNode.ProcessService do
   end
 
   defp persist(state, key, receipt) do
-    with :ok <- Store.put(state.store, @table, key, receipt),
-         :ok <- Store.sync(state.store),
-         do: :ok
+    Store.put(state.store, @table, key, receipt, durable: true)
   end
 
   # Durable spent-ID fences do not expire: capacity fails closed rather than

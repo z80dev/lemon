@@ -1700,7 +1700,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     GenServer.stop(runtime_run)
   end
 
-  test "receipt barriers reject visible initial, CAS and uncertainty rows until sync succeeds" do
+  test "ordered-backend barriers reject visible rows until sync succeeds" do
     store = start_receipt_store(allow_updates: true, sync_failure: true)
     run_id = receipt_run_id()
 
@@ -1714,7 +1714,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     barrier_error = {:error, {:sync_failed, :sync_refused}}
 
-    assert ^barrier_error = RunReceiptStore.put(store, receipt)
+    assert {:error, :outcome_unknown} = RunReceiptStore.put(store, receipt)
     assert {:ok, ^receipt} = LemonCore.Store.fetch(store, :run_receipts, run_id)
     assert ^barrier_error = RunReceiptStore.fetch(store, run_id)
     assert ^barrier_error = RunReceiptStore.put(store, receipt)
@@ -1725,7 +1725,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     changes = %{effective_mode: :merged, target_run_id: "survivor"}
     assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, changes)
-    assert ^barrier_error = RunReceiptStore.update(store, run_id, changes)
+    assert {:error, :outcome_unknown} = RunReceiptStore.update(store, run_id, changes)
     updated = Map.merge(receipt, changes)
     assert {:ok, ^updated} = LemonCore.Store.fetch(store, :run_receipts, run_id)
     assert ^barrier_error = RunReceiptStore.fetch(store, run_id)
@@ -1743,7 +1743,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
                %{state: :outcome_unknown}
              )
 
-    assert ^barrier_error = RunReceiptStore.mark_unknown(store, run_id)
+    assert {:error, :outcome_unknown} = RunReceiptStore.mark_unknown(store, run_id)
     unknown = %{updated | state: :outcome_unknown, effective_mode: nil, target_run_id: nil}
     assert {:ok, ^unknown} = LemonCore.Store.fetch(store, :run_receipts, run_id)
     assert ^barrier_error = RunReceiptStore.fetch(store, run_id)

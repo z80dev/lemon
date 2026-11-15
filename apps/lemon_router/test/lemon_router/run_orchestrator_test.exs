@@ -168,7 +168,7 @@ defmodule LemonRouter.RunOrchestratorTest do
   defmodule AdmissionBarrierBackend do
     @behaviour LemonCore.Store.Backend
 
-    def init(opts), do: {:ok, %{data: %{}, refuse_sync: opts[:refuse_sync]}}
+    def init(opts), do: {:ok, %{data: %{}, refuse_sync: opts[:refuse_sync], initial_barriers: 1}}
 
     def put(state, table, key, value),
       do: {:ok, %{state | data: Map.put(state.data, {table, key}, value)}}
@@ -187,6 +187,8 @@ defmodule LemonRouter.RunOrchestratorTest do
     def list(state, table),
       do: {:ok, for({{^table, key}, value} <- state.data, do: {key, value}), state}
 
+    # Admit the durable claim, then fail the submitting commit before dispatch.
+    def sync(%{initial_barriers: 1} = state), do: {:ok, %{state | initial_barriers: 0}}
     def sync(%{refuse_sync: true}), do: {:error, :barrier_refused}
     def sync(state), do: {:ok, state}
   end

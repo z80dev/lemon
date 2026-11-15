@@ -26,6 +26,37 @@ See [README](README.md) and [architecture](../../docs/architecture/overview.md).
 - Unexpected exceptions in router callbacks/state transitions reach OTP
   supervision, not fabricated `:ok`, nil or unchanged state.
 
+## Receipt barrier failure model: power loss
+
+The user chose **power loss, done cheaper**, not just VM restart protection.
+SQLite receipt/admission writes use the explicit-server Store mutation API with
+`durable: true`. Store serializes the entire scope: switch this connection to
+`synchronous=FULL`, enable `fullfsync=1` on Darwin, commit the mutation, then
+restore NORMAL and disable fullfsync. The commit is the acknowledgement barrier.
+Ordinary writes (sessions, chat, runs, etc.) remain NORMAL; do not make FULL a
+backend-wide default. Non-SQLite backends retain their sync barrier on durable
+writes and authority reads (`Store.confirm_durable/1`); that confirmation is a
+no-op on SQLite, never a checkpoint. Failed durable writes/barriers return
+`:outcome_unknown`, never automatic retry.
+
+Receipt reads, existing-record lookups and `presence_snapshot` do not checkpoint.
+Keep `Store.sync/1` / `TRUNCATE` for the graceful-drain seal. VM restart alone
+would require only commit, but losing an acknowledged fence after power loss
+could repeat an external side effect, so that weaker option was rejected.
+
+Measured on the implementation host: NORMAL commit plus TRUNCATE took p50
+18.3 ms; FULL plus fullfsync commit took p50 6.5 ms / p95 9.5 ms. The earlier
+empty-WAL optimization was rejected (empty checkpoint p50 7 µs versus 32 µs
+for a filesystem-stat fast path). These are host/filesystem-specific results,
+not universal latency guarantees.
+
+Measure on the target filesystem from the umbrella root with
+`MIX_ENV=test mix run --no-start apps/lemon_core/bench/sqlite_sync.exs`. It reports
+realistic non-empty WAL latency, empty-WAL checkpoint latency, and single-receipt
+NORMAL-plus-checkpoint, FULL-commit-only and NORMAL-commit-only p50/p95
+microseconds, including the connection's `fullfsync` setting. Record the measured
+revision alongside results; timings are host/filesystem-specific.
+
 ## Cancellation and completion
 
 - Serialize fixed-ID aborts with admission. Durable abort fences prevent later

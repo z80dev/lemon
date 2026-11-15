@@ -10,11 +10,9 @@ defmodule LemonRouter.RunReceiptStore do
   fences existing receipts as `:outcome_unknown` until the applied disposition
   is durable. Prompts, execution metadata and error terms are never retained here.
 
-  The optional first argument selects a `LemonCore.Store` instance. Every receipt
-  write and existing-record read requires a successful `Store.sync/1` barrier
-  before acknowledgement. A visible row alone cannot prove a previously failed
-  write barrier reached stable storage. Barrier failures return
-  `{:error, {:sync_failed, reason}}`; storage backends without sync fail closed.
+  The optional first argument selects a `LemonCore.Store` instance. Mutations
+  use `durable: true`: their commit is the power-loss barrier, with no checkpoint
+  on the write or subsequent read path. Failed writes remain outcome-unknown.
   """
 
   alias LemonCore.{MapHelpers, Store}
@@ -61,7 +59,7 @@ defmodule LemonRouter.RunReceiptStore do
   @doc false
   def fetch_all do
     with {:ok, rows} <- Store.fetch_all(@table),
-         :ok <- sync(Store) do
+         :ok <- confirm_durable(Store) do
       Enum.reduce_while(rows, {:ok, []}, fn {id, row}, {:ok, acc} ->
         case normalize(row, id) do
           {:ok, receipt} -> {:cont, {:ok, [{id, receipt} | acc]}}
@@ -78,7 +76,7 @@ defmodule LemonRouter.RunReceiptStore do
         if is_map(MapHelpers.get_key(record, :summary)) do
           with :ok <- mark_terminal(server, LemonRouter.RunOrchestrator.admission_table(), run_id),
                :ok <- mark_terminal(server, @table, run_id) do
-            sync(server)
+            :ok
           end
         else
           :ok
@@ -106,7 +104,8 @@ defmodule LemonRouter.RunReceiptStore do
                table,
                run_id,
                current,
-               Map.put(current, :terminal, true)
+               Map.put(current, :terminal, true),
+               durable: true
              ) do
           :ok -> :ok
           {:error, :mismatch} -> mark_terminal(server, table, run_id)
@@ -126,7 +125,7 @@ defmodule LemonRouter.RunReceiptStore do
 
       {:ok, receipt} ->
         with {:ok, receipt} <- normalize(receipt, run_id),
-             :ok <- sync(server) do
+             :ok <- confirm_durable(server) do
           {:ok, receipt}
         end
 
@@ -149,9 +148,9 @@ defmodule LemonRouter.RunReceiptStore do
           dependencies -> Map.put(receipt, :dependent_profile_ids, dependencies)
         end
 
-      case Store.put_new(server, @table, receipt.run_id, receipt) do
+      case Store.put_new(server, @table, receipt.run_id, receipt, durable: true) do
         :ok ->
-          with :ok <- sync(server), do: retain_terminal_evidence(server, receipt.run_id)
+          retain_terminal_evidence(server, receipt.run_id)
 
         {:error, :exists} ->
           existing_receipt(server, receipt)
@@ -181,8 +180,10 @@ defmodule LemonRouter.RunReceiptStore do
           if replacement == current do
             :ok
           else
-            case Store.compare_and_swap(server, @table, run_id, current, replacement) do
-              :ok -> sync(server)
+            case Store.compare_and_swap(server, @table, run_id, current, replacement,
+                   durable: true
+                 ) do
+              :ok -> :ok
               {:error, :mismatch} -> update(server, run_id, changes)
               {:error, _reason} = error -> error
             end
@@ -212,8 +213,8 @@ defmodule LemonRouter.RunReceiptStore do
             target_run_id: nil
         }
 
-        case Store.compare_and_swap(server, @table, run_id, current, replacement) do
-          :ok -> sync(server)
+        case Store.compare_and_swap(server, @table, run_id, current, replacement, durable: true) do
+          :ok -> :ok
           {:error, :mismatch} -> mark_unknown(server, run_id)
           {:error, _reason} = error -> error
         end
@@ -231,8 +232,8 @@ defmodule LemonRouter.RunReceiptStore do
     end
   end
 
-  defp sync(server) do
-    case Store.sync(server) do
+  defp confirm_durable(server) do
+    case Store.confirm_durable(server) do
       :ok -> :ok
       {:error, reason} -> {:error, {:sync_failed, reason}}
     end

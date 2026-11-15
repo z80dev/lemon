@@ -464,6 +464,19 @@ widget = MyApp.WidgetStore.get(id)
 `put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value. `take/2` atomically consumes a key, `compare_and_swap/4` replaces a value only when its exact expected value is still current, and `compare_and_delete/3` conditionally removes an exact snapshot so a sweeper cannot erase a renewed lease or receipt. `compare_and_delete_many/1` first validates a set of exact snapshots in one serialized Store call. SQLite commits the set transactionally, ETS applies it under the Store owner, and ordered backends report the first failure so callers can place a safety-critical durable fence last.
 
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
+
+For power-loss-sensitive writes, pass `durable: true` to the explicit-server
+mutation arity, for example
+`LemonCore.Store.put(LemonCore.Store, :receipts, id, receipt, durable: true)`.
+The option is also available on `put_new`, `compare_and_swap`, `delete`,
+`compare_and_delete` and `compare_and_delete_many`. SQLite scopes FULL
+synchronization (and Darwin fullfsync) to that mutation, restoring NORMAL for
+ordinary writes. Other backends sync before acknowledgement. A failed durable
+mutation returns `{:error, :outcome_unknown}` rather than permission to retry;
+confirmed `:exists` and `:mismatch` remain distinct. SQLite authority reads use
+`Store.confirm_durable/1` without a checkpoint; ordered backends still sync so a
+visible row from an earlier failed barrier cannot falsely acknowledge success.
+`Store.sync/1` remains the explicit checkpoint barrier for a graceful-drain seal.
 Store diagnostics hash keys for idempotency tables so caller replay secrets do not enter logs.
 
 The JSONL backend fails initialization if journal discovery or any selected table
@@ -475,7 +488,8 @@ to reload it; a startup failure requires starting the Store again after repair.
 Only a confirmed missing table reads as empty. Failed loads never append to or
 truncate the journal. Encoding and append failures return errors before memory
 or the read cache is updated, rather than crashing the Store. JSONL appends are
-still unsynced: use the existing `Store.sync/1` durability barrier when required.
+still unsynced: use `durable: true` for acknowledgement-sensitive writes, or
+`Store.sync/1` for an explicit seal over preceding writes.
 Diagnostics omit journal contents, raw paths and exception messages.
 
 Use the generic table API only inside wrapper modules, backend internals, or explicitly app-local legacy tables. Shared-domain runtime code should go through typed wrappers so table ownership stays localized. Wrappers are plain modules over the generic API; `LemonCore.Store` has no domain-specific chat-state, policy, or progress functions.
