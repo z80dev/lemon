@@ -182,6 +182,21 @@ defmodule LemonCore.AgentRuntime.Provider do
   """
   @callback session_context_usage(session_key(), Path.t()) :: {:ok, map()} | {:error, term()}
 
+  @doc """
+  Read-only native maintenance plan for an exact positive millisecond cutoff.
+  The private plan contains the complete `:candidates` list (kind, id, bytes)
+  and runtime-specific revisions. Core retains it; it is never a wire payload.
+  """
+  @callback session_maintenance_plan(pos_integer()) :: {:ok, map()} | {:error, term()}
+
+  @doc """
+  Execute a retained private plan under native admission and directory locks.
+  Revalidate the complete candidate set and revisions before mutation. Returns
+  archived_count, swept_count and verified, or a confirmation mismatch/partial
+  failure. Core consumes confirmation before calling; never retry mutations.
+  """
+  @callback session_maintenance_execute(map()) :: {:ok, map()} | {:error, term()}
+
   @doc "Returns the tool policy for a named runtime mode."
   @callback tool_policy(atom()) :: map()
 
@@ -293,6 +308,8 @@ defmodule LemonCore.AgentRuntime.Provider do
                       session_create: 2,
                       session_plan: 4,
                       session_context_usage: 2,
+                      session_maintenance_plan: 1,
+                      session_maintenance_execute: 1,
                       tool_policy: 1,
                       resolve_subagent: 2,
                       slash_commands: 1,

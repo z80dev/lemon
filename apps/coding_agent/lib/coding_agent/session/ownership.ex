@@ -6,7 +6,9 @@ defmodule CodingAgent.Session.Ownership do
   # Startup holds admission from before loading the journal until its live owner
   # is published. Stopped mutations decide and write under this same admission.
   def with_file(path, fun) do
-    MutationLock.with_lock({:native_session, Path.expand(path)}, fun)
+    CodingAgent.SessionMaintenance.with_root_lock(fn ->
+      MutationLock.with_lock({:native_session, Path.expand(path)}, fun)
+    end)
   end
 
   def initialize(opts, fun) do
@@ -67,17 +69,19 @@ defmodule CodingAgent.Session.Ownership do
   def release(path), do: :global.unregister_name(owner_name(path))
 
   def transfer(old_path, new_path, fun) do
-    keys = Enum.map([old_path, new_path], &{:native_session, Path.expand(&1)})
+    CodingAgent.SessionMaintenance.with_root_lock(fn ->
+      keys = Enum.map([old_path, new_path], &{:native_session, Path.expand(&1)})
 
-    MutationLock.with_locks(keys, fn ->
-      nil = owner(new_path)
-      result = fun.()
+      MutationLock.with_locks(keys, fn ->
+        nil = owner(new_path)
+        result = fun.()
 
-      # global allows one name per process. Keep both journals admitted while
-      # moving the registration, so neither can be mistaken for a stopped file.
-      release(old_path)
-      :ok = publish(new_path)
-      result
+        # global allows one name per process. Keep both journals admitted while
+        # moving the registration, so neither can be mistaken for a stopped file.
+        release(old_path)
+        :ok = publish(new_path)
+        result
+      end)
     end)
   end
 

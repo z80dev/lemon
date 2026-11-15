@@ -378,6 +378,7 @@ defmodule LemonControlPlane.Auth.Authorize do
         "sessions.patch",
         "sessions.metadata.patch",
         "sessions.prune",
+        "sessions.maintain",
         "sessions.reset",
         "sessions.delete",
         "sessions.compact"

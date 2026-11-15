@@ -393,6 +393,12 @@ defmodule CodingAgent.ContextGuardrails do
   end
 
   defp spill_reference(path, data, opts) do
+    CodingAgent.SessionMaintenance.with_root_lock(fn ->
+      spill_reference_locked(path, data, opts)
+    end)
+  end
+
+  defp spill_reference_locked(path, data, opts) do
     case maybe_write_spill(path, data) do
       :ok ->
         case CodingAgent.Artifacts.register_in_dir(path, opts[:spill_dir]) do

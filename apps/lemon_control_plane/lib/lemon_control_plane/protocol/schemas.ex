@@ -503,6 +503,15 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "confirmToken" => :string
       }
     },
+    "sessions.maintain" => %{
+      required: %{
+        "olderThanMs" => :integer
+      },
+      optional: %{
+        "dryRun" => :boolean,
+        "confirmToken" => :string
+      }
+    },
     "sessions.reset" => %{
       required: %{
         "sessionKey" => :string

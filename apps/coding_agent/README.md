@@ -858,7 +858,30 @@ working directory. Automatic resume refuses a missing or corrupt mapped journal
 instead of replacing that session's history with a fresh conversation. Unbound
 automatic native tokens retain their fresh-session fallback.
 
-`SessionManager.list_sessions/1` lists most recently modified sessions first.
+`SessionManager.list_sessions/1` lists most recently active sessions first.
+Each cwd's `.index.sqlite3` caches journal header fields, the latest session-info
+title and activity time. Appends, snapshots and turn checkpoints update it;
+listing stats files but opens only new or mismatched journals. Removing a journal
+removes its row, and deleting or corrupting the derived index rebuilds it from
+JSONL. Atomic replacement, size, inode, mtime and ctime changes invalidate rows.
+Integer and legacy ISO-8601 journal timestamps remain discoverable; cached
+activity times are always epoch milliseconds.
+The cache is not a durability boundary and never makes a successful journal
+write fail. JSONL remains the source of truth.
+
+Journal loading streams and migrates one record at a time, including large
+journals; it does not retain a whole-file binary, split-line list or second
+raw-entry history. Parser overhead is bounded by the largest input record plus
+the file read buffer; the returned session still holds its materialized entry
+tree. Latest checkpoint selection, legacy migrations and torn-tail recovery
+have the same semantics at every file size.
+
+`lemon sessions maintain --older-than 90d` previews archival of cold inactive
+journals and cleanup of managed orphan spill directories. Confirmation uses
+the exact preview cutoff/token and fails if candidates or their contents change.
+Archived journals retain their spill artifacts; live owners and external artifact
+targets are never swept. See the [CLI guide](../../docs/user-guide/cli.md).
+
 `Session.navigate_tree/3` persists branch selection even before another message
 is sent. `SessionManager.fork_file/3` creates an independent branch file with
 parent-session provenance; it refuses to overwrite an existing destination.
