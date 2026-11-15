@@ -235,8 +235,7 @@ defmodule LemonAi.CallDispatcherEdgeTest do
                match?({:error, _}, result)
              end)
 
-      # record_failure/1 is a cast from each task; the call below is ordered
-      # after them because every task finished before its result was awaited.
+      # Every task publishes its breaker result before returning.
 
       # Circuit should now be open
       assert CircuitBreaker.open?(provider)

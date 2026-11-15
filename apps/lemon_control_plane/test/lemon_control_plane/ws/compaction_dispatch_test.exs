@@ -45,15 +45,18 @@ defmodule LemonControlPlane.WS.CompactionDispatchTest do
         params: %{sessionKey: "agent:compact:main", cwd: "/workspace"}
       })
 
-    assert {:ok, ^state} = Connection.handle_in({request, [opcode: :text]}, state)
+    assert {:ok, pending_state} = Connection.handle_in({request, [opcode: :text]}, state)
     assert_receive {:compaction_started, worker}
-    assert {:push, {:ping, ""}, heartbeat_state} = Connection.handle_info(:heartbeat, state)
+
+    assert {:push, {:ping, ""}, heartbeat_state} =
+             Connection.handle_info(:heartbeat, pending_state)
+
     Process.cancel_timer(heartbeat_state.heartbeat_timer_ref)
     send(worker, :finish)
-    assert_receive {:method_result, "compact", {:ok, %{"success" => true}} = result}
+    assert_receive {:method_result, token, {:ok, %{"success" => true}} = result}
 
     assert {:push, {:text, frame}, ^state} =
-             Connection.handle_info({:method_result, "compact", result}, state)
+             Connection.handle_info({:method_result, token, result}, pending_state)
 
     assert Jason.decode!(frame)["ok"] == true
   end

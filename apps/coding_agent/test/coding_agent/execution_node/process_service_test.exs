@@ -259,17 +259,17 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
     assert map_size(:sys.get_state(ctx.server).cache) == 0
   end
 
-  test "real JSONL backend reload preserves intent, terminal exit and missing-cancel fences",
+  test "real SQLite backend reload preserves intent, terminal exit and missing-cancel fences",
        ctx do
-    store = scoped_name(ctx.test, :jsonl_store)
-    service = scoped_name(ctx.test, :jsonl_service)
+    store = scoped_name(ctx.test, :sqlite_store)
+    service = scoped_name(ctx.test, :sqlite_service)
 
     store_spec =
       Supervisor.child_spec(
         {Store,
          name: store,
-         backend: LemonCore.Store.JsonlBackend,
-         backend_opts: [path: Path.join(ctx.root, "jsonl-receipts")]},
+         backend: LemonCore.Store.SqliteBackend,
+         backend_opts: [path: Path.join(ctx.root, "receipts.sqlite3")]},
         id: store
       )
 
@@ -278,23 +278,34 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
 
     start_supervised!(store_spec)
     start_supervised!(service_spec)
-    opts = Keyword.put(ctx.opts, :server, service)
-    literal = args(ctx, "jsonl-run", ["report", "雪 literal"])
-    assert {:ok, %{"exitCode" => 17}} = run(literal, opts)
-    assert {:ok, tombstone} = cancel("jsonl-tombstone", opts)
-    stop_supervised!(service)
-    stop_supervised!(store)
-    start_supervised!(store_spec)
-    start_supervised!(service_spec)
-    assert {:ok, restored} = run(literal, opts)
-    assert restored == Map.put(unavailable("jsonl-run", "completed"), "exitCode", 17)
 
-    assert {:error, :process_intent_conflict} =
-             run(Map.put(literal, "stdinBase64", Base.encode64("different")), opts)
+    try do
+      opts = Keyword.put(ctx.opts, :server, service)
+      literal = args(ctx, "sqlite-run", ["report", "雪 literal"])
+      assert {:ok, %{"exitCode" => 17}} = run(literal, opts)
+      assert {:ok, tombstone} = cancel("sqlite-tombstone", opts)
+      stop_supervised!(service)
+      assert :ok = LemonCore.Store.SqliteBackend.close(:sys.get_state(store).backend_state)
+      stop_supervised!(store)
+      start_supervised!(store_spec)
+      start_supervised!(service_spec)
+      assert {:ok, restored} = run(literal, opts)
+      assert restored == Map.put(unavailable("sqlite-run", "completed"), "exitCode", 17)
 
-    marker = Path.join(ctx.root, "jsonl-must-not-run")
-    assert {:ok, ^tombstone} = run(args(ctx, "jsonl-tombstone", ["touch", marker]), opts)
-    refute File.exists?(marker)
+      assert {:error, :process_intent_conflict} =
+               run(Map.put(literal, "stdinBase64", Base.encode64("different")), opts)
+
+      marker = Path.join(ctx.root, "sqlite-must-not-run")
+      assert {:ok, ^tombstone} = run(args(ctx, "sqlite-tombstone", ["touch", marker]), opts)
+      refute File.exists?(marker)
+    after
+      stop_supervised(service)
+
+      if pid = Process.whereis(store) do
+        :ok = LemonCore.Store.SqliteBackend.close(:sys.get_state(pid).backend_state)
+        stop_supervised!(store)
+      end
+    end
   end
 
   test "string-key receipts normalize, while malformed or contradictory proof fails closed",

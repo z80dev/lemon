@@ -102,7 +102,6 @@ defmodule CodingAgent.BackgroundRun.Worker do
   @impl true
   def terminate(_reason, state) do
     AbortSignal.abort(state.signal)
-    AbortSignal.clear(state.signal)
     abort_live_session(state.session_id)
     :ok
   end

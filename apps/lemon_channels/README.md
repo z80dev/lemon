@@ -2,7 +2,7 @@
 
 Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, XMTP, WhatsApp, and email), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
 
-This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_parser`, `req`, and `nostrum` (runtime: false).
+Nostrum is an included application: its dependencies are loaded normally, while the configured Discord adapter owns and supervises its process tree.
 
 ## Architecture Overview
 
@@ -79,7 +79,7 @@ affect a run. Scheduled runs and direct notifications do not start typing.
 
 **Semantic outbound**: Router emits `LemonCore.DeliveryIntent` values into `LemonChannels.Dispatcher`. Channel renderers decide truncation, send-vs-edit, buttons, media batching, and other platform UX details, while `LemonChannels.PresentationState` tracks message ids, pending creates/edits, deferred chunk sets, and post-edit follow-up chunks per `{route, run, surface}` so coalesced Telegram and Discord updates do not lose overflow chunks, leak superseded tails, detach long-answer follow-up chunks from the original prompt thread, enqueue long-answer tails before the final edit ack, or strand those tails or deferred final edits if the ack arrives before they finish staging. Discord streaming snapshots are truncated to one editable message; finalized Discord text is split at the safe 1,900-character outbound size and delivered as an edit plus ordered follow-ups, and repeated identical finals are suppressed when a newer sequence replays the same answer. Final idempotency includes auto-send file metadata so a later final with the same text but newly attached files still delivers those attachments.
 
-**Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.
+**Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), confirmed-delivery deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Plugin lookups use a persistent-term snapshot; token consumption uses ETS compare-and-replace and confirmed-key insertion uses `:ets.insert_new/2`, without synchronous calls into their owner processes. Messages are delivered by temporary supervised tasks with exponential-backoff retry on transient failures.
 
 Delivery workers are temporary supervised tasks. Delivery is **at-least-once**
 for the channels whose adapters report an unknown outcome: an adapter exception, malformed adapter result, worker exit
@@ -94,17 +94,58 @@ alone. Dedupe marks an idempotency key only on confirmed delivery, so confirmed
 sends are never re-sent. Platform rejections remain explicit terminal errors,
 and rate limits honor `retry_after`.
 
-An enqueue acknowledgement means queued, not delivered. A timeout may occur
-after the queue accepted the write, so Telegram's direct-send fallback runs only
-when the Outbox is unavailable or definitely rejected a full queue. WhatsApp
-command acknowledgement timeouts are likewise outcome-unknown rather than
-safe-to-retry failures.
+An enqueue acknowledgement means **durably queued**, not delivered: every physical
+chunk is recorded in the channels-owned Store table and crosses `Store.sync/1`
+before the caller receives `{:ok, ref}`. On restart, pending records recover
+their original FIFO sequence, retry window/budget and idempotency keys, including
+`nil`. A record's durable ID supplies a private dedupe identity when its payload
+has no key; the outbox never injects that identity into adapter payloads or
+continuation chunks.
+Confirmed sends replace pending message content with a content-free durable
+dedupe receipt, so restarting the queue or Store does not forget confirmed keys.
+Use a persistent Store backend (normally SQLite) for hard-crash recovery; the
+explicitly ephemeral ETS backend cannot survive a Store/VM restart.
+
+Storage work runs outside the queue owner. A failed write/barrier returns
+`{:error, {:outcome_unknown, :outbox_persistence_failed}}`; it may already have
+written part of the admission. The outbox reserves bounded capacity and retries
+only that same idempotent storage operation before dispatching it. An enqueue
+timeout likewise means unknown admission, never permission for a caller resend.
+Telegram's direct-send fallback runs only when the Outbox is unavailable or
+definitely rejected a full queue. WhatsApp command acknowledgement timeouts are
+also outcome-unknown rather than safe-to-retry failures.
+
+Outbox limits are caller policies, configured under
+`config :lemon_channels, LemonChannels.Outbox`: `max_queue_size` defaults to
+5,000 pending physical chunks (including storage admissions and active sends),
+`max_concurrency` to 32 delivery tasks, `retention_ms` to 24 hours for pending
+content, and `max_dedupe_entries` to the latest 5,000 confirmed receipts within
+the existing one-hour dedupe TTL. Queue capacity applies before acknowledgement;
+expired queued records and expired/overflow receipts are pruned during recovery
+and runtime maintenance. Definite terminal failures are removed durably too.
+The Task.Supervisor uses the same concurrency ceiling. These bounds are
+operational safety policies, not measured throughput claims. Diagnostics contain
+counts and fixed classifications, never payload content or adapter exception text.
 
 Telegram isolates unexpected failures per fetched update, retaining provisional
 dedupe and advancing through the remaining batch rather than replaying earlier
 side effects. Internal routing, rendering, and state-write failures are not
 converted into successful deliveries or permissive authorization decisions.
 Pairing, binding, group/admin, and file-access checks remain fail-closed.
+
+Telegram HTTP long polls run as monitored, unlinked tasks under the adapter's
+`AsyncSupervisor`, so live allowlist and drain calls do not wait for Telegram.
+Fetched updates are applied to the current state; drain discards an in-flight
+batch without advancing its offset. Startup probes and poller-lock acquisition
+are deferred to `handle_continue`, leaving `init` probe-free. A supervised lock
+holder uses `LemonCore.Service.Lock` with process identity checks and excludes
+the same bot token across accounts and OS processes. `LEMON_LOCK_DIR` overrides
+the shared service lock directory (default `~/.lemon/run/service`). Lock age
+never permits stealing from a live process; the old poller stale-ms setting is
+removed. Async work fails closed if its supervisor is unavailable.
+Telegram outbound attempts sends once, without adapter sleeps or retry loops;
+only the outbox retries transient errors and honors rate-limit hints. Direct
+script sends return those errors to the caller.
 
 **Script send**: `LemonChannels.ScriptSend` gives shell scripts, cron jobs, and CI a Hermes-style notification path for the promoted Telegram and Discord platforms. It builds direct text or file `OutboundPayload` structs and calls the platform outbound adapter directly without starting inbound transports.
 
@@ -155,7 +196,7 @@ LemonChannels.PortableCommand.handle("bg", "result bg_...", %{session_key: sessi
 
 ### Delivery Groups
 
-The Outbox preserves FIFO ordering within each "delivery group" while allowing full concurrency across independent groups. A delivery group is identified by the tuple `{channel_id, account_id, peer.kind, peer.id, peer.thread_id}`. When a long message is chunked into multiple parts, all chunks share the same group and are delivered sequentially to prevent reordering.
+The Outbox preserves FIFO ordering within each "delivery group", including across retry backoff and process/VM restart, while allowing independent groups to progress up to the configured delivery concurrency cap. A delivery group is identified by the tuple `{channel_id, account_id, peer.kind, peer.id, peer.thread_id}`; edits additionally isolate their message target, and deletes use a separate group, so a pending edit cannot block a new send. When a long message is chunked, its chunks share a group and are delivered sequentially. Recovered groups wait for their adapter to register instead of dropping messages during boot.
 
 ## Supervision Tree
 
@@ -163,16 +204,19 @@ The Outbox preserves FIFO ordering within each "delivery group" while allowing f
 LemonChannels.Application
 +-- LemonChannels.Registry                (GenServer - plugin registry)
 +-- LemonChannels.PresentationState       (GenServer - message-id/send-vs-edit state)
-+-- LemonChannels.Outbox.RateLimiter      (GenServer - token bucket rate limiter)
-+-- LemonChannels.Outbox.Dedupe           (GenServer - ETS-based deduplication)
-+-- Outbox.WorkerSupervisor               (Task.Supervisor)
++-- LemonChannels.Outbox.RateLimiter      (GenServer - ETS bucket table owner)
++-- LemonChannels.Outbox.Dedupe           (GenServer - confirmed-key ETS table owner)
++-- Outbox.WorkerSupervisor               (Task.Supervisor - max_children delivery cap)
 +-- LemonChannels.Outbox                  (GenServer - delivery queue)
 +-- LemonChannels.AdapterSupervisor       (DynamicSupervisor)
     +-- Telegram.Supervisor               (if configured)
     |   +-- Telegram.AsyncSupervisor      (Task.Supervisor)
     |   +-- Telegram.Transport            (GenServer - long-polling)
     +-- Discord.Supervisor                (if configured)
-    |   +-- Discord.Transport             (Nostrum consumer)
+    |   +-- Nostrum.Supervisor             (included application)
+    |   +-- Discord.AsyncSupervisor       (Task.Supervisor)
+    |   +-- Discord.Transport             (GenServer - event lifecycle)
+    |   +-- Discord.Transport.Consumer    (Nostrum consumer)
     +-- XMTP.Transport                    (if configured, GenServer + Port)
     +-- WhatsApp.Supervisor               (if configured)
         +-- WhatsApp.AsyncSupervisor      (Task.Supervisor)
@@ -263,7 +307,7 @@ Each adapter declares its capabilities in `meta/0`. The `LemonChannels.Capabilit
 
 ### Registry
 
-The `LemonChannels.Registry` GenServer manages adapter registration and lookup:
+The `LemonChannels.Registry` GenServer manages adapter registration; registration, unregistration and logout rewrite its persistent-term plugin snapshot. `get_plugin/1` and capability/chunk-size lookups read that snapshot without calling the registry process:
 
 ```elixir
 # Register / unregister
@@ -712,8 +756,8 @@ See [pairing security and limits](../../docs/config.md#telegram-and-discord-dm-p
 | Module | Purpose |
 |--------|---------|
 | `Discord` (plugin) | Plugin behaviour implementation |
-| `Discord.Supervisor` | Starts transport if bot_token is configured |
-| `Discord.Transport` | Nostrum consumer, slash command handling, component interactions, and inbound RunRequest submission |
+| `Discord.Supervisor` | Boots and supervises Nostrum, the event task supervisor, transport and consumer when a token is configured |
+| `Discord.Transport` | Ordered supervised event tasks for slash commands, component interactions, and inbound RunRequest submission |
 | `Discord.Inbound` | Normalizes Discord message events to `InboundMessage`, handles attachments |
 | `Discord.Renderer` | Semantic renderer for status controls, thread-aware replies, and finalize-time auto-send files |
 | `Discord.StatusRenderer` | Builds Discord button rows for cancel/keep-waiting UX |
@@ -773,7 +817,18 @@ The shared implementation is `LemonChannels.VoiceTranscriber`.
 
 #### Configuration
 
-Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`. Required: Discord bot token. Uses the `nostrum` library (declared as `runtime: false` dep; runtime availability is expected from the deployment environment).
+Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`. Required: Discord bot token. Nostrum is shipped as an included application and starts as a child of the Discord supervisor, not from transport init.
+
+Nostrum 0.10.4 accepts token/intents only through global application configuration.
+The Discord supervisor sets those once at adapter boot; the transport never
+mutates them. This version supports **one Discord account per node**. Upstream
+`Nostrum.Bot` provides per-bot startup options and would lift that constraint.
+
+Each event runs in a temporary supervised task, preserving arrival order and
+transport-owned debounce timers/subscriptions. Slow authorization, transcription,
+downloads and replies do not block the transport mailbox. An event task failure
+is recorded in health and is not replayed automatically. Restarting the adapter
+tears down its client, consumer and tasks together.
 
 ### XMTP
 
@@ -806,6 +861,19 @@ Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`. The XM
 **Plugin ID**: `"whatsapp"` | **Chunk limit**: 4096
 
 The WhatsApp adapter uses its own Node.js bridge script and event tag behind the same internal port lifecycle as XMTP.
+
+WhatsApp's transport is the sole reconnect authority for both socket disconnects
+and bridge port failures. Its existing twelve-attempt backoff budget is shared
+across those failures; duplicate disconnect notifications do not add a timer or
+consume another attempt. `PortBridge` runs in manual restart mode for WhatsApp;
+XMTP retains automatic port restart/replay.
+
+Exhaustion records an explicit reconnect-budget error in `Registry.status/0` and
+stops the transient transport child with `{:shutdown, :reconnect_exhausted}`.
+The supervisor retains a stopped child instead of resetting its retry budget.
+Logout and connection replacement also stop with explicit health errors.
+Re-link the account when required, then restart the adapter to recover. Stopping
+the transport closes its bridge and cancels outstanding reconnect/command timers.
 
 #### Module Layout
 
@@ -991,8 +1059,8 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | Module | Purpose |
 |--------|---------|
 | `Adapters.Discord` | Plugin behaviour implementation |
-| `Adapters.Discord.Supervisor` | Starts transport if configured |
-| `Adapters.Discord.Transport` | Nostrum consumer, slash commands, component interactions, debounce buffering |
+| `Adapters.Discord.Supervisor` | Owns the included Nostrum tree, task supervisor, transport and consumer |
+| `Adapters.Discord.Transport` | Ordered supervised event handling, slash commands, interactions, debounce buffering |
 | `Adapters.Discord.Inbound` | Normalize to InboundMessage |
 | `Adapters.Discord.Renderer` | Semantic delivery renderer |
 | `Adapters.Discord.StatusRenderer` | Button/control rendering helpers |
@@ -1075,7 +1143,7 @@ end
 | `jason` | ~> 1.4 | JSON encoding/decoding |
 | `earmark_parser` | ~> 1.4 | Markdown parsing (used by `Telegram.Markdown` for rendering to Telegram entities) |
 | `req` | ~> 0.5.0 | HTTP client (used by Telegram API and voice transcription) |
-| `nostrum` | ~> 0.9 | Discord library (`runtime: false` -- expected from deployment environment) |
+| `nostrum` | ~> 0.9 (locked 0.10.4) | Included Discord application, supervised by the configured adapter |
 
 ## Important Notes
 
@@ -1092,4 +1160,4 @@ end
 - The Telegram formatter avoids MarkdownV2 entirely, rendering to plain text + entity arrays instead
 - Transport-level known-target indexing throttles writes to 30s per target to avoid Store overload
 - Non-retryable delivery errors (`:unknown_channel`, client 4xx except 429, worker exits) are not retried
-- `nostrum` is declared `runtime: false` -- the runtime library must be available in the deployment environment for Discord support
+- Nostrum 0.10.x permits one Discord account per node; only the adapter supervisor configures its global token/intents at boot

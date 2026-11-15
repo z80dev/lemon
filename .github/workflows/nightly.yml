@@ -84,9 +84,53 @@ jobs:
         env:
           LEMON_EVAL_ITERATIONS: "20"
 
+  latency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/beam-setup
+        with:
+          family: dev
+      - name: Compile development runtime
+        run: MIX_ENV=dev mix compile --warnings-as-errors
+      - name: Find previous successful nightly baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p latency-baseline
+          run_id="$(gh run list --workflow nightly.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -n "$run_id" ]; then
+            artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" --jq '.artifacts[] | select(.name == "latency-results" and .expired == false) | .id')"
+            if [ -n "$artifact_id" ]; then
+              gh run download "$run_id" --name latency-results --dir latency-baseline
+            fi
+          fi
+      - name: Offline latency distribution and regression check
+        run: |
+          baseline=()
+          if [ -f latency-baseline/latency.json ]; then
+            baseline=(--baseline latency-baseline/latency.json)
+          else
+            echo "::notice::Latency bootstrap: no retained successful baseline"
+          fi
+          mix lemon.eval.latency --boots 5 --turns 20 \
+            --revision "$GITHUB_SHA" --output latency-results/latency.json "${baseline[@]}"
+      - name: Retain sanitized latency report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: latency-results
+          path: latency-results/latency.json
+          if-no-files-found: warn
+          retention-days: 90
+
   report:
     if: ${{ always() && github.ref == 'refs/heads/main' }}
-    needs: [ci, coverage, determinism]
+    needs: [ci, coverage, determinism, latency]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

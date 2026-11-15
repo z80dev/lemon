@@ -76,24 +76,6 @@ defmodule LemonGateway.Run do
     run_id = request.run_id || generate_run_id()
     session_key = request.session_key || "default"
     request = %{request | run_id: run_id, session_key: session_key}
-    executor_result = resolve_configured_executor()
-
-    {lock_release_fn, continuation} =
-      case maybe_acquire_lock(request) do
-        {:ok, release_fn} ->
-          Logger.debug(
-            "Gateway run init lock acquired run_id=#{inspect(run_id)} session_key=#{inspect(session_key)}"
-          )
-
-          {release_fn, {:start_run, executor_result}}
-
-        {:error, :timeout} ->
-          Logger.warning(
-            "Gateway run lock timeout run_id=#{inspect(run_id)} session_key=#{inspect(session_key)}"
-          )
-
-          {fn -> :ok end, :lock_timeout}
-      end
 
     state = %{
       submitted_execution_request: submitted_request,
@@ -110,7 +92,7 @@ defmodule LemonGateway.Run do
       renderer: LemonGateway.Renderers.Basic,
       renderer_state: nil,
       completed: false,
-      lock_release_fn: lock_release_fn,
+      lock_release_fn: nil,
       last_resume: request.resume,
       current_phase: nil,
       cancelled: false,
@@ -123,7 +105,7 @@ defmodule LemonGateway.Run do
       progress_mapping_registered?: false
     }
 
-    {:ok, state, {:continue, continuation}}
+    {:ok, state, {:continue, :acquire_lock}}
   end
 
   defp generate_run_id do
@@ -193,6 +175,17 @@ defmodule LemonGateway.Run do
   end
 
   @impl true
+  def handle_continue(:acquire_lock, state) do
+    case maybe_acquire_lock(state.execution_request) do
+      {:ok, release_fn} ->
+        {:noreply, %{state | lock_release_fn: release_fn},
+         {:continue, {:start_run, resolve_configured_executor()}}}
+
+      {:error, :timeout} ->
+        {:noreply, state, {:continue, :lock_timeout}}
+    end
+  end
+
   def handle_continue(:lock_timeout, state) do
     completed =
       Event.completed(%{

@@ -282,6 +282,16 @@ defmodule LemonAutomation.KanbanDispatcher do
         reconcile_board(board_id, dispatcher.running)
         state = resume_workflows(state, board_id)
         dispatcher = Map.fetch!(state.boards, board_id)
+        # Renew before expiry reclamation. Only monitored workers still alive in
+        # this VM are authoritative; recovered/unknown runs retain normal recovery.
+        Enum.each(dispatcher.running, fn {_ref, worker} ->
+          if Process.alive?(worker.pid) do
+            KanbanStore.renew_task_lease(worker.task_id, worker.lease_id,
+              lease_ms: dispatcher.lease_ms
+            )
+          end
+        end)
+
         {:ok, _reclaimed} = KanbanStore.reclaim_expired_leases(board_id)
         reconciling = length(unowned_runs(board_id, dispatcher.running))
 
@@ -530,7 +540,7 @@ defmodule LemonAutomation.KanbanDispatcher do
           Process.send_after(
             self(),
             {:dispatch_tick, board_id},
-            interval_ms || dispatcher.interval_ms
+            interval_ms || min(dispatcher.interval_ms, max(div(dispatcher.lease_ms, 3), 1))
           )
 
         put_in(state.boards[board_id].timer, timer)

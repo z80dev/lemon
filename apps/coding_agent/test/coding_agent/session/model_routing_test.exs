@@ -494,7 +494,11 @@ defmodule CodingAgent.Session.ModelRoutingTest do
         restart: :temporary
       )
 
-    start_supervised!(spec)
+    session = start_supervised!(spec)
+    # Route these fixture strings without the opening turn's environment section;
+    # the assertions below deliberately exercise exact max_chars boundaries.
+    :sys.replace_state(session, &%{&1 | context_frozen: true})
+    session
   end
 
   defp turn(session, prompt) do

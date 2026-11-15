@@ -2,8 +2,9 @@ defmodule LemonControlPlane.Methods.NodeInvokeEvent do
   @moduledoc """
   Forwards live coding-agent events from the authenticated invocation session.
 
-  NodeRegistry owns recipient delivery, session binding, sequencing and bounded
-  JSON validation. This method does not persist events or replay terminal work.
+  The invocation process owns recipient delivery, session binding, sequencing
+  and bounded JSON validation. Frames bypass the shared node directory.
+  This method does not persist events or replay terminal work.
   """
 
   @behaviour LemonControlPlane.Method

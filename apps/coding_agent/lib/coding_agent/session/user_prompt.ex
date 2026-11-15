@@ -132,6 +132,11 @@ defmodule CodingAgent.Session.UserPrompt do
         {:reply, {:error, :prompt_pending}, state}
 
       true ->
+        LemonAgent.AbortSignal.subscribe(signal)
+
+        if LemonAgent.AbortSignal.aborted?(signal),
+          do: send(self(), {:lemon_abort, signal, :abort})
+
         id = LemonCore.Id.uuid()
         now = System.system_time(:millisecond)
 
@@ -157,8 +162,6 @@ defmodule CodingAgent.Session.UserPrompt do
               do: nil,
               else: Process.send_after(self(), {:timeout, id}, timeout)
             ),
-          abort_timer:
-            if(is_reference(signal), do: Process.send_after(self(), {:check_abort, id}, 50)),
           public: public
         }
 
@@ -196,19 +199,15 @@ defmodule CodingAgent.Session.UserPrompt do
   def handle_info({:timeout, id}, state),
     do: {:noreply, finish(state, id, {:error, :timeout}, "timed_out")}
 
-  def handle_info({:check_abort, id}, state) do
-    case state.pending[id] do
-      nil ->
-        {:noreply, state}
+  def handle_info({:lemon_abort, signal, _kind}, state) do
+    state =
+      Enum.reduce(state.pending, state, fn {id, pending}, state ->
+        if pending.signal == signal,
+          do: finish(state, id, {:error, :cancelled}, "cancelled"),
+          else: state
+      end)
 
-      pending ->
-        if LemonAgent.AbortSignal.aborted?(pending.signal) do
-          {:noreply, finish(state, id, {:error, :cancelled}, "cancelled")}
-        else
-          timer = Process.send_after(self(), {:check_abort, id}, 50)
-          {:noreply, put_in(state.pending[id].abort_timer, timer)}
-        end
-    end
+    {:noreply, state}
   end
 
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
@@ -237,7 +236,10 @@ defmodule CodingAgent.Session.UserPrompt do
       {pending, rest} ->
         Process.demonitor(pending.monitor, [:flush])
         if pending.timer, do: Process.cancel_timer(pending.timer)
-        if pending.abort_timer, do: Process.cancel_timer(pending.abort_timer)
+
+        unless Enum.any?(rest, fn {_id, other} -> other.signal == pending.signal end),
+          do: LemonAgent.AbortSignal.unsubscribe(pending.signal)
+
         GenServer.reply(pending.from, reply)
 
         public =

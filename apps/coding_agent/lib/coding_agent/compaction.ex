@@ -46,6 +46,9 @@ defmodule CodingAgent.Compaction do
 
   @default_reserve_tokens 16_384
   @default_keep_recent_tokens 20_000
+  # omp #2275 dead-loop band: reserve at least 15%, recover to 80% of trigger.
+  @reserve_percent 15
+  @recovery_percent 80
   @default_message_limit_trigger_ratio 0.9
   @default_message_limit_keep_ratio 0.6
   @default_message_limit_min_keep_messages 20
@@ -64,8 +67,8 @@ defmodule CodingAgent.Compaction do
   Check if compaction should be triggered.
 
   Compaction is triggered when the context tokens exceed `context_threshold/2`:
-  the context window minus the reserve tokens (space for the model's response),
-  optionally lowered by `:threshold_tokens` / `:threshold_percent`.
+  the context window minus the larger of 15% of the window and the configured
+  reserve, optionally lowered by `:threshold_tokens` / `:threshold_percent`.
   An unknown or non-positive context window disables token-based automatic
   compaction; explicit compaction and overflow recovery remain available.
 
@@ -98,10 +101,10 @@ defmodule CodingAgent.Compaction do
   @doc """
   Return the context-window threshold above which automatic compaction runs.
 
-  The reserve-based limit (`window - reserve_tokens`, default reserve when
-  `:reserve_tokens` is absent) is always the ceiling. An optional
-  `:threshold_tokens` (fixed count) or, when absent, `:threshold_percent`
-  (1..100 of the window) lowers it, never raises it. Invalid values are ignored.
+  The reserve is the larger of 15% of the window (rounded up) and configured
+  `:reserve_tokens` (16,384 by default). An optional `:threshold_tokens`
+  (fixed count) or, when absent, `:threshold_percent` (1..100 of the window)
+  lowers the threshold, never raises it. Invalid threshold values are ignored.
   Returns `nil` when the window is unknown or non-positive.
   """
   @spec context_threshold(integer() | nil, map()) :: integer() | nil
@@ -109,7 +112,13 @@ defmodule CodingAgent.Compaction do
 
   def context_threshold(context_window, settings)
       when is_integer(context_window) and context_window > 0 do
-    ceiling = context_window - Map.get(settings, :reserve_tokens, @default_reserve_tokens)
+    reserve =
+      max(
+        div(context_window * @reserve_percent + 99, 100),
+        Map.get(settings, :reserve_tokens, @default_reserve_tokens)
+      )
+
+    ceiling = context_window - reserve
 
     case configured_threshold(context_window, settings) do
       nil -> ceiling
@@ -118,6 +127,15 @@ defmodule CodingAgent.Compaction do
   end
 
   def context_threshold(_context_window, _settings), do: nil
+
+  @doc "Token ceiling for a successful pressure-relieving compaction (omp #2275)."
+  @spec recovery_threshold(integer() | nil, map()) :: integer() | nil
+  def recovery_threshold(window, settings \\ %{}) do
+    case context_threshold(window, settings) do
+      nil -> nil
+      threshold -> max(div(threshold * @recovery_percent, 100), 0)
+    end
+  end
 
   @doc """
   Return automatic compaction capacity for the current request usage.
@@ -1099,7 +1117,15 @@ defmodule CodingAgent.Compaction do
   @spec compact(SessionManager.Session.t(), LemonAi.Types.Model.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def compact(%SessionManager.Session{} = session, model, opts \\ []) do
-    keep_recent_tokens = Keyword.get(opts, :keep_recent_tokens, @default_keep_recent_tokens)
+    configured_keep = Keyword.get(opts, :keep_recent_tokens, @default_keep_recent_tokens)
+    target = Keyword.get(opts, :recovery_target)
+    overhead = Keyword.get(opts, :request_overhead_tokens, 0)
+
+    keep_recent_tokens =
+      if is_integer(target),
+        do: min(configured_keep, max(target - overhead, 0)),
+        else: configured_keep
+
     signal = Keyword.get(opts, :signal)
 
     if aborted?(signal) do
@@ -1131,13 +1157,30 @@ defmodule CodingAgent.Compaction do
       file_ops = merge_file_operations(extract_file_operations(new_messages), previous_compaction)
       tokens_before = estimate_raw_context_tokens(messages)
 
-      {:ok,
-       %{
-         summary: summary,
-         first_kept_entry_id: first_kept_id,
-         tokens_before: tokens_before,
-         details: file_ops
-       }}
+      # This is an in-memory preview in a worker. The raw append device belongs
+      # to the session owner, which alone journals the accepted result later.
+      projected =
+        %{session | file_path: nil, append_device: nil}
+        |> SessionManager.append_compaction(summary, first_kept_id, tokens_before, file_ops)
+        |> SessionManager.build_session_context()
+
+      target = Keyword.get(opts, :recovery_target)
+
+      tokens_after =
+        estimate_raw_context_tokens(projected.messages) +
+          Keyword.get(opts, :request_overhead_tokens, 0)
+
+      if is_integer(target) and tokens_after > target do
+        {:error, :compaction_recovery_band}
+      else
+        {:ok,
+         %{
+           summary: summary,
+           first_kept_entry_id: first_kept_id,
+           tokens_before: tokens_before,
+           details: file_ops
+         }}
+      end
     else
       [] -> {:error, :cannot_compact}
       error -> error

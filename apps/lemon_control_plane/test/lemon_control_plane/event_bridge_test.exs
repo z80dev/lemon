@@ -2,7 +2,7 @@ defmodule LemonControlPlane.EventBridgeTest do
   use ExUnit.Case, async: false
 
   alias LemonControlPlane.EventBridge
-  alias LemonControlPlane.Presence
+  alias LemonControlPlane.Connections
   alias LemonControlPlane.Protocol.Schemas
   alias LemonCore.Events.ChannelDelivery
 
@@ -18,9 +18,9 @@ defmodule LemonControlPlane.EventBridgeTest do
       end
 
     presence =
-      case Process.whereis(Presence) do
+      case Process.whereis(Connections) do
         nil ->
-          {:ok, pid} = Presence.start_link([])
+          {:ok, pid} = Connections.start_link([])
           {:started, pid}
 
         pid ->
@@ -46,9 +46,9 @@ defmodule LemonControlPlane.EventBridgeTest do
   end
 
   defp clear_presence do
-    if Process.whereis(Presence) do
-      for {conn_id, _} <- Presence.list() do
-        Presence.unregister(conn_id)
+    if Process.whereis(Connections) do
+      for {conn_id, _} <- Connections.list() do
+        Connections.unregister(conn_id)
       end
     end
   catch
@@ -93,7 +93,7 @@ defmodule LemonControlPlane.EventBridgeTest do
 
   test "general node invocation events omit execution arguments and MCP secrets" do
     conn_id = "conn_private_invoke_#{System.unique_integer([:positive])}"
-    assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+    assert :ok = Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
     flush_events()
 
     event =
@@ -153,7 +153,9 @@ defmodule LemonControlPlane.EventBridgeTest do
       session_key = "session_#{System.unique_integer()}"
       conn_id = "conn_#{System.unique_integer()}"
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
       flush_events()
 
       assert :ok = EventBridge.subscribe_topics(["session:#{session_key}"])
@@ -173,15 +175,15 @@ defmodule LemonControlPlane.EventBridgeTest do
                      1_000
 
       assert :ok = EventBridge.unsubscribe_topics(["session:#{session_key}"])
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
   end
 
   describe "event forwarding" do
     test "completed exposes authoritative cancellation independent of abort acknowledgement" do
       conn_id = "cancel_wire_#{System.unique_integer([:positive])}"
-      :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
-      on_exit(fn -> Presence.unregister(conn_id) end)
+      :ok = Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      on_exit(fn -> Connections.unregister(conn_id) end)
       flush_events()
 
       for {completion_meta, expected} <- [
@@ -207,8 +209,8 @@ defmodule LemonControlPlane.EventBridgeTest do
 
     test "completed error projection is bounded and redacts credential fields" do
       conn_id = "error_wire_#{System.unique_integer([:positive])}"
-      :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
-      on_exit(fn -> Presence.unregister(conn_id) end)
+      :ok = Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      on_exit(fn -> Connections.unregister(conn_id) end)
       flush_events()
 
       error = %{
@@ -241,14 +243,14 @@ defmodule LemonControlPlane.EventBridgeTest do
       session_key = "session:private"
 
       assert :ok =
-               Presence.register(operator_conn_id, %{
+               Connections.register(operator_conn_id, %{
                  role: :operator,
                  client_id: "operator",
                  pid: operator_pid
                })
 
       assert :ok =
-               Presence.register(node_conn_id, %{
+               Connections.register(node_conn_id, %{
                  role: :node,
                  client_id: "node-1",
                  pid: node_pid
@@ -325,14 +327,15 @@ defmodule LemonControlPlane.EventBridgeTest do
 
       send(operator_pid, :stop)
       send(node_pid, :stop)
-      Presence.unregister(operator_conn_id)
-      Presence.unregister(node_conn_id)
+      Connections.unregister(operator_conn_id)
+      Connections.unregister(node_conn_id)
     end
 
     test "maps channel_delivery events to channel.delivery frames" do
       conn_id = "conn_#{System.unique_integer()}"
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
 
       flush_events()
 
@@ -378,7 +381,7 @@ defmodule LemonControlPlane.EventBridgeTest do
                       }, _state_version},
                      1_000
 
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
 
     test "processes run_completed events", %{bridge_pid: bridge_pid} do
@@ -411,7 +414,9 @@ defmodule LemonControlPlane.EventBridgeTest do
       session_key = "session:event-bridge-tool-failure"
       conn_id = "conn_#{System.unique_integer()}"
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
       flush_events()
       EventBridge.subscribe_run(run_id)
       sync_bridge(bridge_pid)
@@ -467,7 +472,7 @@ defmodule LemonControlPlane.EventBridgeTest do
                      1_000
 
       EventBridge.unsubscribe_run(run_id)
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
 
     test "sends operator clients the full tool result and structured details instead of the channel preview",
@@ -478,7 +483,9 @@ defmodule LemonControlPlane.EventBridgeTest do
       full = Enum.map_join(1..200, "\n", &"line #{&1}")
       preview = String.slice(full, 0, 500) <> "..."
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
       flush_events()
       EventBridge.subscribe_run(run_id)
       sync_bridge(bridge_pid)
@@ -545,7 +552,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       assert reasoning == %{text: "head and tail", source: "lemon"}
 
       EventBridge.unsubscribe_run(run_id)
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
 
     test "maps checkpoint events to agent events", %{bridge_pid: bridge_pid} do
@@ -553,7 +560,9 @@ defmodule LemonControlPlane.EventBridgeTest do
       session_key = "session:event-bridge-checkpoint"
       conn_id = "conn_#{System.unique_integer()}"
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
       flush_events()
 
       EventBridge.subscribe_run(run_id)
@@ -590,7 +599,7 @@ defmodule LemonControlPlane.EventBridgeTest do
                      1_000
 
       EventBridge.unsubscribe_run(run_id)
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
 
     test "maps goal events to goal events", %{bridge_pid: bridge_pid} do
@@ -598,7 +607,9 @@ defmodule LemonControlPlane.EventBridgeTest do
       session_key = "session:event-bridge-goal"
       conn_id = "conn_#{System.unique_integer()}"
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
       flush_events()
 
       EventBridge.subscribe_run(run_id)
@@ -631,7 +642,7 @@ defmodule LemonControlPlane.EventBridgeTest do
                      1_000
 
       EventBridge.unsubscribe_run(run_id)
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
 
     test "maps goal continuation and loop verdict events to goal events" do
@@ -639,7 +650,9 @@ defmodule LemonControlPlane.EventBridgeTest do
       session_key = "session:event-bridge-goal-loop"
       conn_id = "conn_#{System.unique_integer()}"
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
       flush_events()
 
       continuation =
@@ -706,7 +719,7 @@ defmodule LemonControlPlane.EventBridgeTest do
                      1_000
 
       EventBridge.unsubscribe_run(run_id)
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
 
     test "maps ingested metrics and log events with target fields" do
@@ -714,7 +727,9 @@ defmodule LemonControlPlane.EventBridgeTest do
       session_key = "session:event-bridge-ingest"
       conn_id = "conn_#{System.unique_integer()}"
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
       flush_events()
 
       send(
@@ -749,7 +764,7 @@ defmodule LemonControlPlane.EventBridgeTest do
 
       assert byte_size(message) < 700
 
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
   end
 
@@ -758,7 +773,9 @@ defmodule LemonControlPlane.EventBridgeTest do
       conn_id = "conn_#{System.unique_integer()}"
       session_key = "session:event-bridge-static-goal"
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
       flush_events()
 
       event =
@@ -785,7 +802,7 @@ defmodule LemonControlPlane.EventBridgeTest do
                       }, _state_version},
                      1_000
 
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
 
     test "subscribes to exec_approvals topic on init", %{bridge_pid: bridge_pid} do
@@ -807,8 +824,11 @@ defmodule LemonControlPlane.EventBridgeTest do
 
     test "approval events redact nested credentials while preserving review targets" do
       conn_id = "conn_#{System.unique_integer()}"
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
-      on_exit(fn -> Presence.unregister(conn_id) end)
+
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
+      on_exit(fn -> Connections.unregister(conn_id) end)
       flush_events()
 
       event =
@@ -847,7 +867,9 @@ defmodule LemonControlPlane.EventBridgeTest do
     test "broadcasts approval resolved events with pending metadata" do
       conn_id = "conn_#{System.unique_integer()}"
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
       flush_events()
 
       event =
@@ -882,13 +904,15 @@ defmodule LemonControlPlane.EventBridgeTest do
 
       assert :ok = Schemas.validate_event("exec.approval.resolved", payload)
 
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
 
     test "broadcasts approval timeout events with pending metadata" do
       conn_id = "conn_#{System.unique_integer()}"
 
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      assert :ok =
+               Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
       flush_events()
 
       event =
@@ -923,7 +947,7 @@ defmodule LemonControlPlane.EventBridgeTest do
 
       assert :ok = Schemas.validate_event("exec.approval.resolved", payload)
 
-      Presence.unregister(conn_id)
+      Connections.unregister(conn_id)
     end
   end
 
@@ -932,14 +956,14 @@ defmodule LemonControlPlane.EventBridgeTest do
       conn_id = "conn_#{System.unique_integer([:positive])}"
       run_id = "run_model_#{System.unique_integer([:positive])}"
 
-      :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      :ok = Connections.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
       flush_events()
 
-      # Presence is stopped by the file-level teardown, which can win this race when the
+      # Connections is stopped by the file-level teardown, which can win this race when the
       # whole suite runs; unregistering a conn on a dead registry is a no-op, not a failure.
       on_exit(fn ->
         try do
-          Presence.unregister(conn_id)
+          Connections.unregister(conn_id)
         catch
           :exit, _ -> :ok
         end

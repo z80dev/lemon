@@ -282,7 +282,7 @@ defmodule LemonChannels.Adapters.Discord.ApprovalTest do
     interaction = c.interaction |> Map.put(:type, 3) |> Map.put(:channel_id, "999")
 
     assert {:noreply, state} =
-             Transport.handle_info(
+             Transport.process_event(
                {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
                c.state
              )

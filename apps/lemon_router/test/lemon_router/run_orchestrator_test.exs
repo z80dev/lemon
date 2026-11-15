@@ -168,7 +168,7 @@ defmodule LemonRouter.RunOrchestratorTest do
   defmodule AdmissionBarrierBackend do
     @behaviour LemonCore.Store.Backend
 
-    def init(opts), do: {:ok, %{data: %{}, refuse_sync: opts[:refuse_sync]}}
+    def init(opts), do: {:ok, %{data: %{}, refuse_sync: opts[:refuse_sync], initial_barriers: 1}}
 
     def put(state, table, key, value),
       do: {:ok, %{state | data: Map.put(state.data, {table, key}, value)}}
@@ -187,6 +187,8 @@ defmodule LemonRouter.RunOrchestratorTest do
     def list(state, table),
       do: {:ok, for({{^table, key}, value} <- state.data, do: {key, value}), state}
 
+    # Admit the durable claim, then fail the submitting commit before dispatch.
+    def sync(%{initial_barriers: 1} = state), do: {:ok, %{state | initial_barriers: 0}}
     def sync(%{refuse_sync: true}), do: {:error, :barrier_refused}
     def sync(state), do: {:ok, state}
   end
@@ -1739,7 +1741,6 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert opts[:session_key] == session_key
       assert opts[:conversation_key] == conversation_key
       assert opts[:coordinator_pid] == self()
-      assert opts[:manage_session_registry?] == false
       assert opts[:custom] == :value
       assert opts[:execution_request].run_id == run_id
     end
@@ -1802,7 +1803,6 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:captured_run_opts, opts}
       assert opts[:custom] == :caller
       assert opts[:conversation_key] == conversation_key
-      assert opts[:manage_session_registry?] == false
       assert %{active: 1} = DynamicSupervisor.count_children(caller_run_supervisor)
       assert %{active: 0} = DynamicSupervisor.count_children(orchestrator_run_supervisor)
     end

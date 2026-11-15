@@ -31,6 +31,14 @@ defmodule LemonControlPlane.WS.Connection do
   @heartbeat_interval_ms 25_000
   @node_session_touch_interval_ms 3_600_000
 
+  # Caller policy: eight outstanding slow requests leave room for approvals and
+  # events per socket; 256 bounds aggregate work across otherwise unlimited peers.
+  @per_connection_method_limit 8
+  @global_method_limit 256
+
+  def per_connection_method_limit, do: @per_connection_method_limit
+  def global_method_limit, do: @global_method_limit
+
   defstruct [
     :conn_id,
     :auth,
@@ -42,6 +50,7 @@ defmodule LemonControlPlane.WS.Connection do
     :delivery,
     :heartbeat_timer_ref,
     :node_session_touch_timer_ref,
+    method_tasks: %{},
     allowed_roles: :all,
     resync_required: false
   ]
@@ -56,6 +65,7 @@ defmodule LemonControlPlane.WS.Connection do
           state_version: map(),
           delivery: Delivery.t() | nil,
           resync_required: boolean(),
+          method_tasks: %{reference() => map()},
           heartbeat_timer_ref: reference() | nil,
           node_session_touch_timer_ref: reference() | nil,
           allowed_roles: :all | [Authorize.role()]
@@ -157,6 +167,11 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   @impl WebSock
+  def handle_info({:node_registry_owner, _, _, _, _} = message, state) do
+    :ok = LemonCore.NodeRegistry.handle_owner_message(message)
+    {:ok, state}
+  end
+
   def handle_info({:stream_resync, :overflow}, state) do
     send(self(), :stream_overflow_disconnect)
     state = %{state | resync_required: true}
@@ -202,8 +217,28 @@ defmodule LemonControlPlane.WS.Connection do
     {:push, {:text, frame}, state}
   end
 
-  def handle_info({:method_result, id, result}, state) when is_binary(id) do
-    {:push, {:text, encode_response(id, result)}, state}
+  def handle_info({:method_result, token, result}, state) do
+    case Map.pop(state.method_tasks, token) do
+      {nil, _} ->
+        {:ok, state}
+
+      {%{id: id, ref: ref}, tasks} ->
+        Process.demonitor(ref, [:flush])
+        {:push, {:text, encode_response(id, result)}, %{state | method_tasks: tasks}}
+    end
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    case Enum.find(state.method_tasks, fn {_token, task} -> task.ref == ref end) do
+      nil ->
+        {:ok, state}
+
+      {token, task} ->
+        Registry.report_failure(task.method, :exit)
+        result = {:error, Errors.internal_error("Method execution failed")}
+        state = %{state | method_tasks: Map.delete(state.method_tasks, token)}
+        {:push, {:text, encode_response(task.id, result)}, state}
+    end
   end
 
   def handle_info({:lifecycle_after_reply, ref}, state) do
@@ -421,15 +456,7 @@ defmodule LemonControlPlane.WS.Connection do
 
     case Registry.dispatch_mode(method) do
       :async ->
-        connection_pid = self()
-
-        {:ok, _pid} =
-          Task.start(fn ->
-            result = safe_async_dispatch(method, params, ctx)
-            send(connection_pid, {:method_result, id, result})
-          end)
-
-        {:ok, state}
+        start_method_task(id, method, params, ctx, state)
 
       :inline ->
         result = Registry.dispatch(method, params, ctx)
@@ -439,13 +466,30 @@ defmodule LemonControlPlane.WS.Connection do
     end
   end
 
-  defp safe_async_dispatch(method, params, ctx) do
-    Registry.dispatch(method, params, ctx)
-  catch
-    _kind, _reason ->
-      Logger.error("Async WebSocket method failed redacted=true")
+  defp start_method_task(id, method, params, ctx, state) do
+    if map_size(state.method_tasks) >= @per_connection_method_limit do
+      method_capacity_error(id, state)
+    else
+      connection_pid = self()
+      token = make_ref()
 
-      {:error, Errors.internal_error("Method execution failed")}
+      case Task.Supervisor.start_child(LemonControlPlane.MethodTaskSupervisor, fn ->
+             result = Registry.dispatch(method, params, ctx)
+             send(connection_pid, {:method_result, token, result})
+           end) do
+        {:ok, pid} ->
+          task = %{id: id, method: method, ref: Process.monitor(pid)}
+          {:ok, %{state | method_tasks: Map.put(state.method_tasks, token, task)}}
+
+        {:error, :max_children} ->
+          method_capacity_error(id, state)
+      end
+    end
+  end
+
+  defp method_capacity_error(id, state) do
+    error = Errors.unavailable("Concurrent async method limit reached")
+    {:push, {:text, encode_response(id, {:error, error})}, state}
   end
 
   ## Helpers
@@ -619,12 +663,12 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   defp register_presence(state) do
-    case Process.whereis(LemonControlPlane.Presence) do
+    case Process.whereis(LemonControlPlane.Connections) do
       nil ->
         :ok
 
       pid when is_pid(pid) ->
-        LemonControlPlane.Presence.register(state.conn_id, %{
+        LemonControlPlane.Connections.register(state.conn_id, %{
           role: state.auth.role,
           client_id: state.auth.client_id,
           pid: self(),
@@ -634,12 +678,12 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   defp unregister_presence(state) do
-    case Process.whereis(LemonControlPlane.Presence) do
+    case Process.whereis(LemonControlPlane.Connections) do
       nil ->
         :ok
 
       pid when is_pid(pid) ->
-        LemonControlPlane.Presence.unregister(state.conn_id)
+        LemonControlPlane.Connections.unregister(state.conn_id)
     end
   end
 

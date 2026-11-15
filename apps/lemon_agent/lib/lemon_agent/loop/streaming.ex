@@ -38,12 +38,18 @@ defmodule LemonAgent.Loop.Streaming do
           EventStream.t()
         ) :: {:ok, AssistantMessage.t(), LemonAgent.Types.AgentContext.t()} | {:error, term()}
   def stream_assistant_response(context, config, signal, stream_fn, stream) do
-    system_prompt = context.system_prompt
-    result = retry_response(context, config, signal, stream_fn, stream, 0)
+    AbortSignal.subscribe(signal)
 
-    case result do
-      {:ok, message, updated} -> {:ok, message, %{updated | system_prompt: system_prompt}}
-      other -> other
+    try do
+      system_prompt = context.system_prompt
+      result = retry_response(context, config, signal, stream_fn, stream, 0)
+
+      case result do
+        {:ok, message, updated} -> {:ok, message, %{updated | system_prompt: system_prompt}}
+        other -> other
+      end
+    after
+      AbortSignal.unsubscribe(signal)
     end
   end
 
@@ -380,8 +386,12 @@ defmodule LemonAgent.Loop.Streaming do
         if remaining <= 0 do
           :ok
         else
-          Process.sleep(min(remaining, 50))
-          wait_for_retry(signal, deadline)
+          receive do
+            {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
+              wait_for_retry(signal, deadline)
+          after
+            remaining -> :ok
+          end
         end
     end
   end
@@ -889,19 +899,29 @@ defmodule LemonAgent.Loop.Streaming do
         {:event, {:canceled, :redirected}}
 
       true ->
-        case :gen_server.wait_response(request, 50) do
-          {:reply, reply} ->
-            reply
-
-          {:error, {reason, _server}} when reason in [:noproc, :normal, :shutdown] ->
-            {:event, {:canceled, :canceled}}
-
-          {:error, {reason, _server}} ->
-            exit(reason)
-
-          :timeout ->
+        receive do
+          {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
             await_ai_event(stream, signal, request)
+
+          {[:alias | ^request], _reply} = response ->
+            ai_response(response, request)
+
+          {:DOWN, ^request, :process, _server, _reason} = response ->
+            ai_response(response, request)
         end
+    end
+  end
+
+  defp ai_response(response, request) do
+    case :gen_server.check_response(response, request) do
+      {:reply, reply} ->
+        reply
+
+      {:error, {reason, _server}} when reason in [:noproc, :normal, :shutdown] ->
+        {:event, {:canceled, :canceled}}
+
+      {:error, {reason, _server}} ->
+        exit(reason)
     end
   end
 

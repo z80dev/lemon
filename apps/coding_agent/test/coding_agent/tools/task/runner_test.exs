@@ -31,8 +31,7 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
                nil,
                nil,
                nil,
-               task_session_timeout_ms: 100,
-               task_session_poll_ms: 10
+               task_session_timeout_ms: 100
              )
 
     assert reason == "Task session timed out after 100ms waiting for completion"
@@ -47,7 +46,6 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
     signal = AbortSignal.new()
 
     on_exit(fn ->
-      AbortSignal.clear(signal)
       File.rm_rf(tmp_dir)
     end)
 
@@ -70,7 +68,7 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
           signal,
           nil,
           nil,
-          task_session_poll_ms: 10
+          []
         )
       end)
 

@@ -121,10 +121,13 @@ defmodule LemonControlPlane.Methods.RunPresenceTest do
     start_supervised!(
       {RunProcess,
        run_id: extra_id,
-       session_key: key,
-       execution_request: extra,
-       submit_to_gateway?: false,
-       manage_session_registry?: false}
+       session_key: key <> ":extra",
+       execution_request: %{
+         extra
+         | session_key: key <> ":extra",
+           conversation_key: {:session, key <> ":extra"}
+       },
+       submit_to_gateway?: false}
     )
 
     assert {:ok, %{"runs" => [_], "presence" => %{"active" => 2, "queued" => 2}}} =

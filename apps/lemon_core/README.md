@@ -30,7 +30,7 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | LemonCore.Secrets| | LemonCore.Store | | LemonCore.Bus    |
 | .Crypto/.External| | .EtsBackend     | | (Phoenix.PubSub) |
 | .Source/.Runner  | | .SqliteBackend  | |                  |
-| .MasterKey       | | .JsonlBackend   | | LemonCore.Event  |
+| .MasterKey       | |                 | | LemonCore.Event  |
 +------------------+ | .ReadCache      | +------------------+
                      +-----------------+
                                |
@@ -58,7 +58,7 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 |---|-------|---------|
 | 1 | `Phoenix.PubSub` (name: `LemonCore.PubSub`), or a `Registry` | Backbone for the Bus; see `LemonCore.Bus` for which one is used |
 | 2 | `LemonCore.ACPClientBridge` | Registry for direct ACP client request/reply |
-| 3 | `LemonCore.NodeRegistry` | Live named-node registry and targeted invocation broker |
+| 3 | `LemonCore.NodeRegistry` | Socket-owned unique Registry, retained generation floors and temporary per-invocation processes |
 | 4 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
 | 5 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends |
 | 6 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
@@ -66,6 +66,14 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | 8 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
 | 9 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
 | 10 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+
+Named-node sockets register themselves, so Registry removes dead connections
+without node-monitor bookkeeping. Each temporary `LemonCore.NodeInvocation` owns
+its timeout, recipient/socket monitors, sequence validation and controls.
+Streamed events and shell frames go directly to it rather than through a shared
+GenServer. Disconnect, replacement, timeout and caller death remain terminal;
+the authenticated connection generation and retained generation floor prevent
+stale frames or controls from crossing a reconnect. WebSocket/JSON is unchanged.
 
 Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
 and provider credential-pool rotation to `lemon_agent`
@@ -165,7 +173,6 @@ truncating so partial credentials cannot escape.
 | `LemonCore.Store.Backend` | Behaviour for storage backends (init/put/put_new/get/delete/list) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
-| `LemonCore.Store.JsonlBackend` | Append-only JSONL backend (human-readable, portable) |
 | `LemonCore.Store.ReadCache` | Public ETS read-through cache for hot domains |
 | `LemonCore.PolicyStore` | Typed policy API and metadata owner for the existing agent, channel, session, and runtime policy tables |
 | `LemonCore.ToolPolicy` | Strict validated tool authorization shared by every execution boundary |
@@ -220,7 +227,8 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.MapHelpers` | Map key access helpers (atom/string agnostic) |
 | `LemonCore.Telemetry` | Telemetry event helpers and named event emitters |
-| `LemonCore.Reload` | Runtime BEAM/extension reload orchestration |
+| `Lemon.Reload` | Published low-level BEAM/extension reload API; see its moduledoc for retained contracts |
+| `LemonCore.CodeReload` | Soft-loads changed BEAM files and invokes the configured session refresher for source-development reload |
 | `LemonCore.Testing` | Test harness builder (Harness, Case, Helpers) |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
 
@@ -435,7 +443,29 @@ runtime declarations in `LemonCore.Env`.
 |---------|-------------|----------|
 | `EtsBackend` | No (in-memory) | Tests, ephemeral data, default |
 | `SqliteBackend` | Yes (single file) | Production, WAL mode, optional ephemeral tables for high-churn |
-| `JsonlBackend` | Yes (append-only files) | Debugging, data portability, human-readable |
+
+### Upgrading legacy JSONL installations
+
+The JSONL runtime backend migration window ends with `lemon_core` 0.3.0.
+It is removed now (issue #608); SQLite is the supported durable backend.
+This is a breaking package change from 0.2.x.
+
+Before upgrading, stop runtime writers, back up the JSONL store directory,
+and run the migration using the old source checkout:
+
+```bash
+mix lemon.store.migrate_jsonl_to_sqlite --jsonl-path /var/lib/lemon/store --sqlite-path /var/lib/lemon/store.sqlite3 --dry-run
+mix lemon.store.migrate_jsonl_to_sqlite --jsonl-path /var/lib/lemon/store --sqlite-path /var/lib/lemon/store.sqlite3
+```
+
+Use a new target database; `--replace` deletes an existing target. Add
+`--include-runs` if run records must be retained (they are skipped by default),
+and configure `ephemeral_tables: []` if SQLite must keep them after startup.
+Switch the Store configuration to SQLite as below, verify the migrated data,
+then upgrade. Keep the original backup until verification is complete.
+The migration task remains available in 0.3.0 with a private read-only legacy
+reader for recovery; it does not restore a JSONL runtime backend or modify the
+source journals. Only migrate trusted local journals.
 
 ### Configuration
 
@@ -464,6 +494,19 @@ widget = MyApp.WidgetStore.get(id)
 `put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value. `take/2` atomically consumes a key, `compare_and_swap/4` replaces a value only when its exact expected value is still current, and `compare_and_delete/3` conditionally removes an exact snapshot so a sweeper cannot erase a renewed lease or receipt. `compare_and_delete_many/1` first validates a set of exact snapshots in one serialized Store call. SQLite commits the set transactionally, ETS applies it under the Store owner, and ordered backends report the first failure so callers can place a safety-critical durable fence last.
 
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
+
+For power-loss-sensitive writes, pass `durable: true` to the explicit-server
+mutation arity, for example
+`LemonCore.Store.put(LemonCore.Store, :receipts, id, receipt, durable: true)`.
+The option is also available on `put_new`, `compare_and_swap`, `delete`,
+`compare_and_delete` and `compare_and_delete_many`. SQLite scopes FULL
+synchronization (and Darwin fullfsync) to that mutation, restoring NORMAL for
+ordinary writes. Other backends sync before acknowledgement. A failed durable
+mutation returns `{:error, :outcome_unknown}` rather than permission to retry;
+confirmed `:exists` and `:mismatch` remain distinct. SQLite authority reads use
+`Store.confirm_durable/1` without a checkpoint; ordered backends still sync so a
+visible row from an earlier failed barrier cannot falsely acknowledge success.
+`Store.sync/1` remains the explicit checkpoint barrier for a graceful-drain seal.
 Store diagnostics hash keys for idempotency tables so caller replay secrets do not enter logs.
 
 The JSONL backend fails initialization if journal discovery or any selected table
@@ -475,7 +518,8 @@ to reload it; a startup failure requires starting the Store again after repair.
 Only a confirmed missing table reads as empty. Failed loads never append to or
 truncate the journal. Encoding and append failures return errors before memory
 or the read cache is updated, rather than crashing the Store. JSONL appends are
-still unsynced: use the existing `Store.sync/1` durability barrier when required.
+still unsynced: use `durable: true` for acknowledgement-sensitive writes, or
+`Store.sync/1` for an explicit seal over preceding writes.
 Diagnostics omit journal contents, raw paths and exception messages.
 
 Use the generic table API only inside wrapper modules, backend internals, or explicitly app-local legacy tables. Shared-domain runtime code should go through typed wrappers so table ownership stays localized. Wrappers are plain modules over the generic API; `LemonCore.Store` has no domain-specific chat-state, policy, or progress functions.
@@ -527,14 +571,13 @@ keys for portable append-only files.
 
 `LemonCore.Durable` owns stable-storage barriers. JSONL `sync/1` flushes every
 table file and then its directory; acknowledgement requires every actual
-barrier to succeed. On macOS, Python 3 is required for the packaged
-`priv/durable_sync.py` helper, which opens a no-follow descriptor, performs
-`fsync` and Darwin `F_FULLFSYNC` for both files and directories. Paths are
-literal argv, never shell commands; raw helper errors/paths are not returned.
-Missing prerequisites, wrong descriptor kinds or refused/unsupported filesystem
-barriers fail closed. There is no ordinary macOS `sync(8)` or weaker fallback.
-GNU coreutils synchronous per-directory syncing remains the supported
-non-Darwin Unix path.
+barrier to succeed. Directories use OTP 29 raw directory descriptors and native
+`file:sync`, without Python or GNU coreutils. Darwin directory sync provides
+`F_BARRIERFSYNC`, not device-wide `F_FULLFSYNC`. File sync retains the packaged
+Python 3 helper and `F_FULLFSYNC` on Darwin: Store journals, native-process
+cleanup ledgers, paired-eval cleanup manifests and coding-session replacement
+snapshots retain their stable-content guarantees. Paths are literal argv,
+never shell commands; failed barriers remain errors.
 
 ## Event Bus
 

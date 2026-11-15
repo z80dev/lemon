@@ -6,13 +6,16 @@ defmodule LemonAutomation.CronManager do
 
   - Loading jobs from persistent storage on startup
   - Computing next run times for all jobs
-  - Ticking every minute to check for due jobs
+  - Arming one timer for the earliest enabled job
   - Executing due jobs via LemonRouter
   - Tracking run history
 
   ## Tick Behavior
 
-  The manager ticks every minute (configurable) and:
+  The earliest next-run timer drives dispatch. A five-minute safety sweep
+  recovers orphaned runs and wall-clock changes. Job mutations re-arm the timer.
+  Tests may inject a module implementing `now_ms/0` via the `:clock` start option.
+  Each dispatch:
 
   1. Computes which jobs are due
   2. Applies jitter if configured
@@ -342,7 +345,8 @@ defmodule LemonAutomation.CronManager do
     # Load existing jobs from storage
     jobs = CronStore.list_jobs()
 
-    now = LemonCore.Clock.now_ms()
+    clock = Keyword.get(opts, :clock, LemonCore.Clock)
+    now = clock.now_ms()
     config = Config.load().automation
 
     {jobs, catch_up_slots, pending} =
@@ -356,6 +360,8 @@ defmodule LemonAutomation.CronManager do
       tasks: %{},
       task_refs: %{},
       retry_timer: nil,
+      schedule_timer: nil,
+      clock: clock,
       restoration_pending: pending,
       restoration_backoff_ms: 250,
       restoration_timer: nil,
@@ -383,6 +389,7 @@ defmodule LemonAutomation.CronManager do
       |> dispatch_due_retries()
       |> schedule_retry_tick()
       |> schedule_restoration()
+      |> schedule_next_run()
 
     # Schedule first tick
     schedule_tick()
@@ -408,7 +415,7 @@ defmodule LemonAutomation.CronManager do
     case validate_params(params) do
       {:ok, params} ->
         job = params |> CronJob.new() |> capture_default_model()
-        next_run = CronSchedule.next_run_ms(job.schedule, job.timezone)
+        next_run = next_run(job, state)
         job = CronJob.set_next_run(job, next_run)
 
         CronStore.put_job(job)
@@ -425,7 +432,7 @@ defmodule LemonAutomation.CronManager do
         # lifecycle logs identifier-only; operators can inspect authorized
         # structured job state when they need the display name.
         Logger.info("[CronManager] Added job: #{job.id}")
-        {:reply, {:ok, job}, put_in(state.jobs[job.id], job)}
+        {:reply, {:ok, job}, schedule_next_run(put_in(state.jobs[job.id], job))}
 
       {:error, _} = error ->
         {:reply, error, state}
@@ -447,7 +454,7 @@ defmodule LemonAutomation.CronManager do
         case validate_params(params) do
           {:ok, params} ->
             job = params |> CronJob.new() |> capture_default_model()
-            next_run = CronSchedule.next_run_ms(job.schedule, job.timezone)
+            next_run = next_run(job, state)
             job = CronJob.set_next_run(job, next_run)
 
             case CronStore.claim_job(job) do
@@ -460,7 +467,7 @@ defmodule LemonAutomation.CronManager do
 
                 Events.emit_job_created(job)
                 Logger.info("[CronManager] Added claimed job: #{job.id}")
-                {:reply, {:ok, job}, put_in(state.jobs[job.id], job)}
+                {:reply, {:ok, job}, schedule_next_run(put_in(state.jobs[job.id], job))}
 
               {:error, :exists} ->
                 {:reply, {:error, :already_exists}, state}
@@ -502,7 +509,7 @@ defmodule LemonAutomation.CronManager do
                 # Both schedule and timezone determine the next wall-clock slot.
                 updated =
                   if has_any_key?(params, [:schedule, "schedule", :timezone, "timezone"]) do
-                    next_run = CronSchedule.next_run_ms(updated.schedule, updated.timezone)
+                    next_run = next_run(updated, state)
                     CronJob.set_next_run(updated, next_run)
                   else
                     updated
@@ -520,7 +527,7 @@ defmodule LemonAutomation.CronManager do
                 Events.emit_job_updated(updated)
 
                 Logger.info("[CronManager] Updated job: #{job_id}")
-                {:reply, {:ok, updated}, put_in(state.jobs[job_id], updated)}
+                {:reply, {:ok, updated}, schedule_next_run(put_in(state.jobs[job_id], updated))}
 
               {:error, reason} ->
                 {:reply, {:error, {:invalid_schedule, reason}}, state}
@@ -813,7 +820,8 @@ defmodule LemonAutomation.CronManager do
             restoration_backoff_ms: 250
         }
 
-        {:noreply, state |> dispatch_due_retries() |> schedule_retry_tick()}
+        {:noreply,
+         state |> dispatch_due_retries() |> schedule_retry_tick() |> schedule_next_run()}
 
       {:error, _} ->
         {:noreply, schedule_restoration(state)}
@@ -821,6 +829,12 @@ defmodule LemonAutomation.CronManager do
   end
 
   @impl true
+  def handle_info({:scheduled_tick, token}, %{schedule_timer: {_timer, token}} = state) do
+    {:noreply, do_tick(%{state | schedule_timer: nil})}
+  end
+
+  def handle_info({:scheduled_tick, _stale_token}, state), do: {:noreply, state}
+
   def handle_info(:tick, state) do
     state = do_tick(state)
     schedule_tick()
@@ -947,8 +961,47 @@ defmodule LemonAutomation.CronManager do
   # Private Functions
   # ============================================================================
 
+  # A five-minute safety sweep recovers orphaned runs and wall-clock jumps;
+  # normal dispatch is driven by the earliest persisted next-run instant.
   defp schedule_tick do
-    Process.send_after(self(), :tick, @tick_interval_ms)
+    Process.send_after(self(), :tick, 300_000)
+  end
+
+  defp schedule_next_run(state) do
+    if timer = Map.get(state, :schedule_timer), do: Process.cancel_timer(elem(timer, 0))
+    now = clock_now(state)
+
+    next =
+      if dispatch_held?(state) do
+        nil
+      else
+        state.jobs
+        |> Map.values()
+        |> Enum.filter(&(&1.enabled and is_integer(&1.next_run_at_ms)))
+        |> Enum.map(& &1.next_run_at_ms)
+        |> Enum.min(fn -> nil end)
+      end
+
+    timer =
+      if next do
+        token = make_ref()
+        # Bound rechecks after a failed claim; never busy-loop on an overdue slot.
+        delay = min(max(next - now, 100), 300_000)
+        {Process.send_after(self(), {:scheduled_tick, token}, delay), token}
+      end
+
+    Map.put(state, :schedule_timer, timer)
+  end
+
+  defp clock_now(state) do
+    clock = Map.get(state, :clock, LemonCore.Clock)
+    clock.now_ms()
+  end
+
+  defp next_run(job, state) do
+    CronSchedule.next_run_ms(job.schedule, job.timezone,
+      from: DateTime.from_unix!(clock_now(state), :millisecond)
+    )
   end
 
   defp abort_router_run(%CronRun{run_id: router_run_id})
@@ -1150,7 +1203,7 @@ defmodule LemonAutomation.CronManager do
           resumed: true,
           skipped_job_count: skipped_jobs,
           skipped_retry_count: skipped_retries
-        }}, schedule_retry_tick(state)}
+        }}, state |> schedule_retry_tick() |> schedule_next_run()}
     else
       {:error, _} ->
         {:reply, {:error, :store_unavailable}, state}
@@ -1211,7 +1264,7 @@ defmodule LemonAutomation.CronManager do
   end
 
   defp do_tick(state) do
-    now = LemonCore.Clock.now_ms()
+    now = clock_now(state)
     Events.emit_tick(now)
 
     all_jobs = Map.values(state.jobs)
@@ -1233,13 +1286,16 @@ defmodule LemonAutomation.CronManager do
         state
       else
         all_jobs
-        |> Enum.filter(&CronJob.due?/1)
+        |> Enum.filter(
+          &(&1.enabled and is_integer(&1.next_run_at_ms) and &1.next_run_at_ms <= now)
+        )
         |> Enum.reduce(state, fn job, acc -> run_scheduled_job(job, acc, now) end)
       end
 
     state
     |> dispatch_due_retries()
     |> schedule_retry_tick()
+    |> schedule_next_run()
   end
 
   defp unknown_run_locked?(job) do
@@ -1603,7 +1659,7 @@ defmodule LemonAutomation.CronManager do
       reason: :active_run_exists
     })
 
-    next_run = CronSchedule.next_run_ms(job.schedule, job.timezone)
+    next_run = next_run(job, state)
     updated = CronJob.set_next_run(job, next_run)
     CronStore.put_job(updated)
     put_in(state.jobs[job.id], updated)
@@ -1618,7 +1674,7 @@ defmodule LemonAutomation.CronManager do
   end
 
   defp mark_claimed_scheduled_job(%CronJob{} = job, state, now) do
-    next_run = CronSchedule.next_run_ms(job.schedule, job.timezone)
+    next_run = next_run(job, state)
     updated = job |> CronJob.mark_run(now) |> CronJob.set_next_run(next_run)
     CronStore.put_job(updated)
     put_in(state.jobs[job.id], updated)
@@ -1652,7 +1708,7 @@ defmodule LemonAutomation.CronManager do
     })
 
     Events.emit_job_deleted(job)
-    %{state | jobs: Map.delete(state.jobs, job.id)}
+    schedule_next_run(%{state | jobs: Map.delete(state.jobs, job.id)})
   end
 
   defp reload_job_state(%CronJob{} = job, state) do

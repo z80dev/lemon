@@ -405,7 +405,22 @@ defmodule CodingAgent.Session.CompactionManager do
           {:ok, map()} | {:error, term()}
   def auto_compaction_task_result(session_manager, model, opts) do
     try do
-      CodingAgent.Compaction.compact(session_manager, model, opts)
+      case CodingAgent.Compaction.compact(session_manager, model, opts) do
+        {:error, :compaction_recovery_band} ->
+          # One escalation through overflow recovery, never another pass next turn.
+          recovery_opts =
+            opts
+            |> Keyword.put(:keep_recent_tokens, 1)
+            |> Keyword.delete(:keep_recent_messages)
+
+          case overflow_recovery_compaction_task_result(session_manager, model, recovery_opts) do
+            {:error, :cannot_compact} -> {:error, :compaction_recovery_band}
+            result -> result
+          end
+
+        result ->
+          result
+      end
     rescue
       exception ->
         {:error, {:exception, exception}}

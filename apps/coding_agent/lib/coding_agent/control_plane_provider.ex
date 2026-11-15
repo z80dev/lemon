@@ -351,11 +351,9 @@ defmodule CodingAgent.ControlPlaneProvider do
       session_key,
       cwd,
       &CodingAgent.Session.rewind(&1, entry_id, opts),
-      fn path ->
-        with {:ok, session} <- load_native_session(path),
-             {:ok, result, _session} <-
-               Rewind.run(%{session | file_path: path}, entry_id, opts) do
-          {:ok, result}
+      fn session ->
+        with {:ok, result, session} <- Rewind.run(session, entry_id, opts) do
+          {:ok, result, session}
         end
       end
     )
@@ -376,13 +374,11 @@ defmodule CodingAgent.ControlPlaneProvider do
       session_key,
       cwd,
       &CodingAgent.Session.navigate_entry(&1, entry_id, opts),
-      fn path ->
-        with {:ok, session} <- load_native_session(path),
-             {:ok, target} <- Rewind.navigation_target(session, entry_id) do
-          session =
-            CodingAgent.SessionManager.set_leaf_id(%{session | file_path: path}, target.leaf)
+      fn session ->
+        with {:ok, target} <- Rewind.navigation_target(session, entry_id) do
+          session = CodingAgent.SessionManager.set_leaf_id(session, target.leaf)
 
-          {:ok, Rewind.navigation_receipt(session, entry_id, target, false)}
+          {:ok, Rewind.navigation_receipt(session, entry_id, target, false), session}
         end
       end
     )
@@ -394,16 +390,18 @@ defmodule CodingAgent.ControlPlaneProvider do
       session_key,
       cwd,
       &CodingAgent.Session.label_entry_receipt(&1, entry_id, label),
-      fn path ->
-        with {:ok, session} <- load_native_session(path),
-             %{} <- CodingAgent.SessionManager.get_entry(session, entry_id) || :missing do
-          session =
-            CodingAgent.SessionManager.append_label(%{session | file_path: path}, entry_id, label)
+      fn session ->
+        case CodingAgent.SessionManager.get_entry(session, entry_id) || :missing do
+          %{} ->
+            session = CodingAgent.SessionManager.append_label(session, entry_id, label)
 
-          {:ok, Rewind.label_receipt(session, entry_id)}
-        else
-          :missing -> {:error, :entry_not_found}
-          {:error, _} = error -> error
+            {:ok, Rewind.label_receipt(session, entry_id), session}
+
+          :missing ->
+            {:error, :entry_not_found}
+
+          {:error, _} = error ->
+            error
         end
       end
     )
@@ -419,7 +417,7 @@ defmodule CodingAgent.ControlPlaneProvider do
           decision =
             Ownership.with_file(path, fn ->
               case Ownership.owner(path) || live_session(session_key) do
-                nil -> {:stopped, stopped_mutation.(path)}
+                nil -> {:stopped, mutate_stopped_journal(path, stopped_mutation)}
                 pid -> {:live, pid}
               end
             end)
@@ -432,6 +430,25 @@ defmodule CodingAgent.ControlPlaneProvider do
             {:live, pid} -> live_mutation.(pid)
           end
         end
+    end
+  end
+
+  defp mutate_stopped_journal(path, mutation) do
+    with {:ok, session} <- load_native_session(path) do
+      session = CodingAgent.SessionManager.persist(session, path)
+
+      try do
+        with {:ok, result, updated} <- mutation.(session),
+             :ok <-
+               if(updated == session,
+                 do: :ok,
+                 else: CodingAgent.SessionManager.checkpoint(updated)
+               ) do
+          {:ok, result}
+        end
+      after
+        CodingAgent.SessionManager.close(session)
+      end
     end
   end
 
@@ -573,15 +590,9 @@ defmodule CodingAgent.ControlPlaneProvider do
                 session_key,
                 cwd,
                 &CodingAgent.Session.plan(&1, action, opts),
-                fn path ->
-                  with {:ok, session} <- load_native_session(path),
-                       {:ok, plan, _} <-
-                         Planning.transition(
-                           %{session | file_path: path},
-                           action,
-                           opts
-                         ) do
-                    {:ok, plan}
+                fn session ->
+                  with {:ok, plan, session} <- Planning.transition(session, action, opts) do
+                    {:ok, plan, session}
                   end
                 end
               )
@@ -613,6 +624,8 @@ defmodule CodingAgent.ControlPlaneProvider do
     with {:ok, _plan, session} <- Planning.transition(session, action, []) do
       path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
       session = CodingAgent.SessionManager.persist(session, path)
+      :ok = CodingAgent.SessionManager.close(session)
+      session = %{session | append_device: nil}
 
       with :ok <-
              LemonCore.ChatStateStore.put(session_key, %LemonCore.ChatState{

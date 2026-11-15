@@ -20,8 +20,7 @@ defmodule LemonRouter.RunStarter do
         queue_mode: submission.queue_mode,
         execution_request: submission.execution_request,
         coordinator_pid: coordinator_pid,
-        conversation_key: conversation_key,
-        manage_session_registry?: false
+        conversation_key: conversation_key
       })
 
     spec = {submission.run_process_module, run_opts}

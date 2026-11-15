@@ -128,11 +128,23 @@ defmodule LemonControlPlane.Methods.SystemLifecycleTest do
     }
 
     for flags <- [
-          ["--name", "lemon@host.example", "--cookie", "private-cookie"],
-          ["--sname", "lemon", "--cookie", "private-cookie"],
+          ["--name", "lemon@host.example"],
+          ["--sname", "lemon"],
           ["--no-distribution"]
         ] do
-      assert Driver.restart_command(env, flags).args == ["restart" | flags]
+      for mode <- ["source", "release"] do
+        command =
+          Driver.restart_command(
+            Map.put(env, "LEMON_CLI_LAUNCHER", mode),
+            flags,
+            "private-cookie"
+          )
+
+        assert command.args == ["restart" | if(mode == "source", do: flags, else: [])]
+        refute Enum.any?(command.args, &String.contains?(&1, "private-cookie"))
+        refute "--cookie" in command.args
+        assert Map.new(command.env)["RELEASE_COOKIE"] == "private-cookie"
+      end
     end
 
     assert Driver.restart_command(Map.put(env, "LEMON_CLI_LAUNCHER", "release"), [

@@ -5,6 +5,7 @@ defmodule LemonAgent.Application do
   This application starts the core BEAM infrastructure for agent management:
 
   - `LemonAgent.AgentRegistry` - Registry for agent process lookup
+  - `LemonAgent.AbortSignal.Registry` - Process-owned cancellation subscriptions
   - `LemonAgent.LoopTaskSupervisor` - Task.Supervisor for agent loop tasks
   - `LemonAgent.ToolTaskSupervisor` - Task.Supervisor for tool execution tasks
   - `LemonAgent.ModelRuntime.ProviderPoolRotator` - Round-robin state for provider credential pools
@@ -16,6 +17,7 @@ defmodule LemonAgent.Application do
   ```
   LemonAgent.Supervisor (:one_for_one)
   ├── LemonAgent.AgentRegistry (Registry)
+  ├── LemonAgent.AbortSignal.Registry (duplicate Registry)
   ├── LemonAgent.LoopTaskSupervisor (Task.Supervisor)
   ├── LemonAgent.ToolTaskSupervisor (Task.Supervisor)
   ├── LemonAgent.ModelRuntime.ProviderPoolRotator (GenServer)
@@ -29,8 +31,8 @@ defmodule LemonAgent.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      # Owns the abort-signal ETS table so it doesn't get created by short-lived processes.
-      LemonAgent.AbortSignal.TableOwner,
+      # Signal levels live in atomics; Registry owns only live subscriptions.
+      {Registry, keys: :duplicate, name: LemonAgent.AbortSignal.Registry},
       # Registry for agent process lookup and discovery
       {Registry, keys: :unique, name: LemonAgent.AgentRegistry},
       # Task.Supervisor for agent loop tasks
@@ -44,6 +46,10 @@ defmodule LemonAgent.Application do
       # Owns the per-session fallback pin ETS table
       LemonAgent.ModelRuntime.SessionPins
     ]
+
+    children =
+      children ++
+        LemonAgent.GenAISpans.children(Application.get_env(:lemon_agent, :gen_ai_spans, []))
 
     opts = [strategy: :one_for_one, name: LemonAgent.Supervisor]
     Supervisor.start_link(children, opts)

@@ -184,7 +184,8 @@ defmodule LemonControlPlane.Methods.NodeProcessNativeTest do
     # A strict running receipt proves the native owner admitted the intent before
     # the controller loses its response. Get itself cannot admit or restart it.
     assert_running(ctx, id)
-    send(NodeRegistry, {:invoke_timeout, invocation})
+    [{invocation_owner, _}] = Elixir.Registry.lookup(NodeRegistry.Invocations, invocation)
+    send(invocation_owner, :timeout)
 
     assert {:error, {:unavailable, _, %{"preDispatch" => false, "retrySafe" => false}}} =
              Task.await(task)

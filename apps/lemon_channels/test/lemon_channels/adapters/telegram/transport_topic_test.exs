@@ -106,6 +106,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
   setup do
+    unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
+      start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor})
+    end
+
     stop_transport()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
@@ -439,7 +443,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   end
 
   defp start_transport(overrides) when is_map(overrides) do
-    token = "token-" <> Integer.to_string(System.unique_integer([:positive]))
+    token = "topic-test-#{System.pid()}-#{System.unique_integer([:positive])}"
 
     config =
       %{

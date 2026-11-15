@@ -130,19 +130,7 @@ defmodule LemonGateway.Health do
   end
 
   defp scheduler_check do
-    case Process.whereis(LemonGateway.Scheduler) do
-      pid when is_pid(pid) ->
-        case :sys.get_state(LemonGateway.Scheduler) do
-          %{in_flight: in_flight, waitq: waitq, max: max} ->
-            {:ok, %{in_flight: map_size(in_flight), waitq: :queue.len(waitq), max: max}}
-
-          state ->
-            {:error, {:unexpected_state, state}}
-        end
-
-      _ ->
-        {:error, :not_running}
-    end
+    LemonGateway.Scheduler.stats()
   rescue
     error ->
       {:error, error}

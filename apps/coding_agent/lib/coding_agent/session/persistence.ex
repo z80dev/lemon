@@ -146,7 +146,12 @@ defmodule CodingAgent.Session.Persistence do
       state.session_file ||
         SessionManager.session_file_path(state.cwd, state.session_manager.header.id)
 
-    case SessionManager.save_to_file(path, state.session_manager) do
+    result =
+      if is_nil(state.session_manager.append_device),
+        do: SessionManager.save_to_file(path, state.session_manager),
+        else: SessionManager.checkpoint(state.session_manager)
+
+    case result do
       :ok ->
         {:ok, %{state | session_file: path}}
 
@@ -296,18 +301,18 @@ defmodule CodingAgent.Session.Persistence do
 
   defp synthetic_results_for(message, tool_call_ids) do
     Enum.map(tool_call_ids, fn tool_call_id ->
+      result =
+        LemonAgent.InterruptedToolResult.build(:interrupted,
+          details: %{restored_session_repair: true}
+        )
+
       %LemonAi.Types.ToolResultMessage{
         role: :tool_result,
         tool_call_id: tool_call_id,
         tool_name: tool_name_for_call(message, tool_call_id),
-        content: [
-          %LemonAi.Types.TextContent{
-            type: :text,
-            text: "Tool call was interrupted before Lemon recorded a result."
-          }
-        ],
-        details: %{"restored_session_repair" => true, "reason" => "interrupted_tool_call"},
-        trust: :trusted,
+        content: result.content,
+        details: result.details,
+        trust: result.trust,
         is_error: true,
         timestamp: message_timestamp(message)
       }

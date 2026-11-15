@@ -7,7 +7,7 @@ defmodule LemonRouter.RunProcess do
   process submits work into the configured runtime.
 
   Each RunProcess:
-  - Owns a run_id
+  - Owns a run_id and its unique SessionRegistry key, released on process death
   - Manages abort state
   - Subscribes to Bus for run events
   - Maintains metadata snapshot
@@ -63,9 +63,7 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp via_tuple(run_id, session_key) do
-    # The registry value is a lifecycle-owned, non-blocking session index.
-    # Coordinators can recover after SessionRegistry loss without synchronously
-    # interrogating every unrelated RunProcess.
+    # Lifecycle-owned run index; session ownership is registered in init.
     {:via, Registry, {LemonRouter.RunRegistry, run_id, %{session_key: session_key}}}
   end
 
@@ -144,7 +142,13 @@ defmodule LemonRouter.RunProcess do
              init_session_key,
              opts[:conversation_key],
              run_id
-           ) do
+           ),
+         {:ok, _owner} <-
+           Registry.register(LemonRouter.SessionRegistry, execution_request.session_key, %{
+             run_id: run_id,
+             conversation_key:
+               opts[:conversation_key] || {:session, execution_request.session_key}
+           }) do
       session_key = execution_request.session_key
       queue_mode = opts[:queue_mode] || :collect
 
@@ -229,6 +233,7 @@ defmodule LemonRouter.RunProcess do
           {:stop, :agent_session_context_unavailable}
       end
     else
+      {:error, {:already_registered, _pid}} -> {:stop, :session_busy}
       _ -> {:stop, {:invalid_execution_request, run_id}}
     end
   end

@@ -263,7 +263,6 @@ defmodule CodingAgent.Session.ManualOperation do
   defp finish(state, %State{} = op) do
     CompactionManager.maybe_cancel_timer(op.timeout_ref)
     CompactionManager.maybe_demonitor(op.monitor_ref)
-    LemonAgent.AbortSignal.clear(op.signal)
     %{state | manual_operation: nil}
   end
 

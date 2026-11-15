@@ -611,9 +611,18 @@ defmodule CodingAgent.Session.NavigateLabelTest do
   # Replies "answer to: <last user text>" and reports the texts it was sent.
   defp echo_stream(parent) do
     fn _model, context, _opts ->
-      texts = Enum.map(context.messages, &message_text/1)
+      texts = Enum.map(context.messages, &(strip_turn_context(&1) |> message_text()))
       send(parent, {:provider_texts, texts})
       {:ok, events("answer to: #{List.last(texts)}")}
+    end
+  end
+
+  # This echo provider models an answer to the user's text, not an echo of the
+  # runtime's authenticated environment attachment.
+  defp strip_turn_context(message) do
+    case Regex.run(~r/\[lemon:recalled-context id=([0-9a-f]{32})\]/, message_text(message)) do
+      [_, marker] -> Session.strip_recalled_context(message, marker)
+      nil -> message
     end
   end
 

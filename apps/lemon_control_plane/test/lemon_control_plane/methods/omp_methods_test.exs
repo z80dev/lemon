@@ -4,7 +4,7 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.EventBridge
   alias LemonControlPlane.Methods.Registry
-  alias LemonControlPlane.Presence
+  alias LemonControlPlane.Connections
   alias LemonControlPlane.Protocol.{Frames, Schemas}
 
   @fake_omp Path.expand("../../support/fake_omp", __DIR__)
@@ -549,7 +549,7 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
   describe "omp.session events" do
     setup do
       bridge = Process.whereis(EventBridge) || start_supervised!(EventBridge)
-      Process.whereis(Presence) || start_supervised!(Presence)
+      Process.whereis(Connections) || start_supervised!(Connections)
       conn_id = "omp-conn-#{System.unique_integer([:positive])}"
       node_conn_id = "omp-node-#{System.unique_integer([:positive])}"
       parent = self()
@@ -561,12 +561,12 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
           end
         end)
 
-      :ok = Presence.register(conn_id, %{role: :operator, client_id: "omp-test", pid: self()})
-      :ok = Presence.register(node_conn_id, %{role: :node, client_id: "node-1", pid: node_pid})
+      :ok = Connections.register(conn_id, %{role: :operator, client_id: "omp-test", pid: self()})
+      :ok = Connections.register(node_conn_id, %{role: :node, client_id: "node-1", pid: node_pid})
 
       on_exit(fn ->
-        Presence.unregister(conn_id)
-        Presence.unregister(node_conn_id)
+        Connections.unregister(conn_id)
+        Connections.unregister(node_conn_id)
       end)
 
       {:ok, bridge: bridge}

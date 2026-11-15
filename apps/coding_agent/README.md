@@ -58,6 +58,11 @@ an execution node, it starts `Executor.RemoteSessionRunner`, which asks
 the authenticated destination WebSocket. The destination starts the same native
 executor/session path and returns one JSON-safe terminal result; no vendor CLI
 or subprocess agent runner is involved.
+Each controller invocation owns its event sequencing, timeout and cancellation
+in a temporary process; streamed frames do not cross a singleton broker.
+The worker's stable socket owner schedules reconnects with timers, so stopping a
+node also stops it during backoff. Reconnect never resumes disconnected work.
+
 
 Optional context contributors can observe content-free lifecycle telemetry:
 `[:coding_agent, :session, :tool_dispatched]` carries `session_pid`,
@@ -130,7 +135,8 @@ CodingAgent.Supervisor (one_for_one)
 |--------|-------------|
 | `CodingAgent.ExecutionNode.CLI` | Implements `./bin/lemon node join` for a source checkout |
 | `CodingAgent.ExecutionNode.Worker` | Authenticates to a controller, maintains the connection with application-level health keepalives, and executes targeted, versioned `coding_agent.run` requests through `CodingAgent.Executor` |
-| `CodingAgent.ExecutionNode.Socket` | Reconnecting WebSocket client for control-plane handshakes, requests, responses, and node events |
+| `CodingAgent.ExecutionNode.Socket` | Stable WebSocket owner with timer-driven reconnects and interruptible backoff |
+| `CodingAgent.ExecutionNode.Socket.Transport` | One authenticated WebSocket connection, handshakes, requests, responses, and node events |
 | `CodingAgent.ExecutionNode.TokenStore` | Stores durable-node-ID-keyed session and recovery credentials under `~/.lemon/nodes/execution/` with a mode-0700 directory and mode-0600 files; migrates compatible legacy name-keyed records |
 | `CodingAgent.Executor.RemoteRequestCodec` | Restricts the cross-node boundary to JSON-safe execution request/result fields and destination-cwd intent |
 
@@ -519,6 +525,19 @@ Progress includes graph counts and node identities alongside normal child tool u
 
 Set `worktree: true` per child (or on the batch) to create a git branch `lemon/task-<task_id>` from the current checkout's HEAD. Worktrees live beneath the repository's common git directory in `lemon-task-worktrees/<task_id>` and retain the source cwd's relative subdirectory. `merge` (default `[runtime.task].worktree_merge`, itself defaulting to `"none"`) selects what happens after the child **succeeds**; it requires `worktree: true`:
 
+Isolated workspaces warm Git-ignored build directories using APFS clones or
+Linux reflinks when a filesystem probe succeeds. The default allowlist is
+`deps`, `_build`, `node_modules`, `target`, `.venv`; customize it with application
+environment `:coding_agent, :task_clone_directories` (top-level directory names).
+Only existing ignored directories are copied; ignored `.env` and configuration
+outside the allowlist remain private in every merge mode. Build artifacts stay
+out of the baseline and merge patch and are removed with the child checkout.
+Set `:coding_agent, :task_workspace_backend` to `:git_worktree` to force the cold
+fallback. Caller safety policy caps cloning at 100,000 entries, 64 GiB logical
+bytes and ten seconds. Unsupported filesystems or exhausted limits retain the
+ordinary Git behavior. Symlinks are preserved without following their targets.
+Warm-build performance still requires measurement.
+
 - `none`: uncommitted changes and local credentials/config are not copied, and the worktree and branch are retained, not merged or deleted. Review or cherry-pick the child's commits, then remove the worktree with `git worktree remove`.
 - `patch` (omp's default): the parent checkout's uncommitted work — tracked changes plus untracked, non-ignored files (at most 64 MiB; symlinks only when they stay inside the repository) — is replayed into the worktree and committed as a baseline. On success, the child's committed and uncommitted changes relative to that baseline are applied to the parent working tree with `git apply` (not staged or committed), serialized per repository; the worktree and branch are then removed. If the patch does not apply cleanly the parent is left untouched and the worktree, branch and `lemon-task-worktrees/<task_id>.patch` are kept (`status: "conflict"`).
 - `branch`: the child's changes are committed on its branch and the worktree is removed; the branch is kept for review. Unlike omp, Lemon never merges it into your branch.
@@ -760,6 +779,24 @@ unreadable session is an error, never a silently empty conversation. A torn
 last append is recovered; completed corrupt lines remain errors. Interrupted
 tool calls receive an explicit interrupted-result marker, not a fabricated
 successful result.
+Each live session owns one raw append descriptor, closed at stop. Turn-end
+`Session.save/1` appends a navigation/checkpoint marker and calls `file:datasync`;
+it never rewrites prior history. Latest markers override legacy header
+checkpoints, and header-only journals remain readable. Resume shares one parsed
+journal across execution-authority validation and session initialization.
+A cached parse is rechecked against its file revision after startup admission;
+a stopped mutation queued ahead of startup invalidates that snapshot. Stopped
+navigation, labels and planning open their own append descriptor under file
+admission, sync their changes, and close it before returning. Raw descriptors
+belong to their opening process: detached readers reload journal data rather
+than reusing a retired live session's handle.
+Path-backed detached appends use a short-lived raw handle and datasync before
+returning. Rewind confirmations bind the entire journal and tree, not only the
+leaf and entry count: later entries, checkpoint-only appends and same-count
+content edits invalidate the preview.
+Migration and torn-tail repair still use atomic snapshots: the temporary file
+is synced before rename, then the containing directory is synced. Ordinary
+turn barriers use datasync (not Darwin device-wide F_FULLFSYNC).
 Native identities remain unchanged in their headers; oversized or path-unsafe
 identities use deterministic portable journal filenames inside the session directory.
 Usage checkpoints preserve response costs and cache-write durations as well as
@@ -1040,9 +1077,9 @@ Use `todo` for a multi-step task when tracking is useful. Create or replace the 
 
 Repository instructions load from global home locations first, followed by ancestors from filesystem root to the working directory. Each directory includes its root, `.claude/`, and `.lemon/` `AGENTS.md`/`CLAUDE.md` files. Source headers state the applicable directory scope; deeper instructions override broader guidance. Duplicate symlink or hard-link aliases load once using their most specific location.
 
-At session start, Lemon captures the actual Git worktree root, branch/status, a bounded top-level layout, and descendant instruction-file paths. The index lists paths, not file contents: read applicable guides not already injected before editing their directories. Git-backed discovery respects ignored untracked files and excludes generated trees; non-Git discovery uses a bounded traversal without following symlinks. Truncated or unavailable discovery is explicitly labelled, so an omitted path is not proof that a guide does not exist.
+At first session start, Lemon journals cwd, platform, shell, Git worktree root, a bounded top-level layout, and descendant instruction-file paths. Resume reuses these exact environment bytes; a new session or changed cwd captures a fresh block. The index lists paths, not file contents: read applicable guides not already injected before editing their directories. Git-backed discovery respects ignored untracked files and excludes generated trees; non-Git discovery uses a bounded traversal without following symlinks. Truncated or unavailable discovery is explicitly labelled, so an omitted path is not proof that a guide does not exist.
 
-This environment snapshot is appended after the stable prompt and reused across turns to preserve provider caching. It does not update as files or branches change; use tools for fresh state when needed. Assistant-home identity and memory remain separate from repository context, missing/empty bootstrap files are omitted, and subagents still receive only the allowed `AGENTS.md`/`TOOLS.md` workspace files.
+Layout and instruction paths remain in the stable system block as session-start orientation, not live filesystem truth: changing them each turn would churn the cached prefix. Discover newly created directories and use tools for fresh layout when needed. The current UTC date and bounded branch/dirty-file Git snapshot instead accompany each opening `Session.prompt` message through `:user_message` context placement, outside the system prompt. Steering, redirects and queued follow-ups correct or continue that turn without recapturing its environment; optional contributors can still supply relevant context to those messages. Environment context is independent of automatic memory recall and is stripped from user-visible history, not from model replay. Assistant-home identity and memory remain separate from repository context, missing/empty bootstrap files are omitted, and subagents still receive only the allowed `AGENTS.md`/`TOOLS.md` workspace files.
 
 
 ## Usage Examples

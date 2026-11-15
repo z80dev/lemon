@@ -247,6 +247,7 @@ export default {
         items: [
           { text: "Platform microbenchmarks", link: "/benchmarks/platform-microbenchmarks" },
           { text: "Paired disclosure protocol", link: "/benchmarks/paired-disclosure" },
+          { text: "Latency budget", link: "/benchmarks/latency-sla" },
         ],
       },
     ],

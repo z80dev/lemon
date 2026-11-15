@@ -13,11 +13,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   alias LemonChannels.OutboundPayload
   alias LemonChannels.Telegram.Formatter
   @telegram_media_group_max_items 10
-  @default_telegram_outbound_send_delay_ms 1_000
-  @default_retry_after_ms 1_000
-  @default_transient_backoff_ms 500
-  @max_rate_limit_retries 5
-  @max_transient_retries 3
 
   @doc """
   Deliver an outbound payload to Telegram.
@@ -25,7 +20,10 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   @spec deliver(OutboundPayload.t()) :: {:ok, term()} | {:error, term()}
   def deliver(%OutboundPayload{} = payload) do
     with {:ok, config} <- account_config(payload.account_id) do
-      deliver_payload(payload, config)
+      case deliver_payload(payload, config) do
+        {:error, reason} -> {:error, LemonChannels.DeliveryError.classify(reason)}
+        result -> result
+      end
     end
   end
 
@@ -45,7 +43,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     if Code.ensure_loaded?(api_mod) do
       case token do
         token when is_binary(token) and token != "" ->
-          case with_retry(fn -> api_mod.send_message(token, chat_id, text, opts, nil) end) do
+          case api_mod.send_message(token, chat_id, text, opts, nil) do
             {:ok, result} ->
               Logger.debug("Telegram outbound text sent successfully: chat_id=#{chat_id}")
               {:ok, result}
@@ -86,9 +84,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     if Code.ensure_loaded?(api_mod) do
       case token do
         token when is_binary(token) and token != "" ->
-          case with_retry(fn ->
-                 api_mod.edit_message_text(token, chat_id, msg_id, formatted_text, md_opts)
-               end) do
+          case api_mod.edit_message_text(token, chat_id, msg_id, formatted_text, md_opts) do
             {:ok, result} ->
               Logger.debug(
                 "Telegram outbound edit successful: chat_id=#{chat_id} message_id=#{msg_id}"
@@ -256,9 +252,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
         chat_id = String.to_integer(payload.peer.id)
         opts = build_send_opts(payload, nil)
 
-        with_retry(fn ->
-          api_mod.send_voice(token, chat_id, {:binary, filename, mime, bytes}, opts)
-        end)
+        api_mod.send_voice(token, chat_id, {:binary, filename, mime, bytes}, opts)
     end
   end
 
@@ -428,7 +422,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   defp normalize_batch_file_entry(_), do: {:error, :invalid_file_payload}
 
   defp send_normalized_file(api_mod, token, chat_id, %{files: [file]}, opts) do
-    send_file_with_retry(
+    send_file(
       api_mod,
       token,
       chat_id,
@@ -455,16 +449,13 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   end
 
   defp send_image_batches(api_mod, token, chat_id, files, opts) do
-    send_delay_ms = telegram_outbound_send_delay_ms()
-
     files
     |> Enum.chunk_every(@telegram_media_group_max_items)
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {batch, idx}, {:ok, acc} ->
       batch_opts = maybe_remove_reply_to(opts, idx)
-      maybe_delay_between_sends(idx, send_delay_ms)
 
-      case send_media_group_with_retry(api_mod, token, chat_id, batch, batch_opts) do
+      case api_mod.send_media_group(token, chat_id, batch, batch_opts) do
         {:ok, result} ->
           {:cont, {:ok, [result | acc]}}
 
@@ -491,18 +482,14 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   end
 
   defp send_files_sequentially(api_mod, token, chat_id, files, opts) do
-    send_delay_ms = telegram_outbound_send_delay_ms()
-
     Enum.with_index(files)
     |> Enum.reduce_while({:ok, []}, fn {file, idx}, {:ok, acc} ->
-      maybe_delay_between_sends(idx, send_delay_ms)
-
       file_opts =
         opts
         |> maybe_put(:caption, file.caption)
         |> maybe_remove_reply_to(idx)
 
-      case send_file_with_retry(api_mod, token, chat_id, file.path, file_opts) do
+      case send_file(api_mod, token, chat_id, file.path, file_opts) do
         {:ok, result} -> {:cont, {:ok, [result | acc]}}
         {:error, reason} -> {:halt, {:error, batch_failure(reason, acc)}}
       end
@@ -516,106 +503,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   defp batch_failure(reason, []), do: reason
   defp batch_failure({:outcome_unknown, _} = reason, _acc), do: reason
   defp batch_failure(reason, _acc), do: {:outcome_unknown, reason}
-
-  defp send_media_group_with_retry(api_mod, token, chat_id, batch, opts) do
-    with_retry(fn -> api_mod.send_media_group(token, chat_id, batch, opts) end)
-  end
-
-  defp send_file_with_retry(api_mod, token, chat_id, path, opts) do
-    with_retry(fn -> send_file(api_mod, token, chat_id, path, opts) end)
-  end
-
-  defp with_retry(fun) when is_function(fun, 0), do: with_retry(fun, 0, 0)
-
-  defp with_retry(fun, rate_limit_attempts, transient_attempts) when is_function(fun, 0) do
-    case fun.() do
-      {:ok, _} = ok ->
-        ok
-
-      {:error, reason} ->
-        reason = LemonChannels.DeliveryError.classify(reason)
-
-        case retry_decision(reason, rate_limit_attempts, transient_attempts) do
-          {:rate_limit, wait_ms} ->
-            Logger.debug(
-              "Telegram outbound rate limit retry #{rate_limit_attempts + 1}: waiting #{wait_ms}ms"
-            )
-
-            maybe_sleep(wait_ms)
-            with_retry(fun, rate_limit_attempts + 1, transient_attempts)
-
-          {:transient, wait_ms} ->
-            Logger.debug(
-              "Telegram outbound transient retry #{transient_attempts + 1}: waiting #{wait_ms}ms"
-            )
-
-            maybe_sleep(wait_ms)
-            with_retry(fun, rate_limit_attempts, transient_attempts + 1)
-
-          :stop ->
-            {:error, reason}
-        end
-    end
-  end
-
-  defp retry_decision(reason, rate_limit_attempts, transient_attempts) do
-    cond do
-      rate_limited_reason?(reason) and rate_limit_attempts < @max_rate_limit_retries ->
-        {:rate_limit, retry_after_ms(reason)}
-
-      transient_reason?(reason) and transient_attempts < @max_transient_retries ->
-        {:transient, transient_backoff_ms(transient_attempts)}
-
-      true ->
-        :stop
-    end
-  end
-
-  defp rate_limited_reason?({:http_error, 429, _body}), do: true
-  defp rate_limited_reason?(_), do: false
-
-  defp retry_after_ms({:http_error, 429, body}) do
-    body =
-      case body do
-        b when is_binary(b) -> b
-        b when is_list(b) -> to_string(b)
-        _ -> ""
-      end
-
-    case Jason.decode(body) do
-      {:ok, %{"parameters" => %{"retry_after" => seconds}}} when is_number(seconds) ->
-        max(trunc(seconds * 1000), @default_retry_after_ms)
-
-      _ ->
-        @default_retry_after_ms
-    end
-  rescue
-    ArgumentError -> @default_retry_after_ms
-  end
-
-  defp retry_after_ms(_reason), do: @default_retry_after_ms
-
-  defp transient_reason?(:econnrefused), do: true
-  defp transient_reason?(:nxdomain), do: true
-  defp transient_reason?({:failed_connect, _reason}), do: true
-  defp transient_reason?(_), do: false
-
-  defp transient_backoff_ms(attempt) when is_integer(attempt) and attempt >= 0 do
-    LemonCore.Retry.exponential_backoff(@default_transient_backoff_ms, attempt)
-  end
-
-  defp maybe_sleep(ms) when is_integer(ms) and ms > 0 do
-    Process.sleep(ms)
-    :ok
-  end
-
-  defp maybe_sleep(_ms), do: :ok
-
-  defp maybe_delay_between_sends(idx, send_delay_ms) when idx > 0 do
-    maybe_sleep(send_delay_ms)
-  end
-
-  defp maybe_delay_between_sends(_idx, _send_delay_ms), do: :ok
 
   defp send_file(api_mod, token, chat_id, path, opts) do
     cond do
@@ -645,16 +532,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       %{path: path} when is_binary(path) -> image_file?(path)
       _ -> false
     end)
-  end
-
-  defp telegram_outbound_send_delay_ms do
-    cfg = telegram_files_config()
-    raw = cfg[:outbound_send_delay_ms] || cfg["outbound_send_delay_ms"]
-
-    case parse_non_neg_int(raw) do
-      n when is_integer(n) -> n
-      _ -> @default_telegram_outbound_send_delay_ms
-    end
   end
 
   defp image_file?(path) when is_binary(path) do
@@ -720,12 +597,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  defp telegram_files_config do
-    config = telegram_runtime_config()
-    files = config[:files] || config["files"] || %{}
-    if is_map(files), do: files, else: %{}
-  end
-
   defp telegram_runtime_config do
     LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
   end
@@ -739,17 +610,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
         Map.fetch(config, Atom.to_string(key))
     end
   end
-
-  defp parse_non_neg_int(value) when is_integer(value) and value >= 0, do: value
-
-  defp parse_non_neg_int(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, _} when parsed >= 0 -> parsed
-      _ -> nil
-    end
-  end
-
-  defp parse_non_neg_int(_), do: nil
 
   defp normalize_api_mod(mod) when is_atom(mod), do: mod
   defp normalize_api_mod(""), do: LemonChannels.Telegram.API

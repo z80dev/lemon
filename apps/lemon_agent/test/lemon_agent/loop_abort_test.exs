@@ -409,7 +409,6 @@ defmodule LemonAgent.LoopAbortTest do
 
       config = %{config | tool_task_supervisor: tool_supervisor}
       signal = AbortSignal.new()
-      on_exit(fn -> AbortSignal.clear(signal) end)
 
       stream = Loop.agent_loop([user_message("Run")], context, config, signal, nil)
       on_exit(fn -> EventStream.cancel(stream, :test_cleanup) end)
@@ -445,7 +444,6 @@ defmodule LemonAgent.LoopAbortTest do
 
         Process.demonitor(tool_ref, [:flush])
         Task.shutdown(events_task, :brutal_kill)
-        AbortSignal.clear(signal)
       end
     end
 
@@ -498,6 +496,16 @@ defmodule LemonAgent.LoopAbortTest do
       assert result.details.cancelled == true
       assert result.details.started == true
       assert result.details.outcome == :unknown
+      assert result.details.reason == :aborted
+
+      assert Enum.any?(
+               result.content,
+               &String.contains?(
+                 &1.text,
+                 "Do not assume it did not run or automatically repeat it."
+               )
+             )
+
       refute Enum.any?(result.content, &(&1.text == "Complete"))
       assert_receive {:DOWN, ^worker_monitor, :process, ^worker, _}, 1_000
     end

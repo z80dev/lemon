@@ -324,8 +324,7 @@ defmodule LemonRouter.RunOrchestrator do
   def handle_call(:presence_snapshot, _from, state) do
     result =
       with {:ok, admissions} <- Store.fetch_all(@run_admission_table),
-           {:ok, receipts} <- LemonRouter.RunReceiptStore.fetch_all(),
-           :ok <- Store.sync() do
+           {:ok, receipts} <- LemonRouter.RunReceiptStore.fetch_all() do
         {:ok, %{admissions: Map.new(admissions), receipts: Map.new(receipts)}}
       else
         _ -> {:error, :query_failed}
@@ -587,10 +586,8 @@ defmodule LemonRouter.RunOrchestrator do
       scope: %{profile_id: nil, agent_id: request.agent_id, session_key: request.session_key}
     }
 
-    with :ok <- Store.put_new(@run_admission_table, request.run_id, entry),
-         :ok <- Store.sync() do
-      {:error, reason}
-    else
+    case Store.put_new(Store, @run_admission_table, request.run_id, entry, durable: true) do
+      :ok -> {:error, reason}
       _ -> {:error, :outcome_unknown}
     end
   end
@@ -682,9 +679,10 @@ defmodule LemonRouter.RunOrchestrator do
       scope: admission_scope(params)
     }
 
-    case Store.put_new(@run_admission_table, params.run_id, entry) do
+    case Store.put_new(Store, @run_admission_table, params.run_id, entry, durable: true) do
       :ok -> {:ok, entry, :new}
       {:error, :exists} -> existing_admission(params.run_id, identity)
+      {:error, :outcome_unknown} -> {:error, :outcome_unknown}
       {:error, _reason} -> {:error, :admission_store_unavailable}
       _ -> {:error, :admission_store_unavailable}
     end
@@ -727,15 +725,15 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
-  defp continue_accepted_admission(params, identity, admission, state) do
-    case sync_accepted_admission(admission, state.run_admission_retention_ms) do
-      {:ok, _expires_at_ms} ->
+  defp continue_accepted_admission(params, identity, _admission, state) do
+    case Store.confirm_durable() do
+      :ok ->
         cache_until_ms = System.system_time(:millisecond) + state.run_admission_retention_ms
 
         {{:ok, params.run_id},
          cache_accepted_admission(state, params.run_id, identity, cache_until_ms)}
 
-      {:error, _reason} ->
+      _ ->
         {{:error, :outcome_unknown}, state}
     end
   end
@@ -817,59 +815,62 @@ defmodule LemonRouter.RunOrchestrator do
     # fence, including when dispatch's outcome cannot be established.
     submitting = compact_admission("submitting", identity, admission)
 
-    with :ok <- Store.compare_and_swap(@run_admission_table, params.run_id, admission, submitting),
-         :ok <- Store.sync() do
-      case do_submit(attach_request_identity(params, identity), state) do
-        {:ok, run_id} ->
-          case persist_accepted_admission(
-                 run_id,
-                 identity,
-                 submitting,
-                 state.run_admission_retention_ms
-               ) do
-            {:ok, expires_at_ms} ->
-              {{:ok, run_id}, cache_accepted_admission(state, run_id, identity, expires_at_ms)}
+    case Store.compare_and_swap(
+           Store,
+           @run_admission_table,
+           params.run_id,
+           admission,
+           submitting,
+           durable: true
+         ) do
+      :ok ->
+        case do_submit(attach_request_identity(params, identity), state) do
+          {:ok, run_id} ->
+            case persist_accepted_admission(
+                   run_id,
+                   identity,
+                   submitting,
+                   state.run_admission_retention_ms
+                 ) do
+              {:ok, expires_at_ms} ->
+                {{:ok, run_id}, cache_accepted_admission(state, run_id, identity, expires_at_ms)}
 
-            {:error, _reason} ->
-              {{:error, :outcome_unknown}, state}
-          end
+              {:error, _reason} ->
+                {{:error, :outcome_unknown}, state}
+            end
 
-        {:error, :outcome_unknown} ->
-          {{:error, :outcome_unknown}, state}
+          {:error, :outcome_unknown} ->
+            {{:error, :outcome_unknown}, state}
 
-        {:error, _reason} = error ->
-          # A synchronous start rejection may already have persisted terminal
-          # evidence. Never erase that evidence or reopen its fixed-ID fence.
-          # Otherwise, only an unchanged pre-enqueue claim can roll back.
-          case Store.compare_and_swap(
-                 @run_admission_table,
-                 params.run_id,
-                 submitting,
-                 admission
-               ) do
-            :ok ->
-              case Store.sync() do
-                :ok -> {error, state}
-                _ -> {{:error, :outcome_unknown}, state}
-              end
+          {:error, _reason} = error ->
+            # A synchronous start rejection may already have persisted terminal
+            # evidence. Never erase that evidence or reopen its fixed-ID fence.
+            # Otherwise, only an unchanged pre-enqueue claim can roll back.
+            case Store.compare_and_swap(
+                   Store,
+                   @run_admission_table,
+                   params.run_id,
+                   submitting,
+                   admission,
+                   durable: true
+                 ) do
+              :ok ->
+                {error, state}
 
-            {:error, :mismatch} ->
-              case terminal_run_status(params, identity) do
-                :matching_terminal ->
-                  case Store.sync() do
-                    :ok -> {error, state}
-                    _ -> {{:error, :outcome_unknown}, state}
-                  end
+              {:error, :mismatch} ->
+                case terminal_run_status(params, identity) do
+                  :matching_terminal ->
+                    {error, state}
 
-                _ ->
-                  {{:error, :outcome_unknown}, state}
-              end
+                  _ ->
+                    {{:error, :outcome_unknown}, state}
+                end
 
-            _failure ->
-              {{:error, :outcome_unknown}, state}
-          end
-      end
-    else
+              _failure ->
+                {{:error, :outcome_unknown}, state}
+            end
+        end
+
       _failure ->
         {{:error, :outcome_unknown}, state}
     end
@@ -951,18 +952,17 @@ defmodule LemonRouter.RunOrchestrator do
     expires_at_ms = System.system_time(:millisecond) + retention_ms
     replacement = compact_admission("accepted", identity, expected)
 
-    case Store.compare_and_swap(@run_admission_table, run_id, expected, replacement) do
+    case Store.compare_and_swap(Store, @run_admission_table, run_id, expected, replacement,
+           durable: true
+         ) do
       :ok ->
-        case Store.sync() do
-          :ok -> {:ok, expires_at_ms}
-          _ -> {:error, :admission_store_unavailable}
-        end
+        {:ok, expires_at_ms}
 
       {:error, :mismatch} when attempts_left > 0 ->
         case existing_admission(run_id, identity) do
           {:ok, current, :existing} ->
             if MapHelpers.get_key(current, :state) == "accepted",
-              do: sync_accepted_admission(current, retention_ms),
+              do: {:ok, admission_expires_at_ms(current, retention_ms)},
               else:
                 persist_accepted_admission(
                   run_id,
@@ -984,13 +984,6 @@ defmodule LemonRouter.RunOrchestrator do
     end
   catch
     :exit, _ -> {:error, :admission_store_unavailable}
-  end
-
-  defp sync_accepted_admission(admission, retention_ms) do
-    case Store.sync() do
-      :ok -> {:ok, admission_expires_at_ms(admission, retention_ms)}
-      _ -> {:error, :admission_store_unavailable}
-    end
   end
 
   defp cache_accepted_admission(state, run_id, identity, expires_at_ms) do
@@ -1179,7 +1172,10 @@ defmodule LemonRouter.RunOrchestrator do
             else: %{state: "aborted", reason_code: reason_code, expires_at_ms: expires_at_ms}
 
         if expired? do
-          _ = Store.compare_and_swap(@abort_tombstone_table, run_id, tombstone, normalized)
+          _ =
+            Store.compare_and_swap(Store, @abort_tombstone_table, run_id, tombstone, normalized,
+              durable: true
+            )
         end
 
         next_state =
@@ -1202,7 +1198,7 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp persist_abort_tombstone(run_id, tombstone) do
-    case Store.put(@abort_tombstone_table, run_id, tombstone) do
+    case Store.put(Store, @abort_tombstone_table, run_id, tombstone, durable: true) do
       :ok -> :ok
       {:error, _reason} = error -> error
       _unexpected -> {:error, :store_unavailable}
@@ -1239,7 +1235,9 @@ defmodule LemonRouter.RunOrchestrator do
         if entry == compacted do
           {:ok, entry}
         else
-          case Store.compare_and_swap(@run_admission_table, run_id, entry, compacted) do
+          case Store.compare_and_swap(Store, @run_admission_table, run_id, entry, compacted,
+                 durable: true
+               ) do
             :ok -> {:ok, compacted}
             {:error, :mismatch} -> {:error, :concurrent_change}
             {:error, reason} -> {:error, reason}
@@ -1263,7 +1261,10 @@ defmodule LemonRouter.RunOrchestrator do
                  admission_expires_at_ms(entry, @run_admission_retention_ms),
                  now_ms
                ) do
-              _ = Store.compare_and_delete(@run_admission_table, run_id, entry)
+              _ =
+                Store.compare_and_delete(Store, @run_admission_table, run_id, entry,
+                  durable: true
+                )
             end
 
           state when state in ["accepted", "submitting"] ->
@@ -1271,7 +1272,10 @@ defmodule LemonRouter.RunOrchestrator do
             compacted = compact_admission(state, identity, entry)
 
             if entry != compacted,
-              do: Store.compare_and_swap(@run_admission_table, run_id, entry, compacted)
+              do:
+                Store.compare_and_swap(Store, @run_admission_table, run_id, entry, compacted,
+                  durable: true
+                )
 
           _state ->
             :ok
@@ -1301,7 +1305,10 @@ defmodule LemonRouter.RunOrchestrator do
             else: %{state: "aborted", reason_code: reason_code, expires_at_ms: expires_at_ms}
 
         if tombstone != compacted do
-          _ = Store.compare_and_swap(@abort_tombstone_table, run_id, tombstone, compacted)
+          _ =
+            Store.compare_and_swap(Store, @abort_tombstone_table, run_id, tombstone, compacted,
+              durable: true
+            )
         end
 
       _invalid ->

@@ -7,17 +7,19 @@ defmodule CodingAgent.SystemPromptEnvironmentTest do
   @moduletag :tmp_dir
 
   describe "Environment.capture/2" do
-    test "reports branch and a bounded status snapshot with the date last", %{tmp_dir: tmp_dir} do
+    test "reports branch and a bounded status snapshot in user-turn context", %{tmp_dir: tmp_dir} do
       git = git!()
       {_, 0} = System.cmd(git, ["init", "-q", "-b", "feature-x", tmp_dir])
       File.write!(Path.join(tmp_dir, "untracked.ex"), "x")
 
-      block = Environment.capture(tmp_dir, date: ~D[2026-01-02])
+      section = Environment.turn_section(tmp_dir, date: ~D[2026-01-02])
+      assert section.placement == :user_message
+      block = section.body
 
       assert block =~ "Git repository: yes (branch: No commits yet on feature-x)"
-      assert block =~ "Git status at session start (a snapshot"
+      assert block =~ "Git status at turn start (snapshot)"
       assert block =~ "?? untracked.ex"
-      assert String.ends_with?(block, "Today's date: 2026-01-02")
+      assert block =~ "Today's date: 2026-01-02"
     end
 
     test "marks a confirmed plain directory as not a repository" do
@@ -187,7 +189,7 @@ defmodule CodingAgent.SystemPromptEnvironmentTest do
       assert block =~ Path.join(tmp_dir, "guide-200/AGENTS.md")
       refute block =~ Path.join(tmp_dir, "guide-201/AGENTS.md")
       assert length(:binary.matches(block, "/AGENTS.md\"")) == 200
-      assert String.ends_with?(block, "Today's date: 2026-01-02")
+      refute block =~ "Today's date:"
     end
   end
 

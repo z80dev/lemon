@@ -76,7 +76,7 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
 
     :ok = ModelPolicyAdapter.put_default_thinking_preference("default", @jid, nil, "high")
 
-    {:ok, pid} = Transport.start_link()
+    {:ok, pid} = start_transport()
     send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
 
     send(pid, {
@@ -96,7 +96,7 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
   end
 
   test "submits a native request from the configured binding" do
-    {:ok, pid} = Transport.start_link()
+    {:ok, pid} = start_transport()
     send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
 
     send(pid, {
@@ -119,7 +119,7 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
 
   test "definite submission failure sends no typing signal and permits redelivery" do
     :persistent_term.put({WhatsAppTestRouter, :submit_result}, {:error, :unavailable})
-    {:ok, pid} = Transport.start_link()
+    {:ok, pid} = start_transport()
     send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
     port_server = :sys.get_state(pid).port_server
     :erlang.trace(port_server, true, [:receive])
@@ -161,7 +161,7 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
 
   test "ambiguous submission keeps dedupe while reporting uncertainty" do
     :persistent_term.put({WhatsAppTestRouter, :submit_result}, {:error, :outcome_unknown})
-    {:ok, pid} = Transport.start_link()
+    {:ok, pid} = start_transport()
     send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
     port_server = :sys.get_state(pid).port_server
     :erlang.trace(port_server, true, [:receive])
@@ -192,7 +192,7 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
 
   test "failed /cancel preserves transport state and never claims cancellation" do
     :persistent_term.put({WhatsAppTestRouter, :abort_result}, {:error, :unavailable})
-    {:ok, pid} = Transport.start_link()
+    {:ok, pid} = start_transport()
     send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
     port_server = :sys.get_state(pid).port_server
     :erlang.trace(port_server, true, [:receive])
@@ -220,6 +220,14 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
     state = :sys.get_state(pid)
     assert state.pending_new == %{}
     assert state.buffers == %{}
+  end
+
+  defp start_transport do
+    {:ok, pid} = Transport.start_link()
+    bridge = :sys.get_state(pid).port_server
+    :sys.get_state(bridge)
+    :sys.get_state(pid)
+    {:ok, pid}
   end
 
   defp stop_transport do

@@ -8,19 +8,19 @@ defmodule LemonRouter.NativeFollowupAdmissionStore do
 
   def fetch(profile_id) do
     locked(profile_id, fn ->
-      with :ok <- Store.sync(), do: Store.fetch(@table, profile_id)
+      with :ok <- Store.confirm_durable(), do: Store.fetch(@table, profile_id)
     end)
   end
 
   def put(%{profile_id: profile_id} = config) do
     locked(profile_id, fn ->
-      with :ok <- Store.put(@table, profile_id, config),
-           :ok <- Store.sync() do
-        :ok
-      else
+      case Store.put(Store, @table, profile_id, config, durable: true) do
+        :ok ->
+          :ok
+
         error ->
           # A failed durable write must not leave newly published authority.
-          Store.delete(@table, profile_id)
+          Store.delete(Store, @table, profile_id, durable: true)
           error
       end
     end)

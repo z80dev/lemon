@@ -36,7 +36,7 @@ LemonAgent sits between application code and the low-level `LemonAi` library. Ap
 
 ```
 LemonAgent.Supervisor (:one_for_one)
-|-- LemonAgent.AbortSignal.TableOwner   (GenServer, owns the abort ETS table)
+|-- LemonAgent.AbortSignal.Registry     (Registry, :duplicate keys)
 |-- LemonAgent.AgentRegistry            (Registry, :unique keys)
 |-- LemonAgent.LoopTaskSupervisor       (Task.Supervisor for loop tasks)
 +-- LemonAgent.ToolTaskSupervisor       (Task.Supervisor for tool execution)
@@ -44,7 +44,7 @@ LemonAgent.Supervisor (:one_for_one)
 
 The supervisor uses a `:one_for_one` strategy. Each child is independent:
 
-- **AbortSignal.TableOwner** -- A long-lived GenServer that owns the `:agent_core_abort_signals` ETS table and acts as heir so the table survives process restarts.
+- **AbortSignal.Registry** -- A duplicate-key Registry for cancellation and redirect subscriptions. Each process subscribes idempotently per signal and unsubscribes when its wait finishes.
 - **AgentRegistry** -- An Elixir `Registry` with `:unique` keys. Agents register under `{session_id, role, index}` tuples.
 - **LoopTaskSupervisor** -- A `Task.Supervisor` for spawning agent loop tasks via `Task.Supervisor.async_nolink/2`.
 - **ToolTaskSupervisor** -- A `Task.Supervisor` for spawning concurrent tool execution tasks.
@@ -94,8 +94,7 @@ Ordinary text-only final answers are not classified as unexpected stops.
 |--------|------|---------|
 | `LemonAgent.EventStream` | `lib/agent_core/event_stream.ex` | GenServer-based async event producer/consumer. Bounded queue with backpressure (`push/2` returns `:ok` or `{:error, :overflow}`). Owner monitoring, task linking, configurable timeout. Drop strategies: `:error`, `:drop_oldest`, `:drop_newest`. |
 | `LemonAgent.Context` | `lib/agent_core/context.ex` | Context window management. `truncate/2` keeps retained messages chronological, enforces both bookends limits, and treats assistant tool-call/result transcripts atomically; also provides `estimate_size/2`, `estimate_tokens/1`, `make_transform/1`, `stats/2`, and `check_size/3`. |
-| `LemonAgent.AbortSignal` | `lib/agent_core/abort_signal.ex` | ETS-based cooperative abort signaling. `new/0`, `abort/1`, `aborted?/1`, `clear/1`. Used by the loop and tool execution to check for cancellation. |
-| LemonAgent.AbortSignal.TableOwner (internal) | `lib/agent_core/abort_signal/table_owner.ex` | GenServer that owns the abort signal ETS table and acts as heir for table survival. |
+| `LemonAgent.AbortSignal` | `lib/lemon_agent/abort_signal.ex` | Atomics-backed cooperative cancellation. `new/0`, `abort/1`, `aborted?/1`, `subscribe/1`, `unsubscribe/1`. Abort is monotonic; signals are garbage collected when no longer referenced, with no explicit cleanup. Subscribers receive `{:lemon_abort, signal, :abort \| :redirect}` notifications. |
 | `LemonAgent.Proxy` | `lib/agent_core/proxy.ex` | SSE proxy stream function for routing LLM calls through a server. Reconstructs partial `AssistantMessage` from bandwidth-optimized SSE events. Includes `ProxyStreamOptions` struct. |
 | `LemonAgent.ModelRuntime.ProviderConfiguration` | `lib/lemon_agent/model_runtime/provider_configuration.ex` | Shared comment-preserving provider fallback/pool mutation boundary. Preview results carry an opaque config revision; applies can reject concurrent edits, and destructive operations require exact confirmation without returning credential references. |
 
@@ -141,7 +140,7 @@ The `{:agent_end, new_messages}` event contains only messages created during the
 
 ### Cooperative Abort
 
-`LemonAgent.AbortSignal` uses an ETS table with `read_concurrency: true`. Tools check `AbortSignal.aborted?(signal)` in their execute functions. The loop checks before each LLM call, during retry backoff, while waiting for idle provider streams, and during tool execution. On cancellation, supervised tool workers get up to 250ms to observe the signal and finish resource cleanup before remaining workers are terminated. The abort signal stays set until this drain finishes. Cancellation also stops provider streams, cancels tool timers, and leaves queued steering and follow-up messages available for the next run. Tools owning external processes must additionally clean them up on worker death. Incomplete assistant tool calls are removed from canceled model responses so continuing never sends an unpaired tool transcript.
+`LemonAgent.AbortSignal` uses an atomics reference with separate abort and redirect slots. Abort is monotonic; references are garbage collected when no longer retained, without explicit cleanup. Blocking waiters subscribe idempotently per process through the duplicate-key `LemonAgent.AbortSignal.Registry`, receive `{:lemon_abort, signal, :abort \| :redirect}` notifications, and unsubscribe when done. Tools check `AbortSignal.aborted?(signal)` in their execute functions. The loop checks before each LLM call, during retry backoff, while waiting for idle provider streams, and during tool execution. On cancellation, supervised tool workers get up to 250ms to observe the signal and finish resource cleanup before remaining workers are terminated. The abort signal remains set throughout and after this drain. Cancellation also stops provider streams, cancels tool timers, and leaves queued steering and follow-up messages available for the next run. Tools owning external processes must additionally clean them up on worker death. Incomplete assistant tool calls are removed from canceled model responses so continuing never sends an unpaired tool transcript.
 
 Every started or queued tool call receives a paired terminal result before the canceled event. Cooperative tools retain their actual final output, trust and details. If a worker must be terminated without returning a final result, its last observed output snapshot is preserved and the result explicitly states that the mutation outcome is unknown (`details.cancelled: true`, `details.outcome: :unknown`). Calls that never started use `outcome: :not_started`. Cancellation is not evidence that a mutation was rolled back.
 
@@ -199,6 +198,16 @@ the default; they enqueue work rather than wait for its execution. WASM invokes
 retain their existing 120-second sidecar bound. Extension wrappers preserve the
 extension's declared `AgentTool.timeout_ms`, otherwise inheriting the default.
 
+`LemonAgent.InterruptedToolResult.build/2` supplies one interruption vocabulary:
+`details.outcome` is `:unknown` for every started call without a recorded final
+result (abort, timeout, crash or restored-session repair), and `:not_started`
+for calls discarded before dispatch, including steering skips.
+`details.reason` is `:aborted`, `:timeout`, `:crashed`, `:interrupted` or `:skipped`.
+Partial output is retained, not treated as proof of completion. Unknown results
+explicitly warn: “Do not assume it did not run or automatically repeat it.”
+Clients should display that result and use structured metadata rather than
+matching diagnostic strings; JSON transports encode these atoms as strings.
+
 
 ### Registry Pattern
 
@@ -223,8 +232,15 @@ The library emits telemetry events under the `[:lemon_agent, ...]` prefix:
 
 - `[:lemon_agent, :loop, :start]` / `[:lemon_agent, :loop, :end]` -- Agent loop lifecycle.
 - `[:lemon_agent, :tool_task, :start]` / `[:lemon_agent, :tool_task, :end]` / `[:lemon_agent, :tool_task, :error]` -- Individual tool execution.
+- `[:lemon_agent, :tool_call, :start | :stop | :exception]` -- Content-free tool outcomes with native monotonic timing.
 - `[:lemon_agent, :tool_result, :emit]` -- Tool result emission.
 - `[:lemon_agent, :context, :size]` / `[:lemon_agent, :context, :warning]` / `[:lemon_agent, :context, :truncated]` -- Context management.
+
+Optional `LemonAgent.GenAISpans` handlers export model and tool spans with GenAI
+attributes. Export is off by default, has no required OpenTelemetry dependency,
+and never captures prompt/response or tool content. Configure the host SDK or
+an implementation of `LemonAgent.GenAISpans.Exporter`; see the
+[telemetry reference](../../docs/telemetry.md#optional-genai-span-export).
 
 ## Configuration
 
@@ -234,6 +250,7 @@ Application environment keys under `:lemon_agent`:
 |-----|------|---------|-------------|
 | `:queue_call_timeout_ms` | `pos_integer() \| :infinity` | `1_800_000` (30 min) | GenServer call timeout for loop queue polling |
 | `:event_stream_cancel_grace_ms` | `pos_integer()` | `100` | Grace period before force-killing an EventStream's attached task |
+| `:gen_ai_spans` | keyword list | `[]` (disabled) | `enabled: true` attaches optional model/tool span handlers; `exporter` defaults to `LemonAgent.GenAISpans.OpenTelemetry`, `exporter_config` is passed unchanged to custom exporters. Restart the app to apply changes. |
 
 The `:cli_timeout_ms`, `:cli_session_lock_max_age_ms`, and `:cli_cancel_grace_ms` keys were removed with the vendor CLI runners; subagent tasks now run natively in-process.
 

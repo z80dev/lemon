@@ -44,16 +44,45 @@ defmodule LemonAgent.AbortSignalRedirectTest do
     assert AbortSignal.aborted?(signal)
   end
 
-  test "clear/1 clears both the abort and redirect bits" do
+  test "redirect messages wake a waiter without aborting tools" do
     signal = AbortSignal.new()
+    parent = self()
 
+    task =
+      Task.async(fn ->
+        AbortSignal.subscribe(signal)
+        refute AbortSignal.redirect_requested?(signal)
+        send(parent, :redirect_waiting)
+
+        receive do
+          {:lemon_abort, ^signal, :redirect} ->
+            assert AbortSignal.redirect_requested?(signal)
+            refute AbortSignal.aborted?(signal)
+            AbortSignal.unsubscribe(signal)
+            :redirected
+        end
+      end)
+
+    assert_receive :redirect_waiting, 1_000
+    assert :ok = AbortSignal.request_redirect(signal)
+    assert Task.await(task) == :redirected
+  end
+
+  test "redirect can be requested again after clearing without resetting abort" do
+    signal = AbortSignal.new()
+    AbortSignal.subscribe(signal)
     AbortSignal.abort(signal)
-    AbortSignal.request_redirect(signal)
+    assert_receive {:lemon_abort, ^signal, :abort}
 
-    assert :ok = AbortSignal.clear(signal)
+    for _ <- 1..2 do
+      assert :ok = AbortSignal.request_redirect(signal)
+      assert_receive {:lemon_abort, ^signal, :redirect}
+      assert :ok = AbortSignal.clear_redirect(signal)
+      refute AbortSignal.redirect_requested?(signal)
+      assert AbortSignal.aborted?(signal)
+    end
 
-    refute AbortSignal.aborted?(signal)
-    refute AbortSignal.redirect_requested?(signal)
+    AbortSignal.unsubscribe(signal)
   end
 
   test "redirect bits are independent across signals" do

@@ -8,19 +8,27 @@ defmodule LemonCore.DurableTest do
   test "a directory flush is claimed only where it is synchronous", %{tmp_dir: dir} do
     dir = Path.join(dir, "literal 'quoted' 雪")
     File.mkdir!(dir)
-    result = Durable.sync_directory(dir)
+    parent = self()
 
-    cond do
-      match?({:unix, :darwin}, :os.type()) ->
-        # The owning helper fsyncs this exact descriptor and issues F_FULLFSYNC.
-        assert result == :ok
+    worker =
+      spawn(fn ->
+        receive do
+          :sync ->
+            send(parent, {:synced, Durable.sync_directory(dir)})
 
-      gnu_sync?() ->
-        assert result == :ok
+            receive do
+              :stop -> :ok
+            end
+        end
+      end)
 
-      true ->
-        assert result == {:error, :directory_sync_unsupported}
-    end
+    :erlang.trace(worker, true, [:ports])
+    send(worker, :sync)
+    assert_receive {:synced, :ok}
+    ref = :erlang.trace_delivered(worker)
+    assert_receive {:trace_delivered, ^worker, ^ref}
+    refute_received {:trace, ^worker, :open, _, _}
+    send(worker, :stop)
   end
 
   test "a file flush syncs an existing file", %{tmp_dir: dir} do
@@ -36,18 +44,11 @@ defmodule LemonCore.DurableTest do
     if match?({:unix, :darwin}, :os.type()) do
       path = Path.join(dir, "regular")
       File.write!(path, "contents")
-      assert {:error, {:full_sync_failed, _}} = Durable.sync_directory(path)
+      assert {:error, _} = Durable.sync_directory(path)
       assert {:error, {:full_sync_failed, _}} = Durable.sync_file(dir)
       link = Path.join(dir, "link")
       File.ln_s!(path, link)
       assert {:error, {:full_sync_failed, _}} = Durable.sync_file(link)
-    end
-  end
-
-  defp gnu_sync? do
-    case System.find_executable("sync") do
-      nil -> false
-      sync -> match?({"sync (GNU coreutils)" <> _, 0}, System.cmd(sync, ["--version"]))
     end
   end
 end

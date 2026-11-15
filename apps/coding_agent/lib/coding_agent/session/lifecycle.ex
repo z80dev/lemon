@@ -27,13 +27,20 @@ defmodule CodingAgent.Session.Lifecycle do
   alias CodingAgent.Session.Planning
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
-  alias CodingAgent.SystemPrompt.Environment, as: SystemPromptEnvironment
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.Task.Params
   alias CodingAgent.Workspace
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.ModelRuntime.StreamOptions
   alias LemonAgent.ModelRuntime.ModelRouting
+
+  defp emit_start_stage(stage, started, session_id) do
+    :telemetry.execute(
+      [:coding_agent, :session, :start_stage],
+      %{duration: System.monotonic_time() - started},
+      %{stage: stage, session_id: session_id}
+    )
+  end
 
   @fence_entry WorkspaceReads.fence_entry_type()
 
@@ -70,8 +77,21 @@ defmodule CodingAgent.Session.Lifecycle do
 
     Workspace.ensure_workspace(workspace_dir: workspace_dir)
 
-    session_manager = load_or_create_session(cwd, session_file, session_id, parent_session)
+    stage_started = System.monotonic_time()
+
+    session_manager =
+      Keyword.get_lazy(opts, :loaded_session, fn ->
+        load_or_create_session(cwd, session_file, session_id, parent_session)
+      end)
+
+    session_manager =
+      SessionManager.persist(
+        session_manager,
+        session_file || SessionManager.session_file_path(cwd, session_manager.header.id)
+      )
+
     cwd = session_manager.header.cwd
+    emit_start_stage(:journal_load, stage_started, session_manager.header.id)
 
     session_manager = seed_workspace_read_fence(session_manager, opts)
 
@@ -256,6 +276,8 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
       |> Keyword.put(:plan_gate, plan_gate)
 
+    stage_started = System.monotonic_time()
+
     lifecycle =
       ExtensionLifecycle.initialize(
         cwd: cwd,
@@ -295,11 +317,21 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     tool_names = Enum.map(tools, & &1.name)
+    emit_start_stage(:tool_registry, stage_started, session_manager.header.id)
 
-    # Captured once: the date and git snapshot stay fixed for the session so
-    # every prompt refresh reproduces the same bytes (prompt-cache stable).
-    prompt_environment =
-      if is_nil(context_snapshot), do: SystemPromptEnvironment.capture(cwd), else: nil
+    # Durable orientation survives process retirement between turns. Frozen
+    # side queries neither capture nor journal new environment context.
+    stage_started = System.monotonic_time()
+
+    {session_manager, prompt_environment} =
+      if is_nil(context_snapshot) do
+        SessionManager.capture_environment(session_manager, cwd)
+      else
+        {session_manager, nil}
+      end
+
+    emit_start_stage(:environment_capture, stage_started, session_manager.header.id)
+    stage_started = System.monotonic_time()
 
     # Labelled pieces of the composed prompt, kept for context-usage accounting.
     # A frozen snapshot prompt has no known structure and counts as one block.
@@ -344,6 +376,8 @@ defmodule CodingAgent.Session.Lifecycle do
 
     system_prompt =
       Planning.system_prompt(base_system_prompt, session_manager)
+
+    emit_start_stage(:prompt_composition, stage_started, session_manager.header.id)
 
     convert_to_llm = &CodingAgent.Messages.to_llm/1
 
@@ -756,6 +790,8 @@ defmodule CodingAgent.Session.Lifecycle do
           Ownership.transfer(state.session_file, new_path, fn ->
             SessionManager.persist(new_session_manager, new_path)
           end)
+
+        :ok = SessionManager.close(state.session_manager)
 
         Persistence.maybe_unregister_session(
           previous_session_id,

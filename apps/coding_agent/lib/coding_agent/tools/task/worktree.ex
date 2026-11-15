@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.Task.Worktree do
   @moduledoc """
-  Prepares an isolated Git worktree for a native child task and, depending on
-  the merge mode, merges the child's changes back after it succeeds.
+  Prepares an isolated Git worktree for a native child task, warming ignored
+  artifacts with copy-on-write when available, and optionally merges changes.
 
   The caller supplies a generated task ID containing only ASCII letters, digits,
   underscores and hyphens, beginning with a letter or digit (at most 128 bytes).
@@ -10,23 +10,34 @@ defmodule CodingAgent.Tools.Task.Worktree do
 
   Merge modes:
 
-    * `"none"` - the worktree starts at HEAD with tracked files only and is
+    * `"none"` - the worktree starts at HEAD, plus eligible build caches, and is
       retained with its branch for review or cherry-picking. Uncommitted files,
-      local configuration and credentials are not copied.
+      local configuration and credentials outside cache directories are not copied.
     * `"patch"` - the parent checkout's work in progress (tracked changes plus
       untracked, non-ignored files) is replayed into the worktree and committed
       as a baseline. On success, the child's changes relative to that baseline
       are applied to the parent checkout with `git apply`; a patch that does not
       apply cleanly leaves the parent untouched and keeps the worktree, branch
       and patch file.
-    * `"branch"` - the worktree starts at HEAD. On success, the child's changes
-      are committed on the task branch, the worktree is removed and the branch
+    * `"branch"` - the worktree starts at HEAD plus eligible build caches.
+      On success, the child's changes are committed, the worktree is removed and the branch
       is kept for review. The branch is never merged into the user's branch.
 
   Both merge-back modes retain the checkout and branch for manual review when
   the task changes a submodule (gitlink), whether committed, staged or only in
   an initialized submodule checkout. Patch application cannot propagate
   gitlinks, and automatic cleanup must not discard their pins or checkouts.
+
+  Ignored build-cache directories are cloned using `cp -c -R` on macOS or
+  `cp --reflink=always -R` on Linux after a filesystem probe. The default
+  allowlist is `deps`, `_build`, `node_modules`, `target`, `.venv`; application
+  environment `:coding_agent, :task_clone_directories` accepts top-level directory
+  names. Only existing Git-ignored directories are eligible. Ignored secrets
+  and configuration outside this allowlist are never copied.
+  Set `:coding_agent, :task_workspace_backend` to `:git_worktree` to disable
+  warming. Caller resource policy bounds cloning to 100,000 entries, 64 GiB
+  logical bytes and ten seconds. Unsupported filesystems fall back to the
+  ordinary checkout. Symlinks are preserved without being followed.
 
   Existing paths and branches are never reused or removed.
   """
@@ -84,7 +95,9 @@ defmodule CodingAgent.Tools.Task.Worktree do
          parent = Path.join(common, "lemon-task-worktrees"),
          :ok <- prepare_parent(parent),
          {:ok, prepared} <- create(git, root, prefix, parent, task_id) do
-      setup_merge(git, root, parent, task_id, prepared, mode)
+      with {:ok, prepared} <- setup_merge(git, root, parent, task_id, prepared, mode) do
+        warm_clone(git, root, prepared)
+      end
     end
   end
 
@@ -261,6 +274,163 @@ defmodule CodingAgent.Tools.Task.Worktree do
       {:error, reason} ->
         cleanup(git, root, path, branch, reason)
     end
+  end
+
+  # Keep Git's baseline and review semantics, but clone ignored build state after
+  # baseline creation. Ignored artifacts never enter the index or merge patch.
+  defp warm_clone(git, root, prepared) do
+    backend = Application.get_env(:coding_agent, :task_workspace_backend, :auto)
+
+    with false <- backend == :git_worktree,
+         cp when is_binary(cp) <- System.find_executable("cp"),
+         flags when is_list(flags) <- clone_flags(),
+         true <- clone_probe(cp, flags, prepared.worktree_path),
+         paths when is_list(paths) <-
+           Application.get_env(:coding_agent, :task_clone_directories, [
+             "deps",
+             "_build",
+             "node_modules",
+             "target",
+             ".venv"
+           ]),
+         true <- Enum.all?(paths, &valid_cache_directory?/1),
+         paths =
+           Enum.filter(paths, fn rel ->
+             match?({:ok, %{type: :directory}}, File.lstat(Path.join(root, rel))) and
+               match?({:ok, _}, run_git(git, root, ["check-ignore", "--", rel]))
+           end),
+         true <- clone_artifacts(cp, flags, root, prepared.worktree_path, paths) do
+      {:ok, Map.put(prepared, :backend, :cow)}
+    else
+      _ -> {:ok, Map.put(prepared, :backend, :git_worktree)}
+    end
+  end
+
+  defp clone_flags do
+    case :os.type() do
+      {:unix, :darwin} -> ["-c", "-R"]
+      {:unix, :linux} -> ["--reflink=always", "-R"]
+      _ -> nil
+    end
+  end
+
+  defp clone_probe(cp, flags, path) do
+    probe = Application.get_env(:coding_agent, :task_clone_probe)
+
+    if is_function(probe, 0) do
+      probe.()
+    else
+      directory =
+        Path.join(
+          Path.dirname(path),
+          "probe-" <> Integer.to_string(System.unique_integer([:positive]))
+        )
+
+      File.mkdir!(directory)
+      source = Path.join(directory, "source")
+      target = Path.join(directory, "target")
+
+      try do
+        case File.write(source, "probe", [:exclusive]) do
+          :ok -> clone_command(cp, flags ++ [source, target], 1_000)
+          _ -> false
+        end
+      after
+        File.rm_rf(directory)
+      end
+    end
+  end
+
+  defp valid_cache_directory?(rel) do
+    is_binary(rel) and rel != "" and safe_relative?(rel) and
+      length(Path.split(rel)) == 1 and not String.starts_with?(rel, "-")
+  end
+
+  defp clone_artifacts(cp, flags, root, path, paths) do
+    # Caller resource policy, not a measured performance threshold.
+    deadline = System.monotonic_time(:millisecond) + 10_000
+
+    Enum.reduce_while(paths, {true, 0, 0, []}, fn rel, {true, bytes, count, copied} ->
+      source = Path.join(root, rel)
+      target = Path.join(path, rel)
+
+      with true <- safe_destination?(path, rel),
+           false <- File.exists?(target),
+           {:ok, total, files} <- cache_size([source], bytes, count, deadline),
+           remaining = deadline - System.monotonic_time(:millisecond),
+           true <- remaining > 0,
+           true <- clone_owned_file(cp, flags, source, target, remaining) do
+        {:cont, {true, total, files, [target | copied]}}
+      else
+        _ ->
+          Enum.each(copied, &File.rm_rf/1)
+          {:halt, {false, bytes, count, []}}
+      end
+    end)
+    |> elem(0)
+  end
+
+  defp cache_size([], bytes, count, _deadline), do: {:ok, bytes, count}
+
+  defp cache_size([path | rest], bytes, count, deadline) do
+    with true <- System.monotonic_time(:millisecond) < deadline,
+         true <- count < 100_000,
+         {:ok, stat} <- File.lstat(path),
+         true <- bytes + stat.size <= 64 * 1024 * 1024 * 1024 do
+      case stat.type do
+        :directory ->
+          case File.ls(path) do
+            {:ok, entries} ->
+              cache_size(
+                Enum.map(entries, &Path.join(path, &1)) ++ rest,
+                bytes + stat.size,
+                count + 1,
+                deadline
+              )
+
+            _ ->
+              :error
+          end
+
+        :regular ->
+          cache_size(rest, bytes + stat.size, count + 1, deadline)
+
+        :symlink ->
+          cache_size(rest, bytes, count + 1, deadline)
+
+        _ ->
+          :error
+      end
+    else
+      _ -> :error
+    end
+  end
+
+  defp clone_owned_file(cp, flags, source, target, timeout) do
+    if clone_command(cp, flags ++ [source, target], timeout) do
+      true
+    else
+      File.rm_rf(target)
+      false
+    end
+  end
+
+  defp clone_command(cp, args, timeout) do
+    task =
+      Task.async(fn ->
+        try do
+          System.cmd(cp, args, stderr_to_stdout: true)
+        rescue
+          _ -> {"", 1}
+        end
+      end)
+
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {_output, 0}} -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
   end
 
   defp setup_merge(_git, _root, _parent, _task_id, prepared, "none"), do: {:ok, prepared}

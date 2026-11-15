@@ -21,6 +21,12 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     @impl true
     def init(opts) do
+      {:ok, _} =
+        Registry.register(LemonRouter.SessionRegistry, opts[:session_key], %{
+          run_id: opts[:run_id],
+          conversation_key: opts[:conversation_key]
+        })
+
       send(opts[:test_pid], {:started, opts[:run_id], opts})
       {:ok, %{run_id: opts[:run_id], test_pid: opts[:test_pid]}}
     end
@@ -29,6 +35,33 @@ defmodule LemonRouter.SessionCoordinatorTest do
     def handle_cast({:abort, reason}, state) do
       send(state.test_pid, {:aborted, state.run_id, reason})
       {:stop, :normal, state}
+    end
+  end
+
+  defmodule SessionCoordinatorRegistrationRaceStarter do
+    def child_spec(opts) do
+      %{
+        id: {__MODULE__, opts[:run_id]},
+        start: {__MODULE__, :start_link, [opts]},
+        restart: :temporary
+      }
+    end
+
+    def start_link(opts) do
+      case Registry.lookup(LemonRouter.RunRegistry, opts[:collision_run_id]) do
+        [{pid, _}] ->
+          :ok = GenServer.call(pid, {:claim_session, opts[:session_key], opts[:conversation_key]})
+
+          reason =
+            if opts[:collision_error] == :session_busy,
+              do: :session_busy,
+              else: {:already_registered, pid}
+
+          {:error, reason}
+
+        [] ->
+          LemonRouter.SessionCoordinatorTest.StubRunProcess.start_link(opts)
+      end
     end
   end
 
@@ -74,6 +107,14 @@ defmodule LemonRouter.SessionCoordinatorTest do
   defmodule SessionCoordinatorRuntimeRunStub do
     use GenServer
 
+    def child_spec(opts) do
+      %{
+        id: {__MODULE__, opts[:run_id]},
+        start: {__MODULE__, :start_link, [opts]},
+        restart: :temporary
+      }
+    end
+
     def start_link(opts) do
       GenServer.start_link(
         __MODULE__,
@@ -85,7 +126,15 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
 
     @impl true
-    def init(opts), do: {:ok, opts}
+    def init(opts) do
+      {:ok, _} =
+        Registry.register(LemonRouter.SessionRegistry, opts[:session_key], %{
+          run_id: opts[:run_id],
+          conversation_key: opts[:conversation_key]
+        })
+
+      {:ok, opts}
+    end
 
     @impl true
     def handle_cast({_kind, _submission_run_id, _prompt, _worker_pid}, state),
@@ -95,6 +144,14 @@ defmodule LemonRouter.SessionCoordinatorTest do
   defmodule SessionCoordinatorForwardingRunStub do
     use GenServer
 
+    def child_spec(opts) do
+      %{
+        id: {__MODULE__, opts[:run_id]},
+        start: {__MODULE__, :start_link, [opts]},
+        restart: :temporary
+      }
+    end
+
     def start_link(opts) do
       GenServer.start_link(
         __MODULE__,
@@ -106,7 +163,30 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
 
     @impl true
-    def init(opts), do: {:ok, opts}
+    def init(opts) do
+      # A recovered router run owns both indexes; runtime-only steering targets
+      # below have no session key and only need their RunRegistry name.
+      if session_key = opts[:session_key] do
+        {:ok, _} =
+          Registry.register(LemonRouter.SessionRegistry, session_key, %{
+            run_id: opts[:run_id],
+            conversation_key: opts[:conversation_key] || {:session, session_key}
+          })
+      end
+
+      {:ok, opts}
+    end
+
+    @impl true
+    def handle_call({:claim_session, session_key, conversation_key}, _from, state) do
+      {:ok, _} =
+        Registry.register(LemonRouter.SessionRegistry, session_key, %{
+          run_id: state[:run_id],
+          conversation_key: conversation_key
+        })
+
+      {:reply, :ok, state}
+    end
 
     @impl true
     def handle_cast({kind, submission_run_id, prompt, worker_pid}, state) do
@@ -216,7 +296,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end)
 
     start_if_needed(LemonRouter.SessionRegistry, fn ->
-      Registry.start_link(keys: :duplicate, name: LemonRouter.SessionRegistry)
+      Registry.start_link(keys: :unique, name: LemonRouter.SessionRegistry)
     end)
 
     start_if_needed(LemonRouter.RunRegistry, fn ->
@@ -403,7 +483,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     refute_receive {:started, "run1", _}, 100
   end
 
-  test "SessionCoordinator owns SessionRegistry entries for the active session", %{
+  test "RunProcess owns SessionRegistry entries for the active session", %{
     run_supervisor: run_supervisor
   } do
     session_key = unique_session_key()
@@ -474,76 +554,35 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
   end
 
-  test "active queries consult the surviving run registry after registry-linked coordinator loss",
-       %{
-         run_supervisor: run_supervisor
-       } do
-    session_key = unique_session_key()
-    key = {:session, session_key}
-
-    assert :ok =
-             SessionCoordinator.submit(
-               key,
-               submission(key, "run-registry-repair", "one", :collect, run_supervisor,
-                 run_process_module: SessionCoordinatorRuntimeRunStub
-               )
-             )
-
-    assert eventually(fn ->
-             Registry.lookup(LemonRouter.RunRegistry, "run-registry-repair") != []
-           end)
-
-    assert [{coordinator_pid, _meta}] = Registry.lookup(LemonRouter.ConversationRegistry, key)
-
-    assert :ok = Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
-
-    assert {:ok, _pid} =
-             Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
-
-    refute Process.alive?(coordinator_pid)
-    assert Registry.lookup(LemonRouter.SessionRegistry, session_key) == []
-    assert {:ok, "run-registry-repair"} = SessionCoordinator.active_run_for_session(session_key)
-  end
-
-  test "submission adopts a surviving run after SessionRegistry restart before starting the next",
+  test "coordinator restart rediscovers the live registry owner and concurrent submits queue",
        %{run_supervisor: run_supervisor} do
     session_key = unique_session_key()
     key = {:session, session_key}
-    run1 = "run-registry-single-flight-1-#{System.unique_integer([:positive])}"
-    run2 = "run-registry-single-flight-2-#{System.unique_integer([:positive])}"
+    assert :ok = submit(key, "survivor", "one", :collect, run_supervisor)
+    assert_receive {:started, "survivor", _}
 
-    assert :ok =
-             SessionCoordinator.submit(
-               key,
-               submission(key, run1, "one", :collect, run_supervisor,
-                 run_process_module: SessionCoordinatorRuntimeRunStub
-               )
-             )
+    assert [{run_pid, %{run_id: "survivor"}}] =
+             Registry.lookup(LemonRouter.SessionRegistry, session_key)
 
-    assert eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, run1) != [] end)
-    assert [{old_coordinator, _meta}] = Registry.lookup(LemonRouter.ConversationRegistry, key)
+    old_coordinator = coordinator_pid(key)
+    GenServer.stop(old_coordinator)
 
-    assert :ok = Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
+    tasks =
+      for id <- ["queued-a", "queued-b"] do
+        next = submission(key, id, id, :collect, run_supervisor)
+        Task.async(fn -> SessionCoordinator.submit(key, next) end)
+      end
 
-    assert {:ok, _pid} =
-             Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
-
-    refute Process.alive?(old_coordinator)
-    assert [{run1_pid, _}] = Registry.lookup(LemonRouter.RunRegistry, run1)
-
-    assert :ok =
-             SessionCoordinator.submit(
-               key,
-               submission(key, run2, "two", :collect, run_supervisor,
-                 run_process_module: SessionCoordinatorRuntimeRunStub
-               )
-             )
-
-    refute eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, run2) != [] end, 100)
-    assert Process.alive?(run1_pid)
-
-    GenServer.stop(run1_pid)
-    assert eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, run2) != [] end)
+    assert Enum.map(tasks, &Task.await/1) == [:ok, :ok]
+    new_coordinator = coordinator_pid(key)
+    refute new_coordinator == old_coordinator
+    assert {:ok, "survivor"} = SessionCoordinator.active_run(key)
+    state = :sys.get_state(new_coordinator)
+    assert length(state.queue) == 2
+    assert [{_, ^run_pid, _, _}] = DynamicSupervisor.which_children(run_supervisor)
+    GenServer.stop(run_pid)
+    assert_receive {:started, next_id, _}
+    assert next_id in ["queued-a", "queued-b"]
   end
 
   test "an unrelated suspended run cannot block idle submission", %{
@@ -1700,7 +1739,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     GenServer.stop(runtime_run)
   end
 
-  test "receipt barriers reject visible initial, CAS and uncertainty rows until sync succeeds" do
+  test "ordered-backend barriers reject visible rows until sync succeeds" do
     store = start_receipt_store(allow_updates: true, sync_failure: true)
     run_id = receipt_run_id()
 
@@ -1714,7 +1753,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     barrier_error = {:error, {:sync_failed, :sync_refused}}
 
-    assert ^barrier_error = RunReceiptStore.put(store, receipt)
+    assert {:error, :outcome_unknown} = RunReceiptStore.put(store, receipt)
     assert {:ok, ^receipt} = LemonCore.Store.fetch(store, :run_receipts, run_id)
     assert ^barrier_error = RunReceiptStore.fetch(store, run_id)
     assert ^barrier_error = RunReceiptStore.put(store, receipt)
@@ -1725,7 +1764,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     changes = %{effective_mode: :merged, target_run_id: "survivor"}
     assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, changes)
-    assert ^barrier_error = RunReceiptStore.update(store, run_id, changes)
+    assert {:error, :outcome_unknown} = RunReceiptStore.update(store, run_id, changes)
     updated = Map.merge(receipt, changes)
     assert {:ok, ^updated} = LemonCore.Store.fetch(store, :run_receipts, run_id)
     assert ^barrier_error = RunReceiptStore.fetch(store, run_id)
@@ -1743,7 +1782,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
                %{state: :outcome_unknown}
              )
 
-    assert ^barrier_error = RunReceiptStore.mark_unknown(store, run_id)
+    assert {:error, :outcome_unknown} = RunReceiptStore.mark_unknown(store, run_id)
     unknown = %{updated | state: :outcome_unknown, effective_mode: nil, target_run_id: nil}
     assert {:ok, ^unknown} = LemonCore.Store.fetch(store, :run_receipts, run_id)
     assert ^barrier_error = RunReceiptStore.fetch(store, run_id)
@@ -2180,6 +2219,42 @@ defmodule LemonRouter.SessionCoordinatorTest do
       assert_receive {:started, ^own, opts}
       assert opts[:execution_request].prompt == "own prompt"
       assert opts[:execution_request].tool_policy == %{deny: ["bash"]}
+      :ok = stop_active_run(supervisor)
+      assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
+    end
+  end
+
+  test "registration collisions queue behind the winning owner", %{run_supervisor: supervisor} do
+    for reason <- [:session_busy, :already_registered] do
+      session_key = unique_session_key()
+      key = {:session, session_key}
+      active = receipt_run_id()
+      own = receipt_run_id()
+
+      survivor =
+        start_supervised!(
+          {SessionCoordinatorForwardingRunStub, run_id: active, test_pid: self()},
+          id: {:registration_race, active}
+        )
+
+      input =
+        submission(key, own, "after collision", :collect, supervisor,
+          run_process_module: SessionCoordinatorRegistrationRaceStarter,
+          run_process_opts: %{
+            test_pid: self(),
+            collision_run_id: active,
+            collision_error: reason
+          }
+        )
+
+      assert {:ok, %{effective_mode: :queued, target_run_id: ^own}} =
+               SessionCoordinator.submit_with_receipt(key, input)
+
+      assert {:ok, ^active} = SessionCoordinator.active_run(key)
+      state = :sys.get_state(coordinator_pid(key))
+      assert [%Submission{run_id: ^own}] = state.queue
+      GenServer.stop(survivor)
+      assert_receive {:started, ^own, _}
       :ok = stop_active_run(supervisor)
       assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
     end

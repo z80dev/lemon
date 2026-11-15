@@ -53,7 +53,7 @@ defmodule LemonCore.PolicyStoreTest do
       if previous, do: PolicyStore.put_runtime(previous), else: PolicyStore.delete_runtime()
     end)
 
-    policy = %{sandbox: true}
+    policy = %{deny: ["bash"]}
     :ok = PolicyStore.put_runtime(policy)
 
     assert PolicyStore.get_runtime() == policy

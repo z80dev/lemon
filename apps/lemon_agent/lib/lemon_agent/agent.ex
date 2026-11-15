@@ -1315,14 +1315,6 @@ defmodule LemonAgent.Agent do
 
   @spec handle_task_completion(term(), state()) :: state()
   defp handle_task_completion(_result, state) do
-    abort_ref =
-      case state.abort_ref do
-        {:aborted, ref} -> ref
-        ref -> ref
-      end
-
-    AbortSignal.clear(abort_ref)
-
     # Emit introspection event for loop end
     Introspection.record(
       :agent_loop_ended,

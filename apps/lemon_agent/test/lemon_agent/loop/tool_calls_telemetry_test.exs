@@ -104,7 +104,6 @@ defmodule LemonAgent.Loop.ToolCallsTelemetryTest do
   test "pre-aborted calls also produce a content-free paired outcome" do
     signal = AbortSignal.new()
     AbortSignal.abort(signal)
-    on_exit(fn -> AbortSignal.clear(signal) end)
     tool = tool("aborted", fn -> flunk("must not run") end)
 
     execute(

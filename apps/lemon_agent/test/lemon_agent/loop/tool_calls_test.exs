@@ -399,11 +399,16 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert tool_result_message.tool_name == "crashing_tool"
     assert tool_result_message.is_error == true
     assert tool_result_message.details.error_type == :tool_task_crashed
-    assert tool_result_message.details.reason in [":killed", ":noproc"]
+    assert tool_result_message.details.reason == :crashed
+    assert tool_result_message.details.outcome == :unknown
+    assert tool_result_message.details.crash_reason in [":killed", ":noproc"]
 
     assert Enum.any?(tool_result_message.content, fn
-             %TextContent{text: text} -> String.contains?(text, "Tool task crashed:")
-             _ -> false
+             %TextContent{text: text} ->
+               String.contains?(text, "Do not assume it did not run or automatically repeat it.")
+
+             _ ->
+               false
            end)
 
     assert List.last(updated_context.messages).tool_call_id == "call_task_crash"
@@ -512,8 +517,12 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert [tool_result_message] = results
     assert tool_result_message.is_error == true
     assert tool_result_message.tool_call_id == "call_tool_timeout"
-    assert tool_result_message.details == %{error_type: :tool_task_timeout, timeout_ms: 250}
-    assert [%TextContent{text: "Tool task timed out after 250ms"}] = tool_result_message.content
+
+    assert %{error_type: :tool_task_timeout, timeout_ms: 250, outcome: :unknown, reason: :timeout} =
+             tool_result_message.details
+
+    assert [%TextContent{text: text}] = tool_result_message.content
+    assert text =~ "Do not assume it did not run or automatically repeat it."
     assert List.last(updated_context.messages).tool_call_id == "call_tool_timeout"
     assert List.last(updated_new_messages).tool_call_id == "call_tool_timeout"
 
@@ -1136,7 +1145,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert completed.is_error == false
     assert skipped.tool_call_id == "superseded_mutation"
     assert skipped.is_error == true
-    assert skipped.details == %{error_type: :skipped, reason: :steering}
+    assert %{outcome: :not_started, reason: :skipped} = skipped.details
     assert updated_context.messages == results
     assert updated_new_messages == results
 
@@ -1212,7 +1221,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert first_result.is_error == false
     assert second_result.is_error == false
     assert skipped.tool_call_id == "steered_read_3"
-    assert skipped.details == %{error_type: :skipped, reason: :steering}
+    assert %{outcome: :not_started, reason: :skipped} = skipped.details
     assert context.messages == results
     assert messages == results
     refute_received {:tool_started, "steered_read_3", _}
@@ -1345,14 +1354,13 @@ defmodule LemonAgent.Loop.ToolCallsTest do
   test "abort lets cooperative tools finish resource cleanup before returning" do
     parent = self()
     signal = AbortSignal.new()
-    on_exit(fn -> AbortSignal.clear(signal) end)
 
     wait_for_abort = fn wait_for_abort ->
       if AbortSignal.aborted?(signal) do
         send(parent, :abort_observed)
 
         # Cleanup only finishes once the test says so (after the loop has begun
-        # draining aborted tools), instead of racing the loop's abort poll.
+        # draining aborted tools), instead of racing the loop's abort delivery.
         receive do
           :finish_cleanup -> :ok
         after

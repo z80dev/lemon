@@ -23,8 +23,14 @@ defmodule CodingAgent.JoinAwait do
 
     interrupted? = Keyword.get(opts, :interrupted?, fn -> false end)
 
-    with :ok <- ensure_known_runs(run_ids) do
-      do_await(run_ids, task_ids, mode, signal, deadline, interrupted?)
+    AbortSignal.subscribe(signal)
+
+    try do
+      with :ok <- ensure_known_runs(run_ids) do
+        do_await(run_ids, task_ids, mode, signal, deadline, interrupted?)
+      end
+    after
+      AbortSignal.unsubscribe(signal)
     end
   end
 
@@ -50,7 +56,7 @@ defmodule CodingAgent.JoinAwait do
                 {:ok, result}
 
               {:error, :timeout, _snapshot} ->
-                do_await(run_ids, task_ids, mode, signal, deadline, interrupted?)
+                wait_for_change(run_ids, task_ids, mode, signal, deadline, interrupted?)
             end
         end
     end
@@ -72,7 +78,7 @@ defmodule CodingAgent.JoinAwait do
       end)
 
     if map_size(turns) == 0 do
-      RunGraph.await(run_ids, mode, @poll_ms)
+      RunGraph.await(run_ids, mode, 0)
     else
       runs =
         Enum.map(run_ids, fn id ->
@@ -102,9 +108,24 @@ defmodule CodingAgent.JoinAwait do
           {:ok, %{mode: mode, run: run}}
 
         _ ->
-          Process.sleep(@poll_ms)
           {:error, :timeout, %{mode: mode, runs: runs}}
       end
+    end
+  end
+
+  # Task turns, parent questions and the caller's interruption callback do not
+  # share a notification protocol. Their refresh remains bounded; cancellation
+  # wakes this receive immediately rather than waiting for that refresh.
+  defp wait_for_change(run_ids, task_ids, mode, signal, deadline, interrupted?) do
+    timeout =
+      if deadline == :infinity,
+        do: @poll_ms,
+        else: min(@poll_ms, max(0, deadline - System.monotonic_time(:millisecond)))
+
+    receive do
+      {:lemon_abort, ^signal, _kind} -> {:error, :aborted}
+    after
+      timeout -> do_await(run_ids, task_ids, mode, signal, deadline, interrupted?)
     end
   end
 

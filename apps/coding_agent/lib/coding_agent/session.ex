@@ -422,6 +422,20 @@ defmodule CodingAgent.Session do
   def validate_execution_options(opts) when is_list(opts) do
     alias LemonCore.{ExecutionContext, ToolPolicy}
 
+    opts =
+      if is_nil(opts[:session_file]) or
+           CodingAgent.SessionManager.current_snapshot?(
+             opts[:loaded_session],
+             opts[:session_file]
+           ) do
+        opts
+      else
+        case CodingAgent.SessionManager.load_from_file(opts[:session_file]) do
+          {:ok, session} -> Keyword.put(opts, :loaded_session, session)
+          {:error, _} -> Keyword.delete(opts, :loaded_session)
+        end
+      end
+
     with {:ok, context} <- resolve_session_execution_context(opts),
          {:ok, context} <- restrict_durable_execution_context(context, opts),
          cwd <- Keyword.get(opts, :cwd) || context.workspace_scope.root || File.cwd!(),
@@ -461,7 +475,13 @@ defmodule CodingAgent.Session do
         {:ok, context}
 
       path ->
-        case CodingAgent.SessionManager.load_from_file(path) do
+        loaded =
+          case Keyword.fetch(opts, :loaded_session) do
+            {:ok, session} -> {:ok, session}
+            :error -> CodingAgent.SessionManager.load_from_file(path)
+          end
+
+        case loaded do
           {:ok, session} ->
             with {:ok, stored} <- CodingAgent.SessionManager.execution_context(session) do
               if is_nil(stored) do
@@ -1537,7 +1557,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast({:redirect, text}, state) do
-    {state, recalled} = refresh_turn_context(state, text)
+    {state, recalled} = refresh_turn_context(state, text, false)
 
     message = %LemonAi.Types.UserMessage{
       role: :user,
@@ -1617,7 +1637,8 @@ defmodule CodingAgent.Session do
   end
 
   defp enqueue_steering(state, text, preempt) do
-    {state, recalled} = refresh_turn_context(state, text, preempt)
+    # Steering corrects the current turn; it does not open a new user turn.
+    {state, recalled} = refresh_turn_context(state, text, false)
 
     message = %LemonAi.Types.UserMessage{
       role: :user,
@@ -1705,6 +1726,10 @@ defmodule CodingAgent.Session do
 
   def handle_info({:wasm_host_check, ref}, state) do
     {:noreply, WasmBridge.check_host_call(state, ref)}
+  end
+
+  def handle_info({:lemon_abort, signal, _kind}, state) do
+    {:noreply, WasmBridge.abort_host_calls(state, signal)}
   end
 
   def handle_info({:DOWN, ref, :process, pid, reason}, state)
@@ -1899,6 +1924,7 @@ defmodule CodingAgent.Session do
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
     _ = ManualOperation.cancel(state, :session_terminated)
     close_browser_session(state.tool_opts || [])
+    if state.session_manager, do: CodingAgent.SessionManager.close(state.session_manager)
 
     # Approvals this session still has pending can never be used once it is
     # gone: expire them (denied) now instead of leaving them answerable.
@@ -2309,6 +2335,11 @@ defmodule CodingAgent.Session do
     }
     |> Map.merge(trusted_memory_context(state))
     |> ContextRegistry.collect()
+    |> then(fn sections ->
+      if user_turn,
+        do: [CodingAgent.SystemPrompt.Environment.turn_section(state.cwd) | sections],
+        else: sections
+    end)
   rescue
     _error ->
       Logger.debug("Contributed context unavailable")

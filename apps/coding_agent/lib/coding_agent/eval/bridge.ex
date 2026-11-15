@@ -116,7 +116,6 @@ defmodule CodingAgent.Eval.Bridge do
   @spec task_down(t(), reference(), term()) :: t()
   def task_down(%__MODULE__{} = bridge, monitor, reason) do
     {entry, running} = Map.pop!(bridge.running, monitor)
-    AbortSignal.clear(entry.signal)
 
     if reason != :normal do
       # The task died before or while replying; a duplicate reply is ignored.
@@ -167,8 +166,7 @@ defmodule CodingAgent.Eval.Bridge do
 
     receive do
       {:DOWN, monitor, :process, _pid, _reason} when is_map_key(running, monitor) ->
-        {entry, running} = Map.pop!(running, monitor)
-        AbortSignal.clear(entry.signal)
+        {_entry, running} = Map.pop!(running, monitor)
         await_exits(running, deadline)
     after
       timeout ->
@@ -199,7 +197,7 @@ defmodule CodingAgent.Eval.Bridge do
     owner = self()
 
     task = fn ->
-      die_with(owner, signal)
+      die_with(owner)
       MutationLock.inherit(locks, owner)
       Kernel.tool_reply(slot, ref, call, run_call(resolver, tool, tool_call_id, args, signal))
     end
@@ -210,15 +208,13 @@ defmodule CodingAgent.Eval.Bridge do
         %{bridge | running: Map.put(bridge.running, Process.monitor(pid), entry)}
 
       {:error, reason} ->
-        AbortSignal.clear(signal)
         refuse(bridge, call, "could not start the tool call: #{inspect(reason)}")
     end
   end
 
   # Inherited locks are only valid while their holder lives: kill this task if
-  # the `eval` process dies without running `shutdown/1`, and clear the call's
-  # abort signal, which only the dead holder would otherwise have cleared.
-  defp die_with(owner, signal) do
+  # the `eval` process dies without running `shutdown/1`.
+  defp die_with(owner) do
     task = self()
 
     spawn(fn ->
@@ -230,7 +226,7 @@ defmodule CodingAgent.Eval.Bridge do
           Process.exit(task, :kill)
 
           receive do
-            {:DOWN, ^task_monitor, :process, _, _} -> AbortSignal.clear(signal)
+            {:DOWN, ^task_monitor, :process, _, _} -> :ok
           end
 
         {:DOWN, ^task_monitor, :process, _, _} ->

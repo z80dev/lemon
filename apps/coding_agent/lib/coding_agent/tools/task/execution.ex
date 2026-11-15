@@ -331,7 +331,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     runner_opts =
       Keyword.merge(
         runner_opts,
-        Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
+        Keyword.take(opts, [:task_session_timeout_ms])
       )
 
     if Keyword.has_key?(runner_opts, :task_session_timeout_ms) do

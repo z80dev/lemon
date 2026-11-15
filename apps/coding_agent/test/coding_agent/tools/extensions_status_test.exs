@@ -56,7 +56,7 @@ defmodule CodingAgent.Tools.ExtensionsStatusTest do
       tool = ExtensionsStatus.tool("/tmp", session_id: "test-session")
 
       # Create a signal and abort it
-      signal = make_ref()
+      signal = LemonAgent.AbortSignal.new()
       LemonAgent.AbortSignal.abort(signal)
 
       result = tool.execute.("call-1", %{}, signal, nil)

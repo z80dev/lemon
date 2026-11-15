@@ -134,6 +134,7 @@ These rules complement the dependency policy table above. They must be respected
 | Assistant-platform tools (`remember`, `recall`, goal, kanban, media, skill tools) | `lemon_skills` | `coding_agent`, `lemon_core` |
 | Execution policy and authority context contracts | `lemon_core` | Any product-specific app |
 | Model/session routing | `lemon_router` | `coding_agent`, `lemon_skills` |
+| Optional GenAI model/tool telemetry span export | `lemon_agent` | `lemon_ai`, `lemon_core` (both remain umbrella-independent) |
 | Runtime boot, profile, health, env detection | `lemon_core/runtime` | Shell scripts (only thin wrappers allowed there) |
 
 When a new module does not fit an existing domain, update this table before adding the module.
