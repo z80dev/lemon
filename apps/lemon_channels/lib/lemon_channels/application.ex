@@ -31,7 +31,7 @@ defmodule LemonChannels.Application do
       # Dedupe
       LemonChannels.Outbox.Dedupe,
       # Outbox worker supervisor (tasks)
-      {Task.Supervisor, name: LemonChannels.Outbox.WorkerSupervisor},
+      {Task.Supervisor, LemonChannels.Outbox.worker_supervisor_options()},
       # Outbox
       LemonChannels.Outbox,
       # Durable supervision notices use Outbox admission and delivery receipts

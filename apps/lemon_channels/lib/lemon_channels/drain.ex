@@ -66,8 +66,8 @@ defmodule LemonChannels.Drain do
   end
 
   defp idle? do
-    %{queue_length: queued, processing_count: processing} = LemonChannels.Outbox.stats()
-    queued == 0 and processing == 0
+    %{queue_depth: depth} = LemonChannels.Outbox.stats()
+    depth == 0
   catch
     :exit, _ -> true
   end

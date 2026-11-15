@@ -3,80 +3,45 @@ defmodule LemonChannels.RegistryTest do
 
   alias LemonChannels.Registry
 
-  describe "get_plugin/1 resilience" do
-    test "returns nil when registry process is not running" do
-      # Stop the Registry if it's currently running so we can test the
-      # catch :exit fallback that protects the message-routing hot path.
-      #
-      # We stop the entire application supervisor tree to prevent automatic
-      # restarts, then call get_plugin while the process is down.
-      stop_registry!()
+  defmodule SnapshotPlugin do
+    @behaviour LemonChannels.Plugin
+    @impl true
+    def id, do: "registry-snapshot-regression"
+    @impl true
+    def meta, do: %{label: "Registry snapshot", capabilities: %{}, docs: nil}
+    @impl true
+    def child_spec(_opts), do: %{id: __MODULE__, start: {Task, :start_link, [fn -> :ok end]}}
+    @impl true
+    def normalize_inbound(_raw), do: {:error, :unsupported}
+    @impl true
+    def deliver(_payload), do: {:ok, :delivered}
+    @impl true
+    def gateway_methods, do: []
+  end
 
-      # With the Registry down, get_plugin must return nil (not crash).
+  setup do
+    on_exit(fn -> Registry.unregister(SnapshotPlugin.id()) end)
+    :ok
+  end
+
+  test "registration and unregistration synchronously publish the lookup snapshot" do
+    assert Registry.get_plugin(SnapshotPlugin.id()) == nil
+    assert :ok = Registry.register(SnapshotPlugin)
+    assert Registry.get_plugin(SnapshotPlugin.id()) == SnapshotPlugin
+    assert {:error, :already_registered} = Registry.register(SnapshotPlugin)
+    assert :ok = Registry.unregister(SnapshotPlugin.id())
+    assert Registry.get_plugin(SnapshotPlugin.id()) == nil
+  end
+
+  test "plugin lookup does not wait for the registry owner" do
+    assert :ok = Registry.register(SnapshotPlugin)
+    :ok = :sys.suspend(Registry)
+
+    try do
+      assert Registry.get_plugin(SnapshotPlugin.id()) == SnapshotPlugin
       assert Registry.get_plugin("nonexistent_plugin") == nil
-
-      # Restart the Registry so other tests are not affected.
-      ensure_registry_started()
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Helpers
-  # ---------------------------------------------------------------------------
-
-  # Temporarily unregister the Registry name so GenServer.call exits with
-  # :noproc.  We cannot simply GenServer.stop because the supervision tree
-  # restarts it immediately.
-  defp stop_registry! do
-    pid = Process.whereis(Registry)
-
-    if pid do
-      Process.unregister(Registry)
-      # The process itself is still alive under its supervisor, but calling
-      # GenServer.call(Registry, ...) will now fail with :noproc because the
-      # name is unregistered.  We'll re-register in ensure_registry_started.
-    end
-  end
-
-  defp ensure_registry_started do
-    case Process.whereis(Registry) do
-      pid when is_pid(pid) ->
-        # Already registered and running, nothing to do.
-        :ok
-
-      nil ->
-        # The process may still be alive under the supervisor but unnamed.
-        # Walk the supervisor children to find it and re-register.
-        children =
-          try do
-            Supervisor.which_children(LemonChannels.Supervisor)
-          rescue
-            _ -> []
-          catch
-            :exit, _ -> []
-          end
-
-        registry_child =
-          Enum.find(children, fn
-            {LemonChannels.Registry, pid, _, _} when is_pid(pid) -> Process.alive?(pid)
-            _ -> false
-          end)
-
-        case registry_child do
-          {_, pid, _, _} ->
-            try do
-              Process.register(pid, Registry)
-            rescue
-              ArgumentError -> :ok
-            end
-
-          nil ->
-            # Process was terminated; start fresh.
-            case Registry.start_link([]) do
-              {:ok, _pid} -> :ok
-              {:error, {:already_started, _pid}} -> :ok
-            end
-        end
+    after
+      :sys.resume(Registry)
     end
   end
 end

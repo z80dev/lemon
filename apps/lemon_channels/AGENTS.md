@@ -49,6 +49,13 @@ and script notifications.
 
 - Outbox FIFO grouping includes channel, account, peer kind/id and thread.
   Preserve order within a group while allowing independent groups to progress.
+- Acknowledged outbox admission crosses the Store durability barrier. Reload
+  pending records with their original keys, retry budget and FIFO sequence;
+  remove payload content only after a durable terminal transition. Pending
+  capacity includes admissions waiting for storage. Keep Store barriers off the
+  queue owner, lookup/check paths process-call-free, and delivery tasks capped.
+  Durable retry/expiry stamps use wall time; volatile dedupe/rate buckets use
+  monotonic time. Production recovery requires a persistent Store backend.
 - Outbox delivery is at-least-once for the channels whose adapters report an unknown outcome. An unknown outcome
   (adapter `{:outcome_unknown, _}`, adapter exception, worker exit) is retried
   with the same payload and idempotency key within the bounded `max_attempts`

@@ -9,6 +9,23 @@ defmodule LemonChannels.Outbox do
   - Automatic chunking for long messages
   - Telemetry emission
 
+  Enqueue acknowledges only after pending records cross the Store durability
+  barrier. Restart reloads their FIFO sequence and original idempotency keys.
+  Pending content expires after the caller policy `retention_ms` (24 hours by
+  default); confirmed keys retain the existing one-hour TTL, bounded by
+  `max_dedupe_entries` (5,000). Production crash recovery requires a persistent
+  Store backend; the ETS backend is intentionally ephemeral.
+
+  The queue owner never synchronously calls the limiter, dedupe, registry or
+  Store during admission. Store writes/barriers run in one linked, monitored
+  task; a failed barrier reports unknown admission and retries only that same
+  idempotent storage operation. Deliveries use a Task.Supervisor whose
+  `max_children` is the caller policy `max_concurrency` (default 32).
+
+  Named instances accept `:name`, `:store` and `:worker_supervisor` in
+  `start_link/1`; `enqueue/2` and `stats/1` address them without changing the
+  default instance. Startup limit options override the application defaults.
+
   ## Duplicate-delivery policy: at-least-once, bounded
 
   Delivery is at-least-once for the channels whose adapters report an unknown outcome. A delivery whose outcome is
@@ -43,15 +60,20 @@ defmodule LemonChannels.Outbox do
   require Logger
 
   alias LemonChannels.{OutboundPayload, Registry}
-  alias LemonChannels.Outbox.{Chunker, Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Chunker, Dedupe, QueueStore, RateLimiter}
 
   @worker_supervisor LemonChannels.Outbox.WorkerSupervisor
   @default_max_attempts 3
   @default_max_queue_size 5_000
+  @default_max_concurrency 32
+  @default_retention_ms 24 * 60 * 60 * 1000
+  @default_max_dedupe_entries 5_000
+  @cleanup_interval_ms 60_000
   @call_timeout_ms 5_000
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    {name, opts} = Keyword.pop(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -66,56 +88,76 @@ defmodule LemonChannels.Outbox do
   admission may still complete. Callers must not resend automatically; retries
   of an admitted delivery are owned by the outbox itself (see above).
   """
-  @spec enqueue(OutboundPayload.t()) :: {:ok, reference()} | {:error, term()}
-  def enqueue(%OutboundPayload{} = payload) do
-    GenServer.call(__MODULE__, {:enqueue, payload}, @call_timeout_ms)
+  @spec enqueue(GenServer.server(), OutboundPayload.t()) :: {:ok, reference()} | {:error, term()}
+  def enqueue(server \\ __MODULE__, %OutboundPayload{} = payload) do
+    request = :gen_server.send_request(server, {:enqueue, payload})
+
+    case :gen_server.receive_response(request, @call_timeout_ms) do
+      {:reply, result} ->
+        result
+
+      {:error, {:noproc, _server}} ->
+        {:error, :channels_outbox_unavailable}
+
+      {:error, {_reason, _server}} ->
+        {:error, {:outcome_unknown, :enqueue_interrupted}}
+
+      :timeout ->
+        Logger.warning("Outbox enqueue acknowledgement timed out; admission is unknown")
+        {:error, {:outcome_unknown, :enqueue_timeout}}
+    end
   catch
-    :exit, {:noproc, _} ->
-      {:error, :channels_outbox_unavailable}
-
-    :exit, {:timeout, _} ->
-      # IMPORTANT: The GenServer may still process this enqueue even though the
-      # call timed out on our side. The message sits in the GenServer mailbox and
-      # will be delivered eventually, but we have no way to get the ref back.
-      # Admission is ambiguous, not rejected. Callers must not resend.
-      Logger.warning(
-        "Outbox.enqueue timed out (message may still be delivered) " <>
-          "channel=#{payload.channel_id} account=#{payload.account_id} " <>
-          "idempotency_key=#{inspect(payload.idempotency_key)}"
-      )
-
-      {:error, {:outcome_unknown, :enqueue_timeout}}
-
-    :exit, reason ->
-      {:error, {:outbox_exit, reason}}
+    :exit, {:noproc, _} -> {:error, :channels_outbox_unavailable}
+    :exit, _reason -> {:error, {:outcome_unknown, :enqueue_interrupted}}
   end
 
   @doc """
   Returns current outbox statistics.
   """
-  @spec stats() :: map()
-  def stats do
-    GenServer.call(__MODULE__, :stats)
+  @spec stats(GenServer.server()) :: map()
+  def stats(server \\ __MODULE__) do
+    GenServer.call(server, :stats)
   end
 
   @impl true
-  def init(_opts) do
-    # The Outbox is sometimes started standalone in tests. Ensure the task supervisor
-    # exists so we can safely run supervised delivery tasks.
-    _ = ensure_worker_supervisor_started()
+  def init(opts) do
+    Process.flag(:trap_exit, true)
+    :ok = ensure_worker_supervisor_started(opts)
+    store = Keyword.get(opts, :store, LemonCore.Store)
+    receipt_limit = positive_option(:max_dedupe_entries, @default_max_dedupe_entries, opts)
 
-    {:ok,
-     %{
-       queue: :queue.new(),
-       processing: %{},
-       processing_groups: %{},
-       enqueued_total: 0,
-       max_queue_size: max_queue_size()
-     }}
+    with {:ok, entries, receipts, sequence} <- QueueStore.load(store, receipt_limit) do
+      send(self(), :process_queue)
+      Process.send_after(self(), :prune, @cleanup_interval_ms)
+
+      {:ok,
+       %{
+         queue: :queue.from_list(entries),
+         processing: %{},
+         processing_groups: %{},
+         enqueued_total: 0,
+         max_queue_size: max_queue_size(opts),
+         max_concurrency: max_concurrency(opts),
+         retention_ms: positive_option(:retention_ms, @default_retention_ms, opts),
+         worker_supervisor: Keyword.get(opts, :worker_supervisor, @worker_supervisor),
+         max_attempts:
+           if(Keyword.has_key?(opts, :max_attempts), do: max_attempts(opts), else: nil),
+         store: store,
+         sequence: sequence,
+         pending_count: 0,
+         storage_queue: :queue.new(),
+         storage_current: nil,
+         storage_task: nil,
+         receipts: receipts,
+         receipt_limit: receipt_limit
+       }}
+    else
+      _ -> {:stop, :outbox_store_unavailable}
+    end
   end
 
   @impl true
-  def handle_call({:enqueue, payload}, _from, state) do
+  def handle_call({:enqueue, payload}, from, state) do
     # Check idempotency
     case check_enqueue_idempotency(payload) do
       :duplicate ->
@@ -154,32 +196,23 @@ defmodule LemonChannels.Outbox do
 
           {:reply, {:error, :queue_full}, state}
         else
-          # Check rate limit
-          case RateLimiter.check(payload.channel_id, payload.account_id) do
-            :ok ->
-              # Enqueue all chunks for processing
-              state = enqueue_payloads(state, ref, payloads)
-              emit_queue_depth_telemetry(state, :enqueued, %{chunk_count: chunk_count})
+          {entries, sequence} = build_entries(state, ref, payloads)
+          {queue, superseded} = remove_superseded(state.queue, entries)
 
-              # Trigger processing
-              send(self(), :process_queue)
+          operation = %{
+            action: {:admit, from, ref, entries},
+            puts: Enum.map(entries, &QueueStore.pending_put/1),
+            deletes: Enum.map(superseded, &QueueStore.pending_delete/1)
+          }
 
-              {:reply, {:ok, ref}, state}
+          state = %{
+            state
+            | queue: queue,
+              sequence: sequence,
+              pending_count: state.pending_count + chunk_count
+          }
 
-            {:rate_limited, wait_ms} ->
-              # Still enqueue but will be delayed
-              state = enqueue_payloads(state, ref, payloads)
-
-              emit_queue_depth_telemetry(state, :enqueued_rate_limited, %{
-                chunk_count: chunk_count,
-                wait_ms: wait_ms
-              })
-
-              # Schedule processing after rate limit delay
-              Process.send_after(self(), :process_queue, wait_ms)
-
-              {:reply, {:ok, ref}, state}
-          end
+          {:noreply, queue_storage(state, operation)}
         end
     end
   end
@@ -191,7 +224,9 @@ defmodule LemonChannels.Outbox do
       processing_count: map_size(state.processing),
       queue_depth: queue_depth(state),
       max_queue_size: state.max_queue_size,
-      enqueued_total: state.enqueued_total
+      enqueued_total: state.enqueued_total,
+      pending_count: state.pending_count,
+      max_concurrency: state.max_concurrency
     }
 
     {:reply, stats, state}
@@ -207,49 +242,88 @@ defmodule LemonChannels.Outbox do
     {:noreply, process_available(state)}
   end
 
+  def handle_info({ref, result}, %{storage_task: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_storage(%{state | storage_task: nil}, result)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{storage_task: %Task{ref: ref}} = state) do
+    {:noreply, finish_storage(%{state | storage_task: nil}, {:error, :outbox_persistence_failed})}
+  end
+
+  def handle_info(:retry_storage, state) do
+    {:noreply, start_storage(state)}
+  end
+
+  def handle_info(:prune, state) do
+    Process.send_after(self(), :prune, @cleanup_interval_ms)
+    now = System.system_time(:millisecond)
+
+    {expired, receipts} =
+      state.receipts
+      |> :queue.to_list()
+      |> Enum.split_with(fn {_id, receipt} -> receipt.expires_at_ms < now end)
+
+    operation = %{
+      action: :prune,
+      puts: [],
+      deletes: Enum.map(expired, &QueueStore.receipt_delete/1)
+    }
+
+    state = %{state | receipts: :queue.from_list(receipts)}
+    state = if expired == [], do: state, else: queue_storage(state, operation)
+    send(self(), :process_queue)
+    {:noreply, state}
+  end
+
   # Task.Supervisor.async_nolink/2 sends `{ref, result}` on success, and `{:DOWN, ref, ...}`
   # on failure. We key `processing` by the task monitor ref for correct per-chunk bookkeeping.
   def handle_info({task_ref, result}, state) when is_reference(task_ref) do
-    case Map.pop(state.processing, task_ref) do
-      {nil, _} ->
+    case Map.get(state.processing, task_ref) do
+      nil ->
         {:noreply, state}
 
-      {entry, processing} ->
-        # Flush a pending DOWN for this task ref if it already arrived.
+      entry ->
         Process.demonitor(task_ref, [:flush])
-        state = %{state | processing: processing}
-        state = release_processing_group(state, entry, task_ref)
 
         case result do
           {:ok, _delivery_ref} ->
-            # Mark as delivered for idempotency
-            mark_delivered(entry.payload)
-            notify_delivery(entry, result)
+            receipt = QueueStore.receipt(entry)
+            receipts = :queue.in(receipt, state.receipts)
+            {evicted, receipts} = trim_receipts(receipts, state.receipt_limit)
 
-            # Continue processing queue
-            send(self(), :process_queue)
-            {:noreply, state}
+            operation = %{
+              action: {:complete, task_ref, entry, result},
+              puts: [QueueStore.receipt_put(receipt)],
+              deletes: [
+                QueueStore.pending_delete(entry) | Enum.map(evicted, &QueueStore.receipt_delete/1)
+              ]
+            }
+
+            {:noreply, queue_storage(%{state | receipts: receipts}, operation)}
+
+          {:error, {:delivery_not_started, _reason}} ->
+            state = finish_processing(state, task_ref, entry)
+            entry = %{entry | available_at_ms: System.system_time(:millisecond) + 50}
+            Process.send_after(self(), :process_queue, 50)
+            {:noreply, %{state | queue: insert_ordered(state.queue, entry)}}
 
           {:error, reason} ->
             reason = LemonChannels.DeliveryError.classify(reason)
-            {:noreply, handle_delivery_failure(state, entry, reason)}
+            {:noreply, handle_delivery_failure(state, task_ref, entry, reason)}
         end
     end
   end
 
   def handle_info({:DOWN, task_ref, :process, _worker_pid, reason}, state)
       when is_reference(task_ref) do
-    case Map.pop(state.processing, task_ref) do
-      {nil, _processing} ->
+    case Map.get(state.processing, task_ref) do
+      nil ->
         {:noreply, state}
 
-      {entry, processing} ->
-        state = %{state | processing: processing}
-        state = release_processing_group(state, entry, task_ref)
-
-        # A worker may have sent the message before dying, so its outcome is
-        # unknown and follows the bounded at-least-once retry policy.
-        {:noreply, handle_delivery_failure(state, entry, {:worker_exit, reason})}
+      entry ->
+        # The platform may have accepted the write before the worker died.
+        {:noreply, handle_delivery_failure(state, task_ref, entry, {:worker_exit, reason})}
     end
   end
 
@@ -257,47 +331,40 @@ defmodule LemonChannels.Outbox do
     {:noreply, state}
   end
 
+  @impl true
+  def terminate(_reason, state) do
+    if state.storage_task, do: Process.exit(state.storage_task.pid, :shutdown)
+
+    Enum.each(state.processing, fn {_ref, entry} ->
+      if pid = Map.get(entry, :worker_pid), do: Process.exit(pid, :shutdown)
+    end)
+
+    :ok
+  end
+
   # Retryable failures are requeued while the shared `max_attempts` budget
   # lasts; the retried entry keeps its payload and therefore its idempotency key.
   # Anything else, or an exhausted budget, is reported as a terminal failure.
   # `:unknown_channel` is a configuration/programming error and will never
   # succeed by retrying.
-  defp handle_delivery_failure(state, entry, reason) do
-    if retryable_reason?(reason) and entry.attempts < max_attempts() do
+  defp handle_delivery_failure(state, task_ref, entry, reason) do
+    if retryable_reason?(reason) and entry.attempts < (state.max_attempts || max_attempts()) do
       {entry, delay_ms} = schedule_retry(entry, reason)
+      Logger.warning("Outbox delivery retry scheduled; attempt=#{entry.attempts}")
 
-      if LemonChannels.DeliveryError.outcome_unknown?(reason) do
-        Logger.warning(
-          "Retrying delivery after unknown outcome (at-least-once; a duplicate is possible): " <>
-            "attempt=#{entry.attempts}/#{max_attempts()} reason=#{inspect(reason, limit: 50)} " <>
-            "meta=#{inspect(outbox_failure_meta(entry))}"
-        )
-      end
-
-      state = %{state | queue: :queue.in(entry, state.queue)}
-
-      emit_queue_depth_telemetry(state, :retry_scheduled, %{
-        delay_ms: delay_ms,
-        attempts: entry.attempts,
-        reason: inspect(reason, limit: 50)
+      queue_storage(state, %{
+        action: {:retry, task_ref, entry, delay_ms},
+        puts: [QueueStore.pending_put(entry)],
+        deletes: []
       })
-
-      Process.send_after(self(), :process_queue, delay_ms)
-      state
     else
-      reason = finalize_failure_reason(reason)
-      failure_meta = outbox_failure_meta(entry)
+      Logger.warning("Outbox delivery failed; retries=#{entry.attempts}")
 
-      Logger.warning(
-        "Delivery failed after #{entry.attempts} retries: #{inspect(reason)} " <>
-          "meta=#{inspect(failure_meta)}"
-      )
-
-      notify_delivery(entry, {:error, reason})
-
-      # Continue processing queue even after failure
-      send(self(), :process_queue)
-      state
+      queue_storage(state, %{
+        action: {:complete, task_ref, entry, {:error, finalize_failure_reason(reason)}},
+        puts: [],
+        deletes: [QueueStore.pending_delete(entry)]
+      })
     end
   end
 
@@ -327,17 +394,7 @@ defmodule LemonChannels.Outbox do
   defp maybe_notify_delivery(_payload, _result), do: :ok
 
   defp outbox_failure_meta(entry) do
-    payload = entry.payload
-    meta = payload.meta || %{}
-
-    %{
-      channel_id: payload.channel_id,
-      account_id: payload.account_id,
-      kind: payload.kind,
-      peer: payload.peer,
-      run_id: meta[:run_id] || meta["run_id"],
-      session_key: meta[:session_key] || meta["session_key"]
-    }
+    %{kind: entry.payload.kind, attempts: entry.attempts}
   end
 
   # Chunk a payload if its content exceeds the channel's chunk limit
@@ -398,58 +455,72 @@ defmodule LemonChannels.Outbox do
     [payload]
   end
 
-  defp enqueue_payloads(state, ref, payloads) do
-    state =
-      Enum.reduce(payloads, state, fn payload, acc ->
-        payload =
-          if payload.channel_id == "discord" do
-            %{payload | meta: Map.put(payload.meta || %{}, :delivery_id, make_ref())}
-          else
-            payload
-          end
+  defp build_entries(state, ref, payloads) do
+    now = System.system_time(:millisecond)
 
-        entry = %{
-          ref: ref,
-          payload: payload,
-          attempts: 0,
-          available_at_ms: nil,
-          chunk_index: get_in(payload.meta || %{}, [:chunk_index]) || 0,
-          group_key: delivery_group_key(payload)
-        }
+    Enum.map_reduce(payloads, state.sequence, fn payload, sequence ->
+      id = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+      payload = %{payload | idempotency_key: payload.idempotency_key || "outbox:#{id}"}
 
-        queue =
-          acc.queue
-          |> drop_superseded_queued_edits(entry)
-          |> then(&:queue.in(entry, &1))
+      payload =
+        if payload.channel_id == "discord",
+          do: %{payload | meta: Map.put(payload.meta || %{}, :delivery_id, make_ref())},
+          else: payload
 
-        %{acc | queue: queue}
+      entry = %{
+        durable_id: id,
+        sequence: sequence + 1,
+        expires_at_ms: now + state.retention_ms,
+        ref: ref,
+        payload: payload,
+        attempts: 0,
+        available_at_ms: nil,
+        chunk_index: get_in(payload.meta || %{}, [:chunk_index]) || 0,
+        group_key: delivery_group_key(payload)
+      }
+
+      {entry, sequence + 1}
+    end)
+  end
+
+  defp remove_superseded(queue, entries) do
+    edits = Enum.filter(entries, &(&1.payload.kind == :edit))
+    remove_superseded_edits(queue, edits)
+  end
+
+  defp remove_superseded_edits(queue, []), do: {queue, []}
+
+  defp remove_superseded_edits(queue, entries) do
+    {superseded, kept} =
+      queue
+      |> :queue.to_list()
+      |> Enum.split_with(fn queued ->
+        Enum.any?(entries, fn entry ->
+          not is_nil(edit_target_message_id(entry.payload)) and
+            queued.group_key == entry.group_key and queued.payload.kind == :edit and
+            not voice_transcript?(queued.payload) and
+            edit_target_message_id(queued.payload) == edit_target_message_id(entry.payload)
+        end)
       end)
 
-    %{state | enqueued_total: state.enqueued_total + length(payloads)}
+    {:queue.from_list(kept), superseded}
   end
 
-  defp drop_superseded_queued_edits(
-         queue,
-         %{payload: %OutboundPayload{kind: :edit} = payload} = entry
-       ) do
-    case edit_target_message_id(payload) do
-      nil ->
-        queue
+  defp insert_ordered(queue, entry) do
+    case :queue.peek_r(queue) do
+      :empty ->
+        :queue.in(entry, queue)
 
-      message_id ->
-        queue
-        |> :queue.to_list()
-        |> Enum.reject(fn queued ->
-          queued.group_key == entry.group_key and
-            match?(%OutboundPayload{kind: :edit}, queued.payload) and
-            not voice_transcript?(queued.payload) and
-            edit_target_message_id(queued.payload) == message_id
-        end)
-        |> :queue.from_list()
+      {:value, last} when last.sequence <= entry.sequence ->
+        :queue.in(entry, queue)
+
+      _ ->
+        {before, after_entries} =
+          queue |> :queue.to_list() |> Enum.split_while(&(&1.sequence <= entry.sequence))
+
+        :queue.from_list(before ++ [entry | after_entries])
     end
   end
-
-  defp drop_superseded_queued_edits(queue, _entry), do: queue
 
   defp process_available(state) do
     {state, min_wait_ms} = do_process_available(state, nil)
@@ -461,6 +532,10 @@ defmodule LemonChannels.Outbox do
     state
   end
 
+  defp do_process_available(state, min_wait_ms)
+       when map_size(state.processing) >= state.max_concurrency,
+       do: {state, min_wait_ms}
+
   defp do_process_available(state, min_wait_ms) do
     case dequeue_next_available(state.queue, state.processing_groups) do
       {:none, queue, wait_ms} ->
@@ -469,11 +544,24 @@ defmodule LemonChannels.Outbox do
       {:ready, entry, queue, wait_ms} ->
         min_wait_ms = min_wait(min_wait_ms, wait_ms)
 
-        if retry_already_confirmed?(entry) do
-          suppress_confirmed_retry(entry)
-          do_process_available(%{state | queue: queue}, min_wait_ms)
-        else
-          dispatch_entry(state, entry, queue, min_wait_ms)
+        cond do
+          retry_already_confirmed?(entry) ->
+            suppress_confirmed_retry(entry)
+            state = stage_removal(state, entry, queue, {:error, :duplicate})
+            do_process_available(state, min_wait_ms)
+
+          Map.get(entry, :expires_at_ms, :infinity) <= System.system_time(:millisecond) ->
+            state = stage_removal(state, entry, queue, {:error, :expired})
+            do_process_available(state, min_wait_ms)
+
+          Map.get(entry, :recovered, false) and
+              is_nil(Registry.get_plugin(entry.payload.channel_id)) ->
+            entry = %{entry | available_at_ms: System.system_time(:millisecond) + 1_000}
+            state = %{state | queue: insert_ordered(queue, entry)}
+            do_process_available(state, min_wait(min_wait_ms, 1_000))
+
+          true ->
+            dispatch_entry(state, entry, queue, min_wait_ms)
         end
     end
   end
@@ -481,102 +569,79 @@ defmodule LemonChannels.Outbox do
   defp dispatch_entry(state, entry, queue, min_wait_ms) do
     case RateLimiter.consume(entry.payload.channel_id, entry.payload.account_id) do
       :ok ->
-        case start_delivery_task(entry) do
-          {:ok, %Task{} = task} ->
-            processing = Map.put(state.processing, task.ref, entry)
-            processing_groups = Map.put(state.processing_groups, entry.group_key, task.ref)
+        task = start_delivery_task(entry, state.worker_supervisor)
+        entry = Map.put(entry, :worker_pid, task.pid)
+        processing = Map.put(state.processing, task.ref, entry)
+        processing_groups = Map.put(state.processing_groups, entry.group_key, task.ref)
 
-            state = %{
-              state
-              | queue: queue,
-                processing: processing,
-                processing_groups: processing_groups
-            }
+        state = %{
+          state
+          | queue: queue,
+            processing: processing,
+            processing_groups: processing_groups
+        }
 
-            do_process_available(state, min_wait_ms)
-
-          {:error, reason} ->
-            Logger.warning("Failed to start outbox delivery worker: #{inspect(reason)}")
-            requeued = :queue.in(entry, queue)
-            {%{state | queue: requeued}, min_wait(min_wait_ms, 50)}
-        end
+        do_process_available(state, min_wait_ms)
 
       {:rate_limited, wait_ms} ->
-        requeued = :queue.in(entry, queue)
+        entry = %{entry | available_at_ms: System.system_time(:millisecond) + wait_ms}
+        requeued = insert_ordered(queue, entry)
         min_wait_ms = min_wait(min_wait_ms, wait_ms)
         do_process_available(%{state | queue: requeued}, min_wait_ms)
     end
   end
 
-  # A retried entry whose idempotency key was confirmed delivered in the
-  # meantime (e.g. by a same-key entry that succeeded first) must not be re-sent.
-  defp retry_already_confirmed?(%{attempts: attempts, payload: payload}) when attempts > 0 do
-    check_idempotency(payload) == :duplicate
-  end
-
-  defp retry_already_confirmed?(entry) do
-    voice_transcript?(entry.payload) and check_idempotency(entry.payload) == :duplicate
-  end
+  # Also covers a crash between persisting a confirmed receipt and deleting its
+  # pending record. No recovered confirmed key reaches the adapter again.
+  defp retry_already_confirmed?(entry), do: check_idempotency(entry.payload) == :duplicate
 
   defp suppress_confirmed_retry(entry) do
     Logger.info(
       "Suppressed delivery retry: idempotency key already confirmed delivered " <>
         "meta=#{inspect(outbox_failure_meta(entry))}"
     )
-
-    notify_delivery(entry, {:error, :duplicate})
   end
 
   defp dequeue_next_available(queue, processing_groups) do
-    len = :queue.len(queue)
-
-    do_dequeue_next_available(
-      queue,
-      processing_groups,
-      len,
-      System.monotonic_time(:millisecond),
+    scan_available(
+      :queue.to_list(queue),
+      [],
+      MapSet.new(Map.keys(processing_groups)),
+      System.system_time(:millisecond),
       nil
     )
   end
 
-  defp do_dequeue_next_available(queue, _processing_groups, 0, _now_ms, wait_ms),
-    do: {:none, queue, wait_ms}
+  defp scan_available([], skipped, _blocked, _now, wait_ms),
+    do: {:none, :queue.from_list(Enum.reverse(skipped)), wait_ms}
 
-  defp do_dequeue_next_available(queue, processing_groups, remaining, now_ms, min_wait_ms) do
-    case :queue.out(queue) do
-      {:empty, _} ->
-        {:none, queue, min_wait_ms}
+  defp scan_available([entry | rest], skipped, blocked, now, wait_ms) do
+    entry_wait =
+      if Map.get(entry, :expires_at_ms, :infinity) <= now, do: 0, else: entry_wait_ms(entry, now)
 
-      {{:value, entry}, rest} ->
-        entry_wait_ms = entry_wait_ms(entry, now_ms)
-
-        cond do
-          entry_wait_ms > 0 ->
-            # Entry is waiting for its retry window; rotate and continue scanning.
-            min_wait_ms = min_wait(min_wait_ms, entry_wait_ms)
-
-            do_dequeue_next_available(
-              :queue.in(entry, rest),
-              processing_groups,
-              remaining - 1,
-              now_ms,
-              min_wait_ms
-            )
-
-          Map.has_key?(processing_groups, entry.group_key) ->
-            # Group is currently in-flight; rotate to preserve per-group ordering.
-            do_dequeue_next_available(
-              :queue.in(entry, rest),
-              processing_groups,
-              remaining - 1,
-              now_ms,
-              min_wait_ms
-            )
-
-          true ->
-            {:ready, entry, rest, min_wait_ms}
-        end
+    if MapSet.member?(blocked, entry.group_key) or entry_wait > 0 do
+      wait_ms = if entry_wait > 0, do: min_wait(wait_ms, entry_wait), else: wait_ms
+      scan_available(rest, [entry | skipped], MapSet.put(blocked, entry.group_key), now, wait_ms)
+    else
+      {:ready, entry, :queue.from_list(Enum.reverse(skipped, rest)), wait_ms}
     end
+  end
+
+  defp stage_removal(state, entry, queue, result) do
+    ref = make_ref()
+
+    state = %{
+      state
+      | queue: queue,
+        processing: Map.put(state.processing, ref, entry),
+        processing_groups: Map.put(state.processing_groups, entry.group_key, ref)
+    }
+
+    queue_storage(state, %{
+      action: {:complete, ref, entry, result},
+      puts: [],
+      deletes: [QueueStore.pending_delete(entry)]
+    })
   end
 
   defp release_processing_group(state, entry, task_ref) do
@@ -615,22 +680,37 @@ defmodule LemonChannels.Outbox do
 
   defp edit_target_message_id(_payload), do: nil
 
-  defp start_delivery_task(entry) do
-    _ = ensure_worker_supervisor_started()
-
+  defp start_delivery_task(entry, worker_supervisor) do
     payload = entry.payload
 
-    try do
-      {:ok, Task.Supervisor.async_nolink(@worker_supervisor, fn -> do_deliver(payload) end)}
-    catch
-      :exit, reason -> {:error, reason}
-    end
+    # Task.Supervisor admission is synchronous by design. A linked launcher
+    # keeps that call off the queue owner; both launcher and delivery die with
+    # the owner, while adapter failures cannot take the owner down.
+    Task.async(fn ->
+      launcher = self()
+
+      try do
+        task =
+          Task.Supervisor.async_nolink(worker_supervisor, fn ->
+            Process.link(launcher)
+            do_deliver(payload)
+          end)
+
+        Task.await(task, :infinity)
+      rescue
+        _ -> {:error, {:delivery_not_started, :capacity}}
+      catch
+        :exit, _ -> {:error, {:outcome_unknown, :worker_exit}}
+      end
+    end)
   end
 
-  defp ensure_worker_supervisor_started do
-    case Process.whereis(@worker_supervisor) do
+  defp ensure_worker_supervisor_started(opts) do
+    worker_supervisor = Keyword.get(opts, :worker_supervisor, @worker_supervisor)
+
+    case Process.whereis(worker_supervisor) do
       nil ->
-        case Task.Supervisor.start_link(name: @worker_supervisor) do
+        case Task.Supervisor.start_link(worker_supervisor_options(opts)) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
           {:error, _} = err -> err
@@ -675,17 +755,14 @@ defmodule LemonChannels.Outbox do
               LemonCore.Telemetry.emit(
                 [:lemon, :channels, :deliver, :exception],
                 %{duration: System.monotonic_time() - start_time},
-                Map.merge(meta, %{
-                  kind: :exception,
-                  reason: Exception.message(error),
-                  stacktrace: __STACKTRACE__
-                })
+                Map.put(meta, :kind, :exception)
               )
 
-              # Observability only: let the supervisor report DOWN. The outbox
-              # treats a worker exit as an unknown outcome and retries it under
-              # the bounded at-least-once policy.
-              reraise error, __STACKTRACE__
+              # Do not let Task log arbitrary adapter exception text or frames.
+              {:error, {:worker_exit, {error, []}}}
+          catch
+            :exit, reason -> {:error, {:worker_exit, reason}}
+            _kind, _reason -> {:error, {:worker_exit, :adapter_failure}}
           end
       end
 
@@ -738,10 +815,149 @@ defmodule LemonChannels.Outbox do
     Dedupe.mark(channel_id, key)
   end
 
-  defp max_attempts do
+  @doc false
+  def worker_supervisor_options(opts \\ []) do
+    [
+      name: Keyword.get(opts, :worker_supervisor, @worker_supervisor),
+      max_children: max_concurrency(opts)
+    ]
+  end
+
+  defp max_concurrency(opts),
+    do: positive_option(:max_concurrency, @default_max_concurrency, opts)
+
+  defp positive_option(key, default, overrides) do
+    config = Application.get_env(:lemon_channels, __MODULE__, [])
+    config = if is_list(config), do: config, else: []
+
+    case Keyword.get(overrides, key, Keyword.get(config, key, default)) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> default
+    end
+  end
+
+  defp queue_storage(state, operation) do
+    state = %{state | storage_queue: :queue.in(operation, state.storage_queue)}
+    if is_nil(state.storage_current), do: start_storage(state), else: state
+  end
+
+  defp start_storage(%{storage_task: %Task{}} = state), do: state
+
+  defp start_storage(%{storage_current: nil} = state) do
+    case :queue.out(state.storage_queue) do
+      {:empty, _} ->
+        state
+
+      {{:value, operation}, queue} ->
+        start_storage(%{state | storage_current: operation, storage_queue: queue})
+    end
+  end
+
+  defp start_storage(state) do
+    %{store: store, storage_current: operation} = state
+
+    task =
+      Task.async(fn ->
+        try do
+          QueueStore.commit(store, operation.puts, operation.deletes)
+        rescue
+          _ -> {:error, :outbox_persistence_failed}
+        catch
+          _kind, _reason -> {:error, :outbox_persistence_failed}
+        end
+      end)
+
+    %{state | storage_task: task}
+  end
+
+  defp finish_storage(state, :ok) do
+    operation = state.storage_current
+    state = %{state | storage_current: nil}
+
+    state =
+      case operation.action do
+        {:admit, from, ref, entries} ->
+          if from, do: GenServer.reply(from, {:ok, ref})
+
+          queue =
+            Enum.reduce(entries, state.queue, fn entry, queue -> insert_ordered(queue, entry) end)
+
+          state = %{
+            state
+            | queue: queue,
+              pending_count: state.pending_count - length(entries),
+              enqueued_total: state.enqueued_total + length(entries)
+          }
+
+          emit_queue_depth_telemetry(state, :enqueued, %{chunk_count: length(entries)})
+          state
+
+        {:retry, ref, entry, delay_ms} ->
+          state = finish_processing(state, ref, entry)
+          state = %{state | queue: insert_ordered(state.queue, entry)}
+          Process.send_after(self(), :process_queue, delay_ms)
+
+          emit_queue_depth_telemetry(state, :retry_scheduled, %{
+            delay_ms: delay_ms,
+            attempts: entry.attempts,
+            channel_id: entry.payload.channel_id
+          })
+
+          state
+
+        {:complete, ref, entry, result} ->
+          if match?({:ok, _}, result), do: mark_delivered(entry.payload)
+          state = finish_processing(state, ref, entry)
+          notify_delivery(entry, result)
+          state
+
+        :prune ->
+          state
+      end
+
+    send(self(), :process_queue)
+    start_storage(state)
+  end
+
+  defp finish_storage(state, _failure) do
+    Logger.warning("Outbox persistence failed; retaining bounded pending operation")
+
+    operation =
+      case state.storage_current.action do
+        {:admit, from, ref, entries} ->
+          if from,
+            do: GenServer.reply(from, {:error, {:outcome_unknown, :outbox_persistence_failed}})
+
+          %{state.storage_current | action: {:admit, nil, ref, entries}}
+
+        _ ->
+          state.storage_current
+      end
+
+    Process.send_after(self(), :retry_storage, 1_000)
+    %{state | storage_current: operation}
+  end
+
+  defp finish_processing(state, ref, entry) do
+    state = %{state | processing: Map.delete(state.processing, ref)}
+    release_processing_group(state, entry, ref)
+  end
+
+  defp trim_receipts(receipts, limit) do
+    {evicted, kept} =
+      receipts |> :queue.to_list() |> Enum.split(max(:queue.len(receipts) - limit, 0))
+
+    {evicted, :queue.from_list(kept)}
+  end
+
+  defp max_attempts(overrides \\ []) do
     case Application.get_env(:lemon_channels, __MODULE__, []) do
       opts when is_list(opts) ->
-        case Keyword.get(opts, :max_attempts, @default_max_attempts) do
+        case Keyword.get(
+               overrides,
+               :max_attempts,
+               Keyword.get(opts, :max_attempts, @default_max_attempts)
+             ) do
           value when is_integer(value) and value >= 0 -> value
           _ -> @default_max_attempts
         end
@@ -751,10 +967,14 @@ defmodule LemonChannels.Outbox do
     end
   end
 
-  defp max_queue_size do
+  defp max_queue_size(overrides) do
     case Application.get_env(:lemon_channels, __MODULE__, []) do
       opts when is_list(opts) ->
-        case Keyword.get(opts, :max_queue_size, @default_max_queue_size) do
+        case Keyword.get(
+               overrides,
+               :max_queue_size,
+               Keyword.get(opts, :max_queue_size, @default_max_queue_size)
+             ) do
           :infinity -> :infinity
           value when is_integer(value) and value > 0 -> value
           _ -> @default_max_queue_size
@@ -768,7 +988,7 @@ defmodule LemonChannels.Outbox do
   defp schedule_retry(entry, reason) do
     attempt = entry.attempts + 1
     delay_ms = retry_delay(attempt, reason)
-    available_at_ms = System.monotonic_time(:millisecond) + delay_ms
+    available_at_ms = System.system_time(:millisecond) + delay_ms
     {%{entry | attempts: attempt, available_at_ms: available_at_ms}, delay_ms}
   end
 
@@ -840,7 +1060,7 @@ defmodule LemonChannels.Outbox do
   defp queue_full?(_state, _incoming_count), do: false
 
   defp queue_depth(state) do
-    :queue.len(state.queue) + map_size(state.processing)
+    :queue.len(state.queue) + map_size(state.processing) + state.pending_count
   end
 
   defp emit_queue_depth_telemetry(state, event, metadata) do
