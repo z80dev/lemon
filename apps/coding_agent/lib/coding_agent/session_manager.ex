@@ -591,8 +591,15 @@ defmodule CodingAgent.SessionManager do
   """
   @spec append_to_file(String.t(), SessionEntry.t()) :: :ok | {:error, term()}
   def append_to_file(path, %SessionEntry{} = entry) do
-    line = encode_entry(entry) <> "\n"
-    File.write(path, line, [:append, :binary])
+    with {:ok, device} <- :file.open(path, [:append, :raw, :binary]) do
+      try do
+        with :ok <- :file.write(device, [encode_entry(entry), "\n"]),
+             :ok <- :file.datasync(device),
+             do: :ok
+      after
+        :file.close(device)
+      end
+    end
   end
 
   @doc """
@@ -620,14 +627,19 @@ defmodule CodingAgent.SessionManager do
 
     entry = %{entry | id: new_id, parent_id: parent_id}
 
-    if session.append_device do
-      case :file.write(session.append_device, [encode_entry(entry), "\n"]) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          raise File.Error, reason: reason, action: "append session", path: session.file_path
+    result =
+      cond do
+        session.append_device -> :file.write(session.append_device, [encode_entry(entry), "\n"])
+        session.file_path -> append_to_file(session.file_path, entry)
+        true -> :ok
       end
+
+    case result do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "append session", path: session.file_path
     end
 
     %{
