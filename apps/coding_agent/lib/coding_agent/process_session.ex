@@ -1314,6 +1314,7 @@ defmodule CodingAgent.ProcessSession do
 
   defp publish_output(state) do
     :ets.insert(state.tail_table, {:snapshot, state})
+    ProcessStore.notify_change(state.process_id)
     state
   end
 

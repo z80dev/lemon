@@ -620,6 +620,17 @@ Set `output_schema` on a task or batch child to require a JSON-only final respon
 
 Task state uses a single-writer contract. `TaskStoreServer` serializes record changes, bounded event appends, explicit-join followup reservations/suppression, and terminalization. Competing completion/error callbacks are first-writer-wins, repeated terminal callbacks are idempotent, and late running/progress updates preserve the terminal state. `RunGraphServer` completes its DETS recovery before reporting startup readiness, then serializes live inserts, transitions, budget updates, and deletes so recovery cannot overwrite accepted live state.
 
+Native joins and swarm dependency scheduling subscribe before reading state and
+wake from existing Bus run/task notifications and process monitors, not refresh
+polls. Parent-question delivery acknowledgements and queued steering wake joins
+too. Each join keeps one absolute deadline across all wake-ups; cancellation,
+followup reservations and owner-scoped task identity are unchanged. Foreground
+Bash attachments likewise wake on published owner-tail/output and lifecycle
+changes, retaining the original detach deadline and fixed process identity.
+Unattached child inbox admission runs in a per-child mailbox owner with the
+existing 64-message / 256-KiB cap, rather than a queue in the shared control
+coordinator.
+
 For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. Joins reserve followup delivery while waiting. `wait_all` permanently suppresses completed joined tasks, while `wait_any` suppresses only its completed winner and releases every loser; failure, abort, an unknown run, or a child clarification releases the reservation without permanent suppression. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup preserves the full visible task answer and submits router fallbacks as native followup runs; delivery failures are contained after task/run state is terminalized. Async launches fail immediately when their supervised worker cannot start, rather than returning a task id that remains queued forever. Async completions default to `:followup`; `:steer` and `:steer_backlog` also use non-preempting delivery. Live parents finish every already-issued tool call, then receive the completion before their next model request; unavailable parents fall back to router followup runs.
 
 The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
@@ -779,6 +790,11 @@ A session is a `GenServer` process that wraps an `LemonAgent.Agent` loop. Each s
 The Session queue fields are diagnostic mirrors; `LemonAgent.Agent` owns actual
 delivery and consumption. Terminal, cancel, error, abort, and agent-exit paths
 clear the mirrors so `diagnostics/1` cannot report stale follow-ups.
+
+`Session.streaming?/1` reads only the streaming flag. A prompt is admitted from
+the Session's authoritative state; another prompt after that transition returns
+`{:error, :busy}`. Native child continuations do not copy full Session state or
+retry `:already_streaming` on a timer.
 
 Sessions are started under `SessionSupervisor` (dynamic) and registered in
 `SessionRegistry` by their persisted UUID. Registry metadata also retains the

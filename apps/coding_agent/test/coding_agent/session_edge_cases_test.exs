@@ -244,7 +244,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
 
       # Attempt second prompt while streaming
       result = Session.prompt(session, "Second")
-      assert result == {:error, :already_streaming}
+      assert result == {:error, :busy}
 
       assert_receive {:stream_called, stream_pid}, 2_000
       send(stream_pid, :release)

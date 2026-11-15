@@ -15,6 +15,19 @@ defmodule CodingAgent.Session do
   idle prompt also cancels any background auto-compaction snapshot before
   dispatch, so stale compaction cannot delay or mutate the new turn.
 
+  Prompt admission and completion share the session's GenServer state:
+  `prompt/3` marks the turn streaming before replying `:ok`, including deferred
+  dispatch, and rejects another prompt with `{:error, :busy}`. `streaming?/1`
+  reads only that boolean, without copying the transcript or querying the agent.
+  Calls made after a terminal event wait for its session handler to finish, so
+  callers can start the next turn without polling or retrying admission.
+
+  Accepted steering and redirects notify internal waiters with
+  `{:session_coord, :steering_changed}` on the Bus topic
+  `"session_coord:" <> List.to_string(:erlang.pid_to_list(session_pid))`, after
+  the agent acknowledges queue admission. Waiters subscribe before checking
+  their interruption predicate; the notification is a wake-up, not queue data.
+
   ## Non-blocking model calls
 
   The session process never waits on a model call inside `handle_call`. Manual
@@ -510,14 +523,15 @@ defmodule CodingAgent.Session do
   @doc """
   Send a user prompt to the session.
 
-  Returns `:ok` if the prompt was accepted, `{:error, :already_streaming}` if
-  the session is already processing a prompt.
+  Returns `:ok` after marking the accepted turn streaming, or `{:error, :busy}`
+  if a prompt or manual compaction/summary is already in progress. Deferred
+  prompt dispatch is part of the accepted turn and also reports busy.
 
   ## Options
 
     * `:images` - List of image content blocks to include
   """
-  @spec prompt(GenServer.server(), String.t(), keyword()) :: :ok | {:error, :already_streaming}
+  @spec prompt(GenServer.server(), String.t(), keyword()) :: :ok | {:error, :busy}
   def prompt(session, text, opts \\ []) do
     GenServer.call(session, {:prompt, text, opts})
   end
@@ -543,13 +557,9 @@ defmodule CodingAgent.Session do
   # Control sends ordered requests without waiting on a busy recipient. The
   # caller owns the reply alias and waits outside Control's critical path.
   def request_steering(session, text, reply_to) when is_pid(session) do
-    if Process.alive?(session) do
-      token = make_ref()
-      GenServer.cast(session, {:steer, text, false, reply_to, token})
-      {:pending, session, token, System.monotonic_time(:millisecond) + 5_000}
-    else
-      :failed
-    end
+    token = make_ref()
+    GenServer.cast(session, {:steer, text, false, reply_to, token})
+    {:pending, session, token, System.monotonic_time(:millisecond) + 5_000}
   end
 
   @doc false
@@ -680,6 +690,18 @@ defmodule CodingAgent.Session do
   def subscribe(session, opts \\ []) do
     mode = Keyword.get(opts, :mode, :direct)
     GenServer.call(session, {:subscribe, self(), mode, opts})
+  end
+
+  @doc """
+  Return whether the session has an accepted prompt still in progress.
+
+  Includes deferred dispatch and prompt recovery. This scalar state query does
+  not copy session history or consult the underlying agent. Manual operations
+  can make `prompt/3` busy without making the session streaming.
+  """
+  @spec streaming?(GenServer.server()) :: boolean()
+  def streaming?(session) do
+    GenServer.call(session, :streaming?)
   end
 
   @doc """
@@ -1098,7 +1120,7 @@ defmodule CodingAgent.Session do
 
   def handle_call({:prompt, text, opts}, _from, state) do
     if state.is_streaming or ManualOperation.in_flight?(state) do
-      {:reply, {:error, :already_streaming}, state}
+      {:reply, {:error, :busy}, state}
     else
       state = CompactionLifecycle.cancel_for_new_prompt(state)
       state = %{state | terminal_event: nil}
@@ -1141,10 +1163,13 @@ defmodule CodingAgent.Session do
     outgoing = attach_recalled_context(message, recalled)
 
     if state.is_streaming do
-      LemonAgent.Agent.steer(state.agent, outgoing,
-        system_prompt: state.system_prompt,
-        preempt: false
-      )
+      :ok =
+        LemonAgent.Agent.steer(state.agent, outgoing,
+          system_prompt: state.system_prompt,
+          preempt: false
+        )
+
+      notify_steering_changed()
 
       queue = :queue.in(message, state.follow_up_queue)
       {:reply, :ok, %{state | follow_up_queue: queue}}
@@ -1172,10 +1197,13 @@ defmodule CodingAgent.Session do
     outgoing = attach_recalled_context(message, recalled)
 
     if state.is_streaming do
-      LemonAgent.Agent.steer(state.agent, outgoing,
-        system_prompt: state.system_prompt,
-        preempt: false
-      )
+      :ok =
+        LemonAgent.Agent.steer(state.agent, outgoing,
+          system_prompt: state.system_prompt,
+          preempt: false
+        )
+
+      notify_steering_changed()
 
       queue = :queue.in(message, state.follow_up_queue)
       {:reply, :ok, %{state | follow_up_queue: queue}}
@@ -1211,6 +1239,10 @@ defmodule CodingAgent.Session do
     {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self())
     send_initial_todos(new_state, pid)
     {:reply, unsubscribe, new_state}
+  end
+
+  def handle_call(:streaming?, _from, state) do
+    {:reply, state.is_streaming, state}
   end
 
   def handle_call(:get_state, _from, state) do
@@ -1567,7 +1599,8 @@ defmodule CodingAgent.Session do
 
     outgoing = attach_recalled_context(message, recalled)
 
-    LemonAgent.Agent.redirect(state.agent, outgoing, system_prompt: state.system_prompt)
+    :ok = LemonAgent.Agent.redirect(state.agent, outgoing, system_prompt: state.system_prompt)
+    notify_steering_changed()
     queue = :queue.in(message, state.steering_queue)
 
     {:noreply, %{state | steering_queue: queue}}
@@ -1646,13 +1679,26 @@ defmodule CodingAgent.Session do
       timestamp: System.system_time(:millisecond)
     }
 
-    LemonAgent.Agent.steer(state.agent, attach_recalled_context(message, recalled),
-      system_prompt: state.system_prompt,
-      preempt: preempt
-    )
+    :ok =
+      LemonAgent.Agent.steer(state.agent, attach_recalled_context(message, recalled),
+        system_prompt: state.system_prompt,
+        preempt: preempt
+      )
+
+    # Human steering uses an Agent cast. A scalar call from this same sender
+    # fences that cast before waking joiners that query the Agent's queue.
+    if preempt, do: LemonAgent.Agent.has_steering_messages?(state.agent, nil)
+    notify_steering_changed()
 
     key = if preempt, do: :steering_queue, else: :follow_up_queue
     Map.update!(state, key, &:queue.in(message, &1))
+  end
+
+  defp notify_steering_changed do
+    LemonCore.Bus.broadcast(
+      "session_coord:#{:erlang.pid_to_list(self())}",
+      {:session_coord, :steering_changed}
+    )
   end
 
   @spec handle_info(term(), t()) :: {:noreply, t()} | {:stop, term(), t()}
@@ -1711,7 +1757,9 @@ defmodule CodingAgent.Session do
     # generated block to the person who typed the message.
     event = strip_recalled_context_from_event(event)
 
-    # Broadcast to listeners FIRST (before state changes that might clear streams)
+    # Keep terminal streams available while broadcasting. GenServer calls from
+    # subscribers cannot run until handle_agent_event commits the transition
+    # below, even when the terminal notification reaches them before it finishes.
     Notifier.broadcast_event(state, event)
 
     # Process the event and update state

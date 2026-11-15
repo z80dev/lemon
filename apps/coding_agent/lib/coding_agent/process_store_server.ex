@@ -534,6 +534,7 @@ defmodule CodingAgent.ProcessStoreServer do
     :ok = :dets.insert(@dets_table, {id, record, logs})
     :ok = :dets.sync(@dets_table)
     :ets.insert(@table, {id, record, logs})
+    CodingAgent.ProcessStore.notify_change(id)
     :ok
   rescue
     _ -> exit(:launch_store_unavailable)

@@ -1,5 +1,9 @@
 defmodule CodingAgent.Tools.Bash.Managed do
-  @moduledoc false
+  @moduledoc """
+  Foreground attachment to an owner-bound process. Output and lifecycle
+  producers wake the attachment on the existing Bus; only the caller's absolute
+  foreground deadline uses a timeout. Detaching never relaunches the command.
+  """
 
   alias CodingAgent.{BashExecutor, ProcessManager, ProcessStore}
   alias LemonAgent.AbortSignal
@@ -34,6 +38,10 @@ defmodule CodingAgent.Tools.Bash.Managed do
     caller = self()
     signal = Keyword.get(opts, :signal)
     AbortSignal.subscribe(signal)
+    topic = "process_state:#{id}"
+    LemonCore.Bus.subscribe(topic)
+    owner_ref = Process.monitor(CodingAgent.ProcessStoreServer)
+    opts = Keyword.put(opts, :managed_owner_ref, owner_ref)
 
     guard =
       spawn(fn ->
@@ -50,6 +58,8 @@ defmodule CodingAgent.Tools.Bash.Managed do
     after
       send(guard, :release)
       AbortSignal.unsubscribe(signal)
+      Process.demonitor(owner_ref, [:flush])
+      LemonCore.Bus.unsubscribe(topic)
     end
   end
 
@@ -96,11 +106,14 @@ defmodule CodingAgent.Tools.Bash.Managed do
 
   defp wait_for_output(id, deadline, opts, offset) do
     signal = Keyword.get(opts, :signal)
-    # Output/store refresh is still needed, but abort delivery never waits for it.
+    owner_ref = Keyword.fetch!(opts, :managed_owner_ref)
+
     receive do
       {:lemon_abort, ^signal, _kind} -> await(id, deadline, opts, offset)
+      {:process_state, :changed, ^id} -> await(id, deadline, opts, offset)
+      {:DOWN, ^owner_ref, :process, _pid, _reason} -> {:error, :process_store_down}
     after
-      min(20, max(0, deadline - System.monotonic_time(:millisecond))) ->
+      max(0, deadline - System.monotonic_time(:millisecond)) ->
         await(id, deadline, opts, offset)
     end
   end

@@ -797,7 +797,7 @@ defmodule CodingAgent.SessionTest do
       :ok = Session.prompt(session, "First prompt")
       result = Session.prompt(session, "Second prompt")
 
-      assert result == {:error, :already_streaming}
+      assert result == {:error, :busy}
 
       assert_receive {:stream_called, stream_pid}, 2_000
       send(stream_pid, :release)
