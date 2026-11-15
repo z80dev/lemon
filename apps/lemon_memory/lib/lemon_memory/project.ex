@@ -278,22 +278,31 @@ defmodule LemonMemory.Project do
     session_key = Map.get(context, :session_key)
 
     if is_binary(session_key) and session_key != "" do
-      :global.trans({{__MODULE__, server, scope.key}, self()}, fn ->
-        with {:ok, previous} <- load(server, scope),
-             {:ok, facts} <- fun.(previous),
-             true <- fits?(facts) do
-          if facts == previous do
-            {:ok, %{changed: false, facts: facts}}
-          else
-            with :ok <- persist(server, scope, context, facts) do
-              {:ok, %{changed: true, facts: facts}}
+      :global.trans(
+        {{__MODULE__, server, scope.key}, self()},
+        fn ->
+          with {:ok, previous} <- load(server, scope),
+               {:ok, facts} <- fun.(previous),
+               true <- fits?(facts) do
+            if facts == previous do
+              {:ok, %{changed: false, facts: facts}}
+            else
+              with :ok <- persist(server, scope, context, facts) do
+                {:ok, %{changed: true, facts: facts}}
+              end
             end
+          else
+            false -> {:error, :capacity_exceeded}
+            error -> error
           end
-        else
-          false -> {:error, :capacity_exceeded}
-          error -> error
-        end
-      end)
+        end,
+        [node()],
+        3
+      )
+      |> case do
+        :aborted -> {:error, :store_unavailable}
+        result -> result
+      end
     else
       {:error, :unscoped}
     end

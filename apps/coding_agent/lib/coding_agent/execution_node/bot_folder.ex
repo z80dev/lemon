@@ -8,16 +8,25 @@ defmodule CodingAgent.ExecutionNode.BotFolder do
       {:ok, paths} ->
         root = paths["files"]
 
-        :global.trans({{__MODULE__, root}, self()}, fn ->
-          with :ok <- private_directory(Path.dirname(Path.dirname(Path.dirname(root)))),
-               :ok <- private_directory(Path.dirname(Path.dirname(root))),
-               :ok <- private_directory(Path.dirname(root)),
-               :ok <- private_directory(root) do
-            {:ok, root}
-          else
-            _ -> {:error, :invalid_cwd}
-          end
-        end)
+        :global.trans(
+          {{__MODULE__, root}, self()},
+          fn ->
+            with :ok <- private_directory(Path.dirname(Path.dirname(Path.dirname(root)))),
+                 :ok <- private_directory(Path.dirname(Path.dirname(root))),
+                 :ok <- private_directory(Path.dirname(root)),
+                 :ok <- private_directory(root) do
+              {:ok, root}
+            else
+              _ -> {:error, :invalid_cwd}
+            end
+          end,
+          [node()],
+          3
+        )
+        |> case do
+          :aborted -> {:error, :invalid_cwd}
+          result -> result
+        end
 
       _ ->
         {:error, :invalid_cwd}

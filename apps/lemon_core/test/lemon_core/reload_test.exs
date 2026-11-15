@@ -278,15 +278,52 @@ defmodule LemonCore.ReloadTest do
   end
 
   describe "lock behavior" do
-    test "concurrent reloads are serialized without race" do
-      t1 = Task.async(fn -> Reload.reload_app(:lemon_core) end)
-      t2 = Task.async(fn -> Reload.reload_module(LemonCore.Clock) end)
+    test "a held reload rejects contenders without compiling and releases after completion" do
+      parent = self()
 
-      assert {:ok, r1} = Task.await(t1, 10_000)
-      assert {:ok, r2} = Task.await(t2, 10_000)
+      holder =
+        Task.async(fn ->
+          Reload.reload_system(
+            compile: true,
+            compile_fn: fn ->
+              send(parent, {:reload_locked, self()})
 
-      assert r1.kind == :app
-      assert r2.kind == :module
+              receive do
+                :release_reload -> :ok
+              end
+            end
+          )
+        end)
+
+      try do
+        assert_receive {:reload_locked, pid}, 1_000
+        assert pid == holder.pid
+
+        assert {:error, :reload_in_progress} =
+                 Reload.reload_system(
+                   compile: true,
+                   compile_fn: fn -> flunk("contended reload must not compile") end
+                 )
+      after
+        send(holder.pid, :release_reload)
+      end
+
+      assert {:ok, %{kind: :system}} = Task.await(holder)
+      assert {:ok, %{kind: :system}} = Reload.reload_system(lock_retries: 1)
+    end
+
+    test "rejects unbounded retry policies and non-local lock scopes before compilation" do
+      compile = fn -> flunk("invalid locking options must not compile") end
+
+      for retries <- [:infinity, -1, 1.5, nil, "3"] do
+        assert {:error, :invalid_lock_retries} =
+                 Reload.reload_system(compile: true, compile_fn: compile, lock_retries: retries)
+      end
+
+      for nodes <- [[], [:other@host], :all, nil] do
+        assert {:error, :invalid_lock_nodes} =
+                 Reload.reload_system(compile: true, compile_fn: compile, lock_nodes: nodes)
+      end
     end
   end
 

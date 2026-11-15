@@ -146,6 +146,9 @@ defmodule LemonAi.ProviderRegistry do
   end
 
   defp with_mutation_lock(fun) do
-    :global.trans({@mutation_lock, self()}, fun)
+    case :global.trans({@mutation_lock, self()}, fun, [node()], 3) do
+      :aborted -> raise "Provider registry lock unavailable"
+      result -> result
+    end
   end
 end

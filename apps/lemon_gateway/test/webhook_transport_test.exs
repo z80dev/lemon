@@ -262,6 +262,38 @@ defmodule LemonGateway.WebhookTransportTest do
     assert response_payload.retry_safe == true
   end
 
+  test "contended idempotency admission preserves its unavailable error and durable fence" do
+    suffix = System.unique_integer([:positive])
+    integration_id = "contended-#{suffix}"
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", "contended-key-#{suffix}")
+
+    config = Config.config()
+
+    assert {:ok, %{store_key: store_key}} =
+             Idempotency.context(conn, %{}, integration_id, %{}, config)
+
+    stored = Store.get(Idempotency.table(), store_key)
+    lock = {{Idempotency, store_key}, self()}
+    assert :global.set_lock(lock, [node()], 0)
+
+    try do
+      contender =
+        Task.async(fn -> Idempotency.context(conn, %{}, integration_id, %{}, config) end)
+
+      assert {:error, :idempotency_unavailable} = Task.await(contender, 10_000)
+      assert Store.get(Idempotency.table(), store_key) == stored
+      refute_received {:webhook_submit, _}
+    after
+      :global.del_lock(lock, [node()])
+    end
+
+    assert {:duplicate, 503, %{status: "reservation_pending"}} =
+             Idempotency.context(conn, %{}, integration_id, %{}, config)
+  end
+
   test "legacy raw-key receipts migrate without creating a second run" do
     cases = [
       {"pending", :retry},
