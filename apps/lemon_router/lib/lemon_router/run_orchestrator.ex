@@ -586,9 +586,8 @@ defmodule LemonRouter.RunOrchestrator do
       scope: %{profile_id: nil, agent_id: request.agent_id, session_key: request.session_key}
     }
 
-    with :ok <- Store.put_new(Store, @run_admission_table, request.run_id, entry, durable: true) do
-      {:error, reason}
-    else
+    case Store.put_new(Store, @run_admission_table, request.run_id, entry, durable: true) do
+      :ok -> {:error, reason}
       _ -> {:error, :outcome_unknown}
     end
   end
@@ -816,60 +815,62 @@ defmodule LemonRouter.RunOrchestrator do
     # fence, including when dispatch's outcome cannot be established.
     submitting = compact_admission("submitting", identity, admission)
 
-    with :ok <-
-           Store.compare_and_swap(
-             Store,
-             @run_admission_table,
-             params.run_id,
-             admission,
-             submitting, durable: true) do
-      case do_submit(attach_request_identity(params, identity), state) do
-        {:ok, run_id} ->
-          case persist_accepted_admission(
-                 run_id,
-                 identity,
-                 submitting,
-                 state.run_admission_retention_ms
-               ) do
-            {:ok, expires_at_ms} ->
-              {{:ok, run_id}, cache_accepted_admission(state, run_id, identity, expires_at_ms)}
+    case Store.compare_and_swap(
+           Store,
+           @run_admission_table,
+           params.run_id,
+           admission,
+           submitting,
+           durable: true
+         ) do
+      :ok ->
+        case do_submit(attach_request_identity(params, identity), state) do
+          {:ok, run_id} ->
+            case persist_accepted_admission(
+                   run_id,
+                   identity,
+                   submitting,
+                   state.run_admission_retention_ms
+                 ) do
+              {:ok, expires_at_ms} ->
+                {{:ok, run_id}, cache_accepted_admission(state, run_id, identity, expires_at_ms)}
 
-            {:error, _reason} ->
-              {{:error, :outcome_unknown}, state}
-          end
+              {:error, _reason} ->
+                {{:error, :outcome_unknown}, state}
+            end
 
-        {:error, :outcome_unknown} ->
-          {{:error, :outcome_unknown}, state}
+          {:error, :outcome_unknown} ->
+            {{:error, :outcome_unknown}, state}
 
-        {:error, _reason} = error ->
-          # A synchronous start rejection may already have persisted terminal
-          # evidence. Never erase that evidence or reopen its fixed-ID fence.
-          # Otherwise, only an unchanged pre-enqueue claim can roll back.
-          case Store.compare_and_swap(
-                 Store,
-                 @run_admission_table,
-                 params.run_id,
-                 submitting,
-                 admission,
-                 durable: true
-               ) do
-            :ok ->
-              {error, state}
+          {:error, _reason} = error ->
+            # A synchronous start rejection may already have persisted terminal
+            # evidence. Never erase that evidence or reopen its fixed-ID fence.
+            # Otherwise, only an unchanged pre-enqueue claim can roll back.
+            case Store.compare_and_swap(
+                   Store,
+                   @run_admission_table,
+                   params.run_id,
+                   submitting,
+                   admission,
+                   durable: true
+                 ) do
+              :ok ->
+                {error, state}
 
-            {:error, :mismatch} ->
-              case terminal_run_status(params, identity) do
-                :matching_terminal ->
-                  {error, state}
+              {:error, :mismatch} ->
+                case terminal_run_status(params, identity) do
+                  :matching_terminal ->
+                    {error, state}
 
-                _ ->
-                  {{:error, :outcome_unknown}, state}
-              end
+                  _ ->
+                    {{:error, :outcome_unknown}, state}
+                end
 
-            _failure ->
-              {{:error, :outcome_unknown}, state}
-          end
-      end
-    else
+              _failure ->
+                {{:error, :outcome_unknown}, state}
+            end
+        end
+
       _failure ->
         {{:error, :outcome_unknown}, state}
     end

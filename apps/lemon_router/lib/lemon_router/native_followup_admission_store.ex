@@ -14,9 +14,10 @@ defmodule LemonRouter.NativeFollowupAdmissionStore do
 
   def put(%{profile_id: profile_id} = config) do
     locked(profile_id, fn ->
-      with :ok <- Store.put(Store, @table, profile_id, config, durable: true) do
-        :ok
-      else
+      case Store.put(Store, @table, profile_id, config, durable: true) do
+        :ok ->
+          :ok
+
         error ->
           # A failed durable write must not leave newly published authority.
           Store.delete(Store, @table, profile_id, durable: true)

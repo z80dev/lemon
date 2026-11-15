@@ -24,6 +24,9 @@ exclude_tags =
     do: exclude_tags,
     else: [:rsvg_convert | exclude_tags]
 
+exclude_tags =
+  if :os.type() == {:unix, :darwin}, do: exclude_tags, else: [:apfs_clone | exclude_tags]
+
 Code.require_file("support/host_capabilities.ex", __DIR__)
 
 exclude_tags =
