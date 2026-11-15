@@ -183,9 +183,12 @@ daily totals are unknown because complete history cannot be established.
   occur. `lastError` retains the dispatcher's timestamped credential-free failure
   summary, or null if none has been observed. `circuit` contains `state`
   (`closed`, `open`, `half_open`, `not_started`, or `unknown`), `failureCount`
-  and `timeUntilRecoveryMs`. Polling never starts a breaker; unavailable counters
-  are null. Existing breakers have a bounded 100 ms read timeout and process
-  exits report `unknown`. TUI `/status` includes each provider's circuit state.
+  and `timeUntilRecoveryMs`. Polling never starts a breaker: an absent breaker
+  reports `not_started` with null counters. Existing breakers are read directly
+  from their ETS snapshots, even while the process is suspended; no breaker
+  request or read timeout is involved. A registered breaker without a readable
+  snapshot (including one disappearing during the read) reports `unknown` with
+  null counters. TUI `/status` includes each provider's circuit state.
 - `lifecycle` contains `{restart,stop,reason}`. Restart requires a nonempty
   `LEMON_LAUNCHER`; graceful stop is always available. `reason` explains why
   restart is absent and is null for launcher-managed runtimes.
