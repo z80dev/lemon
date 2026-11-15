@@ -296,18 +296,18 @@ defmodule CodingAgent.Session.Persistence do
 
   defp synthetic_results_for(message, tool_call_ids) do
     Enum.map(tool_call_ids, fn tool_call_id ->
+      result =
+        LemonAgent.InterruptedToolResult.build(:interrupted,
+          details: %{restored_session_repair: true}
+        )
+
       %LemonAi.Types.ToolResultMessage{
         role: :tool_result,
         tool_call_id: tool_call_id,
         tool_name: tool_name_for_call(message, tool_call_id),
-        content: [
-          %LemonAi.Types.TextContent{
-            type: :text,
-            text: "Tool call was interrupted before Lemon recorded a result."
-          }
-        ],
-        details: %{"restored_session_repair" => true, "reason" => "interrupted_tool_call"},
-        trust: :trusted,
+        content: result.content,
+        details: result.details,
+        trust: result.trust,
         is_error: true,
         timestamp: message_timestamp(message)
       }

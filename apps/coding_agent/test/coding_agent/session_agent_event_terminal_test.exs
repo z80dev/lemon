@@ -237,17 +237,22 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
 
     if mode == :cooperative do
       assert result.details.source == "actual final result"
-      assert Enum.map_join(result.content, "", & &1.text) == "Command cancelled.\n\nSTARTED\n"
+      assert Enum.map_join(result.content, "", & &1.text) =~ "Command cancelled.\n\nSTARTED\n"
     else
       assert result.details.outcome == :unknown
       assert result.details.partial_details == %{source: "observed stdout"}
-      assert Enum.any?(result.content, &(&1.text =~ "Mutation outcome is unknown"))
+
+      assert Enum.any?(
+               result.content,
+               &(&1.text =~ "Do not assume it did not run or automatically repeat it.")
+             )
     end
 
     assert {:tool_execution_end, ^queued_id, "native_queued", queued_result, true} =
              Enum.find(native_events, &match?({:tool_execution_end, ^queued_id, _, _, _}, &1))
 
     assert queued_result.details.outcome == :not_started
+    assert queued_result.details.reason == :aborted
 
     tool_end_index =
       Enum.find_index(native_events, &match?({:tool_execution_end, ^call_id, _, _, _}, &1))
