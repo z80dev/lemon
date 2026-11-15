@@ -76,6 +76,7 @@ defmodule CodingAgent.Tools.Task.Runner do
       result =
         with :ok <- attach_control_session(opts[:task_id], session, session_id) do
           await = fn next_prompt, budget ->
+            budget = Map.delete(budget, :submission_details)
             {unsubscribe, delivery} = Session.subscribe(session, tagged: true)
 
             try do
@@ -245,10 +246,15 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
+  defp validate_result(_validator, %{details: %{structured_output: _}}), do: :ok
+  defp validate_result(_validator, %{details: %{submission_exhausted: true}}), do: :ok
+
   defp validate_result(validator, result) when is_function(validator, 1),
     do: validator.(Result.visible_output_text(result))
 
   defp validate_result(_validator, _result), do: :ok
+
+  defp correction_prompt("Call submit_result" <> _ = reason), do: reason
 
   defp correction_prompt(reason) do
     reason = if is_binary(reason), do: reason, else: inspect(reason)
@@ -401,6 +407,15 @@ defmodule CodingAgent.Tools.Task.Runner do
         )
 
       {:session_event, ^session_id, {:tool_execution_end, _id, name, result, is_error}} ->
+        budget =
+          case {name, result} do
+            {"submit_result", %AgentToolResult{terminate_turn: true, details: details}} ->
+              Map.put(budget, :submission_details, details)
+
+            _ ->
+              budget
+          end
+
         maybe_emit_action_update(
           on_update,
           description,
@@ -594,7 +609,15 @@ defmodule CodingAgent.Tools.Task.Runner do
         {:error, last.error_message || "Task stopped: #{last.stop_reason}"}
 
       true ->
-        {:ok, Result.extract_final_payload(messages, last_text, last_thinking), budget}
+        payload = Result.extract_final_payload(messages, last_text, last_thinking)
+
+        payload =
+          case budget[:submission_details] do
+            nil -> payload
+            details -> Map.put(payload, :details, details)
+          end
+
+        {:ok, payload, budget}
     end
   end
 

@@ -2,6 +2,13 @@
 
 Core agent runtime for the Lemon umbrella project. LemonAgent provides OTP-native building blocks for AI agents: a supervised GenServer for stateful agent lifecycle management, a stateless agentic loop with streaming events, bounded event streams with backpressure, cooperative abort signaling, context window management, and a subagent supervision/registry infrastructure.
 
+Trusted in-process completion tools may set `AgentToolResult.terminate_turn`
+to end a turn without a further model request. This additive published-package
+API is honored only for `AgentTool.trusted_terminal: true`, a capability the
+host registry must attest, never infer from result details. CodingAgent strips
+this capability from MCP, extension, WASM and unmanaged tools; its built-in
+`submit_result` is the sole approved completion tool.
+
 ## Architecture Overview
 
 ```

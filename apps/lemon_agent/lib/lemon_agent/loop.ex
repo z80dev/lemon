@@ -425,7 +425,9 @@ defmodule LemonAgent.Loop do
 
   defp snapshot_tool_schema(context, %AgentLoopConfig{} = config) do
     snapshot = config.tool_schema_snapshot || ToolSchemaSnapshot.new(context.tools)
-    context = %{context | tools: snapshot.tools}
+    # Agent and direct callers may supply ordinary context maps rather than the
+    # convenience struct. Initialize run-local control state at this boundary.
+    context = context |> Map.put(:tools, snapshot.tools) |> Map.put(:terminate_turn, false)
     config = %{config | tool_schema_snapshot: snapshot}
 
     {context, config, snapshot}
@@ -476,8 +478,10 @@ defmodule LemonAgent.Loop do
       )
 
     if continue_outer do
-      # Check for follow-up messages
-      follow_up_messages = get_follow_up_messages(config)
+      # A trusted terminal tool completes successfully, but must not consume
+      # queued follow-ups or make another provider request.
+      follow_up_messages =
+        if continue_outer == :terminal_tool, do: [], else: get_follow_up_messages(config)
 
       Logger.debug(
         "LemonAgent.Loop do_run_loop continue_outer follow_up=#{length(follow_up_messages)}"
@@ -697,33 +701,38 @@ defmodule LemonAgent.Loop do
             tool_turn_count =
               if has_more_tool_calls, do: tool_turn_count + 1, else: tool_turn_count
 
-            if max_tool_turns_exhausted?(config, has_more_tool_calls, tool_turn_count) do
-              complete_tool_loop_budget(context, new_messages, config, stream, tool_turn_count)
-            else
-              # Consume turn input only after the continuation decision. Clear
-              # redirect before draining, for the same reason as in run_loop/6.
-              AbortSignal.clear_redirect(signal)
-              pending_messages = get_steering_messages(config, signal)
+            cond do
+              context.terminate_turn ->
+                {%{context | terminate_turn: false}, new_messages, [], :terminal_tool}
 
-              if aborted?(signal) do
-                transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
-                EventStream.cancel(stream, :assistant_aborted)
-                {context, new_messages, [], false}
-              else
-                # Continue inner loop
-                do_inner_loop(
-                  context,
-                  new_messages,
-                  config,
-                  signal,
-                  stream_fn,
-                  stream,
-                  pending_messages,
-                  false,
-                  has_more_tool_calls,
-                  tool_turn_count
-                )
-              end
+              max_tool_turns_exhausted?(config, has_more_tool_calls, tool_turn_count) ->
+                complete_tool_loop_budget(context, new_messages, config, stream, tool_turn_count)
+
+              true ->
+                # Consume turn input only after the continuation decision. Clear
+                # redirect before draining, for the same reason as in run_loop/6.
+                AbortSignal.clear_redirect(signal)
+                pending_messages = get_steering_messages(config, signal)
+
+                if aborted?(signal) do
+                  transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
+                  EventStream.cancel(stream, :assistant_aborted)
+                  {context, new_messages, [], false}
+                else
+                  # Continue inner loop
+                  do_inner_loop(
+                    context,
+                    new_messages,
+                    config,
+                    signal,
+                    stream_fn,
+                    stream,
+                    pending_messages,
+                    false,
+                    has_more_tool_calls,
+                    tool_turn_count
+                  )
+                end
             end
         end
 

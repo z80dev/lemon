@@ -44,6 +44,7 @@ defmodule LemonAgent.Loop.ToolCalls do
           {[ToolResultMessage.t()], LemonAgent.Types.AgentContext.t(),
            [LemonAgent.Types.agent_message()]}
   def execute_and_collect_tools(context, new_messages, tool_calls, config, signal, stream) do
+    context = Map.put_new(context, :terminate_turn, false)
     AbortSignal.subscribe(signal)
 
     try do
@@ -675,6 +676,12 @@ defmodule LemonAgent.Loop.ToolCalls do
     }
 
     context = %{context | messages: context.messages ++ [tool_result_message]}
+
+    terminal? =
+      result.terminate_turn and
+        Enum.any?(context.tools, &(&1.name == tool_call.name and &1.trusted_terminal))
+
+    context = %{context | terminate_turn: context.terminate_turn or terminal?}
     new_messages = new_messages ++ [tool_result_message]
     results = [tool_result_message | results]
 
@@ -836,6 +843,11 @@ defmodule LemonAgent.Loop.ToolCalls do
   end
 
   defp prepare_tool_call(nil, tool_call), do: {:error, unknown_tool_result(tool_call)}
+
+  # Trusted result tools own validation so every rejected attempt counts against
+  # their correction bound; generic coercion must not change the submitted value.
+  defp prepare_tool_call(%{trusted_terminal: true}, tool_call),
+    do: {:ok, tool_call, nil}
 
   defp prepare_tool_call(tool, tool_call) do
     {intent, arguments} = LemonAgent.ToolIntent.extract(tool.parameters, tool_call.arguments)
