@@ -135,7 +135,10 @@ defmodule LemonAgent.Loop.ToolCalls do
         {context, new_messages, results} =
           emit_tool_errors(
             remaining_tool_calls,
-            tool_aborted_result(nil, false),
+            LemonAgent.InterruptedToolResult.build(:aborted,
+              started: false,
+              details: %{error_type: :aborted, cancelled: true}
+            ),
             context,
             new_messages,
             results,
@@ -168,7 +171,9 @@ defmodule LemonAgent.Loop.ToolCalls do
             {context, new_messages, results} =
               emit_tool_errors(
                 remaining_tool_calls,
-                tool_skipped_result(),
+                LemonAgent.InterruptedToolResult.build(:skipped,
+                  details: %{error_type: :skipped}
+                ),
                 context,
                 new_messages,
                 results,
@@ -243,7 +248,12 @@ defmodule LemonAgent.Loop.ToolCalls do
 
                   ref ->
                     %{tool_call: tool_call} = pending = Map.fetch!(pending_by_ref, ref)
-                    result = tool_crash_result(reason)
+
+                    result =
+                      LemonAgent.InterruptedToolResult.build(:crashed,
+                        details: %{error_type: :tool_task_crashed, crash_reason: inspect(reason)}
+                      )
+
                     tool_call_finish(tool_call.name, pending.started_at, result, true)
 
                     {pending_by_ref, pending_by_mon} =
@@ -275,7 +285,11 @@ defmodule LemonAgent.Loop.ToolCalls do
                     {context, new_messages, pending_by_ref, pending_by_mon, results}
 
                   %{tool_call: tool_call, pid: pid, timeout_ms: timeout_ms} = pending ->
-                    result = tool_timeout_result(timeout_ms)
+                    result =
+                      LemonAgent.InterruptedToolResult.build(:timeout,
+                        details: %{error_type: :tool_task_timeout, timeout_ms: timeout_ms}
+                      )
+
                     tool_call_finish(tool_call.name, pending.started_at, result, true)
 
                     {pending_by_ref, pending_by_mon} =
@@ -1026,47 +1040,6 @@ defmodule LemonAgent.Loop.ToolCalls do
     }
   end
 
-  defp tool_crash_result(reason) do
-    %AgentToolResult{
-      content: [
-        %TextContent{type: :text, text: "Tool task crashed: #{inspect(reason)}"}
-      ],
-      details: %{error_type: :tool_task_crashed, reason: inspect(reason)}
-    }
-  end
-
-  defp tool_timeout_result(timeout_ms) do
-    %AgentToolResult{
-      content: [
-        %TextContent{type: :text, text: "Tool task timed out after #{timeout_ms}ms"}
-      ],
-      details: %{error_type: :tool_task_timeout, timeout_ms: timeout_ms}
-    }
-  end
-
-  defp tool_aborted_result(partial, started) do
-    content = if partial, do: partial.content, else: []
-
-    notice =
-      if started,
-        do: "Tool execution aborted; no final result was received. Mutation outcome is unknown.",
-        else: "Tool execution aborted before the call started."
-
-    %AgentToolResult{
-      content: content ++ [%TextContent{type: :text, text: notice}],
-      trust: if(partial, do: partial.trust, else: :trusted),
-      is_error: true,
-      details: %{
-        error_type: :aborted,
-        cancelled: true,
-        started: started,
-        outcome: if(started, do: :unknown, else: :not_started),
-        partial: partial != nil,
-        partial_details: if(partial, do: partial.details, else: nil)
-      }
-    }
-  end
-
   defp aborted_task_result(%{result: {result, false}}), do: {result, false}
 
   defp aborted_task_result(%{result: {%AgentToolResult{} = result, true}}) do
@@ -1078,25 +1051,17 @@ defmodule LemonAgent.Loop.ToolCalls do
       end
       |> Map.put(:cancelled, true)
       |> Map.put_new(:error_type, :aborted)
-      |> Map.put_new(:outcome, :unknown)
+      |> Map.put(:outcome, :unknown)
+      |> Map.put(:reason, :aborted)
 
-    {%{result | details: details, is_error: true}, true}
+    {LemonAgent.InterruptedToolResult.build(:aborted, partial: result, details: details), true}
   end
 
-  defp aborted_task_result(%{partial: partial}), do: {tool_aborted_result(partial, true), true}
-
-  defp tool_skipped_result do
-    %AgentToolResult{
-      content: [
-        %TextContent{
-          type: :text,
-          text:
-            "Tool execution skipped because new user steering is queued. " <>
-              "Review the new instructions before retrying this tool call."
-        }
-      ],
-      details: %{error_type: :skipped, reason: :steering}
-    }
+  defp aborted_task_result(%{partial: partial}) do
+    {LemonAgent.InterruptedToolResult.build(:aborted,
+       partial: partial,
+       details: %{error_type: :aborted, cancelled: true}
+     ), true}
   end
 
   defp resolve_max_tool_concurrency(_config, total_tool_calls) when total_tool_calls <= 0, do: 0

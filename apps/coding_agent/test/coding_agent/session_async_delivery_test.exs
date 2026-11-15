@@ -99,7 +99,12 @@ defmodule CodingAgent.SessionAsyncDeliveryTest do
 
     skipped = Enum.filter(messages, &match?(%ToolResultMessage{is_error: true}, &1))
     assert Enum.map(skipped, & &1.tool_call_id) == ["call-9", "call-10"]
-    assert Enum.all?(skipped, &(&1.details.reason == :steering))
+
+    assert Enum.all?(
+             skipped,
+             &(&1.details.reason == :skipped and &1.details.outcome == :not_started)
+           )
+
     assert Enum.any?(messages, &(message_text(&1) == "Human correction"))
     refute_receive {:tool_started, _, _}
     assert :ok = LemonAgent.Agent.wait_for_idle(agent)

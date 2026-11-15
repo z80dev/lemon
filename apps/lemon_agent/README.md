@@ -199,6 +199,16 @@ the default; they enqueue work rather than wait for its execution. WASM invokes
 retain their existing 120-second sidecar bound. Extension wrappers preserve the
 extension's declared `AgentTool.timeout_ms`, otherwise inheriting the default.
 
+`LemonAgent.InterruptedToolResult.build/2` supplies one interruption vocabulary:
+`details.outcome` is `:unknown` for every started call without a recorded final
+result (abort, timeout, crash or restored-session repair), and `:not_started`
+for calls discarded before dispatch, including steering skips.
+`details.reason` is `:aborted`, `:timeout`, `:crashed`, `:interrupted` or `:skipped`.
+Partial output is retained, not treated as proof of completion. Unknown results
+explicitly warn: “Do not assume it did not run or automatically repeat it.”
+Clients should display that result and use structured metadata rather than
+matching diagnostic strings; JSON transports encode these atoms as strings.
+
 
 ### Registry Pattern
 

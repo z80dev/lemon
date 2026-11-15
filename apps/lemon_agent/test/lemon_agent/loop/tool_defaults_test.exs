@@ -29,8 +29,12 @@ defmodule LemonAgent.Loop.ToolDefaultsTest do
 
     {[message], _, _} = run(tool, 1, %AgentLoopConfig{tool_timeout_ms: 200})
     assert message.is_error
-    assert message.details == %{error_type: :tool_task_timeout, timeout_ms: 15}
-    assert [%TextContent{text: "Tool task timed out after 15ms"}] = message.content
+
+    assert %{error_type: :tool_task_timeout, timeout_ms: 15, outcome: :unknown, reason: :timeout} =
+             message.details
+
+    assert [%TextContent{text: text}] = message.content
+    assert text =~ "Do not assume it did not run or automatically repeat it."
   end
 
   test "deadline-owning tools and explicit infinity config are not killed" do

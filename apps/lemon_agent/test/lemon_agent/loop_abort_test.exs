@@ -498,6 +498,16 @@ defmodule LemonAgent.LoopAbortTest do
       assert result.details.cancelled == true
       assert result.details.started == true
       assert result.details.outcome == :unknown
+      assert result.details.reason == :aborted
+
+      assert Enum.any?(
+               result.content,
+               &String.contains?(
+                 &1.text,
+                 "Do not assume it did not run or automatically repeat it."
+               )
+             )
+
       refute Enum.any?(result.content, &(&1.text == "Complete"))
       assert_receive {:DOWN, ^worker_monitor, :process, ^worker, _}, 1_000
     end
