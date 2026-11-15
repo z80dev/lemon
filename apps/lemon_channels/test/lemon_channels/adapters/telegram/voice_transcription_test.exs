@@ -102,6 +102,10 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
   setup do
+    unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
+      start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor})
+    end
+
     :persistent_term.put({VoiceTestRouter, :pid}, self())
     :persistent_term.put({TestTranscriber, :pid}, self())
     VoiceMockAPI.register_sent(self())
@@ -119,7 +123,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
       @gateway_config_key,
       Map.merge(existing, %{
         telegram: %{
-          bot_token: "token",
+          bot_token: "voice-test-#{System.pid()}-#{System.unique_integer([:positive])}",
           api_mod: VoiceMockAPI
         }
       })
@@ -182,7 +186,6 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     {:ok, _pid} =
       Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: VoiceMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -216,7 +219,6 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     {:ok, _pid} =
       Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: VoiceMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
@@ -238,7 +240,6 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     {:ok, _pid} =
       Transport.start_link(
         config: %{
-          bot_token: "token",
           api_mod: VoiceMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,

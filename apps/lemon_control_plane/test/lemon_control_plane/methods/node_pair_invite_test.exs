@@ -20,7 +20,6 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
   @ctx %{auth: %{role: :operator, scopes: [:pairing, :read]}, conn_id: "invite-operator"}
   @moduletag :tmp_dir
   @runtime_keys [:node_source_checkout, :node_install_version, :node_install_base_url]
-  @gateway_status_key {NodeGateway, :status}
   @runtime_env [
     "LEMON_NODE_SOURCE_CHECKOUT",
     "LEMON_NODE_INSTALL_VERSION",
@@ -136,7 +135,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     put_gateway_status(nil)
 
     for status <- [nil, %{available: false, port: 4052}] do
-      :persistent_term.put(@gateway_status_key, status)
+      put_gateway_status(status)
 
       assert {:ok, preview} = NodePairPreview.handle(%{}, @ctx)
 
@@ -1121,15 +1120,25 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
   end
 
   defp put_gateway_status(status) do
-    old = :persistent_term.get(@gateway_status_key, nil)
+    owner =
+      case Process.get(:gateway_status_fixture) do
+        nil ->
+          pid =
+            start_supervised!(
+              {Agent,
+               fn ->
+                 :ets.new(NodeGateway, [:named_table, :protected, :set])
+               end}
+            )
 
-    on_exit(fn ->
-      if is_nil(old),
-        do: :persistent_term.erase(@gateway_status_key),
-        else: :persistent_term.put(@gateway_status_key, old)
-    end)
+          Process.put(:gateway_status_fixture, pid)
+          pid
 
-    :persistent_term.put(@gateway_status_key, status)
+        pid ->
+          pid
+      end
+
+    Agent.get(owner, fn table -> :ets.insert(table, {:status, status}) end)
   end
 
   defp invite(name, extra \\ %{}) do

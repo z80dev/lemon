@@ -17,8 +17,9 @@ defmodule LemonOmp.Session do
   aborts the in-flight turn (including its shell children), disposes the
   session and exits. Because the port owns omp's stdin, any death of this
   process — normal stop, crash, or the whole VM — closes the pipe. `terminate/2`
-  additionally escalates to SIGTERM and SIGKILL (descendants first) if omp has
-  not exited within a short grace period.
+  additionally escalates to SIGTERM and SIGKILL for its witnessed process group
+  if omp has not exited within a short grace period. Descendants that deliberately
+  escape that group are not contained by this cleanup.
 
   ## Steering and cancellation
 
@@ -36,6 +37,7 @@ defmodule LemonOmp.Session do
   use GenServer, restart: :temporary, shutdown: 5_000
 
   alias LemonCore.Rpc.{Client, JsonLines}
+  alias LemonCore.ProcessGroup
   alias LemonOmp.{Approval, Config, Manager, Projection, Rpc, Worktree}
 
   @line_bytes 65_536
@@ -1006,9 +1008,16 @@ defmodule LemonOmp.Session do
   end
 
   defp stop_process(%{port: port, os_pid: os_pid}) do
-    # Closing stdin may end the root before its children. Keep the observed
-    # descendants so that root exit cannot skip their TERM/KILL escalation.
-    descendants = if is_integer(os_pid), do: descendant_pids(os_pid), else: []
+    # Retain the birth-bound group witness before EOF can reparent its children.
+    identity =
+      case ProcessGroup.capture_workload_group(os_pid) do
+        {:ok, identity} ->
+          identity
+
+        {:error, _} ->
+          if is_integer(os_pid), do: ProcessGroup.terminate(os_pid, grace_ms: 1_000)
+          nil
+      end
 
     try do
       Port.close(port)
@@ -1016,17 +1025,10 @@ defmodule LemonOmp.Session do
       ArgumentError -> :ok
     end
 
-    if is_integer(os_pid) do
-      pids = [os_pid | descendants]
-
-      if wait_exit(pids, System.monotonic_time(:millisecond) + @exit_grace_ms) == :alive do
-        pids = Enum.uniq(pids ++ descendant_pids(os_pid))
-        signal(["-TERM" | Enum.map(pids, &to_string/1)])
-
-        if wait_exit(pids, System.monotonic_time(:millisecond) + 1_000) == :alive do
-          pids = Enum.uniq(pids ++ descendant_pids(os_pid))
-          signal(["-KILL" | Enum.map(pids, &to_string/1)])
-        end
+    if identity do
+      case wait_exit(identity, System.monotonic_time(:millisecond) + @exit_grace_ms) do
+        :gone -> :ok
+        {_, observed} -> ProcessGroup.terminate(observed, grace_ms: 1_000)
       end
     end
 
@@ -1035,66 +1037,23 @@ defmodule LemonOmp.Session do
 
   # Count native observation and durable-launch overhead against the grace,
   # rather than subtracting only the sleeps between potentially slow probes.
-  defp wait_exit(pids, deadline) do
-    if Enum.any?(pids, &alive?/1) do
-      remaining = deadline - System.monotonic_time(:millisecond)
+  defp wait_exit(identity, deadline) do
+    case ProcessGroup.workload_group_status(identity) do
+      :terminated ->
+        :gone
 
-      if remaining > 0 do
-        Process.sleep(min(50, remaining))
-        wait_exit(pids, deadline)
-      else
-        :alive
-      end
-    else
-      :gone
-    end
-  end
+      {:alive, observed} ->
+        remaining = deadline - System.monotonic_time(:millisecond)
 
-  defp alive?(os_pid) do
-    case System.find_executable("kill") do
-      nil ->
-        false
-
-      kill ->
-        match?(
-          {_, 0},
-          LemonCore.NativeProcess.cmd(kill, ["-0", to_string(os_pid)], stderr_to_stdout: true)
-        )
-    end
-  end
-
-  defp signal(args) do
-    case System.find_executable("kill") do
-      nil -> :ok
-      kill -> LemonCore.NativeProcess.cmd(kill, args, stderr_to_stdout: true)
-    end
-
-    :ok
-  end
-
-  defp descendant_pids(parent) do
-    case System.find_executable("pgrep") do
-      nil ->
-        []
-
-      pgrep ->
-        case LemonCore.NativeProcess.cmd(pgrep, ["-P", to_string(parent)], stderr_to_stdout: true) do
-          {output, 0} ->
-            children =
-              output
-              |> String.split()
-              |> Enum.flat_map(fn value ->
-                case Integer.parse(value) do
-                  {pid, ""} when pid > 0 -> [pid]
-                  _ -> []
-                end
-              end)
-
-            children ++ Enum.flat_map(children, &descendant_pids/1)
-
-          _ ->
-            []
+        if remaining > 0 do
+          Process.sleep(min(50, remaining))
+          wait_exit(observed, deadline)
+        else
+          {:alive, observed}
         end
+
+      {:unknown, _} = unknown ->
+        unknown
     end
   end
 

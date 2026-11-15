@@ -977,31 +977,37 @@ defmodule LemonEvals.Support do
   def response_stream(%AssistantMessage{} = response) do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
-    _ =
+    {:ok, task_pid} =
       Task.start(fn ->
-        _ = LemonAi.EventStream.push(stream, {:start, response})
+        try do
+          LemonAi.EventStream.push!(stream, {:start, response})
 
-        response.content
-        |> Enum.with_index()
-        |> Enum.each(fn {content, index} ->
-          case content do
-            %TextContent{text: text} ->
-              _ = LemonAi.EventStream.push(stream, {:text_start, index, response})
-              _ = LemonAi.EventStream.push(stream, {:text_delta, index, text, response})
-              LemonAi.EventStream.push(stream, {:text_end, index, text, response})
+          response.content
+          |> Enum.with_index()
+          |> Enum.each(fn {content, index} ->
+            case content do
+              %TextContent{text: text} ->
+                LemonAi.EventStream.push!(stream, {:text_start, index, response})
+                LemonAi.EventStream.push!(stream, {:text_delta, index, text, response})
+                LemonAi.EventStream.push!(stream, {:text_end, index, text, response})
 
-            %ToolCall{} = tool_call ->
-              _ = LemonAi.EventStream.push(stream, {:tool_call_start, index, response})
-              LemonAi.EventStream.push(stream, {:tool_call_end, index, tool_call, response})
+              %ToolCall{} = tool_call ->
+                LemonAi.EventStream.push!(stream, {:tool_call_start, index, response})
+                LemonAi.EventStream.push!(stream, {:tool_call_end, index, tool_call, response})
 
-            _ ->
-              :ok
-          end
-        end)
+              _ ->
+                :ok
+            end
+          end)
 
-        _ = LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
-        LemonAi.EventStream.complete(stream, response)
+          LemonAi.EventStream.complete(stream, response)
+        catch
+          :throw, {:event_stream_push_failed, _reason} ->
+            :ok
+        end
       end)
+
+    LemonAi.EventStream.attach_task(stream, task_pid)
 
     stream
   end

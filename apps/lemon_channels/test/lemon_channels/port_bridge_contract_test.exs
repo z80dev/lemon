@@ -202,6 +202,155 @@ defmodule LemonChannels.PortBridgeContractTest do
     end
   end
 
+  @tag skip: is_nil(System.find_executable("node"))
+  test "stopping either bridge kills orphaned grandchildren before returning", %{tmp_dir: tmp_dir} do
+    script = Path.join(tmp_dir, "process_tree.mjs")
+    File.write!(script, process_tree_script())
+
+    for bridge <- @bridges do
+      with_bridge(bridge, script, fn pid ->
+        pids = await_process_tree(bridge)
+        :ok = GenServer.stop(pid)
+        assert_processes_stopped(pids)
+      end)
+    end
+  end
+
+  @tag skip: is_nil(System.find_executable("node"))
+  test "manual bridge exit cleans its group before notifying its owner", %{tmp_dir: tmp_dir} do
+    script = Path.join(tmp_dir, "process_tree.mjs")
+    File.write!(script, process_tree_script())
+    bridge = Enum.find(@bridges, &(&1.label == "whatsapp"))
+
+    {:ok, pid} =
+      PortBridge.start_link(
+        {bridge, [config: %{bridge_script: script}, notify_pid: self(), restart: :manual]}
+      )
+
+    try do
+      pids = await_process_tree(bridge)
+      PortBridge.command(pid, %{"op" => "crash"})
+      assert_receive {:whatsapp_bridge_event, %{"type" => "bridge_down"}}, 5_000
+      assert_processes_stopped(pids)
+      assert :sys.get_state(pid).os_pid == nil
+    after
+      if Process.alive?(pid), do: GenServer.stop(pid)
+    end
+  end
+
+  @tag skip: is_nil(System.find_executable("node"))
+  test "WhatsApp timeout kills its group and fails all pending sends without replay", %{
+    tmp_dir: tmp_dir
+  } do
+    script = Path.join(tmp_dir, "process_tree.mjs")
+    File.write!(script, process_tree_script())
+    bridge = Enum.find(@bridges, &(&1.label == "whatsapp"))
+
+    {:ok, pid} =
+      PortBridge.start_link(
+        {bridge, [config: %{bridge_script: script}, notify_pid: self(), restart: :manual]}
+      )
+
+    try do
+      pids = await_process_tree(bridge)
+      PortBridge.command(pid, %{"op" => "connect"})
+      assert :sys.get_state(pid).connect_command == %{"op" => "connect"}
+      first = make_ref()
+      second = make_ref()
+      first_timer = Process.send_after(self(), :unexpected_timeout, 60_000)
+      second_timer = Process.send_after(self(), :unexpected_timeout, 60_000)
+
+      state = %{
+        port_server: pid,
+        pending_commands: %{
+          "first" => {{self(), first}, first_timer},
+          "second" => {{self(), second}, second_timer}
+        },
+        connected?: true,
+        own_jid: "test",
+        reconnect_timer: nil,
+        reconnect_attempts: 0
+      }
+
+      assert {:noreply, failed} =
+               LemonChannels.Adapters.WhatsApp.Transport.handle_info(
+                 {:command_timeout, "first"},
+                 state
+               )
+
+      {reconnect_timer, _ref} = failed.reconnect_timer
+      Process.cancel_timer(reconnect_timer)
+      assert_receive {^first, {:error, :outcome_unknown}}
+      assert_receive {^second, {:error, :outcome_unknown}}
+      assert Process.read_timer(first_timer) == false
+      assert Process.read_timer(second_timer) == false
+      assert failed.pending_commands == %{}
+      refute failed.connected?
+      assert failed.reconnect_attempts == 1
+      assert_processes_stopped(pids)
+      assert %{port: nil, os_pid: nil, connect_command: nil} = :sys.get_state(pid)
+
+      assert {:noreply, ^failed} =
+               LemonChannels.Adapters.WhatsApp.Transport.handle_info(
+                 {:command_timeout, "second"},
+                 failed
+               )
+    after
+      if Process.alive?(pid), do: GenServer.stop(pid)
+    end
+  end
+
+  defp await_process_tree(bridge) do
+    event_tag = bridge.event_tag
+    assert_receive {^event_tag, %{"type" => "process_tree", "pids" => [root, grandchild]}}, 30_000
+    assert root > 1
+    assert grandchild > 1
+    on_exit(fn -> LemonCore.ProcessGroup.terminate(root, grace_ms: 0) end)
+    assert Enum.all?([root, grandchild], &os_process_alive?/1)
+    [root, grandchild]
+  end
+
+  defp assert_processes_stopped(pids) do
+    Enum.each(pids, fn pid ->
+      refute os_process_alive?(pid), "OS process #{pid} survived cleanup"
+    end)
+  end
+
+  defp os_process_alive?(pid) do
+    case System.cmd("ps", ["-o", "stat=", "-p", to_string(pid)], stderr_to_stdout: true) do
+      {status, 0} ->
+        status = String.trim(status)
+        status != "" and not String.starts_with?(status, "Z")
+
+      {_output, _status} ->
+        false
+    end
+  end
+
+  defp process_tree_script do
+    ~S"""
+    import { spawn } from "node:child_process";
+    import { createInterface } from "node:readline";
+
+    process.on("SIGTERM", () => {});
+    const child = spawn("/bin/sh", ["-c",
+      'trap "" TERM; sleep 60 </dev/null >/dev/null 2>&1 & printf "%s" "$!"'
+    ], { stdio: ["ignore", "pipe", "ignore"] });
+    let pid = "";
+    child.stdout.on("data", data => { pid += data; });
+    await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+    createInterface({ input: process.stdin }).on("line", line => {
+      if (JSON.parse(line).op === "crash") process.exit(7);
+    });
+    process.stdout.write(JSON.stringify({
+      type: "process_tree", pids: [process.pid, Number(pid)]
+    }) + "\n");
+    """
+  end
+
   defp with_bridge(bridge, script_path, fun) do
     {:ok, pid} =
       PortBridge.start_link({bridge, [config: %{bridge_script: script_path}, notify_pid: self()]})

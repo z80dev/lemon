@@ -32,10 +32,10 @@ defmodule LemonCore.ProcessGroupTest do
       assert {:unknown, ^identity} = ProcessGroup.workload_group_status(identity, true)
 
       assert {:error, :workload_unobservable, ^identity} =
-               ProcessGroup.signal_workload_group(identity, :sigterm)
+               ProcessGroup.terminate(identity, signal: :sigterm)
 
       assert {:error, :workload_unobservable, ^identity} =
-               ProcessGroup.signal_workload_group(identity, :sigkill, true)
+               ProcessGroup.terminate(identity, signal: :sigkill, root_exited: true)
     end
 
     identities =
@@ -71,20 +71,23 @@ defmodule LemonCore.ProcessGroupTest do
              ProcessGroup.workload_group_status(recycled)
 
     assert {:error, :workload_unobservable, _} =
-             ProcessGroup.signal_workload_group(recycled, :sigkill)
+             ProcessGroup.terminate(recycled, signal: :sigkill)
 
     assert {:error, :workload_unobservable, ^lost} =
-             ProcessGroup.signal_workload_group(lost, :sigkill)
+             ProcessGroup.terminate(lost, signal: :sigkill)
 
     assert {:unknown, %{ownership_lost: true}} =
              ProcessGroup.workload_group_status(identity, true)
 
+    assert {:error, :workload_unobservable, %{ownership_lost: true}} =
+             ProcessGroup.terminate(identity, signal: :sigkill, root_exited: true)
+
     assert {:alive, _} = ProcessGroup.workload_group_status(identity)
 
-    assert {:ok, _} = ProcessGroup.signal_workload_group(identity, :sigterm)
+    assert {:terminated, _} = ProcessGroup.terminate(identity)
     assert_receive {^port, {:exit_status, _}}, 5_000
     eventually(fn -> ProcessGroup.workload_group_status(identity) == :terminated end)
-    assert {:terminated, ^identity} = ProcessGroup.signal_workload_group(identity, :sigkill)
+    assert {:terminated, ^identity} = ProcessGroup.terminate(identity, signal: :sigkill)
   end
 
   test "group signalling ignores a PATH-shadowed kill executable" do
@@ -105,19 +108,76 @@ defmodule LemonCore.ProcessGroupTest do
 
     {port, identity} = gated_group()
     System.put_env("PATH", directory)
-    assert {:ok, _} = ProcessGroup.signal_workload_group(identity, :sigkill)
+    assert {:terminated, _} = ProcessGroup.terminate(identity, signal: :sigkill)
     assert_receive {^port, {:exit_status, _}}, 5_000
     eventually(fn -> ProcessGroup.workload_group_status(identity) == :terminated end)
     refute File.exists?(executable <> ".used")
     refute File.exists?(marker)
   end
 
-  defp gated_group do
+  test "TERM escalates for a resistant group without touching another owned group" do
+    {port, identity} = gated_group("trap '' TERM; printf ready; IFS= read -r lemon_gate")
+    {_sentinel_port, sentinel} = gated_group()
+    assert_receive {^port, {:data, "ready"}}, 5_000
+    parent = self()
+
+    before_signal = fn observed ->
+      send(parent, {:before_signal, observed})
+      :ok
+    end
+
+    assert {:terminated, _} =
+             ProcessGroup.terminate(identity, grace_ms: 0, before_signal: before_signal)
+
+    assert_receive {:before_signal, %{root_pid: root_pid}}
+    assert root_pid == identity.root_pid
+    assert_receive {:before_signal, %{root_pid: ^root_pid}}
+    assert_receive {^port, {:exit_status, _}}, 5_000
+    assert :terminated = ProcessGroup.workload_group_status(identity)
+    assert {:alive, _} = ProcessGroup.workload_group_status(sentinel)
+  end
+
+  test "a failed durability barrier prevents both TERM and KILL" do
+    {port, identity} = gated_group()
+    parent = self()
+
+    for signal <- [:sigterm, :sigkill] do
+      before_signal = fn observed ->
+        send(parent, {:before_signal, observed})
+        {:error, :sync_failed}
+      end
+
+      assert {:error, :workload_unobservable, observed} =
+               ProcessGroup.terminate(identity, signal: signal, before_signal: before_signal)
+
+      assert_receive {:before_signal, ^observed}
+      assert {:alive, _} = ProcessGroup.workload_group_status(identity)
+      refute_receive {^port, {:exit_status, _}}, 0
+    end
+  end
+
+  test "single-process service scope delegates one TERM without group escalation" do
+    parent = self()
+
+    command = fn executable, args ->
+      send(parent, {:command, executable, args})
+      {"", 0}
+    end
+
+    assert :ok = ProcessGroup.terminate(123, scope: :process, command: command)
+    assert_receive {:command, "/bin/kill", ["-TERM", "123"]}
+    refute_received {:command, _, _}
+
+    assert :error =
+             ProcessGroup.terminate(123, scope: :process, command: fn _, _ -> {"denied", 1} end)
+  end
+
+  defp gated_group(script \\ "IFS= read -r lemon_gate") do
     port =
       Port.open({:spawn_executable, "/bin/sh"}, [
         :binary,
         :exit_status,
-        args: ["-c", "IFS= read -r lemon_gate"]
+        args: ["-c", script]
       ])
 
     {:os_pid, pid} = Port.info(port, :os_pid)

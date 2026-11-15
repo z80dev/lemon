@@ -4,11 +4,16 @@ defmodule LemonCore.ProcessGroup do
   for a complete captured witness; missing, recycled or lost ownership is unknown.
   This observes local groups, not escaped sessions, containers or remote work.
 
-  Separately, `signal_group/2`, `signal_pids/2` and `terminate/2` are unverified
-  helpers for a group the caller itself just created as the leader of its own
-  process group (an Erlang Port child, whose group id is its OS pid): they signal
-  the whole group (SIGTERM, bounded grace, SIGKILL) with no birth witness, so
-  they must run promptly around the leader's exit, never against a stored id.
+  `terminate/2` is the sole termination entry point. A captured identity revalidates
+  birth witnesses before signalling; a fresh Port group id can be terminated
+  immediately without a stored witness. Observations happen at launch, root exit,
+  explicit reconciliation and termination, never on a healthy-process timer.
+
+  VM-killed cleanup remains an explicit limitation: neither erlexec nor MuonTrap
+  is adopted. Both introduce another native owner/runtime dependency; neither
+  justifies replacing the gated native launcher and durable birth-bound ledger
+  without platform crash tests. Boot reconciliation preserves unknown outcomes
+  rather than replaying commands or signalling recycled PIDs.
   """
 
   def valid_identity?(%{
@@ -95,25 +100,75 @@ defmodule LemonCore.ProcessGroup do
     end
   end
 
-  def signal_workload_group(identity, signal, root_exited \\ false) do
-    signal_workload_group(identity, signal, root_exited, fn _observed -> :ok end)
-  end
+  @default_grace_ms 500
+  @poll_ms 20
+  @kill_attempts 50
+
+  defp signal_group(pgid, signal)
+       when is_integer(pgid) and pgid > 1 and signal in [:sigterm, :sigkill, :probe],
+       do: run_kill(signal, ["-#{pgid}"])
+
+  defp signal_group(_pgid, _signal), do: :gone
 
   @doc """
-  Revalidate ownership, then persist the final observed witness before signalling.
+  Terminates a group this process owns: SIGTERM to `-pgid`, poll up to
+  `:grace_ms` (default #{@default_grace_ms}) for the group to empty, then SIGKILL
+  the group, repeating until it is empty or the bounded attempts run out. The
+  group is signalled as a whole, so descendants reparented to init after their
+  parent exited (and anything forked during the grace) are still members.
+  Returns `:ok` once the group is empty and `:alive` if members survived SIGKILL.
 
-  `before_signal` must return `:ok` only after its durability barrier succeeds.
-  Any other return, exception or exit refuses the signal.
+  With a captured identity, validates birth witnesses before each signal and
+  returns `{:terminated, identity}` or `{:error, :workload_unobservable, identity}`.
+  `:root_exited` carries the observed Port exit; `:before_signal` is a durability
+  barrier that must return `:ok`. `:signal` may be `:sigkill` to skip grace.
+
+  Service-manager callers that already verified a single daemon's identity may
+  use `scope: :process`: this sends TERM only, without escalation or a group
+  signal. The caller retains its existing service shutdown wait. `:command`
+  injects that caller's command adapter (executable and argv to `{output, status}`).
   """
-  def signal_workload_group(identity, signal, root_exited, before_signal)
-      when signal in [:sigterm, :sigkill] and is_function(before_signal, 1) do
-    case workload_group_status(identity, root_exited) do
-      {:alive, %{pgid: pgid} = observed} ->
-        result =
-          with :ok <- before_signal.(observed), do: signal_process_group(pgid, signal)
+  def terminate(group, opts \\ [])
 
-        case result do
-          :ok -> {:ok, observed}
+  def terminate(pid, opts) when is_integer(pid) and pid > 1 do
+    if Keyword.get(opts, :scope, :group) == :process do
+      command =
+        Keyword.get(opts, :command, fn executable, args ->
+          System.cmd(executable, args, stderr_to_stdout: true)
+        end)
+
+      case command.("/bin/kill", ["-TERM", Integer.to_string(pid)]) do
+        {_output, 0} -> :ok
+        _ -> :error
+      end
+    else
+      terminate_group(pid, opts)
+    end
+  end
+
+  def terminate(identity, opts) when is_map(identity) do
+    root_exited = Keyword.get(opts, :root_exited, false)
+    before_signal = Keyword.get(opts, :before_signal, fn _observed -> :ok end)
+    signal = Keyword.get(opts, :signal, :sigterm)
+
+    case workload_group_status(identity, root_exited) do
+      {:alive, observed} ->
+        with :ok <- before_signal.(observed),
+             :ok <- signal_process_group(observed.pgid, signal) do
+          if signal == :sigterm do
+            deadline =
+              System.monotonic_time(:millisecond) +
+                Keyword.get(opts, :grace_ms, @default_grace_ms)
+
+            if not wait_gone(observed.pgid, deadline) do
+              terminate(observed, Keyword.put(opts, :signal, :sigkill))
+            else
+              {:terminated, observed}
+            end
+          else
+            await_owned_exit(observed, root_exited, @kill_attempts)
+          end
+        else
           _ -> {:error, :workload_unobservable, observed}
         end
 
@@ -127,55 +182,13 @@ defmodule LemonCore.ProcessGroup do
     _, _ -> {:error, :workload_unobservable, identity}
   end
 
-  @default_grace_ms 500
-  @poll_ms 20
-  @kill_attempts 50
+  def terminate(identity, _opts), do: {:error, :workload_unobservable, identity}
 
-  @doc """
-  Signals every member of the local process group `pgid`, without ownership
-  verification. Returns `:ok` when the signal reached at least one member,
-  `:gone` when the group is empty, and `:error` when no `kill` binary exists.
-  `signal` is `:sigterm`, `:sigkill`, or `:probe` (signal 0: liveness only).
-
-  Use this only for a group Lemon itself just created as the leader of its own
-  process group (for example an Erlang Port child, which `erl_child_setup`
-  starts as a session/group leader, so its group id is its OS pid). Group ids
-  are not recycled while any member lives; an unverified signal to an
-  already-empty group could hit a recycled id, so callers must signal promptly
-  after the leader's exit rather than long after. Ids `<= 1` are refused.
-  """
-  @spec signal_group(pos_integer(), :sigterm | :sigkill | :probe) :: :ok | :gone | :error
-  def signal_group(pgid, signal)
-      when is_integer(pgid) and pgid > 1 and signal in [:sigterm, :sigkill, :probe],
-      do: run_kill(signal, ["-#{pgid}"])
-
-  def signal_group(_pgid, _signal), do: :gone
-
-  @doc """
-  Signals individual OS pids (those that deliberately left the group). Pids
-  `<= 1` are dropped. Returns like `signal_group/2`.
-  """
-  @spec signal_pids([integer()], :sigterm | :sigkill) :: :ok | :gone | :error
-  def signal_pids(pids, signal) when is_list(pids) and signal in [:sigterm, :sigkill] do
-    case for(pid <- pids, is_integer(pid) and pid > 1, do: Integer.to_string(pid)) do
-      [] -> :gone
-      targets -> run_kill(signal, targets)
-    end
-  end
-
-  @doc """
-  Terminates a group this process owns: SIGTERM to `-pgid`, poll up to
-  `:grace_ms` (default #{@default_grace_ms}) for the group to empty, then SIGKILL
-  the group, repeating until it is empty or the bounded attempts run out. The
-  group is signalled as a whole, so descendants reparented to init after their
-  parent exited (and anything forked during the grace) are still members.
-  Returns `:ok` once the group is empty and `:alive` if members survived SIGKILL.
-  """
-  @spec terminate(pos_integer(), keyword()) :: :ok | :alive | :error
-  def terminate(pgid, opts \\ []) when is_integer(pgid) do
+  defp terminate_group(pgid, opts) do
     grace_ms = Keyword.get(opts, :grace_ms, @default_grace_ms)
+    signal = Keyword.get(opts, :signal, :sigterm)
 
-    case signal_group(pgid, :sigterm) do
+    case signal_group(pgid, signal) do
       :gone ->
         :ok
 
@@ -185,6 +198,20 @@ defmodule LemonCore.ProcessGroup do
       :ok ->
         deadline = System.monotonic_time(:millisecond) + grace_ms
         if wait_gone(pgid, deadline), do: :ok, else: kill_until_gone(pgid, @kill_attempts)
+    end
+  end
+
+  defp await_owned_exit(identity, root_exited, attempts) do
+    case workload_group_status(identity, root_exited) do
+      :terminated ->
+        {:terminated, identity}
+
+      {:alive, observed} when attempts > 0 ->
+        Process.sleep(@poll_ms)
+        await_owned_exit(observed, root_exited, attempts - 1)
+
+      {_, observed} ->
+        {:error, :workload_unobservable, observed}
     end
   end
 
@@ -244,17 +271,9 @@ defmodule LemonCore.ProcessGroup do
   # a fixed argv and no shell. A group that exits between the check and the
   # signal is still reconciled by the caller; a missing binary cannot signal.
   defp signal_process_group(pgid, signal) do
-    case Enum.find(["/bin/kill", "/usr/bin/kill"], &File.regular?/1) do
-      nil ->
-        :error
-
-      executable ->
-        number = if signal == :sigterm, do: "-15", else: "-9"
-
-        {_output, _status} =
-          System.cmd(executable, [number, "--", "-#{pgid}"], stderr_to_stdout: true)
-
-        :ok
+    case run_kill(signal, ["-#{pgid}"]) do
+      :error -> :error
+      _ -> :ok
     end
   end
 

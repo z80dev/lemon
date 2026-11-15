@@ -45,6 +45,15 @@ defmodule LemonControlPlane.EventBridgeTest do
     {:ok, bridge_pid: elem(bridge, 1)}
   end
 
+  test "warning deduplication belongs to the bridge, not event producers", %{bridge_pid: bridge} do
+    sync_bridge(bridge)
+    assert :ets.info(EventBridge, :owner) == bridge
+    key = {__MODULE__, make_ref()}
+    assert Task.async(fn -> :ets.insert_new(EventBridge, {key}) end) |> Task.await()
+    assert :ets.member(EventBridge, key)
+    :ets.delete(EventBridge, key)
+  end
+
   defp clear_presence do
     if Process.whereis(Connections) do
       for {conn_id, _} <- Connections.list() do

@@ -161,9 +161,12 @@ on reconnect and when opening or changing models. Older daemons without
   pastes remain recoverable after later submissions. Ctrl+R opens omp's prompt-history
   search: type to filter past prompts (every word must match, newest first, each row
   shows its age and the folder it was typed in), Up/Down select, Enter fills the
-  composer without sending, Esc closes and leaves the draft untouched. It searches
-  the saved history; with `[tui] prompt_history = false` it lists this session's
-  prompts. Rebind it with `lemon.history.search` under `[tui.keys]`.
+  composer without sending, Esc closes and leaves the draft untouched. Delete at
+  the end of the search query removes the selected prompt from saved history and
+  this editor's recall ring; other running TUIs keep their already-loaded recall.
+  It searches the saved history; with `[tui] prompt_history = false` it lists this
+  session's prompts and deletion stays local. Rebind it with `lemon.history.search`
+  under `[tui.keys]`.
   Alt+L opens omp's keyboard link browser: the transcript replayed fullscreen with a
   hint tag drawn over every link (`http(s)` URLs, local `file:` links the replayed
   tool cards and messages draw, and bare URLs in text, including ones scrolled far into the
@@ -209,12 +212,24 @@ on reconnect and when opening or changing models. Older daemons without
   across stored sessions, new-with-prompt, close), per-session drafts, unread
   badges, history hydration. Search results are not restricted to the initially
   loaded recent sessions; failed searches never leave stale rows selectable.
-  Reconnect, overflow, selection and rewind use the shared bounded
-  [`sessions.snapshot`](../../apps/lemon_control_plane/README.md#session-snapshot-and-reconciliation)
-  authority to replace branch history, current approvals, child/process state
-  and todo/plan projection. Recovery rejects stale/raced reads and never
-  appends uncertain deltas to a recovered answer or replays an offline mutation.
-  Unknown owner state and omitted preview text are shown explicitly.
+  Reconnect and overflow first page `sessions.events` from the last applied cursor.
+  Canonical `session.event` batches apply exactly once in contiguous sequence order;
+  empty projections advance the cursor too. Live batches are buffered during replay,
+  then deduplicated against its final cursor. Once a cursor is installed, legacy
+  `agent`/`chat` duplicates no longer update that session.
+  Cursor version 1 contains `{version, sessionId, streamId, seq}`: sequence is native
+  session-local, not global or run-local, and `streamId` fences the owner incarnation
+  and branch epoch. Branch selection/reset rotates the stream; `eventId`, when
+  supplied, is the stable `streamId:seq` identity on both live delivery and replay.
+  Cold sessions, expired cursors, incompatible versions and changed streams use the
+  bounded [`sessions.snapshot`](../../apps/lemon_control_plane/README.md#session-snapshot-and-reconciliation)
+  authority to replace history, approvals, child/process state and todo/plan projection,
+  and install its `eventCursor`. Replay errors remain visible failures, not successful
+  snapshot recovery. Rewind explicitly refreshes the snapshot; older daemons without
+  cursors retain snapshot-only recovery. Recovery rejects stale/raced reads and never
+  replays an offline mutation. Unknown owner state and omitted previews stay explicit.
+  Replay requests page at 100 batches; the client buffers at most 1024 live batches
+  during a pending read, re-fetching from its cursor if that local bound is exceeded.
   Picker filters accept bracketed paste as text, including copied model names
   and session searches.
 - Durable session lifecycle: `/sessions` adds server-backed text, agent,
@@ -920,7 +935,7 @@ and keep to the house rules: return the same array reference from
 still change; animate via `requestComponentRender` only; `initTheme()`
 before constructing any component.
 
-All three pi packages are pinned to 18.18.9. The product frame provider owns the
+All three pi packages are pinned to 18.20.2. The product frame provider owns the
 row renderer's main/dock split and semantic retirement; Tern's native backend
 uses `describeSurface()` and the same component tree. Native descriptions must
 retain stable node references while unchanged. Chat roles `omp.user`,

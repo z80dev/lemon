@@ -24,10 +24,10 @@ defmodule CodingAgent.Debug.SessionServer do
 
   use GenServer
 
-  alias CodingAgent.BashExecutor
   alias CodingAgent.Debug.Adapters
   alias CodingAgent.Debug.Client
   alias LemonAgent.AbortSignal
+  alias LemonCore.ProcessGroup
 
   @registry CodingAgent.Debug.Registry
   @supervisor CodingAgent.Debug.Supervisor
@@ -1432,8 +1432,11 @@ defmodule CodingAgent.Debug.SessionServer do
       # longer identifies them. Never claim ownership of an attached process.
       if session.status != :terminated and session.kind == :launch do
         case session.process do
-          %{pid: pid} when is_integer(pid) and pid > 0 -> BashExecutor.kill_process_tree(pid)
-          _ -> :ok
+          %{pid: pid} when is_integer(pid) and pid > 0 ->
+            ProcessGroup.terminate(pid, signal: :sigkill)
+
+          _ ->
+            :ok
         end
       end
 

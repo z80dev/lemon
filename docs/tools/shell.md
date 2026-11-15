@@ -24,9 +24,9 @@ leader), so abort, timeout, caller death and session termination signal the whol
 group: SIGTERM, a bounded grace period, then SIGKILL until the group is empty.
 That reaches backgrounded `cmd &` children whose parent shell already exited and
 was reparented to init, and processes forked during teardown, none of which a
-`pgrep -P` descendant walk can see. The `pgrep -P` walk remains only for the
-direct-executor path as a fallback for descendants that deliberately left the
-group (for example behind a PTY wrapper's session). A process that calls
+`pgrep -P` descendant walk can see. One-shot direct execution and durable
+background execution both use `ProcessSession` ownership and the shared
+`ProcessGroup.terminate/2` implementation. A process that calls
 `setsid` or double-forks into a new session escapes group cleanup; stopping a
 background job that has already lost its root retains its witness instead of
 signalling blindly. When a managed process session terminates (supervisor

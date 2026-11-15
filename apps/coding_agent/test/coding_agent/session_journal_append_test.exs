@@ -5,6 +5,35 @@ defmodule CodingAgent.SessionJournalAppendTest do
 
   @moduletag :tmp_dir
 
+  test "stopped navigation checkpoints the path and invalidates a pre-admission snapshot", %{
+    tmp_dir: dir
+  } do
+    path = Path.join(dir, "stopped.jsonl")
+    File.cp!(Path.join(__DIR__, "fixtures/journal_header_only.jsonl"), path)
+    assert {:ok, before} = Journal.load_from_file(path)
+    assert Journal.current_snapshot?(before, path)
+    bytes = File.read!(path)
+    inode = File.stat!(path).inode
+
+    stopped = Journal.set_leaf_id(before, nil)
+
+    assert stopped.append_device == nil
+    assert File.stat!(path).inode == inode
+    assert String.starts_with?(File.read!(path), bytes)
+    refute Journal.current_snapshot?(before, path)
+    assert {:ok, restored} = Journal.load_from_file(path)
+    assert restored.leaf_id == nil
+
+    assert {:ok, options} =
+             CodingAgent.Session.validate_execution_options(
+               cwd: dir,
+               session_file: path,
+               loaded_session: before
+             )
+
+    assert options[:loaded_session].leaf_id == nil
+  end
+
   test "resuming parses the journal once across validation and initialization", %{tmp_dir: dir} do
     path = Path.join(dir, "resume.jsonl")
     assert :ok = Journal.save_to_file(path, Journal.new(dir))

@@ -84,6 +84,20 @@ defmodule LemonCore.AgentRuntime.Provider do
               {:ok, map()} | {:error, term()}
 
   @doc """
+  Read at most `limit` native session broadcasts strictly after a versioned cursor.
+  Entries contain `:cursor`, stable `:event_id` and `:events` (Core event projections,
+  possibly empty). The returned `:cursor` is the last entry's cursor, or the input
+  cursor for an empty page; `:has_more` indicates another page.
+
+  Version 1 cursors identify a native owner/selected-branch epoch, not a run or
+  global stream. Missing/replaced owners, branch changes and evicted cursors
+  return `:cursor_expired`; unsupported versions return `:unsupported_cursor_version`.
+  """
+  @callback session_event_replay(session_key(), map(), pos_integer()) ::
+              {:ok, %{events: [map()], cursor: map(), has_more: boolean()}}
+              | {:error, atom()}
+
+  @doc """
   Recover trusted native continuation context when no admitted-command snapshot
   is available. Accepts only a session identity, never a caller-selected path.
 
@@ -264,6 +278,7 @@ defmodule LemonCore.AgentRuntime.Provider do
                       session_history: 2,
                       session_todos: 2,
                       session_recovery_snapshot: 2,
+                      session_event_replay: 3,
                       session_addressing_context: 1,
                       session_process_receipts: 1,
                       session_jobs: 1,

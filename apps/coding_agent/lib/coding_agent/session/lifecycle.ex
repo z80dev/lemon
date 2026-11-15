@@ -595,6 +595,14 @@ defmodule CodingAgent.Session.Lifecycle do
       pending_prompt_timer_ref: nil,
       event_listeners: [],
       event_streams: %{},
+      event_log:
+        CodingAgent.Session.EventLog.new(
+          session_manager.header.id,
+          session_key,
+          run_id,
+          cwd,
+          opts
+        ),
       abort_signal: nil,
       steering_queue: :queue.new(),
       follow_up_queue: :queue.new(),

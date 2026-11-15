@@ -282,7 +282,8 @@ defmodule CodingAgent.SessionManager do
               leaf_id: nil,
               file_path: nil,
               append_device: nil,
-              needs_snapshot: true
+              needs_snapshot: true,
+              source_revision: nil
   end
 
   # ============================================================================
@@ -323,7 +324,8 @@ defmodule CodingAgent.SessionManager do
   """
   @spec load_from_file(String.t()) :: {:ok, Session.t()} | {:error, term()}
   def load_from_file(path) do
-    with {:ok, content} <- File.read(path),
+    with {:ok, stat} <- File.stat(path),
+         {:ok, content} <- File.read(path),
          {:ok, {header, raw_entries}} <- parse_jsonl(content),
          {header, entries} <- restore_checkpoints(header, raw_entries),
          {:ok, migrated_entries} <- migrate_to_current_version(header.version, entries) do
@@ -341,11 +343,26 @@ defmodule CodingAgent.SessionManager do
          by_id: by_id,
          leaf_id: leaf_id,
          file_path: path,
+         source_revision: file_revision(stat),
          needs_snapshot:
            header.version != @current_version or not String.ends_with?(content, "\n")
        }}
     end
   end
+
+  @doc false
+  def current_snapshot?(%Session{file_path: path, source_revision: revision}, path)
+      when not is_nil(revision) do
+    case File.stat(path) do
+      {:ok, stat} -> file_revision(stat) == revision
+      {:error, _} -> false
+    end
+  end
+
+  def current_snapshot?(_session, _path), do: false
+
+  defp file_revision(stat),
+    do: {stat.major_device, stat.minor_device, stat.inode, stat.size, stat.mtime, stat.ctime}
 
   @doc """
   Write session to JSONL file using atomic replace semantics.
@@ -574,8 +591,15 @@ defmodule CodingAgent.SessionManager do
   """
   @spec append_to_file(String.t(), SessionEntry.t()) :: :ok | {:error, term()}
   def append_to_file(path, %SessionEntry{} = entry) do
-    line = encode_entry(entry) <> "\n"
-    File.write(path, line, [:append, :binary])
+    with {:ok, device} <- :file.open(path, [:append, :raw, :binary]) do
+      try do
+        with :ok <- :file.write(device, [encode_entry(entry), "\n"]),
+             :ok <- :file.datasync(device),
+             do: :ok
+      after
+        :file.close(device)
+      end
+    end
   end
 
   @doc """
@@ -603,14 +627,19 @@ defmodule CodingAgent.SessionManager do
 
     entry = %{entry | id: new_id, parent_id: parent_id}
 
-    if session.append_device do
-      case :file.write(session.append_device, [encode_entry(entry), "\n"]) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          raise File.Error, reason: reason, action: "append session", path: session.file_path
+    result =
+      cond do
+        session.append_device -> :file.write(session.append_device, [encode_entry(entry), "\n"])
+        session.file_path -> append_to_file(session.file_path, entry)
+        true -> :ok
       end
+
+    case result do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "append session", path: session.file_path
     end
 
     %{
@@ -677,6 +706,34 @@ defmodule CodingAgent.SessionManager do
     append_entry(session, entry)
   end
 
+  @doc false
+  def append_pruning(session, replacements) when map_size(replacements) == 0, do: session
+
+  def append_pruning(session, replacements) do
+    append_entry(session, SessionEntry.custom("lemon.tool_pruning", replacements))
+  end
+
+  @doc false
+  def pruned_branch(session, leaf_id \\ nil) do
+    branch = get_branch(session, leaf_id)
+
+    replacements =
+      Enum.reduce(branch, %{}, fn
+        %{type: :custom, custom_type: "lemon.tool_pruning", data: data}, acc ->
+          Map.merge(acc, data)
+
+        _, acc ->
+          acc
+      end)
+
+    Enum.map(branch, fn entry ->
+      case Map.fetch(replacements, entry.id) do
+        {:ok, message} -> %{entry | message: message}
+        :error -> entry
+      end
+    end)
+  end
+
   @doc """
   Append a label entry bookmarking `target_id`. A nil or empty label clears it.
   The entry follows the current leaf like any other entry; labels never change
@@ -731,7 +788,26 @@ defmodule CodingAgent.SessionManager do
           raise File.Error, reason: reason, action: "checkpoint session", path: session.file_path
       end
     else
-      %{session | needs_snapshot: true}
+      if session.file_path do
+        live = persist(session, session.file_path)
+
+        try do
+          case checkpoint(live) do
+            :ok ->
+              %{live | append_device: nil}
+
+            {:error, reason} ->
+              raise File.Error,
+                reason: reason,
+                action: "checkpoint session",
+                path: session.file_path
+          end
+        after
+          close(live)
+        end
+      else
+        %{session | needs_snapshot: true}
+      end
     end
   end
 
@@ -825,7 +901,7 @@ defmodule CodingAgent.SessionManager do
           model: %{provider: String.t(), model_id: String.t()} | nil
         }
   def build_session_context(%Session{} = session, leaf_id \\ nil) do
-    branch = get_branch(session, leaf_id)
+    branch = pruned_branch(session, leaf_id)
 
     # Find latest compaction entry in path
     {compaction_entry, compaction_index} =

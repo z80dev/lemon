@@ -154,12 +154,13 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
 
       Session.subscribe(session)
       assert :ok = Session.prompt(session, String.duplicate("old history ", 200))
-      assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+      assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
       assert :ok = Session.prompt(session, "retry me")
 
       if committed do
         assert_receive {:session_event, _,
-                        {:error, {:assistant_error, "opaque provider rejection"}, partial_state}},
+                        {:error, {:assistant_error, "opaque provider rejection"}, partial_state},
+                        _},
                        5_000
 
         assert %{
@@ -172,12 +173,12 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
         assert :atomics.get(calls, 1) == 2
         refute Enum.any?(SessionManager.entries(state.session_manager), &(&1.type == :compaction))
         refute_received :summary_request
-        refute_received {:session_event, _, {:compaction_start, _}}
+        refute_received {:session_event, _, {:compaction_start, _}, _}
         refute state.is_streaming
       else
         assert_receive :summary_request, 5_000
-        assert_receive {:session_event, _, {:compaction_start, %{reason: :overflow}}}, 5_000
-        assert_receive {:session_event, _, {:compaction_complete, _}}, 5_000
+        assert_receive {:session_event, _, {:compaction_start, %{reason: :overflow}}, _}, 5_000
+        assert_receive {:session_event, _, {:compaction_complete, _}, _}, 5_000
         assert_receive {:prompt_request, false, 3, messages}, 5_000
 
         assert Enum.any?(messages, fn
@@ -185,7 +186,7 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
                  _ -> false
                end)
 
-        assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+        assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
         state = Session.get_state(session)
         assert :atomics.get(calls, 1) == 3
 
@@ -197,8 +198,8 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
         refute state.auto_compaction.in_progress
         refute state.overflow_recovery.in_progress
         refute state.is_streaming
-        refute_received {:session_event, _, {:compaction_start, _}}
-        refute_received {:session_event, _, {:compaction_complete, _}}
+        refute_received {:session_event, _, {:compaction_start, _}, _}
+        refute_received {:session_event, _, {:compaction_complete, _}, _}
         refute_received :summary_request
       end
 

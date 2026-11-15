@@ -7,9 +7,11 @@
 //   "origin:<url>" -> a website approval request for origin <url>; returns "approval:<action>"
 //   "hang"         -> waits for cancel, then fails with "aborted"
 //   "crash"        -> exits with status 3
+//   "process_tree" -> creates an orphaned grandchild that ignores TERM and stdin EOF
 // LCU_FAKE_LOG names a file that receives every request as a JSON line.
 import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { spawn } from 'node:child_process';
 
 const log = process.env.LCU_FAKE_LOG;
 const pending = new Map();
@@ -76,6 +78,19 @@ async function call(request) {
   if (code === 'hang') {
     await new Promise(resolve => hanging.set(request.id, resolve));
     throw new Error('aborted');
+  }
+  if (code === 'process_tree') {
+    process.on('SIGTERM', () => {});
+    const child = spawn('/bin/sh', ['-c',
+      'trap "" TERM; sleep 60 </dev/null >/dev/null 2>&1 & printf "%s" "$!"'
+    ], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let pid = '';
+    child.stdout.on('data', data => { pid += data; });
+    await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', resolve);
+    });
+    return { content: [{ type: 'text', text: JSON.stringify([process.pid, Number(pid)]) }], isError: false };
   }
   if (code === 'crash') process.exit(3);
   return { content: [{ type: 'text', text: `ran:${request.name}` }], isError: false };

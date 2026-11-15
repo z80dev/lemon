@@ -59,9 +59,16 @@ defmodule CodingAgent.Tools.Task.Wait do
         end
       end
 
+      interruption_topic =
+        case Keyword.get(opts, :session_pid) do
+          session when is_pid(session) -> "session_coord:#{:erlang.pid_to_list(session)}"
+          _ -> nil
+        end
+
       case Result.do_join(%{"task_ids" => task_ids, "mode" => "wait_any"}, signal,
              timeout_ms: timeout_ms,
-             interrupted?: interrupted?
+             interrupted?: interrupted?,
+             interruption_topic: interruption_topic
            ) do
         %AgentToolResult{} = result ->
           observe_winner(result)

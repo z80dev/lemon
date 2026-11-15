@@ -7,7 +7,8 @@ defmodule LemonCore.LoopbackListener do
   `peer_owned_by_self?/2` on the established socket: its reverse four-tuple
   identifies the peer, not a replacement listener on the same port. Linux uses
   the kernel socket uid in `/proc/net/tcp{,6}`; macOS/BSD use uid-filtered `lsof`
-  records with exact endpoints. Only the current process uid is cached.
+  records with exact endpoints. Only the current process uid is cached, in
+  supervised `LemonCore.RuntimeCache` ETS storage.
   """
 
   @type ownership :: :owned | :foreign | :absent | :unverifiable
@@ -112,11 +113,11 @@ defmodule LemonCore.LoopbackListener do
   end
 
   defp cached_uid do
-    case :persistent_term.get(@uid_key, nil) do
+    case LemonCore.RuntimeCache.get(@uid_key) do
       nil ->
         with {output, 0} <- System.cmd("id", ["-u"], stderr_to_stdout: true),
              {uid, ""} when uid >= 0 <- Integer.parse(String.trim(output)) do
-          :persistent_term.put(@uid_key, uid)
+          LemonCore.RuntimeCache.put(@uid_key, uid)
           {:ok, uid}
         else
           _ -> {:error, :uid_unavailable}
