@@ -19,6 +19,16 @@ mix test apps/lemon_evals/test
 cd apps/lemon_evals && mix test --cover
 ```
 
+## Offline native latency lane
+
+`mix lemon.eval.latency --output /tmp/latency.json --revision FULL_SHA` runs
+isolated precompiled development runtimes against the existing in-memory SSE
+fixture, through the real authenticated control-plane WebSocket. It prints
+p50/p99 for request arrival, token delivery, queued handoff, cold/warm protocol
+readiness and the four session-start stages. No provider credentials or external
+network are used. See the [latency contract](../../docs/benchmarks/latency-sla.md)
+for precise boundaries, limitations, baseline comparison and nightly thresholds.
+
 ## Live agentic coding benchmark
 
 The nonpaired lane measures actual coding outcomes through the production
