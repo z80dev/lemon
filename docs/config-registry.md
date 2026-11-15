@@ -196,7 +196,6 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_TELEGRAM_COMPACTION_ENABLED` | boolean | `true` |  | `lemon_channels` | Whether Telegram session transcripts are auto-compacted. |
 | `LEMON_TELEGRAM_COMPACTION_RESERVE_TOKENS` | integer | `16384` |  | `lemon_channels` | Token budget reserved during Telegram session compaction. |
 | `LEMON_TELEGRAM_COMPACTION_TRIGGER_RATIO` | float | `0.9` |  | `lemon_channels` | Context-window fill ratio that triggers Telegram compaction. |
-| `LEMON_TELEGRAM_POLLER_LOCK_STALE_MS` | integer | _(none)_ |  | `lemon_channels` | Age (ms) after which a Telegram poller lock is considered stale and reclaimed. |
 
 ### Gateway sms
 

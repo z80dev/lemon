@@ -70,8 +70,7 @@ defmodule LemonChannels.OutboxAdapterContractTest do
         telegram: %{
           account_id: "acct",
           bot_token: "token",
-          api_mod: TelegramApi,
-          files: %{outbound_send_delay_ms: 0}
+          api_mod: TelegramApi
         },
         whatsapp: %{bridge_script: missing_bridge, dm_mode: :open}
       })

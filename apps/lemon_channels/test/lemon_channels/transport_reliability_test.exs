@@ -35,14 +35,14 @@ defmodule LemonChannels.TransportReliabilityTest do
       persist_offset: fn _state, offset -> send(test_pid, {:offset, offset}) end
     }
 
-    next = Poller.poll_updates(state, callbacks)
+    next = Poller.apply_result(state, Poller.fetch(state), callbacks)
     assert_receive {:handled, "10"}
     assert_receive {:handled, "11"}
     refute_receive {:handled, "12"}, 0
     assert_receive {:offset, 13}
     assert next.offset == 13
 
-    assert %{offset: 13} = Poller.poll_updates(next, callbacks)
+    assert %{offset: 13} = Poller.apply_result(next, Poller.fetch(next), callbacks)
     assert_receive {:offset, 13}
     refute_receive {:handled, _}, 0
   end
