@@ -6,7 +6,12 @@ stdio MCP server. Opt-in (`LEMON_COMPUTER_USE_ENABLED=true`).
 
 - `LemonComputerUse.Server` — supervises the Node bridge (`priv/lcu_bridge.mjs`,
   built on LCU's shared harness client), serializes calls, routes approvals and
-  ends LCU turns when Lemon runs complete.
+  ends LCU turns when Lemon runs complete. `LemonCore.Rpc.Client` owns JSON-line
+  framing, in-flight requests and caller monitoring. Its handshake deadline
+  closes stalled connections; tool calls and owner-bound approvals remain
+  unbounded by a host request timer. Cancellation is message-driven and holds
+  the desktop until the bridge acknowledges the cancelled operation. Bridge
+  loss fails active and queued work without replaying possibly applied actions.
 - `LemonComputerUse.Tools.Js` / `Tools.JsReset` — the `cua_js` and
   `cua_js_reset` agent tools, registered through `LemonAgent.ToolRegistry`.
 - `LemonComputerUse.ContextContributor` — the runtime's instructions as a

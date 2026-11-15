@@ -22,7 +22,7 @@ end
 
 ## Dependencies
 
-- `lemon_core` (in_umbrella) - Request ID generation (`LemonCore.Id`) and the `:inets`/`:ssl` runtime used by the HTTP clients
+- `lemon_core` (in_umbrella) - Shared RPC lifecycle/framing contracts, subprocess-group cleanup, request IDs, and the `:inets`/`:ssl` runtime used by the HTTP clients
 - `lemon_skills` (in_umbrella) - Hosts `LemonSkills.McpSource`, whose suite lives in this app's tests
 - `jason` - JSON encoding/decoding
 - `bandit` / `plug` (test only) - Local HTTP and SSE MCP server fixtures for the client tests
@@ -31,9 +31,10 @@ end
 
 - `LemonMCP` - Main module with protocol version
 - `LemonMCP.Protocol` - MCP message types and JSON-RPC handling
-- `LemonMCP.Client` - GenServer client for managing stdio MCP connections, including optional `sampling/createMessage` callback or policy handling
+- `LemonMCP.Client` - Stdio MCP protocol client backed by `LemonCore.Rpc.Client`, including optional supervised `sampling/createMessage` callback or policy handling
 - `LemonMCP.Sampling` - Redacted policy wrapper for reviewed model-backed stdio sampling callbacks
-- `LemonMCP.Transport.Stdio` - Stdio transport for MCP servers
+- `LemonMCP.Transport.Stdio` - Raw-byte stdio transport and subprocess owner implementing `LemonCore.Rpc.Transport`
+- `LemonMCP.Framing.Stdio` - Bounded JSON-line framing that tolerates merged stderr log lines
 - `LemonMCP.Client.HTTP` - Streamable HTTP client for external MCP servers, including JSON responses, per-request SSE responses, session/protocol headers, OAuth protected-resource / authorization-server metadata discovery, optional OAuth client-credentials token acquisition with form-post or HTTP Basic client authentication, refresh-token grant retry when a token response supplies a refresh token, authorization-code PKCE callback/token exchange for public clients, injectable token-cache load/save hooks, and one-shot bearer reacquisition after later 401 challenges
 - `LemonMCP.Client.SSE` - legacy HTTP+SSE client for external MCP servers
 
@@ -60,9 +61,20 @@ absence of an application callback.
 
 Stdio clients accept `cwd: "/path/to/project"` and string-pair `env` overrides.
 The consuming host owns reconnection: subprocess exit terminates the transport
-and fails pending client requests. Protocol buffering is capped at 8 MiB.
-Never replay a timed-out tool invocation automatically; the remote operation may
-already have taken effect.
+and fails pending client requests. The shared core RPC state machine owns request
+correlation, caller monitors, deadlines, and the initialization timeout; the MCP
+wrapper keeps only protocol state. Each operation uses the shorter of its public
+timeout argument and `:timeout_ms`, returning `{:error, :timeout}` on expiry.
+There is no separate caller-side timer. Caller death discards its outstanding
+request, and duplicate, unknown, or late response IDs do not complete another call.
+
+Protocol frames are capped at 8 MiB. Stderr remains merged into stdout, but
+non-protocol lines are discarded without exposing their contents in errors.
+The transport forwards raw chunks; the framing module alone adds outbound
+newlines and assembles inbound frames. Closing a client fails pending calls,
+stops its private callback supervisor and RPC process, and terminates the server's
+process group. Never replay a timed-out tool invocation automatically; the remote
+operation may already have taken effect.
 
 `sampling/createMessage` is disabled by default. Prefer a `sampling_policy`
 when requests should pass through redacted review and local limits before a
@@ -107,6 +119,12 @@ capability only when Lemon can answer server sampling requests:
   end
 )
 ```
+
+Stdio server requests run in tasks under a private supervisor owned by that client.
+A slow sampling review or delegate cannot block ordinary responses, notifications,
+or request deadlines. A raised/thrown sampling failure becomes a redacted internal
+protocol error rather than terminating the connection. Sampling remains opt-in;
+unsupported server methods return `-32601` instead of reaching notification handlers.
 
 When sampling is configured through `LemonSkills.McpSource`, use
 `reviewer: :ops_approval` to route reviewed sampling through
@@ -251,11 +269,14 @@ Long-running interactive authorization providers should pass a GenServer
 
 ## Client State Machine
 
-The client progresses through these states:
+The stdio protocol wrapper and its shared core RPC engine progress through:
 
 1. `:disconnected` - Initial state
 2. `:initializing` - Connection established, handshake in progress
 3. `:ready` - Handshake complete, ready for tool operations
+
+The shared engine bounds initialization with `:timeout_ms`. Only a response
+matching the initialize request ID can make the MCP wrapper ready.
 
 ## Error Codes
 
@@ -287,7 +308,7 @@ When starting a client:
 - `:capabilities` - Client capabilities map
 - `:sampling_policy` - `LemonMCP.Sampling` policy opts for reviewed model-backed sampling
 - `:sampling_handler` - low-level raw callback for `sampling/createMessage`
-- `:timeout_ms` - Request timeout in milliseconds (default: 30000)
+- `:timeout_ms` - Maximum request and initialization timeout in milliseconds (default: 30000; `:infinity` disables the configured bound)
 
 ## Server notifications
 
@@ -299,9 +320,11 @@ For example, a host can react to `notifications/tools/list_changed`,
 `notifications/resources/updated` by refreshing its own cache.
 
 The option must be `nil` (the default, which ignores notifications) or an arity-one
-function. Each callback runs in an independent, unlinked task: exceptions and slow
-callbacks do not block or terminate the client. Delivery order and task completion
-are not guaranteed; hosts own callback work and cache lifecycle.
+function. Each callback runs independently: exceptions and slow callbacks do not
+block or terminate the client. Stdio uses the client's private task supervisor,
+which stops outstanding callbacks when the connection closes. HTTP/SSE callbacks
+remain unlinked tasks. Delivery order and task completion are not guaranteed;
+hosts own cache lifecycle.
 
 Stdio and legacy SSE deliver notifications from their incoming streams. Streamable
 HTTP delivers notifications included in POST responses, including SSE-formatted

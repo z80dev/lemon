@@ -11,6 +11,13 @@ public URLs, redacted session exports, and format-sniffed document text. See
 
 This app has **zero dependencies on other umbrella apps** and must remain that way.
 
+`LemonCore.Rpc.Client` is the shared `gen_statem` for RPC request ownership:
+per-request deadlines, original-caller monitors, fail-all on transport loss,
+bounded JSONL/Content-Length framing and redacted management status. Drivers
+retain protocol semantics and process lifecycle; they never automatically replay
+unknown outcomes. The module is an additive published-package API and has no
+umbrella dependencies.
+
 ## Architecture Overview
 
 ```

@@ -42,4 +42,28 @@ defmodule CodingAgent.Debug.ProtocolTest do
     good = frame(%{"seq" => 3, "type" => "event", "event" => "exited"})
     assert {[%{"event" => "exited"}], "", ""} = Protocol.decode(bad <> good)
   end
+
+  test "shared framing uses the same wire encoding and separates diagnostics" do
+    message = %{"seq" => 4, "type" => "event", "event" => "initialized"}
+    assert {:ok, encoded} = Protocol.Framing.encode(message)
+    assert encoded == frame(message)
+
+    assert {:ok, [{:diagnostic, "warning\n"}, ^message], ""} =
+             Protocol.Framing.decode("warning\n" <> encoded)
+  end
+
+  test "diagnostics do not retain arbitrary trailing bytes in the RPC buffer" do
+    assert {:ok, [{:diagnostic, "fatal adapter error\n"}], ""} =
+             Protocol.Framing.decode("fatal adapter error\n")
+  end
+
+  test "shared framing preserves a split header after diagnostics" do
+    message = %{"seq" => 5, "type" => "event", "event" => "stopped"}
+    <<"Content-", tail::binary>> = frame(message)
+
+    assert {:ok, [{:diagnostic, "warning\n"}], "Content-"} =
+             Protocol.Framing.decode("warning\nContent-")
+
+    assert {:ok, [^message], ""} = Protocol.Framing.decode("Content-" <> tail)
+  end
 end
