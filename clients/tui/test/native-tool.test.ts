@@ -121,6 +121,7 @@ test("native todo checklist preserves phase groups and blocked reasons", () => {
 	expect(description).toContain("Release");
 	expect(description).toContain("Archive");
 	expect(description).toContain("Need access");
+	expect(description).toContain("Deploy — blocked: Need access");
 	expect(description).toContain("1/2");
 });
 

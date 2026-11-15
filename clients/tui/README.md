@@ -161,9 +161,12 @@ on reconnect and when opening or changing models. Older daemons without
   pastes remain recoverable after later submissions. Ctrl+R opens omp's prompt-history
   search: type to filter past prompts (every word must match, newest first, each row
   shows its age and the folder it was typed in), Up/Down select, Enter fills the
-  composer without sending, Esc closes and leaves the draft untouched. It searches
-  the saved history; with `[tui] prompt_history = false` it lists this session's
-  prompts. Rebind it with `lemon.history.search` under `[tui.keys]`.
+  composer without sending, Esc closes and leaves the draft untouched. Delete at
+  the end of the search query removes the selected prompt from saved history and
+  this editor's recall ring; other running TUIs keep their already-loaded recall.
+  It searches the saved history; with `[tui] prompt_history = false` it lists this
+  session's prompts and deletion stays local. Rebind it with `lemon.history.search`
+  under `[tui.keys]`.
   Alt+L opens omp's keyboard link browser: the transcript replayed fullscreen with a
   hint tag drawn over every link (`http(s)` URLs, local `file:` links the replayed
   tool cards and messages draw, and bare URLs in text, including ones scrolled far into the
@@ -920,7 +923,7 @@ and keep to the house rules: return the same array reference from
 still change; animate via `requestComponentRender` only; `initTheme()`
 before constructing any component.
 
-All three pi packages are pinned to 18.18.9. The product frame provider owns the
+All three pi packages are pinned to 18.20.2. The product frame provider owns the
 row renderer's main/dock split and semantic retirement; Tern's native backend
 uses `describeSurface()` and the same component tree. Native descriptions must
 retain stable node references while unchanged. Chat roles `omp.user`,
