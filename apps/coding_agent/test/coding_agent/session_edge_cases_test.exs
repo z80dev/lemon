@@ -360,11 +360,11 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       :ok = Session.prompt(session, "Hello!")
 
       # Should receive error event
-      assert_receive {:session_event, _session_id, {:error, _reason, _partial}}, 5000
+      assert_receive {:session_event, _session_id, {:error, _reason, _partial}, _}, 5000
 
       assert_receive {:session_event, _session_id,
                       {:message_end,
-                       %AssistantMessage{stop_reason: :error, error_message: "Test error"}}},
+                       %AssistantMessage{stop_reason: :error, error_message: "Test error"}}, _},
                      5000
 
       # Wait for the run to wind down, then check state

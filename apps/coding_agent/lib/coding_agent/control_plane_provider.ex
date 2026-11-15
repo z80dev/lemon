@@ -229,6 +229,17 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  @doc "Replay only from the exact live native owner; a stopped/replaced owner expires cursors."
+  def session_event_replay(session_key, cursor, limit) do
+    case live_sessions(session_key) do
+      [pid] -> CodingAgent.Session.replay_events(pid, cursor, limit)
+      [] -> {:error, :cursor_expired}
+      _ -> {:error, :unavailable}
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
   @doc "Read the current native branch, including offline rewind, without starting a session."
   def session_recovery_snapshot(session_key, cwd) do
     case live_sessions(session_key) do

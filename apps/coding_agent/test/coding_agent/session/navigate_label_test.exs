@@ -563,7 +563,7 @@ defmodule CodingAgent.Session.NavigateLabelTest do
   end
 
   defp wait_idle(session) do
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     refute Session.get_state(session).is_streaming
   end
 

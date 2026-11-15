@@ -336,6 +336,9 @@ export class AppShell {
 			tui: this.tui,
 			transcript: this.chatContainer,
 			onStatusChanged: () => this.#renderStatus(),
+			onTerminal: (key) => {
+				if (this.client.online) void this.drainQueue(key);
+			},
 			smoothStreaming: () => smooth,
 		});
 
@@ -433,12 +436,12 @@ export class AppShell {
 			sendPrompt: (text) => this.sendPrompt(text),
 			refreshStatus: () => this.#renderStatus(),
 			confirm: (spec) => this.#confirm(spec),
-			onSnapshot: (result, branchChanged, terminalAdvance) => {
+			onSnapshot: (result, branchChanged) => {
 				if (branchChanged) this.#taskTree.store.clear(result.sessionKey);
 				this.#taskTree.reconcile(result.sessionKey, result.snapshot.children);
-				// Events for recovered runs only request owner reconciliation. Advance
-				// known-unsent work on its verified terminal transition, never a preview.
-				if (terminalAdvance && this.client.online) void this.drainQueue(result.sessionKey);
+			},
+			onTerminalRecovered: (key) => {
+				if (this.client.online) void this.drainQueue(key);
 			},
 		});
 		this.#switcher = new SessionSwitcher({
@@ -635,19 +638,7 @@ export class AppShell {
 			// A finished run is the moment the branch and the token budget can
 			// both have moved, and the only one worth spending a request on. It is
 			// also the moment the session's backlog is allowed to move.
-			this.client.events.on("agent", (event: AgentEvent) => {
-				const session = this.store.session(event.sessionKey ?? this.store.focusedKey);
-				if (session.snapshotIdentity) {
-					// Background recovered runs still own their local queue. Their
-					// completion preview requests owner truth; it never drains directly.
-					if (
-						event.type === "completed" &&
-						session !== this.store.focused &&
-						this.store.queue.items(session.key)[0]?.state === "queued-local"
-					)
-						void this.sessions.resync(session.key);
-					return;
-				}
+			this.client.events.on("agent-applied", (event: AgentEvent) => {
 				this.#taskTree.ingest(event);
 				this.#toolInspector.refresh();
 				if (event?.type !== "completed") return;
@@ -656,7 +647,6 @@ export class AppShell {
 				void this.refreshUsage();
 				// The authoritative resync after an approved plan flipped the mode mid-run.
 				if (completedKey === this.store.focusedKey) void this.refreshPlanMode(completedKey);
-				void this.drainQueue(completedKey);
 			}),
 			// A re-handshake means the client's picture of the daemon is stale: which
 			// sessions are live, what landed while the socket was down, and which
@@ -666,9 +656,11 @@ export class AppShell {
 					if (sessionKey && session.key !== sessionKey) continue;
 					// A re-handshake or stream overflow can lose `completed` events; the
 					// session's own recovery requests (a sessionKey and no reason) do not.
-					if (!sessionKey || reason) session.markCostUnobserved();
+					if ((!sessionKey || reason) && !session.eventCursor) session.markCostUnobserved();
 					if (
 						session !== this.store.focused &&
+						!session.eventCursor &&
+						!session.eventSnapshotRequired &&
 						(!session.snapshotIdentity ||
 							!session.busy ||
 							this.store.queue.items(session.key)[0]?.state !== "queued-local")

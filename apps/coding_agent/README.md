@@ -1165,9 +1165,9 @@ see [`docs/user-guide/reminders-and-heartbeats.md`](../../docs/user-guide/remind
 # Bounded direct mode (default)
 unsubscribe = CodingAgent.Session.subscribe(session, max_queue: 1000)
 receive do
-  {:session_event, session_id, {:stream_resync, %{reason: :overflow}}} ->
+  {:session_event, session_id, {:stream_resync, %{reason: :overflow}}, nil} ->
     IO.puts("recover from the session owner")
-  {:session_event, session_id, event} -> IO.inspect(event)
+  {:session_event, session_id, event, cursor} -> IO.inspect({event, cursor})
   {:session_terminal, session_id, status} -> IO.inspect({:owner_terminal, status})
 end
 unsubscribe.()
@@ -1175,6 +1175,12 @@ unsubscribe.()
 # Existing EventStream, with bounded mailbox ingress and explicit resync
 {:ok, stream_pid} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 1000)
 ```
+
+Native events preserve the raw event in the third element and carry a cursor in
+the fourth: `%{"version" => 1, "sessionId" => session_id, "streamId" => stream_id,
+"seq" => seq}`. Sequence numbers are gap-free within that live session stream;
+the stream ID distinguishes owner lifetimes. Overflow fences carry `nil` instead
+of a cursor because they are subscription controls, not session events.
 
 Both subscription modes bound delivery before the subscriber mailbox accepts an
 event. Overflow fences that subscription and explicitly requests recovery; it
