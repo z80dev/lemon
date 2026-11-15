@@ -8,6 +8,34 @@ defmodule LemonCore.Secrets.LockTest do
   @table :secrets_lock
   @key :secrets
 
+  defmodule ObservedBackend do
+    @behaviour LemonCore.Store.Backend
+    alias LemonCore.Store.EtsBackend
+
+    @impl true
+    def init(opts) do
+      Process.put(:lock_test_observer, Keyword.fetch!(opts, :test_pid))
+      EtsBackend.init(opts)
+    end
+
+    @impl true
+    def get(state, table, key) do
+      if table == :secrets_lock, do: send(Process.get(:lock_test_observer), :lease_read)
+      EtsBackend.get(state, table, key)
+    end
+
+    @impl true
+    defdelegate put(state, table, key, value), to: EtsBackend
+    @impl true
+    defdelegate put_new(state, table, key, value), to: EtsBackend
+    @impl true
+    defdelegate delete(state, table, key), to: EtsBackend
+    @impl true
+    defdelegate list(state, table), to: EtsBackend
+    @impl true
+    defdelegate compare_and_delete_many(state, entries), to: EtsBackend
+  end
+
   setup do
     case Store.start_link([]) do
       {:ok, _pid} -> :ok
@@ -87,6 +115,66 @@ defmodule LemonCore.Secrets.LockTest do
              {:error, {:secrets_lock_held, "some-other-host"}}
 
     assert Store.get(@table, @key) == held
+  end
+
+  for ending <- [:release, :death] do
+    @ending ending
+    test "a waiting local contender wakes on holder #{@ending}", _ctx do
+      test_pid = self()
+
+      store =
+        start_supervised!(
+          {Store,
+           name: :observed_secrets_lock_store,
+           backend: ObservedBackend,
+           backend_opts: [test_pid: test_pid],
+           cached_tables: []}
+        )
+
+      holder =
+        spawn(fn ->
+          Lock.with_write_lock(
+            fn ->
+              send(test_pid, :holding)
+
+              receive do
+                :release -> :ok
+              end
+            end,
+            store
+          )
+
+          send(test_pid, :released)
+
+          receive do
+            :finish -> :ok
+          end
+        end)
+
+      on_exit(fn -> if Process.alive?(holder), do: Process.exit(holder, :kill) end)
+      assert_receive :holding
+      waiter = Task.async(fn -> Lock.with_write_lock(fn -> :written end, store) end)
+
+      # The second strict fetch happens only after subscription and monitoring.
+      assert_receive :lease_read
+      assert_receive :lease_read
+      assert {:monitors, monitors} = Process.info(waiter.pid, :monitors)
+      assert {:process, holder} in monitors
+
+      case @ending do
+        :release ->
+          send(holder, :release)
+          assert_receive :released
+          assert Process.alive?(holder)
+
+        :death ->
+          Process.exit(holder, :kill)
+      end
+
+      assert Task.await(waiter) == :written
+      assert Store.get(store, @table, @key) == nil
+      send(holder, :finish)
+    end
   end
 
   defp lease(overrides) do

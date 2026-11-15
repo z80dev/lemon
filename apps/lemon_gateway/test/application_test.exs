@@ -11,7 +11,7 @@ defmodule LemonGateway.ApplicationTest do
   """
 
   # The `LemonCore.Store` key also carries the run-history/memory collaborator
-  # wiring (`:finalize_run_hooks`, `:run_history_provider`). Deleting or
+  # wiring (`:finalize_run_hooks`). Deleting or
   # wholesale-replacing it leaks into every later test in the suite, which then
   # silently stops recording run history. Snapshot the real config and restore.
   @store_config Application.compile_env(:lemon_core, LemonCore.Store, [])

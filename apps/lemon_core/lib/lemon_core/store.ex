@@ -23,8 +23,7 @@ defmodule LemonCore.Store do
       LemonCore.Store.put(:scratch_store, :notes, "k", "v")
 
   Configuration comes from `start_link/1` opts first (`:backend`,
-  `:backend_opts`, `:cached_tables`, `:finalize_run_hooks`,
-  `:run_history_provider`), falling back to
+  `:backend_opts`, `:cached_tables`, `:finalize_run_hooks`), falling back to
   `Application.get_env(:lemon_core, name)` — which for the default name is the
   historical `config :lemon_core, LemonCore.Store` block. Each instance gets its
   own `LemonCore.Store.ReadCache` tables.
@@ -42,8 +41,6 @@ defmodule LemonCore.Store do
       run is finalized, with or without a session key (see `finalize_run/3`).
     * `:cached_tables` / `register_cached_table/2` — generic tables to mirror
       into the read cache, for owners of hot indexes.
-    * `:run_history_provider` — module (or `{module, server}`) that
-      `get_run_history/3` forwards to; without one, history reads return `[]`.
 
   See `LemonCore.Store.Hooks` for hook shapes and failure isolation.
 
@@ -146,8 +143,9 @@ defmodule LemonCore.Store do
         started_at: integer()
       }
 
-  Hooks run in the store process, in registration order, and failures are
-  isolated. Hooks that require a session must ignore missing or invalid keys.
+  Hooks run outside the Store in registration order, under a shared five-second
+  caller-side budget. Failure or budget exhaustion is isolated from persistence.
+  Hooks that require a session must ignore missing or invalid keys.
 
   Hook delivery is **at least once**. Hooks run only after the run record and
   any eligible session index are written, but retrying a successful finalization
@@ -157,11 +155,18 @@ defmodule LemonCore.Store do
   def finalize_run(server \\ __MODULE__, run_id, summary)
 
   def finalize_run(server, run_id, summary) when is_map(summary) do
-    safe_store_call(server, {:finalize_run, run_id, summary}, {:error, :store_unavailable},
-      op: :finalize_run,
-      table: :runs,
-      key: run_id
-    )
+    case safe_store_call(server, {:finalize_run, run_id, summary}, {:error, :store_unavailable},
+           op: :finalize_run,
+           table: :runs,
+           key: run_id
+         ) do
+      {:finalized, hooks, payload} ->
+        Hooks.invoke_bounded(hooks, payload, op: :finalize_run, store: server)
+        :ok
+
+      other ->
+        other
+    end
   end
 
   def finalize_run(_server, _run_id, _summary), do: {:error, :invalid_summary}
@@ -508,38 +513,6 @@ defmodule LemonCore.Store do
     Hooks.unregister(server, :finalize_run_hooks, hook)
   end
 
-  # Run History API
-
-  @doc """
-  Get run history for a session key, ordered by most recent first.
-
-  ## Options
-
-    * `:limit` - Maximum number of runs to return (default: 10)
-
-  Returns a list of `{run_id, %{events: [...], summary: %{...}, session_key: key, started_at: ts}}`.
-
-  Session keys are binaries, and the guard says so: it is what stops
-  `get_run_history(:my_store, opts)` — which reads as "from this instance" but
-  means "for this session on the default store" — from silently returning the
-  wrong answer. Address an instance with `get_run_history/3`.
-  """
-  @spec get_run_history(binary(), keyword()) :: [{term(), map()}]
-  def get_run_history(session_key, opts \\ []) when is_binary(session_key) and is_list(opts),
-    do: get_run_history(__MODULE__, session_key, opts)
-
-  @doc """
-  Get run history for a session key from a specific store instance.
-  """
-  @spec get_run_history(server(), term(), keyword()) :: [{term(), map()}]
-  def get_run_history(server, session_key, opts) when is_list(opts) do
-    safe_store_call(server, {:get_run_history, session_key, opts}, [],
-      op: :get_run_history,
-      table: :run_history,
-      key: session_key
-    )
-  end
-
   @doc """
   Get a specific run by ID.
   """
@@ -700,12 +673,12 @@ defmodule LemonCore.Store do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
     name = Keyword.get(opts, :name, __MODULE__)
     config = resolve_config(name, opts)
 
     backend = Keyword.get(config, :backend, @default_backend)
     backend_opts = Keyword.get(config, :backend_opts, [])
-    run_history_provider = Keyword.get(config, :run_history_provider)
     finalize_run_hooks = List.wrap(Keyword.get(config, :finalize_run_hooks, []))
 
     cached_tables =
@@ -737,7 +710,6 @@ defmodule LemonCore.Store do
            read_cache: read_cache,
            cached_tables: cached_tables,
            finalize_run_hooks: finalize_run_hooks,
-           run_history_provider: run_history_provider,
            backend: backend,
            backend_state: backend_state,
            introspection_retention_ms: @default_introspection_retention_ms
@@ -770,8 +742,7 @@ defmodule LemonCore.Store do
       :backend,
       :backend_opts,
       :cached_tables,
-      :finalize_run_hooks,
-      :run_history_provider
+      :finalize_run_hooks
     ])
     |> then(&Keyword.merge(env_config, &1))
   end
@@ -781,23 +752,6 @@ defmodule LemonCore.Store do
   # both ways silently ingests every finalized run twice.
   defp finalize_run_hooks(state) do
     Enum.uniq(state.finalize_run_hooks ++ Hooks.registered(state.name, :finalize_run_hooks))
-  end
-
-  # The read side of run history belongs to whoever owns run history; the store
-  # only forwards to the configured provider (`{module, server}` or `module`).
-  defp run_history_get(nil, _session_key, _opts), do: []
-
-  defp run_history_get(provider, session_key, opts) do
-    {module, server} =
-      case provider do
-        {module, server} -> {module, server}
-        module when is_atom(module) -> {module, module}
-      end
-
-    Hooks.safely(fn -> module.get(server, session_key, opts) end, [],
-      op: :get_run_history,
-      provider: provider
-    )
   end
 
   defp schedule_sweep do
@@ -904,13 +858,6 @@ defmodule LemonCore.Store do
   def handle_call({:finalize_run, run_id, summary}, _from, state) do
     {reply, state} = finalize_run_record(state, run_id, summary)
     {:reply, reply, state}
-  end
-
-  def handle_call({:get_run_history, session_key, opts}, _from, state) do
-    # Forwarded to the configured provider, which owns run history and keeps
-    # potentially large history I/O off this process.
-    result = run_history_get(state.run_history_provider, session_key, opts)
-    {:reply, result, state}
   end
 
   def handle_call({:list_introspection_events, opts}, _from, state) do
@@ -1306,22 +1253,16 @@ defmodule LemonCore.Store do
     with {:ok, record, backend_state} <- ensure_final_record(state, run_id, summary),
          {:ok, backend_state} <-
            finalize_run_session(state, backend_state, run_id, record, summary) do
-      Hooks.invoke(
-        finalize_run_hooks(state),
-        %{
-          store: state.name,
-          run_id: run_id,
-          record: record,
-          summary: summary,
-          session_key: Map.get(summary, :session_key),
-          started_at: record.started_at
-        },
-        op: :finalize_run,
+      payload = %{
         store: state.name,
-        run_id: run_id
-      )
+        run_id: run_id,
+        record: record,
+        summary: summary,
+        session_key: Map.get(summary, :session_key),
+        started_at: record.started_at
+      }
 
-      {:ok, %{state | backend_state: backend_state}}
+      {{:finalized, finalize_run_hooks(state), payload}, %{state | backend_state: backend_state}}
     else
       {:error, reason, backend_state} ->
         {{:error, reason}, %{state | backend_state: backend_state}}
@@ -1646,184 +1587,48 @@ defmodule LemonCore.Store do
 
   @impl true
   def handle_info(:sweep_expired, state) do
-    cache = state.read_cache
+    now = System.system_time(:millisecond)
+
+    introspection_sweeps =
+      if is_integer(state.introspection_retention_ms) and state.introspection_retention_ms > 0 do
+        [{:introspection_log, :introspection_timestamp, now - state.introspection_retention_ms}]
+      else
+        []
+      end
+
+    sweeps =
+      Enum.map(@expiring_tables, &{&1, :expires_at, now}) ++
+        introspection_sweeps ++
+        [
+          {:idempotency, :inserted_at_ms, now - @idempotency_retention_ms},
+          {:cron_runs, :started_at_ms, now - @cron_runs_retention_ms}
+        ]
 
     backend_state =
-      Enum.reduce(@expiring_tables, state.backend_state, fn table, acc_state ->
-        sweep_expired_entries(state.backend, acc_state, table, cache)
+      Enum.reduce(sweeps, state.backend_state, fn {table, field, cutoff}, acc ->
+        if function_exported?(state.backend, :sweep, 3) do
+          case state.backend.sweep(acc, table, {field, cutoff}) do
+            {:ok, _count, next} ->
+              ReadCache.sweep(state.read_cache, table, field, cutoff)
+              next
+
+            {:error, reason} ->
+              log_backend_error(:sweep, table, :all, reason)
+              acc
+          end
+        else
+          acc
+        end
       end)
-
-    backend_state =
-      sweep_expired_introspection_events(
-        state.backend,
-        backend_state,
-        state.introspection_retention_ms,
-        cache
-      )
-
-    backend_state = sweep_expired_idempotency(state.backend, backend_state, cache)
-    backend_state = sweep_expired_cron_runs(state.backend, backend_state, cache)
 
     schedule_sweep()
     {:noreply, %{state | backend_state: backend_state}}
   end
 
-  # Every sweeper evicts what it deletes. `ReadCache.delete/3` is a no-op for a
-  # domain this store does not mirror, so the call is unconditional: a table
-  # that later becomes cached (`register_cached_table/2`) is covered without
-  # anyone remembering to add it here.
-  defp sweep_expired_entries(backend, backend_state, table, cache) do
-    case backend.list(backend_state, table) do
-      {:ok, entries, backend_state} ->
-        now = System.system_time(:millisecond)
-
-        Enum.reduce(entries, backend_state, fn {key, value}, acc_state ->
-          case value do
-            %{expires_at: expires_at} when is_integer(expires_at) and now > expires_at ->
-              case backend.delete(acc_state, table, key) do
-                {:ok, new_state} ->
-                  ReadCache.delete(cache, table, key)
-                  new_state
-
-                {:error, reason} ->
-                  log_backend_error(:delete, table, key, reason)
-                  acc_state
-
-                other ->
-                  log_backend_unexpected(:delete, table, key, other)
-                  acc_state
-              end
-
-            _ ->
-              acc_state
-          end
-        end)
-
-      {:error, reason} ->
-        log_backend_error(:list, table, :all, reason)
-        backend_state
-
-      other ->
-        log_backend_unexpected(:list, table, :all, other)
-        backend_state
-    end
-  end
-
-  defp sweep_expired_introspection_events(_backend, backend_state, retention_ms, _cache)
-       when not is_integer(retention_ms) or retention_ms <= 0 do
-    backend_state
-  end
-
-  defp sweep_expired_introspection_events(backend, backend_state, retention_ms, cache) do
-    case backend.list(backend_state, :introspection_log) do
-      {:ok, all_events, backend_state} ->
-        cutoff_ms = System.system_time(:millisecond) - retention_ms
-
-        Enum.reduce(all_events, backend_state, fn {key, event}, acc_state ->
-          event_ts_ms = introspection_event_timestamp(key, event)
-
-          if is_integer(event_ts_ms) and event_ts_ms < cutoff_ms do
-            case backend.delete(acc_state, :introspection_log, key) do
-              {:ok, next_state} ->
-                ReadCache.delete(cache, :introspection_log, key)
-                next_state
-
-              {:error, reason} ->
-                log_backend_error(:delete, :introspection_log, key, reason)
-                acc_state
-
-              other ->
-                log_backend_unexpected(:delete, :introspection_log, key, other)
-                acc_state
-            end
-          else
-            acc_state
-          end
-        end)
-
-      {:error, reason} ->
-        log_backend_error(:list, :introspection_log, :all, reason)
-        backend_state
-
-      other ->
-        log_backend_unexpected(:list, :introspection_log, :all, other)
-        backend_state
-    end
-  end
-
-  defp introspection_event_timestamp({ts_ms, _event_id}, _event) when is_integer(ts_ms), do: ts_ms
-
-  defp introspection_event_timestamp(_key, event) when is_map(event) do
-    case MapHelpers.get_key(event, :ts_ms) do
-      ts when is_integer(ts) -> ts
-      _ -> nil
-    end
-  end
-
-  defp introspection_event_timestamp(_key, _event), do: nil
-
-  defp sweep_expired_idempotency(backend, backend_state, cache) do
-    case backend.list(backend_state, :idempotency) do
-      {:ok, entries, backend_state} ->
-        cutoff_ms = System.system_time(:millisecond) - @idempotency_retention_ms
-
-        Enum.reduce(entries, backend_state, fn {key, value}, acc_state ->
-          inserted_at =
-            case value do
-              %{"inserted_at_ms" => ts} when is_integer(ts) -> ts
-              _ -> nil
-            end
-
-          if is_integer(inserted_at) and inserted_at < cutoff_ms do
-            case backend.delete(acc_state, :idempotency, key) do
-              {:ok, next_state} ->
-                ReadCache.delete(cache, :idempotency, key)
-                next_state
-
-              _ ->
-                acc_state
-            end
-          else
-            acc_state
-          end
-        end)
-
-      _ ->
-        backend_state
-    end
-  end
-
-  defp sweep_expired_cron_runs(backend, backend_state, cache) do
-    case backend.list(backend_state, :cron_runs) do
-      {:ok, entries, backend_state} ->
-        cutoff_ms = System.system_time(:millisecond) - @cron_runs_retention_ms
-
-        Enum.reduce(entries, backend_state, fn {key, value}, acc_state ->
-          # Use started_at_ms as the age reference for cron runs
-          started_at =
-            case value do
-              %{started_at_ms: ts} when is_integer(ts) -> ts
-              %{"started_at_ms" => ts} when is_integer(ts) -> ts
-              _ -> nil
-            end
-
-          if is_integer(started_at) and started_at < cutoff_ms do
-            case backend.delete(acc_state, :cron_runs, key) do
-              {:ok, next_state} ->
-                ReadCache.delete(cache, :cron_runs, key)
-                next_state
-
-              _ ->
-                acc_state
-            end
-          else
-            acc_state
-          end
-        end)
-
-      _ ->
-        backend_state
-    end
+  @impl true
+  def terminate(_reason, state) do
+    if function_exported?(state.backend, :close, 1), do: state.backend.close(state.backend_state)
+    :ok
   end
 
   defp compare_and_delete_many_fallback(backend, backend_state, entries) do

@@ -13,6 +13,7 @@ defmodule LemonCore.Application do
   - `LemonCore.Dedupe.Supervisor` - Supervises each named deduplication table owner
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
+  - `LemonCore.Secrets.Usage` - Batched asynchronous secret usage metadata
   - `LemonCore.UsageLedger` - Serialized per-run usage/cost aggregation (finalize-run hook)
   - `LemonCore.ExecApprovalExpiry` - Expires pending exec approvals whose run or
     session ended (finalize-run hook)
@@ -78,6 +79,7 @@ defmodule LemonCore.Application do
         LemonCore.NodeRegistry,
         {LemonCore.ConfigCache, config_cache_opts},
         LemonCore.Store,
+        LemonCore.Secrets.Usage,
         LemonCore.UsageLedger,
         LemonCore.ExecApprovalExpiry,
         {Task.Supervisor, name: LemonCore.Secrets.SourceTaskSupervisor},

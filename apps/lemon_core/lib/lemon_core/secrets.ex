@@ -35,7 +35,7 @@ defmodule LemonCore.Secrets do
 
   alias LemonCore.Clock
   alias LemonCore.MapHelpers
-  alias LemonCore.Secrets.{Crypto, External, KeyRotation, Lock, MasterKey, Receipts}
+  alias LemonCore.Secrets.{Crypto, External, KeyRotation, Lock, MasterKey, Receipts, Usage}
   alias LemonCore.Store
 
   @table :secrets_v1
@@ -267,7 +267,7 @@ defmodule LemonCore.Secrets do
   ephemeral credential-bearing data: do not inspect, log or persist it.
 
   Reads distinguish storage failure from absence and never remove expired
-  records. Only a best-effort, exact-snapshot usage touch writes during a read.
+  records. Best-effort, exact-snapshot usage touches are cast to a batching worker.
   `:store` selects a Store instance; it defaults to `LemonCore.Store`.
   """
   @spec get_with_revision(name(), keyword()) ::
@@ -277,11 +277,14 @@ defmodule LemonCore.Secrets do
          {:ok, owner} <- normalize_owner(opts),
          {:ok, server} <- storage_owner(opts),
          {:ok, entry} <- fetch_active_entry(server, owner, name),
-         {:ok, master_key, _source} <- MasterKey.resolve(opts),
-         {:ok, plaintext} <- KeyRotation.decrypt(entry, master_key) do
-      revision = entry_revision(server, owner, name, entry)
-      touch_entry(server, owner, name, entry)
-      {:ok, plaintext, revision}
+         {:ok, entry, plaintext} <- decrypt_entry(server, owner, name, entry, opts) do
+      if expired_entry?(entry) do
+        {:error, :expired}
+      else
+        revision = entry_revision(server, owner, name, entry)
+        Usage.touch(server, {owner, name}, entry)
+        {:ok, plaintext, revision}
+      end
     end
   end
 
@@ -307,8 +310,7 @@ defmodule LemonCore.Secrets do
           {:error, :invalid_secret_record}
 
         true ->
-          with {:ok, master_key, _source} <- MasterKey.resolve(opts),
-               {:ok, plaintext} <- KeyRotation.decrypt(entry, master_key) do
+          with {:ok, entry, plaintext} <- decrypt_entry(server, owner, name, entry, opts) do
             {:ok, {server, owner, name, plaintext, entry}}
           end
       end
@@ -744,6 +746,41 @@ defmodule LemonCore.Secrets do
     end
   end
 
+  # A cache miss may wait behind rotation after the caller fetched its snapshot.
+  # Re-read only on authentication failure and retry only a changed record; never
+  # reuse an old ciphertext with the newly published key or touch a replacement.
+  defp decrypt_entry(server, owner, name, entry, opts) do
+    with {:ok, master_key, _source} <- MasterKey.resolve_cached(opts),
+         {:ok, plaintext} <- KeyRotation.decrypt(entry, master_key) do
+      {:ok, entry, plaintext}
+    else
+      {:error, :decrypt_failed} = error ->
+        case Store.fetch(server, @table, {owner, name}) do
+          {:ok, ^entry} ->
+            error
+
+          {:ok, current} when is_map(current) ->
+            cond do
+              Receipts.receipt_only?(current) -> {:error, :not_found}
+              not value_entry?(current) -> {:error, :invalid_secret_record}
+              true -> decrypt_entry(server, owner, name, current, opts)
+            end
+
+          {:ok, nil} ->
+            {:error, :not_found}
+
+          {:ok, _invalid} ->
+            {:error, :invalid_secret_record}
+
+          {:error, _reason} = failure ->
+            failure
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
   defp fetch_active_entry(server, owner, name) do
     case Store.fetch(server, @table, {owner, name}) do
       {:ok, nil} ->
@@ -780,21 +817,6 @@ defmodule LemonCore.Secrets do
   @doc false
   def receipt_only_entry(entry) do
     %{receipts: Receipts.entries(entry)}
-  end
-
-  # Compare-and-swap so a read never writes back a record that changed after it
-  # was fetched (a concurrent `set/3`, or a key rotation staging ciphertext).
-  # Usage metadata is best effort: losing a race only skips the count.
-  defp touch_entry(server, owner, name, entry) do
-    now = Clock.now_ms()
-
-    updated =
-      entry
-      |> put_field(:usage_count, (get_field(entry, :usage_count) || 0) + 1)
-      |> put_field(:last_used_at, now)
-
-    _ = Store.compare_and_swap(server, @table, {owner, name}, entry, updated)
-    :ok
   end
 
   defp metadata(owner, name, entry) do
@@ -836,12 +858,6 @@ defmodule LemonCore.Secrets do
 
   defp get_field(map, key) when is_map(map) do
     MapHelpers.get_key(map, key)
-  end
-
-  defp put_field(map, key, value) when is_map(map) do
-    map
-    |> Map.put(key, value)
-    |> Map.delete(Atom.to_string(key))
   end
 
   defp normalize_owner(opts) do

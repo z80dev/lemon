@@ -84,7 +84,37 @@ Additional nuance:
 - CLI setup commands use `MasterKey.scoped/1`: Keychain results (including failures)
   are cached only in the caller for the command lifetime, nested scopes share the
   cache, and successful initialization replaces a cached miss. Cleanup also runs
-  on exceptions. Servers remain unscoped so external key changes stay visible.
+  on exceptions. Diagnostic `resolve/1` and `status/1` remain fresh outside a
+  scope; encrypted-secret reads use the runtime cache below.
+
+### Runtime read cache and usage metadata
+
+Encrypted-secret reads use `MasterKey.resolve_cached/1`: one successful resolved
+key is retained in VM-local `:persistent_term`, shared by callers with identical
+options and provider configuration. A warm read does not invoke any key provider
+or spawn `security`. Different options replace the single cache entry rather
+than growing an unbounded key cache; failures are not retained. External changes
+to a key file or Keychain entry require `MasterKey.resolve_fresh/1` or a VM restart.
+Use supported key rotation rather than replacing a key in use.
+
+Writers continue to resolve the key freshly while holding `Secrets.Lock`, then
+invalidate the read cache. This preserves the shared SQLite lease's protection
+against another OS process rotating the key. An already-cached reader can still
+run while a writer is resolving its key. Rotation invalidates before switching
+keys and again on exit, inside the mutation lease, and serializes cache misses
+with that transition. This also prevents an in-flight lookup from republishing
+the retired key after a successful or interrupted switch. A read that waited
+behind rotation re-fetches a changed ciphertext snapshot if needed.
+
+Reads cast usage touches to supervised `LemonCore.Secrets.Usage`; they do not wait
+for a metadata write. The worker coalesces identical snapshots per pinned Store
+process and secret over a 100 ms batching interval, then performs one exact-record
+CAS per pending secret. Counts and last-used timestamps are eventually visible,
+remain best effort, and may be lost on conflicts, worker restart or shutdown.
+Delayed touches never restore deleted credentials, overwrite replacements or
+undo staged ciphertext. No usage touch changes the credential revision,
+modification timestamp or secret-change Bus digest. These counters are not an
+audit log; credential writes and rotation retain their durability requirements.
 
 ## Operator Notes
 
@@ -126,9 +156,10 @@ LemonCore.Secrets.set_if_revision(name, refreshed_credential, revision, opts)
 - Revisions are opaque, ephemeral credential-bearing data. Keep them only for
   the refresh in progress; never inspect, log or persist them. A stale save
   must discard its refresh result, not retry it against a newly loaded login.
-- Reads only perform a best-effort exact-record usage touch. Usage counts and
-  last-used timestamps do not invalidate outstanding revisions. Reads never
-  delete expired records and never install revision metadata into legacy rows.
+- Reads only enqueue best-effort exact-record usage touches. Usage counts and
+  last-used timestamps become visible after batching and do not invalidate
+  outstanding revisions. Reads never delete expired records and never install
+  revision metadata into legacy rows.
   Legacy rows derive their revision from their encrypted incarnation until the
   next replacement; re-encryption of a legacy row may invalidate that revision.
 - Conditional saves resolve the current encryption key while holding the
@@ -220,6 +251,11 @@ lemon secrets rotate-key --confirm <token>  # apply exactly that preview
   callers get `{:error, {:secrets_lock_held, host}}` and an operator deletes
   the `:secrets_lock` row after confirming that holder is gone. OAuth refresh
   paths and MCP token caches report a failed save instead of claiming success.
+  Within one VM, waiters monitor the holder and subscribe to its lease-specific
+  release notification; normal release wakes them even if the holder stays alive.
+  They re-read the lease after subscribing so a release cannot be missed.
+  Other OS processes retain the shared-lease poll and dead-holder checks.
+  Standalone Store users without the application Bus also retain that poll.
 - **Scope.** Only the encrypted store is rotated. External sources and
   same-name environment fallback are read-only and untouched. A master key
   supplied by `LEMON_SECRETS_MASTER_KEY` cannot be rewritten: rotation refuses
@@ -290,5 +326,7 @@ after uncertain mutations and reconcile read-only before any new mutation.
 - `apps/lemon_core/test/lemon_core/secrets/key_rotation_test.exs`
 - `apps/lemon_cli/test/lemon_cli/cli_test.exs` (`secrets rotate-key`)
 - `apps/lemon_core/test/lemon_core/secrets/lock_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/read_cache_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/usage_test.exs`
 - `apps/lemon_core/test/lemon_core/store/sqlite_backend_test.exs` (`compare_and_swap/5 and sync/1`)
 - `apps/lemon_core/test/lemon_core/secrets/receipts_test.exs`

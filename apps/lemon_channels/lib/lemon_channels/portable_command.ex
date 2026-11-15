@@ -8,7 +8,7 @@ defmodule LemonChannels.PortableCommand do
   """
 
   alias LemonChannels.CommandCatalog
-  alias LemonCore.{RouterBridge, Store, UsageDiagnostics}
+  alias LemonCore.{RouterBridge, RunHistoryStore, UsageDiagnostics}
 
   @default_limit 10
   @public_statuses ~w(
@@ -105,7 +105,7 @@ defmodule LemonChannels.PortableCommand do
 
     recent =
       if is_binary(session_key) and session_key != "" do
-        Store.get_run_history(session_key, limit: 1) |> List.first()
+        RunHistoryStore.get(session_key, limit: 1) |> List.first()
       end
 
     [

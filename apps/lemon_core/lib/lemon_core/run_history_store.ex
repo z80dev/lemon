@@ -173,6 +173,10 @@ defmodule LemonCore.RunHistoryStore do
 
   @doc """
   Fetch history for a session from a specific store instance.
+
+  Calls this owner directly, without routing through `LemonCore.Store`.
+  Returns `[]` if the owner is unavailable or the call times out. Use `fetch/2`
+  for default-instance reads that must distinguish unavailability from absence.
   """
   @spec get(server(), String.t(), keyword()) :: [{term(), map()}]
   def get(server, session_key, opts) do
