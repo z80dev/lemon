@@ -45,10 +45,10 @@ defmodule CodingAgent.SessionRecalledContextTest do
   transcript. A user scrolling back must never find a machine-generated block
   attributed to them as something they typed.
 
-  The other property under test is the negative one, and it is the one that
-  protects every session that has no memory integration at all: with nothing
-  contributed, the message on the wire is byte-identical to the message the
-  session built.
+  Opening prompts always carry Lemon's current environment, independently of
+  optional recall contributors. Steering and queued follow-ups do not recapture
+  it. Removing only Lemon's authenticated attachment must recover the exact
+  user-authored bytes, even when they contain pasted wrapper delimiters.
   """
 
   use ExUnit.Case, async: false
@@ -191,6 +191,17 @@ defmodule CodingAgent.SessionRecalledContextTest do
     |> Map.fetch!(:content)
   end
 
+  defp assert_environment_only(messages, original) do
+    message = messages |> Enum.filter(&match?(%UserMessage{}, &1)) |> List.last()
+    text = message.content
+    assert text =~ "## Current environment"
+    assert text =~ "Today's date:"
+    assert text =~ "Git repository:"
+    refute text =~ @volatile.body
+    [_, marker] = Regex.run(@marked_open, text)
+    assert Session.strip_recalled_context(message, marker).content == original
+  end
+
   defp agent_state(session) do
     LemonAgent.Agent.get_state(Session.get_state(session).agent)
   end
@@ -315,14 +326,14 @@ defmodule CodingAgent.SessionRecalledContextTest do
       assert sent =~ "<recalled-context>"
     end
 
-    test "no contributor registered leaves the outgoing message byte-identical" do
+    test "no optional contributor still attaches environment to the opening prompt" do
       ContextRegistry.unregister(:recalled_context_test)
       session = start_session()
 
       :ok = Session.prompt(session, "why is the build slow?")
       {messages, _system_prompt} = await_sent()
 
-      assert last_user_content(messages) == "why is the build slow?"
+      assert_environment_only(messages, "why is the build slow?")
     end
 
     test "skill relevance keeps the cacheable prompt stable and stays out of persistence" do
@@ -388,10 +399,8 @@ defmodule CodingAgent.SessionRecalledContextTest do
     end
 
     test "a user message that ends in the closing delimiter survives with no contributor" do
-      # The configuration where this bites hardest: nothing is contributed, so
-      # nothing was ever attached, and a strip that recognised the delimiter
-      # instead of its own marker would still cut the message back to its first
-      # line — in every install, with no memory integration involved at all.
+      # Even with no optional contributor, the built-in environment attachment
+      # must strip only its own marker, never the user's pasted delimiters.
       ContextRegistry.unregister(:recalled_context_test)
       session = start_session()
       unsubscribe = Session.subscribe(session)
@@ -399,14 +408,13 @@ defmodule CodingAgent.SessionRecalledContextTest do
       :ok = Session.prompt(session, @typed_block)
       {messages, _system_prompt} = await_sent()
 
-      # What the model was sent is the message as typed...
-      assert last_user_content(messages) == @typed_block
+      # The model gets the typed block followed by current environment.
+      assert_environment_only(messages, @typed_block)
 
       assert_receive {:session_event, _id, {:message_end, %UserMessage{content: @typed_block}}},
                      2_000
 
-      # ...and so is every record of it. A transcript that disagreed with the
-      # request would replay a message the model never saw on resume.
+      # The visible and persisted records keep exactly the user's pasted block.
       user_contents =
         session
         |> Session.get_messages()
@@ -448,14 +456,14 @@ defmodule CodingAgent.SessionRecalledContextTest do
       unsubscribe.()
     end
 
-    test "a contributor with only a system half leaves the outgoing message byte-identical" do
+    test "a contributor with only a system half adds no extra user context" do
       Contributor.answer([@stable])
       session = start_session()
 
       :ok = Session.prompt(session, "why is the build slow?")
       {messages, system_prompt} = await_sent()
 
-      assert last_user_content(messages) == "why is the build slow?"
+      assert_environment_only(messages, "why is the build slow?")
       assert system_prompt =~ @stable.body
     end
 
@@ -489,6 +497,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       assert [%{message: %UserMessage{content: sent}}] = agent_queues(session).steering_queue
       assert sent =~ @volatile.body
+      refute sent =~ "## Current environment"
 
       assert [%UserMessage{content: "actually, stop"}] =
                :queue.to_list(Session.get_state(session).steering_queue)
@@ -503,6 +512,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       assert [%{message: %UserMessage{content: sent}}] = agent_queues(session).follow_up_queue
       assert sent =~ @volatile.body
+      refute sent =~ "## Current environment"
 
       assert [%UserMessage{content: "and then deploy"}] =
                :queue.to_list(Session.get_state(session).follow_up_queue)
