@@ -1,31 +1,32 @@
 defmodule LemonCore.NodeRegistry do
   @moduledoc """
-  Live registry and targeted invocation broker for named Lemon execution nodes.
+  Socket-owned live registry and targeted invocation API for named Lemon nodes.
 
-  Nodes are registered by the control-plane WebSocket connection after node
-  authentication. Runtime code addresses a node by exact durable ID or unique
-  live name without depending on the control plane; exact IDs resolve first and
-  an authorized durable ID never resolves through another node's name, even
-  offline.
+  The authenticated WebSocket process registers its durable node ID in a unique
+  `Registry`, with its live name, credential generation and metadata as value.
+  Registry removes that entry when the socket dies; there is no node-monitor
+  bookkeeping. Pairing credentials and durable metadata remain in the control
+  plane. Exact IDs win over names, including IDs retained by the generation floor.
 
-  The registry deliberately tracks live connections only. Pairing credentials
-  and durable node metadata remain owned by the control plane; a node is
-  executable only while its authenticated connection is registered here.
-  Per-node authorized session-generation floors are retained in memory so a
-  delayed handshake cannot re-register a credential generation that has
-  already been superseded.
+  Each invocation is a temporary `LemonCore.NodeInvocation` process. Events,
+  results, cancellation, approvals and steer/redirect call that process directly,
+  never a singleton broker. It owns its timers, recipient/socket monitors and
+  sequence validation. Disconnects cancel work; reconnects never replay it.
+
+  Registration, rename, revocation and invocation admission share a lifecycle
+  mutex, not the streamed data path. Owner mutations are delivered to the socket
+  through `handle_owner_message/1`; a socket that cannot acknowledge a handover
+  is not silently replaced. Generation floors survive live socket removal.
+  Owner mutations use the existing control timeout policy; an unacknowledged
+  mutation returns `:outcome_unknown` and must not be automatically retried.
   """
 
-  use GenServer
+  use Supervisor
 
-  alias LemonCore.JSONPayload
+  alias LemonCore.{JSONPayload, NodeInvocation}
 
   @default_timeout_ms 30 * 60 * 1_000
   @default_control_timeout_ms 5_000
-  @max_control_text_bytes 16 * 1_024
-  @max_event_bytes 64 * 1_024
-  @event_types ~w(delta started action checkpoint_created checkpoint_restored checkpoint_deleted approval_requested)
-  @approval_decisions ~w(approve_once approve_session approve_agent approve_global deny)
 
   @type node_info :: %{
           id: String.t(),
@@ -36,851 +37,497 @@ defmodule LemonCore.NodeRegistry do
           connected_at_ms: integer()
         }
 
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-  end
+  def start_link(opts \\ []), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @spec register(String.t(), String.t(), pid(), map()) :: :ok | {:error, term()}
-  def register(node_id, name, pid, metadata \\ %{})
-      when is_binary(node_id) and is_binary(name) and is_pid(pid) and is_map(metadata) do
-    GenServer.call(__MODULE__, {:register, node_id, String.trim(name), pid, 0, metadata, false})
-  end
-
-  @doc "Registers the authenticated connection and credential generation for a node session."
-  @spec register_session(String.t(), String.t(), pid(), non_neg_integer(), map()) ::
-          :ok | {:error, term()}
-  def register_session(node_id, name, pid, generation, metadata \\ %{})
-      when is_binary(node_id) and is_binary(name) and is_pid(pid) and
-             is_integer(generation) and generation >= 0 and is_map(metadata) do
-    GenServer.call(
-      __MODULE__,
-      {:register, node_id, String.trim(name), pid, generation, metadata, true}
+  @impl true
+  def init(_opts) do
+    Supervisor.init(
+      [
+        Supervisor.child_spec(
+          {Registry, keys: :unique, name: __MODULE__.Connections},
+          id: __MODULE__.Connections
+        ),
+        Supervisor.child_spec(
+          {Registry, keys: :unique, name: __MODULE__.Invocations},
+          id: __MODULE__.Invocations
+        ),
+        {DynamicSupervisor, strategy: :one_for_one, name: __MODULE__.InvocationSupervisor},
+        LemonCore.NodeRegistry.Generations
+      ],
+      strategy: :one_for_all
     )
   end
 
-  @spec unregister(String.t(), pid()) :: :ok
+  @doc """
+  Registers a node in the calling socket process.
+
+  The caller owns the entry; supplying a dispatch PID does not transfer Registry
+  ownership. Authenticated transports must call this from the registered socket.
+  """
+  @spec register(String.t(), String.t(), pid(), map()) :: :ok | {:error, term()}
+  def register(node_id, name, pid, metadata \\ %{})
+      when is_binary(node_id) and is_binary(name) and is_pid(pid) and is_map(metadata),
+      do: register_node(node_id, String.trim(name), pid, 0, metadata, false)
+
+  @doc "Registers the calling authenticated socket and its credential generation."
+  def register_session(node_id, name, pid, generation, metadata \\ %{})
+      when is_binary(node_id) and is_binary(name) and is_pid(pid) and
+             is_integer(generation) and generation >= 0 and is_map(metadata),
+      do: register_node(node_id, String.trim(name), pid, generation, metadata, true)
+
   def unregister(node_id, pid) when is_binary(node_id) and is_pid(pid) do
-    GenServer.call(__MODULE__, {:unregister, node_id, pid})
+    lifecycle(fn ->
+      case lookup(node_id) do
+        {owner, %{pid: ^pid}} -> owner_action(owner, node_id, {:remove, :disconnected})
+        _ -> :ok
+      end
+    end)
   end
 
   @doc "Renames a live node without disturbing its connection or invocations."
-  @spec rename(String.t(), String.t()) :: :ok | {:error, term()}
   def rename(node_id, name) when is_binary(node_id) and is_binary(name) do
-    GenServer.call(__MODULE__, {:rename, node_id, String.trim(name)})
+    name = String.trim(name)
+
+    lifecycle(fn ->
+      with :ok <- available_name(node_id, name),
+           {owner, _node} <- lookup(node_id) do
+        owner_action(owner, node_id, {:rename, name})
+      else
+        nil -> {:error, :not_found}
+        error -> error
+      end
+    end)
   end
 
   @spec list() :: [node_info()]
-  def list, do: GenServer.call(__MODULE__, :list)
+  def list, do: Enum.sort_by(live_nodes(), & &1.name)
 
-  @doc """
-  Resolves a name-or-ID selector. An exact live durable ID wins; an authorized
-  durable ID never resolves through another node's name, even while offline;
-  otherwise a unique live name resolves.
-  """
-  @spec resolve(String.t()) :: {:ok, node_info()} | {:error, :not_found}
+  defp live_nodes do
+    Registry.select(__MODULE__.Connections, [{{:"$1", :_, :"$2"}, [], [:"$2"]}])
+    |> Enum.filter(fn node ->
+      Process.alive?(node.pid) and
+        node.generation >= LemonCore.NodeRegistry.Generations.generation_floor(node.id)
+    end)
+  end
+
+  @doc "Resolves an exact durable ID first, otherwise a unique live name."
   def resolve(name_or_id) when is_binary(name_or_id) do
-    GenServer.call(__MODULE__, {:resolve, String.trim(name_or_id)})
-  end
+    selector = String.trim(name_or_id)
 
-  @doc "Resolves an exact durable node ID; never falls back to node names."
-  def resolve_id(node_id) when is_binary(node_id) do
-    GenServer.call(__MODULE__, {:resolve, {:node_id, node_id}})
-  end
-
-  @spec online?(String.t()) :: boolean()
-  def online?(name_or_id) when is_binary(name_or_id) do
-    match?({:ok, _node}, resolve(name_or_id))
-  end
-
-  @doc """
-  Whether live node metadata carries the native run privacy descriptor:
-  `coding_agent.run` version 2 with `executionContext` and `nativePrivacyContext`
-  version 1. Admission
-  and pinned private dispatch share this predicate.
-  """
-  @spec native_privacy_context_supported?(term()) :: boolean()
-  def native_privacy_context_supported?(metadata) do
-    case metadata do
-      %{
-        capabilities: %{
-          "coding_agent.run" => %{
-            "version" => 2,
-            "executionContext" => %{"version" => 1},
-            "nativePrivacyContext" => %{"version" => 1}
-          }
-        }
-      } ->
-        true
-
-      %{
-        "capabilities" => %{
-          "coding_agent.run" => %{
-            "version" => 2,
-            "executionContext" => %{"version" => 1},
-            "nativePrivacyContext" => %{"version" => 1}
-          }
-        }
-      } ->
-        true
+    case resolve_id(selector) do
+      {:ok, _} = found ->
+        found
 
       _ ->
-        false
+        if LemonCore.NodeRegistry.Generations.known?(selector) do
+          {:error, :not_found}
+        else
+          case Enum.find(live_nodes(), &(&1.name == selector)) do
+            nil -> {:error, :not_found}
+            node -> {:ok, node}
+          end
+        end
     end
   end
 
-  @doc """
-  Starts an invocation on a named node and returns immediately.
+  @doc "Resolves an exact durable node ID, never another node's name."
+  def resolve_id(node_id) when is_binary(node_id) do
+    case lookup(node_id) do
+      {_owner, node} ->
+        if Process.alive?(node.pid) and
+             node.generation >= LemonCore.NodeRegistry.Generations.generation_floor(node_id),
+           do: {:ok, node},
+           else: {:error, :not_found}
 
-  The recipient receives one of:
+      nil ->
+        {:error, :not_found}
+    end
+  end
 
-      {:lemon_node_result, invoke_id, {:ok, result}}
-      {:lemon_node_result, invoke_id, {:error, reason}}
+  def online?(selector) when is_binary(selector), do: match?({:ok, _}, resolve(selector))
 
-  Live `coding_agent.run` invocations may also deliver ordered events:
+  @doc "Whether live metadata advertises version 1 native privacy context support."
+  def native_privacy_context_supported?(metadata) do
+    capabilities =
+      if is_map(metadata),
+        do: Map.get(metadata, :capabilities, Map.get(metadata, "capabilities")),
+        else: nil
 
-      {:lemon_node_event, invoke_id, seq, event}
-
-  Events are invocation/session-bound, start at sequence 1, and are not replayed
-  after disconnect. Same-session retries at or below the accepted sequence are
-  acknowledged without delivering a second event.
-  """
-  @spec invoke(String.t(), String.t(), map(), keyword()) ::
-          {:ok, String.t()} | {:error, term()}
-  def invoke(name_or_id, method, args, opts \\ [])
-      when is_binary(name_or_id) and is_binary(method) and is_map(args) do
-    recipient = Keyword.get(opts, :recipient, self())
-    timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
-
-    max_payload_bytes =
-      Keyword.get(opts, :max_payload_bytes, JSONPayload.default_max_bytes())
-
-    GenServer.call(
-      __MODULE__,
-      {:invoke, String.trim(name_or_id), method, args, recipient, timeout_ms, max_payload_bytes,
-       Keyword.get(opts, :expected_pid), Keyword.get(opts, :expected_generation),
-       Keyword.get(opts, :required_native_privacy_context),
-       Keyword.get(opts, :required_process_execution)}
+    match?(
+      %{
+        "coding_agent.run" => %{
+          "version" => 2,
+          "executionContext" => %{"version" => 1},
+          "nativePrivacyContext" => %{"version" => 1}
+        }
+      },
+      capabilities
     )
   end
 
   @doc """
-  Invokes an exact durable ID, never another node with that ID as its name.
+  Starts an invocation and returns its ID immediately.
 
-  `:expected_pid` and `:expected_generation` pin a preceding inspection to the
-  current authenticated session. `required_native_privacy_context: 1` atomically
-  requires the native run privacy descriptor before native execution or proof
-  secret provisioning. Failures are definite pre-dispatch admission failures.
-  `required_process_execution: 1` requires the real run/get/cancel process
-  protocol on the current connection before noninteractive host-driver dispatch.
+  The recipient receives `{:lemon_node_result, invoke_id, {:ok, result} |
+  {:error, reason}}`. Native runs also receive ordered
+  `{:lemon_node_event, invoke_id, seq, event}` frames, beginning at sequence 1.
+  Same-session retries are acknowledged without duplicate delivery.
+  """
+  def invoke(selector, method, args, opts \\ [])
+      when is_binary(selector) and is_binary(method) and is_map(args),
+      do: invoke_target(String.trim(selector), method, args, opts)
+
+  @doc """
+  Invokes only an exact durable node ID.
+
+  `expected_pid` and `expected_generation` pin prior inspection to the dispatch
+  session. `required_native_privacy_context: 1` requires its privacy descriptor;
+  `required_process_execution: 1` requires the real run/get/cancel protocol.
+  Admission errors are definite pre-dispatch failures.
   """
   def invoke_node(node_id, method, args, opts \\ [])
-      when is_binary(node_id) and is_binary(method) and is_map(args) do
-    GenServer.call(
-      __MODULE__,
-      {:invoke, {:node_id, node_id}, method, args, Keyword.get(opts, :recipient, self()),
-       Keyword.get(opts, :timeout_ms, @default_timeout_ms),
-       Keyword.get(opts, :max_payload_bytes, JSONPayload.default_max_bytes()),
-       Keyword.get(opts, :expected_pid), Keyword.get(opts, :expected_generation),
-       Keyword.get(opts, :required_native_privacy_context),
-       Keyword.get(opts, :required_process_execution)}
-    )
-  end
+      when is_binary(node_id) and is_binary(method) and is_map(args),
+      do: invoke_target({:node_id, node_id}, method, args, opts)
 
   @doc """
-  Sends a bounded control operation to an active named-node invocation.
+  Dispatches bounded steer/redirect text to the invocation's original session.
 
-  The control is pinned to the same authenticated node connection and session
-  generation that received the invocation. The recipient receives exactly one
-  terminal acknowledgement:
-
-      {:lemon_node_control_result, control_id, invoke_id, :ok}
-      {:lemon_node_control_result, control_id, invoke_id, {:error, reason}}
-
-  Returning `{:ok, control_id}` means only that the control was dispatched.
-  The operation is accepted only after the destination acknowledges applying
-  it to the invocation's live executor context.
+  `{:ok, control_id}` is dispatch only. The recipient receives
+  `{:lemon_node_control_result, control_id, invoke_id, :ok | {:error, reason}}`
+  only after acknowledgement, rejection or a terminal failure.
   """
-  @spec control(String.t(), :steer | :redirect, String.t(), keyword()) ::
-          {:ok, String.t()} | {:error, term()}
   def control(invoke_id, operation, text, opts \\ []) do
-    recipient = Keyword.get(opts, :recipient, self())
-    timeout_ms = Keyword.get(opts, :timeout_ms, @default_control_timeout_ms)
-
-    GenServer.call(
-      __MODULE__,
-      {:control, invoke_id, operation, text, recipient, timeout_ms}
-    )
+    if not is_binary(invoke_id) or String.trim(invoke_id) == "" do
+      {:error, :invalid_invoke_id}
+    else
+      NodeInvocation.call(
+        invoke_id,
+        {:control, operation, text, Keyword.get(opts, :recipient, self()),
+         Keyword.get(opts, :timeout_ms, @default_control_timeout_ms)},
+        {:error, :terminal}
+      )
+    end
   end
 
-  @doc "Maximum UTF-8 byte length accepted for remote steer/redirect text."
-  @spec max_control_text_bytes() :: pos_integer()
-  def max_control_text_bytes, do: @max_control_text_bytes
+  def max_control_text_bytes, do: 16 * 1_024
 
-  @spec cancel(String.t(), term()) :: :ok
-  def cancel(invoke_id, reason \\ :cancelled) when is_binary(invoke_id) do
-    GenServer.call(__MODULE__, {:cancel, invoke_id, reason})
-  end
+  def cancel(invoke_id, reason \\ :cancelled) when is_binary(invoke_id),
+    do: NodeInvocation.call(invoke_id, {:cancel, reason}, :ok)
 
-  @spec complete(String.t(), String.t(), term(), term()) :: :ok | {:error, term()}
   def complete(node_id, invoke_id, result, error \\ nil)
-      when is_binary(node_id) and is_binary(invoke_id) do
-    GenServer.call(__MODULE__, {:complete, node_id, invoke_id, result, error})
-  end
+      when is_binary(node_id) and is_binary(invoke_id),
+      do:
+        NodeInvocation.call(invoke_id, {:complete, node_id, result, error}, {:error, :not_found})
 
-  @doc "Completes an invocation only from the connection generation that received it."
-  @spec complete_session(String.t(), pid(), non_neg_integer(), String.t(), term(), term()) ::
-          :ok | {:error, term()}
-  def complete_session(node_id, connection_pid, generation, invoke_id, result, error \\ nil)
-      when is_binary(node_id) and is_pid(connection_pid) and is_integer(generation) and
-             generation >= 0 and is_binary(invoke_id) do
-    GenServer.call(
-      __MODULE__,
-      {:complete_session, node_id, connection_pid, generation, invoke_id, result, error}
-    )
-  end
+  def complete_session(node_id, pid, generation, invoke_id, result, error \\ nil),
+    do:
+      NodeInvocation.call(
+        invoke_id,
+        {:complete_session, node_id, pid, generation, result, error},
+        {:error, :not_found}
+      )
 
-  @doc "Accepts a bounded, ordered event from the authenticated invocation session."
-  @spec event_session(String.t(), pid(), non_neg_integer(), String.t(), pos_integer(), map()) ::
-          {:ok, :accepted | :duplicate} | {:error, term()}
-  def event_session(node_id, connection_pid, generation, invoke_id, seq, event) do
-    GenServer.call(
-      __MODULE__,
-      {:event_session, node_id, connection_pid, generation, invoke_id, seq, event}
-    )
-  end
+  def event_session(node_id, pid, generation, invoke_id, seq, event),
+    do:
+      NodeInvocation.call(
+        invoke_id,
+        {:event, node_id, pid, generation, seq, event},
+        {:error, :terminal}
+      )
 
-  @doc """
-  Sends an approval decision to the invocation's original live node session.
+  @doc "Dispatches an approval decision only for the invocation recipient caller."
+  def approval(invoke_id, approval_id, decision),
+    do: NodeInvocation.call(invoke_id, {:approval, approval_id, decision}, {:error, :terminal})
 
-  Only the invocation recipient process may call this function. `:ok` means
-  targeted dispatch, not that the destination has resolved a pending approval.
-  """
-  @spec approval(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def approval(invoke_id, approval_id, decision) do
-    GenServer.call(__MODULE__, {:approval, invoke_id, approval_id, decision})
-  end
-
-  @doc "Completes invocation control only from the authenticated session that received it."
-  @spec complete_control_session(
-          String.t(),
-          pid(),
-          non_neg_integer(),
-          String.t(),
-          String.t(),
-          String.t(),
-          boolean(),
-          String.t() | nil
-        ) :: :ok | {:error, term()}
   def complete_control_session(
         node_id,
-        connection_pid,
+        pid,
         generation,
         control_id,
         invoke_id,
         run_id,
         accepted,
         reason \\ nil
-      )
-      when is_binary(node_id) and is_pid(connection_pid) and is_integer(generation) and
-             generation >= 0 and is_binary(control_id) and is_binary(invoke_id) and
-             is_binary(run_id) and is_boolean(accepted) and
-             (is_nil(reason) or is_binary(reason)) do
-    GenServer.call(
-      __MODULE__,
-      {:complete_control_session, node_id, connection_pid, generation, control_id, invoke_id,
-       run_id, accepted, reason}
-    )
-  end
+      ),
+      do:
+        NodeInvocation.call(
+          {:control, control_id},
+          {:control_result, node_id, pid, generation, control_id, invoke_id, run_id, accepted,
+           reason},
+          {:error, :not_found}
+        )
 
-  @doc "Revokes a live connection from any credential generation older than `generation`."
-  @spec revoke_session(String.t(), non_neg_integer()) :: :ok
+  @doc "Revokes sessions older than the retained monotonic generation floor."
   def revoke_session(node_id, generation)
       when is_binary(node_id) and is_integer(generation) and generation >= 0 do
-    GenServer.call(__MODULE__, {:revoke_session, node_id, generation})
+    lifecycle(fn ->
+      floor = LemonCore.NodeRegistry.Generations.advance(node_id, generation)
+
+      case lookup(node_id) do
+        {owner, %{generation: current, pid: pid}} when current < floor ->
+          result = owner_action(owner, node_id, {:remove, :credential_rotated})
+          send(pid, {:node_session_revoked, node_id, floor})
+          result
+
+        _ ->
+          :ok
+      end
+    end)
   end
 
-  @doc "Pushes an event directly to one live node connection."
-  @spec push(String.t(), String.t(), map()) :: :ok | {:error, :not_found}
-  def push(name_or_id, event_name, payload)
-      when is_binary(name_or_id) and is_binary(event_name) and is_map(payload) do
-    GenServer.call(__MODULE__, {:push, String.trim(name_or_id), event_name, payload})
-  end
-
-  @doc "Routes bounded shell frames only to the recipient of a pinned open invocation."
-  def shell_event_session(node_id, connection_pid, generation, invoke_id, payload) do
-    GenServer.call(
-      __MODULE__,
-      {:shell_event_session, node_id, connection_pid, generation, invoke_id, payload}
-    )
-  end
-
-  @impl true
-  def init(_opts) do
-    {:ok, %{nodes: %{}, names: %{}, invocations: %{}, controls: %{}, generation_floors: %{}}}
-  end
-
-  @impl true
-  def format_status(status) do
-    status
-    |> Map.put(:state, :private_node_transport)
-    |> Map.put(:message, :redacted)
-    |> Map.put(:reason, :redacted)
-    |> Map.put(:log, [])
-  end
-
-  @impl true
-  def handle_call({:register, _node_id, "", _pid, _generation, _metadata, _revoke?}, _from, state) do
-    {:reply, {:error, :invalid_name}, state}
-  end
-
-  def handle_call({:register, node_id, name, pid, generation, metadata, revoke?}, _from, state) do
-    existing_id = Map.get(state.names, name)
-
-    cond do
-      generation < authorized_generation_floor(state, node_id) ->
-        {:reply, {:error, :stale_session}, state}
-
-      is_binary(existing_id) and existing_id != node_id ->
-        {:reply, {:error, {:name_taken, name}}, state}
-
-      true ->
-        {:reply, :ok, register_node(state, node_id, name, pid, generation, metadata, revoke?)}
+  @doc "Pushes a JSON-safe event to one live connection."
+  def push(selector, event_name, payload)
+      when is_binary(selector) and is_binary(event_name) and is_map(payload) do
+    with {:ok, _} <- JSONPayload.validate(payload),
+         {:ok, node} <- resolve(selector) do
+      send(node.pid, {:node_event, event_name, payload})
+      :ok
+    else
+      {:error, :not_found} = error -> error
+      {:error, reason} -> {:error, {:invalid_payload, reason}}
     end
   end
 
-  def handle_call({:unregister, node_id, pid}, _from, state) do
-    state =
-      case Map.get(state.nodes, node_id) do
-        %{pid: ^pid} -> remove_node(state, node_id, :disconnected)
-        _ -> state
-      end
+  def shell_event_session(node_id, pid, generation, invoke_id, payload),
+    do:
+      NodeInvocation.call(
+        invoke_id,
+        {:shell_event, node_id, pid, generation, payload},
+        {:error, :stale_invocation}
+      )
 
-    {:reply, :ok, state}
+  @doc false
+  def handle_owner_message({:node_registry_owner, from, ref, node_id, action}) do
+    send(from, {ref, apply_owner_action(node_id, action)})
+    :ok
   end
 
-  def handle_call({:rename, _node_id, ""}, _from, state) do
-    {:reply, {:error, :invalid_name}, state}
-  end
-
-  def handle_call({:rename, node_id, name}, _from, state) do
-    case {Map.get(state.nodes, node_id), Map.get(state.names, name)} do
-      {nil, _existing_id} ->
-        {:reply, {:error, :not_found}, state}
-
-      {_node, existing_id} when is_binary(existing_id) and existing_id != node_id ->
-        {:reply, {:error, {:name_taken, name}}, state}
-
-      {node, _existing_id} ->
-        renamed = %{node | name: name}
-
-        state = %{
-          state
-          | nodes: Map.put(state.nodes, node_id, renamed),
-            names: state.names |> Map.delete(node.name) |> Map.put(name, node_id)
+  defp register_node(node_id, name, pid, generation, metadata, revoke?) do
+    lifecycle(fn ->
+      with :ok <- available_name(node_id, name),
+           :ok <- authorize_generation(node_id, generation),
+           :ok <- replace_node(node_id, pid, generation, revoke?) do
+        node = %{
+          id: node_id,
+          name: name,
+          pid: pid,
+          generation: generation,
+          metadata: metadata,
+          connected_at_ms: System.system_time(:millisecond)
         }
 
-        {:reply, :ok, state}
-    end
-  end
-
-  def handle_call(:list, _from, state) do
-    nodes =
-      state.nodes
-      |> Map.values()
-      |> Enum.map(&public_node/1)
-      |> Enum.sort_by(& &1.name)
-
-    {:reply, nodes, state}
-  end
-
-  def handle_call({:resolve, name_or_id}, _from, state) do
-    {:reply, resolve_node(state, name_or_id), state}
-  end
-
-  def handle_call({:push, name_or_id, event_name, payload}, _from, state) do
-    with {:ok, _stats} <- JSONPayload.validate(payload),
-         {:ok, node} <- resolve_node(state, name_or_id) do
-      send(node.pid, {:node_event, event_name, payload})
-      {:reply, :ok, state}
-    else
-      {:error, :not_found} = error -> {:reply, error, state}
-      {:error, reason} -> {:reply, {:error, {:invalid_payload, reason}}, state}
-    end
-  end
-
-  def handle_call(
-        {:shell_event_session, node_id, pid, generation, invoke_id, payload},
-        _from,
-        state
-      ) do
-    case {Map.get(state.nodes, node_id), Map.get(state.invocations, invoke_id)} do
-      {%{pid: ^pid, generation: ^generation},
-       %{
-         node_id: ^node_id,
-         node_pid: ^pid,
-         node_generation: ^generation,
-         method: "node.shell.open"
-       } = invocation} ->
-        case JSONPayload.validate(payload, max_bytes: 32_768) do
-          {:ok, _} ->
-            case Process.info(invocation.recipient, :message_queue_len) do
-              {:message_queue_len, length} when length < 128 ->
-                send(invocation.recipient, {:lemon_node_shell_event, invoke_id, payload})
-                {:reply, :ok, state}
-
-              _ ->
-                {:reply, {:error, :slow_consumer}, state}
-            end
-
-          {:error, _} ->
-            {:reply, {:error, :invalid_payload}, state}
+        case Registry.register(__MODULE__.Connections, node_id, node) do
+          {:ok, _} -> :ok
+          {:error, {:already_registered, _}} -> {:error, :connection_changed}
         end
+      end
+    end)
+  end
+
+  defp replace_node(node_id, replacement_pid, generation, revoke?) do
+    case lookup(node_id) do
+      {owner, node} ->
+        # Cancel against the old registry value before removing it. A new
+        # connection must never receive cancellation for the superseded one.
+        result = owner_action(owner, node_id, {:remove, :reconnected})
+
+        if result == :ok and revoke? and node.pid != replacement_pid,
+          do: send(node.pid, {:node_session_revoked, node_id, generation})
+
+        result
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp available_name(_node_id, ""), do: {:error, :invalid_name}
+
+  defp available_name(node_id, name) do
+    if Enum.any?(live_nodes(), &(&1.id != node_id and &1.name == name)),
+      do: {:error, {:name_taken, name}},
+      else: :ok
+  end
+
+  defp authorize_generation(node_id, generation) do
+    if generation < LemonCore.NodeRegistry.Generations.generation_floor(node_id) do
+      {:error, :stale_session}
+    else
+      LemonCore.NodeRegistry.Generations.advance(node_id, generation)
+      :ok
+    end
+  end
+
+  defp lookup(node_id) do
+    case Registry.lookup(__MODULE__.Connections, node_id) do
+      [{owner, node}] -> {owner, node}
+      [] -> nil
+    end
+  end
+
+  defp owner_action(owner, node_id, action) when owner == self(),
+    do: apply_owner_action(node_id, action)
+
+  defp owner_action(owner, node_id, action) do
+    ref = Process.monitor(owner)
+    send(owner, {:node_registry_owner, self(), ref, node_id, action})
+
+    receive do
+      {^ref, result} ->
+        Process.demonitor(ref, [:flush])
+        result
+
+      {:DOWN, ^ref, :process, ^owner, _} ->
+        :ok
+    after
+      # Owner handover uses the existing invocation-control timeout policy.
+      @default_control_timeout_ms ->
+        Process.demonitor(ref, [:flush])
+        {:error, :outcome_unknown}
+    end
+  end
+
+  defp apply_owner_action(node_id, {:remove, reason}) do
+    case lookup(node_id) do
+      {owner, _node} when owner == self() ->
+        disconnect_invocations(node_id, reason)
+        Registry.unregister(__MODULE__.Connections, node_id)
+        :ok
 
       _ ->
-        {:reply, {:error, :stale_invocation}, state}
+        :ok
     end
   end
 
-  def handle_call(
-        {:invoke, name_or_id, method, args, recipient, timeout_ms, max_payload_bytes,
-         expected_pid, expected_generation, required_privacy, required_process},
-        _from,
-        state
-      ) do
+  defp apply_owner_action(node_id, {:rename, name}) do
+    case Registry.update_value(__MODULE__.Connections, node_id, &%{&1 | name: name}) do
+      :error -> {:error, :not_found}
+      _ -> :ok
+    end
+  end
+
+  defp disconnect_invocations(node_id, reason) do
+    Registry.select(__MODULE__.Invocations, [
+      {{:"$1", :_, {:invocation, node_id}}, [], [:"$1"]}
+    ])
+    |> Enum.each(&NodeInvocation.call(&1, {:disconnect, reason}, :ok))
+  end
+
+  defp lifecycle(fun),
+    do: :global.trans({{__MODULE__, :lifecycle}, self()}, fun, [node()])
+
+  defp invoke_target(target, method, args, opts) do
+    opts =
+      opts
+      |> Keyword.put_new(:recipient, self())
+      |> Keyword.put_new(:timeout_ms, @default_timeout_ms)
+      |> Keyword.put_new(:max_payload_bytes, JSONPayload.default_max_bytes())
+
+    with :ok <- validate_invocation(method, args, opts) do
+      lifecycle(fn ->
+        with {:ok, node} <- dispatch_node(target, opts) do
+          id = LemonCore.Id.uuid()
+
+          case DynamicSupervisor.start_child(
+                 __MODULE__.InvocationSupervisor,
+                 {NodeInvocation, {node, method, args, Keyword.put(opts, :invoke_id, id)}}
+               ) do
+            {:ok, _pid} -> {:ok, id}
+            {:error, {:invalid_payload, reason}} -> {:error, {:invalid_payload, reason}}
+            {:error, _} -> {:error, :invocation_unavailable}
+          end
+        end
+      end)
+    end
+  end
+
+  defp validate_invocation(method, args, opts) do
+    recipient = opts[:recipient]
+    timeout = opts[:timeout_ms]
+    bytes = opts[:max_payload_bytes]
+    pid = opts[:expected_pid]
+    generation = opts[:expected_generation]
+    privacy = opts[:required_native_privacy_context]
+    process = opts[:required_process_execution]
+
     cond do
       not is_pid(recipient) ->
-        {:reply, {:error, :invalid_recipient}, state}
+        {:error, :invalid_recipient}
 
-      not is_integer(timeout_ms) or timeout_ms <= 0 ->
-        {:reply, {:error, :invalid_timeout}, state}
+      not is_integer(timeout) or timeout <= 0 ->
+        {:error, :invalid_timeout}
 
-      not is_integer(max_payload_bytes) or max_payload_bytes <= 0 ->
-        {:reply, {:error, :invalid_payload_limit}, state}
+      not is_integer(bytes) or bytes <= 0 ->
+        {:error, :invalid_payload_limit}
 
-      not is_nil(expected_pid) and not is_pid(expected_pid) ->
-        {:reply, {:error, :invalid_expected_node_pid}, state}
+      not is_nil(pid) and not is_pid(pid) ->
+        {:error, :invalid_expected_node_pid}
 
-      not is_nil(expected_generation) and
-          (not is_integer(expected_generation) or expected_generation < 0) ->
-        {:reply, {:error, :invalid_expected_node_generation}, state}
+      not is_nil(generation) and (not is_integer(generation) or generation < 0) ->
+        {:error, :invalid_expected_node_generation}
 
-      not is_nil(required_privacy) and
-          (required_privacy != 1 or method not in ["coding_agent.run", "node.secrets.set"]) ->
-        {:reply, {:error, :invalid_native_privacy_context_requirement}, state}
+      not is_nil(privacy) and
+          (privacy != 1 or method not in ["coding_agent.run", "node.secrets.set"]) ->
+        {:error, :invalid_native_privacy_context_requirement}
 
-      not is_nil(required_process) and
-          (required_process != 1 or
+      not is_nil(process) and
+          (process != 1 or
              method not in ["node.process.run", "node.process.get", "node.process.cancel"]) ->
-        {:reply, {:error, :invalid_process_execution_requirement}, state}
-
-      args_error = invocation_args_error(method, args, max_payload_bytes) ->
-        reason = args_error
-        {:reply, {:error, {:invalid_payload, reason}}, state}
+        {:error, :invalid_process_execution_requirement}
 
       true ->
-        case resolve_dispatch_node(
-               state,
-               name_or_id,
-               expected_pid,
-               expected_generation,
-               required_privacy,
-               required_process
-             ) do
-          {:ok, node} ->
-            invoke_id = LemonCore.Id.uuid()
-            run_id = invocation_run_id(method, args, invoke_id)
-            timer_ref = Process.send_after(self(), {:invoke_timeout, invoke_id}, timeout_ms)
-            recipient_ref = Process.monitor(recipient)
+        json_opts =
+          if method == "coding_agent.run",
+            do: LemonCore.ToolPolicy.execution_json_opts(max_bytes: bytes),
+            else: [max_bytes: bytes]
 
-            invocation = %{
-              id: invoke_id,
-              node_id: node.id,
-              node_pid: node.pid,
-              node_generation: node.generation,
-              recipient: recipient,
-              recipient_ref: recipient_ref,
-              timer_ref: timer_ref,
-              method: method,
-              run_id: run_id,
-              latest_event_seq: 0,
-              max_payload_bytes: max_payload_bytes
-            }
-
-            payload = %{
-              "invokeId" => invoke_id,
-              "nodeId" => node.id,
-              "nodeGeneration" => node.generation,
-              "nodeName" => node.name,
-              "method" => method,
-              "args" => args,
-              "timeoutMs" => timeout_ms
-            }
-
-            case JSONPayload.validate(payload, invocation_json_opts(method, max_payload_bytes)) do
-              {:ok, _stats} ->
-                send(node.pid, {:node_event, "node.invoke.request", payload})
-
-                {:reply, {:ok, invoke_id},
-                 %{state | invocations: Map.put(state.invocations, invoke_id, invocation)}}
-
-              {:error, reason} ->
-                cancel_invocation_monitors(invocation)
-                {:reply, {:error, {:invalid_payload, reason}}, state}
-            end
-
-          {:error, :not_found} ->
-            target =
-              case name_or_id do
-                {:node_id, id} -> id
-                name -> name
-              end
-
-            {:reply, {:error, {:node_offline, target}}, state}
-
-          {:error, reason} ->
-            {:reply, {:error, reason}, state}
+        case JSONPayload.validate(args, json_opts) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, {:invalid_payload, reason}}
         end
     end
   end
 
-  def handle_call(
-        {:control, invoke_id, operation, text, recipient, timeout_ms},
-        _from,
-        state
-      ) do
-    with :ok <- validate_control_request(invoke_id, operation, text, recipient, timeout_ms),
-         {:ok, invocation} <- active_control_invocation(state, invoke_id),
-         {:ok, node} <- active_invocation_node(state, invocation) do
-      control_id = LemonCore.Id.uuid()
-      timer_ref = Process.send_after(self(), {:control_timeout, control_id}, timeout_ms)
-      recipient_ref = Process.monitor(recipient)
-
-      control = %{
-        id: control_id,
-        invoke_id: invoke_id,
-        run_id: invocation.run_id,
-        operation: operation,
-        node_id: invocation.node_id,
-        node_pid: invocation.node_pid,
-        node_generation: invocation.node_generation,
-        recipient: recipient,
-        recipient_ref: recipient_ref,
-        timer_ref: timer_ref
-      }
-
-      payload = %{
-        "controlId" => control_id,
-        "invokeId" => invoke_id,
-        "runId" => invocation.run_id,
-        "nodeId" => node.id,
-        "nodeName" => node.name,
-        "operation" => Atom.to_string(operation),
-        "text" => text,
-        "timeoutMs" => timeout_ms
-      }
-
-      case JSONPayload.validate(payload, max_bytes: invocation.max_payload_bytes) do
-        {:ok, _stats} ->
-          send(node.pid, {:node_event, "node.invoke.control", payload})
-
-          {:reply, {:ok, control_id},
-           %{state | controls: Map.put(state.controls, control_id, control)}}
-
-        {:error, reason} ->
-          cancel_control_monitors(control)
-          {:reply, {:error, {:invalid_payload, reason}}, state}
+  defp dispatch_node(target, opts) do
+    resolved =
+      case target do
+        {:node_id, id} -> resolve_id(id)
+        name -> resolve(name)
       end
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
-    end
-  end
 
-  def handle_call({:cancel, invoke_id, reason}, _from, state) do
-    case Map.pop(state.invocations, invoke_id) do
-      {nil, _invocations} ->
-        {:reply, :ok, state}
-
-      {invocation, invocations} ->
-        cancel_invocation_monitors(invocation)
-        cancel_remote_invocation(state, invoke_id, invocation, reason)
-        notify(invocation, {:error, reason})
-
-        state =
-          %{state | invocations: invocations}
-          |> fail_controls_for_invocation(invoke_id, :terminal)
-
-        {:reply, :ok, state}
-    end
-  end
-
-  def handle_call({:complete, node_id, invoke_id, result, error}, _from, state) do
-    case Map.get(state.invocations, invoke_id) do
-      nil ->
-        {:reply, {:error, :not_found}, state}
-
-      %{node_id: expected_node_id} when expected_node_id != node_id ->
-        {:reply, {:error, :wrong_node}, state}
-
-      invocation ->
-        complete_invocation(invocation, invoke_id, result, error, state)
-    end
-  end
-
-  def handle_call(
-        {:complete_session, node_id, connection_pid, generation, invoke_id, result, error},
-        _from,
-        state
-      ) do
-    case {Map.get(state.nodes, node_id), Map.get(state.invocations, invoke_id)} do
-      {_node, nil} ->
-        {:reply, {:error, :not_found}, state}
-
-      {_node, %{node_id: expected_node_id}} when expected_node_id != node_id ->
-        {:reply, {:error, :wrong_node}, state}
-
-      {%{pid: ^connection_pid, generation: ^generation},
-       %{node_pid: ^connection_pid, node_generation: ^generation} = invocation} ->
-        complete_invocation(invocation, invoke_id, result, error, state)
-
-      _ ->
-        {:reply, {:error, :stale_session}, state}
-    end
-  end
-
-  def handle_call(
-        {:event_session, node_id, connection_pid, generation, invoke_id, seq, event},
-        _from,
-        state
-      ) do
-    with {:ok, invocation} <-
-           event_invocation(state, node_id, connection_pid, generation, invoke_id),
-         :ok <- validate_event(seq, event) do
-      cond do
-        seq <= invocation.latest_event_seq ->
-          {:reply, {:ok, :duplicate}, state}
-
-        seq == invocation.latest_event_seq + 1 ->
-          send(invocation.recipient, {:lemon_node_event, invoke_id, seq, event})
-          invocation = %{invocation | latest_event_seq: seq}
-          state = %{state | invocations: Map.put(state.invocations, invoke_id, invocation)}
-          {:reply, {:ok, :accepted}, state}
-
-        true ->
-          {:reply, {:error, :sequence_gap}, state}
-      end
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
-    end
-  end
-
-  def handle_call({:approval, invoke_id, approval_id, decision}, {caller, _tag}, state) do
-    with {:ok, invocation} <- active_control_invocation(state, invoke_id),
-         :ok <- authorize_approval_recipient(invocation, caller),
-         :ok <- validate_approval(approval_id, decision),
-         {:ok, node} <- active_invocation_node(state, invocation) do
-      payload = %{
-        "nodeId" => node.id,
-        "invokeId" => invoke_id,
-        "runId" => invocation.run_id,
-        "approvalId" => approval_id,
-        "decision" => decision
-      }
-
-      case JSONPayload.validate(payload, max_bytes: @max_event_bytes) do
-        {:ok, _stats} ->
-          send(node.pid, {:node_event, "node.invoke.approval", payload})
-          {:reply, :ok, state}
-
-        {:error, reason} ->
-          {:reply, {:error, {:invalid_payload, payload_error_kind(reason)}}, state}
-      end
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
-    end
-  end
-
-  def handle_call(
-        {:complete_control_session, node_id, connection_pid, generation, control_id, invoke_id,
-         run_id, accepted, reason},
-        _from,
-        state
-      ) do
-    case {Map.get(state.nodes, node_id), Map.get(state.controls, control_id),
-          Map.get(state.invocations, invoke_id)} do
-      {_node, nil, _invocation} ->
-        {:reply, {:error, :not_found}, state}
-
-      {_node, %{node_id: expected_node_id}, _invocation} when expected_node_id != node_id ->
-        {:reply, {:error, :wrong_node}, state}
-
-      {_node, %{invoke_id: expected_invoke_id}, _invocation}
-      when expected_invoke_id != invoke_id ->
-        {:reply, {:error, :wrong_invocation}, state}
-
-      {_node, %{run_id: expected_run_id}, _invocation} when expected_run_id != run_id ->
-        {:reply, {:error, :wrong_run}, state}
-
-      {_node, control, nil} ->
-        state = finish_control(state, control, {:error, :terminal})
-        {:reply, {:error, :terminal}, state}
-
-      {%{pid: ^connection_pid, generation: ^generation},
-       %{
-         node_pid: ^connection_pid,
-         node_generation: ^generation,
-         invoke_id: ^invoke_id,
-         run_id: ^run_id
-       } = control,
-       %{
-         node_pid: ^connection_pid,
-         node_generation: ^generation,
-         run_id: ^run_id
-       }} ->
-        result = if accepted, do: :ok, else: {:error, {:rejected, reason || "rejected"}}
-        {:reply, :ok, finish_control(state, control, result)}
-
-      _ ->
-        {:reply, {:error, :stale_session}, state}
-    end
-  end
-
-  def handle_call({:revoke_session, node_id, generation}, _from, state) do
-    generation_floor = max(generation, authorized_generation_floor(state, node_id))
-
-    state = %{
-      state
-      | generation_floors: Map.put(state.generation_floors, node_id, generation_floor)
-    }
-
-    case Map.get(state.nodes, node_id) do
-      %{generation: current_generation, pid: pid} when current_generation < generation_floor ->
-        send(pid, {:node_session_revoked, node_id, generation_floor})
-        {:reply, :ok, remove_node(state, node_id, :credential_rotated)}
-
-      _ ->
-        {:reply, :ok, state}
-    end
-  end
-
-  @impl true
-  def handle_info({:invoke_timeout, invoke_id}, state) do
-    case Map.pop(state.invocations, invoke_id) do
-      {nil, _invocations} ->
-        {:noreply, state}
-
-      {invocation, invocations} ->
-        Process.demonitor(invocation.recipient_ref, [:flush])
-        cancel_remote_invocation(state, invoke_id, invocation, :timeout)
-        notify(invocation, {:error, :timeout})
-
-        state =
-          %{state | invocations: invocations}
-          |> fail_controls_for_invocation(invoke_id, :terminal)
-
-        {:noreply, state}
-    end
-  end
-
-  def handle_info({:control_timeout, control_id}, state) do
-    case Map.get(state.controls, control_id) do
-      nil -> {:noreply, state}
-      control -> {:noreply, finish_control(state, control, {:error, :timeout})}
-    end
-  end
-
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
-    case Enum.find(state.nodes, fn {_id, node} -> node.monitor_ref == ref end) do
-      {node_id, _node} ->
-        {:noreply, remove_node(state, node_id, :disconnected)}
-
-      nil ->
-        state =
-          Enum.reduce(state.invocations, state, fn {invoke_id, invocation}, acc ->
-            if invocation.recipient_ref == ref do
-              Process.cancel_timer(invocation.timer_ref)
-              cancel_remote_invocation(acc, invoke_id, invocation, :recipient_down)
-
-              acc
-              |> Map.update!(:invocations, &Map.delete(&1, invoke_id))
-              |> fail_controls_for_invocation(invoke_id, :recipient_down)
-            else
-              acc
-            end
-          end)
-
-        controls =
-          Enum.reduce(state.controls, state.controls, fn {control_id, control}, acc ->
-            if control.recipient_ref == ref do
-              Process.cancel_timer(control.timer_ref)
-              Map.delete(acc, control_id)
-            else
-              acc
-            end
-          end)
-
-        {:noreply, %{state | controls: controls}}
-    end
-  end
-
-  defp resolve_node(state, {:node_id, node_id}) do
-    case Map.get(state.nodes, node_id) do
-      nil -> {:error, :not_found}
-      node -> {:ok, node}
-    end
-  end
-
-  # Exact durable IDs win. An ID this registry has authorized (live or retained
-  # by its session floor) never falls back to another node's name while offline;
-  # only otherwise does a unique live name resolve.
-  defp resolve_node(state, selector) do
-    case Map.fetch(state.nodes, selector) do
+    case resolved do
       {:ok, node} ->
-        {:ok, node}
+        cond do
+          (not is_nil(opts[:expected_pid]) and node.pid != opts[:expected_pid]) or
+              (not is_nil(opts[:expected_generation]) and
+                 node.generation != opts[:expected_generation]) ->
+            {:error, {:node_connection_changed, node.id}}
 
-      :error ->
-        with false <- Map.has_key?(state.generation_floors, selector),
-             {:ok, node_id} <- Map.fetch(state.names, selector),
-             {:ok, node} <- Map.fetch(state.nodes, node_id) do
-          {:ok, node}
-        else
-          _ -> {:error, :not_found}
+          opts[:required_native_privacy_context] == 1 and
+              not native_privacy_context_supported?(node.metadata) ->
+            {:error, {:native_privacy_context_unsupported, node.id}}
+
+          opts[:required_process_execution] == 1 and
+              not process_execution_supported?(node.metadata) ->
+            {:error, {:process_execution_unsupported, node.id}}
+
+          true ->
+            {:ok, node}
         end
-    end
-  end
 
-  defp resolve_dispatch_node(
-         state,
-         target,
-         expected_pid,
-         expected_generation,
-         required_privacy,
-         required_process
-       ) do
-    with {:ok, node} <- resolve_node(state, target) do
-      cond do
-        (not is_nil(expected_pid) and node.pid != expected_pid) or
-            (not is_nil(expected_generation) and node.generation != expected_generation) ->
-          {:error, {:node_connection_changed, node.id}}
+      {:error, :not_found} ->
+        selector =
+          case target do
+            {:node_id, id} -> id
+            name -> name
+          end
 
-        required_privacy == 1 and not native_privacy_context_supported?(node.metadata) ->
-          {:error, {:native_privacy_context_unsupported, node.id}}
-
-        required_process == 1 and not process_execution_supported?(node.metadata) ->
-          {:error, {:process_execution_unsupported, node.id}}
-
-        true ->
-          {:ok, node}
-      end
+        {:error, {:node_offline, selector}}
     end
   end
 
   defp process_execution_supported?(metadata) do
-    capabilities =
-      case metadata do
-        %{capabilities: capabilities} -> capabilities
-        %{"capabilities" => capabilities} -> capabilities
-        _ -> nil
-      end
+    capabilities = Map.get(metadata, :capabilities, Map.get(metadata, "capabilities"))
 
     is_map(capabilities) and
       Enum.all?(
@@ -888,317 +535,4 @@ defmodule LemonCore.NodeRegistry do
         &match?(%{"version" => 1}, Map.get(capabilities, &1))
       )
   end
-
-  defp public_node(node) do
-    Map.take(node, [:id, :name, :pid, :generation, :metadata, :connected_at_ms])
-  end
-
-  defp authorized_generation_floor(state, node_id) do
-    retained_floor = Map.get(state.generation_floors, node_id, 0)
-
-    case Map.get(state.nodes, node_id) do
-      %{generation: live_generation} -> max(retained_floor, live_generation)
-      nil -> retained_floor
-    end
-  end
-
-  defp register_node(state, node_id, name, pid, generation, metadata, revoke?) do
-    if revoke?, do: revoke_replaced_connection(state, node_id, pid, generation)
-    state = remove_node(state, node_id, :reconnected)
-    monitor_ref = Process.monitor(pid)
-
-    node = %{
-      id: node_id,
-      name: name,
-      pid: pid,
-      metadata: metadata,
-      generation: generation,
-      connected_at_ms: System.system_time(:millisecond),
-      monitor_ref: monitor_ref
-    }
-
-    %{
-      state
-      | nodes: Map.put(state.nodes, node_id, node),
-        names: Map.put(state.names, name, node_id),
-        generation_floors: Map.put(state.generation_floors, node_id, generation)
-    }
-  end
-
-  defp revoke_replaced_connection(state, node_id, replacement_pid, generation) do
-    case Map.get(state.nodes, node_id) do
-      %{pid: pid} when pid != replacement_pid ->
-        send(pid, {:node_session_revoked, node_id, generation})
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp complete_invocation(invocation, invoke_id, result, error, state) do
-    case JSONPayload.validate(
-           %{"result" => result, "error" => error},
-           completion_json_opts(invocation.method, invocation.max_payload_bytes)
-         ) do
-      {:ok, _stats} ->
-        cancel_invocation_monitors(invocation)
-        reply = if is_nil(error), do: {:ok, result}, else: {:error, {:remote, error}}
-        notify(invocation, reply)
-
-        state =
-          %{state | invocations: Map.delete(state.invocations, invoke_id)}
-          |> fail_controls_for_invocation(invoke_id, :terminal)
-
-        {:reply, :ok, state}
-
-      {:error, reason} ->
-        cancel_invocation_monitors(invocation)
-        cancel_remote_invocation(state, invoke_id, invocation, {:invalid_payload, reason})
-        notify(invocation, {:error, {:invalid_remote_payload, payload_error_kind(reason)}})
-
-        state =
-          %{state | invocations: Map.delete(state.invocations, invoke_id)}
-          |> fail_controls_for_invocation(invoke_id, :terminal)
-
-        {:reply, {:error, {:invalid_payload, reason}}, state}
-    end
-  end
-
-  defp remove_node(state, node_id, reason) do
-    case Map.pop(state.nodes, node_id) do
-      {nil, _nodes} ->
-        state
-
-      {node, nodes} ->
-        Process.demonitor(node.monitor_ref, [:flush])
-
-        {removed, kept} =
-          Enum.split_with(state.invocations, fn {_invoke_id, invocation} ->
-            invocation.node_id == node_id
-          end)
-
-        Enum.each(removed, fn {invoke_id, invocation} ->
-          cancel_invocation_monitors(invocation)
-          cancel_remote_invocation(state, invoke_id, invocation, {:node_disconnected, reason})
-          notify(invocation, {:error, {:node_disconnected, reason}})
-        end)
-
-        {removed_controls, kept_controls} =
-          Enum.split_with(state.controls, fn {_control_id, control} ->
-            control.node_id == node_id
-          end)
-
-        Enum.each(removed_controls, fn {_control_id, control} ->
-          cancel_control_monitors(control)
-          notify_control(control, {:error, {:node_disconnected, reason}})
-        end)
-
-        %{
-          state
-          | nodes: nodes,
-            names: Map.delete(state.names, node.name),
-            invocations: Map.new(kept),
-            controls: Map.new(kept_controls)
-        }
-    end
-  end
-
-  defp cancel_invocation_monitors(invocation) do
-    Process.cancel_timer(invocation.timer_ref)
-    Process.demonitor(invocation.recipient_ref, [:flush])
-    :ok
-  end
-
-  defp notify(invocation, result) do
-    send(invocation.recipient, {:lemon_node_result, invocation.id, result})
-  end
-
-  defp notify_control(control, result) do
-    send(
-      control.recipient,
-      {:lemon_node_control_result, control.id, control.invoke_id, result}
-    )
-  end
-
-  defp validate_control_request(invoke_id, operation, text, recipient, timeout_ms) do
-    cond do
-      not is_binary(invoke_id) or String.trim(invoke_id) == "" ->
-        {:error, :invalid_invoke_id}
-
-      operation not in [:steer, :redirect] ->
-        {:error, :invalid_operation}
-
-      not is_binary(text) or text == "" or not String.valid?(text) ->
-        {:error, :invalid_text}
-
-      byte_size(text) > @max_control_text_bytes ->
-        {:error, {:text_too_large, @max_control_text_bytes}}
-
-      not is_pid(recipient) ->
-        {:error, :invalid_recipient}
-
-      not is_integer(timeout_ms) or timeout_ms <= 0 ->
-        {:error, :invalid_timeout}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp event_invocation(state, node_id, connection_pid, generation, invoke_id) do
-    case {Map.get(state.nodes, node_id), Map.get(state.invocations, invoke_id)} do
-      {_node, nil} ->
-        {:error, :terminal}
-
-      {_node, %{node_id: expected_node_id}} when expected_node_id != node_id ->
-        {:error, :wrong_node}
-
-      {%{pid: ^connection_pid, generation: ^generation},
-       %{node_pid: ^connection_pid, node_generation: ^generation}}
-      when is_pid(connection_pid) and is_integer(generation) and generation >= 0 ->
-        active_control_invocation(state, invoke_id)
-
-      _ ->
-        {:error, :stale_session}
-    end
-  end
-
-  defp validate_event(seq, event) do
-    cond do
-      not is_integer(seq) or seq <= 0 ->
-        {:error, :invalid_seq}
-
-      not is_map(event) or Map.get(event, "type") not in @event_types ->
-        {:error, :invalid_event_type}
-
-      true ->
-        case JSONPayload.validate(event, max_bytes: @max_event_bytes) do
-          {:ok, _stats} -> :ok
-          {:error, reason} -> {:error, {:invalid_payload, payload_error_kind(reason)}}
-        end
-    end
-  end
-
-  defp authorize_approval_recipient(%{recipient: recipient}, recipient), do: :ok
-  defp authorize_approval_recipient(_invocation, _caller), do: {:error, :forbidden}
-
-  defp validate_approval(approval_id, decision) do
-    cond do
-      not is_binary(approval_id) or String.trim(approval_id) == "" ->
-        {:error, :invalid_approval_id}
-
-      decision not in @approval_decisions ->
-        {:error, :invalid_decision}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp active_control_invocation(state, invoke_id) do
-    case Map.get(state.invocations, invoke_id) do
-      %{method: "coding_agent.run", run_id: run_id} = invocation
-      when is_binary(run_id) and run_id != "" ->
-        {:ok, invocation}
-
-      nil ->
-        {:error, :terminal}
-
-      _invocation ->
-        {:error, :unsupported}
-    end
-  end
-
-  defp active_invocation_node(state, invocation) do
-    case Map.get(state.nodes, invocation.node_id) do
-      %{pid: pid, generation: generation} = node
-      when pid == invocation.node_pid and generation == invocation.node_generation ->
-        {:ok, node}
-
-      _ ->
-        {:error, :node_offline}
-    end
-  end
-
-  defp invocation_run_id("coding_agent.run", args, invoke_id) do
-    case Map.get(args, "runId") || Map.get(args, :run_id) do
-      run_id when is_binary(run_id) and run_id != "" -> run_id
-      _ -> "node:#{invoke_id}"
-    end
-  end
-
-  defp invocation_run_id(_method, _args, _invoke_id), do: nil
-
-  defp finish_control(state, control, result) do
-    cancel_control_monitors(control)
-    notify_control(control, result)
-    %{state | controls: Map.delete(state.controls, control.id)}
-  end
-
-  defp fail_controls_for_invocation(state, invoke_id, reason) do
-    {removed, kept} =
-      Enum.split_with(state.controls, fn {_control_id, control} ->
-        control.invoke_id == invoke_id
-      end)
-
-    Enum.each(removed, fn {_control_id, control} ->
-      cancel_control_monitors(control)
-      notify_control(control, {:error, reason})
-    end)
-
-    %{state | controls: Map.new(kept)}
-  end
-
-  defp cancel_control_monitors(control) do
-    Process.cancel_timer(control.timer_ref)
-    Process.demonitor(control.recipient_ref, [:flush])
-    :ok
-  end
-
-  # Bind cancellation to the same live connection that received the request.
-  # A reconnect replaces the registered pid and must not receive cancellation
-  # for work that belonged to the superseded socket.
-  defp cancel_remote_invocation(state, invoke_id, invocation, reason) do
-    case Map.get(state.nodes, invocation.node_id) do
-      %{pid: pid, generation: generation}
-      when pid == invocation.node_pid and generation == invocation.node_generation ->
-        send(pid, {
-          :node_event,
-          "node.invoke.cancel",
-          %{
-            "invokeId" => invoke_id,
-            "nodeId" => invocation.node_id,
-            "nodeGeneration" => invocation.node_generation,
-            "reason" => inspect(reason)
-          }
-        })
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp invocation_args_error(method, args, max_payload_bytes) do
-    case JSONPayload.validate(args, invocation_json_opts(method, max_payload_bytes)) do
-      {:ok, _} -> nil
-      {:error, reason} -> reason
-    end
-  end
-
-  defp invocation_json_opts("coding_agent.run", max_payload_bytes),
-    do: LemonCore.ToolPolicy.execution_json_opts(max_bytes: max_payload_bytes)
-
-  defp invocation_json_opts(_method, max_payload_bytes), do: [max_bytes: max_payload_bytes]
-
-  defp completion_json_opts("node.mcp.discover", max_payload_bytes),
-    do: LemonCore.ToolPolicy.execution_json_opts(max_bytes: min(max_payload_bytes, 1_048_576))
-
-  defp completion_json_opts(method, max_payload_bytes),
-    do: invocation_json_opts(method, max_payload_bytes)
-
-  defp payload_error_kind({kind, _detail})
-       when kind in [:max_bytes, :max_depth, :max_items, :not_json_safe],
-       do: kind
-
-  defp payload_error_kind(_reason), do: :invalid
 end

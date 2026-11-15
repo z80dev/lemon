@@ -1023,6 +1023,13 @@ live durable ID first, and an authorized durable ID never falls back to another
 node's name while offline; private execution then pins that ID, connection and
 generation.
 
+The authenticated socket owns its unique live `Registry` entry; socket death
+unregisters it automatically. Each invocation has its own temporary process for
+timers, caller/socket monitoring, sequencing and invocation-bound controls.
+Streamed event and shell frames route straight to that process, not through a
+shared broker. Credential-generation floors remain retained after disconnect.
+Worker reconnects use timers, and stopping the worker interrupts any backoff.
+
 ### Live named-node runs
 
 `coding_agent.run` workers stream live deltas, tool actions and checkpoints through

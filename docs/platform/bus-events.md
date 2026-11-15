@@ -213,8 +213,11 @@ topic), `LemonRouter.AsyncTaskSurfaceSubscriber`, `CodingAgent.Tools.Task.LiveBr
 
 Named-node `coding_agent.run` executions retain the same run/session Bus contract.
 Workers forward sequenced, bounded JSON frames via the node-only
-`node.invoke.event` method; `NodeRegistry` authorizes the invocation's live
-connection/generation, rejects gaps and deduplicates accepted sequences.
+`node.invoke.event` method. Each temporary `LemonCore.NodeInvocation` authorizes
+its live connection/generation, rejects gaps and deduplicates accepted sequences.
+Frames call that invocation process directly rather than a singleton broker.
+The authenticated socket owns its unique node-ID Registry entry, which is
+removed automatically on socket death; credential-generation floors are retained.
 `CodingAgent.Executor.RemoteSessionRunner` sends deltas and tool actions through
 the usual gateway sink, so the gateway assigns normal delta sequence numbers and
 the router forwards the unchanged typed events to the session topic. Checkpoints

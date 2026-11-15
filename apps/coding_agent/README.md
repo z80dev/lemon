@@ -58,6 +58,11 @@ an execution node, it starts `Executor.RemoteSessionRunner`, which asks
 the authenticated destination WebSocket. The destination starts the same native
 executor/session path and returns one JSON-safe terminal result; no vendor CLI
 or subprocess agent runner is involved.
+Each controller invocation owns its event sequencing, timeout and cancellation
+in a temporary process; streamed frames do not cross a singleton broker.
+The worker's stable socket owner schedules reconnects with timers, so stopping a
+node also stops it during backoff. Reconnect never resumes disconnected work.
+
 
 Optional context contributors can observe content-free lifecycle telemetry:
 `[:coding_agent, :session, :tool_dispatched]` carries `session_pid`,
@@ -130,7 +135,8 @@ CodingAgent.Supervisor (one_for_one)
 |--------|-------------|
 | `CodingAgent.ExecutionNode.CLI` | Implements `./bin/lemon node join` for a source checkout |
 | `CodingAgent.ExecutionNode.Worker` | Authenticates to a controller, maintains the connection with application-level health keepalives, and executes targeted, versioned `coding_agent.run` requests through `CodingAgent.Executor` |
-| `CodingAgent.ExecutionNode.Socket` | Reconnecting WebSocket client for control-plane handshakes, requests, responses, and node events |
+| `CodingAgent.ExecutionNode.Socket` | Stable WebSocket owner with timer-driven reconnects and interruptible backoff |
+| `CodingAgent.ExecutionNode.Socket.Transport` | One authenticated WebSocket connection, handshakes, requests, responses, and node events |
 | `CodingAgent.ExecutionNode.TokenStore` | Stores durable-node-ID-keyed session and recovery credentials under `~/.lemon/nodes/execution/` with a mode-0700 directory and mode-0600 files; migrates compatible legacy name-keyed records |
 | `CodingAgent.Executor.RemoteRequestCodec` | Restricts the cross-node boundary to JSON-safe execution request/result fields and destination-cwd intent |
 
