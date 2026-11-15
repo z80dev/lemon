@@ -338,6 +338,10 @@ LemonAi.CircuitBreaker.reset(:anthropic)
 LemonAi.CircuitBreaker.get_state(:anthropic)   # state, failure count, last failure reason
 ```
 
+Admission/status reads (`open?/1`, `time_until_recovery/1`, `peek/1`) read ETS
+snapshots without calling the breaker. `record_success/1`, `record_failure/2` and
+`reset/1` still return `:ok`, but now synchronously acknowledge snapshot publication.
+
 ### Rate limiting and concurrency caps
 
 A per-provider token bucket plus an in-flight concurrency cap, both enforced by the
@@ -345,6 +349,21 @@ dispatcher before the provider is ever called. A caller that finds the provider 
 cap waits in a FIFO queue for a free slot (default up to 120s,
 `config :lemon_ai, LemonAi.CallDispatcher, queue_timeout_ms: ...`) before
 `{:error, :max_concurrency}` is returned.
+
+Each provider has an independent slot authority. Caps and live leases survive
+authority and dispatcher restarts. While an authority is unavailable, admission
+**fails closed** with `{:error, :admission_unavailable}` without invoking the
+callback; `LemonAi.Error` classifies this as transient. The provider's cap is never
+silently bypassed, and other providers can continue admitting calls.
+Queued callers interrupted by an authority restart receive the same unavailable
+error rather than being implicitly replayed.
+These are node-local limits, retained across child-process restarts, not across
+application/VM shutdown or shared across multiple nodes.
+
+For Hex consumers, the additional `:admission_unavailable` error also applies to
+`set_concurrency_cap/2`, `get_concurrency_cap/1` and `get_active_requests/1`.
+`get_state/0` lists unavailable authorities in `:unavailable` rather than reporting
+them as idle.
 
 ```elixir
 config :lemon_ai, :rate_limiter,
@@ -660,12 +679,13 @@ LemonAi.stream/3  or  LemonAi.complete/3
 Supervision tree:
 
 ```
-LemonAi.Supervisor (one_for_one)
+LemonAi.Supervisor (one_for_one; owns the retained slot lease/cap ETS table)
   ├── Task.Supervisor (LemonAi.StreamTaskSupervisor)
   ├── Registry (LemonAi.RateLimiterRegistry)
   ├── Registry (LemonAi.CircuitBreakerRegistry)
-  ├── DynamicSupervisor (LemonAi.ProviderSupervisor) -- per-provider breakers/limiters
-  ├── LemonAi.CallDispatcher
+  ├── Registry (LemonAi.CallDispatcherRegistry)
+  ├── DynamicSupervisor (LemonAi.ProviderSupervisor) -- per-provider breakers/limiters/slots
+  ├── LemonAi.CallDispatcher -- provider failure summaries
   └── LemonAi.ModelCache
 ```
 
