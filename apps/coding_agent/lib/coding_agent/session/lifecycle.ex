@@ -300,6 +300,9 @@ defmodule CodingAgent.Session.Lifecycle do
         Planning.runtime_context(
           %{
             plan_gate: plan_gate,
+            model: model,
+            settings_manager: settings_manager,
+            tool_opts: tool_opts,
             cwd: cwd,
             session_manager: session_manager,
             run_id: run_id,

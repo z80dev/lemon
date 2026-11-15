@@ -122,12 +122,17 @@ defmodule CodingAgent.ToolRegistry do
 
   An omitted or `nil` optional `:tool_policy` uses the full-access baseline.
   Supplied policies still pass through canonical validation and approval gating.
+
+  `:vendor_tool_dialects` (or `runtime.tools.vendor_dialects`) projects the final
+  inventory for `:model` through `CodingAgent.ToolDialects`. Session builders use
+  native tuples and project only after adding their plan gate.
   """
   @spec get_tools(String.t(), tool_opts()) :: [AgentTool.t()]
   def get_tools(cwd, opts \\ []) do
     cwd
     |> get_tool_tuples(opts)
     |> Enum.map(fn {_name, tool, _source} -> tool end)
+    |> CodingAgent.ToolDialects.apply(opts)
   end
 
   @doc """
@@ -277,9 +282,14 @@ defmodule CodingAgent.ToolRegistry do
       )
     end
 
-    case Enum.find(tuples, fn {_name, tool, _source} -> tool.name == normalized_name end) do
+    tools =
+      tuples
+      |> Enum.map(fn {_name, tool, _source} -> tool end)
+      |> CodingAgent.ToolDialects.apply(opts)
+
+    case Enum.find(tools, &(&1.name == normalized_name)) do
       nil -> {:error, :not_found}
-      {_name, tool, _source} -> {:ok, tool}
+      tool -> {:ok, tool}
     end
   end
 

@@ -54,7 +54,8 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   @token_timeout_ms 30_000
   @oauth_env_vars ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_TOKEN"]
   @oauth_beta_features ["claude-code-20250219", "oauth-2025-04-20"]
-  @claude_code_version_floor "2.1.296"
+  # Reviewed in priv/upstream_identities.json; never adopt an unreviewed local CLI version.
+  @claude_code_version "2.1.296"
   @claude_code_file_lock "claude_code_credentials_file"
 
   @type oauth_secret :: %{required(String.t()) => String.t() | integer() | nil}
@@ -306,7 +307,7 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   @spec oauth_headers() :: [{String.t(), String.t()}]
   def oauth_headers do
     [
-      {"user-agent", "claude-cli/#{claude_code_version()} (external, cli)"},
+      {"user-agent", "claude-cli/#{@claude_code_version} (external, cli)"},
       {"x-app", "cli"}
     ]
   end
@@ -642,47 +643,6 @@ defmodule LemonAi.Auth.AnthropicOAuth do
       end
 
     Path.join([home, ".claude", ".credentials.json"])
-  end
-
-  # ── Claude Code fingerprint ────────────────────────────────────────────────
-
-  # Detected once per PATH and auth cache lifetime: the newer of the installed
-  # Claude Code CLI and the pinned floor, so a stale install cannot pin a rejected version.
-  defp claude_code_version do
-    key = {__MODULE__, :claude_code_version, System.get_env("PATH")}
-
-    case LemonAi.Auth.Cache.get(key) do
-      nil ->
-        version =
-          ["claude", "claude-code"]
-          |> Enum.find_value(&installed_claude_code_version/1)
-          |> newer_version(@claude_code_version_floor)
-
-        LemonAi.Auth.Cache.put(key, version)
-        version
-
-      version ->
-        version
-    end
-  end
-
-  defp installed_claude_code_version(cmd) do
-    with path when is_binary(path) <- System.find_executable(cmd),
-         {output, 0} <- System.cmd(path, ["--version"], stderr_to_stdout: true),
-         [version | _] <- String.split(String.trim(output)),
-         {:ok, _} <- Version.parse(version) do
-      version
-    else
-      _ -> nil
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp newer_version(nil, floor), do: floor
-
-  defp newer_version(version, floor) do
-    if Version.compare(version, floor) == :gt, do: version, else: floor
   end
 
   # ── Helpers ────────────────────────────────────────────────────────────────
