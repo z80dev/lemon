@@ -156,11 +156,17 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
     opts = Keyword.put(opts, :max_children, 1)
     receipt = launch([task_node("a"), task_node("b"), task_node("c")], opts, concurrency: 8)
 
-    for name <- ["a", "b", "c"] do
-      assert_receive {:started, ^name, worker, _, _}, 2_000
-      refute_receive {:started, _, _, _, _}, 50
-      send(worker, {:finish, result(name)})
-    end
+    # Budget release is asynchronous; ready siblings have no ordering contract.
+    # Prove that every sibling runs once and no second child starts concurrently.
+    names =
+      for _ <- 1..3 do
+        assert_receive {:started, name, worker, _, _}, 2_000
+        refute_receive {:started, _, _, _, _}, 50
+        send(worker, {:finish, result(name)})
+        name
+      end
+
+    assert Enum.sort(names) == ["a", "b", "c"]
 
     assert await_report(receipt).details.structured_output.status == "completed"
   end
@@ -190,7 +196,8 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
 
     receipt = launch([task_node("a"), task_node("b", ["a"])], opts)
     assert_receive {:task_progress, "swarm-test", %AgentToolResult{details: %{swarm: _}}}, 2_000
-    coordinator = :sys.get_state(Control)[receipt.details.task_id].worker
+    {:ready, entries} = :sys.get_state(Control)
+    coordinator = entries[receipt.details.task_id].worker
     assert_receive {:started, "a", _, _, context}, 2_000
     assert coordinator != parent
     Process.exit(coordinator, :kill)

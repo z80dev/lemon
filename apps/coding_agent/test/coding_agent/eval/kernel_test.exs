@@ -4,6 +4,94 @@ defmodule CodingAgent.Eval.KernelTest do
   alias CodingAgent.Eval.{Kernel, Output}
 
   @marker "\x1eLEMONEVAL:tok:"
+  @python System.find_executable("python3")
+
+  @tag :tmp_dir
+  @tag skip: is_nil(@python)
+  test "status stays responsive while process-group observation waits", %{tmp_dir: cwd} do
+    test_pid = self()
+
+    runner = fn kind, io ->
+      send(test_pid, {:process_io, kind, self()})
+      receive do: (:release -> io.())
+    end
+
+    slot =
+      start_supervised!(
+        {Kernel, key: make_ref(), language: "py", cwd: cwd, runtime: @python, io_runner: runner}
+      )
+
+    run =
+      Task.async(fn ->
+        {:ok, %{ref: ref}} = result = Kernel.run(slot, "1")
+        assert_receive {:lemon_eval, ^ref, {:result, _}}, 5_000
+        result
+      end)
+
+    assert_receive {:process_io, :verify, worker}, 5_000
+    assert {:verifying, %{operation: %{pid: ^worker}}} = :sys.get_state(slot)
+    assert is_integer(:gen_statem.call(slot, :os_pid, 500))
+    assert {:error, :busy} = Kernel.run(slot, "2")
+    send(worker, :release)
+    assert {:ok, %{cell: 1}} = Task.await(run, 5_000)
+  end
+
+  @tag :tmp_dir
+  @tag skip: is_nil(@python)
+  test "status stays responsive during SIGINT and cleanup IO", %{tmp_dir: cwd} do
+    test_pid = self()
+
+    runner = fn
+      :verify, io ->
+        io.()
+
+      kind, io ->
+        send(test_pid, {:process_io, kind, self()})
+        receive do: (:release -> io.())
+    end
+
+    slot =
+      start_supervised!(
+        {Kernel, key: make_ref(), language: "py", cwd: cwd, runtime: @python, io_runner: runner}
+      )
+
+    assert {:ok, %{ref: ref}} =
+             Kernel.run(
+               slot,
+               "import threading; print('ready', flush=True); threading.Event().wait()"
+             )
+
+    await_output(ref, "ready")
+    interrupt = Task.async(fn -> Kernel.interrupt(slot, ref, :timeout) end)
+    assert_receive {:process_io, :interrupt, worker}, 5_000
+    assert {:interrupting, _} = :sys.get_state(slot)
+    assert is_integer(:gen_statem.call(slot, :os_pid, 500))
+    send(worker, :release)
+    assert :preserved = Task.await(interrupt, 5_000)
+    assert {:idle, _} = :sys.get_state(slot)
+
+    assert {:ok, %{ref: ref}} =
+             Kernel.run(slot, "print('ready', flush=True); threading.Event().wait()")
+
+    await_output(ref, "ready")
+    abort = Task.async(fn -> Kernel.interrupt(slot, ref, :aborted) end)
+    assert_receive {:process_io, {:stop, :aborted, :idle}, worker}, 5_000
+    assert {:stopping, _} = :sys.get_state(slot)
+    assert is_integer(:gen_statem.call(slot, :os_pid, 500))
+    send(worker, :release)
+    assert :killed = Task.await(abort, 5_000)
+    assert {:idle, _} = :sys.get_state(slot)
+    assert Kernel.os_pid(slot) == nil
+  end
+
+  defp await_output(ref, expected, output \\ "") do
+    if String.contains?(output, expected) do
+      :ok
+    else
+      assert_receive {:lemon_eval, ^ref, {:output, chunk}}, 5_000
+      await_output(ref, expected, output <> chunk)
+    end
+  end
 
   describe "split_frames/2" do
     test "separates frames from raw output, including frames after a partial line" do

@@ -166,8 +166,9 @@ defmodule CodingAgent.Debug.SessionServerTest do
       match?([%{status: :stopped}], snapshot.children)
     end)
 
-    [child] = Map.values(:sys.get_state(SessionServer.whereis(ctx.key)).children)
-    child_adapter = :sys.get_state(child).session.adapter
+    {_, %{children: children}} = :sys.get_state(SessionServer.whereis(ctx.key))
+    [child] = Map.values(children)
+    {_, %{session: %{adapter: child_adapter}}} = :sys.get_state(child)
     assert child_adapter.connect_mode == :remote
     assert child_adapter.host == "127.0.0.1"
     assert is_integer(child_adapter.port)
@@ -191,10 +192,16 @@ defmodule CodingAgent.Debug.SessionServerTest do
   test "parent adapter exit tears down children", ctx do
     assert {:ok, _} = launch(ctx, %{"fakeMode" => "reverse"})
     parent = SessionServer.whereis(ctx.key)
-    assert_eventually(fn -> map_size(:sys.get_state(parent).children) == 1 end)
-    [child] = Map.values(:sys.get_state(parent).children)
+
+    assert_eventually(fn ->
+      {_, state} = :sys.get_state(parent)
+      map_size(state.children) == 1
+    end)
+
+    {_, state} = :sys.get_state(parent)
+    [child] = Map.values(state.children)
     ref = Process.monitor(child)
-    Client.stop(:sys.get_state(parent).session.client)
+    Client.stop(state.session.client)
     assert_receive {:DOWN, ^ref, :process, ^child, _}, 15_000
     assert {:ok, %{snapshot: %{children: []}}} = call(ctx.key, %{action: "sessions"})
   end
@@ -220,7 +227,8 @@ defmodule CodingAgent.Debug.SessionServerTest do
              })
 
     parent = SessionServer.whereis(ctx.key)
-    [child] = Map.values(:sys.get_state(parent).children)
+    {_, %{children: children}} = :sys.get_state(parent)
+    [child] = Map.values(children)
     ref = Process.monitor(child)
     assert {:ok, _} = call(ctx.key, %{action: "terminate"})
     assert_receive {:DOWN, ^ref, :process, ^child, _}, 5_000
@@ -384,18 +392,18 @@ defmodule CodingAgent.Debug.SessionServerTest do
 
     signal = AbortSignal.new()
     server = SessionServer.whereis(ctx.key)
-    :erlang.trace(server, true, [:send, {:tracer, self()}])
+    :erlang.trace(server, true, [:receive, {:tracer, self()}])
 
     task =
       Task.async(fn ->
         call(ctx.key, %{action: "continue"}, timeout_ms: 30_000, signal: signal)
       end)
 
-    assert_receive {:trace, ^server, :send,
-                    {:"$gen_call", _from, {:request, "continue", _args, _timeout}}, _client},
+    assert_receive {:trace, ^server, :receive,
+                    {:dap, _client, {:response, _seq, %{"command" => "continue"}}}},
                    5_000
 
-    :erlang.trace(server, false, [:send])
+    :erlang.trace(server, false, [:receive])
     AbortSignal.abort(signal)
 
     assert {:aborted, _message} = Task.await(task, 5_000)
@@ -452,9 +460,11 @@ defmodule CodingAgent.Debug.SessionServerTest do
     assert {:ok, %{snapshot: %{status: :running}}} =
              call(ctx.key, %{action: "status"}, timeout_ms: 500)
 
+    # Status no longer waits for the cancelled mutating operation to unwind.
+    # The next mutating action is the barrier for its monitor cleanup.
+    assert {:ok, %{state: :stopped}} = call(ctx.key, %{action: "pause"})
     assert {:monitors, monitors} = Process.info(server, :monitors)
     refute {:process, caller} in monitors
-    assert {:ok, %{state: :stopped}} = call(ctx.key, %{action: "pause"})
   end
 
   test "a WASM host deadline releases a blocked debug server without cancelling siblings", ctx do

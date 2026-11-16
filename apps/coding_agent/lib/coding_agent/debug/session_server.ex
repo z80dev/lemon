@@ -7,13 +7,35 @@ defmodule CodingAgent.Debug.SessionServer do
   holds one root debug session and adapter-requested child sessions. Breakpoint
   lists persist across root relaunches and may be set before `launch`.
 
-  The server owns a linked `CodingAgent.Debug.Client` for the adapter and
-  processes every operation synchronously. The shared RPC engine owns request
-  correlation and deadlines; the receive loop selects replies directly from
-  the mailbox while applying events, without a second pending-request map.
-  Handshake ordering, event-wait deadlines and message-driven abort
-  subscriptions remain here. Events are applied in arrival order whether they
-  arrive during an operation or between operations.
+  The state machine owns a linked `CodingAgent.Debug.Client`. One monitored
+  operation task performs adapter IO at a time; its event waits suspend through
+  the state machine, never a nested callback receive or polling loop. The shared
+  RPC engine owns correlation and request deadlines. Events retain arrival order,
+  including launch replies arriving before configuration completes. Status and
+  output reads remain available during handshakes, requests and disposal.
+
+  ## Transitions
+
+  The state is `{lifecycle, activity}`. `activity` is `:ready`, `:working` or
+  `:waiting`; mutating calls are postponed until `:ready`, but reads and owner
+  binding are always serviced. The session's public status is a projection of
+  the lifecycle (`:launching` is exposed as `:initializing`).
+
+  | Lifecycle | Event | Next lifecycle |
+  | --- | --- | --- |
+  | idle | launch / attach | launching |
+  | launching | initialized | configuring |
+  | configuring | configuration complete | running |
+  | running | stopped | stopped |
+  | stopped | resume | running |
+  | any active lifecycle | terminated / adapter exit | terminated |
+  | launching / configuring | failed or aborted handshake | idle |
+  | terminated | relaunch | launching |
+  | any | owner exit / idle timeout | stop |
+
+  Named event-wait timeouts are cancelled when their waiter is answered. The
+  idle timeout is armed only between operations; unrelated adapter events do
+  not renew it. Abort and caller death wake the current waiter by message.
 
   Lifecycle: the adapter process tree is killed on `terminate`, when the
   debuggee terminates, when a launch/attach handshake fails or is aborted, when
@@ -22,7 +44,7 @@ defmodule CodingAgent.Debug.SessionServer do
   reason (linked client with trapped exits).
   """
 
-  use GenServer
+  @behaviour :gen_statem
 
   alias CodingAgent.Debug.Adapters
   alias CodingAgent.Debug.Client
@@ -55,7 +77,7 @@ defmodule CodingAgent.Debug.SessionServer do
   def start_link(opts) do
     key = Keyword.fetch!(opts, :key)
     value = %{session_key: Keyword.get(opts, :session_key), started_at: System.monotonic_time()}
-    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {@registry, key, value}})
+    :gen_statem.start_link({:via, Registry, {@registry, key, value}}, __MODULE__, opts, [])
   end
 
   @doc "Server pid for a session key, if one is running."
@@ -91,7 +113,7 @@ defmodule CodingAgent.Debug.SessionServer do
 
     with {:ok, pid} <- ensure_server(key, action, opts) do
       try do
-        GenServer.call(pid, {:op, request, ctx}, timeout_ms + @call_slack_ms)
+        :gen_statem.call(pid, {:op, request, ctx}, timeout_ms + @call_slack_ms)
       catch
         :exit, {:timeout, _} -> {:error, "debug session did not respond in time"}
         :exit, _ -> {:error, "debug session stopped while handling the request"}
@@ -126,7 +148,10 @@ defmodule CodingAgent.Debug.SessionServer do
     end
   end
 
-  # ── GenServer ────────────────────────────────────────────────────────────
+  # ── State machine ────────────────────────────────────────────────────────
+
+  @impl true
+  def callback_mode, do: :handle_event_function
 
   @impl true
   def init(opts) do
@@ -138,161 +163,404 @@ defmodule CodingAgent.Debug.SessionServer do
         _ -> nil
       end
 
-    state =
-      %{
-        key: Keyword.fetch!(opts, :key),
-        owner_ref: owner_ref,
-        owner_pid: Keyword.get(opts, :owner),
-        idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms, @idle_timeout_ms),
-        idle_token: nil,
-        breakpoints: Keyword.get(opts, :breakpoints, %{}),
-        function_breakpoints: Keyword.get(opts, :function_breakpoints, []),
-        session: nil,
-        children: %{},
-        id_prefix: Keyword.get(opts, :id_prefix, "debug"),
-        next_id: 1
-      }
-      |> schedule_idle()
+    state = %{
+      key: Keyword.fetch!(opts, :key),
+      server: self(),
+      owner_ref: owner_ref,
+      owner_pid: Keyword.get(opts, :owner),
+      idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms, @idle_timeout_ms),
+      breakpoints: Keyword.get(opts, :breakpoints, %{}),
+      function_breakpoints: Keyword.get(opts, :function_breakpoints, []),
+      session: nil,
+      children: %{},
+      id_prefix: Keyword.get(opts, :id_prefix, "debug"),
+      next_id: 1,
+      operation: nil,
+      waiter: nil,
+      in_flight: nil,
+      inbox: []
+    }
 
-    {:ok, state}
+    {:ok, {:idle, :ready}, state, idle_timeout(state)}
   end
 
   @impl true
-  def handle_call({:bind_owner, owner}, _from, state),
-    do: CodingAgent.ToolResources.owner_reply(:bind_owner, owner, state)
+  def handle_event({:call, from}, {:bind_owner, owner}, _phase, state) do
+    {:reply, reply, state} = CodingAgent.ToolResources.owner_reply(:bind_owner, owner, state)
+    {:keep_state, state, [{:reply, from, reply}]}
+  end
 
-  def handle_call({:op, %{debug_session_id: id} = request, ctx}, _from, state)
-      when is_binary(id) do
-    cond do
-      state.session && state.session.id == id ->
-        handle_call({:op, Map.delete(request, :debug_session_id), ctx}, nil, state)
+  def handle_event({:call, from}, {:op, %{action: action} = request, ctx}, _phase, state)
+      when action in ["status", "sessions", "output"] and
+             (not is_map_key(request, :debug_session_id) or
+                not is_binary(request.debug_session_id)) do
+    {reply, _state} = run(request, ctx, projection(state))
+    actions = if state.operation, do: [], else: idle_timeout(state)
+    {:keep_state_and_data, [{:reply, from, reply} | actions]}
+  end
 
-      true ->
-        child =
-          Enum.find(state.children, fn {child_id, _} ->
-            id == child_id or String.starts_with?(id, child_id <> "-")
-          end)
+  def handle_event(
+        {:call, from},
+        {:op, %{action: action, debug_session_id: id} = request, ctx},
+        phase,
+        %{session: %{id: id}} = state
+      )
+      when action in ["status", "sessions", "output"] do
+    handle_event({:call, from}, {:op, Map.delete(request, :debug_session_id), ctx}, phase, state)
+  end
 
-        reply =
-          case child do
-            {_, pid} ->
-              try do
-                GenServer.call(pid, {:op, request, ctx}, ctx.timeout_ms + @call_slack_ms)
-              catch
-                :exit, _ -> {:error, "Child debug session is no longer running"}
-              end
+  def handle_event({:call, from}, {:op, %{action: action} = request, ctx}, _phase, state)
+      when action in ["status", "sessions", "output"] do
+    children = state.children
 
-            nil ->
-              {:error, "Unknown debug session: #{id}"}
-          end
+    {:ok, _pid} =
+      Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
+        :gen_statem.reply(from, child_request(children, request, ctx))
+      end)
 
-        {:reply, reply, schedule_idle(state)}
+    {:keep_state_and_data, if(state.operation, do: [], else: idle_timeout(state))}
+  end
+
+  def handle_event({:call, from}, {:op, request, ctx}, {_lifecycle, :ready}, state) do
+    start_operation(state, from, request, ctx)
+  end
+
+  def handle_event({:call, _from}, {:op, _request, _ctx}, _phase, _state),
+    do: {:keep_state_and_data, [:postpone]}
+
+  def handle_event({:call, from}, {:checkpoint, updated}, _phase, state) do
+    state = adopt(state, updated)
+    {:next_state, phase(state, :working), state, [{:reply, from, :ok}]}
+  end
+
+  def handle_event({:call, from}, {:await, updated, ctx, response}, _phase, state) do
+    state = adopt(state, updated)
+    waiter = %{from: from, ctx: ctx, response: response}
+    state = %{state | waiter: waiter}
+
+    case take_event(state) do
+      {:event, event, state} ->
+        answer_waiter(state, event)
+
+      :empty ->
+        timeout =
+          if match?({:all, _}, response),
+            do: :infinity,
+            else: max(ctx.deadline - System.monotonic_time(:millisecond), 0)
+
+        {:next_state, phase(state, :waiting), state, [{{:timeout, :event}, timeout, :expired}]}
     end
   end
 
-  def handle_call({:op, request, ctx}, _from, state) do
-    # Preserve the original invocation worker when routing to a child server.
-    caller_ref =
-      case Map.get(ctx, :caller) do
-        caller when is_pid(caller) -> Process.monitor(caller)
-        _ -> nil
-      end
+  def handle_event(:cast, {:operation_reply, reply}, _phase, %{operation: operation} = state)
+      when not is_nil(operation),
+      do: {:keep_state, %{state | operation: %{operation | reply: reply}}}
 
-    ctx = Map.put(ctx, :caller_ref, caller_ref)
-    AbortSignal.subscribe(ctx.signal)
-
-    {reply, state} =
-      try do
-        run(request, ctx, state)
-      catch
-        {:owner_down, state} -> {:owner_down, state}
-      after
-        AbortSignal.unsubscribe(ctx.signal)
-        if caller_ref, do: Process.demonitor(caller_ref, [:flush])
-      end
-
-    case reply do
-      :owner_down ->
-        {:stop, :normal, {:error, "coding session ended"}, state}
-
-      reply ->
-        case dispose_if_terminated(state) do
-          {:ok, state} -> {:reply, reply, schedule_idle(state)}
-          {:owner_down, state} -> {:stop, :normal, reply, state}
-        end
-    end
+  def handle_event(:info, {ref, {reply, updated}}, _phase, %{operation: %{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    state = adopt(state, updated)
+    finish_operation(state, reply)
   end
 
-  @impl true
-  def handle_info({:start_child, request}, state) do
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, reason},
+        _phase,
+        %{operation: %{ref: ref}} = state
+      ) do
+    reply = {:error, "debug operation stopped: #{inspect(reason)}"}
+    {:stop, {:operation_failed, reason}, reply_operation(state, reply)}
+  end
+
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, _reason},
+        _phase,
+        %{owner_ref: ref} = state
+      )
+      when is_reference(ref) do
+    reply = (state.operation && state.operation.reply) || {:error, "coding session ended"}
+    {:stop, :normal, reply_operation(state, reply)}
+  end
+
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, _reason},
+        _phase,
+        %{operation: %{caller_ref: ref}} = state
+      )
+      when is_reference(ref),
+      do: abort_operation(state)
+
+  def handle_event(
+        :info,
+        {:lemon_abort, signal, :abort},
+        _phase,
+        %{operation: %{signal: signal}} = state
+      ),
+      do: abort_operation(state)
+
+  def handle_event(:info, {:start_child, request}, {_lifecycle, :ready}, state) do
     ctx = %{
       timeout_ms: 30_000,
       deadline: System.monotonic_time(:millisecond) + 30_000,
       signal: nil
     }
 
-    {reply, state} = run(request, ctx, state)
-
-    state =
-      case reply do
-        {:error, message} ->
-          session =
-            new_session(
-              %{state | next_id: 1},
-              String.to_existing_atom(request.action),
-              request.adapter,
-              nil,
-              request
-            )
-
-          %{state | session: %{session | status: :terminated, error: message}}
-
-        _ ->
-          state
-      end
-
-    case dispose_if_terminated(state) do
-      {:ok, state} -> {:noreply, state}
-      {:owner_down, state} -> {:stop, :normal, state}
-    end
+    start_operation(state, nil, {:start_child, request}, ctx)
   end
 
-  def handle_info({:dap, client, payload}, %{session: %{client: client}} = state)
+  def handle_event(:info, {:start_child, _request}, _phase, _state),
+    do: {:keep_state_and_data, [:postpone]}
+
+  def handle_event(:info, {:dap, _client, _payload} = message, _phase, state),
+    do: incoming(state, message)
+
+  def handle_event(:info, {:EXIT, client, reason}, _phase, %{session: %{client: client}} = state)
       when is_pid(client) do
-    case state |> apply_payload(payload) |> dispose_if_terminated() do
-      {:ok, state} -> {:noreply, state}
-      {:owner_down, state} -> {:stop, :normal, state}
-    end
+    incoming(state, {:dap, client, {:exit, "debug adapter client stopped: #{inspect(reason)}"}})
   end
 
-  def handle_info({:dap, _stale_client, _payload}, state), do: {:noreply, state}
+  def handle_event({:timeout, :event}, :expired, _phase, %{waiter: waiter} = state)
+      when not is_nil(waiter),
+      do: answer_waiter(state, :timeout)
 
-  def handle_info({:EXIT, client, reason}, %{session: %{client: client}} = state)
-      when is_pid(client) do
-    state = apply_payload(state, {:exit, "debug adapter client stopped: #{inspect(reason)}"})
-    {:noreply, state}
-  end
-
-  def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
-
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state) do
-    {:stop, :normal, state}
-  end
-
-  def handle_info({:idle, token}, %{idle_token: token} = state) do
-    {:stop, :normal, state}
-  end
-
-  def handle_info(_message, state), do: {:noreply, state}
+  def handle_event({:timeout, :idle}, :expired, _phase, state), do: {:stop, :normal, state}
+  def handle_event(:info, _message, _phase, _state), do: :keep_state_and_data
 
   @impl true
-  def terminate(_reason, state) do
+  def terminate(_reason, _phase, state) do
+    if state.operation, do: Process.exit(state.operation.pid, :kill)
     stop_children(state)
 
     case state.session do
       %{client: client} when is_pid(client) -> Client.stop(client)
       _ -> :ok
     end
+  end
+
+  defp phase(state, activity) do
+    case projection(state).session do
+      nil -> {:idle, activity}
+      %{status: :initializing} -> {:launching, activity}
+      %{status: status} -> {status, activity}
+    end
+  end
+
+  # Reads include events already delivered to the operation task but not yet
+  # checkpointed. Only pure projections run here; adapter IO and teardown stay
+  # in the task. The authoritative checkpoint is never modified twice.
+  defp projection(state) do
+    Enum.reduce(List.wrap(state.in_flight) ++ state.inbox, state, fn
+      {:dap, client, {:event, _, _} = payload}, %{session: %{client: client}} = acc ->
+        apply_payload(acc, payload)
+
+      {:dap, client, {:reverse_request, _} = payload}, %{session: %{client: client}} = acc ->
+        apply_payload(acc, payload)
+
+      {:dap, client, {:exit, reason}}, %{session: %{client: client}} = acc ->
+        update_session(acc, fn session ->
+          error = if session.status == :terminated, do: session.error, else: reason
+          %{session | status: :terminated, error: error}
+        end)
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp idle_timeout(state), do: [{{:timeout, :idle}, state.idle_timeout_ms, :expired}]
+
+  defp adopt(state, updated) do
+    case updated.session do
+      %{client: client} when is_pid(client) -> Process.link(client)
+      _ -> :ok
+    end
+
+    Map.merge(
+      %{state | in_flight: nil},
+      Map.take(updated, [:session, :children, :breakpoints, :function_breakpoints, :next_id])
+    )
+  end
+
+  defp start_operation(state, from, request, ctx) do
+    caller_ref =
+      case Map.get(ctx, :caller) do
+        caller when is_pid(caller) -> Process.monitor(caller)
+        _ -> nil
+      end
+
+    AbortSignal.subscribe(ctx.signal)
+
+    task =
+      Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+        operate(request, ctx, state)
+      end)
+
+    operation = %{
+      pid: task.pid,
+      ref: task.ref,
+      from: from,
+      caller_ref: caller_ref,
+      signal: ctx.signal,
+      aborted: AbortSignal.aborted?(ctx.signal),
+      reply: nil,
+      request: request
+    }
+
+    actions = if match?({:payload, _}, request), do: [], else: [{{:timeout, :idle}, :cancel}]
+    {:next_state, phase(state, :working), %{state | operation: operation}, actions}
+  end
+
+  defp operate(request, ctx, state) do
+    Process.flag(:trap_exit, true)
+    {reply, state} = run_operation(request, ctx, state)
+    :gen_statem.cast(state.server, {:operation_reply, reply})
+    {:ok, state} = dispose_if_terminated(state)
+    {reply, state}
+  end
+
+  defp run_operation({:payload, payload}, _ctx, state), do: {:ok, apply_payload(state, payload)}
+
+  defp run_operation({:start_child, request}, ctx, state) do
+    case run(request, ctx, state) do
+      {{:error, message} = reply, state} ->
+        session =
+          new_session(
+            %{state | next_id: 1},
+            String.to_existing_atom(request.action),
+            request.adapter,
+            nil,
+            request
+          )
+
+        {reply, %{state | session: %{session | status: :terminated, error: message}}}
+
+      result ->
+        result
+    end
+  end
+
+  defp run_operation(%{debug_session_id: id} = request, ctx, state) when is_binary(id) do
+    if state.session && state.session.id == id do
+      run(Map.delete(request, :debug_session_id), ctx, state)
+    else
+      {child_request(state.children, request, ctx), state}
+    end
+  end
+
+  defp run_operation(request, ctx, state), do: run(request, ctx, state)
+
+  defp child_request(children, %{debug_session_id: id} = request, ctx) do
+    child =
+      Enum.find(children, fn {child_id, _} ->
+        id == child_id or String.starts_with?(id, child_id <> "-")
+      end)
+
+    case child do
+      {_, pid} ->
+        try do
+          :gen_statem.call(pid, {:op, request, ctx}, ctx.timeout_ms + @call_slack_ms)
+        catch
+          :exit, _ -> {:error, "Child debug session is no longer running"}
+        end
+
+      nil ->
+        {:error, "Unknown debug session: #{id}"}
+    end
+  end
+
+  defp reply_operation(%{operation: nil} = state, _reply), do: state
+
+  defp reply_operation(state, reply) do
+    operation = state.operation
+    if operation.from, do: :gen_statem.reply(operation.from, reply)
+    if operation.caller_ref, do: Process.demonitor(operation.caller_ref, [:flush])
+    AbortSignal.unsubscribe(operation.signal)
+    %{state | operation: %{operation | from: nil, caller_ref: nil}}
+  end
+
+  defp finish_operation(state, reply) do
+    internal? = match?({:payload, _}, state.operation.request)
+    state = reply_operation(state, reply)
+    state = %{state | operation: nil, waiter: nil}
+    actions = [{{:timeout, :event}, :cancel}]
+    actions = if internal?, do: actions, else: actions ++ idle_timeout(state)
+
+    # Unconsumed responses have no consumer once the operation has finished.
+    events =
+      Enum.reject(state.inbox, fn
+        {:dap, _, {kind, _, _}} when kind in [:response, :request_error] -> true
+        _ -> false
+      end)
+
+    {:next_state, phase(state, :ready), %{state | inbox: []},
+     actions ++ Enum.map(events, &{:next_event, :info, &1})}
+  end
+
+  defp incoming(%{operation: nil, session: %{client: client}} = state, {:dap, client, payload}) do
+    if elem(payload, 0) in [:response, :request_error] do
+      :keep_state_and_data
+    else
+      ctx = %{
+        signal: nil,
+        timeout_ms: @dispose_timeout_ms,
+        deadline: System.monotonic_time(:millisecond) + @dispose_timeout_ms
+      }
+
+      {:next_state, _phase, state, actions} =
+        start_operation(state, nil, {:payload, payload}, ctx)
+
+      state = %{state | in_flight: {:dap, client, payload}}
+      {:next_state, phase(state, :working), state, actions}
+    end
+  end
+
+  defp incoming(%{operation: nil}, _message), do: :keep_state_and_data
+
+  defp incoming(state, message) do
+    state = %{state | inbox: state.inbox ++ [message]}
+
+    case state.waiter && take_event(state) do
+      {:event, event, state} -> answer_waiter(state, event)
+      _ -> {:next_state, phase(state, if(state.waiter, do: :waiting, else: :working)), state}
+    end
+  end
+
+  defp abort_operation(state) do
+    state = %{state | operation: %{state.operation | aborted: true}}
+    if state.waiter, do: answer_waiter(state, :aborted), else: {:keep_state, state}
+  end
+
+  defp take_event(%{operation: %{aborted: true}} = state), do: {:event, :aborted, state}
+
+  defp take_event(state) do
+    client = state.session && state.session.client
+    {mode, seq} = state.waiter.response || {nil, nil}
+
+    index =
+      Enum.find_index(state.inbox, fn
+        {:dap, ^client, {:response, ^seq, %{"success" => false}}} -> mode in [:all, :errors]
+        {:dap, ^client, {:response, ^seq, _}} -> mode == :all
+        {:dap, ^client, {:request_error, ^seq, _}} -> true
+        {:dap, ^client, payload} -> elem(payload, 0) not in [:response, :request_error]
+        _ -> false
+      end)
+
+    if is_nil(index) do
+      :empty
+    else
+      {event, inbox} = List.pop_at(state.inbox, index)
+      {:event, event, %{state | inbox: inbox}}
+    end
+  end
+
+  defp answer_waiter(state, event) do
+    from = state.waiter.from
+    state = %{state | waiter: nil, in_flight: event}
+
+    {:next_state, phase(state, :working), state,
+     [{:reply, from, event}, {{:timeout, :event}, :cancel}]}
   end
 
   # ── Operations ───────────────────────────────────────────────────────────
@@ -559,10 +827,12 @@ defmodule CodingAgent.Debug.SessionServer do
             request.adapter
           end
 
-        case Client.start_link(adapter: adapter, cwd: request.cwd, owner: self()) do
+        case Client.start_link(adapter: adapter, cwd: request.cwd, owner: state.server) do
           {:ok, client} ->
             session = new_session(state, kind, adapter, client, request)
             state = %{state | session: session, next_id: state.next_id + 1}
+            :ok = :gen_statem.call(state.server, {:checkpoint, state})
+            Process.unlink(client)
             handshake(kind, request, ctx, state)
 
           {:error, reason} ->
@@ -761,7 +1031,7 @@ defmodule CodingAgent.Debug.SessionServer do
     status =
       if session.status in [:initializing, :configuring], do: :running, else: session.status
 
-    %{session | configuration_done?: true, status: status}
+    %{session | status: status}
   end
 
   defp send_all_source_breakpoints(state, ctx) do
@@ -1100,9 +1370,7 @@ defmodule CodingAgent.Debug.SessionServer do
     end
   end
 
-  # Disposal waits on the adapter, so the owner's DOWN can be consumed here.
-  # Report it so the caller stops the server like any other owner loss rather
-  # than keeping a dead owner that no live session could rebind.
+  # Disposal runs in the operation task; owner loss remains a state-machine event.
   defp dispose_if_terminated(%{session: %{status: :terminated, client: client}} = state)
        when is_pid(client) do
     state = stop_children(state)
@@ -1113,17 +1381,13 @@ defmodule CodingAgent.Debug.SessionServer do
       signal: nil
     }
 
-    try do
-      case dap_request(
-             state,
-             "disconnect",
-             %{"terminateDebuggee" => state.session.kind == :launch},
-             ctx
-           ) do
-        {_, _, state} -> {:ok, stop_client(state)}
-      end
-    catch
-      {:owner_down, state} -> {:owner_down, stop_client(state)}
+    case dap_request(
+           state,
+           "disconnect",
+           %{"terminateDebuggee" => state.session.kind == :launch},
+           ctx
+         ) do
+      {_, _, state} -> {:ok, stop_client(state)}
     end
   end
 
@@ -1136,7 +1400,6 @@ defmodule CodingAgent.Debug.SessionServer do
     case state.session do
       %{client: client} when is_pid(client) ->
         Client.stop(client)
-        flush_client(client)
         update_session(state, &%{&1 | client: nil, status: :terminated})
 
       _ ->
@@ -1148,15 +1411,6 @@ defmodule CodingAgent.Debug.SessionServer do
     state = stop_children(state)
     state = stop_client(state)
     %{state | session: nil}
-  end
-
-  defp flush_client(client) do
-    receive do
-      {:dap, ^client, _} -> flush_client(client)
-      {:EXIT, ^client, _} -> flush_client(client)
-    after
-      0 -> :ok
-    end
   end
 
   # ── Request / event plumbing ─────────────────────────────────────────────
@@ -1171,6 +1425,7 @@ defmodule CodingAgent.Debug.SessionServer do
   defp send_async(state, command, arguments, ctx) do
     case state.session do
       %{client: client} when is_pid(client) ->
+        :ok = :gen_statem.call(state.server, {:checkpoint, state})
         remaining = max(ctx.deadline - System.monotonic_time(:millisecond), 0)
 
         case Client.request(client, command, arguments, remaining) do
@@ -1221,17 +1476,7 @@ defmodule CodingAgent.Debug.SessionServer do
     after
       if is_pid(client) do
         Client.cancel(client, seq)
-        flush_response(client, seq)
       end
-    end
-  end
-
-  defp flush_response(client, seq) do
-    receive do
-      {:dap, ^client, {kind, ^seq, _result}} when kind in [:response, :request_error] ->
-        flush_response(client, seq)
-    after
-      0 -> :ok
     end
   end
 
@@ -1262,88 +1507,48 @@ defmodule CodingAgent.Debug.SessionServer do
     end
   end
 
-  # Only event waits use this receive deadline; outstanding request deadlines
-  # belong to the RPC engine. Replies for a different request stay in the mailbox
-  # (notably launch/attach while configuration requests are in flight).
+  # The task yields its projection before each event wait. The state machine
+  # keeps unmatched launch replies while configuration requests are in flight,
+  # and owns the deadline and cancellation wakeups.
   defp await(state, ctx, done?, response \\ nil) do
     case done?.(state) do
       {:done, value} ->
         {:ok, value, state}
 
       nil ->
-        {response_mode, response_seq} = response || {nil, nil}
+        remaining = max(ctx.deadline - System.monotonic_time(:millisecond), 0)
 
-        remaining =
-          if response_mode == :all,
-            do: :infinity,
-            else: max(ctx.deadline - System.monotonic_time(:millisecond), 0)
+        case :gen_statem.call(
+               state.server,
+               {:await, state, ctx, response},
+               remaining + @call_slack_ms
+             ) do
+          {:dap, _client, {:response, _seq, message}} ->
+            {:ok, {:response, message}, state}
 
-        cond do
-          AbortSignal.aborted?(ctx.signal) ->
+          {:dap, _client, {:request_error, _seq, reason}} ->
+            {:error, reason, state}
+
+          {:dap, _client, payload} ->
+            await(apply_payload(state, payload), ctx, done?, response)
+
+          :aborted ->
             {:aborted, state}
 
-          remaining == 0 ->
-            {:timeout, state}
-
-          true ->
-            client = state.session && state.session.client
-            owner_ref = state.owner_ref
-            caller_ref = Map.get(ctx, :caller_ref)
-            signal = ctx.signal
-
-            receive do
-              {:dap, ^client, {:response, ^response_seq, %{"success" => false} = message}}
-              when response_mode in [:all, :errors] ->
-                {:ok, {:response, message}, state}
-
-              {:dap, ^client, {:response, ^response_seq, message}} when response_mode == :all ->
-                {:ok, {:response, message}, state}
-
-              {:dap, ^client, {:request_error, ^response_seq, reason}} ->
-                {:error, reason, state}
-
-              {:dap, ^client, payload} when elem(payload, 0) not in [:response, :request_error] ->
-                await(apply_payload(state, payload), ctx, done?, response)
-
-              {:EXIT, ^client, reason} ->
-                state =
-                  apply_payload(
-                    state,
-                    {:exit, "debug adapter client stopped: #{inspect(reason)}"}
-                  )
-
-                await(state, ctx, done?, response)
-
-              {:DOWN, ^owner_ref, :process, _pid, _reason} ->
-                throw({:owner_down, state})
-
-              {:DOWN, ^caller_ref, :process, _pid, _reason} ->
-                {:aborted, state}
-
-              {:lemon_abort, ^signal, :abort} ->
-                {:aborted, state}
-
-              {:lemon_abort, ^signal, :redirect} ->
-                await(state, ctx, done?, response)
-            after
-              remaining -> {:timeout, state}
-            end
+          :timeout ->
+            if match?({:all, _}, response),
+              do: {:error, :timeout, state},
+              else: {:timeout, state}
         end
     end
   end
 
   defp stop_children(state) do
     Enum.each(state.children, fn {_id, pid} ->
-      ref = Process.monitor(pid)
-
       try do
-        GenServer.stop(pid, :normal, @dispose_timeout_ms)
+        :gen_statem.stop(pid, :normal, @dispose_timeout_ms)
       catch
         :exit, _ -> Process.exit(pid, :kill)
-      end
-
-      receive do
-        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
       end
     end)
 
@@ -1363,7 +1568,7 @@ defmodule CodingAgent.Debug.SessionServer do
              @supervisor,
              {__MODULE__,
               key: key,
-              owner: self(),
+              owner: state.server,
               id_prefix: id,
               breakpoints: state.breakpoints,
               function_breakpoints: state.function_breakpoints}
@@ -1557,7 +1762,6 @@ defmodule CodingAgent.Debug.SessionServer do
       status: :initializing,
       capabilities: %{},
       initialized?: false,
-      configuration_done?: false,
       stop: %{},
       frames: [],
       threads: [],
@@ -1591,7 +1795,7 @@ defmodule CodingAgent.Debug.SessionServer do
       end
 
     children =
-      Enum.map(state.children, fn {id, pid} ->
+      Enum.flat_map(state.children, fn {id, pid} ->
         try do
           ctx = %{
             timeout_ms: 100,
@@ -1599,11 +1803,17 @@ defmodule CodingAgent.Debug.SessionServer do
             signal: nil
           }
 
-          {:ok, %{snapshot: child}} = GenServer.call(pid, {:op, %{action: "status"}, ctx}, 100)
-          Map.put(child, :parent_id, state.session && state.session.id)
+          {:ok, %{snapshot: child}} = :gen_statem.call(pid, {:op, %{action: "status"}, ctx}, 100)
+          [Map.put(child, :parent_id, state.session && state.session.id)]
         catch
           :exit, _ ->
-            %{id: id, status: :initializing, parent_id: state.session && state.session.id}
+            # Disposal runs asynchronously. A child may already have exited
+            # before the operation's final checkpoint clears its registry entry.
+            if Process.alive?(pid) do
+              [%{id: id, status: :initializing, parent_id: state.session && state.session.id}]
+            else
+              []
+            end
         end
       end)
 
@@ -1690,12 +1900,6 @@ defmodule CodingAgent.Debug.SessionServer do
   defp drop_continuation_bytes(binary), do: binary
 
   # ── Misc ─────────────────────────────────────────────────────────────────
-
-  defp schedule_idle(state) do
-    token = make_ref()
-    Process.send_after(self(), {:idle, token}, state.idle_timeout_ms)
-    %{state | idle_token: token}
-  end
 
   defp list(body, key) when is_map(body) do
     case body[key] do

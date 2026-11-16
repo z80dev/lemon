@@ -213,7 +213,7 @@ in-process subagents.
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Voice.CallSession` | `voice/call_session.ex` | Per-call GenServer managing STT/TTS pipeline |
+| `LemonGateway.Voice.CallSession` | `voice/call_session.ex` | Per-call state machine owning supervised, deadline-bound LLM/TTS work |
 | `LemonGateway.Voice.TwilioWebSocket` | `voice/twilio_websocket.ex` | WebSocket handler for Twilio Media Streams |
 | `LemonGateway.Voice.DeepgramClient` | `voice/deepgram_client.ex` | WebSocket client for Deepgram STT |
 | `LemonGateway.Voice.WebhookRouter` | `voice/webhook_router.ex` | Voice webhook HTTP routing |
@@ -279,8 +279,16 @@ Gateway queue configuration only applies to legacy transport/binding compatibili
 
 ## Voice Call System
 
+Each call serializes LLM generation and speech synthesis through supervised
+tasks. Generation has the existing 30-second HTTP budget and synthesis has the
+existing 10-second HTTP budget; timeout or task death advances queued work.
+Expired task results and best-effort Twilio playback marks cannot advance a
+new synthesis. Incoming audio resets the configured silence deadline; unrelated
+events do not. Inactivity starts a goodbye with the existing three-second
+shutdown budget. Ending the call terminates its active task.
+
 ```
-Incoming Call -> Twilio -> Voice.WebhookRouter -> CallSession GenServer
+Incoming Call -> Twilio -> Voice.WebhookRouter -> CallSession state machine
                                                       |
                                                TwilioWebSocket
                                             (mulaw audio frames)

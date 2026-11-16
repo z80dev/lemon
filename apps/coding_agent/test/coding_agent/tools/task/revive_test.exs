@@ -21,9 +21,10 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
   test "write wakes an idle child in the same session and auto-delivers its reply", %{
     tmp_dir: cwd
   } do
-    child = launch(cwd, idle_ttl_ms: 0)
+    child = launch(cwd, idle_ttl_ms: 60_000, block_second: true)
     assert {:ok, session} = CodingAgent.lookup_session(child.session_id)
     TaskStore.suppress_auto_followup(child.id)
+    assert {{:timeout, {:park, child.id}}, :park} in active_timeouts()
 
     assert %AgentToolResult{details: %{delivery: "woken"}} =
              Write.execute(
@@ -44,6 +45,10 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
     assert inspect(context.messages) =~ "original assignment"
     assert inspect(context.messages) =~ "answer-1"
     assert inspect(context.messages) =~ "Remember the original assignment"
+    assert_receive {:stream_blocked, producer}, 5_000
+    assert entry(child.id).phase == :running
+    refute {{:timeout, {:park, child.id}}, :park} in active_timeouts()
+    send(producer, :release_stream)
     assert_receive {:child_reply, reply}, 5_000
     assert inspect(reply.content) =~ "answer-2"
     assert {:ok, ^session} = CodingAgent.lookup_session(child.session_id)
@@ -72,16 +77,16 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
   end
 
   @tag :tmp_dir
-  test "zero TTL stays idle and stale parking timers cannot stop a new turn", %{tmp_dir: cwd} do
+  test "zero TTL stays idle and waking owns a running child without a park timer", %{tmp_dir: cwd} do
     child = launch(cwd, idle_ttl_ms: 0, block_second: true)
     assert {:ok, session} = CodingAgent.lookup_session(child.session_id)
-    token = :sys.get_state(Control)[child.id].idle_token
+    refute Map.has_key?(entry(child.id), :idle_token)
 
     assert %AgentToolResult{details: %{delivery: "woken"}} =
              Messaging.send(child.id, "Work", child.opts)
 
     assert_receive {:stream_blocked, producer}, 5_000
-    send(Control, {:park, child.id, token})
+    assert entry(child.id).phase == :running
 
     assert %AgentToolResult{details: %{timed_out: true}} =
              Result.do_join(%{"task_ids" => [child.id]}, nil, timeout_ms: 30)
@@ -153,7 +158,7 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
   @tag :tmp_dir
   test "failed revival admission reports failed and releases the idle session", %{tmp_dir: cwd} do
     child = launch(cwd, idle_ttl_ms: 0)
-    entry = :sys.get_state(Control)[child.id]
+    entry = entry(child.id)
 
     context =
       put_in(entry.continuation, [:lifecycle, :task_supervisor], :missing_revive_supervisor)
@@ -187,7 +192,7 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
     assert Enum.count(deliveries, &(&1 == "injected")) == 7
     assert_receive {:stream_blocked, producer}, 5_000
     assert {:ok, session} = CodingAgent.lookup_session(child.session_id)
-    entry = :sys.get_state(Control)[child.id]
+    entry = entry(child.id)
     assert entry.session == session
     assert is_pid(entry.worker)
     assert Process.alive?(entry.worker)
@@ -314,7 +319,7 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
 
     assert_receive {:model_call, 1, _, _}, 5_000
     assert_receive {:initial_stream, producer}, 5_000
-    session = :sys.get_state(Control)[id].session
+    session = entry(id).session
     send(producer, :release_stream)
 
     assert_eventually(
@@ -340,6 +345,20 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
       session_id: record.session_id,
       session_file: record.session_file
     }
+  end
+
+  defp entry(id) do
+    {:ready, entries} = :sys.get_state(Control)
+    entries[id]
+  end
+
+  defp active_timeouts do
+    {:status, _, _, [_, _, _, _, status]} = :sys.get_status(Control)
+
+    [{_count, timeouts}] =
+      for {:data, fields} <- status, {~c"Time-outs", value} <- fields, do: value
+
+    timeouts
   end
 
   defp assert_phase(id, phase) do

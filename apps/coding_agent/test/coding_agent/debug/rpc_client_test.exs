@@ -34,6 +34,61 @@ defmodule CodingAgent.Debug.RpcClientTest do
     %{listener: listener, adapter: adapter, cwd: cwd, key: key, owner: self()}
   end
 
+  test "status answers while handshake and adapter IO are deliberately held", ctx do
+    observe = fn expected_status ->
+      assert {:ok, %{snapshot: %{status: ^expected_status}}} = responsive_status(ctx)
+    end
+
+    {socket, server, _rpc} = start_session!(ctx, observe)
+
+    request = Task.async(fn -> session_call(ctx, %{action: "evaluate", expression: "held"}) end)
+    [evaluate] = receive_requests(socket, 1)
+    assert evaluate["command"] == "evaluate"
+    assert {:ok, %{snapshot: %{status: :stopped}}} = responsive_status(ctx)
+    assert :ok = CodingAgent.ToolResources.bind(server, ctx.owner)
+    reply(socket, evaluate, %{"result" => "released"})
+    assert {:ok, %{evaluation: %{"result" => "released"}}} = Task.await(request, 5_000)
+  end
+
+  test "owner exit cancels a held handshake and its operation task", ctx do
+    owner = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> send(owner, :stop) end)
+    ctx = %{ctx | owner: owner}
+
+    request =
+      Task.async(fn ->
+        session_call(ctx, %{
+          action: "attach",
+          adapter: ctx.adapter,
+          cwd: ctx.cwd,
+          port: ctx.adapter.port,
+          host: ctx.adapter.host,
+          pid: nil
+        })
+      end)
+
+    {:ok, socket} = :gen_tcp.accept(ctx.listener, 5_000)
+    [%{"command" => "initialize"}] = receive_requests(socket, 1)
+    server = SessionServer.whereis(ctx.key)
+    {_, %{operation: %{pid: worker}}} = :sys.get_state(server)
+    server_ref = Process.monitor(server)
+    worker_ref = Process.monitor(worker)
+    assert {:ok, %{snapshot: %{status: :initializing}}} = responsive_status(ctx)
+    send(owner, :stop)
+    assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}, 5_000
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, 5_000
+    assert {:error, "coding session ended"} = Task.await(request, 5_000)
+    assert {:error, :closed} = :gen_tcp.recv(socket, 0, 5_000)
+  end
+
+  defp responsive_status(ctx) do
+    :gen_statem.call(
+      SessionServer.whereis(ctx.key),
+      {:op, %{action: "status"}, %{timeout_ms: 500, signal: nil}},
+      500
+    )
+  end
+
   test "shared correlation handles fragmented, coalesced and out-of-order replies", ctx do
     {client, socket, rpc} = start_client!(ctx)
     {:ok, first} = Client.request(client, "first", %{"text" => "héllo"})
@@ -189,7 +244,7 @@ defmodule CodingAgent.Debug.RpcClientTest do
 
   test "early attach replies survive initialization and configuration without local maps", ctx do
     {_socket, server, rpc} = start_session!(ctx)
-    state = :sys.get_state(server)
+    {_, state} = :sys.get_state(server)
     refute Map.has_key?(state.session, :awaiting)
     refute Map.has_key?(state.session, :responses)
     assert RpcClient.pending_count(rpc) == 0
@@ -260,8 +315,16 @@ defmodule CodingAgent.Debug.RpcClientTest do
     assert RpcClient.pending_count(rpc) == 1
     Process.exit(caller, :kill)
 
-    assert %{session: %{client: client}} = :sys.get_state(server, 5_000)
+    assert {_, %{session: %{client: client}, operation: operation}} =
+             :sys.get_state(server, 5_000)
+
     assert is_pid(client)
+
+    if operation do
+      ref = Process.monitor(operation.pid)
+      assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
+    end
+
     assert RpcClient.pending_count(rpc) == 0
   end
 
@@ -286,7 +349,7 @@ defmodule CodingAgent.Debug.RpcClientTest do
     {client, socket, rpc}
   end
 
-  defp start_session!(ctx) do
+  defp start_session!(ctx, observe \\ fn _status -> :ok end) do
     task =
       Task.async(fn ->
         session_call(ctx, %{
@@ -302,6 +365,7 @@ defmodule CodingAgent.Debug.RpcClientTest do
     {:ok, socket} = :gen_tcp.accept(ctx.listener, 5_000)
     [initialize] = receive_requests(socket, 1)
     assert initialize["command"] == "initialize"
+    observe.(:initializing)
     reply(socket, initialize, %{"supportsConfigurationDoneRequest" => true})
     [attach] = receive_requests(socket, 1)
     assert attach["command"] == "attach"
@@ -312,6 +376,7 @@ defmodule CodingAgent.Debug.RpcClientTest do
     assert :ok = :gen_tcp.send(socket, event("initialized"))
     [configure] = receive_requests(socket, 1)
     assert configure["command"] == "configurationDone"
+    observe.(:configuring)
     reply(socket, configure, %{})
     assert :ok = :gen_tcp.send(socket, event("stopped", %{"reason" => "entry", "threadId" => 1}))
     [stack] = receive_requests(socket, 1)
@@ -320,7 +385,7 @@ defmodule CodingAgent.Debug.RpcClientTest do
     assert {:ok, %{state: :stopped}} = Task.await(task, 5_000)
 
     server = SessionServer.whereis(ctx.key)
-    %{session: %{client: client}} = :sys.get_state(server)
+    {_, %{session: %{client: client}}} = :sys.get_state(server)
     %{rpc: rpc} = :sys.get_state(client)
     {socket, server, rpc}
   end
