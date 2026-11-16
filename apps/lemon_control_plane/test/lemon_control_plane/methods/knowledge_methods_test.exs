@@ -49,6 +49,15 @@ defmodule LemonControlPlane.Methods.KnowledgeMethodsTest do
   defp call(method, params, ctx \\ @operator),
     do: Registry.dispatch(method, params, Map.put(ctx, :conn_pid, self()))
 
+  defp await_loaded(_source, 0), do: flunk("MCP source never committed its configuration")
+
+  defp await_loaded(source, attempts) do
+    unless LemonSkills.McpSource.inventory(source, []).loaded do
+      Process.sleep(10)
+      await_loaded(source, attempts - 1)
+    end
+  end
+
   test "methods are registered with read/admin scopes" do
     methods = Registry.list_methods()
 
@@ -180,6 +189,10 @@ defmodule LemonControlPlane.Methods.KnowledgeMethodsTest do
       start_supervised!(
         {LemonSkills.McpSource, name: name, configs: configs, refresh_interval_ms: 3_600_000}
       )
+
+      # Configuration loads in the source's first worker job (#587); reads
+      # serve the last committed snapshot, which is unloaded until it lands.
+      await_loaded(name, 500)
 
       Application.put_env(:lemon_control_plane, :mcp_source, name)
 
