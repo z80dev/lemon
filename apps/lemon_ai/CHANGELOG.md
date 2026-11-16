@@ -16,6 +16,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   accumulate deltas themselves or use the single accumulator.
 - **Breaking (0.3.0):** `LemonAi.RetryHelper` and `OneshotRetry` are removed
   (#592). Migration: call `LemonAi.Retry` (shared retry/backoff policy) instead.
+- **Breaking (0.3.0):** `Context.add_*` helpers append in chronological order,
+  matching what providers send; they previously prepended, so helper-built
+  multi-turn contexts reached providers reversed and never chained on the
+  Responses WebSocket (#566). The reversing accessor is removed.
 - `LemonAi.EventStream` is the single event-stream implementation (also behind
   `LemonAgent.EventStream`): `push/2` waits without a call timeout and returns
   `{:error, :overflow | :canceled}`; `push!/2` throws on rejection; adds an

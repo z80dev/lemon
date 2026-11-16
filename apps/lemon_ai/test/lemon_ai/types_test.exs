@@ -19,7 +19,7 @@ defmodule LemonAi.TypesTest do
         |> Context.add_user_message("First")
         |> Context.add_user_message("Second")
 
-      messages = Context.get_messages_chronological(ctx)
+      messages = ctx.messages
       assert length(messages) == 2
       assert %UserMessage{content: "First"} = Enum.at(messages, 0)
       assert %UserMessage{content: "Second"} = Enum.at(messages, 1)
@@ -34,11 +34,11 @@ defmodule LemonAi.TypesTest do
 
   describe "Context.add_assistant_message/2" do
     test "appends assistant message to context" do
+      user = %UserMessage{content: "First"}
       assistant = %AssistantMessage{content: [%TextContent{text: "I can help"}]}
 
-      ctx = Context.new() |> Context.add_assistant_message(assistant)
-      assert length(ctx.messages) == 1
-      assert %AssistantMessage{} = hd(ctx.messages)
+      ctx = Context.new(messages: [user]) |> Context.add_assistant_message(assistant)
+      assert ctx.messages == [user, assistant]
     end
   end
 
@@ -50,9 +50,11 @@ defmodule LemonAi.TypesTest do
         content: [%TextContent{text: "file contents"}]
       }
 
-      ctx = Context.new() |> Context.add_tool_result(result)
-      assert length(ctx.messages) == 1
-      assert %ToolResultMessage{tool_call_id: "tc1"} = hd(ctx.messages)
+      user = %UserMessage{content: "First"}
+      assistant = %AssistantMessage{content: [%TextContent{text: "Checking"}]}
+
+      ctx = Context.new(messages: [user, assistant]) |> Context.add_tool_result(result)
+      assert ctx.messages == [user, assistant, result]
     end
   end
 end

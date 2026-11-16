@@ -197,6 +197,9 @@ defmodule LemonAi.Types do
     `system_prompt` accepts a binary or ordered `t:LemonAi.SystemPrompt.block/0`
     maps. Block text includes its own separators; mark directory-derived blocks
     so providers with prefix caching can keep them outside the shared prefix.
+
+    Messages are stored in chronological order (oldest first), matching provider
+    requests and native session history. The `add_*` helpers append to that order.
     """
     @type message ::
             LemonAi.Types.UserMessage.t()
@@ -225,27 +228,17 @@ defmodule LemonAi.Types do
         timestamp: System.system_time(:millisecond)
       }
 
-      %{ctx | messages: [message | ctx.messages]}
+      %{ctx | messages: ctx.messages ++ [message]}
     end
 
     @doc "Add an assistant message to the context"
     def add_assistant_message(%__MODULE__{} = ctx, %LemonAi.Types.AssistantMessage{} = message) do
-      %{ctx | messages: [message | ctx.messages]}
+      %{ctx | messages: ctx.messages ++ [message]}
     end
 
     @doc "Add a tool result to the context"
     def add_tool_result(%__MODULE__{} = ctx, %LemonAi.Types.ToolResultMessage{} = result) do
-      %{ctx | messages: [result | ctx.messages]}
-    end
-
-    @doc """
-    Returns messages in chronological order (oldest first).
-
-    Messages are stored internally in reverse order for O(1) append performance.
-    Use this function when you need messages in chronological order for LLM APIs.
-    """
-    def get_messages_chronological(%__MODULE__{} = ctx) do
-      Enum.reverse(ctx.messages)
+      %{ctx | messages: ctx.messages ++ [result]}
     end
   end
 
