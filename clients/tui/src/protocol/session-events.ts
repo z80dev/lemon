@@ -1,8 +1,4 @@
-import type {
-	SessionEventBatch,
-	SessionEventCursor,
-	SessionsEventsResult,
-} from "./types.ts";
+import type { SessionEventBatch, SessionEventCursor, SessionsEventsResult } from "./types.ts";
 
 /** An unsupported cursor cannot be interpreted as an older sequence scope. */
 export class SessionEventCursorError extends Error {}
@@ -13,9 +9,13 @@ export function parseSessionEventCursor(value: unknown): SessionEventCursor {
 	}
 	const cursor = value as Partial<SessionEventCursor>;
 	if (
-		typeof cursor.sessionId !== "string" || !cursor.sessionId ||
-		typeof cursor.streamId !== "string" || !cursor.streamId ||
-		typeof cursor.seq !== "number" || !Number.isSafeInteger(cursor.seq) || cursor.seq < 0
+		typeof cursor.sessionId !== "string" ||
+		!cursor.sessionId ||
+		typeof cursor.streamId !== "string" ||
+		!cursor.streamId ||
+		typeof cursor.seq !== "number" ||
+		!Number.isSafeInteger(cursor.seq) ||
+		cursor.seq < 0
 	) {
 		throw new SessionEventCursorError("invalid session event cursor");
 	}
@@ -30,14 +30,22 @@ export function parseSessionEventBatch(value: unknown, sessionKey: string): Sess
 	if (!value || typeof value !== "object") throw new Error("invalid session event batch");
 	const batch = value as Partial<SessionEventBatch>;
 	parseSessionEventCursor(batch.cursor);
-	if (!Array.isArray(batch.events) || !batch.events.every((entry) => {
-		if (
-			!entry || typeof entry.event !== "string" ||
-			!entry.payload || typeof entry.payload !== "object" || Array.isArray(entry.payload)
-		) return false;
-		const key = entry.payload.sessionKey;
-		return key == null || key === sessionKey;
-	})) throw new Error("invalid session event projection");
+	if (
+		!Array.isArray(batch.events) ||
+		!batch.events.every((entry) => {
+			if (
+				!entry ||
+				typeof entry.event !== "string" ||
+				!entry.payload ||
+				typeof entry.payload !== "object" ||
+				Array.isArray(entry.payload)
+			)
+				return false;
+			const key = entry.payload.sessionKey;
+			return key == null || key === sessionKey;
+		})
+	)
+		throw new Error("invalid session event projection");
 	return batch as SessionEventBatch;
 }
 

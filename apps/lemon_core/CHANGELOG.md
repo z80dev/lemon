@@ -106,6 +106,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonCore.Rpc.Client` with `Rpc.Framing`, `Rpc.JsonLines`, `Rpc.ContentLength`
+  and `Rpc.Handler`: one request/response owner for stdio and socket peers (#577).
+- `LemonCore.SessionMaintenance` and session lifecycle hooks for index-backed
+  listing and preview-confirm archive maintenance of native journals (#565).
+- `AgentRuntime.Provider` gains cursor-based event replay for sequenced session
+  events (#560).
+- `[runtime.tools] vendor_dialects` config key (default `false`) (#603).
+- `LemonCore.Secrets.Usage`, and `Store` hooks that run in a monitored worker
+  under `:store_hook_budget_ms` (default 5000) instead of inside the Store (#579).
 - `LemonCore.CodeReload` soft-loads modified BEAM files for source development,
   reports modules still in use without killing processes, and supports one retry.
 - `LemonCore.Drain` coordinates a bounded two-phase drain (`:ingress`, then

@@ -44,19 +44,26 @@ defmodule CodingAgent.SessionIndex do
     if Process.get(held_key, false) do
       fun.()
     else
-      :global.trans(
-        {key, self()},
-        fn ->
-          Process.put(held_key, true)
+      result =
+        :global.trans(
+          {key, self()},
+          fn ->
+            Process.put(held_key, true)
 
-          try do
-            fun.()
-          after
-            Process.delete(held_key)
-          end
-        end,
-        [node()]
-      )
+            try do
+              fun.()
+            after
+              Process.delete(held_key)
+            end
+          end,
+          [node()],
+          3
+        )
+
+      case result do
+        :aborted -> {:error, :lock_timeout}
+        result -> result
+      end
     end
   end
 

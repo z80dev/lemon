@@ -19,6 +19,24 @@ defmodule LemonCore.Secrets.MasterKeyTest do
     assert Process.get(:master_key_reads) == 1
   end
 
+  test "a read-cache miss preserves the command's scoped Keychain memo" do
+    opts = [
+      keychain_module: CountingKeychain,
+      key_providers: [:keychain],
+      env_getter: fn _ -> nil end
+    ]
+
+    MasterKey.scoped(fn ->
+      assert MasterKey.status(opts).configured
+      assert {:ok, _, :keychain} = MasterKey.resolve_cached(opts)
+      assert Process.get(:master_key_reads) == 1
+
+      assert {:ok, _, :keychain} = MasterKey.resolve_fresh(opts)
+      assert {:ok, _, :keychain} = MasterKey.resolve_cached(opts)
+      assert Process.get(:master_key_reads) == 2
+    end)
+  end
+
   test "nested scopes memoize successes and release the key after exceptions" do
     opts = [keychain_module: CountingKeychain, key_providers: [:keychain]]
 

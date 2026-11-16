@@ -6,8 +6,9 @@ defmodule LemonAi.Auth.OmpToken do
   JWT expiry. Owner restarts discard the cache; without the owner each resolution
   fetches from omp without creating a table in the calling process.
 
-  Execution is argv-only, with closed stdin, a 20-second deadline and a 64 KiB
-  combined-output limit. Only stable, credential-free errors leave the adapter.
+  Per-key cache admission waits at most 20 seconds for an in-flight resolution.
+  Execution is argv-only, with closed stdin, a separate 20-second deadline and a
+  64 KiB combined-output limit. Only stable, credential-free errors leave the adapter.
   """
 
   alias LemonAi.Auth.{Cache, KimiCodeOAuth, OAuthFlow}
@@ -39,16 +40,30 @@ defmodule LemonAi.Auth.OmpToken do
         Enum.map(~w(HOME XDG_CONFIG_HOME PI_CODING_AGENT_DIR OMP_PROFILE), &System.get_env/1)
 
       key = {__MODULE__, executable, scope}
+      deadline = System.monotonic_time(:millisecond) + @timeout_ms
+      resolve_locked(key, executable, opts, deadline)
+    end
+  end
 
-      case :global.trans(
-             {key, self()},
-             fn -> resolve_cached(key, executable, opts) end,
-             [node()],
-             3
-           ) do
-        :aborted -> {:error, :omp_timeout}
-        result -> result
-      end
+  defp resolve_locked(key, executable, opts, deadline) do
+    case :global.trans(
+           {key, self()},
+           fn -> resolve_cached(key, executable, opts) end,
+           [node()],
+           0
+         ) do
+      :aborted ->
+        remaining = deadline - System.monotonic_time(:millisecond)
+
+        if remaining > 0 do
+          Process.sleep(min(25, remaining))
+          resolve_locked(key, executable, opts, deadline)
+        else
+          {:error, :omp_timeout}
+        end
+
+      result ->
+        result
     end
   end
 

@@ -141,7 +141,11 @@ export function parseSessionsContext(raw: unknown): SessionsContextResult {
 function promptCache(raw: unknown): { explanation: string } | undefined {
 	const explanation = pickString(raw, "explanation");
 	if (!explanation) return undefined;
-	return { explanation: explanation.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 240) };
+	const printable = Array.from(explanation, (char) => {
+		const code = char.charCodeAt(0);
+		return code < 0x20 || code === 0x7f ? " " : char;
+	}).join("");
+	return { explanation: printable.slice(0, 240) };
 }
 
 function autoCompaction(raw: unknown): ContextAutoCompaction | null {

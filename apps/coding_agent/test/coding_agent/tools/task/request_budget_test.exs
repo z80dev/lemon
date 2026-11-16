@@ -29,6 +29,7 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
     def handle_call(:get_stats, _from, state), do: {:reply, state, state}
     def handle_call(:get_state, _from, state), do: {:reply, state, state}
     def handle_call(:get_messages, _from, state), do: {:reply, state.messages, state}
+    def handle_call(:streaming?, _from, state), do: {:reply, state.is_streaming, state}
 
     def handle_call({:subscribe, pid, :direct, opts}, _from, state) do
       if state.delivery, do: LemonCore.Bus.Delivery.close(state.delivery)

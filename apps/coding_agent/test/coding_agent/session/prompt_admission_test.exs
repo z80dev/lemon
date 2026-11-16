@@ -58,7 +58,7 @@ defmodule CodingAgent.Session.PromptAdmissionTest do
     assert Session.streaming?(session)
     assert {:error, :busy} = Session.prompt(session, "Also rejected")
     send(producer, :release_stream)
-    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _cursor}, 5_000
 
     refute Session.streaming?(session)
     assert Session.get_stats(session).turn_count == 1

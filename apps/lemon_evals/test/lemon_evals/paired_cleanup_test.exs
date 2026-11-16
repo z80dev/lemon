@@ -285,6 +285,10 @@ defmodule LemonEvals.PairedCleanupTest do
     [path] = System.argv()
     identity = #{inspect(identity)}
     Application.put_env(:coding_agent, :process_store_path, path)
+    # ProcessStore publishes lifecycle changes; start only its bus, not a runtime.
+    {:ok, _} = Application.ensure_all_started(:phoenix_pubsub)
+    {:ok, _pubsub} =
+      Supervisor.start_link([{Phoenix.PubSub, name: LemonCore.PubSub}], strategy: :one_for_one)
     {:ok, server} = CodingAgent.ProcessStoreServer.start_link()
     "live" = CodingAgent.ProcessStore.new_process(%{
       id: "live", backend: :local, workload_identity: identity,

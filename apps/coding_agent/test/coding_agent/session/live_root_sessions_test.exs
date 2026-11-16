@@ -91,19 +91,6 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     assert counts(ctx.events, id) == %{journal_load: 0, environment_capture: 1}
   end
 
-  test "invocation overrides retain resolved provider transport settings" do
-    state = %Session{
-      tool_opts: [stream_options: %{provider_options: %{other_option: "caller"}}]
-    }
-
-    {_, options} =
-      CodingAgent.Session.Invocation.stream(state, %LemonAi.Types.StreamOptions{
-        provider_options: %{responses_websocket: true}
-      })
-
-    assert options.provider_options == %{responses_websocket: true, other_option: "caller"}
-  end
-
   test "Responses transport survives retained turns and dies with its live session", ctx do
     ctx = responses_context(ctx)
     {first, session, id} = start_turn(ctx, "first websocket turn")
@@ -187,6 +174,28 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     end
   end
 
+  test "each root checkout binds fresh stream options before provider dispatch", ctx do
+    {run, session, id} = start_turn(ctx, "initial options")
+    assert_receive {:provider, provider, _, _}, 5_000
+    send(provider, {:respond, "initial answer"})
+    complete(run)
+    original_opts = Session.get_state(session).tool_opts
+
+    for {temperature, max_tokens} <- [{0.2, 512}, {0.7, 1_024}] do
+      options = %LemonAi.Types.StreamOptions{temperature: temperature, max_tokens: max_tokens}
+      opts = Keyword.put(original_opts, :stream_options, options)
+      assert {:ok, ^session} = RootLifecycle.checkout(id, opts)
+      assert {:ok, events} = Session.subscribe(session, mode: :stream)
+      assert :ok = Session.prompt(session, "rebound options")
+      assert_receive {:provider, provider, _, actual}, 5_000
+      assert actual.temperature == temperature
+      assert actual.max_tokens == max_tokens
+      send(provider, {:respond, "rebound answer"})
+      Enum.to_list(LemonAgent.EventStream.events(events))
+      assert :ok = RootLifecycle.retain(session)
+    end
+  end
+
   test "TTL parking restores the journal once and does not recapture its environment", ctx do
     {first, session, id} = start_turn(ctx, "before parking")
     assert_receive {:provider, provider, before_parking, _}, 5_000
@@ -197,7 +206,7 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     # Zero TTL uses the production timer path, not a sleep or a polling race.
     assert :ok = GenServer.call(session, {:retain_root, 0})
     assert_receive {:DOWN, ^ref, :process, ^session, :normal}, 5_000
-    assert :error = SessionRegistry.lookup(id)
+    CodingAgent.AsyncHelpers.assert_eventually(fn -> SessionRegistry.lookup(id) == :error end)
 
     {second, restored, ^id} = start_turn(ctx, "after parking", id)
     refute restored == session

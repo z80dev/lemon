@@ -2760,7 +2760,7 @@ checkpoints, mutation locks and background-process semantics remain unchanged.
 omitting it retains the native unique-match behaviour.
 
 Sources: Claude Code
-[`sdk-tools.d.ts` at 2.1.325](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.325)
+`sdk-tools.d.ts` in `@anthropic-ai/claude-code` version 2.1.325
 (`FileReadInput`, `FileEditInput`, `BashInput`); Codex
 [`apply_patch.lark`](https://github.com/openai/codex/blob/b016cd18472588606c04af565528c4cd6746a41f/codex-rs/core/assets/tools/apply_patch.lark)
 and its

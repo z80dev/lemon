@@ -3,13 +3,16 @@ defmodule CodingAgent.StateStorageContractTest do
 
   @lib_dir Path.expand("../../lib", __DIR__)
   @named_table_owners %{
+    "coding_agent/durable_table.ex" => [
+      CodingAgent.ParentQuestionStoreServer,
+      CodingAgent.ProcessStoreServer,
+      CodingAgent.RunGraphServer,
+      CodingAgent.TaskProgressBindingServer,
+      CodingAgent.TaskStoreServer
+    ],
     "coding_agent/file_read_tracker.ex" => CodingAgent.FileReadTracker,
-    "coding_agent/parent_question_store_server.ex" => CodingAgent.ParentQuestionStoreServer,
-    "coding_agent/process_store_server.ex" => CodingAgent.ProcessStoreServer,
-    "coding_agent/run_graph_server.ex" => CodingAgent.RunGraphServer,
     "coding_agent/runtime_tables.ex" => CodingAgent.RuntimeTables,
     "coding_agent/task_progress_binding_server.ex" => CodingAgent.TaskProgressBindingServer,
-    "coding_agent/task_store_server.ex" => CodingAgent.TaskStoreServer,
     "coding_agent/tools/todo_store_owner.ex" => CodingAgent.Tools.TodoStoreOwner,
     "coding_agent/workspace_reads.ex" => CodingAgent.WorkspaceReads
   }
@@ -80,7 +83,9 @@ defmodule CodingAgent.StateStorageContractTest do
 
     children = descendants(CodingAgent.Supervisor)
 
-    for owner <- Map.values(@named_table_owners) do
+    owners = @named_table_owners |> Map.values() |> List.flatten() |> Enum.uniq()
+
+    for owner <- owners do
       assert {^owner, pid, :worker, [^owner]} = List.keyfind(children, owner, 0)
       assert is_pid(pid)
     end

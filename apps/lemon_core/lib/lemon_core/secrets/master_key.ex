@@ -30,11 +30,13 @@ defmodule LemonCore.Secrets.MasterKey do
   which logs a deprecation warning on first use. Re-encrypting under a proper
   key is the real fix: `lemon secrets rotate-key` (`LemonCore.Secrets.KeyRotation`).
 
-  Secret reads use `resolve_cached/1`, a single VM-wide `:persistent_term`
-  entry keyed by caller options and provider configuration. Only successful
-  resolutions are retained. Writers still resolve freshly under `Secrets.Lock`
-  so another OS process cannot leave them using a retired key. Rotation clears
-  the cache under that same lease; cache misses are serialized with invalidation.
+  Secret reads use `resolve_cached/1`, a single slot in the supervised
+  `LemonCore.RuntimeCache` ETS table, keyed by caller options and provider
+  configuration. Only successful resolutions are retained; owner restarts discard
+  them. Without the owner, reads resolve without caching. Writers still resolve
+  freshly under `Secrets.Lock` so another OS process cannot leave them using a
+  retired key. Rotation clears the cache under that same lease; cache misses are
+  serialized with invalidation.
 
   ## Scoped resolution
 
@@ -46,6 +48,7 @@ defmodule LemonCore.Secrets.MasterKey do
 
   require Logger
 
+  alias LemonCore.RuntimeCache
   alias LemonCore.Secrets.KeyProvider
 
   @master_key_bytes 32
@@ -87,28 +90,27 @@ defmodule LemonCore.Secrets.MasterKey do
 
   The single cache slot bounds retained key material even for callers supplying
   different provider options. External key edits require a fresh resolution or
-  process restart; supported rotation invalidates the cache automatically.
+  cache-owner restart; supported rotation invalidates the cache automatically.
   """
   @spec resolve_cached(keyword()) :: {:ok, binary(), source()} | {:error, atom() | tuple()}
   def resolve_cached(opts \\ []) do
     context = {opts, Application.get_env(:lemon_core, LemonCore.Secrets, [])}
 
-    case :persistent_term.get(@cache_key, nil) do
+    case RuntimeCache.get(@cache_key) do
       {^context, result} ->
         result
 
       _ ->
         cache_lock(fn ->
-          case :persistent_term.get(@cache_key, nil) do
+          case RuntimeCache.get(@cache_key) do
             {^context, result} ->
               result
 
             _ ->
-              Process.delete({__MODULE__, :memo})
               result = resolve(opts)
 
               if match?({:ok, _, _}, result) do
-                :persistent_term.put(@cache_key, {context, result})
+                cache_put({context, result})
               end
 
               result
@@ -120,15 +122,21 @@ defmodule LemonCore.Secrets.MasterKey do
   @doc false
   def with_cache_invalidation(fun) do
     cache_lock(fn ->
-      :persistent_term.erase(@cache_key)
+      cache_put(nil)
       Process.delete({__MODULE__, :memo})
 
       try do
         fun.()
       after
-        :persistent_term.erase(@cache_key)
+        cache_put(nil)
       end
     end)
+  end
+
+  defp cache_put(value) do
+    RuntimeCache.put(@cache_key, value)
+  rescue
+    ArgumentError -> :ok
   end
 
   defp cache_lock(fun) do
@@ -137,19 +145,26 @@ defmodule LemonCore.Secrets.MasterKey do
     if Process.get(held, false) do
       fun.()
     else
-      :global.trans(
-        {@cache_key, self()},
-        fn ->
-          Process.put(held, true)
+      result =
+        :global.trans(
+          {@cache_key, self()},
+          fn ->
+            Process.put(held, true)
 
-          try do
-            fun.()
-          after
-            Process.delete(held)
-          end
-        end,
-        [node()]
-      )
+            try do
+              fun.()
+            after
+              Process.delete(held)
+            end
+          end,
+          [node()],
+          3
+        )
+
+      case result do
+        :aborted -> {:error, :lock_timeout}
+        result -> result
+      end
     end
   end
 
@@ -164,8 +179,10 @@ defmodule LemonCore.Secrets.MasterKey do
     # Rotation separately holds with_cache_invalidation/1 around the key switch.
     Process.delete({__MODULE__, :memo})
     result = resolve(opts)
-    cache_lock(fn -> :persistent_term.erase(@cache_key) end)
-    result
+
+    with :ok <- cache_lock(fn -> cache_put(nil) end) do
+      result
+    end
   end
 
   @doc """

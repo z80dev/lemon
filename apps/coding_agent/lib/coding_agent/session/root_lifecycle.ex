@@ -70,5 +70,10 @@ defmodule CodingAgent.Session.RootLifecycle do
     :exit, {:shutdown, _} -> {:error, :session_lost}
   end
 
-  defp locked(fun), do: :global.trans({__MODULE__, self()}, fun, [node()])
+  defp locked(fun) do
+    case :global.trans({__MODULE__, self()}, fun, [node()], 3) do
+      :aborted -> {:error, :lock_timeout}
+      result -> result
+    end
+  end
 end

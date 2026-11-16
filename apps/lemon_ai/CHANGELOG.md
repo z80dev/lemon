@@ -65,6 +65,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonAi.SystemPrompt`: `Context.system_prompt` accepts a binary or ordered
+  blocks, with directory-derived blocks kept after the cache breakpoint (#563).
+- `LemonAi.Auth.Cache`: supervised ETS owner replacing mutable `:persistent_term`
+  token and model caches (#595).
 - `LemonAi.Auth.OmpAuthBroker` gains `credentials/3` (every account for a
   provider in selection order), an `id:` option on `credential/3`, `block/5`
   (catch-all rate-limit block via `POST /v1/credential/:id/block`, also applied

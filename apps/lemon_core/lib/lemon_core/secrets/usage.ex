@@ -9,7 +9,8 @@ defmodule LemonCore.Secrets.Usage do
   lost on a conflict, worker restart or VM shutdown; they are not an audit log.
 
   The default 100 ms interval is the usage-metadata batching policy, not a
-  credential persistence delay. Tests can flush explicitly without sleeping.
+  credential persistence delay. Metadata lists flush pending touches before reading;
+  tests can also flush explicitly without sleeping.
   """
 
   use GenServer
@@ -28,7 +29,11 @@ defmodule LemonCore.Secrets.Usage do
   end
 
   @doc false
-  def flush(server \\ __MODULE__), do: GenServer.call(server, :flush)
+  def flush(server \\ __MODULE__) do
+    GenServer.call(server, :flush)
+  catch
+    :exit, {:noproc, _} -> :ok
+  end
 
   @impl true
   def init(opts) do

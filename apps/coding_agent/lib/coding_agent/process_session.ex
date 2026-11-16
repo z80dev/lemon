@@ -860,6 +860,7 @@ defmodule CodingAgent.ProcessSession do
   defp request_workload_stop(state, signal, reason) do
     case LemonCore.ProcessGroup.terminate(state.workload_identity,
            signal: signal,
+           grace_ms: 2_000,
            root_exited: state.root_exited
          ) do
       {:ok, identity} ->

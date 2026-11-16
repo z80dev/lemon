@@ -39,12 +39,14 @@ defmodule CodingAgent.Session.JobsTest do
     child = "child-#{suffix}"
 
     # Job ids embed the suffix, so cleanup needs no state held by the test process.
+    # Delete through the owner so DETS and its expiry indexes cannot resurrect
+    # synthetic running jobs as held unknown workloads in a later fixture.
     on_exit(fn ->
       marker = "-#{suffix}-"
 
       for {id, _record, _logs} <- :ets.tab2list(:coding_agent_processes),
           String.contains?(id, marker),
-          do: :ets.delete(:coding_agent_processes, id)
+          do: assert(:ok = ProcessStore.delete(id))
     end)
 
     {:ok, key: key, root: root, child: child, suffix: suffix}

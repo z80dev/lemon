@@ -99,6 +99,35 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     :ok
   end
 
+  test "an already-dead parent cancels the task before its run can start" do
+    {parent, monitor} = spawn_monitor(fn -> :ok end)
+    assert_receive {:DOWN, ^monitor, :process, ^parent, :normal}
+    owner = self()
+
+    result =
+      Task.execute(
+        "dead-parent",
+        %{"description" => "Orphaned task", "prompt" => "Never execute", "auto_followup" => true},
+        nil,
+        nil,
+        "/tmp",
+        session_pid: parent,
+        session_key: "agent:main:main",
+        run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator,
+        run_override: fn _on_update, _signal ->
+          send(owner, :unexpected_execution)
+          %LemonAgent.Types.AgentToolResult{content: [], details: %{status: "completed"}}
+        end
+      )
+
+    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+      match?({:ok, %{status: :cancelled}}, TaskStore.get_record(result.details.task_id))
+    end)
+
+    refute_receive :unexpected_execution
+    refute_received {:router_submit, %RunRequest{}, _}
+  end
+
   describe "execute/6 - async auto followup" do
     test "omitted async defaults to background launch" do
       result =
@@ -289,7 +318,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
     test "queue_mode followup falls back to router when session pid is unavailable" do
       {parent, parent_ref, batcher} = start_controlled_followup_parent()
-
       parent_cwd = "/tmp/task_async_parent"
 
       result =

@@ -1179,7 +1179,9 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:invocation_stream, model, options}, _from, state) do
-    {stream_fn, options} = CodingAgent.Session.Invocation.stream(state, options)
+    # Stream options are bound once per checkout (#564); only the volatile
+    # Responses transport handle is attached at provider dispatch.
+    stream_fn = CodingAgent.Session.Invocation.stream_fn(state)
     {state, options} = CodingAgent.Session.ResponsesTransport.prepare(state, model, options)
     {:reply, {stream_fn, options}, state}
   end

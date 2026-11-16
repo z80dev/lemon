@@ -59,7 +59,9 @@ describe("row rendering", () => {
 	test("explains a prompt digest cache miss", () => {
 		const raw = {
 			...reportedContextFixture("s1"),
-			promptCache: { explanation: "Prompt digest changed; the previous prompt cache prefix may miss." },
+			promptCache: {
+				explanation: "Prompt digest changed; the previous prompt cache prefix may miss.",
+			},
 		};
 		expect(renderPlain(panel(raw).component.render(100))).toContain("Prompt digest changed");
 	});

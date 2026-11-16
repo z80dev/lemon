@@ -46,7 +46,9 @@ defmodule CodingAgent.McpApprovalTest do
         fn _ ->
           send(owner, :approval)
           {:ok, :approved, :once}
-        end, tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(cwd))
+        end,
+        tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(cwd)
+      )
 
     assert %AgentToolResult{content: [%TextContent{text: "remote result"}]} =
              tool.execute.("approved", %{}, nil, nil)

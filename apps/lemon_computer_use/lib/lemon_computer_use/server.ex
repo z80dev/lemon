@@ -270,7 +270,6 @@ defmodule LemonComputerUse.Server do
 
     {:noreply,
      state
-     |> Map.merge(%{port: nil, os_pid: nil})
      |> bridge_down({:bridge_exited, code})
      |> run_next()}
   end
@@ -278,7 +277,6 @@ defmodule LemonComputerUse.Server do
   def handle_info({:EXIT, port, reason}, %{port: port} = state) do
     {:noreply,
      state
-     |> Map.merge(%{port: nil, os_pid: nil})
      |> bridge_down({:bridge_exited, safe_reason(reason)})
      |> run_next()}
   end
@@ -334,8 +332,8 @@ defmodule LemonComputerUse.Server do
 
   @impl true
   def terminate(_reason, state) do
-    stop_rpc(state, {:error, {:bridge_exited, :server_down}})
     stop_bridge(state)
+    stop_rpc(state, {:error, {:bridge_exited, :server_down}})
     cancel_elicitations(state)
     :ok
   end
@@ -425,8 +423,9 @@ defmodule LemonComputerUse.Server do
 
       {:error, reason} ->
         reason = {:bridge_exited, safe_reason(reason)}
+        state = bridge_down(state, reason)
         if match?({:call, _}, op), do: GenServer.reply(from, {:error, reason})
-        bridge_down(state, reason)
+        state
     end
   end
 
@@ -749,8 +748,8 @@ defmodule LemonComputerUse.Server do
   end
 
   defp bridge_down(state, reason) do
-    stop_rpc(state, {:error, reason})
     stop_bridge(state)
+    stop_rpc(state, {:error, reason})
     state = cancel_elicitations(state)
 
     Enum.each(state.turns, fn {_key, turn} ->

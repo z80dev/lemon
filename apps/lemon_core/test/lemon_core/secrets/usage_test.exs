@@ -84,6 +84,7 @@ defmodule LemonCore.Secrets.UsageTest do
 
   test "an unavailable worker is best effort and does not write synchronously", ctx do
     assert :ok = Usage.touch(ctx.store, ctx.key, ctx.entry, :absent_secrets_usage_worker)
+    assert :ok = Usage.flush(:absent_secrets_usage_worker)
     assert Store.get(ctx.store, Secrets.table(), ctx.key) == ctx.entry
   end
 

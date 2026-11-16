@@ -361,6 +361,16 @@ defmodule LemonAgent.Agent do
   end
 
   @doc """
+  Replaces options for subsequent turns, owned by the currently selected model.
+
+  Provider switches still rebuild and sanitize these options in the loop.
+  """
+  @spec set_stream_options(GenServer.server(), StreamOptions.t()) :: :ok
+  def set_stream_options(agent, %StreamOptions{} = options) do
+    GenServer.call(agent, {:set_stream_options, options})
+  end
+
+  @doc """
   Sets the thinking/reasoning level.
 
   Valid levels: :off, :auto, :minimal, :low, :medium, :high, :xhigh
@@ -690,6 +700,11 @@ defmodule LemonAgent.Agent do
          model_routing: model_routing,
          stream_options_model: state.stream_options_model || model
      }}
+  end
+
+  def handle_call({:set_stream_options, options}, _from, state) do
+    {:reply, :ok,
+     %{state | stream_options: options, stream_options_model: state.agent_state.model}}
   end
 
   def handle_call({:set_thinking_level, level}, _from, state) do

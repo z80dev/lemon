@@ -626,6 +626,7 @@ defmodule LemonCore.Secrets do
   def list(opts \\ []) do
     with {:ok, owner} <- normalize_owner(opts),
          {:ok, server} <- storage_owner(opts),
+         :ok <- Usage.flush(),
          {:ok, rows} <- Store.fetch_all(server, @table),
          {:ok, _} <- Receipts.find(rows, owner, nil, nil) do
       rows

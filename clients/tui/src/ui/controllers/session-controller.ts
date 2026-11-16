@@ -31,8 +31,8 @@ import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import { METHOD } from "../../protocol/methods.ts";
 import {
 	parseSessionEventCursor,
-	sameSessionEventStream,
 	SessionEventCursorError,
+	sameSessionEventStream,
 } from "../../protocol/session-events.ts";
 import type {
 	ApprovalRequestedEvent,
@@ -536,12 +536,19 @@ export class SessionController {
 					throw new Error("session event replay did not fill the live gap");
 			} catch (error) {
 				if (!this.#isCurrentRecovery(session, selection, generation)) return "stopped";
-				this.#notice(`could not replay ${session.key}: ${describeError(error)}`, "warning", session);
+				this.#notice(
+					`could not replay ${session.key}: ${describeError(error)}`,
+					"warning",
+					session,
+				);
 				if (error instanceof SessionEventCursorError) {
 					session.eventSnapshotRequired = true;
 					return "snapshot";
 				}
-				if (error instanceof ControlPlaneError && ["FORBIDDEN", "UNAUTHORIZED"].includes(error.code))
+				if (
+					error instanceof ControlPlaneError &&
+					["FORBIDDEN", "UNAUTHORIZED"].includes(error.code)
+				)
 					this.#replaceApprovals(session.key, []);
 				return "stopped";
 			}
@@ -624,7 +631,11 @@ export class SessionController {
 			} catch (error) {
 				session.eventSnapshotRequired = true;
 				session.eventRecovery = true;
-				this.#notice(`could not recover ${session.key}: ${describeError(error)}`, "warning", session);
+				this.#notice(
+					`could not recover ${session.key}: ${describeError(error)}`,
+					"warning",
+					session,
+				);
 				return;
 			}
 			// A send receipt can move the active run without a protocol event.
@@ -674,7 +685,8 @@ export class SessionController {
 				session.snapshotIdentity?.revision !== result.identity.revision ||
 				session.snapshotIdentity?.branchId !== result.identity.branchId ||
 				Boolean(
-					session.eventCursor && eventCursor &&
+					session.eventCursor &&
+						eventCursor &&
 						!sameSessionEventStream(session.eventCursor, eventCursor),
 				);
 			if (branchChanged) {
@@ -696,7 +708,7 @@ export class SessionController {
 			session.recoveredCompletion = undefined;
 			const runId = result.identity.runId;
 			session.recoveredSnapshotRunId = terminalAdvance
-				? runId ?? undefined
+				? (runId ?? undefined)
 				: !branchChanged && session.recoveredSnapshotRunId === runId
 					? session.recoveredSnapshotRunId
 					: undefined;

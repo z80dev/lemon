@@ -41,6 +41,86 @@ defmodule CodingAgent.ProcessStoreServerTest do
     {:ok, name: name, tmp_dir: tmp_dir, dets_path: dets_path}
   end
 
+  test "restored unwitnessed lost rows do not consume managed admission", %{
+    name: name,
+    dets_path: path
+  } do
+    now = System.system_time(:second)
+    fingerprint = :crypto.hash(:sha256, "managed-reservation")
+    deadline = System.system_time(:millisecond) + 60_000
+
+    seed_processes!(path, [
+      {"legacy-running", %{id: "legacy-running", status: :running, inserted_at: now}, []},
+      {"unmanaged-lost",
+       %{id: "unmanaged-lost", status: :lost, capacity_held: true, inserted_at: now}, []},
+      {"managed-held",
+       %{
+         id: "managed-held",
+         status: :running,
+         owner: "owner",
+         launch_fingerprint: fingerprint,
+         capacity_held: true,
+         termination_confirmed: false,
+         inserted_at: now
+       }, []}
+    ])
+
+    pid = start_server!(name, path, background_process_limit: 1)
+    assert %{occupied: 1, unknown: 1, active: 0} = GenServer.call(pid, :background_counts)
+
+    assert [{"legacy-running", %{status: :lost}, []}] =
+             :ets.lookup(:coding_agent_processes, "legacy-running")
+
+    assert :new =
+             GenServer.call(
+               pid,
+               {:register_launch, "next", "owner", fingerprint, deadline, self()}
+             )
+
+    assert {:error, :capacity_full} =
+             GenServer.call(pid, {:claim_launch, "next", "owner", fingerprint})
+
+    assert :ok =
+             GenServer.call(pid, {:confirm_termination, "managed-held", :external_confirmed})
+
+    assert :ok = GenServer.call(pid, {:claim_launch, "next", "owner", fingerprint})
+    assert %{occupied: 1} = GenServer.call(pid, :background_counts)
+  end
+
+  test "losing an unwitnessed legacy owner releases its charge and wakes admission", %{
+    name: name,
+    dets_path: path
+  } do
+    id = "legacy-live-owner"
+    test = self()
+
+    {owner, monitor} =
+      spawn_monitor(fn ->
+        {:ok, _} = Registry.register(CodingAgent.ProcessRegistry, id, nil)
+        send(test, :legacy_owner_registered)
+
+        receive do
+          :finish -> :ok
+        end
+      end)
+
+    on_exit(fn -> Process.exit(owner, :kill) end)
+    assert_receive :legacy_owner_registered
+
+    seed_processes!(path, [
+      {id, %{id: id, status: :running, inserted_at: System.system_time(:second)}, []}
+    ])
+
+    pid = start_server!(name, path, background_process_limit: 1)
+    assert %{occupied: 1, active: 1} = GenServer.call(pid, :background_counts)
+    assert :ok = GenServer.call(pid, {:subscribe_capacity, self()})
+    send(owner, :finish)
+    assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}
+    assert_receive :background_capacity_changed
+    assert %{occupied: 0, active: 0} = GenServer.call(pid, :background_counts)
+    assert GenServer.call(pid, :background_capacity_available)
+  end
+
   test "restart marks a flushed running tail lost without losing capture metadata", %{
     name: name,
     dets_path: dets_path
@@ -360,6 +440,13 @@ defmodule CodingAgent.ProcessStoreServerTest do
       assert state.live_ref_index == %{}
       assert state.live_identity_index == %{}
     end
+  end
+
+  defp seed_processes!(path, rows) do
+    table = :coding_agent_processes_dets
+    assert {:ok, ^table} = :dets.open_file(table, file: String.to_charlist(path), type: :set)
+    :ok = :dets.insert(table, rows)
+    :ok = :dets.close(table)
   end
 
   defp start_server!(name, dets_path, opts) do
