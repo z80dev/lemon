@@ -150,6 +150,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Concurrent extension loads no longer silently return no extensions when the
+  reload lock is busy; they wait a bounded time and log an explicit error.
+  Reloading one session's extensions no longer purges another session's.
+- Debugger RPC operations release their abort subscription and caller monitor
+  before replying.
 - Interrupted tool calls (abort, timeout, crash, reload repair, steering skip)
   report one structured `unknown` or `not_started` outcome and tell the model
   not to repeat an uncertain call (#552).

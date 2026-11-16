@@ -36,6 +36,7 @@ defmodule CodingAgent.Debug.SessionServer do
   Named event-wait timeouts are cancelled when their waiter is answered. The
   idle timeout is armed only between operations; unrelated adapter events do
   not renew it. Abort and caller death wake the current waiter by message.
+  Operation subscriptions and caller monitors are released before replying.
 
   Lifecycle: the adapter process tree is killed on `terminate`, when the
   debuggee terminates, when a launch/attach handshake fails or is aborted, when
@@ -474,9 +475,9 @@ defmodule CodingAgent.Debug.SessionServer do
 
   defp reply_operation(state, reply) do
     operation = state.operation
-    if operation.from, do: :gen_statem.reply(operation.from, reply)
     if operation.caller_ref, do: Process.demonitor(operation.caller_ref, [:flush])
     AbortSignal.unsubscribe(operation.signal)
+    if operation.from, do: :gen_statem.reply(operation.from, reply)
     %{state | operation: %{operation | from: nil, caller_ref: nil}}
   end
 

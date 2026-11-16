@@ -405,6 +405,21 @@ defmodule CodingAgent.ToolRegistry do
     :ok
   end
 
+  @doc """
+  Unload removed extension modules only when no cached inventory still uses them.
+
+  The reloading cwd must invalidate and replace its inventory before calling this.
+  Other working directories retain both their inventory and loaded module code.
+  """
+  @spec unload_uncached_extensions([module()]) :: :ok
+  def unload_uncached_extensions(modules) when is_list(modules) do
+    in_use =
+      cache_tab2list()
+      |> Enum.flat_map(fn {_key, snapshot} -> snapshot.extensions end)
+
+    Extensions.unload_extensions(modules -- in_use)
+  end
+
   @typedoc """
   A tool conflict report entry.
 
