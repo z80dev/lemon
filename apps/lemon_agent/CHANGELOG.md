@@ -62,9 +62,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   Migration: update custom queue hooks to the acknowledged contract and use
   `Agent.has_steering_messages?/2` for queue checks.
 - **Breaking (0.3.0):** retry helpers move to `LemonAi.Retry` (#592).
-- **Breaking:** `AgentLoopConfig.emit_system_prompt`, `.stream_rules` and
-  `.on_stream_rule` moved into the new `.hooks` map (same keys, defaults `false`,
-  `[]`, `nil`). Struct literals and field reads using the old fields must change.
+- Note: `AgentLoopConfig.emit_system_prompt`, `.stream_rules` and
+  `.on_stream_rule` live in the new `.hooks` map (same keys, defaults `false`,
+  `[]`, `nil`); use `.hooks` for struct literals and field reads.
 - `LemonAgent.EventStream` is a facade over the single `LemonAi.EventStream`;
   `push/2` returns `:ok | {:error, :overflow | :canceled}` and no longer times
   out, so producers must handle rejection (#570).

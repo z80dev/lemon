@@ -150,6 +150,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Source and packaged Erlang distribution now install the cookie before the
+  listener starts, without putting it in any VM or release-client argv. OTP 29
+  expands both `ERL_FLAGS` and `vm.args` into argv, so neither is a safe cookie
+  channel. The private `0600` cookie and explicit environment selection remain;
+  source `--cookie` is removed (#551 follow-up).
+
+- TUI session-event replay consumes the server's canonical `entries` page field;
+  shared server/client wire fixtures guard cursor, batch and pagination shapes (#560).
+
 - Concurrent extension loads no longer silently return no extensions when the
   reload lock is busy; they wait a bounded time and log an explicit error.
   Reloading one session's extensions no longer purges another session's.

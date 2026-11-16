@@ -596,6 +596,19 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core]
     },
     %{
+      name: :lemon_feature_crash_resume,
+      env_var: "LEMON_FEATURE_CRASH_RESUME",
+      aliases: [],
+      type: :string,
+      default: "off",
+      doc:
+        "Rollout state for `features.crash_resume` (hard-crash continuation): `off`, `opt-in`, `on` or `default-on`. Overrides `[features]` TOML.",
+      secret?: false,
+      required?: false,
+      area: :runtime,
+      apps: [:lemon_core]
+    },
+    %{
       name: :lemon_env,
       env_var: "LEMON_ENV",
       aliases: [],

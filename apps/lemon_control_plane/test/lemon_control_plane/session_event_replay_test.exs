@@ -121,8 +121,10 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     assert Jason.decode!(Jason.encode!(result)) == fixture["page"]
 
     set_result(c, page([], cursor(2)))
+
     assert {:ok, result} =
              SessionsEvents.handle(Map.put(params(c), "cursor", cursor(2)), ctx())
+
     assert Jason.decode!(Jason.encode!(result)) == fixture["empty"]
 
     set_result(c, {:error, :cursor_expired})
