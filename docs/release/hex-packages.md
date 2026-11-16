@@ -23,7 +23,7 @@ lemon_ai → lemon_core → lemon_agent → lemon_memory → lemon_platform_test
 |---|---|---|
 | `lemon_ai` | 0.3.0 | none |
 | `lemon_core` | 0.3.0 | none |
-| `lemon_agent` | 0.2.1 | `lemon_ai ~> 0.3`, `lemon_core ~> 0.3` |
+| `lemon_agent` | 0.3.0 | `lemon_ai ~> 0.3`, `lemon_core ~> 0.3` |
 | `lemon_memory` | 0.2.0 | `lemon_core` |
 | `lemon_platform_test` | 0.2.0 | `lemon_core`, `lemon_memory`, `lemon_ai`, `lemon_agent` (all optional) |
 
@@ -35,13 +35,15 @@ path dependency on a checkout.
 2026-08-11 cannot be installed (below). Sibling requirements have a minimum
 matching the APIs used by each package; none permits the retired 0.1 releases.
 
-### Consolidation API migration (#592)
+### API migration for the 0.3 line (#559, #571, #592)
 
 These changes join the current unreleased package cycle; they do not imply that
 new versions have been published. `lemon_core` stays on its already-unreleased
 0.3.0 line rather than stacking another minor bump.
 
-- **`lemon_ai` 0.3.0 (breaking):** remove `LemonAi.Providers.RetryHelper` and
+- **`lemon_ai` 0.3.0 (breaking):** provider content events are delta-only
+  (#571): starts, deltas and block ends no longer carry an `AssistantMessage`
+  snapshot (see the `lemon_ai` README). Remove `LemonAi.Providers.RetryHelper` and
   `LemonAi.OneshotRetry`. Use `LemonAi.Retry` and `%LemonAi.Retry.Policy{}`.
   Retryability classification belongs to `LemonAi.Error`; provider HTTP retry
   timing, one-shot attempts and cancellation-aware waiting belong to
@@ -63,10 +65,14 @@ new versions have been published. `lemon_core` stays on its already-unreleased
   `LemonChannels.Outbox.RateLimiter`, `LemonControlPlane.A2A.RateLimiter` and
   `LemonWeb.LoginThrottle` implementations to `LemonCore.RateLimiter`; their
   application-owned registered process/table identities remain unchanged.
-- **`lemon_agent` 0.2.1 (patch):** no public option, event or return-shape
-  change. The loop uses `LemonAi.Retry` while preserving one transient retry
-  budget per response and provider `max_attempts: 1`. Package dependencies now
-  require `lemon_ai ~> 0.3` and `lemon_core ~> 0.3`, rather than resolving older
+- **`lemon_agent` 0.3.0 (breaking):** `{:message_update, event}` carries only
+  the delta-only provider event, not a growing partial `AssistantMessage` (#571).
+  Queue transport lives in `AgentLoopConfig.hooks` (`queue_owner`, `queue_ref`,
+  `queue_timeout`) beside `emit_system_prompt`, `stream_rules` and
+  `on_stream_rule` (#559).
+  The loop uses `LemonAi.Retry` while preserving one transient retry budget per
+  response and provider `max_attempts: 1`. Package dependencies require
+  `lemon_ai ~> 0.3` and `lemon_core ~> 0.3`, rather than resolving older
   packages that lack the consolidated APIs.
 
 Both policy structs count `max_attempts` as **total attempts including the
