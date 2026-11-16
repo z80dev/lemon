@@ -68,13 +68,17 @@ defmodule CodingAgent.Session.PersistenceTest do
                tool_call_id: "call_interrupted",
                tool_name: "bash",
                is_error: true,
-               details: %{outcome: :unknown, reason: :interrupted, restored_session_repair: true},
+               details: %{
+                 outcome: :not_started,
+                 reason: :interrupted,
+                 restored_session_repair: true
+               },
                content: [%LemonAi.Types.TextContent{text: repair_text}]
              }
            ] = restored = Persistence.restore_messages_from_session(session_manager)
 
     assert repair_text =~ "interrupted"
-    assert repair_text =~ "Do not assume it did not run or automatically repeat it."
+    assert repair_text =~ "before the call started"
     assert TranscriptValidator.validate(restored) == :ok
   end
 

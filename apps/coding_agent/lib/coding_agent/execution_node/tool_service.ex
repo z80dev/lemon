@@ -15,6 +15,11 @@ defmodule CodingAgent.ExecutionNode.ToolService do
   owned by `CodingAgent.ExecutionNode.ToolSession`, keyed by a node-scoped
   form of the controller session ID.
 
+  Effectful calls require the controller's `toolIntent` marker bound to this
+  call ID. Missing/mismatched markers fail closed. Nested eval calls inherit
+  that parent intent through trusted resolver state only while the eval is live;
+  they never establish a second node-local journal.
+
   An `eval` cell running here can call this node's routable tools through its
   `tools` bridge. Such calls may name this node or omit `node`; naming another
   node fails without running, because routing belongs to the controller.
@@ -86,6 +91,7 @@ defmodule CodingAgent.ExecutionNode.ToolService do
          tool_call_id: call_id,
          session_id: session_id,
          run_id: run_id,
+         tool_intent: args["toolIntent"],
          context: args["executionContext"]
        }}
     else
@@ -139,6 +145,8 @@ defmodule CodingAgent.ExecutionNode.ToolService do
     base = [
       session_id: scoped_session(request.session_id),
       session_pid: owner,
+      controller_tool_intent: request.tool_intent,
+      tool_intent_recorder: fn _data -> {:error, :controller_intent_required} end,
       run_id: context.run_id,
       tool_policy: context.tool_policy,
       execution_context: context,
@@ -150,12 +158,17 @@ defmodule CodingAgent.ExecutionNode.ToolService do
     Keyword.put(base, :tool_resolver, resolver(available, opts[:default_cwd], base, opts))
   end
 
-  # Cells running on this node reach only this node's tools. Nothing here can
-  # ask the session for approval, so a call the session policy would review is
-  # refused rather than run unreviewed.
+  # Cells reach only this node's tools. Their mutations are covered by the
+  # controller's parent eval intent only while that eval invocation is live.
+  # Calls that require their own approval are still refused here.
   defp resolver(available, cwd, base_opts, opts) do
     node = Keyword.get(opts, :node_name)
     policy = Keyword.fetch!(base_opts, :tool_policy)
+
+    base_opts =
+      base_opts
+      |> Keyword.put(:controller_parent_intent, Keyword.get(base_opts, :controller_tool_intent))
+      |> Keyword.delete(:controller_tool_intent)
 
     fn name ->
       cond do
@@ -208,6 +221,8 @@ defmodule CodingAgent.ExecutionNode.ToolService do
   end
 
   defp build(name, cwd, tool_opts) do
-    {:ok, Map.fetch!(@modules, name).tool(cwd, tool_opts)}
+    %AgentTool{} = tool = Map.fetch!(@modules, name).tool(cwd, tool_opts)
+    tool = %{tool | effect: CodingAgent.ToolIntent.builtin_effect(name)}
+    {:ok, CodingAgent.ToolIntent.wrap(tool, tool_opts)}
   end
 end

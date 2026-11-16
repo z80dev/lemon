@@ -234,9 +234,8 @@ defmodule CodingAgent.Tools.Lsp.Client do
   end
 
   @impl true
-  def handle_call({operation, owner}, _from, state)
-      when operation in [:bind_owner, :detach_owner],
-      do: CodingAgent.ToolResources.owner_reply(operation, owner, state)
+  def handle_call({:bind_owner, owner}, _from, state),
+    do: CodingAgent.ToolResources.owner_reply(:bind_owner, owner, state)
 
   def handle_call({:ensure_config, hash}, _from, state) do
     if state.server.config_hash == hash do

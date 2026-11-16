@@ -45,6 +45,7 @@ defmodule CodingAgent.Tools.DebugTest do
     }
 
     opts = [
+      tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir),
       session_id: session_id,
       debug_adapters: adapters,
       include_extensions: false,
