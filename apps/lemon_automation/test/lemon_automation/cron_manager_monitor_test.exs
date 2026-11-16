@@ -161,6 +161,11 @@ defmodule LemonAutomation.CronManagerMonitorTest do
   # Forces the job due at a distinct scheduled slot so each tick claims a fresh
   # deterministic run id.
   defp dispatch(%CronJob{} = job, nth) do
+    # A (re)started manager restores schedules in a task (#587) and defers calls
+    # until it finishes. This call is that barrier: `:sys.replace_state/2` is
+    # not deferred, and restoration would otherwise apply missed-slot grace to
+    # the forced slot below and skip it.
+    _ = CronManager.list()
     scheduled_for_ms = LemonCore.Clock.now_ms() - nth * 120_000
     stored = CronStore.get_job(job.id) || job
     due = %{stored | next_run_at_ms: scheduled_for_ms, enabled: true}
