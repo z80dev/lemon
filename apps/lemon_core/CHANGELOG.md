@@ -6,8 +6,29 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+
+- `LemonCore.Rpc.Client` with `Rpc.Framing`, `Rpc.JsonLines`, `Rpc.ContentLength`
+  and `Rpc.Handler`: one request/response owner for stdio and socket peers (#577).
+- `LemonCore.SessionMaintenance` and session lifecycle hooks for index-backed
+  listing and preview-confirm archive maintenance of native journals (#565).
+- `AgentRuntime.Provider` gains cursor-based event replay for sequenced session
+  events (#560).
+- `[runtime.tools] vendor_dialects` config key (default `false`) (#603).
+- `LemonCore.Secrets.Usage`, and `Store` hooks that run in a monitored worker
+  under `:store_hook_budget_ms` (default 5000) instead of inside the Store (#579).
+
 ### Changed
 
+- `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
+  OS processes (#586).
+- `LemonCore.Service.Lock` recovers stale locks and `:global.trans` callers use
+  `[node()]` with finite retries; `Lemon.Reload` fails fast by default (#589).
+- `Store` secondary work moved out of the Store process: run-history reads go
+  through `RunHistoryStore`, and secret master-key resolution, config reload and
+  hooks run elsewhere (#579).
+- Dedupe, Bus, Drain and similar ETS tables have supervised owners so they
+  outlive their first caller (#595).
 - **Breaking (0.3.0):** `LemonCore.ToolPolicy` no longer has a `sandbox` field;
   legacy input containing it warns once and is ignored without changing
   authority (#605).
