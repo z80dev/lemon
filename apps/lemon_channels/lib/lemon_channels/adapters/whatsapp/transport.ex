@@ -626,27 +626,32 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
         state
 
       true ->
-        # Async transcription under the Task.Supervisor
-        Task.Supervisor.start_child(
-          LemonChannels.Adapters.WhatsApp.AsyncSupervisor,
-          fn ->
-            case do_transcribe_voice(media_path, media_mime, voice_cfg) do
-              {:ok, transcript} when is_binary(transcript) and transcript != "" ->
-                message = Map.put(inbound.message, :text, String.trim(transcript))
-                meta = Map.put(inbound.meta || %{}, :voice_transcribed, true)
-                updated = %{inbound | message: message, meta: meta}
-                do_submit_inbound(updated, state)
+        case LemonCore.TaskSupervisor.start_child(
+               LemonChannels.Adapters.WhatsApp.AsyncSupervisor,
+               fn ->
+                 case do_transcribe_voice(media_path, media_mime, voice_cfg) do
+                   {:ok, transcript} when is_binary(transcript) and transcript != "" ->
+                     message = Map.put(inbound.message, :text, String.trim(transcript))
+                     meta = Map.put(inbound.meta || %{}, :voice_transcribed, true)
+                     updated = %{inbound | message: message, meta: meta}
+                     do_submit_inbound(updated, state)
 
-              {:ok, _} ->
-                Logger.warning("whatsapp voice transcription returned empty text")
-                do_submit_inbound(inbound, state)
+                   {:ok, _} ->
+                     Logger.warning("whatsapp voice transcription returned empty text")
+                     do_submit_inbound(inbound, state)
 
-              {:error, reason} ->
-                Logger.warning("whatsapp voice transcription failed: #{inspect(reason)}")
-                do_submit_inbound(inbound, state)
-            end
-          end
-        )
+                   {:error, reason} ->
+                     Logger.warning("whatsapp voice transcription failed: #{inspect(reason)}")
+                     do_submit_inbound(inbound, state)
+                 end
+               end
+             ) do
+          {:ok, _pid} ->
+            :ok
+
+          {:error, _reason} = error ->
+            handle_submission_failure(inbound, state, error, :submit)
+        end
 
         state
     end

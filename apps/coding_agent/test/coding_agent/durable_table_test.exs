@@ -53,12 +53,15 @@ defmodule CodingAgent.DurableTableContractTest do
 
     on_exit(fn ->
       Enum.each(running, fn module ->
-        assert {:ok, _pid} = Supervisor.restart_child(CodingAgent.Supervisor, module)
+        case Supervisor.restart_child(store_supervisor(module), module) do
+          {:ok, _pid} -> :ok
+          {:error, :running} -> :ok
+        end
       end)
     end)
 
     Enum.each(running, fn module ->
-      assert :ok = Supervisor.terminate_child(CodingAgent.Supervisor, module)
+      assert :ok = Supervisor.terminate_child(store_supervisor(module), module)
     end)
 
     {fixtures, []} =
@@ -66,6 +69,9 @@ defmodule CodingAgent.DurableTableContractTest do
 
     %{fixtures: fixtures}
   end
+
+  defp store_supervisor(ProcessStoreServer), do: CodingAgent.ProcessSupervisor
+  defp store_supervisor(_module), do: CodingAgent.Supervisor
 
   test "current-format DETS files load synchronously without rewriting their tuples", ctx do
     specs = [

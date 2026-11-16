@@ -79,10 +79,7 @@ defmodule LemonAutomation.IntervalRunner do
   defp run_opts(state), do: state.opts
 
   defp start_background_task(fun) do
-    case Process.whereis(@task_supervisor) do
-      nil -> {:error, :task_supervisor_unavailable}
-      pid -> Task.Supervisor.start_child(pid, fun)
-    end
+    LemonCore.TaskSupervisor.start_child(@task_supervisor, fun)
   end
 
   defp schedule_tick(opts) do

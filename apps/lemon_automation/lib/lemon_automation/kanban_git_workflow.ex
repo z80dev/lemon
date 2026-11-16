@@ -661,20 +661,20 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     supervisor = Keyword.get(opts, :task_supervisor, LemonAutomation.TaskSupervisor)
     owner = self()
 
-    task =
-      Task.Supervisor.async_nolink(supervisor, fn ->
-        monitor = Process.monitor(owner)
+    with {:ok, task} <-
+           LemonCore.TaskSupervisor.async_nolink(supervisor, fn ->
+             monitor = Process.monitor(owner)
 
-        try do
-          run_port(program, args, opts, timeout, monitor)
-        after
-          Process.demonitor(monitor, [:flush])
-        end
-      end)
-
-    case Task.yield(task, timeout + 6000) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} -> result
-      _ -> {:error, :command_timeout}
+             try do
+               run_port(program, args, opts, timeout, monitor)
+             after
+               Process.demonitor(monitor, [:flush])
+             end
+           end) do
+      case Task.yield(task, timeout + 6000) || Task.shutdown(task, :brutal_kill) do
+        {:ok, result} -> result
+        _ -> {:error, :command_timeout}
+      end
     end
   end
 

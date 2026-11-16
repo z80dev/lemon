@@ -118,6 +118,25 @@ defmodule LemonAgent.ProxyStreamIntegrationTest do
     "data:" <> Jason.encode!(map) <> "\n\n"
   end
 
+  defp start_cancellation_response(_socket, :waiting_for_headers), do: :ok
+
+  defp start_cancellation_response(socket, :streaming) do
+    :ok =
+      :gen_tcp.send(
+        socket,
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n" <>
+          "transfer-encoding: chunked\r\n\r\n"
+      )
+
+    send_chunk(socket, sse_event(%{"type" => "start"}))
+  end
+
+  defp assert_proxy_started(_stream, :waiting_for_headers), do: :ok
+
+  defp assert_proxy_started(stream, :streaming) do
+    assert [{:start, %AssistantMessage{}}] = stream |> EventStream.events() |> Enum.take(1)
+  end
+
   describe "stream_proxy/3" do
     test "emits only block metadata and deltas while retaining terminal signatures" do
       events = [
@@ -169,6 +188,65 @@ defmodule LemonAgent.ProxyStreamIntegrationTest do
              ] = final.content
 
       assert_receive :sse_server_done, @receive_timeout
+    end
+
+    for phase <- [:waiting_for_headers, :streaming] do
+      test "cancellation stops the HTTP worker and socket while #{phase}" do
+        parent = self()
+        phase = unquote(phase)
+
+        {:ok, listener} =
+          :gen_tcp.listen(0, [:binary, packet: :raw, active: false, ip: {127, 0, 0, 1}])
+
+        on_exit(fn -> :gen_tcp.close(listener) end)
+        {:ok, {_, port}} = :inet.sockname(listener)
+
+        start_supervised!(
+          {Task,
+           fn ->
+             {:ok, socket} = :gen_tcp.accept(listener)
+             request = read_request(socket, "")
+             assert request =~ "POST /api/stream HTTP/1.1"
+
+             start_cancellation_response(socket, phase)
+
+             send(parent, :proxy_request_open)
+             send(parent, {:proxy_socket_result, :gen_tcp.recv(socket, 0, @receive_timeout)})
+             :gen_tcp.close(socket)
+           end}
+        )
+
+        stream =
+          Proxy.stream_proxy(
+            Mocks.mock_model(),
+            LemonAi.Types.Context.new(),
+            %ProxyStreamOptions{
+              auth_token: "offline-fixture",
+              proxy_url: "http://127.0.0.1:#{port}"
+            }
+          )
+
+        assert_receive :proxy_request_open, @receive_timeout
+
+        assert_proxy_started(stream, phase)
+
+        %{task_pid: worker} = :sys.get_state(stream)
+        assert worker in Task.Supervisor.children(LemonAgent.LoopTaskSupervisor)
+        monitor = Process.monitor(worker)
+        {:links, links} = Process.info(worker, :links)
+        [http_worker] = links -- [Process.whereis(LemonAgent.LoopTaskSupervisor)]
+        http_monitor = Process.monitor(http_worker)
+        {:ok, result_ref} = EventStream.subscribe_result(stream)
+
+        :ok = EventStream.cancel(stream, :test_cancel)
+
+        assert_receive {:DOWN, ^monitor, :process, ^worker, _reason}, @receive_timeout
+        assert_receive {:DOWN, ^http_monitor, :process, ^http_worker, _reason}, @receive_timeout
+        assert_receive {:proxy_socket_result, {:error, :closed}}, @receive_timeout
+
+        assert_receive {:event_stream_result, ^result_ref, {:error, {:canceled, :test_cancel}}},
+                       @receive_timeout
+      end
     end
 
     test "a slow consumer receives an overflow error instead of a successful truncated response" do

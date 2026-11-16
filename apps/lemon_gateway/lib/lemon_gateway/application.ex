@@ -18,13 +18,17 @@ defmodule LemonGateway.Application do
       children =
         [
           LemonGateway.Config,
-          {Registry, keys: :unique, name: LemonGateway.RunRegistry},
-          LemonGateway.Slots,
-          LemonGateway.RunSupervisor,
-          {Task.Supervisor, name: LemonGateway.TaskSupervisor}
-          # lemon_channels is started explicitly by the top-level runtime app (or by
-          # starting :lemon_control_plane / lemon_channels directly). LemonGateway
-          # does not attempt to orchestrate startup of sibling applications.
+          # A lost permit authority or registry must stop its Runs before admitting
+          # new work; otherwise a restarted counter could oversubscribe execution.
+          LemonCore.Supervision.subtree(LemonGateway.ExecutionSupervisor, [
+            {Registry, keys: :unique, name: LemonGateway.RunRegistry},
+            LemonGateway.Slots,
+            LemonGateway.RunSupervisor
+          ]),
+          # Bounded owner for voice-call LLM/TTS operations (#588).
+          {LemonCore.TaskSupervisor, name: LemonGateway.TaskSupervisor}
+          # Channels and the control plane are started by their consumers, not
+          # orchestrated as sibling applications by the gateway.
         ] ++ maybe_health_server_child() ++ maybe_gateway_ingress_children()
 
       # Channels and the control plane ask core for transport/config facts rather
@@ -38,9 +42,7 @@ defmodule LemonGateway.Application do
       # exists, so ask it to mirror the table into its read cache.
       LemonCore.Store.register_cached_table(LemonGateway.ProgressStore.table())
 
-      # A lost permit authority or registry must stop its Runs before admitting
-      # new work; otherwise a restarted counter could oversubscribe execution.
-      opts = [strategy: :rest_for_one, name: LemonGateway.Supervisor]
+      opts = [strategy: :one_for_one, name: LemonGateway.Supervisor]
       Supervisor.start_link(children, opts)
     end
   end

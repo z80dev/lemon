@@ -80,25 +80,52 @@ passes tool/reasoning payloads, or appends review output to session history.
 
 ### Supervision Tree
 
-```
+```text
 CodingAgent.Supervisor (one_for_one)
-  +-- RuntimeTables (extension/web/capability caches)
-  +-- Registry (SessionRegistry)
-  +-- Registry (BackgroundRun.Registry)
-  +-- Registry (ProcessRegistry)
-  +-- TodoStoreOwner
-  +-- SessionSupervisor (DynamicSupervisor for Session processes)
-  +-- BackgroundRun.Supervisor (DynamicSupervisor for isolated `/bg` workers)
+  +-- RuntimeTables
+  +-- ToolResourceSupervisor (rest_for_one)
+  |     +-- Eval.Registry, Tools.Lsp.Registry, Debug.Registry
+  |     +-- Eval.KernelSupervisor, Tools.Lsp.Supervisor, Debug.Supervisor
+  |     +-- ToolResources
+  +-- Search.Supervisor (rest_for_one)
+  |     +-- Search.TaskSupervisor (bounded Task.Supervisor)
+  |     +-- Search.SingleFlight
+  +-- Tools.TodoStoreOwner, Tools.Bash.ShellState, Session.UserPrompt
+  +-- MutationLock, FileReadTracker, WorkspaceReads, ConflictStore
+  +-- ExecutionNode.FileService, ExecutionNode.ProcessService
+  +-- ExecutionNode.ToolSession.Tree (rest_for_one)
+  |     +-- ExecutionNode.ToolSession.Registry
+  |     +-- ExecutionNode.ToolSession.Supervisor (DynamicSupervisor)
   +-- Wasm.SidecarSupervisor
-  +-- TaskSupervisor (Task.Supervisor for async ops)
-  +-- TaskStoreServer (DETS-backed async task tracking)
-  +-- ParentQuestionStoreServer (DETS-backed child-to-parent question tracking)
-  +-- RunGraphServer (ETS+DETS persistent run graph)
-  +-- ProcessStoreServer (background process state)
-  +-- ProcessManager (DynamicSupervisor for exec processes)
-+-- LaneQueue (background process launch FIFO)
+  +-- TaskSupervisor (bounded Task.Supervisor)
+  +-- TaskStoreServer, Tools.Task.Control, Tools.Task.Speculation
+  +-- TaskProgressBindingServer, ParentQuestionStoreServer, RunGraphServer
+  +-- ProcessSupervisor (rest_for_one)
+  |     +-- ProcessRegistry
+  |     +-- ProcessStoreServer
+  |     +-- ProcessManager (DynamicSupervisor)
+  |     +-- LaneQueue (background process launch FIFO)
+  +-- SessionTree (rest_for_one)
+  |     +-- SessionRegistry
+  |     +-- SessionSupervisor (DynamicSupervisor)
+  |     +-- Tools.Task.LiveBridgeSupervisor
+  +-- BackgroundRun.Tree (rest_for_one)
+  |     +-- BackgroundRun.Registry
+  |     +-- BackgroundRun.Supervisor (DynamicSupervisor)
   +-- Parallel.Semaphore (task concurrency limit)
 ```
+
+Each dependency subtree has its own restart budget: 10 restarts per 5 seconds
+(an explicit containment policy, not a throughput measurement). Registries start
+before their dynamic supervisors and managers. Registry failure shuts down later
+dependants in reverse order, then starts them in order; unrelated subtrees stay
+up. Sessions, background runs and other temporary children are stopped, never
+automatically replayed.
+
+Task supervisor caps and admission errors are described by
+`LemonCore.TaskSupervisor`. Compaction rejects unavailable/full supervisors with
+`:task_supervisor_unavailable` / `:task_capacity_reached`; it never falls back to
+an unsupervised task.
 
 ### Runtime table ownership
 
@@ -683,6 +710,14 @@ existing 64-message / 256-KiB cap, rather than a queue in the shared control
 coordinator.
 
 For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. Joins reserve followup delivery while waiting. `wait_all` permanently suppresses completed joined tasks, while `wait_any` suppresses only its completed winner and releases every loser; failure, abort, an unknown run, or a child clarification releases the reservation without permanent suppression. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup preserves the full visible task answer and submits router fallbacks as native followup runs; delivery failures are contained after task/run state is terminalized. Async launches fail immediately when their supervised worker cannot start, rather than returning a task id that remains queued forever. Async completions default to `:followup`; `:steer` and `:steer_backlog` also use non-preempting delivery. Live parents finish every already-issued tool call, then receive the completion before their next model request; unavailable parents fall back to router followup runs.
+
+Supervised task admission is bounded independently of the native-child semaphore.
+Capacity exhaustion returns `Background task capacity is exhausted`; an absent
+supervisor returns `Background task supervisor is unavailable`. Neither failure
+runs the task or leaves its task/run/progress bookkeeping queued, and neither
+is retried. `LaneQueue` reports the mapped reason inside `task_start_failed`;
+delegated runs already submitted retain their tracking-error receipt instead of
+claiming that the remote work was never started.
 
 The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
 

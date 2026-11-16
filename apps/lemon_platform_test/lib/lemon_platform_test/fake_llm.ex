@@ -21,6 +21,10 @@ defmodule LemonPlatformTest.FakeLLM do
   conforming stream function from a plain script, so you can assert on what your
   agent *does* with a tool call or a refusal, rather than on how a model streams.
 
+  Producers run under `LemonAgent.LoopTaskSupervisor` and stay attached to their
+  stream. The agent application must be started; missing or full supervision
+  produces an error message instead of an unsupervised fixture worker.
+
   ## A worked example
 
   `script/2` turns a list of turns — one per LLM round-trip — into a stream
@@ -282,8 +286,8 @@ defmodule LemonPlatformTest.FakeLLM do
   defp event_stream(%AssistantMessage{} = message) do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
-    {:ok, task_pid} =
-      Task.start(fn ->
+    admission =
+      LemonCore.TaskSupervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
         try do
           LemonAi.EventStream.push!(stream, {:start, %{message | content: []}})
 
@@ -298,7 +302,18 @@ defmodule LemonPlatformTest.FakeLLM do
         end
       end)
 
-    LemonAi.EventStream.attach_task(stream, task_pid)
+    case admission do
+      {:ok, task_pid} ->
+        LemonAi.EventStream.attach_task(stream, task_pid)
+
+      {:error, reason} ->
+        LemonAi.EventStream.error(stream, %{
+          message
+          | stop_reason: :error,
+            error_message: Atom.to_string(reason),
+            error_details: nil
+        })
+    end
 
     stream
   end

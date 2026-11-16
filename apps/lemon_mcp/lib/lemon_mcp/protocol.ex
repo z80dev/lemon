@@ -426,13 +426,32 @@ defmodule LemonMCP.Protocol do
   end
 
   @doc false
-  def dispatch_notification(%{"method" => method} = message, handler)
+  def start_notification_supervisor(opts) do
+    # Caller policy: at most 32 concurrent notification callbacks per client,
+    # independently of request/sampling work; hosts can set a positive override.
+    %{start: {module, function, args}} =
+      LemonCore.TaskSupervisor.child_spec(
+        max_children: Keyword.get(opts, :max_notification_tasks, 32)
+      )
+
+    apply(module, function, args)
+  end
+
+  @doc false
+  def stop_notification_supervisor(supervisor) do
+    Supervisor.stop(supervisor)
+  catch
+    :exit, {:noproc, _} -> :ok
+  end
+
+  @doc false
+  def dispatch_notification(%{"method" => method} = message, handler, supervisor)
       when is_binary(method) and not is_map_key(message, "id") do
     params = Map.get(message, "params", %{})
 
     _ =
       if is_function(handler, 1) and is_map(params) do
-        Task.start(fn ->
+        LemonCore.TaskSupervisor.start_child(supervisor, fn ->
           try do
             handler.(%{method: method, params: params})
           rescue
@@ -446,7 +465,7 @@ defmodule LemonMCP.Protocol do
     :ok
   end
 
-  def dispatch_notification(_message, _handler), do: :ok
+  def dispatch_notification(_message, _handler, _supervisor), do: :ok
 
   # ============================================================================
   # Encoding / Decoding

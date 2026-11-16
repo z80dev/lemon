@@ -62,6 +62,11 @@ Reviews have only private `remember` and draft-create/non-pinned-patch
 `skill_manage`, no bootstrap memory, transcript persistence or channel delivery.
 They inherit model configuration (or resolve a configured model override),
 never shared grants, and are non-concurrent/rate-limited per live session.
+The review supervisor admits at most 1024 concurrent tasks by default, configurable
+through `:lemon_core, :task_supervisor_max_children` keyed by
+`LemonSkills.ReviewSupervisor`. Capacity or supervisor unavailability skips that
+completion without reading its summary or resetting the session's due counters;
+there is no background retry.
 
 Opt-in TOML `memory.write_approval` and `skills.write_approval` gate agent memory
 and skill mutations through `LemonCore.ExecApprovals`, with bounded redacted,

@@ -114,8 +114,11 @@ defmodule LemonRouter.RunCountTrackerTest do
                )
     end
 
-    assert :ok = Supervisor.terminate_child(LemonRouter.Supervisor, RunCountTracker)
-    assert {:ok, _} = Supervisor.restart_child(LemonRouter.Supervisor, RunCountTracker)
+    assert :ok = Supervisor.terminate_child(LemonRouter.ConversationSupervisor, RunCountTracker)
+
+    assert {:ok, _} =
+             Supervisor.restart_child(LemonRouter.ConversationSupervisor, RunCountTracker)
+
     state = :sys.get_state(RunCountTracker)
     assert state.runs[prefix <> "ok"] == false
     assert state.runs[prefix <> "bad"] == true
@@ -127,8 +130,12 @@ defmodule LemonRouter.RunCountTrackerTest do
   end
 
   test "exiting tracker preserves other fields and reports unavailable daily counts" do
-    assert :ok = Supervisor.terminate_child(LemonRouter.Supervisor, RunCountTracker)
-    on_exit(fn -> Supervisor.restart_child(LemonRouter.Supervisor, RunCountTracker) end)
+    assert :ok = Supervisor.terminate_child(LemonRouter.ConversationSupervisor, RunCountTracker)
+
+    on_exit(fn ->
+      Supervisor.restart_child(LemonRouter.ConversationSupervisor, RunCountTracker)
+    end)
+
     counts = LemonRouter.RunOrchestrator.counts()
     assert is_integer(counts.active)
     assert is_integer(counts.queued)
@@ -158,12 +165,12 @@ defmodule LemonRouter.RunCountTrackerTest do
 
   test "unavailable run supervision does not invent zero active runs" do
     supervisor = LemonRouter.RunSupervisor
-    assert :ok = Supervisor.terminate_child(LemonRouter.Supervisor, supervisor)
+    assert :ok = Supervisor.terminate_child(LemonRouter.ConversationSupervisor, supervisor)
 
     try do
       assert LemonRouter.RunOrchestrator.counts().active == nil
     after
-      Supervisor.restart_child(LemonRouter.Supervisor, supervisor)
+      Supervisor.restart_child(LemonRouter.ConversationSupervisor, supervisor)
     end
   end
 

@@ -243,6 +243,56 @@ defmodule LemonAgent.ModelRuntime.OmpBrokerTest do
     refute_receive {:broker_block, _, _}, 100
   end
 
+  test "best-effort block reports log capacity and unavailable rejections without sending" do
+    parent = self()
+    supervisor_name = LemonAi.StreamTaskSupervisor
+    :ok = Supervisor.terminate_child(LemonAi.Supervisor, supervisor_name)
+
+    on_exit(fn ->
+      {:ok, _pid} = Supervisor.restart_child(LemonAi.Supervisor, supervisor_name)
+    end)
+
+    supervisor = start_supervised!({supervisor_name, max_children: 1})
+
+    {:ok, _blocker} =
+      LemonCore.TaskSupervisor.start_child(supervisor, fn ->
+        receive do
+          :finish -> :ok
+        end
+      end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(parent, :unexpected_broker_request)
+      Req.Test.json(conn, %{})
+    end)
+
+    cfg = %{auth_source: "omp_broker", omp_provider: "kimi-code"}
+
+    assert ExUnit.CaptureLog.capture_log(fn ->
+             assert :ok =
+                      LemonAgent.ModelRuntime.OmpBroker.report_block(
+                        :kimi_coding,
+                        cfg,
+                        7,
+                        now_ms() + 60_000
+                      )
+           end) =~ "not reported: the streaming task supervisor is at capacity."
+
+    stop_supervised!(supervisor_name)
+
+    assert ExUnit.CaptureLog.capture_log(fn ->
+             assert :ok =
+                      LemonAgent.ModelRuntime.OmpBroker.report_block(
+                        :kimi_coding,
+                        cfg,
+                        7,
+                        now_ms() + 60_000
+                      )
+           end) =~ "not reported: the streaming task supervisor is unavailable."
+
+    refute_received :unexpected_broker_request
+  end
+
   test "the omp_gateway provider falls back to omp's gateway token file" do
     home = Path.join(System.tmp_dir!(), "omp_home_#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(home) end)

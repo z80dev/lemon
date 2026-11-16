@@ -47,7 +47,7 @@ defmodule CodingAgent.Tools.Task.Async do
       lifecycle: lifecycle_context
     })
 
-    case start_async_worker(supervisor, fn ->
+    case LemonCore.TaskSupervisor.start_child(supervisor, fn ->
            Logger.debug(
              "Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}"
            )
@@ -77,8 +77,9 @@ defmodule CodingAgent.Tools.Task.Async do
   @doc false
   def resume(task_id, entry, text) do
     context = entry.continuation
+    supervisor = context.lifecycle[:task_supervisor] || CodingAgent.TaskSupervisor
 
-    start_async_worker(context.lifecycle[:task_supervisor] || CodingAgent.TaskSupervisor, fn ->
+    LemonCore.TaskSupervisor.start_child(supervisor, fn ->
       with :ok <- Control.attach_worker(task_id) do
         update = wrap_on_update(task_id, context.lifecycle, context.lifecycle[:on_update])
 
@@ -292,20 +293,10 @@ defmodule CodingAgent.Tools.Task.Async do
     _ -> :ok
   end
 
-  defp start_async_worker(supervisor, fun) do
-    Task.Supervisor.start_child(supervisor, fun)
-  rescue
-    error -> {:error, {:exception, error}}
-  catch
-    :exit, reason -> {:error, {:exit, reason}}
-  end
+  defp normalize_launch_error(reason)
+       when reason in [:task_supervisor_unavailable, :task_capacity_reached],
+       do: reason
 
-  defp normalize_launch_error({:exit, {:noproc, _}}), do: :task_supervisor_unavailable
-  defp normalize_launch_error({:exit, :noproc}), do: :task_supervisor_unavailable
-  defp normalize_launch_error({:noproc, _}), do: :task_supervisor_unavailable
-  defp normalize_launch_error(:noproc), do: :task_supervisor_unavailable
-  defp normalize_launch_error(:max_children), do: :task_capacity_reached
-  defp normalize_launch_error({:max_children, _}), do: :task_capacity_reached
   defp normalize_launch_error(_), do: :task_start_failed
 
   defp finalize_launch_failure(task_id, run_id, reason, lifecycle_context) do

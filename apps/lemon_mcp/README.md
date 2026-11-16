@@ -126,6 +126,13 @@ or request deadlines. A raised/thrown sampling failure becomes a redacted intern
 protocol error rather than terminating the connection. Sampling remains opt-in;
 unsupported server methods return `-32601` instead of reaching notification handlers.
 
+HTTP and SSE clients also own private, capped notification task supervisors.
+Closing or killing the client terminates those callbacks. The per-client
+`max_notification_tasks` option defaults to 32 (caller policy, not a measured
+throughput limit); callbacks beyond the cap are dropped without blocking
+protocol responses or starting unsupervised work. Notification handlers are
+best-effort invalidation signals, not durable delivery.
+
 When sampling is configured through `LemonSkills.McpSource`, use
 `reviewer: :ops_approval` to route reviewed sampling through
 `LemonCore.ExecApprovals`. The source bridge creates redacted

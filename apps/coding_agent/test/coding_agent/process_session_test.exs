@@ -293,7 +293,7 @@ defmodule CodingAgent.ProcessSessionTest do
       assert result.exit_code != 0
     end
 
-    test "on_exit callback is invoked", %{process_id: process_id} do
+    test "on_exit callback is a supervised temporary task", %{process_id: process_id} do
       test_pid = self()
 
       {:ok, _pid} =
@@ -301,11 +301,20 @@ defmodule CodingAgent.ProcessSessionTest do
           command: "echo callback_test",
           process_id: process_id,
           on_exit: fn exit_info ->
-            send(test_pid, {:exit_callback, exit_info})
+            send(test_pid, {:exit_callback, self(), exit_info})
+
+            receive do
+              :finish -> :ok
+            end
           end
         )
 
-      assert_receive {:exit_callback, exit_info}, 2000
+      assert_receive {:exit_callback, worker, exit_info}, 2000
+      on_exit(fn -> if Process.alive?(worker), do: Process.exit(worker, :kill) end)
+      assert worker in Task.Supervisor.children(CodingAgent.TaskSupervisor)
+      monitor = Process.monitor(worker)
+      send(worker, :finish)
+      assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
       assert exit_info.process_id == process_id
       assert exit_info.status == :completed
     end

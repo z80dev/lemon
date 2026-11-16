@@ -188,20 +188,26 @@ defmodule CodingAgent.Session.ProjectMemory do
       caller = self()
       ref = make_ref()
 
-      with {:ok, pid} <-
-             Task.Supervisor.start_child(@supervisor, fn ->
-               {:ok, _} = Registry.register(@registry, {__MODULE__, :slot, slot}, nil)
-               {:ok, _} = Registry.register(@registry, key, nil)
-               send(caller, {ref, :ready})
-               run_job(job, [fingerprint(job)])
-             end) do
-        receive do
-          {^ref, :ready} -> {:ok, pid}
-        after
-          @admission_timeout ->
-            Task.Supervisor.terminate_child(@supervisor, pid)
-            {:error, :unavailable}
-        end
+      case LemonCore.TaskSupervisor.start_child(@supervisor, fn ->
+             {:ok, _} = Registry.register(@registry, {__MODULE__, :slot, slot}, nil)
+             {:ok, _} = Registry.register(@registry, key, nil)
+             send(caller, {ref, :ready})
+             run_job(job, [fingerprint(job)])
+           end) do
+        {:ok, pid} ->
+          receive do
+            {^ref, :ready} -> {:ok, pid}
+          after
+            @admission_timeout ->
+              Task.Supervisor.terminate_child(@supervisor, pid)
+              {:error, :unavailable}
+          end
+
+        {:error, :task_capacity_reached} ->
+          {:error, :busy}
+
+        {:error, _reason} ->
+          {:error, :unavailable}
       end
     else
       {:error, :busy}
@@ -226,10 +232,12 @@ defmodule CodingAgent.Session.ProjectMemory do
   end
 
   defp run_job(job, seen) do
-    task = Task.Supervisor.async_nolink(@supervisor, fn -> extract_and_capture(job) end)
-    timeout = job.opts |> Keyword.get(:timeout_ms, @timeout_ms) |> max(1) |> min(@timeout_ms)
-    timer = Process.send_after(self(), {:capture_timeout, task.ref}, timeout)
-    receive_job(task, timer, seen, nil)
+    with {:ok, task} <-
+           LemonCore.TaskSupervisor.async_nolink(@supervisor, fn -> extract_and_capture(job) end) do
+      timeout = job.opts |> Keyword.get(:timeout_ms, @timeout_ms) |> max(1) |> min(@timeout_ms)
+      timer = Process.send_after(self(), {:capture_timeout, task.ref}, timeout)
+      receive_job(task, timer, seen, nil)
+    end
   end
 
   defp receive_job(task, timer, seen, pending) do

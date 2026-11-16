@@ -1375,20 +1375,34 @@ defmodule LemonControlPlane.ACP do
         _ -> :infinity
       end
 
-    pid =
-      spawn(fn ->
-        case LemonCore.ACPClientBridge.request(
-               result.run_id,
-               request["method"],
-               request["params"],
-               timeout
-             ) do
-          {:ok, response} -> resolve_approval_from_response(approval_id, pending, response)
-          _ -> deny_if_pending(approval_id, pending)
-        end
-      end)
+    case LemonCore.TaskSupervisor.start_child(LemonControlPlane.TaskSupervisor, fn ->
+           case LemonCore.ACPClientBridge.request(
+                  result.run_id,
+                  request["method"],
+                  request["params"],
+                  timeout
+                ) do
+             {:ok, response} -> resolve_approval_from_response(approval_id, pending, response)
+             _ -> deny_if_pending(approval_id, pending)
+           end
+         end) do
+      {:ok, pid} ->
+        Map.update(
+          result,
+          :approval_requests,
+          %{approval_id => pid},
+          &Map.put(&1, approval_id, pid)
+        )
 
-    Map.update(result, :approval_requests, %{approval_id => pid}, &Map.put(&1, approval_id, pid))
+      {:error, reason} ->
+        deny_if_pending(approval_id, pending)
+
+        add_client_request_result(result, %{
+          "method" => "session/request_permission",
+          "status" => "skipped",
+          "reason" => Atom.to_string(reason)
+        })
+    end
   end
 
   defp perform_approval_request(result, pending, _callback) do

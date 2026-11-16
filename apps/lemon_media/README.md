@@ -51,6 +51,13 @@ does not invent a terminal transition; the last durable record remains
 `:running` unless the runner itself returns or raises and the job records a
 normal completion or failure.
 
+Admission is bounded to 1024 concurrent jobs by default. Configure
+`:lemon_core, :task_supervisor_max_children` with a map entry keyed by
+`LemonMedia.MediaJobSupervisor` to change that cap. `start_job/2` returns
+`{:error, :task_capacity_reached}` or `{:error, :task_supervisor_unavailable}`
+without running the job when admission is rejected. Its already-created queued
+record is marked failed and a failed event is published; no retry is scheduled.
+
 Job types are `:media`, `:image`, `:video`, `:audio`, `:tts`, `:stt`, `:vision`
 and `:browser`; statuses are `:queued`, `:running`, `:completed`, `:failed` and
 `:cancelled`.

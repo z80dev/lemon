@@ -36,9 +36,9 @@ defmodule LemonAgent.Application do
       # Registry for agent process lookup and discovery
       {Registry, keys: :unique, name: LemonAgent.AgentRegistry},
       # Task.Supervisor for agent loop tasks
-      {Task.Supervisor, name: LemonAgent.LoopTaskSupervisor},
+      {LemonCore.TaskSupervisor, name: LemonAgent.LoopTaskSupervisor},
       # Task.Supervisor for tool execution tasks
-      {Task.Supervisor, name: LemonAgent.ToolTaskSupervisor},
+      {LemonCore.TaskSupervisor, name: LemonAgent.ToolTaskSupervisor},
       # Round-robin rotation state for provider credential pools
       LemonAgent.ModelRuntime.ProviderPoolRotator,
       # Owns the credential cooldown ETS table

@@ -6,6 +6,12 @@ defmodule LemonAgent.Proxy do
   This module emits delta-only provider events and retains chunks locally for
   block-end and terminal results. Message signatures survive in the final result.
 
+  Requests run under `LemonAgent.LoopTaskSupervisor` and remain attached to the
+  returned stream. Cancelling the stream terminates the HTTP request, including
+  while waiting for headers. Supervisor unavailability or capacity exhaustion
+  completes the stream with the corresponding task-admission error; no request
+  is started outside supervision.
+
   ## Usage
 
   Use `stream_proxy/3` as the `stream_fn` option when creating an Agent
@@ -120,13 +126,23 @@ defmodule LemonAgent.Proxy do
   def stream_proxy(model, context, %ProxyStreamOptions{} = options) do
     {:ok, stream} = EventStream.start_link()
 
-    # Spawn the streaming task
-    {:ok, task_pid} =
-      Task.start(fn ->
-        run_proxy_stream(model, context, options, stream)
-      end)
+    case LemonCore.TaskSupervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
+           run_proxy_stream(model, context, options, stream)
+         end) do
+      {:ok, task_pid} ->
+        EventStream.attach_task(stream, task_pid)
 
-    EventStream.attach_task(stream, task_pid)
+      {:error, reason} ->
+        EventStream.error(stream, %AssistantMessage{
+          role: :assistant,
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          stop_reason: :error,
+          error_message: Atom.to_string(reason),
+          timestamp: System.system_time(:millisecond)
+        })
+    end
 
     stream
   end

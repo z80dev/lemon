@@ -28,6 +28,11 @@ defmodule LemonHoncho.Application do
         []
       end
 
+    children = [
+      LemonCore.TaskSupervisor.child_spec(name: LemonHoncho.TaskSupervisor)
+      | children
+    ]
+
     case Supervisor.start_link(children, strategy: :one_for_one, name: LemonHoncho.Supervisor) do
       {:ok, pid} ->
         contribute()

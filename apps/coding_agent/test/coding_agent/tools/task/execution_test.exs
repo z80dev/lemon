@@ -1,6 +1,7 @@
 defmodule CodingAgent.Tools.Task.ExecutionTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.BudgetTracker
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskProgressBindingServer
   alias CodingAgent.TaskProgressBindingStore
@@ -115,6 +116,59 @@ defmodule CodingAgent.Tools.Task.ExecutionTest do
                RunGraph.get(record.run_id)
 
       assert {:error, :not_found} = TaskProgressBindingStore.get_by_task_id(task_id)
+    end
+
+    test "maps exhausted task capacity and releases all launch bookkeeping" do
+      supervisor = start_supervised!({Elixir.Task.Supervisor, max_children: 1})
+
+      {:ok, blocker} =
+        LemonCore.TaskSupervisor.start_child(supervisor, fn ->
+          receive do: (:release -> :ok)
+        end)
+
+      parent_run_id = RunGraph.new_run(%{type: :session})
+      BudgetTracker.store_budget(parent_run_id, BudgetTracker.create_budget(max_children: 1))
+      caller = self()
+      on_update = fn result -> send(caller, {:capacity_update, result}) end
+
+      assert {:error, "Background task capacity is exhausted"} =
+               Task.execute(
+                 "tool_call_capacity_failure",
+                 %{
+                   "description" => "Capacity failure task",
+                   "prompt" => "This worker must not run",
+                   "async" => true
+                 },
+                 nil,
+                 on_update,
+                 "/tmp",
+                 parent_run_id: parent_run_id,
+                 session_key: "agent:default:telegram:default:dm:12345",
+                 agent_id: "default",
+                 task_supervisor: supervisor
+               )
+
+      assert [{task_id, %{status: :error, error: :task_capacity_reached} = record}] =
+               TaskStore.list(:error)
+
+      assert {:ok, %{status: :error, error: :task_capacity_reached}} =
+               RunGraph.get(record.run_id)
+
+      assert {:error, :not_found} = TaskProgressBindingStore.get_by_task_id(task_id)
+
+      assert %{active_children: 0, active_child_ids: [], completed_child_ids: [child_id]} =
+               BudgetTracker.get_budget(parent_run_id)
+
+      assert child_id == record.run_id
+
+      assert_receive {:capacity_update,
+                      %LemonAgent.Types.AgentToolResult{
+                        is_error: true,
+                        details: %{task_id: ^task_id, status: "error"},
+                        content: [%LemonAi.Types.TextContent{text: "task_capacity_reached"}]
+                      }}
+
+      assert Elixir.Task.Supervisor.children(supervisor) == [blocker]
     end
   end
 end

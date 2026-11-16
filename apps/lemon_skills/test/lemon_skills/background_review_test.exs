@@ -10,7 +10,7 @@ defmodule LemonSkills.BackgroundReviewTest do
 
   setup %{tmp_dir: cwd} do
     target = self()
-    supervisor = start_supervised!({Task.Supervisor, []})
+    supervisor = start_supervised!(LemonCore.TaskSupervisor.child_spec(max_children: 1))
 
     server =
       start_supervised!(
@@ -40,7 +40,7 @@ defmodule LemonSkills.BackgroundReviewTest do
       shared_memory_grant: true
     }
 
-    %{server: server, request: request}
+    %{server: server, request: request, task_supervisor: supervisor}
   end
 
   test "off by default submits nothing and never evaluates a digest", ctx do
@@ -88,6 +88,55 @@ defmodule LemonSkills.BackgroundReviewTest do
     turn(ctx)
     finish(ctx)
     refute_receive {:review, _, _, _, _}
+  end
+
+  test "capacity rejection preserves the due review without reading the summary", ctx do
+    configure(ctx, %{"background_review" => %{"enabled" => true}, "memory_turn_interval" => 1})
+
+    assert {:ok, blocker} =
+             LemonCore.TaskSupervisor.start_child(ctx.task_supervisor, fn ->
+               receive do
+                 :finish -> :ok
+               end
+             end)
+
+    assert turn(ctx) == :skip
+    event(ctx, :run_completed)
+    before = :sys.get_state(ctx.server)
+
+    assert :ok =
+             LearningNudge.review_completed(
+               ctx.request.session_pid,
+               fn -> flunk("rejected review read a summary") end,
+               ctx.server
+             )
+
+    assert :sys.get_state(ctx.server) == before
+    refute_received {:review, _, _, _, _}
+
+    :ok = Task.Supervisor.terminate_child(ctx.task_supervisor, blocker)
+    refute_received {:review, _, _, _, _}
+    assert :ok = finish(ctx)
+    assert_receive {:review, worker, _, _, _}
+    send(worker, :finish)
+  end
+
+  test "unavailable supervisor leaves the review owner and due counters intact", ctx do
+    configure(ctx, %{"background_review" => %{"enabled" => true}, "memory_turn_interval" => 1})
+    assert turn(ctx) == :skip
+    event(ctx, :run_completed)
+    before = :sys.get_state(ctx.server)
+    stop_supervised!(Task.Supervisor)
+
+    assert :ok =
+             LearningNudge.review_completed(
+               ctx.request.session_pid,
+               fn -> flunk("unavailable review read a summary") end,
+               ctx.server
+             )
+
+    assert :sys.get_state(ctx.server) == before
+    refute_received {:review, _, _, _, _}
   end
 
   test "tool threshold fires at completion, not the following prompt", ctx do

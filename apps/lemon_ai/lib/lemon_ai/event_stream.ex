@@ -27,11 +27,13 @@ defmodule LemonAi.EventStream do
         idle_timeout: 300_000
       )
 
-      # Attach a supervised task
-      {:ok, task_pid} = Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
-        # ... streaming logic ...
-      end)
-      EventStream.attach_task(stream, task_pid)
+      # Attach a supervised task, or finish the stream on rejected admission.
+      case LemonAi.StreamTaskSupervisor.start_child(fn ->
+             # ... streaming logic ...
+           end) do
+        {:ok, task_pid} -> EventStream.attach_task(stream, task_pid)
+        {:error, reason} -> EventStream.error(stream, {:task_start_failed, reason}, nil)
+      end
 
       # Producer pushes events (with backpressure)
       case EventStream.push(stream, {:text_delta, 0, "Hello"}) do

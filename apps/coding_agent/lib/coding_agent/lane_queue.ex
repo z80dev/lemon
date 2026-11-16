@@ -386,7 +386,7 @@ defmodule CodingAgent.LaneQueue do
         )
 
         task_result =
-          start_supervised_job(st.task_sup, fn ->
+          LemonCore.TaskSupervisor.async_nolink(st.task_sup, fn ->
             try do
               result = job.fun.()
               Logger.debug("LaneQueue job function completed job_id=#{inspect(job_id)}")
@@ -474,15 +474,6 @@ defmodule CodingAgent.LaneQueue do
           st
         end
     end
-  end
-
-  defp start_supervised_job(task_supervisor, fun) do
-    {:ok, Task.Supervisor.async_nolink(task_supervisor, fun)}
-  rescue
-    error -> {:error, {:exception, error}}
-  catch
-    :exit, reason -> {:error, {:exit, reason}}
-    kind, reason -> {:error, {kind, reason}}
   end
 
   defp cancel_queued_caller(caller_ref, st) do

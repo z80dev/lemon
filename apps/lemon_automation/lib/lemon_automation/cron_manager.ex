@@ -2292,14 +2292,10 @@ defmodule LemonAutomation.CronManager do
   defp start_monitored_task(fun, state) when is_function(fun, 0) do
     supervisor = state.task_supervisor
 
-    if supervisor_alive?(supervisor) do
-      {:ok, Task.Supervisor.async_nolink(supervisor, fun)}
+    if state.standalone_mode and not supervisor_alive?(supervisor) do
+      {:ok, Task.async(fun)}
     else
-      if state.standalone_mode do
-        {:ok, Task.async(fun)}
-      else
-        {:error, :task_supervisor_unavailable}
-      end
+      LemonCore.TaskSupervisor.async_nolink(supervisor, fun)
     end
   rescue
     error -> {:error, {:task_start_exception, error}}

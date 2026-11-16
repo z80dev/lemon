@@ -143,6 +143,13 @@ the same bot token across accounts and OS processes. `LEMON_LOCK_DIR` overrides
 the shared service lock directory (default `~/.lemon/run/service`). Lock age
 never permits stealing from a live process; the old poller stale-ms setting is
 removed. Async work fails closed if its supervisor is unavailable.
+Adapter and voice-reply task supervisors use `LemonCore.TaskSupervisor` with a
+default cap of 1024, configurable per named supervisor under
+`:lemon_core, :task_supervisor_max_children`. The outbox retains its explicit
+`max_concurrency` cap and existing not-started delivery scheduling. Rejected
+background work does not fall back to unsupervised execution or acknowledge a
+side question as started; rejected voice synthesis leaves the delivered text
+intact without claiming audio delivery.
 Telegram outbound attempts sends once, without adapter sleeps or retry loops;
 only the outbox retries transient errors and honors rate-limit hints. Direct
 script sends return those errors to the caller.

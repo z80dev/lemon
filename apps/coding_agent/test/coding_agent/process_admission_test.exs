@@ -206,15 +206,12 @@ defmodule CodingAgent.ProcessAdmissionTest do
       assert_receive {:exit_confirmed, ^id}, 5_000
       assert_receive {:DOWN, ^ref, :process, ^observer, :normal}, 5_000
 
-      case ProcessManager.receipt(id, "admission-test") do
-        {:ok, %{classification: :outcome_unknown}} ->
-          assert :ok = ProcessManager.confirm_external_termination(id, "admission-test")
+      # EOF above independently proves termination even when boot recovery has
+      # already resolved the receipt from :outcome_unknown to :accepted.
+      assert :ok = ProcessStore.confirm_termination(id, :external_confirmed)
 
-        _ ->
-          :ok
-      end
-
-      assert :ok = ProcessManager.clear(id)
+      assert :ok = ProcessStore.delete(id)
+      assert :ok = ProcessSession.stop(id)
     end)
 
     {id, counter, Keyword.put(opts, :command, "exec 3> '#{fifo}'; " <> opts[:command])}
@@ -1129,7 +1126,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
     terminate(available)
   end
 
-  test "queue and store restart reconcile surviving and unknown processes before admitting",
+  test "queue and store restart reconcile surviving and confirmed terminated processes before admitting",
        context do
     {a, counter, opts} = unknown_launch(context, "restart-a")
     caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
@@ -1150,10 +1147,16 @@ defmodule CodingAgent.ProcessAdmissionTest do
     assert :ok = stop_supervised(LaneQueue)
 
     assert :ok =
-             Supervisor.terminate_child(CodingAgent.Supervisor, CodingAgent.ProcessStoreServer)
+             Supervisor.terminate_child(
+               CodingAgent.ProcessSupervisor,
+               CodingAgent.ProcessStoreServer
+             )
 
     assert {:ok, _} =
-             Supervisor.restart_child(CodingAgent.Supervisor, CodingAgent.ProcessStoreServer)
+             Supervisor.restart_child(
+               CodingAgent.ProcessSupervisor,
+               CodingAgent.ProcessStoreServer
+             )
 
     queue =
       start_supervised!(
@@ -1165,16 +1168,21 @@ defmodule CodingAgent.ProcessAdmissionTest do
       )
 
     recovered = %{context | queue: queue}
+    assert {:ok, %{termination_confirmed: true, capacity_held: false}, _} = ProcessStore.get(a)
+    assert {:ok, %{classification: :accepted}} = ProcessManager.receipt(a, "admission-test")
+    {d, _, _, _} = start_blocking(recovered, "restart-d")
     {c, waiting_counter, _} = enqueue(recovered, "restart-c")
-    assert %{occupied: 2, unknown: 1, queued: 1} = ProcessManager.admission_counts()
+    assert %{occupied: 2, unknown: 0, queued: 1} = ProcessManager.admission_counts()
 
-    assert {:error, {:outcome_unknown, ^a}} =
-             ProcessManager.exec(Keyword.put(opts, :lane_queue, queue))
+    # Independent boot-time workload evidence resolves the unknown termination;
+    # repeating the fixed launch identity still returns its receipt, never reruns.
+    assert {:ok, ^a} = ProcessManager.exec(Keyword.put(opts, :lane_queue, queue))
 
     refute File.exists?(waiting_counter)
     assert File.read!(counter) == "x"
     assert :ok = ProcessManager.cancel(c, "admission-test")
     terminate(b)
+    terminate(d)
   end
 
   test "long-running owned process remains inspectable and cancellable after caller yield",

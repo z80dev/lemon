@@ -403,21 +403,18 @@ defmodule CodingAgent.Session.WasmBridge do
   defp start_host_worker(tool_name, params_json, tool, signal) do
     # Linked as well as supervised: abnormal Session death kills the worker;
     # normal shutdown explicitly cancels all requests in Session.terminate/2.
-    {:ok,
-     Task.Supervisor.async(CodingAgent.TaskSupervisor, fn ->
-       try do
-         case maybe_handle_reserved_host_target(tool_name, params_json) do
-           :not_reserved -> execute_host_tool(tool, params_json, signal)
-           result -> result
-         end
-       rescue
-         _ -> {:error, :host_tool_failed}
-       catch
-         _, _ -> {:error, :host_tool_failed}
-       end
-     end)}
-  catch
-    :exit, _ -> {:error, :host_worker_unavailable}
+    LemonCore.TaskSupervisor.async(CodingAgent.TaskSupervisor, fn ->
+      try do
+        case maybe_handle_reserved_host_target(tool_name, params_json) do
+          :not_reserved -> execute_host_tool(tool, params_json, signal)
+          result -> result
+        end
+      rescue
+        _ -> {:error, :host_tool_failed}
+      catch
+        _, _ -> {:error, :host_tool_failed}
+      end
+    end)
   end
 
   defp execute_host_tool(nil, _params_json, _signal), do: {:error, :tool_not_found}

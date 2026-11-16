@@ -1331,25 +1331,28 @@ defmodule CodingAgent.ExecutionNode.Worker do
     do: send_invoke_error(state, invoke_id, :invalid_config)
 
   defp start_service_task(state, invoke_id, failure_reason, run) do
-    task =
-      Task.Supervisor.async(state.services.task_supervisor, fn ->
-        try do
-          run.()
-        rescue
-          _ -> {:error, failure_reason}
-        catch
-          _, _ -> {:error, failure_reason}
-        end
-      end)
+    case LemonCore.TaskSupervisor.async(state.services.task_supervisor, fn ->
+           try do
+             run.()
+           rescue
+             _ -> {:error, failure_reason}
+           catch
+             _, _ -> {:error, failure_reason}
+           end
+         end) do
+      {:ok, task} ->
+        invocation = %{
+          service_task: task,
+          monitor_ref: task.ref,
+          failure_reason: failure_reason,
+          run_ref: nil
+        }
 
-    invocation = %{
-      service_task: task,
-      monitor_ref: task.ref,
-      failure_reason: failure_reason,
-      run_ref: nil
-    }
+        %{state | invocations: Map.put(state.invocations, invoke_id, invocation)}
 
-    %{state | invocations: Map.put(state.invocations, invoke_id, invocation)}
+      {:error, _reason} ->
+        send_invoke_error(state, invoke_id, :runtime_unavailable)
+    end
   rescue
     _ -> send_invoke_error(state, invoke_id, :runtime_unavailable)
   catch
@@ -1495,18 +1498,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
     capabilities = state.services.capabilities_module
     opts = host_io_opts(state)
 
-    task =
-      Task.Supervisor.async(state.services.task_supervisor, fn ->
-        try do
-          capabilities.get(opts)
-        rescue
-          _ -> {:error, :capability_inspection_unavailable}
-        catch
-          _, _ -> {:error, :capability_inspection_unavailable}
-        end
-      end)
+    case LemonCore.TaskSupervisor.async(state.services.task_supervisor, fn ->
+           try do
+             capabilities.get(opts)
+           rescue
+             _ -> {:error, :capability_inspection_unavailable}
+           catch
+             _, _ -> {:error, :capability_inspection_unavailable}
+           end
+         end) do
+      {:ok, task} ->
+        %{state | capability_probe: %{task: task, waiters: waiters, queued: []}}
 
-    %{state | capability_probe: %{task: task, waiters: waiters, queued: []}}
+      {:error, _reason} ->
+        reply_capability_waiters(state, waiters, :unavailable)
+    end
   rescue
     _ -> reply_capability_waiters(state, waiters, :unavailable)
   catch

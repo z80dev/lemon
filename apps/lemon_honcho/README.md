@@ -33,7 +33,8 @@ additional provider, never a replacement.
 | `LemonHoncho.ContextContributor` | The `LemonAgent.ContextRegistry` contributor registered under `:honcho`, contributing each half at its own placement |
 | `LemonHoncho.Tools.*` | The five agent tools: `Reasoning`, `Search`, `Context`, `Profile`, `Conclude` |
 
-`LemonHoncho.Application` starts `SessionManager` and performs the registrations.
+`LemonHoncho.Application` starts the upload task supervisor and `SessionManager`,
+and performs the registrations.
 Set `config :lemon_honcho, :start_session_manager, false` to bring the app up
 without the process — that is a test affordance, not a supported deployment.
 
@@ -206,8 +207,12 @@ is answered with a statement to that effect and no request is made.
 
 **Writes.** A finished run reaches Honcho as two messages — the run's
 `prompt_summary` and `answer_summary` — attributed to the user and assistant peers.
-Uploads are fire-and-forget and never block finalization. Three conditions all have to
-hold for one to happen:
+Uploads are fire-and-forget tasks under `LemonHoncho.TaskSupervisor` and never
+block finalization. Its configurable task cap uses the shared caller policy
+(1024 by default), not a measured throughput claim. An unavailable or full
+supervisor drops the best-effort upload before any remote request and logs the
+admission classification; failed or interrupted writes are never replayed.
+Three conditions all have to hold for an upload to happen:
 
 * `LEMON_HONCHO_SAVE_MESSAGES` is true (the default). When it is false the upload is
   dropped in `SessionManager`, and the two write actions the tools expose are refused

@@ -18,6 +18,31 @@ Router SessionCoordinator (conversation ordering)
   -> LemonCore.Bus -> router semantic output -> channels delivery
 ```
 
+### Supervision tree
+
+```text
+LemonGateway.Supervisor (one_for_one)
+  +-- Config
+  +-- EngineLock
+  +-- ExecutionSupervisor (rest_for_one)
+  |     +-- RunRegistry
+  |     +-- ThreadRegistry
+  |     +-- RunSupervisor (DynamicSupervisor)
+  |     +-- ThreadWorkerSupervisor (DynamicSupervisor)
+  |     +-- Scheduler
+  +-- Health.Server (optional)
+  +-- IngressSupervisor (opt-in)
+```
+
+The execution subtree has a separate budget of 10 restarts per 5 seconds,
+an explicit containment policy. Registry loss stops downstream run/worker
+supervisors and the scheduler in reverse order and restarts them in list order.
+No surviving worker can keep stale registry or scheduler state. Temporary
+executions are not replayed; durable receipts and normal reconciliation retain
+their existing unknown-outcome semantics. Configuration, launch locks and ingress
+remain independently supervised. The unused gateway `TaskSupervisor` is removed;
+ingress owns any task supervisor it needs.
+
 ### Flow
 
 1. Router-owned `SessionCoordinator` decides queue semantics (`collect`, `followup`, `steer`, `interrupt`) and hands queue-semantic-free `%LemonCore.ExecutionCommand{}` values to `LemonGateway.Runtime`.

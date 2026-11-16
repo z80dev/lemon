@@ -13,6 +13,7 @@ defmodule LemonOmp.Application do
     # session supervisor stops every omp process (publishing its exit) while
     # the snapshot table still exists.
     children = [
+      LemonCore.TaskSupervisor.child_spec(name: LemonOmp.TaskSupervisor),
       LemonOmp.Manager,
       LemonOmp.Models,
       {DynamicSupervisor, name: LemonOmp.SessionSupervisor, strategy: :one_for_one}

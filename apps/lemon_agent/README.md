@@ -62,8 +62,19 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 
 - **AbortSignal.Registry** -- A duplicate-key Registry for cancellation and redirect subscriptions. Each process subscribes idempotently per signal and unsubscribes when its wait finishes.
 - **AgentRegistry** -- An Elixir `Registry` with `:unique` keys. Agents register under `{session_id, role, index}` tuples.
-- **LoopTaskSupervisor** -- A `Task.Supervisor` for spawning agent loop tasks via `Task.Supervisor.async_nolink/2`.
+- **LoopTaskSupervisor** -- A `Task.Supervisor` for spawning agent loop tasks through `LemonCore.TaskSupervisor`.
 - **ToolTaskSupervisor** -- A `Task.Supervisor` for spawning concurrent tool execution tasks.
+
+Both task supervisors cap concurrent children at **1024** by default. Configure
+`:lemon_core, :task_supervisor_max_children` as a map keyed by
+`LemonAgent.LoopTaskSupervisor` or `LemonAgent.ToolTaskSupervisor` before startup.
+Values must be positive integers. Rejected prompt/continue admission returns
+`{:error, :task_capacity_reached | :task_supervisor_unavailable}` without changing
+the conversation; direct loop streams terminate with `{:task_start_failed, reason}`.
+Tool admission failures produce error results with `outcome: :not_started`;
+ambiguous startup exits retain `outcome: :unknown`. Neither path retries tools.
+Auto-thinking keeps its documented default-effort fallback when its classifier
+cannot start. Broker block reports remain best-effort and log rejected admission.
 
 Credential cooldowns and fallback session pins live in public ETS tables
 created only by their supervised `ModelRuntime.CredentialHealth` and

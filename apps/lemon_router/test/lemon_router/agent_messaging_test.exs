@@ -588,14 +588,19 @@ defmodule LemonRouter.AgentMessagingTest do
       )
 
     id = "session://" <> source.session_key
-    :ok = Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.RunOrchestrator)
+
+    :ok =
+      Supervisor.terminate_child(LemonRouter.ConversationSupervisor, LemonRouter.RunOrchestrator)
 
     try do
       assert {:ok, entries} = AgentMessaging.list("operator", query: suffix, limit: 200)
       assert %{status: :unknown} = Enum.find(entries, &(&1.id == id))
     after
       assert {:ok, _} =
-               Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.RunOrchestrator)
+               Supervisor.restart_child(
+                 LemonRouter.ConversationSupervisor,
+                 LemonRouter.RunOrchestrator
+               )
     end
   end
 
@@ -606,14 +611,16 @@ defmodule LemonRouter.AgentMessagingTest do
     path = Path.join(System.tmp_dir!(), "named_message_durable_#{suffix}")
     previous = :sys.get_state(Store)
     assert {:ok, backend_state} = SqliteBackend.init(path: path)
-    :ok = Supervisor.terminate_child(LemonRouter.Supervisor, AgentMessaging)
+    :ok = Supervisor.terminate_child(LemonRouter.ConversationSupervisor, AgentMessaging)
 
     :sys.replace_state(Store, fn state ->
       %{state | backend: SqliteBackend, backend_state: backend_state}
     end)
 
     try do
-      assert {:ok, _} = Supervisor.restart_child(LemonRouter.Supervisor, AgentMessaging)
+      assert {:ok, _} =
+               Supervisor.restart_child(LemonRouter.ConversationSupervisor, AgentMessaging)
+
       source_pid = connection(:durable_source)
       target_pid = connection(:durable_target)
       source = register_bot(scope, "source-#{suffix}", source_pid)
@@ -646,7 +653,7 @@ defmodule LemonRouter.AgentMessagingTest do
 
       assert {:ok, _} = AgentMessaging.rename(scope, target.id, "durable_robert")
       assert :ok = Store.sync()
-      :ok = Supervisor.terminate_child(LemonRouter.Supervisor, AgentMessaging)
+      :ok = Supervisor.terminate_child(LemonRouter.ConversationSupervisor, AgentMessaging)
 
       :sys.replace_state(Store, fn state ->
         :ok = SqliteBackend.close(state.backend_state)
@@ -654,7 +661,9 @@ defmodule LemonRouter.AgentMessagingTest do
         %{state | backend_state: reopened}
       end)
 
-      assert {:ok, _} = Supervisor.restart_child(LemonRouter.Supervisor, AgentMessaging)
+      assert {:ok, _} =
+               Supervisor.restart_child(LemonRouter.ConversationSupervisor, AgentMessaging)
+
       register_bot(scope, "source-#{suffix}", source_pid)
       register_bot(scope, "target-#{suffix}", target_pid)
 
@@ -680,14 +689,16 @@ defmodule LemonRouter.AgentMessagingTest do
                       {:named_agent_event, "agent.message.result", _}},
                      50
     after
-      :ok = Supervisor.terminate_child(LemonRouter.Supervisor, AgentMessaging)
+      :ok = Supervisor.terminate_child(LemonRouter.ConversationSupervisor, AgentMessaging)
 
       :sys.replace_state(Store, fn state ->
         :ok = SqliteBackend.close(state.backend_state)
         previous
       end)
 
-      assert {:ok, _} = Supervisor.restart_child(LemonRouter.Supervisor, AgentMessaging)
+      assert {:ok, _} =
+               Supervisor.restart_child(LemonRouter.ConversationSupervisor, AgentMessaging)
+
       File.rm_rf!(path)
     end
   end
@@ -765,8 +776,8 @@ defmodule LemonRouter.AgentMessagingTest do
   end
 
   defp restart_messaging do
-    :ok = Supervisor.terminate_child(LemonRouter.Supervisor, AgentMessaging)
-    assert {:ok, _} = Supervisor.restart_child(LemonRouter.Supervisor, AgentMessaging)
+    :ok = Supervisor.terminate_child(LemonRouter.ConversationSupervisor, AgentMessaging)
+    assert {:ok, _} = Supervisor.restart_child(LemonRouter.ConversationSupervisor, AgentMessaging)
   end
 
   defp wait_until(fun, remaining \\ 100)

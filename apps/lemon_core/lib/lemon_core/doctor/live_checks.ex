@@ -9,7 +9,8 @@ defmodule LemonCore.Doctor.LiveChecks do
   @spec run([job()], keyword()) :: [Check.t()]
   def run(jobs, opts \\ []) do
     timeout = Keyword.get(opts, :live_overall_timeout_ms, 6_000)
-    {:ok, supervisor} = Task.Supervisor.start_link()
+    # Caller policy: this private supervisor admits exactly this invocation's jobs.
+    {:ok, supervisor} = Task.Supervisor.start_link(max_children: max(length(jobs), 1))
 
     try do
       tasks =

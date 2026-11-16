@@ -5,6 +5,10 @@ defmodule LemonEvals.Support do
   parsing, message/content introspection, scripted agent-loop stream
   builders, and generic assertions used across eval contract checks.
 
+  Scripted stream producers run under `LemonAgent.LoopTaskSupervisor`, just like
+  agent work. A full or unavailable supervisor ends the fixture stream with an
+  admission error rather than creating an unsupervised producer.
+
   These functions are `def` (not `defp`) so eval modules can `import` this
   module and call them unqualified, matching how they were written when
   they all lived in a single `LemonEvals.Harness` module.
@@ -1010,8 +1014,8 @@ defmodule LemonEvals.Support do
   def response_stream(%AssistantMessage{} = response) do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
-    {:ok, task_pid} =
-      Task.start(fn ->
+    admission =
+      LemonCore.TaskSupervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
         try do
           LemonAi.EventStream.push!(stream, {:start, %{response | content: []}})
 
@@ -1044,7 +1048,18 @@ defmodule LemonEvals.Support do
         end
       end)
 
-    LemonAi.EventStream.attach_task(stream, task_pid)
+    case admission do
+      {:ok, task_pid} ->
+        LemonAi.EventStream.attach_task(stream, task_pid)
+
+      {:error, reason} ->
+        LemonAi.EventStream.error(stream, %{
+          response
+          | stop_reason: :error,
+            error_message: Atom.to_string(reason),
+            error_details: nil
+        })
+    end
 
     stream
   end
