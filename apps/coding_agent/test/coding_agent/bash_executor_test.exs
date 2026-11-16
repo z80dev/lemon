@@ -6,6 +6,32 @@ defmodule CodingAgent.BashExecutorTest do
   alias LemonAgent.AbortSignal
   alias LemonCore.ProcessGroup
 
+  @tag :python3
+  test "stream relay captures authentic stdout, stderr and shell exit status" do
+    assert {:ok, result} =
+             BashExecutor.execute("printf 'out'; printf 'err' >&2; exit 3", "/tmp",
+               capture_streams: true
+             )
+
+    assert result.stdout == "out"
+    assert result.stderr == "err"
+    assert result.exit_code == 3
+    assert result.output in ["outerr", "errout"]
+  end
+
+  @tag :python3
+  test "stream relay bounds each capture independently" do
+    assert {:ok, result} =
+             BashExecutor.execute("printf '123456789'; printf 'abcdefghi' >&2", "/tmp",
+               capture_streams: true,
+               max_bytes: 4
+             )
+
+    assert result.stdout == "1234"
+    assert result.stderr == "abcd"
+    assert result.truncated
+  end
+
   describe "execute/3" do
     test "executes simple command and returns Result struct" do
       {:ok, result} = BashExecutor.execute("echo hello", "/tmp")

@@ -551,7 +551,12 @@ defmodule CodingAgent.ToolRegistry do
     resolution = if browser?, do: resolution || LemonCore.BrowserProvider.resolve(opts)
     browser_opts = Keyword.put(opts, :browser_provider_resolution, resolution)
 
-    builtin_tools()
+    code_tools =
+      if Tools.CodeMode.enabled?(opts),
+        do: [{:eval_wait, Tools.CodeMode.Wait, :managed}],
+        else: []
+
+    (builtin_tools() ++ code_tools)
     |> Enum.filter(fn
       {:ask, _module, _ownership} ->
         Tools.Ask.available?(opts)
@@ -615,9 +620,22 @@ defmodule CodingAgent.ToolRegistry do
   # workspace (an edit racing a `bash` rewrite of the same file) lose updates.
   # Read-only tools stay parallel. File tools additionally lock per path.
   @mutating_builtins ~w(write edit patch ast_grep bash eval debug fs_checkpoint checkpoint rewind lsp)
+  # Code-mode cells outlive their initial call when yielded. Inner wrapped tools
+  # acquire their own locks; holding the outer eval lock would deadlock them.
+  defp maybe_serialize_mutation(%AgentTool{name: "eval"} = tool, "eval", cwd, opts) do
+    if Tools.CodeMode.enabled?(opts),
+      do: tool,
+      else: serialize_mutation(tool, "eval", cwd, opts)
+  end
 
   defp maybe_serialize_mutation(%AgentTool{} = tool, name, cwd, opts)
        when name in @mutating_builtins do
+    serialize_mutation(tool, name, cwd, opts)
+  end
+
+  defp maybe_serialize_mutation(tool, _name, _cwd, _opts), do: tool
+
+  defp serialize_mutation(tool, name, cwd, opts) do
     key = {:session, Keyword.get(opts, :session_id) || Path.expand(cwd)}
     execute = tool.execute
 
@@ -634,8 +652,6 @@ defmodule CodingAgent.ToolRegistry do
         end
     }
   end
-
-  defp maybe_serialize_mutation(tool, _name, _cwd, _opts), do: tool
 
   # `lsp` only writes files when asked to apply a rename or code action.
   defp mutating_call?("lsp", params), do: is_map(params) and params["apply"] == true

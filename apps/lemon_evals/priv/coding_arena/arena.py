@@ -38,7 +38,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TASKS_DIR = HERE.parent / 'coding_tasks'
 IMAGES = {'base': 'lemon-arena-base', 'lemon': 'lemon-arena-lemon', 'lemon-coding': 'lemon-arena-lemon',
-          'lemon-legacy': 'lemon-arena-lemon', 'omp': 'lemon-arena-omp'}
+          'lemon-code-mode': 'lemon-arena-lemon', 'lemon-legacy': 'lemon-arena-lemon', 'omp': 'lemon-arena-omp'}
 LANGUAGES = {'python', 'javascript', 'typescript', 'go', 'rust', 'bash', 'c', 'sql', 'mixed'}
 CATEGORIES = {'bug_fix', 'feature', 'refactor', 'debugging', 'performance', 'concurrency',
               'read_only', 'test_writing', 'migration', 'cli', 'data', 'parsing', 'api_design'}
@@ -487,12 +487,13 @@ def parse_lemon(output):
     return result
 
 
-# `lemon` runs the release defaults; `lemon-coding` and `lemon-legacy` pin the
-# tool-disclosure profile explicitly (see docs/config.md), so the pair stays a
-# distinct treatment whatever the release default is.
+# Explicit arms pin disclosure independently of release defaults. Code mode is
+# experimental and is never added to the default agent selection.
 AGENTS = {'lemon': (prepare_lemon, lemon_argv, parse_lemon),
           'lemon-coding': (lambda container, args, token, model: prepare_lemon(container, args, token, model, 'coding'),
                            lemon_argv, parse_lemon),
+          'lemon-code-mode': (lambda container, args, token, model: prepare_lemon(container, args, token, model, 'code_mode'),
+                              lemon_argv, parse_lemon),
           'lemon-legacy': (lambda container, args, token, model: prepare_lemon(container, args, token, model, 'legacy'),
                            lemon_argv, parse_lemon),
           'omp': (prepare_omp, omp_argv, parse_omp)}
@@ -526,6 +527,12 @@ def run_trial(trial, task, args, out, model):
     row = {**{key: trial[key] for key in ('id', 'task', 'agent', 'rep')}, 'proxy_trial': attempt,
            'language': task['language'], 'category': task['category'], 'difficulty': task['difficulty'],
            'model': model, 'thinking': args.thinking, 'passed': False, 'failure': None}
+    row['requested_disclosure_profile'] = {
+        'lemon-coding': 'coding', 'lemon-legacy': 'legacy',
+        'lemon-code-mode': 'code_mode'}.get(agent)
+    # CLI completion exports usage/model, not the applied disclosure report.
+    row['observed_disclosure_profile'] = None
+    row['disclosure_attribution'] = 'unverified' if row['requested_disclosure_profile'] else 'not_requested'
     container = None
     started = time.monotonic()
     try:
@@ -856,10 +863,13 @@ def proxy_stats(path):
         except ValueError:
             continue
         trial = stats.setdefault(entry.get('trial'), {'requests': 0, 'errors': 0, 'rate_limited': 0, 'models': set(),
+                                                       'usage_events': 0, 'usage_missing': False,
                                                        'input': 0, 'cache_read': 0, 'output': 0})
         if not entry.get('path', '').endswith(('/messages', '/chat/completions', '/responses')):
             continue
         if entry.get('kind') == 'usage':
+            trial['usage_events'] += 1
+            trial['usage_missing'] = trial['usage_missing'] or entry.get('usage_missing') is True
             cached = entry.get('cache_read_tokens', 0)
             uncached = entry.get('input_tokens', 0)
             # Proxy logs before `usage_style` existed kept OpenAI chat prompt_tokens, which include cache hits.
@@ -868,6 +878,9 @@ def proxy_stats(path):
             trial['input'] += uncached
             trial['cache_read'] += cached
             trial['output'] += entry.get('output_tokens', 0)
+            continue
+        if entry.get('kind') == 'usage_missing':
+            trial['usage_missing'] = True
             continue
         trial['requests'] += 1
         if entry.get('model'):
@@ -881,22 +894,24 @@ def proxy_stats(path):
 def cmd_report(args):
     out = Path(args.output_dir)
     rows = [json.loads(line) for line in (out / 'results.jsonl').read_text().splitlines() if line.strip()]
+    all_rows = list(rows)
     latest = {}
     for row in rows:
         latest[row['id']] = row
     rows = list(latest.values())
     proxy = proxy_stats(args.proxy_log or (out / 'proxy.jsonl'))
-    for row in rows:
+    for row in all_rows:
         stats = proxy.get(row.get('proxy_trial', row['id']))
         if stats:
             row['model_requests'] = stats['requests']
             row['rate_limited'] = stats['rate_limited']
             row['upstream_errors'] = stats['errors']
             row['wire_models'] = sorted(stats['models'])
-            # Anthropic-style input_tokens exclude cache reads; total is everything the provider processed.
-            row['wire_input_tokens'] = stats['input'] + stats['cache_read']
-            row['wire_cached_tokens'] = stats['cache_read']
-            row['wire_output_tokens'] = stats['output']
+            # Missing usage is unknown, not a zero-token trial.
+            if stats['usage_events'] and not stats['usage_missing']:
+                row['wire_input_tokens'] = stats['input'] + stats['cache_read']
+                row['wire_cached_tokens'] = stats['cache_read']
+                row['wire_output_tokens'] = stats['output']
     agents = sorted({row['agent'] for row in rows})
     scored = [row for row in rows if row['failure'] != 'infrastructure']
     models = sorted({row['model'] for row in scored})
@@ -935,6 +950,18 @@ def cmd_report(args):
                     mix[name] = mix.get(name, 0) + count
             entry['tool_mix'] = dict(sorted(mix.items(), key=lambda item: -item[1]))
             result[agent] = entry
+            # Subscription proxy credentials do not establish a dollar price. Never
+            # turn missing prices into zero spend, even when token usage is known.
+            entry['cost_per_verified_success_usd'] = None
+            entry['pricing_status'] = 'unknown_pricing'
+            entry['verified_successes'] = sum(row['passed'] for row in mine)
+            entry['token_totals'] = {
+                key: {'sum': sum(row[key] for row in mine) if mine and all(
+                    isinstance(row.get(key), (int, float)) for row in mine) else None,
+                      'observed_sum': sum(row[key] for row in mine if isinstance(row.get(key), (int, float))),
+                      'observed_trials': sum(isinstance(row.get(key), (int, float)) for row in mine),
+                      'attempted_trials': len(mine)}
+                for key in ('wire_input_tokens', 'wire_cached_tokens', 'wire_output_tokens')}
         return result
 
     def paired(keys):
@@ -972,6 +999,11 @@ def cmd_report(args):
     report = {'manifest': json.loads((out / 'manifest.json').read_text()) if (out / 'manifest.json').exists() else {},
               'trials': len(rows), 'infrastructure_failures': len(rows) - len(scored),
               'models': per_model, 'pooled': pooled, 'breakdowns': breakdowns, 'per_task': per_task}
+    report['disclosure_attribution'] = 'requested_only_not_observed'
+    report['all_attempt_efficiency_by_model'] = {
+        model: efficiency([row for row in all_rows if row['model'] == model])
+        for model in sorted({row['model'] for row in all_rows})}
+    report['all_attempt_efficiency'] = efficiency(all_rows)
     (out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     (out / 'report.md').write_text(render_markdown(report, agents))
     print(render_markdown(report, agents))
@@ -996,6 +1028,17 @@ def render_markdown(report, agents):
                      f"timeout {manifest.get('timeout')}s. Infrastructure failures excluded: {report['infrastructure_failures']}. "
                      'Every (task, repetition) group runs all arms on one model; comparisons never mix models.')
         lines.append('')
+    lines += ['## All recorded attempts: usage and cost', '',
+              'Includes infrastructure failures; unknown prices remain unknown. Input includes cached tokens.',
+              '', '| Agent | Input tokens | Cached tokens | Output tokens | Cost / verified success USD |',
+              '| --- | ---: | ---: | ---: | --- |']
+    for agent in agents:
+        e = report['all_attempt_efficiency'][agent]
+        totals = e['token_totals']
+        lines.append(f"| {agent} | {totals['wire_input_tokens']['sum']} | "
+                     f"{totals['wire_cached_tokens']['sum']} | {totals['wire_output_tokens']['sum']} | "
+                     f"unknown ({e['pricing_status']}) |")
+    lines.append('')
     for model, section in report['models'].items():
         lines += [f'## Model `{model}`', '',
                   f"{section['groups']} groups, {section['complete_groups']} with every arm scored.", '',

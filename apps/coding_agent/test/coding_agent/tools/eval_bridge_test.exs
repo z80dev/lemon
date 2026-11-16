@@ -16,6 +16,111 @@ defmodule CodingAgent.Tools.EvalBridgeTest do
 
   @moduletag :tmp_dir
 
+  @tag :python3
+  test "code-mode local bash bridge returns real split streams and exit status", ctx do
+    bash = CodingAgent.Tools.Bash.tool(ctx.cwd, tool_disclosure: %{profile: :code_mode})
+    resolver = fn "bash" -> {:ok, bash} end
+
+    assert {:ok, result} =
+             CodingAgent.Eval.Bridge.call(
+               resolver,
+               "bash",
+               "streams",
+               %{"command" => "printf 'stdout only'; printf 'stderr only' >&2; exit 3"},
+               AbortSignal.new()
+             )
+
+    assert result.stdout == "stdout only"
+    assert result.stderr == "stderr only"
+    assert result.exit_code == 3
+    refute result.output_combined
+    refute result.ok
+  end
+
+  defmodule ReplySink do
+    def tool_reply(pid, ref, call, result), do: send(pid, {:bridge_reply, ref, call, result})
+  end
+
+  test "a non-kernel runtime receives bridge refusals through its reply module" do
+    ref = make_ref()
+    bridge = CodingAgent.Eval.Bridge.new(self(), ref, "sandbox", nil, reply_module: ReplySink)
+    CodingAgent.Eval.Bridge.request(bridge, 1, "missing", %{})
+    assert_received {:bridge_reply, ^ref, 1, {:error, _}}
+  end
+
+  test "direct bridge calls validate arguments before executing wrapped tools" do
+    parent = self()
+
+    wrapped = %AgentTool{
+      name: "validated",
+      parameters: %{
+        "type" => "object",
+        "required" => ["value"],
+        "properties" => %{"value" => %{"type" => "integer"}}
+      },
+      execute: fn id, args, signal, update ->
+        send(parent, {:validated, id, args, signal, update})
+        %AgentToolResult{content: [%TextContent{text: "done"}]}
+      end
+    }
+
+    resolver = fn "validated" -> {:ok, wrapped} end
+    signal = AbortSignal.new()
+
+    assert {:error, message} =
+             CodingAgent.Eval.Bridge.call(resolver, "validated", "call", %{}, signal)
+
+    assert message =~ "invalid tool arguments"
+    refute_received {:validated, _, _, _, _}
+
+    args = %{"value" => 3, "i" => "ordinary cell data"}
+
+    assert {:ok, %{ok: true, text: "done"}} =
+             CodingAgent.Eval.Bridge.call(resolver, "validated", "call", args, signal)
+
+    assert_received {:validated, "call", ^args, ^signal, nil}
+  end
+
+  test "structured streams come from details rather than presentation text" do
+    result = %AgentToolResult{
+      content: [%TextContent{text: "decorated human output"}],
+      details: %{stdout: "out", stderr: "err", exit_code: 7},
+      is_error: true
+    }
+
+    assert %{
+             ok: false,
+             stdout: "out",
+             stderr: "err",
+             exit_code: 7,
+             text: "decorated human output"
+           } = CodingAgent.Eval.Bridge.project(result)
+
+    plain =
+      CodingAgent.Eval.Bridge.project(%AgentToolResult{
+        content: [%TextContent{text: "stdout: not a structured field"}]
+      })
+
+    refute Map.has_key?(plain, :stdout)
+    refute Map.has_key?(plain, :stderr)
+  end
+
+  test "merged backend streams are unavailable rather than fabricated" do
+    result = %AgentToolResult{
+      content: [%TextContent{text: "combined\\nCommand exited with code 4"}],
+      details: %{
+        stdout: nil,
+        stderr: nil,
+        output: "combined",
+        exit_code: 4,
+        output_combined: true
+      }
+    }
+
+    assert %{stdout: nil, stderr: nil, output: "combined", exit_code: 4, output_combined: true} =
+             CodingAgent.Eval.Bridge.project(result)
+  end
+
   @python System.find_executable("python3") || System.find_executable("python")
   @bun System.find_executable("bun")
   @node System.find_executable("node")
@@ -333,7 +438,7 @@ defmodule CodingAgent.Tools.EvalBridgeTest do
         |> Task.await_many(5_000)
       end)
 
-      events = for _ <- 1..4, do: assert_receive({kind, _} = event when kind in [:enter, :leave])
+      events = for _ <- 1..4, do: assert_receive({kind, _} when kind in [:enter, :leave])
       assert [{:enter, a}, {:leave, a}, {:enter, b}, {:leave, b}] = events
       assert a != b
       assert MutationLock.held() == []

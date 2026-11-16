@@ -2778,6 +2778,13 @@ global config: put the section in the benchmark project's `.lemon/config.toml`
 overrides file config for that process only), or start sessions
 programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile: :coding])`.
 
+The experimental `profile = "code_mode"` (or
+`LEMON_TOOL_DISCLOSURE_PROFILE=code_mode`) replaces that profile's `eval` with
+permissionless Deno cells and `eval_wait`, with deterministic TypeScript tool
+declarations. It requires Deno 2, remains opt-in, and does not change `auto`.
+See [eval](tools/eval.md#experimental-code-mode-profile) for isolation,
+bridged-call authority, re-attachment and the paired-evaluation command.
+
 To opt out of the coding default, set `profile = "legacy"` in the existing
 global/project section or `LEMON_TOOL_DISCLOSURE_PROFILE=legacy` on the runtime.
 `enabled = false` / `LEMON_TOOL_DISCLOSURE_ENABLED=false` disables disclosure

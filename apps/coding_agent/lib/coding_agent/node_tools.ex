@@ -72,6 +72,16 @@ defmodule CodingAgent.NodeTools do
     routing? = Enum.any?(tuples, fn {name, _tool, _source} -> name == "nodes" end)
 
     Enum.map(tuples, fn
+      {"eval", tool, :builtin} ->
+        # Remote tool sessions may use the ordinary full-authority eval kernel.
+        # Never silently switch a code-mode cell to that different runtime.
+        tool =
+          if CodingAgent.Tools.CodeMode.enabled?(opts),
+            do: refuse_remote(tool),
+            else: if(routing?, do: wrap(tool, opts), else: refuse_remote(tool))
+
+        {"eval", tool, :builtin}
+
       {name, tool, :builtin} when name in @routable ->
         {name, if(routing?, do: wrap(tool, opts), else: refuse_remote(tool)), :builtin}
 

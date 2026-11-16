@@ -991,7 +991,8 @@ defmodule CodingAgent.Session do
   @spec lookup_bridge_tool(map(), String.t(), pid()) ::
           {:ok, AgentTool.t()} | {:error, String.t()}
   def lookup_bridge_tool(state, name, session_pid) do
-    with false <- name == "eval" or name in CodingAgent.ToolDisclosure.bridge_names(),
+    with false <-
+           name in ["eval", "eval_wait"] or name in CodingAgent.ToolDisclosure.bridge_names(),
          %{tool: %AgentTool{} = tool} <- Map.get(state.tool_catalog || %{}, name) do
       {:ok,
        Planning.host_tool(
