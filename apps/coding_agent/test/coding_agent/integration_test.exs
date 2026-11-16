@@ -80,6 +80,20 @@ defmodule CodingAgent.IntegrationTest do
     session
   end
 
+  defp start_blocked_session(opts) do
+    stream_fn =
+      LemonAgent.Test.Mocks.blocking_stream_fn(
+        LemonAgent.Test.Mocks.assistant_message("done"),
+        self()
+      )
+
+    session = start_session(Keyword.put(opts, :stream_fn, stream_fn))
+    :ok = Session.prompt(session, "hold this turn")
+    assert_receive {:stream_blocked, producer}, 5_000
+    on_exit(fn -> send(producer, :release_stream) end)
+    {session, producer}
+  end
+
   defp wait_for_streaming_complete(session, timeout \\ 5000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     wait_loop(session, deadline)
@@ -662,7 +676,7 @@ defmodule CodingAgent.IntegrationTest do
 
     @tag :tmp_dir
     test "follow-up messages are queued", %{tmp_dir: tmp_dir} do
-      session = start_session(cwd: tmp_dir)
+      {session, producer} = start_blocked_session(cwd: tmp_dir)
 
       # Queue follow-up messages
       :ok = Session.follow_up(session, "Do this next")
@@ -670,11 +684,12 @@ defmodule CodingAgent.IntegrationTest do
 
       state = Session.get_state(session)
       assert :queue.len(state.follow_up_queue) == 2
+      send(producer, :release_stream)
     end
 
     @tag :tmp_dir
     test "reset clears both queues", %{tmp_dir: tmp_dir} do
-      session = start_session(cwd: tmp_dir)
+      {session, producer} = start_blocked_session(cwd: tmp_dir)
 
       # Add messages to both queues
       :ok = Session.steer(session, "Steer message")
@@ -692,6 +707,7 @@ defmodule CodingAgent.IntegrationTest do
       state_after = Session.get_state(session)
       assert :queue.len(state_after.steering_queue) == 0
       assert :queue.len(state_after.follow_up_queue) == 0
+      send(producer, :release_stream)
     end
 
     @tag :tmp_dir

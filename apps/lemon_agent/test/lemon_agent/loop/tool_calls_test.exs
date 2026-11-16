@@ -1430,4 +1430,69 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert Task.Supervisor.children(supervisor) == []
     EventStream.complete(stream, [])
   end
+
+  test "steering notification skips queued tools before an active tool finishes" do
+    parent = self()
+    signal = AbortSignal.new()
+    supervisor = start_supervised!(Task.Supervisor)
+    queue_owner = start_supervised!({LemonAgent.Agent, []})
+    :sys.replace_state(queue_owner, &%{&1 | abort_ref: signal})
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    events =
+      Task.async(fn ->
+        for event <- EventStream.events(stream) do
+          send(parent, {:observed_tool_event, event})
+          event
+        end
+      end)
+
+    config = %AgentLoopConfig{
+      model: Mocks.mock_model(),
+      convert_to_llm: Mocks.simple_convert_to_llm(),
+      queue_owner: queue_owner,
+      queue_ref: signal,
+      max_tool_concurrency: 1,
+      tool_timeout_ms: :infinity,
+      tool_task_supervisor: supervisor
+    }
+
+    calls = [
+      Mocks.tool_call("blocked", %{}, id: "active"),
+      Mocks.tool_call("blocked", %{}, id: "queued")
+    ]
+
+    runner =
+      Task.async(fn ->
+        ToolCalls.execute_and_collect_tools(
+          simple_context(tools: [blocking_tool(parent, "blocked")]),
+          [],
+          calls,
+          config,
+          signal,
+          stream
+        )
+      end)
+
+    assert_receive {:tool_started, "active", worker}, 2_000
+    correction = user_message("do not run the queued call")
+    assert :ok = LemonAgent.Agent.steer(queue_owner, correction)
+
+    assert_receive {:observed_tool_event,
+                    {:tool_execution_end, "queued", "blocked", skipped, true}},
+                   2_000
+
+    assert %{outcome: :not_started, reason: :skipped} = skipped.details
+    assert Process.alive?(worker)
+    assert :sys.get_state(queue_owner).steering_queue == [correction]
+
+    send(worker, :finish)
+    assert {[completed, skipped_result], _, _} = Task.await(runner)
+    refute completed.is_error
+    assert skipped_result.is_error
+    refute_received {:tool_started, "queued", _}
+
+    EventStream.complete(stream, [])
+    Task.await(events)
+  end
 end

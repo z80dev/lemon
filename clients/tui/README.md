@@ -154,6 +154,15 @@ on reconnect and when opening or changing models. Older daemons without
   without discarding a correction in the editor (autocomplete gets Escape first).
   While idle, Esc Esc discards a non-empty draft (recoverable with Up) and, on an
   empty composer, opens the rewind picker (same as `/rewind`).
+  On daemons advertising `sessions.steer`, text steers to a live local run are
+  acknowledged only after their stable message ID is journaled. Ctrl+Q shows
+  these accepted steers alongside the local queue; `d` / Delete or the native
+  **Withdraw** button requests withdrawal. A successful withdrawal is shown only
+  after the daemon acknowledges it; a steer already bound to a model call cannot be
+  withdrawn. Accepted steers are not locally editable. Reconnect and queue
+  focus refresh pending identities; failed reads retain the last known queue.
+  Neither steering nor withdrawal is replayed after a disconnect. Named-node
+  steering and older daemons retain the routed path without local withdrawal.
   Shift+Enter inserts a newline. Up/Down recall prompts (kept across sessions in
   `~/.lemon/tui-history/history.sqlite3`, mode `0600` in a private `0700` directory;
   `/clear-history` clears saved prompts and `[tui] prompt_history = false` turns it off;
@@ -383,8 +392,9 @@ runs and error notices are error frames with **Copy error** (and **Switch model*
 for runs). Thinking is a live spinner section that folds to "Thought for Ns".
 Compaction results render as a compaction divider. While a run works, the dock
 shows a working row whose **Stop** takes Esc's abort path. Queued prompts are
-pills with an **Edit** control, and approvals offer clickable decision buttons
-with the full action and a countdown. The Alt+A Agent Hub is a card of subagent
+pills with an **Edit** control; journaled local steers instead offer **Withdraw**.
+Approvals offer clickable decision buttons with the full action and a countdown.
+The Alt+A Agent Hub is a card of subagent
 nodes. Copy uses the same clipboard path as `/copy` below.
 
 Tool calls are omp's semantic tool cards rather than painted text: shell calls

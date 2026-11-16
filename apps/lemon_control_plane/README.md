@@ -679,6 +679,29 @@ When a connection PID is present, both checks require its current Connections
 membership and stored authorization, not just the request's captured auth.
 Revoked membership, changed role/scopes, and a dead connection fail closed.
 
+### Journaled steering
+
+Operator clients can submit `sessions.steer {sessionKey,runId,messageId,prompt}`
+to an exact live local run. `messageId` is caller-generated and stable. A
+successful response echoes those identities and `acceptedAfterTurn`, and is sent
+only after the native session journals acceptance. A stale run is rejected,
+never implicitly revived. This path does not replace invocation-bound named-node
+steering. The operator prompt policy matches Agent Hub's 32 KiB message limit.
+
+`sessions.steer.withdraw {sessionKey,messageId}` requires operator write scope
+and returns the same identities with `withdrawn: true` only after the native
+session acknowledges withdrawal. Bound, missing and already-withdrawn inputs
+return `NOT_FOUND`; they are never reported as withdrawn. The operation does
+not cancel the run. An unknown outcome includes `retrySafe: false`; clients
+retain the stable identity and must not automatically retry.
+
+`sessions.steer.pending {sessionKey,[limit]}` requires operator read scope and
+returns `{sessionKey,items:[{messageId,preview,acceptedAfterTurn}],truncated}`.
+This queue-panel read is capped at 100 entries with 512-character previews.
+Only a complete successful read proves that omitted IDs are no longer pending;
+partial reads, missing owners and runtime failures do not confirm an empty
+queue. Clients refresh on connection/queue/lifecycle boundaries, not timers.
+
 ### Snapshot continuity
 
 Queue consumers may additionally request

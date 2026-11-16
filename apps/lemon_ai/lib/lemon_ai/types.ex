@@ -65,14 +65,15 @@ defmodule LemonAi.Types do
   # ============================================================================
 
   defmodule UserMessage do
-    @moduledoc "A message from the user"
+    @moduledoc "A message from the user, with an optional stable application-owned identity."
     @type content :: String.t() | [TextContent.t() | ImageContent.t()]
     @type t :: %__MODULE__{
             role: :user,
+            id: String.t() | nil,
             content: content(),
             timestamp: integer()
           }
-    defstruct role: :user, content: "", timestamp: 0
+    defstruct role: :user, id: nil, content: "", timestamp: 0
   end
 
   defmodule AssistantMessage do

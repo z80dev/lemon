@@ -84,10 +84,6 @@ defmodule CodingAgent.Session do
   use GenServer
   require Logger
 
-  # Small deferral so callers can (a) subscribe after `prompt/3` and still see early
-  # events, and (b) queue immediate follow-ups/steering before the agent loop reaches
-  # its end-of-run checks (avoids a race in very fast mock runs).
-  @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
   @todo_call_timeout_ms 30_000
 
@@ -121,6 +117,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.OverflowRecovery
   alias CodingAgent.Session.Ownership
   alias CodingAgent.Session.Persistence
+  alias CodingAgent.Session.SteeringJournal
   alias CodingAgent.Session.Planning
   alias CodingAgent.Session.PromptComposer
   alias CodingAgent.Session.Recovery
@@ -213,6 +210,7 @@ defmodule CodingAgent.Session do
     :config_cwd,
     :native_source_profile_id,
     branch_generation: 0,
+    input_journal: %{},
     recovery_requests: %{},
     todo_projection: {:ok, []},
     tool_started_at: %{},
@@ -275,6 +273,7 @@ defmodule CodingAgent.Session do
           steering_queue: :queue.queue(),
           follow_up_queue: :queue.queue(),
           turn_index: non_neg_integer(),
+          input_journal: map(),
           session_file: String.t() | nil,
           register_session: boolean(),
           session_registry: atom(),
@@ -530,8 +529,8 @@ defmodule CodingAgent.Session do
   Send a user prompt to the session.
 
   Returns `:ok` after marking the accepted turn streaming, or `{:error, :busy}`
-  if a prompt or manual compaction/summary is already in progress. Deferred
-  prompt dispatch is part of the accepted turn and also reports busy.
+  if a prompt or manual compaction/summary is already in progress.
+  Use `subscribe_prompt/4` to subscribe before any prompt events are emitted.
 
   ## Options
 
@@ -542,6 +541,11 @@ defmodule CodingAgent.Session do
     GenServer.call(session, {:prompt, text, opts})
   end
 
+  @doc "Subscribe and accept a prompt in one session operation. Returns `{:ok, subscription}`."
+  def subscribe_prompt(session, text, prompt_opts \\ [], subscription_opts \\ []) do
+    GenServer.call(session, {:subscribe_prompt, self(), text, prompt_opts, subscription_opts})
+  end
+
   @doc """
   Inject a steering message to interrupt the agent mid-run.
 
@@ -550,14 +554,20 @@ defmodule CodingAgent.Session do
   Pass `preempt: false` for agent-originated messages that must wait for the
   entire issued tool batch, then arrive before the next model request.
   """
-  @spec steer(GenServer.server(), String.t(), keyword()) :: :ok
+  @spec steer(GenServer.server(), String.t(), keyword()) :: :ok | {:ok, map()} | {:error, term()}
   def steer(session, text, opts \\ []) do
-    if Keyword.get(opts, :preempt, true) do
-      GenServer.cast(session, {:steer, text})
-    else
-      GenServer.call(session, {:steer, text, false})
-    end
+    GenServer.call(session, {:steer, text, opts})
   end
+
+  @doc "Withdraw an accepted steer that has not been bound to a model turn."
+  @spec withdraw_steer(GenServer.server(), String.t()) :: :ok | {:error, :not_found}
+  def withdraw_steer(session, id), do: GenServer.call(session, {:withdraw_steer, id})
+
+  @doc "Return the durable pending steering receipts in acceptance order."
+  def pending_steers(session), do: GenServer.call(session, :pending_steers)
+
+  @doc "Requeue the loaded journal's pending inputs without starting a run; idle only."
+  def replay_pending_inputs(session), do: GenServer.call(session, :replay_pending_inputs)
 
   @doc false
   # Control sends ordered requests without waiting on a busy recipient. The
@@ -604,9 +614,10 @@ defmodule CodingAgent.Session do
   Follow-up messages are delivered only when the agent has no more tool calls
   and no steering messages.
   """
-  @spec follow_up(GenServer.server(), String.t()) :: :ok
-  def follow_up(session, text) do
-    GenServer.cast(session, {:follow_up, text})
+  @spec follow_up(GenServer.server(), String.t(), keyword()) ::
+          :ok | {:ok, map()} | {:error, term()}
+  def follow_up(session, text, opts \\ []) do
+    GenServer.call(session, {:follow_up, text, opts})
   end
 
   @doc """
@@ -1030,6 +1041,7 @@ defmodule CodingAgent.Session do
     {:ok, state, extension_status_report} = Lifecycle.initialize(opts, self())
     # A resumed or forked file starts on its selected branch like any other.
     state = BranchState.restore(state)
+    state = SteeringJournal.restore(state)
 
     maybe_register_session(
       state.session_manager,
@@ -1149,32 +1161,19 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:prompt, text, opts}, _from, state) do
+    case accept_prompt(state, text, opts) do
+      {:ok, state} -> {:reply, :ok, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:subscribe_prompt, pid, text, opts, subscription_opts}, _from, state) do
     if state.is_streaming or ManualOperation.in_flight?(state) do
       {:reply, {:error, :busy}, state}
     else
-      state = CompactionLifecycle.cancel_for_new_prompt(state)
-      state = %{state | terminal_event: nil}
-      {state, recalled} = refresh_turn_context(state, text)
-
-      user_message =
-        text
-        |> State.build_prompt_message(opts)
-        |> attach_recalled_context(recalled)
-
-      # Defer the actual prompt slightly after we reply so callers can subscribe immediately
-      # after `Session.prompt/3` and still observe `:agent_start` and other early events.
-      #
-      # This also gives the session a chance to receive near-immediate `follow_up/2` and
-      # `steer/2` messages before the agent loop does its end-of-turn queue checks in
-      # very fast (mocked) runs.
-      timer_ref =
-        Process.send_after(
-          self(),
-          {:do_prompt, user_message, state.system_prompt},
-          @prompt_defer_ms
-        )
-
-      {:reply, :ok, State.begin_prompt(state, timer_ref)}
+      {subscription, state} = subscribe_client(state, pid, subscription_opts)
+      {:ok, state} = accept_prompt(state, text, opts)
+      {:reply, {:ok, subscription}, state}
     end
   end
 
@@ -1186,63 +1185,59 @@ defmodule CodingAgent.Session do
   # and queued, while `outgoing` is the same message with this turn's recalled
   # context attached and is only ever handed to the agent.
   def handle_call({:handle_async_followup, message_or_attrs}, _from, state) do
-    state = CompactionLifecycle.cancel_for_new_prompt(state)
     message = State.build_async_followup_message(message_or_attrs)
-    {state, recalled} = refresh_turn_context(state, message_skill_context(message), false)
-    state = persist_message(state, message)
-    outgoing = attach_recalled_context(message, recalled)
+    accept_input(state, :steer, message, [preempt: false], true)
+  end
 
-    if state.is_streaming do
-      :ok =
-        LemonAgent.Agent.steer(state.agent, outgoing,
-          system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
-          preempt: false
-        )
+  def handle_call({:steer, text, opts}, _from, state) when is_list(opts) do
+    case authorize_steering(state, opts) do
+      :ok ->
+        text =
+          if opts[:origin] == :control_plane,
+            do: CodingAgent.Commands.prepare_prompt(state.cwd, text, %{origin: :control_plane}),
+            else: text
 
-      notify_steering_changed()
+        accept_input(state, :steer, State.build_prompt_message(text), opts)
 
-      queue = :queue.in(message, state.follow_up_queue)
-      {:reply, :ok, %{state | follow_up_queue: queue}}
-    else
-      timer_ref =
-        Process.send_after(self(), {:do_prompt, outgoing, state.system_prompt}, @prompt_defer_ms)
-
-      {:reply, :ok, State.begin_prompt(state, timer_ref)}
+      {:error, _} = error ->
+        {:reply, error, state}
     end
   end
 
-  def handle_call({:steer, text, false}, _from, state) do
-    {:reply, :ok, enqueue_steering(state, text, false)}
+  def handle_call({:follow_up, text, opts}, _from, state) do
+    accept_input(state, :follow_up, State.build_prompt_message(text), opts, true)
+  end
+
+  def handle_call({:withdraw_steer, id}, _from, state) do
+    if SteeringJournal.queued_steer?(state, id) do
+      case LemonAgent.Agent.withdraw_steer(state.agent, id) do
+        :ok ->
+          state = SteeringJournal.withdraw(state, id)
+          Notifier.broadcast_event(state, {:input_withdrawn, id})
+          {:reply, :ok, state}
+
+        {:error, :not_found} = error ->
+          {:reply, error, state}
+      end
+    else
+      {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call(:pending_steers, _from, state) do
+    {:reply, {:ok, SteeringJournal.pending_steers(state)}, state}
+  end
+
+  def handle_call(:replay_pending_inputs, _from, state) do
+    if state.is_streaming or ManualOperation.in_flight?(state) do
+      {:reply, {:error, :busy}, state}
+    else
+      {:reply, :ok, SteeringJournal.restore(state)}
+    end
   end
 
   def handle_call({:deliver_parent_question, text}, _from, state) do
-    {state, recalled} = refresh_turn_context(state, text, false)
-
-    message = %LemonAi.Types.UserMessage{
-      role: :user,
-      content: text,
-      timestamp: System.system_time(:millisecond)
-    }
-
-    outgoing = attach_recalled_context(message, recalled)
-
-    if state.is_streaming do
-      :ok =
-        LemonAgent.Agent.steer(state.agent, outgoing,
-          system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
-          preempt: false
-        )
-
-      notify_steering_changed()
-
-      queue = :queue.in(message, state.follow_up_queue)
-      {:reply, :ok, %{state | follow_up_queue: queue}}
-    else
-      timer_ref =
-        Process.send_after(self(), {:do_prompt, outgoing, state.system_prompt}, @prompt_defer_ms)
-
-      {:reply, :ok, State.begin_prompt(state, timer_ref)}
-    end
+    accept_input(state, :steer, State.build_prompt_message(text), [preempt: false], true)
   end
 
   def handle_call({:replay_events, cursor, limit}, _from, state) do
@@ -1599,13 +1594,11 @@ defmodule CodingAgent.Session do
 
   @spec handle_cast(term(), t()) :: {:noreply, t()}
   @impl true
-  def handle_cast({:steer, text}, state) do
-    {:noreply, enqueue_steering(state, text, true)}
-  end
-
   def handle_cast({:steer, text, false, reply_to, token}, state) do
-    state = enqueue_steering(state, text, false)
-    send(reply_to, {:session_steering_reply, token, :ok})
+    {:reply, result, state} =
+      accept_input(state, :steer, State.build_prompt_message(text), preempt: false)
+
+    send(reply_to, {:session_steering_reply, token, result})
     {:noreply, state}
   end
 
@@ -1631,26 +1624,6 @@ defmodule CodingAgent.Session do
     {:noreply, %{state | steering_queue: queue}}
   end
 
-  def handle_cast({:follow_up, text}, state) do
-    {state, recalled} = refresh_turn_context(state, text, false)
-
-    message = %LemonAi.Types.UserMessage{
-      role: :user,
-      content: text,
-      timestamp: System.system_time(:millisecond)
-    }
-
-    outgoing = attach_recalled_context(message, recalled)
-
-    LemonAgent.Agent.follow_up(state.agent, outgoing,
-      system_prompt: CodingAgent.Session.PromptJournal.blocks(state)
-    )
-
-    queue = :queue.in(message, state.follow_up_queue)
-
-    {:noreply, %{state | follow_up_queue: queue}}
-  end
-
   def handle_cast(:abort, state) do
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
 
@@ -1661,7 +1634,6 @@ defmodule CodingAgent.Session do
       |> cancel_pending_prompt()
       |> CompactionLifecycle.cancel_for_new_prompt()
       |> CompactionManager.clear_overflow_recovery_state()
-      |> Map.put(:follow_up_queue, :queue.new())
 
     Control.cancel_parent(self())
 
@@ -1679,11 +1651,7 @@ defmodule CodingAgent.Session do
       Notifier.broadcast_event(state, {:canceled, :assistant_aborted})
       Notifier.complete_event_streams(state, {:canceled, :assistant_aborted})
 
-      {:noreply,
-       state
-       |> Map.put(:steering_queue, :queue.new())
-       |> Map.put(:follow_up_queue, :queue.new())
-       |> Map.put(:event_streams, %{})}
+      {:noreply, %{state | event_streams: %{}}}
     else
       {:noreply, state}
     end
@@ -1697,29 +1665,126 @@ defmodule CodingAgent.Session do
     {:noreply, Notifier.unsubscribe_direct(state, pid)}
   end
 
-  defp enqueue_steering(state, text, preempt) do
-    # Steering corrects the current turn; it does not open a new user turn.
-    {state, recalled} = refresh_turn_context(state, text, false)
+  defp authorize_steering(state, opts) do
+    cond do
+      not Keyword.has_key?(opts, :run_id) ->
+        :ok
 
-    message = %LemonAi.Types.UserMessage{
-      role: :user,
-      content: text,
-      timestamp: System.system_time(:millisecond)
-    }
+      opts[:run_id] != state.run_id or not state.is_streaming ->
+        {:error, :not_found}
+
+      true ->
+        CodingAgent.Session.AddressingContext.authorize_live_steering(state)
+    end
+  end
+
+  defp accept_prompt(state, text, opts) do
+    if state.is_streaming or ManualOperation.in_flight?(state) do
+      {:error, :busy}
+    else
+      state = CompactionLifecycle.cancel_for_new_prompt(state)
+      {state, recalled} = refresh_turn_context(%{state | terminal_event: nil}, text)
+      message = text |> State.build_prompt_message(opts) |> attach_recalled_context(recalled)
+      {:ok, schedule_prompt(state, message)}
+    end
+  end
+
+  defp schedule_prompt(state, message) do
+    ref = make_ref()
+    send(self(), {:do_prompt, ref, message, state.system_prompt})
+    State.begin_prompt(state, ref)
+  end
+
+  defp subscribe_client(state, pid, opts) do
+    case Keyword.get(opts, :mode, :direct) do
+      :stream ->
+        {:ok, stream, state} = Notifier.subscribe_stream(state, pid, opts)
+        if event = initial_todos(state), do: Notifier.broadcast_event(state, event)
+        {{:ok, stream}, state}
+
+      :direct ->
+        {subscription, state} = Notifier.subscribe_direct(state, pid, self(), opts)
+        send_initial_todos(state, pid)
+        {subscription, state}
+    end
+  end
+
+  defp accept_input(state, kind, message, opts, start_idle \\ false) do
+    message = SteeringJournal.identify(message, opts)
+
+    case SteeringJournal.accept(state, kind, message, opts) do
+      {:error, reason, state} ->
+        {:reply, {:error, reason}, state}
+
+      {:ok, receipt, state, disposition} ->
+        state =
+          if disposition == :new do
+            Notifier.broadcast_event(state, {:input_accepted, receipt})
+            {state, recalled} = refresh_turn_context(state, message_skill_context(message), false)
+            outgoing = attach_recalled_context(message, recalled)
+
+            agent_opts = [
+              system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
+              preempt: Keyword.get(opts, :preempt, true),
+              defer_start: not is_nil(state.pending_prompt_timer_ref)
+            ]
+
+            state =
+              if start_idle and not state.is_streaming do
+                state = CompactionLifecycle.cancel_for_new_prompt(state)
+                state = SteeringJournal.bind(state, [receipt.id])
+                Notifier.broadcast_event(state, {:input_bound, [receipt.id]})
+                schedule_prompt(state, outgoing)
+              else
+                case kind do
+                  :steer ->
+                    :ok = LemonAgent.Agent.steer(state.agent, outgoing, agent_opts)
+
+                  :follow_up ->
+                    :ok = LemonAgent.Agent.follow_up(state.agent, outgoing, agent_opts)
+                end
+
+                key =
+                  if kind == :steer and agent_opts[:preempt],
+                    do: :steering_queue,
+                    else: :follow_up_queue
+
+                Map.update!(state, key, &:queue.in(message, &1))
+              end
+
+            notify_steering_changed()
+            state
+          else
+            state
+          end
+
+        reply = if Keyword.get(opts, :return_receipt, false), do: {:ok, receipt}, else: :ok
+        {:reply, reply, state}
+    end
+  end
+
+  # A closing loop can start accepted input before this reserved prompt reaches
+  # the Agent. Rejection means this message has not been dispatched: queue it,
+  # without retrying an effect or discarding the already accepted prompt.
+  defp queue_reserved_prompt(state, outgoing) do
+    outgoing = SteeringJournal.identify(outgoing)
+    message = strip_recalled_context(outgoing)
+
+    state =
+      if Map.has_key?(state.input_journal, outgoing.id) do
+        state
+      else
+        {:ok, receipt, state, :new} = SteeringJournal.accept(state, :follow_up, message)
+        Notifier.broadcast_event(state, {:input_accepted, receipt})
+        %{state | follow_up_queue: :queue.in(message, state.follow_up_queue)}
+      end
 
     :ok =
-      LemonAgent.Agent.steer(state.agent, attach_recalled_context(message, recalled),
-        system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
-        preempt: preempt
+      LemonAgent.Agent.follow_up(state.agent, outgoing,
+        system_prompt: CodingAgent.Session.PromptJournal.blocks(state)
       )
 
-    # Human steering uses an Agent cast. A scalar call from this same sender
-    # fences that cast before waking joiners that query the Agent's queue.
-    if preempt, do: LemonAgent.Agent.has_steering_messages?(state.agent, nil)
-    notify_steering_changed()
-
-    key = if preempt, do: :steering_queue, else: :follow_up_queue
-    Map.update!(state, key, &:queue.in(message, &1))
+    state
   end
 
   defp notify_steering_changed do
@@ -1734,6 +1799,18 @@ defmodule CodingAgent.Session do
   def handle_info({:task_progress, tool_call_id, result}, state) do
     Notifier.broadcast_event(state, {:tool_execution_update, tool_call_id, "task", %{}, result})
     {:noreply, state}
+  end
+
+  def handle_info({:agent_event, {:input_bound, ids} = event}, state) do
+    state = SteeringJournal.bind(state, ids)
+    Notifier.broadcast_event(state, event)
+    {:noreply, state}
+  end
+
+  def handle_info({:agent_event, {:turn_start} = event}, state) do
+    state = SteeringJournal.turn_started(state)
+    Notifier.broadcast_event(state, event)
+    {:noreply, handle_agent_event(event, state)}
   end
 
   def handle_info({:agent_event, {:error, _reason, _partial_state} = raw_event}, state) do
@@ -1963,55 +2040,31 @@ defmodule CodingAgent.Session do
     {:noreply, state}
   end
 
-  def handle_info({:do_prompt, message, system_prompt}, state) do
-    if state.pending_prompt_timer_ref do
+  def handle_info({:do_prompt, ref, message, system_prompt}, state) do
+    if state.pending_prompt_timer_ref == ref do
       {:noreply, CompactionLifecycle.before_prompt(state, message, system_prompt)}
     else
       {:noreply, state}
     end
   end
 
-  def handle_info(
-        {:dispatch_prompt, %LemonAi.Types.UserMessage{} = user_message, system_prompt},
-        state
-      ) do
-    if state.pending_prompt_timer_ref do
+  def handle_info({:dispatch_prompt, ref, message, system_prompt}, state) do
+    if state.pending_prompt_timer_ref == ref do
       :ok =
         LemonAgent.Agent.set_system_prompt(
           state.agent,
           CodingAgent.Session.PromptJournal.blocks(state, system_prompt)
         )
 
-      # Send to agent (user message will be persisted on :message_end event)
-      _ = LemonAgent.Agent.prompt(state.agent, user_message)
-      {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
-    else
-      # Prompt was canceled (e.g. via abort/reset) before deferred dispatch.
-      {:noreply, state}
-    end
-  end
+      state = %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}
 
-  def handle_info({:dispatch_prompt, %CustomMessage{} = message, system_prompt}, state) do
-    if state.pending_prompt_timer_ref do
-      :ok =
-        LemonAgent.Agent.set_system_prompt(
-          state.agent,
-          CodingAgent.Session.PromptJournal.blocks(state, system_prompt)
-        )
-
-      _ = LemonAgent.Agent.prompt(state.agent, message)
-      {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
+      case LemonAgent.Agent.prompt(state.agent, message) do
+        :ok -> {:noreply, state}
+        {:error, :already_streaming} -> {:noreply, queue_reserved_prompt(state, message)}
+      end
     else
       {:noreply, state}
     end
-  end
-
-  def handle_info({:do_prompt, %LemonAi.Types.UserMessage{} = user_message}, state) do
-    handle_info({:do_prompt, user_message, state.system_prompt}, state)
-  end
-
-  def handle_info({:do_prompt, %CustomMessage{} = message}, state) do
-    handle_info({:do_prompt, message, state.system_prompt}, state)
   end
 
   def handle_info(message, state) do

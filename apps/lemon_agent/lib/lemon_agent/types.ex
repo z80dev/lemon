@@ -431,9 +431,12 @@ defmodule LemonAgent.Types do
     - `thinking_prompt` - Last classified user-prompt marker, retained across continuation
     - `resolved_thinking` - Concrete auto selection, reclamped without reclassifying on model switches
     - `on_thinking_resolved` - Internal cache callback; does not publish classifier events
-    - `get_steering_messages` - Returns messages to inject mid-run for steering
-    - `has_steering_messages` - Non-consuming queue peek used between tool calls
-    - `get_follow_up_messages` - Returns follow-up messages after agent would stop
+    - `queue_owner` - Queue-owning Agent pid; takes precedence over standalone callbacks
+    - `queue_ref` - Active run's abort reference, binding queue requests and notifications
+    - `queue_timeout` - Queue reply deadline (default 30 minutes; `:infinity` opts out)
+    - `get_steering_messages` - Standalone-loop callback for messages to inject mid-run
+    - `has_steering_messages` - Standalone-loop non-consuming peek at tool boundaries
+    - `get_follow_up_messages` - Standalone-loop callback after the agent would stop
     - `max_tool_concurrency` - Max concurrent tool calls (default 8; `nil` uses the default, `:infinity` opts out)
     - `max_tool_turns` - Max assistant turns that may execute tools before terminal fallback
     - `max_retries` - Single transient retry budget per response (default: 3; 0 disables);
@@ -456,6 +459,16 @@ defmodule LemonAgent.Types do
     - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
     - `on_stream_rule` - Synchronous rule receipt/redirect callback; returns `:ok`
       only after durable acceptance, or `{:error, :injection_limit}` when spent
+
+    With `queue_owner`, the loop sends
+    `{:loop_queue, loop_pid, request_ref, queue_ref, kind}` where `kind` is
+    `:steering`, `:has_steering` or `:follow_up`. The owner replies
+    `{:loop_queue, request_ref, result}` with a message list, or a boolean for
+    `:has_steering`. An empty `:follow_up` response must atomically close the run
+    only after checking both queues; input accepted later belongs to the next run.
+    Queue changes wake waiting tools with `{:lemon_steering_changed, queue_ref}`;
+    no timer polls the queue. Standalone callbacks are checked only at turn/tool
+    boundaries; callers needing immediate wakeup use the same notification.
     """
     @type convert_to_llm_fn ::
             ([LemonAgent.Types.agent_message()] ->
@@ -505,6 +518,9 @@ defmodule LemonAgent.Types do
             thinking_prompt: term() | nil,
             resolved_thinking: LemonAi.Types.StreamOptions.thinking_level() | nil,
             on_thinking_resolved: on_thinking_resolved_fn() | nil,
+            queue_owner: pid() | nil,
+            queue_ref: reference() | nil,
+            queue_timeout: timeout(),
             get_steering_messages: get_steering_messages_fn() | nil,
             has_steering_messages: has_steering_messages_fn() | nil,
             get_follow_up_messages: get_follow_up_messages_fn() | nil,
@@ -537,6 +553,9 @@ defmodule LemonAgent.Types do
               thinking_prompt: nil,
               resolved_thinking: nil,
               on_thinking_resolved: nil,
+              queue_owner: nil,
+              queue_ref: nil,
+              queue_timeout: :timer.minutes(30),
               get_steering_messages: nil,
               has_steering_messages: nil,
               get_follow_up_messages: nil,

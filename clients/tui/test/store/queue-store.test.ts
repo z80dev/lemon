@@ -67,6 +67,56 @@ describe("QueueStore", () => {
 		]);
 	});
 
+	test("daemon steers never displace the local queue head or lose stable identities", () => {
+		const queue = new QueueStore();
+		queue.acceptSteer("a", "steer-1", "correction");
+		const id = queue.items("a")[0]!.id;
+		queue.push("a", "next turn");
+		expect(queue.shift("a")?.text).toBe("next turn");
+		expect(queue.items("a")[0]).toMatchObject({
+			id,
+			state: "accepted-steer",
+			steer: { messageId: "steer-1" },
+		});
+		queue.reconcileSteers("a", [{ messageId: "steer-1", preview: "short" }], false);
+		expect(queue.items("a")[0]).toMatchObject({ id, text: "correction" });
+	});
+
+	test("only a complete pending read may remove omitted daemon steers", () => {
+		const queue = new QueueStore();
+		queue.acceptSteer("a", "steer-1", "first");
+		queue.acceptSteer("a", "steer-2", "second");
+		queue.push("a", "local");
+		queue.acceptSteer("b", "foreign", "other session");
+		queue.reconcileSteers("a", [{ messageId: "steer-1", preview: "first" }], true);
+		expect(queue.length("a")).toBe(3);
+		queue.reconcileSteers("a", [], false);
+		expect(queue.items("a").map((item) => item.text)).toEqual(["local"]);
+		expect(queue.length("b")).toBe(1);
+	});
+
+	test("a pending receipt reconciles an uncertain steer without making it replayable", () => {
+		const queue = new QueueStore();
+		queue.restoreForReview("a", {
+			id: "request",
+			text: "correction",
+			at: 0,
+			state: "needs-review",
+			submission: { requestId: "request" },
+			steer: { messageId: "message" },
+		});
+		// Absence could mean it was already consumed, not that acceptance failed.
+		queue.reconcileSteers("a", [], false);
+		expect(queue.items("a")[0]?.submission?.requestId).toBe("request");
+		queue.reconcileSteers("a", [{ messageId: "message", preview: "correction" }], false);
+		expect(queue.items("a")[0]).toMatchObject({
+			id: "request",
+			state: "accepted-steer",
+			steer: { messageId: "message" },
+		});
+		expect(queue.items("a")[0]?.submission).toBeUndefined();
+	});
+
 	test("an untouched session never allocates and reports empty", () => {
 		const queue = new QueueStore();
 		expect(queue.items("ghost")).toEqual([]);

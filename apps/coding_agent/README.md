@@ -140,7 +140,7 @@ startup/config-registration operations (`init`, `reset`, `register`,
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Session` | Main GenServer orchestrating the agent loop, event dispatch, steering, follow-ups, compaction, and persistence |
-| `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, clears diagnostic queue mirrors on every terminal path, triggers compaction, and fires extension hooks |
+| `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, triggers compaction, and fires extension hooks |
 | `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, tracked worker cleanup, overflow recovery state machine, and compaction result application |
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
 | `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
@@ -1203,8 +1203,9 @@ Layout and instruction paths remain in the stable system block as session-start 
 ### Interacting with a Session
 
 ```elixir
-# Send a prompt
-:ok = CodingAgent.Session.prompt(session, "Fix the failing test")
+# Subscribe before accepting the prompt, atomically (no timing grace period)
+{:ok, unsubscribe} =
+  CodingAgent.Session.subscribe_prompt(session, "Fix the failing test")
 
 # Steer mid-run
 :ok = CodingAgent.Session.steer(session, "Focus on auth module only")
@@ -1215,6 +1216,33 @@ Layout and instruction paths remain in the stable system block as session-start 
 # Abort current operation
 :ok = CodingAgent.Session.abort(session)
 ```
+
+`steer/3` and `follow_up/3` acknowledge only after the acceptance record has been
+appended and synced to the session journal. Each input carries a stable ID and the
+last observed model-turn index. Pass `id: fixed_id, return_receipt: true` to obtain
+`{:ok, %{id: id, kind: kind, accepted_after_turn: index, status: status}}`; omitting
+`return_receipt` retains the `:ok` result. Reusing an ID with different input is an
+error, never a second enqueue.
+
+`Session.withdraw_steer(session, id)` returns `:ok` only for a queued, unbound
+steer and syncs its withdrawal before replying; otherwise it returns
+`{:error, :not_found}`. `Session.pending_steers/1` returns `{:ok, receipts}` for
+reconciliation. Acceptance, binding and withdrawal notifications carry the same
+IDs (`input_accepted`, `input_bound`, `input_withdrawn`).
+
+Queue binding first fences withdrawal. The ordered consumed-message event then
+persists the accepted text and its exact model-turn index together, once per ID.
+A provisional binding without a consumed message remains replayable after a
+crash; it is never mistaken for completed delivery. Restore requeues acknowledged,
+unconsumed, non-withdrawn inputs in acceptance order without starting a model call.
+An explicit prompt resumes work. Acceptance and final delivery/withdrawal are
+session history, not branch state: navigation cannot resurrect a consumed or
+withdrawn input. `Session.replay_pending_inputs/1` is an idle-only, idempotent recovery hook
+for a live owner whose journal has already been loaded. Follow-ups accepted at
+normal loop shutdown are consumed by that run or start the next run; they do not
+depend on a timer or a polling grace period. Abort retains pending input for an
+explicit subsequent prompt.
+
 
 Recurring check-ins are cron jobs flagged as heartbeats, not session state;
 see [`docs/user-guide/reminders-and-heartbeats.md`](../../docs/user-guide/reminders-and-heartbeats.md).

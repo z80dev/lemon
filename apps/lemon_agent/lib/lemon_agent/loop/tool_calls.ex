@@ -3,6 +3,7 @@ defmodule LemonAgent.Loop.ToolCalls do
 
   alias LemonAgent.AbortSignal
   alias LemonAgent.EventStream
+  alias LemonAgent.Loop.Queue
   alias LemonAgent.Types.{AgentLoopConfig, AgentToolResult}
 
   alias LemonAi.Types.{
@@ -64,6 +65,18 @@ defmodule LemonAgent.Loop.ToolCalls do
         )
 
         throw(failure)
+
+      :exit, {:loop_queue_failed, _reason} = failure ->
+        if signal, do: AbortSignal.abort(signal)
+        {pending_by_ref, pending_by_mon} = Process.get(@pending_tools_key)
+
+        stop_aborted_tools(
+          pending_by_ref,
+          pending_by_mon,
+          config.tool_task_supervisor || LemonAgent.ToolTaskSupervisor
+        )
+
+        exit(failure)
     after
       Process.delete(@pending_tools_key)
       AbortSignal.unsubscribe(signal)
@@ -121,6 +134,8 @@ defmodule LemonAgent.Loop.ToolCalls do
          base_new_message_count,
          config
        ) do
+    queue_ref = config.queue_ref || signal
+
     # Retain only the current worker set so a failed output push can unwind
     # without leaving supervised tools running after their collector exits.
     Process.put(@pending_tools_key, {pending_by_ref, pending_by_mon})
@@ -191,7 +206,7 @@ defmodule LemonAgent.Loop.ToolCalls do
 
       true ->
         {context, new_messages, results, remaining_tool_calls} =
-          if remaining_tool_calls != [] and has_steering_messages?(config) and
+          if remaining_tool_calls != [] and Queue.has_steering?(config) and
                not aborted?(signal) do
             {context, new_messages, results} =
               emit_tool_errors(
@@ -233,6 +248,9 @@ defmodule LemonAgent.Loop.ToolCalls do
           else
             receive do
               {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
+                {context, new_messages, pending_by_ref, pending_by_mon, results}
+
+              {:lemon_steering_changed, ^queue_ref} ->
                 {context, new_messages, pending_by_ref, pending_by_mon, results}
 
               {:tool_task_update, ref, partial} ->
@@ -344,10 +362,6 @@ defmodule LemonAgent.Loop.ToolCalls do
 
                     {context, new_messages, pending_by_ref, pending_by_mon, results}
                 end
-            after
-              steering_poll_timeout(remaining_tool_calls, config) ->
-                # Steering is a callback-based queue, not an abort timer.
-                {context, new_messages, pending_by_ref, pending_by_mon, results}
             end
           end
 
@@ -371,11 +385,6 @@ defmodule LemonAgent.Loop.ToolCalls do
         )
     end
   end
-
-  defp steering_poll_timeout([_ | _], %AgentLoopConfig{has_steering_messages: callback})
-       when not is_nil(callback), do: 100
-
-  defp steering_poll_timeout(_remaining_tool_calls, _config), do: :infinity
 
   defp tool_call_order(tool_calls) do
     tool_calls
@@ -453,7 +462,7 @@ defmodule LemonAgent.Loop.ToolCalls do
     unsafe_pending? =
       Enum.any?(pending_by_ref, fn {_ref, pending} -> not pending.parallel_safe end)
 
-    if aborted?(signal) or has_steering_messages?(config) or unsafe_pending? do
+    if aborted?(signal) or Queue.has_steering?(config) or unsafe_pending? do
       {pending_by_ref, pending_by_mon, remaining_tool_calls, []}
     else
       parent = self()
@@ -468,7 +477,7 @@ defmodule LemonAgent.Loop.ToolCalls do
             parallel_safe? = tool != nil and tool.parallel_safe == true
 
             cond do
-              aborted?(signal) or has_steering_messages?(config) ->
+              aborted?(signal) or Queue.has_steering?(config) ->
                 {:halt, state}
 
               map_size(by_ref) >= max_pending ->
@@ -1221,12 +1230,6 @@ defmodule LemonAgent.Loop.ToolCalls do
   defp remember_partial(pending_by_ref, _ref, _partial), do: pending_by_ref
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
-
-  defp has_steering_messages?(%AgentLoopConfig{has_steering_messages: nil}), do: false
-
-  defp has_steering_messages?(%AgentLoopConfig{has_steering_messages: has_fn}) do
-    has_fn.() == true
-  end
 
   defp normalize_trust(:untrusted), do: :untrusted
   defp normalize_trust(_), do: :trusted

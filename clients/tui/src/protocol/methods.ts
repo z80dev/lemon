@@ -84,6 +84,7 @@ import type {
 	HealthResult,
 	LogsTailParams,
 	ModelsListResult,
+	PendingSteersResult,
 	ProcessJobsCancelParams,
 	ProcessJobsCancelResult,
 	ProcessJobsInspectParams,
@@ -102,14 +103,16 @@ import type {
 	RunsRecentListResult,
 	SessionDetailResult,
 	SessionExportFormat,
+	SessionSteerParams,
+	SessionSteerReceipt,
 	SessionSummary,
 	SessionsCompactParams,
 	SessionsContextParams,
 	SessionsContextResult,
 	SessionsDeleteResult,
-	SessionsExportResult,
 	SessionsEventsParams,
 	SessionsEventsResult,
+	SessionsExportResult,
 	SessionsForkParams,
 	SessionsForkResult,
 	SessionsListParams,
@@ -173,6 +176,9 @@ export const METHOD = {
 	sessionsDelete: "sessions.delete",
 	sessionsCompact: "sessions.compact",
 	sessionsPlan: "sessions.plan",
+	sessionsSteer: "sessions.steer",
+	sessionsSteerWithdraw: "sessions.steer.withdraw",
+	sessionsSteerPending: "sessions.steer.pending",
 	sessionsContext: "sessions.context",
 	sessionsTree: "sessions.tree",
 	sessionsRewind: "sessions.rewind",
@@ -337,6 +343,65 @@ export class ControlPlaneMethods {
 
 	chatAbort(params: ChatAbortParams, options?: RequestOptions): Promise<ChatAbortResult> {
 		return this.#call<ChatAbortResult>(METHOD.chatAbort, params, options);
+	}
+
+	/** A live-run mutation: never park it for reconnect or replay it automatically. */
+	async sessionsSteer(params: SessionSteerParams): Promise<SessionSteerReceipt> {
+		const result = await this.#call<SessionSteerReceipt>(METHOD.sessionsSteer, params, {
+			queueIfOffline: false,
+			requestId: params.messageId,
+		});
+		if (
+			result?.sessionKey !== params.sessionKey ||
+			result?.runId !== params.runId ||
+			result?.messageId !== params.messageId ||
+			!Number.isSafeInteger(result.acceptedAfterTurn) ||
+			result.acceptedAfterTurn < 0
+		) {
+			throw new Error("unverified steering receipt; inspect the queue before retrying");
+		}
+		return result;
+	}
+
+	async sessionsSteerWithdraw(params: { sessionKey: string; messageId: string }): Promise<void> {
+		const result = await this.#call<{
+			sessionKey: string;
+			messageId: string;
+			withdrawn: boolean;
+		}>(METHOD.sessionsSteerWithdraw, params, { queueIfOffline: false });
+		if (
+			result?.sessionKey !== params.sessionKey ||
+			result?.messageId !== params.messageId ||
+			result?.withdrawn !== true
+		) {
+			throw new Error("withdrawal outcome unknown; inspect the queue before retrying");
+		}
+	}
+
+	async sessionsSteerPending(sessionKey: string): Promise<PendingSteersResult> {
+		const result = await this.#call<PendingSteersResult>(
+			METHOD.sessionsSteerPending,
+			{ sessionKey },
+			{ queueIfOffline: false },
+		);
+		if (
+			result?.sessionKey !== sessionKey ||
+			typeof result.truncated !== "boolean" ||
+			!Array.isArray(result.items) ||
+			result.items.some(
+				(item) =>
+					!item ||
+					typeof item.messageId !== "string" ||
+					!item.messageId.trim() ||
+					typeof item.preview !== "string" ||
+					!Number.isSafeInteger(item.acceptedAfterTurn) ||
+					item.acceptedAfterTurn < 0,
+			) ||
+			new Set(result.items.map((item) => item.messageId)).size !== result.items.length
+		) {
+			throw new Error("unverified pending steering queue");
+		}
+		return result;
 	}
 
 	chatHistory(params: ChatHistoryParams, options?: RequestOptions): Promise<ChatHistoryResult> {

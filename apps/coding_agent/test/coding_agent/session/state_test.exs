@@ -92,7 +92,7 @@ defmodule CodingAgent.Session.StateTest do
 
     assert next_state.is_streaming
     assert next_state.pending_prompt_timer_ref == timer_ref
-    assert next_state.turn_index == 5
+    assert next_state.turn_index == 4
     assert next_state.overflow_recovery == %OverflowRecovery.State{}
   end
 
@@ -102,6 +102,7 @@ defmodule CodingAgent.Session.StateTest do
       is_streaming: true,
       pending_prompt_timer_ref: make_ref(),
       turn_index: 4,
+      input_journal: %{},
       started_at: 12,
       session_file: "/tmp/session.jsonl",
       steering_queue: :queue.from_list(["steer"]),

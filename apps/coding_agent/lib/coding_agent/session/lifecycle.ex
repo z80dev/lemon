@@ -758,11 +758,10 @@ defmodule CodingAgent.Session.Lifecycle do
   @spec reset(Session.t(), non_neg_integer()) ::
           {:ok, Session.t()} | {:error, :busy, Session.t()}
   def reset(state, reset_abort_wait_ms) when is_integer(reset_abort_wait_ms) do
-    was_streaming = state.is_streaming
-    had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
+    was_streaming = state.is_streaming or LemonAgent.Agent.get_state(state.agent).is_streaming
     state = State.cancel_pending_prompt(state)
 
-    case wait_for_reset_abort(state, was_streaming, had_pending_prompt, reset_abort_wait_ms) do
+    case wait_for_reset_abort(state, reset_abort_wait_ms) do
       :ok ->
         # Reset may discard queued events after abort. Capture already reported
         # spend from the agent first, and persist it in both old and new files.
@@ -775,10 +774,6 @@ defmodule CodingAgent.Session.Lifecycle do
             Notifier.broadcast_event(state, {:canceled, :reset})
             Notifier.complete_event_streams(state, {:canceled, :reset})
 
-            if not had_pending_prompt do
-              BackgroundTasks.flush_queued_agent_events()
-            end
-
             %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
           else
             state
@@ -786,6 +781,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
         state = CompactionManager.cancel_compaction_tasks(state, :session_reset)
         :ok = LemonAgent.Agent.reset(state.agent)
+        BackgroundTasks.flush_queued_agent_events()
 
         previous_session_id = state.session_manager.header.id
         :ok = CodingAgent.Tools.Bash.ShellState.reset(previous_session_id)
@@ -847,10 +843,7 @@ defmodule CodingAgent.Session.Lifecycle do
     end
   end
 
-  defp wait_for_reset_abort(_state, false, _had_pending_prompt, _reset_abort_wait_ms), do: :ok
-  defp wait_for_reset_abort(_state, true, true, _reset_abort_wait_ms), do: :ok
-
-  defp wait_for_reset_abort(state, true, false, reset_abort_wait_ms) do
+  defp wait_for_reset_abort(state, reset_abort_wait_ms) do
     LemonAgent.Agent.abort(state.agent)
     LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
   end

@@ -35,10 +35,11 @@ See [README](README.md) for usage and [BEAM invariants](../../docs/beam_agents.m
 - Event streams are bounded and owned. Owner death cancels the attached task;
   consumers that outlive a producer must choose the caller as owner.
 - `{:agent_end, messages}` contains only the new messages, not full history.
-- Steering/follow-up polling calls back into the Agent. Preserve the bounded
-  queue-call timeout and acknowledge follow-up enqueueing before returning.
-  Callers that must release a blocked join only after delivery rely on that
-  acknowledgement; queueing does not start a new loop after a terminal event.
+- Steering/follow-up delivery uses correlated messages to the Agent owner.
+  Preserve the bounded request timeout and acknowledge enqueueing before returning.
+  An empty final queue response atomically closes that run's input boundary;
+  accepted input after it starts the next run. Journal restoration explicitly
+  defers starting queued input until the caller resumes the session.
 - Context truncation preserves chronological order. Assistant tool calls and
   contiguous results are one unit: keep or drop the whole unit. Bookends obeys
   both message and character hard limits.

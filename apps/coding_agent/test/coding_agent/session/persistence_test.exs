@@ -7,7 +7,6 @@ defmodule CodingAgent.Session.PersistenceTest do
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session
   alias CodingAgent.Session.Persistence
-  alias CodingAgent.Session.State
   alias CodingAgent.SessionManager
   alias CodingAgent.Executor
   alias LemonGateway.ExecutionRequest
@@ -357,25 +356,10 @@ defmodule CodingAgent.Session.PersistenceTest do
       timestamp: 456
     }
 
-    message = State.build_async_followup_message(attrs)
-
+    unsubscribe = Session.subscribe(session)
     assert :ok = Session.handle_async_followup(session, attrs)
-
-    pending_prompt_timer_ref = Session.get_state(session).pending_prompt_timer_ref
-    assert is_reference(pending_prompt_timer_ref)
-    Process.cancel_timer(pending_prompt_timer_ref)
-
-    :sys.replace_state(session, fn state ->
-      %{state | pending_prompt_timer_ref: nil}
-    end)
-
-    send(session, {:agent_event, {:message_end, message}})
-    send(session, {:agent_event, {:agent_end, [message]}})
-
-    assert wait_until(fn ->
-             state = Session.get_state(session)
-             state.is_streaming == false and state.pending_prompt_timer_ref == nil
-           end)
+    assert_receive {:session_event, _id, {:agent_end, _messages}, _cursor}, 5_000
+    unsubscribe.()
 
     native_session_id = Session.get_state(session).session_manager.header.id
     assert :ok = Session.save(session)
@@ -402,7 +386,7 @@ defmodule CodingAgent.Session.PersistenceTest do
            }
   end
 
-  defp wait_until(fun, timeout_ms \\ 1_000) when is_function(fun, 0) do
+  defp wait_until(fun, timeout_ms) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(fun, deadline)
   end
