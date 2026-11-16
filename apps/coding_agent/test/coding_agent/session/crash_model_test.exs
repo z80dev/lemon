@@ -148,8 +148,9 @@ defmodule CodingAgent.Session.CrashModelTest do
     records = decoded_records(prefix)
     expected_ids = for %{"id" => id, "type" => type} <- records, type != "session", do: id
 
-    assert {:ok, session} = SessionManager.load_from_file(path),
-           "JournalPrefix: complete prefix could not reopen"
+    recovery = SessionManager.load_from_file(path)
+    assert match?({:ok, _session}, recovery), "JournalPrefix: complete prefix could not reopen"
+    {:ok, session} = recovery
 
     ids = Enum.map(SessionManager.entries(session), & &1.id)
     assert ids == expected_ids, "JournalPrefix: recovered entries differ from complete records"
