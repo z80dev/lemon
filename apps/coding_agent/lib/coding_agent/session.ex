@@ -1840,7 +1840,17 @@ defmodule CodingAgent.Session do
                     do: :steering_queue,
                     else: :follow_up_queue
 
-                Map.update!(state, key, &:queue.in(message, &1))
+                state = Map.update!(state, key, &:queue.in(message, &1))
+
+                # Idle input starts the Agent's next run inside the call above
+                # (#559). Publish it now so branch mutations (navigate, rewind,
+                # compact) refuse as busy before the run's bound/turn events land.
+                if state.is_streaming or agent_opts[:defer_start],
+                  do: state,
+                  else: %{
+                    state
+                    | is_streaming: LemonAgent.Agent.get_state(state.agent).is_streaming
+                  }
               end
 
             notify_steering_changed()
