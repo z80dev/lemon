@@ -309,7 +309,8 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
 
     receipt = launch([task_node("a")], opts, output_schema: schema)
     assert_receive {:started, "a", a, _, _}, 2_000
-    send(a, {:finish, result(~s({"ok":true}))})
+    # Strict children return an accepted submit_result value as structured_output (#602).
+    send(a, {:finish, result(~s({"ok":true}), %{structured_output: %{"ok" => true}})})
     report = await_report(receipt)
     assert report.details.structured_output.status == "completed"
     assert hd(report.details.structured_output.tasks).structured_output == %{"ok" => true}

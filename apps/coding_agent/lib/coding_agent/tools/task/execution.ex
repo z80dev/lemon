@@ -385,6 +385,14 @@ defmodule CodingAgent.Tools.Task.Execution do
       ),
       do: %{result | is_error: true}
 
+  # Request-budget exhaustion keeps its partial text and annotation in both
+  # schema modes; the child stopped before it could call submit_result.
+  def validate_output(
+        %LemonAgent.Types.AgentToolResult{details: %{budget_exhausted: true}} = result,
+        validated
+      ),
+      do: decode_output(result, validated)
+
   def validate_output(%LemonAgent.Types.AgentToolResult{} = result, %{
         output_schema: schema,
         schema_mode: mode
@@ -392,7 +400,12 @@ defmodule CodingAgent.Tools.Task.Execution do
       when not is_nil(schema) and mode != "permissive",
       do: {:error, result.details[:structured_output_error] || "Task ended without submit_result"}
 
-  def validate_output(%LemonAgent.Types.AgentToolResult{} = result, validated) do
+  def validate_output(%LemonAgent.Types.AgentToolResult{} = result, validated),
+    do: decode_output(result, validated)
+
+  def validate_output(error, _validated), do: error
+
+  defp decode_output(result, validated) do
     case validated[:output_schema] do
       nil ->
         result
@@ -428,8 +441,6 @@ defmodule CodingAgent.Tools.Task.Execution do
         end
     end
   end
-
-  def validate_output(error, _validated), do: error
 
   defp prepare_workspace(%{validated: %{worktree: true} = validated} = execution, opts) do
     mode =
