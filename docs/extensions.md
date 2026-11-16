@@ -976,11 +976,19 @@ Reload is refused with an error while the session is streaming, and requires an
 active session (there is nothing to reload in fallback mode).
 
 When reload is triggered:
-1. Providers registered by the previous load are unregistered and all loaded extension modules are purged from the code server
-2. The tool registry's extension cache is invalidated and extensions are re-discovered from all configured paths
+1. Providers registered by the session's previous load are unregistered
+2. The current working directory's tool-registry extension cache is invalidated and extensions are re-discovered from the session's configured paths; unrelated working directories' modules and caches are left intact
 3. Extension providers are registered again
 4. The session's tools (with conflict detection and tool disclosure) and hooks are rebuilt
 5. A new `{:extension_status_report, report}` event is broadcast
+
+Removed or renamed sources stop contributing tools and hooks to the reloaded
+session. Their obsolete module registrations are removed once no other cached
+working-directory inventory uses them; old code still in use is never
+hard-purged. Compilation replaces the configured modules without first deleting
+all extensions in the VM. Concurrent loads wait for the node-local reload lock
+with a finite retry limit; exhausted contention is an explicit load error in the
+status report, and the simpler `load_extensions/1` API logs the failure.
 
 ```elixir
 # Reload via tool (from within agent)

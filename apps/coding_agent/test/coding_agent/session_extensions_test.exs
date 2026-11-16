@@ -606,6 +606,98 @@ defmodule CodingAgent.SessionExtensionsTest do
   # ============================================================================
 
   describe "reload_extensions/1" do
+    test "reload preserves other sessions and unloads only unshared removed sources", %{
+      tmp_dir: tmp_dir
+    } do
+      first_cwd = Path.join(tmp_dir, "first")
+      second_cwd = Path.join(tmp_dir, "second")
+      shared_cwd = Path.join(tmp_dir, "shared")
+
+      tools_code = fn name ->
+        """
+        [
+          %LemonAgent.Types.AgentTool{
+            name: "#{name}",
+            description: "#{name}",
+            parameters: %{},
+            label: "#{name}",
+            execute: fn _, _, _, _ ->
+              %LemonAgent.Types.AgentToolResult{
+                content: [%LemonAi.Types.TextContent{text: "#{name}"}]
+              }
+            end
+          }
+        ]
+        """
+      end
+
+      modules =
+        for {cwd, name} <- [
+              {first_cwd, "FirstIsolatedReloadExtension"},
+              {second_cwd, "SecondIsolatedReloadExtension"},
+              {shared_cwd, "SharedIsolatedReloadExtension"}
+            ] do
+          create_extension_file(cwd, name, tools: tools_code.(name))
+        end
+
+      on_exit(fn -> Enum.each(modules, &cleanup_module/1) end)
+      [first_module, second_module, shared_module] = modules
+      shared_path = Path.join(shared_cwd, ".lemon/extensions")
+
+      sessions =
+        for cwd <- [first_cwd, second_cwd] do
+          start_session(
+            cwd: cwd,
+            session_mode: :chat,
+            settings_manager: %SettingsManager{
+              extension_paths: [Path.join(cwd, ".lemon/extensions"), shared_path]
+            }
+          )
+        end
+
+      [first, second] = sessions
+      first_source = CodingAgent.Extensions.get_source_path(first_module)
+      second_source = CodingAgent.Extensions.get_source_path(second_module)
+      shared_source = CodingAgent.Extensions.get_source_path(shared_module)
+      assert is_binary(first_source)
+      assert is_binary(second_source)
+      assert is_binary(shared_source)
+
+      File.rename!(first_source, first_source <> ".disabled")
+      File.rm!(shared_source)
+      assert {:ok, report} = Session.reload_extensions(first)
+      assert report.total_loaded == 0
+      assert Session.get_state(first).extensions == []
+      refute "FirstIsolatedReloadExtension" in tool_names(Session.get_state(first).tools)
+      assert CodingAgent.Extensions.get_source_path(first_module) == nil
+      refute Code.ensure_loaded?(first_module)
+      refute Enum.any?(CodingAgent.Extensions.list_extensions(), &(&1.module == first_module))
+
+      for module <- [second_module, shared_module] do
+        assert Code.ensure_loaded?(module)
+        assert is_binary(CodingAgent.Extensions.get_source_path(module))
+      end
+
+      second_tools = Session.get_state(second).tools
+
+      for name <- ["SecondIsolatedReloadExtension", "SharedIsolatedReloadExtension"] do
+        tool = Enum.find(second_tools, &(&1.name == name))
+
+        assert %AgentToolResult{content: [%TextContent{text: ^name}]} =
+                 tool.execute.("still-live", %{}, nil, nil)
+      end
+
+      renamed_source = Path.rootname(second_source) <> ".exs"
+      File.rename!(second_source, renamed_source)
+      assert {:ok, report} = Session.reload_extensions(second)
+      assert report.total_loaded == 1
+      assert Session.get_state(second).extensions == [second_module]
+      assert CodingAgent.Extensions.get_source_path(second_module) == renamed_source
+      assert CodingAgent.Extensions.get_source_path(shared_module) == nil
+      refute Code.ensure_loaded?(shared_module)
+      refute Enum.any?(CodingAgent.Extensions.list_extensions(), &(&1.module == shared_module))
+    end
+
     test "rebuilds extension tools after extension file changes", %{tmp_dir: tmp_dir} do
       v1_tools = """
       [

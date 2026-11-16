@@ -130,6 +130,9 @@ defmodule CodingAgent.ExtensionLifecycle do
 
   @doc """
   Reload extension lifecycle data for a running session.
+
+  Recompiles only the session's configured sources. Removed modules are unloaded
+  only when no other cached working-directory inventory uses them.
   """
   @spec reload(keyword()) :: lifecycle_result()
   def reload(opts) do
@@ -154,13 +157,13 @@ defmodule CodingAgent.ExtensionLifecycle do
       end
 
     Extensions.unregister_extension_providers(old_provider_registration)
-    Extensions.clear_extension_cache()
 
     extension_paths = extension_paths(config_cwd, settings_manager)
     ToolRegistry.invalidate_extension_cache(cwd)
 
     {extensions, load_errors} = load_extensions(extension_paths)
     ToolRegistry.prime_extension_cache(cwd, extension_paths, extensions, load_errors)
+    unload_removed_extensions(previous_status_report, extensions)
 
     hooks = Extensions.get_hooks(extensions)
     provider_registration = Extensions.register_extension_providers(extensions)
@@ -326,6 +329,15 @@ defmodule CodingAgent.ExtensionLifecycle do
 
     {extensions, load_errors}
   end
+
+  defp unload_removed_extensions(%{extensions: previous}, extensions) when is_list(previous) do
+    previous
+    |> Enum.map(& &1.module)
+    |> Kernel.--(extensions)
+    |> ToolRegistry.unload_uncached_extensions()
+  end
+
+  defp unload_removed_extensions(_previous_status_report, _extensions), do: :ok
 
   @spec build_tools(
           String.t(),
