@@ -20,6 +20,71 @@ Two layers coexist and are easy to confuse:
   queryable envelope written through `LemonCore.Store`. It has its own event taxonomy and is
   *not* derived from the telemetry events here.
 
+## Safe runtime diagnostics
+
+Production diagnostics use owner-published snapshots and explicit summary APIs,
+not `:sys.get_state`. Gateway health reads scheduler counters without waiting
+for the scheduler mailbox. Async task surface bindings are immutable Registry
+values: answer finalization never asks a subscriber for its private state.
+Long-lived admission, stream, process-store, LSP, channel-registry and task-control
+servers expose redacted `format_status/1` summaries. These hooks also remove
+messages, reasons and debug logs that may contain private data; they do not make
+arbitrary process inspection safe.
+
+Prefer the documented telemetry events and bounded status summaries first.
+On a trusted local node, `:sys.get_status(pid)` requests the redacted OTP status
+but still requires a responsive owner; it is not a health probe.
+
+For a problem that requires tracing, use OTP `:dbg` or an operator-installed
+`recon_trace` only for a short, bounded capture of a specific PID and function.
+Neither is enabled by Lemon, and `recon` is not a required dependency. Trace
+arguments, return values, messages and exceptions can contain credentials,
+prompts and tool output **before redaction**. Do not enable node-wide tracing
+or attach to an untrusted remote node; keep captures private and never paste
+raw output into issues. Set a small event limit (for example
+`recon_trace:calls/3`'s limit argument), stop the trace immediately after capture,
+and clear OTP tracing with `:dbg.stop_clear/0`. Tracing has runtime overhead;
+do not use it as a permanent metrics collector.
+
+## Control-plane method execution
+
+`LemonControlPlane.Methods.Registry` emits these events for every dispatch,
+including unknown methods and caught callback failures:
+
+| Event | Measurements | Metadata |
+| --- | --- | --- |
+| `[:lemon, :control_plane, :method, :start]` | `system_time` (native) | `method` |
+| `[:lemon, :control_plane, :method, :stop]` | `duration` (native) | `method`, `outcome: :ok \| :error \| :exception` |
+| `[:lemon, :control_plane, :method, :exception]` | `count: 1` | `method`, `class` (exception module or catch kind) |
+
+Method labels are registered names of at most 128 bytes, or `:unknown`; arbitrary
+request method strings are never reflected into telemetry. Parameters, auth
+context, return values and raw failure terms are excluded. A caught exception
+emits both the exception counter and a stop with `outcome: :exception`. A process
+killed during dispatch may have a start without a stop.
+
+## OS-process lifecycle
+
+| Event | Measurements | Metadata |
+| --- | --- | --- |
+| `[:lemon, :process_group, :start]` | `count: 1` | `scope: :group \| :process` |
+| `[:lemon, :process_group, :stop]` | `count: 1`, `duration` (native) | `scope`, `outcome: :terminated \| :signaled` |
+| `[:lemon, :process_group, :failure]` | `count: 1`, `duration` (native) | `scope`, `outcome: :alive \| :unobservable` |
+| `[:lemon, :process_session, :start]` | `count: 1`, `duration` (native) | `mode: :managed \| :oneshot`, `outcome: :running` |
+| `[:lemon, :process_session, :failure]` | `count: 1`, `duration` (native) | `mode`, `outcome: :startup_failed` |
+| `[:lemon, :process_session, :stop]` | `count: 1`, `duration` (native) | `mode`, `outcome: :stopped \| :owner_failed` |
+
+Process-group events describe termination attempts, not workload launches.
+Process-scoped `:signaled` means signal acknowledgement, not verified exit;
+group termination distinguishes confirmed termination from an alive or
+unobservable group. Process-session durations start before initialization, so
+`:start` measures startup and `:stop` measures owner lifetime including startup.
+An owner stop is not evidence that the workload completed successfully. Abrupt
+BEAM process kills may prevent terminal events.
+
+All metadata is bounded labels: no process/session identities, commands, paths,
+environment values, output or raw failure reasons are included.
+
 ## Session-start latency stages
 
 `[:coding_agent, :session, :start_stage]` is emitted synchronously by

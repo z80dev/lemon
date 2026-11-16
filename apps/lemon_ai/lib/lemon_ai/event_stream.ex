@@ -64,6 +64,17 @@ defmodule LemonAi.EventStream do
 
   use GenServer
 
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, _} -> {:state, :redacted}
+      {:message, _} -> {:message, :redacted}
+      {:reason, _} -> {:reason, :redacted}
+      {:log, _} -> {:log, []}
+      pair -> pair
+    end)
+  end
+
   alias LemonAi.Types.AssistantMessage
 
   require Logger

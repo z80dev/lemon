@@ -170,6 +170,15 @@ defmodule CodingAgent.Tools.Task.Control do
     do: GenServer.call(__MODULE__, {:command, task_id, "cancel", nil, nil})
 
   @impl true
+  def format_status(status) do
+    status
+    |> Map.put(:state, %{module: __MODULE__, task_count: map_size(status.state)})
+    |> Map.put(:message, :redacted)
+    |> Map.put(:reason, :redacted)
+    |> Map.put(:log, [])
+  end
+
+  @impl true
   def init(_opts) do
     {:ok, %{}}
   end
