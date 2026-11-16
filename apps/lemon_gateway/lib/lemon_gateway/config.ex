@@ -16,8 +16,6 @@ defmodule LemonGateway.Config do
     enable_discord: false,
     enable_xmtp: false,
     enable_webhook: false,
-    require_engine_lock: true,
-    engine_lock_timeout_ms: 60_000,
     projects: %{},
     bindings: [],
     email: %{},

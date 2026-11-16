@@ -52,9 +52,7 @@ defmodule LemonCore.Config.GatewayTest do
       [
         "LEMON_GATEWAY_MAX_CONCURRENT_RUNS",
         "LEMON_GATEWAY_DEFAULT_CWD",
-        "LEMON_GATEWAY_AUTO_RESUME",
-        "LEMON_GATEWAY_REQUIRE_ENGINE_LOCK",
-        "LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS"
+        "LEMON_GATEWAY_AUTO_RESUME"
       ]
       |> Enum.each(&System.delete_env/1)
 
@@ -79,8 +77,6 @@ defmodule LemonCore.Config.GatewayTest do
 
       assert config.channels[:stub] == %{resolved: true, raw: %{}}
 
-      assert config.require_engine_lock == true
-      assert config.engine_lock_timeout_ms == 60_000
       assert config.projects == %{}
       assert config.bindings == []
       assert config.sms == %{}
@@ -199,17 +195,13 @@ defmodule LemonCore.Config.GatewayTest do
       System.put_env("LEMON_GATEWAY_MAX_CONCURRENT_RUNS", "10")
       System.put_env("LEMON_GATEWAY_DEFAULT_CWD", "/workspace")
       System.put_env("LEMON_GATEWAY_AUTO_RESUME", "true")
-      System.put_env("LEMON_GATEWAY_REQUIRE_ENGINE_LOCK", "false")
-      System.put_env("LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS", "120000")
 
       settings = %{
         "gateway" => %{
           "max_concurrent_runs" => 2,
           "default_cwd" => "~/home",
           "auto_resume" => false,
-          "enable_stub" => false,
-          "require_engine_lock" => true,
-          "engine_lock_timeout_ms" => 60_000
+          "enable_stub" => false
         }
       }
 
@@ -219,8 +211,6 @@ defmodule LemonCore.Config.GatewayTest do
       assert config.default_cwd == "/workspace"
       assert config.auto_resume == true
       assert config.enabled_channels[:stub] == false
-      assert config.require_engine_lock == false
-      assert config.engine_lock_timeout_ms == 120_000
     end
   end
 
@@ -401,8 +391,6 @@ defmodule LemonCore.Config.GatewayTest do
       assert defaults["auto_resume"] == false
       assert defaults["enable_stub"] == false
       assert defaults["stub"] == %{}
-      assert defaults["require_engine_lock"] == true
-      assert defaults["engine_lock_timeout_ms"] == 60_000
       assert defaults["projects"] == %{}
       assert defaults["bindings"] == []
       assert defaults["sms"] == %{}
@@ -432,8 +420,6 @@ defmodule LemonCore.Config.GatewayTest do
       assert is_integer(config.max_concurrent_runs)
       assert is_boolean(config.auto_resume)
       assert is_map(config.enabled_channels)
-      assert is_boolean(config.require_engine_lock)
-      assert is_integer(config.engine_lock_timeout_ms)
       assert is_map(config.projects)
       assert is_list(config.bindings)
       assert is_map(config.sms)

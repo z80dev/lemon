@@ -394,7 +394,6 @@ defmodule LemonScripts.LiveCronRuntimeRestartSmoke do
     enable_discord = false
     enable_webhook = false
     enable_xmtp = false
-    require_engine_lock = false
 
     [gateway.voice]
     enabled = false

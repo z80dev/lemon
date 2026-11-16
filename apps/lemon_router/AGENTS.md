@@ -14,6 +14,10 @@ See [README](README.md) and [architecture](../../docs/architecture/overview.md).
   follow-up debounce/merge, steering fallback and interrupt semantics. A key is
   `{:resume, engine, token}` for an explicit shared token, otherwise
   `{:session, session_key}` (including auto-resume).
+- Coordinators have no idle-stop path or population cap: distinct conversation
+  keys accumulate processes for the VM lifetime. Per-conversation backlog bounds
+  do not bound this population. See the
+  [admission inventory](../../docs/architecture/admission-gates.md).
 - Task/delegated auto-followups prefer steer with follow-up fallback. Do not merge
   separate provenance-bearing async completions during debounce. Record the final
   delivery disposition/receipt after router mutation, not before.
@@ -67,8 +71,8 @@ revision alongside results; timings are host/filesystem-specific.
 - Permanent admission rows retain only state/semantic identity; bounded cleanup
   compacts legacy rows and sanitizes reasons without discarding replay protection.
 - A run that never binds to a live executor must still terminalize exactly once
-  so its coordinator releases the conversation. Runtime submission retries are
-  bounded by a pre-start deadline, not permanent busy state.
+  so its coordinator releases the conversation. Retry only runtime unavailability,
+  bounded by the pre-start deadline; definite rejection terminalizes once.
 - Queued start failure emits one structured completion and advances the queue.
   Adopt an ambiguously started child already in the registry rather than emit a
   second synthetic completion.

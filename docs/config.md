@@ -2882,15 +2882,21 @@ Top-level `[gateway]` keys (defaults from `LemonCore.Config.Gateway`):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `max_concurrent_runs` | `2` | Gateway-wide concurrent run limit (`LEMON_GATEWAY_MAX_CONCURRENT_RUNS`). |
+| `max_concurrent_runs` | `2` | Positive gateway-wide execution permit limit (`LEMON_GATEWAY_MAX_CONCURRENT_RUNS`), owned by `LemonGateway.Slots`. |
 | `default_cwd` | unset | Fallback working directory for unbound chats (`LEMON_GATEWAY_DEFAULT_CWD`). |
 | `auto_resume` | `false` | Resume interrupted sessions on start. |
 | `enable_telegram`, `enable_discord`, `enable_xmtp`, `enable_webhook`, `enable_a2a` | `false` | Enable the named channel; `enable_<id>` is read per registered channel (and `LEMON_GATEWAY_ENABLE_<ID>` overrides it). |
-| `require_engine_lock` | `true` | Serialize runs per engine session (`LEMON_GATEWAY_REQUIRE_ENGINE_LOCK`). |
-| `engine_lock_timeout_ms` | `60000` | Engine lock wait budget (`LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS`). |
 
-`enable_webhook`, `require_engine_lock` and `engine_lock_timeout_ms` are
-validated as boolean, boolean and positive integer respectively.
+`enable_webhook` is validated as a boolean. Invalid execution capacity fails
+startup; there is no fallback to 10. Engine-session ownership is always a
+fail-fast claim, not a configurable lock or timeout.
+
+This execution cap does not bound queued Runs or coordinator population.
+Router's `config :lemon_router, run_process_limit: 500` bounds live router
+RunProcesses, including those waiting for gateway permits. It is independent of
+`max_concurrent_runs`. See the canonical
+[admission inventory](architecture/admission-gates.md) for every gate and
+saturation behavior.
 
 ## A2A peers
 

@@ -211,8 +211,6 @@ enable_discord = false
 enable_webhook = false
 enable_xmtp = false
 enable_a2a = false
-require_engine_lock = true
-engine_lock_timeout_ms = 60000
 
 [gateway.queue]
 mode = "collect"

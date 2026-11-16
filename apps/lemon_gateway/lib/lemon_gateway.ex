@@ -23,9 +23,9 @@ defmodule LemonGateway do
   @doc """
   Submits an execution command for execution.
 
-  The request is routed through the scheduler, which handles concurrency
-  limiting per conversation key.
+  Starts a Run directly. The Run claims its engine session before waiting
+  for a global execution permit; the router owns conversation ordering.
   """
-  @spec submit(ExecutionCommand.t()) :: :ok
+  @spec submit(ExecutionCommand.t()) :: :ok | {:error, term()}
   def submit(%ExecutionCommand{} = command), do: LemonGateway.Runtime.submit_execution(command)
 end

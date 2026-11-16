@@ -23,8 +23,6 @@ defmodule LemonCore.Config.Gateway do
       default_cwd = "~/workspace"
       auto_resume = false
       enable_webhook = false
-      require_engine_lock = true
-      engine_lock_timeout_ms = 60000
 
       [[gateway.bindings]]
       transport = "foo"
@@ -34,8 +32,6 @@ defmodule LemonCore.Config.Gateway do
   Environment variables override file configuration:
   - `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`
   - `LEMON_GATEWAY_DEFAULT_CWD`
-  - `LEMON_GATEWAY_REQUIRE_ENGINE_LOCK`
-  - `LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS`
 
   A registered channel declares and reads its own `LEMON_GATEWAY_ENABLE_<ID>`
   variable; the library never names one.
@@ -49,8 +45,6 @@ defmodule LemonCore.Config.Gateway do
     :default_cwd,
     :auto_resume,
     :enable_webhook,
-    :require_engine_lock,
-    :engine_lock_timeout_ms,
     :projects,
     :bindings,
     :sms,
@@ -103,8 +97,6 @@ defmodule LemonCore.Config.Gateway do
           default_cwd: String.t() | nil,
           auto_resume: boolean(),
           enable_webhook: boolean(),
-          require_engine_lock: boolean(),
-          engine_lock_timeout_ms: integer(),
           projects: map(),
           bindings: [binding()],
           sms: map(),
@@ -132,8 +124,6 @@ defmodule LemonCore.Config.Gateway do
       auto_resume: resolve_auto_resume(gateway_settings),
       enable_webhook:
         resolve_enable_flag(gateway_settings, "enable_webhook", :lemon_gateway_enable_webhook),
-      require_engine_lock: resolve_require_engine_lock(gateway_settings),
-      engine_lock_timeout_ms: resolve_engine_lock_timeout(gateway_settings),
       projects: resolve_projects(gateway_settings),
       bindings: resolve_bindings(gateway_settings),
       sms: resolve_sms(gateway_settings),
@@ -215,22 +205,6 @@ defmodule LemonCore.Config.Gateway do
   end
 
   defp resolve_voice_replies(value), do: value
-
-  defp resolve_require_engine_lock(settings) do
-    Env.get(:lemon_gateway_require_engine_lock,
-      default:
-        if(is_nil(settings["require_engine_lock"]),
-          do: true,
-          else: settings["require_engine_lock"]
-        )
-    )
-  end
-
-  defp resolve_engine_lock_timeout(settings) do
-    Env.get(:lemon_gateway_engine_lock_timeout_ms,
-      default: settings["engine_lock_timeout_ms"] || 60_000
-    )
-  end
 
   defp resolve_projects(settings) do
     settings["projects"] || %{}
@@ -353,8 +327,6 @@ defmodule LemonCore.Config.Gateway do
       "default_cwd" => nil,
       "auto_resume" => false,
       "enable_webhook" => false,
-      "require_engine_lock" => true,
-      "engine_lock_timeout_ms" => 60_000,
       "projects" => %{},
       "bindings" => [],
       "sms" => %{},

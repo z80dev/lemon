@@ -387,11 +387,6 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(gateway, :auto_resume), "gateway.auto_resume")
     |> validate_boolean(Map.get(gateway, :enable_web_dashboard), "gateway.enable_web_dashboard")
     |> validate_boolean(Map.get(gateway, :enable_webhook), "gateway.enable_webhook")
-    |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
-    |> validate_non_negative_integer(
-      Map.get(gateway, :engine_lock_timeout_ms),
-      "gateway.engine_lock_timeout_ms"
-    )
     |> validate_channel_flags(gateway)
     |> validate_channel_sections(gateway)
     |> validate_web_dashboard_config(Map.get(gateway, :web_dashboard))

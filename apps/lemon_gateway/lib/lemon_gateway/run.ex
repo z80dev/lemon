@@ -65,12 +65,7 @@ defmodule LemonGateway.Run do
   def init(args) when is_map(args) do
     Process.flag(:trap_exit, true)
 
-    %{
-      execution_request: %ExecutionRequest{} = request,
-      slot_ref: slot_ref,
-      worker_pid: worker_pid
-    } =
-      args
+    %{execution_request: %ExecutionRequest{} = request} = args
 
     submitted_request = request
     run_id = request.run_id || generate_run_id()
@@ -82,8 +77,8 @@ defmodule LemonGateway.Run do
       execution_request: request,
       run_id: run_id,
       session_key: session_key,
-      slot_ref: slot_ref,
-      worker_pid: worker_pid,
+      slot_ref: nil,
+      slots_monitor_ref: nil,
       executor: nil,
       run_ref: nil,
       control_ctx: nil,
@@ -92,7 +87,7 @@ defmodule LemonGateway.Run do
       renderer: LemonGateway.Renderers.Basic,
       renderer_state: nil,
       completed: false,
-      lock_release_fn: nil,
+      claim_key: nil,
       last_resume: request.resume,
       current_phase: nil,
       cancelled: false,
@@ -105,34 +100,23 @@ defmodule LemonGateway.Run do
       progress_mapping_registered?: false
     }
 
-    {:ok, state, {:continue, :acquire_lock}}
+    {:ok, state, {:continue, :admit}}
   end
 
   defp generate_run_id do
     "run_#{LemonCore.Id.uuid()}"
   end
 
-  defp maybe_acquire_lock(request) do
-    require_lock = LemonGateway.Config.get(:require_engine_lock)
-    timeout_ms = LemonGateway.Config.get(:engine_lock_timeout_ms) || 60_000
-
-    if require_lock do
-      LemonGateway.EngineLock.acquire(lock_key_for(request), timeout_ms)
-    else
-      {:ok, fn -> :ok end}
-    end
-  end
-
-  defp lock_key_for(%ExecutionRequest{resume: %ResumeToken{value: value}})
+  defp claim_key_for(%ExecutionRequest{resume: %ResumeToken{value: value}})
        when is_binary(value) do
     {:resume, value}
   end
 
-  defp lock_key_for(%ExecutionRequest{session_key: session_key}) when is_binary(session_key) do
+  defp claim_key_for(%ExecutionRequest{session_key: session_key}) when is_binary(session_key) do
     {:session, session_key}
   end
 
-  defp lock_key_for(_), do: {:default, :global}
+  defp claim_key_for(_), do: {:default, :global}
 
   # Request meta is atom-keyed on the normal router path, but replayed events
   # and hand-built tests can use string keys.
@@ -175,54 +159,43 @@ defmodule LemonGateway.Run do
   end
 
   @impl true
-  def handle_continue(:acquire_lock, state) do
-    case maybe_acquire_lock(state.execution_request) do
-      {:ok, release_fn} ->
-        {:noreply, %{state | lock_release_fn: release_fn},
-         {:continue, {:start_run, resolve_configured_executor()}}}
+  def handle_continue(:admit, state) do
+    key = claim_key_for(state.execution_request)
 
-      {:error, :timeout} ->
-        {:noreply, state, {:continue, :lock_timeout}}
+    case LemonGateway.EngineSessionClaim.claim(key) do
+      :ok ->
+        state = %{state | claim_key: key}
+
+        case terminal_fence(state) do
+          :open ->
+            case Process.whereis(LemonGateway.Slots) do
+              pid when is_pid(pid) ->
+                ref = Process.monitor(pid)
+                LemonGateway.Slots.acquire(state.run_id)
+                {:noreply, %{state | slots_monitor_ref: ref}}
+
+              nil ->
+                finalize_start_failure(state, :runtime_unavailable)
+            end
+
+          :terminal ->
+            {:stop, :normal, %{state | completed: true}}
+
+          :unavailable ->
+            {:stop, :run_state_unavailable, state}
+        end
+
+      {:error, :session_in_use} ->
+        finalize_start_failure(state, :session_in_use)
     end
   end
 
-  def handle_continue(:lock_timeout, state) do
-    completed =
-      Event.completed(%{
-        engine: @engine_provenance,
-        ok: false,
-        error: :lock_timeout,
-        answer: "",
-        run_id: state.run_id,
-        session_key: state.session_key
-      })
-
-    renderer_state = state.renderer.init(%{engine: @engine_provenance})
-    {renderer_state, _render_action} = state.renderer.apply_event(renderer_state, completed)
-    state = %{state | renderer_state: renderer_state}
-
-    finalize(state, completed)
-    {:stop, :normal, %{state | completed: true}}
-  end
-
-  def handle_continue({:start_run, executor_result}, state) do
+  defp terminal_fence(state) do
     case RunStore.fetch(state.run_id) do
-      {:ok, %{summary: %{completed: completed}}} when is_map(completed) ->
-        # A queued cancellation/terminal fence may win before this child binds.
-        # Do not execute it later or publish a second result for the fixed ID.
-        if is_function(state.lock_release_fn), do: state.lock_release_fn.()
-        LemonGateway.Scheduler.release_slot(state.slot_ref)
-        send(state.worker_pid, {:run_complete, self(), completed})
-        {:stop, :normal, %{state | completed: true}}
-
-      {:ok, nil} ->
-        start_executor(executor_result, state)
-
-      {:ok, %{summary: nil}} ->
-        start_executor(executor_result, state)
-
-      _ ->
-        {:stop, :run_state_unavailable, state}
+      {:ok, %{summary: %{completed: completed}}} when is_map(completed) -> :terminal
+      {:ok, nil} -> :open
+      {:ok, %{summary: nil}} -> :open
+      _ -> :unavailable
     end
   end
 
@@ -363,6 +336,30 @@ defmodule LemonGateway.Run do
   end
 
   @impl true
+  def handle_info({:slot_granted, slot_ref}, %{slot_ref: nil} = state) do
+    state = %{state | slot_ref: slot_ref}
+
+    cond do
+      state.cancelled ->
+        finalize_cancel(state)
+
+      true ->
+        case terminal_fence(state) do
+          :open -> start_executor(resolve_configured_executor(), state)
+          :terminal -> {:stop, :normal, %{state | completed: true}}
+          :unavailable -> {:stop, :run_state_unavailable, state}
+        end
+    end
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{slots_monitor_ref: ref} = state
+      )
+      when is_reference(ref) do
+    {:stop, :runtime_unavailable, state}
+  end
+
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
     event =
       if state.cancelled and is_completed(event),
@@ -687,12 +684,17 @@ defmodule LemonGateway.Run do
       _ = safe_executor_control(state.executor, :cancel, state.control_ctx)
     end
 
-    if is_function(state.lock_release_fn), do: state.lock_release_fn.()
-    LemonGateway.Scheduler.release_slot(state.slot_ref)
+    release_admission(state)
 
     if state.progress_mapping_registered?,
       do: unregister_progress_mapping(state.execution_request)
 
+    :ok
+  end
+
+  defp release_admission(state) do
+    if state.slot_ref, do: LemonGateway.Slots.release(state.slot_ref)
+    if state.claim_key, do: LemonGateway.EngineSessionClaim.release(state.claim_key)
     :ok
   end
 
@@ -706,10 +708,7 @@ defmodule LemonGateway.Run do
         _ -> state
       end
 
-    # Release engine lock first (if acquired)
-    if is_function(state.lock_release_fn) do
-      state.lock_release_fn.()
-    end
+    release_admission(state)
 
     # Add run_id, session_key, and accumulated answer to completed event
     answer = Map.get(completed, :answer)
@@ -768,9 +767,6 @@ defmodule LemonGateway.Run do
         build_event_meta(state)
       )
     end
-
-    LemonGateway.Scheduler.release_slot(state.slot_ref)
-    send(state.worker_pid, {:run_complete, self(), completed})
 
     notify_pid = meta_field(state.execution_request, :notify_pid)
 

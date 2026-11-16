@@ -11,15 +11,27 @@ defmodule LemonGateway.Runtime do
   alias LemonCore.ExecutionCommand
   alias LemonGateway.ExecutionRequest
 
-  @doc "Submits a core execution command to the scheduler."
+  @doc "Starts a gateway Run; admission continues asynchronously in the child."
   @impl true
-  @spec submit_execution(ExecutionCommand.t()) :: :ok | {:error, :invalid_run_id}
-  def submit_execution(%ExecutionCommand{} = command) do
-    command
-    |> ExecutionCommand.ensure_conversation_key()
-    |> ExecutionRequest.from_command()
-    |> LemonGateway.Scheduler.submit_execution()
+  @spec submit_execution(ExecutionCommand.t()) :: :ok | {:error, term()}
+  def submit_execution(%ExecutionCommand{run_id: run_id} = command)
+      when is_binary(run_id) and run_id != "" do
+    request =
+      command
+      |> ExecutionCommand.ensure_conversation_key()
+      |> ExecutionRequest.from_command()
+
+    case LemonGateway.RunSupervisor.start_run(%{execution_request: request}) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  catch
+    :exit, {:noproc, _} -> {:error, :runtime_unavailable}
+    :exit, _ -> {:error, :outcome_unknown}
   end
+
+  def submit_execution(%ExecutionCommand{}), do: {:error, :invalid_run_id}
 
   @doc "Cancels a run identified by its progress message ID within a scope."
   @spec cancel_by_progress_msg(term(), integer()) :: :ok
@@ -35,11 +47,11 @@ defmodule LemonGateway.Runtime do
   @impl true
   @spec cancel_by_run_id(binary(), term()) :: :ok
   def cancel_by_run_id(run_id, reason \\ :user_requested) when is_binary(run_id) do
-    LemonGateway.Scheduler.cancel_execution(run_id, reason)
+    LemonGateway.Slots.cancel_by_run_id(run_id, reason)
 
     case run_pid(run_id) do
       run_pid when is_pid(run_pid) ->
-        LemonGateway.Scheduler.cancel(run_pid, reason)
+        GenServer.cast(run_pid, {:cancel, reason})
 
       _ ->
         :ok
@@ -64,7 +76,9 @@ defmodule LemonGateway.Runtime do
   @impl true
   @spec available?() :: boolean()
   def available? do
-    with pid when is_pid(pid) <- GenServer.whereis(LemonGateway.Scheduler),
+    with pid when is_pid(pid) <- Process.whereis(LemonGateway.Slots),
+         run_supervisor when is_pid(run_supervisor) <-
+           Process.whereis(LemonGateway.RunSupervisor),
          :ok <- LemonGateway.Executor.validate_configured() do
       true
     else

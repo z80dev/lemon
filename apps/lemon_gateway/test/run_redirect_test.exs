@@ -10,8 +10,6 @@ defmodule LemonGateway.RunRedirectTest do
 
   alias LemonGateway.Run
   alias LemonGateway.ExecutionRequest
-  alias LemonCore.ResumeToken
-  alias LemonGateway.Event
 
   # ============================================================================
   # Configured executor fixture
@@ -109,8 +107,7 @@ defmodule LemonGateway.RunRedirectTest do
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 10,
-      enable_telegram: false,
-      require_engine_lock: false
+      enable_telegram: false
     })
 
     Application.put_env(:lemon_gateway, :executor, RunRedirectFixtureExecutor)
@@ -142,14 +139,8 @@ defmodule LemonGateway.RunRedirectTest do
     }
   end
 
-  defp start_run_direct(request, slot_ref \\ make_ref()) do
-    args = %{
-      execution_request: request,
-      slot_ref: slot_ref,
-      worker_pid: self()
-    }
-
-    Run.start_link(args)
+  defp start_run_direct(request) do
+    Run.start_link(%{execution_request: request})
   end
 
   # ============================================================================

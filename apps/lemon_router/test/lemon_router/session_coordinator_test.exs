@@ -668,7 +668,23 @@ defmodule LemonRouter.SessionCoordinatorTest do
     [{pid, _}] = Registry.lookup(LemonRouter.ConversationRegistry, key)
     assert GenServer.call(pid, :pending_count) == 2
     :ok = SessionCoordinator.abort_run(cancelled)
-    assert_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^cancelled}}
+
+    assert_receive %LemonCore.Event{
+      type: :run_completed,
+      payload: %{
+        completed: %{
+          error: :user_requested,
+          meta: %{disposition: :cancelled, cancelled: true}
+        }
+      },
+      meta: %{run_id: ^cancelled}
+    }
+
+    assert {:ok, %{state: :accepted, effective_mode: :queued} = receipt} =
+             RunReceiptStore.fetch(cancelled)
+
+    assert {:ok, ^receipt} =
+             receipt_submit(key, cancelled, "must not execute", :collect, run_supervisor)
 
     assert %{
              summary: %{

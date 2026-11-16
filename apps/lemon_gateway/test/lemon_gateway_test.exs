@@ -3,7 +3,6 @@ defmodule LemonGatewayTest do
   use ExUnit.Case
 
   alias Elixir.LemonGateway.ExecutionRequest
-  alias Elixir.LemonGateway.Event
 
   setup do
     # Isolate Telegram poller file locks from any locally running gateway process (and from other tests).
@@ -21,7 +20,7 @@ defmodule LemonGatewayTest do
   end
 
   defp submit_request(%ExecutionRequest{} = request) do
-    Elixir.LemonGateway.Scheduler.submit_execution(request)
+    LemonGateway.Runtime.submit_execution(ExecutionRequest.to_command(request))
   end
 
   defp request(session_key, prompt, scenario, meta) do
@@ -316,37 +315,7 @@ defmodule LemonGatewayTest do
                    1_000
   end
 
-  test "scheduler releases slot after worker death" do
-    parent = self()
-
-    _worker_a =
-      spawn(fn ->
-        Elixir.LemonGateway.Scheduler.request_slot(self(), :thread_a)
-
-        receive do
-          {:slot_granted, _slot_ref} ->
-            send(parent, :worker_a_granted)
-            Process.exit(self(), :kill)
-        end
-      end)
-
-    worker_b =
-      spawn(fn ->
-        Elixir.LemonGateway.Scheduler.request_slot(self(), :thread_b)
-
-        receive do
-          {:slot_granted, _slot_ref} ->
-            send(parent, :worker_b_granted)
-        end
-      end)
-
-    assert_receive :worker_a_granted, 1_000
-    assert_receive :worker_b_granted, 1_000
-
-    Process.exit(worker_b, :kill)
-  end
-
-  test "thread worker frees slot when a run crashes" do
+  test "a crashed run frees its permit" do
     session_key = "test:2"
 
     crash_request =
@@ -355,6 +324,11 @@ defmodule LemonGatewayTest do
     ok_request = request(session_key, "ok", "echo", %{notify_pid: self(), user_msg_id: 11})
 
     submit_request(crash_request)
+
+    LemonGateway.AsyncHelpers.assert_eventually(fn ->
+      LemonGateway.Runtime.run_pid(crash_request.run_id) == nil
+    end)
+
     submit_request(ok_request)
 
     assert_receive {:lemon_gateway_run_completed, ^ok_request,
@@ -362,24 +336,7 @@ defmodule LemonGatewayTest do
                    2_000
   end
 
-  test "scheduler handles back-to-back submissions for the same thread" do
-    session_key = "test:3"
-    request1 = request(session_key, "first", "echo", %{notify_pid: self(), user_msg_id: 20})
-    request2 = request(session_key, "second", "echo", %{notify_pid: self(), user_msg_id: 21})
-
-    Task.async(fn -> submit_request(request1) end)
-    Task.async(fn -> submit_request(request2) end)
-
-    assert_receive {:lemon_gateway_run_completed, ^request1,
-                    %{__event__: :completed, ok: true, answer: "Echo: first"}},
-                   2_000
-
-    assert_receive {:lemon_gateway_run_completed, ^request2,
-                    %{__event__: :completed, ok: true, answer: "Echo: second"}},
-                   2_000
-  end
-
-  test "scheduler re-creates worker after idle stop" do
+  test "a new run starts after its predecessor exits" do
     session_key = "test:4"
     request1 = request(session_key, "one", "echo", %{notify_pid: self(), user_msg_id: 30})
     request2 = request(session_key, "two", "echo", %{notify_pid: self(), user_msg_id: 31})
@@ -390,9 +347,9 @@ defmodule LemonGatewayTest do
                     %{__event__: :completed, ok: true, answer: "Echo: one"}},
                    2_000
 
-    # Wait for the worker to stop when idle.
+    # Wait for the previous run to release its session claim.
     LemonGateway.AsyncHelpers.assert_eventually(fn ->
-      LemonGateway.ThreadRegistry.whereis({:session, session_key}) == nil
+      LemonGateway.Runtime.run_pid(request1.run_id) == nil
     end)
 
     submit_request(request2)
