@@ -292,7 +292,15 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc "Whether the WASM sidecar supervisor is running."
   @callback wasm_sidecar_running?() :: boolean()
 
+  @doc """
+  Read at most 100 unresolved tool intent IDs/names from a native resume journal.
+  Unknown outcomes remain unresolved; this read never executes or retries tools.
+  """
+  @callback interrupted_tool_calls(Path.t(), LemonCore.ResumeToken.t()) ::
+              {:ok, [%{id: binary(), name: binary()}]} | {:error, term()}
+
   @optional_callbacks list_tasks: 0,
+                      interrupted_tool_calls: 2,
                       user_prompt_bind: 3,
                       user_prompt_bind: 4,
                       user_prompt_resolve: 5,

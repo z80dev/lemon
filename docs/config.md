@@ -1266,6 +1266,7 @@ without ad-hoc environment variables.
 session_search               = "default-on" # durable memory ingest and search (default)
 routing_feedback             = "default-on" # task fingerprinting + routing feedback (default)
 skill_synthesis_drafts       = "default-on" # skill synthesis draft pipeline (default)
+crash_resume                = "off"        # hard-crash continuation is explicitly opt-in
 ```
 
 `session_search` defaults to `"default-on"`: durable memory ingest and search
@@ -1291,6 +1292,48 @@ LEMON_FEATURE_ROUTING_FEEDBACK=default-on
 ```
 
 Config validation fails cleanly if a flag is set to an unrecognised state.
+
+### Hard-crash recovery
+
+`features.crash_resume` defaults to `"off"`. To opt in, set it to `"on"` (or
+`"default-on"`), or set `LEMON_FEATURE_CRASH_RESUME=on`, before starting Lemon.
+This controls both orphaned router runs and their interrupted native task children;
+`"opt-in"` alone does not enable automatic boot recovery.
+
+At boot Lemon reconciles durable admissions without a terminal result. With the
+flag off, dispatched runs finish as interrupted with an unknown outcome, not as
+successful or definitely unstarted. A claim that never crossed dispatch is marked
+not started and is never automatically executed. With the flag on, resumable local
+runs receive a continuation turn
+under the **original run ID**. Their original request and native journal are
+retained privately before execution. The notice lists unresolved tool intent IDs
+and tool names (at most 100), and instructs the model to inspect state and ask before
+repeating any state-changing action: an unknown tool result is never permission to
+retry that tool. No original tool arguments appear in the notice.
+
+Children that were running are continued once per resumed parent attempt, under
+their original task IDs, before the parent's continuation prompt. Parent awaits
+therefore keep working. Children whose parent is not resumed are not re-driven.
+Real terminal task results remain first-writer-wins.
+Worktree children reuse their existing checkout; recovery never recreates it or
+automatically replays worktree preparation, merging or cleanup. Results explicitly
+report that merge effects were not replayed. For an interrupted swarm coordinator,
+only its already-running native descendants can continue: recovery does not rerun
+the scheduler or launch previously pending nodes.
+
+The existing carryover policy allows at most **three recovery attempts**, durably
+counted before dispatch, even across repeated crashes. Explicit abort fences are
+permanent and always prevent recovery. A run seen in both graceful carryover and
+the crash scan is dispatched only once. Unportable requests, invocation-bound
+capabilities and named-node executions are not automatically re-issued; they
+converge to interrupted/unknown instead. Graceful restart carryover still works
+independently of this flag.
+
+From a local operator console,
+`LemonRouter.RestartCarryover.CrashRecovery.operator_view(limit: 20)` returns recent
+resumed/abandoned run IDs, attempt counts, bounded reason classifications and
+timestamps. Results are capped at 100 and contain no prompts, paths, credentials,
+tool arguments or raw errors. Store failures remain explicit errors.
 
 ## Canonical Sections
 

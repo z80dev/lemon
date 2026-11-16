@@ -294,8 +294,19 @@ defmodule LemonRouter.RestartCarryover do
   defp replay_item(_submission), do: :skipped
 
   defp carry(%RunRequest{} = request, fields) do
-    # Meta pids/refs/ports (an originating connection, a reply target) name
-    # processes of this VM; after the restart there is nobody behind them.
+    request = %{request | run_id: LemonCore.Id.run_id()}
+
+    case portable_request(request) do
+      {:ok, request} ->
+        Map.new(fields) |> Map.put(:request, request)
+
+      {:error, :process_bound} ->
+        :skipped
+    end
+  end
+
+  @doc false
+  def portable_request(%RunRequest{} = request) do
     meta =
       (request.meta || %{})
       |> Map.drop(@identity_meta_keys)
@@ -303,11 +314,11 @@ defmodule LemonRouter.RestartCarryover do
         is_pid(value) or is_reference(value) or is_port(value)
       end)
 
-    request = %RunRequest{request | run_id: LemonCore.Id.run_id(), meta: meta}
+    request = %RunRequest{request | meta: meta}
 
     case bound_path(request) do
       nil ->
-        Map.new(fields) |> Map.put(:request, request)
+        {:ok, request}
 
       path ->
         Logger.warning(
@@ -315,7 +326,7 @@ defmodule LemonRouter.RestartCarryover do
             "#{inspect(path, limit: 8)} session_key=#{inspect(request.session_key)}"
         )
 
-        :skipped
+        {:error, :process_bound}
     end
   end
 
@@ -444,9 +455,30 @@ defmodule LemonRouter.RestartCarryover do
   end
 
   defp replay_record(store, key, %{items: items} = record, submit, acc) do
+    attempts = Map.get(record, :attempts, 0)
+
+    if attempts >= @max_replay_attempts do
+      _ = Store.delete(store, @table, key, durable: true)
+      %{acc | rejected: acc.rejected + length(items)}
+    else
+      claimed = Map.put(record, :attempts, attempts + 1)
+
+      case Store.compare_and_swap(store, @table, key, record, claimed, durable: true) do
+        :ok -> replay_claimed_record(store, key, claimed, items, submit, acc)
+        _ -> %{acc | pending: acc.pending + length(items)}
+      end
+    end
+  end
+
+  defp replay_record(store, key, _malformed, _submit, acc) do
+    _ = Store.delete(store, @table, key)
+    acc
+  end
+
+  defp replay_claimed_record(store, key, record, items, submit, acc) do
     {remaining, acc} =
       Enum.reduce(items, {[], acc}, fn item, {remaining, acc} ->
-        case submit.(item.request) do
+        case submit_carried_item(store, item, submit) do
           {:ok, _run_id} ->
             {remaining, %{acc | submitted: acc.submitted + 1}}
 
@@ -464,25 +496,36 @@ defmodule LemonRouter.RestartCarryover do
         end
       end)
 
-    attempts = Map.get(record, :attempts, 0) + 1
+    attempts = Map.fetch!(record, :attempts)
 
     _ =
       if remaining == [] or attempts >= @max_replay_attempts do
-        Store.delete(store, @table, key)
+        Store.delete(store, @table, key, durable: true)
       else
-        Store.put(store, @table, key, %{
-          record
-          | items: Enum.reverse(remaining),
-            attempts: attempts
-        })
+        Store.put(store, @table, key, %{record | items: Enum.reverse(remaining)}, durable: true)
       end
 
     acc
   end
 
-  defp replay_record(store, key, _malformed, _submit, acc) do
-    _ = Store.delete(store, @table, key)
-    acc
+  defp submit_carried_item(store, item, submit) do
+    ids = Enum.uniq([item.request.run_id, Map.get(item, :interrupted_run_id)])
+
+    preflight =
+      ids
+      |> Enum.reject(&is_nil/1)
+      |> Enum.reduce_while(:ok, fn run_id, :ok ->
+        case Store.fetch(store, LemonRouter.RunOrchestrator.abort_tombstone_table(), run_id) do
+          {:ok, nil} -> {:cont, :ok}
+          {:ok, %{}} -> {:halt, {:error, :aborted}}
+          _ -> {:halt, {:error, :outcome_unknown}}
+        end
+      end)
+
+    case preflight do
+      :ok -> submit.(item.request)
+      error -> error
+    end
   end
 
   defp now, do: System.monotonic_time(:millisecond)

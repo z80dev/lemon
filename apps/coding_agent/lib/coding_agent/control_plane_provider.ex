@@ -30,6 +30,24 @@ defmodule CodingAgent.ControlPlaneProvider do
   alias CodingAgent.Tools.Task.Hub
   alias CodingAgent.Tools.TodoStore
 
+  @doc "Read bounded unresolved intents without starting or resuming the session."
+  def interrupted_tool_calls(cwd, %LemonCore.ResumeToken{engine: "lemon", value: id})
+      when is_binary(cwd) and is_binary(id) and id != "" do
+    path = CodingAgent.SessionManager.session_file_path(cwd, id)
+
+    with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+         true <- session.header.id == id do
+      CodingAgent.ToolIntent.unknown_calls(path)
+    else
+      false -> {:error, :session_identity_mismatch}
+      {:error, _} = error -> error
+    end
+  rescue
+    _error -> {:error, :invalid_journal}
+  end
+
+  def interrupted_tool_calls(_cwd, _resume), do: {:error, :invalid_resume_token}
+
   def session_maintenance_plan(older_than_ms),
     do: CodingAgent.SessionMaintenance.plan(older_than_ms)
 

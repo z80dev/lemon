@@ -1,12 +1,12 @@
 defmodule LemonRouter.RestartCarryover.Replayer do
   @moduledoc """
-  Boot task that replays work carried across the previous graceful restart.
+  Boot task that reconciles crash-orphaned admissions and graceful carryover.
 
   Replies to carried conversations are delivered by channel adapters, so replay
   waits until the applications named by
   `config :lemon_router, :restart_replay_after` (default: `:lemon_channels` and
-  `:lemon_control_plane`) have started, for at most two minutes. With nothing
-  persisted it exits immediately.
+  `:lemon_control_plane`) have started, for at most two minutes. Admissions are
+  snapshotted before waiting, so newly accepted work is never a crash candidate.
   """
 
   use Task, restart: :temporary
@@ -14,6 +14,7 @@ defmodule LemonRouter.RestartCarryover.Replayer do
   require Logger
 
   alias LemonRouter.RestartCarryover
+  alias LemonRouter.RestartCarryover.CrashRecovery
 
   @wait_ms 120_000
   @poll_ms 250
@@ -21,13 +22,17 @@ defmodule LemonRouter.RestartCarryover.Replayer do
   def start_link(_opts), do: Task.start_link(&run/0)
 
   defp run do
-    case LemonCore.Store.fetch_all(RestartCarryover.table()) do
-      {:ok, [_ | _]} ->
+    with {:ok, admissions} <-
+           LemonCore.Store.fetch_all(LemonRouter.RunOrchestrator.admission_table()),
+         {:ok, carryover} <- LemonCore.Store.fetch_all(RestartCarryover.table()) do
+      if admissions != [] or carryover != [] do
         await_apps(after_apps(), System.monotonic_time(:millisecond) + @wait_ms)
+        summary = CrashRecovery.reconcile(admissions, carryover: carryover)
+        Logger.info("Crash recovery reconciled: #{inspect(summary)}")
         RestartCarryover.replay()
-
-      _nothing_or_unavailable ->
-        :ok
+      end
+    else
+      _ -> Logger.error("Restart reconciliation unavailable; durable work was not dispatched")
     end
   end
 

@@ -118,6 +118,17 @@ defmodule CodingAgent.TaskStore do
     end)
   end
 
+  @doc "Record an unsupported interrupted task without permitting a later redrive."
+  def mark_lost(task_id, reason) when is_binary(task_id) do
+    TaskStoreServer.transition(task_id, :lost, fn record ->
+      record
+      |> Map.put(:status, :lost)
+      |> Map.put(:agent_state, :aborted)
+      |> Map.put(:error, reason)
+      |> Map.put(:completed_at, System.system_time(:second))
+    end)
+  end
+
   @doc """
   Mark local completion tracking as lost without declaring the delegated run
   failed. A later authoritative result may still complete or fail this task.

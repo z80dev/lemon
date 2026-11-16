@@ -284,6 +284,16 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     case start_session(resume, session_opts, state, meta) do
       {:ok, session, session_id, state} ->
+        # Restored children launch before the prompt; subscription stays atomic
+        # with the prompt (or the follow-up submission) below.
+        :ok =
+          CodingAgent.Tools.Task.Restore.restore_parent(run_id, meta,
+            parent_session: session_id,
+            session_pid: session,
+            agent_id: agent_id,
+            session_key: session_key
+          )
+
         case async_followups do
           list when is_list(list) and list != [] ->
             _unsubscribe = CodingAgent.Session.subscribe(session)
@@ -452,7 +462,42 @@ defmodule CodingAgent.Executor.SessionRunner do
   defp start_session(resume, session_opts, state, meta) do
     with :ok <- register_native_source_floor(session_opts, state.run_id),
          :ok <- CodingAgent.Workspace.validate_profile_instructions(meta[:profile_instructions]) do
-      Presentation.start_or_resume_session(resume, session_opts, state)
+      case Presentation.start_or_resume_session(resume, session_opts, state) do
+        {:ok, session, session_id, _next_state} = result ->
+          case checkpoint_native_resume(session, session_id, state.run_id, meta) do
+            :ok ->
+              result
+
+            {:error, _reason} = error ->
+              GenServer.stop(session, :normal)
+              error
+          end
+
+        {:error, _reason} = error ->
+          error
+      end
+    end
+  end
+
+  defp checkpoint_native_resume(_session, _session_id, nil, _meta), do: :ok
+
+  defp checkpoint_native_resume(session, session_id, run_id, meta) do
+    if CodingAgent.Tools.Task.Restore.enabled?(),
+      do: persist_native_resume(session, session_id, run_id, meta),
+      else: :ok
+  end
+
+  defp persist_native_resume(session, session_id, run_id, meta) do
+    token = %LemonCore.ResumeToken{engine: @engine, value: session_id}
+
+    with :ok <- CodingAgent.Session.save(session) do
+      case LemonCore.RouterBridge.register_native_resume(run_id, token) do
+        {:error, :unavailable} = error ->
+          if Params.managed_metadata?(meta), do: error, else: :ok
+
+        result ->
+          result
+      end
     end
   end
 

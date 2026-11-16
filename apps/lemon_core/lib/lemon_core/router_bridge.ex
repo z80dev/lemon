@@ -154,6 +154,13 @@ defmodule LemonCore.RouterBridge do
     |> expect_ok()
   end
 
+  @doc "Durably bind a native run's journal before its first model or tool call."
+  def register_native_resume(run_id, resume) do
+    :run_orchestrator
+    |> call(:register_native_resume, [run_id, resume], :mutation)
+    |> expect_ok()
+  end
+
   @doc "Submit with a fixed ID and return the queue-owned admission receipt."
   def submit_run_with_receipt(%RunRequest{} = request) do
     case call(:run_orchestrator, :submit_with_receipt, [request], :mutation) do

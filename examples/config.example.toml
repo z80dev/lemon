@@ -437,14 +437,15 @@ name = "Default Agent"
 # auto_recall = true
 
 # --- Feature Flags ---
-# Each flag is an operator kill switch for a subsystem; all ship enabled.
+# Flags gate subsystems; crash_resume alone ships disabled.
 # Valid states: "off" | "opt-in" | "default-on"
 #   off          - feature is fully disabled (kill-switch)
 #   opt-in       - legacy pre-promotion state; behaves like "off" unless the caller opts in
-#   default-on   - enabled unless explicitly disabled (the shipped default)
+#   default-on   - enabled unless explicitly disabled
 # Environment variable override: LEMON_FEATURE_<FLAG_NAME> (SCREAMING_SNAKE_CASE)
 
 # [features]
 # session_search         = "default-on" # durable memory ingest/search kill switch
 # routing_feedback       = "default-on" # task fingerprinting + routing feedback recording
 # skill_synthesis_drafts = "default-on" # scheduled skill-synthesis draft pipeline
+# crash_resume          = "off"        # opt in with "on"; resumes local runs/children after hard crashes

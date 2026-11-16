@@ -98,6 +98,9 @@ defmodule CodingAgent.JoinAwait do
           {:ok, %{agent_turn: turn} = record} when turn > 0 ->
             Map.put(acc, record.run_id, record)
 
+          {:ok, %{status: :interrupted} = record} ->
+            Map.put(acc, record.run_id, record)
+
           _ ->
             acc
         end
@@ -118,6 +121,7 @@ defmodule CodingAgent.JoinAwait do
         :completed,
         :error,
         :lost,
+        :interrupted,
         :killed,
         :cancelled
       ]
