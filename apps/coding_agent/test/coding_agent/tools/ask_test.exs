@@ -141,6 +141,8 @@ defmodule CodingAgent.Tools.AskTest do
 
     assert pending["questions"] == [Map.put(question, "multi", false)]
     assert pending["expiresAtMs"] == nil
+    # Surface status remains responsive during an unbounded human-response wait.
+    assert UserPrompt.bound?(key)
 
     assert :ok =
              UserPrompt.resolve(

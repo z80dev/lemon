@@ -33,6 +33,16 @@ defmodule LemonSkills.McpSource do
   `force_refresh: true` to `discover_tools/1`, or call `refresh/0`, to re-ask
   every connected server immediately.
 
+  Configuration loading, handshakes, discovery, reconnects and remote inventory
+  run in supervised, monitored workers. They serialize cache publication while
+  status, inventory and approval reads keep serving the last committed snapshot.
+  Discovery/refresh has a ten-minute total deadline, including queueing and OAuth;
+  expiry returns `{:error, :timeout}` without publishing a partial snapshot.
+  Tool requests retain their configured timeout (at most five minutes). A
+  dispatched request that times out or loses its connection returns
+  `{:error, :outcome_unknown}`: it may have executed and must not be replayed.
+  Closing a source cancels its workers and releases provisional and live clients.
+
   ## Native workload ownership
 
   Stdio clients use `LemonCore.NativeProcess.open/2` through the standalone MCP
@@ -57,6 +67,11 @@ defmodule LemonSkills.McpSource do
   @default_refresh_interval_ms :timer.minutes(1)
   @client_ready_timeout_ms 5_000
   @client_request_timeout_ms 10_000
+  # MCP caller policy: one ten-minute budget covers configuration I/O, queued
+  # discovery and OAuth across the complete server set. Tool calls inherit the
+  # existing five-minute request cap; five seconds allows local reply delivery.
+  @operation_timeout_ms :timer.minutes(10)
+  @call_timeout_ms :timer.minutes(5) + 5_000
   @oauth_authorization_timeout_ms :timer.minutes(5)
   @reconnect_delays [500, 1_000, 2_000, 4_000]
   @crash_window_ms 30_000
@@ -107,17 +122,20 @@ defmodule LemonSkills.McpSource do
   Returns `[]` when MCP is disabled, and also when it is enabled but no server is
   configured or reachable — a caller cannot distinguish those cases from the
   return value alone; use `status/0` or `mcp_enabled?/0` for that.
+  Worker admission or deadline failures return `{:error, reason}` rather than
+  treating an unavailable discovery as an empty successful inventory.
   """
-  @spec discover_tools(keyword()) :: [AgentTool.t()]
+  @spec discover_tools(keyword()) :: [AgentTool.t()] | {:error, atom()}
   def discover_tools(opts \\ []), do: discover_tools(__MODULE__, opts)
 
-  @spec discover_tools(GenServer.server(), keyword()) :: [AgentTool.t()]
+  @spec discover_tools(GenServer.server(), keyword()) :: [AgentTool.t()] | {:error, atom()}
   def discover_tools(server, opts) do
-    GenServer.call(server, {:discover_tools, opts}, :infinity)
+    GenServer.call(server, {:discover_tools, opts}, @operation_timeout_ms + 5_000)
   end
 
   @doc "Discover all configured clients, failing closed if any connection or discovery fails."
-  def discover_ready(server), do: GenServer.call(server, :discover_ready, :infinity)
+  def discover_ready(server),
+    do: GenServer.call(server, :discover_ready, @operation_timeout_ms + 5_000)
 
   @doc """
   Stable profile-native execution alias for a public server name, HTTP endpoint,
@@ -160,7 +178,7 @@ defmodule LemonSkills.McpSource do
   would require redaction are omitted rather than silently changed.
   """
   def remote_tools(server) do
-    GenServer.call(server, :remote_tools, :infinity)
+    GenServer.call(server, :remote_tools, @operation_timeout_ms + 5_000)
   catch
     :exit, _ -> {:error, :discovery_failed}
   end
@@ -199,8 +217,9 @@ defmodule LemonSkills.McpSource do
   `{:error, reason}`: `:mcp_disabled` when MCP is off, `:not_found` when the name
   is not in the tool cache, `:not_connected` when the owning server is configured
   but its client is down, or the error term the MCP client reported. Requests
-  default to 10 seconds (maximum 5 minutes). A timeout does not imply the remote
-  operation was cancelled; invocations are never automatically replayed.
+  default to 10 seconds (maximum 5 minutes). A timeout or lost connection after
+  dispatch returns `:outcome_unknown`, never proof of cancellation; invocations
+  are never automatically replayed.
   """
   @spec call_tool(String.t(), map(), keyword()) ::
           {:ok, AgentToolResult.t()} | {:error, term()}
@@ -208,19 +227,20 @@ defmodule LemonSkills.McpSource do
     do: call_tool(__MODULE__, tool_name, params, opts)
 
   def call_tool(server, tool_name, params, opts) do
-    GenServer.call(server, {:call_tool, tool_name, params, opts}, :infinity)
+    GenServer.call(server, {:call_tool, tool_name, params, opts}, @call_timeout_ms)
   catch
-    :exit, _ -> {:error, :not_connected}
+    :exit, {:noproc, _} -> {:error, :not_connected}
+    :exit, _ -> {:error, :outcome_unknown}
   end
 
   @doc """
   Re-queries every configured MCP server and replaces the tool cache.
 
-  Always returns `:ok`, including in disabled mode, where it is a no-op.
+  Returns `:ok` after refresh, or `{:error, :timeout}` if its overall deadline expires.
   """
-  @spec refresh(GenServer.server()) :: :ok
+  @spec refresh(GenServer.server()) :: :ok | {:error, atom()}
   def refresh(server \\ __MODULE__) do
-    GenServer.call(server, :refresh, :infinity)
+    GenServer.call(server, :refresh, @operation_timeout_ms + 5_000)
   end
 
   @doc """
@@ -228,9 +248,9 @@ defmodule LemonSkills.McpSource do
   the tools it contributed. Intended for diagnostics (`mix lemon.doctor`, the
   control plane status method), not for control flow.
   """
-  @spec status() :: map()
-  def status do
-    GenServer.call(__MODULE__, :status)
+  @spec status(GenServer.server()) :: map()
+  def status(server \\ __MODULE__) do
+    GenServer.call(server, :status)
   end
 
   @doc """
@@ -339,16 +359,27 @@ defmodule LemonSkills.McpSource do
 
   @impl true
   def init(opts) do
+    source = self()
     Process.flag(:trap_exit, true)
 
     disabled = Keyword.get(opts, :disabled, false)
 
-    for key <- [:owner, :custodian], pid = Keyword.get(opts, key), is_pid(pid) do
-      Process.monitor(pid)
-    end
+    monitor_refs =
+      for key <- [:owner, :custodian], pid = Keyword.get(opts, key), is_pid(pid), into: %{} do
+        {key, Process.monitor(pid)}
+      end
+
+    owner_refs = Map.values(monitor_refs)
 
     if disabled do
-      {:ok, %{disabled: true, tool_cache: %{}, servers: %{}}}
+      {:ok,
+       %{
+         disabled: true,
+         tool_cache: %{},
+         servers: %{},
+         owner_refs: owner_refs,
+         custodian_ref: monitor_refs[:custodian]
+       }}
     else
       cache_ttl = Keyword.get(opts, :cache_ttl_ms, @default_cache_ttl_ms)
       refresh_interval = Keyword.get(opts, :refresh_interval_ms, @default_refresh_interval_ms)
@@ -362,11 +393,16 @@ defmodule LemonSkills.McpSource do
         refresh_interval_ms: refresh_interval,
         refresh_timer: nil,
         configs: Keyword.get(opts, :configs),
-        cwd: Keyword.get(opts, :cwd)
+        cwd: Keyword.get(opts, :cwd),
+        source: source,
+        owner_refs: owner_refs,
+        custodian_ref: monitor_refs[:custodian],
+        active_job: nil,
+        jobs: :queue.new(),
+        invocations: %{}
       }
 
-      state = initialize_servers(state, opts)
-      state = schedule_refresh(state)
+      state = state |> enqueue_job(:initialize, nil) |> schedule_refresh()
 
       {:ok, state}
     end
@@ -377,58 +413,16 @@ defmodule LemonSkills.McpSource do
     {:reply, {:error, :mcp_disabled}, state}
   end
 
-  def handle_call(:discover_ready, _from, state) do
-    {tools, state} = refresh_tools(state)
-
-    result =
-      cond do
-        Enum.any?(state.servers, fn {_, server} -> server.last_error == "connection failed" end) ->
-          {:error, :connection_failed}
-
-        Enum.any?(state.servers, fn {_, server} -> not server.connected end) ->
-          {:error, :discovery_failed}
-
-        true ->
-          {:ok, tools}
-      end
-
-    {:reply, result, state}
+  def handle_call(:discover_ready, from, state) do
+    {:noreply, enqueue_job(state, :discover_ready, from)}
   end
 
   def handle_call(:remote_tools, _from, %{disabled: true} = state) do
     {:reply, {:error, :mcp_disabled}, state}
   end
 
-  def handle_call(:remote_tools, _from, state) do
-    result =
-      Enum.reduce_while(state.servers, {:ok, []}, fn
-        {_name,
-         %{
-           connected: true,
-           client: client,
-           client_module: mod,
-           config: config,
-           capabilities: capabilities
-         }},
-        {:ok, acc} ->
-          values = config_redact_values(config)
-          public_name = Keyword.get(config_options(config), :name)
-
-          # The configured label is also returned by discovery. Fail closed if
-          # it would echo a known credential; never emit a secret-bearing DTO.
-          with true <- scrub_inventory(public_name, values) == public_name,
-               {:ok, tools} when is_list(tools) <-
-                 list_advertised_tools(mod, client, capabilities) do
-            {:cont, {:ok, acc ++ Enum.map(tools, &scrub_remote_tool(&1, values))}}
-          else
-            _ -> {:halt, {:error, :discovery_failed}}
-          end
-
-        _, _ ->
-          {:halt, {:error, :discovery_failed}}
-      end)
-
-    {:reply, result, state}
+  def handle_call(:remote_tools, from, state) do
+    {:noreply, enqueue_job(state, :remote_tools, from)}
   end
 
   def handle_call(:approval_policy, _from, state) do
@@ -460,20 +454,8 @@ defmodule LemonSkills.McpSource do
   end
 
   @impl true
-  def handle_call({:discover_tools, opts}, _from, state) do
-    force_refresh = Keyword.get(opts, :force_refresh, false)
-    state = maybe_reload_servers(state, opts)
-
-    {tools, state} =
-      if force_refresh or cache_expired?(state) do
-        refresh_tools(state)
-      else
-        {cached_tools(state), state}
-      end
-
-    server_names = Map.fetch!(state.scopes, source_scope(state, opts))
-    tools = Enum.filter(tools, &(state.tool_cache[&1.name].server_name in server_names))
-    {:reply, tools, state}
+  def handle_call({:discover_tools, opts}, from, state) do
+    {:noreply, enqueue_job(state, {:discover_tools, opts}, from)}
   end
 
   @impl true
@@ -510,20 +492,39 @@ defmodule LemonSkills.McpSource do
             if executable_call_allowed?(config, original_name) do
               timeout = request_timeout(opts, config)
 
-              Task.start(fn ->
-                reply =
-                  try do
-                    call_mcp_entry(client_mod, client, original_name, params, timeout_ms: timeout)
-                  rescue
-                    _ -> {:error, :invalid_tool_result}
-                  catch
-                    :exit, _ -> {:error, :not_connected}
-                  end
+              case start_task(fn ->
+                     try do
+                       case call_mcp_entry(client_mod, client, original_name, params,
+                              timeout_ms: timeout
+                            ) do
+                         {:error, reason}
+                         when reason in [:timeout, :not_connected, :connection_closed] ->
+                           {:error, :outcome_unknown}
 
-                GenServer.reply(from, reply)
-              end)
+                         reply ->
+                           reply
+                       end
+                     rescue
+                       _ -> {:error, :invalid_tool_result}
+                     catch
+                       :exit, _ -> {:error, :outcome_unknown}
+                     end
+                   end) do
+                {:ok, task} ->
+                  caller_ref = Process.monitor(elem(from, 0))
+                  # Invocation caller policy: the protocol deadline owns remote
+                  # timeout; one second only bounds local worker/reply teardown.
+                  timer =
+                    Process.send_after(self(), {:invocation_timeout, task.ref}, timeout + 1_000)
 
-              {:noreply, state}
+                  invocation = %{task: task, from: from, caller_ref: caller_ref, timer: timer}
+
+                  {:noreply,
+                   %{state | invocations: Map.put(state.invocations, task.ref, invocation)}}
+
+                {:error, reason} ->
+                  {:reply, {:error, reason}, state}
+              end
             else
               {:reply, {:error, :not_found}, state}
             end
@@ -540,24 +541,8 @@ defmodule LemonSkills.McpSource do
   end
 
   @impl true
-  def handle_call(:refresh, _from, state) do
-    servers =
-      Map.new(state.servers, fn {name, server} ->
-        if server.reconnect_timer, do: Process.cancel_timer(server.reconnect_timer)
-
-        {name,
-         %{
-           server
-           | reconnect_timer: nil,
-             reconnect_token: nil,
-             reconnect_attempt: 0,
-             crashes: [],
-             unavailable: false
-         }}
-      end)
-
-    {_tools, state} = %{state | servers: servers} |> maybe_reload_servers([]) |> refresh_tools()
-    {:reply, :ok, state}
+  def handle_call(:refresh, from, state) do
+    {:noreply, enqueue_job(state, :refresh, from)}
   end
 
   @impl true
@@ -616,6 +601,30 @@ defmodule LemonSkills.McpSource do
     {:reply, reply, state}
   end
 
+  def handle_call(
+        {:worker_client, worker, client, mod},
+        _from,
+        %{active_job: %{task: %{pid: worker}} = job} = state
+      ) do
+    Process.link(client)
+    {:reply, :ok, %{state | active_job: %{job | clients: Map.put(job.clients, client, mod)}}}
+  end
+
+  def handle_call({:worker_client, _, client, _}, _from, state) do
+    kill_client(client)
+    {:reply, {:error, :discovery_failed}, state}
+  end
+
+  def handle_call({:handoff_custodian, custodian}, _from, state) do
+    if state.custodian_ref, do: Process.demonitor(state.custodian_ref, [:flush])
+    ref = Process.monitor(custodian)
+    refs = [ref | List.delete(state.owner_refs, state.custodian_ref)]
+    {:reply, :ok, %{state | custodian_ref: ref, owner_refs: refs}}
+  end
+
+  @impl true
+  def handle_cast(:close, state), do: {:stop, :normal, state}
+
   @impl true
   def handle_info(:periodic_refresh, %{disabled: true} = state) do
     {:noreply, state}
@@ -624,19 +633,65 @@ defmodule LemonSkills.McpSource do
   @impl true
   def handle_info(:periodic_refresh, state) do
     state =
-      if cache_expired?(state) do
-        {_, new_state} = refresh_tools(state)
-        new_state
-      else
-        state
-      end
+      if cache_expired?(state), do: enqueue_job(state, {:refresh_servers, nil}, nil), else: state
 
-    state = schedule_refresh(state)
-    {:noreply, state}
+    {:noreply, schedule_refresh(state)}
   end
 
-  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
-    {:stop, :normal, state}
+  def handle_info({ref, result}, %{active_job: %{task: %{ref: ref}}} = state) do
+    {:noreply, finish_job(state, result)}
+  end
+
+  def handle_info({ref, result}, state) when is_reference(ref) do
+    case Map.pop(Map.get(state, :invocations, %{}), ref) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {invocation, invocations} ->
+        finish_invocation(invocation, result)
+        {:noreply, %{state | invocations: invocations}}
+    end
+  end
+
+  def handle_info({:job_timeout, token}, state) do
+    {:noreply, cancel_job(state, token, {:error, :timeout})}
+  end
+
+  def handle_info({:invocation_timeout, ref}, state) do
+    case Map.pop(state.invocations, ref) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {invocation, invocations} ->
+        Process.exit(invocation.task.pid, :kill)
+        finish_invocation(invocation, {:error, :outcome_unknown})
+        {:noreply, %{state | invocations: invocations}}
+    end
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    cond do
+      ref in state.owner_refs ->
+        {:stop, :normal, state}
+
+      state[:active_job] && state.active_job.task.ref == ref ->
+        {:noreply, cancel_job(state, state.active_job.token, {:error, :discovery_failed})}
+
+      true ->
+        state = cancel_caller_jobs(state, ref)
+
+        {dead, live} =
+          Enum.split_with(Map.get(state, :invocations, %{}), fn {task_ref, invocation} ->
+            task_ref == ref or invocation.caller_ref == ref
+          end)
+
+        Enum.each(dead, fn {_ref, invocation} ->
+          Process.exit(invocation.task.pid, :kill)
+          finish_invocation(invocation, {:error, :outcome_unknown})
+        end)
+
+        {:noreply, if(state.disabled, do: state, else: %{state | invocations: Map.new(live)})}
+    end
   end
 
   def handle_info({:EXIT, client, _reason}, state) do
@@ -665,13 +720,13 @@ defmodule LemonSkills.McpSource do
 
   def handle_info({:mcp_notification, name, token, %{method: method}}, state)
       when method in @list_changed_methods do
-    case state.servers[name] do
-      %{notification_token: ^token, connected: true} ->
-        {_tools, state} = refresh_tools(state, [name])
-        {:noreply, state}
-
-      _ ->
-        {:noreply, state}
+    # A new client's notification may arrive before its discovery snapshot is
+    # committed. Check the connection token when this queued operation executes.
+    if state.active_job ||
+         match?(%{notification_token: ^token, connected: true}, state.servers[name]) do
+      {:noreply, enqueue_job(state, {:notification, name, token}, nil)}
+    else
+      {:noreply, state}
     end
   end
 
@@ -679,20 +734,8 @@ defmodule LemonSkills.McpSource do
 
   def handle_info({:mcp_reconnect, name, token}, state) do
     case state.servers[name] do
-      %{reconnect_token: ^token, unavailable: false} = server ->
-        server = %{server | reconnect_timer: nil, reconnect_token: nil}
-
-        {_tools, state} =
-          refresh_tools(%{state | servers: Map.put(state.servers, name, server)}, [name])
-
-        server = state.servers[name]
-
-        server =
-          if server.connected,
-            do: %{server | reconnect_attempt: 0},
-            else: schedule_reconnect(name, server)
-
-        {:noreply, %{state | servers: Map.put(state.servers, name, server)}}
+      %{reconnect_token: ^token, unavailable: false} ->
+        {:noreply, enqueue_job(state, {:reconnect, name, token}, nil)}
 
       _ ->
         {:noreply, state}
@@ -701,23 +744,30 @@ defmodule LemonSkills.McpSource do
 
   @impl true
   def terminate(_reason, state) do
-    Enum.each(state.servers, fn {_name, server} -> close_client(server) end)
+    if state[:active_job], do: stop_job(state.active_job)
+
+    Enum.each(Map.get(state, :invocations, %{}), fn {_, invocation} ->
+      Process.exit(invocation.task.pid, :kill)
+    end)
+
+    Enum.each(state.servers, fn {_name, server} -> kill_client(server.client) end)
   end
 
   # ============================================================================
   # Private Functions
   # ============================================================================
 
-  defp schedule_reconnect(_name, %{unavailable: true} = server), do: server
+  defp schedule_reconnect(name, server, owner \\ self())
+  defp schedule_reconnect(_name, %{unavailable: true} = server, _owner), do: server
 
-  defp schedule_reconnect(name, server) do
+  defp schedule_reconnect(name, server, owner) do
     case Enum.at(@reconnect_delays, server.reconnect_attempt) do
       nil ->
         %{server | unavailable: true, last_error: "server unavailable: reconnect exhausted"}
 
       delay ->
         token = make_ref()
-        timer = Process.send_after(self(), {:mcp_reconnect, name, token}, delay)
+        timer = Process.send_after(owner, {:mcp_reconnect, name, token}, delay)
 
         %{
           server
@@ -730,7 +780,7 @@ defmodule LemonSkills.McpSource do
   end
 
   defp notification_opts(server) do
-    owner = self()
+    owner = server.source
     name = server_name(server.config)
     token = server.notification_token
 
@@ -803,7 +853,277 @@ defmodule LemonSkills.McpSource do
     {transport, label, opts}
   end
 
-  defp initialize_servers(state, opts), do: maybe_reload_servers(state, opts)
+  defp run_job(:initialize, state) do
+    {:ok, maybe_reload_servers(state, cwd: state.cwd)}
+  end
+
+  defp run_job(:discover_ready, state) do
+    state = maybe_reload_servers(state, cwd: state.cwd)
+    {tools, state} = refresh_tools(state)
+
+    result =
+      cond do
+        Enum.any?(state.servers, fn {_, server} -> server.last_error == "connection failed" end) ->
+          {:error, :connection_failed}
+
+        Enum.any?(state.servers, fn {_, server} -> not server.connected end) ->
+          {:error, :discovery_failed}
+
+        true ->
+          {:ok, tools}
+      end
+
+    {result, state}
+  end
+
+  defp run_job(:remote_tools, state) do
+    result =
+      Enum.reduce_while(state.servers, {:ok, []}, fn
+        {_,
+         %{
+           connected: true,
+           client: client,
+           client_module: mod,
+           config: config,
+           capabilities: capabilities
+         }},
+        {:ok, acc} ->
+          values = config_redact_values(config)
+          public_name = Keyword.get(config_options(config), :name)
+
+          with true <- scrub_inventory(public_name, values) == public_name,
+               {:ok, tools} when is_list(tools) <-
+                 list_advertised_tools(mod, client, capabilities) do
+            {:cont, {:ok, acc ++ Enum.map(tools, &scrub_remote_tool(&1, values))}}
+          else
+            _ -> {:halt, {:error, :discovery_failed}}
+          end
+
+        _, _ ->
+          {:halt, {:error, :discovery_failed}}
+      end)
+
+    {result, state}
+  end
+
+  defp run_job({:discover_tools, opts}, state) do
+    state = maybe_reload_servers(state, opts)
+
+    {tools, state} =
+      if Keyword.get(opts, :force_refresh, false) or cache_expired?(state),
+        do: refresh_tools(state),
+        else: {cached_tools(state), state}
+
+    names = Map.fetch!(state.scopes, source_scope(state, opts))
+    {Enum.filter(tools, &(state.tool_cache[&1.name].server_name in names)), state}
+  end
+
+  defp run_job(:refresh, state) do
+    servers =
+      Map.new(state.servers, fn {name, server} ->
+        if server.reconnect_timer, do: Process.cancel_timer(server.reconnect_timer)
+
+        {name,
+         %{
+           server
+           | reconnect_timer: nil,
+             reconnect_token: nil,
+             reconnect_attempt: 0,
+             crashes: [],
+             unavailable: false
+         }}
+      end)
+
+    {_, state} = %{state | servers: servers} |> maybe_reload_servers([]) |> refresh_tools()
+    {:ok, state}
+  end
+
+  defp run_job({:refresh_servers, names}, state) do
+    {_, state} = refresh_tools(state, names)
+    {:ok, state}
+  end
+
+  defp run_job({:notification, name, token}, state) do
+    case state.servers[name] do
+      %{notification_token: ^token, connected: true} ->
+        run_job({:refresh_servers, [name]}, state)
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
+  defp run_job({:reconnect, name, token}, state) do
+    case state.servers[name] do
+      %{reconnect_token: ^token, unavailable: false} = server ->
+        server = %{server | reconnect_timer: nil, reconnect_token: nil}
+
+        {_, state} =
+          refresh_tools(%{state | servers: Map.put(state.servers, name, server)}, [name])
+
+        server = state.servers[name]
+
+        server =
+          if server.connected,
+            do: %{server | reconnect_attempt: 0},
+            else: schedule_reconnect(name, server, state.source)
+
+        {:ok, %{state | servers: Map.put(state.servers, name, server)}}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
+  # The deadline includes queueing and all configured servers, including OAuth.
+  # Only one discovery snapshot can commit at a time; reads never await the worker.
+  defp enqueue_job(state, operation, from) do
+    token = make_ref()
+    timer = Process.send_after(self(), {:job_timeout, token}, @operation_timeout_ms)
+    caller_ref = if from, do: Process.monitor(elem(from, 0))
+    job = %{operation: operation, from: from, token: token, timer: timer, caller_ref: caller_ref}
+    start_next_job(%{state | jobs: :queue.in(job, state.jobs)})
+  end
+
+  defp start_next_job(%{active_job: nil} = state) do
+    case :queue.out(state.jobs) do
+      {:empty, _} ->
+        state
+
+      {{:value, job}, jobs} ->
+        snapshot = Map.drop(state, [:active_job, :jobs, :invocations])
+
+        case start_task(fn -> run_job(job.operation, snapshot) end) do
+          {:ok, task} ->
+            %{state | jobs: jobs, active_job: Map.merge(job, %{task: task, clients: %{}})}
+
+          {:error, reason} ->
+            release_job(job, {:error, reason})
+            start_next_job(%{state | jobs: jobs})
+        end
+    end
+  end
+
+  defp start_next_job(state), do: state
+
+  defp finish_job(state, {reply, updated}) do
+    job = state.active_job
+    Process.demonitor(job.task.ref, [:flush])
+
+    # A client can die while discovery is blocked. Never publish that stale
+    # snapshot over the crash counter/reconnect state observed by the owner.
+    servers =
+      Map.new(updated.servers, fn {name, server} ->
+        if is_pid(server.client) and not Process.alive?(server.client) do
+          current = state.servers[name]
+
+          if current && (current.reconnect_timer || current.unavailable),
+            do: {name, current},
+            else: {name, %{server | client: nil, connected: false}}
+        else
+          {name, server}
+        end
+      end)
+
+    cache =
+      Map.reject(updated.tool_cache, fn {_, entry} ->
+        not servers[entry.server_name].connected
+      end)
+
+    retained = MapSet.new(Enum.map(servers, fn {_, server} -> server.client end))
+
+    Enum.each(job.clients, fn {client, _} ->
+      unless MapSet.member?(retained, client), do: kill_client(client)
+    end)
+
+    reply =
+      if match?({:ok, _}, reply) and
+           Enum.any?(servers, fn {_, server} -> not server.connected end),
+         do: {:error, :discovery_failed},
+         else: reply
+
+    release_job(job, reply)
+
+    state = %{
+      state
+      | servers: servers,
+        scopes: updated.scopes,
+        tool_cache: cache,
+        active_job: nil
+    }
+
+    start_next_job(state)
+  end
+
+  defp cancel_job(state, token, reply) do
+    state =
+      case state.active_job do
+        %{token: ^token} = job ->
+          stop_job(job)
+          release_job(job, reply)
+          %{state | active_job: nil}
+
+        _ ->
+          state
+      end
+
+    {cancelled, jobs} = state.jobs |> :queue.to_list() |> Enum.split_with(&(&1.token == token))
+    Enum.each(cancelled, &release_job(&1, reply))
+    start_next_job(%{state | jobs: :queue.from_list(jobs)})
+  end
+
+  defp cancel_caller_jobs(%{disabled: true} = state, _ref), do: state
+
+  defp cancel_caller_jobs(state, ref) do
+    tokens =
+      Enum.flat_map(:queue.to_list(state.jobs), fn job ->
+        if job.caller_ref == ref, do: [job.token], else: []
+      end)
+
+    tokens =
+      if state.active_job && state.active_job.caller_ref == ref,
+        do: [state.active_job.token | tokens],
+        else: tokens
+
+    Enum.reduce(tokens, state, &cancel_job(&2, &1, {:error, :discovery_failed}))
+  end
+
+  defp stop_job(job) do
+    Process.exit(job.task.pid, :kill)
+    Process.demonitor(job.task.ref, [:flush])
+    Enum.each(job.clients, fn {client, _} -> kill_client(client) end)
+  end
+
+  defp release_job(job, reply) do
+    Process.cancel_timer(job.timer)
+    if job.caller_ref, do: Process.demonitor(job.caller_ref, [:flush])
+    if job.from, do: GenServer.reply(job.from, reply)
+  end
+
+  defp finish_invocation(invocation, reply) do
+    Process.cancel_timer(invocation.timer)
+    Process.demonitor(invocation.task.ref, [:flush])
+    Process.demonitor(invocation.caller_ref, [:flush])
+    GenServer.reply(invocation.from, reply)
+  end
+
+  defp kill_client(client) when is_pid(client), do: Process.exit(client, :kill)
+  defp kill_client(_), do: :ok
+
+  defp start_task(fun) do
+    owner = self()
+
+    {:ok,
+     Task.Supervisor.async_nolink(LemonSkills.TaskSupervisor, fn ->
+       Process.link(owner)
+       fun.()
+     end)}
+  rescue
+    # async_nolink raises before spawning when this capped supervisor is full.
+    RuntimeError -> {:error, :task_capacity_reached}
+  catch
+    :exit, {:noproc, _} -> {:error, :task_supervisor_unavailable}
+  end
 
   defp scope_key(opts) do
     case Keyword.get(opts, :cwd) do
@@ -848,7 +1168,7 @@ defmodule LemonSkills.McpSource do
   end
 
   defp refresh_tools(state, names \\ nil) do
-    source = self()
+    source = state.source
 
     {servers, tool_cache} =
       state.servers
@@ -966,6 +1286,7 @@ defmodule LemonSkills.McpSource do
     servers =
       Enum.reduce(configs, servers, fn cfg, acc ->
         Map.put_new(acc, server_name(cfg), %{
+          source: state.source,
           config: cfg,
           client: nil,
           client_module: nil,
@@ -1231,7 +1552,7 @@ defmodule LemonSkills.McpSource do
 
     with {:ok, client_mod} <- stdio_client_module(),
          executable when is_binary(executable) <- System.find_executable(command) do
-      start_ready_client(client_mod, opts, client_ready_timeout_ms(source_opts))
+      start_ready_client(client_mod, opts, client_ready_timeout_ms(source_opts), server.source)
     else
       nil -> {:error, :executable_not_found}
       error -> error
@@ -1254,7 +1575,7 @@ defmodule LemonSkills.McpSource do
         oauth_token_cache_opts(url, opts) ++ notification_opts(server)
 
     with {:ok, client_mod} <- http_client_module() do
-      start_ready_client(client_mod, client_opts, client_ready_timeout_ms(opts))
+      start_ready_client(client_mod, client_opts, client_ready_timeout_ms(opts), server.source)
     end
   end
 
@@ -1271,23 +1592,37 @@ defmodule LemonSkills.McpSource do
       ] ++ notification_opts(server)
 
     with {:ok, client_mod} <- sse_client_module() do
-      start_ready_client(client_mod, client_opts, ready_timeout_ms)
+      start_ready_client(client_mod, client_opts, ready_timeout_ms, server.source)
     end
   end
 
-  defp start_ready_client(client_mod, opts, timeout) do
+  defp start_ready_client(client_mod, opts, timeout, source) do
     # Startup may dispatch remote work even if readiness subsequently fails.
     LemonCore.NativeProcess.unsupported!()
 
-    with {:ok, client} <- client_mod.start_link(opts) do
-      case await_ready(client_mod, client, timeout) do
-        :ok ->
-          {:ok, client}
+    # start_link can return an init error and deliver the linked child's exit.
+    # Shield that startup window so a failed handshake remains connection_failed
+    # rather than crashing the whole discovery worker. The source still owns
+    # cancellation and can kill this worker even while it traps linked exits.
+    trap_exit = Process.flag(:trap_exit, true)
 
-        error ->
-          close_client(%{client: client, client_module: client_mod})
-          error
+    try do
+      with {:ok, client} <- client_mod.start_link(opts),
+           :ok <- GenServer.call(source, {:worker_client, self(), client, client_mod}) do
+        Process.unlink(client)
+
+        case await_ready(client_mod, client, timeout) do
+          :ok ->
+            {:ok, client}
+
+          error ->
+            close_client(%{client: client, client_module: client_mod})
+            error
+        end
       end
+    after
+      Process.flag(:trap_exit, trap_exit)
+      if not Process.alive?(source), do: exit(:shutdown)
     end
   end
 
@@ -1751,6 +2086,8 @@ defmodule LemonSkills.McpSource do
     description = map_value(mcp_tool, "description") || map_value(mcp_tool, :description) || ""
     parameters = map_value(mcp_tool, "inputSchema") || map_value(mcp_tool, :inputSchema) || %{}
 
+    # MCP's configured request deadline owns cancellation/unknown-outcome
+    # classification; an independent AgentTool timer would race that reply.
     {%AgentTool{
        name: tool_name,
        timeout_ms: :infinity,
@@ -1856,6 +2193,7 @@ defmodule LemonSkills.McpSource do
   defp utility_tool(command, suffix, description, parameters, call_spec) do
     tool_name = "mcp_#{server_slug(command)}_#{suffix}"
 
+    # Utilities use the same bounded MCP request owner, not a second tool timer.
     {%AgentTool{
        name: tool_name,
        timeout_ms: :infinity,

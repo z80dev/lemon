@@ -226,6 +226,97 @@ defmodule LemonMemory.StoreTransferTest do
     assert {:ok, [^record]} = Store.transfer_snapshot(ctx.server, "alice", ctx.home, &{:ok, &1})
   end
 
+  @tag timeout: 10_000
+  test "slow snapshot callbacks keep Store status responsive and bound transfer callers", ctx do
+    assert {:ok, _} = Store.transfer_put_new(ctx.server, "operation", ctx.intent)
+    owner = self()
+    store = Process.whereis(ctx.server)
+
+    snapshot =
+      Task.async(fn ->
+        Store.transfer_snapshot(ctx.server, "alice", ctx.home, fn _docs ->
+          send(owner, {:snapshot_entered, self()})
+
+          receive do
+            :release_snapshot -> {:ok, []}
+          end
+        end)
+      end)
+
+    assert_receive {:snapshot_entered, worker}, 1_000
+    on_exit(fn -> send(worker, :release_snapshot) end)
+    assert %{total: 0} = GenServer.call(store, :stats, 1_000)
+    assert {:status, ^store, _, _} = :sys.get_status(store, 1_000)
+
+    read = Task.async(fn -> Store.transfer_get(ctx.server, "operation") end)
+    journal = Task.async(fn -> Store.transfer_put_new(ctx.server, "queued", ctx.intent) end)
+
+    import =
+      Task.async(fn ->
+        Store.transfer_import(
+          ctx.server,
+          "alice",
+          ctx.home,
+          [],
+          [],
+          "operation",
+          ctx.completed,
+          fn ->
+            send(owner, :published_after_timeout)
+            :ok
+          end
+        )
+      end)
+
+    assert {:error, :memory_unavailable} = Task.await(snapshot, 6_000)
+    assert {:error, :memory_unavailable} = Task.await(read, 1_000)
+    assert {:error, :memory_unavailable} = Task.await(journal, 1_000)
+    assert {:error, :transfer_pending} = Task.await(import, 1_000)
+    refute_received :published_after_timeout
+
+    send(worker, :release_snapshot)
+    assert_receive :published_after_timeout, 1_000
+    assert {:ok, entry} = Store.transfer_get(ctx.server, "operation")
+    assert entry == ctx.completed
+    assert {:ok, entry} = Store.transfer_get(ctx.server, "queued")
+    assert entry == ctx.intent
+  end
+
+  test "snapshot worker death rolls back the transaction and releases queued writes", ctx do
+    owner = self()
+
+    snapshot =
+      Task.async(fn ->
+        Store.transfer_snapshot(ctx.server, "alice", ctx.home, fn _docs ->
+          send(owner, {:snapshot_worker, self()})
+
+          receive do
+            :release -> {:ok, []}
+          end
+        end)
+      end)
+
+    assert_receive {:snapshot_worker, worker}, 1_000
+    record = doc("after-worker-death", "alice", ctx.home)
+    write = :gen_server.send_request(ctx.server, {:put_sync, record})
+    assert :queue.len(:sys.get_state(ctx.server, 1_000).deferred) == 1
+    Process.exit(worker, :kill)
+    assert {:error, :memory_unavailable} = Task.await(snapshot, 1_000)
+    assert {:reply, :ok} = :gen_server.receive_response(write, 1_000)
+    assert {:ok, [^record]} = Store.transfer_snapshot(ctx.server, "alice", ctx.home, &{:ok, &1})
+  end
+
+  test "snapshot worker admission failure releases the SQLite transaction", ctx do
+    :sys.replace_state(ctx.server, &%{&1 | task_supervisor: :missing_memory_task_supervisor})
+
+    assert {:error, :memory_unavailable} =
+             Store.transfer_snapshot(ctx.server, "alice", ctx.home, &{:ok, &1})
+
+    record = doc("after-admission-failure", "alice", ctx.home)
+    assert :ok = Store.put_sync(ctx.server, record)
+    assert {:ok, ^record} = Store.get_document(ctx.server, record.doc_id)
+  end
+
   defp doc(id, agent, home) do
     %Document{
       doc_id: "mem_" <> id,

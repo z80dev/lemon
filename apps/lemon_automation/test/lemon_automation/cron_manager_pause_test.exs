@@ -124,7 +124,7 @@ defmodule LemonAutomation.CronManagerPauseTest do
 
   test "a slot claimed just before the pause is aborted instead of submitted", %{id: id} do
     store_job(id, next_run_at_ms: LemonCore.Clock.now_ms() - 1_000)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     state = %{state | jobs: Map.take(state.jobs, [id])}
 
     assert {:noreply, state} = CronManager.handle_cast(:tick, state)
@@ -194,7 +194,7 @@ defmodule LemonAutomation.CronManagerPauseTest do
 
   test "a jitter timer delivered after pause and resume cannot resurrect its claim", %{id: id} do
     store_job(id, jitter_sec: 1, next_run_at_ms: LemonCore.Clock.now_ms() - 1_000)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     state = %{state | jobs: Map.take(state.jobs, [id])}
     assert {:noreply, state} = CronManager.handle_cast(:tick, state)
     assert [%CronRun{id: run_id, status: :running}] = CronStore.list_runs(id)
@@ -219,7 +219,7 @@ defmodule LemonAutomation.CronManagerPauseTest do
 
   test "pause preserves manual claims and scheduled work whose submission has started", %{id: id} do
     store_job(id, next_run_at_ms: LemonCore.Clock.now_ms() + 3_600_000)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     state = %{state | jobs: Map.take(state.jobs, [id])}
     manual = id |> CronRun.new(:manual) |> CronRun.start(LemonCore.Id.run_id())
     started = id |> CronRun.new(:schedule) |> CronRun.start(LemonCore.Id.run_id())
@@ -394,7 +394,7 @@ defmodule LemonAutomation.CronManagerPauseTest do
   # Mirrors a restart while paused: the marker exists before the manager loads.
   defp paused_state(ids) do
     {:ok, %{paused_at_ms: paused_at}} = CronManager.pause_all()
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     {%{state | jobs: Map.take(state.jobs, ids)}, paused_at}
   end
 
@@ -410,6 +410,20 @@ defmodule LemonAutomation.CronManagerPauseTest do
 
     CronStore.put_run(run)
     run
+  end
+
+  defp initialized_manager do
+    {:ok, state, {:continue, :restore_startup}} = CronManager.init([])
+    {:noreply, state} = CronManager.handle_continue(:restore_startup, state)
+    ref = state.restoration_task.ref
+
+    receive do
+      {^ref, result} ->
+        {:noreply, state} = CronManager.handle_info({ref, result}, state)
+        {:ok, state}
+    after
+      5_000 -> flunk("startup restoration did not finish")
+    end
   end
 
   defp store_job(id, attrs) do

@@ -16,7 +16,7 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
 
   test "boot preserves a missed daily slot and tick claims it exactly once", %{id: id} do
     job = store_job(id, next_run_at_ms: LemonCore.Clock.now_ms() - 1_800_000)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     assert state.jobs[id].next_run_at_ms == job.next_run_at_ms
     state = %{state | jobs: Map.take(state.jobs, [id])}
     assert {:noreply, state} = CronManager.handle_cast(:tick, state)
@@ -30,7 +30,7 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
 
   test "slots outside grace re-anchor with an audit", %{id: id} do
     store_job(id, next_run_at_ms: LemonCore.Clock.now_ms() - 7_200_001)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     assert state.jobs[id].next_run_at_ms > LemonCore.Clock.now_ms()
     assert CronStore.list_runs(id) == []
 
@@ -49,7 +49,7 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
              nil
 
     job = store_job(id, schedule: schedule, next_run_at_ms: due)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     assert state.jobs[id].next_run_at_ms == job.next_run_at_ms
     assert state.catch_up_slots[id] == due
   end
@@ -68,7 +68,7 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
     end)
 
     store_job(id, next_run_at_ms: LemonCore.Clock.now_ms() - 1_000)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     assert state.jobs[id].next_run_at_ms > LemonCore.Clock.now_ms()
     refute state.catch_up_slots[id]
     assert CronStore.list_runs(id) == []
@@ -80,7 +80,7 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
     schedule = "#{date.minute} #{date.hour} #{date.day} #{date.month} *"
     assert CronSchedule.next_run_ms(schedule, "UTC") > due
     store_job(id, schedule: schedule, once: true, next_run_at_ms: due)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     refute Map.has_key?(state.jobs, id)
     assert CronStore.get_job(id) == nil
     assert CronStore.list_runs(id) == []
@@ -88,7 +88,7 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
 
   test "missed one-shot inside grace claims once and disables immediately", %{id: id} do
     store_job(id, once: true, next_run_at_ms: LemonCore.Clock.now_ms() - 1_000)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     state = %{state | jobs: Map.take(state.jobs, [id])}
     assert {:noreply, state} = CronManager.handle_cast(:tick, state)
     refute state.jobs[id].enabled
@@ -99,7 +99,7 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
 
   test "paused jobs retain their paused schedule", %{id: id} do
     job = store_job(id, enabled: false, next_run_at_ms: LemonCore.Clock.now_ms() - 1_000)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     assert state.jobs[id] == job
     assert {:noreply, _} = CronManager.handle_cast(:tick, %{state | jobs: %{id => job}})
     assert CronStore.list_runs(id) == []
@@ -107,17 +107,17 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
 
   test "short periods use the two-minute minimum grace", %{id: id} do
     store_job(id, schedule: "* * * * *", next_run_at_ms: LemonCore.Clock.now_ms() - 119_000)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     assert state.catch_up_slots[id]
 
     store_job(id, schedule: "* * * * *", next_run_at_ms: LemonCore.Clock.now_ms() - 121_000)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     refute state.catch_up_slots[id]
     assert state.jobs[id].next_run_at_ms > LemonCore.Clock.now_ms()
   end
 
   test "tick cleans history only at the hourly cadence", %{id: id} do
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     run = id |> CronRun.new(:manual) |> CronRun.complete("ok")
     CronStore.put_run(run)
     state = %{state | jobs: %{}, run_retention_per_job: 0}
@@ -155,6 +155,20 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
     assert CronStore.get_run(foreign.id)
     assert CronStore.get_run(active.id)
     assert CronStore.get_run(retry.id)
+  end
+
+  defp initialized_manager do
+    {:ok, state, {:continue, :restore_startup}} = CronManager.init([])
+    {:noreply, state} = CronManager.handle_continue(:restore_startup, state)
+    ref = state.restoration_task.ref
+
+    receive do
+      {^ref, result} ->
+        {:noreply, state} = CronManager.handle_info({ref, result}, state)
+        {:ok, state}
+    after
+      5_000 -> flunk("startup restoration did not finish")
+    end
   end
 
   defp store_job(id, attrs) do

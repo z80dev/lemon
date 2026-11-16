@@ -2,6 +2,11 @@ defmodule LemonAgent.BudgetScope do
   @moduledoc """
   Serializes enforcement-only usage for a native session and its descendants.
 
+  Checks and cost-cap queries read protected ETS snapshots directly, including
+  ancestor snapshots, without synchronous calls into the scope tree. Each scope
+  owns its table; its Registry entry and counters disappear when it exits.
+  Updates and cumulative propagation remain serialized and acknowledged.
+
   Provider usage events and billing records remain local to each session. Child
   reports are cumulative, keyed by child identity, so completion can safely repeat
   the last live report. A child retains its originating run reference: late usage
@@ -17,10 +22,24 @@ defmodule LemonAgent.BudgetScope do
   def check(scope, projected \\ %{tokens: 0, cost_usd: 0.0})
   def check(nil, _projected), do: nil
   def check({pid, _run}, projected), do: check(pid, projected)
-  def check(pid, projected), do: GenServer.call(pid, {:check, projected})
+
+  def check(pid, projected) do
+    {budget, parent} = snapshot(pid)
+    Budget.check(budget, projected) || check(parent, projected)
+  end
+
   def cost_capped?(nil), do: false
   def cost_capped?({pid, _run}), do: cost_capped?(pid)
-  def cost_capped?(pid), do: GenServer.call(pid, :cost_capped)
+
+  def cost_capped?(pid) do
+    {budget, parent} = snapshot(pid)
+
+    Enum.any?(
+      [:max_run_cost_usd, :max_session_cost_usd],
+      &is_number(Map.get(budget.limits, &1))
+    ) or cost_capped?(parent)
+  end
+
   def update(pid, budget), do: GenServer.call(pid, {:own, budget})
   def report(nil, _id, _usage), do: :ok
   def report({pid, run}, id, usage), do: GenServer.call(pid, {:child, run, id, usage})
@@ -29,17 +48,23 @@ defmodule LemonAgent.BudgetScope do
   def init(opts) do
     Process.monitor(Keyword.fetch!(opts, :owner))
 
-    {:ok,
-     %{
-       own: Budget.new(Keyword.fetch!(opts, :limits), Keyword.get(opts, :usage)),
-       children: %{},
-       child_usage: Budget.normalize_usage(Keyword.get(opts, :child_usage)),
-       child_run_usage: Budget.normalize_usage(nil),
-       run: make_ref(),
-       parent: Keyword.get(opts, :parent),
-       id: Keyword.fetch!(opts, :id),
-       owner: Keyword.fetch!(opts, :owner)
-     }}
+    table = :ets.new(__MODULE__, [:set, :protected, read_concurrency: true])
+    {:ok, _} = Registry.register(LemonAgent.AgentRegistry, {__MODULE__, self()}, table)
+
+    state = %{
+      own: Budget.new(Keyword.fetch!(opts, :limits), Keyword.get(opts, :usage)),
+      children: %{},
+      child_usage: Budget.normalize_usage(Keyword.get(opts, :child_usage)),
+      child_run_usage: Budget.normalize_usage(nil),
+      run: make_ref(),
+      parent: Keyword.get(opts, :parent),
+      id: Keyword.fetch!(opts, :id),
+      owner: Keyword.fetch!(opts, :owner),
+      table: table
+    }
+
+    publish(state)
+    {:ok, state}
   end
 
   @impl true
@@ -51,27 +76,15 @@ defmodule LemonAgent.BudgetScope do
         own: %{state.own | run_usage: Budget.normalize_usage(nil)}
     }
 
+    publish(state)
     {:reply, :ok, state}
   end
 
   def handle_call(:attachment, _from, state), do: {:reply, {self(), state.run}, state}
 
-  def handle_call({:check, projected}, _from, state) do
-    {:reply, Budget.check(inclusive(state), projected) || check(state.parent, projected), state}
-  end
-
-  def handle_call(:cost_capped, _from, state) do
-    own_cap =
-      Enum.any?(
-        [:max_run_cost_usd, :max_session_cost_usd],
-        &is_number(Map.get(state.own.limits, &1))
-      )
-
-    {:reply, own_cap or cost_capped?(state.parent), state}
-  end
-
   def handle_call({:own, budget}, _from, state) do
     state = %{state | own: budget}
+    publish(state)
     propagate(state)
     {:reply, :ok, state}
   end
@@ -98,6 +111,7 @@ defmodule LemonAgent.BudgetScope do
           )
     }
 
+    publish(state)
     send(state.owner, {:subagent_budget_usage, state.child_usage})
     propagate(state)
     {:reply, :ok, state}
@@ -116,6 +130,18 @@ defmodule LemonAgent.BudgetScope do
     do: {:stop, :normal, state}
 
   defp propagate(state), do: report(state.parent, state.id, inclusive(state).session_usage)
+
+  # Each scope owns its row; Registry's ETS-backed lookup locates it without
+  # messaging any scope. Deep checks never enter an ancestor's mailbox.
+  defp snapshot(pid) do
+    [{^pid, table}] = Registry.lookup(LemonAgent.AgentRegistry, {__MODULE__, pid})
+    [{:budget, budget, parent}] = :ets.lookup(table, :budget)
+    {budget, parent}
+  end
+
+  defp publish(state) do
+    :ets.insert(state.table, {:budget, inclusive(state), state.parent})
+  end
 
   defp delta(current, previous) when is_number(current) and is_number(previous),
     do: max(current - previous, 0)

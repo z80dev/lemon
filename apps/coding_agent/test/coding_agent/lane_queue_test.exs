@@ -10,6 +10,31 @@ defmodule CodingAgent.LaneQueueTest do
 
   # --- Original tests ---
 
+  test "status responds while a launch callback is blocked on IO", %{task_sup: sup} do
+    queue =
+      start_supervised!(
+        {LaneQueue,
+         name: :lane_queue_callback_responsiveness,
+         caps: %{background_exec: 1},
+         task_supervisor: sup}
+      )
+
+    owner = self()
+
+    caller =
+      Task.async(fn ->
+        LaneQueue.run(queue, :background_exec, fn ->
+          send(owner, {:callback_waiting, self()})
+          receive do: (:finish_io -> :finished)
+        end)
+      end)
+
+    assert_receive {:callback_waiting, worker}
+    assert %{jobs_count: 1} = GenServer.call(queue, :status)
+    send(worker, :finish_io)
+    assert {:ok, :finished} = Task.await(caller)
+  end
+
   test "accepts caps as a map", %{task_sup: sup} do
     {:ok, pid} =
       LaneQueue.start_link(

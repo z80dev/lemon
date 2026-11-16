@@ -208,6 +208,196 @@ defmodule LemonSkills.McpSessionTest do
     assert text(result) =~ "fixture://receipt"
   end
 
+  test "session lookups and source status respond during blocked handshake and discovery",
+       context do
+    for method <- ["initialize", "tools/list"] do
+      {listener, port} = gate_listener()
+      config = gated_config(context, port, method)
+      owner = self()
+      opening = Task.async(fn -> McpSession.open(context.id, context.root, [config], owner) end)
+      socket = await_gate(listener, method)
+      source = source(context.id)
+
+      assert %{disabled: false, cached_tools: 0} = GenServer.call(source, :status, 1_000)
+      assert %{loaded: true} = GenServer.call(source, {:inventory, []}, 1_000)
+      assert [] = GenServer.call(McpSession, {:lookup, context.id, :tools}, 1_000)
+      assert %{} = GenServer.call(McpSession, {:lookup, context.id, :approvals}, 1_000)
+      assert Task.yield(opening, 0) == nil
+
+      assert :ok = :gen_tcp.send(socket, "release\n")
+      assert :ok = Task.await(opening, 5_000)
+      assert [_] = McpSession.tools(context.id)
+      assert :ok = McpSession.close(context.id)
+      :gen_tcp.close(socket)
+      :gen_tcp.close(listener)
+    end
+  end
+
+  test "close cancels a blocked attachment and stops its worker and provisional clients",
+       context do
+    {listener, port} = gate_listener()
+    config = gated_config(context, port, "initialize")
+    owner = self()
+    opening = Task.async(fn -> McpSession.open(context.id, context.root, [config], owner) end)
+    socket = await_gate(listener, "initialize")
+    source = source(context.id)
+    refs = monitor_pending(source)
+
+    assert :ok = McpSession.close(context.id)
+    assert {:error, :session_closed} = Task.await(opening, 1_000)
+    assert_down(refs)
+    assert McpSession.tools(context.id) == []
+    :gen_tcp.close(socket)
+  end
+
+  test "owner loss during blocked discovery releases the entire pending attachment", context do
+    {listener, port} = gate_listener()
+    config = gated_config(context, port, "tools/list")
+
+    owner =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    on_exit(fn -> if Process.alive?(owner), do: Process.exit(owner, :kill) end)
+    opening = Task.async(fn -> McpSession.open(context.id, context.root, [config], owner) end)
+    socket = await_gate(listener, "tools/list")
+    refs = monitor_pending(source(context.id))
+
+    send(owner, :stop)
+    assert {:error, :owner_unavailable} = Task.await(opening, 1_000)
+    assert_down(refs)
+    assert McpSession.approvals(context.id) == %{}
+    :gen_tcp.close(socket)
+  end
+
+  test "source discovery deadlines discard late results without blocking status", context do
+    {listener, port} = gate_listener()
+
+    configs =
+      gated_config(context, port, "tools/list")
+      |> Map.put("type", "stdio")
+      |> LemonSkills.Config.parse_mcp_server_config()
+
+    source = start_supervised!({McpSource, name: nil, configs: configs})
+    discovery = Task.async(fn -> McpSource.discover_ready(source) end)
+    socket = await_gate(listener, "tools/list")
+    before = :sys.get_state(source)
+    job = before.active_job
+    refs = monitor_pending(source) |> Enum.reject(fn {_, pid} -> pid == source end)
+
+    send(source, {:job_timeout, job.token})
+    assert {:error, :timeout} = Task.await(discovery, 1_000)
+    assert_down(refs)
+    send(source, {job.task.ref, {{:ok, [:stale]}, before}})
+    send(source, {:job_timeout, job.token})
+    assert %{cached_tools: 0} = GenServer.call(source, :status, 1_000)
+    assert :sys.get_state(source).active_job == nil
+    :gen_tcp.close(socket)
+  end
+
+  test "raw remote discovery cannot block session management or cached source reads", context do
+    {listener, port} = gate_listener()
+    config = gated_config(context, port, "tools/list", "1")
+    assert :ok = McpSession.open(context.id, context.root, [config], self())
+    source = source(context.id)
+    remote = Task.async(fn -> McpSession.remote_tools(context.id) end)
+    socket = await_gate(listener, "tools/list")
+
+    assert [_] = GenServer.call(McpSession, {:lookup, context.id, :tools}, 1_000)
+    assert %{cached_tools: 1} = GenServer.call(source, :status, 1_000)
+    assert map_size(GenServer.call(source, :approval_policy, 1_000)) == 1
+    assert Task.yield(remote, 0) == nil
+    assert :ok = :gen_tcp.send(socket, "release\n")
+    assert {:ok, [_]} = Task.await(remote, 1_000)
+    :gen_tcp.close(socket)
+  end
+
+  test "replacement fences a blocked attachment and its late result", context do
+    {listener, port} = gate_listener()
+    config = gated_config(context, port, "tools/list")
+    owner = self()
+    opening = Task.async(fn -> McpSession.open(context.id, context.root, [config], owner) end)
+    socket = await_gate(listener, "tools/list")
+    pending = :sys.get_state(McpSession)[context.id]
+    refs = monitor_pending(pending.source)
+
+    assert :ok =
+             McpSession.open(context.id, context.root, [config(context, "replacement")], owner)
+
+    assert {:error, :session_closed} = Task.await(opening, 1_000)
+    assert_down(refs)
+    send(McpSession, {pending.task.ref, {:ok, [:stale], %{}}})
+    [tool] = McpSession.tools(context.id)
+    assert {:ok, result} = tool.execute.("current", %{}, nil, nil)
+    assert text(result) == "replacement|#{context.root}"
+    :gen_tcp.close(socket)
+  end
+
+  test "abandoning a blocked open cancels the source even while its owner lives", context do
+    {listener, port} = gate_listener()
+    config = gated_config(context, port, "tools/list")
+    owner = self()
+    caller = spawn(fn -> McpSession.open(context.id, context.root, [config], owner) end)
+    socket = await_gate(listener, "tools/list")
+    refs = monitor_pending(source(context.id))
+
+    Process.exit(caller, :kill)
+    assert_down(refs)
+    assert McpSession.tools(context.id) == []
+    :gen_tcp.close(socket)
+  end
+
+  test "a dispatched tool deadline is an unknown outcome and leaves status responsive", context do
+    {listener, port} = gate_listener()
+    config = gated_config(context, port, "tools/call")
+    assert :ok = McpSession.open(context.id, context.root, [config], self())
+    [tool] = McpSession.tools(context.id)
+    source = source(context.id)
+    call = Task.async(fn -> McpSource.call_tool(source, tool.name, %{}, timeout_ms: 500) end)
+    socket = await_gate(listener, "tools/call")
+
+    assert %{cached_tools: 1} = GenServer.call(source, :status, 1_000)
+    assert {:error, :outcome_unknown} = Task.await(call, 2_000)
+    assert :sys.get_state(source).invocations == %{}
+    assert :ok = :gen_tcp.send(socket, "release\n")
+    :gen_tcp.close(socket)
+  end
+
+  defp gated_config(context, port, method, after_count \\ "0") do
+    config(context, "gated")
+    |> Map.put("env", %{
+      "MCP_SESSION_VALUE" => "gated",
+      "MCP_GATE_PORT" => Integer.to_string(port),
+      "MCP_GATE_METHOD" => method,
+      "MCP_GATE_AFTER" => after_count
+    })
+  end
+
+  defp gate_listener do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, active: false, packet: :line, ip: {127, 0, 0, 1}])
+
+    {:ok, {_, port}} = :inet.sockname(listener)
+    on_exit(fn -> :gen_tcp.close(listener) end)
+    {listener, port}
+  end
+
+  defp await_gate(listener, method) do
+    {:ok, socket} = :gen_tcp.accept(listener, 5_000)
+    assert {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
+    assert data == method <> "\n"
+    socket
+  end
+
+  defp monitor_pending(source) do
+    job = :sys.get_state(source).active_job
+    pids = [source, job.task.pid | Map.keys(job.clients)]
+    Enum.map(pids, fn pid -> {Process.monitor(pid), pid} end)
+  end
+
   defp config(context, value) do
     %{
       "name" => "fixture",
@@ -245,12 +435,14 @@ defmodule LemonSkills.McpSessionTest do
       end
 
       defp handle(%{"method" => "initialize", "id" => id}) do
+        pause("initialize")
         capability = if System.get_env("MCP_SESSION_VALUE") == "resources-only", do: "resources", else: "tools"
         respond(id, %{"protocolVersion" => "2024-11-05", "capabilities" => %{capability => %{}},
           "serverInfo" => %{"name" => "session-fixture", "version" => "1.0"}})
       end
 
       defp handle(%{"method" => "tools/list", "id" => id}) do
+        pause("tools/list")
         if System.get_env("MCP_SESSION_VALUE") == "discovery-error" do
           IO.write([:json.encode(%{"jsonrpc" => "2.0", "id" => id,
             "error" => %{"code" => -32603, "message" => "private diagnostic"}}), "\n"])
@@ -266,12 +458,25 @@ defmodule LemonSkills.McpSessionTest do
       end
 
       defp handle(%{"method" => "tools/call", "id" => id}) do
+        pause("tools/call")
         respond(id, %{"content" => [%{"type" => "text",
           "text" => System.get_env("MCP_SESSION_VALUE", "") <> "|" <> File.cwd!()}]})
       end
 
       defp handle(%{"id" => id}), do: respond(id, %{})
       defp handle(_), do: :ok
+      defp pause(method) do
+        count = Process.get({:calls, method}, 0)
+        Process.put({:calls, method}, count + 1)
+        if System.get_env("MCP_GATE_METHOD") == method and
+             count == String.to_integer(System.get_env("MCP_GATE_AFTER", "0")) do
+          port = String.to_integer(System.fetch_env!("MCP_GATE_PORT"))
+          {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false])
+          :ok = :gen_tcp.send(socket, method <> "\n")
+          {:ok, _} = :gen_tcp.recv(socket, 0)
+          :gen_tcp.close(socket)
+        end
+      end
       defp respond(id, result), do: IO.write([:json.encode(%{"jsonrpc" => "2.0", "id" => id, "result" => result}), "\n"])
     end
     SessionFixture.run()

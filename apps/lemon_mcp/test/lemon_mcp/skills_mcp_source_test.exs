@@ -167,6 +167,7 @@ defmodule LemonMCP.SkillsMcpSourceTest do
 
     state = %{
       disabled: false,
+      invocations: %{},
       tool_cache: %{"safe" => %{server_name: "server", original_name: {:tool, "mutate"}}},
       servers: %{
         "server" => %{
@@ -178,11 +179,15 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       }
     }
 
-    assert {:noreply, ^state} =
+    assert {:noreply, pending} =
              McpSource.handle_call({:call_tool, "safe", %{}, []}, {self(), ref}, state)
 
+    [{task_ref, _invocation}] = Map.to_list(pending.invocations)
     assert_receive {:invoked, "mutate", %{}, 70}
-    assert_receive {^ref, {:error, :timeout}}
+    assert_receive {^task_ref, {:error, :outcome_unknown} = result}
+    assert {:noreply, completed} = McpSource.handle_info({task_ref, result}, pending)
+    assert completed.invocations == %{}
+    assert_receive {^ref, {:error, :outcome_unknown}}
     refute_receive {:invoked, _, _, _}
   end
 

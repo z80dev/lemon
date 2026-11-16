@@ -170,7 +170,7 @@ defmodule LemonSkills.McpSourceLifecycleTest do
     [{name, current}] = :sys.get_state(source).servers |> Map.to_list()
     Process.cancel_timer(current.reconnect_timer)
     send(source, {:mcp_reconnect, name, current.reconnect_token})
-    :sys.get_state(source)
+    McpSource.discover_tools(source, [])
   end
 
   defp server(source), do: :sys.get_state(source).servers |> Map.values() |> hd()
