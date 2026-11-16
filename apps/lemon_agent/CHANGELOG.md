@@ -6,6 +6,29 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+**Release version: 0.3.0.**
+
+### Breaking (0.3.0)
+
+- Agent events are delta-only (#571). Migration: handlers must accumulate
+  deltas instead of expecting full partial messages on every event.
+- Agent queue hooks changed with durable steering (#559). Migration: steering
+  and follow-up acceptance is acknowledged and journaled; update custom queue
+  hooks to the new acknowledged contract and use
+  `Agent.has_steering_messages?/2` for queue checks.
+- Retry helpers move to `LemonAi.Retry` (#592).
+
+### Added (wave 3)
+
+- `submit_result` structured subagent results (#602); task-tool action
+  telemetry only (#604); optional advisor reviewing each turn (#600);
+  experimental opt-in `code_mode` profile (#598).
+- Durable steering and follow-up acceptance with withdraw RPCs (#559);
+  default-off `features.crash_resume` re-drives cut-off task children (#558).
+- `gen_statem` lifecycles (#588), non-blocking callbacks (#587), hibernating
+  idle subagents with batched completions (#597), supervision subtrees with
+  bounded task admission (#585).
+
 ### Added
 
 - `LemonAgent.InterruptedToolResult`: one builder for interrupted tool results

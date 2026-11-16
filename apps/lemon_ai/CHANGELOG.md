@@ -12,6 +12,25 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   blocks, with directory-derived blocks kept after the cache breakpoint (#563).
 - `LemonAi.Auth.Cache`: supervised ETS owner replacing mutable `:persistent_term`
   token and model caches (#595).
+**Release version: 0.3.0.**
+
+### Breaking (0.3.0)
+
+- Provider streaming is delta-only: events carry deltas, accumulation happens
+  once, and deltas are coalesced (#571). Migration: consumers that read
+  accumulated partial messages from every event must accumulate deltas
+  themselves or use the single accumulator.
+- `LemonAi.RetryHelper` and `OneshotRetry` are removed (#592). Migration: call
+  `LemonAi.Retry` (shared retry/backoff policy) instead.
+
+### Added (wave 3)
+
+- Provider preconnect and opt-in request hedging with dispatcher telemetry
+  (`hedge_started`, `hedge_skipped`) (#567).
+- Opt-in OpenAI Responses over WebSocket with `previous_response_id` chaining
+  (`responses_websocket = true`) (#566).
+- Consolidated retry, rate-limit and dedupe seams under `LemonAi.Retry` (#592).
+- Hibernation and batched completions for idle subagent processes (#597).
 
 ### Changed
 

@@ -17,6 +17,24 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - `[runtime.tools] vendor_dialects` config key (default `false`) (#603).
 - `LemonCore.Secrets.Usage`, and `Store` hooks that run in a monitored worker
   under `:store_hook_budget_ms` (default 5000) instead of inside the Store (#579).
+### Added (wave 3)
+
+- New public `LemonCore.Supervision` (supervision subtrees, caps, no
+  unsupervised fallbacks) and `LemonCore.TaskSupervisor` (bounded task
+  admission) (#585).
+- Default-off `features.crash_resume` (`"off"`) for hard-crash continuation of
+  orphaned runs and cut-off task children (#556, #558).
+- Durable steering and follow-up acceptance journaling plus withdraw RPCs (#559).
+- Status hooks and published counters with redaction for diagnostics (#593);
+  crash and torn-write model tests with mutation checks (#555).
+- Consolidated retry, limiter, dedupe and runtime seams (#592); `gen_statem`
+  lifecycles (#588); callbacks without blocking work and bounded calls into
+  shared servers (#587).
+
+### Fixed (wave 3)
+
+- `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
+  (#555).
 
 ### Changed
 
