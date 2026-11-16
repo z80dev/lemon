@@ -57,7 +57,9 @@ defmodule CodingAgent.SessionIndex do
             end
           end,
           [node()],
-          3
+          # Finite, but wide enough for a burst of local writers: :global's
+          # randomized backoff gives up after about 4 s instead of about 1 s.
+          5
         )
 
       case result do
