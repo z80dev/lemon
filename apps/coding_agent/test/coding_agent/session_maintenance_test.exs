@@ -1,7 +1,14 @@
 defmodule CodingAgent.SessionMaintenanceTest do
   use ExUnit.Case, async: false
 
-  alias CodingAgent.{Artifacts, Config, ControlPlaneProvider, SessionIndex, SessionMaintenance}
+  alias CodingAgent.{
+    Artifacts,
+    Config,
+    ControlPlaneProvider,
+    SessionIndex,
+    SessionMaintenance
+  }
+
   alias CodingAgent.Session.Ownership
   alias LemonCore.{AgentRuntime, SessionLifecycle, Store}
 
@@ -45,6 +52,78 @@ defmodule CodingAgent.SessionMaintenanceTest do
     end)
 
     %{root: root, cwd: cwd}
+  end
+
+  test "concurrent startups share re-entrant root admission" do
+    parent = self()
+
+    tasks =
+      for _ <- 1..32 do
+        Task.async(fn ->
+          SessionMaintenance.with_root_lock(fn ->
+            SessionMaintenance.with_root_lock(fn ->
+              send(parent, {:admitted, self()})
+
+              receive do
+                :finish -> :ok
+              end
+            end)
+          end)
+        end)
+      end
+
+    # All startups must enter before any can leave. An exclusive root lock
+    # serializes whole Session.init calls and starves later callers.
+    for _ <- tasks do
+      assert_receive {:admitted, _pid}, 5_000
+    end
+
+    Enum.each(tasks, &send(&1.pid, :finish))
+    assert Enum.map(tasks, &Task.await/1) == List.duplicate(:ok, 32)
+  end
+
+  test "a dead startup owner releases root admission to maintenance" do
+    parent = self()
+
+    {owner, monitor} =
+      spawn_monitor(fn ->
+        SessionMaintenance.with_root_lock(fn ->
+          send(parent, :startup_admitted)
+
+          receive do
+            :finish -> :ok
+          end
+        end)
+      end)
+
+    on_exit(fn -> Process.exit(owner, :kill) end)
+    assert_receive :startup_admitted
+
+    task =
+      Task.async(fn ->
+        SessionMaintenance.with_root_lock(
+          fn ->
+            send(parent, :maintenance_admitted)
+            :ok
+          end,
+          :exclusive
+        )
+      end)
+
+    refute_receive :maintenance_admitted
+    Process.exit(owner, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^owner, :killed}
+    assert Task.await(task) == :ok
+    assert_receive :maintenance_admitted
+  end
+
+  test "shared admission refuses an unsafe upgrade to exclusive maintenance" do
+    assert SessionMaintenance.with_root_lock(fn ->
+             SessionMaintenance.with_root_lock(
+               fn -> flunk("upgraded shared lock") end,
+               :exclusive
+             )
+           end) == {:error, :lock_upgrade}
   end
 
   test "preview does not write journals, archive directories or an index", %{cwd: cwd} do

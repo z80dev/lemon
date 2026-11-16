@@ -494,8 +494,7 @@ defmodule CodingAgent.Session.Lifecycle do
                {:check_model_cost, candidate, context, options},
                :infinity
              ) do
-        {base_stream_fn, options} =
-          GenServer.call(session_pid, {:invocation_stream, options}, :infinity)
+        base_stream_fn = GenServer.call(session_pid, :invocation_stream_fn, :infinity)
 
         base_stream_fn.(candidate, context, options)
       end

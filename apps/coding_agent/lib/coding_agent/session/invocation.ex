@@ -85,6 +85,18 @@ defmodule CodingAgent.Session.Invocation do
 
         state = update_model(state, opts)
         state = update_thinking(state, opts)
+
+        # Bind caller overrides once, before the loop takes ownership. Merging
+        # them back at each provider dispatch would undo switch sanitization.
+        stream_options =
+          ModelResolver.build_stream_options(
+            state.model,
+            state.settings_manager,
+            Keyword.get(opts, :stream_options),
+            state.config_cwd
+          )
+
+        :ok = LemonAgent.Agent.set_stream_options(state.agent, stream_options)
         {:ok, Lifecycle.rebind_invocation(state)}
       end
     end
@@ -122,24 +134,7 @@ defmodule CodingAgent.Session.Invocation do
     end
   end
 
-  def stream(state, options) do
-    overrides = Keyword.get(state.tool_opts, :stream_options)
-
-    options =
-      if is_map(overrides) do
-        overrides =
-          overrides
-          |> Map.delete(:__struct__)
-          |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-          |> Map.new()
-
-        Map.merge(options, overrides)
-      else
-        options
-      end
-
-    {Keyword.get(state.tool_opts, :stream_fn) || (&LemonAi.stream/3), options}
-  end
+  def stream_fn(state), do: Keyword.get(state.tool_opts, :stream_fn) || (&LemonAi.stream/3)
 
   defp update_model(%CodingAgent.Session{} = state, opts) do
     requested = Keyword.get(opts, :model)
@@ -148,6 +143,7 @@ defmodule CodingAgent.Session.Invocation do
     if requested && explicit do
       model = ModelResolver.resolve_session_model(requested, state.settings_manager)
       :ok = LemonAgent.Agent.set_model(state.agent, model)
+
       if model.provider != state.model.provider or model.id != state.model.id,
         do: LemonAgent.ModelRuntime.SessionPins.clear(state.session_manager.header.id)
 

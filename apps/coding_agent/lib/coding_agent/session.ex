@@ -1150,8 +1150,8 @@ defmodule CodingAgent.Session do
     end
   end
 
-  def handle_call({:invocation_stream, options}, _from, state) do
-    {:reply, CodingAgent.Session.Invocation.stream(state, options), state}
+  def handle_call(:invocation_stream_fn, _from, state) do
+    {:reply, CodingAgent.Session.Invocation.stream_fn(state), state}
   end
 
   def handle_call({:record_tool_intent, data, signal, parent_id}, from, state) do

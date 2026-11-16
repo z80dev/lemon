@@ -820,6 +820,10 @@ so they cannot overwrite a starting session's snapshot. A second startup for an
 owned file returns `{:error, {:already_started, owner_pid}}` before loading it,
 without an abnormal linked exit to the caller. Reset transfers ownership to the
 new journal. The owning process's exit releases its registration.
+Startup, ownership changes and spill writers share root admission concurrently;
+maintenance takes exclusive admission. Acquisition is node-local and re-entrant,
+with finite retries returning `{:error, :lock_timeout}` without running the
+operation. A holder's exit releases its admission.
 
 Live sessions synchronously append completed messages, tool calls/results, model
 changes and compaction entries to their JSONL file. They do not depend on a

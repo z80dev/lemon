@@ -120,7 +120,7 @@ defmodule CodingAgent.DurableTableContractTest do
     assert [{"process-held", %{status: :lost, launch_classification: :outcome_unknown}, []}] =
              :ets.lookup(ProcessStoreServer.table_name(), "process-held")
 
-    assert %{occupied: 2, unknown: 2, canceled: 1} =
+    assert %{occupied: 1, unknown: 1, canceled: 1} =
              GenServer.call(ProcessStoreServer, :background_counts)
 
     assert [
@@ -165,7 +165,7 @@ defmodule CodingAgent.DurableTableContractTest do
              :ets.lookup(ProcessStoreServer.table_name(), "process-held")
   end
 
-  test "owner restart recovers flushed process tails and keeps unknown capacity", ctx do
+  test "owner restart recovers unmanaged tails without inventing an admission charge", ctx do
     path = Path.join(ctx.tmp_dir, "restart.dets")
     pid = start_supervised!({ProcessStoreServer, dets_path: path})
 
@@ -181,7 +181,7 @@ defmodule CodingAgent.DurableTableContractTest do
     assert {:ok, %{status: :lost, error: :lost_on_restart}, ["one", "two"]} =
              ProcessStore.get("tail")
 
-    assert %{occupied: 1, unknown: 1} = GenServer.call(recovered, :background_counts)
+    assert %{occupied: 0, unknown: 0} = GenServer.call(recovered, :background_counts)
   end
 
   test "sweep touches only expired indexed keys, including with a large retained tail", ctx do

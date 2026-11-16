@@ -157,14 +157,14 @@ defmodule CodingAgent.SessionStreamRules599Test do
 
   defp await_end(session) do
     receive do
-      {:session_event, _, {:agent_end, _}} ->
+      {:session_event, _, {:agent_end, _}, _cursor} ->
         # The owner processes agent_end before replying to this explicit barrier.
         refute Session.get_state(session).is_streaming
 
-      {:session_event, _, {:error, reason, _}} ->
+      {:session_event, _, {:error, reason, _}, _cursor} ->
         flunk("unexpected session error: #{inspect(reason)}")
 
-      {:session_event, _, _} ->
+      {:session_event, _, _, _cursor} ->
         await_end(session)
     after
       5_000 -> flunk("session did not finish")
