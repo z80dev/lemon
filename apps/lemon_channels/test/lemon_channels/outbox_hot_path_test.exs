@@ -1,7 +1,8 @@
 defmodule LemonChannels.OutboxHotPathTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Dedupe}
+  alias LemonCore.RateLimiter
 
   test "concurrent confirmed-key inserts have exactly one winner" do
     key = "atomic-confirmed-#{System.unique_integer([:positive])}"
@@ -48,18 +49,29 @@ defmodule LemonChannels.OutboxHotPathTest do
     # Freeze refill beyond the test deadline, without sleeping or changing the
     # production clock. CAS must preserve this timestamp across contenders.
     :ets.insert(
-      :lemon_channels_outbox_rate_limits,
+      LemonChannels.Outbox.RateLimiter,
       {full_key, 5, System.monotonic_time(:millisecond) + 60_000}
     )
 
-    on_exit(fn -> :ets.delete(:lemon_channels_outbox_rate_limits, full_key) end)
-    results = race(64, fn -> RateLimiter.consume(channel, account) end)
+    on_exit(fn -> :ets.delete(LemonChannels.Outbox.RateLimiter, full_key) end)
+
+    results =
+      race(64, fn -> RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel, account) end)
+
     assert Enum.count(results, &(&1 == :ok)) == 5
     assert Enum.count(results, &(&1 == {:rate_limited, 33})) == 59
-    assert RateLimiter.check(channel, account) == {:rate_limited, 33}
-    assert RateLimiter.status(channel, account) == %{tokens: 0.0, rate: 30, burst: 5}
-    assert :ok = RateLimiter.record(channel, account)
-    assert RateLimiter.status(channel, account).tokens == 0
+
+    assert RateLimiter.check(LemonChannels.Outbox.RateLimiter, channel, account) ==
+             {:rate_limited, 33}
+
+    assert RateLimiter.status(LemonChannels.Outbox.RateLimiter, channel, account) == %{
+             tokens: 0.0,
+             rate: 30,
+             burst: 5
+           }
+
+    assert :ok = RateLimiter.record(LemonChannels.Outbox.RateLimiter, channel, account)
+    assert RateLimiter.status(LemonChannels.Outbox.RateLimiter, channel, account).tokens == 0
   end
 
   defp race(count, callback) do

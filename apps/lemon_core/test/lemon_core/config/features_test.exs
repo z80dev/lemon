@@ -7,15 +7,16 @@ defmodule LemonCore.Config.FeaturesTest do
   @env_var "LEMON_FEATURE_SESSION_SEARCH"
 
   setup do
-    original = System.get_env(@env_var)
-    System.delete_env(@env_var)
+    originals = Map.new([@env_var, "LEMON_FEATURE_CRASH_RESUME"], &{&1, System.get_env(&1)})
+    Enum.each(originals, fn {key, _value} -> System.delete_env(key) end)
 
     on_exit(fn ->
-      if is_nil(original) do
-        System.delete_env(@env_var)
-      else
-        System.put_env(@env_var, original)
-      end
+      Enum.each(originals, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+
+      LemonCore.Config.reload()
     end)
 
     :ok
@@ -34,6 +35,26 @@ defmodule LemonCore.Config.FeaturesTest do
       assert features.skill_synthesis_drafts == :"default-on"
       assert Features.enabled?(features, :routing_feedback)
       assert Features.enabled?(features, :skill_synthesis_drafts)
+    end
+
+    test "crash resume is default off and explicitly configurable" do
+      refute Features.enabled?(Features.resolve(%{}), :crash_resume)
+
+      features = Features.resolve(%{"features" => %{"crash_resume" => "on"}})
+      assert Features.enabled?(features, :crash_resume)
+
+      System.put_env("LEMON_FEATURE_CRASH_RESUME", "off")
+      overridden = Features.resolve(%{"features" => %{"crash_resume" => "on"}})
+      refute Features.enabled?(overridden, :crash_resume)
+    end
+
+    test "the cached facade retains canonical feature flags through projections and overrides" do
+      System.put_env("LEMON_FEATURE_CRASH_RESUME", "on")
+      config = LemonCore.Config.reload()
+      assert Features.enabled?(config.features, :crash_resume)
+      assert LemonCore.Config.cached().features == config.features
+      assert LemonCore.Config.cached(nil, overrides: %{}).features == config.features
+      assert LemonCore.Config.to_map(config).features.crash_resume == :"default-on"
     end
 
     test "struct defaults match resolve defaults" do

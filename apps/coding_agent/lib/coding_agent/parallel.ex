@@ -44,6 +44,9 @@ defmodule CodingAgent.Parallel do
     """
     @spec acquire(t()) :: :ok
     def acquire(semaphore) do
+      # Caller policy is to wait for capacity until release or caller death.
+      # The server defers its reply and monitors waiters; a call timeout without
+      # cancelling the queued acquisition could leak a subsequently granted slot.
       GenServer.call(semaphore, :acquire, :infinity)
     end
 

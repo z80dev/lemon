@@ -12,6 +12,18 @@ Installed users get this client as a compiled per-platform binary
 (`~/.lemon/versions/<v>/tui/bin/lemon-tui`); plain `lemon` in an interactive
 terminal launches it, auto-starting the daemon first. See `docs/install.md`.
 
+Native session startup and the first change from an empty to nonempty prompt
+(terminal typing, native Tern editing, paste or draft restoration) hint the
+selected model's HTTP pool to warm. The TUI sends only the catalog model ID via
+`models.preconnect` (operator write scope), only when advertised and online;
+hints are never queued offline. The daemon coalesces origins for 30 seconds,
+accepting at most eight distinct origins in that window and running at most eight
+warm-up tasks concurrently. Warming sends an unauthenticated `HEAD /`
+through the same stock `Req.Finch` pool as provider calls: no prompt, credentials,
+model generation, retry or redirect. Failures are silent and cannot prevent
+submission. Servers may close idle connections; latency gains are not guaranteed
+and still require the opt-in latency measurements.
+
 The source launcher `../../bin/lemon-tui` securely bootstraps a fresh local
 runtime: when no runtime is listening and no token is configured, it generates
 a high-entropy process-scoped `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, passes the
@@ -154,6 +166,15 @@ on reconnect and when opening or changing models. Older daemons without
   without discarding a correction in the editor (autocomplete gets Escape first).
   While idle, Esc Esc discards a non-empty draft (recoverable with Up) and, on an
   empty composer, opens the rewind picker (same as `/rewind`).
+  On daemons advertising `sessions.steer`, text steers to a live local run are
+  acknowledged only after their stable message ID is journaled. Ctrl+Q shows
+  these accepted steers alongside the local queue; `d` / Delete or the native
+  **Withdraw** button requests withdrawal. A successful withdrawal is shown only
+  after the daemon acknowledges it; a steer already bound to a model call cannot be
+  withdrawn. Accepted steers are not locally editable. Reconnect and queue
+  focus refresh pending identities; failed reads retain the last known queue.
+  Neither steering nor withdrawal is replayed after a disconnect. Named-node
+  steering and older daemons retain the routed path without local withdrawal.
   Shift+Enter inserts a newline. Up/Down recall prompts (kept across sessions in
   `~/.lemon/tui-history/history.sqlite3`, mode `0600` in a private `0700` directory;
   `/clear-history` clears saved prompts and `[tui] prompt_history = false` turns it off;
@@ -383,8 +404,9 @@ runs and error notices are error frames with **Copy error** (and **Switch model*
 for runs). Thinking is a live spinner section that folds to "Thought for Ns".
 Compaction results render as a compaction divider. While a run works, the dock
 shows a working row whose **Stop** takes Esc's abort path. Queued prompts are
-pills with an **Edit** control, and approvals offer clickable decision buttons
-with the full action and a countdown. The Alt+A Agent Hub is a card of subagent
+pills with an **Edit** control; journaled local steers instead offer **Withdraw**.
+Approvals offer clickable decision buttons with the full action and a countdown.
+The Alt+A Agent Hub is a card of subagent
 nodes. Copy uses the same clipboard path as `/copy` below.
 
 Tool calls are omp's semantic tool cards rather than painted text: shell calls

@@ -56,9 +56,7 @@ defmodule LemonCore.Config.ValidatorTest do
           max_concurrent_runs: 5,
           auto_resume: false,
           enabled_channels: %{stub: false},
-          channels: %{stub: %{resolved: true, raw: %{}}},
-          require_engine_lock: true,
-          engine_lock_timeout_ms: 30_000
+          channels: %{stub: %{resolved: true, raw: %{}}}
         },
         logging: %{
           level: :info,
@@ -199,9 +197,7 @@ defmodule LemonCore.Config.ValidatorTest do
           "engines" => %{"custom" => %{"command" => "custom-cli"}},
           "projects" => %{"workspace" => %{"default_engine" => "claude"}},
           "bindings" => [%{"default_engine" => "opencode"}],
-          "webhook" => %{"engine" => "pi"},
-          "require_engine_lock" => true,
-          "engine_lock_timeout_ms" => 30_000
+          "webhook" => %{"engine" => "pi"}
         },
         "profiles" => %{
           "default" => %{"engine" => "claude"},
@@ -380,14 +376,6 @@ defmodule LemonCore.Config.ValidatorTest do
 
       errors = Validator.validate_gateway(%{max_concurrent_runs: 5}, [])
       refute Enum.any?(errors, &String.contains?(&1, "gateway.max_concurrent_runs"))
-    end
-
-    test "validates engine_lock_timeout_ms" do
-      errors = Validator.validate_gateway(%{engine_lock_timeout_ms: -1}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "gateway.engine_lock_timeout_ms"))
-
-      errors = Validator.validate_gateway(%{engine_lock_timeout_ms: 0}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "gateway.engine_lock_timeout_ms"))
     end
 
     test "validates boolean fields" do

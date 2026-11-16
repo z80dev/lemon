@@ -1,10 +1,22 @@
 defmodule LemonRouter.RunProcess.Watchdog do
   @moduledoc """
-  Idle-run watchdog timer logic for RunProcess.
+  Idle watchdog transitions for the `LemonRouter.RunProcess` state machine.
 
-  Manages scheduling, touching, and cancelling the per-run idle watchdog
-  timer, as well as the interactive keepalive confirmation flow for
-  Telegram sessions.
+  The run owns the timeout; this module builds `:gen_statem` actions rather
+  than sending timer messages or retaining timer references.
+
+  | State | Event | Next state / timeout |
+  | --- | --- | --- |
+  | awaiting start | run started | running / idle timeout |
+  | running or confirming idle | output, action, keepalive | running / fresh idle timeout |
+  | running | idle timeout, prompt delivered | confirming idle / confirmation timeout |
+  | running | idle timeout, no prompt destination | completing / synthetic failure |
+  | confirming idle | confirmation timeout | completing / synthetic failure |
+  | active | cancel | completing / synthetic cancellation |
+  | any | unrelated event | unchanged / existing deadline retained |
+
+  Leaving the active state cancels its `state_timeout` automatically. Zero
+  idle timeout disables only idle expiry, not cancellation or gateway monitoring.
   """
 
   require Logger
@@ -49,85 +61,45 @@ defmodule LemonRouter.RunProcess.Watchdog do
       else: @default_run_idle_watchdog_confirm_timeout_ms
   end
 
-  @spec schedule_run_watchdog(map()) :: map()
-  def schedule_run_watchdog(%{run_watchdog_timeout_ms: timeout_ms} = state)
-      when not is_integer(timeout_ms) or timeout_ms <= 0 do
+  @spec start(map()) :: {map(), list()}
+  def start(state) do
     now_ms = LemonCore.Clock.now_ms()
-    _ = cancel_run_watchdog_timer(state)
 
-    run_started_at_ms =
-      if is_integer(state.run_started_at_ms), do: state.run_started_at_ms, else: now_ms
-
-    %{
+    state = %{
       state
-      | run_started_at_ms: run_started_at_ms,
-        run_last_activity_at_ms: now_ms,
-        run_watchdog_ref: nil
+      | run_started_at_ms: state.run_started_at_ms || now_ms,
+        run_last_activity_at_ms: now_ms
     }
+
+    timeout = state.run_watchdog_timeout_ms || :infinity
+    {state, [{:state_timeout, timeout, :idle}]}
   end
 
-  def schedule_run_watchdog(state) do
-    timeout_ms = state.run_watchdog_timeout_ms || @default_run_idle_watchdog_timeout_ms
-    now_ms = LemonCore.Clock.now_ms()
-    _ = cancel_run_watchdog_timer(state)
-    ref = Process.send_after(self(), :run_watchdog_timeout, timeout_ms)
-
-    run_started_at_ms =
-      if is_integer(state.run_started_at_ms), do: state.run_started_at_ms, else: now_ms
-
-    %{
-      state
-      | run_started_at_ms: run_started_at_ms,
-        run_last_activity_at_ms: now_ms,
-        run_watchdog_ref: ref
-    }
+  @spec activity(atom(), map()) :: tuple()
+  def activity(phase, state) when phase in [:running, :confirming_idle] do
+    {state, actions} = start(state)
+    {:next_state, :running, state, actions}
   end
 
-  @spec touch_run_watchdog(map()) :: map()
-  def touch_run_watchdog(%{run_started_at_ms: started_at} = state) when is_integer(started_at) do
-    state
-    |> touch_run_watchdog_activity()
-    |> clear_watchdog_confirmation()
-    |> schedule_run_watchdog()
-  end
+  def activity(_phase, state), do: {:keep_state, state}
 
-  def touch_run_watchdog(state), do: state
-
-  @spec touch_run_watchdog_activity(map()) :: map()
-  def touch_run_watchdog_activity(state) do
-    %{state | run_last_activity_at_ms: LemonCore.Clock.now_ms()}
-  end
-
-  @spec cancel_run_watchdog(map()) :: map()
-  def cancel_run_watchdog(%{run_watchdog_ref: nil} = state), do: state
-
-  def cancel_run_watchdog(%{run_watchdog_ref: ref} = state) do
-    _ = Process.cancel_timer(ref)
-    %{state | run_watchdog_ref: nil}
-  end
-
-  @spec maybe_request_watchdog_confirmation(map()) :: {:ok, map()} | :error
-  def maybe_request_watchdog_confirmation(state) do
+  @spec request_confirmation(map()) :: :ok | :error
+  def request_confirmation(state) do
     with {:ok, intent} <- watchdog_confirmation_intent(state),
          :ok <- dispatcher().dispatch(intent) do
-      timeout_ms =
-        state.run_watchdog_confirm_timeout_ms || @default_run_idle_watchdog_confirm_timeout_ms
-
-      ref = Process.send_after(self(), :run_watchdog_confirmation_timeout, timeout_ms)
-
       Logger.warning(
         "RunProcess watchdog idle prompt sent run_id=#{inspect(state.run_id)} " <>
-          "session_key=#{inspect(state.session_key)} confirm_timeout_ms=#{timeout_ms}"
+          "session_key=#{inspect(state.session_key)} " <>
+          "confirm_timeout_ms=#{state.run_watchdog_confirm_timeout_ms}"
       )
 
-      {:ok, put_in_watchdog_confirmation(state, ref)}
+      :ok
     else
-      _ ->
-        :error
+      _ -> :error
     end
   end
 
-  @spec fail_run_for_idle_timeout(map()) :: map()
+  @spec fail_run_for_idle_timeout(map()) :: :ok
   def fail_run_for_idle_timeout(state) do
     timeout_ms = state.run_watchdog_timeout_ms || @default_run_idle_watchdog_timeout_ms
 
@@ -137,37 +109,11 @@ defmodule LemonRouter.RunProcess.Watchdog do
     )
 
     emit_synthetic_run_completion(state, {:run_idle_watchdog_timeout, timeout_ms}, timeout_ms)
-    clear_watchdog_confirmation(state)
   end
 
-  @spec fail_run_for_user_cancel(map()) :: map()
+  @spec fail_run_for_user_cancel(map()) :: :ok
   def fail_run_for_user_cancel(state) do
     emit_synthetic_run_completion(state, :user_requested, nil)
-    clear_watchdog_confirmation(state)
-  end
-
-  @spec clear_watchdog_confirmation(map()) :: map()
-  def clear_watchdog_confirmation(state) do
-    state
-    |> cancel_run_watchdog_confirmation()
-    |> Map.put(:run_watchdog_awaiting_confirmation?, false)
-  end
-
-  @spec cancel_run_watchdog_confirmation(map()) :: map()
-  def cancel_run_watchdog_confirmation(%{run_watchdog_confirmation_ref: nil} = state), do: state
-
-  def cancel_run_watchdog_confirmation(%{run_watchdog_confirmation_ref: ref} = state) do
-    _ = Process.cancel_timer(ref)
-    %{state | run_watchdog_confirmation_ref: nil}
-  end
-
-  # --- Private helpers ---
-
-  defp cancel_run_watchdog_timer(%{run_watchdog_ref: nil}), do: :ok
-
-  defp cancel_run_watchdog_timer(%{run_watchdog_ref: ref}) do
-    _ = Process.cancel_timer(ref)
-    :ok
   end
 
   defp watchdog_confirmation_intent(state) do
@@ -234,13 +180,6 @@ defmodule LemonRouter.RunProcess.Watchdog do
       )
 
     LemonRouter.RunCompletion.publish(state.execution_request, event)
-  end
-
-  defp put_in_watchdog_confirmation(state, ref) do
-    state
-    |> cancel_run_watchdog_confirmation()
-    |> Map.put(:run_watchdog_confirmation_ref, ref)
-    |> Map.put(:run_watchdog_awaiting_confirmation?, true)
   end
 
   defp dispatcher do

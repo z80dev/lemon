@@ -17,10 +17,8 @@ defmodule CodingAgent.ProcessSessionTest do
   defp await_status(process_id, statuses) do
     assert_eventually(
       fn ->
-        case ProcessSession.poll(process_id) do
-          {:ok, %{status: status}} -> status in statuses
-          _ -> false
-        end
+        {:ok, %{status: status}} = ProcessSession.poll(process_id)
+        status in statuses
       end,
       timeout: 5_000,
       message: "process #{process_id} never reached #{inspect(statuses)}"
@@ -36,6 +34,40 @@ defmodule CodingAgent.ProcessSessionTest do
   setup do
     process_id = "test-proc-#{:erlang.unique_integer([:positive])}"
     {:ok, process_id: process_id}
+  end
+
+  test "managed owner emits bounded start and stop telemetry", %{process_id: process_id} do
+    handler = {__MODULE__, make_ref()}
+    parent = self()
+    events = Enum.map([:start, :stop], &[:lemon, :process_session, &1])
+
+    :ok =
+      :telemetry.attach_many(
+        handler,
+        events,
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    {:ok, pid} = ProcessSession.start_link(command: "printf telemetry", process_id: process_id)
+
+    assert_receive {:telemetry, [:lemon, :process_session, :start],
+                    %{count: 1, duration: start_duration},
+                    %{mode: :managed, outcome: :running} = start_metadata}
+
+    assert map_size(start_metadata) == 2
+    await_finished(process_id)
+    GenServer.stop(pid)
+
+    assert_receive {:telemetry, [:lemon, :process_session, :stop],
+                    %{count: 1, duration: duration},
+                    %{mode: :managed, outcome: :stopped} = metadata}
+
+    assert duration >= start_duration
+    assert map_size(metadata) == 2
   end
 
   # ============================================================================
@@ -261,7 +293,7 @@ defmodule CodingAgent.ProcessSessionTest do
       assert result.exit_code != 0
     end
 
-    test "on_exit callback is invoked", %{process_id: process_id} do
+    test "on_exit callback is a supervised temporary task", %{process_id: process_id} do
       test_pid = self()
 
       {:ok, _pid} =
@@ -269,11 +301,20 @@ defmodule CodingAgent.ProcessSessionTest do
           command: "echo callback_test",
           process_id: process_id,
           on_exit: fn exit_info ->
-            send(test_pid, {:exit_callback, exit_info})
+            send(test_pid, {:exit_callback, self(), exit_info})
+
+            receive do
+              :finish -> :ok
+            end
           end
         )
 
-      assert_receive {:exit_callback, exit_info}, 2000
+      assert_receive {:exit_callback, worker, exit_info}, 2000
+      on_exit(fn -> if Process.alive?(worker), do: Process.exit(worker, :kill) end)
+      assert worker in Task.Supervisor.children(CodingAgent.TaskSupervisor)
+      monitor = Process.monitor(worker)
+      send(worker, :finish)
+      assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
       assert exit_info.process_id == process_id
       assert exit_info.status == :completed
     end

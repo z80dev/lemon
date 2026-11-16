@@ -9,7 +9,8 @@ defmodule LemonAgent.Loop.Streaming do
   alias LemonAgent.Loop.TranscriptValidator
   alias LemonAgent.Types.{AgentLoopConfig, AgentTool}
 
-  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Retry
+  alias LemonAi.StreamAccumulator
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -194,7 +195,7 @@ defmodule LemonAgent.Loop.Streaming do
       # replay an earlier request or leave an unpaired malformed tool call.
       context =
         if committed do
-          previous = if added, do: List.last(failed_context.messages), else: message
+          previous = Map.get(message.error_details || %{}, :original_message, message)
 
           retained = %{
             strip_tool_calls(previous)
@@ -288,11 +289,25 @@ defmodule LemonAgent.Loop.Streaming do
        }}
     )
 
-    case wait_for_retry(signal, delay_ms, config.stream_options) do
+    case Retry.wait(delay_ms,
+           cancelled?: fn ->
+             cond do
+               aborted?(signal) -> :aborted
+               redirect_requested?(signal) -> :redirected
+               true -> false
+             end
+           end,
+           cancel_messages: [
+             {:lemon_abort, signal, :abort},
+             {:lemon_abort, signal, :redirect}
+           ],
+           cancel_message_requires_state: true,
+           sleep_fun: LemonAi.Provider.retry_policy(config.stream_options).sleep_fun
+         ) do
       :ok ->
         retry_response(context, config, signal, stream_fn, stream, attempt)
 
-      reason ->
+      {:error, reason} ->
         finish_retry(stream, attempt, false, true)
 
         {message, context} =
@@ -311,44 +326,26 @@ defmodule LemonAgent.Loop.Streaming do
   end
 
   defp retry_delay(error, config, retries_done) do
-    if retries_done < config.max_retries and LemonAi.Error.retryable?(error) do
-      case retry_after_ms(error) do
-        delay when is_integer(delay) and delay > @max_retry_after_ms ->
-          :stop
+    policy =
+      config.stream_options
+      |> LemonAi.Provider.retry_policy()
+      |> Map.merge(%{
+        max_attempts: config.max_retries + 1,
+        base_delay_ms: config.retry_base_delay_ms,
+        max_delay_ms: config.retry_max_delay_ms,
+        max_retry_after_ms: @max_retry_after_ms,
+        classify: &LemonAi.Error.classify/1,
+        jitter: :none
+      })
+      |> Retry.policy()
 
-        delay when is_integer(delay) and delay >= 0 ->
-          throttle_delay(error, config, retries_done, delay)
-
-        _ ->
-          delay =
-            min(
-              config.retry_base_delay_ms * Integer.pow(2, min(retries_done, 30)),
-              config.retry_max_delay_ms
-            )
-
-          throttle_delay(error, config, retries_done, delay)
-      end
-    else
-      :stop
-    end
-  end
-
-  defp throttle_delay(error, config, retries_done, delay) do
-    if LemonAi.Error.classify(error) == :rate_limit do
-      policy =
-        RetryHelper.policy(config.stream_options)
-        |> Map.merge(%{
-          base_delay_ms: config.retry_base_delay_ms,
-          max_delay_ms: config.retry_max_delay_ms,
-          max_retry_after_ms: @max_retry_after_ms
-        })
-
-      case RetryHelper.retry_delay_ms(error, retries_done, policy, retry_after_ms(error)) do
+    if Retry.retry_allowed?(retries_done, policy) and LemonAi.Error.retryable?(error) do
+      case Retry.retry_delay_ms(error, retries_done, policy, retry_after_ms(error)) do
         :give_up -> :stop
         delay -> {:ok, delay}
       end
     else
-      {:ok, delay}
+      :stop
     end
   end
 
@@ -356,51 +353,7 @@ defmodule LemonAgent.Loop.Streaming do
   defp error_text(error), do: error
 
   defp retry_after_ms(error),
-    do: RetryHelper.error_retry_after_ms(error)
-
-  defp wait_for_retry(signal, delay_ms, options) do
-    case RetryHelper.policy(options) do
-      %{sleep_fun: sleep_fun} ->
-        cond do
-          aborted?(signal) ->
-            :aborted
-
-          redirect_requested?(signal) ->
-            :redirected
-
-          true ->
-            sleep_fun.(delay_ms)
-            wait_for_retry(signal, System.monotonic_time(:millisecond))
-        end
-
-      _ ->
-        wait_for_retry(signal, System.monotonic_time(:millisecond) + delay_ms)
-    end
-  end
-
-  defp wait_for_retry(signal, deadline) do
-    cond do
-      aborted?(signal) ->
-        :aborted
-
-      redirect_requested?(signal) ->
-        :redirected
-
-      true ->
-        remaining = deadline - System.monotonic_time(:millisecond)
-
-        if remaining <= 0 do
-          :ok
-        else
-          receive do
-            {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
-              wait_for_retry(signal, deadline)
-          after
-            remaining -> :ok
-          end
-        end
-    end
-  end
+    do: Retry.error_retry_after_ms(error)
 
   defp finish_retry(_stream, 0, _success, _canceled), do: :ok
 
@@ -563,7 +516,7 @@ defmodule LemonAgent.Loop.Streaming do
        when kind in [:done, :error],
        do: reconcile_final_message(message, partial)
 
-  defp reported_terminal_message(_event, partial), do: partial
+  defp reported_terminal_message(_event, partial), do: partial_snapshot(partial)
 
   defp process_stream_events(
          context,
@@ -657,7 +610,7 @@ defmodule LemonAgent.Loop.Streaming do
 
       {partial, ctx, added, committed, raw_arguments, _matcher} when partial != nil ->
         # Stream ended without done/error event - finalize with partial
-        partial = normalize_arguments(partial, ctx.tools, raw_arguments)
+        partial = partial |> partial_snapshot() |> normalize_arguments(ctx.tools, raw_arguments)
         partial = normalize_terminal_message(partial)
         Loop.record_budget_usage(config, partial, stream)
 
@@ -692,7 +645,7 @@ defmodule LemonAgent.Loop.Streaming do
   defp process_stream_event({:start, partial}, _partial, context, added, _stream, _config) do
     # Metadata alone is not output. Defer the transcript start until an update
     # or final message so a discarded pre-output attempt leaves no dangling start.
-    {:continue, partial, context, added}
+    {:continue, StreamAccumulator.new(partial), context, added}
   end
 
   defp process_stream_event(event, partial, context, added, stream, _config)
@@ -707,22 +660,19 @@ defmodule LemonAgent.Loop.Streaming do
               :tool_call_delta,
               :tool_call_end
             ] do
-    updated_partial = get_partial_from_event(event) || partial
+    accumulator = StreamAccumulator.apply(partial || StreamAccumulator.new(), event)
 
-    if updated_partial != nil do
-      context =
-        if added do
-          update_last_message(context, updated_partial)
-        else
-          EventStream.push!(stream, {:message_start, copy_message(updated_partial)})
-          %{context | messages: context.messages ++ [updated_partial]}
-        end
+    context =
+      if added do
+        context
+      else
+        message = StreamAccumulator.metadata(accumulator)
+        EventStream.push!(stream, {:message_start, message})
+        %{context | messages: context.messages ++ [message]}
+      end
 
-      EventStream.push!(stream, {:message_update, copy_message(updated_partial), event})
-      {:continue, updated_partial, context, true}
-    else
-      {:continue, partial, context, added}
-    end
+    EventStream.push!(stream, {:message_update, event})
+    {:continue, accumulator, context, true}
   end
 
   defp process_stream_event(
@@ -761,7 +711,7 @@ defmodule LemonAgent.Loop.Streaming do
 
   defp process_stream_event({:canceled, reason}, partial, context, added, stream, config)
        when reason in [:stream_idle_timeout, :dispatcher_stream_idle_timeout] do
-    message = partial || build_error_message(config, :error, nil)
+    message = partial_snapshot(partial) || build_error_message(config, :error, nil)
 
     message = %{
       message
@@ -785,9 +735,9 @@ defmodule LemonAgent.Loop.Streaming do
     {:continue, partial, context, added}
   end
 
-  defp accumulate_arguments({:tool_call_delta, index, delta, _partial}, arguments)
+  defp accumulate_arguments({:tool_call_delta, index, delta}, arguments)
        when is_binary(delta),
-       do: Map.update(arguments, index, delta, &(&1 <> delta))
+       do: Map.update(arguments, index, [delta], &[delta | &1])
 
   defp accumulate_arguments(_event, arguments), do: arguments
 
@@ -804,8 +754,8 @@ defmodule LemonAgent.Loop.Streaming do
     errors = ToolCalls.argument_errors(calls, tools)
 
     errors =
-      Enum.reduce(raw, errors, fn {_index, json}, errors ->
-        case Jason.decode(json) do
+      Enum.reduce(raw, errors, fn {_index, chunks}, errors ->
+        case chunks |> Enum.reverse() |> IO.iodata_to_binary() |> Jason.decode() do
           {:ok, value} when is_map(value) -> errors
           {:error, error} -> [Exception.message(error) | errors]
           _ -> ["expected JSON object" | errors]
@@ -855,15 +805,8 @@ defmodule LemonAgent.Loop.Streaming do
 
   defp committed_content?(_), do: false
 
-  # Extract the partial message from stream events
-  defp get_partial_from_event({_type, _idx, partial}) when is_struct(partial, AssistantMessage),
-    do: partial
-
-  defp get_partial_from_event({_type, _idx, _delta, partial})
-       when is_struct(partial, AssistantMessage),
-       do: partial
-
-  defp get_partial_from_event(_), do: nil
+  defp partial_snapshot(%StreamAccumulator{} = partial), do: StreamAccumulator.snapshot(partial)
+  defp partial_snapshot(partial), do: partial
 
   defp default_stream_fn(model, context, options) do
     LemonAi.stream(model, context, options)
@@ -957,6 +900,12 @@ defmodule LemonAgent.Loop.Streaming do
   defp terminal_ai_event?({:error, _reason, _message}), do: true
   defp terminal_ai_event?({:canceled, _reason}), do: true
   defp terminal_ai_event?(_event), do: false
+
+  defp reconcile_final_message(%AssistantMessage{content: [_ | _]} = final, %StreamAccumulator{}),
+    do: final
+
+  defp reconcile_final_message(final, %StreamAccumulator{} = partial),
+    do: reconcile_final_message(final, StreamAccumulator.snapshot(partial))
 
   defp reconcile_final_message(%AssistantMessage{} = final, %AssistantMessage{} = partial) do
     if empty_content?(final.content) and not empty_content?(partial.content) do
@@ -1058,6 +1007,8 @@ defmodule LemonAgent.Loop.Streaming do
   end
 
   defp finalize_canceled_message(partial, context, added, stream, config, reason) do
+    partial = partial_snapshot(partial)
+
     stop_reason =
       case reason do
         :aborted -> :aborted

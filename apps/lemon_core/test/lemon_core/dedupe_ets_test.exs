@@ -230,17 +230,38 @@ defmodule LemonCore.Dedupe.EtsTest do
       assert Ets.seen?(table, "key1", 1000) == true
     end
 
-    test "handles non-existent table gracefully", %{table: table} do
-      # When table doesn't exist, mark fails silently, so check_and_mark returns :new
-      # This is acceptable behavior - the operation is best-effort
-      result = Ets.check_and_mark(table, "key1", 1000)
-      assert result in [:seen, :new]
+    test "fails closed when the table is unavailable", %{table: table} do
+      assert :seen = Ets.check_and_mark(table, "key1", 1000)
     end
 
     test "returns :seen for invalid ttl", %{table: table} do
       :ok = Ets.init(table)
       # Non-integer TTL should return :seen (conservative)
       assert :seen = Ets.check_and_mark(table, "key1", "invalid")
+    end
+  end
+
+  describe "retain/4" do
+    test "restoring a confirmed receipt never shortens its retention", %{table: table} do
+      :ok = Ets.init(table)
+      assert :new = Ets.retain(table, :receipt, 120_000, 60_000)
+      [{:receipt, timestamp}] = :ets.lookup(table, :receipt)
+
+      assert :seen = Ets.retain(table, :receipt, 30_000, 60_000)
+      assert [{:receipt, ^timestamp}] = :ets.lookup(table, :receipt)
+
+      assert :seen = Ets.retain(table, :receipt, 240_000, 60_000)
+      [{:receipt, extended}] = :ets.lookup(table, :receipt)
+      assert extended > timestamp
+      assert Ets.seen?(table, :receipt, 60_000)
+    end
+
+    test "replaces an expired receipt without retaining its old timestamp", %{table: table} do
+      :ok = Ets.init(table)
+      :ets.insert(table, {:receipt, System.monotonic_time(:millisecond) - 120_000})
+
+      assert :new = Ets.retain(table, :receipt, 60_000, 60_000)
+      assert Ets.seen?(table, :receipt, 60_000)
     end
   end
 
@@ -332,25 +353,48 @@ defmodule LemonCore.Dedupe.EtsTest do
       assert length(:ets.tab2list(table)) == 10
     end
 
-    test "handles concurrent check_and_mark", %{table: table} do
-      :ok = Ets.init(table)
+    for initial_state <- [:absent, :expired] do
+      @initial_state initial_state
+      test "exactly one concurrent caller claims an #{@initial_state} key", %{table: table} do
+        :ok = Ets.init(table)
 
-      # Multiple processes checking same key
-      tasks =
-        for _ <- 1..10 do
-          Task.async(fn ->
-            Ets.check_and_mark(table, "shared_key", 1000)
-          end)
+        if @initial_state == :expired do
+          :ets.insert(table, {"shared_key", System.monotonic_time(:millisecond) - 120_000})
         end
 
-      results = Task.await_many(tasks)
+        parent = self()
 
-      # Only one should get :new, rest should get :seen
-      new_count = Enum.count(results, &(&1 == :new))
-      seen_count = Enum.count(results, &(&1 == :seen))
+        tasks =
+          for _ <- 1..64 do
+            Task.async(fn ->
+              send(parent, {:ready, self()})
 
-      assert new_count >= 1
-      assert new_count + seen_count == 10
+              receive do
+                :claim -> Ets.check_and_mark(table, "shared_key", 60_000)
+              end
+            end)
+          end
+
+        for task <- tasks do
+          pid = task.pid
+          assert_receive {:ready, ^pid}
+        end
+
+        for task <- tasks, do: send(task.pid, :claim)
+        results = Task.await_many(tasks)
+
+        assert Enum.frequencies(results) == %{new: 1, seen: 63}
+        assert Ets.seen?(table, "shared_key", 60_000)
+      end
+    end
+
+    test "infinite retention is released only explicitly", %{table: table} do
+      :ok = Ets.init(table)
+      assert :new = Ets.check_and_mark(table, :retained, :infinity)
+      assert :seen = Ets.check_and_mark(table, :retained, :infinity)
+      assert Ets.seen?(table, :retained, :infinity)
+      assert :ok = Ets.forget(table, :retained)
+      assert :new = Ets.check_and_mark(table, :retained, :infinity)
     end
   end
 end

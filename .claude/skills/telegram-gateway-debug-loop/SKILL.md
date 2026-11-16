@@ -1,6 +1,6 @@
 ---
 name: telegram-gateway-debug-loop
-description: "Debug and stress-test lemon gateway behavior by acting as both sides of Telegram conversations: run lemon-gateway with debug logs, then use Telethon with user credentials to send/reply messages in a dedicated topic while watching gateway logs and runtime state. Use for stuck runs, delivery failures, scheduler/lock contention, async delegation bugs, and context overflows."
+description: "Debug and stress-test lemon gateway behavior by acting as both sides of Telegram conversations: run lemon-gateway with debug logs, then use Telethon with user credentials to send/reply messages in a dedicated topic while watching gateway logs and runtime state. Use for stuck runs, delivery failures, slot contention, async delegation bugs, and context overflows."
 disable-model-invocation: true
 argument-hint: "[description of issue to debug]"
 allowed-tools: Read, Grep, Bash, Glob, Write
@@ -47,15 +47,14 @@ Use this skill to run end-to-end repros with real Telegram traffic.
 ## Inspecting Runtime State
 
 6. While traffic is active, inspect runtime state via the remote shell:
-   - `:sys.get_state(LemonGateway.Scheduler)` — scheduler state
-   - `:sys.get_state(LemonGateway.EngineLock)` — lock state
-   - `DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)` — active workers
+   - `LemonGateway.Slots.stats()` — ETS execution and waiter counts
+   - `DynamicSupervisor.which_children(LemonGateway.RunSupervisor)` — running and waiting Runs
 
 ## Watching for Failures
 
 7. Watch gateway logs for high-value failure signatures:
    - `:unknown_channel` — message routed to unknown channel
-   - Scheduler stalls or lock starvation
+   - Slot saturation or `:session_in_use` engine-session claim failures
    - Context overflow/trim failures
    - Delivery retries/timeouts
 

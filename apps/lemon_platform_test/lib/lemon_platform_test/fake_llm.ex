@@ -8,11 +8,11 @@ defmodule LemonPlatformTest.FakeLLM do
   returns an `LemonAi.EventStream` process emitting a documented sequence of events:
 
       {:start, message}
-      {:text_start, index, message}
-      {:text_delta, index, chunk, message}
-      {:text_end, index, chunk, message}
-      {:tool_call_start, index, message}
-      {:tool_call_end, index, tool_call, message}
+      {:text_start, index}
+      {:text_delta, index, chunk}
+      {:text_end, index, chunk}
+      {:tool_call_start, index, tool_call}
+      {:tool_call_end, index, tool_call}
       {:done, stop_reason, message}
 
   That protocol is what every provider adapter produces and what the loop
@@ -20,6 +20,10 @@ defmodule LemonPlatformTest.FakeLLM do
   agent against Lemon has meant reverse-engineering it. `FakeLLM` produces a
   conforming stream function from a plain script, so you can assert on what your
   agent *does* with a tool call or a refusal, rather than on how a model streams.
+
+  Producers run under `LemonAgent.LoopTaskSupervisor` and stay attached to their
+  stream. The agent application must be started; missing or full supervision
+  produces an error message instead of an unsupervised fixture worker.
 
   ## A worked example
 
@@ -282,14 +286,14 @@ defmodule LemonPlatformTest.FakeLLM do
   defp event_stream(%AssistantMessage{} = message) do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
-    {:ok, task_pid} =
-      Task.start(fn ->
+    admission =
+      LemonCore.TaskSupervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
         try do
-          LemonAi.EventStream.push!(stream, {:start, message})
+          LemonAi.EventStream.push!(stream, {:start, %{message | content: []}})
 
           message.content
           |> Enum.with_index()
-          |> Enum.each(fn {block, index} -> push_block(stream, block, index, message) end)
+          |> Enum.each(fn {block, index} -> push_block(stream, block, index) end)
 
           LemonAi.EventStream.complete(stream, message)
         catch
@@ -298,23 +302,34 @@ defmodule LemonPlatformTest.FakeLLM do
         end
       end)
 
-    LemonAi.EventStream.attach_task(stream, task_pid)
+    case admission do
+      {:ok, task_pid} ->
+        LemonAi.EventStream.attach_task(stream, task_pid)
+
+      {:error, reason} ->
+        LemonAi.EventStream.error(stream, %{
+          message
+          | stop_reason: :error,
+            error_message: Atom.to_string(reason),
+            error_details: nil
+        })
+    end
 
     stream
   end
 
-  defp push_block(stream, %TextContent{text: text}, index, message) do
-    LemonAi.EventStream.push!(stream, {:text_start, index, message})
-    LemonAi.EventStream.push!(stream, {:text_delta, index, text, message})
-    LemonAi.EventStream.push!(stream, {:text_end, index, text, message})
+  defp push_block(stream, %TextContent{text: text}, index) do
+    LemonAi.EventStream.push!(stream, {:text_start, index})
+    LemonAi.EventStream.push!(stream, {:text_delta, index, text})
+    LemonAi.EventStream.push!(stream, {:text_end, index, text})
   end
 
-  defp push_block(stream, %ToolCall{} = call, index, message) do
-    LemonAi.EventStream.push!(stream, {:tool_call_start, index, message})
-    LemonAi.EventStream.push!(stream, {:tool_call_end, index, call, message})
+  defp push_block(stream, %ToolCall{} = call, index) do
+    LemonAi.EventStream.push!(stream, {:tool_call_start, index, %{call | arguments: %{}}})
+    LemonAi.EventStream.push!(stream, {:tool_call_end, index, call})
   end
 
-  defp push_block(_stream, _other, _index, _message), do: :ok
+  defp push_block(_stream, _other, _index), do: :ok
 
   defp generate_id do
     "call_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)

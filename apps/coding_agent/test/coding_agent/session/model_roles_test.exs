@@ -18,10 +18,10 @@ defmodule CodingAgent.Session.ModelRolesTest do
       }
 
       {:ok, stream} = LemonAi.EventStream.start_link()
-      LemonAi.EventStream.push(stream, {:start, response})
-      LemonAi.EventStream.push(stream, {:text_start, 0, response})
-      LemonAi.EventStream.push(stream, {:text_delta, 0, text, response})
-      LemonAi.EventStream.push(stream, {:text_end, 0, response})
+      LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
+      LemonAi.EventStream.push(stream, {:text_start, 0})
+      LemonAi.EventStream.push(stream, {:text_delta, 0, text})
+      LemonAi.EventStream.push(stream, {:text_end, 0, text})
       LemonAi.EventStream.push(stream, {:done, :stop, response})
       LemonAi.EventStream.complete(stream, response)
       {:ok, stream}
@@ -209,10 +209,10 @@ defmodule CodingAgent.Session.ModelRolesTest do
         }
 
         {:ok, stream} = LemonAi.EventStream.start_link()
-        LemonAi.EventStream.push(stream, {:start, response})
-        LemonAi.EventStream.push(stream, {:text_start, 0, response})
-        LemonAi.EventStream.push(stream, {:text_delta, 0, "Selected child completed", response})
-        LemonAi.EventStream.push(stream, {:text_end, 0, response})
+        LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
+        LemonAi.EventStream.push(stream, {:text_start, 0})
+        LemonAi.EventStream.push(stream, {:text_delta, 0, "Selected child completed"})
+        LemonAi.EventStream.push(stream, {:text_end, 0, "Selected child completed"})
         LemonAi.EventStream.push(stream, {:done, :stop, response})
         LemonAi.EventStream.complete(stream, response)
         {:ok, stream}

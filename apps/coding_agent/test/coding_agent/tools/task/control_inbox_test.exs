@@ -35,7 +35,7 @@ defmodule CodingAgent.Tools.Task.ControlInboxTest do
     assert :ok = Control.command(first, "message", "first", context.opts)
     assert :ok = Control.command(first, "message", "second", context.opts)
 
-    entries = :sys.get_state(Control)
+    {:ready, entries} = :sys.get_state(Control)
     inbox = entries[first].inbox
     assert is_pid(inbox)
     assert inbox != entries[second].inbox
@@ -64,7 +64,7 @@ defmodule CodingAgent.Tools.Task.ControlInboxTest do
     assert {:error, "Task message queue is full (64 messages / 256 KiB)"} =
              Control.send_message("all", "not partially accepted", context.opts)
 
-    other_inbox = :sys.get_state(Control)[other].inbox
+    other_inbox = entry(other).inbox
     assert {:messages, []} = Process.info(other_inbox, :messages)
     for _ <- 1..64, do: assert(:ok = Control.command(other, "message", "small", context.opts))
     assert {:error, _} = Control.command(other, "message", "overflow", context.opts)
@@ -92,13 +92,13 @@ defmodule CodingAgent.Tools.Task.ControlInboxTest do
         assert :ok = Control.complete(id)
       end
 
-      entry = :sys.get_state(Control)[id]
+      entry = entry(id)
       assert is_reference(entry.session_ref)
       trace_down(recipient, entry.session_ref, fn -> GenServer.stop(recipient) end)
       projection = Control.hub_state([id])[id]
       assert projection.session == nil
       assert projection.status == if(idle?, do: :parked, else: :dead)
-      assert :sys.get_state(Control)[id].session_ref == nil
+      assert entry(id).session_ref == nil
     end
   end
 
@@ -123,7 +123,7 @@ defmodule CodingAgent.Tools.Task.ControlInboxTest do
     assert_receive {:run_graph, :state_changed, ^run_id}
     assert_receive {:attached, ^worker}
     assert Control.worker_pids([id, "missing", id]) == [worker]
-    entry = :sys.get_state(Control)[id]
+    entry = entry(id)
     trace_down(worker, entry.worker_ref, fn -> send(worker, :finish) end)
     assert Control.worker_pids([id]) == []
     assert_receive {:failure, ^id, "Task worker exited: :normal"}
@@ -132,7 +132,7 @@ defmodule CodingAgent.Tools.Task.ControlInboxTest do
   test "cancellation closes admission and force-cancels the registered worker", context do
     id = child(context)
     assert :ok = Control.command(id, "message", "discard", context.opts)
-    inbox = :sys.get_state(Control)[id].inbox
+    inbox = entry(id).inbox
     inbox_monitor = Process.monitor(inbox)
     test = self()
 
@@ -158,22 +158,22 @@ defmodule CodingAgent.Tools.Task.ControlInboxTest do
     assert_receive {:aborted, ^recipient}
     refute_received {:delivered, ^recipient, _}
 
-    send(Control, {:force_cancel, id})
-    assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :killed}
+    assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :killed}, 5_000
     assert_receive {:failure, ^id, "Task aborted"}
     assert Control.worker_pids([id]) == []
+    assert {:error, "Task aborted"} = Control.attach_worker(id)
     assert {:ok, %{status: :cancelled, agent_state: :killed}} = TaskStore.get_record(id)
   end
 
   test "inbox death cancels its task without replay or a coordinator restart", context do
     id = child(context)
     assert :ok = Control.command(id, "message", "must not replay", context.opts)
-    entry = :sys.get_state(Control)[id]
+    entry = entry(id)
     control = Process.whereis(Control)
     trace_down(entry.inbox, entry.inbox_ref, fn -> Process.exit(entry.inbox, :kill) end)
     assert_receive {:failure, ^id, "Task inbox exited"}
     assert Process.whereis(Control) == control
-    assert :sys.get_state(Control)[id].inbox == nil
+    assert entry(id).inbox == nil
     assert {:error, _} = Control.send_message(id, "do not restart", context.opts)
     assert {:ok, %{status: :cancelled}} = TaskStore.get_record(id)
   end
@@ -183,7 +183,7 @@ defmodule CodingAgent.Tools.Task.ControlInboxTest do
     first = session()
     second = session()
     assert :ok = Control.attach_session(id, first, unique_id())
-    old_ref = :sys.get_state(Control)[id].session_ref
+    old_ref = entry(id).session_ref
     assert :ok = Control.attach_session(id, second, unique_id())
     send(Control, {:DOWN, old_ref, :process, first, :normal})
     assert %{status: :running, session: ^second} = Control.hub_state([id])[id]
@@ -207,6 +207,110 @@ defmodule CodingAgent.Tools.Task.ControlInboxTest do
     after
       :erlang.trace(control, false, [:receive])
     end
+  end
+
+  test "park expiry detaches the session without timer tokens", context do
+    id = child(context)
+    recipient = session()
+    :ok = Control.attach_session(id, recipient, unique_id())
+    resume = %{opts: [idle_ttl_ms: 1], start_opts: [cwd: "/tmp", session_file: "/unused"]}
+    :ok = Control.retain_session(id, recipient, resume)
+    TaskStore.finish(id, "done")
+    :ok = Control.complete(id)
+
+    # stop_child/1 delivers abort before detaching the session.
+    assert_receive {:aborted, ^recipient}
+    assert %{phase: :parked, session: nil} = entry(id)
+    refute Map.has_key?(entry(id), :idle_token)
+    refute Map.has_key?(entry(id), :cancelled)
+    refute {{:timeout, {:park, id}}, :park} in active_timeouts()
+  end
+
+  test "park and force-cancel deadlines are independent and not reset by traffic", context do
+    first = idle_child(context, 60_000)
+    second = idle_child(context, 60_000)
+    trace_timeouts()
+
+    assert {{:timeout, {:park, first}}, :park} in active_timeouts()
+    assert {{:timeout, {:park, second}}, :park} in active_timeouts()
+    :ok = Control.configure(second, %{configured: true})
+    assert %{status: :idle} = Control.hub_state([second])[second]
+    :ok = Control.command(first, "cancel", nil, context.opts)
+
+    assert_receive {:control_timeout_started,
+                    {{:timeout, {:force_cancel, ^first}}, 2_000, :force_cancel, []}}
+
+    refute {{:timeout, {:park, first}}, :park} in active_timeouts()
+    assert {{:timeout, {:park, second}}, :park} in active_timeouts()
+    assert {{:timeout, {:force_cancel, first}}, :force_cancel} in active_timeouts()
+
+    :ok = Control.command(first, "cancel", nil, context.opts)
+    send(Control, :unrelated)
+    Control.worker_pids([])
+    refute_received {:control_timeout_started, _}
+
+    :ok = Control.complete(first)
+    assert %{phase: :killed} = entry(first)
+    refute {{:timeout, {:force_cancel, first}}, :force_cancel} in active_timeouts()
+    assert {{:timeout, {:park, second}}, :park} in active_timeouts()
+  end
+
+  test "zero TTL schedules no park timeout", context do
+    id = idle_child(context, 0)
+    assert %{phase: :idle} = entry(id)
+    refute {{:timeout, {:park, id}}, :park} in active_timeouts()
+  end
+
+  test "session DOWN during cancellation retains the worker force deadline", context do
+    id = child(context)
+    recipient = session()
+    :ok = Control.attach_session(id, recipient, unique_id())
+    :ok = Control.command(id, "cancel", nil, context.opts)
+    monitor = entry(id).session_ref
+    trace_down(recipient, monitor, fn -> GenServer.stop(recipient) end)
+    assert %{phase: :cancelling, session: nil} = entry(id)
+    assert {{:timeout, {:force_cancel, id}}, :force_cancel} in active_timeouts()
+    :ok = Control.complete(id)
+    refute {{:timeout, {:force_cancel, id}}, :force_cancel} in active_timeouts()
+  end
+
+  defp idle_child(context, ttl) do
+    id = child(context)
+    recipient = session()
+    :ok = Control.attach_session(id, recipient, unique_id())
+    resume = %{opts: [idle_ttl_ms: ttl], start_opts: [cwd: "/tmp", session_file: "/unused"]}
+    :ok = Control.retain_session(id, recipient, resume)
+    TaskStore.finish(id, "done")
+    :ok = Control.complete(id)
+    id
+  end
+
+  defp trace_timeouts do
+    debug = fn owner, event, _extra ->
+      case event do
+        {:start_timer, action, :ready} -> send(owner, {:control_timeout_started, action})
+        _ -> :ok
+      end
+
+      owner
+    end
+
+    :ok = :sys.install(Control, {debug, self()})
+    on_exit(fn -> :sys.remove(Control, debug) end)
+  end
+
+  defp active_timeouts do
+    {:status, _, _, [_, _, _, _, status]} = :sys.get_status(Control)
+
+    [{_count, timeouts}] =
+      for {:data, fields} <- status, {~c"Time-outs", value} <- fields, do: value
+
+    timeouts
+  end
+
+  defp entry(id) do
+    {:ready, entries} = :sys.get_state(Control)
+    entries[id]
   end
 
   defp trace_down(pid, monitor, stop) do

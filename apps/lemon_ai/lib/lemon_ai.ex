@@ -19,7 +19,7 @@ defmodule LemonAi do
 
       for event <- LemonAi.EventStream.events(stream) do
         case event do
-          {:text_delta, _idx, delta, _partial} -> IO.write(delta)
+          {:text_delta, _idx, delta} -> IO.write(delta)
           {:done, _reason, message} -> IO.puts("\\nDone!")
           _ -> :ok
         end
@@ -53,6 +53,10 @@ defmodule LemonAi do
 
   # Re-export commonly used types
   defdelegate new_context(opts \\ []), to: Context, as: :new
+
+  @doc "Asynchronously warm the selected model's HTTP pool without a paid model request."
+  @spec preconnect(Model.t()) :: :ok
+  defdelegate preconnect(model), to: LemonAi.Preconnect, as: :hint
 
   @doc """
   Stream a response from an LLM.
@@ -93,6 +97,9 @@ defmodule LemonAi do
         api: model.api,
         call_kind: call_kind
       })
+      |> Keyword.put(:hedge_input_tokens, fn ->
+        LemonAi.PromptDiagnostics.stats(context).approx_input_tokens
+      end)
 
     opts = normalize_options(opts)
 
@@ -113,12 +120,14 @@ defmodule LemonAi do
   Get a complete response from an LLM (non-streaming).
 
   Collects `stream/3` privately and retries classified transient failures with
-  `LemonAi.OneshotRetry`. The default is three total attempts, not three sets
+  `LemonAi.Retry`. The default is three total attempts, not three sets
   of provider HTTP retries. `stream/3` itself never gains completion retries.
+  Each private stream is stopped after collecting its result, before waiting
+  or starting another attempt.
 
   Pass `:retry` as a keyword list or map alongside stream options to override
   `:max_attempts`, `:base_delay_ms`, `:max_delay_ms`, `:sleep_fun`, `:cancelled?`
-  or `:subscribe_cancel`. See `LemonAi.OneshotRetry` for the message subscription
+  or `:subscribe_cancel`. See `LemonAi.Retry` for the message subscription
   and cleanup contract used to interrupt backoff without polling.
   Set `retry: [max_attempts: 1]` to surface the first failure. Server hints
   longer than the allowed wait surface unchanged instead of retrying early.
@@ -142,7 +151,7 @@ defmodule LemonAi do
     provider_retry = Map.put(options.provider_retry || %{}, :max_attempts, 1)
     options = %{options | provider_retry: provider_retry}
 
-    LemonAi.OneshotRetry.run(
+    LemonAi.Retry.run(
       fn _attempt -> complete_once(model, context, options) end,
       retry_options
     )
@@ -160,11 +169,18 @@ defmodule LemonAi do
             other
         end
       after
-        # No consumer sees this private handle. Release its bounded queue and
-        # attached worker before a retry, even when the caller is long-lived.
-        EventStream.cancel(stream, :completion_collected)
+        # Completed streams retain their result and ignore cancellation. This
+        # private handle has no future reader, so stop it before any backoff.
+        stop_completion_stream(stream)
       end
     end
+  end
+
+  defp stop_completion_stream(stream) do
+    GenServer.stop(stream, :normal, :infinity)
+  catch
+    :exit, {:noproc, _} -> :ok
+    :exit, {:normal, _} -> :ok
   end
 
   @doc """

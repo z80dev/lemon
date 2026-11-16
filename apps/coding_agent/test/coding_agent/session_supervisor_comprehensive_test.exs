@@ -132,16 +132,16 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      LemonAi.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
       response.content
       |> Enum.with_index()
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            LemonAi.EventStream.push(stream, {:text_start, idx, response})
-            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
-            LemonAi.EventStream.push(stream, {:text_end, idx, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text})
+            LemonAi.EventStream.push(stream, {:text_end, idx, text})
 
           _ ->
             :ok
@@ -621,7 +621,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       # Modify one session
       :ok = Session.steer(pid1, "Steer message")
-      :ok = Session.follow_up(pid1, "Follow-up message")
+      :ok = Session.steer(pid1, "Follow-up message", preempt: false)
 
       state1 = Session.get_state(pid1)
       state2 = Session.get_state(pid2)

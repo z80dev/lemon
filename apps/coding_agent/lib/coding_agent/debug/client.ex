@@ -22,6 +22,11 @@ defmodule CodingAgent.Debug.Client do
   without replying; late and unknown responses are ignored. Session-level
   event waits and abort subscriptions remain with `SessionServer`.
 
+  Socket accept/connect waits run in a monitored supervised worker, not in
+  callbacks. The client remains inspectable and stoppable during the handshake;
+  `start_link/1` waits for readiness in its caller and returns only once requests
+  can be sent. Stopping during startup closes the listener, worker and adapter.
+
   The client links to its owner and traps exits, so the adapter's OS process
   group (adapter, debug server, debuggee) is killed when the owner dies, when
   `stop/1` is called, or when the client itself crashes. Descendants that escape
@@ -53,8 +58,16 @@ defmodule CodingAgent.Debug.Client do
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    opts = Keyword.put_new(opts, :owner, self())
-    GenServer.start_link(__MODULE__, opts, timeout: @socket_ready_timeout_ms + 5_000)
+    token = make_ref()
+
+    opts =
+      opts
+      |> Keyword.put_new(:owner, self())
+      |> Keyword.put(:startup_notify, {self(), token})
+
+    with {:ok, client} <- GenServer.start_link(__MODULE__, opts) do
+      await_startup(client, token)
+    end
   end
 
   @doc "Send a request; returns its sequence number. Its result arrives as a message."
@@ -104,6 +117,29 @@ defmodule CodingAgent.Debug.Client do
 
   # ── GenServer ────────────────────────────────────────────────────────────
 
+  defp await_startup(client, token) do
+    ref = Process.monitor(client)
+
+    result =
+      receive do
+        {^token, :ok} ->
+          {:ok, client}
+
+        {^token, {:error, reason}} ->
+          {:error, {:shutdown, reason}}
+
+        {:DOWN, ^ref, :process, ^client, _reason} ->
+          {:error, {:shutdown, "debug adapter stopped before connecting"}}
+      after
+        @socket_ready_timeout_ms + 5_000 ->
+          {:error, {:shutdown, "debug adapter startup timed out"}}
+      end
+
+    Process.demonitor(ref, [:flush])
+    if match?({:error, _}, result), do: stop(client)
+    result
+  end
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -118,45 +154,41 @@ defmodule CodingAgent.Debug.Client do
       os_pid: nil,
       socket: nil,
       rpc: nil,
+      listener: nil,
+      startup_task: nil,
+      startup_notify: Keyword.get(opts, :startup_notify),
+      ready?: false,
       rpc_ref: nil,
       stderr: "",
       seq: 0,
       exited?: false
     }
 
-    case open_transport(adapter, cwd, Keyword.get(opts, :env, [])) do
+    {:ok, state, {:continue, {:open_transport, cwd, Keyword.get(opts, :env, [])}}}
+  end
+
+  @impl true
+  def handle_continue({:open_transport, cwd, env}, state) do
+    case open_transport(state.adapter, cwd, env) do
       {:ok, port, socket} ->
-        transport = %{port: port, socket: socket}
+        finish_startup(%{state | port: port, os_pid: port_os_pid(port)}, socket)
 
-        case RpcClient.start_link(
-               owner: self(),
-               framing: Protocol.Framing,
-               send: fn encoded -> write(transport, encoded) end
-             ) do
-          {:ok, rpc} ->
-            {:ok,
-             %{
-               state
-               | port: port,
-                 socket: socket,
-                 os_pid: port_os_pid(port),
-                 rpc: rpc,
-                 rpc_ref: Process.monitor(rpc)
-             }}
-
-          {:error, reason} ->
-            shutdown(%{state | port: port, socket: socket, os_pid: port_os_pid(port)})
-            {:stop, reason}
-        end
+      {:connect, port, listener, connect} ->
+        state = %{state | port: port, os_pid: port_os_pid(port), listener: listener}
+        start_connection(state, connect)
 
       {:error, reason} ->
-        {:stop, {:shutdown, reason}}
+        startup_failed(state, reason)
     end
   end
 
   @impl true
   def handle_call({:request, _command, _arguments, _timeout}, _from, %{exited?: true} = state) do
     {:reply, {:error, "debug adapter #{state.adapter.name} is not running"}, state}
+  end
+
+  def handle_call({:request, _command, _arguments, _timeout}, _from, %{ready?: false} = state) do
+    {:reply, {:error, "debug adapter is still connecting"}, state}
   end
 
   def handle_call({:request, command, arguments, timeout}, {caller, _tag}, state) do
@@ -179,11 +211,17 @@ defmodule CodingAgent.Debug.Client do
     end
   end
 
+  def handle_call({:cancel, _seq}, _from, %{ready?: false} = state),
+    do: {:reply, :ok, state}
+
   def handle_call({:cancel, seq}, _from, state) do
     :ok = RpcClient.cancel(state.rpc, seq)
     flush_request(seq)
     {:reply, :ok, state}
   end
+
+  def handle_call({:respond, _request, _result}, _from, %{ready?: false} = state),
+    do: {:reply, {:error, "debug adapter is still connecting"}, state}
 
   def handle_call({:respond, request, result}, _from, state) do
     response = %{
@@ -202,6 +240,9 @@ defmodule CodingAgent.Debug.Client do
 
     {:reply, RpcClient.send_message(state.rpc, response), %{state | seq: state.seq + 1}}
   end
+
+  def handle_call(:child_adapter, _from, %{ready?: false} = state),
+    do: {:reply, {:error, "debug adapter is still connecting"}, state}
 
   def handle_call(:child_adapter, _from, state) do
     adapter =
@@ -223,6 +264,21 @@ defmodule CodingAgent.Debug.Client do
   def handle_call(:os_pid, _from, state), do: {:reply, state.os_pid, state}
 
   @impl true
+  def handle_info({ref, result}, %{startup_task: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    if state.listener, do: :gen_tcp.close(state.listener)
+    state = %{state | startup_task: nil, listener: nil}
+
+    case result do
+      {:ok, socket} -> finish_startup(state, socket)
+      {:error, reason} -> startup_failed(state, reason)
+    end
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{startup_task: %Task{ref: ref}} = state) do
+    startup_failed(%{state | startup_task: nil}, "debug adapter connection worker stopped")
+  end
+
   def handle_info({:rpc_message, message}, state), do: {:noreply, dispatch(message, state)}
 
   def handle_info({{:dap_request, seq}, result}, state) do
@@ -232,6 +288,10 @@ defmodule CodingAgent.Debug.Client do
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{rpc_ref: ref} = state) do
     adapter_gone(drain_inbound(state), "debug adapter RPC connection closed")
+  end
+
+  def handle_info({port, {:data, data}}, %{port: port, ready?: false} = state) do
+    {:noreply, append_stderr(state, data)}
   end
 
   def handle_info({port, {:data, data}}, %{port: port, socket: nil} = state) do
@@ -304,17 +364,18 @@ defmodule CodingAgent.Debug.Client do
   end
 
   defp open_remote_transport(adapter) do
-    opts = [:binary, packet: :raw, active: true]
-
-    case :gen_tcp.connect(
-           String.to_charlist(adapter.host),
-           adapter.port,
-           opts,
-           @socket_ready_timeout_ms
-         ) do
-      {:ok, socket} -> {:ok, nil, socket}
-      {:error, reason} -> {:error, "cannot connect to debug adapter: #{inspect(reason)}"}
-    end
+    {:connect, nil, nil,
+     fn ->
+       case :gen_tcp.connect(
+              String.to_charlist(adapter.host),
+              adapter.port,
+              [:binary, packet: :raw, active: false],
+              @socket_ready_timeout_ms
+            ) do
+         {:ok, socket} -> {:ok, socket}
+         {:error, reason} -> {:error, "cannot connect to debug adapter: #{inspect(reason)}"}
+       end
+     end}
   end
 
   # Standalone adapters listen on loopback; unlike Delve they do not dial back.
@@ -327,22 +388,15 @@ defmodule CodingAgent.Debug.Client do
       with {:ok, port} <- open_port(adapter.command, args, cwd, env) do
         deadline = System.monotonic_time(:millisecond) + @socket_ready_timeout_ms
 
-        case connect_server(port, number, deadline) do
-          {:ok, socket} ->
-            {:ok, port, socket}
-
-          {:error, reason} ->
-            kill_port_tree(port)
-            {:error, reason}
-        end
+        {:connect, port, nil, fn -> connect_server(number, deadline) end}
       end
     else
       {:error, reason} -> {:error, "cannot allocate debug adapter port: #{inspect(reason)}"}
     end
   end
 
-  defp connect_server(port, number, deadline) do
-    case :gen_tcp.connect({127, 0, 0, 1}, number, [:binary, packet: :raw, active: true], 100) do
+  defp connect_server(number, deadline) do
+    case :gen_tcp.connect({127, 0, 0, 1}, number, [:binary, packet: :raw, active: false], 100) do
       {:ok, socket} ->
         {:ok, socket}
 
@@ -351,15 +405,8 @@ defmodule CodingAgent.Debug.Client do
           {:error,
            "debug adapter did not listen within #{@socket_ready_timeout_ms}ms: #{inspect(reason)}"}
         else
-          receive do
-            {^port, {:exit_status, status}} ->
-              {:error, "debug adapter exited (code #{status}) before listening"}
-
-            {^port, {:data, _logs}} ->
-              connect_server(port, number, deadline)
-          after
-            50 -> connect_server(port, number, deadline)
-          end
+          Process.sleep(50)
+          connect_server(number, deadline)
         end
     end
   end
@@ -372,57 +419,92 @@ defmodule CodingAgent.Debug.Client do
          {:ok, listen_port} <- :inet.port(listener) do
       args = adapter.args ++ ["--client-addr=127.0.0.1:#{listen_port}"]
 
-      result =
-        with {:ok, port} <- open_port(adapter.command, args, cwd, env) do
-          case accept_adapter(listener, port) do
-            {:ok, socket} ->
-              :ok = :inet.setopts(socket, active: true)
-              {:ok, port, socket}
+      case open_port(adapter.command, args, cwd, env) do
+        {:ok, port} ->
+          {:connect, port, listener,
+           fn ->
+             case :gen_tcp.accept(listener, @socket_ready_timeout_ms) do
+               {:ok, socket} ->
+                 {:ok, socket}
 
-            {:error, reason} ->
-              kill_port_tree(port)
-              {:error, reason}
-          end
-        end
+               {:error, :timeout} ->
+                 {:error, "debug adapter did not connect within #{@socket_ready_timeout_ms}ms"}
 
-      :gen_tcp.close(listener)
-      result
+               {:error, reason} ->
+                 {:error, "debug adapter connection failed: #{inspect(reason)}"}
+             end
+           end}
+
+        {:error, reason} ->
+          :gen_tcp.close(listener)
+          {:error, reason}
+      end
     else
       {:error, reason} -> {:error, "cannot open debug adapter listener: #{inspect(reason)}"}
     end
   end
 
-  defp accept_adapter(listener, port) do
-    deadline = System.monotonic_time(:millisecond) + @socket_ready_timeout_ms
-    accept_loop(listener, port, deadline, "")
-  end
+  defp start_connection(state, connect) do
+    client = self()
 
-  defp accept_loop(listener, port, deadline, output) do
-    remaining = deadline - System.monotonic_time(:millisecond)
+    try do
+      task =
+        Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+          with {:ok, socket} <- connect.() do
+            case :gen_tcp.controlling_process(socket, client) do
+              :ok ->
+                {:ok, socket}
 
-    if remaining <= 0 do
-      {:error, "debug adapter did not connect within #{@socket_ready_timeout_ms}ms"}
-    else
-      case :gen_tcp.accept(listener, min(remaining, 100)) do
-        {:ok, socket} ->
-          {:ok, socket}
-
-        {:error, :timeout} ->
-          receive do
-            {^port, {:exit_status, status}} ->
-              {:error, "debug adapter exited (code #{status}) before connecting: #{output}"}
-
-            {^port, {:data, data}} ->
-              accept_loop(listener, port, deadline, bounded(output <> data))
-          after
-            0 -> accept_loop(listener, port, deadline, output)
+              {:error, _reason} ->
+                :gen_tcp.close(socket)
+                {:error, "debug adapter connection ownership transfer failed"}
+            end
           end
+        end)
 
-        {:error, reason} ->
-          {:error, "debug adapter connection failed: #{inspect(reason)}"}
-      end
+      {:noreply, %{state | startup_task: task}}
+    rescue
+      _ -> startup_failed(state, "debug adapter connection worker unavailable")
+    catch
+      :exit, _ -> startup_failed(state, "debug adapter connection worker unavailable")
     end
   end
+
+  defp finish_startup(state, socket) do
+    state = %{state | socket: socket}
+    transport = %{port: state.port, socket: socket}
+
+    case RpcClient.start_link(
+           owner: self(),
+           framing: Protocol.Framing,
+           send: fn encoded -> write(transport, encoded) end
+         ) do
+      {:ok, rpc} ->
+        state = %{state | rpc: rpc, rpc_ref: Process.monitor(rpc)}
+
+        case if(socket, do: :inet.setopts(socket, active: true), else: :ok) do
+          :ok ->
+            notify_startup(state, :ok)
+            {:noreply, %{state | ready?: true, startup_notify: nil}}
+
+          {:error, _reason} ->
+            startup_failed(state, "debug adapter connection closed during startup")
+        end
+
+      {:error, _reason} ->
+        startup_failed(state, "debug adapter RPC connection could not start")
+    end
+  end
+
+  defp startup_failed(state, reason) do
+    notify_startup(state, {:error, reason})
+    {:stop, :normal, %{state | startup_notify: nil, exited?: true}}
+  end
+
+  defp notify_startup(%{startup_notify: {starter, token}}, result),
+    do: send(starter, {token, result})
+
+  defp notify_startup(_state, _result), do: :ok
 
   defp open_port(command, args, cwd, env) do
     port_opts =
@@ -544,6 +626,8 @@ defmodule CodingAgent.Debug.Client do
     end
   end
 
+  defp sync_inbound(%{rpc: nil} = state), do: state
+
   defp sync_inbound(state) do
     # Taking the tail also synchronizes all preceding feed casts. Drain their
     # decoded messages before appending any unfinished frame as exit diagnostics.
@@ -574,6 +658,8 @@ defmodule CodingAgent.Debug.Client do
 
   defp bounded(text), do: text
 
+  defp adapter_gone(%{ready?: false} = state, reason), do: startup_failed(state, reason)
+
   defp adapter_gone(%{exited?: true} = state, _reason), do: {:stop, :normal, state}
 
   defp adapter_gone(state, reason) do
@@ -598,6 +684,8 @@ defmodule CodingAgent.Debug.Client do
   defp close_rpc(_state), do: :ok
 
   defp shutdown(state) do
+    if state.startup_task, do: Process.exit(state.startup_task.pid, :kill)
+    if state.listener, do: :gen_tcp.close(state.listener)
     if state.os_pid, do: ProcessGroup.terminate(state.os_pid, signal: :sigkill)
     if state.socket, do: :gen_tcp.close(state.socket)
 
@@ -607,19 +695,6 @@ defmodule CodingAgent.Debug.Client do
       rescue
         ArgumentError -> :ok
       end
-    end
-  end
-
-  defp kill_port_tree(port) do
-    case port_os_pid(port) do
-      nil -> :ok
-      os_pid -> ProcessGroup.terminate(os_pid, signal: :sigkill)
-    end
-
-    try do
-      Port.close(port)
-    rescue
-      ArgumentError -> :ok
     end
   end
 

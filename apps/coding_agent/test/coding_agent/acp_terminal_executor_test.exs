@@ -25,6 +25,7 @@ defmodule CodingAgent.ACPTerminalExecutorTest do
       end)
 
     create = request("terminal/create")
+    assert create.reply_to in Task.Supervisor.children(CodingAgent.TaskSupervisor)
     assert create.params["command"] == elem(CodingAgent.BashExecutor.get_shell_config(), 0)
     assert create.params["args"] == ["-c", command]
     assert create.params["cwd"] == "/tmp"

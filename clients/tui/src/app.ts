@@ -229,6 +229,8 @@ export class AppShell {
 	#disposers: Array<() => void> = [];
 	#unregisterTerminalCleanup: (() => void) | undefined;
 	readonly #drainingSessions = new Set<string>();
+	readonly #steerVersions = new Map<string, number>();
+	readonly #withdrawingSteers = new Set<string>();
 	#started = false;
 	#sessionReady = false;
 	#initialSessionLoad: Promise<void> | undefined;
@@ -280,6 +282,13 @@ export class AppShell {
 			vimMode: options.vimMode,
 			modelMentions: this.#modelMentions,
 			theme: getEditorTheme(),
+			onComposeStart: () => {
+				const model = this.store.focused.model;
+				if (!model || !this.client.online || !this.methods.supports("models.preconnect")) return;
+				void this.client
+					.request("models.preconnect", { model }, { queueIfOffline: false })
+					.catch(() => {});
+			},
 			onSubmit: async (text) => {
 				const sessionKey = this.store.focusedKey;
 				const disposition = await this.submit(text);
@@ -337,14 +346,17 @@ export class AppShell {
 			transcript: this.chatContainer,
 			onStatusChanged: () => this.#renderStatus(),
 			onTerminal: (key) => {
-				if (this.client.online) void this.drainQueue(key);
+				if (this.client.online) {
+					void this.refreshSteers(key);
+					void this.drainQueue(key);
+				}
 			},
 			smoothStreaming: () => smooth,
 		});
 
 		this.#queuePanel = new QueuePanelComponent({
 			onEdit: (item) => this.editQueued(item),
-			onDelete: (item) => this.deleteQueued(item),
+			onDelete: (item) => void this.deleteQueued(item),
 			onBlur: () => this.blurQueue(),
 			requestRender: () => this.tui.requestRender(),
 		});
@@ -439,9 +451,13 @@ export class AppShell {
 			onSnapshot: (result, branchChanged) => {
 				if (branchChanged) this.#taskTree.store.clear(result.sessionKey);
 				this.#taskTree.reconcile(result.sessionKey, result.snapshot.children);
+				void this.refreshSteers(result.sessionKey);
 			},
 			onTerminalRecovered: (key) => {
-				if (this.client.online) void this.drainQueue(key);
+				if (this.client.online) {
+					void this.refreshSteers(key);
+					void this.drainQueue(key);
+				}
 			},
 		});
 		this.#switcher = new SessionSwitcher({
@@ -604,6 +620,7 @@ export class AppShell {
 				// Every handshake, resumed or not: plan mode may have moved while away.
 				// A pending startup request refreshes after it has picked the session.
 				if (!this.#startup) void this.refreshPlanMode();
+				if (!this.#startup) void this.refreshSteers();
 				if (this.#sessionReady) void refreshSetupStatus(this.store, this.methods);
 				if (this.#sessionReady || this.#initialSessionLoad) return;
 				const startup = this.#startup;
@@ -679,6 +696,7 @@ export class AppShell {
 				this.#toolInspector.close();
 				this.#taskTree.setSession(this.store.focusedKey);
 				void this.refreshPlanMode();
+				void this.refreshSteers();
 			}),
 			// Approving a plan proposal turns plan mode off server-side; refining it
 			// keeps plan mode on with a (possibly new) plan file.
@@ -974,6 +992,7 @@ export class AppShell {
 
 	/** Focus the queue panel. False when there is nothing queued to focus. */
 	focusQueue(): boolean {
+		void this.refreshSteers();
 		this.syncQueuePanel();
 		if (!this.#queuePanel.visible) return false;
 		this.#queueFocused = true;
@@ -1077,6 +1096,13 @@ export class AppShell {
 
 	/** Enter in the panel: the item goes back to being a draft. */
 	editQueued(item: QueueItem): void {
+		if (item.steer) {
+			this.events.notice(
+				"accepted steers cannot be edited; d withdraws one if still unbound",
+				"warning",
+			);
+			return;
+		}
 		if (item.state === "waiting-connection") {
 			this.events.notice("that one is already on its way to the daemon", "warning");
 			return;
@@ -1092,12 +1118,63 @@ export class AppShell {
 		this.blurQueue();
 	}
 
-	deleteQueued(item: QueueItem): void {
+	async deleteQueued(item: QueueItem): Promise<void> {
+		const sessionKey = this.store.focusedKey;
 		if (item.state === "waiting-connection") {
 			this.events.notice("that one is already on its way to the daemon", "warning");
 			return;
 		}
-		this.store.queue.remove(this.store.focusedKey, item.id);
+		if (!item.steer) {
+			this.store.queue.remove(sessionKey, item.id);
+			return;
+		}
+		if (!this.store.queue.find(sessionKey, item.id) || this.#withdrawingSteers.has(item.id)) return;
+		const session = this.store.session(sessionKey);
+		if (!this.client.online) {
+			this.events.notice(
+				"steer withdrawal needs a connection; nothing queued or withdrawn",
+				"warning",
+				session,
+			);
+			return;
+		}
+		this.#withdrawingSteers.add(item.id);
+		this.#bumpSteers(sessionKey);
+		try {
+			await this.methods.sessionsSteerWithdraw({ sessionKey, messageId: item.steer.messageId });
+			this.store.queue.remove(sessionKey, item.id);
+			this.events.notice("steer withdrawn before binding", "info", session);
+		} catch (error) {
+			this.events.notice(
+				ControlPlaneError.is(error, "NOT_FOUND")
+					? "steer was not withdrawn: already bound, withdrawn, or no longer live"
+					: `steer withdrawal not confirmed: ${describeError(error)} — inspect the queue before retrying`,
+				"warning",
+				session,
+			);
+		} finally {
+			this.#bumpSteers(sessionKey);
+			this.#withdrawingSteers.delete(item.id);
+		}
+	}
+
+	/** Refresh on reconnect, queue focus and terminal/snapshot boundaries, never by polling. */
+	async refreshSteers(sessionKey = this.store.focusedKey): Promise<void> {
+		if (!this.client.online || !this.methods.supports(METHOD.sessionsSteerPending)) return;
+		const version = this.#bumpSteers(sessionKey);
+		try {
+			const result = await this.methods.sessionsSteerPending(sessionKey);
+			if (this.#steerVersions.get(sessionKey) !== version) return;
+			this.store.queue.reconcileSteers(sessionKey, result.items, result.truncated);
+		} catch {
+			// A failed read is not an empty queue; retain the last known identities.
+		}
+	}
+
+	#bumpSteers(sessionKey: string): number {
+		const version = (this.#steerVersions.get(sessionKey) ?? 0) + 1;
+		this.#steerVersions.set(sessionKey, version);
+		return version;
 	}
 
 	/**
@@ -1397,16 +1474,16 @@ export class AppShell {
 	 *
 	 *   idle                     -> `chat.send`, or `profile.chat` for a canonical profile session
 	 *   busy + queue             -> held in the {@link QueueStore}, never sent
-	 *   busy + steer             -> authoritative route with `queueMode: steer`
+	 *   busy + steer             -> journaled native input, or invocation-bound routed steering
 	 *   busy + redirect          -> authoritative route with `queueMode: redirect`
 	 *   busy + interrupt         -> authoritative route with `queueMode: interrupt`, and the
 	 *                               partial answer is sealed as interrupted
 	 *
-	 * Both degradations are visible rather than silent. Steering a run that just
-	 * ended is a lost race, not a mistake, so the prompt still goes out as a new
-	 * turn and says so; a daemon that refuses `steer`, `redirect`, or `interrupt` outright
-	 * leaves the prompt in the queue, where the user can still get at it, instead
-	 * of dropping it on the floor.
+	 * Native steering targets the fixed active run and retains its message ID for
+	 * withdrawal. A stale-run refusal preserves the draft; unknown acceptance is
+	 * never replayed. Older daemons and nonlocal execution retain routed steering,
+	 * whose definite refusals leave an editable local follow-up. If completion was
+	 * already observed before submission, the prompt starts a new turn explicitly.
 	 */
 	async sendPrompt(text: string, options: DeliverOptions = {}): Promise<SubmissionDisposition> {
 		const prompt = text.trim();
@@ -1487,6 +1564,15 @@ export class AppShell {
 		mode: Exclude<SubmissionMode, "queue">,
 		queueIfOffline?: boolean,
 	): Promise<SubmissionDisposition> {
+		if (
+			mode === "steer" &&
+			session.activeRunId &&
+			this.methods.supports(METHOD.sessionsSteer) &&
+			this.methods.supports(METHOD.sessionsSteerWithdraw)
+		) {
+			const disposition = await this.#sendSteer(prompt, session, session.activeRunId);
+			if (disposition !== undefined) return disposition;
+		}
 		const runId = session.activeRunId;
 		const requestId = crypto.randomUUID();
 		try {
@@ -1514,6 +1600,45 @@ export class AppShell {
 		}
 	}
 
+	async #sendSteer(
+		prompt: string,
+		session: SessionStore,
+		runId: string,
+	): Promise<SubmissionDisposition | undefined> {
+		const messageId = crypto.randomUUID();
+		this.#bumpSteers(session.key);
+		try {
+			await this.methods.sessionsSteer({
+				sessionKey: session.key,
+				runId,
+				messageId,
+				prompt,
+			});
+			this.store.queue.acceptSteer(session.key, messageId, prompt);
+			this.events.addUserBlock(prompt, session, { delivery: "steer" });
+			this.events.notice(
+				"steer journaled — ctrl+q, then d to withdraw while unbound",
+				"info",
+				session,
+			);
+			return "accepted";
+		} catch (error) {
+			if (ControlPlaneError.is(error, "NOT_FOUND")) {
+				// Named execution still needs its invocation-bound router authority.
+				this.events.notice(
+					"no local live steer target — using the routed submission",
+					"warning",
+					session,
+				);
+				return undefined;
+			}
+			this.events.notice(`steer not acknowledged: ${describeError(error)}`, "warning", session);
+			return this.#submissionFailure(session, prompt, messageId, error, [], { messageId });
+		} finally {
+			this.#bumpSteers(session.key);
+		}
+	}
+
 	#hasUncertainSubmission(session: SessionStore): boolean {
 		if (!this.store.queue.items(session.key).some((item) => item.submission)) return false;
 		this.events.notice(
@@ -1530,6 +1655,7 @@ export class AppShell {
 		requestId: string,
 		error: unknown,
 		attachments: QueueItem["attachments"] = [],
+		steer?: QueueItem["steer"],
 	): SubmissionDisposition {
 		const details = error instanceof ControlPlaneError ? error.details : undefined;
 		const unsafe =
@@ -1551,6 +1677,7 @@ export class AppShell {
 			state: "needs-review",
 			attachments,
 			submission: { requestId, ...(runId ? { runId } : {}) },
+			...(steer ? { steer } : {}),
 		});
 		this.events.notice(
 			`submission outcome unknown${runId ? ` · ${runId}` : ""} — draft retained; inspect the session and review ctrl+q before retrying`,

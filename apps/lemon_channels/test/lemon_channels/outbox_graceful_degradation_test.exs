@@ -14,7 +14,8 @@ defmodule LemonChannels.OutboxGracefulDegradationTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.Outbox
-  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Dedupe}
+  alias LemonCore.RateLimiter
   alias LemonChannels.OutboundPayload
 
   # Temporarily unregister a named process, run the given function,
@@ -34,23 +35,27 @@ defmodule LemonChannels.OutboxGracefulDegradationTest do
 
   describe "RateLimiter graceful degradation" do
     test "check returns fallback rate_limited tuple when process is unavailable" do
-      with_process_unavailable(RateLimiter, fn ->
+      with_process_unavailable(LemonChannels.Outbox.RateLimiter, fn ->
         # GenServer.call exits with :noproc when the name is unregistered.
         # The catch :exit clause returns a conservative fallback.
-        assert RateLimiter.check("ch1", "acc1") == {:rate_limited, 1_000}
+        assert RateLimiter.check(LemonChannels.Outbox.RateLimiter, "ch1", "acc1") ==
+                 {:rate_limited, 1_000}
       end)
 
       # Verify the process is still functional after re-registration
-      restored_check = RateLimiter.check("ch1", "acc1")
+      restored_check = RateLimiter.check(LemonChannels.Outbox.RateLimiter, "ch1", "acc1")
       assert match?(:ok, restored_check) or match?({:rate_limited, _}, restored_check)
     end
 
     test "consume returns fallback rate_limited tuple when process is unavailable" do
-      with_process_unavailable(RateLimiter, fn ->
-        assert RateLimiter.consume("ch1", "acc1") == {:rate_limited, 1_000}
+      with_process_unavailable(LemonChannels.Outbox.RateLimiter, fn ->
+        assert RateLimiter.consume(LemonChannels.Outbox.RateLimiter, "ch1", "acc1") ==
+                 {:rate_limited, 1_000}
       end)
 
-      restored_consume = RateLimiter.consume("ch1-after", "acc1")
+      restored_consume =
+        RateLimiter.consume(LemonChannels.Outbox.RateLimiter, "ch1-after", "acc1")
+
       assert match?(:ok, restored_consume) or match?({:rate_limited, _}, restored_consume)
     end
   end

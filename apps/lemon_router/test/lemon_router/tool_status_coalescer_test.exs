@@ -76,7 +76,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     end
 
     if is_nil(Process.whereis(LemonChannels.Outbox.RateLimiter)) do
-      {:ok, _} = LemonChannels.Outbox.RateLimiter.start_link([])
+      {:ok, _} = LemonCore.RateLimiter.start_link(name: LemonChannels.Outbox.RateLimiter)
     end
 
     if is_nil(Process.whereis(LemonChannels.Outbox.Dedupe)) do

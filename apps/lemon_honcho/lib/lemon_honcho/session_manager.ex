@@ -210,9 +210,10 @@ defmodule LemonHoncho.SessionManager do
   nobody will read is a request nobody should pay for, and the dialectic is
   billed.
 
-  Message uploads (`sync_document/1`) are not subject to that guard: they are
-  independent writes and serializing them behind reads would delay them for no
-  benefit.
+  Message uploads (`sync_document/1`) are independent writes under the capped
+  `LemonHoncho.TaskSupervisor`, not subject to the refresh guard. They may finish
+  after the manager restarts, but never replay automatically. Admission failure
+  drops the best-effort upload and logs its classification without issuing HTTP.
 
   ## Configuration, and the testing seam
 
@@ -582,6 +583,7 @@ defmodule LemonHoncho.SessionManager do
       # `config/1` and the moduledoc's *Testing seam*.
       config: Keyword.get(opts, :config),
       client: Keyword.get(opts, :client) || configured_client(),
+      upload_supervisor: Keyword.get(opts, :upload_supervisor, LemonHoncho.TaskSupervisor),
       max_sessions: Keyword.get(opts, :max_sessions, @max_sessions),
       idle_ttl_ms: Keyword.get(opts, :idle_ttl_ms, @idle_ttl_ms),
       sessions: %{}
@@ -1207,14 +1209,18 @@ defmodule LemonHoncho.SessionManager do
 
     manager = self()
 
-    spawn(fn -> run_upload(manager, key, plan, messages) end)
+    case LemonCore.TaskSupervisor.start_child(state.upload_supervisor, fn ->
+           run_upload(manager, key, plan, messages)
+         end) do
+      {:ok, _pid} -> :ok
+      {:error, reason} -> Logger.debug("honcho: upload not started: #{inspect(reason)}")
+    end
 
     track_entry(state, key, entry)
   end
 
-  # Unmonitored on purpose: nothing waits on an upload and there is no cached
-  # value to release, so the only thing a monitor would buy is a log line the
-  # rescue clause already writes.
+  # Upload tasks are temporary and supervised, but not monitored by the manager:
+  # no caller is waiting for their result and a failure must not replay a write.
   defp run_upload(manager, key, plan, messages) do
     case ensure_ready(plan) do
       {:ok, session_id, _peers} = init ->

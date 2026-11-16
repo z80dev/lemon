@@ -58,7 +58,8 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   alias LemonAi.EventStream
   alias LemonAi.Models.Presets
-  alias LemonAi.Providers.{OpenCodeGoSession, RequestHeaders, RetryHelper, StreamingHelper}
+  alias LemonAi.Providers.{OpenCodeGoSession, RequestHeaders, StreamingHelper}
+  alias LemonAi.Retry
 
   require Logger
 
@@ -109,7 +110,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
           url,
           headers,
           params,
-          RetryHelper.policy(opts),
+          LemonAi.Provider.retry_policy(opts),
           0,
           opts,
           metadata
@@ -995,7 +996,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
             {output, committed, raw_usage} = process_sse_stream(stream, initial_output, response)
 
             retry_delay =
-              if RetryHelper.retry_allowed?(attempt, policy) and not committed and
+              if Retry.retry_allowed?(attempt, policy) and not committed and
                    retryable_stream_output_error?(output) do
                 http_retry_delay_ms(attempt, policy, output.error_message, %{})
               else
@@ -1010,7 +1011,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
                 output
 
               delay_ms ->
-                RetryHelper.sleep(delay_ms)
+                LemonAi.Provider.retry_sleep(delay_ms, policy)
                 retry.()
             end
 
@@ -1018,12 +1019,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
             error_body = materialize_response_body(response)
 
             retry_delay =
-              if not RetryHelper.rotate_rate_limit?(
+              if not Retry.rotate_rate_limit?(
                    policy,
                    {:http_error, response.status, error_body}
                  ) and
-                   RetryHelper.retry_allowed?(attempt, policy) and
-                   RetryHelper.retryable_http_error?(response.status, error_body) do
+                   Retry.retry_allowed?(attempt, policy) and
+                   LemonAi.Error.retryable_http_error?(response.status, error_body) do
                 http_retry_delay_ms(
                   attempt,
                   policy,
@@ -1049,19 +1050,19 @@ defmodule LemonAi.Providers.OpenAICompletions do
                   initial_output
                   | stop_reason: :error,
                     error_message: error.message,
-                    retry_after_ms: RetryHelper.retry_after_ms(response.headers)
+                    retry_after_ms: Retry.retry_after_ms(response.headers)
                 }
 
               delay_ms ->
-                RetryHelper.sleep(delay_ms)
+                LemonAi.Provider.retry_sleep(delay_ms, policy)
                 retry.()
             end
         end
 
       {:error, %Req.TransportError{reason: reason} = error} ->
-        if RetryHelper.retry_allowed?(attempt, policy) and
-             RetryHelper.retryable_transport_error?(error) do
-          RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
+        if Retry.retry_allowed?(attempt, policy) and
+             LemonAi.Error.retryable_transport_error?(error) do
+          LemonAi.Provider.retry_sleep(Retry.backoff_delay_ms(attempt, policy), policy)
           retry.()
         else
           Logger.warning("Provider transport failed: #{inspect(reason)}")
@@ -1247,7 +1248,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
   # Shared timing preserves structured body hints and throttle backoff.
   defp http_retry_delay_ms(attempt, policy, error_body, headers, status \\ 0) do
     error = LemonAi.Error.parse_http_error(status, error_body, headers)
-    RetryHelper.http_retry_delay_ms(attempt, headers, policy, error)
+    Retry.http_retry_delay_ms(attempt, headers, policy, error)
   end
 
   defp retryable_stream_output_error?(%AssistantMessage{stop_reason: :error} = output),
@@ -1340,7 +1341,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
       state = %{state | output: %{output | content: new_content}}
 
       # Push delta event
-      EventStream.push_async(stream, {:text_delta, block_index, content, state.output})
+      EventStream.push_async(stream, {:text_delta, block_index, content})
 
       %{state | committed?: true}
     else
@@ -1373,7 +1374,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         state = %{state | output: %{output | content: new_content}}
 
         # Push delta event
-        EventStream.push_async(stream, {:thinking_delta, block_index, text, state.output})
+        EventStream.push_async(stream, {:thinking_delta, block_index, text})
 
         %{state | committed?: true}
 
@@ -1425,19 +1426,18 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
     block = %{block | name: merge_tool_name(block.name, func_name)}
 
-    new_partial_args = info.partial_args <> func_args
-    block = %{block | arguments: parse_partial_json(new_partial_args)}
+    argument_chunks = [func_args | info.argument_chunks]
 
     output = state.output
     new_content = List.replace_at(output.content, info.block_index, block)
     output = %{output | content: new_content}
 
-    new_info = %{info | block: block, partial_args: new_partial_args}
+    new_info = %{info | block: block, argument_chunks: argument_chunks}
     tool_call_blocks = Map.put(state.tool_call_blocks, index, new_info)
 
     state = %{state | output: output, tool_call_blocks: tool_call_blocks}
 
-    EventStream.push_async(stream, {:tool_call_delta, info.block_index, func_args, state.output})
+    EventStream.push_async(stream, {:tool_call_delta, info.block_index, func_args})
 
     %{state | committed?: true}
   end
@@ -1502,7 +1502,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         state = %{state | current_block: new_block, output: %{output | content: new_content}}
 
         # Push start event
-        EventStream.push_async(stream, {:text_start, block_index, state.output})
+        EventStream.push_async(stream, {:text_start, block_index})
 
         {%{state | committed?: true}, block_index}
     end
@@ -1525,7 +1525,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         state = %{state | current_block: new_block, output: %{output | content: new_content}}
 
         # Push start event
-        EventStream.push_async(stream, {:thinking_start, block_index, state.output})
+        EventStream.push_async(stream, {:thinking_start, block_index})
 
         {%{state | committed?: true}, block_index}
     end
@@ -1535,12 +1535,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
     case state.current_block do
       %TextContent{text: text} ->
         block_index = length(state.output.content) - 1
-        EventStream.push_async(stream, {:text_end, block_index, text, state.output})
+        EventStream.push_async(stream, {:text_end, block_index, text})
         %{state | current_block: nil, committed?: true}
 
       %ThinkingContent{thinking: thinking} ->
         block_index = length(state.output.content) - 1
-        EventStream.push_async(stream, {:thinking_end, block_index, thinking, state.output})
+        EventStream.push_async(stream, {:thinking_end, block_index, thinking})
         %{state | current_block: nil, committed?: true}
 
       nil ->
@@ -1566,9 +1566,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
         block_index = length(new_content) - 1
         output = %{output | content: new_content}
 
-        EventStream.push_async(stream, {:tool_call_start, block_index, output})
+        EventStream.push_async(stream, {:tool_call_start, block_index, new_block})
 
-        info = %{block_index: block_index, block: new_block, partial_args: ""}
+        info = %{block_index: block_index, block: new_block, argument_chunks: []}
         tool_call_blocks = Map.put(state.tool_call_blocks, index, info)
 
         {%{state | output: output, tool_call_blocks: tool_call_blocks, committed?: true}, info}
@@ -1638,10 +1638,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
     final_state =
       Enum.reduce(sorted, state, fn {_index, info}, acc_state ->
+        arguments = info.argument_chunks |> Enum.reverse() |> IO.iodata_to_binary()
+
         final_args =
-          case Jason.decode(info.partial_args) do
+          case Jason.decode(arguments) do
             {:ok, args} when is_map(args) -> args
-            _ -> parse_partial_json(info.partial_args)
+            _ -> LemonAi.PartialJson.decode(arguments)
           end
 
         final_block = %{info.block | arguments: final_args}
@@ -1649,7 +1651,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         new_content = List.replace_at(output.content, info.block_index, final_block)
         output = %{output | content: new_content}
 
-        EventStream.push_async(stream, {:tool_call_end, info.block_index, final_block, output})
+        EventStream.push_async(stream, {:tool_call_end, info.block_index, final_block})
 
         %{acc_state | output: output, committed?: true}
       end)
@@ -1697,65 +1699,4 @@ defmodule LemonAi.Providers.OpenAICompletions do
   end
 
   defp sanitize_json_value(value), do: value
-
-  defp parse_partial_json(""), do: %{}
-
-  defp parse_partial_json(json) do
-    # Try to parse as complete JSON first
-    case Jason.decode(json) do
-      {:ok, result} when is_map(result) ->
-        result
-
-      _ ->
-        # Attempt recovery for partial JSON by closing brackets
-        attempt_partial_json_recovery(json)
-    end
-  end
-
-  defp attempt_partial_json_recovery(json) do
-    json = String.trim(json)
-    completed = complete_partial_json(json)
-
-    [completed, json <> "}", json <> "\"}"]
-    |> Enum.uniq()
-    |> Enum.find_value(%{}, fn attempt ->
-      case Jason.decode(attempt) do
-        {:ok, result} when is_map(result) -> result
-        _ -> nil
-      end
-    end)
-  end
-
-  defp complete_partial_json(json) do
-    {stack, in_string?, escaped?} =
-      json
-      |> String.graphemes()
-      |> Enum.reduce({[], false, false}, fn
-        "\\", {stack, true, false} ->
-          {stack, true, true}
-
-        _char, {stack, true, true} ->
-          {stack, true, false}
-
-        "\"", {stack, in_string?, false} ->
-          {stack, not in_string?, false}
-
-        "{", {stack, false, false} ->
-          {["}" | stack], false, false}
-
-        "[", {stack, false, false} ->
-          {["]" | stack], false, false}
-
-        "}", {["}" | rest], false, false} ->
-          {rest, false, false}
-
-        "]", {["]" | rest], false, false} ->
-          {rest, false, false}
-
-        _char, acc ->
-          acc
-      end)
-
-    json <> if(in_string? and not escaped?, do: "\"", else: "") <> Enum.join(stack, "")
-  end
 end

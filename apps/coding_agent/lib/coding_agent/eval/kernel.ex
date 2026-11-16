@@ -3,7 +3,7 @@ defmodule CodingAgent.Eval.Kernel do
   One `eval` kernel slot: a persistent Python or JavaScript process for one
   owner (coding session) and language.
 
-  The slot GenServer owns the kernel `Port`, which runs a driver from
+  The slot state machine owns the kernel `Port`, which runs a driver from
   `priv/eval/` (`python_kernel.py` under `python3`/`python`, `js_kernel.js`
   under `bun`/`node`) in the session cwd. Commands are newline-delimited JSON
   on stdin. The kernel's stdout and stderr are one merged stream: protocol
@@ -45,9 +45,29 @@ defmodule CodingAgent.Eval.Kernel do
   driver's stdin as `{"op":"tool_result","id":<cell id>,"call":<int>,"result":{...}}`
   or `{"op":"tool_error","id":<cell id>,"call":<int>,"message":<string>}`, and
   are written only while the run they answer is still busy.
+
+  ## Transitions
+
+  | State | Event | Next state |
+  | --- | --- | --- |
+  | idle | run without a kernel | starting |
+  | starting | ready frame | verifying (asynchronous process-group witness) |
+  | verifying | valid witness | busy |
+  | idle | run with a kernel | busy |
+  | busy | result | idle |
+  | busy | timeout interruption | interrupting (asynchronous SIGINT) |
+  | interrupting | result / two-second state timeout | idle / stopping |
+  | any live state | abort, reset, caller exit or kernel failure | stopping |
+  | stopping | process-group cleanup completes | idle (or starting after reset) |
+
+  Startup uses one named timeout across starting and verification; interrupt
+  grace and idle expiry use state timeouts. Status and output extend none of them.
+  Process-group observation and signalling run in monitored tasks, so `os_pid/1`
+  and owner binding remain responsive during slow `ps` or `kill` IO. A run is
+  never admitted until its witness is verified or previous cleanup has finished.
   """
 
-  use GenServer
+  @behaviour :gen_statem
 
   alias CodingAgent.BashExecutor
   alias CodingAgent.Eval.Output
@@ -68,7 +88,6 @@ defmodule CodingAgent.Eval.Kernel do
     :owner_ref,
     :owner_pid,
     :idle_timeout_ms,
-    :idle_timer,
     :port,
     :os_pid,
     :kernel_group,
@@ -77,7 +96,11 @@ defmodule CodingAgent.Eval.Kernel do
     :lost_reason,
     :display_path,
     :pip_command,
-    :interruption,
+    :operation,
+    :pending_run,
+    :io_runner,
+    startup_output: [],
+    interrupt_from: [],
     buffer: "",
     generation: 0,
     next_id: 1
@@ -96,10 +119,15 @@ defmodule CodingAgent.Eval.Kernel do
   @doc """
   Starts a slot. Options: `:key` (registry key, required), `:language`
   (`"py"` | `"js"`), `:cwd`, `:runtime` (executable path), `:owner_pid`,
-  `:idle_timeout_ms` and `:name`.
+  `:idle_timeout_ms` and `:name`. `:io_runner` can wrap process IO tasks with
+  an arity-two function receiving the operation kind and zero-arity IO function.
   """
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name))
+    case Keyword.get(opts, :name) do
+      nil -> :gen_statem.start_link(__MODULE__, opts, [])
+      name when is_atom(name) -> :gen_statem.start_link({:local, name}, __MODULE__, opts, [])
+      name -> :gen_statem.start_link(name, __MODULE__, opts, [])
+    end
   end
 
   @doc """
@@ -114,7 +142,7 @@ defmodule CodingAgent.Eval.Kernel do
           {:ok, %{ref: reference(), cell: pos_integer(), restarted: lost_reason() | nil}}
           | {:error, term()}
   def run(slot, code, opts \\ []) do
-    GenServer.call(
+    :gen_statem.call(
       slot,
       {:run, code, Keyword.get(opts, :reset, false), self()},
       @startup_timeout_ms + 10_000
@@ -127,7 +155,7 @@ defmodule CodingAgent.Eval.Kernel do
   """
   @spec interrupt(GenServer.server(), reference(), :timeout | :aborted) :: :preserved | :killed
   def interrupt(slot, ref, reason) do
-    GenServer.call(slot, {:interrupt, ref, reason}, 15_000)
+    :gen_statem.call(slot, {:interrupt, ref, reason}, 15_000)
   catch
     :exit, _ -> :killed
   end
@@ -145,13 +173,16 @@ defmodule CodingAgent.Eval.Kernel do
         ) ::
           :ok
   def tool_reply(slot, ref, call, payload),
-    do: GenServer.cast(slot, {:tool_reply, ref, call, payload})
+    do: :gen_statem.cast(slot, {:tool_reply, ref, call, payload})
 
   @doc "OS pid of the running kernel process, if any."
   @spec os_pid(GenServer.server()) :: integer() | nil
-  def os_pid(slot), do: GenServer.call(slot, :os_pid)
+  def os_pid(slot), do: :gen_statem.call(slot, :os_pid)
 
   # ── Server ──────────────────────────────────────────────────────────────
+
+  @impl true
+  def callback_mode, do: :handle_event_function
 
   @impl true
   def init(opts) do
@@ -171,80 +202,81 @@ defmodule CodingAgent.Eval.Kernel do
       owner_ref: owner_ref,
       owner_pid: Keyword.get(opts, :owner_pid),
       pip_command: Keyword.get(opts, :pip_command),
+      io_runner: Keyword.get(opts, :io_runner, fn _kind, fun -> fun.() end),
       idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms) || @default_idle_timeout_ms
     }
 
-    {:ok, arm_idle(state)}
+    {:ok, :idle, state, idle_timeout(state)}
   end
 
   @impl true
-  def handle_call({:bind_owner, owner}, _from, state),
-    do: CodingAgent.ToolResources.owner_reply(:bind_owner, owner, state)
-
-  def handle_call({:run, _code, _reset, _caller}, _from, %{busy: busy} = state)
-      when busy != nil do
-    {:reply, {:error, :busy}, state}
+  def handle_event({:call, from}, {:bind_owner, owner}, _phase, state) do
+    {:reply, reply, state} = CodingAgent.ToolResources.owner_reply(:bind_owner, owner, state)
+    {:keep_state, state, [{:reply, from, reply}]}
   end
 
-  def handle_call({:run, code, reset, caller}, _from, state) do
-    state = if reset and state.port, do: kill_kernel(state, :reset), else: state
-    restarted = if state.port == nil and state.generation > 0, do: state.lost_reason || :reset
+  def handle_event({:call, from}, :os_pid, _phase, state),
+    do: {:keep_state_and_data, [{:reply, from, state.os_pid}]}
 
-    case ensure_kernel(state) do
-      {:ok, state} ->
-        id = state.next_id
-        File.write!(state.display_path, "")
-        Port.command(state.port, [Jason.encode!(%{op: "execute", id: id, code: code}), "\n"])
-        ref = make_ref()
-        busy = %{ref: ref, caller: caller, monitor: Process.monitor(caller), id: id}
-        state = cancel_idle(%{state | busy: busy, next_id: id + 1})
-        {:reply, {:ok, %{ref: ref, cell: id, restarted: restarted}}, state}
+  def handle_event({:call, from}, {:run, code, reset, caller}, :idle, state) do
+    pending = %{from: from, code: code, caller: caller, monitor: Process.monitor(caller)}
+    state = %{state | pending_run: pending}
 
-      {:error, reason, state} ->
-        {:reply, {:error, reason}, arm_idle(state)}
-    end
-  end
-
-  def handle_call(
-        {:interrupt, ref, :timeout},
-        from,
-        %{busy: %{ref: ref}, interruption: nil} = state
-      ) do
-    state = drain_port(state)
-
-    if state.busy do
-      target =
-        if state.language == "py",
-          do: "-#{state.os_pid}",
-          else: Integer.to_string(state.os_pid)
-
-      case System.cmd("/bin/kill", ["-INT", "--", target], stderr_to_stdout: true) do
-        {_output, 0} ->
-          timer = Process.send_after(self(), {:interrupt_grace, ref}, 2_000)
-          {:noreply, %{state | interruption: %{from: from, timer: timer}}}
-
-        _ ->
-          {:reply, :killed, state |> kill_kernel(:timeout) |> arm_idle()}
-      end
+    if reset and state.port do
+      stop_kernel(state, :reset, :restart)
     else
-      {:reply, :preserved, state}
+      start_run(state)
     end
   end
 
-  def handle_call({:interrupt, ref, reason}, _from, %{busy: %{ref: ref}} = state) do
-    {:reply, :killed, state |> kill_kernel(reason) |> arm_idle()}
+  def handle_event({:call, _from}, {:run, _code, _reset, _caller}, :stopping, %{pending_run: nil}),
+      do: {:keep_state_and_data, [:postpone]}
+
+  def handle_event({:call, from}, {:run, _code, _reset, _caller}, _phase, _state),
+    do: {:keep_state_and_data, [{:reply, from, {:error, :busy}}]}
+
+  def handle_event(
+        {:call, from},
+        {:interrupt, ref, :timeout},
+        :busy,
+        %{busy: %{ref: ref}} = state
+      ) do
+    target =
+      if state.language == "py",
+        do: "-#{state.os_pid}",
+        else: Integer.to_string(state.os_pid)
+
+    state =
+      start_io(%{state | interrupt_from: [from]}, :interrupt, fn ->
+        System.cmd("/bin/kill", ["-INT", "--", target], stderr_to_stdout: true)
+      end)
+
+    {:next_state, :interrupting, state}
   end
 
-  def handle_call({:interrupt, _ref, _reason}, _from, state), do: {:reply, :preserved, state}
+  def handle_event({:call, from}, {:interrupt, ref, reason}, phase, %{busy: %{ref: ref}} = state)
+      when phase in [:busy, :interrupting] do
+    stop_kernel(%{state | interrupt_from: [from | state.interrupt_from]}, reason, :idle)
+  end
 
-  def handle_call(:os_pid, _from, state), do: {:reply, state.os_pid, state}
+  def handle_event(
+        {:call, from},
+        {:interrupt, ref, _reason},
+        :stopping,
+        %{busy: %{ref: ref}} = state
+      ),
+      do: {:keep_state, %{state | interrupt_from: [from | state.interrupt_from]}}
 
-  @impl true
-  def handle_cast(
+  def handle_event({:call, from}, {:interrupt, _ref, _reason}, _phase, _state),
+    do: {:keep_state_and_data, [{:reply, from, :preserved}]}
+
+  def handle_event(
+        :cast,
         {:tool_reply, ref, call, payload},
+        phase,
         %{busy: %{ref: ref, id: id}, port: port} = state
       )
-      when port != nil do
+      when port != nil and phase in [:busy, :interrupting] do
     frame =
       with {:ok, result} <- payload,
            {:ok, json} <- Jason.encode(%{op: "tool_result", id: id, call: call, result: result}) do
@@ -269,18 +301,59 @@ defmodule CodingAgent.Eval.Kernel do
       ArgumentError -> :ok
     end
 
-    {:noreply, state}
+    {:keep_state, state}
   end
 
-  def handle_cast({:tool_reply, _ref, _call, _payload}, state), do: {:noreply, state}
+  def handle_event(:cast, {:tool_reply, _ref, _call, _payload}, _phase, _state),
+    do: :keep_state_and_data
 
-  @impl true
-  def handle_info({port, {:data, data}}, %{port: port} = state) do
-    {:noreply, consume(state, data)}
+  def handle_event(:info, {port, {:data, data}}, :starting, %{port: port} = state) do
+    {frames, raw, buffer} = split_frames(state.buffer <> data, state.marker)
+    state = %{state | buffer: buffer, startup_output: [state.startup_output | raw]}
+
+    case Enum.find(frames, &match?(%{"type" => "ready"}, &1)) do
+      nil ->
+        {:keep_state, state}
+
+      ready ->
+        state = start_io(state, :verify, fn -> owned_kernel_group(ready, state.os_pid) end)
+        {:next_state, :verifying, state}
+    end
   end
 
-  def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
-    kill_os_processes(state, true)
+  def handle_event(:info, {port, {:data, data}}, phase, %{port: port} = state) do
+    state = consume(state, data)
+
+    if phase in [:busy, :interrupting] and is_nil(state.busy) do
+      # Do not admit another cell while an old SIGINT can still be delivered.
+      if state.operation do
+        {:keep_state, state}
+      else
+        {:next_state, :idle, state, idle_timeout(state)}
+      end
+    else
+      {:keep_state, state}
+    end
+  end
+
+  def handle_event(:info, {ref, result}, phase, %{operation: %{ref: ref, kind: kind}} = state) do
+    Process.demonitor(ref, [:flush])
+    finish_io(kind, result, phase, %{state | operation: nil})
+  end
+
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, reason},
+        _phase,
+        %{operation: %{ref: ref, kind: kind}} = state
+      ) do
+    finish_io(kind, {:io_error, reason}, nil, %{state | operation: nil})
+  end
+
+  def handle_event(:info, {port, {:exit_status, _status}}, :stopping, %{port: port} = state),
+    do: {:keep_state, state}
+
+  def handle_event(:info, {port, {:exit_status, status}}, phase, %{port: port} = state) do
     state = flush_buffer(state)
 
     if state.busy do
@@ -288,57 +361,206 @@ defmodule CodingAgent.Eval.Kernel do
       Process.demonitor(state.busy.monitor, [:flush])
     end
 
-    if state.display_path, do: File.rm(state.display_path)
-    state = complete_interrupt(state, :killed)
+    state = %{state | busy: nil}
 
-    {:noreply,
-     arm_idle(%{
-       state
-       | port: nil,
-         os_pid: nil,
-         kernel_group: nil,
-         busy: nil,
-         lost_reason: :crashed
-     })}
+    state =
+      if phase in [:starting, :verifying] do
+        output = startup_tail([state.startup_output, state.buffer])
+        defer_run_error(state, "kernel exited during startup (status #{status})#{output}")
+      else
+        state
+      end
+
+    stop_kernel(state, :crashed, :idle, true)
   end
 
-  def handle_info({:EXIT, port, _reason}, %{port: port} = state), do: {:noreply, state}
-  def handle_info({:EXIT, _other, _reason}, state), do: {:noreply, state}
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, _reason},
+        _phase,
+        %{owner_ref: ref} = state
+      )
+      when is_reference(ref),
+      do: {:stop, :normal, state}
 
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state) do
-    {:stop, :normal, state}
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, _reason},
+        :stopping,
+        %{pending_run: %{monitor: ref}} = state
+      ),
+      do: {:keep_state, %{state | pending_run: nil}}
+
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, _reason},
+        _phase,
+        %{pending_run: %{monitor: ref}} = state
+      ),
+      do: stop_kernel(%{state | pending_run: nil}, :aborted, :idle)
+
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, _reason},
+        :stopping,
+        %{busy: %{monitor: ref}} = state
+      ),
+      do: {:keep_state, state}
+
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, _reason},
+        _phase,
+        %{busy: %{monitor: ref}} = state
+      ),
+      do: stop_kernel(state, :aborted, :idle)
+
+  def handle_event({:timeout, :startup}, :expired, phase, state)
+      when phase in [:starting, :verifying] do
+    output = startup_tail([state.startup_output, state.buffer])
+
+    state =
+      defer_run_error(
+        state,
+        "kernel did not start within #{div(@startup_timeout_ms, 1000)}s#{output}"
+      )
+
+    stop_kernel(state, :crashed, :idle)
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{busy: %{monitor: ref}} = state) do
-    # The caller died mid-cell; nobody can receive this cell's result.
-    {:noreply, state |> kill_kernel(:aborted) |> arm_idle()}
+  def handle_event(:state_timeout, :interrupt_grace, :interrupting, state),
+    do: stop_kernel(state, :timeout, :idle)
+
+  def handle_event(:state_timeout, :idle, :idle, state) do
+    if state.owner_ref do
+      if state.port, do: stop_kernel(state, :idle, :dormant), else: :keep_state_and_data
+    else
+      {:stop, :normal, state}
+    end
   end
 
-  def handle_info({:idle_timeout, timer}, %{idle_timer: timer, busy: nil} = state) do
-    state = if state.port, do: kill_kernel(state, :idle), else: state
-
-    if state.owner_ref,
-      do: {:noreply, %{state | idle_timer: nil}},
-      else: {:stop, :normal, state}
-  end
-
-  def handle_info({:interrupt_grace, ref}, %{busy: %{ref: ref}} = state) do
-    {:noreply, state |> complete_interrupt(:killed) |> kill_kernel(:timeout) |> arm_idle()}
-  end
-
-  def handle_info(_message, state), do: {:noreply, state}
+  def handle_event(:info, _message, _phase, _state), do: :keep_state_and_data
 
   @impl true
-  def terminate(_reason, state) do
-    if state.port, do: kill_kernel(state, :aborted)
+  def terminate(_reason, _phase, state) do
+    cancel_io(state)
+
+    # Shutdown cannot accept calls. Cleanup still runs outside this callback;
+    # the supervised worker retains the birth witness after the port closes.
+    if state.port do
+      Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
+        kill_os_processes(state, true)
+        if state.display_path, do: File.rm(state.display_path)
+      end)
+    end
+
     :ok
+  end
+
+  defp idle_timeout(state), do: [{:state_timeout, state.idle_timeout_ms, :idle}]
+
+  defp start_io(state, kind, fun) do
+    runner = state.io_runner
+    task = Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn -> runner.(kind, fun) end)
+    %{state | operation: %{ref: task.ref, pid: task.pid, kind: kind}}
+  end
+
+  defp cancel_io(%{operation: nil} = state), do: state
+
+  defp cancel_io(state) do
+    Process.exit(state.operation.pid, :kill)
+    Process.demonitor(state.operation.ref, [:flush])
+    %{state | operation: nil}
+  end
+
+  defp start_run(%{port: nil} = state) do
+    restarted = if state.generation > 0, do: state.lost_reason || :reset
+    state = %{state | pending_run: Map.put(state.pending_run, :restarted, restarted)}
+
+    case open_kernel(state) do
+      {:ok, state} ->
+        {:next_state, :starting, state, [{{:timeout, :startup}, @startup_timeout_ms, :expired}]}
+
+      {:error, reason, state} ->
+        {:next_state, :idle, fail_run(state, reason), idle_timeout(state)}
+    end
+  end
+
+  defp start_run(state), do: execute(state)
+
+  defp execute(state) do
+    pending = state.pending_run
+    id = state.next_id
+    File.write!(state.display_path, "")
+    Port.command(state.port, [Jason.encode!(%{op: "execute", id: id, code: pending.code}), "\n"])
+    ref = make_ref()
+    busy = %{ref: ref, caller: pending.caller, monitor: pending.monitor, id: id}
+    reply = {:ok, %{ref: ref, cell: id, restarted: Map.get(pending, :restarted)}}
+    state = %{state | busy: busy, pending_run: nil, next_id: id + 1, startup_output: []}
+    {:next_state, :busy, state, [{:reply, pending.from, reply}, {{:timeout, :startup}, :cancel}]}
+  end
+
+  defp fail_run(%{pending_run: nil} = state, _reason), do: state
+
+  defp fail_run(state, reason) do
+    :gen_statem.reply(state.pending_run.from, {:error, reason})
+    Process.demonitor(state.pending_run.monitor, [:flush])
+    %{state | pending_run: nil}
+  end
+
+  defp defer_run_error(state, reason),
+    do: %{state | pending_run: Map.put(state.pending_run, :error, reason)}
+
+  defp finish_io(:verify, {:ok, group}, _phase, state),
+    do: execute(%{state | kernel_group: group})
+
+  defp finish_io(:verify, _error, _phase, state) do
+    if match?({:win32, _}, :os.type()) do
+      execute(state)
+    else
+      reason =
+        "could not prove the kernel's own process group (needs ps); refusing to run code whose processes could not be stopped"
+
+      stop_kernel(defer_run_error(state, reason), :crashed, :idle)
+    end
+  end
+
+  defp finish_io(:interrupt, _result, _phase, %{busy: nil} = state),
+    do: {:next_state, :idle, complete_interrupt(state, :preserved), idle_timeout(state)}
+
+  defp finish_io(:interrupt, {_output, 0}, _phase, state),
+    do: {:keep_state, state, [{:state_timeout, 2_000, :interrupt_grace}]}
+
+  defp finish_io(:interrupt, _error, _phase, state), do: stop_kernel(state, :timeout, :idle)
+
+  defp finish_io({:stop, reason, next}, _result, _phase, state) do
+    state = finish_stop(state, reason)
+
+    state =
+      case state.pending_run do
+        %{error: error} -> fail_run(state, error)
+        _ -> state
+      end
+
+    cond do
+      next == :restart and state.pending_run -> start_run(state)
+      next == :dormant -> {:next_state, :idle, state}
+      true -> {:next_state, :idle, state, idle_timeout(state)}
+    end
+  end
+
+  defp stop_kernel(state, reason, next, port_exited \\ false) do
+    state = cancel_io(state)
+
+    state =
+      start_io(state, {:stop, reason, next}, fn -> kill_os_processes(state, port_exited) end)
+
+    {:next_state, :stopping, state, [{{:timeout, :startup}, :cancel}]}
   end
 
   # ── Kernel process ──────────────────────────────────────────────────────
 
-  defp ensure_kernel(%{port: port} = state) when port != nil, do: {:ok, state}
-
-  defp ensure_kernel(state) do
+  defp open_kernel(state) do
     token = :crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false)
     marker = "\x1eLEMONEVAL:" <> token <> ":"
     display_path = Path.join(System.tmp_dir!(), "lemon-eval-display-#{token}.jsonl")
@@ -385,14 +607,7 @@ defmodule CodingAgent.Eval.Kernel do
           lost_reason: nil
       }
 
-      case await_ready(state, System.monotonic_time(:millisecond) + @startup_timeout_ms, []) do
-        {:ok, _state} = ready ->
-          ready
-
-        {:error, reason, state} ->
-          File.rm(display_path)
-          {:error, reason, state}
-      end
+      {:ok, state}
     rescue
       error ->
         File.rm(display_path)
@@ -400,55 +615,10 @@ defmodule CodingAgent.Eval.Kernel do
     end
   end
 
-  defp await_ready(%{port: port} = state, deadline, startup_output) do
-    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
-
-    receive do
-      {^port, {:data, data}} ->
-        {frames, raw, buffer} = split_frames(state.buffer <> data, state.marker)
-        state = %{state | buffer: buffer}
-        startup_output = [startup_output | raw]
-
-        case Enum.find(frames, &match?(%{"type" => "ready"}, &1)) do
-          nil -> await_ready(state, deadline, startup_output)
-          ready -> bind_kernel_group(state, ready)
-        end
-
-      {^port, {:exit_status, status}} ->
-        output = startup_tail([startup_output, state.buffer])
-
-        {:error, "kernel exited during startup (status #{status})#{output}",
-         %{state | port: nil, os_pid: nil, kernel_group: nil, buffer: "", lost_reason: :crashed}}
-    after
-      remaining ->
-        output = startup_tail([startup_output, state.buffer])
-        state = kill_kernel(state, :crashed)
-        {:error, "kernel did not start within #{div(@startup_timeout_ms, 1000)}s#{output}", state}
-    end
-  end
-
   defp startup_tail(iodata) do
     case iodata |> IO.iodata_to_binary() |> BashExecutor.sanitize_output() |> String.trim() do
       "" -> ""
       text -> ":\n" <> String.slice(text, -2000, 2000)
-    end
-  end
-
-  defp bind_kernel_group(state, ready) do
-    case {owned_kernel_group(ready, state.os_pid), :os.type()} do
-      {{:ok, group}, _os} ->
-        {:ok, %{state | kernel_group: group}}
-
-      {:error, {:win32, _}} ->
-        # No birth-witnessed process groups on Windows; the native Port owns cleanup.
-        {:ok, state}
-
-      {:error, _unix} ->
-        state = kill_kernel(state, :crashed)
-
-        {:error,
-         "could not prove the kernel's own process group (needs ps); refusing to run code whose processes could not be stopped",
-         state}
     end
   end
 
@@ -495,17 +665,13 @@ defmodule CodingAgent.Eval.Kernel do
     if state.os_pid, do: ProcessGroup.terminate(state.os_pid, signal: :sigkill)
   end
 
-  defp kill_kernel(%{port: nil} = state, _reason), do: state
-
-  defp kill_kernel(%{port: port} = state, reason) do
-    kill_os_processes(state, false)
-
+  defp finish_stop(state, reason) do
     # Relay output that was produced before the kill.
     state = drain_port(state)
     state = flush_buffer(state)
 
     try do
-      Port.close(port)
+      if state.port, do: Port.close(state.port)
     catch
       :error, _ -> :ok
     end
@@ -533,12 +699,9 @@ defmodule CodingAgent.Eval.Kernel do
     }
   end
 
-  defp complete_interrupt(%{interruption: nil} = state, _outcome), do: state
-
   defp complete_interrupt(state, outcome) do
-    Process.cancel_timer(state.interruption.timer)
-    GenServer.reply(state.interruption.from, outcome)
-    %{state | interruption: nil}
+    Enum.each(state.interrupt_from, &:gen_statem.reply(&1, outcome))
+    %{state | interrupt_from: []}
   end
 
   defp drain_port(%{port: port} = state) do
@@ -595,7 +758,8 @@ defmodule CodingAgent.Eval.Kernel do
 
     notify(state, {:result, frame})
     Process.demonitor(state.busy.monitor, [:flush])
-    state |> complete_interrupt(:preserved) |> Map.put(:busy, nil) |> arm_idle()
+    state = %{state | busy: nil}
+    if state.operation, do: state, else: complete_interrupt(state, :preserved)
   end
 
   defp handle_frame(_frame, state), do: state
@@ -650,15 +814,4 @@ defmodule CodingAgent.Eval.Kernel do
       binary_part(data, byte_size(data) - len, len) == binary_part(marker, 0, len)
     end)
   end
-
-  # ── Idle timer ──────────────────────────────────────────────────────────
-
-  defp arm_idle(state) do
-    state = cancel_idle(state)
-    timer = make_ref()
-    Process.send_after(self(), {:idle_timeout, timer}, state.idle_timeout_ms)
-    %{state | idle_timer: timer}
-  end
-
-  defp cancel_idle(state), do: %{state | idle_timer: nil}
 end

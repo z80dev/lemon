@@ -82,7 +82,7 @@ defmodule LemonCore.Application do
         LemonCore.Secrets.Usage,
         LemonCore.UsageLedger,
         LemonCore.ExecApprovalExpiry,
-        {Task.Supervisor, name: LemonCore.Secrets.SourceTaskSupervisor},
+        LemonCore.TaskSupervisor.child_spec(name: LemonCore.Secrets.SourceTaskSupervisor),
         LemonCore.Secrets.SourceCache
       ] ++
         sqlite_children() ++

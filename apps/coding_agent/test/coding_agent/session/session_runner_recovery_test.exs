@@ -31,7 +31,7 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     state = runner(owner)
     run_ref = state.run_ref
-    state = %{state | translator: %{state.translator | accumulated_text: "missing tail"}}
+    state = %{state | translator: RunTranslator.replace_text(state.translator, "missing tail")}
 
     assert {:stop, :normal, state} =
              SessionRunner.handle_info({:session_terminal, "session-1", :completed}, state)
@@ -56,7 +56,8 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "session-1", {:message_update, %{}, "late delta"}, nil},
+               {:session_event, "session-1", {:message_update, {:text_delta, 0, "late delta"}},
+                nil},
                state
              )
 
@@ -73,7 +74,8 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "other-session", {:message_update, %{}, "foreign"}, nil},
+               {:session_event, "other-session", {:message_update, {:text_delta, 0, "foreign"}},
+                nil},
                state
              )
 
@@ -112,7 +114,7 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     state = %{
       state
-      | translator: %{state.translator | accumulated_text: "Current partial prefix"}
+      | translator: RunTranslator.replace_text(state.translator, "Current partial prefix")
     }
 
     assert {:stop, :normal, state} =

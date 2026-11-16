@@ -108,6 +108,16 @@ Import rechecks exact selected row revisions, rejects foreign identity collision
 replaces only the chosen agent/home scope, and commits the receipt together with
 the rows and FTS updates. A durable pending
 intent is never a successful import and must not be automatically replayed.
+Transfer calls have a five-second deadline, including Store queueing. An import
+timeout returns `:transfer_pending`, not proof of rollback: queued publication or
+commit may still finish. Reconcile the same durable operation key and receipt;
+never automatically retry an uncertain journal mutation as a new operation.
+Snapshot callbacks execute in the capped `LemonMemory.TaskSupervisor`, over
+immutable documents rather than the SQLite connection. Store retains the
+transaction and queues ordinary operations until the callback completes;
+`stats/1` and OTP status still respond during slow filesystem snapshot reads.
+Worker admission failure or death rolls back the snapshot transaction and
+releases queued operations.
 Transfer scans reject more than 2000 agent rows or 500 selected documents rather
 than silently copying a recent window. See the
 [owning transfer API](../lemon_skills/README.md#profile-memory-transfer).

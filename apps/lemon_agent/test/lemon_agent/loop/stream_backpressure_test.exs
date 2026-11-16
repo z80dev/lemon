@@ -17,7 +17,7 @@ defmodule LemonAgent.Loop.StreamBackpressureTest do
         receive do
           :produce ->
             :ok = LemonAi.EventStream.push(provider, {:start, message})
-            :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "partial", message})
+            :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "partial"})
 
             receive do
               :finish -> :ok

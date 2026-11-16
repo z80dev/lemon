@@ -231,7 +231,7 @@ defmodule LemonCore.Rpc.Client do
   defp deliver(data, message) do
     client = self()
 
-    case Task.Supervisor.start_child(data.task_supervisor, fn ->
+    case LemonCore.TaskSupervisor.start_child(data.task_supervisor, fn ->
            try do
              reply = fn payload -> send_message(client, payload) end
 

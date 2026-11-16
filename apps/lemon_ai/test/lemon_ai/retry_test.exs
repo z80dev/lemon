@@ -1,0 +1,277 @@
+defmodule LemonAi.RetryTest do
+  use ExUnit.Case, async: true
+
+  alias LemonAi.Retry
+  alias LemonAi.Types.AssistantMessage
+
+  defp failure(reason) do
+    %AssistantMessage{
+      stop_reason: :error,
+      error_message: LemonAi.Error.format_error(reason),
+      error_details: LemonAi.Error.to_error_details(reason)
+    }
+  end
+
+  defp scripted(results) do
+    parent = self()
+    {:ok, queue} = Agent.start_link(fn -> results end)
+
+    fn number ->
+      send(parent, {:attempt, number})
+
+      Agent.get_and_update(queue, fn
+        [result] -> {result, [result]}
+        [result | rest] -> {result, rest}
+      end)
+    end
+  end
+
+  defp options(extra \\ []) do
+    parent = self()
+
+    Keyword.merge(
+      [
+        base_delay_ms: 2,
+        sleep_fun: fn ms ->
+          send(parent, {:sleep, ms})
+          :ok
+        end
+      ],
+      extra
+    )
+  end
+
+  test "invalid numeric policy never starts an unbounded request loop" do
+    parent = self()
+
+    for key <- [:max_attempts, :base_delay_ms, :max_delay_ms],
+        value <- [:infinity, "3"] do
+      assert_raise ArgumentError, fn ->
+        Retry.run(
+          fn _ ->
+            send(parent, :unexpected_attempt)
+            {:error, :timeout}
+          end,
+          [{key, value}]
+        )
+      end
+    end
+
+    refute_received :unexpected_attempt
+  end
+
+  test "delay helpers stop at the total attempt budget, including throttles and hints" do
+    policy = Retry.policy(max_attempts: 4, base_delay_ms: 1_000, jitter: :none)
+
+    assert Enum.map(0..4, &Retry.delay(policy, &1)) ==
+             [1_000, 2_000, 4_000, :give_up, :give_up]
+
+    assert Retry.delay(policy, 2, 7_000) == 7_000
+    assert Retry.delay(policy, 3, 0) == :give_up
+    assert Retry.delay(policy, 3, 7_000) == :give_up
+    assert Retry.delay(%{policy | max_attempts: 1}, 0) == :give_up
+    assert Retry.backoff_delay_ms(12, policy) == 30_000
+
+    exhausted = %{
+      policy
+      | jitter: :equal,
+        jitter_fun: fn _ -> flunk("exhausted jitter") end,
+        error_retry_after_ms: fn _ -> flunk("exhausted retry hint") end
+    }
+
+    assert Retry.delay(exhausted, 3) == :give_up
+
+    for error <- [:timeout, {:http_error, 429, "Rate limited"}] do
+      assert Retry.retry_delay_ms(error, 3, exhausted) == :give_up
+      assert Retry.retry_delay_ms(error, 3, exhausted, 7_000) == :give_up
+
+      assert Retry.http_retry_delay_ms(3, [{"retry-after", "1"}], exhausted, error) ==
+               :give_up
+    end
+  end
+
+  test "resolved and tuple outcomes recover transient server and overloaded failures" do
+    success = %AssistantMessage{stop_reason: :stop}
+
+    for result <- [
+          failure({:http_error, 529, %{"error" => %{"type" => "overloaded_error"}}}),
+          {:ok, failure("overloaded_error")},
+          {:error, {:http_error, 500, "Internal server error"}}
+        ] do
+      assert Retry.run(scripted([result, {:ok, success}]), options()) == {:ok, success}
+      assert_receive {:attempt, 1}
+      assert_receive {:sleep, delay}
+      assert delay == 2
+      assert_receive {:attempt, 2}
+      refute_received {:attempt, _}
+    end
+  end
+
+  test "client, authentication, overflow and quota errors surface unchanged" do
+    for result <- [
+          {:error, {:http_error, 400, "Bad request"}},
+          failure({:http_error, 401, "Unauthorized"}),
+          {:error, {:http_error, 429, %{"error" => %{"code" => "insufficient_quota"}}}},
+          {:ok, failure({:http_error, 503, %{"error" => %{"code" => "context_length_exceeded"}}})}
+        ] do
+      assert Retry.run(scripted([result]), options()) == result
+      assert_receive {:attempt, 1}
+      refute_received {:attempt, _}
+      refute_received {:sleep, _}
+    end
+  end
+
+  test "backoff is capped but an allowed server hint is never shortened" do
+    success = %AssistantMessage{stop_reason: :stop}
+
+    assert Retry.run(
+             scripted([{:error, :timeout}, success]),
+             options(base_delay_ms: 10_000, max_delay_ms: 1)
+           ) == success
+
+    assert_receive {:attempt, 1}
+    assert_receive {:sleep, 1}
+    assert_receive {:attempt, 2}
+
+    failed = %{failure("Service temporarily unavailable") | retry_after_ms: 17}
+
+    assert Retry.run(
+             scripted([failed, success]),
+             options(base_delay_ms: 1, max_delay_ms: 17)
+           ) == success
+
+    assert_receive {:attempt, 1}
+    assert_receive {:sleep, 17}
+    assert_receive {:attempt, 2}
+    refute_received {:attempt, _}
+  end
+
+  test "throttles never retry before the 10s floor and respect a smaller wait ceiling" do
+    failure =
+      {:error,
+       {:http_error, 429,
+        %{"error" => %{"code" => "1302", "message" => "Rate limit reached for requests"}}}}
+
+    assert Retry.run(scripted([failure, :ok]), options(jitter_fun: fn _ -> 500 end)) == :ok
+    assert_receive {:attempt, 1}
+    assert_receive {:sleep, 10_500}
+    assert_receive {:attempt, 2}
+
+    assert Retry.run(scripted([failure]), options(max_delay_ms: 9_999)) == failure
+    assert_receive {:attempt, 1}
+    refute_received {:sleep, _}
+    refute_received {:attempt, _}
+  end
+
+  test "attempts are bounded per invocation including the first" do
+    for max_attempts <- [0, 1] do
+      assert Retry.run(scripted([{:error, :timeout}]), options(max_attempts: max_attempts)) ==
+               {:error, :timeout}
+
+      assert_receive {:attempt, 1}
+      refute_received {:attempt, _}
+      refute_received {:sleep, _}
+    end
+  end
+
+  test "cancellation before a call never invokes it" do
+    assert Retry.run(scripted([{:error, :timeout}]), options(cancelled?: fn -> true end)) ==
+             {:error, :aborted}
+
+    refute_received {:attempt, _}
+  end
+
+  test "cancellation already visible when an attempt settles preserves its result" do
+    {:ok, state} = Agent.start_link(fn -> false end)
+    original = {:error, :timeout}
+
+    run = fn _ ->
+      Agent.update(state, fn _ -> true end)
+      original
+    end
+
+    assert Retry.run(run, options(cancelled?: fn -> Agent.get(state, & &1) end)) ==
+             original
+
+    refute_received {:sleep, _}
+  end
+
+  test "backoff receives cancellation and always releases its subscription" do
+    parent = self()
+    message = {:cancel_retry, make_ref()}
+
+    task =
+      Task.async(fn ->
+        Retry.run(
+          fn attempt ->
+            send(parent, {:retry_attempt, attempt})
+            {:error, :timeout}
+          end,
+          base_delay_ms: 30_000,
+          max_delay_ms: 30_000,
+          jitter_fun: fn upper -> upper end,
+          subscribe_cancel: fn ->
+            send(parent, :subscribed)
+            {:message, message, fn -> send(parent, :unsubscribed) end}
+          end,
+          cancelled?: fn ->
+            send(parent, :checked)
+            false
+          end
+        )
+      end)
+
+    assert_receive :subscribed
+    assert_receive :checked
+    assert_receive {:retry_attempt, 1}
+    send(task.pid, message)
+    assert Task.await(task) == {:error, :aborted}
+    assert_receive :unsubscribed
+    refute_received {:retry_attempt, 2}
+  end
+
+  test "subscription precedes the initial cancellation check and cleans up on failure" do
+    key = make_ref()
+
+    assert_raise RuntimeError, "completion failed", fn ->
+      Retry.run(
+        fn _ -> raise "completion failed" end,
+        subscribe_cancel: fn ->
+          Process.put(key, :subscribed)
+          {:message, :cancel_retry, fn -> Process.delete(key) end}
+        end,
+        cancelled?: fn ->
+          assert Process.get(key) == :subscribed
+          false
+        end
+      )
+    end
+
+    assert Process.get(key) == nil
+  end
+
+  test "aborted and redirected messages never replay despite transient error metadata" do
+    for reason <- [:aborted, :redirected] do
+      message = %{failure(:timeout) | stop_reason: reason}
+
+      for result <- [message, {:error, message}] do
+        assert Retry.run(scripted([result]), options()) == result
+        assert_receive {:attempt, 1}
+        refute_received {:attempt, _}
+        refute_received {:sleep, _}
+      end
+    end
+  end
+
+  test "one policy owns all three attempts and deterministic backoffs" do
+    result = {:error, :timeout}
+    assert Retry.run(scripted([result]), options(jitter_fun: fn upper -> upper end)) == result
+    assert_receive {:attempt, 1}
+    assert_receive {:sleep, 2}
+    assert_receive {:attempt, 2}
+    assert_receive {:sleep, 4}
+    assert_receive {:attempt, 3}
+    refute_received {:attempt, _}
+    refute_received {:sleep, _}
+  end
+end

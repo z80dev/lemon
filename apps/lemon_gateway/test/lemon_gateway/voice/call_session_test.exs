@@ -4,97 +4,215 @@ defmodule LemonGateway.Voice.CallSessionTest do
   alias LemonGateway.Voice.CallSession
 
   setup do
-    previous_model = Application.get_env(:lemon_gateway, :voice_llm_model)
-    Application.put_env(:lemon_gateway, :voice_llm_model, "unknown-model")
+    unless Process.whereis(LemonGateway.Voice.CallRegistry) do
+      start_supervised!({Registry, keys: :unique, name: LemonGateway.Voice.CallRegistry})
+    end
 
-    on_exit(fn ->
-      if is_nil(previous_model) do
-        Application.delete_env(:lemon_gateway, :voice_llm_model)
-      else
-        Application.put_env(:lemon_gateway, :voice_llm_model, previous_model)
+    supervisor = start_supervised!(Task.Supervisor)
+    %{task_supervisor: supervisor}
+  end
+
+  test "child spec keeps call sessions temporary" do
+    assert CallSession.child_spec(call_sid: "call-1").restart == :temporary
+  end
+
+  test "audio is forwarded and activity updated without changing synthesis", context do
+    session = start_call(context)
+    CallSession.register_deepgram_ws(session, self())
+    CallSession.handle_audio(session, <<1, 2, 3, 4>>)
+
+    assert_receive {:"$websockex_cast", {:send_audio, <<1, 2, 3, 4>>}}
+    assert {:idle, data} = :sys.get_state(session)
+    assert data.deepgram_ws_pid == self()
+    assert DateTime.compare(data.last_activity_at, data.started_at) in [:eq, :gt]
+  end
+
+  test "LLM result is synthesized and recorded through supervised tasks", context do
+    owner = self()
+
+    session =
+      start_call(context,
+        llm_fun: fn history ->
+          send(owner, {:llm_history, history})
+          "generated answer"
+        end
+      )
+
+    transcript(session, "hello")
+    assert_receive {:llm_history, [%{role: "user", content: "hello"} | _]}
+    assert_receive {:tts, "generated answer", task}
+    assert {:synthesizing, %{task: %Task{pid: ^task}}} = :sys.get_state(session)
+    send(task, {:release, <<0, 0>>})
+    assert_receive {:send_audio, _audio}
+    assert {:idle, data} = :sys.get_state(session)
+    assert hd(data.conversation_history) == %{role: "assistant", content: "generated answer"}
+  end
+
+  test "hung TTS expires and the next queued speech succeeds", context do
+    session = start_call(context, tts_timeout_ms: 500)
+    CallSession.speak(session, "hung speech")
+    assert_receive {:tts, "hung speech", hung_task}
+    monitor = Process.monitor(hung_task)
+    CallSession.speak(session, "next speech")
+
+    assert_receive {:DOWN, ^monitor, :process, ^hung_task, reason}, 2_000
+    assert reason in [:killed, :noproc]
+    assert_receive {:tts, "next speech", next_task}, 2_000
+    send(next_task, {:release, <<0, 0>>})
+    assert_receive {:send_audio, _audio}
+    assert {:idle, data} = :sys.get_state(session)
+    refute Enum.any?(data.conversation_history, &(&1.content == "hung speech"))
+    assert hd(data.conversation_history).content == "next speech"
+  end
+
+  test "hung LLM expires without preventing subsequent speech", context do
+    owner = self()
+
+    session =
+      start_call(context,
+        llm_timeout_ms: 500,
+        llm_fun: fn _history ->
+          send(owner, {:llm_started, self()})
+
+          receive do
+            :never -> "late answer"
+          end
+        end
+      )
+
+    transcript(session, "hello")
+    assert_receive {:llm_started, task}
+    monitor = Process.monitor(task)
+    CallSession.speak(session, "still available")
+    assert_receive {:DOWN, ^monitor, :process, ^task, reason}, 2_000
+    assert reason in [:killed, :noproc]
+    assert_receive {:tts, "still available", next_task}, 2_000
+    send(next_task, {:release, <<0, 0>>})
+    assert_receive {:send_audio, _audio}
+    assert {:idle, _data} = :sys.get_state(session)
+  end
+
+  test "playback marks and stale results cannot finish an active task", context do
+    session = start_call(context)
+    CallSession.speak(session, "first")
+    assert_receive {:tts, "first", task}
+    CallSession.speak(session, "second")
+    send(session, :speech_complete)
+    send(session, {make_ref(), {:ok, <<0, 0>>}})
+    send(session, {:DOWN, make_ref(), :process, self(), :normal})
+
+    assert {:synthesizing, data} = :sys.get_state(session)
+    assert data.task.pid == task
+    assert :queue.to_list(data.jobs) == [{:speak, "second"}]
+    send(task, {:release, <<0, 0>>})
+    assert_receive {:send_audio, _audio}
+    assert_receive {:tts, "second", next_task}
+    send(next_task, {:release, <<0, 0>>})
+    assert_receive {:send_audio, _audio}
+    assert {:idle, _data} = :sys.get_state(session)
+  end
+
+  test "TTS failure advances the queue without needing a playback callback", context do
+    session = start_call(context)
+    CallSession.speak(session, "failed")
+    assert_receive {:tts, "failed", task}
+    CallSession.speak(session, "next")
+    send(task, {:release_error, :provider_failed})
+    assert_receive {:tts, "next", next_task}
+    send(next_task, {:release, <<0, 0>>})
+    assert_receive {:send_audio, _audio}
+    assert {:idle, _data} = :sys.get_state(session)
+  end
+
+  test "task death does not crash the call or strand queued work", context do
+    session = start_call(context)
+    CallSession.speak(session, "crashed")
+    assert_receive {:tts, "crashed", task}
+    CallSession.speak(session, "next")
+    Process.exit(task, :kill)
+    assert_receive {:tts, "next", next_task}
+    send(next_task, {:release, <<0, 0>>})
+    assert_receive {:send_audio, _audio}
+    assert {:idle, _data} = :sys.get_state(session)
+  end
+
+  test "ending a call terminates its supervised active task", context do
+    session = start_call(context)
+    CallSession.speak(session, "still running")
+    assert_receive {:tts, "still running", task}
+    task_monitor = Process.monitor(task)
+    session_monitor = Process.monitor(session)
+    CallSession.end_call(session)
+    assert_receive {:DOWN, ^task_monitor, :process, ^task, :killed}
+    assert_receive {:DOWN, ^session_monitor, :process, ^session, :normal}
+  end
+
+  test "a killed call owner cannot orphan its provider task", context do
+    session = start_call(context)
+    CallSession.speak(session, "still running")
+    assert_receive {:tts, "still running", task}
+    monitor = Process.monitor(task)
+    Process.exit(session, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^task, :killed}
+  end
+
+  test "silence closes the call even after goodbye finishes and audio arrives", context do
+    session = start_call(context, silence_timeout_ms: 1_000)
+    monitor = Process.monitor(session)
+    assert_receive {:tts, "Thanks for calling! Goodbye.", goodbye_task}, 2_000
+    CallSession.handle_audio(session, <<0, 0>>)
+    send(goodbye_task, {:release, <<0, 0>>})
+    assert_receive {:send_audio, _audio}
+    assert {:closing, %{task: nil}} = :sys.get_state(session)
+    assert_receive {:DOWN, ^monitor, :process, ^session, :normal}, 4_000
+  end
+
+  test "missing Twilio still advances synthesis", context do
+    session = start_call(context)
+    CallSession.register_twilio_ws(session, nil)
+    CallSession.speak(session, "no websocket")
+    assert_receive {:tts, "no websocket", task}
+    CallSession.speak(session, "next")
+    send(task, {:release, <<0, 0>>})
+    assert_receive {:tts, "next", next_task}
+    assert {:synthesizing, data} = :sys.get_state(session)
+    assert data.task.pid == next_task
+    assert hd(data.conversation_history).content == "no websocket"
+  end
+
+  defp start_call(context, opts \\ []) do
+    owner = self()
+
+    defaults = [
+      call_sid: "statem-call-#{System.unique_integer([:positive])}",
+      task_supervisor: context.task_supervisor,
+      silence_timeout_ms: :infinity,
+      llm_timeout_ms: :infinity,
+      tts_timeout_ms: :infinity,
+      tts_fun: fn text ->
+        send(owner, {:tts, text, self()})
+
+        receive do
+          {:release, audio} -> {:ok, audio}
+          {:release_error, reason} -> {:error, reason}
+        end
       end
-    end)
+    ]
 
-    :ok
+    session = start_supervised!({CallSession, Keyword.merge(defaults, opts)})
+    assert_receive {:tts, _welcome, task}
+    CallSession.register_twilio_ws(session, self())
+    assert {:synthesizing, _data} = :sys.get_state(session)
+    send(task, {:release, <<0, 0>>})
+    assert_receive {:send_audio, _audio}
+    assert {:idle, _data} = :sys.get_state(session)
+    session
   end
 
-  test "generate_response task sends speak cast back to owner process" do
-    state = %CallSession{
-      call_sid: "call-1",
-      from_number: "+15550000000",
-      to_number: "+15551111111",
-      twilio_ws_pid: nil,
-      deepgram_ws_pid: nil,
-      started_at: DateTime.utc_now(),
-      last_activity_at: DateTime.utc_now(),
-      current_utterance: "",
-      is_speaking: false,
-      is_processing: false,
-      response_queue: [],
-      session_key: "voice:+15550000000",
-      conversation_history: [%{role: "user", content: "hello"}],
-      interruption_detected: false
-    }
-
-    assert {:noreply, new_state} = CallSession.handle_info(:generate_response, state)
-    assert new_state.is_processing
-    assert_receive {:"$gen_cast", {:speak, response}}, 1_000
-    assert is_binary(response)
-    assert response != ""
-  end
-
-  test "child spec uses temporary restart to avoid restart loops after normal call end" do
-    spec = CallSession.child_spec(call_sid: "call-1")
-    assert spec.restart == :temporary
-  end
-
-  test "audio_from_twilio forwards audio to deepgram client via cast and updates activity" do
-    before_ts = DateTime.utc_now()
-
-    state = %CallSession{
-      call_sid: "call-1",
-      from_number: "+15550000000",
-      to_number: "+15551111111",
-      twilio_ws_pid: nil,
-      deepgram_ws_pid: self(),
-      started_at: before_ts,
-      last_activity_at: before_ts,
-      current_utterance: "",
-      is_speaking: false,
-      is_processing: false,
-      response_queue: [],
-      session_key: "voice:+15550000000",
-      conversation_history: [],
-      interruption_detected: false
-    }
-
-    assert {:noreply, new_state} =
-             CallSession.handle_cast({:audio_from_twilio, <<1, 2, 3, 4>>}, state)
-
-    assert_receive {:"$websockex_cast", {:send_audio, <<1, 2, 3, 4>>}}, 500
-    assert DateTime.compare(new_state.last_activity_at, before_ts) in [:eq, :gt]
-  end
-
-  test "audio_ready always advances speech state even when twilio websocket is missing" do
-    state = %CallSession{
-      call_sid: "call-1",
-      from_number: "+15550000000",
-      to_number: "+15551111111",
-      twilio_ws_pid: nil,
-      deepgram_ws_pid: nil,
-      started_at: DateTime.utc_now(),
-      last_activity_at: DateTime.utc_now(),
-      current_utterance: "",
-      is_speaking: true,
-      is_processing: true,
-      response_queue: [],
-      session_key: "voice:+15550000000",
-      conversation_history: [],
-      interruption_detected: false
-    }
-
-    assert {:noreply, new_state} = CallSession.handle_info({:audio_ready, <<0, 0>>, "hi"}, state)
-    assert new_state.is_processing == false
-    assert_receive :speech_complete, 500
+  defp transcript(session, text) do
+    CallSession.handle_transcript(session, %{
+      "is_final" => true,
+      "channel" => %{"alternatives" => [%{"transcript" => text}]}
+    })
   end
 end

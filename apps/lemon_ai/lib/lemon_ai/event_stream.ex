@@ -27,14 +27,16 @@ defmodule LemonAi.EventStream do
         idle_timeout: 300_000
       )
 
-      # Attach a supervised task
-      {:ok, task_pid} = Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
-        # ... streaming logic ...
-      end)
-      EventStream.attach_task(stream, task_pid)
+      # Attach a supervised task, or finish the stream on rejected admission.
+      case LemonAi.StreamTaskSupervisor.start_child(fn ->
+             # ... streaming logic ...
+           end) do
+        {:ok, task_pid} -> EventStream.attach_task(stream, task_pid)
+        {:error, reason} -> EventStream.error(stream, {:task_start_failed, reason}, nil)
+      end
 
       # Producer pushes events (with backpressure)
-      case EventStream.push(stream, {:text_delta, 0, "Hello", partial}) do
+      case EventStream.push(stream, {:text_delta, 0, "Hello"}) do
         :ok -> :continue
         {:error, :overflow} -> :stop_producing
         {:error, :canceled} -> :stop_producing
@@ -53,6 +55,11 @@ defmodule LemonAi.EventStream do
   `error/3` preserves the agent reason and partial-state result. Result subscribers
   and first-content timing work for either event format.
 
+  Content events are delta-only: they never contain a growing partial message.
+  Consumers needing a partial answer retain a `LemonAi.StreamAccumulator` and
+  materialize it only for snapshots/resync. Text deltas may be coalesced by
+  subscriber transports; concatenate their bytes, not their event count.
+
   Synchronous pushes have no call timeout. Producers must handle rejected pushes,
   or use `push!/2` with an explicit tagged-throw boundary. A slow server must not
   turn into a producer exit merely because its mailbox takes five seconds to run.
@@ -63,6 +70,17 @@ defmodule LemonAi.EventStream do
   """
 
   use GenServer
+
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, _} -> {:state, :redacted}
+      {:message, _} -> {:message, :redacted}
+      {:reason, _} -> {:reason, :redacted}
+      {:log, _} -> {:log, []}
+      pair -> pair
+    end)
+  end
 
   alias LemonAi.Types.AssistantMessage
 
@@ -83,15 +101,15 @@ defmodule LemonAi.EventStream do
 
   @type event ::
           {:start, AssistantMessage.t()}
-          | {:text_start, non_neg_integer(), AssistantMessage.t()}
-          | {:text_delta, non_neg_integer(), String.t(), AssistantMessage.t()}
-          | {:text_end, non_neg_integer(), String.t(), AssistantMessage.t()}
-          | {:thinking_start, non_neg_integer(), AssistantMessage.t()}
-          | {:thinking_delta, non_neg_integer(), String.t(), AssistantMessage.t()}
-          | {:thinking_end, non_neg_integer(), String.t(), AssistantMessage.t()}
-          | {:tool_call_start, non_neg_integer(), AssistantMessage.t()}
-          | {:tool_call_delta, non_neg_integer(), String.t(), AssistantMessage.t()}
-          | {:tool_call_end, non_neg_integer(), LemonAi.Types.ToolCall.t(), AssistantMessage.t()}
+          | {:text_start, non_neg_integer()}
+          | {:text_delta, non_neg_integer(), String.t()}
+          | {:text_end, non_neg_integer(), String.t()}
+          | {:thinking_start, non_neg_integer()}
+          | {:thinking_delta, non_neg_integer(), String.t()}
+          | {:thinking_end, non_neg_integer(), String.t()}
+          | {:tool_call_start, non_neg_integer(), LemonAi.Types.ToolCall.t()}
+          | {:tool_call_delta, non_neg_integer(), String.t()}
+          | {:tool_call_end, non_neg_integer(), LemonAi.Types.ToolCall.t()}
           | {:done, AssistantMessage.stop_reason(), AssistantMessage.t()}
           | {:error, AssistantMessage.stop_reason(), AssistantMessage.t()}
 
@@ -358,10 +376,12 @@ defmodule LemonAi.EventStream do
   def collect_text(stream) do
     stream
     |> events()
-    |> Enum.reduce("", fn
-      {:text_delta, _idx, delta, _partial}, acc -> acc <> delta
+    |> Enum.reduce([], fn
+      {:text_delta, _idx, delta}, acc -> [delta | acc]
       _, acc -> acc
     end)
+    |> Enum.reverse()
+    |> IO.iodata_to_binary()
   end
 
   @doc """

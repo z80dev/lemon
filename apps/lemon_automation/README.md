@@ -28,6 +28,22 @@ LemonAutomation.Supervisor
   |-- SynthesisRunnerManager (GenServer - scheduled skill synthesis)
 ```
 
+CronManager acknowledges supervisor startup before a monitored supervised worker
+restores its durable inventory, pause state, active-run results and retry scans.
+The manager answers OTP status
+and cached `pause_status/0` during restoration; an as-yet unread pause marker
+returns `:store_unavailable`, never a fabricated unpaused state. Ordinary calls
+and events queue until the worker finishes so they cannot mutate a partial
+inventory or be overwritten by the worker's snapshot. Failed restoration holds
+scheduled dispatch and retries with bounded backoff.
+
+Task supervisors use `LemonCore.TaskSupervisor` for bounded admission (1024
+workers by default, configurable per supervisor in
+`:lemon_core, :task_supervisor_max_children`). Capacity exhaustion and an absent
+supervisor use the caller's existing failure contract; they never launch an
+unsupervised fallback except in explicitly requested standalone cron mode.
+Existing cron retry and kanban lease/reconciliation policies remain unchanged.
+
 ### Execution Flow
 
 CronManager arms one timer for the earliest enabled job's next run, re-arming on

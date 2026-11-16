@@ -35,6 +35,12 @@ the cache, and a manager restart clears it. Versions are validated against the
 executable's mtime; upgrades replace that executable's cached row. A missing
 owner is a cache miss, not a reason to create a caller-owned table.
 
+Hard-killed sessions schedule worktree cleanup under the capped
+`LemonOmp.TaskSupervisor`. If it cannot admit cleanup, the terminal snapshot
+marks the worktree as kept with the task-admission reason; no unsupervised
+fallback can delete it later. The supervisor uses the shared configurable
+1024-task caller-policy default, not a measured throughput limit.
+
 The control plane exposes it as `omp.*` methods and the `omp.session` event.
 See [Delegating to omp](../../docs/user-guide/omp.md) and the
 [tool reference](../../docs/tools/omp.md).

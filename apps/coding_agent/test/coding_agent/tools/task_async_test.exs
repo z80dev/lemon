@@ -67,7 +67,10 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   end
 
   defmodule TaskAsyncExitingRunOrchestrator do
-    def submit(%RunRequest{}), do: exit(:router_unavailable)
+    def submit(%RunRequest{} = request) do
+      send(request.meta.test_owner, {:router_exiting, self()})
+      exit(:router_unavailable)
+    end
   end
 
   setup do
@@ -314,6 +317,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
 
     test "queue_mode followup falls back to router when session pid is unavailable" do
+      {parent, parent_ref, batcher} = start_controlled_followup_parent()
       parent_cwd = "/tmp/task_async_parent"
 
       result =
@@ -336,7 +340,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             }
           end,
           session_module: __MODULE__.TaskAsyncSessionSpy,
-          session_pid: nil,
+          session_pid: parent,
+          async_followup_server: batcher,
           session_key: "agent:main:main",
           agent_id: "main",
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
@@ -344,6 +349,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
+      flush_after_parent_exit(batcher, parent, parent_ref, result.details.task_id)
 
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
       assert followup.session_key == "agent:main:main"
@@ -363,6 +369,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
 
     test "queue_mode followup preserves long router followup output" do
+      {parent, parent_ref, batcher} = start_controlled_followup_parent()
+
       long_output =
         "START_LONG_ROUTER\n" <>
           String.duplicate("router followup body ", 300) <>
@@ -388,13 +396,15 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             }
           end,
           session_module: __MODULE__.TaskAsyncSessionSpy,
-          session_pid: nil,
+          session_pid: parent,
+          async_followup_server: batcher,
           session_key: "agent:main:main",
           agent_id: "main",
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       assert %LemonAgent.Types.AgentToolResult{} = result
+      flush_after_parent_exit(batcher, parent, parent_ref, result.details.task_id)
 
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
       assert followup.prompt == "Task #{result.details.task_id} completed.\n\n" <> long_output
@@ -1153,6 +1163,18 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert :ok = RunGraph.mark_running(run_id)
       assert :ok = TaskStore.mark_running(task_id)
 
+      owner = self()
+
+      server =
+        start_supervised!(
+          {AsyncFollowups,
+           name: nil,
+           schedule_flush: fn destination, message, _delay ->
+             send(owner, {:flush_scheduled, destination, message})
+             make_ref()
+           end}
+        )
+
       outcome =
         {:ok,
          %LemonAgent.Types.AgentToolResult{
@@ -1169,15 +1191,24 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
                        queue_mode: :followup,
                        parent_session_key: "agent:main:main",
                        parent_agent_id: "main",
-                       run_orchestrator: __MODULE__.TaskAsyncExitingRunOrchestrator
+                       run_orchestrator: __MODULE__.TaskAsyncExitingRunOrchestrator,
+                       meta: %{test_owner: owner},
+                       async_followup_server: server
                      },
                      task_id,
                      run_id,
                      outcome
                    )
+
+          assert_receive {:flush_scheduled, ^server, message}
+          send(server, message)
+          assert_receive {:router_exiting, worker}, 1_000
+          ref = Process.monitor(worker)
+          assert_receive {:DOWN, ^ref, :process, ^worker, reason}, 1_000
+          assert reason in [:normal, :noproc]
         end)
 
-      assert log =~ "Task tool failed to auto-followup"
+      assert log =~ "Async completion followup delivery failed"
       assert {:ok, %{status: :completed}, _events} = TaskStore.get(task_id)
       assert {:ok, %{status: :completed}} = RunGraph.get(run_id)
     end
@@ -1525,6 +1556,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       start_supervised!(UnknownAgentOrchestrator)
       UnknownAgentOrchestrator.configure(self())
 
+      {parent, parent_ref, batcher} = start_controlled_followup_parent()
+
       result =
         Task.execute(
           "call_unknown_agent",
@@ -1544,13 +1577,15 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             }
           end,
           session_module: __MODULE__.TaskAsyncSessionSpy,
-          session_pid: nil,
+          session_pid: parent,
+          async_followup_server: batcher,
           session_key: "agent:unknown_agent:main",
           agent_id: "unknown_agent",
           run_orchestrator: UnknownAgentOrchestrator
         )
 
       assert %LemonAgent.Types.AgentToolResult{} = result
+      flush_after_parent_exit(batcher, parent, parent_ref, result.details.task_id)
 
       # First attempt with "unknown_agent" should be rejected
       assert_receive {:router_rejected, %RunRequest{agent_id: "unknown_agent"}}, 1_000
@@ -1558,5 +1593,40 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       # Fallback to "default" should succeed
       assert_receive {:router_fallback, %RunRequest{agent_id: "default"}}, 1_000
     end
+  end
+
+  defp start_controlled_followup_parent do
+    owner = self()
+
+    {parent, parent_ref} =
+      spawn_monitor(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    on_exit(fn -> send(parent, :stop) end)
+
+    batcher =
+      start_supervised!(
+        {AsyncFollowups,
+         name: nil,
+         schedule_flush: fn destination, message, _delay ->
+           send(owner, {:flush_scheduled, destination, message})
+           make_ref()
+         end}
+      )
+
+    {parent, parent_ref, batcher}
+  end
+
+  defp flush_after_parent_exit(batcher, parent, parent_ref, task_id) do
+    # A dead parent at launch cancels its worker. Exercise fallback only after
+    # the child has completed and its followup is waiting for the batch deadline.
+    assert_receive {:flush_scheduled, ^batcher, message}, 1_000
+    assert {:ok, %{status: :completed}, _events} = TaskStore.get(task_id)
+    send(parent, :stop)
+    assert_receive {:DOWN, ^parent_ref, :process, ^parent, :normal}, 1_000
+    send(batcher, message)
   end
 end

@@ -80,25 +80,53 @@ passes tool/reasoning payloads, or appends review output to session history.
 
 ### Supervision Tree
 
-```
+```text
 CodingAgent.Supervisor (one_for_one)
-  +-- RuntimeTables (extension/web/capability caches)
-  +-- Registry (SessionRegistry)
-  +-- Registry (BackgroundRun.Registry)
-  +-- Registry (ProcessRegistry)
-  +-- TodoStoreOwner
-  +-- SessionSupervisor (DynamicSupervisor for Session processes)
-  +-- BackgroundRun.Supervisor (DynamicSupervisor for isolated `/bg` workers)
+  +-- RuntimeTables
+  +-- ToolResourceSupervisor (rest_for_one)
+  |     +-- Eval.Registry, Tools.Lsp.Registry, Debug.Registry
+  |     +-- Eval.KernelSupervisor, Tools.Lsp.Supervisor, Debug.Supervisor
+  |     +-- ToolResources
+  +-- Search.Supervisor (rest_for_one)
+  |     +-- Search.TaskSupervisor (bounded Task.Supervisor)
+  |     +-- Search.SingleFlight
+  +-- Tools.TodoStoreOwner, Tools.Bash.ShellState, Session.UserPrompt
+  +-- MutationLock, FileReadTracker, WorkspaceReads, ConflictStore
+  +-- ExecutionNode.FileService, ExecutionNode.ProcessService
+  +-- ExecutionNode.ToolSession.Tree (rest_for_one)
+  |     +-- ExecutionNode.ToolSession.Registry
+  |     +-- ExecutionNode.ToolSession.Supervisor (DynamicSupervisor)
   +-- Wasm.SidecarSupervisor
-  +-- TaskSupervisor (Task.Supervisor for async ops)
-  +-- TaskStoreServer (DETS-backed async task tracking)
-  +-- ParentQuestionStoreServer (DETS-backed child-to-parent question tracking)
-  +-- RunGraphServer (ETS+DETS persistent run graph)
-  +-- ProcessStoreServer (background process state)
-  +-- ProcessManager (DynamicSupervisor for exec processes)
-+-- LaneQueue (background process launch FIFO)
+  +-- TaskSupervisor (bounded Task.Supervisor)
+  +-- TaskStoreServer, AsyncFollowups, Tools.Task.Control, Tools.Task.Speculation
+  +-- TaskProgressBindingServer, ParentQuestionStoreServer, RunGraphServer
+  +-- ProcessSupervisor (rest_for_one)
+  |     +-- ProcessRegistry
+  |     +-- ProcessStoreServer
+  |     +-- ProcessManager (DynamicSupervisor)
+  |     +-- LaneQueue (background process launch FIFO)
+  +-- SessionTree (rest_for_one)
+  |     +-- SessionRegistry
+  |     +-- SessionSupervisor (DynamicSupervisor)
+  |     +-- Tools.Task.LiveBridgeSupervisor
+  +-- AdvisorSupervisor (DynamicSupervisor; temporary session reviewers)
+  +-- BackgroundRun.Tree (rest_for_one)
+  |     +-- BackgroundRun.Registry
+  |     +-- BackgroundRun.Supervisor (DynamicSupervisor)
   +-- Parallel.Semaphore (task concurrency limit)
 ```
+
+Each dependency subtree has its own restart budget: 10 restarts per 5 seconds
+(an explicit containment policy, not a throughput measurement). Registries start
+before their dynamic supervisors and managers. Registry failure shuts down later
+dependants in reverse order, then starts them in order; unrelated subtrees stay
+up. Sessions, background runs and other temporary children are stopped, never
+automatically replayed.
+
+Task supervisor caps and admission errors are described by
+`LemonCore.TaskSupervisor`. Compaction rejects unavailable/full supervisors with
+`:task_supervisor_unavailable` / `:task_capacity_reached`; it never falls back to
+an unsupervised task.
 
 ### Runtime table ownership
 
@@ -140,7 +168,7 @@ startup/config-registration operations (`init`, `reset`, `register`,
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Session` | Main GenServer orchestrating the agent loop, event dispatch, steering, follow-ups, compaction, and persistence |
-| `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, clears diagnostic queue mirrors on every terminal path, triggers compaction, and fires extension hooks |
+| `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, triggers compaction, and fires extension hooks |
 | `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, tracked worker cleanup, overflow recovery state machine, and compaction result application |
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
 | `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
@@ -529,6 +557,18 @@ Instead of `prompt`, a task (or batch item or swarm node) may pass `steps`: one 
 
 Async completions reach the parent as `Task <name> (<task_id>) [<persona>] completed.` or `… failed: <reason>`, followed by the child's visible answer, so a parent with several children in flight can attribute each one; a failure keeps any partial answer under the failure line. Answers longer than 12,000 characters keep the first 10,000 and end with a pointer to `read agent://<task_id>`, which returns the full stored output.
 
+Native `task` and delegated `agent` completions for the same parent and execution
+authority share a fixed **50 ms completion-batch window**, starting with the first
+arrival (later completions do not extend it). This is a caller latency policy for
+coalescing sibling bursts, not a measured provider optimum. The batch becomes one
+non-preempting live-session followup, or one router submission if the parent is
+unavailable; each child's task/run identity and visible answer remain in the
+`async_followups` provenance list. Different parents, policies, invocation
+authority, or delivery modes never merge. Explicit `collect`/`interrupt` modes and
+managed native-continuation routing retain their semantics. Joins are checked
+again before delivery: selected results are suppressed, while temporary join
+reservations hold completions until selection or joiner death releases them.
+
 Read-only batch items start speculatively while the model is still streaming the call (`[runtime.task].speculative_launch`, default on). As each `tasks[]` object closes, it is validated through the normal depth, parent-restriction, budget/policy and launch path, inheriting the top-level options already streamed, and launched only when that launch is read-only: a read-only persona (`scout`, `reviewer`, `security-reviewer`, or `read_only: true`), or an effective tool policy after parent restriction that allows nothing beyond `read`, `grep`, `find`, `ls` and `agent_message`. Because items inherit top-level options and a model may write `worktree`, `tool_policy` or `cwd` after `tasks`, write-capable items (and `worktree: true` items) always launch at dispatch, so no later option can isolate or narrow a child that already edited the shared checkout. When the call finishes, dispatch adopts the launched children whose parameters equal the finished call's (their receipts are returned, nothing is relaunched) and starts the rest. A finished call whose items differ — for example a `context`, `model` or `cwd` written after `tasks` — cancels every speculative child and launches the finished items; an invalid call, a call the loop never executes (aborted turn, retry, redirect, refused arguments) or an agent loop that exits before dispatch cancels them too. Cancelled speculative children are terminalized as `cancelled` with followups suppressed and their parent budget reservations released. Speculation applies only when `task` would run without review: an approval requirement for `task`, extension `on_tool_call`/`on_tool_result` hooks, plan mode, the nesting cap or `action` other than `run` disable it. Until adoption, a speculative child's progress goes to the parent session rather than the call's update callback.
 
 Use `action: "swarm"` for a dependency graph of up to 32 named tasks. Each node has a unique `name`, its normal task options, and optional `depends_on: ["OtherName"]`. The entire graph, names, native task parameters, and dependency edges are validated before any work starts; cycles, self-dependencies and unknown names are errors. Ready nodes are admitted in declaration order up to `concurrency` (1–32, default 8), including children waiting for global model capacity. Busy native child-budget slots also apply backpressure rather than turning ready nodes into failures. The coordinator consumes no model slot, so a cap of one still works.
@@ -628,7 +668,34 @@ Pass `agent: "scout"`, `"reviewer"`, `"security-reviewer"`, `"sonic"`, or `"task
 
 A `seance` child consults a past session: pass `agent: "seance"` with `source_session` set to a session id or journal path in the current project's sessions directory. The source must belong to the caller's own conversation: the caller's session or one of its header ancestors (forks, task parents); a `task` child of the caller with the same principal; or a session whose last journaled run is recorded in `RunStore` under the caller's session key with the same principal. Unscoped callers (no session id/key), other conversations, other projects or profiles, symlinks, renamed journals and missing sessions are refused before launch; a caller fenced by an unreviewed workspace read may consult only its own lineage. At launch the source's active branch is forked into a fresh child journal next to it (`SessionManager.fork_file/3` with `fresh_budget: true`), so compaction summaries restore as on resume, the source file is never written, and the source's historical spend does not count against the consult (the fork's spend reports to the parent's budget scope). The fork is listed like other task child journals and is deleted if the child never produced an assistant message. The child keeps the source's model unless `model` is given, gets the read-only `read`, `grep`, `find`, `ls` tool set, receives no personal workspace memory, and does not accept `worktree`.
 
-Set `output_schema` on a task or batch child to require a JSON-only final response. Validated data appears as `structured_output` in completion, `poll`, `get`, `join` task rows, and live final progress; JSON `null` remains an explicitly present field. When the final response is invalid JSON or mismatches the schema, the same child session is re-prompted with the validation error up to two more times before the session ends. With the default `schema_mode: "strict"` a still-invalid response fails the task rather than silently accepting prose; `schema_mode: "permissive"` instead completes with the visible text and `details.structured_output_error` (no `structured_output`), so worktree merge-back still runs. Supported JSON Schema constraints include types/unions, objects (`properties`, `required`, `additionalProperties`), arrays (`items`, bounds, uniqueness), strings (length and Unicode regex `pattern`), numeric bounds/`multipleOf`, `enum`, `const`, and `allOf`/`anyOf`/`oneOf`/`not`. Boolean schemas are supported. References, formats, and unsupported keywords are rejected before launching work. Schemas are bounded to 64 KiB encoded JSON and 32 nesting levels; validation errors name the failed JSON path without echoing response values.
+Set `output_schema` on a task or batch child to require a structured result.
+With default `schema_mode: "strict"`, the child receives `submit_result` with
+the schema as its parameters. Validation errors return as tool errors in the
+same turn; the existing caller policy allows the first attempt plus two
+corrections. A third invalid submission fails the task. Acceptance ends the
+turn without another model call, and the validated value becomes
+`structured_output` in completion, `poll`, `get`, `join` and live final progress.
+JSON `null` remains an explicitly present field. A child ending without a
+submission receives at most two reminders in the same session, then fails even
+if its prose happens to be valid JSON. Completion tools remain available to
+read-only personas without granting workspace or external authority.
+
+`schema_mode: "permissive"` retains final-text JSON parsing and two correction
+prompts; exhaustion completes with visible text and
+`details.structured_output_error` (no `structured_output`), allowing worktree
+merge-back. Supported JSON Schema constraints include types/unions, objects
+(`properties`, `required`, `additionalProperties`), arrays (`items`, bounds,
+uniqueness), strings (length and Unicode regex `pattern`), numeric
+bounds/`multipleOf`, `enum`, `const`, and `allOf`/`anyOf`/`oneOf`/`not`.
+Boolean schemas are supported. References, formats and unsupported keywords
+are rejected before launch. Schemas are bounded to 64 KiB encoded JSON and 32
+nesting levels; errors name the failed JSON path without echoing response values.
+
+The deterministic paired fixtures in
+`test/coding_agent/tools/task/submit_result_test.exs` compare malformed text
+(prose, Markdown fences, bare JSON) with schema-valid tool arguments: the
+asserted malformed counts are 2/3 before and 0/3 after. This is a protocol
+fixture comparison, not a measured live-model pass-rate or latency claim.
 
 Task state uses a single-writer contract. `TaskStoreServer` serializes record changes, bounded event appends, explicit-join followup reservations/suppression, and terminalization. Competing completion/error callbacks are first-writer-wins, repeated terminal callbacks are idempotent, and late running/progress updates preserve the terminal state. `RunGraphServer` completes its DETS recovery before reporting startup readiness, then serializes live inserts, transitions, budget updates, and deletes so recovery cannot overwrite accepted live state.
 
@@ -644,6 +711,14 @@ existing 64-message / 256-KiB cap, rather than a queue in the shared control
 coordinator.
 
 For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. Joins reserve followup delivery while waiting. `wait_all` permanently suppresses completed joined tasks, while `wait_any` suppresses only its completed winner and releases every loser; failure, abort, an unknown run, or a child clarification releases the reservation without permanent suppression. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup preserves the full visible task answer and submits router fallbacks as native followup runs; delivery failures are contained after task/run state is terminalized. Async launches fail immediately when their supervised worker cannot start, rather than returning a task id that remains queued forever. Async completions default to `:followup`; `:steer` and `:steer_backlog` also use non-preempting delivery. Live parents finish every already-issued tool call, then receive the completion before their next model request; unavailable parents fall back to router followup runs.
+
+Supervised task admission is bounded independently of the native-child semaphore.
+Capacity exhaustion returns `Background task capacity is exhausted`; an absent
+supervisor returns `Background task supervisor is unavailable`. Neither failure
+runs the task or leaves its task/run/progress bookkeeping queued, and neither
+is retried. `LaneQueue` reports the mapped reason inside `task_start_failed`;
+delegated runs already submitted retain their tracking-error receipt instead of
+claiming that the remote work was never started.
 
 The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
 
@@ -1218,8 +1293,9 @@ Layout and instruction paths remain in the stable system block as session-start 
 ### Interacting with a Session
 
 ```elixir
-# Send a prompt
-:ok = CodingAgent.Session.prompt(session, "Fix the failing test")
+# Subscribe before accepting the prompt, atomically (no timing grace period)
+{:ok, unsubscribe} =
+  CodingAgent.Session.subscribe_prompt(session, "Fix the failing test")
 
 # Steer mid-run
 :ok = CodingAgent.Session.steer(session, "Focus on auth module only")
@@ -1230,6 +1306,37 @@ Layout and instruction paths remain in the stable system block as session-start 
 # Abort current operation
 :ok = CodingAgent.Session.abort(session)
 ```
+
+`steer/3` and `follow_up/3` acknowledge only after the acceptance record has been
+appended and synced to the session journal. Each input carries a stable ID and the
+last observed model-turn index. Pass `id: fixed_id, return_receipt: true` to obtain
+`{:ok, %{id: id, kind: kind, accepted_after_turn: index, status: status}}`; omitting
+`return_receipt` retains the `:ok` result. Reusing an ID with different input is an
+error, never a second enqueue.
+
+`Session.withdraw_steer(session, id)` returns `:ok` only for a queued, unbound
+steer and syncs its withdrawal before replying; otherwise it returns
+`{:error, :not_found}`. `Session.pending_steers/1` returns `{:ok, receipts}` for
+reconciliation. Acceptance, binding and withdrawal notifications carry the same
+IDs (`input_accepted`, `input_bound`, `input_withdrawn`).
+
+Queue binding first fences withdrawal. The ordered consumed-message event then
+persists the accepted text and its exact model-turn index together, once per ID.
+A provisional binding without a consumed message remains replayable after a
+crash; it is never mistaken for completed delivery. Restore requeues acknowledged,
+unconsumed, non-withdrawn inputs in acceptance order without starting a model call.
+An explicit prompt resumes work. Acceptance and final delivery/withdrawal are
+session history, not branch state: navigation cannot resurrect a consumed or
+withdrawn input. `Session.replay_pending_inputs/1` is an idle-only, idempotent recovery hook
+for a live owner whose journal has already been loaded. Follow-ups accepted at
+normal loop shutdown are consumed by that run or start the next run; they do not
+depend on a timer or a polling grace period. Retained roots cannot rebind invocation
+authority or park while their Agent is still executing accepted input, even if
+the next run's events have not yet reached the Session. Finalizing the previous
+runner leaves that busy root alive; its idle notification re-arms bounded root
+retention after queued work completes. Abort retains pending input for an
+explicit subsequent prompt.
+
 
 Recurring check-ins are cron jobs flagged as heartbeats, not session state;
 see [`docs/user-guide/reminders-and-heartbeats.md`](../../docs/user-guide/reminders-and-heartbeats.md).
@@ -1251,11 +1358,26 @@ unsubscribe.()
 {:ok, stream_pid} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 1000)
 ```
 
-Native events preserve the raw event in the third element and carry a cursor in
-the fourth: `%{"version" => 1, "sessionId" => session_id, "streamId" => stream_id,
-"seq" => seq}`. Sequence numbers are gap-free within that live session stream;
-the stream ID distinguishes owner lifetimes. Overflow fences carry `nil` instead
-of a cursor because they are subscription controls, not session events.
+Native events carry the event in the third element and a cursor in the fourth:
+`%{"version" => 1, "sessionId" => session_id, "streamId" => stream_id, "seq" => seq}`.
+The replay log and projected `session.event` batches remain gap-free; the stream
+ID distinguishes owner lifetimes. Overflow fences carry `nil` instead of a
+cursor because they are subscription controls, not session events.
+
+Assistant updates are `{:message_update, provider_event}`, never a growing
+`AssistantMessage`. Text/thinking starts carry an index, tool starts also carry
+`%ToolCall{}` identity, deltas carry index plus binary, and block ends carry their
+final text/thinking/tool call. `message_start` and `message_end` retain messages.
+Partial messages are materialized on demand by `Session.recovery_snapshot/1`
+and the public snapshot/resync path, not attached to every update.
+
+Each direct/stream subscriber coalesces adjacent same-index text deltas until
+the next owner mailbox flush, event boundary, or existing subscriber count/byte
+budget. Its combined event carries the last covered cursor; replay still returns
+the original events. Thinking, tool arguments, lifecycle boundaries and terminal
+events remain ordered and are never merged. Child-task progress likewise sends
+new visible text only; message completion and the tool's final result retain the
+complete answer. Projected control-plane/TUI/channel event shapes are unchanged.
 
 Both subscription modes bound delivery before the subscriber mailbox accepts an
 event. Overflow fences that subscription and explicitly requests recovery; it

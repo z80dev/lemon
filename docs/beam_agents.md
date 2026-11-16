@@ -26,6 +26,31 @@ errors and are not automatically restarted/retried.
   Session persistence and prompt projection are separate: a model-facing safety
   transform must not silently rewrite the user's stored transcript.
 
+Operational work uses capped task supervisors through
+`LemonCore.TaskSupervisor`. The default 1024-task limit is caller policy, not a
+measured throughput claim; a child can set `max_children`, or deployments can
+set `:lemon_core, :task_supervisor_max_children` by registered supervisor name.
+Capacity and absent-supervisor refusals map to `:task_capacity_reached` and
+`:task_supervisor_unavailable`. They never launch a fallback task. Temporary
+tasks are not restarted, and uncertain admissions must not be replayed.
+
+Proxy requests remain attached to their event stream while supervised:
+cancellation shuts down the request and socket even before response headers.
+Honcho uploads and process-exit callbacks are best-effort supervised work;
+admission refusal skips them rather than silently bypassing the cap. ACP
+permission prompts fail closed if their worker cannot start.
+
+The exact path/count exceptions for raw process creation live in
+[`RawProcessArchitectureTest`](../apps/lemon_core/test/lemon_core/raw_process_architecture_test.exs).
+They are lifecycle primitives, not a general permission to launch work:
+cleanup/approval guardians survive forced owner death; cancellation reapers
+finish after their stream or caller exits; VM-drain failsafes survive app-tree
+shutdown; `Bus.Delivery` is bounded and creator/consumer-monitored.
+A documentation-only latch example is counted explicitly too. Remaining
+channel attachment/webhook tasks belong
+to #580/#581 and voice tasks to #588. No compaction, proxy or upload fallback is
+allowlisted. Changing to another unsupervised spawn primitive is not a fix.
+
 ## Event flow
 
 ```text

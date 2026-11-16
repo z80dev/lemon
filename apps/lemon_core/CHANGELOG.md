@@ -76,6 +76,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- New public `LemonCore.Supervision` (supervision subtrees, caps, no
+  unsupervised fallbacks) and `LemonCore.TaskSupervisor` (bounded task
+  admission) (#585).
+- Default-off `features.crash_resume` (`"off"`) for hard-crash continuation of
+  orphaned runs and cut-off task children (#556, #558).
+- Durable steering and follow-up acceptance journaling plus withdraw RPCs (#559).
+- Status hooks and published counters with redaction for diagnostics (#593);
+  crash and torn-write model tests with mutation checks (#555).
+- Consolidated retry, limiter, dedupe and runtime seams (#592); `gen_statem`
+  lifecycles (#588); callbacks without blocking work and bounded calls into
+  shared servers (#587).
 - `LemonCore.Rpc.Client` with `Rpc.Framing`, `Rpc.JsonLines`, `Rpc.ContentLength`
   and `Rpc.Handler`: one request/response owner for stdio and socket peers (#577).
 - `LemonCore.SessionMaintenance` and session lifecycle hooks for index-backed
@@ -182,6 +193,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
+  (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase
   key components, protecting `githubToken`, `openaiApiKey` and similar fields
   while retaining parser `tokens`, `TokenKind`, `token_count` and task names.

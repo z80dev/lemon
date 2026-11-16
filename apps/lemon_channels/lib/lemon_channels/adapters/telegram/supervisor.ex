@@ -29,7 +29,9 @@ defmodule LemonChannels.Adapters.Telegram.Supervisor do
         child_config = merge_config(%{}, explicit) |> Map.put(:bot_token, token)
 
         [
-          {Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor},
+          LemonCore.TaskSupervisor.child_spec(
+            name: LemonChannels.Adapters.Telegram.AsyncSupervisor
+          ),
           # Start the inbound transport (polling)
           {LemonChannels.Adapters.Telegram.Transport, [config: child_config]}
         ]

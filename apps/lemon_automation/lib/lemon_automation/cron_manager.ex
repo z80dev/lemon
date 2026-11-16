@@ -10,6 +10,12 @@ defmodule LemonAutomation.CronManager do
   - Executing due jobs via LemonRouter
   - Tracking run history
 
+  Durable startup restoration runs in a monitored supervised worker. The manager
+  answers OTP status and cached `pause_status/0` during slow restoration, while
+  ordinary calls and events queue until the worker finishes. This prevents a
+  partial inventory or a stale restoration result from overwriting mutations.
+  Failed restoration retains its dispatch hold and retries with bounded backoff.
+
   ## Tick Behavior
 
   The earliest next-run timer drives dispatch. A five-minute safety sweep
@@ -30,6 +36,9 @@ defmodule LemonAutomation.CronManager do
   result rather than scheduling another editor. Only confirmed terminal
   failures are retryable. Pausing prevents future scheduled runs; aborting
   cancels the exact owned router run and does not repeat an ambiguous abort.
+
+  Scheduled retries use `LemonCore.Retry.Policy` for their shared retry budget
+  and fixed, jitter-free delay. Durable lineage, claims and timers remain here.
 
   ## API
 
@@ -103,7 +112,7 @@ defmodule LemonAutomation.CronManager do
 
   use GenServer
 
-  @vsn 2
+  @vsn 3
 
   alias LemonAutomation.{
     CronCommandRunner,
@@ -342,32 +351,26 @@ defmodule LemonAutomation.CronManager do
 
   @impl true
   def init(opts) do
-    # Load existing jobs from storage
-    jobs = CronStore.list_jobs()
-
     clock = Keyword.get(opts, :clock, LemonCore.Clock)
-    now = clock.now_ms()
-    config = Config.load().automation
-
-    {jobs, catch_up_slots, pending} =
-      case restore_startup_schedules() do
-        {:ok, restored, slots} -> {restored, slots, false}
-        {:error, _} -> {jobs, %{}, true}
-      end
 
     state = %{
-      jobs: Map.new(jobs, &{&1.id, &1}),
+      jobs: %{},
       tasks: %{},
       task_refs: %{},
       retry_timer: nil,
       schedule_timer: nil,
       clock: clock,
-      restoration_pending: pending,
+      restoration_pending: true,
       restoration_backoff_ms: 250,
       restoration_timer: nil,
-      catch_up_slots: catch_up_slots,
-      last_cleanup_at_ms: now,
-      run_retention_per_job: config.run_retention_per_job,
+      restoration_task: nil,
+      restoration_token: nil,
+      restoration_initial: true,
+      restoration_pause: nil,
+      restoration_deferred: :queue.new(),
+      catch_up_slots: %{},
+      last_cleanup_at_ms: clock.now_ms(),
+      run_retention_per_job: 100,
       task_supervisor:
         Keyword.get(
           opts,
@@ -383,25 +386,77 @@ defmodule LemonAutomation.CronManager do
       state_vsn: @vsn
     }
 
-    state =
-      state
-      |> recover_stale_active_runs()
-      |> dispatch_due_retries()
-      |> schedule_retry_tick()
-      |> schedule_restoration()
-      |> schedule_next_run()
+    {:ok, state, {:continue, :restore_startup}}
+  end
 
-    # Schedule first tick
+  @impl true
+  def handle_continue(:restore_startup, state) do
     schedule_tick()
+    {:noreply, start_restoration(state)}
+  end
 
-    Logger.info("[CronManager] Started with #{length(jobs)} jobs")
+  def handle_continue(:drain_restoration, state) do
+    case :queue.out(state.restoration_deferred) do
+      {:empty, _queue} ->
+        {:noreply, state}
 
-    {:ok, state}
+      {{:value, message}, queue} ->
+        state = %{state | restoration_deferred: queue}
+
+        result =
+          case message do
+            {:call, message, from} ->
+              case handle_call(message, from, state) do
+                {:reply, reply, state} ->
+                  GenServer.reply(from, reply)
+                  {:noreply, state}
+
+                result ->
+                  result
+              end
+
+            {:cast, message} ->
+              handle_cast(message, state)
+
+            {:info, message} ->
+              handle_info(message, state)
+          end
+
+        case result do
+          {:noreply, %{restoration_task: nil} = state} -> restoration_replay(state)
+          result -> result
+        end
+    end
   end
 
   @impl true
   def code_change(old_vsn, state, _extra) do
     {:ok, migrate_state(old_vsn, state)}
+  end
+
+  @impl true
+  def handle_call(
+        :pause_status,
+        _from,
+        %{restoration_task: task, restoration_initial: initial?} = state
+      )
+      when initial? or not is_nil(task) do
+    result =
+      case state.restoration_pause do
+        {:ok, marker} -> {:ok, pause_status(marker, state)}
+        _ -> {:error, :store_unavailable}
+      end
+
+    {:reply, result, state}
+  end
+
+  def handle_call(
+        message,
+        from,
+        %{restoration_task: task, restoration_initial: initial?} = state
+      )
+      when initial? or not is_nil(task) do
+    {:noreply, defer_restoration(state, {:call, message, from})}
   end
 
   @impl true
@@ -801,31 +856,46 @@ defmodule LemonAutomation.CronManager do
   end
 
   @impl true
+  def handle_cast(message, %{restoration_task: task, restoration_initial: initial?} = state)
+      when initial? or not is_nil(task) do
+    {:noreply, defer_restoration(state, {:cast, message})}
+  end
+
+  @impl true
   def handle_cast(:tick, state) do
     state = do_tick(state)
     {:noreply, state}
   end
 
   @impl true
+  def handle_info({:restoration_pause, token, result}, %{restoration_token: token} = state) do
+    {:noreply, %{state | restoration_pause: result}}
+  end
+
+  def handle_info({ref, result}, %{restoration_task: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    finish_restoration(state, result)
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{restoration_task: %Task{ref: ref}} = state
+      ) do
+    finish_restoration(state, {:failed, nil})
+  end
+
+  def handle_info(message, %{restoration_task: %Task{}} = state) do
+    {:noreply, defer_restoration(state, {:info, message})}
+  end
+
+  def handle_info(message, %{restoration_initial: true} = state)
+      when message != :restore_schedules do
+    {:noreply, defer_restoration(state, {:info, message})}
+  end
+
   def handle_info(:restore_schedules, %{restoration_pending: true} = state) do
-    state = %{state | restoration_timer: nil}
-
-    case restore_startup_schedules() do
-      {:ok, jobs, slots} ->
-        state = %{
-          state
-          | jobs: Map.new(jobs, &{&1.id, &1}),
-            catch_up_slots: slots,
-            restoration_pending: false,
-            restoration_backoff_ms: 250
-        }
-
-        {:noreply,
-         state |> dispatch_due_retries() |> schedule_retry_tick() |> schedule_next_run()}
-
-      {:error, _} ->
-        {:noreply, schedule_restoration(state)}
-    end
+    if state.restoration_timer, do: Process.cancel_timer(state.restoration_timer)
+    {:noreply, start_restoration(%{state | restoration_timer: nil})}
   end
 
   @impl true
@@ -957,6 +1027,12 @@ defmodule LemonAutomation.CronManager do
     {:noreply, state}
   end
 
+  @impl true
+  def terminate(_reason, state) do
+    if task = Map.get(state, :restoration_task), do: Process.exit(task.pid, :kill)
+    :ok
+  end
+
   # ============================================================================
   # Private Functions
   # ============================================================================
@@ -967,12 +1043,13 @@ defmodule LemonAutomation.CronManager do
     Process.send_after(self(), :tick, 300_000)
   end
 
-  defp schedule_next_run(state) do
+  defp schedule_next_run(state, held? \\ nil) do
     if timer = Map.get(state, :schedule_timer), do: Process.cancel_timer(elem(timer, 0))
     now = clock_now(state)
+    held? = if is_nil(held?), do: dispatch_held?(state), else: held?
 
     next =
-      if dispatch_held?(state) do
+      if held? do
         nil
       else
         state.jobs
@@ -1016,17 +1093,110 @@ defmodule LemonAutomation.CronManager do
 
   defp abort_router_run(_run), do: :ok
 
-  # Failed durable skips hold dispatch without restarting the supervision tree.
-  defp restore_startup_schedules do
-    with {:ok, marker} <- CronStore.global_pause(),
-         {:ok, jobs} <- CronStore.list_jobs_result() do
-      restore_schedules(
-        jobs,
-        LemonCore.Clock.now_ms(),
-        Config.load().automation.catch_up_missed,
-        marker != nil
-      )
+  defp start_restoration(state) do
+    manager = self()
+    token = make_ref()
+    initial? = state.restoration_initial
+
+    work = fn ->
+      try do
+        restore_startup_schedules(manager, token, initial?)
+      rescue
+        _ -> {:failed, nil}
+      catch
+        _, _ -> {:failed, nil}
+      end
     end
+
+    case start_monitored_task(work, state) do
+      {:ok, task} ->
+        %{state | restoration_task: task, restoration_token: token, restoration_pause: nil}
+
+      {:error, _} ->
+        schedule_restoration(state)
+    end
+  end
+
+  defp restore_startup_schedules(manager, token, initial?) do
+    config = Config.load().automation
+    marker = CronStore.global_pause()
+    send(manager, {:restoration_pause, token, marker})
+
+    result =
+      with {:ok, marker} <- marker,
+           {:ok, jobs} <- CronStore.list_jobs_result(),
+           {:ok, jobs, slots} <-
+             restore_schedules(
+               jobs,
+               LemonCore.Clock.now_ms(),
+               config.catch_up_missed,
+               marker != nil
+             ),
+           {:ok, active_runs} <- CronStore.active_runs_result(),
+           {:ok, retries} <- CronStore.pending_retries_result() do
+        {:ok, jobs, slots, recovery_results(active_runs), retries, marker != nil}
+      end
+
+    fallback = if initial? and match?({:error, _}, result), do: CronStore.list_jobs()
+    {result, fallback, config.run_retention_per_job}
+  end
+
+  defp finish_restoration(state, {result, fallback, retention}) do
+    state = %{
+      state
+      | restoration_task: nil,
+        restoration_token: nil,
+        restoration_initial: false,
+        run_retention_per_job: retention
+    }
+
+    state =
+      case result do
+        {:ok, jobs, slots, active_runs, retries, paused?} ->
+          %{
+            state
+            | jobs: Map.new(jobs, &{&1.id, &1}),
+              catch_up_slots: slots,
+              restoration_pending: false,
+              restoration_backoff_ms: 250
+          }
+          |> recover_stale_active_runs(LemonCore.Clock.now_ms(), active_runs)
+          |> schedule_restored_retries(retries, paused?)
+          |> schedule_next_run(paused?)
+
+        {:error, _} ->
+          state =
+            if is_list(fallback),
+              do: %{state | jobs: Map.new(fallback, &{&1.id, &1})},
+              else: state
+
+          schedule_restoration(state)
+      end
+
+    restoration_replay(state)
+  end
+
+  defp finish_restoration(state, {:failed, _reason}) do
+    state = %{state | restoration_task: nil, restoration_token: nil}
+    restoration_replay(schedule_restoration(state))
+  end
+
+  defp schedule_restored_retries(%{retry_timer: nil} = state, retries, paused?) do
+    schedule_retry_tick(state, retries, paused?)
+  end
+
+  defp schedule_restored_retries(state, _retries, _paused?), do: state
+
+  defp defer_restoration(state, message) do
+    %{state | restoration_deferred: :queue.in(message, state.restoration_deferred)}
+  end
+
+  defp restoration_replay(%{restoration_initial: true} = state), do: {:noreply, state}
+
+  defp restoration_replay(state) do
+    if :queue.is_empty(state.restoration_deferred),
+      do: {:noreply, state},
+      else: {:noreply, state, {:continue, :drain_restoration}}
   end
 
   defp schedule_restoration(%{restoration_pending: true, restoration_timer: nil} = state) do
@@ -1269,7 +1439,7 @@ defmodule LemonAutomation.CronManager do
 
     all_jobs = Map.values(state.jobs)
     LemonCore.Telemetry.cron_tick(length(all_jobs))
-    state = recover_stale_active_runs(state, now)
+    state = recover_stale_active_runs(state, now, nil)
 
     state =
       if now - Map.get(state, :last_cleanup_at_ms, 0) >= 3_600_000 do
@@ -1317,9 +1487,11 @@ defmodule LemonAutomation.CronManager do
       true
   end
 
-  defp recover_stale_active_runs(state, now \\ LemonCore.Clock.now_ms()) do
+  defp recover_stale_active_runs(state, now, results) do
     # Include orphaned runs: removing a job must not drop ownership of its editor.
-    Enum.reduce(CronStore.active_runs(), state, fn run, state ->
+    results = results || recovery_results(CronStore.active_runs())
+
+    Enum.reduce(results, state, fn {run, outcome}, state ->
       job = Map.get(state.jobs, run.job_id)
 
       cond do
@@ -1327,7 +1499,7 @@ defmodule LemonAutomation.CronManager do
           state
 
         is_binary(run.run_id) ->
-          case durable_result(run.run_id) do
+          case outcome do
             {:terminal, result} ->
               result =
                 if meta_value(run.meta, :abort_requested),
@@ -1360,6 +1532,13 @@ defmodule LemonAutomation.CronManager do
     _ ->
       Logger.warning("[CronManager] Active run reconciliation unavailable")
       state
+  end
+
+  defp recovery_results(runs) do
+    Enum.map(runs, fn run ->
+      outcome = if is_binary(run.run_id), do: durable_result(run.run_id), else: :unknown
+      {run, outcome}
+    end)
   end
 
   defp durable_result(run_id) do
@@ -1909,11 +2088,11 @@ defmodule LemonAutomation.CronManager do
 
   defp persist_retry_intent(%CronJob{} = job, %CronRun{} = run) do
     current_attempt = retry_attempt(run)
-    max_retries = max_retries(job)
+    policy = retry_policy(job)
 
-    if retryable_run?(run) and current_attempt < max_retries do
+    if retryable_run?(run) and LemonCore.Retry.retry_allowed?(current_attempt, policy) do
       next_attempt = current_attempt + 1
-      due_at_ms = LemonCore.Clock.now_ms() + retry_delay_ms(job)
+      due_at_ms = LemonCore.Clock.now_ms() + LemonCore.Retry.delay(policy, current_attempt)
 
       meta =
         (run.meta || %{})
@@ -2020,10 +2199,11 @@ defmodule LemonAutomation.CronManager do
     CronStore.put_run(%{source_run | meta: meta})
   end
 
-  defp schedule_retry_tick(state) do
+  defp schedule_retry_tick(state, retries \\ nil, held? \\ nil) do
     if state.retry_timer, do: Process.cancel_timer(state.retry_timer)
+    startup? = not is_nil(retries)
 
-    case CronStore.pending_retries() do
+    case retries || CronStore.pending_retries() do
       [] ->
         %{state | retry_timer: nil}
 
@@ -2039,10 +2219,12 @@ defmodule LemonAutomation.CronManager do
         # A past-due retry may be waiting for another active run. Poll gently;
         # the persisted due time remains the authority across restarts. Nothing
         # dispatches while paused, so only re-check at the normal tick cadence.
+        held? = if is_nil(held?), do: dispatch_held?(state), else: held?
+
         delay_ms =
           cond do
-            dispatch_held?(state) -> @tick_interval_ms
-            due_at_ms <= now -> 1_000
+            held? -> @tick_interval_ms
+            due_at_ms <= now -> if(startup?, do: 0, else: 1_000)
             true -> due_at_ms - now
           end
 
@@ -2086,6 +2268,17 @@ defmodule LemonAutomation.CronManager do
   defp max_retries(%CronJob{max_retries: value}) when is_integer(value) and value > 0, do: value
   defp max_retries(_job), do: 0
 
+  defp retry_policy(job) do
+    delay = retry_delay_ms(job)
+
+    LemonCore.Retry.policy(
+      max_attempts: max_retries(job) + 1,
+      base_delay_ms: delay,
+      max_delay_ms: delay,
+      jitter: :none
+    )
+  end
+
   defp retry_delay_ms(%CronJob{retry_backoff_ms: value}) when is_integer(value) and value >= 0,
     do: value
 
@@ -2113,14 +2306,10 @@ defmodule LemonAutomation.CronManager do
   defp start_monitored_task(fun, state) when is_function(fun, 0) do
     supervisor = state.task_supervisor
 
-    if supervisor_alive?(supervisor) do
-      {:ok, Task.Supervisor.async_nolink(supervisor, fun)}
+    if state.standalone_mode and not supervisor_alive?(supervisor) do
+      {:ok, Task.async(fun)}
     else
-      if state.standalone_mode do
-        {:ok, Task.async(fun)}
-      else
-        {:error, :task_supervisor_unavailable}
-      end
+      LemonCore.TaskSupervisor.async_nolink(supervisor, fun)
     end
   rescue
     error -> {:error, {:task_start_exception, error}}
@@ -2582,6 +2771,11 @@ defmodule LemonAutomation.CronManager do
     |> Map.put_new(:retry_timer, nil)
     |> Map.put_new(:task_supervisor, @task_supervisor)
     |> Map.put_new(:standalone_mode, false)
+    |> Map.put_new(:restoration_task, nil)
+    |> Map.put_new(:restoration_token, nil)
+    |> Map.put_new(:restoration_initial, false)
+    |> Map.put_new(:restoration_pause, nil)
+    |> Map.put_new(:restoration_deferred, :queue.new())
     |> Map.put(:state_vsn, @vsn)
   end
 
@@ -2593,6 +2787,11 @@ defmodule LemonAutomation.CronManager do
       retry_timer: nil,
       task_supervisor: @task_supervisor,
       standalone_mode: false,
+      restoration_task: nil,
+      restoration_token: nil,
+      restoration_initial: false,
+      restoration_pause: nil,
+      restoration_deferred: :queue.new(),
       state_vsn: @vsn
     }
   end

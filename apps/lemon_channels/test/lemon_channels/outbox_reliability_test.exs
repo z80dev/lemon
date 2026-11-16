@@ -2,7 +2,8 @@ defmodule LemonChannels.OutboxReliabilityTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.{OutboundPayload, Outbox, Registry}
-  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Dedupe}
+  alias LemonCore.RateLimiter
 
   defmodule ControlledPlugin do
     @behaviour LemonChannels.Plugin
@@ -35,7 +36,14 @@ defmodule LemonChannels.OutboxReliabilityTest do
     original_config = Application.fetch_env(:lemon_channels, Outbox)
 
     for module <- [Registry, RateLimiter, Dedupe, Outbox] do
-      if is_nil(Process.whereis(module)), do: start_supervised!(module)
+      if is_nil(
+           Process.whereis(
+             if(module == LemonCore.RateLimiter,
+               do: LemonChannels.Outbox.RateLimiter,
+               else: module
+             )
+           )
+         ), do: start_supervised!(module)
     end
 
     Registry.register(ControlledPlugin)

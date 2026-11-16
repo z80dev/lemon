@@ -40,7 +40,10 @@ defmodule LemonChannels.Outbox do
   reports an exception thrown by its send call, as unknown.
 
   Retries are bounded by `max_attempts` (default 3 retries), one budget shared
-  by all retryable failures, with exponential backoff. When the budget is spent
+  by all retryable failures, with `LemonCore.Retry.Policy` exponential backoff
+  (without jitter). Without a positive server retry hint, retries back off for
+  1, 2, then 4 seconds. Scheduling and durable retry state remain owned here.
+  When the budget is spent
   the last failure is reported to the notifier as terminal. Dedupe is marked only
   on confirmed delivery, so a confirmed send is never re-sent: a repeated
   enqueue with the same idempotency key, and a pending retry whose key was
@@ -60,7 +63,8 @@ defmodule LemonChannels.Outbox do
   require Logger
 
   alias LemonChannels.{OutboundPayload, Registry}
-  alias LemonChannels.Outbox.{Chunker, Dedupe, QueueStore, RateLimiter}
+  alias LemonChannels.Outbox.{Chunker, Dedupe, QueueStore}
+  alias LemonCore.RateLimiter
 
   @worker_supervisor LemonChannels.Outbox.WorkerSupervisor
   @default_max_attempts 3
@@ -350,8 +354,10 @@ defmodule LemonChannels.Outbox do
   # `:unknown_channel` is a configuration/programming error and will never
   # succeed by retrying.
   defp handle_delivery_failure(state, task_ref, entry, reason) do
-    if retryable_reason?(reason) and entry.attempts < (state.max_attempts || max_attempts()) do
-      {entry, delay_ms} = schedule_retry(entry, reason)
+    policy = retry_policy(state.max_attempts || max_attempts())
+
+    if retryable_reason?(reason) and LemonCore.Retry.retry_allowed?(entry.attempts, policy) do
+      {entry, delay_ms} = schedule_retry(entry, reason, policy)
       Logger.warning("Outbox delivery retry scheduled; attempt=#{entry.attempts}")
 
       queue_storage(state, %{
@@ -568,7 +574,11 @@ defmodule LemonChannels.Outbox do
   end
 
   defp dispatch_entry(state, entry, queue, min_wait_ms) do
-    case RateLimiter.consume(entry.payload.channel_id, entry.payload.account_id) do
+    case RateLimiter.consume(
+           LemonChannels.Outbox.RateLimiter,
+           entry.payload.channel_id,
+           entry.payload.account_id
+         ) do
       :ok ->
         task = start_delivery_task(entry, state.worker_supervisor)
         entry = Map.put(entry, :worker_pid, task.pid)
@@ -693,15 +703,13 @@ defmodule LemonChannels.Outbox do
       launcher = self()
 
       try do
-        task =
-          Task.Supervisor.async_nolink(worker_supervisor, fn ->
-            Process.link(launcher)
-            do_deliver(payload)
-          end)
-
-        Task.await(task, :infinity)
-      rescue
-        _ -> {:error, {:delivery_not_started, :capacity}}
+        case LemonCore.TaskSupervisor.async_nolink(worker_supervisor, fn ->
+               Process.link(launcher)
+               do_deliver(payload)
+             end) do
+          {:ok, task} -> Task.await(task, :infinity)
+          {:error, reason} -> {:error, {:delivery_not_started, reason}}
+        end
       catch
         :exit, _ -> {:error, {:outcome_unknown, :worker_exit}}
       end
@@ -713,7 +721,10 @@ defmodule LemonChannels.Outbox do
 
     case Process.whereis(worker_supervisor) do
       nil ->
-        case Task.Supervisor.start_link(worker_supervisor_options(opts)) do
+        %{start: {module, function, args}} =
+          LemonCore.TaskSupervisor.child_spec(worker_supervisor_options(opts))
+
+        case apply(module, function, args) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
           {:error, _} = err -> err
@@ -986,20 +997,28 @@ defmodule LemonChannels.Outbox do
     end
   end
 
-  defp schedule_retry(entry, reason) do
-    attempt = entry.attempts + 1
-    delay_ms = retry_delay(attempt, reason)
+  defp retry_policy(max_attempts) do
+    LemonCore.Retry.policy(
+      max_attempts: max_attempts + 1,
+      base_delay_ms: 1_000,
+      max_delay_ms: :infinity,
+      max_retry_after_ms: :infinity,
+      jitter: :none
+    )
+  end
+
+  defp schedule_retry(entry, reason, policy) do
+    # Retry-after parsing uses zero for an absent hint; passing it to delay/3
+    # would override exponential backoff with an immediate retry.
+    hint =
+      case retry_after_ms(reason) do
+        0 -> nil
+        delay_ms -> delay_ms
+      end
+
+    delay_ms = LemonCore.Retry.delay(policy, entry.attempts, hint)
     available_at_ms = System.system_time(:millisecond) + delay_ms
-    {%{entry | attempts: attempt, available_at_ms: available_at_ms}, delay_ms}
-  end
-
-  defp retry_delay(attempt, reason) do
-    max(exponential_retry_delay(attempt), retry_after_ms(reason))
-  end
-
-  defp exponential_retry_delay(attempt) do
-    # Exponential backoff: 1s, 2s, 4s
-    LemonCore.Retry.exponential_backoff(1000, max(attempt - 1, 0))
+    {%{entry | attempts: entry.attempts + 1, available_at_ms: available_at_ms}, delay_ms}
   end
 
   defp retry_after_ms({:http_error, 429, body}) do

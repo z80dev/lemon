@@ -167,7 +167,7 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
 
         Task.start(fn ->
           LemonAi.EventStream.push(stream, {:start, partial_response})
-          LemonAi.EventStream.push(stream, {:text_start, 0, partial_response})
+          LemonAi.EventStream.push(stream, {:text_start, 0})
           LemonAi.EventStream.push(stream, {:error, :rate_limited, partial_response})
           LemonAi.EventStream.complete(stream, partial_response)
         end)

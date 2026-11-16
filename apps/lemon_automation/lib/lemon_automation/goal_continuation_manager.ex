@@ -22,12 +22,12 @@ defmodule LemonAutomation.GoalContinuationManager do
 
   @impl true
   def handle_call({:continue_once, session_key, opts}, from, state) do
-    task =
-      Task.Supervisor.async_nolink(LemonAutomation.TaskSupervisor, fn ->
-        GoalLoopManager.run_once(session_key, Keyword.put(opts, :verdict, :continue))
-      end)
-
-    {:noreply, put_in(state.calls[task.ref], from)}
+    case LemonCore.TaskSupervisor.async_nolink(LemonAutomation.TaskSupervisor, fn ->
+           GoalLoopManager.run_once(session_key, Keyword.put(opts, :verdict, :continue))
+         end) do
+      {:ok, task} -> {:noreply, put_in(state.calls[task.ref], from)}
+      {:error, _reason} = error -> {:reply, error, state}
+    end
   rescue
     error -> {:reply, {:error, error}, state}
   end

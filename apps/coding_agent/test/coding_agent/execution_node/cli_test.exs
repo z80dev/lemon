@@ -351,17 +351,29 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     for tag <- [:pair_request, :pair_approve, {:pair_challenge, "bound-node"}],
         reason <- [:timeout, :disconnected] do
       assert {:stop, {:pairing_failed, :outcome_unknown}, ^state} =
-               Worker.handle_info(
+               Worker.handle_event(
+                 :info,
                  {:execution_node_socket, self(), {:response, tag, {:error, reason}}},
+                 :connecting,
                  state
                )
     end
 
     assert {:stop, {:pairing_failed, :outcome_unknown}, ^state} =
-             Worker.handle_info({:execution_node_socket, self(), {:disconnected, :closed}}, state)
+             Worker.handle_event(
+               :info,
+               {:execution_node_socket, self(), {:disconnected, :closed}},
+               :connecting,
+               state
+             )
 
     assert {:stop, {:pairing_failed, :outcome_unknown}, ^state} =
-             Worker.handle_info({:execution_node_socket, self(), {:connected, %{}}}, state)
+             Worker.handle_event(
+               :info,
+               {:execution_node_socket, self(), {:connected, %{}}},
+               :connecting,
+               state
+             )
   end
 
   test "one-shot local runtime startup failure has a bounded non-rejection result" do
@@ -394,24 +406,30 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     rejection = %{"code" => "UNAUTHORIZED", "message" => "private server diagnostic"}
 
     assert {:stop, {:pairing_failed, :invite_rejected}, ^state} =
-             Worker.handle_info(
+             Worker.handle_event(
+               :info,
                {:execution_node_socket, self(), {:response, :pair_request, {:error, rejection}}},
+               :connecting,
                state
              )
 
     assert {:stop, {:pairing_failed, :outcome_unknown}, ^state} =
-             Worker.handle_info(
+             Worker.handle_event(
+               :info,
                {:execution_node_socket, self(),
                 {:response, {:pair_challenge, "node"}, {:error, rejection}}},
+               :connecting,
                state
              )
 
     for {stage, outcome} <- [{nil, :invite_rejected}, {:requesting, :outcome_unknown}] do
       current = %{state | pairing_stage: stage}
 
-      assert {:noreply, ^current} =
-               Worker.handle_info(
+      assert {:keep_state, ^current} =
+               Worker.handle_event(
+                 :info,
                  {:execution_node_socket, self(), {:authentication_error, rejection}},
+                 :connecting,
                  current
                )
 

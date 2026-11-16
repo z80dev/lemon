@@ -5,8 +5,10 @@ OpenAI, Google, AWS Bedrock, Azure, Groq, Mistral, xAI, DeepSeek, OpenRouter, an
 through **one streaming API**, with a built-in model registry, per-provider circuit
 breaking and rate limiting, and cost accounting. No web framework, no umbrella, no
 runtime dependencies beyond [`req`](https://hex.pm/packages/req),
-[`jason`](https://hex.pm/packages/jason), and
-[`nimble_options`](https://hex.pm/packages/nimble_options).
+[`finch`](https://hex.pm/packages/finch),
+[`jason`](https://hex.pm/packages/jason),
+[`nimble_options`](https://hex.pm/packages/nimble_options), and
+[`websockex`](https://hex.pm/packages/websockex).
 
 The whole surface is `LemonAi.stream/3` and `LemonAi.complete/3` plus a handful of helpers. Point
 a `%LemonAi.Types.Model{}` at any provider and the rest of your code stays identical.
@@ -71,8 +73,8 @@ keys explicitly or rely on the environment.
 stream
 |> LemonAi.EventStream.events()
 |> Enum.each(fn
-  {:text_delta, _idx, delta, _partial} -> IO.write(delta)
-  {:thinking_delta, _idx, delta, _partial} -> IO.write([IO.ANSI.faint(), delta, IO.ANSI.reset()])
+  {:text_delta, _idx, delta} -> IO.write(delta)
+  {:thinking_delta, _idx, delta} -> IO.write([IO.ANSI.faint(), delta, IO.ANSI.reset()])
   {:done, _reason, _message} -> IO.puts("\n-- done --")
   {:error, _reason, message} -> IO.puts("Error: #{message.error_message}")
   _ -> :ok
@@ -93,6 +95,31 @@ Non-blocking lifecycle observers can call
 subscriber and later sends `{:event_stream_result, reference, result}`. This
 guarantees that a subsequent cancellation cannot overtake result registration.
 
+### Delta-only event contract (breaking package change)
+
+Provider content events no longer carry an `AssistantMessage` snapshot:
+
+- Starts: `{:text_start, index}`, `{:thinking_start, index}`,
+  `{:tool_call_start, index, tool_call}` (tool identity/initial arguments).
+- Deltas: `{:text_delta | :thinking_delta | :tool_call_delta, index, delta}`.
+  Tool argument deltas are JSON fragments.
+- Ends: `{:text_end, index, text}`, `{:thinking_end, index, thinking}`,
+  `{:tool_call_end, index, tool_call}`.
+- `{:start, message}`, `{:done, reason, message}` and
+  `{:error, reason, message}` retain their existing shapes. Terminal messages
+  retain complete content, usage and provider signatures.
+
+Render delta bytes in order; subscriber transports may combine adjacent text
+deltas for the same block without changing their concatenated bytes. Consumers
+that need partial answers can keep `LemonAi.StreamAccumulator.new(message)`, feed
+events through `apply/2`, and call `snapshot/1` on demand. It retains chunks rather
+than copying a growing binary on every event. Do not materialize a snapshot on
+each delta. `result/2` and `collect_text/1` still return the same final text.
+
+The opt-in 100 KiB tool-argument benchmark is excluded from default tests; see
+`apps/lemon_ai/test/lemon_ai/stream_delta_benchmark_test.exs` for its focused command
+and the byte-copy accounting method. No live provider calls are required.
+
 `LemonAi.complete/3` collects the stream privately and retries classified transient
 completion errors, including resolved error messages, up to **three total attempts**.
 Its attempt budget replaces nested provider HTTP retries rather than multiplying
@@ -107,7 +134,7 @@ LemonAi.complete(model, context, retry: [max_attempts: 2, max_delay_ms: 10_000])
 LemonAi.complete(model, context, retry: [max_attempts: 1])
 ```
 
-`LemonAi.OneshotRetry.run/2` provides the same bounded policy for side-effect-free
+`LemonAi.Retry.run/2` provides the same bounded policy for side-effect-free
 completion callbacks, with per-call `sleep_fun`, `cancelled?` and
 `subscribe_cancel` hooks. A subscription returns
 `{:message, cancellation_message, unsubscribe_fun}`; backoff waits receive that
@@ -118,6 +145,48 @@ not acquire oneshot retries; the agent loop refuses replay after any text,
 thinking or tool update, even if later partials erase the content. Metadata-only
 failed attempts do not leave dangling transcript starts, and reported usage from
 failed attempts remains charged to the cumulative agent budget.
+
+### Preconnect and opt-in hedging
+
+`LemonAi.preconnect(model)` asynchronously hints the stock `Req.Finch` pool with
+an unauthenticated `HEAD /` to the model's origin. It never generates tokens or
+sends credentials/prompts; failure does not affect calls. Caller policy coalesces
+each origin for 30 seconds and permits eight distinct origins per window, with
+eight concurrent tasks maximum. Servers may close connections;
+first-request latency improvements still require the #546 measurement.
+
+Request hedging is **off for every provider by default**, including subscription
+providers whose quotas count duplicate calls. Enable only selected providers:
+
+```elixir
+config :lemon_ai, LemonAi.CallDispatcher, hedging: %{openai: true}
+```
+
+The dispatcher retains the latest 100 first-content-event latencies per
+provider/model (caller policy), using their nearest-rank p90 as the deadline.
+There is no hedge until an observation exists. At most one duplicate can start
+after that deadline, only through normal circuit/rate admission and a
+**zero-wait concurrency acquisition**. Failed admission never queues or bypasses
+the provider authority. The first content event or terminal result selects the
+winning stream; the losing stream and its provider task are cancelled. No output
+from the losing stream reaches the caller. Tools and unlabelled callbacks never
+hedge.
+
+An atomic per-model budget permits no more than `floor(requests / 10)` duplicates,
+including duplicates that fail after admission. The cap is cumulative since
+dispatcher startup, not a rolling rate; restart resets the latency/budget window.
+The duplicate input is conservatively estimated using the existing prompt-size
+heuristic, added to the returned message's known input/total-token counters, and
+recorded in `CallDispatcher.hedging_state(provider, model).duplicate_input_tokens`.
+It is not measured vendor billing; unknown usage remains unknown and cost fields
+remain vendor-reported. Each admitted transport retains its own model-call span;
+the separate `:hedge_started` telemetry records the estimate, avoiding duplicate
+logical usage in those spans.
+
+Published-package API additions: `LemonAi.preconnect/1`,
+`LemonAi.CallDispatcher.hedging_state/2`, per-provider `:hedging` configuration,
+and the dispatch option `:hedge_input_tokens` (zero-arity estimate callback;
+supplied automatically by `LemonAi.stream/3` and `complete/3`).
 
 ## Tool use
 
@@ -205,6 +274,34 @@ LemonAi.Models.supports_xhigh(model)
 ```
 
 ### Provider request controls
+
+OpenAI Responses and Codex Responses support an **opt-in**, session-owned
+WebSocket transport. SSE remains the default. Standalone callers create one
+transport per live conversation and pass its PID on every turn:
+
+```elixir
+{:ok, transport} =
+  LemonAi.Providers.OpenAIResponsesWebSocket.start_link(owner: self())
+
+opts = %LemonAi.Types.StreamOptions{
+  api_key: key,
+  provider_options: %{responses_websocket: true, responses_transport: transport}
+}
+
+{:ok, stream} = LemonAi.stream(model, context, opts)
+```
+
+Always pass the complete context: the transport sends only the new suffix when
+the previous response and replay prefix still match. A definite first-frame
+anchor rejection permits one full replay; three rejected anchors disable
+chaining for that live session. Partial or uncertain exchanges are never replayed.
+Idle sockets close after 30 seconds. Credential/header changes, endpoint/model
+changes and `OpenAIResponsesWebSocket.reset/1` discard the connection and anchor;
+call `reset/1` after compaction or history replacement. Owner death releases the
+transport. This state is memory-only and must not be journaled or shared across
+accounts or sessions. No token or latency improvement is claimed without an arena
+measurement. These provider options and transport lifecycle functions extend the
+published `lemon_ai` API.
 
 Anthropic requests default the required `max_tokens` field to the model's full
 output budget rather than a fraction of it. An explicit `max_tokens` overrides
@@ -544,6 +641,14 @@ caller can schedule its own retry.
 config :lemon_ai, :provider_retry,
   max_attempts: 4, base_delay_ms: 1_000, max_delay_ms: 30_000, max_retry_after_ms: 60_000
 ```
+
+`LemonAi.Retry` owns retry budgets, delay parsing and bounded timing for provider
+and completion retries. `LemonAi.Provider.retry_policy/1` adapts application defaults
+and `StreamOptions.provider_retry` overrides into its policy, supplying
+`LemonAi.Error.classify/1` and provider-specific retry timing. Classification and
+same-credential HTTP, transport and text eligibility belong to `LemonAi.Error`.
+Per-request `sleep_fun` and `jitter_fun` override the configured callbacks.
+
 Authentication failures, invalid requests, context overflow and exhausted billing
 or subscription quotas are not retried in place. Quota exhaustion remains
 `:rate_limit` for credential rotation, but `LemonAi.Error.retryable?/1` returns
@@ -693,6 +798,23 @@ The hard ceiling never resets; its reasons remain `:timeout` and
 (default 5 minutes). Its supervised process owns the ETS table; caller exits do not
 discard entries, while restarting the owner creates an empty cache.
 
+`LemonAi.StreamTaskSupervisor` caps provider workers and stream-result trackers
+at **1024** concurrent tasks by default. This standalone package owns its cap:
+
+```elixir
+config :lemon_ai, :task_supervisor_max_children, %{
+  LemonAi.StreamTaskSupervisor => 1024
+}
+```
+
+The cap must be a positive integer and applies at application startup. Provider
+worker rejection returns `{:error, :task_capacity_reached}` or
+`{:error, :task_supervisor_unavailable}` without invoking the provider callback.
+If a result tracker cannot start after the callback has returned a stream, the
+dispatcher cancels that stream, releases admission, and returns
+`{:error, :outcome_unknown}`: cancellation is not proof the request had no effects.
+These local task-admission failures do not automatically retry the request.
+
 ## Key types
 
 All defined in `LemonAi.Types`:
@@ -752,13 +874,15 @@ Events emitted by `LemonAi.EventStream`:
 
 ```elixir
 {:start, message}
-{:text_start, idx, message}
-{:text_delta, idx, delta, message}
-{:text_end, idx, text, message}
-{:thinking_start | :thinking_delta | :thinking_end, idx, ..., message}
-{:tool_call_start, idx, message}
-{:tool_call_delta, idx, json_fragment, message}
-{:tool_call_end, idx, tool_call, message}
+{:text_start, idx}
+{:text_delta, idx, delta}
+{:text_end, idx, text}
+{:thinking_start, idx}
+{:thinking_delta, idx, delta}
+{:thinking_end, idx, thinking}
+{:tool_call_start, idx, tool_call}
+{:tool_call_delta, idx, json_fragment}
+{:tool_call_end, idx, tool_call}
 {:done, stop_reason, message}
 {:error, stop_reason, message}
 {:canceled, reason}
@@ -922,6 +1046,7 @@ HTTP is mocked with `Req.Test` stubs; see `test/providers/` for patterns.
 | Dependency | Purpose |
 |------------|---------|
 | `req ~> 0.5` | HTTP client with streaming support |
+| `websockex ~> 0.5` | Opt-in session-owned Responses WebSocket client |
 | `jason ~> 1.4` | JSON encoding/decoding |
 | `nimble_options ~> 1.1` | Options validation |
 | `plug ~> 1.16` (test only) | `Req.Test` stubs |

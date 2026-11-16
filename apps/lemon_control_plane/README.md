@@ -97,6 +97,11 @@ as legacy `agent`/`chat` traffic. Empty batches still advance the cursor. For a
 session with a cursor, these batches are authoritative: do not also apply legacy
 `agent`/`chat` events for that session.
 
+Native `message_update` tuples contain only their provider event, without a
+partial assistant message. The native ACP mapper consumes these deltas directly;
+public `session.event`, `agent`/`chat`, ACP chunk, and snapshot response shapes are
+unchanged. Snapshots still materialize the current partial answer on demand.
+
 Completed `agent` events include an authoritative `cancelled` boolean taken
 from the durable completion's metadata, plus a bounded, redacted `error` value.
 Clients must not infer cancellation from error wording or from whether the
@@ -120,12 +125,13 @@ on partial usage does not attest a free request. Legacy `usage.cost`/`usage.stat
 daily projections remain known-value subtotals, not complete provider-usage or
 spend-enforcement authority; canonical `usage.records` retains the null counters.
 
-Slow/approval-gated handlers run under a dedicated `Task.Supervisor` so events
-and approval resolution can continue while their correlated request remains
-pending. Caller-policy caps admit at most eight outstanding async methods per
-connection and 256 globally. Excess requests return `UNAVAILABLE` before work
-starts; completion or worker death releases the connection slot. Disconnect
-does not replay a request or cancel a mutation already admitted.
+Slow/approval-gated handlers run under a dedicated bounded task supervisor so
+events and approval resolution can continue while their correlated request
+remains pending. Caller-policy caps admit at most eight outstanding async methods
+per connection and 256 globally. Excess requests or an unavailable supervisor
+return `UNAVAILABLE` before work starts; completion or worker death releases the
+connection slot. Disconnect does not replay a request or cancel a mutation already
+admitted.
 
 Connection membership uses a duplicate-key Registry; event fan-out dispatches
 directly over its entries without calling a presence server. Registry removes
@@ -678,6 +684,29 @@ Replay checks operator read authorization before and after the provider read.
 When a connection PID is present, both checks require its current Connections
 membership and stored authorization, not just the request's captured auth.
 Revoked membership, changed role/scopes, and a dead connection fail closed.
+
+### Journaled steering
+
+Operator clients can submit `sessions.steer {sessionKey,runId,messageId,prompt}`
+to an exact live local run. `messageId` is caller-generated and stable. A
+successful response echoes those identities and `acceptedAfterTurn`, and is sent
+only after the native session journals acceptance. A stale run is rejected,
+never implicitly revived. This path does not replace invocation-bound named-node
+steering. The operator prompt policy matches Agent Hub's 32 KiB message limit.
+
+`sessions.steer.withdraw {sessionKey,messageId}` requires operator write scope
+and returns the same identities with `withdrawn: true` only after the native
+session acknowledges withdrawal. Bound, missing and already-withdrawn inputs
+return `NOT_FOUND`; they are never reported as withdrawn. The operation does
+not cancel the run. An unknown outcome includes `retrySafe: false`; clients
+retain the stable identity and must not automatically retry.
+
+`sessions.steer.pending {sessionKey,[limit]}` requires operator read scope and
+returns `{sessionKey,items:[{messageId,preview,acceptedAfterTurn}],truncated}`.
+This queue-panel read is capped at 100 entries with 512-character previews.
+Only a complete successful read proves that omitted IDs are no longer pending;
+partial reads, missing owners and runtime failures do not confirm an empty
+queue. Clients refresh on connection/queue/lifecycle boundaries, not timers.
 
 ### Snapshot continuity
 
@@ -1552,6 +1581,13 @@ See [attaching a bot machine](../../docs/user-guide/attaching-a-bot-machine.md).
   (default 9901) enabled by `[gateway] enable_a2a = true`. Peers are independent
   principals. Task access is peer-scoped and message IDs durably replay the
   original task. Unknown submissions reconcile; cancellation is first-writer-wins.
+  A2A runner admission is bounded separately (1024 concurrent runners by default).
+  Capacity or supervisor unavailability returns the existing internal-error
+  response without submitting a run. The durable message/task identity remains
+  available for explicit replay, with its runner lease released; no automatic
+  resubmission is scheduled. Configure the cap through
+  `:lemon_core, :task_supervisor_max_children`, keyed by
+  `LemonControlPlane.A2A.TaskSupervisor`.
 
 `:lemon_control_plane, :port` controls the listener; test default `0` chooses a
 free port. `:git_commit` may supply server version metadata. Runtime configuration

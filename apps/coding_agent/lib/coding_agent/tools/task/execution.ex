@@ -110,6 +110,8 @@ defmodule CodingAgent.Tools.Task.Execution do
             orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
             role: role_id,
             queue_mode: validated.queue_mode,
+            output_schema: validated[:output_schema],
+            schema_mode: validated[:schema_mode],
             meta: validated.meta
           })
 
@@ -160,6 +162,8 @@ defmodule CodingAgent.Tools.Task.Execution do
             model: validated.model,
             session_pid: Keyword.get(opts, :session_pid),
             session_module: Keyword.get(opts, :session_module, Session),
+            async_followup_server:
+              Keyword.get(opts, :async_followup_server, CodingAgent.AsyncFollowups),
             run_orchestrator:
               Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
           }
@@ -345,6 +349,15 @@ defmodule CodingAgent.Tools.Task.Execution do
   end
 
   # Lets the runner re-prompt the same child session before it is stopped.
+  defp output_validator_opts(%{output_schema: schema, schema_mode: mode})
+       when not is_nil(schema) and mode != "permissive" do
+    [
+      validate_output: fn _text ->
+        {:error, "Call submit_result to submit the required result."}
+      end
+    ]
+  end
+
   defp output_validator_opts(%{output_schema: schema}) when not is_nil(schema) do
     [
       validate_output: fn text ->
@@ -359,7 +372,40 @@ defmodule CodingAgent.Tools.Task.Execution do
   defp output_validator_opts(_validated), do: []
 
   @doc false
-  def validate_output(%LemonAgent.Types.AgentToolResult{} = result, validated) do
+  def validate_output(
+        %LemonAgent.Types.AgentToolResult{details: %{structured_output: _}} = result,
+        %{schema_mode: mode}
+      )
+      when mode != "permissive",
+      do: result
+
+  def validate_output(
+        %LemonAgent.Types.AgentToolResult{details: %{submission_exhausted: true}} = result,
+        _validated
+      ),
+      do: %{result | is_error: true}
+
+  # Request-budget exhaustion keeps its partial text and annotation in both
+  # schema modes; the child stopped before it could call submit_result.
+  def validate_output(
+        %LemonAgent.Types.AgentToolResult{details: %{budget_exhausted: true}} = result,
+        validated
+      ),
+      do: decode_output(result, validated)
+
+  def validate_output(%LemonAgent.Types.AgentToolResult{} = result, %{
+        output_schema: schema,
+        schema_mode: mode
+      })
+      when not is_nil(schema) and mode != "permissive",
+      do: {:error, result.details[:structured_output_error] || "Task ended without submit_result"}
+
+  def validate_output(%LemonAgent.Types.AgentToolResult{} = result, validated),
+    do: decode_output(result, validated)
+
+  def validate_output(error, _validated), do: error
+
+  defp decode_output(result, validated) do
     case validated[:output_schema] do
       nil ->
         result
@@ -395,8 +441,6 @@ defmodule CodingAgent.Tools.Task.Execution do
         end
     end
   end
-
-  def validate_output(error, _validated), do: error
 
   defp prepare_workspace(%{validated: %{worktree: true} = validated} = execution, opts) do
     mode =

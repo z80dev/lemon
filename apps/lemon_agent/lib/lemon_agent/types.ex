@@ -80,9 +80,10 @@ defmodule LemonAgent.Types do
             content: [content_block()],
             details: any(),
             trust: LemonAi.Types.trust_level(),
-            is_error: boolean()
+            is_error: boolean(),
+            terminate_turn: boolean()
           }
-    defstruct content: [], details: nil, trust: :trusted, is_error: false
+    defstruct content: [], details: nil, trust: :trusted, is_error: false, terminate_turn: false
   end
 
   # ============================================================================
@@ -244,6 +245,7 @@ defmodule LemonAgent.Types do
             parameters: map(),
             label: String.t(),
             parallel_safe: boolean(),
+            trusted_terminal: boolean(),
             effect: :none | :idempotent | :external,
             timeout_ms: pos_integer() | :infinity | nil,
             execute: execute_fn() | nil,
@@ -254,6 +256,7 @@ defmodule LemonAgent.Types do
               parameters: %{},
               label: "",
               parallel_safe: false,
+              trusted_terminal: false,
               effect: :external,
               timeout_ms: nil,
               execute: nil,
@@ -339,9 +342,10 @@ defmodule LemonAgent.Types do
     @type t :: %__MODULE__{
             system_prompt: LemonAi.SystemPrompt.t(),
             messages: [LemonAgent.Types.agent_message()],
-            tools: [LemonAgent.Types.AgentTool.t()]
+            tools: [LemonAgent.Types.AgentTool.t()],
+            terminate_turn: boolean()
           }
-    defstruct system_prompt: nil, messages: [], tools: []
+    defstruct system_prompt: nil, messages: [], tools: [], terminate_turn: false
 
     @doc "Create a new empty agent context"
     def new(opts \\ []) do
@@ -431,9 +435,9 @@ defmodule LemonAgent.Types do
     - `thinking_prompt` - Last classified user-prompt marker, retained across continuation
     - `resolved_thinking` - Concrete auto selection, reclamped without reclassifying on model switches
     - `on_thinking_resolved` - Internal cache callback; does not publish classifier events
-    - `get_steering_messages` - Returns messages to inject mid-run for steering
-    - `has_steering_messages` - Non-consuming queue peek used between tool calls
-    - `get_follow_up_messages` - Returns follow-up messages after agent would stop
+    - `get_steering_messages` - Standalone-loop callback for messages to inject mid-run
+    - `has_steering_messages` - Standalone-loop non-consuming peek at tool boundaries
+    - `get_follow_up_messages` - Standalone-loop callback after the agent would stop
     - `max_tool_concurrency` - Max concurrent tool calls (default 8; `nil` uses the default, `:infinity` opts out)
     - `max_tool_turns` - Max assistant turns that may execute tools before terminal fallback
     - `max_retries` - Single transient retry budget per response (default: 3; 0 disables);
@@ -451,7 +455,13 @@ defmodule LemonAgent.Types do
     - `budget` - Budget state, including run totals when continuing a prompt
     - `stream_options` - Options for streaming requests
     - `stream_fn` - Custom stream function (defaults to LemonAi.stream_simple/3)
-    - `hooks` - Optional prompt observation and stream-rule hooks:
+    - `hooks` - Optional queue transport, prompt observation and stream-rule hooks:
+      - `queue_owner` - Queue-owning Agent pid; takes precedence over standalone callbacks
+      - `queue_ref` - Active run's abort reference, binding requests and notifications
+      - `queue_timeout` - Queue reply deadline (default 30 minutes; `:infinity` opts out)
+      - `queued_start` - Internal: the owner started this continue run from queued
+        input, so `agent_loop_continue` accepts an empty or assistant-final history
+        (default false)
       - `emit_system_prompt` - Internal journal transport; the Agent consumes these
         snapshots without publishing them to ordinary subscribers (default false)
       - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
@@ -459,6 +469,16 @@ defmodule LemonAgent.Types do
       - `on_stream_rule` - Synchronous rule receipt/redirect callback; returns `:ok`
         only after durable acceptance, or `{:error, :injection_limit}` when spent
         (default nil)
+
+    With `hooks.queue_owner`, the loop sends
+    `{:loop_queue, loop_pid, request_ref, queue_ref, kind}` where `kind` is
+    `:steering`, `:has_steering` or `:follow_up`. The owner replies
+    `{:loop_queue, request_ref, result}` with a message list, or a boolean for
+    `:has_steering`. An empty `:follow_up` response must atomically close the run
+    only after checking both queues; input accepted later belongs to the next run.
+    Queue changes wake waiting tools with `{:lemon_steering_changed, queue_ref}`;
+    no timer polls the queue. Standalone callbacks are checked only at turn/tool
+    boundaries; callers needing immediate wakeup use the same notification.
     """
     @type convert_to_llm_fn ::
             ([LemonAgent.Types.agent_message()] ->
@@ -496,6 +516,10 @@ defmodule LemonAgent.Types do
                {:ok, LemonAi.EventStream.t()} | LemonAi.EventStream.t() | {:error, term()})
 
     @type hooks :: %{
+            optional(:queue_owner) => pid() | nil,
+            optional(:queue_ref) => reference() | nil,
+            optional(:queue_timeout) => timeout(),
+            optional(:queued_start) => boolean(),
             optional(:emit_system_prompt) => boolean(),
             optional(:stream_rules) => [map()] | (-> [map()]),
             optional(:on_stream_rule) => (map() -> :ok | {:error, term()}) | nil
@@ -601,7 +625,8 @@ defmodule LemonAgent.Types do
   ## Message Lifecycle
   Emitted for user, assistant, and tool_result messages.
   - `{:message_start, message}` - Message processing started
-  - `{:message_update, message, assistant_event}` - Streaming update (assistant only)
+  - `{:message_update, assistant_event}` - Delta-only provider update (assistant only);
+    use `LemonAgent.Agent.get_state/1` for a partial message snapshot
   - `{:message_end, message}` - Message processing complete
 
   ## Tool Execution Lifecycle
@@ -629,7 +654,7 @@ defmodule LemonAgent.Types do
           | {:budget_exceeded, details :: LemonAgent.Budget.details()}
           | {:budget_warning, details :: %{message: String.t()}}
           | {:message_start, message :: agent_message()}
-          | {:message_update, message :: agent_message(), assistant_event :: term()}
+          | {:message_update, assistant_event :: LemonAi.EventStream.event()}
           | {:message_end, message :: agent_message()}
           | {:system_prompt, LemonAi.SystemPrompt.t()}
           | {:tool_execution_start, id :: String.t(), name :: String.t(), args :: map()}

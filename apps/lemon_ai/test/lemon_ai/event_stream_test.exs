@@ -20,9 +20,9 @@ defmodule LemonAi.EventStreamOverflowTest do
     {:ok, stream} =
       EventStream.start_link(max_queue: 1, timeout: :infinity, idle_timeout: :infinity)
 
-    assert :ok = EventStream.push!(stream, {:text_delta, 0, "accepted", nil})
+    assert :ok = EventStream.push!(stream, {:text_delta, 0, "accepted"})
 
-    assert catch_throw(EventStream.push!(stream, {:text_delta, 0, "rejected", nil})) ==
+    assert catch_throw(EventStream.push!(stream, {:text_delta, 0, "rejected"})) ==
              {:event_stream_push_failed, :overflow}
 
     assert {:error, %AssistantMessage{error_message: "Event stream queue overflow"}} =
@@ -111,8 +111,8 @@ defmodule LemonAi.EventStreamOverflowTest do
 
   defp extract_text_content(events) do
     events
-    |> Enum.filter(&match?({:text_delta, _, _, _}, &1))
-    |> Enum.map(fn {:text_delta, _, text, _} -> text end)
+    |> Enum.filter(&match?({:text_delta, _, _}, &1))
+    |> Enum.map(fn {:text_delta, _, text} -> text end)
   end
 
   # ============================================================================
@@ -122,12 +122,11 @@ defmodule LemonAi.EventStreamOverflowTest do
   describe "queue overflow with :drop_oldest strategy" do
     test "drops oldest events when queue is full" do
       {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :drop_oldest)
-      partial = make_message()
 
       # Push 5 events into a queue of size 3
       # Events 1 and 2 should be dropped
       for i <- 1..5 do
-        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       stats = EventStream.stats(stream)
@@ -146,11 +145,10 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "always returns :ok even when dropping" do
       {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :drop_oldest)
-      partial = make_message()
 
       # All pushes should succeed
       for i <- 1..10 do
-        result = EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        result = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
         assert result == :ok
       end
 
@@ -160,11 +158,10 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "preserves event order for remaining events" do
       {:ok, stream} = EventStream.start_link(max_queue: 5, drop_strategy: :drop_oldest)
-      partial = make_message()
 
       # Push 8 events, first 3 should be dropped
       for i <- 1..8 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       EventStream.complete(stream, make_message())
@@ -177,13 +174,12 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "handles rapid overflow correctly" do
       {:ok, stream} = EventStream.start_link(max_queue: 2, drop_strategy: :drop_oldest)
-      partial = make_message()
 
       # Push many events very quickly
       tasks =
         for i <- 1..20 do
           Task.async(fn ->
-            EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+            EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
           end)
         end
 
@@ -202,12 +198,11 @@ defmodule LemonAi.EventStreamOverflowTest do
   describe "queue overflow with :drop_newest strategy" do
     test "drops newest events when queue is full" do
       {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :drop_newest)
-      partial = make_message()
 
       # Push 5 events into a queue of size 3
       # Events 4 and 5 should be dropped (newest are dropped)
       for i <- 1..5 do
-        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       stats = EventStream.stats(stream)
@@ -227,11 +222,10 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "always returns :ok even when dropping" do
       {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :drop_newest)
-      partial = make_message()
 
       # All pushes should succeed
       for i <- 1..10 do
-        result = EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        result = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
         assert result == :ok
       end
 
@@ -241,10 +235,9 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "preserves oldest events" do
       {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :drop_newest)
-      partial = make_message()
 
       for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       # Queue has [msg_1, msg_2, msg_3], dropped 7 newest (msg_4..msg_10)
@@ -262,13 +255,12 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "logs debug message when dropping" do
       {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :drop_newest)
-      partial = make_message()
 
       # Fill the queue
-      EventStream.push(stream, {:text_delta, 0, "msg_1", partial})
+      EventStream.push(stream, {:text_delta, 0, "msg_1"})
 
       # This should trigger a log and drop the event
-      EventStream.push(stream, {:text_delta, 0, "msg_2", partial})
+      EventStream.push(stream, {:text_delta, 0, "msg_2"})
 
       stats = EventStream.stats(stream)
       assert stats.dropped == 1
@@ -282,21 +274,19 @@ defmodule LemonAi.EventStreamOverflowTest do
   describe "queue overflow with :error strategy" do
     test "returns {:error, :overflow} when queue is full" do
       {:ok, stream} = EventStream.start_link(max_queue: 2, drop_strategy: :error)
-      partial = make_message()
 
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_1", partial})
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_2", partial})
-      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "msg_3", partial})
+      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_1"})
+      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_2"})
+      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "msg_3"})
     end
 
     test "increments dropped count on overflow" do
       {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :error)
-      partial = make_message()
 
-      EventStream.push(stream, {:text_delta, 0, "msg_1", partial})
+      EventStream.push(stream, {:text_delta, 0, "msg_1"})
 
       for _ <- 1..5 do
-        EventStream.push(stream, {:text_delta, 0, "overflow", partial})
+        EventStream.push(stream, {:text_delta, 0, "overflow"})
       end
 
       stats = EventStream.stats(stream)
@@ -305,14 +295,13 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "push_async silently drops on overflow" do
       {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :error)
-      partial = make_message()
 
       # Fill the queue
-      EventStream.push(stream, {:text_delta, 0, "msg_1", partial})
+      EventStream.push(stream, {:text_delta, 0, "msg_1"})
 
       # Async pushes should not block or return errors
       for i <- 2..10 do
-        EventStream.push_async(stream, {:text_delta, 0, "msg_#{i}", partial})
+        EventStream.push_async(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       # Wait for async messages to be processed
@@ -324,12 +313,11 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "allows pushing after consuming events" do
       {:ok, stream} = EventStream.start_link(max_queue: 2, drop_strategy: :error)
-      partial = make_message()
 
       # Fill the queue
-      EventStream.push(stream, {:text_delta, 0, "msg_1", partial})
-      EventStream.push(stream, {:text_delta, 0, "msg_2", partial})
-      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "msg_3", partial})
+      EventStream.push(stream, {:text_delta, 0, "msg_1"})
+      EventStream.push(stream, {:text_delta, 0, "msg_2"})
+      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "msg_3"})
 
       # Start a consumer to drain some events
       reader =
@@ -340,16 +328,15 @@ defmodule LemonAi.EventStreamOverflowTest do
       Task.await(reader, 1000)
 
       # Now we should be able to push again
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_4", partial})
+      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_4"})
     end
 
     test "terminal events force room by dropping oldest" do
       {:ok, stream} = EventStream.start_link(max_queue: 2, drop_strategy: :error)
-      partial = make_message()
 
       # Fill the queue
-      EventStream.push(stream, {:text_delta, 0, "msg_1", partial})
-      EventStream.push(stream, {:text_delta, 0, "msg_2", partial})
+      EventStream.push(stream, {:text_delta, 0, "msg_1"})
+      EventStream.push(stream, {:text_delta, 0, "msg_2"})
 
       # Complete should still work by dropping oldest
       EventStream.complete(stream, make_message())
@@ -580,9 +567,8 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "stream still works without any attached task" do
       {:ok, stream} = EventStream.start_link()
-      partial = make_message()
 
-      EventStream.push(stream, {:text_delta, 0, "hello", partial})
+      EventStream.push(stream, {:text_delta, 0, "hello"})
       EventStream.complete(stream, make_message())
 
       events = EventStream.events(stream) |> Enum.to_list()
@@ -722,8 +708,7 @@ defmodule LemonAi.EventStreamOverflowTest do
       {:ok, stream} = EventStream.start_link(owner: self())
 
       # Stream should work normally
-      partial = make_message()
-      EventStream.push(stream, {:text_delta, 0, "hello", partial})
+      EventStream.push(stream, {:text_delta, 0, "hello"})
       EventStream.complete(stream, make_message())
 
       {:ok, _} = EventStream.result(stream, 100)
@@ -771,7 +756,6 @@ defmodule LemonAi.EventStreamOverflowTest do
   describe "backpressure scenarios with slow consumers" do
     test "producer can push faster than consumer reads" do
       {:ok, stream} = EventStream.start_link(max_queue: 100, drop_strategy: :error)
-      partial = make_message()
 
       # Start slow consumer
       consumer =
@@ -786,7 +770,7 @@ defmodule LemonAi.EventStreamOverflowTest do
 
       # Fast producer
       for i <- 1..20 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       EventStream.complete(stream, make_message())
@@ -798,15 +782,14 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "backpressure with error strategy blocks producer" do
       {:ok, stream} = EventStream.start_link(max_queue: 5, drop_strategy: :error)
-      partial = make_message()
 
       # Fill the queue
       for i <- 1..5 do
-        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       # Next push should fail
-      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "overflow", partial})
+      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "overflow"})
 
       # Start consumer
       consumer =
@@ -817,16 +800,15 @@ defmodule LemonAi.EventStreamOverflowTest do
       Task.await(consumer, 1000)
 
       # Now push should work again
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "after_consume", partial})
+      assert :ok = EventStream.push(stream, {:text_delta, 0, "after_consume"})
     end
 
     test "slow consumer with drop_oldest loses old events" do
       {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :drop_oldest)
-      partial = make_message()
 
       # Fill queue and trigger drops
       for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       stats = EventStream.stats(stream)
@@ -844,7 +826,6 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "concurrent producers and consumer with backpressure" do
       {:ok, stream} = EventStream.start_link(max_queue: 10, drop_strategy: :drop_oldest)
-      partial = make_message()
 
       # Start consumer
       consumer =
@@ -862,7 +843,7 @@ defmodule LemonAi.EventStreamOverflowTest do
         for producer_id <- 1..3 do
           Task.async(fn ->
             for i <- 1..10 do
-              EventStream.push(stream, {:text_delta, 0, "p#{producer_id}_#{i}", partial})
+              EventStream.push(stream, {:text_delta, 0, "p#{producer_id}_#{i}"})
               Process.sleep(1)
             end
           end)
@@ -882,10 +863,9 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "take waiter gets event immediately when available" do
       {:ok, stream} = EventStream.start_link()
-      partial = make_message()
 
       # Push event before consumer starts
-      EventStream.push(stream, {:text_delta, 0, "already_there", partial})
+      EventStream.push(stream, {:text_delta, 0, "already_there"})
 
       # Consumer should get event immediately: the event is already queued, so
       # the consumer finishes without any further producer activity.
@@ -896,7 +876,7 @@ defmodule LemonAi.EventStreamOverflowTest do
 
       events = Task.await(consumer, 5_000)
 
-      assert [{:text_delta, 0, "already_there", _}] = events
+      assert [{:text_delta, 0, "already_there"}] = events
     end
   end
 
@@ -907,13 +887,12 @@ defmodule LemonAi.EventStreamOverflowTest do
   describe "event ordering guarantees" do
     test "events are delivered in FIFO order" do
       {:ok, stream} = EventStream.start_link()
-      partial = make_message()
 
       # Push events in order
       for i <- 1..100 do
         EventStream.push(
           stream,
-          {:text_delta, 0, "msg_#{String.pad_leading(to_string(i), 3, "0")}", partial}
+          {:text_delta, 0, "msg_#{String.pad_leading(to_string(i), 3, "0")}"}
         )
       end
 
@@ -933,10 +912,9 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "terminal events come after all regular events" do
       {:ok, stream} = EventStream.start_link()
-      partial = make_message()
 
       for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       EventStream.complete(stream, make_message())
@@ -949,17 +927,16 @@ defmodule LemonAi.EventStreamOverflowTest do
 
       # All other events should be text_delta
       Enum.each(rest, fn event ->
-        assert {:text_delta, _, _, _} = event
+        assert {:text_delta, _, _} = event
       end)
     end
 
     test "multiple consumers see same order" do
       {:ok, stream} = EventStream.start_link()
-      partial = make_message()
 
       # Push some events
       for i <- 1..5 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       EventStream.complete(stream, make_message())
@@ -975,10 +952,9 @@ defmodule LemonAi.EventStreamOverflowTest do
       {:ok, stream} = EventStream.start_link(max_queue: 1000)
 
       # Use a single producer to ensure deterministic ordering
-      partial = make_message()
 
       for i <- 1..50 do
-        EventStream.push(stream, {:text_delta, 0, "#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "#{i}"})
       end
 
       EventStream.complete(stream, make_message())
@@ -993,7 +969,6 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "waiters receive events in order they arrive" do
       {:ok, stream} = EventStream.start_link()
-      partial = make_message()
 
       # Start consumer first
       consumer =
@@ -1006,7 +981,7 @@ defmodule LemonAi.EventStreamOverflowTest do
 
       # Push events
       for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
         Process.sleep(5)
       end
 
@@ -1022,11 +997,10 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "drop_oldest preserves order of remaining events" do
       {:ok, stream} = EventStream.start_link(max_queue: 5, drop_strategy: :drop_oldest)
-      partial = make_message()
 
       # Push 10 events, first 5 will be dropped
       for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "#{i}"})
       end
 
       EventStream.complete(stream, make_message())
@@ -1052,7 +1026,7 @@ defmodule LemonAi.EventStreamOverflowTest do
 
       assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
 
-      result = EventStream.push(stream, {:text_delta, 0, "test", make_message()})
+      result = EventStream.push(stream, {:text_delta, 0, "test"})
       assert {:error, :canceled} = result
     end
 
@@ -1071,10 +1045,9 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "stats available after stream completion" do
       {:ok, stream} = EventStream.start_link(max_queue: 10)
-      partial = make_message()
 
       for i <- 1..5 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       EventStream.complete(stream, make_message())
@@ -1099,11 +1072,10 @@ defmodule LemonAi.EventStreamOverflowTest do
 
     test "very large queue handles many events" do
       {:ok, stream} = EventStream.start_link(max_queue: 100_000)
-      partial = make_message()
 
       # Push many events
       for i <- 1..1000 do
-        EventStream.push(stream, {:text_delta, 0, "#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "#{i}"})
       end
 
       stats = EventStream.stats(stream)

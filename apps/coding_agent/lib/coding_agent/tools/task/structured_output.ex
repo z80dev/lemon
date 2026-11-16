@@ -43,6 +43,64 @@ defmodule CodingAgent.Tools.Task.StructuredOutput do
       Jason.encode!(schema)
   end
 
+  def instruction(nil, _mode), do: ""
+  def instruction(schema, "permissive"), do: instruction(schema)
+
+  def instruction(schema, _mode) do
+    "Finish by calling submit_result with a value matching this schema. " <>
+      "Correct any validation errors in the same turn; prose does not submit a result.\n" <>
+      Jason.encode!(schema)
+  end
+
+  # Caller policy: the existing two schema corrections, plus the first attempt.
+  def tools(nil, _mode), do: []
+  def tools(_schema, "permissive"), do: []
+
+  def tools(schema, _mode) do
+    attempts = :atomics.new(1, [])
+
+    [
+      %LemonAgent.Types.AgentTool{
+        name: "submit_result",
+        label: "Submit result",
+        description: "Submit the final structured task result.",
+        parameters: schema,
+        trusted_terminal: true,
+        effect: :none,
+        execute: fn _id, value, _signal, _on_update ->
+          attempt = :atomics.add_get(attempts, 1, 1)
+
+          case validate_value(value, schema) do
+            {:ok, accepted} ->
+              %LemonAgent.Types.AgentToolResult{
+                content: [%LemonAi.Types.TextContent{text: Jason.encode!(accepted)}],
+                details: %{structured_output: accepted},
+                terminate_turn: true
+              }
+
+            {:error, reason} ->
+              %LemonAgent.Types.AgentToolResult{
+                content: [%LemonAi.Types.TextContent{text: reason}],
+                details: %{structured_output_error: reason, submission_exhausted: attempt >= 3},
+                is_error: true,
+                terminate_turn: attempt >= 3
+              }
+          end
+        end
+      }
+    ]
+  end
+
+  @spec validate_value(term(), term()) :: {:ok, term()} | {:error, String.t()}
+  def validate_value(value, schema) do
+    with {:ok, prepared} <- prepare(schema),
+         :ok <- validate(value, prepared, "$") do
+      {:ok, value}
+    end
+  rescue
+    SystemLimitError -> error("$", "string pattern exceeded its match budget")
+  end
+
   @spec decode(term(), term()) :: {:ok, term()} | {:error, String.t()}
   def decode(_text, nil), do: {:ok, nil}
 

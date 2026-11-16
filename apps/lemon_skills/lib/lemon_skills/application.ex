@@ -19,9 +19,14 @@ defmodule LemonSkills.Application do
 
     children = [
       LemonSkills.Registry,
-      {Task.Supervisor, name: LemonSkills.ReviewSupervisor},
+      LemonCore.TaskSupervisor.child_spec(name: LemonSkills.ReviewSupervisor),
       LemonSkills.LearningNudge,
       # MCP source for external tool discovery
+      # MCP caller admission policy caps concurrent I/O workers at 128 per runtime.
+      Supervisor.child_spec(
+        {Task.Supervisor, name: LemonSkills.TaskSupervisor, max_children: 128},
+        id: LemonSkills.TaskSupervisor
+      ),
       {LemonSkills.McpSource, []},
       {DynamicSupervisor, strategy: :one_for_one, name: LemonSkills.McpSession.Supervisor},
       LemonSkills.McpSession

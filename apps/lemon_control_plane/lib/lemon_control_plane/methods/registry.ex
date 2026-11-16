@@ -73,6 +73,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ProcessJobsCancel,
     # Models
     LemonControlPlane.Methods.ModelsList,
+    LemonControlPlane.Methods.ModelsPreconnect,
     LemonControlPlane.Methods.ProvidersManagementList,
     LemonControlPlane.Methods.ProvidersManagementApiKeySet,
     LemonControlPlane.Methods.ProvidersManagementDisconnect,
@@ -162,6 +163,9 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsCreate,
     LemonControlPlane.Methods.SessionsPlan,
     LemonControlPlane.Methods.SessionsContext,
+    LemonControlPlane.Methods.SessionsSteer,
+    LemonControlPlane.Methods.SessionsSteerWithdraw,
+    LemonControlPlane.Methods.SessionsSteerPending,
     LemonControlPlane.Methods.SessionsChanges,
     LemonControlPlane.Methods.SessionsFork,
     LemonControlPlane.Methods.SessionsActive,
@@ -305,6 +309,31 @@ defmodule LemonControlPlane.Methods.Registry do
   """
   @spec dispatch(String.t(), map() | nil, map()) :: {:ok, term()} | {:error, term()}
   def dispatch(method, params, ctx) do
+    started = System.monotonic_time()
+    metadata = %{method: telemetry_method(method)}
+    emit_method(:start, %{system_time: System.system_time()}, metadata)
+
+    try do
+      result = do_dispatch(method, params, ctx)
+      outcome = if match?({:ok, _}, result), do: :ok, else: :error
+
+      emit_method(
+        :stop,
+        %{duration: System.monotonic_time() - started},
+        Map.put(metadata, :outcome, outcome)
+      )
+
+      result
+    rescue
+      error ->
+        dispatch_exception(metadata, started, error.__struct__)
+    catch
+      kind, _reason ->
+        dispatch_exception(metadata, started, kind)
+    end
+  end
+
+  defp do_dispatch(method, params, ctx) do
     case lookup(method) do
       {:ok, module} ->
         # Validate params against schema
@@ -328,14 +357,29 @@ defmodule LemonControlPlane.Methods.Registry do
       {:error, :not_found} ->
         {:error, Errors.method_not_found(method)}
     end
-  rescue
-    error ->
-      report_failure(method, error.__struct__)
-      {:error, Errors.internal_error("Method execution failed")}
-  catch
-    kind, _reason ->
-      report_failure(method, kind)
-      {:error, Errors.internal_error("Method execution failed")}
+  end
+
+  defp dispatch_exception(metadata, started, class) do
+    report_failure(metadata.method, class)
+
+    emit_method(
+      :stop,
+      %{duration: System.monotonic_time() - started},
+      Map.put(metadata, :outcome, :exception)
+    )
+
+    {:error, Errors.internal_error("Method execution failed")}
+  end
+
+  defp telemetry_method(method) do
+    case lookup(method) do
+      {:ok, _module} when is_binary(method) and byte_size(method) <= 128 -> method
+      _ -> :unknown
+    end
+  end
+
+  defp emit_method(event, measurements, metadata) do
+    LemonCore.Telemetry.emit([:lemon, :control_plane, :method, event], measurements, metadata)
   end
 
   @doc false
@@ -379,6 +423,15 @@ defmodule LemonControlPlane.Methods.Registry do
   end
 
   ## Server Callbacks
+
+  @impl true
+  def format_status(status) do
+    status
+    |> Map.put(:state, %{module: __MODULE__})
+    |> Map.put(:message, :redacted)
+    |> Map.put(:reason, :redacted)
+    |> Map.put(:log, [])
+  end
 
   @impl true
   def init(_opts) do

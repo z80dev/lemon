@@ -6,6 +6,20 @@ defmodule LemonAutomation.CronFailureAlertsTest do
   alias LemonCore.{ChannelSupervision, Store}
   alias LemonCore.Doctor.CronDiagnostics
 
+  defp initialized_manager do
+    {:ok, state, {:continue, :restore_startup}} = CronManager.init([])
+    {:noreply, state} = CronManager.handle_continue(:restore_startup, state)
+    ref = state.restoration_task.ref
+
+    receive do
+      {^ref, result} ->
+        {:noreply, state} = CronManager.handle_info({ref, result}, state)
+        {:ok, state}
+    after
+      5_000 -> flunk("startup restoration did not finish")
+    end
+  end
+
   defmodule Notices do
     @behaviour ChannelSupervision
     def bind_run(_id, _session, _target), do: :ok
@@ -56,7 +70,7 @@ defmodule LemonAutomation.CronFailureAlertsTest do
 
   test "terminalization increments once per run, persists across reload, and resets on success",
        %{job: job} do
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     state = %{state | jobs: %{job.id => job}}
     run = running(job)
     CronStore.put_run(run)
@@ -79,7 +93,7 @@ defmodule LemonAutomation.CronFailureAlertsTest do
              CronManager.handle_info({:run_complete, run.id, {:error, "timeout"}}, state)
 
     assert CronJob.failure_streak(state.jobs[job.id]) == 2
-    {:ok, reloaded} = CronManager.init([])
+    {:ok, reloaded} = initialized_manager()
     assert CronJob.failure_streak(reloaded.jobs[job.id]) == 2
 
     run = running(job)
@@ -98,7 +112,7 @@ defmodule LemonAutomation.CronFailureAlertsTest do
   test "retired one-shot failures remain visible as unread doctor alerts", %{job: job} do
     job = %{job | once: true}
     CronStore.put_job(job)
-    {:ok, state} = CronManager.init([])
+    {:ok, state} = initialized_manager()
     state = %{state | jobs: %{job.id => job}}
     run = job.id |> CronRun.new(:schedule) |> CronRun.start(nil)
     CronStore.put_run(run)

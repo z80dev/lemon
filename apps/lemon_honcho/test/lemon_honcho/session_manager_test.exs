@@ -251,6 +251,24 @@ defmodule LemonHoncho.SessionManagerTest.OverrunClient do
   end
 end
 
+defmodule LemonHoncho.SessionManagerTest.BlockedUploadClient do
+  @moduledoc false
+  alias LemonHoncho.SessionManagerTest.{OkClient, Recorder}
+
+  defdelegate ensure_workspace(config), to: OkClient
+  defdelegate ensure_peer(config, peer), to: OkClient
+  defdelegate ensure_session(config, session, specs), to: OkClient
+  defdelegate set_peer_config(config, session, peer, flags), to: OkClient
+
+  def add_messages(_config, _session, _messages) do
+    Recorder.record(:upload_worker, self())
+
+    receive do
+      :finish -> {:ok, %{}}
+    end
+  end
+end
+
 defmodule LemonHoncho.SessionManagerTest do
   use ExUnit.Case, async: false
 
@@ -984,6 +1002,73 @@ defmodule LemonHoncho.SessionManagerTest do
   end
 
   describe "sync_document/1" do
+    test "uploads stop with their supervisor and are never restarted" do
+      supervisor =
+        start_supervised!(
+          Supervisor.child_spec({Task.Supervisor, max_children: 1}, id: :upload_tasks)
+        )
+
+      start_manager(
+        upload_supervisor: supervisor,
+        client: LemonHoncho.SessionManagerTest.BlockedUploadClient
+      )
+
+      assert :ok = SessionManager.sync_document(document())
+      assert_receive {:honcho_call, :upload_worker, worker}, 1_000
+      assert Task.Supervisor.children(supervisor) == [worker]
+      monitor = Process.monitor(worker)
+      stop_supervised!(:upload_tasks)
+      assert_receive {:DOWN, ^monitor, :process, ^worker, :shutdown}, 1_000
+      assert Process.alive?(Process.whereis(SessionManager))
+      assert Recorder.count(:upload_worker) == 1
+    end
+
+    test "full and unavailable supervisors refuse uploads before client calls" do
+      supervisor =
+        start_supervised!(
+          Supervisor.child_spec({Task.Supervisor, max_children: 1}, id: :upload_tasks)
+        )
+
+      parent = self()
+
+      {:ok, _blocker} =
+        Task.Supervisor.start_child(supervisor, fn ->
+          send(parent, :upload_capacity_held)
+
+          receive do
+            :finish -> :ok
+          end
+        end)
+
+      assert_receive :upload_capacity_held
+      manager = start_manager(upload_supervisor: supervisor)
+
+      :sys.replace_state(manager, fn state ->
+        Logger.put_process_level(self(), :debug)
+        state
+      end)
+
+      log =
+        capture_log(fn ->
+          SessionManager.sync_document(document())
+          :sys.get_state(manager)
+        end)
+
+      assert log =~ "task_capacity_reached"
+      assert Recorder.counts() == %{}
+      stop_supervised!(:upload_tasks)
+
+      log =
+        capture_log(fn ->
+          SessionManager.sync_document(document())
+          :sys.get_state(manager)
+        end)
+
+      assert log =~ "task_supervisor_unavailable"
+      assert Recorder.counts() == %{}
+      assert Process.alive?(manager)
+    end
+
     test "makes no calls when message saving is switched off" do
       start_manager(save_messages?: false)
 
@@ -1245,7 +1330,7 @@ defmodule LemonHoncho.SessionManagerTest do
   # session keys instead of five hundred.
   defp start_manager(overrides \\ []) do
     {client, overrides} = Keyword.pop(overrides, :client, OkClient)
-    {bounds, fields} = Keyword.split(overrides, [:max_sessions, :idle_ttl_ms])
+    {bounds, fields} = Keyword.split(overrides, [:max_sessions, :idle_ttl_ms, :upload_supervisor])
     config = struct!(base_config(), fields)
 
     start_supervised!({SessionManager, [config: config, client: client] ++ bounds})

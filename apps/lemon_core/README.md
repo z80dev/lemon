@@ -18,6 +18,21 @@ retain protocol semantics and process lifecycle; they never automatically replay
 unknown outcomes. The module is an additive published-package API and has no
 umbrella dependencies.
 
+`LemonCore.TaskSupervisor` is the shared bounded task-admission boundary.
+Its default of **1024 concurrent children per supervisor is caller policy**,
+not a benchmark-derived throughput setting. Set an explicit positive integer
+`:max_children` in `child_spec/1`, or configure a name-keyed map under
+`config :lemon_core, :task_supervisor_max_children, %{SupervisorName => 256}`.
+Explicit child options win; changes apply when the supervisor starts.
+The standalone `lemon_ai` package uses the same policy under its own
+`:lemon_ai` application configuration, without depending on core.
+Core's private doctor supervisor instead caps each invocation at its job count.
+`start_child/3`, `async/3` and `async_nolink/3` return tagged success or
+`:task_capacity_reached` / `:task_supervisor_unavailable` admission errors.
+Rejected work has not run and is not automatically retried. Other supervisor
+exits retain the caller's existing unknown-outcome handling: losing the
+admission reply does not prove that a task's side effects never began.
+
 ## Architecture Overview
 
 ```

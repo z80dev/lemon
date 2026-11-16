@@ -10,6 +10,36 @@ defmodule LemonAgent.BudgetScopeTest do
     pid
   end
 
+  test "deep checks and cost-cap queries read snapshots without calling any scope" do
+    root = scope(%{max_run_cost_usd: 1.0})
+
+    scopes =
+      Enum.reduce(1..32, [root], fn _, [parent | _] = scopes ->
+        [scope(%{}, parent: BudgetScope.attachment(parent)) | scopes]
+      end)
+
+    [leaf | _] = scopes
+    usage = %{tokens: 10, cost_usd: 1.0}
+
+    :ok =
+      BudgetScope.update(leaf, %{Budget.new(%{}, nil) | run_usage: usage, session_usage: usage})
+
+    # Suspending all owners makes even one mailbox call unable to complete.
+    # Updates above are synchronous barriers, not unsynchronized ETS observations.
+    Enum.each(scopes, &:sys.suspend/1)
+
+    try do
+      check = Task.async(fn -> {BudgetScope.check(leaf), BudgetScope.cost_capped?(leaf)} end)
+      assert {%{scope: :run, used: 1.0}, true} = Task.await(check, 1_000)
+    after
+      Enum.each(scopes, &:sys.resume/1)
+    end
+
+    :ok = BudgetScope.begin_run(root)
+    assert nil == BudgetScope.check(leaf)
+    assert %{scope: :run} = BudgetScope.check(leaf, %{tokens: 0, cost_usd: 1.1})
+  end
+
   test "live and repeated completion reports charge descendants exactly once" do
     parent = scope(%{max_run_cost_usd: 1.0})
     attachment = BudgetScope.attachment(parent)

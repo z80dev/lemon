@@ -480,6 +480,49 @@ Tool calls requested by the response that exhausts a cap are recorded as rejecte
 error results without executing their side effects. Increase the configured cap
 if you intentionally want to continue an exhausted session.
 
+## Optional session advisor
+
+The native session API accepts `advisor: [...]`; it is **off by default**.
+This is an explicit local session option, not a TOML setting. For example:
+
+```elixir
+CodingAgent.start_session(
+  cwd: cwd,
+  model: primary_model,
+  advisor: [
+    model: reviewer_model,
+    max_notes: 3,
+    max_note_chars: 2000,
+    max_events: 1000,
+    timeout_ms: 30_000,
+    agent_options: [stream_options: reviewer_stream_options, get_api_key: reviewer_credentials]
+  ]
+)
+```
+
+The reviewer inherits the primary model unless `model:` is supplied. Supply
+provider credentials/options through `agent_options`, using the same trusted
+local API as `LemonAgent.Agent`. No paid review runs occur unless enabled.
+Each review starts with only the newly subscribed event delta, at a primary
+tool-turn boundary. Pending deltas wait for the current review, never for the
+primary turn. Subscription overflow, buffer overflow, timeout or reviewer
+failure retires the temporary advisor without restarting or failing the primary.
+
+Its tools are the intersection of primary authority and the built-in `read`,
+`grep`, `find`, `ls` allowlist; extensions and MCP cannot override those tools.
+Inherited denials and approvals remain in force. Tool results are fenced as
+untrusted context. The local `advise` tool normalizes whitespace, deduplicates
+case-insensitively across updates and caps accepted notes per update.
+Oversized/empty notes are suppressed. `critical` notes preempt the primary's
+remaining tool queue; `warning` and `info` notes use non-preempting follow-up
+delivery. Notes are advisory, not new user authority.
+
+The numbers above are caller-policy defaults, not measured tuning results.
+Completed advisor responses charge the primary run's `BudgetTracker`, including
+unknown usage; an already-exhausted budget prevents another review. Concurrent
+primary/reviewer requests can still finish after a limit is reached. No latency
+or quality improvement is claimed; measure before enabling by default.
+
 ## Native Execution and Subagents
 
 Lemon uses its native executor for every top-level TUI and gateway run. Configure
@@ -1223,6 +1266,7 @@ without ad-hoc environment variables.
 session_search               = "default-on" # durable memory ingest and search (default)
 routing_feedback             = "default-on" # task fingerprinting + routing feedback (default)
 skill_synthesis_drafts       = "default-on" # skill synthesis draft pipeline (default)
+crash_resume                = "off"        # hard-crash continuation is explicitly opt-in
 ```
 
 `session_search` defaults to `"default-on"`: durable memory ingest and search
@@ -1248,6 +1292,48 @@ LEMON_FEATURE_ROUTING_FEEDBACK=default-on
 ```
 
 Config validation fails cleanly if a flag is set to an unrecognised state.
+
+### Hard-crash recovery
+
+`features.crash_resume` defaults to `"off"`. To opt in, set it to `"on"` (or
+`"default-on"`), or set `LEMON_FEATURE_CRASH_RESUME=on`, before starting Lemon.
+This controls both orphaned router runs and their interrupted native task children;
+`"opt-in"` alone does not enable automatic boot recovery.
+
+At boot Lemon reconciles durable admissions without a terminal result. With the
+flag off, dispatched runs finish as interrupted with an unknown outcome, not as
+successful or definitely unstarted. A claim that never crossed dispatch is marked
+not started and is never automatically executed. With the flag on, resumable local
+runs receive a continuation turn
+under the **original run ID**. Their original request and native journal are
+retained privately before execution. The notice lists unresolved tool intent IDs
+and tool names (at most 100), and instructs the model to inspect state and ask before
+repeating any state-changing action: an unknown tool result is never permission to
+retry that tool. No original tool arguments appear in the notice.
+
+Children that were running are continued once per resumed parent attempt, under
+their original task IDs, before the parent's continuation prompt. Parent awaits
+therefore keep working. Children whose parent is not resumed are not re-driven.
+Real terminal task results remain first-writer-wins.
+Worktree children reuse their existing checkout; recovery never recreates it or
+automatically replays worktree preparation, merging or cleanup. Results explicitly
+report that merge effects were not replayed. For an interrupted swarm coordinator,
+only its already-running native descendants can continue: recovery does not rerun
+the scheduler or launch previously pending nodes.
+
+The existing carryover policy allows at most **three recovery attempts**, durably
+counted before dispatch, even across repeated crashes. Explicit abort fences are
+permanent and always prevent recovery. A run seen in both graceful carryover and
+the crash scan is dispatched only once. Unportable requests, invocation-bound
+capabilities and named-node executions are not automatically re-issued; they
+converge to interrupted/unknown instead. Graceful restart carryover still works
+independently of this flag.
+
+From a local operator console,
+`LemonRouter.RestartCarryover.CrashRecovery.operator_view(limit: 20)` returns recent
+resumed/abandoned run IDs, attempt counts, bounded reason classifications and
+timestamps. Results are capped at 100 and contain no prompts, paths, credentials,
+tool arguments or raw errors. Store failures remain explicit errors.
 
 ## Canonical Sections
 
@@ -1493,6 +1579,38 @@ with `--non-interactive`).
 To force a token explicitly, set:
 - `OPENAI_CODEX_API_KEY` (preferred)
 - `CHATGPT_TOKEN` (fallback)
+
+## OpenAI Responses WebSocket (opt-in)
+
+Native live coding sessions can reuse an OpenAI Responses WebSocket across turns.
+Enable it separately for each provider in `~/.lemon/config.toml` or the project's
+`.lemon/config.toml`:
+
+```toml
+[providers.openai.provider_options]
+responses_websocket = true
+
+[providers.openai-codex.provider_options]
+responses_websocket = true
+```
+
+This applies only to the `openai_responses` and `openai_codex_responses` wire
+APIs, including custom providers using `api = "openai_responses"`. Azure Responses,
+Chat Completions and other APIs keep their existing transport. Omit the setting
+or set it to `false` to keep the default SSE path.
+
+The live session owns the transport; subsequent turns reuse it and may send only
+new input with `previous_response_id`. Model switches and compaction close the
+connection and discard the continuation baseline. Credential/header changes
+invalidate it on the next request. The transport dies with its session; its pid
+and continuation state are never written to session history or restored after
+parking/restart. Summary/classifier calls do not borrow the conversation's
+transport.
+
+An invalid continuation anchor triggers a full replay. Three anchor rejections
+disable chaining for that logical session, including across compaction resets.
+This feature is experimental and off by default; no token or latency improvement
+is claimed without a measured workload.
 
 ## OpenAI-Compatible Endpoints
 
@@ -2735,6 +2853,13 @@ global config: put the section in the benchmark project's `.lemon/config.toml`
 overrides file config for that process only), or start sessions
 programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile: :coding])`.
 
+The experimental `profile = "code_mode"` (or
+`LEMON_TOOL_DISCLOSURE_PROFILE=code_mode`) replaces that profile's `eval` with
+permissionless Deno cells and `eval_wait`, with deterministic TypeScript tool
+declarations. It requires Deno 2, remains opt-in, and does not change `auto`.
+See [eval](tools/eval.md#experimental-code-mode-profile) for isolation,
+bridged-call authority, re-attachment and the paired-evaluation command.
+
 To opt out of the coding default, set `profile = "legacy"` in the existing
 global/project section or `LEMON_TOOL_DISCLOSURE_PROFILE=legacy` on the runtime.
 `enabled = false` / `LEMON_TOOL_DISCLOSURE_ENABLED=false` disables disclosure
@@ -2839,15 +2964,21 @@ Top-level `[gateway]` keys (defaults from `LemonCore.Config.Gateway`):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `max_concurrent_runs` | `2` | Gateway-wide concurrent run limit (`LEMON_GATEWAY_MAX_CONCURRENT_RUNS`). |
+| `max_concurrent_runs` | `2` | Positive gateway-wide execution permit limit (`LEMON_GATEWAY_MAX_CONCURRENT_RUNS`), owned by `LemonGateway.Slots`. |
 | `default_cwd` | unset | Fallback working directory for unbound chats (`LEMON_GATEWAY_DEFAULT_CWD`). |
 | `auto_resume` | `false` | Resume interrupted sessions on start. |
 | `enable_telegram`, `enable_discord`, `enable_xmtp`, `enable_webhook`, `enable_a2a` | `false` | Enable the named channel; `enable_<id>` is read per registered channel (and `LEMON_GATEWAY_ENABLE_<ID>` overrides it). |
-| `require_engine_lock` | `true` | Serialize runs per engine session (`LEMON_GATEWAY_REQUIRE_ENGINE_LOCK`). |
-| `engine_lock_timeout_ms` | `60000` | Engine lock wait budget (`LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS`). |
 
-`enable_webhook`, `require_engine_lock` and `engine_lock_timeout_ms` are
-validated as boolean, boolean and positive integer respectively.
+`enable_webhook` is validated as a boolean. Invalid execution capacity fails
+startup; there is no fallback to 10. Engine-session ownership is always a
+fail-fast claim, not a configurable lock or timeout.
+
+This execution cap does not bound queued Runs or coordinator population.
+Router's `config :lemon_router, run_process_limit: 500` bounds live router
+RunProcesses, including those waiting for gateway permits. It is independent of
+`max_concurrent_runs`. See the canonical
+[admission inventory](architecture/admission-gates.md) for every gate and
+saturation behavior.
 
 ## A2A peers
 

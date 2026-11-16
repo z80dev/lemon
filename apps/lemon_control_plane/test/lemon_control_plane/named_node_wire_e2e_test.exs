@@ -113,12 +113,12 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
       {:ok, task} =
         Task.start(fn ->
           response = assistant_message("partial native answer")
-          LemonAi.EventStream.push(stream, {:start, response})
+          LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
           for chunk <- 1..100 do
             send(owner, {:native_stream_chunk, chunk})
             Process.sleep(20)
-            LemonAi.EventStream.push(stream, {:text_delta, 0, "native #{chunk} ", response})
+            LemonAi.EventStream.push(stream, {:text_delta, 0, "native #{chunk} "})
           end
 
           LemonAi.EventStream.push(stream, {:done, :stop, response})
@@ -134,14 +134,14 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
       {:ok, stream} = LemonAi.EventStream.start_link()
 
       Task.start(fn ->
-        LemonAi.EventStream.push(stream, {:start, response})
+        LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
         Enum.with_index(response.content)
         |> Enum.each(fn
           {%TextContent{text: text}, index} ->
-            LemonAi.EventStream.push(stream, {:text_start, index, response})
-            LemonAi.EventStream.push(stream, {:text_delta, index, text, response})
-            LemonAi.EventStream.push(stream, {:text_end, index, response})
+            LemonAi.EventStream.push(stream, {:text_start, index})
+            LemonAi.EventStream.push(stream, {:text_delta, index, text})
+            LemonAi.EventStream.push(stream, {:text_end, index, text})
 
           _other ->
             :ok
@@ -784,7 +784,9 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
         }
       )
 
-    assert_receive {:execution_node_socket, ^expired_socket, {:authentication_error, error}}, 3_000
+    assert_receive {:execution_node_socket, ^expired_socket, {:authentication_error, error}},
+                   3_000
+
     assert error["code"] == "UNAUTHORIZED"
     assert error["message"] =~ "Token has expired"
     assert error["details"] == %{"reason" => "session_expired"}
@@ -882,7 +884,9 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
         }
       )
 
-    assert_receive {:execution_node_socket, ^reconnect_socket, {:authentication_error, error}}, 3_000
+    assert_receive {:execution_node_socket, ^reconnect_socket, {:authentication_error, error}},
+                   3_000
+
     assert error["code"] == "UNAUTHORIZED"
     assert error["message"] =~ "Invalid token"
     assert error["details"] == %{"reason" => "session_invalid"}
@@ -949,10 +953,11 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                execution_capabilities: ["read"],
                socket_opts: [reconnect_delay_ms: 10],
                status_writer: fn _, _ -> :ok end,
-               # The automatic 5 s watch and 15 min re-probe are exercised by the
-               # worker unit suite; here both wake-ups are driven explicitly so
-               # the repair enrollment and the resume never overlap.
-               watch_interval_ms: 600_000,
+               # The credential watch is a gen_statem timeout (#588), not an
+               # external message. Run it fast; it can only resume once the
+               # repaired credential is published to this root below, after
+               # the repair enrollment has disconnected. Re-probe stays idle.
+               watch_interval_ms: 20,
                probe_interval_ms: 600_000
              ]
            ]},
@@ -1003,6 +1008,8 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
              )
 
     repair_worker_id = {:repair_wire_repair_worker, suffix}
+    # The repair enrollment saves elsewhere so the parked worker cannot see it early.
+    repair_root = Path.join(tmp_dir, "repair")
 
     repair_worker =
       start_supervised!(%{
@@ -1015,7 +1022,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                controller: url,
                cwd: tmp_dir,
                invite_code: repair["inviteCode"],
-               token_store_opts: [root: tmp_dir],
+               token_store_opts: [root: repair_root],
                notify_pid: self(),
                executor_module: NamedNodeWireExecutor,
                execution_capabilities: ["read"],
@@ -1031,13 +1038,17 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
 
     assert {:ok, repaired} =
-             CodingAgent.ExecutionNode.TokenStore.load(node_name, root: tmp_dir, controller: url)
+             CodingAgent.ExecutionNode.TokenStore.load(node_name,
+               root: repair_root,
+               controller: url
+             )
 
     assert repaired["nodeId"] == node_id
     refute repaired["token"] == expired_token
 
-    # The parked worker resumes from the saved credential without a restart.
-    send(worker, :credential_watch)
+    # Publishing the saved credential to the parked worker's root is the only
+    # thing that lets its watch resume, without a restart.
+    assert :ok = CodingAgent.ExecutionNode.TokenStore.save(node_name, repaired, root: tmp_dir)
 
     assert_receive {:execution_node_worker, ^worker, {:status, :starting}}, 5_000
     assert_receive {:execution_node_worker, ^worker, {:status, :online, ^node_id}}, 10_000

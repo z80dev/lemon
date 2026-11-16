@@ -163,7 +163,7 @@ defmodule LemonAgent.AgentQueueTest do
 
       # Add messages to both queues
       :ok = CoreAgent.steer(agent, Mocks.user_message("Steering"))
-      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow-up"))
+      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow-up"), defer_start: true)
 
       :ok = CoreAgent.prompt(agent, "Will fail")
       assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
@@ -597,7 +597,7 @@ defmodule LemonAgent.AgentQueueTest do
 
       # Queue a large number of follow-up messages
       for i <- 1..100 do
-        :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow #{i}"))
+        :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow #{i}"), defer_start: true)
       end
 
       internal_state = :sys.get_state(agent)
@@ -645,7 +645,7 @@ defmodule LemonAgent.AgentQueueTest do
   # Steering vs Follow-up Message Interaction
   # ============================================================================
 
-  test "turn input arriving between the final steering drain and follow-up poll continues the run" do
+  test "turn input arriving between the final steering drain and follow-up request continues the run" do
     owner = self()
     signal = LemonAgent.AbortSignal.new()
     {:ok, queue_owner} = start_agent()
@@ -655,24 +655,12 @@ defmodule LemonAgent.AgentQueueTest do
       if Process.alive?(queue_owner), do: GenServer.stop(queue_owner)
     end)
 
-    # Drive the loop against the real Agent queue handlers. Inject precisely
-    # after its last steering drain, before entering the final follow-up poll.
+    # Relay queue requests so the test can stop exactly after the final steering
+    # drain, before the real Agent handles the follow-up/closing decision.
     config = %LemonAgent.Types.AgentLoopConfig{
       model: Mocks.mock_model(),
       convert_to_llm: Mocks.simple_convert_to_llm(),
-      get_steering_messages: fn ->
-        GenServer.call(queue_owner, {:get_steering_messages, signal})
-      end,
-      get_follow_up_messages: fn ->
-        unless Process.get(:late_input_injected) do
-          Process.put(:late_input_injected, true)
-
-          :ok =
-            CoreAgent.steer(queue_owner, Mocks.user_message("Late completion"), preempt: false)
-        end
-
-        GenServer.call(queue_owner, {:get_follow_up_messages, signal})
-      end
+      hooks: %{queue_owner: owner, queue_ref: signal}
     }
 
     stream_fn = fn model, context, options ->
@@ -690,13 +678,27 @@ defmodule LemonAgent.AgentQueueTest do
       )
 
     events = Task.async(fn -> Enum.to_list(LemonAgent.EventStream.events(stream)) end)
+    assert_receive {:loop_queue, loop_pid, initial_ref, ^signal, :steering}, 2_000
+    send(queue_owner, {:loop_queue, loop_pid, initial_ref, signal, :steering})
     assert_receive {:late_request, [_initial]}, 2_000
+
+    assert_receive {:loop_queue, ^loop_pid, steering_ref, ^signal, :steering}, 2_000
+    send(queue_owner, {:loop_queue, loop_pid, steering_ref, signal, :steering})
+
+    assert_receive {:loop_queue, ^loop_pid, follow_up_ref, ^signal, :follow_up}, 2_000
+    :ok = CoreAgent.steer(queue_owner, Mocks.user_message("Late completion"), preempt: false)
+    send(queue_owner, {:loop_queue, loop_pid, follow_up_ref, signal, :follow_up})
     assert_receive {:late_request, continued}, 2_000
 
     assert Enum.any?(
              continued,
              &match?(%LemonAi.Types.UserMessage{content: "Late completion"}, &1)
            )
+
+    assert_receive {:loop_queue, ^loop_pid, final_steering_ref, ^signal, :steering}, 2_000
+    send(queue_owner, {:loop_queue, loop_pid, final_steering_ref, signal, :steering})
+    assert_receive {:loop_queue, ^loop_pid, closing_ref, ^signal, :follow_up}, 2_000
+    send(queue_owner, {:loop_queue, loop_pid, closing_ref, signal, :follow_up})
 
     assert Enum.count(Task.await(events, 2_000), &match?({:agent_end, _}, &1)) == 1
     assert :sys.get_state(queue_owner).steering_queue == []
@@ -860,7 +862,7 @@ defmodule LemonAgent.AgentQueueTest do
 
       # Queue both types of messages
       :ok = CoreAgent.steer(agent, Mocks.user_message("Steering interrupt"))
-      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow-up after"))
+      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow-up after"), defer_start: true)
 
       :ok = CoreAgent.prompt(agent, "Start operation")
 
@@ -879,7 +881,7 @@ defmodule LemonAgent.AgentQueueTest do
       {:ok, agent} =
         start_agent(stream_fn: Mocks.mock_stream_fn([response1, response2]))
 
-      :ok = CoreAgent.follow_up(agent, follow_up_message)
+      :ok = CoreAgent.follow_up(agent, follow_up_message, defer_start: true)
       :ok = CoreAgent.prompt(agent, "Initial")
 
       assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
@@ -1033,7 +1035,7 @@ defmodule LemonAgent.AgentQueueTest do
       {:ok, agent} = start_agent(stream_fn: stream_fn, max_retries: 0)
       unsubscribe = CoreAgent.subscribe(agent, self())
       on_exit(unsubscribe)
-      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow up"))
+      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow up"), defer_start: true)
       :ok = CoreAgent.prompt(agent, "Initial")
       assert_receive {:follow_up_blocked, loop}, 2_000
       pending = Mocks.user_message("Must remain queued")
@@ -1046,7 +1048,7 @@ defmodule LemonAgent.AgentQueueTest do
       assert :sys.get_state(agent).running_task == nil
 
       accepted_after_failure = Mocks.user_message("Accepted while idle")
-      assert :ok = CoreAgent.follow_up(agent, accepted_after_failure)
+      assert :ok = CoreAgent.follow_up(agent, accepted_after_failure, defer_start: true)
       assert :sys.get_state(agent).follow_up_queue == [pending, accepted_after_failure]
       assert :sys.get_state(agent).running_task == nil
       assert :counters.get(calls, 1) == 2
@@ -1067,25 +1069,23 @@ defmodule LemonAgent.AgentQueueTest do
       assert internal_state.follow_up_queue == []
     end
 
-    test "steering queue operations are cast (non-blocking)" do
+    test "steering acknowledges that messages are queued" do
       {:ok, agent} = start_agent()
+      messages = for i <- 1..100, do: Mocks.user_message("Msg #{i}")
 
-      # Casts must return even while the agent cannot process messages
-      :ok = :sys.suspend(agent)
-
-      for i <- 1..100 do
-        :ok = CoreAgent.steer(agent, Mocks.user_message("Msg #{i}"))
+      for message <- messages do
+        assert :ok = CoreAgent.steer(agent, message)
       end
 
-      :ok = :sys.resume(agent)
+      assert :sys.get_state(agent).steering_queue == messages
     end
 
-    test "queue operations while not streaming" do
+    test "queue operations can explicitly defer starting an idle agent" do
       {:ok, agent} = start_agent()
 
       # Should work fine even when not streaming
       :ok = CoreAgent.steer(agent, Mocks.user_message("Steer while idle"))
-      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow while idle"))
+      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Follow while idle"), defer_start: true)
 
       internal_state = :sys.get_state(agent)
       assert length(internal_state.steering_queue) == 1

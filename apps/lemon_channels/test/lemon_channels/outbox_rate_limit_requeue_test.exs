@@ -8,7 +8,7 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.{Outbox, OutboundPayload, Registry}
-  alias LemonChannels.Outbox.RateLimiter
+  alias LemonCore.RateLimiter
 
   # Test plugin that tracks deliveries
   defmodule TrackingPlugin do
@@ -65,7 +65,9 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
   end
 
   defp start_supervised_if_needed(module) do
-    case Process.whereis(module) do
+    case Process.whereis(
+           if(module == LemonCore.RateLimiter, do: LemonChannels.Outbox.RateLimiter, else: module)
+         ) do
       nil -> start_supervised!(module)
       _pid -> :ok
     end
@@ -77,7 +79,7 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
 
       # Exhaust rate limiter tokens
       for _ <- 1..10 do
-        RateLimiter.consume(channel_id, "multi-account")
+        RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel_id, "multi-account")
       end
 
       # Enqueue multiple messages
@@ -118,7 +120,7 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
 
       # Exhaust rate limiter
       for _ <- 1..10 do
-        RateLimiter.consume(channel_id, account)
+        RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel_id, account)
       end
 
       payload = %OutboundPayload{

@@ -1,7 +1,7 @@
 defmodule LemonAi.MixProject do
   use Mix.Project
 
-  @version "0.2.1"
+  @version "0.3.0"
   @source_url "https://github.com/z80dev/lemon"
 
   # This file ships verbatim in the hex tarball, so it must not read anything
@@ -86,6 +86,10 @@ defmodule LemonAi.MixProject do
     [
       # HTTP client with streaming support
       {:req, "~> 0.5"},
+      # Direct access to Req's connection pool for unpaid preconnect hints
+      {:finch, "~> 0.21"},
+      # Session-owned Responses WebSocket transport
+      {:websockex, "~> 0.5"},
       # JSON encoding/decoding
       {:jason, "~> 1.4"},
       # Options validation

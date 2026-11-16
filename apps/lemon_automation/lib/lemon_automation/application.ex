@@ -7,7 +7,7 @@ defmodule LemonAutomation.Application do
   def start(_type, _args) do
     children =
       [
-        {Task.Supervisor, name: LemonAutomation.TaskSupervisor},
+        LemonCore.TaskSupervisor.child_spec(name: LemonAutomation.TaskSupervisor),
         LemonAutomation.CronManager,
         LemonAutomation.GoalContinuationManager,
         LemonAutomation.GoalLoopManager,

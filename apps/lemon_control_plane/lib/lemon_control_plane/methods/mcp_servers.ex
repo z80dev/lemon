@@ -130,7 +130,8 @@ defmodule LemonControlPlane.Methods.McpServersRefresh do
   Handler for `mcp.servers.refresh` (admin): reloads global MCP configuration,
   reconnects dead clients and re-discovers tools through
   `LemonSkills.McpSource.refresh/0`, then returns the fresh inventory. Async
-  because connecting can wait on each server's readiness timeout.
+  because connecting can wait on each server's readiness timeout. Bounded worker
+  failures return `unavailable` rather than a partial success inventory.
   """
 
   @behaviour LemonControlPlane.Method
@@ -153,8 +154,10 @@ defmodule LemonControlPlane.Methods.McpServersRefresh do
 
     if McpSupport.available?(source) do
       try do
-        :ok = LemonSkills.McpSource.refresh(source)
-        McpSupport.inventory()
+        case LemonSkills.McpSource.refresh(source) do
+          :ok -> McpSupport.inventory()
+          {:error, _reason} -> {:error, Errors.unavailable("MCP refresh is unavailable")}
+        end
       catch
         :exit, _ -> {:error, Errors.unavailable("MCP source is unavailable")}
       end

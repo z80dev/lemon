@@ -44,7 +44,7 @@ defmodule CodingAgent.Tools.Task.RequestBudgetTest do
       {:reply, :ok, %{state | is_streaming: true}}
     end
 
-    def handle_call({:steer, text, false}, _from, state) do
+    def handle_call({:steer, text, [preempt: false]}, _from, state) do
       send(state.owner, {:notice, state.count, text})
       {:reply, :ok, state}
     end

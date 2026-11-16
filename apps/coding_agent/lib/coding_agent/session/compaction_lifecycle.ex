@@ -84,7 +84,7 @@ defmodule CodingAgent.Session.CompactionLifecycle do
       state = maybe_trigger(state, self(), {message, system_prompt})
 
       if not state.auto_compaction.in_progress do
-        send(self(), {:dispatch_prompt, message, system_prompt})
+        send(self(), {:dispatch_prompt, state.pending_prompt_timer_ref, message, system_prompt})
       end
 
       state
@@ -94,8 +94,11 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   @doc false
   def resume_pending_prompt(state) do
     case state.auto_compaction.pending_prompt do
-      {message, system_prompt} -> send(self(), {:dispatch_prompt, message, system_prompt})
-      nil -> :ok
+      {message, system_prompt} ->
+        send(self(), {:dispatch_prompt, state.pending_prompt_timer_ref, message, system_prompt})
+
+      nil ->
+        :ok
     end
 
     state

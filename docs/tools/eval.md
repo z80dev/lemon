@@ -1,5 +1,137 @@
 # Eval
 
+## Experimental code-mode profile
+
+`code_mode` is **opt-in**. The existing `legacy`, `coding` and `auto` defaults
+and their full-authority stateful Python/JavaScript `eval` kernels below are
+unchanged. Select the experiment with:
+
+```toml
+[tools.disclosure]
+profile = "code_mode"
+```
+
+Or set `LEMON_TOOL_DISCLOSURE_PROFILE=code_mode`, or pass
+`tool_disclosure: [profile: :code_mode]` when starting a session.
+Disclosure must be enabled. Custom hand-assembled toolsets still bypass
+disclosure and are not implicitly converted into sandboxes.
+
+The small direct surface is `eval`, `eval_wait`, `read`, `ask`, `todo`, `wait`
+and `nodes`, where present and policy-allowed, plus explicitly pinned/extra
+tools. `tool_search` and `tool_invoke` remain available: they are not removed
+without a measured promotion decision. All other allowed tools remain in the
+wrapped session catalog. The `eval` description includes TypeScript declarations
+generated from that catalog: tools, object keys and union alternatives have
+deterministic ordering, required/optional fields and JSON-quoted names.
+Unsupported schemas/references are `unknown`, not invented types. This is
+declaration rendering, not TypeScript execution or an authority grant.
+
+Code-mode `eval` accepts an async **JavaScript function body**, with explicit
+`return`, `console.log`, `await`, and `tools.NAME(args)`:
+
+```json
+{"code":"const r = await tools.bash({command: \"git status --short\"}); return {exit_code: r.exit_code, stdout: r.stdout};"}
+```
+
+Cells do not share variables. The stateful Python kernel is a separate
+full-authority implementation available through ordinary-profile `eval`;
+it is never an implicit fallback for code-mode cells.
+
+| Parameter | Meaning |
+| --- | --- |
+| `code` | JavaScript async-function body; required. |
+| `timeout` | Execution deadline in seconds, default/max 600 (the existing eval maximum). |
+| `yield_after` | Initial wait in seconds, default/max 30; `0` returns immediately. |
+
+A long-running cell returns `details.status = "yielded"` and a session-scoped
+`cell_id`. Yield does **not** restart code, cancel tools or release their
+individual mutation locks. Re-attach without replaying effects:
+
+```json
+{"cell_id":"cell_FROM_EVAL","yield_after":30}
+```
+
+Send that object to `eval_wait`; it accepts `cell_id` and `yield_after`.
+Terminal statuses are `ok`, `error`, `timeout` or `aborted`. One cell runs per
+session; a second `eval` refuses while it is running. Its bounded result
+(last 50 KiB; `details.truncated` reports clipping) remains attachable until a
+new cell replaces it, the resource expires after 30 idle minutes, or the session
+is disposed. Cells survive successful session-resource handoff; new bridged
+calls pause while detached, and re-attachment refreshes the session resolver.
+They are volatile: a node/runtime crash does not journal or replay a cell.
+Cancellation/deadline terminates the cell and aborts/joins outstanding tools.
+
+### Isolation and bridge authority
+
+The chosen runtime is **Deno 2**, required on `PATH` (or the trusted programmatic
+`:code_mode_runtime` executable override). Host inspection for #598 found Bun
+but **no Deno**. The repository's Wasmtime sidecar executes compiled WIT
+`sandboxed-tool` components and provides capability-gated host callbacks; it
+does not contain a JavaScript interpreter or a source-cell API. Adding one
+would be a different runtime project. Requiring optional Deno gives this
+experiment an existing permission boundary without altering the WASM sidecar
+or the stateful `Eval.Kernel`.
+
+The trusted Deno driver launches a worker with `permissions: "none"`; the
+process also uses explicit `--deny-read`, `--deny-write`, `--deny-net`,
+`--deny-env`, `--deny-run`, `--deny-ffi`, `--deny-sys`, `--no-remote`,
+`--no-npm`, `--no-config` and `--no-prompt`. Cells cannot approve permission
+requests, import arbitrary local/remote modules, read ambient environment,
+touch files or open connections directly. Missing/incompatible Deno fails
+closed, never falling back to Bun, Node, Python or ordinary `eval`.
+Code-mode cells are local-only; their bridged tools may still route through
+`nodes`, under the normal destination policy.
+
+Tool calls resolve through the existing session catalog, including argument
+validation, policy, approvals, hooks, secret handling and plan-mode gates.
+Denied tools never enter the catalog. The sandbox is not a second authority
+plane: file/network/process effects require those wrapped calls. Inner calls
+retain the existing 16-concurrent/1,000-per-cell bridge limits. `eval`,
+`eval_wait` and the disclosure bridge pair cannot recursively invoke themselves
+through the cell bridge. Tool results remain untrusted, including printed or
+returned summaries.
+
+Bridge results preserve `{ok, text, details, images}` and promote authentic
+core result fields. Local non-PTY code-mode `bash` additionally returns
+`{stdout, stderr, exit_code, output, output_combined}` using a trusted Python 3
+stream relay (Python 3 is required for this path). `stdout` and `stderr` are
+independently bounded captured streams; `output` retains combined arrival order.
+Unlike ordinary managed bash, this local foreground path kills on timeout
+rather than detaching. PTY, ACP and remote/sandbox transports that only supply
+combined output report null streams and `output_combined: true`; null means
+unavailable, not empty. No tool text is parsed to manufacture an exit code.
+
+### Paired evaluation and decision
+
+**Decision: keep opt-in.** No success/token/cost improvement has been measured
+for #598, and no default or discovery-tool removal is justified. The
+orchestrator runs the paired evaluation separately; this change does not
+authorize paid model calls.
+
+With Docker, matching rebuilt Lemon arena images containing Deno/Python 3,
+and the arena credential proxy already running, use a fresh output directory:
+
+```bash
+python3 apps/lemon_evals/priv/coding_arena/arena.py run \
+  --agents lemon-coding,lemon-code-mode --models glm-5.3=1 \
+  --thinking high --repetitions 3 --seed 598 \
+  --output-dir /OPERATOR/PATH/code-mode-arena \
+  --proxy-log /OPERATOR/PATH/proxy.jsonl
+python3 apps/lemon_evals/priv/coding_arena/arena.py report \
+  --output-dir /OPERATOR/PATH/code-mode-arena \
+  --proxy-log /OPERATOR/PATH/proxy.jsonl
+```
+
+Retain verifier outcomes, all attempted wire tokens, exact source/image/model
+identities and pricing needed for cost per verified success. Missing usage or
+pricing remains unknown. The arena records the requested profile but cannot
+attest the CLI's effective disclosure profile; do not use its arm label as
+observed-profile evidence or as a promotion gate. See the
+[paired-disclosure protocol](../benchmarks/paired-disclosure.md) for attribution,
+approval/spend controls and the report's limitations.
+
+## Ordinary-profile kernels
+
 `eval` runs code cells in persistent Python or JavaScript kernels. Each coding
 session gets one kernel per language, started on first use in the session's
 working directory. Variables, imports, functions and classes defined in one call

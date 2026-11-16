@@ -21,9 +21,9 @@ lemon_ai → lemon_core → lemon_agent → lemon_memory → lemon_platform_test
 
 | Package | In-repo version | Sibling deps |
 |---|---|---|
-| `lemon_ai` | 0.2.1 | none |
+| `lemon_ai` | 0.3.0 | none |
 | `lemon_core` | 0.3.0 | none |
-| `lemon_agent` | 0.2.0 | `lemon_ai`, `lemon_core` |
+| `lemon_agent` | 0.3.0 | `lemon_ai ~> 0.3`, `lemon_core ~> 0.3` |
 | `lemon_memory` | 0.2.0 | `lemon_core` |
 | `lemon_platform_test` | 0.2.0 | `lemon_core`, `lemon_memory`, `lemon_ai`, `lemon_agent` (all optional) |
 
@@ -32,8 +32,56 @@ Every other app is in-repo only. `lemon_platform_test`'s `PluginCase` targets
 path dependency on a checkout.
 
 `0.2.0` is the first installable release line. The `0.1.0` releases published on
-2026-08-11 cannot be installed (below); sibling requirements are `~> 0.2` so no
-resolver ever picks them.
+2026-08-11 cannot be installed (below). Sibling requirements have a minimum
+matching the APIs used by each package; none permits the retired 0.1 releases.
+
+### API migration for the 0.3 line (#559, #571, #592)
+
+These changes join the current unreleased package cycle; they do not imply that
+new versions have been published. `lemon_core` stays on its already-unreleased
+0.3.0 line rather than stacking another minor bump.
+
+- **`lemon_ai` 0.3.0 (breaking):** provider content events are delta-only
+  (#571): starts, deltas and block ends no longer carry an `AssistantMessage`
+  snapshot (see the `lemon_ai` README). Remove `LemonAi.Providers.RetryHelper` and
+  `LemonAi.OneshotRetry`. Use `LemonAi.Retry` and `%LemonAi.Retry.Policy{}`.
+  Retryability classification belongs to `LemonAi.Error`; provider HTTP retry
+  timing, one-shot attempts and cancellation-aware waiting belong to
+  `LemonAi.Retry`. Provider configuration is converted with
+  `LemonAi.Provider.retry_policy/0,1`; injected sleep remains configurable via
+  `retry_sleep/1,2`. Provider-only `LemonAi.RateLimiter` is unchanged.
+- **`lemon_core` 0.3.0:** add `%LemonCore.Retry.Policy{}` and policy-based
+  `LemonCore.Retry.policy/1`, `retry_allowed?/2`, `backoff_delay_ms/2` and
+  `delay/2,3`. Existing core backoff/Retry-After APIs remain available and use
+  that policy implementation. Add `LemonCore.RateLimiter` for platform
+  consumers and `LemonCore.RuntimeSeam` for optional-consumer registration and
+  protected dispatch. Existing domain bridge APIs and behaviour contracts remain
+  public; the duplicated registry implementations are removed, not the domain
+  acknowledgement/failure policies. `LemonCore.Dedupe.Ets.check_and_mark/3`
+  now atomically claims and fails closed when its table is unavailable; new
+  `retain/4`, `forget/2` and `:infinity` retention support confirmed receipts and
+  caller-owned bounded histories. Durable inbox uniqueness continues to use
+  Store CAS. Platform callers migrate from the removed
+  `LemonChannels.Outbox.RateLimiter`, `LemonControlPlane.A2A.RateLimiter` and
+  `LemonWeb.LoginThrottle` implementations to `LemonCore.RateLimiter`; their
+  application-owned registered process/table identities remain unchanged.
+- **`lemon_agent` 0.3.0 (breaking):** `{:message_update, event}` carries only
+  the delta-only provider event, not a growing partial `AssistantMessage` (#571).
+  Queue transport lives in `AgentLoopConfig.hooks` (`queue_owner`, `queue_ref`,
+  `queue_timeout`) beside `emit_system_prompt`, `stream_rules` and
+  `on_stream_rule` (#559).
+  The loop uses `LemonAi.Retry` while preserving one transient retry budget per
+  response and provider `max_attempts: 1`. Package dependencies require
+  `lemon_ai ~> 0.3` and `lemon_core ~> 0.3`, rather than resolving older
+  packages that lack the consolidated APIs.
+
+Both policy structs count `max_attempts` as **total attempts including the
+initial attempt**. Their shared fields are `base_delay_ms`, `max_delay_ms`,
+`max_retry_after_ms`, `factor`, `jitter`, `jitter_fraction`, `jitter_fun`,
+`sleep_fun`, `alternate_available` and `classify`; AI also accepts
+`error_retry_after_ms`. A delay calculation does not create another retry
+budget. Unknown mutation outcomes remain non-retryable except for the
+documented, fixed-idempotency-key channel outbox delivery policy.
 
 ## The generator (`lemon_new`)
 
@@ -98,7 +146,7 @@ is in:
   packages are `in_umbrella: true`.
 - **Package** — anywhere else (`deps/<pkg>/` in a consumer, an unpacked
   tarball): no umbrella paths, and a private `lemon_deps/1` rewrites each
-  `in_umbrella` sibling into a `~> 0.2` Hex requirement, keeping `optional: true`.
+  `in_umbrella` sibling into its declared Hex requirement, keeping `optional: true`.
 
 `LEMON_HEX_PUBLISH=1` forces the package form inside the repo. `mix hex.build`
 needs it: run without it, the deps are still `in_umbrella` and hex refuses to

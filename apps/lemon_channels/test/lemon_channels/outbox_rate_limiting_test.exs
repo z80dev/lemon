@@ -5,11 +5,11 @@ defmodule LemonChannels.OutboxRateLimitingTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Outbox.RateLimiter
+  alias LemonCore.RateLimiter
 
   setup do
     # Start the RateLimiter if not running
-    case Process.whereis(RateLimiter) do
+    case Process.whereis(LemonChannels.Outbox.RateLimiter) do
       nil ->
         {:ok, pid} = RateLimiter.start_link([])
 
@@ -29,16 +29,16 @@ defmodule LemonChannels.OutboxRateLimitingTest do
     account = "account-1"
 
     # Get initial status
-    status1 = RateLimiter.status(channel, account)
+    status1 = RateLimiter.status(LemonChannels.Outbox.RateLimiter, channel, account)
     initial_tokens = status1.tokens
 
     # Check multiple times
-    :ok = RateLimiter.check(channel, account)
-    :ok = RateLimiter.check(channel, account)
-    :ok = RateLimiter.check(channel, account)
+    :ok = RateLimiter.check(LemonChannels.Outbox.RateLimiter, channel, account)
+    :ok = RateLimiter.check(LemonChannels.Outbox.RateLimiter, channel, account)
+    :ok = RateLimiter.check(LemonChannels.Outbox.RateLimiter, channel, account)
 
     # Tokens should not have decreased (check doesn't consume)
-    status2 = RateLimiter.status(channel, account)
+    status2 = RateLimiter.status(LemonChannels.Outbox.RateLimiter, channel, account)
     # Note: tokens may have increased slightly due to refill, but shouldn't be less
     assert status2.tokens >= initial_tokens - 0.1
   end
@@ -48,16 +48,16 @@ defmodule LemonChannels.OutboxRateLimitingTest do
     account = "account-1"
 
     # Get initial status (fresh bucket has burst tokens)
-    status1 = RateLimiter.status(channel, account)
+    status1 = RateLimiter.status(LemonChannels.Outbox.RateLimiter, channel, account)
     initial_tokens = status1.tokens
 
     # Consume 3 tokens
-    :ok = RateLimiter.consume(channel, account)
-    :ok = RateLimiter.consume(channel, account)
-    :ok = RateLimiter.consume(channel, account)
+    :ok = RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel, account)
+    :ok = RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel, account)
+    :ok = RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel, account)
 
     # Should have 3 fewer tokens (approximately, accounting for refill)
-    status2 = RateLimiter.status(channel, account)
+    status2 = RateLimiter.status(LemonChannels.Outbox.RateLimiter, channel, account)
     tokens_consumed = initial_tokens - status2.tokens
     # Allow for some refill during the test
     assert tokens_consumed > 2.5
@@ -67,26 +67,29 @@ defmodule LemonChannels.OutboxRateLimitingTest do
     channel = "record-channel-#{System.unique_integer([:positive])}"
     account = "account-1"
 
-    status1 = RateLimiter.status(channel, account)
+    status1 = RateLimiter.status(LemonChannels.Outbox.RateLimiter, channel, account)
     initial_tokens = status1.tokens
 
-    :ok = RateLimiter.record(channel, account)
+    :ok = RateLimiter.record(LemonChannels.Outbox.RateLimiter, channel, account)
 
     # ETS updates are visible immediately to the following status read.
-    status2 = RateLimiter.status(channel, account)
+    status2 = RateLimiter.status(LemonChannels.Outbox.RateLimiter, channel, account)
     assert status2.tokens < initial_tokens
   end
 
   test "new buckets start with burst tokens" do
     channel = "new-bucket-#{System.unique_integer([:positive])}"
-    status = RateLimiter.status(channel, "account-1")
+    status = RateLimiter.status(LemonChannels.Outbox.RateLimiter, channel, "account-1")
 
     assert status.tokens == status.burst
   end
 
   test "rapid consumption of an exhausted bucket is rate limited with a wait" do
     channel = "rapid-#{System.unique_integer([:positive])}"
-    results = for _ <- 1..20, do: RateLimiter.consume(channel, "account-1")
+
+    results =
+      for _ <- 1..20,
+          do: RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel, "account-1")
 
     assert Enum.any?(results, fn
              {:rate_limited, wait_ms} -> is_integer(wait_ms) and wait_ms > 0

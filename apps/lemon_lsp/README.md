@@ -11,6 +11,16 @@ can opt into durable local process-group tracking without changing ordinary
 session ownership or protocol limits. Coding-tool diagnostics and formatters keep
 their timeout/output-bounded BashExecutor path, which uses the same launch seam.
 
+Each server/workspace/configuration pool owns a temporary `LemonLsp.Session`
+under `LemonLsp.SessionSupervisor`, discovered through `LemonLsp.SessionRegistry`.
+`ServerManager` retains the public API and redacted status projections, not
+document contents or protocol state. Requests and callbacks run in their session;
+a stalled or failed session does not block another workspace. A failed session
+is not automatically restarted or replayed; acquiring it again starts a new peer.
+Sessions use `LemonCore.Rpc.Client` with Content-Length framing and terminate
+owned process groups through `LemonCore.ProcessGroup.terminate/2`, without
+sleep-based cleanup.
+
 ## Supported language servers
 
 The original providers are ElixirLS (`elixir_ls`), TypeScript Language Server

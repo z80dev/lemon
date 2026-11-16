@@ -384,12 +384,9 @@ defmodule LemonAutomation.KanbanDispatcher do
   end
 
   defp start_task(task_supervisor, worker_mod, task, worker_opts) do
-    if supervisor_alive?(task_supervisor) do
-      {:ok,
-       Task.Supervisor.async_nolink(task_supervisor, fn -> worker_mod.run(task, worker_opts) end)}
-    else
-      {:error, :task_supervisor_unavailable}
-    end
+    LemonCore.TaskSupervisor.async_nolink(task_supervisor, fn ->
+      worker_mod.run(task, worker_opts)
+    end)
   rescue
     error -> {:error, {:task_start_exception, error}}
   catch
@@ -576,10 +573,6 @@ defmodule LemonAutomation.KanbanDispatcher do
 
   defp app_env(key, default), do: Application.get_env(:lemon_automation, key, default)
   defp now_ms, do: System.system_time(:millisecond)
-
-  defp supervisor_alive?(pid) when is_pid(pid), do: Process.alive?(pid)
-  defp supervisor_alive?(name) when is_atom(name), do: is_pid(Process.whereis(name))
-  defp supervisor_alive?(_), do: false
 
   defp lease_id(task) do
     lease = task.meta["kanbanLease"] || task.meta[:kanbanLease] || %{}

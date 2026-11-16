@@ -214,7 +214,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProcessTest do
              )
 
     assert is_integer(code)
-    state = :sys.get_state(ctx.worker)
+    {:reconnecting, state} = :sys.get_state(ctx.worker)
     assert state.process_tasks == %{}
     Process.sleep(2_100)
     refute File.exists?(survived)

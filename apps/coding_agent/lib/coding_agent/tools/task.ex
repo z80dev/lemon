@@ -14,6 +14,7 @@ defmodule CodingAgent.Tools.Task do
     Result,
     Speculation,
     Swarm,
+    Telemetry,
     Wait
   }
 
@@ -130,14 +131,14 @@ defmodule CodingAgent.Tools.Task do
           "output_schema" => %{
             "type" => ["object", "boolean"],
             "description" =>
-              "Final JSON Schema (default: persona output). Invalid output is re-prompted up to twice; " <>
-                "valid data becomes structured_output"
+              "Final JSON Schema (default: persona output). Strict children call submit_result; " <>
+                "two corrections are allowed, and accepted data becomes structured_output without another model call"
           },
           "schema_mode" => %{
             "type" => "string",
             "enum" => ["strict", "permissive"],
             "description" =>
-              "strict (default) fails on invalid output after retries; permissive returns text plus structured_output_error"
+              "strict (default) requires submit_result; permissive parses final text and returns structured_output_error on failure"
           },
           "request_budget" => %{
             "type" => "integer",
@@ -202,6 +203,12 @@ defmodule CodingAgent.Tools.Task do
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
   def execute(tool_call_id, params, signal, on_update, cwd, opts) do
+    Telemetry.observe(params, opts, signal, fn ->
+      execute_action(tool_call_id, params, signal, on_update, cwd, opts)
+    end)
+  end
+
+  defp execute_action(tool_call_id, params, signal, on_update, cwd, opts) do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else

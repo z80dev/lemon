@@ -27,7 +27,7 @@ defmodule LemonAgent.Loop do
       {:message_start, prompt}
       {:message_end, prompt}
       {:message_start, assistant_msg}
-      {:message_update, assistant_msg, event}
+      {:message_update, event}
       ...
       {:message_end, assistant_msg}
       {:tool_execution_start, id, name, args}
@@ -56,7 +56,7 @@ defmodule LemonAgent.Loop do
   require Logger
 
   alias LemonAgent.{AbortSignal, AutoThinking, Budget, EventStream}
-  alias LemonAgent.Loop.{StateMachine, Streaming, ToolCalls, ToolStream}
+  alias LemonAgent.Loop.{Queue, StateMachine, Streaming, ToolCalls, ToolStream}
   alias LemonAgent.ModelRuntime.StreamOptions
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentToolResult, ToolSchemaSnapshot}
 
@@ -143,7 +143,7 @@ defmodule LemonAgent.Loop do
       end
 
     # Run the loop in a supervised task
-    case Task.Supervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
+    case LemonCore.TaskSupervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
            try do
              run_agent_loop(prompts, context, config, signal, stream_fn, stream)
            rescue
@@ -160,9 +160,6 @@ defmodule LemonAgent.Loop do
            end
          end) do
       {:ok, pid} ->
-        EventStream.attach_task(stream, pid)
-
-      {:ok, pid, _info} ->
         EventStream.attach_task(stream, pid)
 
       {:error, reason} ->
@@ -242,15 +239,16 @@ defmodule LemonAgent.Loop do
           pid() | nil
         ) :: EventStream.t()
   def agent_loop_continue(context, config, signal, stream_fn, owner) do
-    # Validate context
-    if context.messages == [] do
-      raise ArgumentError, "Cannot continue: no messages in context"
-    end
+    # A queue-started run continues from accepted input that its first steering
+    # drain supplies, so its history may be empty or end with an assistant turn.
+    unless Map.get(config.hooks || %{}, :queued_start, false) do
+      if context.messages == [] do
+        raise ArgumentError, "Cannot continue: no messages in context"
+      end
 
-    last_message = List.last(context.messages)
-
-    if assistant_message?(last_message) do
-      raise ArgumentError, "Cannot continue from message role: assistant"
+      if assistant_message?(List.last(context.messages)) do
+        raise ArgumentError, "Cannot continue from message role: assistant"
+      end
     end
 
     {:ok, stream} =
@@ -269,7 +267,7 @@ defmodule LemonAgent.Loop do
         )
       end
 
-    case Task.Supervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
+    case LemonCore.TaskSupervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
            try do
              run_continue_loop(context, config, signal, stream_fn, stream)
            rescue
@@ -286,9 +284,6 @@ defmodule LemonAgent.Loop do
            end
          end) do
       {:ok, pid} ->
-        EventStream.attach_task(stream, pid)
-
-      {:ok, pid, _info} ->
         EventStream.attach_task(stream, pid)
 
       {:error, reason} ->
@@ -415,12 +410,9 @@ defmodule LemonAgent.Loop do
 
   defp run_loop(context, new_messages, config, signal, stream_fn, stream) do
     # Check for steering messages at start (user may have typed while waiting).
-    # Clear the redirect flag BEFORE draining: a redirect cast processed before
-    # the drain has its correction included here (a set flag is then cleared
-    # harmlessly, worst case one immediate cancel/retry with the correction
-    # already in context); one processed after the drain keeps its flag, so
-    # the model call is canceled mid-stream and retried with the correction.
-    # Clearing after the drain would swallow that second case silently.
+    # Clear redirect before requesting the queue. Corrections accepted before
+    # the owner handles this request are included; later redirects keep their
+    # flag and cancel the next model call instead of being swallowed.
     AbortSignal.clear_redirect(signal)
     pending_messages = get_steering_messages(config, signal)
 
@@ -431,7 +423,9 @@ defmodule LemonAgent.Loop do
 
   defp snapshot_tool_schema(context, %AgentLoopConfig{} = config) do
     snapshot = config.tool_schema_snapshot || ToolSchemaSnapshot.new(context.tools)
-    context = %{context | tools: snapshot.tools}
+    # Agent and direct callers may supply ordinary context maps rather than the
+    # convenience struct. Initialize run-local control state at this boundary.
+    context = context |> Map.put(:tools, snapshot.tools) |> Map.put(:terminate_turn, false)
     config = %{config | tool_schema_snapshot: snapshot}
 
     {context, config, snapshot}
@@ -482,8 +476,10 @@ defmodule LemonAgent.Loop do
       )
 
     if continue_outer do
-      # Check for follow-up messages
-      follow_up_messages = get_follow_up_messages(config)
+      # A trusted terminal tool completes successfully, but must not consume
+      # queued follow-ups or make another provider request.
+      follow_up_messages =
+        if continue_outer == :terminal_tool, do: [], else: Queue.follow_up(config)
 
       Logger.debug(
         "LemonAgent.Loop do_run_loop continue_outer follow_up=#{length(follow_up_messages)}"
@@ -626,6 +622,9 @@ defmodule LemonAgent.Loop do
               EventStream.cancel(stream, :assistant_aborted)
               {context, new_messages, [], false}
             else
+              # A correction may already have been injected before its redirect
+              # flag was observed. Retry the model even if the queue is empty;
+              # completed tools are not re-executed.
               do_inner_loop(
                 context,
                 new_messages,
@@ -635,7 +634,7 @@ defmodule LemonAgent.Loop do
                 stream,
                 pending_messages,
                 false,
-                false,
+                true,
                 tool_turn_count
               )
             end
@@ -702,33 +701,38 @@ defmodule LemonAgent.Loop do
             tool_turn_count =
               if has_more_tool_calls, do: tool_turn_count + 1, else: tool_turn_count
 
-            if max_tool_turns_exhausted?(config, has_more_tool_calls, tool_turn_count) do
-              complete_tool_loop_budget(context, new_messages, config, stream, tool_turn_count)
-            else
-              # Consume turn input only after the continuation decision. Clear
-              # redirect before draining, for the same reason as in run_loop/6.
-              AbortSignal.clear_redirect(signal)
-              pending_messages = get_steering_messages(config, signal)
+            cond do
+              context.terminate_turn ->
+                {%{context | terminate_turn: false}, new_messages, [], :terminal_tool}
 
-              if aborted?(signal) do
-                transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
-                EventStream.cancel(stream, :assistant_aborted)
-                {context, new_messages, [], false}
-              else
-                # Continue inner loop
-                do_inner_loop(
-                  context,
-                  new_messages,
-                  config,
-                  signal,
-                  stream_fn,
-                  stream,
-                  pending_messages,
-                  false,
-                  has_more_tool_calls,
-                  tool_turn_count
-                )
-              end
+              max_tool_turns_exhausted?(config, has_more_tool_calls, tool_turn_count) ->
+                complete_tool_loop_budget(context, new_messages, config, stream, tool_turn_count)
+
+              true ->
+                # Consume turn input only after the continuation decision. Clear
+                # redirect before draining, for the same reason as in run_loop/6.
+                AbortSignal.clear_redirect(signal)
+                pending_messages = get_steering_messages(config, signal)
+
+                if aborted?(signal) do
+                  transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
+                  EventStream.cancel(stream, :assistant_aborted)
+                  {context, new_messages, [], false}
+                else
+                  # Continue inner loop
+                  do_inner_loop(
+                    context,
+                    new_messages,
+                    config,
+                    signal,
+                    stream_fn,
+                    stream,
+                    pending_messages,
+                    false,
+                    has_more_tool_calls,
+                    tool_turn_count
+                  )
+                end
             end
         end
 
@@ -1037,28 +1041,16 @@ defmodule LemonAgent.Loop do
     state
   end
 
-  defp get_steering_messages(%AgentLoopConfig{get_steering_messages: nil}), do: []
-
-  defp get_steering_messages(%AgentLoopConfig{get_steering_messages: get_fn}) do
-    get_fn.() || []
-  end
-
   defp get_steering_messages(%AgentLoopConfig{} = config, signal) do
     if aborted?(signal) do
       []
     else
-      messages = get_steering_messages(config)
+      messages = Queue.steering(config)
       if aborted?(signal), do: [], else: messages
     end
   end
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
-
-  defp get_follow_up_messages(%AgentLoopConfig{get_follow_up_messages: nil}), do: []
-
-  defp get_follow_up_messages(%AgentLoopConfig{get_follow_up_messages: get_fn}) do
-    get_fn.() || []
-  end
 
   defp assistant_message?(%AssistantMessage{}), do: true
   defp assistant_message?(%{role: :assistant}), do: true

@@ -10,6 +10,45 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Epic #543 wave 3 (additive, unless marked **Breaking**):
+  - Providers preconnect and offer opt-in request hedging, with
+    `hedge_started`/`hedge_skipped` dispatcher telemetry (#567); OpenAI
+    Responses over WebSocket with `previous_response_id` chaining is opt-in via
+    `responses_websocket = true` (#566).
+  - Subagents return structured results through a `submit_result` tool (#602);
+    task-tool action usage is measured by telemetry only, with no behavior
+    change (#604); idle subagent processes hibernate and completions are
+    batched, with published memory figures (#597).
+  - Optional advisor: a second model that reviews each turn (#600).
+  - Experimental, opt-in `code_mode` tool profile
+    (`profile = "code_mode"` / `LEMON_TOOL_DISCLOSURE_PROFILE=code_mode`);
+    legacy, coding and auto defaults are unchanged (#598).
+  - Gateway admission: the EngineLock FIFO is replaced by a fail-fast
+    engine-session claim (#610), the Run is the slot waiter and `ThreadWorker`
+    is deleted (#611), the router no longer retries gateway admission (#612),
+    and one admission-gate inventory and ADR documents the router/gateway stack
+    (#613).
+  - Diagnostics and status use standard status hooks and published counters
+    with redaction instead of `:sys.get_state` (#593).
+  - LSP runs one process per language-server session (#578).
+  - Callbacks no longer do blocking work and calls into shared servers are
+    bounded (#587); `gen_statem` replaces hand-rolled timer/status-flag
+    lifecycles (#588).
+  - Supervision subtrees, caps and no unsupervised fallbacks, with bounded task
+    admission (#585); retry, limiter, dedupe and runtime seams are consolidated
+    (#592).
+  - Durable steering and follow-up acceptance with withdraw RPCs (#559).
+  - Crash and torn-write model tests for the durable cores with mutation checks
+    (#555).
+  - Default-off `features.crash_resume` (`"off"`; set `"on"` to opt in) resumes
+    router runs orphaned by a hard crash (#556) and re-drives cut-off task
+    children at boot (#558).
+- **Breaking (`lemon_ai`/`lemon_agent` 0.3.0):** provider streaming events are
+  delta-only with single accumulation and coalescing (#571); agent queue hooks
+  change with durable steering (#559); `RetryHelper`/`OneshotRetry` are removed
+  in favor of `LemonAi.Retry` (#592). See the package changelogs for migration.
+- `Durable.sync_file` no longer leaks a stray port `EXIT` message to its
+  caller (#555).
 - Opt-in Terminal-Bench comparisons through a Harbor adapter for Lemon and omp,
   with credentials held only by the arena proxy and paired statistics (#544),
   and a re-runnable omp edit-fixture comparison for the `edit` and `patch`

@@ -6,6 +6,10 @@ defmodule CodingAgent.Session.RunTranslator do
   attempt observations. Transcript messages may omit failed/empty attempts or
   repeat messages and are never accounting input. Budget ledgers enforce limits
   independently and must not fill unknown provider counters or costs.
+
+  Reasoning actions start with the first nonempty delta, not the provider's
+  metadata-only start. End-only and empty blocks emit a matching start before
+  completion, without adding reasoning to answer deltas.
   """
 
   alias CodingAgent.Executor.Usage
@@ -40,7 +44,8 @@ defmodule CodingAgent.Session.RunTranslator do
     :budget_stop,
     :cancel_reason,
     usage_occurrences: [],
-    accumulated_text: "",
+    text_chunks: [],
+    text_bytes: 0,
     pending_actions: %{},
     task_actions: %{},
     reasoning_accumulator: nil,
@@ -67,7 +72,6 @@ defmodule CodingAgent.Session.RunTranslator do
         Keyword.get(opts, :run_id) ||
           "translator_#{Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)}",
       delta_callback: Keyword.get(opts, :delta_callback),
-      accumulated_text: "",
       pending_actions: %{},
       reasoning_accumulator: Presentation.new_reasoning_accumulator(),
       started_emitted: false,
@@ -76,6 +80,12 @@ defmodule CodingAgent.Session.RunTranslator do
       first_token_emitted: false
     }
   end
+
+  def snapshot_text(%__MODULE__{text_chunks: chunks}),
+    do: chunks |> Enum.reverse() |> IO.iodata_to_binary()
+
+  def replace_text(%__MODULE__{} = t, text) when is_binary(text),
+    do: %{t | text_chunks: [text], text_bytes: byte_size(text)}
 
   def handle_event(%__MODULE__{} = t, {:agent_start}) do
     token = ResumeToken.new(t.engine, t.session_id)
@@ -269,29 +279,22 @@ defmodule CodingAgent.Session.RunTranslator do
     end
   end
 
-  def handle_event(%__MODULE__{} = t, {:message_update, _msg, delta}) when is_binary(delta) do
-    t = emit_delta(t, delta)
-    %{t | accumulated_text: t.accumulated_text <> delta}
-  end
-
-  def handle_event(%__MODULE__{} = t, {:message_update, msg, event}) when is_tuple(event) do
+  def handle_event(%__MODULE__{} = t, {:message_update, event}) do
     case emit_reasoning_action(event, t) do
       {true, t} ->
         t
 
       {false, t} ->
-        case Presentation.text_delta_from_message_update(msg, event, t.accumulated_text) do
+        case Presentation.extract_delta_text(event) do
           text when is_binary(text) and text != "" ->
             t = emit_delta(t, text)
-            %{t | accumulated_text: t.accumulated_text <> text}
+            %{t | text_chunks: [text | t.text_chunks], text_bytes: t.text_bytes + byte_size(text)}
 
           _ ->
             t
         end
     end
   end
-
-  def handle_event(%__MODULE__{} = t, {:message_update, _msg, _delta}), do: t
 
   def handle_event(%__MODULE__{} = t, {:approval_request, _approval_id, _pending} = event) do
     emit_approval_action(t, event)
@@ -425,7 +428,7 @@ defmodule CodingAgent.Session.RunTranslator do
         messages: messages
       })
     else
-      answer = Presentation.extract_answer(messages, t.accumulated_text)
+      answer = Presentation.extract_answer(messages, nil) || snapshot_text(t)
 
       usage =
         t.usage_occurrences
@@ -455,7 +458,7 @@ defmodule CodingAgent.Session.RunTranslator do
         "session_id=#{inspect(t.session_id)} " <>
         "error=#{error_msg} " <>
         "reason=#{inspect(reason, limit: 80, printable_limit: 8_000)} " <>
-        "answer_bytes=#{byte_size(t.accumulated_text || "")} " <>
+        "answer_bytes=#{t.text_bytes} " <>
         "pending_actions=#{map_size(t.pending_actions || %{})}"
     )
 
@@ -548,16 +551,12 @@ defmodule CodingAgent.Session.RunTranslator do
   defp emit_reasoning_action(event, %__MODULE__{} = t) do
     case Presentation.reasoning_action(event, t.reasoning_accumulator) do
       {:emit, action, accumulator} ->
-        t =
-          emit_action_event(t, %{
-            id: action.id,
-            kind: action.kind,
-            title: action.title,
-            phase: action.phase,
-            ok: action.ok,
-            detail: action.detail
-          })
+        t = emit_action_event(t, action)
 
+        {true, %{t | reasoning_accumulator: accumulator}}
+
+      {:emit_many, actions, accumulator} ->
+        t = Enum.reduce(actions, t, &emit_action_event(&2, &1))
         {true, %{t | reasoning_accumulator: accumulator}}
 
       {:skip, %Presentation.ReasoningAccumulator{} = accumulator} ->
@@ -620,7 +619,7 @@ defmodule CodingAgent.Session.RunTranslator do
           engine: t.engine,
           ok: false,
           error: error_msg,
-          answer: t.accumulated_text,
+          answer: snapshot_text(t),
           resume: t.resume_token,
           usage: usage,
           meta:

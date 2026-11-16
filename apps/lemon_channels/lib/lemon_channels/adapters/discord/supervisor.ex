@@ -41,7 +41,9 @@ defmodule LemonChannels.Adapters.Discord.Supervisor do
 
         [
           Nostrum.Application,
-          {Task.Supervisor, name: LemonChannels.Adapters.Discord.AsyncSupervisor},
+          LemonCore.TaskSupervisor.child_spec(
+            name: LemonChannels.Adapters.Discord.AsyncSupervisor
+          ),
           # Read persisted allowlists afresh on every transport restart.
           {LemonChannels.Adapters.Discord.Transport, [config: merge_config(%{}, explicit)]},
           LemonChannels.Adapters.Discord.Transport.Consumer

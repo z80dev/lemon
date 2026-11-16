@@ -52,6 +52,16 @@ defmodule LemonRouter.SessionCoordinator do
     end
   end
 
+  @doc false
+  def submit_recovered(conversation_key, %Submission{} = submission, opts \\ []) do
+    with {:ok, pid} <- ensure_coordinator(conversation_key, opts) do
+      case GenServer.call(pid, {:submit_recovered, submission}, 15_000) do
+        {:ok, _receipt} -> :ok
+        {:error, _} = error -> error
+      end
+    end
+  end
+
   @doc """
   Admit a fixed run ID and return its durable, content-free queue disposition.
 
@@ -372,6 +382,21 @@ defmodule LemonRouter.SessionCoordinator do
      state}
   end
 
+  def handle_call({:submit_recovered, submission}, _from, state) do
+    # Only the orchestrator's serialized, durable crash claim uses this entry
+    # point. Ordinary fixed-ID receipt replay never dispatches again.
+    if RestartCarryover.sealed?() do
+      {:reply, {:error, :runtime_stopping}, state}
+    else
+      case RunReceiptStore.fetch(state.receipt_store, submission.run_id) do
+        {:ok, nil} -> admit_submission(state, submission)
+        {:ok, %{terminal: true}} -> {:reply, {:error, :already_finalized}, state}
+        {:ok, %{}} -> admit_submission(state, submission, :recovery)
+        {:error, _} -> {:reply, {:error, :outcome_unknown}, state}
+      end
+    end
+  end
+
   def handle_call({:submit_with_receipt, submission}, _from, state) do
     case RunReceiptStore.fetch(state.receipt_store, submission.run_id) do
       {:ok, %{} = receipt} ->
@@ -398,7 +423,7 @@ defmodule LemonRouter.SessionCoordinator do
     end
   end
 
-  defp admit_submission(state, submission) do
+  defp admit_submission(state, submission, mode \\ :new) do
     recovered_state = discover_active_run(state, :session_key, submission.session_key)
 
     {:reply, reply, next_state} =
@@ -439,7 +464,14 @@ defmodule LemonRouter.SessionCoordinator do
             %{receipt | state: :outcome_unknown, effective_mode: nil, target_run_id: nil}
           end
 
-        case RunReceiptStore.put(next_state.receipt_store, receipt) do
+        persisted =
+          if mode == :recovery do
+            RunReceiptStore.update(next_state.receipt_store, submission.run_id, receipt)
+          else
+            RunReceiptStore.put(next_state.receipt_store, receipt)
+          end
+
+        case persisted do
           :ok ->
             ack = if reply == :ok, do: {:ok, receipt}, else: {:error, :outcome_unknown}
             {:reply, ack, next_state}

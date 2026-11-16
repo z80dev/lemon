@@ -103,13 +103,16 @@ defmodule CodingAgent.Search.SingleFlight do
   def handle_call({:commit, signal, fun}, from, state) do
     case authorize_flight(signal, state) do
       {:ok, key, flight, state} ->
-        publication =
-          Task.Supervisor.async_nolink(CodingAgent.Search.TaskSupervisor, fn ->
-            safe_run(fun)
-          end)
+        case LemonCore.TaskSupervisor.async_nolink(CodingAgent.Search.TaskSupervisor, fn ->
+               safe_run(fun)
+             end) do
+          {:ok, publication} ->
+            flight = %{flight | status: :committing, publication: {publication, from}}
+            {:noreply, put_in(state, [:by_key, key], flight)}
 
-        flight = %{flight | status: :committing, publication: {publication, from}}
-        {:noreply, put_in(state, [:by_key, key], flight)}
+          {:error, _reason} = error ->
+            {:reply, error, state}
+        end
 
       {:error, state} ->
         {:reply, {:error, "Operation aborted"}, state}
@@ -135,27 +138,31 @@ defmodule CodingAgent.Search.SingleFlight do
     flight_signal = AbortSignal.new()
     operation = if is_function(fun, 1), do: fn -> fun.(flight_signal) end, else: fun
 
-    task =
-      Task.Supervisor.async_nolink(CodingAgent.Search.TaskSupervisor, fn ->
-        safe_run(operation)
-      end)
+    case LemonCore.TaskSupervisor.async_nolink(CodingAgent.Search.TaskSupervisor, fn ->
+           safe_run(operation)
+         end) do
+      {:ok, task} ->
+        timer = Process.send_after(self(), {:flight_timeout, task.ref}, timeout_ms)
 
-    timer = Process.send_after(self(), {:flight_timeout, task.ref}, timeout_ms)
+        flight = %{
+          key: key,
+          task: task,
+          timer: timer,
+          signal: flight_signal,
+          status: :running,
+          publication: nil,
+          callers: [%{from: from, signal: signal}]
+        }
 
-    flight = %{
-      key: key,
-      task: task,
-      timer: timer,
-      signal: flight_signal,
-      status: :running,
-      publication: nil,
-      callers: [%{from: from, signal: signal}]
-    }
+        {:noreply,
+         state
+         |> put_in([:by_key, key], flight)
+         |> put_in([:by_ref, task.ref], key)}
 
-    {:noreply,
-     state
-     |> put_in([:by_key, key], flight)
-     |> put_in([:by_ref, task.ref], key)}
+      {:error, _reason} = error ->
+        unsubscribe_unused(signal, state)
+        {:reply, error, state}
+    end
   end
 
   @impl true

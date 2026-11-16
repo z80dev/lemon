@@ -848,6 +848,8 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
 
     assert {:ok, final} = OpenAIResponsesShared.process_stream(events, output, stream, model)
     assert final.stop_reason == :tool_use
+    assert [%ToolCall{arguments: %{"a" => 1}} = call] = final.content
+    refute Map.has_key?(call, :argument_chunks)
 
     EventStream.cancel(stream, :test_cleanup)
   end

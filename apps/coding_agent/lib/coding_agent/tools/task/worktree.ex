@@ -39,7 +39,9 @@ defmodule CodingAgent.Tools.Task.Worktree do
   logical bytes and ten seconds. Unsupported filesystems fall back to the
   ordinary checkout. Symlinks are preserved without being followed.
 
-  Existing paths and branches are never reused or removed.
+  Preparation never reuses or removes preexisting paths or branches. Crash
+  continuation validates its recorded checkout and resumes there without
+  repeating preparation, automatic merge or cleanup.
   """
 
   alias LemonAgent.AbortSignal
@@ -105,6 +107,25 @@ defmodule CodingAgent.Tools.Task.Worktree do
     do: {:error, "Unknown worktree merge mode #{inspect(mode)}"}
 
   def prepare(_, _, _), do: {:error, "Worktree cwd and task ID must be strings"}
+
+  @doc """
+  Validates the recorded checkout for crash continuation without creating,
+  warming, staging, committing, merging or removing any workspace.
+  """
+  @spec validate_existing(prepared()) :: :ok | {:error, String.t()}
+  def validate_existing(%{cwd: cwd, worktree_path: path, branch: branch} = prepared)
+      when is_binary(cwd) and is_binary(path) and is_binary(branch) do
+    with true <- File.dir?(cwd),
+         true <- cwd == path or String.starts_with?(cwd, path <> "/"),
+         {:ok, git} <- git_executable() do
+      validate_child_checkout(git, prepared)
+    else
+      false -> {:error, "Task worktree is missing or no longer contains its recorded cwd"}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def validate_existing(_prepared), do: {:error, "Invalid recorded task worktree"}
 
   @doc """
   Merges a successful child's worktree changes according to the prepared merge
@@ -192,6 +213,10 @@ defmodule CodingAgent.Tools.Task.Worktree do
 
   def summary(%{status: "error"} = merge),
     do: "Could not merge task changes (#{merge.reason}); worktree kept at #{merge.worktree_path}."
+
+  def summary(%{status: "not_replayed"}),
+    do:
+      "Crash continuation kept the original worktree; automatic merge and cleanup were not replayed."
 
   def summary(_merge), do: nil
 

@@ -5,7 +5,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
   alias CodingAgent.Session.ProviderFallback
   alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.{CredentialHealth, SessionPins}
-  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Retry
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -49,17 +49,17 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
       send(parent, {:attempt, options.api_key, options.provider_retry.alternate_available})
 
       if options.api_key == "fake-key-a" do
-        policy = RetryHelper.policy(options)
+        policy = LemonAi.Provider.retry_policy(options)
 
         delay =
-          RetryHelper.http_retry_delay_ms(
+          Retry.http_retry_delay_ms(
             0,
             %{"retry-after" => "30"},
             policy,
             {:http_error, 429, "rate limited"}
           )
 
-        if is_integer(delay), do: RetryHelper.sleep(delay)
+        if is_integer(delay), do: LemonAi.Provider.retry_sleep(delay, policy)
         failure(model, 429, "insufficient_quota", :request)
       else
         {:ok, terminal_stream(model, :stop, [%TextContent{text: "ok"}])}
@@ -121,10 +121,9 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     monitor = Process.monitor(producer)
     LemonAi.EventStream.attach_task(provider, producer)
     on_exit(fn -> Process.exit(producer, :kill) end)
-    partial = message(primary, :stop, [%TextContent{text: "partial"}])
 
     for _ <- 1..(capacity + 1) do
-      assert :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "partial", partial})
+      assert :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "partial"})
     end
 
     send(relay, {:provider_stream, provider})
@@ -498,13 +497,13 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
         {events, content} =
           case gate do
             :whitespace_text ->
-              {[{:text_delta, 0, " \n", error}], []}
+              {[{:text_delta, 0, " \n"}], []}
 
             :thinking ->
-              {[{:thinking_delta, 0, "private thinking", error}], []}
+              {[{:thinking_delta, 0, "private thinking"}], []}
 
             :tool_delta ->
-              {[{:tool_call_delta, 0, "{", error}], []}
+              {[{:tool_call_delta, 0, "{"}], []}
 
             gate when gate in [:terminal_text, :direct_text] ->
               {[], [%TextContent{text: " "}]}

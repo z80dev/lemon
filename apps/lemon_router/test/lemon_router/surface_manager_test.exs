@@ -65,6 +65,65 @@ defmodule LemonRouter.SurfaceManagerTest do
     :ok
   end
 
+  test "subscriber OTP status excludes bindings, metadata and queued content" do
+    secret = "diagnostics-private-content"
+
+    status = %{
+      state: %{binding: %{parent_session_key: secret}, meta: %{token: secret}},
+      message: {:event, secret},
+      reason: {:error, secret},
+      log: [secret]
+    }
+
+    redacted = LemonRouter.AsyncTaskSurfaceSubscriber.format_status(status)
+    refute inspect(redacted) =~ secret
+    assert redacted.state == %{binding: :redacted, meta: :redacted}
+  end
+
+  test "subscriber publishes its immutable binding and finalization does not call a busy owner" do
+    id = "diagnostics-#{System.unique_integer([:positive])}"
+    surface = {:status_task, id}
+
+    session_key =
+      SessionKey.channel_peer(%{
+        agent_id: id,
+        channel_id: "telegram",
+        account_id: "default",
+        peer_kind: :dm,
+        peer_id: id
+      })
+
+    state =
+      base_state()
+      |> Map.put(:session_key, session_key)
+      |> Map.put(:task_status_surfaces, %{id => surface})
+
+    binding = %{
+      child_run_id: id,
+      parent_run_id: state.run_id,
+      parent_session_key: state.session_key,
+      root_action_id: id,
+      surface: surface
+    }
+
+    pid =
+      start_supervised!({LemonRouter.AsyncTaskSurfaceSubscriber, binding: binding})
+
+    assert Registry.lookup(LemonRouter.AsyncTaskSurfaceRegistry, id) == [{pid, binding}]
+    :ok = :sys.suspend(pid)
+
+    try do
+      task =
+        Task.async(fn ->
+          SurfaceManager.finalize_status(state, Event.new(:run_completed, %{ok: true}))
+        end)
+
+      assert Task.await(task, 1_000) == :ok
+    after
+      :sys.resume(pid)
+    end
+  end
+
   test "prepare_status_action/2 creates a task-specific surface for a top-level task action" do
     action_event = %{
       action: %{

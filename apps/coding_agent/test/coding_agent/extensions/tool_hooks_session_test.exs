@@ -306,7 +306,10 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
       assert File.read!(path) == "original"
       assert File.read!(decoy_path) == "unrelated current"
       assert {:ok, reloaded} = SessionManager.load_from_file(state.session_manager.file_path)
-      assert reloaded.leaf_id == target.parent_id
+      # Rewind lands before the model turn that consumed the prompt (#559 marker).
+      marker = SessionManager.get_entry(reloaded, target.parent_id)
+      assert CodingAgent.Session.SteeringJournal.turn_marker?(marker)
+      assert reloaded.leaf_id == marker.parent_id
     end
   end
 end

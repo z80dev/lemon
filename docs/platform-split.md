@@ -10,18 +10,26 @@ to its own repository (D19). Git history has the full plan.
 
 | Package | What it is | In repo | On Hex |
 |---|---|---|---|
-| `lemon_ai` | Provider-agnostic LLM client: providers, model registry, streaming, rate limiting, circuit breaking | 0.2.1 | 0.2.1 |
-| `lemon_core` | Bus and event envelope, pluggable Store, secrets, config, paths, boundary contracts | 0.2.0 | 0.2.0 |
-| `lemon_agent` | Agent loop, tool registry, subagents, model runtime, workspace stores | 0.2.0 | 0.2.0 |
+| `lemon_ai` | Provider-agnostic LLM client: providers, model registry, streaming, rate limiting, circuit breaking | 0.3.0 | 0.2.1 |
+| `lemon_core` | Bus and event envelope, pluggable Store, secrets, config, paths, boundary contracts | 0.3.0 | 0.2.0 |
+| `lemon_agent` | Agent loop, tool registry, subagents, model runtime, workspace stores | 0.3.0 | 0.2.0 |
 | `lemon_memory` | Durable memory: document schema, SQLite store, provider behaviour, ingest, search | 0.2.0 | 0.2.0 |
 | `lemon_platform_test` | Contract-test kit: `BackendCase`, `EventsCase`, `ProviderCase`, `FakeLLM` (and `PluginCase`, which needs the unpublished `lemon_channels`) | 0.2.0 | 0.2.0 |
 
-These are exactly what `mix lemon.new` generates against. The 0.2 line is the
+The published releases are what `mix lemon.new` generates against. The 0.2 line is the
 first installable one: `lemon_core`, `lemon_agent`, `lemon_memory` and
 `lemon_platform_test` are published at 0.2.0 and `lemon_ai` at 0.2.1. Every
 0.1.0 release is retired on Hex as uninstallable. The mechanics of publishing
 and proving the tarballs are in
 [`docs/release/hex-packages.md`](release/hex-packages.md).
+
+The in-repo 0.3 releases are not publication claims: `lemon_ai` 0.3.0,
+`lemon_core` 0.3.0 and `lemon_agent` 0.3.0 require the
+[API migration notes](release/hex-packages.md) before publishing. Their minor
+increments identify breaking changes on pre-1.0 package lines: delta-only
+stream events (#571) and the retry consolidation (#592) in AI, and delta-only
+`message_update` events plus loop hooks in `AgentLoopConfig.hooks` (#559) in
+the agent.
 
 The packages have one external consumer:
 [LemonSim](https://github.com/z80dev/lemon-sim) (D19); its CI builds against the

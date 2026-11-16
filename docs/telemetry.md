@@ -20,6 +20,71 @@ Two layers coexist and are easy to confuse:
   queryable envelope written through `LemonCore.Store`. It has its own event taxonomy and is
   *not* derived from the telemetry events here.
 
+## Safe runtime diagnostics
+
+Production diagnostics use owner-published snapshots and explicit summary APIs,
+not `:sys.get_state`. Gateway health reads scheduler counters without waiting
+for the scheduler mailbox. Async task surface bindings are immutable Registry
+values: answer finalization never asks a subscriber for its private state.
+Long-lived admission, stream, process-store, LSP, channel-registry and task-control
+servers expose redacted `format_status/1` summaries. These hooks also remove
+messages, reasons and debug logs that may contain private data; they do not make
+arbitrary process inspection safe.
+
+Prefer the documented telemetry events and bounded status summaries first.
+On a trusted local node, `:sys.get_status(pid)` requests the redacted OTP status
+but still requires a responsive owner; it is not a health probe.
+
+For a problem that requires tracing, use OTP `:dbg` or an operator-installed
+`recon_trace` only for a short, bounded capture of a specific PID and function.
+Neither is enabled by Lemon, and `recon` is not a required dependency. Trace
+arguments, return values, messages and exceptions can contain credentials,
+prompts and tool output **before redaction**. Do not enable node-wide tracing
+or attach to an untrusted remote node; keep captures private and never paste
+raw output into issues. Set a small event limit (for example
+`recon_trace:calls/3`'s limit argument), stop the trace immediately after capture,
+and clear OTP tracing with `:dbg.stop_clear/0`. Tracing has runtime overhead;
+do not use it as a permanent metrics collector.
+
+## Control-plane method execution
+
+`LemonControlPlane.Methods.Registry` emits these events for every dispatch,
+including unknown methods and caught callback failures:
+
+| Event | Measurements | Metadata |
+| --- | --- | --- |
+| `[:lemon, :control_plane, :method, :start]` | `system_time` (native) | `method` |
+| `[:lemon, :control_plane, :method, :stop]` | `duration` (native) | `method`, `outcome: :ok \| :error \| :exception` |
+| `[:lemon, :control_plane, :method, :exception]` | `count: 1` | `method`, `class` (exception module or catch kind) |
+
+Method labels are registered names of at most 128 bytes, or `:unknown`; arbitrary
+request method strings are never reflected into telemetry. Parameters, auth
+context, return values and raw failure terms are excluded. A caught exception
+emits both the exception counter and a stop with `outcome: :exception`. A process
+killed during dispatch may have a start without a stop.
+
+## OS-process lifecycle
+
+| Event | Measurements | Metadata |
+| --- | --- | --- |
+| `[:lemon, :process_group, :start]` | `count: 1` | `scope: :group \| :process` |
+| `[:lemon, :process_group, :stop]` | `count: 1`, `duration` (native) | `scope`, `outcome: :terminated \| :signaled` |
+| `[:lemon, :process_group, :failure]` | `count: 1`, `duration` (native) | `scope`, `outcome: :alive \| :unobservable` |
+| `[:lemon, :process_session, :start]` | `count: 1`, `duration` (native) | `mode: :managed \| :oneshot`, `outcome: :running` |
+| `[:lemon, :process_session, :failure]` | `count: 1`, `duration` (native) | `mode`, `outcome: :startup_failed` |
+| `[:lemon, :process_session, :stop]` | `count: 1`, `duration` (native) | `mode`, `outcome: :stopped \| :owner_failed` |
+
+Process-group events describe termination attempts, not workload launches.
+Process-scoped `:signaled` means signal acknowledgement, not verified exit;
+group termination distinguishes confirmed termination from an alive or
+unobservable group. Process-session durations start before initialization, so
+`:start` measures startup and `:stop` measures owner lifetime including startup.
+An owner stop is not evidence that the workload completed successfully. Abrupt
+BEAM process kills may prevent terminal events.
+
+All metadata is bounded labels: no process/session identities, commands, paths,
+environment values, output or raw failure reasons are included.
+
 ## Session-start latency stages
 
 `[:coding_agent, :session, :start_stage]` is emitted synchronously by
@@ -186,7 +251,7 @@ repeats once per tool-calling turn.
 sequenceDiagram
     participant Ch as Channel adapter
     participant R as LemonRouter
-    participant S as Gateway Scheduler
+    participant S as Gateway Run / Slots
     participant L as LemonAgent.Loop
     participant P as LemonAi.CallDispatcher
     participant M as LemonMemory.Ingest
@@ -195,9 +260,9 @@ sequenceDiagram
     Ch->>R: inbound message
     Note over Ch: [:lemon, :channels, :inbound]
     Note over R: [:lemon, :run, :submit]
-    R->>S: request execution slot
-    Note over S: [:lemon, :gateway, :scheduler, :slot_queued]<br/>then :slot_granted
-    S->>L: run accepted
+    R->>S: start Run; claim engine session; request permit
+    Note over S: Slots.stats exposes in_flight, waitq, max
+    S->>L: permit granted; executor starts
     Note over L: [:lemon_agent, :loop, :start]<br/>[:lemon_agent, :tool_schema_snapshot, :created]
 
     loop each turn
@@ -208,7 +273,6 @@ sequenceDiagram
 
     Note over L: [:lemon_agent, :loop, :end]
     L->>S: release slot
-    Note over S: [:lemon, :gateway, :scheduler, :slot_released]
     L->>M: finalize run
     Note over M: [:lemon, :memory, :ingest, :ok] or :failure
     R->>O: enqueue reply
@@ -272,6 +336,91 @@ results, exception reasons, stacktraces, prompts or intent strings. Duration
 starts at admission (including argument preparation), not time spent queued
 behind earlier calls. Existing `tool_task` and `tool_result` events are unchanged.
 
+### Task action usage — `[:coding_agent, :task, :action]`
+
+The native task tool emits `%{count: 1}` after dispatch returns or raises.
+Metadata is an allowlist: `action`, `kind`, `outcome`, `model`, `depth`, and
+`run_id`. No prompt, steps text, task descriptions, messages, tool arguments,
+results, paths, credentials, exceptions or stacktraces are included.
+
+| `kind` | `action` | Counting unit |
+| --- | --- | --- |
+| `:dispatch` | `"run"`, `"swarm"`, `"poll"`, `"join"`, `"wait"`, `"get"`, `"message"`, `"steer"`, `"cancel"`, `"unknown"` | Exactly one per executed `task` call, including validation/policy refusals and calls already aborted |
+| `:feature` | `"batch"` | Once per `run` call containing `tasks[]`, even if invalid |
+| `:feature` | `"steps"` | Once per `run` or `swarm` call containing `steps`, at top level or in any task item, even if invalid; not once per stage or child |
+| `:launch` | `"speculative_launch"` | Once per early `Execution.run/6` attempt after read-only/policy/budget preflight; streaming fragments and adoption do not count again |
+
+Feature counts overlap dispatch counts: a batch with several stepped children
+counts one `run`, one `batch`, and one `steps`. They measure caller usage, not
+child-session count. Speculative attempts count separately even when later
+discarded; ineligible items that never attempt an early launch do not count.
+The separately exposed `wait` tool is not a `task` action and is not counted.
+Emit sites are [`Task`](../apps/coding_agent/lib/coding_agent/tools/task.ex)
+and [`Speculation`](../apps/coding_agent/lib/coding_agent/tools/task/speculation.ex),
+through the bounded task telemetry helper.
+
+`outcome` is `:ok` for a normal return, `:error` for a returned error or an
+`AgentToolResult` marked `is_error`, `:aborted` if the dispatch's signal is
+aborted, or `:exception` for a raised/thrown/exited dispatch (propagated unchanged).
+An async receipt means **launch accepted**, not eventual child success. A batch
+receipt may contain sibling failures without being marked as an overall error;
+these are not child-outcome counters. Hard-killed emitters cannot emit a terminal
+observation. Tool calls blocked before task dispatch are not counted.
+
+`model` is the **calling session's** model (`provider/id` for model structs),
+not an inferred effective child model: one batch may use several child models.
+`depth` is the caller's nonnegative task nesting depth (root `0`); unknown
+subagent depth is `nil`. `run_id` is the caller's `parent_run_id`/`run_id` option,
+not the new child's run. Missing identity/model stays `nil`.
+
+#### Capturing and reporting eval/arena usage
+
+Telemetry itself persists nothing. In the dedicated **source-development
+runtime executing the tools**, install the optional eval recorder before
+starting an eval or arena trial:
+
+```elixir
+{:ok, recorder} = LemonEvals.TaskActions.start_link("/tmp/task-actions.jsonl")
+# Run the eval/trials against this runtime, then wait for their dispatches to settle.
+:ok = LemonEvals.TaskActions.flush(recorder)
+GenServer.stop(recorder)
+```
+
+The file must not already exist. The recorder makes it owner-only, writes only
+the allowlisted event/measurement/metadata envelope, and detaches on stop.
+Handlers only enqueue records; JSON encoding and file I/O run in the recorder.
+`flush/1` waits for already queued records and syncs the file; it is not a barrier
+for still-running emitters. Stop the recorder normally before its owning process
+exits. `lemon_evals` is not shipped in runtime releases: a packaged arena runtime
+must use its own telemetry attachment/exporter with this same JSONL envelope,
+not expect a recorder on the separate host/client to observe remote events:
+
+```json
+{"event":["coding_agent","task","action"],"measurements":{"count":1},"metadata":{"action":"swarm","kind":"dispatch","outcome":"ok","model":"provider/model","depth":0,"run_id":"run-id"}}
+```
+
+Aggregate offline, without running a model or starting runtime apps:
+
+```bash
+mix lemon.eval.task_actions --input /tmp/task-actions.jsonl \
+  --output /tmp/task-action-counts.json
+```
+
+The helper reports `total_dispatches`, `event_count`, `per_action`, `per_run`,
+and a run/action/kind/outcome/model/depth `breakdown`. A `null` run bucket is
+unattributed evidence, not proof of a single run. Unrelated event envelopes are
+ignored; invalid JSON or malformed task-action records fail rather than silently
+undercount. An empty file means zero **observations**, not verified non-use.
+Use one recorder per emitting runtime and avoid duplicate ingestion. Include
+zero-action runs, observation dates, exact runtime revisions, missing capture
+intervals and trial identities separately in the experiment manifest; this
+helper cannot infer them. Only explicit run/model/depth labels survive into its
+report; raw extra fields are never copied.
+
+This instrumentation does not change task defaults or remove/move actions.
+Two weeks of production usage, arena evidence, the posted usage report, and
+the per-action keep/move/delete decisions in #604 remain operator/user work.
+
 ### Heartbeats — `[:lemon, :heartbeat, ...]`
 
 | Event | Measurements | Metadata | Emitter |
@@ -289,20 +438,15 @@ behind earlier calls. Existing `tool_task` and `tool_result` events are unchange
 | `[:lemon, :channels, :deliver, :stop]` | `duration` (native) | delivery meta plus `ok` (boolean) | [`outbox.ex:608`](../apps/lemon_channels/lib/lemon_channels/outbox.ex); fires for both success and `{:error, _}` — check `ok` |
 | `[:lemon, :channels, :deliver, :exception]` | `duration` (native) | delivery meta plus `kind: :exception`, `reason`, `stacktrace` | [`outbox.ex:591`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), only when the plugin raises |
 
-### Engine scheduling — `[:lemon, :gateway, :scheduler, ...]`
+### Gateway execution permits
 
-Last segment is built at runtime from an atom argument
-([`scheduler.ex:477`](../apps/lemon_gateway/lib/lemon_gateway/scheduler.ex)). Values:
-`:slot_granted`, `:slot_queued`, `:slot_released`.
-
-| Event | Measurements | Metadata |
-|---|---|---|
-| `[:lemon, :gateway, :scheduler, :slot_granted]` | `in_flight`, `max`, `waitq`, `wait_ms`, `count: 1` | `%{}` (empty) |
-| `[:lemon, :gateway, :scheduler, :slot_queued]` | `in_flight`, `max`, `waitq`, `count: 1` | `%{}` (empty) |
-| `[:lemon, :gateway, :scheduler, :slot_released]` | `in_flight`, `max`, `waitq`, `count: 1` | `%{}` (empty) |
-
-These are the clearest saturation signal in the system: `waitq > 0` means runs are waiting
-for an engine slot. The empty metadata means they cannot be correlated to a run or session.
+`LemonGateway.Slots.stats/0` reads an ETS snapshot containing `in_flight`,
+`waitq`, and `max`, or returns `{:error, :not_running}`. Health and status can
+read it without calling a busy permit server. `waitq > 0` indicates saturation.
+The removed scheduler's `:slot_queued`, `:slot_granted`, and `:slot_released`
+telemetry family is not emitted by Slots; do not attach consumers to it.
+Aggregate snapshots do not provide per-run wait latency. See the
+[admission measurement protocol](architecture/admission-gates.md#measurement-methodology).
 
 ### Agent loop — `[:lemon_agent, ...]`
 
@@ -327,6 +471,8 @@ for an engine slot. The empty metadata means they cannot be correlated to a run 
 |---|---|---|---|
 | `[:lemon_ai, :dispatcher, :dispatch]` | `system_time` | `provider` | [`call_dispatcher.ex:79`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex), before breaker and rate-limit checks |
 | `[:lemon_ai, :dispatcher, :rejected]` | `duration`, `system_time` | `provider`, `reason`, `retry_after_ms` (circuit-open only) | [`call_dispatcher.ex:94`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex) (`:circuit_open`), `:127` (`:rate_limited`), `:140` (`:max_concurrency`) |
+| `[:lemon_ai, :dispatcher, :hedge_started]` | `duplicate_input_tokens` (prompt-size estimate, not vendor billing) | `provider`, `model` | Opt-in duplicate admitted after the model p90 first-content deadline. Transport model-call spans remain separate; the returned logical message includes the extra input estimate. |
+| `[:lemon_ai, :dispatcher, :hedge_skipped]` | none | `provider`, `model`, `reason` | Hedge attempted but rejected, including zero-wait admission rejection. No queue is created. |
 | `[:lemon_ai, :model_call, :start]` | `system_time`, `monotonic_time` | `provider`, `telemetry_span_context`, and `model` (id), `api`, `call_kind` (`:stream` \| `:complete`) when the caller labelled the call | [`model_call_telemetry.ex`](../apps/lemon_ai/lib/lemon_ai/model_call_telemetry.ex), emitted by `CallDispatcher.dispatch/3` after the breaker, concurrency slot and rate limiter admit the call. Rejected dispatches emit only `:rejected` — never a `:start` |
 | `[:lemon_ai, :model_call, :stop]` | `duration`, `monotonic_time` (native); `first_event_duration` (native, first text/thinking/tool-call delta, only when observed); `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` (only when the provider reported them) | start metadata plus `outcome` (`:ok` \| `:error` \| `:canceled` \| `:aborted`), `stop_reason` (when the final message has one), `error_category` (non-`:ok` outcomes; bounded atom — a `LemonAi.Error.classify/1` category, or `:canceled`/`:timeout`/`:idle_timeout`/`:owner_down`/`:shutdown`/`:aborted`/`:stream_exit`/`:stream_tracking_failed`/`:stream_tracking_exit`/`:unexpected_result`) | `CallDispatcher`. For streams it fires when the stream reaches its terminal event (done, error, cancel, idle/hard timeout) or the producer dies, from the existing stream tracker — not when `dispatch/3` returns. Prompts, messages, credentials, URLs and raw error terms are never in the metadata |
 | `[:lemon_ai, :model_call, :exception]` | `duration`, `monotonic_time` (native) | start metadata plus `kind` (`:error` \| `:throw` \| `:exit`), `reason` (exception module for `:error`, otherwise the kind) | `CallDispatcher`, when the dispatch callback raises, throws or exits. Exactly one `:stop` or `:exception` follows each `:start`, unless the stream tracker process is killed outright |
@@ -430,7 +576,6 @@ defmodule MyApp.TelemetryLogger do
 
   @events [
     [:lemon, :channels, :outbox, :rejected],
-    [:lemon, :gateway, :scheduler, :slot_queued],
     [:lemon_ai, :dispatcher, :rejected],
     [:lemon_ai, :circuit_breaker, :opened],
     [:lemon_agent, :tool_task, :error],
@@ -452,10 +597,6 @@ defmodule MyApp.TelemetryLogger do
       "outbox rejected channel=#{meta.channel_id} reason=#{meta.reason} " <>
         "depth=#{m.queue_depth}/#{m.max_queue_size}"
     )
-  end
-
-  def handle_event([:lemon, :gateway, :scheduler, :slot_queued], m, _meta, _config) do
-    Logger.warning("engine slots saturated in_flight=#{m.in_flight}/#{m.max} waitq=#{m.waitq}")
   end
 
   def handle_event([:lemon_ai, :dispatcher, :rejected], _m, meta, _config) do
@@ -536,8 +677,7 @@ import Telemetry.Metrics
 
 def metrics do
   [
-    # Saturation: the two signals that mean "shed load or add capacity".
-    last_value("lemon.gateway.scheduler.waitq", tags: []),
+    # Outbox overload; gateway permit pressure is sampled separately via Slots.stats/0.
     counter("lemon.channels.outbox.rejected.count", tags: [:channel_id, :reason]),
 
     # Provider health.
@@ -588,15 +728,13 @@ emit site.
 These are recorded, not fixed. Renaming events is a breaking change for any attached
 consumer and belongs in its own change.
 
-**Two families build their final segment at runtime**, so they cannot be discovered by
-searching for a literal event name, and `attach_many/4` requires knowing every value in
-advance: `[:lemon, :gateway, :scheduler, _]` and `[:coding_agent, :session, :overflow_recovery, _]`.
-The known values are listed in the catalog above.
+**Session recovery builds its final segment at runtime**, so literal event-name
+searches cannot discover every `[:coding_agent, :session, :overflow_recovery, _]`
+event. The known values are listed in the catalog above.
 
 **Measurement gaps.** `[:lemon_agent, :loop, :end]`
-reports `duration: nil` when the process-dictionary start time is missing. The scheduler
-family emits empty metadata, so slot pressure cannot be attributed to a run, session, or
-engine.
+reports `duration: nil` when the process-dictionary start time is missing.
+Gateway slot statistics are aggregate snapshots, not per-run wait spans.
 
 **Coverage gaps.** `[:lemon_agent, :subagent, :end]` fires only on explicit stop, so a
 crashed subagent produces a `:spawn` with no matching `:end`. There is no telemetry on the
@@ -657,8 +795,6 @@ Every atom below appears in a live `LemonCore.Introspection.record/3` call.
 | `LemonRouter.RunProcess` | `:run_started`, `:run_completed`, `:run_failed` |
 | `LemonRouter.RunOrchestrator` | `:orchestration_started`, `:orchestration_resolved`, `:orchestration_failed` |
 | Router answer finalization | `:answer_finalize_started`, `:answer_finalize_dispatch`, `:answer_finalize_completed`, `:answer_artifact_finalize_failed`, `:answer_media_jobs_record_failed` |
-| `LemonGateway.ThreadWorker` | `:thread_started`, `:thread_message_dispatched`, `:thread_terminated` |
-| `LemonGateway.Scheduler` | `:scheduled_job_triggered`, `:scheduled_job_completed` |
 | `CodingAgent.Session` | `:session_started`, `:session_ended`, `:compaction_triggered` |
 | `CodingAgent.Session.EventHandler` | `:tool_call_dispatched`, `:engine_event_ignored` |
 | `LemonAgent.Agent` | `:agent_loop_started`, `:agent_turn_observed` (inferred), `:agent_loop_ended`, `:agent_progress_snapshot` |

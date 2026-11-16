@@ -209,29 +209,32 @@ defmodule LemonSkills.LearningNudge do
       config = session.config["background_review"]
       review_fun = state.review_fun
 
-      task =
-        Task.Supervisor.async_nolink(state.task_supervisor, fn ->
-          try do
-            {prompt, answer} = summary_fun.()
-            digest = LemonSkills.BackgroundReview.digest(prompt, answer, config)
-            review_fun.(request, config, digest)
-          rescue
-            _ -> {:error, :review_failed}
-          catch
-            _, _ -> {:error, :review_failed}
-          end
-        end)
+      case LemonCore.TaskSupervisor.async_nolink(state.task_supervisor, fn ->
+             try do
+               {prompt, answer} = summary_fun.()
+               digest = LemonSkills.BackgroundReview.digest(prompt, answer, config)
+               review_fun.(request, config, digest)
+             rescue
+               _ -> {:error, :review_failed}
+             catch
+               _, _ -> {:error, :review_failed}
+             end
+           end) do
+        {:ok, task} ->
+          session = %{
+            session
+            | review_ref: task.ref,
+              last_review: now,
+              turns: 0,
+              previous_tools: 0,
+              previous_skill_managed: false
+          }
 
-      session = %{
-        session
-        | review_ref: task.ref,
-          last_review: now,
-          turns: 0,
-          previous_tools: 0,
-          previous_skill_managed: false
-      }
+          {:reply, :ok, put_in(state.sessions[pid], session)}
 
-      {:reply, :ok, put_in(state.sessions[pid], session)}
+        {:error, _reason} ->
+          {:reply, :ok, state}
+      end
     else
       {:reply, :ok, state}
     end

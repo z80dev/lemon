@@ -121,12 +121,12 @@ defmodule LemonAgent.Loop.ContinuationTest do
     }
 
     terminal = %{partial | stop_reason: :tool_use}
-    first = [{:text_delta, 0, "already sent", partial}, {:done, :tool_use, terminal}]
+    first = [{:text_delta, 0, "already sent"}, {:done, :tool_use, terminal}]
     events = run([first, reply(Mocks.assistant_message("appended"))], [Mocks.echo_tool()])
 
     assert Enum.count(
              events,
-             &match?({:message_update, _, {:text_delta, _, "already sent", _}}, &1)
+             &match?({:message_update, {:text_delta, _, "already sent"}}, &1)
            ) == 1
 
     assert_receive {:request, _}
@@ -146,7 +146,7 @@ defmodule LemonAgent.Loop.ContinuationTest do
     message = Mocks.assistant_message_with_tool_calls([call])
 
     first = [
-      {:tool_call_delta, 0, "{\"text\":\"repaired\"", message},
+      {:tool_call_delta, 0, "{\"text\":\"repaired\""},
       {:done, :tool_use, message}
     ]
 

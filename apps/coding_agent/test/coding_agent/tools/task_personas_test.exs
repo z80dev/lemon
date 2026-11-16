@@ -18,7 +18,13 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
   @tag :tmp_dir
   test "native scout receives a system persona and cannot gain writing tools", %{tmp_dir: cwd} do
     owner = self()
-    response = Mocks.mock_stream_fn_single(Mocks.assistant_message(~s({"answer":42})))
+
+    response =
+      Mocks.mock_stream_fn_single(
+        Mocks.assistant_message_with_tool_calls([
+          Mocks.tool_call("submit_result", %{"answer" => 42})
+        ])
+      )
 
     opts = [
       parent_session: unique_id(),
@@ -46,11 +52,11 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
     prompt = LemonAi.SystemPrompt.text(context.system_prompt)
     assert prompt =~ "Parent custom instruction."
     assert prompt =~ CodingAgent.Subagents.get(cwd, "scout").prompt
-    assert prompt =~ "ONLY valid JSON"
+    assert prompt =~ "calling submit_result"
     names = Enum.map(context.tools, & &1.name)
     assert "read" in names
     assert "agent_message" in names
-    assert Enum.all?(names, &(&1 in ~w(read grep find ls agent_message)))
+    assert Enum.all?(names, &(&1 in ~w(read grep find ls agent_message submit_result)))
 
     assert {:ok, record, _events} = TaskStore.get(result.details.task_id)
     assert record.result.details.structured_output == %{"answer" => 42}
@@ -111,7 +117,12 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
   end
 
   test "schema output is validated before completion and preserved through get and join" do
-    opts = [parent_session: unique_id(), run_override: fn _, _ -> result(~s({"answer":42})) end]
+    opts = [
+      parent_session: unique_id(),
+      run_override: fn _, _ ->
+        %{result("") | details: %{structured_output: %{"answer" => 42}}}
+      end
+    ]
 
     receipt =
       execute("/tmp", opts, %{
@@ -142,12 +153,15 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
 
     assert [failed] = joined_bad.details.tasks
     assert failed.status == "error"
-    assert failed.error =~ "type mismatch"
+    assert failed.error =~ "without submit_result"
     refute Map.has_key?(failed, :structured_output)
   end
 
   test "JSON null remains a present structured output field" do
-    opts = [parent_session: unique_id(), run_override: fn _, _ -> result("null") end]
+    opts = [
+      parent_session: unique_id(),
+      run_override: fn _, _ -> %{result("") | details: %{structured_output: nil}} end
+    ]
 
     receipt =
       execute("/tmp", opts, %{

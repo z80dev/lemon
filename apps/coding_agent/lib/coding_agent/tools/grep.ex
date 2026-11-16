@@ -362,13 +362,16 @@ defmodule CodingAgent.Tools.Grep do
     timeout_ms = Map.get(opts, :timeout_ms, @ripgrep_timeout_ms)
     signal = Map.get(opts, :signal)
 
-    task =
-      Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
-        cmd_fun.("rg", args, stderr_to_stdout: true, cd: Path.dirname(opts.path))
-      end)
+    case LemonCore.TaskSupervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+           cmd_fun.("rg", args, stderr_to_stdout: true, cd: Path.dirname(opts.path))
+         end) do
+      {:ok, task} ->
+        started_at_ms = System.monotonic_time(:millisecond)
+        await_ripgrep_result(task, signal, timeout_ms, started_at_ms)
 
-    started_at_ms = System.monotonic_time(:millisecond)
-    await_ripgrep_result(task, signal, timeout_ms, started_at_ms)
+      {:error, reason} ->
+        {:error, "Search error: #{inspect(reason)}"}
+    end
   end
 
   defp await_ripgrep_result(task, signal, timeout_ms, started_at_ms) do
@@ -450,12 +453,15 @@ defmodule CodingAgent.Tools.Grep do
   end
 
   defp search_with_elixir(opts) do
-    task =
-      Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
-        run_elixir_search(opts)
-      end)
+    case LemonCore.TaskSupervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+           run_elixir_search(opts)
+         end) do
+      {:ok, task} ->
+        await_elixir_result(task, opts, System.monotonic_time(:millisecond))
 
-    await_elixir_result(task, opts, System.monotonic_time(:millisecond))
+      {:error, reason} ->
+        {:error, "Search error: #{inspect(reason)}"}
+    end
   end
 
   defp await_elixir_result(task, opts, started_at_ms) do

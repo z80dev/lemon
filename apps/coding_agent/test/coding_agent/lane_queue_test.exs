@@ -10,6 +10,31 @@ defmodule CodingAgent.LaneQueueTest do
 
   # --- Original tests ---
 
+  test "status responds while a launch callback is blocked on IO", %{task_sup: sup} do
+    queue =
+      start_supervised!(
+        {LaneQueue,
+         name: :lane_queue_callback_responsiveness,
+         caps: %{background_exec: 1},
+         task_supervisor: sup}
+      )
+
+    owner = self()
+
+    caller =
+      Task.async(fn ->
+        LaneQueue.run(queue, :background_exec, fn ->
+          send(owner, {:callback_waiting, self()})
+          receive do: (:finish_io -> :finished)
+        end)
+      end)
+
+    assert_receive {:callback_waiting, worker}
+    assert %{jobs_count: 1} = GenServer.call(queue, :status)
+    send(worker, :finish_io)
+    assert {:ok, :finished} = Task.await(caller)
+  end
+
   test "accepts caps as a map", %{task_sup: sup} do
     {:ok, pid} =
       LaneQueue.start_link(
@@ -204,7 +229,7 @@ defmodule CodingAgent.LaneQueueTest do
         task_supervisor: missing_supervisor
       )
 
-    assert {:error, {:task_start_failed, {:exit, _reason}}} =
+    assert {:error, {:task_start_failed, :task_supervisor_unavailable}} =
              LaneQueue.run(pid, :background_exec, fn -> :never end)
 
     assert Process.alive?(pid)
@@ -213,6 +238,30 @@ defmodule CodingAgent.LaneQueueTest do
     start_supervised!({Task.Supervisor, name: missing_supervisor})
     assert {:ok, :recovered} = LaneQueue.run(pid, :background_exec, fn -> :recovered end)
     assert Process.alive?(pid)
+  end
+
+  test "reports exhausted supervisor capacity without running the queued job" do
+    supervisor = start_supervised!({Task.Supervisor, max_children: 1})
+
+    {:ok, blocker} =
+      LemonCore.TaskSupervisor.start_child(supervisor, fn ->
+        receive do: (:release -> :ok)
+      end)
+
+    queue =
+      start_supervised!(
+        {LaneQueue,
+         name: :lane_queue_capacity_failure,
+         caps: %{background_exec: 1},
+         task_supervisor: supervisor}
+      )
+
+    assert {:error, {:task_start_failed, :task_capacity_reached}} =
+             LaneQueue.run(queue, :background_exec, fn -> flunk("rejected job ran") end)
+
+    assert Process.alive?(queue)
+    assert GenServer.call(queue, :status).jobs_count == 0
+    assert Task.Supervisor.children(supervisor) == [blocker]
   end
 
   test "sequential execution with cap 1 preserves FIFO order", %{task_sup: sup} do

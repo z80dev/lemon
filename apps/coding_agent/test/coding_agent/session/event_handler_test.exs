@@ -259,6 +259,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         hooks: [],
         is_streaming: true,
         steering_queue: :queue.from_list([:item1, :item2]),
+        follow_up_queue: :queue.new(),
         event_streams: %{"s1" => :r1}
       }
 
@@ -292,6 +293,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         hooks: [],
         is_streaming: true,
         steering_queue: :queue.new(),
+        follow_up_queue: :queue.new(),
         event_streams: %{"s1" => :r1}
       }
 
@@ -342,6 +344,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         hooks: [],
         is_streaming: true,
         steering_queue: :queue.new(),
+        follow_up_queue: :queue.new(),
         event_streams: %{},
         session_key: session_key,
         agent_id: "agent-1",
@@ -374,6 +377,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         hooks: [],
         is_streaming: true,
         steering_queue: :queue.new(),
+        follow_up_queue: :queue.new(),
         event_streams: %{},
         session_key: session_key,
         relevant_skill_keys: ["github-pr-workflow"]
@@ -409,6 +413,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         hooks: [],
         is_streaming: true,
         steering_queue: :queue.new(),
+        follow_up_queue: :queue.new(),
         event_streams: %{},
         session_key: session_key,
         agent_id: "agent-learning",
@@ -460,6 +465,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         hooks: [],
         is_streaming: true,
         steering_queue: :queue.new(),
+        follow_up_queue: :queue.new(),
         event_streams: %{},
         session_key: session_key,
         system_prompt: "<learning-workflow>\nUse `recall`.\n</learning-workflow>"

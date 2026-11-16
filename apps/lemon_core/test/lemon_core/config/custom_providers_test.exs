@@ -55,6 +55,34 @@ defmodule LemonCore.Config.CustomProvidersTest do
     assert {:ok, _config} = Modular.validate_settings(settings)
   end
 
+  test "provider option tables survive resolution with string keys" do
+    {:ok, settings} =
+      Toml.decode("""
+      [providers.openai.provider_options]
+      responses_websocket = true
+
+      [providers.openai-codex.provider_options]
+      responses_websocket = false
+      """)
+
+    providers = Providers.resolve(settings)
+
+    assert Providers.get_provider(providers, "openai").provider_options ==
+             %{"responses_websocket" => true}
+
+    assert Providers.get_provider(providers, "openai-codex").provider_options ==
+             %{"responses_websocket" => false}
+  end
+
+  test "non-map provider options do not become runtime options" do
+    for value <- [true, "true", ["responses_websocket"], nil] do
+      providers =
+        Providers.resolve(%{"providers" => %{"openai" => %{"provider_options" => value}}})
+
+      refute Map.has_key?(Providers.get_provider(providers, "openai"), :provider_options)
+    end
+  end
+
   test "lemon config validation reports bad api, missing base_url and model errors" do
     settings = %{
       "providers" => %{

@@ -10,7 +10,8 @@ defmodule LemonRouter.RunProcessTest do
   use ExUnit.Case, async: false
 
   alias Elixir.LemonRouter.RunProcess
-  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Dedupe}
+  alias LemonCore.RateLimiter
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
   alias LemonCore.{ChatStateStore, ResumeToken, RunRequest, SessionKey}
   alias LemonRouter.PendingCompactionStore
@@ -117,6 +118,13 @@ defmodule LemonRouter.RunProcessTest do
       if is_pid(pid), do: send(pid, {:rejecting_scheduler_submit, request})
       {:error, :temporary_failure}
     end
+  end
+
+  defmodule UnavailableRuntime do
+    @moduledoc false
+
+    def available?, do: true
+    def submit_execution(%LemonCore.ExecutionCommand{}), do: {:error, :runtime_unavailable}
   end
 
   defmodule TupleAcceptingRuntime do
@@ -277,7 +285,7 @@ defmodule LemonRouter.RunProcessTest do
                })
 
       assert eventually(fn ->
-               state = :sys.get_state(pid)
+               {_phase, state} = :sys.get_state(pid)
 
                state.session_key == request_session_key and
                  state.execution_request.session_key == request_session_key and
@@ -391,7 +399,7 @@ defmodule LemonRouter.RunProcessTest do
   defp flush_answer_delta(run_pid, session_key, run_id, seq) do
     # The local broadcast precedes this call from the same sender. Wait for
     # RunProcess to finish admission before becoming another ingress producer.
-    assert %{run_id: ^run_id, saw_delta: true} = :sys.get_state(run_pid)
+    assert {_, %{run_id: ^run_id, saw_delta: true}} = :sys.get_state(run_pid)
 
     # Coalescers outlive runs, so a sequence number alone can match a previous
     # run and let the flush race the current run's delta.
@@ -658,16 +666,13 @@ defmodule LemonRouter.RunProcessTest do
                       }},
                      500
 
-      assert eventually(fn ->
-               state = :sys.get_state(pid)
-               state.gateway_submitted? and state.gateway_submit_attempt == 0
-             end)
+      assert {:awaiting_start, %{gateway_submit_attempt: 0}} = :sys.get_state(pid)
 
       refute_receive {:tuple_accepting_runtime_submit, _request}, 150
       GenServer.stop(pid)
     end
 
-    test "terminalizes exactly once when runtime submission never succeeds" do
+    test "a definite rejection terminalizes exactly once without retrying" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
       job = make_test_request(run_id)
@@ -684,9 +689,12 @@ defmodule LemonRouter.RunProcessTest do
                  run_id: run_id,
                  session_key: session_key,
                  execution_request: job,
-                 gateway_scheduler: RejectingScheduler,
-                 gateway_submit_deadline_ms: 120
+                 engine_runtime: RejectingScheduler,
+                 gateway_submit_deadline_ms: 30_000
                })
+
+      monitor = Process.monitor(pid)
+      assert_receive {:rejecting_scheduler_submit, %LemonCore.ExecutionCommand{run_id: ^run_id}}
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
@@ -708,42 +716,58 @@ defmodule LemonRouter.RunProcessTest do
                      },
                      1_000
 
-      refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}, 300
-      assert eventually(fn -> not Process.alive?(pid) end)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}
+      refute_received {:rejecting_scheduler_submit, _request}
+      refute_received %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}
     end
 
-    test "does not mark run submitted when scheduler rejects execution" do
+    test "runtime unavailability retries only until the submission deadline" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
-
-      :persistent_term.put({RejectingScheduler, :notify_pid}, self())
-
-      on_exit(fn ->
-        :persistent_term.erase({RejectingScheduler, :notify_pid})
-      end)
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 execution_request: job,
-                 gateway_scheduler: RejectingScheduler
+                 execution_request: make_test_request(run_id),
+                 engine_runtime: UnavailableRuntime,
+                 gateway_submit_deadline_ms: 30_000
                })
 
-      assert_receive {:rejecting_scheduler_submit,
-                      %LemonCore.ExecutionCommand{
-                        run_id: ^run_id,
-                        session_key: ^session_key
-                      }},
-                     500
+      # The initial internal submit event precedes this synchronous state barrier.
+      assert {:submitting, state} = :sys.get_state(pid)
+      assert state.gateway_submit_attempt >= 1
+      assert state.gateway_submit_last_error == :runtime_unavailable
+      monitor = Process.monitor(pid)
 
-      assert eventually(fn ->
-               state = :sys.get_state(pid)
-               state.gateway_submitted? == false and state.gateway_submit_attempt > 0
-             end)
+      # Move the absolute deadline into the past; the pending named retry must
+      # terminalize instead of submitting again.
+      {:submitting, state} =
+        :sys.replace_state(pid, fn {:submitting, state} ->
+          {:submitting,
+           %{state | gateway_submit_deadline_at_ms: System.monotonic_time(:millisecond)}}
+        end)
 
-      GenServer.stop(pid)
+      attempts = state.gateway_submit_attempt + 1
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{
+                         completed: %{
+                           error: %{
+                             type: :runtime_submission_failed,
+                             reason: :runtime_unavailable,
+                             attempts: ^attempts
+                           }
+                         }
+                       },
+                       meta: %{run_id: ^run_id}
+                     },
+                     2_000
+
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}
+      refute_received %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}
     end
 
     test "retries until scheduler becomes available and submits the job once" do
@@ -763,7 +787,7 @@ defmodule LemonRouter.RunProcessTest do
                })
 
       assert eventually(fn ->
-               state = :sys.get_state(pid)
+               {:submitting, state} = :sys.get_state(pid)
                state.gateway_submit_attempt > 0
              end)
 
@@ -800,7 +824,7 @@ defmodule LemonRouter.RunProcessTest do
                })
 
       assert eventually(fn ->
-               state = :sys.get_state(pid)
+               {:submitting, state} = :sys.get_state(pid)
                state.gateway_submit_attempt > 0
              end)
 
@@ -808,8 +832,7 @@ defmodule LemonRouter.RunProcessTest do
 
       assert eventually(fn ->
                if Process.alive?(pid) do
-                 state = :sys.get_state(pid)
-                 state.aborted == true
+                 match?({:aborting, _}, :sys.get_state(pid))
                else
                  true
                end
@@ -827,7 +850,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -1107,198 +1130,287 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
-  describe "run watchdog timeout" do
-    test "synthesizes run_completed and exits when a started run never completes" do
-      run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
+  test "abort cancels both the submission retry and its absolute deadline" do
+    run_id = "submission-#{System.unique_integer([:positive, :monotonic])}"
+    assert Process.whereis(TestScheduler) == nil
 
-      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+    pid =
+      start_supervised!(
+        {RunProcess,
+         %{
+           run_id: run_id,
+           session_key: SessionKey.main(run_id),
+           execution_request: make_test_request(run_id),
+           gateway_scheduler: TestScheduler,
+           gateway_submit_deadline_ms: 60_000
+         }}
+      )
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false,
-                 run_watchdog_timeout_ms: 50
-               })
+    assert {:submitting, %{gateway_submit_attempt: attempt}} = :sys.get_state(pid)
+    assert attempt > 0
+    assert {:state_timeout, :submission_deadline} in active_timeouts(pid)
+    assert {{:timeout, :submission_retry}, :submit_to_gateway} in active_timeouts(pid)
+    RunProcess.keep_alive(pid, :continue)
+    assert {:submitting, _} = :sys.get_state(pid)
+    RunProcess.abort(pid, :test_abort)
+    :ok = :sys.suspend(pid)
 
-      started_event =
-        LemonCore.Event.new(
-          :run_started,
-          %{run_id: run_id, session_key: session_key, engine: "echo"},
-          %{run_id: run_id, session_key: session_key}
-        )
+    try do
+      assert {:aborting, _} = :sys.get_state(pid)
+      refute {:state_timeout, :submission_deadline} in active_timeouts(pid)
+      refute {{:timeout, :submission_retry}, :submit_to_gateway} in active_timeouts(pid)
+    after
+      :ok = :sys.resume(pid)
+    end
+  end
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
+  describe "run watchdog state machine" do
+    setup do
+      dispatcher = RunProcessToolStatusIntentDispatcherStub
+      previous_dispatcher = Application.fetch_env(:lemon_router, :dispatcher)
+      key = {dispatcher, :test_pid}
+      previous_pid = :persistent_term.get(key, :unset)
+      Application.put_env(:lemon_router, :dispatcher, dispatcher)
+      :persistent_term.put(key, self())
+
+      on_exit(fn ->
+        case previous_dispatcher do
+          {:ok, value} -> Application.put_env(:lemon_router, :dispatcher, value)
+          :error -> Application.delete_env(:lemon_router, :dispatcher)
+        end
+
+        if previous_pid == :unset,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, previous_pid)
+      end)
+
+      :ok
+    end
+
+    test "idle expiry synthesizes exactly one completion and stops normally" do
+      {pid, run_id, session_key} = watchdog_run(run_watchdog_timeout_ms: 1)
+      monitor = Process.monitor(pid)
+      start_watchdog(pid, run_id, session_key)
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
-                       payload: %{
-                         completed: %{ok: false, error: {:run_idle_watchdog_timeout, 50}}
-                       },
-                       meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
+                       payload: %{completed: %{error: {:run_idle_watchdog_timeout, 1}}},
+                       meta: %{run_id: ^run_id, synthetic: true}
                      },
                      1_500
 
-      assert eventually(fn -> not Process.alive?(pid) end)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+      refute_received %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}
     end
 
-    test "activity extends watchdog timeout" do
-      run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
+    test "unrelated events and metadata calls retain the original watchdog deadline" do
+      {pid, run_id, session_key} = watchdog_run(run_watchdog_timeout_ms: 60_000)
+      trace_timeouts(pid)
+      start_watchdog(pid, run_id, session_key)
+      assert {:running, data} = :sys.get_state(pid)
+      assert_receive {:timeout_started, ^pid, {:state_timeout, 60_000, :idle, []}, :running}
+      refute Map.has_key?(data, :run_watchdog_ref)
+      refute Map.has_key?(data, :run_watchdog_confirmation_ref)
+      refute Map.has_key?(data, :run_watchdog_awaiting_confirmation?)
 
-      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
-
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false,
-                 run_watchdog_timeout_ms: 250
-               })
-
-      started_event =
-        LemonCore.Event.new(
-          :run_started,
-          %{run_id: run_id, session_key: session_key, engine: "echo"},
-          %{run_id: run_id, session_key: session_key}
-        )
-
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
-
-      # Keep the run active for twice the idle timeout. Without activity extending the
-      # watchdog it would have fired long before the loop ends.
-      keep_active_until = System.monotonic_time(:millisecond) + 2 * 250
-
-      keep_active = fn keep_active, seq ->
-        if System.monotonic_time(:millisecond) < keep_active_until do
-          delta_event =
-            LemonCore.Event.new(
-              :delta,
-              %{seq: seq, text: "still working"},
-              %{run_id: run_id, session_key: session_key}
-            )
-
-          :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), delta_event)
-          refute_receive %LemonCore.Event{type: :run_completed}, 20
-          keep_active.(keep_active, seq + 1)
-        end
+      for _ <- 1..10 do
+        send(pid, :unrelated)
+        send(pid, LemonCore.Event.new(:router_probe, %{}, %{run_id: run_id}))
+        RunProcess.keep_alive(pid, :unrecognized)
+        assert %{session_key: ^session_key} = GenServer.call(pid, :get_metadata)
       end
 
-      keep_active.(keep_active, 1)
+      # The call barrier observes all earlier events and their timeout actions.
+      assert {:running, ^data} = :sys.get_state(pid)
+      assert {:state_timeout, :idle} in active_timeouts(pid)
+      refute_received {:timeout_started, ^pid, {:state_timeout, _, _, _}, _}
+    end
+
+    test "actual output explicitly renews the idle state timeout" do
+      {pid, run_id, session_key} = watchdog_run(run_watchdog_timeout_ms: 60_000)
+      trace_timeouts(pid)
+      start_watchdog(pid, run_id, session_key)
+      assert {:running, _} = :sys.get_state(pid)
+      assert_receive {:timeout_started, ^pid, {:state_timeout, 60_000, :idle, []}, :running}
+
+      send(
+        pid,
+        LemonCore.Event.new(:delta, %{seq: 1, text: "still working"}, %{
+          run_id: run_id,
+          session_key: session_key
+        })
+      )
+
+      assert {:running, %{saw_delta: true}} = :sys.get_state(pid)
+      assert_receive {:timeout_started, ^pid, {:state_timeout, 60_000, :idle, []}, :running}
+    end
+
+    test "zero disables idle expiry without disabling cancellation" do
+      {pid, run_id, session_key} = watchdog_run(run_watchdog_timeout_ms: 0)
+      monitor = Process.monitor(pid)
+      start_watchdog(pid, run_id, session_key)
+      assert {:running, _} = :sys.get_state(pid)
+      refute Enum.any?(active_timeouts(pid), &match?({:state_timeout, _}, &1))
+      RunProcess.abort(pid, :test_abort)
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
-                       payload: %{
-                         completed: %{ok: false, error: {:run_idle_watchdog_timeout, 250}}
-                       },
-                       meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
+                       payload: %{completed: %{error: :test_abort}},
+                       meta: %{run_id: ^run_id}
                      },
                      1_500
 
-      assert eventually(fn -> not Process.alive?(pid) end)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
     end
 
-    test "watchdog can be disabled with zero timeout" do
-      run_id = "run_#{System.unique_integer([:positive])}"
-      session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
-
-      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
-
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false,
-                 run_watchdog_timeout_ms: 0
-               })
-
-      started_event =
-        LemonCore.Event.new(
-          :run_started,
-          %{run_id: run_id, session_key: session_key, engine: "echo"},
-          %{run_id: run_id, session_key: session_key}
+    test "confirmation expiry uses its own state timeout" do
+      {pid, run_id, session_key} =
+        watchdog_run(
+          telegram?: true,
+          run_watchdog_timeout_ms: 1,
+          run_watchdog_confirm_timeout_ms: 1
         )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
+      monitor = Process.monitor(pid)
+      trace_timeouts(pid)
+      start_watchdog(pid, run_id, session_key)
 
-      refute_receive %LemonCore.Event{type: :run_completed}, 150
-      assert Process.alive?(pid)
+      assert_receive {:dispatched_intent,
+                      %LemonCore.DeliveryIntent{kind: :watchdog_prompt, run_id: ^run_id}}
 
-      GenServer.stop(pid)
+      assert_receive {:timeout_started, ^pid, {:state_timeout, 1, :confirmation, []},
+                      :confirming_idle}
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{error: {:run_idle_watchdog_timeout, 1}}},
+                       meta: %{run_id: ^run_id}
+                     },
+                     1_500
+
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
     end
 
-    test "telegram run enters keepalive confirmation window before timeout" do
-      run_id = "run_#{System.unique_integer([:positive])}"
+    test "continue replaces confirmation expiry and cancel cannot revive the run" do
+      {pid, run_id, session_key} =
+        watchdog_run(
+          telegram?: true,
+          run_watchdog_timeout_ms: 1,
+          run_watchdog_confirm_timeout_ms: 60_000
+        )
 
-      session_key =
+      monitor = Process.monitor(pid)
+      trace_timeouts(pid)
+      start_watchdog(pid, run_id, session_key)
+
+      assert_receive {:dispatched_intent,
+                      %LemonCore.DeliveryIntent{kind: :watchdog_prompt, run_id: ^run_id}}
+
+      assert {:confirming_idle, _} = :sys.get_state(pid)
+      assert_receive {:timeout_started, ^pid, {:state_timeout, 1, :idle, []}, :running}
+      assert {:state_timeout, :confirmation} in active_timeouts(pid)
+
+      # Queue all decisions first so expiry cannot race the cancellation.
+      :ok = :sys.suspend(pid)
+      RunProcess.keep_alive(run_id, :continue)
+      RunProcess.keep_alive(run_id, :cancel)
+      RunProcess.keep_alive(run_id, :continue)
+      :ok = :sys.resume(pid)
+      assert_receive {:timeout_started, ^pid, {:state_timeout, 1, :idle, []}, :running}
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{error: :user_requested}},
+                       meta: %{run_id: ^run_id}
+                     },
+                     1_500
+
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+      refute_received {:timeout_started, ^pid, {:state_timeout, _, :idle, _}, _}
+      refute_received %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}
+    end
+
+    test "abort leaves confirmation and cancels its timeout" do
+      {pid, run_id, session_key} =
+        watchdog_run(
+          telegram?: true,
+          run_watchdog_timeout_ms: 1,
+          run_watchdog_confirm_timeout_ms: 60_000
+        )
+
+      start_watchdog(pid, run_id, session_key)
+
+      assert_receive {:dispatched_intent,
+                      %LemonCore.DeliveryIntent{kind: :watchdog_prompt, run_id: ^run_id}}
+
+      RunProcess.abort(pid, :test_abort)
+      assert {:aborting, _} = :sys.get_state(pid)
+      refute Enum.any?(active_timeouts(pid), &match?({:state_timeout, _}, &1))
+    end
+  end
+
+  defp watchdog_run(opts) do
+    run_id = "watchdog-#{System.unique_integer([:positive, :monotonic])}"
+
+    session_key =
+      if opts[:telegram?] do
         SessionKey.channel_peer(%{
-          agent_id: "test-agent",
+          agent_id: run_id,
           channel_id: "telegram",
           account_id: "default",
           peer_kind: :group,
-          peer_id: "12345",
-          thread_id: "777"
+          peer_id: "12345"
         })
+      else
+        SessionKey.main(run_id)
+      end
 
-      job = make_test_request(run_id)
+    LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
-      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+    options =
+      opts
+      |> Map.new()
+      |> Map.merge(%{
+        run_id: run_id,
+        session_key: session_key,
+        execution_request: make_test_request(run_id),
+        submit_to_gateway?: false
+      })
 
-      assert {:ok, pid} =
-               RunProcess.start_link(%{
-                 run_id: run_id,
-                 session_key: session_key,
-                 execution_request: job,
-                 submit_to_gateway?: false,
-                 run_watchdog_timeout_ms: 40,
-                 run_watchdog_confirm_timeout_ms: 120
-               })
+    pid = start_supervised!({RunProcess, options})
+    {pid, run_id, session_key}
+  end
 
-      started_event =
-        LemonCore.Event.new(
-          :run_started,
-          %{run_id: run_id, session_key: session_key, engine: "echo"},
-          %{run_id: run_id, session_key: session_key}
-        )
+  defp start_watchdog(pid, run_id, session_key) do
+    send(
+      pid,
+      LemonCore.Event.new(:run_started, %{run_id: run_id}, %{
+        run_id: run_id,
+        session_key: session_key
+      })
+    )
+  end
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
+  defp trace_timeouts(pid) do
+    debug = fn owner, event, _extra ->
+      case event do
+        {:start_timer, action, phase} -> send(owner, {:timeout_started, pid, action, phase})
+        _ -> :ok
+      end
 
-      assert eventually(
-               fn ->
-                 st = :sys.get_state(pid)
-                 st.run_watchdog_awaiting_confirmation? == true
-               end,
-               1_000
-             )
-
-      RunProcess.keep_alive(run_id, :continue)
-
-      assert eventually(
-               fn ->
-                 st = :sys.get_state(pid)
-                 st.run_watchdog_awaiting_confirmation? == false
-               end,
-               1_000
-             )
-
-      RunProcess.keep_alive(run_id, :cancel)
-
-      assert_receive %LemonCore.Event{
-                       type: :run_completed,
-                       payload: %{completed: %{ok: false, error: :user_requested}},
-                       meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
-                     },
-                     1_500
-
-      assert eventually(fn -> not Process.alive?(pid) end)
+      owner
     end
+
+    :ok = :sys.install(pid, {debug, self()})
+  end
+
+  defp active_timeouts(pid) do
+    {:status, ^pid, _, [_, _, _, _, status]} = :sys.get_status(pid)
+
+    [{_count, timeouts}] =
+      for {:data, fields} <- status, {~c"Time-outs", value} <- fields, do: value
+
+    timeouts
   end
 
   describe "zero-answer assistant retries" do
@@ -1567,7 +1679,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -1757,7 +1869,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -2013,7 +2125,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -2117,7 +2229,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -2219,7 +2331,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -2318,7 +2430,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -2416,7 +2528,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -3181,7 +3293,7 @@ defmodule LemonRouter.RunProcessTest do
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
 
       assert eventually(fn ->
-               state = :sys.get_state(pid)
+               {_phase, state} = :sys.get_state(pid)
                state.generated_image_paths == ["artifacts/chart.png"]
              end)
 
@@ -3224,7 +3336,7 @@ defmodule LemonRouter.RunProcessTest do
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
 
       assert eventually(fn ->
-               state = :sys.get_state(pid)
+               {_phase, state} = :sys.get_state(pid)
 
                state.requested_send_files == [
                  %{path: "workspace/image.png", filename: "image.png", caption: "Generated"}
@@ -3238,7 +3350,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -3333,7 +3445,9 @@ defmodule LemonRouter.RunProcessTest do
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
 
       assert eventually(fn ->
-               :sys.get_state(pid).requested_send_files == [
+               {_phase, state} = :sys.get_state(pid)
+
+               state.requested_send_files == [
                  %{path: "workspace/image.png", filename: "renamed.png", caption: "Generated"}
                ]
              end)
@@ -3378,7 +3492,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 

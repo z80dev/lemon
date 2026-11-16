@@ -47,7 +47,8 @@ defmodule CodingAgent.MixProject do
       {:readability, "~> 0.12"},
       {:exqlite, "~> 0.34.0"},
       {:floki, "~> 0.38"},
-      {:httpoison, "~> 3.0", override: true}
+      {:httpoison, "~> 3.0", override: true},
+      {:stream_data, "~> 1.1", only: :test}
     ]
   end
 end

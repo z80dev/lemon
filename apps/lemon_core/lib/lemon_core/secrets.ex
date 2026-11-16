@@ -603,22 +603,42 @@ defmodule LemonCore.Secrets do
           fn ->
             with {:ok, rows} <- fetch_receipt_rows(server),
                  {:ok, _} <- Receipts.find(rows, owner, nil, nil) do
-              case remove_value(server, owner, name, entry) do
-                :ok ->
-                  emit_secret_event(owner, name, :delete)
-                  :ok
-
-                {:error, :mismatch} ->
-                  {:error, :stale_revision}
-
-                {:error, _reason} = error ->
-                  error
-              end
+              remove_incarnation(server, owner, name, entry)
             end
           end,
           server
         )
       end
+    end
+  end
+
+  defp remove_incarnation(server, owner, name, entry) do
+    case remove_value(server, owner, name, entry) do
+      :ok ->
+        emit_secret_event(owner, name, :delete)
+        :ok
+
+      {:error, :mismatch} ->
+        # Usage touches rewrite metadata outside the write lock, so they can
+        # race this exact-record CAS. Retry only while the same incarnation is
+        # current; a replaced or removed value remains a stale revision.
+        revision = entry_revision(server, owner, name, entry)
+
+        case Store.fetch(server, @table, {owner, name}) do
+          {:ok, current} when is_map(current) ->
+            if entry_revision(server, owner, name, current) == revision,
+              do: remove_incarnation(server, owner, name, current),
+              else: {:error, :stale_revision}
+
+          {:ok, nil} ->
+            {:error, :stale_revision}
+
+          {:error, _reason} = error ->
+            error
+        end
+
+      {:error, _reason} = error ->
+        error
     end
   end
 

@@ -67,6 +67,11 @@ defmodule CodingAgent.ToolExecutor do
   gate a restored or inherited fence earned.
   """
   @spec wrap_with_approval(AgentTool.t(), ToolPolicy.policy(), map()) :: AgentTool.t()
+  # Registry-attested completion tools report data to the caller; they grant no
+  # workspace or external capability and remain available to read-only children.
+  def wrap_with_approval(%AgentTool{trusted_terminal: true} = tool, _policy, _context),
+    do: tool
+
   def wrap_with_approval(%AgentTool{} = tool, policy, context) do
     if tool.name == "lsp" or
          tool.name in ["webfetch", "websearch"] or

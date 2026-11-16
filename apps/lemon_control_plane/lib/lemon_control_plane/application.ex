@@ -25,9 +25,10 @@ defmodule LemonControlPlane.Application do
         # Registry owns connection membership; method tasks have a hard global bound.
         LemonControlPlane.Connections,
         Supervisor.child_spec(
-          {Task.Supervisor,
-           name: LemonControlPlane.MethodTaskSupervisor,
-           max_children: LemonControlPlane.WS.Connection.global_method_limit()},
+          LemonCore.TaskSupervisor.child_spec(
+            name: LemonControlPlane.MethodTaskSupervisor,
+            max_children: LemonControlPlane.WS.Connection.global_method_limit()
+          ),
           id: LemonControlPlane.MethodTaskSupervisor
         ),
         # Connection-owned machine terminals (no global terminal event fanout)
@@ -36,7 +37,8 @@ defmodule LemonControlPlane.Application do
         LemonControlPlane.EventBridge,
         # WebSocket processes are owned by the HTTP server.
         # Durable A2A runs outlive an individual HTTP request or SSE client.
-        {Task.Supervisor, name: LemonControlPlane.A2A.TaskSupervisor},
+        LemonCore.TaskSupervisor.child_spec(name: LemonControlPlane.A2A.TaskSupervisor),
+        LemonCore.TaskSupervisor.child_spec(name: LemonControlPlane.TaskSupervisor),
         # HTTP/WebSocket server
         server_child_spec(),
         {LemonControlPlane.NodeGateway,
@@ -62,7 +64,10 @@ defmodule LemonControlPlane.Application do
       config = LemonControlPlane.A2A.Config.current()
 
       [
-        LemonControlPlane.A2A.RateLimiter,
+        {LemonCore.RateLimiter,
+         profile: :a2a,
+         name: LemonControlPlane.A2A.RateLimiter,
+         limit: fn -> LemonControlPlane.A2A.Config.current().rate_limit_per_minute end},
         Supervisor.child_spec(
           {Bandit,
            plug: LemonControlPlane.A2A.Router,

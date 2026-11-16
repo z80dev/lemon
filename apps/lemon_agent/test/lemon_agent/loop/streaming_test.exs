@@ -7,6 +7,8 @@ defmodule LemonAgent.Loop.StreamingTest do
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig}
 
+  alias LemonAi.Retry
+
   alias LemonAi.Types.{
     StreamOptions,
     ToolCall,
@@ -43,6 +45,47 @@ defmodule LemonAgent.Loop.StreamingTest do
       content: text,
       timestamp: System.system_time(:millisecond)
     }
+  end
+
+  test "delta-only updates preserve exact text without forwarding partial snapshots" do
+    context = simple_context(messages: [user_message("hi")])
+    metadata = %{Mocks.assistant_message("") | content: []}
+    final = %{metadata | stop_reason: :stop}
+
+    stream_fn = fn _, _, _ ->
+      {:ok, provider} = LemonAi.EventStream.start_link()
+      :ok = LemonAi.EventStream.push(provider, {:start, metadata})
+      :ok = LemonAi.EventStream.push(provider, {:text_start, 0})
+      :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "Hello "})
+      :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "world"})
+      LemonAi.EventStream.complete(provider, final)
+      {:ok, provider}
+    end
+
+    {:ok, output} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, message, updated_context} =
+             Streaming.stream_assistant_response(
+               context,
+               simple_config(stream_fn: stream_fn),
+               nil,
+               stream_fn,
+               output
+             )
+
+    assert [%{text: "Hello world"}] = message.content
+    assert List.last(updated_context.messages) == message
+    EventStream.complete(output, [])
+    events = Enum.to_list(EventStream.events(output))
+
+    assert [
+             {:message_update, {:text_start, 0}},
+             {:message_update, {:text_delta, 0, "Hello "}},
+             {:message_update, {:text_delta, 0, "world"}}
+           ] = Enum.filter(events, &(elem(&1, 0) == :message_update))
+
+    assert {:message_start, ^metadata} = Enum.find(events, &(elem(&1, 0) == :message_start))
+    assert {:message_end, ^message} = Enum.find(events, &(elem(&1, 0) == :message_end))
   end
 
   test "short-circuits before stream_fn when signal is already aborted" do
@@ -135,7 +178,7 @@ defmodule LemonAgent.Loop.StreamingTest do
 
       Task.start(fn ->
         LemonAi.EventStream.push(ai_stream, {:start, %{partial | content: []}})
-        LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "streamed answer", partial})
+        LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "streamed answer"})
         LemonAi.EventStream.push(ai_stream, {:done, :stop, final})
         LemonAi.EventStream.complete(ai_stream, final)
       end)
@@ -173,8 +216,8 @@ defmodule LemonAgent.Loop.StreamingTest do
 
       Task.start(fn ->
         LemonAi.EventStream.push(ai_stream, {:start, %{partial | content: []}})
-        LemonAi.EventStream.push(ai_stream, {:tool_call_start, 0, partial})
-        LemonAi.EventStream.push(ai_stream, {:tool_call_end, 0, tool_call, partial})
+        LemonAi.EventStream.push(ai_stream, {:tool_call_start, 0, %{tool_call | arguments: %{}}})
+        LemonAi.EventStream.push(ai_stream, {:tool_call_end, 0, tool_call})
         LemonAi.EventStream.push(ai_stream, {:done, :tool_use, final})
         LemonAi.EventStream.complete(ai_stream, final)
       end)
@@ -210,11 +253,9 @@ defmodule LemonAgent.Loop.StreamingTest do
     signal = AbortSignal.new()
 
     empty_tool_call = Mocks.tool_call("read_file", %{}, id: "call_read_args")
-    partial_tool_call = Mocks.tool_call("read_file", %{"path" => "mix"}, id: "call_read_args")
     final_tool_call = Mocks.tool_call("read_file", %{"path" => "mix.exs"}, id: "call_read_args")
 
     started_partial = Mocks.assistant_message_with_tool_calls([empty_tool_call])
-    delta_partial = Mocks.assistant_message_with_tool_calls([partial_tool_call])
     completed_partial = Mocks.assistant_message_with_tool_calls([final_tool_call])
     final = %{completed_partial | content: [], stop_reason: :tool_use}
 
@@ -223,18 +264,18 @@ defmodule LemonAgent.Loop.StreamingTest do
 
       Task.start(fn ->
         LemonAi.EventStream.push(ai_stream, {:start, %{started_partial | content: []}})
-        LemonAi.EventStream.push(ai_stream, {:tool_call_start, 0, started_partial})
+        LemonAi.EventStream.push(ai_stream, {:tool_call_start, 0, empty_tool_call})
 
         LemonAi.EventStream.push(
           ai_stream,
-          {:tool_call_delta, 0, ~s({"path":"mix), delta_partial}
+          {:tool_call_delta, 0, ~s({"path":"mix)}
         )
 
-        LemonAi.EventStream.push(ai_stream, {:tool_call_delta, 0, ~s(.exs"}), completed_partial})
+        LemonAi.EventStream.push(ai_stream, {:tool_call_delta, 0, ~s(.exs"})})
 
         LemonAi.EventStream.push(
           ai_stream,
-          {:tool_call_end, 0, final_tool_call, completed_partial}
+          {:tool_call_end, 0, final_tool_call}
         )
 
         LemonAi.EventStream.push(ai_stream, {:done, :tool_use, final})
@@ -260,8 +301,7 @@ defmodule LemonAgent.Loop.StreamingTest do
     events = EventStream.events(stream) |> Enum.to_list()
 
     assert Enum.any?(events, fn
-             {:message_update, %{content: [%ToolCall{arguments: %{"path" => "mix"}}]},
-              {:tool_call_delta, 0, ~s({"path":"mix), _}} ->
+             {:message_update, {:tool_call_delta, 0, ~s({"path":"mix)}} ->
                true
 
              _ ->
@@ -365,7 +405,7 @@ defmodule LemonAgent.Loop.StreamingTest do
     assert {:provider_retry_end, %{attempt: 1, success: true, canceled: false}} in events
   end
 
-  test "request failures back off exponentially and exhaust a bounded retry budget" do
+  test "request failures use deterministic exponential backoff and a single response budget" do
     parent = self()
     context = simple_context(messages: [user_message("run")])
 
@@ -374,7 +414,24 @@ defmodule LemonAgent.Loop.StreamingTest do
       {:error, :timeout}
     end
 
-    config = simple_config(stream_fn: stream_fn, max_retries: 2, retry_base_delay_ms: 2)
+    options = retry_test_options()
+
+    options = %{
+      options
+      | provider_retry:
+          Map.put(options.provider_retry, :jitter_fun, fn _ ->
+            flunk("ordinary loop retries must not jitter")
+          end)
+    }
+
+    config =
+      simple_config(
+        stream_fn: stream_fn,
+        max_retries: 2,
+        retry_base_delay_ms: 2,
+        stream_options: options
+      )
+
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
     assert {:error, :timeout} =
@@ -384,11 +441,100 @@ defmodule LemonAgent.Loop.StreamingTest do
     assert_receive :request_attempt
     assert_receive :request_attempt
     refute_received :request_attempt
+    assert_receive {:retry_sleep, 2}
+    assert_receive {:retry_sleep, 4}
+    refute_received {:retry_sleep, _}
 
     EventStream.complete(stream, [])
     events = Enum.to_list(EventStream.events(stream))
     assert for({:provider_retry, %{delay_ms: delay}} <- events, do: delay) == [2, 4]
     assert {:provider_retry_end, %{attempt: 2, success: false, canceled: false}} in events
+  end
+
+  test "ordinary retry timing caps backoff but preserves server hints" do
+    parent = self()
+
+    for {error, expected_delays} <- [
+          {:timeout, [3, 3]},
+          {{:http_error, 503, "Service unavailable", [{"retry-after-ms", "7"}]}, [7, 7]}
+        ] do
+      stream_fn = fn _, _, options ->
+        assert options.provider_retry.max_attempts == 1
+        send(parent, :request_attempt)
+        {:error, error}
+      end
+
+      config =
+        simple_config(
+          stream_fn: stream_fn,
+          max_retries: 2,
+          retry_base_delay_ms: 4,
+          retry_max_delay_ms: 3,
+          stream_options: retry_test_options()
+        )
+
+      {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+      assert {:error, ^error} =
+               Streaming.stream_assistant_response(
+                 simple_context(messages: [user_message("run")]),
+                 config,
+                 nil,
+                 nil,
+                 stream
+               )
+
+      for _ <- 1..3, do: assert_receive(:request_attempt)
+      refute_received :request_attempt
+
+      for delay <- expected_delays, do: assert_receive({:retry_sleep, ^delay})
+      refute_received {:retry_sleep, _}
+      EventStream.complete(stream, [])
+
+      assert for({:provider_retry, %{delay_ms: delay}} <- EventStream.events(stream), do: delay) ==
+               expected_delays
+    end
+  end
+
+  test "cleared redirect notifications do not abort retry backoff" do
+    parent = self()
+    signal = AbortSignal.new()
+    final = Mocks.assistant_message("recovered")
+    {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+    stream_fn = fn _, _, _ ->
+      send(parent, :request_attempt)
+
+      case Agent.get_and_update(attempts, fn attempt -> {attempt, attempt + 1} end) do
+        0 ->
+          :ok = AbortSignal.request_redirect(signal)
+          :ok = AbortSignal.clear_redirect(signal)
+          {:error, :timeout}
+
+        1 ->
+          Mocks.mock_stream_fn_single_direct(final).(nil, nil, nil)
+      end
+    end
+
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, ^final, _} =
+             Streaming.stream_assistant_response(
+               simple_context(messages: [user_message("run")]),
+               simple_config(stream_fn: stream_fn),
+               signal,
+               nil,
+               stream
+             )
+
+    assert_receive :request_attempt
+    assert_receive :request_attempt
+    refute_received :request_attempt
+    EventStream.complete(stream, [])
+
+    assert {:provider_retry_end, %{attempt: 1, success: true, canceled: false}} in Enum.to_list(
+             EventStream.events(stream)
+           )
   end
 
   test "context overflow and authentication failures do not consume retry attempts" do
@@ -623,9 +769,9 @@ defmodule LemonAgent.Loop.StreamingTest do
   # max_attempts to one, not just reduce its own retry counter.
   defp throttled_provider(parent, error, options, attempt \\ 0) do
     send(parent, :upstream_attempt)
-    policy = LemonAi.Providers.RetryHelper.policy(options)
+    policy = LemonAi.Provider.retry_policy(options)
 
-    if LemonAi.Providers.RetryHelper.retry_allowed?(attempt, policy) do
+    if Retry.retry_allowed?(attempt, policy) do
       throttled_provider(parent, error, options, attempt + 1)
     else
       {:error, error}
@@ -774,8 +920,8 @@ defmodule LemonAgent.Loop.StreamingTest do
     stream_fn = fn _, _, _ ->
       send(parent, :upstream_attempt)
       {:ok, ai_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
-      LemonAi.EventStream.push(ai_stream, {:start, partial})
-      LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "partial output", partial})
+      LemonAi.EventStream.push(ai_stream, {:start, %{partial | content: []}})
+      LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "partial output"})
       LemonAi.EventStream.push(ai_stream, {:canceled, :stream_idle_timeout})
       {:ok, ai_stream}
     end
@@ -811,15 +957,15 @@ defmodule LemonAgent.Loop.StreamingTest do
     }
 
     for {event, terminal} <- [
-          {{:text_start, 0, empty}, :error},
-          {{:text_delta, 0, " ", empty}, :done},
-          {{:text_end, 0, "", empty}, :error},
-          {{:thinking_start, 0, empty}, :error},
-          {{:thinking_delta, 0, " ", empty}, :done},
-          {{:thinking_end, 0, "", empty}, :error},
-          {{:tool_call_start, 0, empty}, :error},
-          {{:tool_call_delta, 0, "{}", empty}, :done},
-          {{:tool_call_end, 0, Mocks.tool_call("echo", %{}), empty}, :error}
+          {{:text_start, 0}, :error},
+          {{:text_delta, 0, " "}, :done},
+          {{:text_end, 0, ""}, :error},
+          {{:thinking_start, 0}, :error},
+          {{:thinking_delta, 0, " "}, :done},
+          {{:thinking_end, 0, ""}, :error},
+          {{:tool_call_start, 0, Mocks.tool_call("echo", %{})}, :error},
+          {{:tool_call_delta, 0, "{}"}, :done},
+          {{:tool_call_end, 0, Mocks.tool_call("echo", %{})}, :error}
         ] do
       stream_fn = fn _, _, _ ->
         send(parent, :committed_attempt)

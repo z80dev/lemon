@@ -185,6 +185,8 @@ defmodule CodingAgent.ExtensionLifecycle do
         Keyword.get(tool_opts, :session_mode, :chat)
       )
 
+    tool_opts = Keyword.put(tool_opts, :tool_disclosure, disclosure_cfg)
+
     hook_context = tool_hook_context(cwd, tool_opts)
     obfuscator = Keyword.get(opts, :secret_obfuscator)
 
@@ -349,7 +351,14 @@ defmodule CodingAgent.ExtensionLifecycle do
          hooks,
          obfuscator
        ) do
+    tool_opts = Keyword.put(tool_opts, :tool_disclosure, disclosure_cfg)
+
     hook_context = tool_hook_context(cwd, tool_opts)
+
+    terminal_names =
+      extra_tools
+      |> Enum.filter(&ToolRegistry.trusted_terminal?/1)
+      |> Enum.map(& &1.name)
 
     case custom_tools do
       nil ->
@@ -357,6 +366,7 @@ defmodule CodingAgent.ExtensionLifecycle do
           ToolDisclosure.apply(
             cwd
             |> ToolRegistry.get_tool_tuples(tool_opts)
+            |> Enum.reject(fn {name, _tool, _source} -> name in terminal_names end)
             |> ToolHooks.wrap_tuples(hooks, hook_context)
             |> SecretObfuscator.wrap_tuples(obfuscator),
             extra_tools
@@ -378,7 +388,8 @@ defmodule CodingAgent.ExtensionLifecycle do
         extension_tools = Extensions.get_tools(extensions, cwd)
 
         all_tools =
-          Enum.map(custom ++ extension_tools ++ extra_tools, fn tool ->
+          (Enum.reject(custom ++ extension_tools, &(&1.name in terminal_names)) ++ extra_tools)
+          |> Enum.map(fn tool ->
             tool
             |> ToolRegistry.wrap_unmanaged_tool()
             |> CodingAgent.ToolIntent.wrap(tool_opts)

@@ -9,7 +9,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   """
 
   alias CodingAgent.Session
-  alias CodingAgent.Tools.Task.{Control, Result}
+  alias CodingAgent.Tools.Task.{Control, Restore, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
@@ -81,8 +81,19 @@ defmodule CodingAgent.Tools.Task.Runner do
 
     try do
       result =
-        with :ok <- attach_control_session(opts[:task_id], session, session_id) do
+        with :ok <- attach_control_session(opts[:task_id], session, session_id),
+             :ok <-
+               Restore.record_launch(
+                 opts[:task_id],
+                 session,
+                 start_opts,
+                 description,
+                 role_id,
+                 opts
+               ),
+             :ok <- restore_descendants(session, session_id, start_opts, signal, opts) do
           await = fn next_prompt, budget ->
+            budget = Map.delete(budget, :submission_details)
             {unsubscribe, delivery} = Session.subscribe(session, tagged: true)
 
             try do
@@ -173,6 +184,19 @@ defmodule CodingAgent.Tools.Task.Runner do
   defp retain_session(_result, _session, _start_opts, _description, _role_id, _opts),
     do: false
 
+  defp restore_descendants(session, session_id, start_opts, signal, opts) do
+    Restore.restore_parent(
+      start_opts[:run_id],
+      %{crash_resume: opts[:crash_resume] == true},
+      parent_session: session_id,
+      session_pid: session,
+      parent_signal: signal,
+      crash_resume_root_run_id: opts[:crash_resume_root_run_id],
+      session_key: start_opts[:session_key],
+      agent_id: start_opts[:agent_id]
+    )
+  end
+
   # Sends each stage to the same child session in order. Only the last stage's
   # answer is the task result and faces the caller's validator; an error, an
   # abort or an exhausted request budget ends the chain with that outcome.
@@ -253,10 +277,15 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
+  defp validate_result(_validator, %{details: %{structured_output: _}}), do: :ok
+  defp validate_result(_validator, %{details: %{submission_exhausted: true}}), do: :ok
+
   defp validate_result(validator, result) when is_function(validator, 1),
     do: validator.(Result.visible_output_text(result))
 
   defp validate_result(_validator, _result), do: :ok
+
+  defp correction_prompt("Call submit_result" <> _ = reason), do: reason
 
   defp correction_prompt(reason) do
     reason = if is_binary(reason), do: reason, else: inspect(reason)
@@ -404,6 +433,15 @@ defmodule CodingAgent.Tools.Task.Runner do
         )
 
       {:session_event, ^session_id, {:tool_execution_end, _id, name, result, is_error}, _cursor} ->
+        budget =
+          case {name, result} do
+            {"submit_result", %AgentToolResult{terminate_turn: true, details: details}} ->
+              Map.put(budget, :submission_details, details)
+
+            _ ->
+              budget
+          end
+
         maybe_emit_action_update(
           on_update,
           description,
@@ -429,22 +467,28 @@ defmodule CodingAgent.Tools.Task.Runner do
           budget
         )
 
-      {:session_event, ^session_id,
-       {:message_update, %LemonAi.Types.AssistantMessage{} = msg, _event}, _cursor} ->
-        text = LemonAi.get_text(msg)
-        thinking = LemonAi.get_thinking(msg)
+      {:session_event, ^session_id, {:message_start, %LemonAi.Types.AssistantMessage{}}, _cursor} ->
+        await_result(
+          session,
+          session_ref,
+          delivery_gate,
+          session_id,
+          signal,
+          on_update,
+          description,
+          "",
+          "",
+          role_id,
+          timeout_ms,
+          deadline_ms,
+          budget
+        )
 
-        {last_text, last_thinking} =
-          maybe_emit_update(
-            on_update,
-            text,
-            thinking,
-            last_text,
-            last_thinking,
-            description,
-            session_id,
-            role_id
-          )
+      {:session_event, ^session_id, {:message_update, {:text_delta, _index, delta}}, _cursor}
+      when is_binary(delta) ->
+        # Progress carries only new visible text; the authoritative full output
+        # is emitted at message_end. Never snapshot a growing assistant message.
+        maybe_emit_update(on_update, delta, "", "", "", description, session_id, role_id)
 
         await_result(
           session,
@@ -454,7 +498,7 @@ defmodule CodingAgent.Tools.Task.Runner do
           signal,
           on_update,
           description,
-          last_text,
+          last_text <> delta,
           last_thinking,
           role_id,
           timeout_ms,
@@ -472,7 +516,7 @@ defmodule CodingAgent.Tools.Task.Runner do
             on_update,
             text,
             thinking,
-            last_text,
+            "",
             last_thinking,
             description,
             session_id,
@@ -598,7 +642,15 @@ defmodule CodingAgent.Tools.Task.Runner do
         {:error, last.error_message || "Task stopped: #{last.stop_reason}"}
 
       true ->
-        {:ok, Result.extract_final_payload(messages, last_text, last_thinking), budget}
+        payload = Result.extract_final_payload(messages, last_text, last_thinking)
+
+        payload =
+          case budget[:submission_details] do
+            nil -> payload
+            details -> Map.put(payload, :details, details)
+          end
+
+        {:ok, payload, budget}
     end
   end
 

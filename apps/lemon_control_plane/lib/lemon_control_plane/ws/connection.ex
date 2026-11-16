@@ -473,7 +473,7 @@ defmodule LemonControlPlane.WS.Connection do
       connection_pid = self()
       token = make_ref()
 
-      case Task.Supervisor.start_child(LemonControlPlane.MethodTaskSupervisor, fn ->
+      case LemonCore.TaskSupervisor.start_child(LemonControlPlane.MethodTaskSupervisor, fn ->
              result = Registry.dispatch(method, params, ctx)
              send(connection_pid, {:method_result, token, result})
            end) do
@@ -481,8 +481,12 @@ defmodule LemonControlPlane.WS.Connection do
           task = %{id: id, method: method, ref: Process.monitor(pid)}
           {:ok, %{state | method_tasks: Map.put(state.method_tasks, token, task)}}
 
-        {:error, :max_children} ->
+        {:error, :task_capacity_reached} ->
           method_capacity_error(id, state)
+
+        {:error, _reason} ->
+          error = Errors.unavailable("Async method execution unavailable")
+          {:push, {:text, encode_response(id, {:error, error})}, state}
       end
     end
   end

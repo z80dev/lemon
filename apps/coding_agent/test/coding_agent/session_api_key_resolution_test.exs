@@ -879,7 +879,9 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       )
 
     assert Enum.filter(secrets, &String.contains?(observed, &1)) == []
-    assert requests == []
+    # Session start may send LemonAi.Preconnect's unauthenticated HEAD to the
+    # origin (#567); it is still checked for secrets above but is not a model call.
+    assert Enum.reject(requests, &match?({:wire, "HEAD", "/", _headers, ""}, &1)) == []
   end
 
   defp received_wire_requests(acc) do

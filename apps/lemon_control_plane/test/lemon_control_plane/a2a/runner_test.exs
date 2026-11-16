@@ -4,7 +4,8 @@ defmodule LemonControlPlane.A2A.RunnerTest do
   import Plug.Conn
   import Plug.Test
 
-  alias LemonControlPlane.A2A.{Handler, RateLimiter, Router}
+  alias LemonControlPlane.A2A.{Handler, Router, Runner}
+  alias LemonCore.RateLimiter
   alias LemonCore.{A2AStore, RunStore, Store}
   alias LemonCore.A2A.Protocol
 
@@ -78,8 +79,13 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     AbortRouter.set_owner(self())
     AbortRouter.set_result(:ok)
 
-    if is_nil(Process.whereis(RateLimiter)) do
-      start_supervised!(RateLimiter)
+    if is_nil(Process.whereis(LemonControlPlane.A2A.RateLimiter)) do
+      start_supervised!(
+        {RateLimiter,
+         profile: :a2a,
+         name: LemonControlPlane.A2A.RateLimiter,
+         limit: fn -> LemonControlPlane.A2A.Config.current().rate_limit_per_minute end}
+      )
     end
 
     :ok =
@@ -466,6 +472,61 @@ defmodule LemonControlPlane.A2A.RunnerTest do
 
     assert %{state: "TASK_STATE_WORKING"} = A2AStore.get_task(task_id)
     Store.delete(:a2a_tasks, task_id)
+  end
+
+  test "runner capacity rejection releases the durable task lease without submitting" do
+    name = LemonControlPlane.A2A.TaskSupervisor
+    original_supervisor = Process.whereis(name)
+    true = Process.unregister(name)
+
+    try do
+      supervisor =
+        start_supervised!(LemonCore.TaskSupervisor.child_spec(name: name, max_children: 1))
+
+      assert {:ok, _blocker} =
+               LemonCore.TaskSupervisor.start_child(supervisor, fn ->
+                 receive do
+                   :finish -> :ok
+                 end
+               end)
+
+      assert_rejected_launch(:task_capacity_reached)
+    after
+      stop_supervised(name)
+      true = Process.register(original_supervisor, name)
+    end
+  end
+
+  test "unavailable runner supervisor releases the durable task lease without submitting" do
+    name = LemonControlPlane.A2A.TaskSupervisor
+    supervisor = Process.whereis(name)
+    true = Process.unregister(name)
+
+    try do
+      assert_rejected_launch(:task_supervisor_unavailable)
+    after
+      true = Process.register(supervisor, name)
+    end
+  end
+
+  defp assert_rejected_launch(reason) do
+    context_id = unique_id("admission-context")
+    message_id = unique_id("admission-message")
+
+    assert {:error, ^reason} = Runner.start("local", context_id, "please help", message_id)
+    assert %{task_id: task_id} = A2AStore.get_message(message_id)
+    task = A2AStore.get_task(task_id)
+    on_exit(fn -> cleanup_task(task_id, context_id, message_id, task.run_id) end)
+
+    assert task.state == "TASK_STATE_SUBMITTED"
+    assert is_nil(task[:runner_lease_id])
+    assert is_nil(task[:runner_lease_expires_at_ms])
+    refute_received {:a2a_submit_blocked, _, _}
+
+    assert {:error, -32_603, "Internal error"} = start_message(context_id, message_id)
+    assert A2AStore.get_message(message_id).task_id == task_id
+    assert A2AStore.get_task(task_id).run_id == task.run_id
+    refute_received {:a2a_submit_blocked, _, _}
   end
 
   defp start_message(context_id, message_id) do

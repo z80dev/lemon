@@ -38,6 +38,89 @@ defmodule LemonLsp.ServerManagerProtocolTest do
     end
   end
 
+  test "session cleanup contains no process sleeps" do
+    for module <- ["server_manager.ex", "session.ex"] do
+      source = Path.expand("../../lib/lemon_lsp/#{module}", __DIR__)
+      refute File.read!(source) =~ "Process.sleep"
+    end
+  end
+
+  test "a slow fake server and a suspended session cannot block another root", context do
+    {first, second, first_pid} = isolated_pair(context)
+
+    request =
+      :gen_server.send_request(
+        ServerManager,
+        {:request_session, first, "fake/slow", %{}, 20_000,
+         %{on_timeout: :cancel, capture_edits: false}}
+      )
+
+    # A response from the same fake server proves it consumed the slow request.
+    assert {:ok, _} = ServerManager.request_session(first, "fake/pid", %{}, timeout_ms: 20_000)
+    :ok = :sys.suspend(first_pid)
+
+    try do
+      assert {:ok, response} =
+               ServerManager.request_session(second, "fake/pid", %{}, timeout_ms: 2_000)
+
+      assert is_binary(response["result"]["pid"])
+      assert :timeout = :gen_server.wait_response(request, 0)
+    after
+      :sys.resume(first_pid)
+    end
+
+    assert {:ok, _} = ServerManager.stop_session(first)
+    assert {:reply, {:error, :session_stopped}} = :gen_server.receive_response(request, 2_000)
+  end
+
+  test "a fake server crash and session crash leave its sibling alive", context do
+    {first, second, first_pid} = isolated_pair(context)
+    manager = Process.whereis(ServerManager)
+    first_monitor = Process.monitor(first_pid)
+
+    assert {:error, :session_exited} =
+             ServerManager.request_session(first, "fake/crash", %{}, timeout_ms: 20_000)
+
+    assert {:ok, _} = ServerManager.request_session(second, "fake/pid")
+    assert Process.alive?(manager)
+    assert_receive {:DOWN, ^first_monitor, :process, ^first_pid, :normal}, 2_000
+    [{second_pid, _}] = Registry.lookup(LemonLsp.SessionRegistry, {:id, manager, second})
+    monitor = Process.monitor(second_pid)
+    Process.exit(second_pid, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^second_pid, :killed}, 2_000
+    assert Process.alive?(manager)
+
+    assert {:ok, restarted} =
+             ServerManager.start_session(:elixir_ls, cwd: context.tmp_dir, session_id: first)
+
+    assert restarted.session_id == first
+    assert {:ok, _} = ServerManager.request_session(first, "fake/pid", %{}, timeout_ms: 20_000)
+  end
+
+  defp isolated_pair(context) do
+    first = context.session_id
+    second = first <> "-other-root"
+    other_root = Path.join(context.tmp_dir, "other")
+    File.mkdir_p!(other_root)
+    on_exit(fn -> ServerManager.stop_session(second) end)
+
+    assert {:ok, _} =
+             ServerManager.start_session(:elixir_ls, cwd: context.tmp_dir, session_id: first)
+
+    assert {:ok, _} =
+             ServerManager.start_session(:elixir_ls,
+               cwd: other_root,
+               config_root: context.tmp_dir,
+               session_id: second
+             )
+
+    assert {:ok, _} = ServerManager.request_session(first, "fake/pid", %{}, timeout_ms: 20_000)
+    assert {:ok, _} = ServerManager.request_session(second, "fake/pid", %{}, timeout_ms: 20_000)
+    manager = Process.whereis(ServerManager)
+    [{first_pid, _}] = Registry.lookup(LemonLsp.SessionRegistry, {:id, manager, first})
+    {first, second, first_pid}
+  end
+
   test "acknowledges edits only after applying them and permits reentrant manager calls", %{
     tmp_dir: tmp_dir,
     session_id: session_id

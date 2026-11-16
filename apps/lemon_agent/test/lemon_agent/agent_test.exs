@@ -900,103 +900,43 @@ defmodule LemonAgent.AgentTest do
   end
 
   # ============================================================================
-  # Follow-up Long-Poll Race Condition Tests
+  # Loop Follow-up Requests
   # ============================================================================
 
-  describe "follow-up long-poll mechanism" do
-    test "returns follow-up arriving during 50ms poll window" do
-      # Block a run so its abort_ref stays registered
+  # The run's loop asks its queue owner with a correlated message (#559); there
+  # is no follow-up long-poll window.
+  describe "loop follow-up requests" do
+    test "serve already-queued follow-ups one message per request" do
       {agent, abort_ref} = start_blocked_run_agent()
 
-      message = Mocks.user_message("Late follow-up")
+      for n <- 1..3, do: :ok = Agent.follow_up(agent, Mocks.user_message("Follow #{n}"))
 
-      caller =
-        Task.async(fn ->
-          GenServer.call(agent, {:get_follow_up_messages, abort_ref})
-        end)
+      for n <- 1..3 do
+        assert [%{content: content}] = follow_up_request(agent, abort_ref)
+        assert content == "Follow #{n}"
+      end
 
-      wait_until(fn ->
-        :sys.get_state(agent).follow_up_poll != nil
-      end)
-
-      Agent.follow_up(agent, message)
-      result = Task.await(caller, 1_000)
-
-      assert length(result) == 1
-      assert hd(result).content == "Late follow-up"
+      assert follow_up_request(agent, abort_ref) == []
     end
 
-    test "returns empty list when no follow-up arrives within 50ms" do
+    test "return an empty list immediately when nothing is queued" do
       {agent, abort_ref} = start_blocked_run_agent()
-
-      # Call with nothing queued - should timeout after 50ms
-      result = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
-      assert result == []
+      assert follow_up_request(agent, abort_ref) == []
     end
 
-    test "returns already-queued follow-ups immediately without polling" do
-      {agent, abort_ref} = start_blocked_run_agent()
+    test "return an empty list for a mismatched run reference" do
+      {agent, _abort_ref} = start_blocked_run_agent()
+      :ok = Agent.follow_up(agent, Mocks.user_message("Should not be returned"))
 
-      # Queue follow-ups BEFORE calling get_follow_up_messages
-      Agent.follow_up(agent, Mocks.user_message("Already queued"))
-
-      # Should be served from the queue without registering a long-poll
-      result = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
-
-      assert length(result) == 1
-      assert hd(result).content == "Already queued"
-      assert :sys.get_state(agent).follow_up_poll == nil
-    end
-
-    test "returns empty list for mismatched abort_ref" do
-      {:ok, agent} = start_agent()
-      :ok = Agent.prompt(agent, "test")
-
-      # Use a wrong abort_ref
-      wrong_ref = make_ref()
-      Agent.follow_up(agent, Mocks.user_message("Should not be returned"))
-
-      result = GenServer.call(agent, {:get_follow_up_messages, wrong_ref})
-      assert result == []
+      assert follow_up_request(agent, make_ref()) == []
+      assert [%{content: "Should not be returned"}] = :sys.get_state(agent).follow_up_queue
     end
   end
 
-  # ============================================================================
-  # Follow-up Queue Tests
-  # ============================================================================
-
-  describe "follow-up queue consumption" do
-    test "returns one message per call" do
-      {:ok, agent} = start_agent()
-
-      state = :sys.get_state(agent)
-
-      abort_ref =
-        case state.abort_ref do
-          {:aborted, ref} -> ref
-          ref -> ref
-        end
-
-      # Queue 3 follow-ups
-      Agent.follow_up(agent, Mocks.user_message("Follow 1"))
-      Agent.follow_up(agent, Mocks.user_message("Follow 2"))
-      Agent.follow_up(agent, Mocks.user_message("Follow 3"))
-      Agent.get_state(agent)
-
-      # First call should return only 1 message
-      result1 = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
-      assert length(result1) == 1
-      assert hd(result1).content == "Follow 1"
-
-      # Second call should return next message
-      result2 = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
-      assert length(result2) == 1
-      assert hd(result2).content == "Follow 2"
-
-      # Third call should return last message
-      result3 = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
-      assert length(result3) == 1
-      assert hd(result3).content == "Follow 3"
-    end
+  defp follow_up_request(agent, abort_ref) do
+    request_ref = make_ref()
+    send(agent, {:loop_queue, self(), request_ref, abort_ref, :follow_up})
+    assert_receive {:loop_queue, ^request_ref, messages}, 1_000
+    messages
   end
 end

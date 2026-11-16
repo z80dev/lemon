@@ -184,13 +184,21 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         owner = self()
         data = state.data
 
-        task =
-          Task.Supervisor.async_nolink(LemonChannels.Adapters.Discord.AsyncSupervisor, fn ->
-            Process.put(:discord_transport, owner)
-            process_event(event, data)
-          end)
+        case LemonCore.TaskSupervisor.async_nolink(
+               LemonChannels.Adapters.Discord.AsyncSupervisor,
+               fn ->
+                 Process.put(:discord_transport, owner)
+                 process_event(event, data)
+               end
+             ) do
+          {:ok, task} ->
+            %{state | task: task, queue: queue}
 
-        %{state | task: task, queue: queue}
+          {:error, _reason} ->
+            LemonChannels.Registry.record_status("discord", {:error, :event_failed})
+            Logger.warning("discord event task admission failed; event will not be replayed")
+            dispatch_next(%{state | queue: queue})
+        end
 
       {:empty, _queue} ->
         state
@@ -202,10 +210,20 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp start_task(fun) do
     owner = Process.get(:discord_transport, self())
 
-    Task.Supervisor.start_child(LemonChannels.Adapters.Discord.AsyncSupervisor, fn ->
-      Process.put(:discord_transport, owner)
-      fun.()
-    end)
+    case LemonCore.TaskSupervisor.start_child(
+           LemonChannels.Adapters.Discord.AsyncSupervisor,
+           fn ->
+             Process.put(:discord_transport, owner)
+             fun.()
+           end
+         ) do
+      {:ok, _pid} = result ->
+        result
+
+      {:error, _reason} = error ->
+        Logger.warning("discord background task admission failed; work will not be replayed")
+        error
+    end
   end
 
   defp subscription(action, topic) do
@@ -473,7 +491,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp forget_submission_dedupe(refs) do
     Enum.each(refs, fn
       %{memory_key: memory_key, persistent_key: persistent_key} ->
-        _ = :ets.delete(@dedupe_table, memory_key)
+        _ = Ets.forget(@dedupe_table, memory_key)
         _ = Store.delete(:idempotency, persistent_key)
 
       _ ->
@@ -1101,8 +1119,16 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       end
 
       if command == "btw" do
-        respond_ephemeral(interaction, "Answering side question…")
-        _ = start_task(fn -> send_followup(interaction, run.()) end)
+        case start_task(fn ->
+               respond_ephemeral(interaction, "Answering side question…")
+               send_followup(interaction, run.())
+             end) do
+          {:ok, _pid} ->
+            :ok
+
+          {:error, _reason} ->
+            respond_ephemeral(interaction, "Side question could not be started.")
+        end
       else
         respond_ephemeral(interaction, run.())
       end

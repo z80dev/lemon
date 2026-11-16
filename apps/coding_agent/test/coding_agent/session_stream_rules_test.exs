@@ -72,8 +72,8 @@ defmodule CodingAgent.SessionStreamRules599Test do
 
       {:ok, stream} = LemonAi.EventStream.start_link()
       send(parent, {:provider_call, call, context, stream})
-      :ok = LemonAi.EventStream.push(stream, {:start, response})
-      :ok = LemonAi.EventStream.push(stream, {:text_delta, 0, text, response})
+      :ok = LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
+      :ok = LemonAi.EventStream.push(stream, {:text_delta, 0, text})
 
       if call != 1 do
         :ok = LemonAi.EventStream.push(stream, {:done, :stop, response})
@@ -110,7 +110,7 @@ defmodule CodingAgent.SessionStreamRules599Test do
     assert inspect(corrected) =~ "Return GOOD_TOKEN instead."
 
     assert {:error, :canceled} =
-             LemonAi.EventStream.push(first_stream, {:text_delta, 0, "late", nil})
+             LemonAi.EventStream.push(first_stream, {:text_delta, 0, "late"})
 
     await_end(session)
 

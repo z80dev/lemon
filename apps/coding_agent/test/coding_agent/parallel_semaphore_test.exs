@@ -13,6 +13,8 @@ defmodule CodingAgent.Parallel.SemaphoreTest do
     await_monitored(sem, first)
     second = start_caller(sem)
     await_monitored(sem, second)
+    # Acquisition waits for capacity, not for a blocked server callback.
+    assert Semaphore.available(sem) == 0
 
     kill_and_wait(holder)
 

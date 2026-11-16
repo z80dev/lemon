@@ -5,6 +5,71 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
   alias LemonAgent.Test.Mocks
   alias CodingAgent.Tools.Task.Runner
 
+  @tag :tmp_dir
+  test "child progress carries deltas and terminal output retains the complete answer", %{
+    tmp_dir: tmp_dir
+  } do
+    parent = self()
+    final = Mocks.assistant_message("hello world")
+
+    stream_fn = fn _model, _context, _options ->
+      {:ok, stream} = LemonAi.EventStream.start_link()
+
+      {:ok, producer} =
+        Task.start(fn ->
+          LemonAi.EventStream.push(stream, {:start, %{final | content: []}})
+          LemonAi.EventStream.push(stream, {:text_start, 0})
+          send(parent, {:child_producer, self()})
+
+          for delta <- ["hello", " world"] do
+            receive do: (:next -> :ok)
+            LemonAi.EventStream.push(stream, {:text_delta, 0, delta})
+          end
+
+          receive do: (:finish -> :ok)
+          LemonAi.EventStream.push(stream, {:text_end, 0, "hello world"})
+          LemonAi.EventStream.complete(stream, final)
+        end)
+
+      LemonAi.EventStream.attach_task(stream, producer)
+      {:ok, stream}
+    end
+
+    task =
+      Task.async(fn ->
+        Runner.start_session_with_prompt(
+          [
+            cwd: tmp_dir,
+            workspace_dir: tmp_dir,
+            model: Mocks.mock_model(),
+            tools: [],
+            stream_fn: stream_fn
+          ],
+          "Say hello.",
+          "Streaming child",
+          nil,
+          fn result -> send(parent, {:child_update, result}) end,
+          nil
+        )
+      end)
+
+    assert_receive {:child_producer, producer}, 5_000
+    on_exit(fn -> Process.exit(producer, :kill) end)
+    send(producer, :next)
+    assert_receive {:child_update, %{content: [%LemonAi.Types.TextContent{text: "hello"}]}}, 5_000
+    send(producer, :next)
+
+    assert_receive {:child_update, %{content: [%LemonAi.Types.TextContent{text: " world"}]}},
+                   5_000
+
+    send(producer, :finish)
+
+    assert_receive {:child_update, %{content: [%LemonAi.Types.TextContent{text: "hello world"}]}},
+                   5_000
+
+    assert %{content: [%LemonAi.Types.TextContent{text: "hello world"}]} = Task.await(task, 5_000)
+  end
+
   test "times out hung child sessions instead of waiting forever" do
     tmp_dir =
       Path.join(System.tmp_dir!(), "task-runner-timeout-#{System.unique_integer([:positive])}")

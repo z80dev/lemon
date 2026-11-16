@@ -16,42 +16,37 @@ defmodule LemonRouter.Application do
         LemonRouter.RestartCarryover,
         # Agent profiles configuration
         LemonRouter.AgentProfiles,
-        # Registries
-        {Registry, keys: :unique, name: LemonRouter.RunRegistry},
-        # Strict single-flight: at most one *active* run per session_key.
-        {Registry, keys: :unique, name: LemonRouter.SessionRegistry},
-        # Per-conversation coordinator registry (conversation_key => coordinator pid)
-        {Registry, keys: :unique, name: LemonRouter.ConversationRegistry},
-        # Coalescer registry - required for StreamCoalescer to work
-        {Registry, keys: :unique, name: LemonRouter.CoalescerRegistry},
-        # Tool status coalescer registry
-        {Registry, keys: :unique, name: LemonRouter.ToolStatusRegistry},
-        # Async task surface subscriber registry + supervisor
-        {Registry, keys: :unique, name: LemonRouter.AsyncTaskSurfaceRegistry},
-        {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.AsyncTaskSurfaceSupervisor},
-        # Run supervisor (DynamicSupervisor for run processes)
-        {
-          DynamicSupervisor,
-          strategy: :one_for_one,
-          name: LemonRouter.RunSupervisor,
-          max_children: run_process_limit()
-        },
-        # Session coordinator supervisor (router-owned queue semantics)
-        {DynamicSupervisor,
-         strategy: :one_for_one, name: LemonRouter.SessionCoordinatorSupervisor},
-        # Stream coalescer supervisor
-        {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.CoalescerSupervisor},
-        # Tool status coalescer supervisor
-        {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.ToolStatusSupervisor},
-        # Run count telemetry tracker (must start before orchestrator)
-        LemonRouter.RunCountTracker,
+        LemonCore.Supervision.subtree(LemonRouter.CoalescingSupervisor, [
+          {Registry, keys: :unique, name: LemonRouter.CoalescerRegistry},
+          {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.CoalescerSupervisor}
+        ]),
+        LemonCore.Supervision.subtree(LemonRouter.ToolStatusTree, [
+          {Registry, keys: :unique, name: LemonRouter.ToolStatusRegistry},
+          {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.ToolStatusSupervisor}
+        ]),
+        LemonCore.Supervision.subtree(LemonRouter.AsyncTaskSurfaceTree, [
+          {Registry, keys: :unique, name: LemonRouter.AsyncTaskSurfaceRegistry},
+          {DynamicSupervisor,
+           strategy: :one_for_one, name: LemonRouter.AsyncTaskSurfaceSupervisor}
+        ]),
         # Router-owned adaptive routing feedback store; opens SQLite lazily.
         LemonRouter.RoutingFeedbackStore,
-        # Run orchestrator
-        LemonRouter.RunOrchestrator,
-        LemonRouter.AgentMessaging,
-        # Resubmits work carried across the previous graceful restart.
-        LemonRouter.RestartCarryover.Replayer
+        LemonCore.Supervision.subtree(LemonRouter.ConversationSupervisor, [
+          {Registry, keys: :unique, name: LemonRouter.RunRegistry},
+          {Registry, keys: :unique, name: LemonRouter.SessionRegistry},
+          {Registry, keys: :unique, name: LemonRouter.ConversationRegistry},
+          {DynamicSupervisor,
+           strategy: :one_for_one,
+           name: LemonRouter.RunSupervisor,
+           max_children: run_process_limit()},
+          {DynamicSupervisor,
+           strategy: :one_for_one, name: LemonRouter.SessionCoordinatorSupervisor},
+          LemonRouter.RunCountTracker,
+          LemonRouter.RunOrchestrator,
+          LemonRouter.AgentMessaging,
+          # Replay only after registries, run/coordinator supervisors and admission.
+          LemonRouter.RestartCarryover.Replayer
+        ])
       ] ++ maybe_health_server_child()
 
     opts = [strategy: :one_for_one, name: LemonRouter.Supervisor]

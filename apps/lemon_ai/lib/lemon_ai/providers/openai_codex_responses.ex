@@ -49,7 +49,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   alias LemonAi.EventStream
   alias LemonAi.Providers.OpenAIResponsesShared
-  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Retry
   alias LemonAi.Providers.SSEParser
   alias LemonAi.Providers.StreamingHelper
   import LemonAi.Providers.AssistantMessageHelper
@@ -123,16 +123,24 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
       end
 
       headers = build_headers(model, opts, account_id, api_key)
+      headers = websocket_headers(headers, opts)
 
       EventStream.push_async(stream, {:start, output})
 
-      # Make streaming request with retries
-      case stream_with_retries(
+      case OpenAIResponsesShared.request_stream(
+             opts,
              responses_url(model.base_url),
-             body,
              headers,
-             RetryHelper.policy(opts),
-             0
+             body,
+             fn ->
+               stream_with_retries(
+                 responses_url(model.base_url),
+                 body,
+                 headers,
+                 LemonAi.Provider.retry_policy(opts),
+                 0
+               )
+             end
            ) do
         {:ok, event_stream} ->
           # Map codex events to standard OpenAI Responses events
@@ -171,6 +179,14 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   # ============================================================================
   # Request Building
   # ============================================================================
+
+  defp websocket_headers(headers, %{provider_options: %{responses_websocket: true}}) do
+    headers
+    |> Map.reject(fn {key, _value} -> String.downcase(to_string(key)) == "openai-beta" end)
+    |> Map.put("OpenAI-Beta", "responses_websockets=2026-02-06")
+  end
+
+  defp websocket_headers(headers, _opts), do: headers
 
   defp build_request_body(model, context, opts) do
     # System prompt goes in instructions, not in messages
@@ -363,7 +379,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   defp stream_with_retries(url, body, headers, policy, attempt) do
     headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
-    retry_allowed? = RetryHelper.retry_allowed?(attempt, policy)
+    retry_allowed? = Retry.retry_allowed?(attempt, policy)
 
     case Req.post(url,
            json: body,
@@ -379,8 +395,8 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
         error_text = normalize_error_body(error_body)
 
         retry_delay =
-          if retry_allowed? and RetryHelper.retryable_http_error?(status, error_text) do
-            RetryHelper.http_retry_delay_ms(
+          if retry_allowed? and LemonAi.Error.retryable_http_error?(status, error_text) do
+            Retry.http_retry_delay_ms(
               attempt,
               response_headers,
               policy,
@@ -394,17 +410,17 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
           :give_up ->
             {:error,
              LemonAi.Error.parse_http_error(status, error_text, response_headers, :openai_codex),
-             RetryHelper.retry_after_ms(response_headers)}
+             Retry.retry_after_ms(response_headers)}
 
           delay_ms ->
-            RetryHelper.sleep(delay_ms)
+            LemonAi.Provider.retry_sleep(delay_ms, policy)
             stream_with_retries(url, body, headers, policy, attempt + 1)
         end
 
       {:error, reason} ->
         cond do
-          retry_allowed? and RetryHelper.retryable_transport_error?(reason) ->
-            RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
+          retry_allowed? and LemonAi.Error.retryable_transport_error?(reason) ->
+            LemonAi.Provider.retry_sleep(Retry.backoff_delay_ms(attempt, policy), policy)
             stream_with_retries(url, body, headers, policy, attempt + 1)
 
           true ->

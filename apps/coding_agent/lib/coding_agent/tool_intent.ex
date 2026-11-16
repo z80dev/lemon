@@ -23,6 +23,79 @@ defmodule CodingAgent.ToolIntent do
   @read_only_builtins ~w(read read_skill recall lsp_diagnostics bash_output grep find semantic_find ls webfetch websearch extensions_status)
 
   @scope_key {__MODULE__, :parent_scope}
+  @unknown_call_limit 100
+
+  @doc """
+  Lists effectful calls whose journal contains no known durable result.
+
+  Reads all journal entries, including inactive branches and scoped eval/WASM
+  intents. Returns only IDs and tool names, never arguments or digests. Operator
+  and recovery-prompt projections are capped at the first 100 distinct unresolved
+  IDs in journal order; this is not an authorization to retry any call.
+
+  Synthetic interrupted results with an unknown outcome do not resolve intents.
+  Journal loading errors are returned rather than treated as an empty history.
+  """
+  @spec unknown_calls(String.t()) ::
+          {:ok, [%{id: binary(), name: binary()}]} | {:error, term()}
+  def unknown_calls(session_file) when is_binary(session_file) do
+    with {:ok, session} <- CodingAgent.SessionManager.load_from_file(session_file) do
+      entries = CodingAgent.SessionManager.entries(session)
+
+      known =
+        Enum.reduce(entries, MapSet.new(), fn
+          %{type: :message, message: %{"role" => "tool_result"} = message}, acc ->
+            id = message["tool_call_id"] || message["tool_use_id"]
+            details = message["details"]
+
+            if is_binary(id) and not unknown_outcome?(details),
+              do: MapSet.put(acc, id),
+              else: acc
+
+          _entry, acc ->
+            acc
+        end)
+
+      entries
+      |> Enum.reduce_while({:ok, [], MapSet.new()}, fn
+        %{type: :custom, custom_type: "lemon.tool_intent", data: data}, {:ok, calls, seen} ->
+          case data do
+            %{"toolCallId" => id, "tool" => name} when is_binary(id) and is_binary(name) ->
+              if MapSet.member?(known, id) or MapSet.member?(seen, id) do
+                {:cont, {:ok, calls, seen}}
+              else
+                {:cont, {:ok, [%{id: id, name: name} | calls], MapSet.put(seen, id)}}
+              end
+
+            _ ->
+              {:halt, {:error, :invalid_tool_intent}}
+          end
+
+        _entry, acc ->
+          {:cont, acc}
+      end)
+      |> case do
+        {:ok, calls, _seen} -> {:ok, calls |> Enum.reverse() |> Enum.take(@unknown_call_limit)}
+        {:error, _reason} = error -> error
+      end
+    end
+  rescue
+    _error -> {:error, :invalid_journal}
+  end
+
+  def unknown_calls(_session_file), do: {:error, :invalid_session_file}
+
+  defp unknown_outcome?(details) when is_map(details) do
+    (details["outcome"] || details[:outcome]) in [
+      :unknown,
+      "unknown",
+      :outcome_unknown,
+      "outcome_unknown"
+    ]
+  end
+
+  defp unknown_outcome?(_details), do: false
+
   @doc false
   def builtin_effect(name) when name in @read_only_builtins, do: :none
   def builtin_effect(_name), do: :external

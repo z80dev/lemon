@@ -2,6 +2,22 @@
 
 Core agent runtime for the Lemon umbrella project. LemonAgent provides OTP-native building blocks for AI agents: a supervised GenServer for stateful agent lifecycle management, a stateless agentic loop with streaming events, bounded event streams with backpressure, cooperative abort signaling, context window management, and a subagent supervision/registry infrastructure.
 
+Trusted in-process completion tools may set `AgentToolResult.terminate_turn`
+to end a turn without a further model request. This additive published-package
+API is honored only for `AgentTool.trusted_terminal: true`, a capability the
+host registry must attest, never infer from result details. CodingAgent strips
+this capability from MCP, extension, WASM and unmanaged tools; its built-in
+`submit_result` is the sole approved completion tool.
+
+Agent processes use OTP `hibernate_after: 5_000` to reclaim idle heaps between
+turns, without a polling timer or a delayed wake-up. `Agent.start_link/1` accepts
+`:hibernate_after` in milliseconds or `:infinity` to opt out; coding sessions
+apply the same option to themselves and their owned agent. Hibernation preserves
+state, subscriptions and OTP system/code-change handling; it does not park or
+terminate a live root session. This is an additive published-package option.
+See [session memory measurements](../../docs/benchmarks/session-memory.md)
+for the opt-in measurement procedure and latency comparison.
+
 ## Architecture Overview
 
 ```
@@ -46,8 +62,19 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 
 - **AbortSignal.Registry** -- A duplicate-key Registry for cancellation and redirect subscriptions. Each process subscribes idempotently per signal and unsubscribes when its wait finishes.
 - **AgentRegistry** -- An Elixir `Registry` with `:unique` keys. Agents register under `{session_id, role, index}` tuples.
-- **LoopTaskSupervisor** -- A `Task.Supervisor` for spawning agent loop tasks via `Task.Supervisor.async_nolink/2`.
+- **LoopTaskSupervisor** -- A `Task.Supervisor` for spawning agent loop tasks through `LemonCore.TaskSupervisor`.
 - **ToolTaskSupervisor** -- A `Task.Supervisor` for spawning concurrent tool execution tasks.
+
+Both task supervisors cap concurrent children at **1024** by default. Configure
+`:lemon_core, :task_supervisor_max_children` as a map keyed by
+`LemonAgent.LoopTaskSupervisor` or `LemonAgent.ToolTaskSupervisor` before startup.
+Values must be positive integers. Rejected prompt/continue admission returns
+`{:error, :task_capacity_reached | :task_supervisor_unavailable}` without changing
+the conversation; direct loop streams terminate with `{:task_start_failed, reason}`.
+Tool admission failures produce error results with `outcome: :not_started`;
+ambiguous startup exits retain `outcome: :unknown`. Neither path retries tools.
+Auto-thinking keeps its documented default-effort fallback when its classifier
+cannot start. Broker block reports remain best-effort and log rejected admission.
 
 Credential cooldowns and fallback session pins live in public ETS tables
 created only by their supervised `ModelRuntime.CredentialHealth` and
@@ -133,7 +160,7 @@ All execution emits structured events via `LemonAgent.EventStream`:
 {:agent_start}
 {:turn_start}
 {:message_start, message}
-{:message_update, message, assistant_event}
+{:message_update, assistant_event}
 {:message_end, message}
 {:tool_execution_start, id, name, args}
 {:tool_execution_update, id, name, args, partial_result}
@@ -145,6 +172,18 @@ All execution emits structured events via `LemonAgent.EventStream`:
 ```
 
 The `{:agent_end, new_messages}` event contains only messages created during the current run, not the full conversation history.
+
+**Breaking published-package event change:** `message_update` now contains only
+the delta-only provider event, not a growing `AssistantMessage`. Provider deltas
+are `{kind, index, delta}`; text/thinking starts are `{kind, index}`, tool starts
+carry a `ToolCall`, and block ends carry their final text/thinking/tool block.
+`message_start`, `message_end`, terminal events and final results retain their
+existing shapes. The loop retains partial content as chunks and materializes it
+only for completion/cancellation, not once per update. Agent/session snapshot
+APIs still expose the current partial answer on demand. Subscribers concatenate
+adjacent text delta bytes; transports may coalesce them per subscriber, never
+across content-block or lifecycle boundaries. Stream rules inspect the original
+delta stream, and the opt-in system-prompt observer is unchanged.
 
 System prompts accept either a string or ordered
 `%{text: binary, directory_derived: boolean}` blocks. Queued steering/follow-up

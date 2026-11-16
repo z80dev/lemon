@@ -47,10 +47,10 @@ defmodule LemonAgent.Agent do
   alias LemonAgent.{AbortSignal, AutoThinking, Budget}
   alias LemonAgent.Types
   alias LemonAgent.Types.{AgentLoopConfig, AgentState}
+  alias LemonAi.StreamAccumulator
   alias LemonAi.Types.StreamOptions
   alias LemonCore.Introspection
 
-  @follow_up_poll_timeout_ms 50
   @default_queue_call_timeout_ms :timer.minutes(30)
 
   # ============================================================================
@@ -75,6 +75,7 @@ defmodule LemonAgent.Agent do
 
   @type state :: %{
           agent_state: AgentState.t(),
+          stream_accumulator: StreamAccumulator.t() | nil,
           listeners: list({pid(), reference()}),
           abort_ref: reference() | nil,
           running_task: Task.t() | nil,
@@ -129,6 +130,7 @@ defmodule LemonAgent.Agent do
           tool_timeout_ms: pos_integer() | :infinity | nil,
           intent_tracing: boolean(),
           queue_call_timeout: timeout(),
+          hibernate_after: timeout(),
           name: GenServer.name()
         ]
 
@@ -169,6 +171,8 @@ defmodule LemonAgent.Agent do
   - `:intent_tracing` - Include optional provider-only tool intent (default true)
   - `:queue_call_timeout` - Timeout for loop queue polling GenServer calls (`:infinity` or ms, default: 30 minutes)
   - `:name` - Optional GenServer name
+  - `:hibernate_after` - Idle milliseconds before OTP hibernation (default 5,000);
+    `:infinity` disables it. Does not delay incoming messages or system/code-change requests.
 
   ## Examples
 
@@ -180,12 +184,10 @@ defmodule LemonAgent.Agent do
   @spec start_link(opts()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     {name, opts} = Keyword.pop(opts, :name)
-
-    if name do
-      GenServer.start_link(__MODULE__, opts, name: name)
-    else
-      GenServer.start_link(__MODULE__, opts)
-    end
+    # Keep short inter-message gaps warm; reclaim heaps between user turns.
+    server_opts = [hibernate_after: Keyword.get(opts, :hibernate_after, 5_000)]
+    server_opts = if name, do: Keyword.put(server_opts, :name, name), else: server_opts
+    GenServer.start_link(__MODULE__, opts, server_opts)
   end
 
   @doc """
@@ -198,6 +200,8 @@ defmodule LemonAgent.Agent do
 
   Returns `:ok` immediately. Use `wait_for_idle/1` to wait for completion.
   Returns `{:error, :already_streaming}` if a prompt is already being processed.
+  Returns `{:error, :task_capacity_reached | :task_supervisor_unavailable}` when
+  the loop cannot be admitted; the agent state and conversation are unchanged.
 
   ## Examples
 
@@ -209,7 +213,8 @@ defmodule LemonAgent.Agent do
           GenServer.server(),
           String.t() | Types.agent_message() | list(Types.agent_message())
         ) ::
-          :ok | {:error, :already_streaming}
+          :ok
+          | {:error, :already_streaming | :task_capacity_reached | :task_supervisor_unavailable}
   def prompt(agent, message) do
     GenServer.call(agent, {:prompt, message})
   end
@@ -221,9 +226,16 @@ defmodule LemonAgent.Agent do
   Returns `{:error, :already_streaming}` if already processing.
   Returns `{:error, :no_messages}` if there are no messages to continue from.
   Returns `{:error, :cannot_continue}` if the last message is from the assistant.
+  Task admission errors match `prompt/2` and leave the current context unchanged.
   """
   @spec continue(GenServer.server()) ::
-          :ok | {:error, :already_streaming | :no_messages | :cannot_continue}
+          :ok
+          | {:error,
+             :already_streaming
+             | :no_messages
+             | :cannot_continue
+             | :task_capacity_reached
+             | :task_supervisor_unavailable}
   def continue(agent) do
     GenServer.call(agent, :continue)
   end
@@ -405,22 +417,32 @@ defmodule LemonAgent.Agent do
   message is consumed by an already-running loop.
 
   Pass `preempt: false` for agent-originated input: already-issued tool calls
-  finish before delivery at the next turn boundary. This variant acknowledges
+  finish before delivery at the next turn boundary. All variants acknowledge
   enqueueing synchronously. Human steering retains its preempting default.
+  Pass `defer_start: true` when restoring accepted journal input.
   """
   @spec steer(GenServer.server(), Types.agent_message(), keyword()) :: :ok
   def steer(agent, message, opts \\ []) do
     queued = queued_message(message, opts)
 
-    if Keyword.get(opts, :preempt, true) do
-      GenServer.cast(agent, {:steer, queued})
-    else
-      queued =
-        if is_map(queued) and Map.has_key?(queued, :message), do: queued, else: %{message: queued}
+    queued =
+      if Keyword.get(opts, :preempt, true) do
+        queued
+      else
+        wrapper =
+          if is_map(queued) and Map.has_key?(queued, :message),
+            do: queued,
+            else: %{message: queued}
 
-      GenServer.call(agent, {:steer, Map.put(queued, :preempt, false)})
-    end
+        Map.put(wrapper, :preempt, false)
+      end
+
+    GenServer.call(agent, {:steer, queued, Keyword.get(opts, :defer_start, false)})
   end
+
+  @doc "Withdraws an accepted steering message before it is bound to a turn."
+  @spec withdraw_steer(GenServer.server(), String.t()) :: :ok | {:error, :not_found}
+  def withdraw_steer(agent, id), do: GenServer.call(agent, {:withdraw_steer, id})
 
   @doc """
   Queues a redirect message: the in-flight model request is canceled (keeping
@@ -448,13 +470,16 @@ defmodule LemonAgent.Agent do
   agent completes its current work. Pass `system_prompt: prompt` to apply a
   per-turn prompt refresh when the queued message is consumed.
 
-  Returns `:ok` only after the message has been enqueued. This acknowledges
-  acceptance, not consumption: an idle agent does not start automatically, and
-  messages accepted after the final queue poll remain queued for a future run.
+  Returns `:ok` after enqueueing. Inputs accepted after the deterministic closing
+  handshake start the next run. Pass `defer_start: true` when restoring a journal
+  to queue input without executing a model call.
   """
   @spec follow_up(GenServer.server(), Types.agent_message(), keyword()) :: :ok
   def follow_up(agent, message, opts \\ []) do
-    GenServer.call(agent, {:follow_up, queued_message(message, opts)})
+    GenServer.call(
+      agent,
+      {:follow_up, queued_message(message, opts), Keyword.get(opts, :defer_start, false)}
+    )
   end
 
   # ============================================================================
@@ -462,7 +487,8 @@ defmodule LemonAgent.Agent do
   # ============================================================================
 
   @doc """
-  Gets the current agent state.
+  Gets the current agent state, materializing the in-flight assistant message
+  from its accumulated chunks only for this snapshot.
   """
   @spec get_state(GenServer.server()) :: AgentState.t()
   def get_state(agent) do
@@ -518,12 +544,15 @@ defmodule LemonAgent.Agent do
 
     state = %{
       agent_state: agent_state,
+      stream_accumulator: nil,
       listeners: [],
       abort_ref: nil,
       running_task: nil,
+      bound_input_ids: MapSet.new(),
       steering_queue: [],
       follow_up_queue: [],
-      follow_up_poll: nil,
+      queue_consumer: nil,
+      loop_closing: false,
       convert_to_llm: convert_to_llm,
       transform_context: transform_context,
       stream_fn: stream_fn,
@@ -557,13 +586,24 @@ defmodule LemonAgent.Agent do
 
   @impl true
   def handle_call({:prompt, message}, _from, state) do
-    if state.agent_state.is_streaming do
+    if state.running_task != nil do
       {:reply, {:error, :already_streaming}, state}
     else
       messages = normalize_prompt_input(message)
-      new_state = start_loop(messages, state)
-      {:reply, :ok, new_state}
+
+      case start_loop(messages, state) do
+        {:ok, new_state} -> {:reply, :ok, new_state}
+        {:error, reason} -> {:reply, {:error, reason}, state}
+      end
     end
+  end
+
+  def handle_call({:follow_up, message, true}, _from, state) do
+    {:reply, :ok, append_input(state, :follow_up_queue, message)}
+  end
+
+  def handle_call({:follow_up, message, false}, from, state) do
+    handle_call({:follow_up, message}, from, state)
   end
 
   def handle_call({:follow_up, message}, _from, state) do
@@ -572,7 +612,7 @@ defmodule LemonAgent.Agent do
 
   def handle_call(:continue, _from, state) do
     cond do
-      state.agent_state.is_streaming ->
+      state.running_task != nil ->
         {:reply, {:error, :already_streaming}, state}
 
       state.agent_state.messages == [] ->
@@ -582,8 +622,10 @@ defmodule LemonAgent.Agent do
         {:reply, {:error, :cannot_continue}, state}
 
       true ->
-        new_state = start_loop(nil, state)
-        {:reply, :ok, new_state}
+        case start_loop(nil, state) do
+          {:ok, new_state} -> {:reply, :ok, new_state}
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
     end
   end
 
@@ -630,8 +672,11 @@ defmodule LemonAgent.Agent do
     new_state = %{
       state
       | agent_state: new_agent_state,
+        stream_accumulator: nil,
         steering_queue: [],
         follow_up_queue: [],
+        loop_closing: false,
+        bound_input_ids: MapSet.new(),
         thinking_prompt: nil,
         resolved_thinking: nil
     }
@@ -690,7 +735,16 @@ defmodule LemonAgent.Agent do
   end
 
   def handle_call(:get_state, _from, state) do
-    {:reply, state.agent_state, state}
+    agent_state =
+      case state.stream_accumulator do
+        nil ->
+          state.agent_state
+
+        accumulator ->
+          %{state.agent_state | stream_message: StreamAccumulator.snapshot(accumulator)}
+      end
+
+    {:reply, agent_state, state}
   end
 
   def handle_call(:get_model, _from, state) do
@@ -739,84 +793,37 @@ defmodule LemonAgent.Agent do
     {:reply, state.session_id, state}
   end
 
-  # Handle steering/follow-up message requests from the loop task
-  def handle_call({:get_steering_messages, abort_ref}, _from, state) do
-    if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
-      {messages, new_queue} = consume_steering_queue(state.steering_queue)
-      {:reply, messages, %{state | steering_queue: new_queue}}
-    else
-      {:reply, [], state}
-    end
+  def handle_call({:has_steering_messages, abort_ref}, _from, state) do
+    {has_steering, state} = drain_loop_queue(state, :has_steering)
+    {:reply, state.abort_ref == abort_ref and has_steering, state}
   end
 
-  def handle_call({:has_steering_messages, abort_ref}, _from, state) do
-    {:reply,
-     state.abort_ref == abort_ref and Enum.any?(state.steering_queue, &preempting_message?/1),
-     state}
+  def handle_call({:withdraw_steer, id}, _from, state) when is_binary(id) and id != "" do
+    {withdrawn, queue} = Enum.split_with(state.steering_queue, &(input_id(&1) == id))
+    result = if withdrawn == [], do: {:error, :not_found}, else: :ok
+    state = %{state | steering_queue: queue}
+
+    if is_pid(state.queue_consumer) do
+      send(state.queue_consumer, {:lemon_steering_changed, state.abort_ref})
+    end
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:withdraw_steer, _id}, _from, state) do
+    {:reply, {:error, :not_found}, state}
+  end
+
+  def handle_call({:steer, message, true}, _from, state) do
+    {:reply, :ok, append_input(state, :steering_queue, message)}
+  end
+
+  def handle_call({:steer, message, false}, from, state) do
+    handle_call({:steer, message}, from, state)
   end
 
   def handle_call({:steer, message}, _from, state) do
-    state = %{state | steering_queue: state.steering_queue ++ [message]}
-
-    # The loop may already be in its final follow-up poll. Wake that poll rather
-    # than leaving accepted turn input stranded until another prompt.
-    state =
-      case state.follow_up_poll do
-        %{from: from, abort_ref: abort_ref} = poll ->
-          if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
-            Process.cancel_timer(poll.timer_ref)
-            {messages, queue} = consume_steering_queue(state.steering_queue)
-            GenServer.reply(from, messages)
-            %{state | steering_queue: queue, follow_up_poll: nil}
-          else
-            state
-          end
-
-        nil ->
-          state
-      end
-
-    {:reply, :ok, state}
-  end
-
-  def handle_call({:get_follow_up_messages, abort_ref}, from, state) do
-    if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
-      cond do
-        state.steering_queue != [] ->
-          {messages, queue} = consume_steering_queue(state.steering_queue)
-          {:reply, messages, %{state | steering_queue: queue}}
-
-        state.follow_up_queue != [] ->
-          {messages, queue} = consume_queue(state.follow_up_queue)
-          {:reply, messages, %{state | follow_up_queue: queue}}
-
-        true ->
-          # Long-poll briefly to close the race where a follow-up is enqueued right
-          # as the loop is finishing. This keeps follow-ups inside the same run.
-          poll_ref = make_ref()
-
-          timer_ref =
-            Process.send_after(
-              self(),
-              {:follow_up_poll_timeout, poll_ref},
-              @follow_up_poll_timeout_ms
-            )
-
-          state = %{
-            state
-            | follow_up_poll: %{
-                from: from,
-                abort_ref: abort_ref,
-                poll_ref: poll_ref,
-                timer_ref: timer_ref
-              }
-          }
-
-          {:noreply, state}
-      end
-    else
-      {:reply, [], state}
-    end
+    {:reply, :ok, enqueue_steering(state, message)}
   end
 
   @impl true
@@ -837,7 +844,7 @@ defmodule LemonAgent.Agent do
   end
 
   def handle_cast({:steer, message}, state) do
-    {:noreply, %{state | steering_queue: state.steering_queue ++ [message]}}
+    {:noreply, enqueue_steering(state, message)}
   end
 
   def handle_cast({:redirect, message}, state) do
@@ -932,22 +939,25 @@ defmodule LemonAgent.Agent do
     end
   end
 
-  def handle_info({:follow_up_poll_timeout, poll_ref}, state) do
-    case state.follow_up_poll do
-      %{poll_ref: ^poll_ref, from: from, abort_ref: abort_ref} ->
-        state = %{state | follow_up_poll: nil}
+  def handle_info({:loop_queue, pid, request_ref, abort_ref, kind}, state) do
+    if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
+      state = %{state | queue_consumer: pid}
+      {messages, state} = drain_loop_queue(state, kind)
 
-        if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
-          {messages, queue} = consume_steering_queue(state.steering_queue)
-          GenServer.reply(from, messages)
-          {:noreply, %{state | steering_queue: queue}}
+      state =
+        if is_list(messages) and messages != [] do
+          ids = messages |> Enum.map(&input_id/1) |> Enum.reject(&is_nil/1)
+          broadcast_event(state, {:input_bound, ids})
+          %{state | bound_input_ids: Enum.reduce(ids, state.bound_input_ids, &MapSet.put(&2, &1))}
         else
-          GenServer.reply(from, [])
-          {:noreply, state}
+          state
         end
 
-      _ ->
-        {:noreply, state}
+      send(pid, {:loop_queue, request_ref, messages})
+      {:noreply, state}
+    else
+      send(pid, {:loop_queue, request_ref, if(kind == :has_steering, do: false, else: [])})
+      {:noreply, state}
     end
   end
 
@@ -992,8 +1002,9 @@ defmodule LemonAgent.Agent do
   defp normalize_prompt_input(input) when is_list(input), do: input
   defp normalize_prompt_input(input) when is_map(input), do: [input]
 
-  @spec start_loop(list(Types.agent_message()) | nil, state()) :: state()
-  defp start_loop(messages, state) do
+  @spec start_loop(list(Types.agent_message()) | nil, state(), keyword()) ::
+          {:ok, state()} | {:error, term()}
+  defp start_loop(messages, state, opts \\ []) do
     abort_ref = AbortSignal.new()
     agent_pid = self()
 
@@ -1017,38 +1028,48 @@ defmodule LemonAgent.Agent do
     # Build config for the loop
     config = build_loop_config(%{state | agent_state: new_agent_state}, abort_ref, agent_pid)
 
-    # Emit introspection event for loop start
-    model_id =
-      case new_agent_state.model do
-        %{id: id} when is_binary(id) -> id
-        _ -> ""
-      end
+    config =
+      if Keyword.get(opts, :queued_start, false),
+        do: %{config | hooks: Map.put(config.hooks, :queued_start, true)},
+        else: config
 
-    Introspection.record(
-      :agent_loop_started,
-      %{
-        model: model_id,
-        tool_count: length(new_agent_state.tools),
-        message_count: length(new_agent_state.messages),
-        is_continue: messages == nil
-      },
-      session_key: state.session_id,
-      provenance: :direct
-    )
+    case LemonCore.TaskSupervisor.async_nolink(LemonAgent.LoopTaskSupervisor, fn ->
+           run_agent_loop(messages, context, config, abort_ref, agent_pid, state.stream_fn)
+         end) do
+      {:ok, task} ->
+        model_id =
+          case new_agent_state.model do
+            %{id: id} when is_binary(id) -> id
+            _ -> ""
+          end
 
-    # Spawn a supervised task to run the loop
-    task =
-      Task.Supervisor.async_nolink(LemonAgent.LoopTaskSupervisor, fn ->
-        run_agent_loop(messages, context, config, abort_ref, agent_pid, state.stream_fn)
-      end)
+        Introspection.record(
+          :agent_loop_started,
+          %{
+            model: model_id,
+            tool_count: length(new_agent_state.tools),
+            message_count: length(new_agent_state.messages),
+            is_continue: messages == nil
+          },
+          session_key: state.session_id,
+          provenance: :direct
+        )
 
-    %{
-      state
-      | agent_state: new_agent_state,
-        response_system_prompt: context.system_prompt,
-        abort_ref: abort_ref,
-        running_task: task
-    }
+        {:ok,
+         %{
+           state
+           | agent_state: new_agent_state,
+             stream_accumulator: nil,
+             response_system_prompt: context.system_prompt,
+             abort_ref: abort_ref,
+             queue_consumer: nil,
+             loop_closing: false,
+             running_task: task
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @spec build_loop_config(state(), reference(), pid()) :: AgentLoopConfig.t()
@@ -1111,15 +1132,6 @@ defmodule LemonAgent.Agent do
             | run_usage: state.agent_state.run_usage
           }
         end,
-      get_steering_messages: fn ->
-        GenServer.call(agent_pid, {:get_steering_messages, abort_ref}, queue_call_timeout)
-      end,
-      has_steering_messages: fn ->
-        GenServer.call(agent_pid, {:has_steering_messages, abort_ref}, queue_call_timeout)
-      end,
-      get_follow_up_messages: fn ->
-        GenServer.call(agent_pid, {:get_follow_up_messages, abort_ref}, queue_call_timeout)
-      end,
       max_tool_turns: state.max_tool_turns,
       max_tool_concurrency: state.max_tool_concurrency,
       max_retries: state.max_retries,
@@ -1129,6 +1141,9 @@ defmodule LemonAgent.Agent do
       intent_tracing: state.intent_tracing,
       stream_options: stream_options,
       hooks: %{
+        queue_owner: agent_pid,
+        queue_ref: abort_ref,
+        queue_timeout: state.queue_call_timeout,
         emit_system_prompt: is_pid(state.system_prompt_observer),
         stream_rules: state.stream_rules,
         on_stream_rule: state.on_stream_rule
@@ -1177,21 +1192,21 @@ defmodule LemonAgent.Agent do
         LemonAgent.Loop.agent_loop_continue(context, config, abort_ref, stream_fn, agent_pid)
       end
 
-    # Consume the stream and forward events
-    partial_message =
+    # Forward deltas without maintaining another copy of the partial message.
+    message_open? =
       event_stream
       |> LemonAgent.EventStream.events()
-      |> Enum.reduce_while(nil, fn event, partial ->
-        # Send event to GenServer
+      |> Enum.reduce(false, fn event, message_open? ->
         send(agent_pid, {:agent_event, event})
-
-        # Track partial message state
-        new_partial = track_partial_message(event, partial)
-        {:cont, new_partial}
+        track_message_open(event, message_open?)
       end)
 
-    # Handle any remaining partial message
-    handle_remaining_partial(partial_message, agent_pid, abort_ref, config)
+    # This ordered call snapshots the Agent's accumulator only if the stream
+    # stopped without closing its last message.
+    if message_open? do
+      partial_message = get_state(agent_pid).stream_message
+      handle_remaining_partial(partial_message, agent_pid, abort_ref, config)
+    end
 
     :ok
   rescue
@@ -1206,16 +1221,18 @@ defmodule LemonAgent.Agent do
 
   defp aborted?(abort_ref), do: AbortSignal.aborted?(abort_ref)
 
-  defp track_partial_message({:message_start, message}, _partial), do: message
-  defp track_partial_message({:message_update, message, _delta}, _partial), do: message
-  defp track_partial_message({:message_end, _message}, _partial), do: nil
-  defp track_partial_message(_event, partial), do: partial
+  defp track_message_open({:message_start, %{role: :assistant}}, _open?), do: true
+  defp track_message_open({:message_start, _message}, _open?), do: false
+  defp track_message_open({:message_end, _message}, _open?), do: false
+  defp track_message_open({:provider_retry, _details}, _open?), do: false
+  defp track_message_open(_event, open?), do: open?
 
   defp handle_remaining_partial(nil, _agent_pid, _abort_ref, _config), do: :ok
 
   defp handle_remaining_partial(partial, agent_pid, abort_ref, config) do
     # Check if partial has meaningful content
-    if partial[:role] == :assistant and has_meaningful_content?(partial[:content] || []) do
+    if Map.get(partial, :role) == :assistant and
+         has_meaningful_content?(Map.get(partial, :content, [])) do
       # Append the partial message
       send(agent_pid, {:agent_event, {:message_end, partial}})
     else
@@ -1268,14 +1285,24 @@ defmodule LemonAgent.Agent do
   end
 
   @spec handle_agent_event(Types.agent_event(), state()) :: state()
-  defp handle_agent_event({:message_start, message}, state) do
-    new_agent_state = %{state.agent_state | stream_message: message}
-    %{state | agent_state: new_agent_state}
+  defp handle_agent_event({:message_start, %LemonAi.Types.AssistantMessage{} = message}, state) do
+    %{
+      state
+      | agent_state: %{state.agent_state | stream_message: nil},
+        stream_accumulator: StreamAccumulator.new(message)
+    }
   end
 
-  defp handle_agent_event({:message_update, message, _delta}, state) do
+  defp handle_agent_event({:message_start, message}, state) do
     new_agent_state = %{state.agent_state | stream_message: message}
-    %{state | agent_state: new_agent_state}
+    %{state | agent_state: new_agent_state, stream_accumulator: nil}
+  end
+
+  defp handle_agent_event({:message_update, event}, state) do
+    case state.stream_accumulator do
+      nil -> state
+      accumulator -> %{state | stream_accumulator: StreamAccumulator.apply(accumulator, event)}
+    end
   end
 
   defp handle_agent_event({:message_end, message}, state) do
@@ -1287,7 +1314,7 @@ defmodule LemonAgent.Agent do
         messages: new_messages
     }
 
-    %{state | agent_state: new_agent_state}
+    %{state | agent_state: new_agent_state, stream_accumulator: nil}
   end
 
   defp handle_agent_event({:tool_execution_start, id, _name, _args}, state) do
@@ -1335,7 +1362,7 @@ defmodule LemonAgent.Agent do
         stream_message: nil
     }
 
-    %{state | agent_state: new_agent_state}
+    %{state | agent_state: new_agent_state, stream_accumulator: nil}
   end
 
   defp handle_agent_event(
@@ -1354,7 +1381,11 @@ defmodule LemonAgent.Agent do
   end
 
   defp handle_agent_event({:provider_retry, _details}, state) do
-    %{state | agent_state: %{state.agent_state | stream_message: nil, error: nil}}
+    %{
+      state
+      | agent_state: %{state.agent_state | stream_message: nil, error: nil},
+        stream_accumulator: nil
+    }
   end
 
   defp handle_agent_event(_event, state), do: state
@@ -1381,22 +1412,27 @@ defmodule LemonAgent.Agent do
         pending_tool_calls: MapSet.new()
     }
 
-    # Reply to all waiters
-    Enum.each(state.waiters, fn
-      {:call, from} ->
-        GenServer.reply(from, :ok)
-
-      {:notify, pid, ref} ->
-        send(pid, {:wait_for_idle, ref, :ok})
-    end)
-
-    %{
+    idle_state = %{
       state
       | agent_state: new_agent_state,
+        stream_accumulator: nil,
         abort_ref: nil,
         running_task: nil,
-        waiters: []
+        queue_consumer: nil
     }
+
+    next_state = if state.loop_closing, do: maybe_start_queued(idle_state), else: idle_state
+
+    if next_state.running_task do
+      next_state
+    else
+      Enum.each(state.waiters, fn
+        {:call, from} -> GenServer.reply(from, :ok)
+        {:notify, pid, ref} -> send(pid, {:wait_for_idle, ref, :ok})
+      end)
+
+      %{next_state | waiters: []}
+    end
   end
 
   @spec broadcast_event(state(), Types.agent_event()) :: :ok
@@ -1455,7 +1491,7 @@ defmodule LemonAgent.Agent do
         # drains steering. The abort_ref stays a plain reference: a redirect
         # must never flip it to the {:aborted, ref} sentinel, or was_aborted
         # bookkeeping would misreport.
-        state = %{state | steering_queue: state.steering_queue ++ [message]}
+        state = enqueue_steering(state, message)
         AbortSignal.request_redirect(abort_ref)
         state
 
@@ -1467,21 +1503,84 @@ defmodule LemonAgent.Agent do
   end
 
   defp enqueue_follow_up(state, message) do
-    state = %{state | follow_up_queue: state.follow_up_queue ++ [message]}
+    state = append_input(state, :follow_up_queue, message)
+    maybe_start_queued(state)
+  end
 
-    case state.follow_up_poll do
-      %{from: from, abort_ref: poll_abort_ref} = poll ->
-        if state.abort_ref == poll_abort_ref and not AbortSignal.aborted?(poll_abort_ref) do
-          if poll[:timer_ref], do: Process.cancel_timer(poll.timer_ref)
-          {messages, new_queue} = consume_queue(state.follow_up_queue)
-          GenServer.reply(from, messages)
-          %{state | follow_up_queue: new_queue, follow_up_poll: nil}
-        else
-          state
-        end
+  defp enqueue_steering(state, message) do
+    state = append_input(state, :steering_queue, message)
 
-      _ ->
+    if is_pid(state.queue_consumer) do
+      send(state.queue_consumer, {:lemon_steering_changed, state.abort_ref})
+    end
+
+    if state.loop_closing, do: maybe_start_queued(state), else: state
+  end
+
+  defp maybe_start_queued(%{running_task: nil} = state) do
+    if state.steering_queue != [] or state.follow_up_queue != [] do
+      queued = %{
         state
+        | steering_queue: state.steering_queue ++ state.follow_up_queue,
+          follow_up_queue: []
+      }
+
+      case start_loop(nil, queued, queued_start: true) do
+        {:ok, started} ->
+          started
+
+        {:error, reason} ->
+          # Admission rejection leaves queued input in place for the next run.
+          Logger.warning("LemonAgent queued input not started: #{inspect(reason)}")
+          state
+      end
+    else
+      state
+    end
+  end
+
+  defp maybe_start_queued(state), do: state
+
+  defp drain_loop_queue(state, :has_steering) do
+    {Enum.any?(state.steering_queue, &preempting_message?/1), state}
+  end
+
+  defp drain_loop_queue(state, :steering) do
+    {messages, queue} = consume_steering_queue(state.steering_queue)
+    {messages, %{state | steering_queue: queue}}
+  end
+
+  defp drain_loop_queue(state, :follow_up) do
+    cond do
+      state.steering_queue != [] ->
+        drain_loop_queue(state, :steering)
+
+      state.follow_up_queue != [] ->
+        {messages, queue} = consume_queue(state.follow_up_queue)
+        {messages, %{state | follow_up_queue: queue}}
+
+      true ->
+        {[], %{state | loop_closing: true}}
+    end
+  end
+
+  defp input_id(%{message: message}), do: input_id(message)
+  defp input_id(message) when is_map(message), do: Map.get(message, :id)
+  defp input_id(_message), do: nil
+
+  defp append_input(state, queue, message) do
+    id = input_id(message)
+
+    duplicate? =
+      is_binary(id) and
+        (MapSet.member?(state.bound_input_ids, id) or
+           Enum.any?(state.steering_queue, &(input_id(&1) == id)) or
+           Enum.any?(state.follow_up_queue, &(input_id(&1) == id)))
+
+    if duplicate? do
+      state
+    else
+      Map.update!(state, queue, &(&1 ++ [message]))
     end
   end
 

@@ -368,7 +368,8 @@ defmodule LemonLsp.ServerManagerTest do
                {:start_session, :elixir_ls, [cwd: tmp_dir, session_id: session_id]}
              )
 
-    root = :sys.get_state(manager).sessions[session_id].os_pid
+    [{session, _}] = Registry.lookup(LemonLsp.SessionRegistry, {:id, manager, session_id})
+    root = :sys.get_state(session).sessions[session_id].os_pid
     on_exit(fn -> LemonCore.ProcessGroup.terminate(root, grace_ms: 0) end)
     assert wait_until(fn -> File.exists?(child_pid_path) end)
     child_pid = child_pid_path |> File.read!() |> String.to_integer()
@@ -663,7 +664,9 @@ defmodule LemonLsp.ServerManagerTest do
   end
 
   defp register_group_cleanup(session_id) do
-    root = :sys.get_state(LspServerManager).sessions[session_id].os_pid
+    manager = Process.whereis(LspServerManager)
+    [{session, _}] = Registry.lookup(LemonLsp.SessionRegistry, {:id, manager, session_id})
+    root = :sys.get_state(session).sessions[session_id].os_pid
     on_exit(fn -> LemonCore.ProcessGroup.terminate(root, grace_ms: 0) end)
   end
 

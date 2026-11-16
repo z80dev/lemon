@@ -37,5 +37,6 @@ Code.require_file("support/integration_config.ex", __DIR__)
 # retry timing install their own `:sleep_fun`.
 Application.put_env(:lemon_ai, :provider_retry, sleep_fun: fn _ms -> :ok end)
 
-ExUnit.configure(exclude: [:integration])
+# Opt in with: mix test apps/lemon_ai/test/lemon_ai/stream_delta_benchmark_test.exs --include benchmark
+ExUnit.configure(exclude: [:integration, :benchmark])
 ExUnit.start(capture_log: true)

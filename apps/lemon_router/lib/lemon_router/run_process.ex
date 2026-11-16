@@ -15,15 +15,36 @@ defmodule LemonRouter.RunProcess do
   - Bounds pre-start runtime submission retries with a terminal watchdog
 
   Heavy logic is delegated to focused submodules:
-  - `RunProcess.Watchdog` -- idle-run watchdog timer
+  - `RunProcess.Watchdog` -- idle-run state timeout and confirmation policy
   - `RunProcess.CompactionTrigger` -- context-overflow & compaction markers
   - `RunProcess.RetryHandler` -- zero-answer auto-retry
   - `LemonRouter.SurfaceManager` -- semantic answer/status coordination and fanout
   - `RunProcess.ArtifactTracker` -- generated file tracking and answer metadata enrichment
   - `LemonRouter.MediaJobRecorder` -- generated media delivery metadata recording
+
+  ## Lifecycle transitions
+
+  | State | Event | Next state / timeout |
+  | --- | --- | --- |
+  | submitting | runtime unavailable | submitting / named retry; deadline unchanged |
+  | submitting | submission accepted | awaiting start / submission timers cancelled |
+  | submitting | deadline, definite rejection or activation refusal | completing / one synthetic completion |
+  | awaiting start | run started | running / idle state timeout |
+  | running or confirming idle | output, action, keepalive | running / fresh idle timeout |
+  | running | idle expiry | confirming idle, or completing if no prompt can be delivered |
+  | confirming idle | confirmation expiry or cancel | completing / synthetic completion |
+  | active | abort or restart boundary | aborting / bounded missing-executor grace |
+  | active or aborting | executor DOWN/missing | completion grace / named timeout |
+  | any | run completed | stopped normally |
+
+  Gateway bind, DOWN and abort grace periods are independent named timeouts.
+  Metadata calls and unrelated events never restart them or the idle deadline.
+  `:completing` prevents duplicate synthetic publication while the retained
+  terminal event travels through the bus. No timer references or lifecycle
+  booleans are retained in process data.
   """
 
-  use GenServer
+  @behaviour :gen_statem
 
   require Logger
 
@@ -48,7 +69,7 @@ defmodule LemonRouter.RunProcess do
         _ -> opts[:session_key]
       end
 
-    GenServer.start_link(__MODULE__, opts, name: via_tuple(run_id, session_key))
+    :gen_statem.start_link(via_tuple(run_id, session_key), __MODULE__, opts, [])
   end
 
   def child_spec(opts) do
@@ -74,7 +95,7 @@ defmodule LemonRouter.RunProcess do
   def abort(pid_or_run_id, reason \\ :user_requested)
 
   def abort(pid_or_run_id, reason) when is_pid(pid_or_run_id) do
-    GenServer.cast(pid_or_run_id, {:abort, reason})
+    :gen_statem.cast(pid_or_run_id, {:abort, reason})
   end
 
   def abort(pid_or_run_id, reason) when is_binary(pid_or_run_id) do
@@ -91,7 +112,7 @@ defmodule LemonRouter.RunProcess do
   def keep_alive(pid_or_run_id, decision \\ :continue)
 
   def keep_alive(pid_or_run_id, decision) when is_pid(pid_or_run_id) do
-    GenServer.cast(pid_or_run_id, {:watchdog_keep_alive, decision})
+    :gen_statem.cast(pid_or_run_id, {:watchdog_keep_alive, decision})
   end
 
   def keep_alive(pid_or_run_id, decision) when is_binary(pid_or_run_id) do
@@ -111,7 +132,7 @@ defmodule LemonRouter.RunProcess do
   @spec suspend_for_restart(pid(), pid(), :boundary | :now) :: :ok
   def suspend_for_restart(pid, reply_to, mode \\ :boundary)
       when is_pid(pid) and is_pid(reply_to) and mode in [:boundary, :now] do
-    GenServer.cast(pid, {:suspend_for_restart, reply_to, mode})
+    :gen_statem.cast(pid, {:suspend_for_restart, reply_to, mode})
   end
 
   @doc false
@@ -119,8 +140,11 @@ defmodule LemonRouter.RunProcess do
     to: CompactionTrigger
 
   # ---------------------------------------------------------------------------
-  # GenServer callbacks
+  # State machine callbacks
   # ---------------------------------------------------------------------------
+
+  @impl true
+  def callback_mode, do: :handle_event_function
 
   @impl true
   def init(opts) do
@@ -168,27 +192,18 @@ defmodule LemonRouter.RunProcess do
         execution_request: execution_request,
         queue_mode: queue_mode,
         start_ts_ms: LemonCore.Clock.now_ms(),
-        aborted: false,
-        completed: false,
         saw_delta: false,
         run_started_at_ms: nil,
         run_last_activity_at_ms: nil,
         run_watchdog_timeout_ms: run_watchdog_timeout_ms,
         run_watchdog_confirm_timeout_ms: run_watchdog_confirm_timeout_ms,
-        run_watchdog_ref: nil,
-        run_watchdog_confirmation_ref: nil,
-        run_watchdog_awaiting_confirmation?: false,
-        submit_to_gateway?: submit_to_gateway?,
         engine_runtime: engine_runtime,
         run_orchestrator: run_orchestrator,
         gateway_submit_attempt: 0,
         gateway_submit_deadline_ms: gateway_submit_deadline_ms,
         gateway_submit_deadline_at_ms:
           System.monotonic_time(:millisecond) + gateway_submit_deadline_ms,
-        gateway_submit_deadline_ref: nil,
         gateway_submit_last_error: nil,
-        gateway_submit_terminalized?: false,
-        gateway_submitted?: false,
         gateway_run_pid: nil,
         gateway_run_ref: nil,
         coordinator_pid: opts[:coordinator_pid],
@@ -224,10 +239,14 @@ defmodule LemonRouter.RunProcess do
       case LemonRouter.AgentMessagingSessions.capture(execution_request) do
         :ok ->
           if submit_to_gateway? do
-            send(self(), :submit_to_gateway)
+            {:ok, :submitting, state,
+             [
+               {:next_event, :internal, :submit_to_gateway},
+               {:state_timeout, gateway_submit_deadline_ms, :submission_deadline}
+             ]}
+          else
+            {:ok, :awaiting_start, state}
           end
-
-          {:ok, maybe_schedule_gateway_submit_deadline(state)}
 
         {:error, _} ->
           {:stop, :agent_session_context_unavailable}
@@ -239,7 +258,7 @@ defmodule LemonRouter.RunProcess do
   end
 
   @impl true
-  def handle_call(:get_metadata, _from, state) do
+  def handle_event({:call, from}, :get_metadata, _phase, state) do
     metadata = %{
       session_key: state.session_key,
       agent_id:
@@ -250,84 +269,71 @@ defmodule LemonRouter.RunProcess do
       started_at_ms: state.run_started_at_ms || state.start_ts_ms
     }
 
-    {:reply, metadata, state}
+    {:keep_state_and_data, [{:reply, from, metadata}]}
   end
 
-  @impl true
-  def handle_info(:submit_to_gateway, state) do
-    cond do
-      state.gateway_submitted? or state.aborted or state.completed ->
-        {:noreply, state}
+  def handle_event(type, :submit_to_gateway, :submitting, state)
+      when type == :internal or type == {:timeout, :submission_retry} do
+    case LemonRouter.NativeLineage.validate_activation(state.execution_request) do
+      :ok ->
+        if runtime_available?(state.engine_runtime) do
+          case submit_runtime_execution(state.engine_runtime, state) do
+            :ok ->
+              Logger.debug(
+                "RunProcess submitted to gateway run_id=#{inspect(state.run_id)} " <>
+                  "session_key=#{inspect(state.session_key)}"
+              )
 
-      true ->
-        case LemonRouter.NativeLineage.validate_activation(state.execution_request) do
-          :ok ->
-            if runtime_available?(state.engine_runtime) do
-              case submit_runtime_execution(state.engine_runtime, state) do
-                :ok ->
-                  Logger.debug(
-                    "RunProcess submitted to gateway run_id=#{inspect(state.run_id)} " <>
-                      "session_key=#{inspect(state.session_key)}"
-                  )
+              {:next_state, :awaiting_start, %{state | gateway_submit_attempt: 0},
+               [{{:timeout, :submission_retry}, :cancel}]}
 
-                  {:noreply,
-                   state
-                   |> cancel_gateway_submit_deadline()
-                   |> Map.merge(%{gateway_submitted?: true, gateway_submit_attempt: 0})}
-
-                {:error, reason} ->
-                  retry_runtime_submission(state, reason, "Engine runtime rejected submit")
-              end
-            else
+            {:error, :runtime_unavailable} ->
               retry_runtime_submission(state, :runtime_unavailable, "Engine runtime unavailable")
-            end
 
-          {:error, reason} ->
-            # A failed pre-send fence cannot authorize a retry or a new F.
-            {:noreply,
-             terminalize_gateway_submission(%{state | gateway_submit_last_error: reason})}
+            {:error, reason} ->
+              terminalize_gateway_submission(%{state | gateway_submit_last_error: reason})
+          end
+        else
+          retry_runtime_submission(state, :runtime_unavailable, "Engine runtime unavailable")
         end
+
+      {:error, reason} ->
+        # A failed pre-send fence cannot authorize a retry or a new F.
+        terminalize_gateway_submission(%{state | gateway_submit_last_error: reason})
     end
   end
 
-  def handle_info({:gateway_submit_deadline, deadline_ref}, state) do
-    cond do
-      state.gateway_submit_deadline_ref != deadline_ref ->
-        {:noreply, state}
+  def handle_event(:state_timeout, :submission_deadline, :submitting, state) do
+    Logger.error(
+      "RunProcess runtime submission deadline exceeded run_id=#{inspect(state.run_id)} " <>
+        "session_key=#{inspect(state.session_key)} attempts=#{state.gateway_submit_attempt} " <>
+        "last_error=#{inspect(state.gateway_submit_last_error)}"
+    )
 
-      state.gateway_submitted? or state.aborted or state.completed ->
-        {:noreply, %{state | gateway_submit_deadline_ref: nil}}
-
-      true ->
-        state = %{state | gateway_submit_deadline_ref: nil}
-
-        Logger.error(
-          "RunProcess runtime submission deadline exceeded run_id=#{inspect(state.run_id)} " <>
-            "session_key=#{inspect(state.session_key)} attempts=#{state.gateway_submit_attempt} " <>
-            "last_error=#{inspect(state.gateway_submit_last_error)}"
-        )
-
-        {:noreply, terminalize_gateway_submission(state)}
-    end
+    terminalize_gateway_submission(state)
   end
 
-  # Handle run events from Bus
-  def handle_info(%LemonCore.Event{type: :run_started} = event, state) do
+  # Handle run events from Bus.
+  def handle_event(:info, %LemonCore.Event{type: :run_started} = event, phase, state) do
     Bus.broadcast(Bus.session_topic(state.session_key), event)
+    state = maybe_monitor_gateway_run(state)
 
-    state =
-      state
-      |> Watchdog.schedule_run_watchdog()
-      |> maybe_monitor_gateway_run()
+    bind_actions =
+      if is_nil(state.gateway_run_pid),
+        do: [{{:timeout, :gateway_bind}, @gateway_bind_grace_ms, :ensure_bound}],
+        else: []
 
-    if is_nil(state.gateway_run_pid) do
-      Process.send_after(self(), :ensure_gateway_bound, @gateway_bind_grace_ms)
+    if phase in [:aborting, :completing] do
+      {:keep_state, state}
+    else
+      {state, actions} = Watchdog.start(state)
+
+      {:next_state, :running, state,
+       [{{:timeout, :submission_retry}, :cancel} | actions ++ bind_actions]}
     end
-
-    {:noreply, state}
   end
 
-  def handle_info(%LemonCore.Event{type: :run_completed} = event, state) do
+  def handle_event(:info, %LemonCore.Event{type: :run_completed} = event, _phase, state) do
     :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(state.run_id)
     {ok?, err} = CompactionTrigger.extract_completed_ok_and_error(event)
     usage = CompactionTrigger.extract_completed_usage(event)
@@ -363,11 +369,7 @@ defmodule LemonRouter.RunProcess do
 
     # If we were monitoring the gateway run process, stop monitoring it before we exit so
     # we don't race a :DOWN message and emit a synthetic completion.
-    state =
-      state
-      |> Watchdog.cancel_run_watchdog()
-      |> Watchdog.cancel_run_watchdog_confirmation()
-      |> maybe_demonitor_gateway_run()
+    state = maybe_demonitor_gateway_run(state)
 
     # Emit router-level completion event
     Bus.broadcast(Bus.session_topic(state.session_key), event)
@@ -430,12 +432,10 @@ defmodule LemonRouter.RunProcess do
       SurfaceManager.fanout_final_answer(state, event)
     end
 
-    {:stop, :normal, %{state | completed: true}}
+    {:stop, :normal, state}
   end
 
-  def handle_info(%LemonCore.Event{type: :delta, payload: delta} = event, state) do
-    state = Watchdog.touch_run_watchdog(state)
-
+  def handle_event(:info, %LemonCore.Event{type: :delta, payload: delta} = event, phase, state) do
     # Forward delta to session subscribers
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
@@ -447,12 +447,15 @@ defmodule LemonRouter.RunProcess do
     # Forward semantic answer text through the router surface façade.
     SurfaceManager.ingest_answer_delta(state, delta)
 
-    {:noreply, %{state | saw_delta: true}}
+    Watchdog.activity(phase, %{state | saw_delta: true})
   end
 
-  def handle_info(%LemonCore.Event{type: :engine_action, payload: action_ev} = event, state) do
-    state = Watchdog.touch_run_watchdog(state)
-
+  def handle_event(
+        :info,
+        %LemonCore.Event{type: :engine_action, payload: action_ev} = event,
+        phase,
+        state
+      ) do
     {state, tool_status_surface, capture_current_turn?} =
       SurfaceManager.prepare_status_action(state, action_ev)
 
@@ -473,17 +476,24 @@ defmodule LemonRouter.RunProcess do
     state = artifact_tracker(state).track_generated_images(state, action_ev)
     state = artifact_tracker(state).track_requested_send_files(state, action_ev)
 
-    state =
-      state
-      |> track_effectful_action(action_ev)
-      |> maybe_finish_restart_suspend()
+    state = track_effectful_action(state, action_ev)
 
-    {:noreply, state}
+    case state do
+      %{restart_suspend: reply_to, effectful_actions: in_flight}
+      when is_pid(reply_to) and map_size(in_flight) == 0 ->
+        abort_for_restart(state, reply_to, :clean)
+
+      _ ->
+        Watchdog.activity(phase, state)
+    end
   end
 
-  def handle_info(%LemonCore.Event{type: :task_projected_child_action, payload: action_ev}, state) do
-    state = Watchdog.touch_run_watchdog(state)
-
+  def handle_event(
+        :info,
+        %LemonCore.Event{type: :task_projected_child_action, payload: action_ev},
+        phase,
+        state
+      ) do
     {state, tool_status_surface, _capture_current_turn?} =
       SurfaceManager.prepare_status_action(state, action_ev)
 
@@ -493,63 +503,46 @@ defmodule LemonRouter.RunProcess do
       tool_status_surface
     )
 
-    {:noreply, state}
+    Watchdog.activity(phase, state)
   end
 
-  def handle_info(%LemonCore.Event{} = event, state) do
-    state = Watchdog.touch_run_watchdog(state)
-
-    # Forward other events to session subscribers
+  def handle_event(:info, %LemonCore.Event{} = event, _phase, state) do
     Bus.broadcast(Bus.session_topic(state.session_key), event)
-    {:noreply, state}
+    :keep_state_and_data
   end
 
-  def handle_info(:run_watchdog_timeout, state) do
-    state = %{state | run_watchdog_ref: nil}
+  def handle_event(:state_timeout, :idle, :running, state) do
+    case Watchdog.request_confirmation(state) do
+      :ok ->
+        {:next_state, :confirming_idle, state,
+         [{:state_timeout, state.run_watchdog_confirm_timeout_ms, :confirmation}]}
 
-    if state.completed do
-      {:noreply, state}
-    else
-      state = Watchdog.touch_run_watchdog_activity(state)
-
-      cond do
-        state.run_watchdog_awaiting_confirmation? ->
-          {:noreply, state}
-
-        true ->
-          case Watchdog.maybe_request_watchdog_confirmation(state) do
-            {:ok, next_state} -> {:noreply, next_state}
-            :error -> {:noreply, Watchdog.fail_run_for_idle_timeout(state)}
-          end
-      end
+      :error ->
+        Watchdog.fail_run_for_idle_timeout(state)
+        await_completion(state)
     end
   end
 
-  def handle_info(:run_watchdog_confirmation_timeout, state) do
-    state = %{state | run_watchdog_confirmation_ref: nil}
-
-    if state.completed do
-      {:noreply, state}
-    else
-      {:noreply, Watchdog.fail_run_for_idle_timeout(state)}
-    end
+  def handle_event(:state_timeout, :confirmation, :confirming_idle, state) do
+    Watchdog.fail_run_for_idle_timeout(state)
+    await_completion(state)
   end
 
-  # If the gateway run process dies without emitting a completion event, synthesize a failure
-  # completion so the session can make progress (and SessionRegistry is eventually cleared).
-  def handle_info(
+  # Give a real completion a grace window before synthesizing executor failure.
+  def handle_event(
+        :info,
         {:DOWN, ref, :process, pid, reason},
+        phase,
         %{gateway_run_ref: ref, gateway_run_pid: pid} = state
-      ) do
-    # Normal completions should be handled by :run_completed; give the bus a small grace window.
-    delay_ms = gateway_down_grace_ms(reason)
-    Process.send_after(self(), {:gateway_run_down, reason}, delay_ms)
-    {:noreply, %{state | gateway_run_ref: nil, gateway_run_pid: nil}}
+      )
+      when phase != :completing do
+    {:keep_state, %{state | gateway_run_ref: nil, gateway_run_pid: nil},
+     [{{:timeout, :gateway_down}, gateway_down_grace_ms(reason), reason}]}
   end
 
-  def handle_info({:gateway_run_down, reason}, state) do
-    if state.completed do
-      {:noreply, state}
+  def handle_event({:timeout, :gateway_down}, reason, phase, state) do
+    if phase == :completing do
+      :keep_state_and_data
     else
       Logger.warning(
         "RunProcess observed gateway run down run_id=#{inspect(state.run_id)} " <>
@@ -564,7 +557,7 @@ defmodule LemonRouter.RunProcess do
               Events.Completion.new(%{
                 ok: false,
                 error: {:gateway_run_down, reason},
-                meta: %{cancelled: state.aborted},
+                meta: %{cancelled: phase == :aborting},
                 answer: ""
               }),
             duration_ms: nil
@@ -577,18 +570,15 @@ defmodule LemonRouter.RunProcess do
         )
 
       LemonRouter.RunCompletion.publish(state.execution_request, event)
-      {:noreply, state}
+      await_completion(state)
     end
   end
 
-  def handle_info({:finalize_aborted_run, reason}, state) do
+  def handle_event({:timeout, :abort_completion}, reason, :aborting, state) do
     cond do
-      state.completed or not state.aborted ->
-        {:noreply, state}
-
       runtime_run_pid(state.engine_runtime, state.run_id) != nil ->
         cancel_runtime_run(state.engine_runtime, state.run_id, reason)
-        {:noreply, maybe_monitor_gateway_run(state)}
+        {:keep_state, maybe_monitor_gateway_run(state)}
 
       true ->
         Logger.warning(
@@ -617,20 +607,17 @@ defmodule LemonRouter.RunProcess do
           )
 
         LemonRouter.RunCompletion.publish(state.execution_request, event)
-        {:noreply, state}
+        await_completion(state)
     end
   end
 
-  def handle_info(:ensure_gateway_bound, state) do
+  def handle_event({:timeout, :gateway_bind}, :ensure_bound, _phase, state) do
     cond do
-      state.completed ->
-        {:noreply, state}
-
       not is_nil(state.gateway_run_pid) ->
-        {:noreply, state}
+        :keep_state_and_data
 
       runtime_run_pid(state.engine_runtime, state.run_id) != nil ->
-        {:noreply, maybe_monitor_gateway_run(state)}
+        {:keep_state, maybe_monitor_gateway_run(state)}
 
       true ->
         Logger.warning(
@@ -638,26 +625,21 @@ defmodule LemonRouter.RunProcess do
             "session_key=#{inspect(state.session_key)}"
         )
 
-        Process.send_after(
-          self(),
-          :finalize_missing_gateway_after_start,
-          @gateway_missing_completion_grace_ms
-        )
-
-        {:noreply, state}
+        {:keep_state_and_data,
+         [
+           {{:timeout, :gateway_bind}, @gateway_missing_completion_grace_ms,
+            :finalize_missing_gateway}
+         ]}
     end
   end
 
-  def handle_info(:finalize_missing_gateway_after_start, state) do
+  def handle_event({:timeout, :gateway_bind}, :finalize_missing_gateway, phase, state) do
     cond do
-      state.completed ->
-        {:noreply, state}
-
       not is_nil(state.gateway_run_pid) ->
-        {:noreply, state}
+        :keep_state_and_data
 
       runtime_run_pid(state.engine_runtime, state.run_id) != nil ->
-        {:noreply, maybe_monitor_gateway_run(state)}
+        {:keep_state, maybe_monitor_gateway_run(state)}
 
       true ->
         Logger.warning(
@@ -673,7 +655,7 @@ defmodule LemonRouter.RunProcess do
                 Events.Completion.new(%{
                   ok: false,
                   error: :gateway_run_missing_after_start,
-                  meta: %{cancelled: state.aborted},
+                  meta: %{cancelled: phase == :aborting},
                   answer: ""
                 }),
               duration_ms: nil
@@ -686,88 +668,81 @@ defmodule LemonRouter.RunProcess do
           )
 
         LemonRouter.RunCompletion.publish(state.execution_request, event)
-        {:noreply, state}
+        await_completion(state)
     end
   end
 
-  def handle_info(_msg, state) do
-    {:noreply, state}
-  end
+  def handle_event(:cast, {:abort, _reason}, phase, _state)
+      when phase in [:aborting, :completing],
+      do: :keep_state_and_data
 
-  @impl true
-  def handle_cast({:abort, reason}, state), do: {:noreply, do_abort(state, reason)}
+  def handle_event(:cast, {:abort, reason}, _phase, state), do: do_abort(state, reason)
 
   # Drain: stop at the next point where no effectful action is executing, so the
   # journal never holds a tool call whose outcome is unknown. `:now` stops even
   # mid-tool and reports the in-flight actions as uncertain.
-  def handle_cast({:suspend_for_restart, reply_to, mode}, state) do
+  def handle_event(:cast, {:suspend_for_restart, reply_to, mode}, phase, state) do
     cond do
-      state.aborted or state.completed ->
+      phase in [:aborting, :completing] ->
         send(reply_to, {:restart_suspended, state.run_id, :not_running, []})
-        {:noreply, state}
+        :keep_state_and_data
 
       is_nil(state.run_started_at_ms) ->
-        {:noreply, abort_for_restart(state, reply_to, :not_started)}
+        abort_for_restart(state, reply_to, :not_started)
 
       map_size(state.effectful_actions) == 0 ->
-        {:noreply, abort_for_restart(state, reply_to, :clean)}
+        abort_for_restart(state, reply_to, :clean)
 
       mode == :now ->
-        {:noreply, abort_for_restart(state, reply_to, :uncertain)}
+        abort_for_restart(state, reply_to, :uncertain)
 
       true ->
-        {:noreply, %{state | restart_suspend: reply_to}}
+        {:keep_state, %{state | restart_suspend: reply_to}}
     end
   end
 
-  @impl true
-  def handle_cast({:watchdog_keep_alive, decision}, state) do
-    cond do
-      state.completed ->
-        {:noreply, state}
+  def handle_event(:cast, {:watchdog_keep_alive, _decision}, phase, _state)
+      when phase in [:aborting, :completing],
+      do: :keep_state_and_data
 
-      decision in [:continue, :keep_alive] ->
-        Logger.info(
-          "RunProcess watchdog keepalive accepted run_id=#{inspect(state.run_id)} " <>
-            "session_key=#{inspect(state.session_key)}"
-        )
+  def handle_event(:cast, {:watchdog_keep_alive, decision}, phase, state)
+      when phase in [:running, :confirming_idle] and decision in [:continue, :keep_alive] do
+    Logger.info(
+      "RunProcess watchdog keepalive accepted run_id=#{inspect(state.run_id)} " <>
+        "session_key=#{inspect(state.session_key)}"
+    )
 
-        state =
-          state
-          |> Watchdog.clear_watchdog_confirmation()
-          |> Watchdog.schedule_run_watchdog()
-
-        {:noreply, state}
-
-      decision in [:cancel, :stop, :kill] ->
-        Logger.warning(
-          "RunProcess watchdog keepalive cancelled by user run_id=#{inspect(state.run_id)} " <>
-            "session_key=#{inspect(state.session_key)}"
-        )
-
-        {:noreply, Watchdog.fail_run_for_user_cancel(state)}
-
-      true ->
-        {:noreply, state}
-    end
+    {state, actions} = Watchdog.start(state)
+    {:next_state, :running, state, actions}
   end
+
+  def handle_event(:cast, {:watchdog_keep_alive, decision}, _phase, state)
+      when decision in [:cancel, :stop, :kill] do
+    Watchdog.fail_run_for_user_cancel(state)
+    await_completion(state)
+  end
+
+  def handle_event(_type, _event, _phase, _state), do: :keep_state_and_data
 
   defp do_abort(state, reason) do
-    if state.aborted or state.completed do
-      state
-    else
-      Logger.debug("RunProcess #{state.run_id} aborting: #{inspect(reason)}")
+    Logger.debug("RunProcess #{state.run_id} aborting: #{inspect(reason)}")
+    cancel_runtime_run(state.engine_runtime, state.run_id, reason)
 
-      # Best-effort cancel of the gateway run. This does not currently remove
-      # queued jobs for the same session_key; it only cancels the in-flight run.
-      cancel_runtime_run(state.engine_runtime, state.run_id, reason)
+    actions =
+      if is_nil(state.gateway_run_pid),
+        do: [{{:timeout, :abort_completion}, @abort_completion_grace_ms, reason}],
+        else: []
 
-      if is_nil(state.gateway_run_pid) do
-        Process.send_after(self(), {:finalize_aborted_run, reason}, @abort_completion_grace_ms)
-      end
+    {:next_state, :aborting, %{state | restart_suspend: nil},
+     [{{:timeout, :submission_retry}, :cancel} | actions]}
+  end
 
-      %{state | aborted: true}
-    end
+  defp await_completion(state) do
+    actions =
+      for name <- [:submission_retry, :gateway_bind, :gateway_down, :abort_completion],
+          do: {{:timeout, name}, :cancel}
+
+    {:next_state, :completing, state, actions}
   end
 
   defp abort_for_restart(state, reply_to, outcome) do
@@ -797,25 +772,14 @@ defmodule LemonRouter.RunProcess do
 
   defp track_effectful_action(state, _action_ev), do: state
 
-  defp maybe_finish_restart_suspend(
-         %{restart_suspend: reply_to, effectful_actions: in_flight} = state
-       )
-       when is_pid(reply_to) and map_size(in_flight) == 0 do
-    abort_for_restart(state, reply_to, :clean)
-  end
-
-  defp maybe_finish_restart_suspend(state), do: state
-
   @impl true
-  def terminate(reason, state) do
-    _ = cancel_gateway_submit_deadline(state)
-
+  def terminate(reason, _phase, state) do
     if is_pid(state.coordinator_pid) do
       send(state.coordinator_pid, {:run_process_terminated, state.run_id, reason})
     end
 
     # If not completed normally, emit failure event and attempt abort
-    if reason != :normal and not state.completed do
+    if reason != :normal do
       # Emit introspection event for run failure
       Introspection.record(
         :run_failed,
@@ -1076,57 +1040,33 @@ defmodule LemonRouter.RunProcess do
     end
   end
 
-  defp maybe_schedule_gateway_submit_deadline(%{submit_to_gateway?: false} = state), do: state
-
-  defp maybe_schedule_gateway_submit_deadline(state) do
-    deadline_ref = make_ref()
-
-    Process.send_after(
-      self(),
-      {:gateway_submit_deadline, deadline_ref},
-      state.gateway_submit_deadline_ms
-    )
-
-    %{state | gateway_submit_deadline_ref: deadline_ref}
-  end
-
-  defp cancel_gateway_submit_deadline(%{gateway_submit_deadline_ref: nil} = state), do: state
-
-  defp cancel_gateway_submit_deadline(state) do
-    %{state | gateway_submit_deadline_ref: nil}
-  end
-
   defp retry_runtime_submission(state, reason, log_prefix) do
     next_attempt = state.gateway_submit_attempt + 1
     now_ms = System.monotonic_time(:millisecond)
 
     if now_ms >= state.gateway_submit_deadline_at_ms do
-      {:noreply,
-       terminalize_gateway_submission(%{
-         state
-         | gateway_submit_attempt: next_attempt,
-           gateway_submit_last_error: reason
-       })}
+      terminalize_gateway_submission(%{
+        state
+        | gateway_submit_attempt: next_attempt,
+          gateway_submit_last_error: reason
+      })
     else
       delay_ms = gateway_submit_retry_delay_ms(state.gateway_submit_attempt)
       remaining_ms = max(state.gateway_submit_deadline_at_ms - now_ms, 0)
-      Process.send_after(self(), :submit_to_gateway, min(delay_ms, remaining_ms))
 
       Logger.warning(
         "#{log_prefix} for run_id=#{inspect(state.run_id)} reason=#{inspect(reason)}; " <>
           "retrying in #{min(delay_ms, remaining_ms)}ms (attempt=#{next_attempt})"
       )
 
-      {:noreply,
+      {:keep_state,
        %{
          state
          | gateway_submit_attempt: next_attempt,
            gateway_submit_last_error: reason
-       }}
+       }, [{{:timeout, :submission_retry}, min(delay_ms, remaining_ms), :submit_to_gateway}]}
     end
   end
-
-  defp terminalize_gateway_submission(%{gateway_submit_terminalized?: true} = state), do: state
 
   defp terminalize_gateway_submission(state) do
     error = %{
@@ -1144,7 +1084,7 @@ defmodule LemonRouter.RunProcess do
             Events.Completion.new(%{
               ok: false,
               error: error,
-              meta: %{cancelled: state.aborted},
+              meta: %{cancelled: false},
               answer: ""
             }),
           duration_ms: LemonCore.Clock.now_ms() - state.start_ts_ms
@@ -1159,8 +1099,6 @@ defmodule LemonRouter.RunProcess do
 
     LemonRouter.RunCompletion.publish(state.execution_request, event)
 
-    state
-    |> cancel_gateway_submit_deadline()
-    |> Map.put(:gateway_submit_terminalized?, true)
+    await_completion(state)
   end
 end

@@ -355,6 +355,9 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert tool_result_message.tool_name == "startup_failure_tool"
     assert tool_result_message.is_error == true
     assert tool_result_message.details.error_type == :tool_task_start_failed
+    assert tool_result_message.details.reason == ":task_supervisor_unavailable"
+    assert tool_result_message.details.started == false
+    assert tool_result_message.details.outcome == :not_started
 
     assert Enum.any?(tool_result_message.content, fn
              %TextContent{text: text} -> String.contains?(text, "Tool task failed to start")
@@ -369,6 +372,55 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
     assert Enum.any?(events, &match?({:tool_execution_start, "call_start_failure", _, _}, &1))
     assert Enum.any?(events, &match?({:tool_execution_end, "call_start_failure", _, _, true}, &1))
+  end
+
+  test "capacity rejection settles every tool as not started without running or retrying it" do
+    supervisor = start_supervised!({LemonCore.TaskSupervisor, max_children: 1})
+
+    {:ok, blocker} =
+      LemonCore.TaskSupervisor.start_child(supervisor, fn ->
+        receive do
+          :finish -> :ok
+        end
+      end)
+
+    tool = blocking_tool(self(), "mutate")
+    calls = for id <- ["first", "second"], do: Mocks.tool_call("mutate", %{}, id: id)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    {results, context, messages} =
+      ToolCalls.execute_and_collect_tools(
+        simple_context(tools: [tool]),
+        [],
+        calls,
+        simple_config(tool_task_supervisor: supervisor),
+        nil,
+        stream
+      )
+
+    assert Enum.map(results, & &1.tool_call_id) == ["first", "second"]
+
+    assert Enum.all?(results, fn result ->
+             result.is_error and
+               result.details == %{
+                 error_type: :tool_task_start_failed,
+                 reason: ":task_capacity_reached",
+                 started: false,
+                 outcome: :not_started
+               }
+           end)
+
+    assert context.messages == results
+    assert messages == results
+    assert Task.Supervisor.children(supervisor) == [blocker]
+    refute_received {:tool_started, _, _}
+
+    EventStream.complete(stream, [])
+    events = Enum.to_list(EventStream.events(stream))
+
+    for id <- ["first", "second"] do
+      assert Enum.count(events, &match?({:tool_execution_end, ^id, _, _, true}, &1)) == 1
+    end
   end
 
   test "emits structured error tool_result when tool task process crashes" do
@@ -1429,5 +1481,69 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 5_000
     assert Task.Supervisor.children(supervisor) == []
     EventStream.complete(stream, [])
+  end
+
+  test "steering notification skips queued tools before an active tool finishes" do
+    parent = self()
+    signal = AbortSignal.new()
+    supervisor = start_supervised!(Task.Supervisor)
+    queue_owner = start_supervised!({LemonAgent.Agent, []})
+    :sys.replace_state(queue_owner, &%{&1 | abort_ref: signal})
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    events =
+      Task.async(fn ->
+        for event <- EventStream.events(stream) do
+          send(parent, {:observed_tool_event, event})
+          event
+        end
+      end)
+
+    config = %AgentLoopConfig{
+      model: Mocks.mock_model(),
+      convert_to_llm: Mocks.simple_convert_to_llm(),
+      hooks: %{queue_owner: queue_owner, queue_ref: signal},
+      max_tool_concurrency: 1,
+      tool_timeout_ms: :infinity,
+      tool_task_supervisor: supervisor
+    }
+
+    calls = [
+      Mocks.tool_call("blocked", %{}, id: "active"),
+      Mocks.tool_call("blocked", %{}, id: "queued")
+    ]
+
+    runner =
+      Task.async(fn ->
+        ToolCalls.execute_and_collect_tools(
+          simple_context(tools: [blocking_tool(parent, "blocked")]),
+          [],
+          calls,
+          config,
+          signal,
+          stream
+        )
+      end)
+
+    assert_receive {:tool_started, "active", worker}, 2_000
+    correction = user_message("do not run the queued call")
+    assert :ok = LemonAgent.Agent.steer(queue_owner, correction)
+
+    assert_receive {:observed_tool_event,
+                    {:tool_execution_end, "queued", "blocked", skipped, true}},
+                   2_000
+
+    assert %{outcome: :not_started, reason: :skipped} = skipped.details
+    assert Process.alive?(worker)
+    assert :sys.get_state(queue_owner).steering_queue == [correction]
+
+    send(worker, :finish)
+    assert {[completed, skipped_result], _, _} = Task.await(runner)
+    refute completed.is_error
+    assert skipped_result.is_error
+    refute_received {:tool_started, "queued", _}
+
+    EventStream.complete(stream, [])
+    Task.await(events)
   end
 end

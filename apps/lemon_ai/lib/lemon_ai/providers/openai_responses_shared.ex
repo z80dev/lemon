@@ -56,6 +56,19 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   # ============================================================================
   # Utilities
   # ============================================================================
+  @doc false
+  def request_stream(opts, url, headers, body, sse_request) do
+    case opts.provider_options do
+      %{responses_websocket: true, responses_transport: transport} when is_pid(transport) ->
+        LemonAi.Providers.OpenAIResponsesWebSocket.request(transport, url, headers, body)
+
+      %{responses_websocket: true} ->
+        {:error, "Responses WebSocket requires a live session transport", nil}
+
+      _ ->
+        sse_request.()
+    end
+  end
 
   @doc """
   Stable OpenAI prompt-cache/routing identity, bounded to 64 wire bytes.
@@ -905,7 +918,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
 
         EventStream.push_async(
           state.stream,
-          {:thinking_start, length(output.content) - 1, output}
+          {:thinking_start, length(output.content) - 1}
         )
 
         {:ok, %{state | current_item: item, current_block: block, output: output}}
@@ -913,7 +926,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       "message" ->
         block = %TextContent{type: :text, text: ""}
         output = %{state.output | content: state.output.content ++ [block]}
-        EventStream.push_async(state.stream, {:text_start, length(output.content) - 1, output})
+        EventStream.push_async(state.stream, {:text_start, length(output.content) - 1})
         {:ok, %{state | current_item: item, current_block: block, output: output}}
 
       type when type in ["function_call", "custom_tool_call"] ->
@@ -930,20 +943,32 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
             if(type == "custom_tool_call", do: %{"input" => item["input"] || ""}, else: %{})
         }
 
-        # Store partial JSON for streaming parsing
-        partial_json =
-          if type == "custom_tool_call",
-            do: Jason.encode!(%{"input" => item["input"] || ""}),
-            else: item["arguments"] || ""
-
-        block = Map.put(block, :partial_json, partial_json)
+        # Keep wire fragments local; decode only when the tool call finishes.
+        initial_input = if type == "custom_tool_call", do: item["input"], else: item["arguments"]
+        block = Map.put(block, :argument_chunks, [initial_input || ""])
 
         output = %{state.output | content: state.output.content ++ [block]}
 
         EventStream.push_async(
           state.stream,
-          {:tool_call_start, length(output.content) - 1, output}
+          {:tool_call_start, length(output.content) - 1,
+           block |> Map.delete(:argument_chunks) |> Map.put(:arguments, %{})}
         )
+
+        if type == "custom_tool_call" do
+          EventStream.push_async(
+            state.stream,
+            {:tool_call_delta, state.current_index,
+             "{\"input\":\"" <> escape_input(initial_input || "")}
+          )
+        else
+          if initial_input not in [nil, ""] do
+            EventStream.push_async(
+              state.stream,
+              {:tool_call_delta, state.current_index, initial_input}
+            )
+          end
+        end
 
         {:ok, %{state | current_item: item, current_block: block, output: output}}
 
@@ -974,7 +999,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       output = update_content_block(state, block)
       idx = state.current_index
 
-      EventStream.push_async(state.stream, {:thinking_delta, idx, delta, output})
+      EventStream.push_async(state.stream, {:thinking_delta, idx, delta})
       {:ok, %{state | current_block: block, output: output}}
     else
       {:ok, state}
@@ -989,7 +1014,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       output = update_content_block(state, block)
       idx = state.current_index
 
-      EventStream.push_async(state.stream, {:thinking_delta, idx, delta, output})
+      EventStream.push_async(state.stream, {:thinking_delta, idx, delta})
       {:ok, %{state | current_block: block, output: output}}
     else
       {:ok, state}
@@ -1017,7 +1042,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       output = update_content_block(state, block)
       idx = state.current_index
 
-      EventStream.push_async(state.stream, {:text_delta, idx, delta, output})
+      EventStream.push_async(state.stream, {:text_delta, idx, delta})
       {:ok, %{state | current_block: block, output: output}}
     else
       {:ok, state}
@@ -1031,7 +1056,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       output = update_content_block(state, block)
       idx = state.current_index
 
-      EventStream.push_async(state.stream, {:text_delta, idx, delta, output})
+      EventStream.push_async(state.stream, {:text_delta, idx, delta})
       {:ok, %{state | current_block: block, output: output}}
     else
       {:ok, state}
@@ -1044,14 +1069,16 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
        ) do
     if state.current_item && state.current_item["type"] == "custom_tool_call" &&
          state.current_block && state.current_block.type == :tool_call do
-      input = Map.get(state.current_block.arguments, "input", "") <> delta
-      args = %{"input" => input}
-
-      block =
-        %{state.current_block | arguments: args} |> Map.put(:partial_json, Jason.encode!(args))
+      chunks = [delta | state.current_block.argument_chunks]
+      block = Map.put(state.current_block, :argument_chunks, chunks)
 
       output = update_content_block(state, block)
-      EventStream.push_async(state.stream, {:tool_call_delta, state.current_index, delta, output})
+
+      EventStream.push_async(
+        state.stream,
+        {:tool_call_delta, state.current_index, escape_input(delta)}
+      )
+
       {:ok, %{state | current_block: block, output: output}}
     else
       {:ok, state}
@@ -1061,10 +1088,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   defp process_event(%{"type" => "response.custom_tool_call_input.done", "input" => input}, state) do
     if state.current_item && state.current_item["type"] == "custom_tool_call" &&
          state.current_block && state.current_block.type == :tool_call do
-      args = %{"input" => input}
-
-      block =
-        %{state.current_block | arguments: args} |> Map.put(:partial_json, Jason.encode!(args))
+      block = Map.put(state.current_block, :argument_chunks, [input])
 
       {:ok, %{state | current_block: block, output: update_content_block(state, block)}}
     else
@@ -1078,16 +1102,13 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
        ) do
     if state.current_item && state.current_item["type"] == "function_call" &&
          state.current_block && state.current_block.type == :tool_call do
-      partial_json = Map.get(state.current_block, :partial_json, "") <> delta
-      arguments = parse_streaming_json(partial_json)
-
-      block =
-        %{state.current_block | arguments: arguments} |> Map.put(:partial_json, partial_json)
+      chunks = [delta | state.current_block.argument_chunks]
+      block = Map.put(state.current_block, :argument_chunks, chunks)
 
       output = update_content_block(state, block)
       idx = state.current_index
 
-      EventStream.push_async(state.stream, {:tool_call_delta, idx, delta, output})
+      EventStream.push_async(state.stream, {:tool_call_delta, idx, delta})
       {:ok, %{state | current_block: block, output: output}}
     else
       {:ok, state}
@@ -1100,8 +1121,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
        ) do
     if state.current_item && state.current_item["type"] == "function_call" &&
          state.current_block && state.current_block.type == :tool_call do
-      parsed_args = parse_streaming_json(arguments)
-      block = %{state.current_block | arguments: parsed_args} |> Map.put(:partial_json, arguments)
+      block = Map.put(state.current_block, :argument_chunks, [arguments])
       output = update_content_block(state, block)
       {:ok, %{state | current_block: block, output: output}}
     else
@@ -1128,7 +1148,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         output = update_content_block(state, block)
         idx = state.current_index
 
-        EventStream.push_async(state.stream, {:thinking_end, idx, thinking, output})
+        EventStream.push_async(state.stream, {:thinking_end, idx, thinking})
         {:ok, %{state | current_block: nil, output: output}}
 
       "message" when state.current_block != nil and state.current_block.type == :text ->
@@ -1147,20 +1167,20 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         output = update_content_block(state, block)
         idx = state.current_index
 
-        EventStream.push_async(state.stream, {:text_end, idx, text, output})
+        EventStream.push_async(state.stream, {:text_end, idx, text})
         {:ok, %{state | current_block: nil, output: output}}
 
       type
       when type in ["function_call", "custom_tool_call"] and
              state.current_block != nil and state.current_block.type == :tool_call ->
-        partial_json = Map.get(state.current_block, :partial_json, "")
+        input =
+          item[if(type == "custom_tool_call", do: "input", else: "arguments")] ||
+            state.current_block.argument_chunks |> Enum.reverse() |> IO.iodata_to_binary()
 
         args =
           case if(type == "custom_tool_call",
-                 do:
-                   {:ok,
-                    %{"input" => item["input"] || state.current_block.arguments["input"] || ""}},
-                 else: Jason.decode(item["arguments"] || partial_json)
+                 do: {:ok, %{"input" => input}},
+                 else: Jason.decode(input)
                ) do
             {:ok, arguments} when is_map(arguments) ->
               arguments
@@ -1182,7 +1202,11 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         output = update_content_block(state, tool_call)
         idx = state.current_index
 
-        EventStream.push_async(state.stream, {:tool_call_end, idx, tool_call, output})
+        if type == "custom_tool_call" do
+          EventStream.push_async(state.stream, {:tool_call_delta, idx, "\"}"})
+        end
+
+        EventStream.push_async(state.stream, {:tool_call_end, idx, tool_call})
         {:ok, %{state | current_block: nil, output: output}}
 
       _ ->
@@ -1260,7 +1284,12 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         stop_reason
       end
 
-    output = %{output | stop_reason: stop_reason}
+    output = %{
+      output
+      | stop_reason: stop_reason,
+        content: Enum.map(output.content, &finalize_open_tool_call/1)
+    }
+
     {:done, %{state | output: output}}
   end
 
@@ -1276,6 +1305,25 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   defp process_event(_event, state) do
     {:ok, state}
   end
+
+  defp escape_input(input) do
+    encoded = Jason.encode!(input)
+    binary_part(encoded, 1, byte_size(encoded) - 2)
+  end
+
+  defp finalize_open_tool_call(%{__struct__: ToolCall, argument_chunks: chunks} = block) do
+    input = chunks |> Enum.reverse() |> IO.iodata_to_binary()
+
+    arguments =
+      case block.arguments do
+        %{"input" => _} -> %{"input" => input}
+        _ -> parse_streaming_json(input)
+      end
+
+    block |> Map.delete(:argument_chunks) |> Map.put(:arguments, arguments)
+  end
+
+  defp finalize_open_tool_call(block), do: block
 
   defp response_failed_message(event) do
     error =

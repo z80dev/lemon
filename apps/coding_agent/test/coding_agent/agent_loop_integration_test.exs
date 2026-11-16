@@ -188,7 +188,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
                      end)
 
               # Should have message_update events (streaming)
-              assert Enum.any?(events, &match?({:message_update, _, _}, &1))
+              assert Enum.any?(events, &match?({:message_update, _}, &1))
 
             {:error, reason, _events} ->
               flunk("Agent loop failed: #{inspect(reason)}")
@@ -261,8 +261,8 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
                 Enum.filter(events, fn
                   {:tool_start, _, _} -> true
                   {:tool_end, _, _} -> true
-                  {:message_update, _, {:tool_call_start, _, _}} -> true
-                  {:message_update, _, {:tool_call_end, _, _, _}} -> true
+                  {:message_update, {:tool_call_start, _, _}} -> true
+                  {:message_update, {:tool_call_end, _, _}} -> true
                   _ -> false
                 end)
 
@@ -305,8 +305,8 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
                 Enum.filter(events, fn
                   {:tool_start, _, _} -> true
                   {:tool_end, _, _} -> true
-                  {:message_update, _, {:tool_call_start, _, _}} -> true
-                  {:message_update, _, {:tool_call_end, _, _, _}} -> true
+                  {:message_update, {:tool_call_start, _, _}} -> true
+                  {:message_update, {:tool_call_end, _, _}} -> true
                   _ -> false
                 end)
 
@@ -357,8 +357,8 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
                 Enum.filter(events, fn
                   {:tool_start, _, _} -> true
                   {:tool_end, _, _} -> true
-                  {:message_update, _, {:tool_call_start, _, _}} -> true
-                  {:message_update, _, {:tool_call_end, _, _, _}} -> true
+                  {:message_update, {:tool_call_start, _, _}} -> true
+                  {:message_update, {:tool_call_end, _, _}} -> true
                   _ -> false
                 end)
 

@@ -401,13 +401,16 @@ defmodule CodingAgent.Tools.Find do
   end
 
   defp run_wildcard_with_timeout(patterns, include_hidden, wildcard_fun, signal, timeout_ms) do
-    task =
-      Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
-        Enum.flat_map(patterns, &wildcard_fun.(&1, match_dot: include_hidden))
-      end)
+    case LemonCore.TaskSupervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+           Enum.flat_map(patterns, &wildcard_fun.(&1, match_dot: include_hidden))
+         end) do
+      {:ok, task} ->
+        started_at_ms = System.monotonic_time(:millisecond)
+        await_wildcard_result(task, signal, timeout_ms, started_at_ms)
 
-    started_at_ms = System.monotonic_time(:millisecond)
-    await_wildcard_result(task, signal, timeout_ms, started_at_ms)
+      {:error, reason} ->
+        {:error, "Find operation failed: #{inspect(reason)}"}
+    end
   end
 
   defp await_wildcard_result(task, signal, timeout_ms, started_at_ms) do

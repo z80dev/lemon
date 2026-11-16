@@ -16,6 +16,10 @@ defmodule LemonSkills.McpSession do
   Closing, replacing, or losing the owner releases every connection.
   Missing sessions return empty tools/policies.
   Errors are classified atoms and never contain configuration or client output.
+  Attachments run in supervised workers with a ten-minute total deadline;
+  cached lookups and closes remain responsive during handshake or discovery.
+  Closing/replacing a pending attachment or losing its owner/caller cancels it.
+  Late results cannot restore a closed or replaced session.
   """
 
   use GenServer
@@ -23,6 +27,10 @@ defmodule LemonSkills.McpSession do
   alias LemonSkills.{Config, McpSource}
 
   @supervisor LemonSkills.McpSession.Supervisor
+  # Session attachment policy: ten minutes for the whole server set, including
+  # OAuth/queueing. Cached management reads retain the OTP five-second deadline.
+  @open_timeout_ms :timer.minutes(10)
+  @read_timeout_ms 5_000
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -30,7 +38,11 @@ defmodule LemonSkills.McpSession do
   def open(id, cwd, configs, owner_pid) do
     with :ok <- validate_identity(id, cwd, owner_pid),
          {:ok, configs} <- normalize_configs(configs) do
-      request({:open, id, Path.expand(cwd), configs, owner_pid}, {:error, :runtime_unavailable})
+      request(
+        {:open, id, Path.expand(cwd), configs, owner_pid},
+        {:error, :runtime_unavailable},
+        @open_timeout_ms + @read_timeout_ms
+      )
     end
   end
 
@@ -88,7 +100,11 @@ defmodule LemonSkills.McpSession do
           {:http, url, Keyword.put(opts, :profile_owned, true)}
         end)
 
-      request({:open, id, Path.expand(cwd), configs, owner_pid}, {:error, :runtime_unavailable})
+      request(
+        {:open, id, Path.expand(cwd), configs, owner_pid},
+        {:error, :runtime_unavailable},
+        @open_timeout_ms + @read_timeout_ms
+      )
     end
   end
 
@@ -211,61 +227,81 @@ defmodule LemonSkills.McpSession do
 
   @doc "Return credential-scrubbed raw remote tool descriptors through the owning source."
   @spec remote_tools(term()) :: {:ok, [map()]} | {:error, atom()}
-  def remote_tools(id), do: request({:remote_tools, id}, {:error, :runtime_unavailable})
+  def remote_tools(id) do
+    case request({:source, id}, {:error, :runtime_unavailable}) do
+      {:ok, source} -> McpSource.remote_tools(source)
+      error -> error
+    end
+  end
 
-  @spec close(term()) :: :ok
+  @spec close(term()) :: :ok | {:error, atom()}
   def close(id), do: request({:close, id}, :ok)
 
-  defp request(message, fallback) do
-    GenServer.call(__MODULE__, message, :infinity)
+  defp request(message, fallback, timeout \\ @read_timeout_ms) do
+    GenServer.call(__MODULE__, message, timeout)
   catch
     :exit, _ -> fallback
   end
 
   @impl true
-  def init(_opts), do: {:ok, %{}}
+  def init(_opts) do
+    Process.flag(:trap_exit, true)
+    {:ok, %{}}
+  end
 
   @impl true
-  def handle_call({:open, id, cwd, configs, owner}, _from, state) do
+  def handle_call({:open, id, cwd, configs, owner}, from, state) do
     state = remove_session(state, id)
 
     if Process.alive?(owner) do
-      spec =
-        Supervisor.child_spec(
-          {McpSource, name: nil, configs: configs, cwd: cwd, owner: owner, custodian: self()},
-          restart: :temporary
-        )
+      manager = self()
+      token = make_ref()
 
-      case DynamicSupervisor.start_child(@supervisor, spec) do
-        {:ok, source} ->
-          case discover(source) do
-            {:ok, tools, approvals} ->
-              if Process.alive?(owner) and Process.alive?(source) do
-                session = %{
-                  source: source,
-                  source_ref: Process.monitor(source),
-                  owner: owner,
-                  owner_ref: Process.monitor(owner),
-                  tools: tools,
-                  approvals: approvals
-                }
+      case start_task(fn -> open_source(manager, id, token, cwd, configs, owner) end) do
+        {:ok, task} ->
+          session = %{
+            source: nil,
+            source_ref: nil,
+            owner: owner,
+            owner_ref: Process.monitor(owner),
+            caller_ref: Process.monitor(elem(from, 0)),
+            task: task,
+            token: token,
+            timer: Process.send_after(self(), {:open_timeout, id, token}, @open_timeout_ms),
+            from: from,
+            tools: [],
+            approvals: %{}
+          }
 
-                {:reply, :ok, Map.put(state, id, session)}
-              else
-                stop_source(source)
-                {:reply, {:error, :owner_unavailable}, state}
-              end
+          {:noreply, Map.put(state, id, session)}
 
-            {:error, reason} ->
-              stop_source(source)
-              {:reply, {:error, reason}, state}
-          end
-
-        _ ->
-          {:reply, {:error, :connection_failed}, state}
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
       end
     else
       {:reply, {:error, :owner_unavailable}, state}
+    end
+  end
+
+  def handle_call({:attach_source, id, token, source}, _from, state) do
+    case state[id] do
+      %{token: ^token} = session ->
+        session = %{session | source: source, source_ref: Process.monitor(source)}
+        {:reply, :ok, Map.put(state, id, session)}
+
+      _ ->
+        {:reply, {:error, :session_closed}, state}
+    end
+  end
+
+  def handle_call({:detach_source, id, token}, _from, state) do
+    case state[id] do
+      %{token: ^token} = session ->
+        if session.source_ref, do: Process.demonitor(session.source_ref, [:flush])
+        {:reply, :ok, Map.put(state, id, %{session | source_ref: nil})}
+
+      _ ->
+        {:reply, {:error, :session_closed}, state}
     end
   end
 
@@ -274,6 +310,9 @@ defmodule LemonSkills.McpSession do
 
     case Map.get(state, id) do
       nil ->
+        {:reply, default, state}
+
+      %{task: _} ->
         {:reply, default, state}
 
       session ->
@@ -285,11 +324,14 @@ defmodule LemonSkills.McpSession do
     end
   end
 
-  def handle_call({:remote_tools, id}, _from, state) do
+  def handle_call({:source, id}, _from, state) do
     case Map.get(state, id) do
+      %{task: _} ->
+        {:reply, {:error, :discovery_failed}, state}
+
       %{source: source, owner: owner} ->
         if Process.alive?(owner) and Process.alive?(source) do
-          {:reply, McpSource.remote_tools(source), state}
+          {:reply, {:ok, source}, state}
         else
           {:reply, {:error, :owner_unavailable}, remove_session(state, id)}
         end
@@ -299,18 +341,138 @@ defmodule LemonSkills.McpSession do
     end
   end
 
-  def handle_call({:close, id}, _from, state) do
-    {:reply, :ok, remove_session(state, id)}
+  def handle_call({:close, id}, from, state) do
+    source =
+      case state[id] do
+        %{source: source} -> source
+        _ -> nil
+      end
+
+    state = remove_session(state, id)
+
+    if source do
+      # A close acknowledgement means the dynamic supervisor has removed the
+      # child, not merely that a shutdown cast has reached the source mailbox.
+      # Waiting happens in an owned worker so other session reads stay live.
+      case start_task(fn ->
+             stop_source(source)
+             GenServer.reply(from, :ok)
+           end) do
+        {:ok, _task} -> {:noreply, state}
+        {:error, reason} -> {:reply, {:error, reason}, state}
+      end
+    else
+      {:reply, :ok, state}
+    end
   end
 
   @impl true
+  def handle_info({ref, result}, state) when is_reference(ref) do
+    case Enum.find(state, fn {_, session} -> session[:task] && session.task.ref == ref end) do
+      nil ->
+        {:noreply, state}
+
+      {id, session} ->
+        Process.demonitor(ref, [:flush])
+        Process.demonitor(session.caller_ref, [:flush])
+        Process.cancel_timer(session.timer)
+
+        case result do
+          {:ok, tools, approvals} when is_pid(session.source) ->
+            if Process.alive?(session.owner) and Process.alive?(session.source) do
+              GenServer.reply(session.from, :ok)
+
+              session =
+                session
+                |> Map.drop([:task, :token, :timer, :from, :caller_ref])
+                |> Map.merge(%{tools: tools, approvals: approvals})
+
+              {:noreply, Map.put(state, id, session)}
+            else
+              {:noreply, remove_session(state, id, {:error, :owner_unavailable})}
+            end
+
+          {:error, reason} ->
+            {:noreply, remove_session(state, id, {:error, reason})}
+        end
+    end
+  end
+
+  def handle_info({:open_timeout, id, token}, state) do
+    case state[id] do
+      %{token: ^token} -> {:noreply, remove_session(state, id, {:error, :timeout})}
+      _ -> {:noreply, state}
+    end
+  end
+
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     state =
       Enum.reduce(state, state, fn {id, session}, acc ->
-        if ref in [session.owner_ref, session.source_ref], do: remove_session(acc, id), else: acc
+        refs = [
+          session.owner_ref,
+          session.source_ref,
+          session[:caller_ref],
+          session[:task] && session.task.ref
+        ]
+
+        if ref in refs, do: remove_session(acc, id, {:error, :owner_unavailable}), else: acc
       end)
 
     {:noreply, state}
+  end
+
+  def handle_info({:EXIT, _, _}, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    Enum.each(state, fn {id, _} -> remove_session(state, id) end)
+  end
+
+  defp open_source(manager, id, token, cwd, configs, owner) do
+    spec =
+      Supervisor.child_spec(
+        {McpSource, name: nil, configs: configs, cwd: cwd, owner: owner, custodian: self()},
+        restart: :temporary
+      )
+
+    case DynamicSupervisor.start_child(@supervisor, spec) do
+      {:ok, source} ->
+        result =
+          with :ok <- GenServer.call(manager, {:attach_source, id, token, source}),
+               :ok <- GenServer.call(source, {:handoff_custodian, manager}),
+               {:ok, _, _} = result <- discover(source) do
+            result
+          end
+
+        case result do
+          {:ok, _, _} ->
+            result
+
+          {:error, _} = error ->
+            GenServer.call(manager, {:detach_source, id, token})
+            stop_source(source)
+            error
+        end
+
+      _ ->
+        {:error, :connection_failed}
+    end
+  catch
+    :exit, _ -> {:error, :connection_failed}
+  end
+
+  defp start_task(fun) do
+    owner = self()
+
+    {:ok,
+     Task.Supervisor.async_nolink(LemonSkills.TaskSupervisor, fn ->
+       Process.link(owner)
+       fun.()
+     end)}
+  rescue
+    RuntimeError -> {:error, :task_capacity_reached}
+  catch
+    :exit, {:noproc, _} -> {:error, :task_supervisor_unavailable}
   end
 
   defp discover(source) do
@@ -318,7 +480,15 @@ defmodule LemonSkills.McpSession do
       {:ok, tools} ->
         {:ok, tools, McpSource.approval_policy(source)}
 
-      {:error, reason} when reason in [:mcp_disabled, :connection_failed, :discovery_failed] ->
+      {:error, reason}
+      when reason in [
+             :mcp_disabled,
+             :connection_failed,
+             :discovery_failed,
+             :timeout,
+             :task_capacity_reached,
+             :task_supervisor_unavailable
+           ] ->
         {:error, reason}
 
       _ ->
@@ -328,15 +498,24 @@ defmodule LemonSkills.McpSession do
     :exit, _ -> {:error, :discovery_failed}
   end
 
-  defp remove_session(state, id) do
+  defp remove_session(state, id, reply \\ {:error, :session_closed}) do
     case Map.pop(state, id) do
       {nil, state} ->
         state
 
       {session, state} ->
         Process.demonitor(session.owner_ref, [:flush])
-        Process.demonitor(session.source_ref, [:flush])
-        stop_source(session.source)
+        if session.source_ref, do: Process.demonitor(session.source_ref, [:flush])
+
+        if session[:task] do
+          Process.exit(session.task.pid, :kill)
+          Process.demonitor(session.task.ref, [:flush])
+          Process.demonitor(session.caller_ref, [:flush])
+          Process.cancel_timer(session.timer)
+          GenServer.reply(session.from, reply)
+        end
+
+        if session.source, do: GenServer.cast(session.source, :close)
         state
     end
   end

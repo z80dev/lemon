@@ -35,7 +35,7 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
     GenServer.start_link(
       __MODULE__,
       %{binding: binding, meta: meta},
-      name: via_tuple(binding.child_run_id)
+      name: via_tuple(binding)
     )
   end
 
@@ -129,10 +129,20 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, _state} -> {:state, %{binding: :redacted, meta: :redacted}}
+      {:log, _value} -> {:log, []}
+      {key, _value} when key in [:message, :reason] -> {key, :redacted}
+      entry -> entry
+    end)
+  end
+
   # ---- Private ----
 
-  defp via_tuple(child_run_id) do
-    {:via, Registry, {LemonRouter.AsyncTaskSurfaceRegistry, child_run_id}}
+  defp via_tuple(binding) do
+    {:via, Registry, {LemonRouter.AsyncTaskSurfaceRegistry, binding.child_run_id, binding}}
   end
 
   defp valid_binding?(binding) when is_map(binding) do

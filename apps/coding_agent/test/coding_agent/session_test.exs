@@ -86,7 +86,7 @@ defmodule CodingAgent.SessionTest do
 
     Task.start(fn ->
       # Emit start event
-      LemonAi.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
       # Emit text deltas for each text content
       response.content
@@ -94,13 +94,17 @@ defmodule CodingAgent.SessionTest do
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            LemonAi.EventStream.push(stream, {:text_start, idx, response})
-            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
-            LemonAi.EventStream.push(stream, {:text_end, idx, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text})
+            LemonAi.EventStream.push(stream, {:text_end, idx, text})
 
           %ToolCall{} = tool_call ->
-            LemonAi.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
-            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+            LemonAi.EventStream.push(
+              stream,
+              {:tool_call_start, idx, %{tool_call | arguments: %{}}}
+            )
+
+            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call})
 
           _ ->
             :ok
@@ -205,6 +209,60 @@ defmodule CodingAgent.SessionTest do
   defp start_session(opts \\ []) do
     opts = default_opts(opts)
     start_supervised!(Supervisor.child_spec({Session, opts}, id: make_ref(), restart: :temporary))
+  end
+
+  test "hibernated session and owned agent handle code changes and another prompt" do
+    session = start_session(hibernate_after: 0)
+    agent = :sys.get_state(session).agent
+
+    for {pid, module} <- [{session, Session}, {agent, LemonAgent.Agent}] do
+      await_hibernation(pid)
+      :ok = :sys.suspend(pid)
+      assert :ok = :sys.change_code(pid, module, :hibernate_regression, [])
+      :ok = :sys.resume(pid)
+    end
+
+    assert :ok = Session.prompt(session, "Wake after code change")
+    wait_for_streaming_complete(session)
+    state = LemonAgent.Agent.get_state(agent)
+    assert Process.alive?(session)
+    assert Process.alive?(agent)
+
+    assert Enum.any?(state.messages, fn
+             %AssistantMessage{content: content} ->
+               Enum.any?(content, &match?(%TextContent{text: "Hello!"}, &1))
+
+             _message ->
+               false
+           end)
+
+    await_hibernation(session)
+    await_hibernation(agent)
+    assert {:ok, _report} = Session.reload_extensions(session)
+    assert Session.get_state(session).agent == agent
+    assert Process.alive?(agent)
+  end
+
+  defp await_hibernation(pid, attempts \\ 200)
+
+  defp await_hibernation(pid, 0),
+    do: flunk("process did not hibernate: #{inspect(Process.info(pid, :current_function))}")
+
+  defp await_hibernation(pid, attempts) do
+    case Process.info(pid, :current_function) do
+      {:current_function, {module, function, arity}}
+      when {module, function, arity} in [
+             {:erlang, :hibernate, 3},
+             {:gen_server, :loop_hibernate, 4}
+           ] ->
+        :ok
+
+      _other ->
+        receive do
+        after
+          5 -> await_hibernation(pid, attempts - 1)
+        end
+    end
   end
 
   defp wait_for_streaming_complete(session) do
@@ -818,14 +876,14 @@ defmodule CodingAgent.SessionTest do
       assert messages != []
     end
 
-    test "increments turn_index on prompt" do
+    test "increments turn_index when a model turn starts" do
       session = start_session()
       state_before = Session.get_state(session)
 
-      :ok = Session.prompt(session, "Hello!")
-      state_after = Session.get_state(session)
-
-      assert state_after.turn_index == state_before.turn_index + 1
+      assert {:ok, unsubscribe} = Session.subscribe_prompt(session, "Hello!")
+      assert_receive {:session_event, _id, {:turn_start}, _cursor}, 5_000
+      assert Session.get_state(session).turn_index == state_before.turn_index + 1
+      unsubscribe.()
     end
   end
 
@@ -856,23 +914,37 @@ defmodule CodingAgent.SessionTest do
   end
 
   describe "follow_up/2" do
-    test "follow-up messages are queued" do
+    test "an idle follow-up starts a turn" do
       session = start_session()
+      unsubscribe = Session.subscribe(session)
+      assert :ok = Session.follow_up(session, "When you're done, do this")
+      assert_receive {:session_event, _id, {:agent_end, _messages}, _cursor}, 5_000
 
-      :ok = Session.follow_up(session, "When you're done, do this")
-      state = Session.get_state(session)
+      assert Enum.any?(
+               Session.get_messages(session),
+               &(&1.content == "When you're done, do this")
+             )
 
-      assert :queue.len(state.follow_up_queue) == 1
+      unsubscribe.()
     end
 
-    test "multiple follow-up messages are queued" do
+    test "consecutive follow-ups are delivered even across terminal boundaries" do
       session = start_session()
+      unsubscribe = Session.subscribe(session)
+      assert :ok = Session.follow_up(session, "First follow-up")
+      assert :ok = Session.follow_up(session, "Second follow-up")
 
-      :ok = Session.follow_up(session, "First follow-up")
-      :ok = Session.follow_up(session, "Second follow-up")
-      state = Session.get_state(session)
+      assert_receive {:session_event, _id,
+                      {:message_end, %LemonAi.Types.UserMessage{content: "First follow-up"}},
+                      _cursor},
+                     5_000
 
-      assert :queue.len(state.follow_up_queue) == 2
+      assert_receive {:session_event, _id,
+                      {:message_end, %LemonAi.Types.UserMessage{content: "Second follow-up"}},
+                      _cursor},
+                     5_000
+
+      unsubscribe.()
     end
   end
 
@@ -1735,7 +1807,18 @@ defmodule CodingAgent.SessionTest do
     end
 
     test "follow_up_queue_size reflects queued messages" do
-      session = start_session()
+      session =
+        start_session(
+          stream_fn:
+            LemonAgent.Test.Mocks.blocking_stream_fn(
+              LemonAgent.Test.Mocks.assistant_message("done"),
+              self()
+            )
+        )
+
+      :ok = Session.prompt(session, "hold this turn")
+      assert_receive {:stream_blocked, producer}, 5_000
+      on_exit(fn -> send(producer, :release_stream) end)
 
       diag_before = Session.diagnostics(session)
       assert diag_before.follow_up_queue_size == 0
@@ -1744,6 +1827,7 @@ defmodule CodingAgent.SessionTest do
 
       diag_after = Session.diagnostics(session)
       assert diag_after.follow_up_queue_size == 1
+      send(producer, :release_stream)
     end
 
     test "error_rate is zero when no tool calls" do

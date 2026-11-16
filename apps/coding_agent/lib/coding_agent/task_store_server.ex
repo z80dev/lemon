@@ -68,6 +68,16 @@ defmodule CodingAgent.TaskStoreServer do
     GenServer.call(__MODULE__, {:begin_agent_turn, task_id}, 10_000)
   end
 
+  @doc "Durably checkpoint a data-only launch before the child's first prompt."
+  def checkpoint_launch(task_id, session_id, descriptor) do
+    GenServer.call(__MODULE__, {:checkpoint_launch, task_id, session_id, descriptor}, 10_000)
+  end
+
+  @doc "Consume one crash continuation attempt without reopening terminal results."
+  def claim_restore(task_id, parent_run_id, owner) do
+    GenServer.call(__MODULE__, {:claim_restore, task_id, parent_run_id, owner}, 10_000)
+  end
+
   @doc "Atomically reserve task followups for a join owned by the calling process."
   @spec begin_auto_followup_join([String.t()], reference(), GenServer.server()) :: :ok
   def begin_auto_followup_join(task_ids, join_token, server \\ __MODULE__) do
@@ -132,6 +142,7 @@ defmodule CodingAgent.TaskStoreServer do
         dets_table: @dets_table,
         path: dets_path(opts),
         normalize: &__MODULE__.normalize_row/2,
+        after_load: &__MODULE__.persist_restored_rows/1,
         timestamp: &__MODULE__.expiry_timestamp/1,
         ttl_key: :task_store_ttl_seconds,
         interval_key: :task_store_cleanup_interval_seconds
@@ -196,7 +207,15 @@ defmodule CodingAgent.TaskStoreServer do
             |> update_fn.()
             |> Map.put(:updated_at, System.system_time(:second))
 
-          do_insert_record(task_id, updated, events)
+          mode =
+            if target_status in @terminal_statuses and
+                 (is_map(record[:launch_descriptor]) or
+                    (record[:orchestration_worker] == true and
+                       CodingAgent.Tools.Task.Restore.enabled?())),
+               do: durable_mode(state),
+               else: :write
+
+          do_insert_record(task_id, updated, events, mode)
         end
 
         {:reply, :ok, state}
@@ -204,6 +223,64 @@ defmodule CodingAgent.TaskStoreServer do
       _ ->
         {:reply, :ok, state}
     end
+  end
+
+  def handle_call({:checkpoint_launch, task_id, session_id, descriptor}, _from, state) do
+    state = ensure_tables(state)
+
+    case :ets.lookup(@table, task_id) do
+      [{^task_id, %{status: :running} = record, events}] ->
+        record =
+          record
+          |> Map.put(:session_id, session_id)
+          |> Map.put(:launch_descriptor, descriptor)
+          |> Map.put(:session_file, descriptor && descriptor.start_opts[:session_file])
+
+        do_insert_record(task_id, record, events, durable_mode(state))
+
+      _ ->
+        :ok
+    end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:claim_restore, task_id, parent_run_id, owner}, _from, state) do
+    state = ensure_tables(state)
+
+    reply =
+      case :ets.lookup(@table, task_id) do
+        [{^task_id, %{status: :interrupted, parent_run_id: ^parent_run_id} = record, events}] ->
+          attempts = Map.get(record, :restart_attempt, 0)
+
+          if CodingAgent.Tools.Task.Restore.enabled?() and
+               CodingAgent.Tools.Task.Restore.resumable?(record[:launch_descriptor]) and
+               attempts < CodingAgent.Tools.Task.Restore.max_attempts() and
+               DurableTable.open?(state.dets_table) do
+            updated =
+              record
+              |> Map.drop([:error, :completed_at])
+              |> Map.merge(%{
+                status: :running,
+                agent_state: :running,
+                owner: owner,
+                parent_session_id: elem(owner, 0),
+                restart_attempt: attempts + 1,
+                updated_at: System.system_time(:second)
+              })
+              |> Map.update(:agent_turn, 1, &(&1 + 1))
+
+            do_insert_record(task_id, updated, events, :sync)
+            {:ok, updated}
+          else
+            {:error, :not_resumable}
+          end
+
+        _ ->
+          {:error, :not_interrupted}
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call({:begin_agent_turn, task_id}, _from, state) do
@@ -357,11 +434,16 @@ defmodule CodingAgent.TaskStoreServer do
       |> then(fn record ->
         status = Map.get(record, :status)
 
-        if status in [:running, :tracking_lost] or
-             (status == :queued and Map.get(record, :kind) == :background_command) do
+        if status in [:queued, :running, :tracking_lost, :interrupted] do
+          resumable? =
+            status in [:running, :interrupted] and
+              CodingAgent.Tools.Task.Restore.enabled?() and
+              CodingAgent.Tools.Task.Restore.resumable?(record[:launch_descriptor]) and
+              Map.get(record, :restart_attempt, 0) < CodingAgent.Tools.Task.Restore.max_attempts()
+
           record
-          |> Map.put(:status, :lost)
-          |> Map.put(:error, :lost_on_restart)
+          |> Map.put(:status, if(resumable?, do: :interrupted, else: :lost))
+          |> Map.put(:error, if(resumable?, do: :outcome_unknown, else: :lost_on_restart))
           |> Map.put(:completed_at, System.system_time(:second))
         else
           record
@@ -371,10 +453,30 @@ defmodule CodingAgent.TaskStoreServer do
     {task_id, record, events}
   end
 
-  defp do_insert_record(task_id, record, events) do
-    :ok = DurableTable.put(@table, {task_id, record, events})
+  @doc false
+  def persist_restored_rows(state) do
+    :ets.foldl(
+      fn
+        {_, %{status: status}, _} = row, :ok when status in [:lost, :interrupted] ->
+          DurableTable.persist(state.table, row)
+
+        _row, :ok ->
+          :ok
+      end,
+      :ok,
+      state.table
+    )
+
+    :ok = DurableTable.sync(state.table)
+    state
+  end
+
+  defp do_insert_record(task_id, record, events, mode \\ :write) do
+    :ok = DurableTable.put(@table, {task_id, record, events}, mode)
     notify_change(task_id, record)
   end
+
+  defp durable_mode(state), do: if(DurableTable.open?(state.dets_table), do: :sync, else: :write)
 
   defp delete_expired_task(task_id) do
     record = :ets.lookup_element(@table, task_id, 2, %{})
@@ -472,14 +574,15 @@ defmodule CodingAgent.TaskStoreServer do
   defp transition_allowed?(:tracking_lost, target_status),
     do: target_status in @terminal_statuses
 
-  defp transition_allowed?(status, target_status) when status in [:queued, :running],
-    do: target_status in @terminal_statuses
+  defp transition_allowed?(status, target_status)
+       when status in [:queued, :running, :interrupted],
+       do: target_status in @terminal_statuses
 
   defp transition_allowed?(_status, _target_status), do: false
 
   @doc false
   def expiry_timestamp({_id, record, _events}) do
-    if record[:status] in @terminal_statuses and record[:agent_state] != :idle,
+    if record[:status] in [:interrupted | @terminal_statuses] and record[:agent_state] != :idle,
       do: DurableTable.terminal_timestamp(record)
   end
 

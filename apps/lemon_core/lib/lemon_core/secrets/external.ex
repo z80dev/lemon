@@ -162,14 +162,16 @@ defmodule LemonCore.Secrets.External do
   end
 
   defp supervised_fetch(module, source, opts) do
-    case Process.whereis(@task_supervisor) do
-      nil ->
+    case LemonCore.TaskSupervisor.async_nolink(@task_supervisor, fn ->
+           module.fetch(source, opts)
+         end) do
+      {:error, :task_supervisor_unavailable} ->
         {:error, :source_supervisor_unavailable}
 
-      _pid ->
-        task =
-          Task.Supervisor.async_nolink(@task_supervisor, fn -> module.fetch(source, opts) end)
+      {:error, _reason} ->
+        {:error, :spawn_failed}
 
+      {:ok, task} ->
         case Task.yield(task, source.timeout_ms) do
           {:ok, {:ok, %{values: values, byte_count: byte_count}} = result}
           when is_map(values) and is_integer(byte_count) and byte_count >= 0 ->

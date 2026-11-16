@@ -33,13 +33,11 @@ defmodule LemonCore.EngineInfoBridge do
   """
   @spec configure(keyword()) :: :ok | {:error, term()}
   def configure(opts) when is_list(opts) do
-    incoming = opts |> Enum.into(%{}) |> Map.take(@config_keys)
+    roles = Enum.map(@config_keys, &{&1, :module})
 
-    if Enum.all?(incoming, fn {_key, module} -> is_atom(module) end) do
-      Application.put_env(:lemon_core, @bridge_key, Map.merge(current_config(), incoming))
-      :ok
-    else
-      {:error, :invalid_config}
+    case LemonCore.RuntimeSeam.configure(@bridge_key, opts, roles, :merge) do
+      :ok -> :ok
+      {:error, _} -> {:error, :invalid_config}
     end
   end
 
@@ -59,10 +57,7 @@ defmodule LemonCore.EngineInfoBridge do
   @doc "Whether a capability is configured and loadable."
   @spec available?(capability()) :: boolean()
   def available?(capability) do
-    case impl(capability) do
-      nil -> false
-      module -> Code.ensure_loaded?(module)
-    end
+    LemonCore.RuntimeSeam.available?(impl(capability))
   end
 
   @doc "Whether the process behind `capability` is alive."
@@ -94,21 +89,9 @@ defmodule LemonCore.EngineInfoBridge do
   """
   @spec gateway_config() :: {:ok, map()} | :none
   def gateway_config do
-    case impl(:gateway_config) do
-      nil ->
-        :none
-
-      module ->
-        if Code.ensure_loaded?(module) and function_exported?(module, :replacement_config, 0) do
-          normalize_config(apply(module, :replacement_config, []))
-        else
-          :none
-        end
-    end
-  rescue
-    _ -> :none
-  catch
-    :exit, _ -> :none
+    :gateway_config
+    |> call(:replacement_config, [], :none)
+    |> normalize_config()
   end
 
   defp registry_call(function, args) do
@@ -123,17 +106,7 @@ defmodule LemonCore.EngineInfoBridge do
   end
 
   defp call(capability, function, args, fallback) do
-    module = impl(capability)
-
-    if Code.ensure_loaded?(module) and function_exported?(module, function, length(args)) do
-      apply(module, function, args)
-    else
-      fallback
-    end
-  rescue
-    _ -> fallback
-  catch
-    :exit, _ -> fallback
+    LemonCore.RuntimeSeam.invoke(impl(capability), function, args, unavailable: fallback)
   end
 
   defp normalize_config(config) when is_map(config), do: {:ok, config}
@@ -148,10 +121,5 @@ defmodule LemonCore.EngineInfoBridge do
 
   defp normalize_config(_config), do: :none
 
-  defp current_config do
-    case Application.get_env(:lemon_core, @bridge_key, %{}) do
-      config when is_map(config) -> Map.take(config, @config_keys)
-      _ -> %{}
-    end
-  end
+  defp current_config, do: LemonCore.RuntimeSeam.config(@bridge_key, @config_keys)
 end

@@ -25,7 +25,11 @@ defmodule LemonMemory.Application do
   # optional SQLite subsystems.
   defp sqlite_children do
     if Code.ensure_loaded?(Exqlite.Sqlite3) do
-      [LemonMemory.Store, LemonMemory.Ingest]
+      [
+        {Task.Supervisor, name: LemonMemory.TaskSupervisor, max_children: 16},
+        LemonMemory.Store,
+        LemonMemory.Ingest
+      ]
     else
       Logger.info(
         "exqlite is not available: durable memory is disabled. " <>

@@ -31,6 +31,18 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
   end
 
   test "items launch while the call streams and dispatch adopts them without relaunching" do
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:coding_agent, :task, :action],
+        &__MODULE__.record_task_action/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
     tool = task_tool()
     {at, length} = :binary.match(@batch, ~s("first"}))
 
@@ -45,6 +57,16 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
 
     result = dispatch(tool, "call-adopt", @batch)
     assert result.details.task_ids == [first, second]
+
+    assert_receive {:task_action, %{count: 1},
+                    %{action: "speculative_launch", kind: :launch, outcome: :ok}}
+
+    assert_receive {:task_action, %{count: 1},
+                    %{action: "speculative_launch", kind: :launch, outcome: :ok}}
+
+    assert_receive {:task_action, %{count: 1}, %{action: "run", kind: :dispatch, outcome: :ok}}
+    assert_receive {:task_action, %{count: 1}, %{action: "batch", kind: :feature, outcome: :ok}}
+    refute_received {:task_action, _, _}
     assert Enum.all?(result.details.tasks, &(&1.status == "queued"))
     refute_receive {:started, _, _}, 100
 
@@ -198,7 +220,7 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
         ~s({"prompt":"inspect","tool_policy":{"allow":["read","grep"]}}]})
 
     stream(tool, "call-mixed", json)
-    started = for _ <- 1..2, do: assert_receive({:started, _, _} = message, 2_000)
+    started = for _ <- 1..2, do: assert_receive({:started, _, _}, 2_000)
     refute_receive {:started, _, _}, 100
 
     assert [{_, reader, inspect}, {_, scout, look}] =
@@ -258,8 +280,8 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
         Task.start(fn ->
           push(stream, [
             {:start, %{partial | content: []}},
-            {:tool_call_start, 0, partial},
-            {:tool_call_delta, 0, head, partial}
+            {:tool_call_start, 0, %{call | arguments: %{}}},
+            {:tool_call_delta, 0, head}
           ])
 
           # Hold the rest of the call so the test can rule out speculative dispatch.
@@ -267,8 +289,8 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
           receive do: (:continue -> :ok)
 
           push(stream, [
-            {:tool_call_delta, 0, tail, partial},
-            {:tool_call_end, 0, call, final},
+            {:tool_call_delta, 0, tail},
+            {:tool_call_end, 0, call},
             {:done, :tool_use, final}
           ])
 
@@ -325,6 +347,9 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
     assert_receive {:aborted, ^first}, 2_000
     assert_receive {:aborted, ^second}, 2_000
   end
+
+  def record_task_action(_event, measurements, metadata, owner),
+    do: send(owner, {:task_action, measurements, metadata})
 
   defp task_tool(extra \\ []) do
     opts =

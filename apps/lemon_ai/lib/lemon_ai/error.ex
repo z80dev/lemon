@@ -23,7 +23,7 @@ defmodule LemonAi.Error do
   """
 
   alias LemonAi.Models.Presets
-  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Retry
 
   require Logger
 
@@ -686,15 +686,44 @@ defmodule LemonAi.Error do
 
   @doc """
   HTTP status codes worth retrying in place against the SAME provider (with
-  backoff). Used by `LemonAi.Providers.RetryHelper.retryable_http_status?/1`.
+  backoff). Used by `LemonAi.Error.retryable_http_status?/1`.
 
   These statuses are transient request failures (408/409/425), rate limits
   (429), or server failures (5xx). This status-only set cannot override
   permanent provider-body evidence. Providers with an error body must use
-  `LemonAi.Providers.RetryHelper.retryable_http_error?/2`.
+  `LemonAi.Error.retryable_http_error?/2`.
   """
   @spec transport_retry_statuses() :: [pos_integer()]
   def transport_retry_statuses, do: @transport_retry_statuses
+
+  @doc "Whether a status alone is eligible for same-provider retry."
+  def retryable_http_status?(status), do: status in @transport_retry_statuses
+
+  def retryable_http_status?(status, statuses) when is_integer(status) and is_list(statuses),
+    do: status in statuses
+
+  @doc "Whether the HTTP status and provider body allow retrying the same credential."
+  def retryable_http_error?(status, body), do: retryable?({:http_error, status, body})
+
+  @doc "Whether a transport exception or reason is retryable."
+  def retryable_transport_error?(reason), do: retryable?(reason)
+
+  @doc "Whether provider error text describes a transient failure."
+  def retryable_error_text?(text) when is_binary(text), do: retryable?(text)
+  def retryable_error_text?(_), do: false
+
+  @doc "Extracts retry timing after interpreting provider-specific HTTP error details."
+  def retry_after_ms({:error, reason}), do: retry_after_ms(reason)
+
+  def retry_after_ms({:http_error, status, body, headers}) do
+    Retry.retry_after_ms(headers) ||
+      Retry.error_retry_after_ms(parse_http_error(status, body, headers))
+  end
+
+  def retry_after_ms({:http_error, status, body}),
+    do: Retry.error_retry_after_ms(parse_http_error(status, body))
+
+  def retry_after_ms(error), do: Retry.error_retry_after_ms(error)
 
   # ============================================================================
   # Private Helpers
@@ -1339,7 +1368,7 @@ defmodule LemonAi.Error do
   end
 
   defp get_retry_after(headers_map) do
-    RetryHelper.retry_after_ms(headers_map)
+    Retry.retry_after_ms(headers_map)
   end
 
   defp parse_integer(value) when is_binary(value) do

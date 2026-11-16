@@ -6,7 +6,7 @@ defmodule CodingAgent.Session.ProviderFallback do
   alias LemonAgent.ModelRuntime.CredentialHealth
   alias LemonAgent.ModelRuntime.Credentials
   alias LemonAgent.ModelRuntime.SessionPins
-  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Retry
   alias LemonAi.Types.StreamOptions
 
   @max_precommit_events 256
@@ -91,8 +91,8 @@ defmodule CodingAgent.Session.ProviderFallback do
     {:ok, output_stream} =
       LemonAi.EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
 
-    {:ok, task_pid} =
-      Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
+    task_result =
+      LemonCore.TaskSupervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
         candidates =
           [primary_model | fallback_models]
           |> Enum.reject(&is_nil/1)
@@ -120,8 +120,15 @@ defmodule CodingAgent.Session.ProviderFallback do
         end
       end)
 
-    LemonAi.EventStream.attach_task(output_stream, task_pid)
-    {:ok, output_stream}
+    case task_result do
+      {:ok, task_pid} ->
+        LemonAi.EventStream.attach_task(output_stream, task_pid)
+        {:ok, output_stream}
+
+      {:error, reason} = error ->
+        LemonAi.EventStream.cancel(output_stream, reason)
+        error
+    end
   end
 
   defp run_candidates([], ctx, last_error) do
@@ -279,7 +286,7 @@ defmodule CodingAgent.Session.ProviderFallback do
   defp error_details(reason), do: LemonAi.Error.to_error_details(reason)
 
   defp retry_after_hint({:error, _reason, message}), do: retry_after_hint(message)
-  defp retry_after_hint(error), do: RetryHelper.error_retry_after_ms(error)
+  defp retry_after_hint(error), do: Retry.error_retry_after_ms(error)
 
   defp with_alternate_signal(options, model, entries, candidates, ctx) do
     healthy? = fn provider, entry ->
@@ -476,15 +483,15 @@ defmodule CodingAgent.Session.ProviderFallback do
   defp terminal_event?({:canceled, _reason}), do: true
   defp terminal_event?(_), do: false
 
-  defp useful_event?({:text_delta, _idx, text, _message}) when is_binary(text),
+  defp useful_event?({:text_delta, _idx, text}) when is_binary(text),
     do: text != ""
 
-  defp useful_event?({:thinking_delta, _idx, text, _message}) when is_binary(text),
+  defp useful_event?({:thinking_delta, _idx, text}) when is_binary(text),
     do: text != ""
 
-  defp useful_event?({:tool_call_start, _idx, _message}), do: true
-  defp useful_event?({:tool_call_end, _idx, _tool_call, _message}), do: true
-  defp useful_event?({:tool_call_delta, _idx, _delta, _message}), do: true
+  defp useful_event?({:tool_call_start, _idx, _tool_call}), do: true
+  defp useful_event?({:tool_call_end, _idx, _tool_call}), do: true
+  defp useful_event?({:tool_call_delta, _idx, _delta}), do: true
 
   defp useful_event?({kind, _reason, %{content: content}}) when kind in [:done, :error],
     do: Enum.any?(content, &nonempty_content?/1)

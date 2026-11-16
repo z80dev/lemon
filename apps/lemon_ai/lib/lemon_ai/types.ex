@@ -65,14 +65,15 @@ defmodule LemonAi.Types do
   # ============================================================================
 
   defmodule UserMessage do
-    @moduledoc "A message from the user"
+    @moduledoc "A message from the user, with an optional stable application-owned identity."
     @type content :: String.t() | [TextContent.t() | ImageContent.t()]
     @type t :: %__MODULE__{
             role: :user,
+            id: String.t() | nil,
             content: content(),
             timestamp: integer()
           }
-    defstruct role: :user, content: "", timestamp: 0
+    defstruct role: :user, id: nil, content: "", timestamp: 0
   end
 
   defmodule AssistantMessage do
@@ -356,6 +357,11 @@ defmodule LemonAi.Types do
     `caller_headers` retains the original caller override layer when Lemon-owned
     options are rebuilt for another model. Derived provider/model headers must
     not become caller overrides on the next request.
+
+    `provider_options.responses_websocket` opts OpenAI/Codex Responses into
+    WebSocket transport; `provider_options.responses_transport` must be the PID
+    of a live `LemonAi.Providers.OpenAIResponsesWebSocket` owned by the caller's
+    conversation. Omit/disable the flag to retain the unchanged SSE path.
     """
     @type thinking_level :: LemonAi.Types.Model.reasoning_level()
     @type t :: %__MODULE__{

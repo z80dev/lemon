@@ -34,6 +34,9 @@ defmodule CodingAgent.LaneQueue do
   @spec run(GenServer.server(), lane(), (-> term()), map()) ::
           {:ok, term()} | {:error, term()}
   def run(server \\ __MODULE__, :background_exec, fun, meta \\ %{}) when is_function(fun, 0) do
+    # This API waits for the callback's result, not admission.
+    # Execution is off-process and callers are monitored; a deadline here could
+    # report failure after a launch took effect. Bounded admission uses run_background/4.
     GenServer.call(server, {:enqueue, :background_exec, fun, meta}, :infinity)
   end
 
@@ -383,7 +386,7 @@ defmodule CodingAgent.LaneQueue do
         )
 
         task_result =
-          start_supervised_job(st.task_sup, fn ->
+          LemonCore.TaskSupervisor.async_nolink(st.task_sup, fn ->
             try do
               result = job.fun.()
               Logger.debug("LaneQueue job function completed job_id=#{inspect(job_id)}")
@@ -471,15 +474,6 @@ defmodule CodingAgent.LaneQueue do
           st
         end
     end
-  end
-
-  defp start_supervised_job(task_supervisor, fun) do
-    {:ok, Task.Supervisor.async_nolink(task_supervisor, fun)}
-  rescue
-    error -> {:error, {:exception, error}}
-  catch
-    :exit, reason -> {:error, {:exit, reason}}
-    kind, reason -> {:error, {kind, reason}}
   end
 
   defp cancel_queued_caller(caller_ref, st) do

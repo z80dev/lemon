@@ -10,6 +10,13 @@ defmodule CodingAgent.Session.Persistence do
 
   @spec persist_message(map(), term()) :: map()
   def persist_message(state, message) do
+    case CodingAgent.Session.SteeringJournal.persist_input(state, message) do
+      {:ok, state} -> state
+      :unhandled -> do_persist_message(state, message)
+    end
+  end
+
+  defp do_persist_message(state, message) do
     state = record_uncapped_usage(state, message)
 
     new_session_manager =
@@ -47,6 +54,19 @@ defmodule CodingAgent.Session.Persistence do
       end
 
     %{state | session_manager: new_session_manager}
+  end
+
+  @doc false
+  def serialize_input(state, %CodingAgent.Messages.CustomMessage{} = message),
+    do: serialize_custom_message(state, message)
+
+  def serialize_input(state, message) do
+    serialized = MessageSerialization.serialize_message(message)
+
+    case lemon_run(state) do
+      nil -> serialized
+      run -> Map.put(serialized, "lemonRun", run)
+    end
   end
 
   defp lemon_run(state) do

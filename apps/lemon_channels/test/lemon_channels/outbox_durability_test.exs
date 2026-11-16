@@ -104,6 +104,7 @@ defmodule LemonChannels.OutboxDurabilityTest do
       end
     end
 
+    @impl true
     def close(state), do: SqliteBackend.close(state.backend)
 
     defp gate(state, operation) do
@@ -136,7 +137,7 @@ defmodule LemonChannels.OutboxDurabilityTest do
     ]
 
     start_store(store_opts)
-    start_supervised!({Task.Supervisor, name: @workers, max_children: 2})
+    start_supervised!(LemonCore.TaskSupervisor.child_spec(name: @workers, max_children: 2))
     :ok = Registry.register(Adapter)
     previous_keys = :ets.match_object(:lemon_channels_outbox_dedupe, {{Adapter.id(), :_}, :_})
 
@@ -324,7 +325,10 @@ defmodule LemonChannels.OutboxDurabilityTest do
     assert first != second
     assert Outbox.stats(outbox).processing_count == 2
     assert %{active: 2} = Supervisor.count_children(@workers)
-    assert {:error, :max_children} = Task.Supervisor.start_child(@workers, fn -> :unexpected end)
+
+    assert {:error, :task_capacity_reached} =
+             LemonCore.TaskSupervisor.start_child(@workers, fn -> :unexpected end)
+
     refute_receive {:attempt, _, _, _}, 0
     send(worker1, {:finish, {:ok, :accepted}})
     assert_receive {:attempt, _, _, worker3}
@@ -428,13 +432,20 @@ defmodule LemonChannels.OutboxDurabilityTest do
     outbox = start_outbox()
     test_pid = self()
     handler = "outbox-retry-#{System.unique_integer([:positive])}"
+    retry_barrier = make_ref()
 
     :telemetry.attach(
       handler,
       [:lemon, :channels, :outbox, :queue],
-      fn _, _, metadata, _ ->
-        if metadata[:event] == :retry_scheduled and metadata[:channel_id] == Adapter.id(),
-          do: send(test_pid, :retry_durable)
+      fn _, _measurements, metadata, _ ->
+        if metadata[:event] == :retry_scheduled and metadata[:channel_id] == Adapter.id() do
+          send(test_pid, {:retry_durable, metadata.delay_ms})
+
+          # Crash at the durable transition, never after an old worker dispatch.
+          receive do
+            {:release_retry, ^retry_barrier} -> :ok
+          end
+        end
       end,
       nil
     )
@@ -445,13 +456,18 @@ defmodule LemonChannels.OutboxDurabilityTest do
       assert {:ok, _} = Outbox.enqueue(outbox, first)
       assert_receive {:attempt, "retry-head", _, worker}, 1_000
       assert {:ok, _} = Outbox.enqueue(outbox, second)
+      failed_at_ms = System.system_time(:millisecond)
       send(worker, {:finish, {:error, {:outcome_unknown, :lost_ack}}})
-      assert_receive :retry_durable, 1_000
+      assert_receive {:retry_durable, 1_000}, 1_000
       assert {:ok, records} = Store.fetch_all(@store, QueueStore.pending_table())
 
-      assert Enum.any?(records, fn {_id, entry} ->
-               entry.payload.idempotency_key == first.idempotency_key and entry.attempts == 1
-             end)
+      {_id, retry} =
+        Enum.find(records, fn {_id, entry} ->
+          entry.payload.idempotency_key == first.idempotency_key
+        end)
+
+      assert retry.attempts == 1
+      assert retry.available_at_ms >= failed_at_ms + 1_000
 
       crash(outbox)
       restarted = start_outbox()
@@ -469,6 +485,7 @@ defmodule LemonChannels.OutboxDurabilityTest do
 
       assert Outbox.stats(restarted).queue_depth == 0
     after
+      send(outbox, {:release_retry, retry_barrier})
       :telemetry.detach(handler)
     end
   end

@@ -9,12 +9,15 @@ defmodule LemonWeb.OperatorAuthTest do
   import LemonWeb.Test.OperatorAuth
   import Plug.Conn, only: [get_session: 2]
 
-  alias LemonWeb.{Auth, LoginController, LoginThrottle}
+  alias LemonWeb.{Auth, LoginController}
+  alias LemonCore.RateLimiter
 
   defp peer(conn, ip), do: %{conn | remote_ip: ip}
 
   defp clear_throttle(_context) do
-    for ip <- [{127, 0, 0, 1}, {10, 0, 0, 7}, {10, 0, 0, 8}], do: LoginThrottle.clear(ip)
+    for ip <- [{127, 0, 0, 1}, {10, 0, 0, 7}, {10, 0, 0, 8}],
+        do: RateLimiter.clear(LemonWeb.LoginThrottle, ip)
+
     :ok
   end
 

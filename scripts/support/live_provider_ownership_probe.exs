@@ -568,26 +568,40 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
     case :gen_tcp.accept(listener) do
       {:ok, socket} ->
         {headers, body} = receive_headers(socket, "")
-        [_, length] = Regex.run(~r/\r\ncontent-length:\s*(\d+)/i, headers)
-        body = receive_body(socket, body, String.to_integer(length))
-        %{"model" => id} = Jason.decode!(body)
-        send(owner, {ref, :wire, %{model: id, headers: headers <> "\r\n"}})
-        {status, type, response} = response(scenario, count, id)
 
-        :ok =
-          :gen_tcp.send(socket, [
-            "HTTP/1.1 ",
-            status,
-            "\r\ncontent-type: ",
-            type,
-            "\r\ncontent-length: ",
-            Integer.to_string(byte_size(response)),
-            "\r\nconnection: close\r\n\r\n",
-            response
-          ])
+        if String.starts_with?(headers, "HEAD ") do
+          # Session start warms the origin with LemonAi.Preconnect's
+          # unauthenticated HEAD (#567); it is not a model request.
+          :ok =
+            :gen_tcp.send(
+              socket,
+              "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+            )
 
-        :gen_tcp.close(socket)
-        serve(listener, owner, ref, scenario, count + 1)
+          :gen_tcp.close(socket)
+          serve(listener, owner, ref, scenario, count)
+        else
+          [_, length] = Regex.run(~r/\r\ncontent-length:\s*(\d+)/i, headers)
+          body = receive_body(socket, body, String.to_integer(length))
+          %{"model" => id} = Jason.decode!(body)
+          send(owner, {ref, :wire, %{model: id, headers: headers <> "\r\n"}})
+          {status, type, response} = response(scenario, count, id)
+
+          :ok =
+            :gen_tcp.send(socket, [
+              "HTTP/1.1 ",
+              status,
+              "\r\ncontent-type: ",
+              type,
+              "\r\ncontent-length: ",
+              Integer.to_string(byte_size(response)),
+              "\r\nconnection: close\r\n\r\n",
+              response
+            ])
+
+          :gen_tcp.close(socket)
+          serve(listener, owner, ref, scenario, count + 1)
+        end
 
       {:error, :closed} ->
         :ok

@@ -88,20 +88,24 @@ defmodule CodingAgent.SessionBranchTest do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      LemonAi.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
       response.content
       |> Enum.with_index()
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            LemonAi.EventStream.push(stream, {:text_start, idx, response})
-            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
-            LemonAi.EventStream.push(stream, {:text_end, idx, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text})
+            LemonAi.EventStream.push(stream, {:text_end, idx, text})
 
           %ToolCall{} = tool_call ->
-            LemonAi.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
-            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+            LemonAi.EventStream.push(
+              stream,
+              {:tool_call_start, idx, %{tool_call | arguments: %{}}}
+            )
+
+            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call})
 
           _ ->
             :ok
@@ -1149,26 +1153,30 @@ defmodule CodingAgent.SessionBranchTest do
       assert_messages_match_branch(session)
     end
 
-    test "branch switch preserves queued steering messages" do
+    test "steering accepted while idle runs before a branch switch" do
       session = start_session()
 
       :ok = Session.prompt(session, "Hello!")
       wait_for_streaming_complete(session)
 
-      # Add steering messages
+      # After the closing handshake, accepted input starts the next run (#559);
+      # it is consumed rather than parked across a later branch switch.
       :ok = Session.steer(session, "Steer 1")
       :ok = Session.steer(session, "Steer 2")
+      wait_for_streaming_complete(session)
 
       state_before = Session.get_state(session)
-      assert :queue.len(state_before.steering_queue) == 2
+      assert :queue.is_empty(state_before.steering_queue)
 
-      # Navigate to first entry
+      user_texts =
+        for %{role: :user, content: content} <- Session.get_messages(session), do: content
+
+      assert "Steer 1" in user_texts
+      assert "Steer 2" in user_texts
+
       first_id = hd(SessionManager.entries(state_before.session_manager)).id
       :ok = Session.navigate_tree(session, first_id)
-
-      # Steering queue should remain (it's for the agent, not session state)
-      state_after = Session.get_state(session)
-      assert :queue.len(state_after.steering_queue) == 2
+      assert :queue.is_empty(Session.get_state(session).steering_queue)
     end
 
     @tag :tmp_dir

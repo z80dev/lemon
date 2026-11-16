@@ -81,6 +81,7 @@ export class QueuePanelComponent implements Component {
 		this.#items = items;
 		this.#selected = Math.max(0, Math.min(this.#selected, items.length - 1));
 		this.#cachedRows = undefined;
+		this.#native = undefined;
 	}
 
 	handleInput(data: string): void {
@@ -169,7 +170,12 @@ export class QueuePanelComponent implements Component {
 					node(
 						"badge",
 						{
-							text: item.state === "waiting-connection" ? "offline" : "review before retry",
+							text:
+								item.state === "waiting-connection"
+									? "offline"
+									: item.state === "accepted-steer"
+										? "accepted steer"
+										: "review before retry",
 							tone: "warning",
 						},
 						undefined,
@@ -197,7 +203,9 @@ export class QueuePanelComponent implements Component {
 					node("badge", { text: `${items.length}`, role: "omp.queue.count" }, undefined, "count"),
 				);
 			}
-			if (item.state !== "waiting-connection") {
+			if (item.steer) {
+				children.push(actionButton("Withdraw", "queue.withdraw", { key: "withdraw" }));
+			} else if (item.state !== "waiting-connection") {
 				const edit = actionButton("Edit", "queue.edit", { keys: "ctrl+q", key: "edit" });
 				edit.p!.role = "omp.queue.edit";
 				children.push(edit);
@@ -220,12 +228,16 @@ export class QueuePanelComponent implements Component {
 		return described;
 	}
 
-	/** A pill's Edit: the item's own Enter path. */
+	/** Native controls use the same edit/withdraw paths as the keyboard. */
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (event.type !== "action" || event.act !== "queue.edit") return;
+		if (event.type !== "action" || (event.act !== "queue.edit" && event.act !== "queue.withdraw")) {
+			return;
+		}
 		const id = event.key.slice(0, event.key.indexOf("/"));
 		const item = this.#items.find((candidate) => candidate.id === id);
-		if (item) this.#options.onEdit(item);
+		if (!item) return;
+		if (event.act === "queue.withdraw" && item.steer) this.#options.onDelete(item);
+		else if (event.act === "queue.edit" && !item.steer) this.#options.onEdit(item);
 	}
 
 	// -- internals -----------------------------------------------------------
@@ -257,7 +269,9 @@ export class QueuePanelComponent implements Component {
 		const rows: string[] = [];
 		const clamp = (text: string) => truncateToWidth(text, width);
 
-		const hint = this.focused ? "↑↓ select · enter edits · d deletes · esc done" : "ctrl+q to edit";
+		const hint = this.focused
+			? "↑↓ select · enter edits local · d deletes/withdraws · esc done"
+			: "ctrl+q to edit/withdraw";
 		const header = `queue · ${this.#items.length} waiting · ${hint}`;
 		rows.push(theme.fg(this.focused ? "accent" : "dim", clamp(header)));
 
@@ -270,7 +284,9 @@ export class QueuePanelComponent implements Component {
 					? "(offline) "
 					: item.state === "needs-review"
 						? "(review before retry) "
-						: "";
+						: item.state === "accepted-steer"
+							? "(accepted steer) "
+							: "";
 			const media = item.attachments?.length ? ` [${item.attachments.length} image(s)]` : "";
 			const line = clamp(`${marker} ${index + 1}. ${state}${oneLine(item.text)}${media}`);
 			const selected = this.focused && index === this.#selected;

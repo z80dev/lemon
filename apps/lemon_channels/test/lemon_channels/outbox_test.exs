@@ -2,7 +2,7 @@ defmodule LemonChannels.OutboxTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.{Outbox, OutboundPayload}
-  alias LemonChannels.Outbox.RateLimiter
+  alias LemonCore.RateLimiter
 
   defmodule TestChannelPlugin do
     @behaviour LemonChannels.Plugin
@@ -195,7 +195,7 @@ defmodule LemonChannels.OutboxTest do
 
       # Exhaust rate limit
       for _ <- 1..20 do
-        RateLimiter.consume(channel, account)
+        RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel, account)
       end
 
       initial_stats = Outbox.stats()

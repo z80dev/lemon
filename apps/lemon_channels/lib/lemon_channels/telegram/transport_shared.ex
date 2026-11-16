@@ -14,8 +14,7 @@ defmodule LemonChannels.Telegram.TransportShared do
   end
 
   def forget_dedupe(key) do
-    _ = :ets.delete(@channels_dedupe_table, key)
-    :ok
+    LemonCore.Dedupe.Ets.forget(@channels_dedupe_table, key)
   end
 
   def inbound_message_dedupe_key(inbound) when is_map(inbound) do

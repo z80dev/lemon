@@ -519,13 +519,15 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
   end
 
   describe "structured output retries" do
-    test "re-prompts the same child session until its output validates" do
+    test "re-prompts the same child session until it submits a valid result" do
       owner = self()
 
       responses =
         Mocks.mock_stream_fn([
           Mocks.assistant_message("The answer is 42."),
-          Mocks.assistant_message(~s({"answer":42}))
+          Mocks.assistant_message_with_tool_calls([
+            Mocks.tool_call("submit_result", %{"answer" => 42})
+          ])
         ])
 
       opts =
@@ -543,9 +545,10 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
       assert result.details.structured_output == %{"answer" => 42}
       assert_receive {:model_call, _first}, 2_000
       assert_receive {:model_call, second}, 2_000
+      # An accepted submit_result ends the turn without another model call (#602).
+      refute_received {:model_call, _}
       correction = inspect(second)
-      assert correction =~ "failed validation against the required output schema"
-      assert correction =~ "response is not valid JSON"
+      assert correction =~ "Call submit_result to submit the required result."
       assert correction =~ "The answer is 42."
     end
 
@@ -563,7 +566,7 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
         )
 
       assert {:error, message} = execute("/tmp", opts, schema_params())
-      assert message =~ "not valid JSON"
+      assert message =~ "Task ended without submit_result"
 
       for _attempt <- 1..3, do: assert_received(:model_call)
       refute_received :model_call
@@ -591,7 +594,9 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
   describe "agent:// results" do
     test "owners read completed output and structured fields; foreign callers cannot" do
       output = ~s({"answer":42,"items":[{"name":"lib"}]})
-      opts = base_opts(agent_id: "profile-a", run_override: fn _, _ -> result(output) end)
+      # A strict child returns its accepted submit_result value as structured_output.
+      submitted = %{result(output) | details: %{structured_output: Jason.decode!(output)}}
+      opts = base_opts(agent_id: "profile-a", run_override: fn _, _ -> submitted end)
 
       receipt =
         execute("/tmp", opts, %{

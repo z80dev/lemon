@@ -156,19 +156,23 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
           {:ok, stream} = LemonAi.EventStream.start_link()
 
           Task.start(fn ->
-            LemonAi.EventStream.push(stream, {:start, response})
+            LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
             Enum.with_index(response.content)
             |> Enum.each(fn {content, idx} ->
               case content do
                 %TextContent{text: text} ->
-                  LemonAi.EventStream.push(stream, {:text_start, idx, response})
-                  LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
-                  LemonAi.EventStream.push(stream, {:text_end, idx, response})
+                  LemonAi.EventStream.push(stream, {:text_start, idx})
+                  LemonAi.EventStream.push(stream, {:text_delta, idx, text})
+                  LemonAi.EventStream.push(stream, {:text_end, idx, text})
 
                 %ToolCall{} = tool_call ->
-                  LemonAi.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
-                  LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+                  LemonAi.EventStream.push(
+                    stream,
+                    {:tool_call_start, idx, %{tool_call | arguments: %{}}}
+                  )
+
+                  LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call})
 
                 _ ->
                   :ok
@@ -378,15 +382,21 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
   describe "concurrent prompts handling" do
     test "follow-up queue processed after completion" do
       response1 = Mocks.assistant_message("First response")
-      response2 = Mocks.assistant_message("Follow-up response")
 
-      session = start_session(stream_fn: multi_response_stream_fn([response1, response2]))
+      session =
+        start_session(stream_fn: Mocks.blocking_stream_fn(response1, self()))
 
       _unsub = Session.subscribe(session)
       :ok = Session.prompt(session, "First message")
+      assert_receive {:stream_blocked, first_producer}, 5_000
+      on_exit(fn -> send(first_producer, :release_stream) end)
 
       # Queue a follow-up
       :ok = Session.follow_up(session, "Follow up message")
+      send(first_producer, :release_stream)
+      assert_receive {:stream_blocked, second_producer}, 5_000
+      on_exit(fn -> send(second_producer, :release_stream) end)
+      send(second_producer, :release_stream)
 
       events = collect_events([], 5000)
 

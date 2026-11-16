@@ -59,6 +59,7 @@ defmodule CodingAgent.Session.Invocation do
             settings_manager: state.settings_manager,
             plan_gate: state.plan_gate
           )
+          |> Keyword.put(:responses_transport, Keyword.get(state.tool_opts, :responses_transport))
 
         state = %{
           state
@@ -142,6 +143,7 @@ defmodule CodingAgent.Session.Invocation do
 
     if requested && explicit do
       model = ModelResolver.resolve_session_model(requested, state.settings_manager)
+      state = CodingAgent.Session.ResponsesTransport.switch_model(state, model)
       :ok = LemonAgent.Agent.set_model(state.agent, model)
 
       if model.provider != state.model.provider or model.id != state.model.id,

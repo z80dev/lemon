@@ -2,8 +2,8 @@ defmodule LemonGateway.Health do
   @moduledoc """
   Health check system for the gateway.
 
-  Runs built-in checks (supervisor, scheduler, executor, run_supervisor,
-  engine_lock) and optional custom checks configured via `:health_checks`
+  Runs built-in checks (supervisor, slots, executor, run_supervisor,
+  run_registry) and optional custom checks configured via `:health_checks`
   application env.
   Returns a structured health status map consumed by `Health.Router`.
   """
@@ -35,10 +35,10 @@ defmodule LemonGateway.Health do
   defp built_in_checks do
     checks = [
       {"supervisor", fn -> process_alive_check(LemonGateway.Supervisor) end},
-      {"scheduler", fn -> scheduler_check() end},
+      {"slots", fn -> slots_check() end},
       {"executor", fn -> executor_check() end},
       {"run_supervisor", fn -> dynamic_supervisor_check(LemonGateway.RunSupervisor) end},
-      {"engine_lock", fn -> process_alive_check(LemonGateway.EngineLock) end}
+      {"run_registry", fn -> process_alive_check(LemonGateway.RunRegistry) end}
     ]
 
     if xmtp_enabled?() do
@@ -129,8 +129,8 @@ defmodule LemonGateway.Health do
       {:error, error}
   end
 
-  defp scheduler_check do
-    LemonGateway.Scheduler.stats()
+  defp slots_check do
+    LemonGateway.Slots.stats()
   rescue
     error ->
       {:error, error}

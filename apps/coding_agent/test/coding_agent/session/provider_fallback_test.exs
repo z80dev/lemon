@@ -682,8 +682,8 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
         {:ok, http_task} =
           Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
-            LemonAi.EventStream.push_async(stream, {:start, message})
-            LemonAi.EventStream.push_async(stream, {:text_delta, 0, "hello", message})
+            LemonAi.EventStream.push_async(stream, {:start, %{message | content: []}})
+            LemonAi.EventStream.push_async(stream, {:text_delta, 0, "hello"})
             send(parent, {:http_task, self()})
             Process.sleep(:infinity)
           end)
@@ -766,7 +766,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      LemonAi.EventStream.push(stream, {:start, message})
+      LemonAi.EventStream.push(stream, {:start, %{message | content: []}})
       # What a hung provider stream yields when its own stream_timeout fires.
       LemonAi.EventStream.push(stream, {:canceled, :timeout})
     end)
@@ -779,10 +779,10 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      LemonAi.EventStream.push(stream, {:start, message})
-      LemonAi.EventStream.push(stream, {:text_start, 0, message})
-      LemonAi.EventStream.push(stream, {:text_delta, 0, text, message})
-      LemonAi.EventStream.push(stream, {:text_end, 0, text, message})
+      LemonAi.EventStream.push(stream, {:start, %{message | content: []}})
+      LemonAi.EventStream.push(stream, {:text_start, 0})
+      LemonAi.EventStream.push(stream, {:text_delta, 0, text})
+      LemonAi.EventStream.push(stream, {:text_end, 0, text})
       LemonAi.EventStream.complete(stream, message)
     end)
 
@@ -794,9 +794,9 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      LemonAi.EventStream.push(stream, {:start, message})
-      LemonAi.EventStream.push(stream, {:text_start, 0, message})
-      LemonAi.EventStream.push(stream, {:text_delta, 0, text, message})
+      LemonAi.EventStream.push(stream, {:start, %{message | content: []}})
+      LemonAi.EventStream.push(stream, {:text_start, 0})
+      LemonAi.EventStream.push(stream, {:text_delta, 0, text})
       send(parent, {:delta_pushed, self()})
 
       receive do
@@ -805,7 +805,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
         1_000 -> :ok
       end
 
-      LemonAi.EventStream.push(stream, {:text_end, 0, text, message})
+      LemonAi.EventStream.push(stream, {:text_end, 0, text})
       LemonAi.EventStream.complete(stream, message)
     end)
 
@@ -817,7 +817,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      LemonAi.EventStream.push(stream, {:start, message})
+      LemonAi.EventStream.push(stream, {:start, %{message | content: []}})
       LemonAi.EventStream.error(stream, message)
     end)
 
@@ -829,8 +829,8 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      LemonAi.EventStream.push(stream, {:start, message})
-      LemonAi.EventStream.push(stream, {:text_delta, 0, "partial", message})
+      LemonAi.EventStream.push(stream, {:start, %{message | content: []}})
+      LemonAi.EventStream.push(stream, {:text_delta, 0, "partial"})
       LemonAi.EventStream.error(stream, message)
     end)
 

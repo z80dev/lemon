@@ -8,8 +8,6 @@ defmodule CodingAgent.Session.CompactionManager do
   applies the returned state changes.
   """
 
-  require Logger
-
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.Session
   alias LemonCore.Introspection
@@ -350,6 +348,8 @@ defmodule CodingAgent.Session.CompactionManager do
       ) do
     case result do
       {:ok, compaction_result} ->
+        state = CodingAgent.Session.ResponsesTransport.reset(state)
+
         session_manager =
           SessionManager.append_pruning(
             state.session_manager,
@@ -486,25 +486,10 @@ defmodule CodingAgent.Session.CompactionManager do
   # Background Task Helpers
   # ============================================================================
 
-  @spec start_background_task((-> any())) :: {:ok, pid()} | {:error, term()}
-  def start_background_task(fun) when is_function(fun, 0) do
-    case Task.Supervisor.start_child(@task_supervisor, fun) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:noproc, _}} ->
-        Task.start(fun)
-
-      {:error, :noproc} ->
-        Task.start(fun)
-
-      {:error, reason} ->
-        Logger.warning(
-          "Failed to start supervised session task: #{inspect(reason)}; falling back to Task.start/1"
-        )
-
-        Task.start(fun)
-    end
+  @spec start_background_task((-> any()), GenServer.server()) ::
+          {:ok, pid()} | {:error, term()}
+  def start_background_task(fun, supervisor \\ @task_supervisor) when is_function(fun, 0) do
+    LemonCore.TaskSupervisor.start_child(supervisor, fun)
   end
 
   @spec start_tracked_background_task((-> any()), non_neg_integer(), atom()) ::

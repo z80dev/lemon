@@ -28,6 +28,8 @@ defmodule LemonRouter.RunOrchestrator do
     SubmissionBuilder
   }
 
+  alias LemonRouter.RestartCarryover.CrashRecovery
+
   @abort_tombstone_ttl_ms 300_000
   @serialized_mutation_timeout_ms 20_000
   @run_admission_table :router_run_admissions
@@ -133,6 +135,26 @@ defmodule LemonRouter.RunOrchestrator do
   @doc "Seal immutable executing-host native startup policy before native execution begins."
   def register_native_source_floor(source, actual_policy) do
     LemonRouter.NativeLineage.register_source_floor(source, actual_policy, :local)
+  end
+
+  @doc false
+  def register_native_resume(run_id, resume), do: CrashRecovery.bind_resume(run_id, resume)
+
+  @doc false
+  def recover_orphan(run_id, admission), do: recover_orphan(__MODULE__, run_id, admission)
+
+  @doc false
+  def recover_orphan(server, run_id, admission) do
+    GenServer.call(server, {:recover_orphan, run_id, admission}, @serialized_mutation_timeout_ms)
+  end
+
+  @doc false
+  def abandon_orphan(run_id, admission, :graceful_carryover) do
+    GenServer.call(
+      __MODULE__,
+      {:recover_orphan, run_id, admission, :graceful_carryover},
+      @serialized_mutation_timeout_ms
+    )
   end
 
   @doc false
@@ -314,6 +336,7 @@ defmodule LemonRouter.RunOrchestrator do
         Keyword.get(opts, :receipt_cleanup_interval_ms, @receipt_cleanup_interval_ms),
       last_receipt_cleanup_ms: 0,
       abort_tombstones: %{},
+      restart_boot_id: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
       accepted_run_ids: %{}
     }
 
@@ -334,6 +357,16 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   def handle_call(:presence_barrier, _from, state), do: {:reply, :ok, state}
+
+  def handle_call({:recover_orphan, run_id, admission}, _from, state) do
+    {result, state} = recover_crashed_admission(run_id, admission, state)
+    {:reply, result, state}
+  end
+
+  def handle_call({:recover_orphan, run_id, admission, reason}, _from, state) do
+    {result, state} = recover_crashed_admission(run_id, admission, state, reason)
+    {:reply, result, state}
+  end
 
   def handle_call({:submit_with_receipt, %RunRequest{} = params}, from, state) do
     {:reply, result, next_state} = handle_call({:submit, params}, from, state)
@@ -419,7 +452,7 @@ defmodule LemonRouter.RunOrchestrator do
     {:reply, {:error, :invalid_run_request}, state}
   end
 
-  defp do_submit(%RunRequest{} = params, orchestrator_state) do
+  defp do_submit(%RunRequest{} = params, orchestrator_state, mode \\ :new) do
     origin = params.origin || :unknown
     session_key = params.session_key
     agent_id = params.agent_id || SessionKey.agent_id(session_key) || "default"
@@ -448,7 +481,14 @@ defmodule LemonRouter.RunOrchestrator do
       {:ok, %Submission{} = submission} ->
         LemonCore.EventBridge.subscribe_run(run_id)
 
-        case session_coordinator_mod().submit(submission.conversation_key, submission) do
+        coordinator = session_coordinator_mod()
+
+        submitted =
+          if mode == :recovery,
+            do: coordinator.submit_recovered(submission.conversation_key, submission),
+            else: coordinator.submit(submission.conversation_key, submission)
+
+        case submitted do
           :ok ->
             execution_request = submission.execution_request
             meta = submission.meta || %{}
@@ -523,9 +563,157 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
+  defp recover_crashed_admission(run_id, expected, state, disposition \\ nil) do
+    with {:ok, tombstone} <- Store.fetch(@abort_tombstone_table, run_id),
+         {:ok, current} <- Store.fetch(@run_admission_table, run_id),
+         {:ok, run} <- RunStore.fetch(run_id),
+         {:ok, receipt} <- LemonRouter.RunReceiptStore.fetch(run_id) do
+      cond do
+        not is_map(current) or current != expected ->
+          {{:ok, :skipped}, state}
+
+        MapHelpers.get_key(current, :terminal) == true or terminal_summary?(run) ->
+          with :ok <- LemonRouter.RunReceiptStore.retain_terminal_evidence(run_id),
+               :ok <- CrashRecovery.settle(Store, run_id) do
+            {{:ok, :skipped}, state}
+          else
+            _ -> {{:error, :outcome_unknown}, state}
+          end
+
+        recovery_live?(run_id, state) ->
+          {{:ok, :skipped}, state}
+
+        is_map(tombstone) ->
+          abandon_crashed_admission(run_id, current, :aborted, state)
+
+        disposition == :graceful_carryover ->
+          abandon_crashed_admission(run_id, current, :graceful_carryover, state)
+
+        is_map(receipt) and receipt[:target_run_id] not in [nil, run_id] ->
+          abandon_crashed_admission(run_id, current, :joined_run, state)
+
+        MapHelpers.get_key(current, :state) == "claimed" ->
+          abandon_crashed_admission(run_id, current, :not_started, state)
+
+        not CrashRecovery.enabled?() ->
+          abandon_crashed_admission(run_id, current, :disabled, state)
+
+        Map.get(current, :restart_attempt, 0) >= CrashRecovery.max_attempts() ->
+          abandon_crashed_admission(run_id, current, :attempt_limit, state)
+
+        current[:restart_boot_id] == state.restart_boot_id ->
+          {{:ok, :skipped}, state}
+
+        true ->
+          resume_crashed_admission(run_id, current, state)
+      end
+    else
+      _ -> {{:error, :outcome_unknown}, state}
+    end
+  end
+
+  defp terminal_summary?(%{} = run), do: is_map(MapHelpers.get_key(run, :summary))
+  defp terminal_summary?(_run), do: false
+
+  defp recovery_live?(run_id, state) do
+    Map.has_key?(state.accepted_run_ids, run_id) or
+      Registry.lookup(LemonRouter.RunRegistry, run_id) != []
+  end
+
+  defp resume_crashed_admission(run_id, current, state) do
+    attempt = Map.get(current, :restart_attempt, 0) + 1
+
+    case CrashRecovery.continuation(run_id, attempt) do
+      {:ok, request} ->
+        dispatch_crash_continuation(request, current, attempt, state)
+
+      {:error, :unavailable} ->
+        {{:error, :outcome_unknown}, state}
+
+      {:error, _reason} ->
+        abandon_crashed_admission(run_id, current, :unresumable, state)
+    end
+  end
+
+  defp dispatch_crash_continuation(request, current, attempt, state) do
+    claimed =
+      current
+      |> Map.put(:restart_attempt, attempt)
+      |> Map.put(:restart_boot_id, state.restart_boot_id)
+
+    # This durable CAS consumes the attempt before any coordinator/executor I/O.
+    # The original admission identity is retained: external replay is still an
+    # acknowledgement, never permission to dispatch a continuation.
+    with :ok <-
+           Store.compare_and_swap(Store, @run_admission_table, request.run_id, current, claimed,
+             durable: true
+           ),
+         :ok <- CrashRecovery.record(request.run_id, :resumed, :hard_crash, attempt) do
+      identity = Map.fetch!(current, :identity)
+      result = do_submit(attach_request_identity(request, identity), state, :recovery)
+
+      case result do
+        {:ok, run_id} ->
+          expires = System.system_time(:millisecond) + state.run_admission_retention_ms
+          {{:ok, :resumed}, cache_accepted_admission(state, run_id, identity, expires)}
+
+        {:error, :outcome_unknown} ->
+          {{:error, :outcome_unknown}, state}
+
+        {:error, _reason} ->
+          abandon_crashed_admission(request.run_id, claimed, :rejected, state)
+      end
+    else
+      _ ->
+        {{:error, :outcome_unknown}, state}
+    end
+  end
+
+  defp abandon_crashed_admission(run_id, admission, reason, state) do
+    scope = MapHelpers.get_key(admission, :scope) || %{}
+    session_key = MapHelpers.get_key(scope, :session_key)
+    attempts = Map.get(admission, :restart_attempt, 0)
+
+    summary = %{
+      run_id: run_id,
+      session_key: session_key,
+      engine: "lemon",
+      duration_ms: nil,
+      meta: %{router_request_identity: Map.get(admission, :identity)},
+      completed: %{
+        run_id: run_id,
+        session_key: session_key,
+        engine: "lemon",
+        ok: false,
+        answer: "",
+        error: if(reason in [:aborted, :not_started], do: reason, else: :outcome_unknown),
+        interrupted: true,
+        outcome: if(reason == :not_started, do: :not_started, else: :unknown)
+      }
+    }
+
+    case RunStore.finalize(run_id, summary) do
+      :ok ->
+        with :ok <- LemonRouter.RunReceiptStore.retain_terminal_evidence(run_id),
+             :ok <- CrashRecovery.record(run_id, :abandoned, reason, attempts) do
+          {{:ok, :abandoned}, state}
+        else
+          _ -> {{:error, :outcome_unknown}, state}
+        end
+
+      {:error, {:already_finalized, ^run_id}} ->
+        {{:ok, :skipped}, state}
+
+      _ ->
+        {{:error, :outcome_unknown}, state}
+    end
+  end
+
   defp build_native_submission(request, state) do
-    with {:ok, submission} <- SubmissionBuilder.build(request, state) do
-      LemonRouter.NativeLineage.capture_submission(submission)
+    with {:ok, submission} <- SubmissionBuilder.build(request, state),
+         {:ok, submission} <- LemonRouter.NativeLineage.capture_submission(submission),
+         :ok <- CrashRecovery.capture(submission) do
+      {:ok, submission}
     end
   end
 
@@ -855,6 +1043,7 @@ defmodule LemonRouter.RunOrchestrator do
                    durable: true
                  ) do
               :ok ->
+                if CrashRecovery.enabled?(), do: CrashRecovery.settle(Store, params.run_id)
                 {error, state}
 
               {:error, :mismatch} ->
@@ -1033,6 +1222,8 @@ defmodule LemonRouter.RunOrchestrator do
         :native_source,
         :native_followup,
         :native_root_binding,
+        :restart_attempt,
+        :restart_boot_id,
         :native_failure
       ])
     )

@@ -44,7 +44,7 @@ defmodule CodingAgent.BackgroundRun.Worker do
     owner = self()
 
     result =
-      Task.Supervisor.start_child(state.task_supervisor, fn ->
+      LemonCore.TaskSupervisor.start_child(state.task_supervisor, fn ->
         result = run_queued(state)
         send(owner, {:background_run_result, state.id, result})
       end)

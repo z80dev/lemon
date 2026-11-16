@@ -33,26 +33,29 @@ defmodule LemonAi.Providers.StreamingHelper do
         idle_timeout: opts.stream_idle_timeout || @default_stream_idle_timeout
       )
 
-    {:ok, task_pid} =
-      Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
-        if opts.api_key_authoritative and opts.api_key in [nil, ""] do
-          message = "A resolved credential is required for provider #{model.provider}."
+    case LemonAi.StreamTaskSupervisor.start_child(fn ->
+           if opts.api_key_authoritative and opts.api_key in [nil, ""] do
+             message = "A resolved credential is required for provider #{model.provider}."
 
-          EventStream.error(stream, %AssistantMessage{
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            stop_reason: :error,
-            error_message: message,
-            error_details: LemonAi.Error.to_error_details(%{category: :auth, message: message})
-          })
-        else
-          do_stream_fn.(stream, model, context, opts)
-        end
-      end)
+             EventStream.error(stream, %AssistantMessage{
+               api: model.api,
+               provider: model.provider,
+               model: model.id,
+               stop_reason: :error,
+               error_message: message,
+               error_details: LemonAi.Error.to_error_details(%{category: :auth, message: message})
+             })
+           else
+             do_stream_fn.(stream, model, context, opts)
+           end
+         end) do
+      {:ok, task_pid} ->
+        EventStream.attach_task(stream, task_pid)
+        {:ok, stream}
 
-    EventStream.attach_task(stream, task_pid)
-
-    {:ok, stream}
+      {:error, reason} ->
+        GenServer.stop(stream, :normal)
+        {:error, reason}
+    end
   end
 end

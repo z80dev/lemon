@@ -78,6 +78,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "discoverOpenAI" => :boolean
       }
     },
+    "models.preconnect" => %{required: %{"model" => :string}, optional: %{}},
 
     # User-managed profiles
     "profiles.list" => %{optional: %{}},
@@ -417,6 +418,21 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
     "sessions.context" => %{
       required: %{"sessionKey" => :string, "cwd" => :string}
+    },
+    "sessions.steer" => %{
+      required: %{
+        "sessionKey" => :string,
+        "runId" => :string,
+        "messageId" => :string,
+        "prompt" => :string
+      }
+    },
+    "sessions.steer.withdraw" => %{
+      required: %{"sessionKey" => :string, "messageId" => :string}
+    },
+    "sessions.steer.pending" => %{
+      required: %{"sessionKey" => :string},
+      optional: %{"limit" => :integer}
     },
     "sessions.changes" => %{
       required: %{"sessionKey" => :string, "cwd" => :string},

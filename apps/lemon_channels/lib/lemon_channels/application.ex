@@ -22,16 +22,16 @@ defmodule LemonChannels.Application do
       LemonChannels.Registry,
       # Channels-owned delivery presentation state (message ids / send-vs-edit)
       LemonChannels.PresentationState,
-      {Task.Supervisor, name: LemonChannels.VoiceReplyTaskSupervisor},
+      LemonCore.TaskSupervisor.child_spec(name: LemonChannels.VoiceReplyTaskSupervisor),
       LemonChannels.VoiceReplyDelivery,
       # Best-effort chat-originated run activity
       LemonChannels.TypingIndicator,
       # Rate limiter
-      LemonChannels.Outbox.RateLimiter,
+      {LemonCore.RateLimiter, name: LemonChannels.Outbox.RateLimiter},
       # Dedupe
       LemonChannels.Outbox.Dedupe,
       # Outbox worker supervisor (tasks)
-      {Task.Supervisor, LemonChannels.Outbox.worker_supervisor_options()},
+      LemonCore.TaskSupervisor.child_spec(LemonChannels.Outbox.worker_supervisor_options()),
       # Outbox
       LemonChannels.Outbox,
       # Durable supervision notices use Outbox admission and delivery receipts

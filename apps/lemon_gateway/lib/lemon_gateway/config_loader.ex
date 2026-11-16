@@ -62,9 +62,7 @@ defmodule LemonGateway.ConfigLoader do
       enable_telegram: fetch(gateway, :enable_telegram),
       enable_discord: fetch(gateway, :enable_discord),
       enable_xmtp: fetch(gateway, :enable_xmtp),
-      enable_webhook: fetch(gateway, :enable_webhook),
-      require_engine_lock: fetch(gateway, :require_engine_lock),
-      engine_lock_timeout_ms: fetch(gateway, :engine_lock_timeout_ms)
+      enable_webhook: fetch(gateway, :enable_webhook)
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()

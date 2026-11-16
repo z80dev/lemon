@@ -3,7 +3,8 @@ defmodule LemonControlPlane.A2A.Router do
 
   use Plug.Router
 
-  alias LemonControlPlane.A2A.{Auth, Config, Handler, RateLimiter, TaskView}
+  alias LemonControlPlane.A2A.{Auth, Config, Handler, TaskView}
+  alias LemonCore.RateLimiter
   alias LemonCore.A2A.Protocol
   alias LemonCore.A2AStore
 
@@ -43,7 +44,7 @@ defmodule LemonControlPlane.A2A.Router do
     with "2.0" <- conn.body_params["jsonrpc"],
          true <- is_binary(method),
          {:ok, peer_id} <- Auth.authenticate(conn),
-         true <- RateLimiter.allow?(peer_id) do
+         true <- RateLimiter.allow?(LemonControlPlane.A2A.RateLimiter, peer_id) do
       case Handler.handle(method, params, peer_id) do
         {:ok, result} -> json(conn, 200, Protocol.response(id, result))
         {:stream, task_id} -> stream_task(conn, id, task_id)

@@ -123,7 +123,7 @@ defmodule LemonWeb.DiagnosticsLiveTest do
   test "null run counts render unknown in the live card and copied diagnostics", %{conn: conn} do
     {:ok, started} = Application.ensure_all_started(:lemon_router)
     on_exit(fn -> Enum.each(Enum.reverse(started), &Application.stop/1) end)
-    :ok = Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.RunCountTracker)
+    :ok = Supervisor.terminate_child(LemonRouter.ConversationSupervisor, LemonRouter.RunCountTracker)
 
     try do
       {:ok, view, _html} = live(conn, "/diagnostics")
@@ -134,7 +134,7 @@ defmodule LemonWeb.DiagnosticsLiveTest do
       assert copy =~ "unknown today"
       assert copy =~ "unknown failed today"
     after
-      Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.RunCountTracker)
+      Supervisor.restart_child(LemonRouter.ConversationSupervisor, LemonRouter.RunCountTracker)
     end
   end
 end

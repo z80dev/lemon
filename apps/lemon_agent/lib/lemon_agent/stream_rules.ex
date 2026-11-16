@@ -91,11 +91,11 @@ defmodule LemonAgent.StreamRules do
 
   def new(_rules), do: fail!(:invalid_rules)
 
-  @doc "Observes one provider event; never inspects its partial-message snapshot."
+  @doc "Observes one delta-only provider event without reconstructing a message."
   @spec feed(t(), term()) :: {t(), nil | rule()}
   def feed(%__MODULE__{rules: []} = state, _event), do: {state, nil}
 
-  def feed(%__MODULE__{} = state, {kind, index, delta, _partial})
+  def feed(%__MODULE__{} = state, {kind, index, delta})
       when kind in [:text_delta, :tool_call_delta] do
     validate_delta!(delta)
     key = stream_key!(kind, index)
@@ -110,14 +110,13 @@ defmodule LemonAgent.StreamRules do
     end
   end
 
-  def feed(%__MODULE__{} = state, {kind, index, _partial})
-      when kind in [:text_start, :tool_call_start] do
-    key = stream_key!(delta_kind(kind), index)
-    validate_stream_capacity!(state.buffers, key)
-    {%{state | buffers: Map.put(state.buffers, key, "")}, nil}
-  end
+  def feed(%__MODULE__{} = state, {:text_start, index}),
+    do: start_block(state, :text_delta, index)
 
-  def feed(%__MODULE__{} = state, {kind, index, _content, _partial})
+  def feed(%__MODULE__{} = state, {:tool_call_start, index, _tool_call}),
+    do: start_block(state, :tool_call_delta, index)
+
+  def feed(%__MODULE__{} = state, {kind, index, _content})
       when kind in [:text_end, :tool_call_end] do
     key = stream_key!(delta_kind(kind), index)
     {%{state | buffers: Map.delete(state.buffers, key)}, nil}
@@ -128,6 +127,12 @@ defmodule LemonAgent.StreamRules do
   def feed(%__MODULE__{} = state, {:error, _reason, _partial}), do: clear(state)
   def feed(%__MODULE__{} = state, {:canceled, _reason}), do: clear(state)
   def feed(%__MODULE__{} = state, _event), do: {state, nil}
+
+  defp start_block(state, kind, index) do
+    key = stream_key!(kind, index)
+    validate_stream_capacity!(state.buffers, key)
+    {%{state | buffers: Map.put(state.buffers, key, "")}, nil}
+  end
 
   defp validate_rule_count!([], _remaining), do: :ok
   defp validate_rule_count!([_ | _], 0), do: fail!(:too_many_rules)
