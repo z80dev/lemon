@@ -96,7 +96,7 @@ defmodule CodingAgent.Session.Rewind do
 
       %{type: :message, message: message} = entry ->
         if field(message, :role) in [:user, "user"],
-          do: {:ok, %{leaf: entry.parent_id, prompt: message_text(message)}},
+          do: {:ok, %{leaf: before_turn(session, entry), prompt: message_text(message)}},
           else: {:ok, %{leaf: entry.id, prompt: nil}}
 
       entry ->
@@ -274,7 +274,7 @@ defmodule CodingAgent.Session.Rewind do
       try do
         case restore_plan(plan) do
           :ok ->
-            session = SessionManager.set_leaf_id(session, target.parent_id)
+            session = SessionManager.set_leaf_id(session, before_turn(session, target))
 
             {:ok,
              %{
@@ -639,6 +639,16 @@ defmodule CodingAgent.Session.Rewind do
   end
 
   defp preview(_), do: ""
+
+  # A user message lands before the model turn that consumed it: skip the
+  # steering journal's turn markers so the abandoned turn's marker is not kept.
+  defp before_turn(session, entry) do
+    parent = entry.parent_id && SessionManager.get_entry(session, entry.parent_id)
+
+    if CodingAgent.Session.SteeringJournal.turn_marker?(parent),
+      do: before_turn(session, parent),
+      else: entry.parent_id
+  end
 
   @doc "A stored label as projected to clients: strictly redacted, like tree text."
   @spec project_label(String.t() | nil) :: String.t() | nil

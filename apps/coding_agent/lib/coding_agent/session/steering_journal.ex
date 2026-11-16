@@ -155,6 +155,10 @@ defmodule CodingAgent.Session.SteeringJournal do
     %{state | session_manager: manager, turn_index: index, is_streaming: true}
   end
 
+  @doc "Whether a session entry is the model-turn marker written at `turn_start`."
+  def turn_marker?(%{type: :custom, custom_type: @turn}), do: true
+  def turn_marker?(_entry), do: false
+
   def restore(state) do
     {inputs, turn} =
       state.session_manager
