@@ -17,6 +17,7 @@ defmodule LemonControlPlane.ACP.ContextReport do
       bar(report),
       table(report),
       compaction(report["autoCompaction"]),
+      get_in(report, ["promptCache", "explanation"]),
       top(report["top"]),
       caveat(report)
     ]
@@ -46,8 +47,11 @@ defmodule LemonControlPlane.ACP.ContextReport do
 
     total =
       case report["window"] do
-        nil -> "#{tokens(report["usedTokens"])} tokens (window unknown)"
-        window -> "#{tokens(report["usedTokens"])} / #{tokens(window)} tokens (#{report["percentUsed"]}%)"
+        nil ->
+          "#{tokens(report["usedTokens"])} tokens (window unknown)"
+
+        window ->
+          "#{tokens(report["usedTokens"])} / #{tokens(window)} tokens (#{report["percentUsed"]}%)"
       end
 
     ["**Context usage**", model && "`#{model}`", total, source(report["source"])]
@@ -74,7 +78,9 @@ defmodule LemonControlPlane.ACP.ContextReport do
 
     free =
       if report["freeTokens"],
-        do: [row("Free space", report["freeTokens"], percent(report["freeTokens"], report["window"]))],
+        do: [
+          row("Free space", report["freeTokens"], percent(report["freeTokens"], report["window"]))
+        ],
         else: []
 
     Enum.join(
@@ -100,7 +106,9 @@ defmodule LemonControlPlane.ACP.ContextReport do
     lines =
       items
       |> Enum.with_index(1)
-      |> Enum.map(fn {item, index} -> "#{index}. #{item["label"]} — #{tokens(item["tokens"])}" end)
+      |> Enum.map(fn {item, index} ->
+        "#{index}. #{item["label"]} — #{tokens(item["tokens"])}"
+      end)
 
     Enum.join(["**Largest contributors**" | lines], "\n")
   end

@@ -47,16 +47,18 @@ defmodule LemonAgent.GenAISpans do
   def init(opts) do
     exporter = Keyword.get(opts, :exporter, __MODULE__.OpenTelemetry)
 
-    with :ok <- LemonCore.Contract.validate(exporter, Exporter) do
-      Process.flag(:trap_exit, true)
-      config = {exporter, Keyword.get(opts, :exporter_config)}
-      # A hard-killed attachment cannot run terminate/2. Reclaim its fixed id
-      # on supervised restart rather than leaving a duplicate handler behind.
-      :telemetry.detach(__MODULE__)
-      :ok = :telemetry.attach_many(__MODULE__, @events, &__MODULE__.handle_event/4, config)
-      {:ok, config}
-    else
-      {:error, reason} -> {:stop, {:invalid_gen_ai_exporter, reason}}
+    case LemonCore.Contract.validate(exporter, Exporter) do
+      :ok ->
+        Process.flag(:trap_exit, true)
+        config = {exporter, Keyword.get(opts, :exporter_config)}
+        # A hard-killed attachment cannot run terminate/2. Reclaim its fixed id
+        # on supervised restart rather than leaving a duplicate handler behind.
+        :telemetry.detach(__MODULE__)
+        :ok = :telemetry.attach_many(__MODULE__, @events, &__MODULE__.handle_event/4, config)
+        {:ok, config}
+
+      {:error, reason} ->
+        {:stop, {:invalid_gen_ai_exporter, reason}}
     end
   end
 

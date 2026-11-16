@@ -350,18 +350,28 @@ defmodule CodingAgent.Session.CompactionManager do
       ) do
     case result do
       {:ok, compaction_result} ->
+        session_manager =
+          SessionManager.append_pruning(
+            state.session_manager,
+            Map.get(compaction_result, :pruned, %{})
+          )
+
         # Use custom summary if provided, otherwise use generated one
         summary = custom_summary || compaction_result.summary
 
         # Append compaction entry to session manager
         session_manager =
-          SessionManager.append_compaction(
-            state.session_manager,
-            summary,
-            compaction_result.first_kept_entry_id,
-            compaction_result.tokens_before,
-            compaction_result.details
-          )
+          if is_nil(compaction_result.first_kept_entry_id) do
+            session_manager
+          else
+            SessionManager.append_compaction(
+              session_manager,
+              summary,
+              compaction_result.first_kept_entry_id,
+              compaction_result.tokens_before,
+              compaction_result.details
+            )
+          end
 
         # Rebuild messages from the new position and update agent
         messages = restore_messages_fn.(session_manager)
@@ -388,7 +398,10 @@ defmodule CodingAgent.Session.CompactionManager do
            }}
 
         broadcast_event_fn.(state, compaction_event)
-        _ = CodingAgent.Session.ProjectMemory.after_compaction(state, summary)
+
+        if not is_nil(compaction_result.first_kept_entry_id) do
+          _ = CodingAgent.Session.ProjectMemory.after_compaction(state, summary)
+        end
 
         {:ok, %{state | session_manager: session_manager}}
 

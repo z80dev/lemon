@@ -25,6 +25,62 @@ defmodule CodingAgent.BackgroundRunTest do
     %{tmp_dir: tmp_dir}
   end
 
+  test "background sessions share native task slots and reclaim a crashed holder" do
+    alias CodingAgent.Parallel.Semaphore
+
+    semaphore = Process.whereis(CodingAgent.TaskSemaphore)
+    slots = Semaphore.available(semaphore)
+    assert slots > 0
+    Enum.each(1..slots, fn _ -> Semaphore.acquire(semaphore) end)
+
+    # Slots are owner-monitored, including assertion-failure cleanup.
+    owner = self()
+
+    runner = fn _opts, prompt, _signal, _timeout ->
+      owner_ref = Process.monitor(owner)
+      send(owner, {:shared_slot_started, prompt, self()})
+
+      receive do
+        :finish ->
+          Process.demonitor(owner_ref, [:flush])
+          {:ok, prompt}
+
+        {:DOWN, ^owner_ref, :process, ^owner, _reason} ->
+          {:error, :cancelled}
+      end
+    end
+
+    assert {:ok, %{id: first}} = BackgroundRun.start("first", runner: runner)
+    await_semaphore_waiters(semaphore, 1)
+    assert {:ok, %{id: second}} = BackgroundRun.start("second", runner: runner)
+    await_semaphore_waiters(semaphore, 2)
+    refute_received {:shared_slot_started, _, _}
+
+    Semaphore.release(semaphore)
+    assert_receive {:shared_slot_started, "first", first_pid}, 2_000
+    await_semaphore_waiters(semaphore, 1)
+    refute_received {:shared_slot_started, "second", _}
+
+    Process.exit(first_pid, :kill)
+    assert_receive {:shared_slot_started, "second", second_pid}, 2_000
+    send(second_pid, :finish)
+    assert {:error, :failed} = await_result(first)
+    assert {:ok, "second"} = await_result(second)
+    Enum.each(1..slots, fn _ -> Semaphore.release(semaphore) end)
+    assert Semaphore.available(semaphore) == slots
+  end
+
+  defp await_semaphore_waiters(semaphore, count, attempts \\ 10_000)
+  defp await_semaphore_waiters(_semaphore, _count, 0), do: flunk("semaphore did not queue")
+
+  defp await_semaphore_waiters(semaphore, count, attempts) do
+    if :queue.len(:sys.get_state(semaphore).waiters) == count do
+      :ok
+    else
+      await_semaphore_waiters(semaphore, count, attempts - 1)
+    end
+  end
+
   test "background and side-query children preserve inherited automatic provenance", %{
     tmp_dir: tmp_dir
   } do

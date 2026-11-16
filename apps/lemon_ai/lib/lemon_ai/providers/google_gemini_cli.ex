@@ -228,11 +228,13 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
 
     request =
       if context.system_prompt do
+        system_prompt = LemonAi.SystemPrompt.text(context.system_prompt)
+
         system_instruction =
           if is_antigravity do
-            build_antigravity_system_instruction(context.system_prompt)
+            build_antigravity_system_instruction(system_prompt)
           else
-            %{"parts" => [%{"text" => GoogleShared.sanitize_surrogates(context.system_prompt)}]}
+            %{"parts" => [%{"text" => GoogleShared.sanitize_surrogates(system_prompt)}]}
           end
 
         Map.put(request, "systemInstruction", system_instruction)

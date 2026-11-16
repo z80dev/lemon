@@ -6,7 +6,13 @@ defmodule CodingAgent.SessionManager do
   The first entry is always a SessionHeader, followed by session entries.
   Navigation checkpoints are appended outside the entry tree; the latest marker
   wins on reload. Old header-only checkpoints remain supported. A live session
-  owns one raw append descriptor and flushes turn checkpoints with datasync.
+  owns one raw append descriptor, flushes turn checkpoints with datasync, and
+  syncs effectful tool intents before dispatch. Tool results are appended without
+  a per-result sync.
+
+  A rebuildable SQLite metadata index keeps listing from reopening unchanged
+  journals. Loading streams records for every journal size, retaining only the
+  materialized session plus one input record (not the entire JSONL source).
 
   ## Tree Structure
 
@@ -21,6 +27,7 @@ defmodule CodingAgent.SessionManager do
   """
 
   alias CodingAgent.Session.BudgetLedger
+  alias CodingAgent.SessionIndex
   alias CodingAgent.SessionManager.{Session, SessionEntry, SessionHeader}
 
   @current_version 3
@@ -282,7 +289,8 @@ defmodule CodingAgent.SessionManager do
               leaf_id: nil,
               file_path: nil,
               append_device: nil,
-              needs_snapshot: true
+              needs_snapshot: true,
+              source_revision: nil
   end
 
   # ============================================================================
@@ -323,29 +331,38 @@ defmodule CodingAgent.SessionManager do
   """
   @spec load_from_file(String.t()) :: {:ok, Session.t()} | {:error, term()}
   def load_from_file(path) do
-    with {:ok, content} <- File.read(path),
-         {:ok, {header, raw_entries}} <- parse_jsonl(content),
-         {header, entries} <- restore_checkpoints(header, raw_entries),
-         {:ok, migrated_entries} <- migrate_to_current_version(header.version, entries) do
-      by_id = Map.new(migrated_entries, fn entry -> {entry.id, entry} end)
+    with {:ok, stat} <- File.stat(path) do
+      initial = %{
+        header: nil,
+        entries_rev: [],
+        by_id: %{},
+        count: 0,
+        terminated?: true,
+        source_revision: file_revision(stat)
+      }
 
-      leaf_id =
-        if header.checkpoint_entry_count == length(migrated_entries),
-          do: header.active_leaf_id,
-          else: find_latest_leaf(migrated_entries)
+      path
+      |> File.stream!()
+      |> Enum.reduce_while({:ok, initial}, &parse_line/2)
+      |> finish_load(path)
+    end
+  rescue
+    error in File.Error -> {:error, error.reason}
+  end
 
-      {:ok,
-       %Session{
-         header: %{header | version: @current_version},
-         entries_rev: Enum.reverse(migrated_entries),
-         by_id: by_id,
-         leaf_id: leaf_id,
-         file_path: path,
-         needs_snapshot:
-           header.version != @current_version or not String.ends_with?(content, "\n")
-       }}
+  @doc false
+  def current_snapshot?(%Session{file_path: path, source_revision: revision}, path)
+      when not is_nil(revision) do
+    case File.stat(path) do
+      {:ok, stat} -> file_revision(stat) == revision
+      {:error, _} -> false
     end
   end
+
+  def current_snapshot?(_session, _path), do: false
+
+  defp file_revision(stat),
+    do: {stat.major_device, stat.minor_device, stat.inode, stat.size, stat.mtime, stat.ctime}
 
   @doc """
   Write session to JSONL file using atomic replace semantics.
@@ -368,7 +385,9 @@ defmodule CodingAgent.SessionManager do
       |> Enum.join("\n")
 
     with :ok <- File.mkdir_p(dir) do
-      atomic_write(path, lines <> "\n")
+      SessionIndex.mutate(path, {:snapshot, session.header, session.entries_rev}, fn ->
+        atomic_write(path, lines <> "\n")
+      end)
     end
   end
 
@@ -425,31 +444,54 @@ defmodule CodingAgent.SessionManager do
         "checkpointEntryCount" => map_size(session.by_id)
       })
 
-    with :ok <- :file.write(session.append_device, [marker, "\n"]),
-         :ok <- :file.datasync(session.append_device),
-         do: :ok
+    SessionIndex.mutate(session.file_path, :checkpoint, fn ->
+      with :ok <- :file.write(session.append_device, [marker, "\n"]),
+           :ok <- :file.datasync(session.append_device),
+           do: :ok
+    end)
+  end
+
+  @doc """
+  Append and sync a `lemon.tool_intent` before an effectful tool is dispatched.
+
+  Must run in the live journal descriptor's owner. Returns the updated session
+  even if sync fails: an appended intent may survive and must remain conservative
+  on recovery. Results use ordinary unsynced `append_message/2` writes.
+  The optional file module is a fault-injection and latency-measurement seam.
+  """
+  @spec record_tool_intent(Session.t(), map(), module()) ::
+          {:ok, Session.t()} | {:error, term(), Session.t()}
+  def record_tool_intent(session, data, file_module \\ :file)
+
+  def record_tool_intent(%Session{append_device: nil} = session, _data, _file_module),
+    do: {:error, :not_persisted, session}
+
+  def record_tool_intent(%Session{} = session, data, file_module) do
+    entry = SessionEntry.custom("lemon.tool_intent", data)
+    entry = %{entry | id: generate_unique_id(session.by_id), parent_id: session.leaf_id}
+
+    case file_module.write(session.append_device, [encode_entry(entry), "\n"]) do
+      :ok ->
+        session = %{
+          session
+          | entries_rev: [entry | session.entries_rev],
+            by_id: Map.put(session.by_id, entry.id, entry),
+            leaf_id: entry.id
+        }
+
+        case file_module.datasync(session.append_device) do
+          :ok -> {:ok, session}
+          {:error, reason} -> {:error, {:sync, reason}, session}
+        end
+
+      {:error, reason} ->
+        {:error, {:append, reason}, session}
+    end
   end
 
   @doc "Closes the live journal descriptor; raw descriptors also close when their owner exits."
   def close(%Session{append_device: nil}), do: :ok
   def close(%Session{append_device: device}), do: :file.close(device)
-
-  defp restore_checkpoints(header, entries) do
-    {header, reversed} =
-      Enum.reduce(entries, {header, []}, fn
-        %{"type" => "checkpoint"} = marker, {header, acc} ->
-          {%{
-             header
-             | active_leaf_id: marker["activeLeafId"],
-               checkpoint_entry_count: marker["checkpointEntryCount"]
-           }, acc}
-
-        entry, {header, acc} ->
-          {header, [entry | acc]}
-      end)
-
-    {header, Enum.reverse(reversed)}
-  end
 
   @doc "Restores durable execution authority independently of the selected history branch."
   def execution_context(session) do
@@ -486,10 +528,21 @@ defmodule CodingAgent.SessionManager do
         {session, text}
 
       _ ->
+        lifecycle_observation(:environment_capture, session.header.id)
         text = capture.(cwd)
         entry = SessionEntry.custom("lemon.prompt_environment", %{"cwd" => cwd, "text" => text})
         {append_entry(session, entry), text}
     end
+  end
+
+  # Content-free counting seam for deterministic lifecycle tests and latency
+  # measurements. Count actual parses/captures, not session-start stages.
+  defp lifecycle_observation(operation, session_id) do
+    :telemetry.execute(
+      [:coding_agent, :session, operation],
+      %{count: 1},
+      %{session_id: session_id}
+    )
   end
 
   @doc """
@@ -574,8 +627,17 @@ defmodule CodingAgent.SessionManager do
   """
   @spec append_to_file(String.t(), SessionEntry.t()) :: :ok | {:error, term()}
   def append_to_file(path, %SessionEntry{} = entry) do
-    line = encode_entry(entry) <> "\n"
-    File.write(path, line, [:append, :binary])
+    SessionIndex.mutate(path, {:append, entry}, fn ->
+      with {:ok, device} <- :file.open(path, [:append, :raw, :binary]) do
+        try do
+          with :ok <- :file.write(device, [encode_entry(entry), "\n"]),
+               :ok <- :file.datasync(device),
+               do: :ok
+        after
+          :file.close(device)
+        end
+      end
+    end)
   end
 
   @doc """
@@ -603,14 +665,26 @@ defmodule CodingAgent.SessionManager do
 
     entry = %{entry | id: new_id, parent_id: parent_id}
 
-    if session.append_device do
-      case :file.write(session.append_device, [encode_entry(entry), "\n"]) do
-        :ok ->
-          :ok
+    result =
+      cond do
+        session.append_device ->
+          SessionIndex.mutate(session.file_path, {:append, entry}, fn ->
+            :file.write(session.append_device, [encode_entry(entry), "\n"])
+          end)
 
-        {:error, reason} ->
-          raise File.Error, reason: reason, action: "append session", path: session.file_path
+        session.file_path ->
+          append_to_file(session.file_path, entry)
+
+        true ->
+          :ok
       end
+
+    case result do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "append session", path: session.file_path
     end
 
     %{
@@ -677,6 +751,34 @@ defmodule CodingAgent.SessionManager do
     append_entry(session, entry)
   end
 
+  @doc false
+  def append_pruning(session, replacements) when map_size(replacements) == 0, do: session
+
+  def append_pruning(session, replacements) do
+    append_entry(session, SessionEntry.custom("lemon.tool_pruning", replacements))
+  end
+
+  @doc false
+  def pruned_branch(session, leaf_id \\ nil) do
+    branch = get_branch(session, leaf_id)
+
+    replacements =
+      Enum.reduce(branch, %{}, fn
+        %{type: :custom, custom_type: "lemon.tool_pruning", data: data}, acc ->
+          Map.merge(acc, data)
+
+        _, acc ->
+          acc
+      end)
+
+    Enum.map(branch, fn entry ->
+      case Map.fetch(replacements, entry.id) do
+        {:ok, message} -> %{entry | message: message}
+        :error -> entry
+      end
+    end)
+  end
+
   @doc """
   Append a label entry bookmarking `target_id`. A nil or empty label clears it.
   The entry follows the current leaf like any other entry; labels never change
@@ -731,7 +833,26 @@ defmodule CodingAgent.SessionManager do
           raise File.Error, reason: reason, action: "checkpoint session", path: session.file_path
       end
     else
-      %{session | needs_snapshot: true}
+      if session.file_path do
+        live = persist(session, session.file_path)
+
+        try do
+          case checkpoint(live) do
+            :ok ->
+              %{live | append_device: nil}
+
+            {:error, reason} ->
+              raise File.Error,
+                reason: reason,
+                action: "checkpoint session",
+                path: session.file_path
+          end
+        after
+          close(live)
+        end
+      else
+        %{session | needs_snapshot: true}
+      end
     end
   end
 
@@ -825,7 +946,7 @@ defmodule CodingAgent.SessionManager do
           model: %{provider: String.t(), model_id: String.t()} | nil
         }
   def build_session_context(%Session{} = session, leaf_id \\ nil) do
-    branch = get_branch(session, leaf_id)
+    branch = pruned_branch(session, leaf_id)
 
     # Find latest compaction entry in path
     {compaction_entry, compaction_index} =
@@ -963,19 +1084,15 @@ defmodule CodingAgent.SessionManager do
 
   def migrate_to_current_version(2, entries) do
     # v2 -> v3: Rename "hookMessage" role to "custom"
-    migrated =
-      Enum.map(entries, fn entry ->
-        case entry do
-          %{"message" => %{"role" => "hookMessage"} = msg} = e ->
-            %{e | "message" => %{msg | "role" => "custom"}}
-
-          other ->
-            other
-        end
-      end)
+    migrated = Enum.map(entries, &migrate_hook_message/1)
 
     migrate_to_current_version(3, migrated)
   end
+
+  defp migrate_hook_message(%{"message" => %{"role" => "hookMessage"} = message} = entry),
+    do: %{entry | "message" => %{message | "role" => "custom"}}
+
+  defp migrate_hook_message(entry), do: entry
 
   defp add_ids_to_entries(entries) do
     {migrated_rev, _last_id, _ids} =
@@ -1129,85 +1246,130 @@ defmodule CodingAgent.SessionManager do
   @doc """
   List all sessions for a cwd with metadata.
 
-  Returns a list of maps with `:path`, `:id`, `:timestamp`, and `:cwd`.
+  Returns indexed header fields, `:title`, `:updated_at` and `:path`. Unchanged
+  journals are statted but not opened. Missing or changed cache rows rebuild
+  from their journal; a deleted index rebuilds automatically.
   """
   @spec list_sessions(String.t()) :: {:ok, [map()]} | {:error, term()}
-  def list_sessions(cwd) do
-    session_dir = get_session_dir(cwd)
-
-    case File.ls(session_dir) do
-      {:ok, files} ->
-        sessions =
-          files
-          |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
-          |> Enum.map(fn file ->
-            path = Path.join(session_dir, file)
-            load_session_metadata(path)
-          end)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.sort_by(&{&1.updated_at, &1.timestamp}, :desc)
-
-        {:ok, sessions}
-
-      {:error, :enoent} ->
-        {:ok, []}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp load_session_metadata(path) do
-    case File.open(path, [:read, :utf8]) do
-      {:ok, file} ->
-        first_line = IO.read(file, :line)
-        File.close(file)
-
-        case if(is_binary(first_line), do: Jason.decode(first_line), else: {:error, :empty}) do
-          {:ok, %{"type" => "session"} = header} ->
-            %{
-              path: path,
-              id: header["id"],
-              timestamp: header["timestamp"],
-              updated_at:
-                case File.stat(path, time: :posix) do
-                  {:ok, stat} -> stat.mtime * 1000
-                  _ -> header["timestamp"]
-                end,
-              cwd: header["cwd"]
-            }
-
-          _ ->
-            nil
-        end
-
-      _ ->
-        nil
-    end
-  end
+  def list_sessions(cwd), do: SessionIndex.list(get_session_dir(cwd))
 
   # ============================================================================
   # JSONL Parsing and Encoding
   # ============================================================================
 
-  defp parse_jsonl(content) do
-    lines =
-      content
-      |> String.split("\n")
-      |> Enum.reject(&(String.trim(&1) == ""))
+  defp parse_line(line, {:ok, state}) do
+    complete? = String.ends_with?(line, "\n")
+    state = %{state | terminated?: complete?}
 
-    case lines do
-      [] ->
-        {:error, :empty_file}
+    if String.trim(line) == "" do
+      {:cont, {:ok, state}}
+    else
+      case {state.header, Jason.decode(line, strings: :copy)} do
+        {nil, {:ok, data}} ->
+          case parse_header(data) do
+            {:ok, header} -> {:cont, {:ok, %{state | header: header}}}
+            error -> {:halt, error}
+          end
 
-      [header_line | entry_lines] ->
-        with {:ok, header_data} <- Jason.decode(header_line),
-             {:ok, header} <- parse_header(header_data),
-             {:ok, entries} <- parse_entries(entry_lines, not String.ends_with?(content, "\n")) do
-          {:ok, {header, entries}}
-        end
+        {nil, {:error, _reason} = error} ->
+          {:halt, error}
+
+        {_header, {:ok, data}} when is_map(data) ->
+          {:cont, {:ok, load_entry(state, data)}}
+
+        {_header, {:ok, _data}} ->
+          {:halt, {:error, :invalid_entry}}
+
+        {_header, {:error, _reason}} when not complete? ->
+          {:halt, {:ok, state}}
+
+        {_header, {:error, reason}} ->
+          {:halt, {:error, {:json_parse_error, reason, line}}}
+      end
     end
   end
+
+  defp load_entry(
+         %{header: %SessionHeader{} = header} = state,
+         %{"type" => "checkpoint"} = marker
+       ) do
+    header = %{
+      header
+      | active_leaf_id: marker["activeLeafId"],
+        checkpoint_entry_count: marker["checkpointEntryCount"]
+    }
+
+    %{state | header: header}
+  end
+
+  defp load_entry(state, data) do
+    data =
+      if state.header.version == 1 do
+        data
+        |> Map.put("id", generate_unique_id(state.by_id))
+        |> Map.put(
+          "parentId",
+          case state.entries_rev do
+            [entry | _] -> entry.id
+            [] -> nil
+          end
+        )
+        |> migrate_stream_compaction(state)
+      else
+        data
+      end
+
+    data = if state.header.version <= 2, do: migrate_hook_message(data), else: data
+    entry = map_to_entry(data)
+
+    %{
+      state
+      | entries_rev: [entry | state.entries_rev],
+        by_id: Map.put(state.by_id, entry.id, entry),
+        count: state.count + 1
+    }
+  end
+
+  defp migrate_stream_compaction(
+         %{"type" => "compaction", "firstKeptEntryIndex" => index} = data,
+         state
+       )
+       when is_integer(index) do
+    reverse_index = if index < 0, do: -index - 1, else: state.count - index - 1
+
+    case if(reverse_index >= 0, do: Enum.at(state.entries_rev, reverse_index)) do
+      %SessionEntry{id: id} ->
+        data |> Map.put("firstKeptEntryId", id) |> Map.delete("firstKeptEntryIndex")
+
+      _ ->
+        Map.delete(data, "firstKeptEntryIndex")
+    end
+  end
+
+  defp migrate_stream_compaction(data, _state), do: data
+
+  defp finish_load({:ok, %{header: nil}}, _path), do: {:error, :empty_file}
+
+  defp finish_load({:ok, %{header: %SessionHeader{} = header} = state}, path) do
+    lifecycle_observation(:journal_load, header.id)
+    leaf_id =
+      if header.checkpoint_entry_count == state.count,
+        do: header.active_leaf_id,
+        else: find_latest_leaf(state.entries_rev)
+
+    {:ok,
+     %Session{
+       header: %{header | version: @current_version},
+       entries_rev: state.entries_rev,
+       by_id: state.by_id,
+       leaf_id: leaf_id,
+       file_path: path,
+       source_revision: state.source_revision,
+       needs_snapshot: header.version != @current_version or not state.terminated?
+     }}
+  end
+
+  defp finish_load({:error, _reason} = error, _path), do: error
 
   defp parse_header(%{"type" => "session"} = data) do
     header = %SessionHeader{
@@ -1225,22 +1387,6 @@ defmodule CodingAgent.SessionManager do
   end
 
   defp parse_header(_), do: {:error, :invalid_header}
-
-  defp parse_entries(lines, interrupted_append?) do
-    last_index = length(lines) - 1
-
-    Enum.reduce_while(Enum.with_index(lines), {:ok, []}, fn {line, index}, {:ok, acc} ->
-      case Jason.decode(line) do
-        {:ok, data} -> {:cont, {:ok, [data | acc]}}
-        {:error, _reason} when index == last_index and interrupted_append? -> {:halt, {:ok, acc}}
-        {:error, reason} -> {:halt, {:error, {:json_parse_error, reason, line}}}
-      end
-    end)
-    |> case do
-      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
-      error -> error
-    end
-  end
 
   defp encode_header(%SessionHeader{} = header) do
     %{
@@ -1407,20 +1553,12 @@ defmodule CodingAgent.SessionManager do
   defp json_safe_key(key) when is_atom(key), do: Atom.to_string(key)
   defp json_safe_key(key), do: inspect(key)
 
-  # Find the latest entry that has no children (a leaf node)
+  # Entries are newest-first, so the first childless entry is the latest leaf.
   defp find_latest_leaf([]), do: nil
 
-  defp find_latest_leaf(entries) do
-    # Get all ids that are referenced as parent_id
-    parent_ids = MapSet.new(entries, & &1.parent_id)
-
-    # Find entries that are not parents (leaves)
-    leaves = Enum.filter(entries, fn entry -> not MapSet.member?(parent_ids, entry.id) end)
-
-    # Return the last leaf (most recently added)
-    case List.last(leaves) do
-      nil -> List.last(entries) && List.last(entries).id
-      entry -> entry.id
-    end
+  defp find_latest_leaf(entries_rev) do
+    parent_ids = MapSet.new(entries_rev, & &1.parent_id)
+    entry = Enum.find(entries_rev, &(not MapSet.member?(parent_ids, &1.id))) || hd(entries_rev)
+    entry.id
   end
 end

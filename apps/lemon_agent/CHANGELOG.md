@@ -15,6 +15,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - Optional GenAI span exporter behaviour with an OpenTelemetry adapter
   (`opentelemetry_api` is optional) (#594).
 - `KanbanStore.renew_task_lease/3`: exact-lease guarded lease renewal (#596).
+- `AgentTool` `:effect` (`:none | :idempotent | :external`, default `:external`);
+  effectful tools cannot start work from `on_stream` (#554).
+- `LemonAgent.StreamRules`: dormant `streamPattern` rules that abort and retry
+  the model stream with a correction (#599).
 
 - `auth_source = "omp_broker"` resolves any provider's credential from omp's
   auth broker (`LemonAgent.ModelRuntime.OmpBroker`), authoritative and
@@ -40,6 +44,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking:** `AgentLoopConfig.emit_system_prompt`, `.stream_rules` and
+  `.on_stream_rule` moved into the new `.hooks` map (same keys, defaults `false`,
+  `[]`, `nil`). Struct literals and field reads using the old fields must change.
+- `LemonAgent.EventStream` is a facade over the single `LemonAi.EventStream`;
+  `push/2` returns `:ok | {:error, :overflow | :canceled}` and no longer times
+  out, so producers must handle rejection (#570).
+- `AgentLoopConfig`/`Context` system prompts accept `LemonAi.SystemPrompt` blocks
+  as well as strings (#563).
 - `AbortSignal` levels live in `:atomics` and are garbage-collected with their
   holders; `AbortSignal.TableOwner` and `AbortSignal.clear/1` are removed (#549).
 

@@ -92,10 +92,36 @@ defmodule LemonControlPlane.Methods.SessionsContext do
            usage |> Map.get(:top, []) |> Enum.flat_map(&top_item/1) |> Enum.take(@top_limit),
          "messageCount" => non_negative(Map.get(usage, :message_count)),
          "usage" => usage(Map.get(usage, :usage)),
+         "promptCache" => prompt_cache(Map.get(usage, :prompt_cache)),
          "measuredAt" => non_negative(Map.get(usage, :measured_at))
        }}
     end
   end
+
+  defp prompt_cache(%{status: status} = cache) do
+    # Explain only enumerated runtime diagnoses, never arbitrary prompt content.
+    explanation =
+      case status do
+        :digest_changed -> "Prompt digest changed; the previous prompt cache prefix may miss."
+        :unchanged -> "Prompt digest unchanged."
+        :restored -> "Rebuilt prompt differed; the journaled prompt was restored."
+        _ -> "No previous reply prompt digest is available."
+      end
+
+    %{
+      "digest" => digest(Map.get(cache, :digest)),
+      "previousDigest" => digest(Map.get(cache, :previous_digest)),
+      "explanation" => explanation
+    }
+  end
+
+  defp prompt_cache(_), do: nil
+
+  defp digest(value) when is_binary(value) do
+    if Regex.match?(~r/\A[0-9a-f]{64}\z/, value), do: value, else: nil
+  end
+
+  defp digest(_), do: nil
 
   defp category(%{id: id, tokens: tokens} = category)
        when is_map_key(@category_labels, id) and is_integer(tokens) and tokens >= 0 do

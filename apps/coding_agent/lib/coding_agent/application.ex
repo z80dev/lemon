@@ -10,8 +10,6 @@ defmodule CodingAgent.Application do
 
     lane_caps =
       Application.get_env(:coding_agent, :lane_caps, %{
-        main: 4,
-        subagent: 8,
         background_exec: 2
       })
 
@@ -23,6 +21,7 @@ defmodule CodingAgent.Application do
       )
 
     children = [
+      CodingAgent.RuntimeTables,
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
       {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},

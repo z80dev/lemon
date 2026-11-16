@@ -6,8 +6,24 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+
+- `LemonAi.SystemPrompt`: `Context.system_prompt` accepts a binary or ordered
+  blocks, with directory-derived blocks kept after the cache breakpoint (#563).
+- `LemonAi.Auth.Cache`: supervised ETS owner replacing mutable `:persistent_term`
+  token and model caches (#595).
+
 ### Changed
 
+- `LemonAi.EventStream` is the single event-stream implementation (also behind
+  `LemonAgent.EventStream`): `push/2` waits without a call timeout and returns
+  `{:error, :overflow | :canceled}`; `push!/2` throws on rejection; adds an
+  opt-in `bench/event_stream.exs` benchmark (#570).
+- OpenAI Responses providers support freeform/custom tools for the opt-in Codex
+  `apply_patch` dialect (#603).
+- Auth, provider-registry and OMP-token state use bounded locks and supervised
+  ETS ownership instead of unbounded `:global` locks and mutable
+  `:persistent_term` (#589, #595).
 - `LemonAi.CallDispatcher` keeps per-provider concurrency caps and live leases
   across slot-authority and dispatcher restarts and fails closed with
   `:admission_unavailable`; circuit-breaker reads come from ETS (#591).

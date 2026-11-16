@@ -38,6 +38,7 @@ export function getPromptHistoryPath(): string {
 
 /** A saved prompt as the Ctrl+R search overlay lists it. */
 export interface PromptHistoryEntry {
+	id: number;
 	prompt: string;
 	/** Unix seconds. Prompts saved before timestamps existed carry the time they were first migrated. */
 	created_at: number;
@@ -137,15 +138,28 @@ export class PromptHistoryStore {
 
 	#select(db: Database): PromptHistoryEntry[] {
 		return db
-			.query<{ prompt: string; created_at: number; cwd: string | null }, []>(
-				"SELECT prompt, created_at, cwd FROM prompts ORDER BY id DESC",
+			.query<{ id: number; prompt: string; created_at: number; cwd: string | null }, []>(
+				"SELECT id, prompt, created_at, cwd FROM prompts ORDER BY id DESC",
 			)
 			.all()
 			.map((row) => ({
+				id: row.id,
 				prompt: row.prompt,
 				created_at: row.created_at,
 				...(row.cwd ? { cwd: row.cwd } : {}),
 			}));
+	}
+
+	/** Delete only the selected snapshot, never a different prompt reusing its SQLite row ID. */
+	delete(entry: PromptHistoryEntry): void {
+		if (!this.#enabled) return;
+		this.#withDatabase("delete", (db) => {
+			db.run("DELETE FROM prompts WHERE id = ? AND prompt = ? AND created_at = ?", [
+				entry.id,
+				entry.prompt,
+				entry.created_at,
+			]);
+		});
 	}
 
 	/** Keep the DB inode: unlinking a live SQLite database splits writers. */

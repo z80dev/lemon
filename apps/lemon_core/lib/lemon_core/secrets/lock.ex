@@ -12,6 +12,11 @@ defmodule LemonCore.Secrets.Lock do
   across every OS process sharing the store file, so a `lemon secrets set` in
   one terminal and a rotation in another exclude each other.
 
+  Same-VM waiters monitor the holder and subscribe to its lease-specific release
+  notification, rechecking the durable lease after subscribing to avoid lost
+  wakeups. Other OS processes still poll the shared lease; notifications never
+  replace the Store's atomic acquisition or dead-holder checks.
+
   ## Reclaiming abandoned leases
 
   A lease has no expiry: a holder that is merely slow keeps it. The lease
@@ -31,7 +36,7 @@ defmodule LemonCore.Secrets.Lock do
   holder is gone before deleting the `:secrets_lock` row.
   """
 
-  alias LemonCore.Store
+  alias LemonCore.{Bus, Store}
 
   @table :secrets_lock
   @key :secrets
@@ -94,6 +99,7 @@ defmodule LemonCore.Secrets.Lock do
       {:ok, lease} ->
         case holder_state(lease) do
           :dead -> reclaim(server, lease, deadline)
+          {:local, holder} -> wait_local(server, lease, holder, deadline)
           :alive -> wait(server, deadline, {:error, :secrets_locked})
           {:unprovable, host} -> wait(server, deadline, {:error, {:secrets_lock_held, host}})
         end
@@ -113,7 +119,7 @@ defmodule LemonCore.Secrets.Lock do
     end
   end
 
-  # A normal release may still arrive, so keep polling until the deadline.
+  # Other VMs cannot observe a BEAM monitor or this node's release notification.
   defp wait(server, deadline, timeout_error) do
     if System.monotonic_time(:millisecond) >= deadline do
       timeout_error
@@ -123,23 +129,103 @@ defmodule LemonCore.Secrets.Lock do
     end
   end
 
-  defp release(server, lease), do: Store.compare_and_delete_many(server, [{@table, @key, lease}])
+  defp wait_local(server, lease, holder, deadline) do
+    monitor = Process.monitor(holder)
+    owner = lease.owner
+    topic = "secrets_lock:#{owner}"
 
-  defp holder_state(%{host: host, os_pid: os_pid, holder: holder})
-       when is_binary(host) and is_binary(os_pid) and is_binary(holder) do
+    result =
+      try do
+        case subscribe(topic) do
+          :ok ->
+            # A release before subscription is detected by this exact re-read;
+            # a later release sends the notification we are now subscribed to.
+            case Store.fetch(server, @table, @key) do
+              {:ok, ^lease} ->
+                remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+                receive do
+                  {:DOWN, ^monitor, :process, ^holder, _reason} -> :retry
+                  {__MODULE__, :released, ^owner} -> :retry
+                after
+                  remaining -> {:error, :secrets_locked}
+                end
+
+              {:ok, _changed} ->
+                :retry
+
+              {:error, reason} ->
+                {:error, {:store_failed, reason}}
+            end
+
+          :unavailable ->
+            # Standalone Store users need not start the application Bus.
+            :poll
+        end
+      after
+        Process.demonitor(monitor, [:flush])
+        unsubscribe(topic)
+
+        receive do
+          {__MODULE__, :released, ^owner} -> :ok
+        after
+          0 -> :ok
+        end
+      end
+
+    case result do
+      :retry -> acquire(server, deadline)
+      :poll -> wait(server, deadline, {:error, :secrets_locked})
+      error -> error
+    end
+  end
+
+  defp release(server, lease) do
+    result = Store.compare_and_delete_many(server, [{@table, @key, lease}])
+    if result == :ok, do: notify_release(lease)
+    result
+  end
+
+  defp subscribe(topic) do
+    Bus.subscribe(topic)
+  rescue
+    _ -> :unavailable
+  catch
+    :exit, _ -> :unavailable
+  end
+
+  defp unsubscribe(topic) do
+    Bus.unsubscribe(topic)
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp notify_release(lease) do
+    Bus.broadcast("secrets_lock:#{lease.owner}", {__MODULE__, :released, lease.owner})
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp holder_state(%{owner: owner, host: host, os_pid: os_pid, holder: holder})
+       when is_binary(owner) and is_binary(host) and is_binary(os_pid) and is_binary(holder) do
     cond do
       host != host() -> {:unprovable, host}
-      os_pid == System.pid() -> if local_holder_alive?(holder), do: :alive, else: :dead
+      os_pid == System.pid() -> local_holder_state(holder)
       true -> os_process_state(os_pid)
     end
   end
 
   defp holder_state(_unreadable), do: {:unprovable, :unknown}
 
-  defp local_holder_alive?(holder) do
-    holder |> String.to_charlist() |> :erlang.list_to_pid() |> Process.alive?()
+  defp local_holder_state(holder) do
+    pid = holder |> String.to_charlist() |> :erlang.list_to_pid()
+    if Process.alive?(pid), do: {:local, pid}, else: :dead
   rescue
-    ArgumentError -> true
+    ArgumentError -> {:unprovable, :unknown}
   end
 
   # `kill -0` probes without signalling. Only an explicit "no such process"

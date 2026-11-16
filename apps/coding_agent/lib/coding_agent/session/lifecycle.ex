@@ -17,6 +17,7 @@ defmodule CodingAgent.Session.Lifecycle do
     OverflowRecovery,
     Persistence,
     PromptComposer,
+    PromptJournal,
     ProviderFallback,
     State,
     WasmBridge
@@ -300,6 +301,9 @@ defmodule CodingAgent.Session.Lifecycle do
         Planning.runtime_context(
           %{
             plan_gate: plan_gate,
+            model: model,
+            settings_manager: settings_manager,
+            tool_opts: tool_opts,
             cwd: cwd,
             session_manager: session_manager,
             run_id: run_id,
@@ -374,8 +378,10 @@ defmodule CodingAgent.Session.Lifecycle do
         nil -> CodingAgent.SystemPrompt.join_sections(prompt_sections)
       end
 
-    system_prompt =
-      Planning.system_prompt(base_system_prompt, session_manager)
+    prompt_state = PromptJournal.restore(session_manager, base_system_prompt, prompt_sections)
+    system_prompt = prompt_state.system_prompt
+    base_system_prompt = prompt_state.base_system_prompt
+    prompt_sections = prompt_state.prompt_sections
 
     emit_start_stage(:prompt_composition, stage_started, session_manager.header.id)
 
@@ -478,7 +484,6 @@ defmodule CodingAgent.Session.Lifecycle do
     # (provider prompt caches are keyed per provider+credential).
     agent_registry_key = {session_manager.header.id, :main, 0}
     agent_name = LemonAgent.AgentRegistry.via(agent_registry_key)
-    base_stream_fn = Keyword.get(opts, :stream_fn) || (&LemonAi.stream/3)
 
     # Consult the live branch policy even when the session started explicitly
     # pinned: navigation can restore an automatic branch (and vice versa).
@@ -489,6 +494,9 @@ defmodule CodingAgent.Session.Lifecycle do
                {:check_model_cost, candidate, context, options},
                :infinity
              ) do
+        {base_stream_fn, options} =
+          GenServer.call(session_pid, {:invocation_stream, options}, :infinity)
+
         base_stream_fn.(candidate, context, options)
       end
     end
@@ -499,11 +507,12 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     retry_settings = SettingsManager.get_retry_settings(settings_manager)
+    stream_rules = CodingAgent.Rules.stream_rules(cwd)
 
     {:ok, agent} =
       LemonAgent.Agent.start_link(
         initial_state: %{
-          system_prompt: system_prompt,
+          system_prompt: PromptJournal.blocks(prompt_state),
           model: model,
           tools: tools,
           thinking_level: thinking_level,
@@ -511,6 +520,13 @@ defmodule CodingAgent.Session.Lifecycle do
         },
         convert_to_llm: convert_to_llm,
         stream_fn: stream_fn,
+        system_prompt_observer: session_pid,
+        stream_rules: fn ->
+          GenServer.call(session_pid, {:available_stream_rules, stream_rules}, :infinity)
+        end,
+        on_stream_rule: fn rule ->
+          GenServer.call(session_pid, {:inject_stream_rule, rule}, :infinity)
+        end,
         stream_options: stream_options,
         transform_context: transform_context,
         get_api_key: get_api_key,
@@ -569,6 +585,7 @@ defmodule CodingAgent.Session.Lifecycle do
       system_prompt: system_prompt,
       base_system_prompt: base_system_prompt,
       prompt_sections: prompt_sections,
+      journaled_prompt: prompt_state.journaled_prompt,
       base_tools: lifecycle.tools,
       prompt_environment: prompt_environment,
       explicit_system_prompt: explicit_system_prompt,
@@ -595,6 +612,14 @@ defmodule CodingAgent.Session.Lifecycle do
       pending_prompt_timer_ref: nil,
       event_listeners: [],
       event_streams: %{},
+      event_log:
+        CodingAgent.Session.EventLog.new(
+          session_manager.header.id,
+          session_key,
+          run_id,
+          cwd,
+          opts
+        ),
       abort_signal: nil,
       steering_queue: :queue.new(),
       follow_up_queue: :queue.new(),
@@ -725,7 +750,9 @@ defmodule CodingAgent.Session.Lifecycle do
         extension_status_report: lifecycle.extension_status_report,
         wasm_sidecar_pid: wasm_reload.sidecar_pid,
         wasm_tool_names: wasm_reload.wasm_tool_names,
-        wasm_status: wasm_reload.wasm_status
+        wasm_status: wasm_reload.wasm_status,
+        tool_opts: Keyword.merge(state.tool_opts, tool_opts),
+        journaled_prompt: nil
     }
 
     {:ok, lifecycle.extension_status_report, new_state}
@@ -810,6 +837,8 @@ defmodule CodingAgent.Session.Lifecycle do
         state =
           State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))
           |> Map.put(:session_file, new_path)
+          |> Map.put(:journaled_prompt, nil)
+          |> Map.put(:response_system_prompt, nil)
           |> rebuild_tools(previous_session_id)
           |> BranchState.restore()
 
@@ -827,6 +856,13 @@ defmodule CodingAgent.Session.Lifecycle do
   defp wait_for_reset_abort(state, true, false, reset_abort_wait_ms) do
     LemonAgent.Agent.abort(state.agent)
     LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
+  end
+
+  @doc false
+  def rebind_invocation(%Session{} = state) do
+    state
+    |> rebuild_tools(state.session_manager.header.id)
+    |> Planning.refresh()
   end
 
   # Rebuild closures and hook/approval contexts for the fresh journal identity
@@ -935,7 +971,8 @@ defmodule CodingAgent.Session.Lifecycle do
 
   defp maybe_put_workspace_scope_root(context, _execution_context), do: context
 
-  defp resolve_approval_context(opts, session_id, tool_policy) do
+  @doc false
+  def resolve_approval_context(opts, session_id, tool_policy) do
     approval_context = Keyword.get(opts, :approval_context)
 
     channel_identity =

@@ -102,6 +102,12 @@ defmodule CodingAgent.Tools.Edit do
             "description" =>
               "Text mode only: replacement text. In anchored mode omit this top-level field and put new_text inside each edit."
           },
+          "replace_all" => %{
+            "type" => "boolean",
+            "default" => false,
+            "description" =>
+              "Text mode only: replace every exact occurrence, retaining native mutation checks"
+          },
           "snapshot" => %{
             "type" => "string",
             "description" =>
@@ -167,6 +173,8 @@ defmodule CodingAgent.Tools.Edit do
           keyword()
         ) :: AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
+    opts = Keyword.put(opts, :replace_all, params["replace_all"] == true)
+
     if aborted?(signal) do
       {:error, "Operation aborted"}
     else
@@ -329,11 +337,15 @@ defmodule CodingAgent.Tools.Edit do
     else
       with :ok <- validate_required_param(params["old_text"], "old_text"),
            :ok <- validate_required_param(params["new_text"], "new_text"),
-           :ok <- validate_old_text(params["old_text"]) do
+           :ok <- validate_old_text(params["old_text"]),
+           :ok <- validate_replace_all(params["replace_all"]) do
         {:ok, {:text, params["old_text"], params["new_text"]}}
       end
     end
   end
+
+  defp validate_replace_all(value) when value in [nil, true, false], do: :ok
+  defp validate_replace_all(_value), do: {:error, "replace_all must be a boolean"}
 
   defp validate_snapshot_path(nil, _target, _cwd, _opts), do: :ok
 
@@ -432,7 +444,22 @@ defmodule CodingAgent.Tools.Edit do
     end
   end
 
-  defp perform_local_edit(raw, content, spec, _opts, _path), do: perform_edit(raw, content, spec)
+  defp perform_local_edit(raw, content, {:text, old, new} = spec, opts, _path) do
+    if Keyword.get(opts, :replace_all, false),
+      do: replace_all(content, old, new),
+      else: perform_edit(raw, content, spec)
+  end
+
+  defp replace_all(content, old, new) do
+    old = FileFormatHelpers.normalize_to_lf(old)
+    new = FileFormatHelpers.normalize_to_lf(new)
+
+    if String.contains?(content, old),
+      do: {:ok, String.replace(content, old, new)},
+      else:
+        {:error,
+         "Could not find the exact text to replace; re-read the file and copy old_text from it."}
+  end
 
   defp check_seen_lines(opts, path, tag, edits, raw) do
     if tag != AnchoredEdit.snapshot(raw) and Keyword.get(opts, :enforce_seen_lines, true) do

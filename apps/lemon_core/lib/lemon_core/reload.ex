@@ -46,9 +46,12 @@ defmodule Lemon.Reload do
 
   ## Common options
 
-  Each entry point uses `:global.trans/4` with `:lock_nodes` (default `[node()]`)
-  and `:lock_retries` (default `0`). An aborted lock returns
-  `{:error, :reload_in_progress}`.
+  Each entry point uses a node-local `:global.trans/4` mutex. `:lock_nodes`
+  accepts only `[node()]`; distributed or empty lists return
+  `{:error, :invalid_lock_nodes}`. `:lock_retries` defaults to `0` (fail fast)
+  and must be a non-negative integer; invalid or infinite retries return
+  `{:error, :invalid_lock_retries}`. An aborted lock returns
+  `{:error, :reload_in_progress}` without running the reload callback.
 
   For `reload_module/2`, `reload_app/2` and `reload_system/1`, `compile: true`
   first runs `Mix.Task.run("compile", args)` inside the calling node.
@@ -198,8 +201,8 @@ defmodule Lemon.Reload do
       - `{server, module}`
       - `{server, module, old_vsn}`
       - `{server, module, old_vsn, extra}`
-    - `:lock_nodes` - distributed lock nodes (default: `[node()]`)
-    - `:lock_retries` - `:global.trans/4` retries (default: `0`)
+    - `:lock_nodes` - only `[node()]` is supported (the default)
+    - `:lock_retries` - non-negative integer acquisition retries (default: `0`)
   """
   @spec reload_system(keyword()) :: {:ok, result()} | {:error, term()}
   def reload_system(opts \\ []) do
@@ -647,14 +650,21 @@ defmodule Lemon.Reload do
   end
 
   defp with_reload_lock(opts, fun) do
-    lock_nodes = Keyword.get(opts, :lock_nodes, [node()])
-    retries = Keyword.get(opts, :lock_retries, 0)
+    if Keyword.get(opts, :lock_nodes, [node()]) == [node()] do
+      acquire_reload_lock(Keyword.get(opts, :lock_retries, 0), fun)
+    else
+      {:error, :invalid_lock_nodes}
+    end
+  end
 
-    case :global.trans(@lock_key, fn -> fun.() end, lock_nodes, retries) do
+  defp acquire_reload_lock(retries, fun) when is_integer(retries) and retries >= 0 do
+    case :global.trans({@lock_key, self()}, fun, [node()], retries) do
       :aborted -> {:error, :reload_in_progress}
       result -> result
     end
   end
+
+  defp acquire_reload_lock(_retries, _fun), do: {:error, :invalid_lock_retries}
 
   defp unwrap({:ok, result}), do: result
 

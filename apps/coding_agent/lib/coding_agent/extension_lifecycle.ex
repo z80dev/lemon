@@ -196,6 +196,7 @@ defmodule CodingAgent.ExtensionLifecycle do
         |> SecretObfuscator.wrap_tuples(obfuscator),
         extra_tools
         |> Enum.map(&ToolRegistry.wrap_unmanaged_tool/1)
+        |> Enum.map(&CodingAgent.ToolIntent.wrap(&1, tool_opts))
         |> ToolExecutor.wrap_all_with_approval(
           tool_policy,
           Map.put(approval_context || %{}, :approval_tier, :exec)
@@ -366,6 +367,7 @@ defmodule CodingAgent.ExtensionLifecycle do
             |> SecretObfuscator.wrap_tuples(obfuscator),
             extra_tools
             |> Enum.map(&ToolRegistry.wrap_unmanaged_tool/1)
+            |> Enum.map(&CodingAgent.ToolIntent.wrap(&1, tool_opts))
             |> ToolExecutor.wrap_all_with_approval(
               tool_policy,
               Map.put(approval_context || %{}, :approval_tier, :exec)
@@ -383,7 +385,11 @@ defmodule CodingAgent.ExtensionLifecycle do
 
         all_tools =
           (Enum.reject(custom ++ extension_tools, &(&1.name in terminal_names)) ++ extra_tools)
-          |> Enum.map(&ToolRegistry.wrap_unmanaged_tool/1)
+          |> Enum.map(fn tool ->
+            tool
+            |> ToolRegistry.wrap_unmanaged_tool()
+            |> CodingAgent.ToolIntent.wrap(tool_opts)
+          end)
 
         tools =
           if tool_policy && approval_context do

@@ -66,6 +66,7 @@ defmodule CodingAgent.Tools.Task.StructuredOutput do
         description: "Submit the final structured task result.",
         parameters: schema,
         trusted_terminal: true,
+        effect: :none,
         execute: fn _id, value, _signal, _on_update ->
           attempt = :atomics.add_get(attempts, 1, 1)
 

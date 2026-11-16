@@ -166,7 +166,12 @@ defmodule CodingAgent.NodeToolsTest do
     start_hand("hand-1", "box", ctx.remote)
     policy = %{allow: ["bash", "read"]}
 
-    {:ok, bash} = ToolRegistry.get_tool(ctx.local, "bash", tool_policy: policy)
+    {:ok, bash} =
+      ToolRegistry.get_tool(ctx.local, "bash",
+        tool_policy: policy,
+        tool_intent_recorder: intent_recorder(ctx.local)
+      )
+
     refute Map.has_key?(bash.parameters["properties"], "node")
 
     result = run(bash, %{"command" => "touch ran", "node" => "box"})
@@ -177,6 +182,23 @@ defmodule CodingAgent.NodeToolsTest do
   end
 
   describe "destination admission" do
+    test "effectful requests without an exact controller intent never run", ctx do
+      for marker <- [nil, %{"recordedBy" => "controller", "toolCallId" => "other-call"}] do
+        args = request("write", %{"path" => "not-run.txt", "content" => "no"})
+        args = Map.put(args, "toolIntent", marker)
+        assert {:ok, result} = ToolService.run(args, default_cwd: ctx.remote)
+        assert result["isError"]
+        refute File.exists?(Path.join(ctx.remote, "not-run.txt"))
+      end
+    end
+
+    test "the exact controller intent permits one destination call", ctx do
+      args = request("write", %{"path" => "ran.txt", "content" => "yes"})
+      assert {:ok, result} = ToolService.run(args, default_cwd: ctx.remote)
+      refute result["isError"]
+      assert File.read!(Path.join(ctx.remote, "ran.txt")) == "yes"
+    end
+
     test "the destination capability ceiling forbids tools it excludes", ctx do
       assert {:error, :forbidden} =
                ToolService.run(request("bash", %{"command" => "true"}),
@@ -232,8 +254,29 @@ defmodule CodingAgent.NodeToolsTest do
   # ── helpers ──────────────────────────────────────────────────────────────
 
   defp tool(cwd, name) do
-    {:ok, tool} = ToolRegistry.get_tool(cwd, name, session_id: "node-tools-test")
+    {:ok, tool} =
+      ToolRegistry.get_tool(cwd, name,
+        session_id: "node-tools-test",
+        tool_intent_recorder: intent_recorder(cwd)
+      )
+
     tool
+  end
+
+  defp intent_recorder(cwd) do
+    fn data ->
+      path = Path.join(cwd, "intent-#{System.unique_integer([:positive])}.jsonl")
+      session = CodingAgent.SessionManager.new(cwd) |> CodingAgent.SessionManager.persist(path)
+
+      try do
+        case CodingAgent.SessionManager.record_tool_intent(session, data) do
+          {:ok, _session} -> :ok
+          {:error, reason, _session} -> {:error, reason}
+        end
+      after
+        CodingAgent.SessionManager.close(session)
+      end
+    end
   end
 
   defp run(tool, params, signal \\ nil) do
@@ -256,6 +299,7 @@ defmodule CodingAgent.NodeToolsTest do
       "tool" => tool,
       "arguments" => arguments,
       "toolCallId" => "call-1",
+      "toolIntent" => %{"recordedBy" => "controller", "toolCallId" => "call-1"},
       "sessionId" => "session-1",
       "runId" => "run-1",
       "executionContext" => encoded

@@ -528,6 +528,7 @@ function notes(usage: SessionsContextResult): string[] {
 			: "";
 	return [
 		OVERHEAD_NOTES[usage.overhead],
+		...(usage.promptCache ? [usage.promptCache.explanation] : []),
 		usage.source === "estimate"
 			? "No provider usage yet: the total and every split are estimates (≈4 chars/token)."
 			: `Category splits are estimates (≈4 chars/token) normalized to the reported total.${raw}`,

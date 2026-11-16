@@ -2,9 +2,9 @@ defmodule LemonGateway.TransportRegistry do
   @moduledoc """
   Registry of available transport modules.
 
-  Maintains a mapping of transport ID strings to their implementing modules.
-  Tracks which transports are enabled via configuration and warns about
-  misconfigured transports at startup.
+  Publishes transport modules and their configured enablement at startup.
+  Lookups read an immutable snapshot without calling this process or Config.
+  Restart the registry after changing transport configuration.
   """
   use GenServer
   require Logger
@@ -15,6 +15,7 @@ defmodule LemonGateway.TransportRegistry do
   @reserved_ids ~w(default all)
   @channels_owned_transport_ids ~w(discord email)
   @id_regex ~r/^[a-z][a-z0-9_-]*$/
+  @snapshot_key {__MODULE__, :snapshot}
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
@@ -22,18 +23,23 @@ defmodule LemonGateway.TransportRegistry do
 
   @doc "Returns a list of all registered transport IDs."
   @spec list_transports() :: [transport_id()]
-  def list_transports, do: GenServer.call(__MODULE__, :list)
+  def list_transports, do: snapshot().transports |> Map.keys()
 
   @doc "Returns the transport module for the given ID, or raises if not found."
   @spec get_transport!(transport_id()) :: transport_mod()
-  def get_transport!(id), do: GenServer.call(__MODULE__, {:get, id})
+  def get_transport!(id) do
+    case get_transport(id) do
+      nil -> raise ArgumentError, "unknown transport id: #{inspect(id)}"
+      mod -> mod
+    end
+  end
 
   @doc "Returns the transport module for the given ID, or `nil` if not registered."
   @spec get_transport(transport_id()) :: transport_mod() | nil
-  def get_transport(id), do: GenServer.call(__MODULE__, {:get_or_nil, id})
+  def get_transport(id), do: Map.get(snapshot().transports, id)
 
   @spec enabled_transports() :: [{transport_id(), transport_mod()}]
-  def enabled_transports, do: GenServer.call(__MODULE__, :enabled)
+  def enabled_transports, do: snapshot().enabled
 
   @impl true
   def init(_opts) do
@@ -61,32 +67,21 @@ defmodule LemonGateway.TransportRegistry do
 
     maybe_warn_dual_gate(map)
 
-    {:ok, map}
+    enabled = Enum.filter(map, fn {id, _mod} -> transport_enabled?(id) end)
+    :persistent_term.put(@snapshot_key, {self(), %{transports: map, enabled: enabled}})
+    {:ok, nil}
   end
 
-  @impl true
-  def handle_call(:list, _from, state) do
-    {:reply, Map.keys(state), state}
-  end
+  defp snapshot do
+    case :persistent_term.get(@snapshot_key, nil) do
+      {owner, snapshot} ->
+        if Process.whereis(__MODULE__) == owner,
+          do: snapshot,
+          else: %{transports: %{}, enabled: []}
 
-  def handle_call({:get, id}, _from, state) do
-    case Map.fetch(state, id) do
-      {:ok, mod} -> {:reply, mod, state}
-      :error -> raise ArgumentError, "unknown transport id: #{inspect(id)}"
+      nil ->
+        %{transports: %{}, enabled: []}
     end
-  end
-
-  def handle_call({:get_or_nil, id}, _from, state) do
-    {:reply, Map.get(state, id), state}
-  end
-
-  def handle_call(:enabled, _from, state) do
-    enabled =
-      state
-      |> Enum.filter(fn {id, _mod} -> transport_enabled?(id) end)
-      |> Enum.into([])
-
-    {:reply, enabled, state}
   end
 
   defp validate_id!(id) when id in @reserved_ids do

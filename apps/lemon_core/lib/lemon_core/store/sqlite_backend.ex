@@ -6,6 +6,10 @@ defmodule LemonCore.Store.SqliteBackend do
   (like `:runs`) can be configured as ephemeral to avoid disk write amplification.
   Ephemeral tables are stored in ETS only.
 
+  Retention timestamps are indexed alongside the term-encoded payloads. Existing
+  databases are backfilled transactionally on first open; undecodable rows are
+  retained without retention metadata and still produce explicit read errors.
+
   ## Options
 
     * `:path` - Required. Path to SQLite file, or a directory (then `store.sqlite3` is used)
@@ -23,6 +27,14 @@ defmodule LemonCore.Store.SqliteBackend do
 
   @default_ephemeral_tables [:runs]
   @default_filename "store.sqlite3"
+  @min_timestamp -9_223_372_036_854_775_808
+  @max_timestamp 9_223_372_036_854_775_807
+  @sweep_columns [
+    expires_at: "expires_at_ms",
+    introspection_timestamp: "introspection_ts_ms",
+    inserted_at_ms: "inserted_at_ms",
+    started_at_ms: "started_at_ms"
+  ]
 
   @schema_sql """
   CREATE TABLE IF NOT EXISTS lemon_store_kv (
@@ -30,21 +42,35 @@ defmodule LemonCore.Store.SqliteBackend do
     key_blob BLOB NOT NULL,
     value_blob BLOB NOT NULL,
     updated_at_ms INTEGER NOT NULL,
+    expires_at_ms INTEGER,
+    introspection_ts_ms INTEGER,
+    inserted_at_ms INTEGER,
+    started_at_ms INTEGER,
     PRIMARY KEY (table_name, key_blob)
   );
   """
 
   @put_sql """
-  INSERT INTO lemon_store_kv (table_name, key_blob, value_blob, updated_at_ms)
-  VALUES (?1, ?2, ?3, ?4)
+  INSERT INTO lemon_store_kv (
+    table_name, key_blob, value_blob, updated_at_ms,
+    expires_at_ms, introspection_ts_ms, inserted_at_ms, started_at_ms
+  )
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
   ON CONFLICT(table_name, key_blob) DO UPDATE SET
     value_blob = excluded.value_blob,
-    updated_at_ms = excluded.updated_at_ms
+    updated_at_ms = excluded.updated_at_ms,
+    expires_at_ms = excluded.expires_at_ms,
+    introspection_ts_ms = excluded.introspection_ts_ms,
+    inserted_at_ms = excluded.inserted_at_ms,
+    started_at_ms = excluded.started_at_ms
   """
 
   @put_new_sql """
-  INSERT INTO lemon_store_kv (table_name, key_blob, value_blob, updated_at_ms)
-  VALUES (?1, ?2, ?3, ?4)
+  INSERT INTO lemon_store_kv (
+    table_name, key_blob, value_blob, updated_at_ms,
+    expires_at_ms, introspection_ts_ms, inserted_at_ms, started_at_ms
+  )
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
   ON CONFLICT(table_name, key_blob) DO NOTHING
   """
 
@@ -82,20 +108,28 @@ defmodule LemonCore.Store.SqliteBackend do
 
     raw_path = Keyword.fetch!(opts, :path)
     path = normalize_path(raw_path)
-    ephemeral_tables = Keyword.get(opts, :ephemeral_tables, @default_ephemeral_tables)
+
+    ephemeral_tables =
+      opts
+      |> Keyword.get(:ephemeral_tables, @default_ephemeral_tables)
+      |> MapSet.new()
 
     with :ok <- File.mkdir_p(Path.dirname(path)),
-         {:ok, conn} <- Sqlite3.open(path),
-         :ok <- init_db(conn),
-         {:ok, statements} <- prepare_statements(conn) do
-      {:ok,
-       %{
-         path: path,
-         conn: conn,
-         statements: statements,
-         ephemeral_tables: MapSet.new(ephemeral_tables),
-         ephemeral_ets: %{}
-       }}
+         {:ok, conn} <- Sqlite3.open(path) do
+      case initialize_connection(conn) do
+        {:ok, statements} ->
+          {:ok,
+           %{
+             path: path,
+             conn: conn,
+             statements: statements,
+             ephemeral_tables: ephemeral_tables,
+             ephemeral_ets: %{}
+           }}
+
+        {:error, reason} ->
+          {:error, {:sqlite_init_failed, path, reason}}
+      end
     else
       {:error, reason} ->
         {:error, {:sqlite_init_failed, path, reason}}
@@ -119,7 +153,7 @@ defmodule LemonCore.Store.SqliteBackend do
                table_name,
                {:blob, encoded_key},
                {:blob, encoded_value},
-               now_ms
+               now_ms | retention_metadata(key, value)
              ]),
            :done <- Sqlite3.step(state.conn, state.statements.put) do
         {:ok, state}
@@ -162,7 +196,7 @@ defmodule LemonCore.Store.SqliteBackend do
                table_name,
                {:blob, encoded_key},
                {:blob, encoded_value},
-               now_ms
+               now_ms | retention_metadata(key, value)
              ]),
            :done <- Sqlite3.step(state.conn, state.statements.put_new),
            {:ok, changes} <- Sqlite3.changes(state.conn) do
@@ -243,6 +277,28 @@ defmodule LemonCore.Store.SqliteBackend do
         :busy -> {:error, :sqlite_busy}
         {:error, reason} -> {:error, reason}
         other -> {:error, {:sqlite_delete_failed, other}}
+      end
+    end
+  end
+
+  @impl true
+  def sweep(state, table, {field, cutoff})
+      when is_integer(cutoff) and cutoff >= @min_timestamp and cutoff <= @max_timestamp do
+    if ephemeral_table?(state, table) do
+      {table_ets, state} = ensure_ephemeral_table(state, table)
+      match_spec = LemonCore.Store.EtsBackend.sweep_match_spec(field, cutoff)
+      {:ok, :ets.select_delete(table_ets, match_spec), state}
+    else
+      statement = Map.fetch!(state.statements, {:sweep, field})
+
+      with :ok <- bind_statement(statement, [normalize_table_name(table), cutoff]),
+           :done <- Sqlite3.step(state.conn, statement),
+           {:ok, count} <- Sqlite3.changes(state.conn) do
+        {:ok, count, state}
+      else
+        :busy -> {:error, :sqlite_busy}
+        {:error, reason} -> {:error, reason}
+        other -> {:error, {:sqlite_sweep_failed, other}}
       end
     end
   end
@@ -460,6 +516,7 @@ defmodule LemonCore.Store.SqliteBackend do
   Closes prepared statements and SQLite connection.
   """
   @spec close(map()) :: :ok
+  @impl true
   def close(%{conn: conn, statements: statements}) do
     Enum.each(Map.values(statements), fn stmt ->
       case Sqlite3.release(conn, stmt) do
@@ -478,6 +535,31 @@ defmodule LemonCore.Store.SqliteBackend do
 
   def close(_), do: :ok
 
+  defp initialize_connection(conn) do
+    result =
+      with :ok <- init_db(conn),
+           {:ok, statements} <- prepare_statements(conn) do
+        {:ok, statements}
+      end
+
+    case result do
+      {:ok, _statements} ->
+        result
+
+      error ->
+        _ = Sqlite3.close(conn)
+        error
+    end
+  rescue
+    error ->
+      _ = Sqlite3.close(conn)
+      reraise error, __STACKTRACE__
+  catch
+    kind, reason ->
+      _ = Sqlite3.close(conn)
+      :erlang.raise(kind, reason, __STACKTRACE__)
+  end
+
   defp init_db(conn) do
     with :ok <- Sqlite3.execute(conn, "PRAGMA journal_mode=WAL"),
          :ok <- Sqlite3.execute(conn, "PRAGMA synchronous=NORMAL"),
@@ -487,32 +569,184 @@ defmodule LemonCore.Store.SqliteBackend do
          :ok <- Sqlite3.execute(conn, "PRAGMA checkpoint_fullfsync=ON"),
          :ok <- Sqlite3.execute(conn, "PRAGMA temp_store=MEMORY"),
          :ok <- Sqlite3.execute(conn, "PRAGMA busy_timeout=5000"),
-         :ok <- Sqlite3.execute(conn, @schema_sql) do
+         :ok <- Sqlite3.execute(conn, @schema_sql),
+         :ok <- migrate_retention_metadata(conn) do
       :ok
     end
   end
 
-  defp prepare_statements(conn) do
-    with {:ok, put_stmt} <- Sqlite3.prepare(conn, @put_sql),
-         {:ok, put_new_stmt} <- Sqlite3.prepare(conn, @put_new_sql),
-         {:ok, get_stmt} <- Sqlite3.prepare(conn, @get_sql),
-         {:ok, delete_stmt} <- Sqlite3.prepare(conn, @delete_sql),
-         {:ok, list_stmt} <- Sqlite3.prepare(conn, @list_sql),
-         {:ok, list_recent_stmt} <- Sqlite3.prepare(conn, @list_recent_sql),
-         {:ok, list_tables_stmt} <- Sqlite3.prepare(conn, @list_tables_sql) do
-      {:ok,
-       %{
-         put: put_stmt,
-         put_new: put_new_stmt,
-         get: get_stmt,
-         delete: delete_stmt,
-         list: list_stmt,
-         list_recent: list_recent_stmt,
-         list_tables: list_tables_stmt
-       }}
-    else
-      {:error, reason} -> {:error, {:prepare_failed, reason}}
+  defp migrate_retention_metadata(conn) do
+    with :ok <- Sqlite3.execute(conn, "BEGIN IMMEDIATE") do
+      result =
+        with {:ok, columns} <-
+               with_statement(conn, "PRAGMA table_info(lemon_store_kv)", fn statement ->
+                 Sqlite3.fetch_all(conn, statement)
+               end),
+             existing = MapSet.new(columns, fn [_id, name | _rest] -> name end),
+             missing = Enum.reject(@sweep_columns, fn {_field, name} -> name in existing end),
+             :ok <- add_retention_columns(conn, missing),
+             :ok <- backfill_retention_metadata(conn, missing),
+             :ok <- create_retention_indexes(conn),
+             :ok <- Sqlite3.execute(conn, "COMMIT") do
+          :ok
+        end
+
+      case result do
+        :ok ->
+          :ok
+
+        error ->
+          _ = Sqlite3.execute(conn, "ROLLBACK")
+          {:error, normalize_transaction_error(error)}
+      end
     end
+  end
+
+  defp add_retention_columns(conn, columns) do
+    Enum.reduce_while(columns, :ok, fn {_field, column}, :ok ->
+      case Sqlite3.execute(conn, "ALTER TABLE lemon_store_kv ADD COLUMN #{column} INTEGER") do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp create_retention_indexes(conn) do
+    Enum.reduce_while(@sweep_columns, :ok, fn {_field, column}, :ok ->
+      sql = """
+      CREATE INDEX IF NOT EXISTS lemon_store_kv_#{column}
+      ON lemon_store_kv (table_name, #{column}) WHERE #{column} IS NOT NULL
+      """
+
+      case Sqlite3.execute(conn, sql) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp backfill_retention_metadata(_conn, []), do: :ok
+
+  defp backfill_retention_metadata(conn, _missing) do
+    select_sql =
+      "SELECT rowid, table_name, key_blob, value_blob FROM lemon_store_kv ORDER BY rowid"
+
+    update_sql = """
+    UPDATE lemon_store_kv
+    SET expires_at_ms = ?1, introspection_ts_ms = ?2, inserted_at_ms = ?3, started_at_ms = ?4
+    WHERE rowid = ?5
+    """
+
+    with_statement(conn, select_sql, fn select ->
+      with_statement(conn, update_sql, fn update ->
+        backfill_retention_rows(conn, select, update)
+      end)
+    end)
+  end
+
+  defp backfill_retention_rows(conn, select, update) do
+    case Sqlite3.step(conn, select) do
+      {:row, [rowid, table, key_blob, value_blob]} ->
+        metadata =
+          with {:ok, key} <- decode(key_blob, table: table, field: :key),
+               {:ok, value} <- decode(value_blob, table: table, field: :value, key: key) do
+            retention_metadata(key, value)
+          else
+            # Preserve the original blobs and their explicit read errors. A
+            # migration must never turn corruption into an expired/missing row.
+            {:error, _reason} -> [nil, nil, nil, nil]
+          end
+
+        with :ok <- bind_statement(update, metadata ++ [rowid]),
+             :done <- Sqlite3.step(conn, update) do
+          backfill_retention_rows(conn, select, update)
+        end
+
+      :done ->
+        :ok
+
+      error ->
+        {:error, normalize_transaction_error(error)}
+    end
+  end
+
+  defp with_statement(conn, sql, operation) do
+    with {:ok, statement} <- Sqlite3.prepare(conn, sql) do
+      try do
+        operation.(statement)
+      after
+        _ = Sqlite3.release(conn, statement)
+      end
+    end
+  end
+
+  defp retention_metadata(key, value) do
+    expires_at =
+      case value do
+        %{expires_at: timestamp} -> timestamp
+        _ -> nil
+      end
+
+    introspection_timestamp =
+      case key do
+        {timestamp, _event_id} when is_integer(timestamp) -> timestamp
+        _ -> LemonCore.MapHelpers.get_key(value, :ts_ms)
+      end
+
+    inserted_at =
+      case value do
+        %{"inserted_at_ms" => timestamp} -> timestamp
+        _ -> nil
+      end
+
+    started_at =
+      case value do
+        %{started_at_ms: timestamp} when is_integer(timestamp) -> timestamp
+        %{"started_at_ms" => timestamp} -> timestamp
+        _ -> nil
+      end
+
+    Enum.map([expires_at, introspection_timestamp, inserted_at, started_at], &sql_timestamp/1)
+  end
+
+  # Out-of-range Erlang integers must still round-trip in the payload. Numeric
+  # sentinels beyond the cutoff range preserve comparisons without SQLite's
+  # signed-64-bit parameter binding truncating those values.
+  defp sql_timestamp(timestamp) when is_integer(timestamp) and timestamp < @min_timestamp,
+    do: -1.0e100
+
+  defp sql_timestamp(timestamp) when is_integer(timestamp) and timestamp > @max_timestamp,
+    do: 1.0e100
+
+  defp sql_timestamp(timestamp) when is_integer(timestamp), do: timestamp
+  defp sql_timestamp(_timestamp), do: nil
+
+  defp prepare_statements(conn) do
+    statements = [
+      put: @put_sql,
+      put_new: @put_new_sql,
+      get: @get_sql,
+      delete: @delete_sql,
+      list: @list_sql,
+      list_recent: @list_recent_sql,
+      list_tables: @list_tables_sql
+    ]
+
+    sweeps =
+      Enum.map(@sweep_columns, fn {field, column} ->
+        {{:sweep, field}, "DELETE FROM lemon_store_kv WHERE table_name = ?1 AND #{column} < ?2"}
+      end)
+
+    Enum.reduce_while(statements ++ sweeps, {:ok, %{}}, fn {name, sql}, {:ok, prepared} ->
+      case Sqlite3.prepare(conn, sql) do
+        {:ok, statement} ->
+          {:cont, {:ok, Map.put(prepared, name, statement)}}
+
+        {:error, reason} ->
+          Enum.each(Map.values(prepared), &Sqlite3.release(conn, &1))
+          {:halt, {:error, {:prepare_failed, reason}}}
+      end
+    end)
   end
 
   defp normalize_path(path) when is_binary(path) do

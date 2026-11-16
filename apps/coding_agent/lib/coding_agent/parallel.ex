@@ -2,9 +2,7 @@ defmodule CodingAgent.Parallel do
   @moduledoc """
   Concurrency control utilities for task execution.
 
-  Provides a semaphore-based approach for limiting the number of concurrently
-  running tasks, and a `map_with_concurrency_limit` helper for executing a
-  batch of work items with bounded parallelism.
+  Native tasks and background sessions share the monitored TaskSemaphore.
   """
 
   defmodule Semaphore do
@@ -171,61 +169,6 @@ defmodule CodingAgent.Parallel do
           state
       end
     end
-  end
-
-  @doc """
-  Maps over `items` with at most `max_concurrency` items executing `fun`
-  concurrently.
-
-  Returns a list of results in the same order as the input items.
-
-  ## Options
-
-  - `:timeout` - per-task timeout in milliseconds (default: `:infinity`)
-  - `:task_supervisor` - optional `Task.Supervisor` name/pid to use
-
-  ## Examples
-
-      iex> CodingAgent.Parallel.map_with_concurrency_limit([1, 2, 3], 2, &(&1 * 2))
-      [2, 4, 6]
-  """
-  @spec map_with_concurrency_limit(
-          Enumerable.t(),
-          pos_integer(),
-          (term() -> term()),
-          keyword()
-        ) :: [term()]
-  def map_with_concurrency_limit(items, max_concurrency, fun, opts \\ [])
-      when is_integer(max_concurrency) and max_concurrency > 0 do
-    timeout = Keyword.get(opts, :timeout, :infinity)
-    task_supervisor = Keyword.get(opts, :task_supervisor)
-
-    {:ok, semaphore} = Semaphore.start_link(max_concurrency)
-
-    try do
-      tasks =
-        Enum.map(items, fn item ->
-          start_task(task_supervisor, fn ->
-            Semaphore.acquire(semaphore)
-
-            try do
-              fun.(item)
-            after
-              Semaphore.release(semaphore)
-            end
-          end)
-        end)
-
-      Task.await_many(tasks, timeout)
-    after
-      GenServer.stop(semaphore)
-    end
-  end
-
-  defp start_task(nil, fun), do: Task.async(fun)
-
-  defp start_task(supervisor, fun) do
-    Task.Supervisor.async(supervisor, fun)
   end
 
   @doc """

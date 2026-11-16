@@ -4,6 +4,7 @@ defmodule LemonOmp.Models do
   Prices are omp catalog data, not a guarantee of upstream route availability.
   """
   use GenServer
+  alias LemonCore.ProcessGroup
   alias LemonOmp.{Config, Projection}
 
   @ttl 600_000
@@ -84,9 +85,7 @@ defmodule LemonOmp.Models do
     after
       case Port.info(port, :os_pid) do
         {:os_pid, pid} ->
-          LemonCore.NativeProcess.cmd("kill", ["-KILL", Integer.to_string(pid)],
-            stderr_to_stdout: true
-          )
+          ProcessGroup.terminate(pid, signal: :sigkill)
 
           close_port(port)
 

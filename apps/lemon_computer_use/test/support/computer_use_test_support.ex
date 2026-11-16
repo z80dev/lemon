@@ -17,9 +17,16 @@ defmodule LemonComputerUse.TestSupport do
     Application.put_env(:lemon_computer_use, :command, [fake])
     Application.put_env(:lemon_computer_use, :bridge_script, fake)
     Application.put_env(:lemon_computer_use, :lcu_root, dir)
-    Application.put_env(:lemon_computer_use, :connect_timeout_ms, 10_000)
+
+    Application.put_env(
+      :lemon_computer_use,
+      :connect_timeout_ms,
+      Map.get(context, :connect_timeout_ms, 10_000)
+    )
+
     System.put_env("LCU_FAKE_LOG", log)
     if context[:connect_fail], do: System.put_env("LCU_FAKE_CONNECT_FAIL", "1")
+    if context[:connect_hang], do: System.put_env("LCU_FAKE_CONNECT_HANG", "1")
 
     on_exit(fn ->
       Enum.each(saved, fn
@@ -29,6 +36,7 @@ defmodule LemonComputerUse.TestSupport do
 
       System.delete_env("LCU_FAKE_LOG")
       System.delete_env("LCU_FAKE_CONNECT_FAIL")
+      System.delete_env("LCU_FAKE_CONNECT_HANG")
       File.rm_rf(dir)
     end)
 

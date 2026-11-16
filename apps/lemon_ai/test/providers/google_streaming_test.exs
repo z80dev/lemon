@@ -245,6 +245,16 @@ defmodule LemonAi.Providers.GoogleStreamingTest do
 
     assert req_body == expected
     assert {:ok, _result} = EventStream.result(stream, 1000)
+
+    blocks = [
+      %{text: "Sys", directory_derived: false},
+      %{text: "tem", directory_derived: true}
+    ]
+
+    {:ok, stream} = Google.stream(model, %{context | system_prompt: blocks}, opts)
+    assert_receive {:request_body, block_body}, 1000
+    assert block_body == expected
+    assert {:ok, _} = EventStream.result(stream, 1000)
   end
 
   test "Argon sends supported thinking levels to the Gemini API endpoint" do

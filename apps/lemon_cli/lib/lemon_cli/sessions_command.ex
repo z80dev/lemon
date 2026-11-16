@@ -3,8 +3,8 @@ defmodule LemonCli.SessionsCommand do
   Mix-free, authenticated daemon client for durable session management.
 
   Every read is bounded, history/export output stays redacted, destructive
-  pruning is preview-token bound, and single-session deletion requires the
-  exact session key before the lifecycle service performs verified deletion.
+  pruning and maintenance are preview-token bound, and single-session deletion
+  requires the exact session key before the lifecycle service verifies deletion.
   """
 
   alias LemonCli.CommandRegistry
@@ -37,6 +37,7 @@ defmodule LemonCli.SessionsCommand do
   defp dispatch(["restore" | args]), do: patch_boolean(args, :archived, false, "restored")
   defp dispatch(["export" | args]), do: export(args)
   defp dispatch(["prune" | args]), do: prune(args)
+  defp dispatch(["maintain" | args]), do: maintain(args)
   defp dispatch(["delete" | args]), do: delete(args)
   defp dispatch(_args), do: usage_error("Missing or invalid sessions command.")
 
@@ -467,6 +468,98 @@ defmodule LemonCli.SessionsCommand do
         parsed.options[:json] == true
       )
 
+  defp maintain(args) do
+    with {:ok, parsed} <- parse(args, older_than: :string, confirm: :string, json: :boolean),
+         [] <- parsed.positionals,
+         :ok <- maintenance_confirmation(parsed.options),
+         {:ok, cutoff_ms} <- parse_cutoff(parsed.options[:older_than]),
+         :ok <- ensure_started() do
+      result =
+        SessionClient.maintenance(
+          older_than_ms: cutoff_ms,
+          dry_run: is_nil(parsed.options[:confirm]),
+          confirm_token: parsed.options[:confirm]
+        )
+
+      maintenance_result(result, parsed.options[:json] == true)
+    else
+      {:error, message} -> usage_error(message)
+      [_ | _] -> usage_error("Maintain does not accept positional arguments.")
+    end
+  end
+
+  defp maintenance_confirmation(options) do
+    case options[:confirm] do
+      nil ->
+        :ok
+
+      token ->
+        cond do
+          String.trim(token) == "" ->
+            {:error, "Maintenance requires the exact non-empty preview token with --confirm."}
+
+          not is_binary(options[:older_than]) ->
+            {:error,
+             "Maintenance confirmation requires the preview's exact epoch millisecond cutoff."}
+
+          not Regex.match?(~r/^[1-9]\d*$/, options[:older_than]) ->
+            {:error,
+             "Maintenance confirmation requires the preview's exact epoch millisecond cutoff."}
+
+          true ->
+            :ok
+        end
+    end
+  end
+
+  defp maintenance_result({:ok, result}, json?) do
+    if json?, do: json_success(%{maintenance: result}), else: print_maintenance(result)
+    @exit_ok
+  end
+
+  defp maintenance_result({:error, :confirmation_mismatch}, json?),
+    do:
+      failure(
+        "confirmation_mismatch",
+        "The maintenance candidate set changed; run a new preview and review its new token.",
+        json?
+      )
+
+  defp maintenance_result({:error, :confirmation_required}, json?),
+    do:
+      failure(
+        "confirmation_required",
+        "Run the maintenance preview and pass its exact cutoff and token with --confirm.",
+        json?
+      )
+
+  defp maintenance_result({:error, :invalid_older_than_ms}, json?),
+    do:
+      failure(
+        "invalid_older_than_ms",
+        "Maintenance requires a positive millisecond cutoff.",
+        json?
+      )
+
+  defp maintenance_result({:error, {:partial_failure, result}}, json?) do
+    message =
+      "Maintenance stopped with partial changes; inspect the result and run a fresh preview."
+
+    if json?,
+      do: json_failure("partial_maintenance_failure", message, %{maintenance: result}),
+      else: IO.puts(:stderr, message)
+
+    @exit_error
+  end
+
+  defp maintenance_result({:error, _reason}, json?),
+    do:
+      failure(
+        "maintenance_unavailable",
+        "Session maintenance could not be completed safely; no automatic retry was attempted.",
+        json?
+      )
+
   defp delete(args) do
     with {:ok, parsed} <- parse(args, confirm: :string, json: :boolean),
          [session_key] <- parsed.positionals,
@@ -542,7 +635,7 @@ defmodule LemonCli.SessionsCommand do
     end
   end
 
-  defp parse_cutoff(nil), do: {:error, "Prune requires --older-than AGE|DATE."}
+  defp parse_cutoff(nil), do: {:error, "This command requires --older-than AGE|DATE."}
 
   defp parse_cutoff(value) do
     value = String.trim(value)
@@ -603,9 +696,16 @@ defmodule LemonCli.SessionsCommand do
   end
 
   defp validate_absolute_cutoff(cutoff) do
-    if cutoff <= System.system_time(:millisecond),
-      do: {:ok, cutoff},
-      else: {:error, "Older-than cutoff cannot be in the future."}
+    cond do
+      cutoff <= 0 ->
+        {:error, "Older-than cutoff must be after the Unix epoch."}
+
+      cutoff > System.system_time(:millisecond) ->
+        {:error, "Older-than cutoff cannot be in the future."}
+
+      true ->
+        {:ok, cutoff}
+    end
   end
 
   defp ensure_started, do: SessionClient.ensure_running()
@@ -819,6 +919,33 @@ defmodule LemonCli.SessionsCommand do
     IO.puts("Prune deletion verified: #{result.verified}")
     IO.puts("Deleted sessions: #{result.deleted_count}")
     Enum.each(result.deleted_session_keys, &IO.puts("  #{&1}"))
+  end
+
+  defp print_maintenance(%{dry_run: true} = result) do
+    IO.puts(
+      "Maintenance preview: #{result.archive_count} journal(s) to archive, " <>
+        "#{result.orphan_count} orphan artifact(s)"
+    )
+
+    IO.puts("Cutoff (epoch milliseconds): #{result.older_than_ms}")
+
+    Enum.each(result.candidates, fn candidate ->
+      IO.puts("  #{candidate.kind} #{candidate.id} (#{candidate.bytes} bytes)")
+    end)
+
+    IO.puts("Candidates shown: #{length(result.candidates)} (bounded, redacted list)")
+    IO.puts("Confirmation token: #{result.confirmation_token}")
+
+    IO.puts(
+      "Execute only after review: lemon sessions maintain --older-than #{result.older_than_ms} " <>
+        "--confirm #{result.confirmation_token}"
+    )
+  end
+
+  defp print_maintenance(result) do
+    IO.puts("Maintenance verified: #{result.verified}")
+    IO.puts("Archived journals: #{result.archived_count}")
+    IO.puts("Swept orphan artifacts: #{result.swept_count}")
   end
 
   defp format_time(value) when is_integer(value) do

@@ -114,15 +114,15 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
 
     Session.subscribe(session)
     :ok = Session.prompt(session, "read and write")
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
 
-    assert_received {:session_event, _, {:tool_execution_end, "r1", "read", read, false}}
+    assert_received {:session_event, _, {:tool_execution_end, "r1", "read", read, false}, _}
     assert Enum.map_join(read.content, "", & &1.text) =~ "redirected contents"
 
     assert Enum.map_join(read.content, "", & &1.text) =~
              "[hook context]\nread call guidance\nresult guidance"
 
-    assert_received {:session_event, _, {:tool_execution_end, "w1", "write", write, true}}
+    assert_received {:session_event, _, {:tool_execution_end, "w1", "write", write, true}, _}
     assert Enum.map_join(write.content, "", & &1.text) =~ "writes are frozen"
 
     assert Enum.map_join(write.content, "", & &1.text) =~
@@ -261,12 +261,12 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
 
       Session.subscribe(session)
       :ok = Session.prompt(session, "write the file")
-      assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+      assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
       assert_received {:original_write_receipt, original}
       assert is_binary(original.checkpoint_id)
       refute original.checkpoint_id == decoy.id
       assert original.path == path
-      assert_received {:session_event, _, {:tool_execution_end, "w1", "write", result, false}}
+      assert_received {:session_event, _, {:tool_execution_end, "w1", "write", result, false}, _}
       assert Enum.map_join(result.content, "", & &1.text) == "Saved."
       assert result.details.checkpoint_id == original.checkpoint_id
       assert result.details.checkpoint_kind == "filesystem"

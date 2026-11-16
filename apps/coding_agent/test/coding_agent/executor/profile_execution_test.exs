@@ -158,9 +158,10 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
       assert {:ok, run_ref, %{runner_pid: runner}} =
                Executor.start_run(request, %{stream_fn: stream_fn}, self())
 
-      on_exit(fn -> if Process.alive?(runner), do: GenServer.stop(runner) end)
+      on_exit(fn -> CodingAgent.Session.Presentation.safe_stop_session(runner) end)
       assert_receive {:pane_stream, ^run_id, stream}, 5_000
       session = :sys.get_state(runner).session
+      on_exit(fn -> CodingAgent.Session.Presentation.safe_stop_session(session) end)
       state = Session.get_state(session)
       assert Keyword.get(state.tool_opts, :tern_pane) == pane
       session_id = state.session_manager.header.id
@@ -402,14 +403,19 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
 
       stream_fn = fn model, context, _options ->
         {:ok, stream} = LemonAi.EventStream.start_link()
-        send(parent, {:profile_context, model.id, context.system_prompt, stream})
+
+        send(
+          parent,
+          {:profile_context, model.id, LemonAi.SystemPrompt.text(context.system_prompt), stream}
+        )
+
         {:ok, stream}
       end
 
       assert {:ok, run_ref, %{runner_pid: runner}} =
                Executor.start_run(request, %{stream_fn: stream_fn}, self())
 
-      on_exit(fn -> if Process.alive?(runner), do: GenServer.stop(runner) end)
+      on_exit(fn -> CodingAgent.Session.Presentation.safe_stop_session(runner) end)
       assert_receive {:profile_context, "gpt-4o", prompt, stream}, 5_000
       assert prompt =~ "private-profile-system-prompt"
       assert prompt =~ "private-profile-soul"
@@ -421,7 +427,7 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
       assert session_state.workspace_dir ==
                Path.join([root, "destination-state", "profiles", profile_id, "workspace"])
 
-      assert session_state.mcp_session_id == runner_state.mcp_session_id
+      assert is_binary(session_state.mcp_session_id)
 
       assert session_state.profile_instructions ==
                RemoteRequestCodec.normalize_meta(meta).profile_instructions
@@ -495,8 +501,10 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
       LemonAi.EventStream.push(stream, {:done, :stop, response})
       LemonAi.EventStream.complete(stream, response)
       events = collect_completed(run_ref)
-      assert_receive {:DOWN, ^session_ref, :process, _, _}, 5_000
+      assert Process.alive?(runner_state.session)
       assert_receive {:DOWN, ^runner_ref, :process, ^runner, _}, 5_000
+      GenServer.stop(runner_state.session)
+      assert_receive {:DOWN, ^session_ref, :process, _, _}, 5_000
       assert McpSession.tools(session_state.mcp_session_id) == []
       refute inspect(events) =~ "runtime-secret"
       refute inspect(events) =~ "private-profile-system-prompt"
@@ -529,7 +537,7 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
   end
 
   @tag :tmp_dir
-  test "native startup failure closes newly opened profile connections", %{tmp_dir: root} do
+  test "missing native history never opens profile connections", %{tmp_dir: root} do
     url = fixture_url(self())
     previous_trap_exit = Process.flag(:trap_exit, true)
     on_exit(fn -> Process.flag(:trap_exit, previous_trap_exit) end)
@@ -556,8 +564,7 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
                run_ref: make_ref()
              )
 
-    assert_receive {:mcp_request, "initialize", %{"authorization" => "Bearer failure-secret"}},
-                   5_000
+    refute_received {:mcp_request, "initialize", _headers}
 
     assert :sys.get_state(McpSession) |> Map.keys() |> Enum.sort() == before
     Process.flag(:trap_exit, previous_trap_exit)

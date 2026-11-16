@@ -6,16 +6,19 @@ defmodule LemonCore.Dedupe.EtsTest do
 
   alias LemonCore.Dedupe.Ets
 
+  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+
   setup do
     # Use a unique table name for each test to avoid conflicts
     table_name = :"test_dedupe_#{System.unique_integer([:positive])}"
 
     on_exit(fn ->
-      # Clean up ETS table if it exists
-      try do
-        :ets.delete(table_name)
-      catch
-        _, _ -> :ok
+      case :ets.info(table_name, :owner) do
+        owner when is_pid(owner) ->
+          DynamicSupervisor.terminate_child(LemonCore.Dedupe.Supervisor, owner)
+
+        :undefined ->
+          :ok
       end
     end)
 
@@ -23,6 +26,67 @@ defmodule LemonCore.Dedupe.EtsTest do
   end
 
   describe "init/1" do
+    test "outlives the first caller and has a supervised owner", %{table: table} do
+      {caller, monitor} =
+        spawn_monitor(fn ->
+          :ok = Ets.init(table)
+          :ok = Ets.mark(table, :retained)
+        end)
+
+      assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}
+      owner = :ets.info(table, :owner)
+      assert is_pid(owner)
+      refute owner == caller
+
+      assert Enum.any?(DynamicSupervisor.which_children(LemonCore.Dedupe.Supervisor), fn
+               {_, ^owner, :worker, _} -> true
+               _ -> false
+             end)
+
+      assert Ets.seen?(table, :retained, 60_000)
+    end
+
+    test "serializes concurrent first callers", %{table: table} do
+      parent = self()
+
+      tasks =
+        for _ <- 1..16 do
+          Task.async(fn ->
+            send(parent, {:ready, self()})
+
+            receive do
+              :initialize -> Ets.init(table)
+            end
+          end)
+        end
+
+      for _ <- tasks, do: assert_receive({:ready, _pid})
+      for task <- tasks, do: send(task.pid, :initialize)
+
+      assert Enum.all?(Task.await_many(tasks), &(&1 == :ok))
+      assert is_pid(:ets.info(table, :owner))
+    end
+
+    test "supervision recreates an empty table after owner failure", %{table: table} do
+      :ok = Ets.init(table)
+      :ok = Ets.mark(table, :old)
+      owner = :ets.info(table, :owner)
+      monitor = Process.monitor(owner)
+      Process.exit(owner, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^owner, :killed}
+
+      assert_eventually(fn ->
+        replacement = :ets.info(table, :owner)
+        is_pid(replacement) and replacement != owner
+      end)
+
+      children = DynamicSupervisor.which_children(LemonCore.Dedupe.Supervisor)
+      assert Enum.any?(children, fn {_, pid, _, _} -> pid == :ets.info(table, :owner) end)
+      refute Ets.seen?(table, :old, 60_000)
+      assert :ok = Ets.mark(table, :new)
+      assert Ets.seen?(table, :new, 60_000)
+    end
+
     test "creates a new ETS table", %{table: table} do
       assert :ok = Ets.init(table)
       assert :ets.info(table) != :undefined

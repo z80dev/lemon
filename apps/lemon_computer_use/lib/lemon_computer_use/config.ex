@@ -20,8 +20,8 @@ defmodule LemonComputerUse.Config do
     * Chrome is controlled exclusively by `[runtime.tools.browser] provider` /
       `LEMON_BROWSER_PROVIDER`. The LCU Chrome surface is included only when
       the read-only provider resolver confirms a connected LCU extension.
-    * `:connect_timeout_ms` — how long tool construction waits for the first
-      connection (default 30 seconds).
+    * `:connect_timeout_ms` — the shared RPC handshake deadline and how long
+      tool construction waits for the first connection (default 30 seconds).
 
   `:command` and `:bridge_script` are test seams: the LCU server argv and the
   bridge script path.

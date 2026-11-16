@@ -215,6 +215,7 @@ defmodule CodingAgent.Tools.AskTest do
 
     {:ok, tool} =
       CodingAgent.ToolRegistry.get_tool(File.cwd!(), "ask",
+        tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(File.cwd!()),
         session_key: key,
         settings_manager: %{tools: %{}},
         include_extensions: false,

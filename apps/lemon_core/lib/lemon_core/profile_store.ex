@@ -1345,7 +1345,11 @@ defmodule LemonCore.ProfileStore do
 
   defp locked(opts, fun) do
     key = {__MODULE__, config_path(opts)}
-    :global.trans(key, fun, [node()])
+
+    case :global.trans({key, self()}, fun, [node()], 3) do
+      :aborted -> {:error, :profile_unavailable}
+      result -> result
+    end
   end
 
   defp profile_table(id), do: "profiles.#{id}"
