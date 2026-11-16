@@ -123,16 +123,24 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
       end
 
       headers = build_headers(model, opts, account_id, api_key)
+      headers = websocket_headers(headers, opts)
 
       EventStream.push_async(stream, {:start, output})
 
-      # Make streaming request with retries
-      case stream_with_retries(
+      case OpenAIResponsesShared.request_stream(
+             opts,
              responses_url(model.base_url),
-             body,
              headers,
-             RetryHelper.policy(opts),
-             0
+             body,
+             fn ->
+               stream_with_retries(
+                 responses_url(model.base_url),
+                 body,
+                 headers,
+                 RetryHelper.policy(opts),
+                 0
+               )
+             end
            ) do
         {:ok, event_stream} ->
           # Map codex events to standard OpenAI Responses events
@@ -171,6 +179,14 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   # ============================================================================
   # Request Building
   # ============================================================================
+
+  defp websocket_headers(headers, %{provider_options: %{responses_websocket: true}}) do
+    headers
+    |> Map.reject(fn {key, _value} -> String.downcase(to_string(key)) == "openai-beta" end)
+    |> Map.put("OpenAI-Beta", "responses_websockets=2026-02-06")
+  end
+
+  defp websocket_headers(headers, _opts), do: headers
 
   defp build_request_body(model, context, opts) do
     # System prompt goes in instructions, not in messages

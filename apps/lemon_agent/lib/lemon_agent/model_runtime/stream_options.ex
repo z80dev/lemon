@@ -85,7 +85,9 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
 
     case CustomProviders.custom_provider(providers_map, Map.get(model, :provider)) do
       {provider_id, provider_cfg} ->
-        custom_provider_options(base_opts, provider_id, provider_cfg, providers_map)
+        base_opts
+        |> responses_options(model, provider_cfg)
+        |> custom_provider_options(provider_id, provider_cfg, providers_map)
 
       nil ->
         provider_stream_options(model, providers_map, base_opts)
@@ -113,6 +115,8 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     provider_cfg =
       ProviderNames.provider_config(providers_map, provider_config_lookup_key(model)) ||
         CustomProviders.config_for(providers_map, Map.get(model, :provider)) || %{}
+
+    base_opts = responses_options(base_opts, model, provider_cfg)
 
     # Catalog-only built-in models may not carry configured provider headers.
     # Keep model overrides above those defaults, then explicit caller headers.
@@ -231,6 +235,31 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
         base_opts
     end
   end
+
+  defp responses_options(opts, %{api: api}, provider_cfg)
+       when api in [:openai_responses, :openai_codex_responses] do
+    configured = provider_config_value(provider_cfg, :provider_options) || %{}
+    existing = opts.provider_options
+
+    websocket =
+      Map.get(
+        existing,
+        :responses_websocket,
+        Map.get(
+          existing,
+          "responses_websocket",
+          Map.get(configured, :responses_websocket, Map.get(configured, "responses_websocket"))
+        )
+      )
+
+    if is_boolean(websocket) do
+      %{opts | provider_options: Map.put(existing, :responses_websocket, websocket)}
+    else
+      opts
+    end
+  end
+
+  defp responses_options(opts, _model, _provider_cfg), do: opts
 
   defp google_vertex_input(base_opts, provider_cfg) do
     stream_options_to_map(base_opts)

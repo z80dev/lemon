@@ -88,6 +88,8 @@ defmodule LemonAi.MixProject do
       {:req, "~> 0.5"},
       # Direct access to Req's connection pool for unpaid preconnect hints
       {:finch, "~> 0.21"},
+      # Session-owned Responses WebSocket transport
+      {:websockex, "~> 0.5"},
       # JSON encoding/decoding
       {:jason, "~> 1.4"},
       # Options validation

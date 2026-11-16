@@ -202,6 +202,7 @@ defmodule CodingAgent.Session.Planning do
 
   defp change_model(state, model) do
     if different_model?(state.model, model) do
+      state = CodingAgent.Session.ResponsesTransport.reset(state)
       context = SessionManager.build_session_context(state.session_manager)
 
       model_routing =

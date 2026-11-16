@@ -89,6 +89,102 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     assert counts(ctx.events, id) == %{journal_load: 0, environment_capture: 1}
   end
 
+  test "invocation overrides retain resolved provider transport settings" do
+    state = %Session{
+      tool_opts: [stream_options: %{provider_options: %{other_option: "caller"}}]
+    }
+
+    {_, options} =
+      CodingAgent.Session.Invocation.stream(state, %LemonAi.Types.StreamOptions{
+        provider_options: %{responses_websocket: true}
+      })
+
+    assert options.provider_options == %{responses_websocket: true, other_option: "caller"}
+  end
+
+  test "Responses transport survives retained turns and dies with its live session", ctx do
+    ctx = responses_context(ctx)
+    {first, session, id} = start_turn(ctx, "first websocket turn")
+    assert_receive {:provider, provider, _, options}, 5_000
+    transport = options.provider_options.responses_transport
+    assert is_pid(transport)
+    assert Process.alive?(transport)
+    assert Session.get_state(session).tool_opts[:responses_transport].pid == transport
+    send(provider, {:respond, "first websocket answer"})
+    complete(first)
+
+    {second, ^session, ^id} = start_turn(ctx, "second websocket turn", id)
+    assert_receive {:provider, provider, _, options}, 5_000
+    assert options.provider_options.responses_transport == transport
+    send(provider, {:respond, "second websocket answer"})
+    complete(second)
+
+    session_ref = Process.monitor(session)
+    transport_ref = Process.monitor(transport)
+    Process.exit(session, :kill)
+    assert_receive {:DOWN, ^session_ref, :process, ^session, :killed}, 5_000
+    assert_receive {:DOWN, ^transport_ref, :process, ^transport, _reason}, 5_000
+  end
+
+  test "model switches and successful compaction reset rather than replace the transport", ctx do
+    ctx = responses_context(ctx)
+    {first, session, _id} = start_turn(ctx, "before invalidation")
+    assert_receive {:provider, provider, _, options}, 5_000
+    transport = options.provider_options.responses_transport
+    send(provider, {:respond, "answer before invalidation"})
+    complete(first)
+    :erlang.trace(transport, true, [:receive])
+
+    next_model = %{ctx.model | id: "replacement-responses-model"}
+    assert :ok = Session.switch_model(session, next_model)
+    assert_receive {:trace, ^transport, :receive, {:"$gen_call", _, :reset}}, 5_000
+    assert Session.get_state(session).tool_opts[:responses_transport].pid == transport
+
+    # Use the same final provider-call boundary after the explicit model switch.
+    {_, options} = GenServer.call(session, {:invocation_stream, next_model, options})
+    assert options.provider_options.responses_transport == transport
+    state = Session.get_state(session)
+
+    result = %{
+      summary: "compacted fixture",
+      first_kept_entry_id: nil,
+      tokens_before: 100,
+      details: %{}
+    }
+
+    assert {:ok, compacted} =
+             CodingAgent.Session.CompactionManager.apply_compaction_result(
+               state,
+               {:ok, result},
+               nil,
+               fn _ -> [] end,
+               fn _, _ -> :ok end
+             )
+
+    assert_receive {:trace, ^transport, :receive, {:"$gen_call", _, :reset}}, 5_000
+    assert compacted.tool_opts[:responses_transport].pid == transport
+    assert Process.alive?(transport)
+  end
+
+  test "disabled and unsupported requests never receive a transport", ctx do
+    for {api, enabled} <- [{:openai_responses, false}, {:mock, true}] do
+      ctx =
+        ctx
+        |> responses_context()
+        |> Map.update!(:model, &%{&1 | api: api})
+        |> Map.put(:run_opts, %{
+          stream_options: %{provider_options: %{responses_websocket: enabled}}
+        })
+
+      {run, session, _id} = start_turn(ctx, "without websocket")
+      assert_receive {:provider, provider, _, options}, 5_000
+      refute Map.has_key?(options.provider_options, :responses_transport)
+      refute Session.get_state(session).tool_opts[:responses_transport]
+      send(provider, {:respond, "unchanged transport"})
+      complete(run)
+    end
+  end
+
   test "TTL parking restores the journal once and does not recapture its environment", ctx do
     {first, session, id} = start_turn(ctx, "before parking")
     assert_receive {:provider, provider, before_parking, _}, 5_000
@@ -215,14 +311,18 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
       images: [],
       resume: if(id, do: ResumeToken.new("lemon", id)),
       meta: %{
-        model: Mocks.mock_model(),
+        model: Map.get(ctx, :model, Mocks.mock_model()),
         resume_source: source,
         project_memory_capture: false
       }
     }
 
     assert {:ok, run_ref, %{runner_pid: runner}} =
-             Executor.start_run(request, %{stream_fn: ctx.stream}, self())
+             Executor.start_run(
+               request,
+               Map.merge(%{stream_fn: ctx.stream}, Map.get(ctx, :run_opts, %{})),
+               self()
+             )
 
     session = :sys.get_state(runner).session
     id = Session.get_state(session).session_manager.header.id
@@ -234,6 +334,13 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     end)
 
     {run_ref, session, id}
+  end
+
+  defp responses_context(ctx) do
+    Map.merge(ctx, %{
+      model: %{Mocks.mock_model() | api: :openai_responses},
+      run_opts: %{stream_options: %{provider_options: %{responses_websocket: true}}}
+    })
   end
 
   defp complete(run_ref) do

@@ -495,7 +495,7 @@ defmodule CodingAgent.Session.Lifecycle do
                :infinity
              ) do
         {base_stream_fn, options} =
-          GenServer.call(session_pid, {:invocation_stream, options}, :infinity)
+          GenServer.call(session_pid, {:invocation_stream, candidate, options}, :infinity)
 
         base_stream_fn.(candidate, context, options)
       end
@@ -596,7 +596,8 @@ defmodule CodingAgent.Session.Lifecycle do
       acp_mcp_session_id: Keyword.get(opts, :acp_mcp_session_id),
       extra_tools: extra_tools,
       # Retain startup tool options without transcript payloads for fresh-ID resets.
-      tool_opts: Keyword.drop(tool_opts, [:initial_messages, :context_snapshot]),
+      tool_opts:
+        Keyword.drop(tool_opts, [:initial_messages, :context_snapshot, :responses_transport]),
       # Kept so a reload recomputes disclosure with the same per-session
       # override the session started with -- `reload_extensions/1` rebuilds
       # `tool_opts` from state rather than from the original opts.
@@ -788,6 +789,7 @@ defmodule CodingAgent.Session.Lifecycle do
           end
 
         state = CompactionManager.cancel_compaction_tasks(state, :session_reset)
+        state = CodingAgent.Session.ResponsesTransport.reset(state)
         :ok = LemonAgent.Agent.reset(state.agent)
 
         previous_session_id = state.session_manager.header.id

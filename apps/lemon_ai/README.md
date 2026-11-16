@@ -6,8 +6,9 @@ through **one streaming API**, with a built-in model registry, per-provider circ
 breaking and rate limiting, and cost accounting. No web framework, no umbrella, no
 runtime dependencies beyond [`req`](https://hex.pm/packages/req),
 [`finch`](https://hex.pm/packages/finch),
-[`jason`](https://hex.pm/packages/jason), and
-[`nimble_options`](https://hex.pm/packages/nimble_options).
+[`jason`](https://hex.pm/packages/jason),
+[`nimble_options`](https://hex.pm/packages/nimble_options), and
+[`websockex`](https://hex.pm/packages/websockex).
 
 The whole surface is `LemonAi.stream/3` and `LemonAi.complete/3` plus a handful of helpers. Point
 a `%LemonAi.Types.Model{}` at any provider and the rest of your code stays identical.
@@ -273,6 +274,34 @@ LemonAi.Models.supports_xhigh(model)
 ```
 
 ### Provider request controls
+
+OpenAI Responses and Codex Responses support an **opt-in**, session-owned
+WebSocket transport. SSE remains the default. Standalone callers create one
+transport per live conversation and pass its PID on every turn:
+
+```elixir
+{:ok, transport} =
+  LemonAi.Providers.OpenAIResponsesWebSocket.start_link(owner: self())
+
+opts = %LemonAi.Types.StreamOptions{
+  api_key: key,
+  provider_options: %{responses_websocket: true, responses_transport: transport}
+}
+
+{:ok, stream} = LemonAi.stream(model, context, opts)
+```
+
+Always pass the complete context: the transport sends only the new suffix when
+the previous response and replay prefix still match. A definite first-frame
+anchor rejection permits one full replay; three rejected anchors disable
+chaining for that live session. Partial or uncertain exchanges are never replayed.
+Idle sockets close after 30 seconds. Credential/header changes, endpoint/model
+changes and `OpenAIResponsesWebSocket.reset/1` discard the connection and anchor;
+call `reset/1` after compaction or history replacement. Owner death releases the
+transport. This state is memory-only and must not be journaled or shared across
+accounts or sessions. No token or latency improvement is claimed without an arena
+measurement. These provider options and transport lifecycle functions extend the
+published `lemon_ai` API.
 
 Anthropic requests default the required `max_tokens` field to the model's full
 output budget rather than a fraction of it. An explicit `max_tokens` overrides
@@ -992,6 +1021,7 @@ HTTP is mocked with `Req.Test` stubs; see `test/providers/` for patterns.
 | Dependency | Purpose |
 |------------|---------|
 | `req ~> 0.5` | HTTP client with streaming support |
+| `websockex ~> 0.5` | Opt-in session-owned Responses WebSocket client |
 | `jason ~> 1.4` | JSON encoding/decoding |
 | `nimble_options ~> 1.1` | Options validation |
 | `plug ~> 1.16` (test only) | `Req.Test` stubs |

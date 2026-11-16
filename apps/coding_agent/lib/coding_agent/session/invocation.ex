@@ -59,6 +59,7 @@ defmodule CodingAgent.Session.Invocation do
             settings_manager: state.settings_manager,
             plan_gate: state.plan_gate
           )
+          |> Keyword.put(:responses_transport, Keyword.get(state.tool_opts, :responses_transport))
 
         state = %{
           state
@@ -133,7 +134,13 @@ defmodule CodingAgent.Session.Invocation do
           |> Enum.reject(fn {_key, value} -> is_nil(value) end)
           |> Map.new()
 
-        Map.merge(options, overrides)
+        Map.merge(options, overrides, fn
+          :provider_options, resolved, requested when is_map(resolved) and is_map(requested) ->
+            Map.merge(resolved, requested)
+
+          _key, _resolved, requested ->
+            requested
+        end)
       else
         options
       end
@@ -147,7 +154,9 @@ defmodule CodingAgent.Session.Invocation do
 
     if requested && explicit do
       model = ModelResolver.resolve_session_model(requested, state.settings_manager)
+      state = CodingAgent.Session.ResponsesTransport.switch_model(state, model)
       :ok = LemonAgent.Agent.set_model(state.agent, model)
+
       if model.provider != state.model.provider or model.id != state.model.id,
         do: LemonAgent.ModelRuntime.SessionPins.clear(state.session_manager.header.id)
 
