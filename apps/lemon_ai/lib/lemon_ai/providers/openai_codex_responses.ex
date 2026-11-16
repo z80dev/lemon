@@ -49,7 +49,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   alias LemonAi.EventStream
   alias LemonAi.Providers.OpenAIResponsesShared
-  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Retry
   alias LemonAi.Providers.SSEParser
   alias LemonAi.Providers.StreamingHelper
   import LemonAi.Providers.AssistantMessageHelper
@@ -131,7 +131,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
              responses_url(model.base_url),
              body,
              headers,
-             RetryHelper.policy(opts),
+             LemonAi.Provider.retry_policy(opts),
              0
            ) do
         {:ok, event_stream} ->
@@ -363,7 +363,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   defp stream_with_retries(url, body, headers, policy, attempt) do
     headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
-    retry_allowed? = RetryHelper.retry_allowed?(attempt, policy)
+    retry_allowed? = Retry.retry_allowed?(attempt, policy)
 
     case Req.post(url,
            json: body,
@@ -379,8 +379,8 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
         error_text = normalize_error_body(error_body)
 
         retry_delay =
-          if retry_allowed? and RetryHelper.retryable_http_error?(status, error_text) do
-            RetryHelper.http_retry_delay_ms(
+          if retry_allowed? and LemonAi.Error.retryable_http_error?(status, error_text) do
+            Retry.http_retry_delay_ms(
               attempt,
               response_headers,
               policy,
@@ -394,17 +394,17 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
           :give_up ->
             {:error,
              LemonAi.Error.parse_http_error(status, error_text, response_headers, :openai_codex),
-             RetryHelper.retry_after_ms(response_headers)}
+             Retry.retry_after_ms(response_headers)}
 
           delay_ms ->
-            RetryHelper.sleep(delay_ms)
+            LemonAi.Provider.retry_sleep(delay_ms, policy)
             stream_with_retries(url, body, headers, policy, attempt + 1)
         end
 
       {:error, reason} ->
         cond do
-          retry_allowed? and RetryHelper.retryable_transport_error?(reason) ->
-            RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
+          retry_allowed? and LemonAi.Error.retryable_transport_error?(reason) ->
+            LemonAi.Provider.retry_sleep(Retry.backoff_delay_ms(attempt, policy), policy)
             stream_with_retries(url, body, headers, policy, attempt + 1)
 
           true ->

@@ -9,7 +9,7 @@ defmodule LemonAgent.Loop.Streaming do
   alias LemonAgent.Loop.TranscriptValidator
   alias LemonAgent.Types.{AgentLoopConfig, AgentTool}
 
-  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Retry
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -288,11 +288,25 @@ defmodule LemonAgent.Loop.Streaming do
        }}
     )
 
-    case wait_for_retry(signal, delay_ms, config.stream_options) do
+    case Retry.wait(delay_ms,
+           cancelled?: fn ->
+             cond do
+               aborted?(signal) -> :aborted
+               redirect_requested?(signal) -> :redirected
+               true -> false
+             end
+           end,
+           cancel_messages: [
+             {:lemon_abort, signal, :abort},
+             {:lemon_abort, signal, :redirect}
+           ],
+           cancel_message_requires_state: true,
+           sleep_fun: LemonAi.Provider.retry_policy(config.stream_options).sleep_fun
+         ) do
       :ok ->
         retry_response(context, config, signal, stream_fn, stream, attempt)
 
-      reason ->
+      {:error, reason} ->
         finish_retry(stream, attempt, false, true)
 
         {message, context} =
@@ -311,44 +325,26 @@ defmodule LemonAgent.Loop.Streaming do
   end
 
   defp retry_delay(error, config, retries_done) do
-    if retries_done < config.max_retries and LemonAi.Error.retryable?(error) do
-      case retry_after_ms(error) do
-        delay when is_integer(delay) and delay > @max_retry_after_ms ->
-          :stop
+    policy =
+      config.stream_options
+      |> LemonAi.Provider.retry_policy()
+      |> Map.merge(%{
+        max_attempts: config.max_retries + 1,
+        base_delay_ms: config.retry_base_delay_ms,
+        max_delay_ms: config.retry_max_delay_ms,
+        max_retry_after_ms: @max_retry_after_ms,
+        classify: &LemonAi.Error.classify/1,
+        jitter: :none
+      })
+      |> Retry.policy()
 
-        delay when is_integer(delay) and delay >= 0 ->
-          throttle_delay(error, config, retries_done, delay)
-
-        _ ->
-          delay =
-            min(
-              config.retry_base_delay_ms * Integer.pow(2, min(retries_done, 30)),
-              config.retry_max_delay_ms
-            )
-
-          throttle_delay(error, config, retries_done, delay)
-      end
-    else
-      :stop
-    end
-  end
-
-  defp throttle_delay(error, config, retries_done, delay) do
-    if LemonAi.Error.classify(error) == :rate_limit do
-      policy =
-        RetryHelper.policy(config.stream_options)
-        |> Map.merge(%{
-          base_delay_ms: config.retry_base_delay_ms,
-          max_delay_ms: config.retry_max_delay_ms,
-          max_retry_after_ms: @max_retry_after_ms
-        })
-
-      case RetryHelper.retry_delay_ms(error, retries_done, policy, retry_after_ms(error)) do
+    if Retry.retry_allowed?(retries_done, policy) and LemonAi.Error.retryable?(error) do
+      case Retry.retry_delay_ms(error, retries_done, policy, retry_after_ms(error)) do
         :give_up -> :stop
         delay -> {:ok, delay}
       end
     else
-      {:ok, delay}
+      :stop
     end
   end
 
@@ -356,51 +352,7 @@ defmodule LemonAgent.Loop.Streaming do
   defp error_text(error), do: error
 
   defp retry_after_ms(error),
-    do: RetryHelper.error_retry_after_ms(error)
-
-  defp wait_for_retry(signal, delay_ms, options) do
-    case RetryHelper.policy(options) do
-      %{sleep_fun: sleep_fun} ->
-        cond do
-          aborted?(signal) ->
-            :aborted
-
-          redirect_requested?(signal) ->
-            :redirected
-
-          true ->
-            sleep_fun.(delay_ms)
-            wait_for_retry(signal, System.monotonic_time(:millisecond))
-        end
-
-      _ ->
-        wait_for_retry(signal, System.monotonic_time(:millisecond) + delay_ms)
-    end
-  end
-
-  defp wait_for_retry(signal, deadline) do
-    cond do
-      aborted?(signal) ->
-        :aborted
-
-      redirect_requested?(signal) ->
-        :redirected
-
-      true ->
-        remaining = deadline - System.monotonic_time(:millisecond)
-
-        if remaining <= 0 do
-          :ok
-        else
-          receive do
-            {:lemon_abort, ^signal, kind} when kind in [:abort, :redirect] ->
-              wait_for_retry(signal, deadline)
-          after
-            remaining -> :ok
-          end
-        end
-    end
-  end
+    do: Retry.error_retry_after_ms(error)
 
   defp finish_retry(_stream, 0, _success, _canceled), do: :ok
 

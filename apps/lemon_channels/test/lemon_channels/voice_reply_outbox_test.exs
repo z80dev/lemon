@@ -12,7 +12,8 @@ defmodule LemonChannels.VoiceReplyOutboxTest do
     VoiceReplyDelivery
   }
 
-  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Dedupe}
+  alias LemonCore.RateLimiter
   alias LemonChannels.Telegram.Truncate
   alias LemonCore.{DeliveryIntent, DeliveryRoute}
 
@@ -107,7 +108,14 @@ defmodule LemonChannels.VoiceReplyOutboxTest do
 
   setup do
     for module <- [Registry, RateLimiter, Dedupe, Outbox, PresentationState, VoiceReplyDelivery] do
-      if is_nil(Process.whereis(module)), do: start_supervised!(module)
+      if is_nil(
+           Process.whereis(
+             if(module == LemonCore.RateLimiter,
+               do: LemonChannels.Outbox.RateLimiter,
+               else: module
+             )
+           )
+         ), do: start_supervised!(module)
     end
 
     if is_nil(Process.whereis(LemonChannels.VoiceReplyTaskSupervisor)) do

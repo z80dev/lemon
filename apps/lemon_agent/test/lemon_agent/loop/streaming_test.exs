@@ -7,6 +7,8 @@ defmodule LemonAgent.Loop.StreamingTest do
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig}
 
+  alias LemonAi.Retry
+
   alias LemonAi.Types.{
     StreamOptions,
     ToolCall,
@@ -365,7 +367,7 @@ defmodule LemonAgent.Loop.StreamingTest do
     assert {:provider_retry_end, %{attempt: 1, success: true, canceled: false}} in events
   end
 
-  test "request failures back off exponentially and exhaust a bounded retry budget" do
+  test "request failures use deterministic exponential backoff and a single response budget" do
     parent = self()
     context = simple_context(messages: [user_message("run")])
 
@@ -374,7 +376,24 @@ defmodule LemonAgent.Loop.StreamingTest do
       {:error, :timeout}
     end
 
-    config = simple_config(stream_fn: stream_fn, max_retries: 2, retry_base_delay_ms: 2)
+    options = retry_test_options()
+
+    options = %{
+      options
+      | provider_retry:
+          Map.put(options.provider_retry, :jitter_fun, fn _ ->
+            flunk("ordinary loop retries must not jitter")
+          end)
+    }
+
+    config =
+      simple_config(
+        stream_fn: stream_fn,
+        max_retries: 2,
+        retry_base_delay_ms: 2,
+        stream_options: options
+      )
+
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
     assert {:error, :timeout} =
@@ -384,11 +403,100 @@ defmodule LemonAgent.Loop.StreamingTest do
     assert_receive :request_attempt
     assert_receive :request_attempt
     refute_received :request_attempt
+    assert_receive {:retry_sleep, 2}
+    assert_receive {:retry_sleep, 4}
+    refute_received {:retry_sleep, _}
 
     EventStream.complete(stream, [])
     events = Enum.to_list(EventStream.events(stream))
     assert for({:provider_retry, %{delay_ms: delay}} <- events, do: delay) == [2, 4]
     assert {:provider_retry_end, %{attempt: 2, success: false, canceled: false}} in events
+  end
+
+  test "ordinary retry timing caps backoff but preserves server hints" do
+    parent = self()
+
+    for {error, expected_delays} <- [
+          {:timeout, [3, 3]},
+          {{:http_error, 503, "Service unavailable", [{"retry-after-ms", "7"}]}, [7, 7]}
+        ] do
+      stream_fn = fn _, _, options ->
+        assert options.provider_retry.max_attempts == 1
+        send(parent, :request_attempt)
+        {:error, error}
+      end
+
+      config =
+        simple_config(
+          stream_fn: stream_fn,
+          max_retries: 2,
+          retry_base_delay_ms: 4,
+          retry_max_delay_ms: 3,
+          stream_options: retry_test_options()
+        )
+
+      {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+      assert {:error, ^error} =
+               Streaming.stream_assistant_response(
+                 simple_context(messages: [user_message("run")]),
+                 config,
+                 nil,
+                 nil,
+                 stream
+               )
+
+      for _ <- 1..3, do: assert_receive(:request_attempt)
+      refute_received :request_attempt
+
+      for delay <- expected_delays, do: assert_receive({:retry_sleep, ^delay})
+      refute_received {:retry_sleep, _}
+      EventStream.complete(stream, [])
+
+      assert for({:provider_retry, %{delay_ms: delay}} <- EventStream.events(stream), do: delay) ==
+               expected_delays
+    end
+  end
+
+  test "cleared redirect notifications do not abort retry backoff" do
+    parent = self()
+    signal = AbortSignal.new()
+    final = Mocks.assistant_message("recovered")
+    {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+    stream_fn = fn _, _, _ ->
+      send(parent, :request_attempt)
+
+      case Agent.get_and_update(attempts, fn attempt -> {attempt, attempt + 1} end) do
+        0 ->
+          :ok = AbortSignal.request_redirect(signal)
+          :ok = AbortSignal.clear_redirect(signal)
+          {:error, :timeout}
+
+        1 ->
+          Mocks.mock_stream_fn_single_direct(final).(nil, nil, nil)
+      end
+    end
+
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, ^final, _} =
+             Streaming.stream_assistant_response(
+               simple_context(messages: [user_message("run")]),
+               simple_config(stream_fn: stream_fn),
+               signal,
+               nil,
+               stream
+             )
+
+    assert_receive :request_attempt
+    assert_receive :request_attempt
+    refute_received :request_attempt
+    EventStream.complete(stream, [])
+
+    assert {:provider_retry_end, %{attempt: 1, success: true, canceled: false}} in Enum.to_list(
+             EventStream.events(stream)
+           )
   end
 
   test "context overflow and authentication failures do not consume retry attempts" do
@@ -623,9 +731,9 @@ defmodule LemonAgent.Loop.StreamingTest do
   # max_attempts to one, not just reduce its own retry counter.
   defp throttled_provider(parent, error, options, attempt \\ 0) do
     send(parent, :upstream_attempt)
-    policy = LemonAi.Providers.RetryHelper.policy(options)
+    policy = LemonAi.Provider.retry_policy(options)
 
-    if LemonAi.Providers.RetryHelper.retry_allowed?(attempt, policy) do
+    if Retry.retry_allowed?(attempt, policy) do
       throttled_provider(parent, error, options, attempt + 1)
     else
       {:error, error}

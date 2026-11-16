@@ -2,7 +2,8 @@ defmodule LemonChannels.OutboxArchitectureTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.{OutboundPayload, Outbox, Registry}
-  alias LemonChannels.Outbox.{Chunker, Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Chunker, Dedupe}
+  alias LemonCore.RateLimiter
 
   defmodule BlockingPlugin do
     @behaviour LemonChannels.Plugin
@@ -82,7 +83,9 @@ defmodule LemonChannels.OutboxArchitectureTest do
   end
 
   defp start_supervised_if_needed(module) do
-    case Process.whereis(module) do
+    case Process.whereis(
+           if(module == LemonCore.RateLimiter, do: LemonChannels.Outbox.RateLimiter, else: module)
+         ) do
       nil -> start_supervised!(module)
       _pid -> :ok
     end

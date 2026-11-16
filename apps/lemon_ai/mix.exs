@@ -1,7 +1,7 @@
 defmodule LemonAi.MixProject do
   use Mix.Project
 
-  @version "0.2.1"
+  @version "0.3.0"
   @source_url "https://github.com/z80dev/lemon"
 
   # This file ships verbatim in the hex tarball, so it must not read anything

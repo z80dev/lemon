@@ -43,6 +43,26 @@ defmodule LemonChannels.Adapters.WhatsApp.Reconnect581Test do
     :ok
   end
 
+  test "all twelve reconnect slots are admitted and the thirteenth is terminal" do
+    event = {:whatsapp_bridge_event, %{"type" => "bridge_down"}}
+    initial = %{connected?: false, own_jid: nil, reconnect_timer: nil, reconnect_attempts: 0}
+
+    exhausted =
+      Enum.reduce(1..12, initial, fn expected, state ->
+        assert {:noreply, pending} = Transport.handle_info(event, state)
+        assert pending.reconnect_attempts == expected
+        {timer, _ref} = pending.reconnect_timer
+        Process.cancel_timer(timer)
+        %{pending | reconnect_timer: nil}
+      end)
+
+    assert {:stop, {:shutdown, :reconnect_exhausted}, terminal} =
+             Transport.handle_info(event, exhausted)
+
+    assert terminal.reconnect_attempts == 12
+    assert terminal.reconnect_timer == nil
+  end
+
   test "duplicate socket and port failures share one reconnect timer and one attempt" do
     state = %{connected?: false, own_jid: nil, reconnect_timer: nil, reconnect_attempts: 0}
     disconnected = {:whatsapp_bridge_event, %{"type" => "disconnected", "status_code" => 500}}

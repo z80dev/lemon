@@ -62,7 +62,10 @@ defmodule LemonControlPlane.Application do
       config = LemonControlPlane.A2A.Config.current()
 
       [
-        LemonControlPlane.A2A.RateLimiter,
+        {LemonCore.RateLimiter,
+         profile: :a2a,
+         name: LemonControlPlane.A2A.RateLimiter,
+         limit: fn -> LemonControlPlane.A2A.Config.current().rate_limit_per_minute end},
         Supervisor.child_spec(
           {Bandit,
            plug: LemonControlPlane.A2A.Router,

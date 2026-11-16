@@ -26,17 +26,10 @@ defmodule LemonCore.AgentMessaging do
 
   @doc "Register a complete messaging runtime, or unregister it with `nil`."
   @spec configure(module() | nil) :: :ok | {:error, term()}
-  def configure(nil) do
-    Application.delete_env(:lemon_core, @runtime_key)
-    :ok
-  end
+  def configure(nil), do: LemonCore.RuntimeSeam.unregister(@runtime_key)
 
-  def configure(module) do
-    with :ok <- LemonCore.Contract.validate(module, __MODULE__) do
-      Application.put_env(:lemon_core, @runtime_key, module)
-      :ok
-    end
-  end
+  def configure(module),
+    do: LemonCore.RuntimeSeam.register(@runtime_key, module, __MODULE__)
 
   @doc "Discover eligible identities with runtime status, within one authorized scope."
   def list(scope, opts \\ []), do: call(:list, [scope, opts], :query, :list)
@@ -65,20 +58,19 @@ defmodule LemonCore.AgentMessaging do
     do: call(:complete_external, [conn_pid, message_id, completion], :mutation, :map)
 
   defp call(function, args, operation, shape) do
-    case Application.get_env(:lemon_core, @runtime_key) do
-      nil -> {:error, :unavailable}
-      module -> invoke(module, function, args, operation, shape)
-    end
-  end
+    result =
+      LemonCore.RuntimeSeam.invoke(
+        LemonCore.RuntimeSeam.provider(@runtime_key),
+        function,
+        args,
+        unavailable: {:error, :unavailable},
+        missing: failure(operation, :query_failed),
+        exception: failure(operation, :query_failed),
+        exit: failure(operation, :unavailable),
+        throw: failure(operation, :unavailable)
+      )
 
-  defp invoke(module, function, args, operation, shape) do
-    module
-    |> apply(function, args)
-    |> acknowledgement(shape, operation)
-  rescue
-    _ -> failure(operation, :query_failed)
-  catch
-    _, _ -> failure(operation, :unavailable)
+    acknowledgement(result, shape, operation)
   end
 
   defp acknowledgement({:error, _} = error, _shape, _operation), do: error

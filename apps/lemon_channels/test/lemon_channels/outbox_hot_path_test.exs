@@ -1,7 +1,8 @@
 defmodule LemonChannels.OutboxHotPathTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Dedupe}
+  alias LemonCore.RateLimiter
 
   test "concurrent confirmed-key inserts have exactly one winner" do
     key = "atomic-confirmed-#{System.unique_integer([:positive])}"

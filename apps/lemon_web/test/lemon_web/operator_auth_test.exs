@@ -9,7 +9,8 @@ defmodule LemonWeb.OperatorAuthTest do
   import LemonWeb.Test.OperatorAuth
   import Plug.Conn, only: [get_session: 2]
 
-  alias LemonWeb.{Auth, LoginController, LoginThrottle}
+  alias LemonWeb.{Auth, LoginController}
+  alias LemonCore.RateLimiter, as: LoginThrottle
 
   defp peer(conn, ip), do: %{conn | remote_ip: ip}
 

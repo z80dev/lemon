@@ -460,12 +460,20 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
 
   describe "outbox delivery of a message lost after DATA" do
     alias LemonChannels.Outbox
-    alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+    alias LemonChannels.Outbox.{Dedupe}
+    alias LemonCore.RateLimiter
     alias LemonChannels.Registry
 
     setup do
       for module <- [Registry, RateLimiter, Dedupe, Outbox] do
-        if is_nil(Process.whereis(module)), do: start_supervised!(module)
+        if is_nil(
+             Process.whereis(
+               if(module == LemonCore.RateLimiter,
+                 do: LemonChannels.Outbox.RateLimiter,
+                 else: module
+               )
+             )
+           ), do: start_supervised!(module)
       end
 
       :ok = Registry.register(Email)

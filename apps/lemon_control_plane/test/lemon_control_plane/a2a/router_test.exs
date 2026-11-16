@@ -4,7 +4,8 @@ defmodule LemonControlPlane.A2A.RouterTest do
   import Plug.Conn
   import Plug.Test
 
-  alias LemonControlPlane.A2A.{RateLimiter, Router}
+  alias LemonControlPlane.A2A.{Router}
+  alias LemonCore.RateLimiter
 
   defmodule RunStub do
     def submit(request) do
@@ -60,8 +61,13 @@ defmodule LemonControlPlane.A2A.RouterTest do
 
     :ok = LemonCore.RouterBridge.configure(run_orchestrator: RunStub)
 
-    if is_nil(Process.whereis(RateLimiter)) do
-      start_supervised!(RateLimiter)
+    if is_nil(Process.whereis(LemonControlPlane.A2A.RateLimiter)) do
+      start_supervised!(
+        {RateLimiter,
+         profile: :a2a,
+         name: LemonControlPlane.A2A.RateLimiter,
+         limit: fn -> LemonControlPlane.A2A.Config.current().rate_limit_per_minute end}
+      )
     end
 
     on_exit(fn ->

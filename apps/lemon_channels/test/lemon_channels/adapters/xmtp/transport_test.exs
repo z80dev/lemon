@@ -149,7 +149,8 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
                     {:"$gen_cast", {:command, %{"op" => "ack_inbound"}}}},
                    100
 
-    refute MapSet.member?(:sys.get_state(pid).seen_inbound_keys, dedupe_key)
+    :sys.get_state(pid)
+    refute LemonCore.Dedupe.Ets.seen?(:lemon_channels_xmtp_dedupe, dedupe_key, :infinity)
 
     :persistent_term.put({XmtpTestRouter, :submit_result}, {:ok, "run-after-redelivery"})
     send(pid, {:xmtp_bridge_event, %{"type" => "connected", "mode" => "live"}})
@@ -166,7 +167,8 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
                       }}}},
                    800
 
-    assert MapSet.member?(:sys.get_state(pid).seen_inbound_keys, dedupe_key)
+    :sys.get_state(pid)
+    assert LemonCore.Dedupe.Ets.seen?(:lemon_channels_xmtp_dedupe, dedupe_key, :infinity)
   end
 
   test "ambiguous submission is acknowledged for dedupe but never reported as success" do

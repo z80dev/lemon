@@ -19,7 +19,7 @@ defmodule LemonAi.Providers.Anthropic do
     hints, never permission to silently discard messages
   - Incomplete SSE responses fail with partial content instead of reporting success
   - Retries for 429/529/5xx and transport errors per
-    `LemonAi.Providers.RetryHelper.policy/0`, honoring `retry-after` and
+    `LemonAi.Provider.retry_policy/0`, honoring `retry-after` and
     `anthropic-ratelimit-*-reset`; the final error carries `retry_after_ms`
 
   Usage updates retain counters omitted by later events. Explicitly unknown (`nil`)
@@ -36,13 +36,13 @@ defmodule LemonAi.Providers.Anthropic do
 
   alias LemonAi.Auth.{AnthropicOAuth, KimiCodeOAuth}
   alias LemonAi.EventStream
+  alias LemonAi.Retry
   alias LemonAi.Models.Presets
 
   alias LemonAi.Providers.{
     HttpTrace,
     OpenCodeGoSession,
     RequestHeaders,
-    RetryHelper,
     StreamingHelper
   }
 
@@ -166,7 +166,7 @@ defmodule LemonAi.Providers.Anthropic do
             body,
             initial_state,
             trace_id,
-            RetryHelper.policy(opts),
+            LemonAi.Provider.retry_policy(opts),
             0
           )
 
@@ -210,7 +210,7 @@ defmodule LemonAi.Providers.Anthropic do
               | stop_reason: :error,
                 error_message: error.message,
                 error_details: error,
-                retry_after_ms: RetryHelper.error_retry_after_ms(error)
+                retry_after_ms: Retry.error_retry_after_ms(error)
             }
 
             EventStream.error(stream, error_output)
@@ -423,9 +423,9 @@ defmodule LemonAi.Providers.Anthropic do
 
       {:ok, %Req.Response{status: status} = response} = wrapped_response ->
         retry_delay =
-          if RetryHelper.retry_allowed?(attempt, policy) and
+          if Retry.retry_allowed?(attempt, policy) and
                retryable_http_response?(response, initial_state.model) do
-            RetryHelper.http_retry_delay_ms(
+            Retry.http_retry_delay_ms(
               attempt,
               response.headers,
               policy,
@@ -441,7 +441,7 @@ defmodule LemonAi.Providers.Anthropic do
 
           delay_ms ->
             log_retry(trace_id, "retry_http", %{status: status}, attempt, policy, delay_ms)
-            RetryHelper.sleep(delay_ms)
+            LemonAi.Provider.retry_sleep(delay_ms, policy)
 
             stream_request_with_retries(
               url,
@@ -455,9 +455,9 @@ defmodule LemonAi.Providers.Anthropic do
         end
 
       {:error, reason} = error ->
-        if RetryHelper.retry_allowed?(attempt, policy) and not committed and
-             RetryHelper.retryable_transport_error?(reason) do
-          delay_ms = RetryHelper.backoff_delay_ms(attempt, policy)
+        if Retry.retry_allowed?(attempt, policy) and not committed and
+             LemonAi.Error.retryable_transport_error?(reason) do
+          delay_ms = Retry.backoff_delay_ms(attempt, policy)
 
           log_retry(
             trace_id,
@@ -468,7 +468,7 @@ defmodule LemonAi.Providers.Anthropic do
             delay_ms
           )
 
-          RetryHelper.sleep(delay_ms)
+          LemonAi.Provider.retry_sleep(delay_ms, policy)
 
           stream_request_with_retries(
             url,
@@ -498,7 +498,7 @@ defmodule LemonAi.Providers.Anthropic do
   end
 
   defp retryable_http_response?(%Req.Response{status: status} = response, model) do
-    RetryHelper.retryable_http_error?(status, response.body) or
+    LemonAi.Error.retryable_http_error?(status, response.body) or
       retryable_kimi_empty_400?(response, model)
   end
 

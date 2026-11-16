@@ -4,7 +4,8 @@ defmodule LemonControlPlane.A2A.RunnerTest do
   import Plug.Conn
   import Plug.Test
 
-  alias LemonControlPlane.A2A.{Handler, RateLimiter, Router}
+  alias LemonControlPlane.A2A.{Handler, Router}
+  alias LemonCore.RateLimiter
   alias LemonCore.{A2AStore, RunStore, Store}
   alias LemonCore.A2A.Protocol
 
@@ -78,8 +79,13 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     AbortRouter.set_owner(self())
     AbortRouter.set_result(:ok)
 
-    if is_nil(Process.whereis(RateLimiter)) do
-      start_supervised!(RateLimiter)
+    if is_nil(Process.whereis(LemonControlPlane.A2A.RateLimiter)) do
+      start_supervised!(
+        {RateLimiter,
+         profile: :a2a,
+         name: LemonControlPlane.A2A.RateLimiter,
+         limit: fn -> LemonControlPlane.A2A.Config.current().rate_limit_per_minute end}
+      )
     end
 
     :ok =

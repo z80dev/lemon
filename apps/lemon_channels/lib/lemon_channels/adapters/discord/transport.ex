@@ -473,7 +473,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp forget_submission_dedupe(refs) do
     Enum.each(refs, fn
       %{memory_key: memory_key, persistent_key: persistent_key} ->
-        _ = :ets.delete(@dedupe_table, memory_key)
+        _ = Ets.forget(@dedupe_table, memory_key)
         _ = Store.delete(:idempotency, persistent_key)
 
       _ ->

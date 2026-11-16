@@ -142,7 +142,7 @@ defmodule LemonCore.EngineRuntime do
   router-only mode.
   """
   @spec validate(term()) :: :ok | {:error, LemonCore.Contract.error()}
-  def validate(module), do: LemonCore.Contract.validate(module, __MODULE__)
+  def validate(module), do: LemonCore.RuntimeSeam.validate(module, __MODULE__)
 
   @doc """
   Accept a command for execution.

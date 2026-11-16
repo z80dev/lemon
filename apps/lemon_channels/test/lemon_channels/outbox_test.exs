@@ -2,7 +2,7 @@ defmodule LemonChannels.OutboxTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.{Outbox, OutboundPayload}
-  alias LemonChannels.Outbox.RateLimiter
+  alias LemonCore.RateLimiter
 
   defmodule TestChannelPlugin do
     @behaviour LemonChannels.Plugin

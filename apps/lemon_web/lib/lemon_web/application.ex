@@ -18,7 +18,7 @@ defmodule LemonWeb.Application do
     LemonWeb.ShellLive.RunEvents.attach()
 
     children = [
-      LemonWeb.LoginThrottle,
+      {LemonCore.RateLimiter, profile: :login, name: LemonWeb.LoginThrottle},
       LemonWeb.Endpoint
     ]
 

@@ -2,7 +2,8 @@ defmodule LemonChannels.OutboxRetryBehaviorTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.{Outbox, OutboundPayload, Registry}
-  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Dedupe}
+  alias LemonCore.RateLimiter
 
   defmodule RetryAfterPlugin do
     @behaviour LemonChannels.Plugin
@@ -113,10 +114,30 @@ defmodule LemonChannels.OutboxRetryBehaviorTest do
   end
 
   defp start_supervised_if_needed(module) do
-    case Process.whereis(module) do
+    case Process.whereis(
+           if(module == LemonCore.RateLimiter, do: LemonChannels.Outbox.RateLimiter, else: module)
+         ) do
       nil -> start_supervised!(module)
       _pid -> :ok
     end
+  end
+
+  test "delivery policy preserves three retries and server hints" do
+    policy =
+      LemonCore.Retry.policy(
+        max_attempts: 4,
+        base_delay_ms: 1_000,
+        max_delay_ms: :infinity,
+        max_retry_after_ms: :infinity,
+        jitter: :none
+      )
+
+    assert Enum.map(0..2, &LemonCore.Retry.delay(policy, &1)) == [1_000, 2_000, 4_000]
+    assert Enum.all?(0..2, &LemonCore.Retry.retry_allowed?(&1, policy))
+    refute LemonCore.Retry.retry_allowed?(3, policy)
+    assert LemonCore.Retry.delay(policy, 0, 1_200) == 1_200
+    assert LemonCore.Retry.delay(policy, 0, 100_000_000) == 100_000_000
+    assert LemonCore.Retry.delay(policy, 3) == :give_up
   end
 
   test "honors retry_after delay and does not notify intermediate failures" do

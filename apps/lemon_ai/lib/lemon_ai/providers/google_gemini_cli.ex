@@ -25,7 +25,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
 
   alias LemonAi.EventStream
   alias LemonAi.Providers.GoogleShared
-  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Retry
   alias LemonAi.Providers.StreamingHelper
   import LemonAi.Providers.AssistantMessageHelper
 
@@ -387,12 +387,12 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
       {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
         error_text = GoogleShared.normalize_http_error_body(error_body)
 
-        policy = RetryHelper.policy(opts)
+        policy = LemonAi.Provider.retry_policy(opts)
         error = {:http_error, status, error_text, response_headers}
 
         delay =
           if attempt < max_retries and GoogleShared.retryable_error?(status, error_text) do
-            RetryHelper.http_retry_delay_ms(attempt, response_headers, policy, error)
+            Retry.http_retry_delay_ms(attempt, response_headers, policy, error)
           else
             :give_up
           end
@@ -402,7 +402,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
             {:error, GoogleShared.safe_http_error(status, error_text, response_headers)}
 
           delay_ms ->
-            RetryHelper.sleep(delay_ms)
+            LemonAi.Provider.retry_sleep(delay_ms, policy)
             make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
         end
 
@@ -844,7 +844,10 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
   end
 
   defp retry_delay_with_jitter(base_ms, attempt) do
-    RetryHelper.exponential_backoff_with_jitter(base_ms, attempt)
+    Retry.backoff_delay_ms(
+      attempt,
+      Retry.policy(base_delay_ms: base_ms, max_delay_ms: base_ms * Integer.pow(2, attempt))
+    )
   end
 
   @doc "Register this provider with the registry"

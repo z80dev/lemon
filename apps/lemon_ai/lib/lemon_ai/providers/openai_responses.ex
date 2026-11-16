@@ -45,7 +45,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
   alias LemonAi.Providers.HttpTrace
   alias LemonAi.Providers.OpenAIResponsesShared
   alias LemonAi.Providers.RequestHeaders
-  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Retry
   alias LemonAi.Providers.SSEParser
   alias LemonAi.Providers.StreamingHelper
   import LemonAi.Providers.AssistantMessageHelper
@@ -101,7 +101,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
              headers,
              body,
              trace_id,
-             RetryHelper.policy(opts),
+             LemonAi.Provider.retry_policy(opts),
              0,
              model.provider
            ) do
@@ -409,7 +409,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
   defp stream_request(url, headers, body, trace_id, policy, attempt, provider) do
     headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
-    retry_allowed? = RetryHelper.retry_allowed?(attempt, policy)
+    retry_allowed? = Retry.retry_allowed?(attempt, policy)
 
     case Req.post(url,
            json: body,
@@ -441,8 +441,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
         })
 
         retry_delay =
-          if retry_allowed? and RetryHelper.retryable_http_error?(status, response_body) do
-            RetryHelper.http_retry_delay_ms(
+          if retry_allowed? and LemonAi.Error.retryable_http_error?(status, response_body) do
+            Retry.http_retry_delay_ms(
               attempt,
               response_headers,
               policy,
@@ -457,10 +457,10 @@ defmodule LemonAi.Providers.OpenAIResponses do
             error =
               LemonAi.Error.parse_http_error(status, response_body, response_headers, provider)
 
-            {:error, error, RetryHelper.retry_after_ms(response_headers)}
+            {:error, error, Retry.retry_after_ms(response_headers)}
 
           delay_ms ->
-            RetryHelper.sleep(delay_ms)
+            LemonAi.Provider.retry_sleep(delay_ms, policy)
             stream_request(url, headers, body, trace_id, policy, attempt + 1, provider)
         end
 
@@ -473,8 +473,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
           input_items: count_input_items(Map.get(body, "input"))
         })
 
-        if retry_allowed? and RetryHelper.retryable_transport_error?(reason) do
-          RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
+        if retry_allowed? and LemonAi.Error.retryable_transport_error?(reason) do
+          LemonAi.Provider.retry_sleep(Retry.backoff_delay_ms(attempt, policy), policy)
           stream_request(url, headers, body, trace_id, policy, attempt + 1, provider)
         else
           details = LemonAi.Error.to_error_details(reason)

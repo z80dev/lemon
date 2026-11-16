@@ -58,7 +58,8 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   alias LemonAi.EventStream
   alias LemonAi.Models.Presets
-  alias LemonAi.Providers.{OpenCodeGoSession, RequestHeaders, RetryHelper, StreamingHelper}
+  alias LemonAi.Providers.{OpenCodeGoSession, RequestHeaders, StreamingHelper}
+  alias LemonAi.Retry
 
   require Logger
 
@@ -109,7 +110,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
           url,
           headers,
           params,
-          RetryHelper.policy(opts),
+          LemonAi.Provider.retry_policy(opts),
           0,
           opts,
           metadata
@@ -995,7 +996,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
             {output, committed, raw_usage} = process_sse_stream(stream, initial_output, response)
 
             retry_delay =
-              if RetryHelper.retry_allowed?(attempt, policy) and not committed and
+              if Retry.retry_allowed?(attempt, policy) and not committed and
                    retryable_stream_output_error?(output) do
                 http_retry_delay_ms(attempt, policy, output.error_message, %{})
               else
@@ -1010,7 +1011,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
                 output
 
               delay_ms ->
-                RetryHelper.sleep(delay_ms)
+                LemonAi.Provider.retry_sleep(delay_ms, policy)
                 retry.()
             end
 
@@ -1018,12 +1019,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
             error_body = materialize_response_body(response)
 
             retry_delay =
-              if not RetryHelper.rotate_rate_limit?(
+              if not Retry.rotate_rate_limit?(
                    policy,
                    {:http_error, response.status, error_body}
                  ) and
-                   RetryHelper.retry_allowed?(attempt, policy) and
-                   RetryHelper.retryable_http_error?(response.status, error_body) do
+                   Retry.retry_allowed?(attempt, policy) and
+                   LemonAi.Error.retryable_http_error?(response.status, error_body) do
                 http_retry_delay_ms(
                   attempt,
                   policy,
@@ -1049,19 +1050,19 @@ defmodule LemonAi.Providers.OpenAICompletions do
                   initial_output
                   | stop_reason: :error,
                     error_message: error.message,
-                    retry_after_ms: RetryHelper.retry_after_ms(response.headers)
+                    retry_after_ms: Retry.retry_after_ms(response.headers)
                 }
 
               delay_ms ->
-                RetryHelper.sleep(delay_ms)
+                LemonAi.Provider.retry_sleep(delay_ms, policy)
                 retry.()
             end
         end
 
       {:error, %Req.TransportError{reason: reason} = error} ->
-        if RetryHelper.retry_allowed?(attempt, policy) and
-             RetryHelper.retryable_transport_error?(error) do
-          RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
+        if Retry.retry_allowed?(attempt, policy) and
+             LemonAi.Error.retryable_transport_error?(error) do
+          LemonAi.Provider.retry_sleep(Retry.backoff_delay_ms(attempt, policy), policy)
           retry.()
         else
           Logger.warning("Provider transport failed: #{inspect(reason)}")
@@ -1247,7 +1248,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
   # Shared timing preserves structured body hints and throttle backoff.
   defp http_retry_delay_ms(attempt, policy, error_body, headers, status \\ 0) do
     error = LemonAi.Error.parse_http_error(status, error_body, headers)
-    RetryHelper.http_retry_delay_ms(attempt, headers, policy, error)
+    Retry.http_retry_delay_ms(attempt, headers, policy, error)
   end
 
   defp retryable_stream_output_error?(%AssistantMessage{stop_reason: :error} = output),

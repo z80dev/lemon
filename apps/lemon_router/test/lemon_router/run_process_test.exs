@@ -10,7 +10,8 @@ defmodule LemonRouter.RunProcessTest do
   use ExUnit.Case, async: false
 
   alias Elixir.LemonRouter.RunProcess
-  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Dedupe}
+  alias LemonCore.RateLimiter
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
   alias LemonCore.{ChatStateStore, ResumeToken, RunRequest, SessionKey}
   alias LemonRouter.PendingCompactionStore
@@ -827,7 +828,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -1567,7 +1568,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -1757,7 +1758,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -2013,7 +2014,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -2117,7 +2118,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -2219,7 +2220,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -2318,7 +2319,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -2416,7 +2417,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -3238,7 +3239,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
@@ -3378,7 +3379,7 @@ defmodule LemonRouter.RunProcessTest do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
       start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      start_if_needed(RateLimiter, fn ->
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
         RateLimiter.start_link([])
       end)
 
