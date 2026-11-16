@@ -86,7 +86,7 @@ defmodule CodingAgent.SessionTest do
 
     Task.start(fn ->
       # Emit start event
-      LemonAi.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
       # Emit text deltas for each text content
       response.content
@@ -94,13 +94,17 @@ defmodule CodingAgent.SessionTest do
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            LemonAi.EventStream.push(stream, {:text_start, idx, response})
-            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
-            LemonAi.EventStream.push(stream, {:text_end, idx, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text})
+            LemonAi.EventStream.push(stream, {:text_end, idx, text})
 
           %ToolCall{} = tool_call ->
-            LemonAi.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
-            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+            LemonAi.EventStream.push(
+              stream,
+              {:tool_call_start, idx, %{tool_call | arguments: %{}}}
+            )
+
+            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call})
 
           _ ->
             :ok

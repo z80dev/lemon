@@ -1013,10 +1013,54 @@ defmodule CodingAgent.ExecutorTest do
     end
 
     @tag :tmp_dir
+    test "pairs an empty reasoning block without leaking it into answer deltas", %{
+      tmp_dir: tmp_dir
+    } do
+      response =
+        assistant_message([
+          %ThinkingContent{type: :thinking, thinking: ""},
+          %TextContent{type: :text, text: "answer only"}
+        ])
+
+      request =
+        request(tmp_dir,
+          prompt: "answer after empty thinking",
+          run_id: "run-native-empty-reasoning",
+          stream_fn: mock_stream_fn([response])
+        )
+
+      {:ok, run_ref, _ctx} =
+        Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
+
+      messages = collect_until_completed(run_ref)
+
+      reasoning =
+        for {:engine_event, ^run_ref,
+             %{__event__: :action_event, action: %{kind: "reasoning"}} = event} <- messages do
+          event
+        end
+
+      assert [
+               %{phase: :started, action: started},
+               %{phase: :completed, ok: true, action: completed}
+             ] = reasoning
+
+      assert started.id == completed.id
+      assert started.detail.reasoning == completed.detail.reasoning
+      assert started.detail.reasoning.text == ""
+      assert started.detail.reasoning.delta == ""
+      assert for({:engine_delta, ^run_ref, text} <- messages, do: text) == ["answer only"]
+
+      assert {:engine_event, ^run_ref, %{__event__: :completed, answer: "answer only"}} =
+               List.last(messages)
+    end
+
+    @tag :tmp_dir
     test "emits reasoning updates with the accumulated tail window", %{tmp_dir: tmp_dir} do
-      thinking = "start-" <> String.duplicate("middle-", 120) <> "live-tail"
-      accumulated = thinking <> thinking
-      expected_tail = "..." <> String.slice(accumulated, -500, 500)
+      first = "start-"
+      tail = String.duplicate("middle-", 120) <> "live-tail"
+      thinking = first <> tail
+      expected_tail = "..." <> String.slice(thinking, -500, 500)
 
       response =
         assistant_message([
@@ -1024,11 +1068,34 @@ defmodule CodingAgent.ExecutorTest do
           %TextContent{type: :text, text: "done"}
         ])
 
+      stream_fn = fn _model, _context, _options ->
+        {:ok, stream} = LemonAi.EventStream.start_link()
+
+        Task.start(fn ->
+          events = [
+            {:start, %{response | content: []}},
+            {:thinking_start, 0},
+            {:thinking_delta, 0, first},
+            {:thinking_delta, 0, tail},
+            {:thinking_end, 0, thinking},
+            {:text_start, 1},
+            {:text_delta, 1, "done"},
+            {:text_end, 1, "done"},
+            {:done, response.stop_reason, response}
+          ]
+
+          Enum.each(events, &LemonAi.EventStream.push(stream, &1))
+          LemonAi.EventStream.complete(stream, response)
+        end)
+
+        {:ok, stream}
+      end
+
       request =
         request(tmp_dir,
           prompt: "think then answer",
           run_id: "run-native-reasoning-update",
-          stream_fn: mock_stream_fn([response])
+          stream_fn: stream_fn
         )
 
       {:ok, run_ref, _ctx} =
@@ -1042,7 +1109,9 @@ defmodule CodingAgent.ExecutorTest do
                 phase: :updated,
                 action: %{
                   kind: "reasoning",
-                  detail: %{reasoning: %{text: ^expected_tail}}
+                  detail: %{
+                    reasoning: %{text: ^expected_tail, full_text: ^thinking, delta: ^tail}
+                  }
                 }
               }} =
                Enum.find(messages, fn
@@ -1716,24 +1785,28 @@ defmodule CodingAgent.ExecutorTest do
           LemonAi.EventStream.complete(stream, response)
 
         %AssistantMessage{} ->
-          LemonAi.EventStream.push(stream, {:start, response})
+          LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
           response.content
           |> Enum.with_index()
           |> Enum.each(fn
             {%TextContent{text: text}, idx} ->
-              LemonAi.EventStream.push(stream, {:text_start, idx, response})
-              LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
-              LemonAi.EventStream.push(stream, {:text_end, idx, text, response})
+              LemonAi.EventStream.push(stream, {:text_start, idx})
+              LemonAi.EventStream.push(stream, {:text_delta, idx, text})
+              LemonAi.EventStream.push(stream, {:text_end, idx, text})
 
             {%ThinkingContent{thinking: thinking}, idx} ->
-              LemonAi.EventStream.push(stream, {:thinking_start, idx, response})
-              LemonAi.EventStream.push(stream, {:thinking_delta, idx, thinking, response})
-              LemonAi.EventStream.push(stream, {:thinking_end, idx, thinking, response})
+              LemonAi.EventStream.push(stream, {:thinking_start, idx})
+              LemonAi.EventStream.push(stream, {:thinking_delta, idx, thinking})
+              LemonAi.EventStream.push(stream, {:thinking_end, idx, thinking})
 
             {%ToolCall{} = tool_call, idx} ->
-              LemonAi.EventStream.push(stream, {:tool_call_start, idx, response})
-              LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+              LemonAi.EventStream.push(
+                stream,
+                {:tool_call_start, idx, %{tool_call | arguments: %{}}}
+              )
+
+              LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call})
 
             {_content, _idx} ->
               :ok

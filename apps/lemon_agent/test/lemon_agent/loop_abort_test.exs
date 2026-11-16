@@ -171,8 +171,7 @@ defmodule LemonAgent.LoopAbortTest do
 
           # Stream a few chunks, then stall until released (the abort must end the run)
           for i <- 1..10 do
-            updated = %{partial | content: [%TextContent{type: :text, text: "Hello World #{i}"}]}
-            LemonAi.EventStream.push(stream, {:text_delta, 0, " #{i}", updated})
+            LemonAi.EventStream.push(stream, {:text_delta, 0, " #{i}"})
 
             if i == 2 do
               send(parent, :stream_blocked)

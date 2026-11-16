@@ -119,6 +119,58 @@ defmodule LemonAgent.ProxyStreamIntegrationTest do
   end
 
   describe "stream_proxy/3" do
+    test "emits only block metadata and deltas while retaining terminal signatures" do
+      events = [
+        %{"type" => "start"},
+        %{"type" => "text_start", "contentIndex" => 0},
+        %{"type" => "text_delta", "contentIndex" => 0, "delta" => "hello"},
+        %{"type" => "text_end", "contentIndex" => 0, "contentSignature" => "text-sig"},
+        %{"type" => "thinking_start", "contentIndex" => 1},
+        %{"type" => "thinking_delta", "contentIndex" => 1, "delta" => "private"},
+        %{"type" => "thinking_end", "contentIndex" => 1, "contentSignature" => "thought-sig"},
+        %{"type" => "toolcall_start", "contentIndex" => 2, "id" => "call", "toolName" => "echo"},
+        %{"type" => "toolcall_delta", "contentIndex" => 2, "delta" => ~s({"text":)},
+        %{"type" => "toolcall_delta", "contentIndex" => 2, "delta" => ~s("hi"})},
+        %{"type" => "toolcall_end", "contentIndex" => 2},
+        %{"type" => "done", "reason" => "toolUse", "usage" => %{}}
+      ]
+
+      port = start_sse_server(Enum.map(events, &sse_event/1))
+
+      stream =
+        Proxy.stream_proxy(
+          Mocks.mock_model(),
+          LemonAi.Types.Context.new(),
+          %ProxyStreamOptions{auth_token: "token", proxy_url: "http://localhost:#{port}"}
+        )
+
+      assert [
+               {:start, %AssistantMessage{content: []}},
+               {:text_start, 0},
+               {:text_delta, 0, "hello"},
+               {:text_end, 0, "hello"},
+               {:thinking_start, 1},
+               {:thinking_delta, 1, "private"},
+               {:thinking_end, 1, "private"},
+               {:tool_call_start, 2, %ToolCall{id: "call", name: "echo", arguments: %{}}},
+               {:tool_call_delta, 2, ~s({"text":)},
+               {:tool_call_delta, 2, ~s("hi"})},
+               {:tool_call_end, 2, %ToolCall{arguments: %{"text" => "hi"}}},
+               {:done, :tool_use, final}
+             ] = stream |> EventStream.events() |> Enum.to_list()
+
+      assert [
+               %TextContent{text: "hello", text_signature: "text-sig"},
+               %LemonAi.Types.ThinkingContent{
+                 thinking: "private",
+                 thinking_signature: "thought-sig"
+               },
+               %ToolCall{id: "call", name: "echo", arguments: %{"text" => "hi"}}
+             ] = final.content
+
+      assert_receive :sse_server_done, @receive_timeout
+    end
+
     test "a slow consumer receives an overflow error instead of a successful truncated response" do
       parent = self()
 

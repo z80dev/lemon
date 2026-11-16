@@ -70,10 +70,10 @@ defmodule CodingAgent.ExecutorFallbackTest do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      LemonAi.EventStream.push(stream, {:start, message})
-      LemonAi.EventStream.push(stream, {:text_start, 0, message})
-      LemonAi.EventStream.push(stream, {:text_delta, 0, text, message})
-      LemonAi.EventStream.push(stream, {:text_end, 0, text, message})
+      LemonAi.EventStream.push(stream, {:start, %{message | content: []}})
+      LemonAi.EventStream.push(stream, {:text_start, 0})
+      LemonAi.EventStream.push(stream, {:text_delta, 0, text})
+      LemonAi.EventStream.push(stream, {:text_end, 0, text})
       LemonAi.EventStream.complete(stream, message)
     end)
 

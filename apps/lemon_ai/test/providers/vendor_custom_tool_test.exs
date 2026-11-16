@@ -60,7 +60,8 @@ defmodule LemonAi.Providers.VendorCustomTool603Test do
   test "freeform streamed input becomes validated object arguments and replays as custom input/output" do
     {:ok, stream} = EventStream.start_link()
     on_exit(fn -> if Process.alive?(stream), do: EventStream.cancel(stream, :test_cleanup) end)
-    patch = "*** Begin Patch\n*** Add File: hello\n+hi\n*** End Patch\n"
+    patch = "*** Begin Patch\n*** Add File: hello\n+\"quoted\"\\path\t雪\n*** End Patch\n"
+    {initial_input, delta_input} = String.split_at(patch, 16)
 
     item = %{
       "type" => "custom_tool_call",
@@ -70,8 +71,8 @@ defmodule LemonAi.Providers.VendorCustomTool603Test do
     }
 
     events = [
-      %{"type" => "response.output_item.added", "item" => Map.put(item, "input", "")},
-      %{"type" => "response.custom_tool_call_input.delta", "delta" => patch},
+      %{"type" => "response.output_item.added", "item" => Map.put(item, "input", initial_input)},
+      %{"type" => "response.custom_tool_call_input.delta", "delta" => delta_input},
       %{"type" => "response.custom_tool_call_input.done", "input" => patch},
       %{"type" => "response.output_item.done", "item" => Map.put(item, "input", patch)},
       %{"type" => "response.completed", "response" => %{"status" => "completed"}}
@@ -90,6 +91,20 @@ defmodule LemonAi.Providers.VendorCustomTool603Test do
              final.content
 
     assert call.id == "call_603|ctc_603"
+
+    EventStream.complete(stream, final)
+    emitted = Enum.to_list(EventStream.events(stream))
+
+    assert {:tool_call_start, 0,
+            %ToolCall{id: "call_603|ctc_603", name: "apply_patch", arguments: %{}}} =
+             hd(emitted)
+
+    input =
+      for {:tool_call_delta, 0, delta} <- emitted, into: "", do: delta
+
+    assert Jason.decode!(input) == %{"input" => patch}
+    assert {:tool_call_end, 0, call} in emitted
+    refute Enum.any?(emitted, &(tuple_size(&1) == 4))
 
     result = %ToolResultMessage{
       tool_call_id: call.id,

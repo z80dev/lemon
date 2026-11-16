@@ -1236,11 +1236,26 @@ unsubscribe.()
 {:ok, stream_pid} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 1000)
 ```
 
-Native events preserve the raw event in the third element and carry a cursor in
-the fourth: `%{"version" => 1, "sessionId" => session_id, "streamId" => stream_id,
-"seq" => seq}`. Sequence numbers are gap-free within that live session stream;
-the stream ID distinguishes owner lifetimes. Overflow fences carry `nil` instead
-of a cursor because they are subscription controls, not session events.
+Native events carry the event in the third element and a cursor in the fourth:
+`%{"version" => 1, "sessionId" => session_id, "streamId" => stream_id, "seq" => seq}`.
+The replay log and projected `session.event` batches remain gap-free; the stream
+ID distinguishes owner lifetimes. Overflow fences carry `nil` instead of a
+cursor because they are subscription controls, not session events.
+
+Assistant updates are `{:message_update, provider_event}`, never a growing
+`AssistantMessage`. Text/thinking starts carry an index, tool starts also carry
+`%ToolCall{}` identity, deltas carry index plus binary, and block ends carry their
+final text/thinking/tool call. `message_start` and `message_end` retain messages.
+Partial messages are materialized on demand by `Session.recovery_snapshot/1`
+and the public snapshot/resync path, not attached to every update.
+
+Each direct/stream subscriber coalesces adjacent same-index text deltas until
+the next owner mailbox flush, event boundary, or existing subscriber count/byte
+budget. Its combined event carries the last covered cursor; replay still returns
+the original events. Thinking, tool arguments, lifecycle boundaries and terminal
+events remain ordered and are never merged. Child-task progress likewise sends
+new visible text only; message completion and the tool's final result retain the
+complete answer. Projected control-plane/TUI/channel event shapes are unchanged.
 
 Both subscription modes bound delivery before the subscriber mailbox accepts an
 event. Overflow fences that subscription and explicitly requests recovery; it

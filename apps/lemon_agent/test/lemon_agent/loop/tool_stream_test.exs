@@ -6,6 +6,46 @@ defmodule LemonAgent.Loop.ToolStreamTest do
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
+  test "tool metadata is tracked by index and only opted-in hooks materialize argument chunks" do
+    alias LemonAgent.Loop.ToolStream
+
+    tool = spawn_tool(self(), [])
+    first = Mocks.tool_call("spawn", %{}, id: "first")
+    second = Mocks.tool_call("spawn", %{}, id: "second")
+    unobserved = Mocks.tool_call("other", %{}, id: "unobserved")
+
+    try do
+      ToolStream.observe({:tool_call_start, 2, first}, %{}, [tool], nil)
+      ToolStream.observe({:tool_call_start, 7, second}, %{}, [tool], nil)
+      ToolStream.observe({:tool_call_delta, 7, "2}"}, %{7 => ["2}", ~s({"n":)]}, [tool], nil)
+      ToolStream.observe({:tool_call_delta, 2, "1}"}, %{2 => ["1}", ~s({"n":)]}, [tool], nil)
+      ToolStream.observe({:tool_call_start, 2, unobserved}, %{}, [tool], nil)
+
+      ToolStream.observe(
+        {:tool_call_delta, 2, "ignored"},
+        %{2 => [:not_materializable]},
+        [tool],
+        nil
+      )
+
+      ToolStream.settle()
+      ToolStream.settle()
+
+      events = observed()
+
+      assert [
+               {:stream, {:args, %{id: "second", json: ~s({"n":2})}}},
+               {:stream, {:args, %{id: "first", json: ~s({"n":1})}}}
+               | settled
+             ] = events
+
+      assert Enum.sort(settled) ==
+               [{:stream, {:settle, "first"}}, {:stream, {:settle, "second"}}]
+    after
+      ToolStream.settle()
+    end
+  end
+
   test "streams accumulated arguments before execution and settles once afterwards" do
     run([
       streamed_call("call_1", [~s({"n":), ~s( "2", "i": "Spawning"})], %{"n" => 2}),
@@ -143,9 +183,9 @@ defmodule LemonAgent.Loop.ToolStreamTest do
     partial = Mocks.assistant_message_with_tool_calls([%{call | arguments: %{}}])
     final = Mocks.assistant_message_with_tool_calls([call])
 
-    [{:start, %{partial | content: []}}, {:tool_call_start, 0, partial}] ++
-      Enum.map(chunks, &{:tool_call_delta, 0, &1, partial}) ++
-      [{:tool_call_end, 0, call, final}, {:done, :tool_use, final}]
+    [{:start, %{partial | content: []}}, {:tool_call_start, 0, %{call | arguments: %{}}}] ++
+      Enum.map(chunks, &{:tool_call_delta, 0, &1}) ++
+      [{:tool_call_end, 0, call}, {:done, :tool_use, final}]
   end
 
   defp reply(message), do: [{:done, message.stop_reason, message}]

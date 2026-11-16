@@ -918,13 +918,13 @@ defmodule LemonAi.Providers.GoogleVertexTest do
 
       has_text_start =
         Enum.any?(events, fn
-          {:text_start, _idx, _output} -> true
+          {:text_start, _idx} -> true
           _ -> false
         end)
 
       has_text_end =
         Enum.any?(events, fn
-          {:text_end, _idx, _text, _output} -> true
+          {:text_end, _idx, _text} -> true
           _ -> false
         end)
 
@@ -954,7 +954,7 @@ defmodule LemonAi.Providers.GoogleVertexTest do
 
       deltas =
         Enum.filter(events, fn
-          {:text_delta, _idx, _delta, _output} -> true
+          {:text_delta, _idx, _delta} -> true
           _ -> false
         end)
 
@@ -990,13 +990,13 @@ defmodule LemonAi.Providers.GoogleVertexTest do
 
       has_tool_call_start =
         Enum.any?(events, fn
-          {:tool_call_start, _idx, _output} -> true
+          {:tool_call_start, _idx, %ToolCall{}} -> true
           _ -> false
         end)
 
       has_tool_call_end =
         Enum.any?(events, fn
-          {:tool_call_end, _idx, _tool_call, _output} -> true
+          {:tool_call_end, _idx, _tool_call} -> true
           _ -> false
         end)
 

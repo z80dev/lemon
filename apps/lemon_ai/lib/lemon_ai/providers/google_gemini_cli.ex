@@ -526,7 +526,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
         case final_state.current_block do
           %TextContent{} = block ->
             idx = length(final_state.output.content) - 1
-            EventStream.push_async(stream, {:text_end, idx, block.text, final_state.output})
+            EventStream.push_async(stream, {:text_end, idx, block.text})
             final_state
 
           %ThinkingContent{} = block ->
@@ -534,7 +534,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
 
             EventStream.push_async(
               stream,
-              {:thinking_end, idx, block.thinking, final_state.output}
+              {:thinking_end, idx, block.thinking}
             )
 
             final_state
@@ -688,14 +688,14 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
           block = %ThinkingContent{thinking: "", thinking_signature: nil}
           output = %{state.output | content: state.output.content ++ [block]}
           idx = length(output.content) - 1
-          EventStream.push_async(stream, {:thinking_start, idx, output})
+          EventStream.push_async(stream, {:thinking_start, idx})
           {%{state | output: output, current_block: block, has_content: true}, idx}
 
         {nil, false} ->
           block = %TextContent{text: "", text_signature: nil}
           output = %{state.output | content: state.output.content ++ [block]}
           idx = length(output.content) - 1
-          EventStream.push_async(stream, {:text_start, idx, output})
+          EventStream.push_async(stream, {:text_start, idx})
           {%{state | output: output, current_block: block, has_content: true}, idx}
 
         {%ThinkingContent{}, false} ->
@@ -703,13 +703,13 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
 
           EventStream.push_async(
             stream,
-            {:thinking_end, old_idx, state.current_block.thinking, state.output}
+            {:thinking_end, old_idx, state.current_block.thinking}
           )
 
           block = %TextContent{text: "", text_signature: nil}
           output = %{state.output | content: state.output.content ++ [block]}
           idx = length(output.content) - 1
-          EventStream.push_async(stream, {:text_start, idx, output})
+          EventStream.push_async(stream, {:text_start, idx})
           {%{state | output: output, current_block: block}, idx}
 
         {%TextContent{}, true} ->
@@ -717,13 +717,13 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
 
           EventStream.push_async(
             stream,
-            {:text_end, old_idx, state.current_block.text, state.output}
+            {:text_end, old_idx, state.current_block.text}
           )
 
           block = %ThinkingContent{thinking: "", thinking_signature: nil}
           output = %{state.output | content: state.output.content ++ [block]}
           idx = length(output.content) - 1
-          EventStream.push_async(stream, {:thinking_start, idx, output})
+          EventStream.push_async(stream, {:thinking_start, idx})
           {%{state | output: output, current_block: block}, idx}
 
         {%ThinkingContent{}, true} ->
@@ -751,7 +751,7 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
     content = List.replace_at(state.output.content, idx, updated_block)
     output = %{state.output | content: content}
 
-    EventStream.push_async(stream, {event_type, idx, text, output})
+    EventStream.push_async(stream, {event_type, idx, text})
 
     %{state | output: output, current_block: updated_block}
   end
@@ -764,12 +764,12 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
       case state.current_block do
         %TextContent{} = block ->
           idx = length(state.output.content) - 1
-          EventStream.push_async(stream, {:text_end, idx, block.text, state.output})
+          EventStream.push_async(stream, {:text_end, idx, block.text})
           %{state | current_block: nil}
 
         %ThinkingContent{} = block ->
           idx = length(state.output.content) - 1
-          EventStream.push_async(stream, {:thinking_end, idx, block.thinking, state.output})
+          EventStream.push_async(stream, {:thinking_end, idx, block.thinking})
           %{state | current_block: nil}
 
         _ ->
@@ -805,14 +805,14 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
     output = %{state.output | content: state.output.content ++ [tool_call]}
     idx = length(output.content) - 1
 
-    EventStream.push_async(stream, {:tool_call_start, idx, output})
+    EventStream.push_async(stream, {:tool_call_start, idx, %{tool_call | arguments: %{}}})
 
     EventStream.push_async(
       stream,
-      {:tool_call_delta, idx, Jason.encode!(tool_call.arguments), output}
+      {:tool_call_delta, idx, Jason.encode!(tool_call.arguments)}
     )
 
-    EventStream.push_async(stream, {:tool_call_end, idx, tool_call, output})
+    EventStream.push_async(stream, {:tool_call_end, idx, tool_call})
 
     %{
       state

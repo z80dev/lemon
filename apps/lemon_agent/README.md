@@ -133,7 +133,7 @@ All execution emits structured events via `LemonAgent.EventStream`:
 {:agent_start}
 {:turn_start}
 {:message_start, message}
-{:message_update, message, assistant_event}
+{:message_update, assistant_event}
 {:message_end, message}
 {:tool_execution_start, id, name, args}
 {:tool_execution_update, id, name, args, partial_result}
@@ -145,6 +145,18 @@ All execution emits structured events via `LemonAgent.EventStream`:
 ```
 
 The `{:agent_end, new_messages}` event contains only messages created during the current run, not the full conversation history.
+
+**Breaking published-package event change:** `message_update` now contains only
+the delta-only provider event, not a growing `AssistantMessage`. Provider deltas
+are `{kind, index, delta}`; text/thinking starts are `{kind, index}`, tool starts
+carry a `ToolCall`, and block ends carry their final text/thinking/tool block.
+`message_start`, `message_end`, terminal events and final results retain their
+existing shapes. The loop retains partial content as chunks and materializes it
+only for completion/cancellation, not once per update. Agent/session snapshot
+APIs still expose the current partial answer on demand. Subscribers concatenate
+adjacent text delta bytes; transports may coalesce them per subscriber, never
+across content-block or lifecycle boundaries. Stream rules inspect the original
+delta stream, and the opt-in system-prompt observer is unchanged.
 
 System prompts accept either a string or ordered
 `%{text: binary, directory_derived: boolean}` blocks. Queued steering/follow-up

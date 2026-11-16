@@ -286,8 +286,8 @@ defmodule LemonAgent.Test.Mocks do
   @doc """
   Creates a stream function whose producer stalls until the test releases it.
 
-  The producer (unlinked task) pushes `{:start, response}` (unless
-  `before_start: true`), then `chunks` text deltas, then sends
+  The producer (unlinked task) pushes an empty `:start` message (unless
+  `before_start: true`), then a text block start and `chunks` text deltas, then sends
   `{tag, producer_pid}` to `parent` and blocks until it receives
   `:release_stream` (or `max_block_ms`, default 10s). Only then does it push
   `{:done, response.stop_reason, response}` and complete the stream.
@@ -308,10 +308,13 @@ defmodule LemonAgent.Test.Mocks do
       {:ok, stream} = LemonAi.EventStream.start_link()
 
       Task.start(fn ->
-        unless before_start, do: LemonAi.EventStream.push(stream, {:start, response})
+        unless before_start,
+          do: LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
+
+        if chunks > 0, do: LemonAi.EventStream.push(stream, {:text_start, 0})
 
         for i <- 1..chunks//1 do
-          LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}", response})
+          LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}"})
         end
 
         send(parent, {tag, self()})
@@ -322,7 +325,7 @@ defmodule LemonAgent.Test.Mocks do
           max_block_ms -> :ok
         end
 
-        if before_start, do: LemonAi.EventStream.push(stream, {:start, response})
+        if before_start, do: LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
         LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
         LemonAi.EventStream.complete(stream, response)
       end)
@@ -355,25 +358,34 @@ defmodule LemonAgent.Test.Mocks do
 
     Task.start(fn ->
       # Emit start event
-      LemonAi.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
       # Emit text deltas for each text content
       Enum.with_index(response.content)
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            LemonAi.EventStream.push(stream, {:text_start, idx, response})
-            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
-            LemonAi.EventStream.push(stream, {:text_end, idx, text, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text})
+            LemonAi.EventStream.push(stream, {:text_end, idx, text})
 
           %ThinkingContent{thinking: thinking} ->
-            LemonAi.EventStream.push(stream, {:thinking_start, idx, response})
-            LemonAi.EventStream.push(stream, {:thinking_delta, idx, thinking, response})
-            LemonAi.EventStream.push(stream, {:thinking_end, idx, thinking, response})
+            LemonAi.EventStream.push(stream, {:thinking_start, idx})
+            LemonAi.EventStream.push(stream, {:thinking_delta, idx, thinking})
+            LemonAi.EventStream.push(stream, {:thinking_end, idx, thinking})
 
           %ToolCall{} = tool_call ->
-            LemonAi.EventStream.push(stream, {:tool_call_start, idx, response})
-            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+            LemonAi.EventStream.push(
+              stream,
+              {:tool_call_start, idx, %{tool_call | arguments: %{}}}
+            )
+
+            LemonAi.EventStream.push(
+              stream,
+              {:tool_call_delta, idx, Jason.encode!(tool_call.arguments)}
+            )
+
+            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call})
 
           _ ->
             :ok

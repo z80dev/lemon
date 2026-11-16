@@ -106,7 +106,7 @@ defmodule LemonAgent.LoopRedirectTest do
                 Process.sleep(30)
               end
 
-              LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}", response})
+              LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}"})
             end
 
             LemonAi.EventStream.push(stream, {:done, :stop, response})

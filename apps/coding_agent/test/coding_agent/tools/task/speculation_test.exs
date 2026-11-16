@@ -198,7 +198,7 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
         ~s({"prompt":"inspect","tool_policy":{"allow":["read","grep"]}}]})
 
     stream(tool, "call-mixed", json)
-    started = for _ <- 1..2, do: assert_receive({:started, _, _} = message, 2_000)
+    started = for _ <- 1..2, do: assert_receive({:started, _, _}, 2_000)
     refute_receive {:started, _, _}, 100
 
     assert [{_, reader, inspect}, {_, scout, look}] =
@@ -258,8 +258,8 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
         Task.start(fn ->
           push(stream, [
             {:start, %{partial | content: []}},
-            {:tool_call_start, 0, partial},
-            {:tool_call_delta, 0, head, partial}
+            {:tool_call_start, 0, %{call | arguments: %{}}},
+            {:tool_call_delta, 0, head}
           ])
 
           # Hold the rest of the call until the test has seen the first child.
@@ -267,8 +267,8 @@ defmodule CodingAgent.Tools.Task.SpeculationTest do
           receive do: (:continue -> :ok)
 
           push(stream, [
-            {:tool_call_delta, 0, tail, partial},
-            {:tool_call_end, 0, call, final},
+            {:tool_call_delta, 0, tail},
+            {:tool_call_end, 0, call},
             {:done, :tool_use, final}
           ])
 

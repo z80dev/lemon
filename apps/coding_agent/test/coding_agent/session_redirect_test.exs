@@ -62,16 +62,16 @@ defmodule CodingAgent.SessionRedirectTest do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      LemonAi.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
       response.content
       |> Enum.with_index()
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            LemonAi.EventStream.push(stream, {:text_start, idx, response})
-            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
-            LemonAi.EventStream.push(stream, {:text_end, idx, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text})
+            LemonAi.EventStream.push(stream, {:text_end, idx, text})
 
           _ ->
             :ok
@@ -130,7 +130,7 @@ defmodule CodingAgent.SessionRedirectTest do
     send(parent, {:streaming_chunk, i})
     Process.sleep(30)
 
-    case push_unless_gone(stream, {:text_delta, 0, "chunk #{i}", response}) do
+    case push_unless_gone(stream, {:text_delta, 0, "chunk #{i}"}) do
       :ok -> stream_until_canceled(parent, stream, response, i + 1)
       {:error, _reason} -> send(parent, :first_call_canceled)
     end

@@ -760,27 +760,35 @@ defmodule LemonAi.Providers.Bedrock do
 
   defp trace_header(_headers, _key), do: nil
 
-  defp stream_response_body(response) do
+  defp stream_response_body(%Req.Response{body: %Req.Response.Async{ref: ref}} = response) do
     Stream.resource(
-      fn -> response end,
-      fn resp ->
-        receive do
-          {ref, {:data, data}} when ref == resp.async.ref ->
-            {[data], resp}
+      fn -> false end,
+      fn
+        true ->
+          {:halt, true}
 
-          {ref, :done} when ref == resp.async.ref ->
-            {:halt, resp}
+        false ->
+          receive do
+            {^ref, _} = message ->
+              case Req.parse_message(response, message) do
+                {:ok, parts} ->
+                  chunks = for {:data, data} <- parts, do: data
+                  {chunks, :done in parts}
 
-          {ref, {:error, reason}} when ref == resp.async.ref ->
-            Logger.error("Stream error: #{inspect(reason)}")
-            {:halt, resp}
-        after
-          60_000 ->
-            Logger.error("Stream timeout")
-            {:halt, resp}
-        end
+                {:error, reason} ->
+                  Logger.error("Stream error: #{inspect(reason)}")
+                  {:halt, true}
+
+                :unknown ->
+                  {[], false}
+              end
+          after
+            60_000 ->
+              Logger.error("Stream timeout")
+              {:halt, true}
+          end
       end,
-      fn _resp -> :ok end
+      fn _ -> Req.cancel_async_response(response) end
     )
   end
 
@@ -922,7 +930,15 @@ defmodule LemonAi.Providers.Bedrock do
         process_chunk(chunk, state, stream)
       end)
 
-    final_state.output
+    Enum.reduce(final_state.blocks, final_state.output, fn
+      {_index, %{type: :tool_call, index: idx, argument_chunks: chunks}}, output ->
+        block = Enum.at(output.content, idx)
+        block = finalize_tool_arguments(block, chunks)
+        %{output | content: List.replace_at(output.content, idx, block)}
+
+      _, output ->
+        output
+    end)
   end
 
   defp process_chunk(chunk, state, stream) do
@@ -1104,9 +1120,9 @@ defmodule LemonAi.Providers.Bedrock do
 
           content = state.output.content ++ [block]
           output = %{state.output | content: content}
-          block_data = %{type: :tool_call, index: length(content) - 1, partial_json: ""}
+          block_data = %{type: :tool_call, index: length(content) - 1, argument_chunks: []}
 
-          EventStream.push_async(stream, {:tool_call_start, length(content) - 1, output})
+          EventStream.push_async(stream, {:tool_call_start, length(content) - 1, block})
 
           %{
             state
@@ -1163,22 +1179,21 @@ defmodule LemonAi.Providers.Bedrock do
 
           case block_data.type do
             :text ->
-              EventStream.push_async(stream, {:text_end, idx, block.text, state.output})
+              EventStream.push_async(stream, {:text_end, idx, block.text})
+              state
 
             :thinking ->
-              EventStream.push_async(stream, {:thinking_end, idx, block.thinking, state.output})
+              EventStream.push_async(stream, {:thinking_end, idx, block.thinking})
+              state
 
             :tool_call ->
               # Final parse of arguments
-              arguments = parse_streaming_json(block_data.partial_json || "")
-              updated_block = %{block | arguments: arguments}
+              updated_block = finalize_tool_arguments(block, block_data.argument_chunks)
               updated_content = List.replace_at(content, idx, updated_block)
               output = %{state.output | content: updated_content}
-              EventStream.push_async(stream, {:tool_call_end, idx, updated_block, output})
-              %{state | output: output}
+              EventStream.push_async(stream, {:tool_call_end, idx, updated_block})
+              %{state | output: output, blocks: Map.delete(state.blocks, content_block_index)}
           end
-
-          state
         else
           state
         end
@@ -1257,11 +1272,11 @@ defmodule LemonAi.Providers.Bedrock do
         output = %{state.output | content: content}
         idx = length(content) - 1
         block_data = %{type: :text, index: idx}
-        EventStream.push_async(stream, {:text_start, idx, output})
+        EventStream.push_async(stream, {:text_start, idx})
         {output, block_data, idx}
       end
 
-    EventStream.push_async(stream, {:text_delta, idx, text, output})
+    EventStream.push_async(stream, {:text_delta, idx, text})
 
     %{state | output: output, blocks: Map.put(state.blocks, content_block_index, block_data)}
   end
@@ -1272,25 +1287,9 @@ defmodule LemonAi.Providers.Bedrock do
     if block_data && block_data.type == :tool_call do
       idx = block_data.index
       input_delta = tool_use["input"] || ""
-      partial_json = (block_data.partial_json || "") <> input_delta
-
-      # Try to parse partial JSON for arguments
-      arguments = parse_streaming_json(partial_json)
-
-      content = state.output.content
-      block = Enum.at(content, idx)
-      updated_block = %{block | arguments: arguments}
-      updated_content = List.replace_at(content, idx, updated_block)
-      output = %{state.output | content: updated_content}
-
-      EventStream.push_async(stream, {:tool_call_delta, idx, input_delta, output})
-
-      %{
-        state
-        | output: output,
-          blocks:
-            Map.put(state.blocks, content_block_index, %{block_data | partial_json: partial_json})
-      }
+      block_data = %{block_data | argument_chunks: [input_delta | block_data.argument_chunks]}
+      EventStream.push_async(stream, {:tool_call_delta, idx, input_delta})
+      %{state | blocks: Map.put(state.blocks, content_block_index, block_data)}
     else
       state
     end
@@ -1330,12 +1329,12 @@ defmodule LemonAi.Providers.Bedrock do
         output = %{state.output | content: content}
         idx = length(content) - 1
         block_data = %{type: :thinking, index: idx}
-        EventStream.push_async(stream, {:thinking_start, idx, output})
+        EventStream.push_async(stream, {:thinking_start, idx})
         {output, block_data, idx}
       end
 
     if text_delta != "" do
-      EventStream.push_async(stream, {:thinking_delta, idx, text_delta, output})
+      EventStream.push_async(stream, {:thinking_delta, idx, text_delta})
     end
 
     %{state | output: output, blocks: Map.put(state.blocks, content_block_index, block_data)}
@@ -1350,6 +1349,11 @@ defmodule LemonAi.Providers.Bedrock do
       "tool_use" -> :tool_use
       _ -> :error
     end
+  end
+
+  defp finalize_tool_arguments(block, chunks) do
+    arguments = chunks |> Enum.reverse() |> IO.iodata_to_binary() |> parse_streaming_json()
+    %{block | arguments: arguments}
   end
 
   defp parse_streaming_json(""), do: %{}

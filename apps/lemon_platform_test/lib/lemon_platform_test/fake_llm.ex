@@ -8,11 +8,11 @@ defmodule LemonPlatformTest.FakeLLM do
   returns an `LemonAi.EventStream` process emitting a documented sequence of events:
 
       {:start, message}
-      {:text_start, index, message}
-      {:text_delta, index, chunk, message}
-      {:text_end, index, chunk, message}
-      {:tool_call_start, index, message}
-      {:tool_call_end, index, tool_call, message}
+      {:text_start, index}
+      {:text_delta, index, chunk}
+      {:text_end, index, chunk}
+      {:tool_call_start, index, tool_call}
+      {:tool_call_end, index, tool_call}
       {:done, stop_reason, message}
 
   That protocol is what every provider adapter produces and what the loop
@@ -285,11 +285,11 @@ defmodule LemonPlatformTest.FakeLLM do
     {:ok, task_pid} =
       Task.start(fn ->
         try do
-          LemonAi.EventStream.push!(stream, {:start, message})
+          LemonAi.EventStream.push!(stream, {:start, %{message | content: []}})
 
           message.content
           |> Enum.with_index()
-          |> Enum.each(fn {block, index} -> push_block(stream, block, index, message) end)
+          |> Enum.each(fn {block, index} -> push_block(stream, block, index) end)
 
           LemonAi.EventStream.complete(stream, message)
         catch
@@ -303,18 +303,18 @@ defmodule LemonPlatformTest.FakeLLM do
     stream
   end
 
-  defp push_block(stream, %TextContent{text: text}, index, message) do
-    LemonAi.EventStream.push!(stream, {:text_start, index, message})
-    LemonAi.EventStream.push!(stream, {:text_delta, index, text, message})
-    LemonAi.EventStream.push!(stream, {:text_end, index, text, message})
+  defp push_block(stream, %TextContent{text: text}, index) do
+    LemonAi.EventStream.push!(stream, {:text_start, index})
+    LemonAi.EventStream.push!(stream, {:text_delta, index, text})
+    LemonAi.EventStream.push!(stream, {:text_end, index, text})
   end
 
-  defp push_block(stream, %ToolCall{} = call, index, message) do
-    LemonAi.EventStream.push!(stream, {:tool_call_start, index, message})
-    LemonAi.EventStream.push!(stream, {:tool_call_end, index, call, message})
+  defp push_block(stream, %ToolCall{} = call, index) do
+    LemonAi.EventStream.push!(stream, {:tool_call_start, index, %{call | arguments: %{}}})
+    LemonAi.EventStream.push!(stream, {:tool_call_end, index, call})
   end
 
-  defp push_block(_stream, _other, _index, _message), do: :ok
+  defp push_block(_stream, _other, _index), do: :ok
 
   defp generate_id do
     "call_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)

@@ -290,8 +290,6 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
   end
 
   test "aborting an idle provider preserves observed partial prose in chronological journal order" do
-    partial = Mocks.assistant_message("OBSERVED_PARTIAL_PROSE")
-
     stream_fn = fn _model, _context, _options ->
       {:ok, response_stream} = LemonAi.EventStream.start_link()
       :ok = LemonAi.EventStream.push(response_stream, {:start, Mocks.assistant_message("")})
@@ -299,7 +297,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
       :ok =
         LemonAi.EventStream.push(
           response_stream,
-          {:text_delta, 0, "OBSERVED_PARTIAL_PROSE", partial}
+          {:text_delta, 0, "OBSERVED_PARTIAL_PROSE"}
         )
 
       {:ok, response_stream}
@@ -312,10 +310,15 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     :ok = Session.prompt(session, "write an essay")
 
     assert_receive {:session_event, ^session_id,
-                    {:message_update,
-                     %AssistantMessage{content: [%TextContent{text: "OBSERVED_PARTIAL_PROSE"}]},
-                     _}, _},
+                    {:message_update, {:text_delta, 0, "OBSERVED_PARTIAL_PROSE"}}, _},
                    2_000
+
+    assert {:ok, snapshot} = Session.recovery_snapshot(session)
+
+    assert %AssistantMessage{content: [%TextContent{text: "OBSERVED_PARTIAL_PROSE"}]} =
+             snapshot.partial
+
+    assert snapshot.event_cursor["seq"] > 0
 
     :ok = Session.abort(session)
     events = collect_stream_events(stream)

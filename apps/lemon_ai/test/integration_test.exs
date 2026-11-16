@@ -216,7 +216,7 @@ defmodule LemonAi.IntegrationTest do
         assert length(start_events) == 1
 
         # Check for text deltas
-        text_deltas = Enum.filter(events, &match?({:text_delta, _, _, _}, &1))
+        text_deltas = Enum.filter(events, &match?({:text_delta, _, _}, &1))
         assert text_deltas != []
 
         # Check for done event
@@ -226,7 +226,7 @@ defmodule LemonAi.IntegrationTest do
         # Collect text from deltas
         collected_text =
           text_deltas
-          |> Enum.map(fn {:text_delta, _idx, delta, _partial} -> delta end)
+          |> Enum.map(fn {:text_delta, _idx, delta} -> delta end)
           |> Enum.join("")
 
         assert String.downcase(collected_text) =~ "hello"
@@ -353,7 +353,7 @@ defmodule LemonAi.IntegrationTest do
         assert length(start_events) == 1
 
         # Check for text deltas
-        text_deltas = Enum.filter(events, &match?({:text_delta, _, _, _}, &1))
+        text_deltas = Enum.filter(events, &match?({:text_delta, _, _}, &1))
         assert text_deltas != []
 
         # Check for done event
@@ -363,7 +363,7 @@ defmodule LemonAi.IntegrationTest do
         # Collect text from deltas
         collected_text =
           text_deltas
-          |> Enum.map(fn {:text_delta, _idx, delta, _partial} -> delta end)
+          |> Enum.map(fn {:text_delta, _idx, delta} -> delta end)
           |> Enum.join("")
 
         assert String.downcase(collected_text) =~ "hello"
@@ -487,7 +487,7 @@ defmodule LemonAi.IntegrationTest do
         assert length(start_events) == 1
 
         # Check for text deltas
-        text_deltas = Enum.filter(events, &match?({:text_delta, _, _, _}, &1))
+        text_deltas = Enum.filter(events, &match?({:text_delta, _, _}, &1))
         assert text_deltas != []
 
         # Check for done event
@@ -497,7 +497,7 @@ defmodule LemonAi.IntegrationTest do
         # Collect text from deltas
         collected_text =
           text_deltas
-          |> Enum.map(fn {:text_delta, _idx, delta, _partial} -> delta end)
+          |> Enum.map(fn {:text_delta, _idx, delta} -> delta end)
           |> Enum.join("")
 
         assert String.downcase(collected_text) =~ "hello"
@@ -620,7 +620,7 @@ defmodule LemonAi.IntegrationTest do
         assert length(start_events) == 1
 
         # Check for text deltas
-        text_deltas = Enum.filter(events, &match?({:text_delta, _, _, _}, &1))
+        text_deltas = Enum.filter(events, &match?({:text_delta, _, _}, &1))
         assert text_deltas != []
 
         # Check for done event
@@ -630,7 +630,7 @@ defmodule LemonAi.IntegrationTest do
         # Collect text from deltas
         collected_text =
           text_deltas
-          |> Enum.map(fn {:text_delta, _idx, delta, _partial} -> delta end)
+          |> Enum.map(fn {:text_delta, _idx, delta} -> delta end)
           |> Enum.join("")
 
         assert String.downcase(collected_text) =~ "hello"
@@ -857,9 +857,9 @@ defmodule LemonAi.IntegrationTest do
           # Should have some content events (text_delta, text_start, etc.)
           content_events =
             Enum.filter(events, fn e ->
-              match?({:text_delta, _, _, _}, e) or
-                match?({:text_start, _, _}, e) or
-                match?({:text_end, _, _, _}, e)
+              match?({:text_delta, _, _}, e) or
+                match?({:text_start, _}, e) or
+                match?({:text_end, _, _}, e)
             end)
 
           assert content_events != [],

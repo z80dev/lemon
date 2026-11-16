@@ -97,6 +97,11 @@ as legacy `agent`/`chat` traffic. Empty batches still advance the cursor. For a
 session with a cursor, these batches are authoritative: do not also apply legacy
 `agent`/`chat` events for that session.
 
+Native `message_update` tuples contain only their provider event, without a
+partial assistant message. The native ACP mapper consumes these deltas directly;
+public `session.event`, `agent`/`chat`, ACP chunk, and snapshot response shapes are
+unchanged. Snapshots still materialize the current partial answer on demand.
+
 Completed `agent` events include an authoritative `cancelled` boolean taken
 from the durable completion's metadata, plus a bounded, redacted `error` value.
 Clients must not infer cancellation from error wording or from whether the

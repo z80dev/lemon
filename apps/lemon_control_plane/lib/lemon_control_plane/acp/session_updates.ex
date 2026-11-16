@@ -99,9 +99,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
      }}
   end
 
-  def map_event(state, {:message_update, message, event}) do
-    if assistant?(message), do: message_delta(state, message, event), else: {[], state}
-  end
+  def map_event(state, {:message_update, event}), do: message_delta(state, event)
 
   def map_event(state, {:message_end, message}) do
     if assistant?(message) and not state.text_emitted,
@@ -177,7 +175,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     do:
       map_event(
         state,
-        {:message_update, get(event, :message), get(event, :assistantMessageEvent)}
+        {:message_update, get(event, :assistantMessageEvent)}
       )
 
   defp map_named_event(state, "message_end", event),
@@ -240,19 +238,13 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   defp map_named_event(state, "subagent_progress", event), do: subagent_update(state, event)
   defp map_named_event(state, _type, _event), do: {[], state}
 
-  defp message_delta(state, _message, text) when is_binary(text),
+  defp message_delta(state, {:text_delta, _index, text}),
     do: chunks(state, "agent_message_chunk", text)
 
-  defp message_delta(state, _message, {:text_delta, _index, text, _partial}),
-    do: chunks(state, "agent_message_chunk", text)
-
-  defp message_delta(state, _message, {:thinking_delta, _index, text, _partial}),
+  defp message_delta(state, {:thinking_delta, _index, text}),
     do: chunks(state, "agent_thought_chunk", text)
 
-  defp message_delta(state, message, {:done, _reason, _final}),
-    do: map_event(state, {:message_end, message})
-
-  defp message_delta(state, _message, event) when is_map(event) do
+  defp message_delta(state, event) when is_map(event) do
     case to_string(get(event, :type) || "") do
       "text_delta" ->
         chunks(state, "agent_message_chunk", get(event, :delta))
@@ -277,7 +269,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     end
   end
 
-  defp message_delta(state, _message, _event), do: {[], state}
+  defp message_delta(state, _event), do: {[], state}
 
   defp action_event(state, payload) do
     action = get(payload, :action) || %{}

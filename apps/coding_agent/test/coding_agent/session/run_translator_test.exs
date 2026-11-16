@@ -6,6 +6,26 @@ defmodule CodingAgent.Session.RunTranslatorTest do
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
+  test "delta-only updates retain chunks and materialize the same complete answer" do
+    message = %LemonAi.Types.AssistantMessage{content: [%TextContent{text: "hello world"}]}
+
+    t =
+      translator()
+      |> RunTranslator.handle_event({:message_start, %{message | content: []}})
+      |> RunTranslator.handle_event({:message_update, {:text_start, 0}})
+      |> RunTranslator.handle_event({:message_update, {:text_delta, 0, "hello"}})
+      |> RunTranslator.handle_event({:message_update, {:text_delta, 0, " "}})
+      |> RunTranslator.handle_event({:message_update, {:text_delta, 0, "world"}})
+      |> RunTranslator.handle_event({:message_update, {:text_end, 0, "hello world"}})
+
+    assert t.text_chunks == ["world", " ", "hello"]
+    assert t.text_bytes == 11
+    assert t.delta_seq == 3
+    assert RunTranslator.snapshot_text(t) == "hello world"
+    RunTranslator.handle_event(t, {:agent_end, [message]})
+    assert_receive {:completed, %{ok: true, answer: "hello world"}}
+  end
+
   test "session termination and tuple request failures use plain actionable copy" do
     translator()
     |> RunTranslator.handle_event({:agent_start})
@@ -446,12 +466,138 @@ defmodule CodingAgent.Session.RunTranslatorTest do
   end
 
   describe "reasoning actions" do
+    test "start with content, emit only new thought chunks, and never enter the answer" do
+      first = "checking the native path"
+      pending = " carefully"
+      tail = String.duplicate("é", 350)
+      thinking = first <> pending <> tail <> " done"
+
+      t =
+        translator()
+        |> RunTranslator.handle_event({:message_update, {:thinking_start, 0}})
+        |> RunTranslator.handle_event({:message_update, {:thinking_delta, 0, ""}})
+
+      refute_receive {:action_event, _}
+
+      t = RunTranslator.handle_event(t, {:message_update, {:thinking_delta, 0, first}})
+
+      assert_receive {:action_event,
+                      %{
+                        id: id,
+                        kind: :reasoning,
+                        phase: :started,
+                        detail: %{reasoning: %{text: ^first, full_text: ^first, delta: ^first}}
+                      }}
+
+      t = RunTranslator.handle_event(t, {:message_update, {:thinking_delta, 0, pending}})
+      refute_receive {:action_event, _}
+
+      t = RunTranslator.handle_event(t, {:message_update, {:thinking_delta, 0, tail}})
+      update_delta = pending <> tail
+      full_text = first <> update_delta
+      preview = "..." <> String.slice(full_text, -500, 500)
+
+      assert_receive {:action_event,
+                      %{
+                        id: ^id,
+                        kind: :reasoning,
+                        phase: :updated,
+                        detail: %{
+                          reasoning: %{
+                            text: ^preview,
+                            full_text: ^full_text,
+                            delta: ^update_delta
+                          }
+                        }
+                      }}
+
+      t = RunTranslator.handle_event(t, {:message_update, {:thinking_end, 0, thinking}})
+
+      assert_receive {:action_event,
+                      %{
+                        id: ^id,
+                        kind: :reasoning,
+                        phase: :completed,
+                        ok: true,
+                        detail: %{reasoning: %{full_text: ^thinking, delta: " done"}}
+                      }}
+
+      refute_receive {:action_event, _}
+      assert t.reasoning_accumulator.blocks == %{}
+      assert t.text_chunks == []
+      assert t.delta_seq == 0
+
+      t = RunTranslator.handle_event(t, {:message_update, {:text_delta, 1, "answer only"}})
+      assert RunTranslator.snapshot_text(t) == "answer only"
+      assert t.delta_seq == 1
+    end
+
+    test "pair empty and end-only blocks, including reused content indices" do
+      for start? <- [true, false], thinking <- ["", "only supplied at the end"] do
+        Enum.reduce(1..2, translator(), fn iteration, t ->
+          t =
+            if start? do
+              RunTranslator.handle_event(t, {:message_update, {:thinking_start, 0}})
+            else
+              t
+            end
+
+          refute_receive {:action_event, _}
+          t = RunTranslator.handle_event(t, {:message_update, {:thinking_end, 0, thinking}})
+          id = "lemon.reasoning.0.#{iteration}"
+
+          assert_receive {:action_event, started}
+
+          assert %{
+                   id: ^id,
+                   kind: :reasoning,
+                   phase: :started,
+                   detail: %{reasoning: %{text: ^thinking, delta: ^thinking}}
+                 } = started
+
+          assert_receive {:action_event, completed}
+
+          assert %{
+                   id: ^id,
+                   kind: :reasoning,
+                   phase: :completed,
+                   ok: true,
+                   detail: %{reasoning: %{text: ^thinking, delta: ""}}
+                 } = completed
+
+          refute_receive {:action_event, _}
+          assert t.reasoning_accumulator.blocks == %{}
+          assert t.text_chunks == []
+          assert t.delta_seq == 0
+          t
+        end)
+      end
+    end
+
+    test "pair interleaved blocks even when their first delta has no start event" do
+      t =
+        translator()
+        |> RunTranslator.handle_event({:message_update, {:thinking_start, 0}})
+        |> RunTranslator.handle_event({:message_update, {:thinking_delta, 1, "second"}})
+        |> RunTranslator.handle_event({:message_update, {:thinking_delta, 0, "first"}})
+        |> RunTranslator.handle_event({:message_update, {:thinking_end, 1, "second"}})
+        |> RunTranslator.handle_event({:message_update, {:thinking_end, 0, "first"}})
+
+      assert_receive {:action_event, %{phase: :started, id: second_id}}
+      assert_receive {:action_event, %{phase: :started, id: first_id}}
+      assert second_id != first_id
+      assert_receive {:action_event, %{phase: :completed, id: ^second_id}}
+      assert_receive {:action_event, %{phase: :completed, id: ^first_id}}
+      refute_receive {:action_event, _}
+      assert t.reasoning_accumulator.blocks == %{}
+    end
+
     test "carry a bounded full text next to the channel preview" do
       thinking = String.duplicate("think ", 1_000)
 
       translator()
-      |> RunTranslator.handle_event({:message_update, %{}, {:thinking_start, 0, nil}})
-      |> RunTranslator.handle_event({:message_update, %{}, {:thinking_end, 0, thinking, nil}})
+      |> RunTranslator.handle_event({:message_update, {:thinking_start, 0}})
+      |> RunTranslator.handle_event({:message_update, {:thinking_end, 0, thinking}})
 
       assert_receive {:action_event, %{kind: :reasoning, phase: :started}}
 
@@ -466,7 +612,7 @@ defmodule CodingAgent.Session.RunTranslatorTest do
       thinking = String.duplicate("y", 40_000)
 
       translator()
-      |> RunTranslator.handle_event({:message_update, %{}, {:thinking_end, 0, thinking, nil}})
+      |> RunTranslator.handle_event({:message_update, {:thinking_end, 0, thinking}})
 
       assert_receive {:action_event,
                       %{kind: :reasoning, phase: :completed, detail: %{reasoning: reasoning}}}

@@ -20,19 +20,17 @@ defmodule LemonAi.EventStreamTest do
     test "pushes events and consumes them" do
       {:ok, stream} = EventStream.start_link()
 
-      partial = make_message()
-
       # Push some events
-      EventStream.push(stream, {:text_delta, 0, "Hello", partial})
-      EventStream.push(stream, {:text_delta, 0, " world", partial})
+      EventStream.push(stream, {:text_delta, 0, "Hello"})
+      EventStream.push(stream, {:text_delta, 0, " world"})
       EventStream.complete(stream, make_message(content: [%TextContent{text: "Hello world"}]))
 
       # Consume events
       events = EventStream.events(stream) |> Enum.to_list()
 
       assert length(events) == 3
-      assert {:text_delta, 0, "Hello", _} = Enum.at(events, 0)
-      assert {:text_delta, 0, " world", _} = Enum.at(events, 1)
+      assert {:text_delta, 0, "Hello"} = Enum.at(events, 0)
+      assert {:text_delta, 0, " world"} = Enum.at(events, 1)
       assert {:done, :stop, _} = Enum.at(events, 2)
     end
   end
@@ -63,10 +61,9 @@ defmodule LemonAi.EventStreamTest do
     test "collects all text deltas" do
       {:ok, stream} = EventStream.start_link()
 
-      partial = make_message()
-      EventStream.push(stream, {:text_delta, 0, "Hello", partial})
-      EventStream.push(stream, {:text_delta, 0, " ", partial})
-      EventStream.push(stream, {:text_delta, 0, "world!", partial})
+      EventStream.push(stream, {:text_delta, 0, "Hello"})
+      EventStream.push(stream, {:text_delta, 0, " "})
+      EventStream.push(stream, {:text_delta, 0, "world!"})
       EventStream.complete(stream, make_message())
 
       text = EventStream.collect_text(stream)
@@ -85,10 +82,9 @@ defmodule LemonAi.EventStreamTest do
         end)
 
       # Push events from another process
-      partial = make_message()
 
       for i <- 1..10 do
-        EventStream.push(stream, {:text_delta, 0, "#{i}", partial})
+        EventStream.push(stream, {:text_delta, 0, "#{i}"})
       end
 
       EventStream.complete(stream, make_message())
