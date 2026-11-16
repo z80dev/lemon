@@ -57,7 +57,6 @@ defmodule CodingAgent.ProcessSession do
   alias CodingAgent.ProcessStore
   alias LemonCore.TerminalBackends
   alias LemonCore.TerminalBackends.{Docker, Ssh}
-  alias LemonCore.TerminalBackends.Docker.Sandbox
 
   @default_max_log_lines 1000
   # A line longer than this (for example `\r` progress output with no
@@ -285,8 +284,7 @@ defmodule CodingAgent.ProcessSession do
     command = Keyword.fetch!(opts, :command)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     env = Keyword.get(opts, :env, %{})
-    {:ok, backend} = Sandbox.backend(opts)
-    {:ok, policy} = Sandbox.policy(opts)
+    backend = Keyword.get(opts, :backend, :local)
     terminal_capabilities = TerminalBackends.capabilities(backend)
     max_log_lines = limits.max_log_lines
     timeout_ms = Keyword.get(opts, :timeout_ms)
@@ -302,7 +300,6 @@ defmodule CodingAgent.ProcessSession do
           cwd: cwd,
           env: env,
           backend: backend,
-          tool_policy: %{sandbox: policy.sandbox},
           terminal_capabilities: terminal_capabilities,
           max_log_lines: max_log_lines,
           full_output_path: output_path,
@@ -333,19 +330,10 @@ defmodule CodingAgent.ProcessSession do
       end
 
     # Start the OS process via Port
-    {port, stdin_path, broker} =
+    {port, stdin_path} =
       try do
         if before_start = Keyword.get(opts, :before_start), do: before_start.()
-        broker = if policy.sandbox, do: Sandbox.start()
-
-        try do
-          {port, stdin_path} = start_port(command, cwd, env, backend, broker)
-          {port, stdin_path, broker}
-        rescue
-          exception ->
-            Sandbox.stop(broker)
-            reraise exception, __STACKTRACE__
-        end
+        start_port(command, cwd, env, backend)
       rescue
         _exception -> failed_start(process_id, opts, output_path, output_file)
       catch
@@ -393,7 +381,6 @@ defmodule CodingAgent.ProcessSession do
       cwd: cwd,
       env: env,
       backend: backend,
-      broker: broker,
       terminal_capabilities: terminal_capabilities,
       status: :running,
       exit_code: nil,
@@ -689,7 +676,6 @@ defmodule CodingAgent.ProcessSession do
 
     unless state.stdin_closed, do: File.close(state.stdin)
     File.rm(state.stdin_path)
-    Sandbox.stop(Map.get(state, :broker))
 
     :ok
   end
@@ -910,7 +896,7 @@ defmodule CodingAgent.ProcessSession do
     |> publish_output()
   end
 
-  defp start_port(command, cwd, env, backend, broker) do
+  defp start_port(command, cwd, env, backend) do
     {shell_path, shell_args} = CodingAgent.BashExecutor.get_shell_config()
 
     {executable, args, stderr_to_stdout?} =
@@ -922,7 +908,7 @@ defmodule CodingAgent.ProcessSession do
            false}
 
         :docker ->
-          {Docker.docker_path() || "docker", Docker.args(command, cwd, env, broker), true}
+          {Docker.docker_path() || "docker", docker_args(command, cwd, env), true}
 
         :ssh ->
           {Ssh.ssh_path() || "ssh", Ssh.args(command, env), true}
@@ -993,6 +979,61 @@ defmodule CodingAgent.ProcessSession do
 
   defp maybe_stderr_to_stdout(port_opts, true), do: [:stderr_to_stdout | port_opts]
   defp maybe_stderr_to_stdout(port_opts, false), do: port_opts
+
+  defp docker_args(command, cwd, env) do
+    workspace = docker_workspace(cwd)
+
+    [
+      "run",
+      "--rm",
+      "-i",
+      "--pull",
+      "never",
+      "--network",
+      Docker.network(),
+      "--memory",
+      Docker.memory(),
+      "--cpus",
+      Docker.cpus(),
+      "--pids-limit",
+      Docker.pids_limit(),
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges",
+      "--workdir",
+      "/workspace",
+      "--volume",
+      "#{workspace}:/workspace"
+    ] ++
+      docker_read_only_args() ++
+      docker_tmpfs_args() ++
+      docker_env_args(env) ++
+      [
+        Docker.image(),
+        "/bin/sh",
+        "-lc",
+        command
+      ]
+  end
+
+  defp docker_workspace(nil), do: File.cwd!()
+  defp docker_workspace(""), do: File.cwd!()
+  defp docker_workspace(cwd), do: Path.expand(cwd)
+
+  defp docker_read_only_args do
+    if Docker.read_only_rootfs?(), do: ["--read-only"], else: []
+  end
+
+  defp docker_tmpfs_args do
+    Enum.flat_map(Docker.tmpfs_mounts(), fn mount ->
+      ["--tmpfs", mount]
+    end)
+  end
+
+  defp docker_env_args(env) do
+    Enum.flat_map(env, fn {k, v} -> ["--env", "#{k}=#{v}"] end)
+  end
 
   defp command_with_cwd(command, nil), do: command
   defp command_with_cwd(command, ""), do: command

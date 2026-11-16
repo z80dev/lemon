@@ -850,9 +850,8 @@ defmodule CodingAgent.ProcessStoreServer do
 
           # Do not launch a writer with a reservation that restart cannot recover.
           # On failure the ETS charge stays conservative until startup cleanup.
-          with :ok <- DurableTable.persist(@table, entry, true) do
-            {:ok, granted}
-          else
+          case DurableTable.persist(@table, entry, true) do
+            :ok -> {:ok, granted}
             _ -> {:error, :artifact_accounting_unavailable}
           end
         else

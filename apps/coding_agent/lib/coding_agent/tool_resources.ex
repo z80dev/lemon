@@ -2,25 +2,15 @@ defmodule CodingAgent.ToolResources do
   @moduledoc """
   Volatile tool lifecycle for a durable native session identity.
 
-  Successful executor turns detach resources before stopping their transient
-  Session process; resumed turns bind the same registry keys to their new pid.
-  Explicit stop/abort, unexpected owner death, logical history deletion and idle
-  expiry still dispose of resources. Registry keys remain the durable owner; a
-  different live Session pid cannot take over a resource. The lifecycle listener
-  uses existing registry metadata and keeps no second ownership store.
+  Executor turns keep their Session process alive, retaining resources under the
+  same owner. Explicit stop/abort, unexpected owner death, history deletion and
+  idle parking dispose of resources. A different live Session pid cannot take
+  over a resource. The lifecycle listener uses existing registry metadata and
+  keeps no second ownership store.
   """
   use GenServer
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-
-  def handoff(id, owner) do
-    results =
-      Enum.map(resources(id), fn {_supervisor, pid} ->
-        call(pid, {:detach_owner, owner})
-      end)
-
-    if Enum.all?(results, &(&1 == :ok)), do: :ok, else: {:error, :handoff_failed}
-  end
 
   def stop(id) do
     Enum.each(resources(id), fn {supervisor, pid} ->
@@ -39,12 +29,8 @@ defmodule CodingAgent.ToolResources do
   end
 
   @doc false
-  def owner_reply(operation, owner, state) do
-    result =
-      case operation do
-        :bind_owner -> bind_owner(state, owner)
-        :detach_owner -> detach_owner(state, owner)
-      end
+  def owner_reply(:bind_owner, owner, state) do
+    result = bind_owner(state, owner)
 
     case result do
       {:ok, updated} -> {:reply, :ok, updated}
@@ -64,14 +50,6 @@ defmodule CodingAgent.ToolResources do
       {:error, :owner_conflict}
     end
   end
-
-  defp detach_owner(%{owner_pid: owner} = state, owner) when is_pid(owner) do
-    clear_monitor(state.owner_ref)
-    {:ok, %{state | owner_pid: nil, owner_ref: nil}}
-  end
-
-  defp detach_owner(%{owner_pid: nil} = state, _owner), do: {:ok, state}
-  defp detach_owner(_state, _owner), do: {:error, :owner_conflict}
 
   defp clear_monitor(ref) when is_reference(ref), do: Process.demonitor(ref, [:flush])
   defp clear_monitor(_ref), do: :ok

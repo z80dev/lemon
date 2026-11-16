@@ -178,6 +178,8 @@ defmodule CodingAgent.Tools.TaskCrashRestoreTest do
         run_ref: run_ref
       )
 
+    runner_monitor = Process.monitor(runner)
+
     assert_receive {:provider_entered, first, first_context}, 5_000
     assert_receive {:provider_entered, second, second_context}, 5_000
 
@@ -219,7 +221,7 @@ defmodule CodingAgent.Tools.TaskCrashRestoreTest do
     )
 
     assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: true}}, 5_000
-    GenServer.stop(runner, :normal)
+    assert_receive {:DOWN, ^runner_monitor, :process, ^runner, :normal}, 5_000
   end
 
   test "unresumed, graceful-only, unrelated and aborted parents never redrive", %{cwd: cwd} do

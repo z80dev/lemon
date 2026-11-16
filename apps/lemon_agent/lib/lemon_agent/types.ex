@@ -451,11 +451,14 @@ defmodule LemonAgent.Types do
     - `budget` - Budget state, including run totals when continuing a prompt
     - `stream_options` - Options for streaming requests
     - `stream_fn` - Custom stream function (defaults to LemonAi.stream_simple/3)
-    - `emit_system_prompt` - Internal journal transport; the Agent consumes these
-      snapshots without publishing them to ordinary subscribers
-    - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
-    - `on_stream_rule` - Synchronous rule receipt/redirect callback; returns `:ok`
-      only after durable acceptance, or `{:error, :injection_limit}` when spent
+    - `hooks` - Optional prompt observation and stream-rule hooks:
+      - `emit_system_prompt` - Internal journal transport; the Agent consumes these
+        snapshots without publishing them to ordinary subscribers (default false)
+      - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
+        (default [])
+      - `on_stream_rule` - Synchronous rule receipt/redirect callback; returns `:ok`
+        only after durable acceptance, or `{:error, :injection_limit}` when spent
+        (default nil)
     """
     @type convert_to_llm_fn ::
             ([LemonAgent.Types.agent_message()] ->
@@ -492,6 +495,12 @@ defmodule LemonAgent.Types do
              LemonAi.Types.StreamOptions.t() ->
                {:ok, LemonAi.EventStream.t()} | LemonAi.EventStream.t() | {:error, term()})
 
+    @type hooks :: %{
+            optional(:emit_system_prompt) => boolean(),
+            optional(:stream_rules) => [map()] | (-> [map()]),
+            optional(:on_stream_rule) => (map() -> :ok | {:error, term()}) | nil
+          }
+
     @type t :: %__MODULE__{
             model: LemonAi.Types.Model.t(),
             convert_to_llm: convert_to_llm_fn(),
@@ -523,7 +532,7 @@ defmodule LemonAgent.Types do
             stream_options: LemonAi.Types.StreamOptions.t(),
             stream_options_model: LemonAi.Types.Model.t() | nil,
             stream_fn: stream_fn() | nil,
-            emit_system_prompt: boolean()
+            hooks: hooks()
           }
     defstruct model: nil,
               convert_to_llm: nil,
@@ -554,10 +563,8 @@ defmodule LemonAgent.Types do
               budget: nil,
               stream_options: %StreamOptions{},
               stream_options_model: nil,
-              stream_rules: [],
-              on_stream_rule: nil,
               stream_fn: nil,
-              emit_system_prompt: false
+              hooks: %{}
   end
 
   # ============================================================================

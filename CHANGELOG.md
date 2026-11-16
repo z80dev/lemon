@@ -22,6 +22,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Isolated task workspaces start warm: copy-on-write clones of allowlisted,
   git-ignored build caches (`deps`, `_build`, `node_modules`, `target`,
   `.venv`); secrets and ignored config are never copied (#601).
+- Tool intent is journaled before dispatch: effectful tools carry an `effect`
+  class (`:none`, `:idempotent`, `:external` default), coding sessions append a
+  synced `lemon.tool_intent` entry first and do not run the tool if that fails,
+  and reload reports interrupted calls as `unknown` or `not_started` (#554).
+- Per-session sequenced event log: session events carry a gap-free `seq` and a
+  versioned cursor, and `sessions.events` replays ordered batches after a cursor
+  or returns `cursor_expired`; the TUI dedupes live and reconnect batches (#560).
+- `lemon sessions maintain --older-than`: preview-confirm archiving of cold native
+  session journals and removal of orphan spill artifacts, plus a session index
+  for listing and streamed loading of large journals (#565).
+- Stream rules: a rule with `streamPattern` (and `injectionLimit`) stays out of
+  the prompt until streamed output matches, then the stream is cancelled and
+  retried with a `<system-interrupt reason="rule_violation">` correction (#599).
+- Opt-in `[runtime.tools] vendor_dialects` experiment exposing Claude-style
+  `Read`/`Edit`/`Bash` and Codex `apply_patch` tool shapes for matching models;
+  default stays off, and upstream identities are pinned in a hash manifest (#603).
+- `docs/omp-port-ledger.md` inventories omp/pi-mono ports, and the TUI moves to
+  `@oh-my-pi` 18.20.2 packages (#609).
 
 ### Changed
 
@@ -56,6 +74,38 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   with `:admission_unavailable` instead of bypassing the cap (#591).
 - Cron schedules the earliest deadline instead of scanning every minute, and
   kanban leases renew while their worker is alive (#596).
+- The system prompt is sent to providers as ordered blocks, static first and
+  directory-derived last, with a prompt digest journaled per reply, so sessions
+  in different directories share the cached prefix (#563).
+- Root sessions stay alive across turns and park after five idle minutes or when
+  over the 32-root idle budget, instead of being saved and resumed every turn;
+  eval kernels survive turns but not parking (#564).
+- Compaction first spills old tool-result bodies to `artifact://` references
+  (newest 40,000 tokens protected, results under 50 tokens skipped) and skips the
+  summary call if that alone is enough (#569).
+- One `EventStream` implementation (`LemonAi.EventStream`) backs both stream APIs;
+  `push/2` now returns `{:error, :overflow | :canceled}` instead of ignoring them (#570).
+- Native joins, swarm scheduling and foreground bash waits wake on Bus
+  notifications and monitors instead of 20–100 ms polling; child inboxes get a
+  per-child owner (#575).
+- Task, process, run-graph and parent-question stores share one durable-table
+  module with unchanged DETS files and an in-owner expiry index (#576).
+- One request/response client for stdio and socket RPC peers replaces per-client
+  pending-request bookkeeping, with deadlines and fail-all on transport loss (#577).
+- Store hooks run in a monitored worker with a five-second budget, and secret
+  master-key work, config reload and run-history reads no longer run inside the
+  `Store` process (#579).
+- Bash, background and other OS processes share `ProcessSession` ownership and
+  one `ProcessGroup.terminate/2` kill path (#586).
+- In-VM locks pass `[node()]` with finite retries and fail with a safe error
+  instead of waiting forever; the cross-process `Service.Lock` gains stale
+  recovery (#589).
+- One shared cap, `:coding_agent, :task_max_concurrency` (default 8), governs
+  native task children and background sessions; the unused main/subagent lanes
+  and the second semaphore are gone (#590).
+- Long-lived caches and tables (extension, web, capability, dedupe, auth) have
+  supervised owners and survive their first caller; mutable `:persistent_term`
+  use is removed (#595).
 
 ### Fixed
 
