@@ -56,7 +56,7 @@ defmodule LemonAgent.Loop do
   require Logger
 
   alias LemonAgent.{AbortSignal, AutoThinking, Budget, EventStream}
-  alias LemonAgent.Loop.{StateMachine, Streaming, ToolCalls, ToolStream}
+  alias LemonAgent.Loop.{Queue, StateMachine, Streaming, ToolCalls, ToolStream}
   alias LemonAgent.ModelRuntime.StreamOptions
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentToolResult, ToolSchemaSnapshot}
 
@@ -415,12 +415,9 @@ defmodule LemonAgent.Loop do
 
   defp run_loop(context, new_messages, config, signal, stream_fn, stream) do
     # Check for steering messages at start (user may have typed while waiting).
-    # Clear the redirect flag BEFORE draining: a redirect cast processed before
-    # the drain has its correction included here (a set flag is then cleared
-    # harmlessly, worst case one immediate cancel/retry with the correction
-    # already in context); one processed after the drain keeps its flag, so
-    # the model call is canceled mid-stream and retried with the correction.
-    # Clearing after the drain would swallow that second case silently.
+    # Clear redirect before requesting the queue. Corrections accepted before
+    # the owner handles this request are included; later redirects keep their
+    # flag and cancel the next model call instead of being swallowed.
     AbortSignal.clear_redirect(signal)
     pending_messages = get_steering_messages(config, signal)
 
@@ -487,7 +484,7 @@ defmodule LemonAgent.Loop do
       # A trusted terminal tool completes successfully, but must not consume
       # queued follow-ups or make another provider request.
       follow_up_messages =
-        if continue_outer == :terminal_tool, do: [], else: get_follow_up_messages(config)
+        if continue_outer == :terminal_tool, do: [], else: Queue.follow_up(config)
 
       Logger.debug(
         "LemonAgent.Loop do_run_loop continue_outer follow_up=#{length(follow_up_messages)}"
@@ -630,6 +627,9 @@ defmodule LemonAgent.Loop do
               EventStream.cancel(stream, :assistant_aborted)
               {context, new_messages, [], false}
             else
+              # A correction may already have been injected before its redirect
+              # flag was observed. Retry the model even if the queue is empty;
+              # completed tools are not re-executed.
               do_inner_loop(
                 context,
                 new_messages,
@@ -639,7 +639,7 @@ defmodule LemonAgent.Loop do
                 stream,
                 pending_messages,
                 false,
-                false,
+                true,
                 tool_turn_count
               )
             end
@@ -1046,28 +1046,16 @@ defmodule LemonAgent.Loop do
     state
   end
 
-  defp get_steering_messages(%AgentLoopConfig{get_steering_messages: nil}), do: []
-
-  defp get_steering_messages(%AgentLoopConfig{get_steering_messages: get_fn}) do
-    get_fn.() || []
-  end
-
   defp get_steering_messages(%AgentLoopConfig{} = config, signal) do
     if aborted?(signal) do
       []
     else
-      messages = get_steering_messages(config)
+      messages = Queue.steering(config)
       if aborted?(signal), do: [], else: messages
     end
   end
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
-
-  defp get_follow_up_messages(%AgentLoopConfig{get_follow_up_messages: nil}), do: []
-
-  defp get_follow_up_messages(%AgentLoopConfig{get_follow_up_messages: get_fn}) do
-    get_fn.() || []
-  end
 
   defp assistant_message?(%AssistantMessage{}), do: true
   defp assistant_message?(%{role: :assistant}), do: true

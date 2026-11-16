@@ -179,6 +179,7 @@ defmodule CodingAgent.Messages do
     @type content :: String.t() | [TextContent.t() | ImageContent.t()]
     @type t :: %__MODULE__{
             role: :custom,
+            id: String.t() | nil,
             custom_type: String.t(),
             content: content(),
             display: boolean(),
@@ -186,6 +187,7 @@ defmodule CodingAgent.Messages do
             timestamp: integer()
           }
     defstruct role: :custom,
+              id: nil,
               custom_type: "",
               content: "",
               display: true,

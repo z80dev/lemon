@@ -287,11 +287,17 @@ defmodule CodingAgent.Session.Presentation do
         :ok ->
           :ok
 
+        {:error, :session_busy} when retain ->
+          # A durable follow-up may already have started another Agent run.
+          # Finalizing the previous runner must not stop that live work.
+          :ok
+
         {:error, reason} ->
           Logger.warning("LemonRunner finalize_session save failed: #{inspect(reason)}")
       end
 
-      if not retain or result != :ok, do: safe_stop_session(session)
+      if not retain or result not in [:ok, {:error, :session_busy}],
+        do: safe_stop_session(session)
     end
 
     state

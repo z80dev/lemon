@@ -738,7 +738,16 @@ defmodule CodingAgent.SessionEdgeCasesTest do
 
   describe "steering and follow_up queue edge cases" do
     test "queues work correctly with queue module" do
-      session = start_session()
+      stream_fn =
+        LemonAgent.Test.Mocks.blocking_stream_fn(
+          LemonAgent.Test.Mocks.assistant_message("done"),
+          self()
+        )
+
+      session = start_session(stream_fn: stream_fn)
+      :ok = Session.prompt(session, "hold this turn")
+      assert_receive {:stream_blocked, producer}, 5_000
+      on_exit(fn -> send(producer, :release_stream) end)
 
       # Add items to both queues
       :ok = Session.steer(session, "Steer 1")
@@ -753,6 +762,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       # Check FIFO order
       {{:value, first_steer}, _} = :queue.out(state.steering_queue)
       assert first_steer.content == "Steer 1"
+      send(producer, :release_stream)
     end
 
     test "steering queue is cleared after agent_end" do

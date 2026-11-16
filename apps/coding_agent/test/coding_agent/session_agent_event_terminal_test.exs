@@ -133,8 +133,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
   end
 
   defp queue_diagnostic_follow_up(session) do
-    :ok = Session.follow_up(session, "queued follow-up")
-    _ = Session.get_state(session)
+    :ok = Session.steer(session, "queued follow-up", preempt: false)
     :ok
   end
 
@@ -370,7 +369,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     state = Session.get_state(session)
     assert state.is_streaming == false
     assert map_size(state.event_streams) == 0
-    assert Session.diagnostics(session).follow_up_queue_size == 0
+    assert Session.diagnostics(session).follow_up_queue_size == 1
   end
 
   test "message_end persists user, assistant, and tool_result messages" do
@@ -419,7 +418,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     assert state.is_streaming == false
     assert map_size(state.event_streams) == 0
     assert :queue.len(state.steering_queue) == 0
-    assert Session.diagnostics(session).follow_up_queue_size == 0
+    assert Session.diagnostics(session).follow_up_queue_size == 1
   end
 
   test "error terminal semantics stay consistent for stream subscribers" do
@@ -443,7 +442,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     state = Session.get_state(session)
     assert state.is_streaming == false
     assert map_size(state.event_streams) == 0
-    assert Session.diagnostics(session).follow_up_queue_size == 0
+    assert Session.diagnostics(session).follow_up_queue_size == 1
   end
 
   test "canceled terminal semantics stay consistent for stream subscribers" do
@@ -467,17 +466,17 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     state = Session.get_state(session)
     assert state.is_streaming == false
     assert map_size(state.event_streams) == 0
-    assert :queue.len(state.steering_queue) == 0
-    assert Session.diagnostics(session).follow_up_queue_size == 0
+    assert :queue.len(state.steering_queue) == 1
+    assert Session.diagnostics(session).follow_up_queue_size == 1
   end
 
-  test "abort immediately clears the session follow-up diagnostic mirror" do
+  test "abort retains acknowledged unbound input for an explicit next prompt" do
     session = start_session()
     queue_diagnostic_follow_up(session)
     assert Session.diagnostics(session).follow_up_queue_size == 1
 
     assert :ok = Session.abort(session)
-    assert Session.diagnostics(session).follow_up_queue_size == 0
+    assert Session.diagnostics(session).follow_up_queue_size == 1
   end
 
   test "agent exit publishes a terminal error and stops the session (no zombie)" do

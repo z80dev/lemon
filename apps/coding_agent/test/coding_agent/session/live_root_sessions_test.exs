@@ -56,8 +56,10 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     assert {:reply, {:error, :session_busy}, ^state} =
              Session.handle_call({:prepare_root_turn, []}, {self(), make_ref()}, state)
 
-    assert {:reply, {:error, :session_busy}, ^state} =
+    assert {:reply, {:error, :session_busy}, retaining} =
              Session.handle_call({:retain_root, 0}, {self(), make_ref()}, state)
+
+    assert retaining == %{state | root_retention_ttl: 0}
   end
 
   test "a second turn reuses the live owner without journal loads or environment captures", ctx do
@@ -300,6 +302,64 @@ defmodule CodingAgent.Session.LiveRootSessionsTest do
     assert {:ok, ^session} = SessionRegistry.lookup(id)
     assert Session.get_state(session).agent == old_agent
     assert counts(ctx.events, id) == %{journal_load: 0, environment_capture: 1}
+  end
+
+  test "finalizing an old runner leaves an acknowledged follow-up alive", ctx do
+    {first, session, id} = start_turn(ctx, "initial turn")
+    assert_receive {:provider, provider, _, _}, 5_000
+    send(provider, {:respond, "initial answer"})
+    complete(first)
+
+    unsubscribe = Session.subscribe(session)
+    assert :ok = Session.follow_up(session, "accepted next turn", id: "retained-follow-up")
+    assert_receive {:provider, provider, context, _}, 5_000
+    assert Enum.count(context.messages, &(Map.get(&1, :id) == "retained-follow-up")) == 1
+
+    runner_state = %{session: session}
+    assert CodingAgent.Session.Presentation.finalize_session(runner_state, true) == runner_state
+    assert Process.alive?(session)
+    assert Session.get_state(session).is_streaming
+
+    assert is_reference(Session.get_state(session).root_idle_waiter)
+    observer = self()
+
+    hook = fn
+      :waiting, {:noreply, %Session{root_idle_token: token}}, _extra when is_integer(token) ->
+        send(observer, {:root_retained, self()})
+        :retained
+
+      status, _event, _extra ->
+        status
+    end
+
+    :ok = :sys.install(session, {hook, :waiting})
+
+    send(provider, {:respond, "follow-up answer"})
+    assert_receive {:session_event, ^id, {:agent_end, _}, _}, 5_000
+    assert_receive {:root_retained, ^session}, 5_000
+    assert Session.get_state(session).root_idle_token
+    unsubscribe.()
+  end
+
+  test "root checkout and parking fence Agent work before its events reach Session", ctx do
+    {run, session, id} = start_turn(ctx, "active invocation")
+    assert_receive {:provider, provider, _, _}, 5_000
+    state = Session.get_state(session)
+    token = System.unique_integer([:positive, :monotonic])
+
+    # Reproduce the owner view after the previous terminal event and before the
+    # queued run's agent_start: the Agent is active but Session still looks idle.
+    :sys.replace_state(session, &%{&1 | is_streaming: false, root_idle_token: token})
+
+    assert {:error, :session_busy} = RootLifecycle.checkout(id, [])
+    assert :ok = GenServer.call(session, {:park_root, token})
+    send(session, {:park_root, token})
+    assert Session.get_state(session).run_id == state.run_id
+    assert Process.alive?(session)
+
+    :sys.replace_state(session, &%{&1 | is_streaming: true, root_idle_token: nil})
+    send(provider, {:respond, "same invocation answer"})
+    complete(run)
   end
 
   defp start_turn(ctx, prompt, id \\ nil, source \\ :explicit) do

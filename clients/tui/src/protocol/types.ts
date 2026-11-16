@@ -482,6 +482,32 @@ export interface ChatSendResult {
 	summary?: Record<string, unknown>;
 }
 
+export interface SessionSteerParams {
+	sessionKey: string;
+	runId: string;
+	messageId: string;
+	prompt: string;
+}
+
+export interface SessionSteerReceipt {
+	sessionKey: string;
+	runId: string;
+	messageId: string;
+	acceptedAfterTurn: number;
+}
+
+export interface PendingSteer {
+	messageId: string;
+	preview: string;
+	acceptedAfterTurn: number;
+}
+
+export interface PendingSteersResult {
+	sessionKey: string;
+	items: PendingSteer[];
+	truncated: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // profiles
 // ---------------------------------------------------------------------------

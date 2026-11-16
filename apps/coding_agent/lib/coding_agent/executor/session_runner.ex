@@ -284,10 +284,10 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     case start_session(resume, session_opts, state, meta) do
       {:ok, session, session_id, state} ->
-        _unsub = CodingAgent.Session.subscribe(session)
-
         case async_followups do
           list when is_list(list) and list != [] ->
+            _unsubscribe = CodingAgent.Session.subscribe(session)
+
             :ok =
               CodingAgent.Session.handle_async_followup(session, %{
                 content: prompt,
@@ -296,7 +296,9 @@ defmodule CodingAgent.Executor.SessionRunner do
 
           _ ->
             prompt = CodingAgent.Commands.prepare_prompt(cwd, prompt, request.meta || %{})
-            :ok = CodingAgent.Session.prompt(session, prompt, images: request.images)
+
+            {:ok, _unsubscribe} =
+              CodingAgent.Session.subscribe_prompt(session, prompt, images: request.images)
         end
 
         session_ref = Process.monitor(session)

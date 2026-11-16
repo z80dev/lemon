@@ -621,7 +621,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       # Modify one session
       :ok = Session.steer(pid1, "Steer message")
-      :ok = Session.follow_up(pid1, "Follow-up message")
+      :ok = Session.steer(pid1, "Follow-up message", preempt: false)
 
       state1 = Session.get_state(pid1)
       state2 = Session.get_state(pid2)

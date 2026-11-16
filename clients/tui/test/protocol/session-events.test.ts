@@ -3,8 +3,8 @@ import {
 	parseSessionEventBatch,
 	parseSessionEventCursor,
 	parseSessionsEvents,
-	sameSessionEventStream,
 	SessionEventCursorError,
+	sameSessionEventStream,
 } from "../../src/protocol/session-events.ts";
 
 const cursor = { version: 1 as const, sessionId: "native", streamId: "owner:branch", seq: 5 };
@@ -12,7 +12,13 @@ const cursor = { version: 1 as const, sessionId: "native", streamId: "owner:bran
 describe("versioned session event wire boundaries", () => {
 	test("keeps cursor and event identity unchanged, including empty projections", () => {
 		const batch = { cursor, eventId: "owner:branch:5", events: [] };
-		const result = { status: "ok", sessionKey: "session", events: [batch], cursor, hasMore: false };
+		const result = {
+			status: "ok" as const,
+			sessionKey: "session",
+			events: [batch],
+			cursor,
+			hasMore: false,
+		};
 		expect(parseSessionEventCursor(cursor)).toBe(cursor);
 		expect(parseSessionEventBatch(batch, "session")).toBe(batch);
 		expect(parseSessionsEvents(result)).toBe(result);
@@ -24,7 +30,9 @@ describe("versioned session event wire boundaries", () => {
 
 	test("rejects unsupported versions explicitly instead of interpreting their seq", () => {
 		for (const version of [undefined, 0, 2, "1"]) {
-			expect(() => parseSessionEventCursor({ ...cursor, version })).toThrow(SessionEventCursorError);
+			expect(() => parseSessionEventCursor({ ...cursor, version })).toThrow(
+				SessionEventCursorError,
+			);
 			expect(() => parseSessionEventCursor({ ...cursor, version })).toThrow(
 				"unsupported session event cursor version",
 			);
@@ -39,7 +47,8 @@ describe("versioned session event wire boundaries", () => {
 			{ ...cursor, seq: "5" },
 			{ ...cursor, sessionId: "" },
 			{ ...cursor, streamId: null },
-		]) expect(() => parseSessionEventCursor(value)).toThrow(SessionEventCursorError);
+		])
+			expect(() => parseSessionEventCursor(value)).toThrow(SessionEventCursorError);
 	});
 
 	test("an equal seq never equates owners, native sessions or branch epochs", () => {
@@ -49,10 +58,15 @@ describe("versioned session event wire boundaries", () => {
 	});
 
 	test("rejects a foreign projected session and malformed pages before application", () => {
-		expect(() => parseSessionEventBatch({
-			cursor,
-			events: [{ event: "chat", payload: { sessionKey: "foreign" } }],
-		}, "session")).toThrow("invalid session event projection");
+		expect(() =>
+			parseSessionEventBatch(
+				{
+					cursor,
+					events: [{ event: "chat", payload: { sessionKey: "foreign" } }],
+				},
+				"session",
+			),
+		).toThrow("invalid session event projection");
 		for (const value of [
 			{ status: "ok", sessionKey: "session", events: [], cursor },
 			{ status: "unknown", sessionKey: "session" },
@@ -63,6 +77,7 @@ describe("versioned session event wire boundaries", () => {
 				cursor,
 				hasMore: false,
 			},
-		]) expect(() => parseSessionsEvents(value)).toThrow();
+		])
+			expect(() => parseSessionsEvents(value)).toThrow();
 	});
 });

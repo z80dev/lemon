@@ -138,6 +138,35 @@ describe("QueuePanelComponent", () => {
 
 describe("native description", () => {
 	test.each([false, true])(
+		"accepted steer offers withdrawal, not editing, buttons=%s",
+		(buttons) => {
+			setNativeButtons(buttons);
+			const item: QueueItem = {
+				id: "q-steer",
+				text: "correction",
+				at: 0,
+				state: "accepted-steer",
+				steer: { messageId: "message-1" },
+			};
+			const { panel, edited, deleted } = build([item]);
+			expect(renderPlain(panel.render(100))).toContain("(accepted steer) correction");
+			const pill = panel.describe().c?.[0];
+			if (!pill || !("k" in pill)) throw new Error("expected steer pill");
+			expect(pill.c?.some((child) => "key" in child && child.key === "edit")).toBe(false);
+			expect(pill.c?.some((child) => "key" in child && child.key === "withdraw")).toBe(true);
+			panel.handleNativeEvent({
+				type: "action",
+				key: "q-steer/withdraw",
+				act: "queue.withdraw",
+				mods: [],
+			});
+			expect(deleted).toEqual([item]);
+			panel.handleNativeEvent({ type: "action", key: "q-steer/edit", act: "queue.edit", mods: [] });
+			expect(edited).toEqual([]);
+		},
+	);
+
+	test.each([false, true])(
 		"Edit routes the clicked item with native buttons=%s; offline items offer none",
 		(buttons) => {
 			setNativeButtons(buttons);

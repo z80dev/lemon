@@ -246,6 +246,59 @@ defmodule CodingAgent.ControlPlaneProvider do
     :exit, _ -> {:error, :unavailable}
   end
 
+  @doc "Accept steering only on the live root's fixed active invocation."
+  def session_steer(session_key, run_id, text, id) do
+    case live_sessions(session_key) do
+      [pid] ->
+        CodingAgent.Session.steer(pid, text,
+          id: id,
+          run_id: run_id,
+          return_receipt: true,
+          origin: :control_plane
+        )
+
+      [] ->
+        {:error, :not_found}
+
+      _ ->
+        {:error, :unavailable}
+    end
+  catch
+    :exit, _ -> {:error, :outcome_unknown}
+  end
+
+  def session_withdraw_steer(session_key, id) do
+    case live_sessions(session_key) do
+      [pid] ->
+        with :ok <- AddressingContext.authorize_live_steering(CodingAgent.Session.get_state(pid)),
+             do: CodingAgent.Session.withdraw_steer(pid, id)
+
+      [] ->
+        {:error, :not_found}
+
+      _ ->
+        {:error, :unavailable}
+    end
+  catch
+    :exit, _ -> {:error, :outcome_unknown}
+  end
+
+  def session_pending_steers(session_key) do
+    case live_sessions(session_key) do
+      [pid] ->
+        with :ok <- AddressingContext.authorize_live_steering(CodingAgent.Session.get_state(pid)),
+             do: CodingAgent.Session.pending_steers(pid)
+
+      [] ->
+        {:error, :not_found}
+
+      _ ->
+        {:error, :unavailable}
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
   @doc "Read the current native branch, including offline rewind, without starting a session."
   def session_recovery_snapshot(session_key, cwd) do
     case live_sessions(session_key) do

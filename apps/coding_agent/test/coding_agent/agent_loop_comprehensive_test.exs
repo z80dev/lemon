@@ -382,15 +382,21 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
   describe "concurrent prompts handling" do
     test "follow-up queue processed after completion" do
       response1 = Mocks.assistant_message("First response")
-      response2 = Mocks.assistant_message("Follow-up response")
 
-      session = start_session(stream_fn: multi_response_stream_fn([response1, response2]))
+      session =
+        start_session(stream_fn: Mocks.blocking_stream_fn(response1, self()))
 
       _unsub = Session.subscribe(session)
       :ok = Session.prompt(session, "First message")
+      assert_receive {:stream_blocked, first_producer}, 5_000
+      on_exit(fn -> send(first_producer, :release_stream) end)
 
       # Queue a follow-up
       :ok = Session.follow_up(session, "Follow up message")
+      send(first_producer, :release_stream)
+      assert_receive {:stream_blocked, second_producer}, 5_000
+      on_exit(fn -> send(second_producer, :release_stream) end)
+      send(second_producer, :release_stream)
 
       events = collect_events([], 5000)
 

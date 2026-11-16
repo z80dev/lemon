@@ -42,7 +42,7 @@ export interface AppStoreEventMap {
  *   `queue`      hold it in the {@link QueueStore} and send it when the run
  *                ends — it never reaches the daemon before then, which is what
  *                keeps it editable;
- *   `steer`      send it into the running turn (`chat.send queueMode: steer`);
+ *   `steer`      journal it into the live local turn, or use invocation-bound routing;
  *   `redirect`   replace the model's pending direction while preserving
  *                completed tool work (`queueMode: redirect`);
  *   `interrupt`  stop the run and send it (`queueMode: interrupt`).

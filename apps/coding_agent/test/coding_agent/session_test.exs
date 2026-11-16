@@ -876,14 +876,14 @@ defmodule CodingAgent.SessionTest do
       assert messages != []
     end
 
-    test "increments turn_index on prompt" do
+    test "increments turn_index when a model turn starts" do
       session = start_session()
       state_before = Session.get_state(session)
 
-      :ok = Session.prompt(session, "Hello!")
-      state_after = Session.get_state(session)
-
-      assert state_after.turn_index == state_before.turn_index + 1
+      assert {:ok, unsubscribe} = Session.subscribe_prompt(session, "Hello!")
+      assert_receive {:session_event, _id, {:turn_start}, _cursor}, 5_000
+      assert Session.get_state(session).turn_index == state_before.turn_index + 1
+      unsubscribe.()
     end
   end
 
@@ -914,23 +914,37 @@ defmodule CodingAgent.SessionTest do
   end
 
   describe "follow_up/2" do
-    test "follow-up messages are queued" do
+    test "an idle follow-up starts a turn" do
       session = start_session()
+      unsubscribe = Session.subscribe(session)
+      assert :ok = Session.follow_up(session, "When you're done, do this")
+      assert_receive {:session_event, _id, {:agent_end, _messages}, _cursor}, 5_000
 
-      :ok = Session.follow_up(session, "When you're done, do this")
-      state = Session.get_state(session)
+      assert Enum.any?(
+               Session.get_messages(session),
+               &(&1.content == "When you're done, do this")
+             )
 
-      assert :queue.len(state.follow_up_queue) == 1
+      unsubscribe.()
     end
 
-    test "multiple follow-up messages are queued" do
+    test "consecutive follow-ups are delivered even across terminal boundaries" do
       session = start_session()
+      unsubscribe = Session.subscribe(session)
+      assert :ok = Session.follow_up(session, "First follow-up")
+      assert :ok = Session.follow_up(session, "Second follow-up")
 
-      :ok = Session.follow_up(session, "First follow-up")
-      :ok = Session.follow_up(session, "Second follow-up")
-      state = Session.get_state(session)
+      assert_receive {:session_event, _id,
+                      {:message_end, %LemonAi.Types.UserMessage{content: "First follow-up"}},
+                      _cursor},
+                     5_000
 
-      assert :queue.len(state.follow_up_queue) == 2
+      assert_receive {:session_event, _id,
+                      {:message_end, %LemonAi.Types.UserMessage{content: "Second follow-up"}},
+                      _cursor},
+                     5_000
+
+      unsubscribe.()
     end
   end
 
@@ -1793,7 +1807,18 @@ defmodule CodingAgent.SessionTest do
     end
 
     test "follow_up_queue_size reflects queued messages" do
-      session = start_session()
+      session =
+        start_session(
+          stream_fn:
+            LemonAgent.Test.Mocks.blocking_stream_fn(
+              LemonAgent.Test.Mocks.assistant_message("done"),
+              self()
+            )
+        )
+
+      :ok = Session.prompt(session, "hold this turn")
+      assert_receive {:stream_blocked, producer}, 5_000
+      on_exit(fn -> send(producer, :release_stream) end)
 
       diag_before = Session.diagnostics(session)
       assert diag_before.follow_up_queue_size == 0
@@ -1802,6 +1827,7 @@ defmodule CodingAgent.SessionTest do
 
       diag_after = Session.diagnostics(session)
       assert diag_after.follow_up_queue_size == 1
+      send(producer, :release_stream)
     end
 
     test "error_rate is zero when no tool calls" do

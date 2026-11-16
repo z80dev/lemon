@@ -46,10 +46,12 @@ defmodule CodingAgent.Session.RootLifecycle do
 
   @doc false
   def enforce_cap(cap) when is_integer(cap) and cap >= 0 do
+    # Token-fenced messages also let a Session enforce the cap after deferred
+    # retention without synchronously calling itself when it is the oldest root.
     idle_roots()
     |> Enum.sort_by(fn {_pid, order} -> order end)
     |> then(fn roots -> Enum.take(roots, max(length(roots) - cap, 0)) end)
-    |> Enum.each(fn {pid, order} -> call(pid, {:park_root, order}) end)
+    |> Enum.each(fn {pid, order} -> send(pid, {:park_root, order}) end)
 
     :ok
   end

@@ -2,10 +2,8 @@ defmodule CodingAgent.Session.EventHandler do
   @moduledoc """
   Applies LemonAgent events to CodingAgent session state.
 
-  Terminal events always clear both session-side queue mirrors. LemonAgent owns
-  actual steering/follow-up consumption; the mirrors exist only for session
-  diagnostics and must not report messages that the underlying loop already
-  consumed or discarded.
+  LemonAgent owns input consumption. Durable acceptance records keep pending
+  steering/follow-up mirrors live across run boundaries until binding or withdrawal.
   """
 
   alias CodingAgent.Extensions
@@ -26,7 +24,7 @@ defmodule CodingAgent.Session.EventHandler do
   def handle({:agent_start}, state, _callbacks) do
     # Execute on_agent_start hooks
     Extensions.execute_hooks(state.hooks, :on_agent_start, [])
-    state
+    %{state | is_streaming: true}
   end
 
   def handle({:usage_budget_updated, usage}, state, _callbacks) do
@@ -214,9 +212,19 @@ defmodule CodingAgent.Session.EventHandler do
   end
 
   defp clear_terminal_queues(state) do
+    inputs = Map.get(state, :input_journal, %{})
+
+    pending? = fn
+      message when is_map(message) ->
+        match?(%{status: :pending}, Map.get(inputs, Map.get(message, :id)))
+
+      _ ->
+        false
+    end
+
     state
-    |> Map.put(:steering_queue, :queue.new())
-    |> Map.put(:follow_up_queue, :queue.new())
+    |> Map.update!(:steering_queue, &:queue.filter(pending?, &1))
+    |> Map.update!(:follow_up_queue, &:queue.filter(pending?, &1))
     |> Map.put(:tool_started_at, %{})
   end
 

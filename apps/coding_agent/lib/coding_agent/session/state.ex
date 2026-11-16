@@ -98,8 +98,7 @@ defmodule CodingAgent.Session.State do
   @spec cancel_pending_prompt(map()) :: map()
   def cancel_pending_prompt(%{pending_prompt_timer_ref: nil} = state), do: state
 
-  def cancel_pending_prompt(%{pending_prompt_timer_ref: timer_ref} = state) do
-    _ = Process.cancel_timer(timer_ref)
+  def cancel_pending_prompt(%{pending_prompt_timer_ref: _ref} = state) do
     %{state | pending_prompt_timer_ref: nil, is_streaming: false}
   end
 
@@ -191,7 +190,6 @@ defmodule CodingAgent.Session.State do
       state
       | is_streaming: true,
         pending_prompt_timer_ref: timer_ref,
-        turn_index: state.turn_index + 1,
         overflow_recovery: %{
           state.overflow_recovery
           | in_progress: false,
@@ -212,6 +210,7 @@ defmodule CodingAgent.Session.State do
         is_streaming: false,
         pending_prompt_timer_ref: nil,
         turn_index: 0,
+        input_journal: %{},
         started_at: started_at_ms,
         session_file: nil,
         steering_queue: :queue.new(),

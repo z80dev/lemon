@@ -30,6 +30,25 @@ defmodule CodingAgent.Session.AddressingContext do
 
   def resolve(_, _), do: {:error, :context_unavailable}
 
+  @doc false
+  def authorize_live_steering(state) do
+    opts = Map.new(state.tool_opts || [])
+    approval = state.approval_context || %{}
+    authority = Map.merge(opts, approval)
+    servers = authority[:invocation_mcp_servers] || authority[:mcp_servers]
+
+    with :ok <- local_root_key(state.session_key),
+         false <- state.task_child == true,
+         false <-
+           opts[:native_managed_context] == true or approval[:native_managed_context] == true,
+         :ok <- ordinary_authority(authority, servers) do
+      :ok
+    else
+      true -> {:error, :forbidden}
+      error -> error
+    end
+  end
+
   defp local_root_key(key) do
     case SessionKey.parse(key) do
       %{kind: :main, agent_id: id} when id != "" ->

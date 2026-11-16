@@ -73,6 +73,21 @@ defmodule LemonCore.AgentRuntime.Provider do
   @callback session_history(session_key(), Path.t()) :: {:ok, [map()]} | {:error, term()}
 
   @doc """
+  Accept a stable-ID steer for an exact live run, acknowledging only after its
+  session journal append. A stale run is rejected without starting another run.
+  Unknown mutation outcomes must not be retried automatically.
+  """
+  @callback session_steer(session_key(), String.t(), String.t(), String.t()) ::
+              {:ok, %{id: String.t(), accepted_after_turn: non_neg_integer()}}
+              | {:error, atom()}
+
+  @doc "Withdraw a journaled steer only while it remains queued and unbound."
+  @callback session_withdraw_steer(session_key(), String.t()) :: :ok | {:error, atom()}
+
+  @doc "Read pending, unbound steers from the live session's acceptance journal."
+  @callback session_pending_steers(session_key()) :: {:ok, [map()]} | {:error, atom()}
+
+  @doc """
   Materializes the selected native branch's complete todo list, never its cache.
   The revision is `{branch_generation, governing_entry_id}`; stopped sessions
   have generation zero. It is not a cross-session identity or replay cursor.
@@ -291,6 +306,9 @@ defmodule LemonCore.AgentRuntime.Provider do
                       compact_session: 2,
                       native_session_owner: 1,
                       session_history: 2,
+                      session_steer: 4,
+                      session_withdraw_steer: 2,
+                      session_pending_steers: 1,
                       session_todos: 2,
                       session_recovery_snapshot: 2,
                       session_event_replay: 3,

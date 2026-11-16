@@ -7,7 +7,7 @@
  * no longer editable, and the editable queue is the feature — the user can
  * reorder their mind before the agent gets a chance to read it.
  *
- * Three states are distinguished because they fail differently:
+ * Local and daemon-owned states are distinguished because they fail differently:
  *   `queued-local`       waiting for the session's run to finish; ours to send.
  *   `waiting-connection` mirror of a `chat.send` the protocol client parked
  *                        while offline (see {@link ControlPlaneClient.queued}).
@@ -15,6 +15,8 @@
  *                        flushes it on reconnect — so it is shown, not edited.
  *   `needs-review`       a send may already have taken effect; requires an
  *                        explicit edit/review and is never automatically drained.
+ *   `accepted-steer`     journaled by the daemon; deletion must be acknowledged
+ *                        by its withdrawal RPC before this client removes it.
  *
  * The store is per session key: switching sessions must not hand one session's
  * backlog to another, and a background session whose run finishes drains its
@@ -24,7 +26,11 @@
 import type { PendingImage } from "../composer/images.ts";
 import { Emitter } from "./events.ts";
 
-export type QueueItemState = "queued-local" | "waiting-connection" | "needs-review";
+export type QueueItemState =
+	| "queued-local"
+	| "waiting-connection"
+	| "needs-review"
+	| "accepted-steer";
 
 export interface QueueItem {
 	/** Unique across the process; stable while the item sits in the queue. */
@@ -33,6 +39,8 @@ export interface QueueItem {
 	attachments?: readonly PendingImage[];
 	/** A possibly committed send: inspect this identity, never auto-replay it. */
 	submission?: { requestId: string; runId?: string };
+	/** Daemon-owned input: never edit or replay it as a local queued prompt. */
+	steer?: { messageId: string };
 	state: QueueItemState;
 	/** Wall-clock ms when the item was queued. */
 	at: number;
@@ -106,7 +114,10 @@ export class QueueStore {
 			at: Date.now(),
 			...(attachments.length ? { attachments } : {}),
 		};
-		this.#listFor(sessionKey).push(item);
+		const items = this.#listFor(sessionKey);
+		const firstSteer = items.findIndex((queued) => queued.state === "accepted-steer");
+		if (firstSteer < 0) items.push(item);
+		else items.splice(firstSteer, 0, item);
 		this.#changed(sessionKey);
 		return item;
 	}
@@ -114,6 +125,53 @@ export class QueueStore {
 	/** A refused/uncertain send stays inspectable, but must not auto-retry. */
 	restoreForReview(sessionKey: string, item: QueueItem): void {
 		this.#listFor(sessionKey).unshift({ ...item, state: "needs-review" });
+		this.#changed(sessionKey);
+	}
+
+	/** Mirror a journaled steer without taking ownership of its delivery. */
+	acceptSteer(sessionKey: string, messageId: string, text: string): void {
+		const items = this.#listFor(sessionKey);
+		const index = items.findIndex((item) => item.steer?.messageId === messageId);
+		const previous = items[index];
+		const item: QueueItem = {
+			id: previous?.id ?? nextQueueId(),
+			text,
+			at: previous?.at ?? Date.now(),
+			state: "accepted-steer",
+			steer: { messageId },
+		};
+		if (index < 0) items.push(item);
+		else items[index] = item;
+		this.#changed(sessionKey);
+	}
+
+	/** A complete read may prune old steers; a bounded partial read never may. */
+	reconcileSteers(
+		sessionKey: string,
+		steers: readonly { messageId: string; preview: string }[],
+		truncated: boolean,
+	): void {
+		const previous = this.items(sessionKey);
+		const byId = new Map(
+			previous.flatMap((item) => (item.steer ? [[item.steer.messageId, item] as const] : [])),
+		);
+		const ids = new Set(steers.map((steer) => steer.messageId));
+		const kept = previous.filter(
+			(item) =>
+				!item.steer ||
+				((truncated || item.submission !== undefined) && !ids.has(item.steer.messageId)),
+		);
+		for (const steer of steers) {
+			const old = byId.get(steer.messageId);
+			kept.push({
+				id: old?.id ?? nextQueueId(),
+				text: old?.text ?? steer.preview,
+				at: old?.at ?? Date.now(),
+				state: "accepted-steer",
+				steer: { messageId: steer.messageId },
+			});
+		}
+		this.#bySession.set(sessionKey, kept);
 		this.#changed(sessionKey);
 	}
 

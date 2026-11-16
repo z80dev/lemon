@@ -435,9 +435,9 @@ defmodule LemonAgent.Types do
     - `thinking_prompt` - Last classified user-prompt marker, retained across continuation
     - `resolved_thinking` - Concrete auto selection, reclamped without reclassifying on model switches
     - `on_thinking_resolved` - Internal cache callback; does not publish classifier events
-    - `get_steering_messages` - Returns messages to inject mid-run for steering
-    - `has_steering_messages` - Non-consuming queue peek used between tool calls
-    - `get_follow_up_messages` - Returns follow-up messages after agent would stop
+    - `get_steering_messages` - Standalone-loop callback for messages to inject mid-run
+    - `has_steering_messages` - Standalone-loop non-consuming peek at tool boundaries
+    - `get_follow_up_messages` - Standalone-loop callback after the agent would stop
     - `max_tool_concurrency` - Max concurrent tool calls (default 8; `nil` uses the default, `:infinity` opts out)
     - `max_tool_turns` - Max assistant turns that may execute tools before terminal fallback
     - `max_retries` - Single transient retry budget per response (default: 3; 0 disables);
@@ -455,7 +455,10 @@ defmodule LemonAgent.Types do
     - `budget` - Budget state, including run totals when continuing a prompt
     - `stream_options` - Options for streaming requests
     - `stream_fn` - Custom stream function (defaults to LemonAi.stream_simple/3)
-    - `hooks` - Optional prompt observation and stream-rule hooks:
+    - `hooks` - Optional queue transport, prompt observation and stream-rule hooks:
+      - `queue_owner` - Queue-owning Agent pid; takes precedence over standalone callbacks
+      - `queue_ref` - Active run's abort reference, binding requests and notifications
+      - `queue_timeout` - Queue reply deadline (default 30 minutes; `:infinity` opts out)
       - `emit_system_prompt` - Internal journal transport; the Agent consumes these
         snapshots without publishing them to ordinary subscribers (default false)
       - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
@@ -463,6 +466,16 @@ defmodule LemonAgent.Types do
       - `on_stream_rule` - Synchronous rule receipt/redirect callback; returns `:ok`
         only after durable acceptance, or `{:error, :injection_limit}` when spent
         (default nil)
+
+    With `hooks.queue_owner`, the loop sends
+    `{:loop_queue, loop_pid, request_ref, queue_ref, kind}` where `kind` is
+    `:steering`, `:has_steering` or `:follow_up`. The owner replies
+    `{:loop_queue, request_ref, result}` with a message list, or a boolean for
+    `:has_steering`. An empty `:follow_up` response must atomically close the run
+    only after checking both queues; input accepted later belongs to the next run.
+    Queue changes wake waiting tools with `{:lemon_steering_changed, queue_ref}`;
+    no timer polls the queue. Standalone callbacks are checked only at turn/tool
+    boundaries; callers needing immediate wakeup use the same notification.
     """
     @type convert_to_llm_fn ::
             ([LemonAgent.Types.agent_message()] ->
@@ -500,6 +513,9 @@ defmodule LemonAgent.Types do
                {:ok, LemonAi.EventStream.t()} | LemonAi.EventStream.t() | {:error, term()})
 
     @type hooks :: %{
+            optional(:queue_owner) => pid() | nil,
+            optional(:queue_ref) => reference() | nil,
+            optional(:queue_timeout) => timeout(),
             optional(:emit_system_prompt) => boolean(),
             optional(:stream_rules) => [map()] | (-> [map()]),
             optional(:on_stream_rule) => (map() -> :ok | {:error, term()}) | nil

@@ -53,8 +53,6 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
   use ExUnit.Case, async: false
 
-  import CodingAgent.AsyncHelpers
-
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
@@ -212,13 +210,6 @@ defmodule CodingAgent.SessionRecalledContextTest do
   # can be read before a run consumes it.
   defp agent_queues(session) do
     :sys.get_state(Session.get_state(session).agent)
-  end
-
-  # `steer/2` and `follow_up/2` are casts; wait until the agent has the message.
-  defp await_queue(session, queue) do
-    assert_eventually(fn -> Map.fetch!(agent_queues(session), queue) != [] end,
-      message: "agent never received #{queue} message"
-    )
   end
 
   defp transcript_contents(session) do
@@ -498,7 +489,6 @@ defmodule CodingAgent.SessionRecalledContextTest do
       session = start_session()
 
       :ok = Session.steer(session, "actually, stop")
-      await_queue(session, :steering_queue)
 
       assert [%{message: %UserMessage{content: sent}}] = agent_queues(session).steering_queue
       assert sent =~ @volatile.body
@@ -510,10 +500,17 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
     test "follow_up hands the agent the attached message and queues the clean one" do
       Contributor.answer([@stable, @volatile])
-      session = start_session()
+
+      session =
+        start_session(
+          stream_fn: Mocks.blocking_stream_fn(Mocks.assistant_message("done"), self())
+        )
+
+      :ok = Session.prompt(session, "hold this turn")
+      assert_receive {:stream_blocked, producer}, 5_000
+      on_exit(fn -> send(producer, :release_stream) end)
 
       :ok = Session.follow_up(session, "and then deploy")
-      await_queue(session, :follow_up_queue)
 
       assert [%{message: %UserMessage{content: sent}}] = agent_queues(session).follow_up_queue
       assert sent =~ @volatile.body
@@ -521,6 +518,8 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       assert [%UserMessage{content: "and then deploy"}] =
                :queue.to_list(Session.get_state(session).follow_up_queue)
+
+      send(producer, :release_stream)
     end
 
     test "steer with nothing contributed sends the text unchanged" do
@@ -528,7 +527,6 @@ defmodule CodingAgent.SessionRecalledContextTest do
       session = start_session()
 
       :ok = Session.steer(session, "actually, stop")
-      await_queue(session, :steering_queue)
 
       assert [%{message: %UserMessage{content: "actually, stop"}}] =
                agent_queues(session).steering_queue
@@ -757,7 +755,10 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
   defp assert_stripped_error_event(mode, partial_state) do
     Contributor.answer([@stable, @volatile])
-    session = start_session(session_mode: mode)
+    # Keep full AgentState coverage without embedding executable tool closures
+    # in this synthetic error payload. Real coding errors project messages only.
+    opts = if mode == :chat, do: [session_mode: mode, tools: []], else: [session_mode: mode]
+    session = start_session(opts)
     unsubscribe = Session.subscribe(session)
 
     :ok = Session.prompt(session, "why is the build slow?")

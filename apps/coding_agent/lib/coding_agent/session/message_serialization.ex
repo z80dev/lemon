@@ -18,6 +18,7 @@ defmodule CodingAgent.Session.MessageSerialization do
       "content" => serialize_content(msg.content),
       "timestamp" => msg.timestamp
     }
+    |> put_id(Map.get(msg, :id), "id")
   end
 
   def serialize_message(%LemonAi.Types.AssistantMessage{} = msg) do
@@ -58,11 +59,18 @@ defmodule CodingAgent.Session.MessageSerialization do
       "details" => normalize_map_keys(msg.details),
       "timestamp" => msg.timestamp
     }
+    |> put_id(Map.get(msg, :id), "id")
   end
 
   def serialize_message(msg) when is_map(msg) do
     msg
   end
+
+  defp put_id(message, nil, _key), do: message
+  defp put_id(message, id, key), do: Map.put(message, key, id)
+
+  defp input_id(%{"lemonInput" => %{"id" => id}}), do: id
+  defp input_id(_details), do: nil
 
   @spec serialize_content(String.t() | list()) :: String.t() | list()
   def serialize_content(nil), do: ""
@@ -188,6 +196,7 @@ defmodule CodingAgent.Session.MessageSerialization do
       content: deserialize_content(msg["content"]),
       timestamp: msg["timestamp"] || 0
     }
+    |> put_id(msg["id"], :id)
   end
 
   def deserialize_message(%{"role" => "assistant"} = msg) do
@@ -229,6 +238,7 @@ defmodule CodingAgent.Session.MessageSerialization do
       details: msg["details"],
       timestamp: msg["timestamp"] || 0
     }
+    |> put_id(msg["id"] || input_id(msg["details"]), :id)
   end
 
   def deserialize_message(%{"role" => "branch_summary"} = msg) do
