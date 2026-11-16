@@ -44,6 +44,7 @@ defmodule LemonMemory.Store do
   @default_retention_ms 30 * 24 * 60 * 60 * 1000
   @default_max_per_scope 500
   @sweep_interval_ms 15 * 60 * 1000
+  @transfer_timeout_ms 5_000
   @filename "memory.sqlite3"
 
   @schema_sql """
@@ -644,7 +645,16 @@ defmodule LemonMemory.Store do
   defp owner_query(:legacy), do: {:ok, "legacy", nil}
   defp owner_query(_), do: {:error, :invalid_memory_scope}
 
-  @doc "Read an exact profile/home snapshot inside the Store serialization boundary."
+  @doc """
+  Read an exact profile/home snapshot inside the Store serialization boundary.
+  Transfer calls wait at most five seconds, including queueing behind SQLite work.
+  A timeout does not cancel queued work; journal mutations must be reconciled by
+  their fixed key, never retried as a new operation.
+
+  Snapshot callbacks run in a supervised worker over immutable documents. The
+  Store retains its SQLite transaction and defers ordinary operations until that
+  worker completes; aggregate stats and OTP status remain responsive meanwhile.
+  """
   def transfer_snapshot(server, agent_id, home_digest, fun) do
     transfer_call(server, {:transfer_snapshot, agent_id, home_digest, fun})
   end
@@ -661,19 +671,22 @@ defmodule LemonMemory.Store do
   Local `:boundary` and `:rollback` callbacks run on the Store process; the
   boundary owns filesystem locks across publication, commit and known rollback.
   A failed/uncertain commit leaves the prior durable intent pending, never replayed.
+  A five-second call timeout returns `{:error, :transfer_pending}`: publication
+  or commit may still complete, so callers must reconcile the durable receipt
+  rather than infer rollback or replay the import.
   """
   def transfer_import(server, agent, home, revisions, docs, key, receipt, publish, opts \\ []) do
     GenServer.call(
       server,
       {:transfer_import, agent, home, revisions, docs, key, receipt, publish, opts},
-      :infinity
+      @transfer_timeout_ms
     )
   catch
     :exit, _ -> {:error, :transfer_pending}
   end
 
   defp transfer_call(server, message) do
-    GenServer.call(server, message, :infinity)
+    GenServer.call(server, message, @transfer_timeout_ms)
   catch
     :exit, _ -> {:error, :memory_unavailable}
   end
@@ -884,6 +897,10 @@ defmodule LemonMemory.Store do
          stmts: stmts,
          path: path,
          retention_ms: retention_ms,
+         snapshot_task: nil,
+         snapshot_from: nil,
+         deferred: :queue.new(),
+         task_supervisor: Keyword.get(config, :task_supervisor, LemonMemory.TaskSupervisor),
          max_per_scope: max_per_scope
        }}
     else
@@ -894,6 +911,10 @@ defmodule LemonMemory.Store do
   end
 
   @impl true
+  def handle_cast(message, %{snapshot_task: %Task{}} = state) do
+    {:noreply, %{state | deferred: :queue.in({:cast, message}, state.deferred)}}
+  end
+
   def handle_cast({:put, doc}, state) do
     case do_put(state, doc) do
       :ok ->
@@ -940,6 +961,10 @@ defmodule LemonMemory.Store do
     )
 
     {:noreply, state}
+  end
+
+  def handle_call(message, from, %{snapshot_task: %Task{}} = state) when message != :stats do
+    {:noreply, %{state | deferred: :queue.in({:call, message, from}, state.deferred)}}
   end
 
   def handle_call({:owned_recent, params}, _from, state),
@@ -1032,13 +1057,22 @@ defmodule LemonMemory.Store do
     {:reply, result, state}
   end
 
-  def handle_call({:transfer_snapshot, agent, home, fun}, _from, state) do
-    result =
-      transfer_transaction(state, fn ->
-        with {:ok, docs} <- transfer_documents(state, agent, home), do: fun.(docs)
-      end)
+  def handle_call({:transfer_snapshot, agent, home, fun}, from, state) do
+    case Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
+      :ok ->
+        case transfer_documents(state, agent, home) do
+          {:ok, docs} ->
+            start_snapshot(state, from, fn -> fun.(docs) end)
 
-    {:reply, result, state}
+          error ->
+            {:reply, finish_transfer_transaction(state, error), state}
+        end
+
+      error ->
+        {:reply, error, state}
+    end
+  rescue
+    _ -> {:reply, finish_transfer_transaction(state, {:error, :memory_unavailable}), state}
   end
 
   def handle_call(
@@ -1179,6 +1213,23 @@ defmodule LemonMemory.Store do
   end
 
   @impl true
+  def handle_info({ref, result}, %{snapshot_task: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    finish_snapshot(state, result)
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{snapshot_task: %Task{ref: ref}} = state
+      ) do
+    finish_snapshot(state, {:error, :memory_unavailable})
+  end
+
+  def handle_info(:sweep, %{snapshot_task: %Task{}} = state) do
+    schedule_sweep()
+    {:noreply, state}
+  end
+
   def handle_info(:sweep, state) do
     sweep_old_documents(state)
     schedule_sweep()
@@ -1188,7 +1239,43 @@ defmodule LemonMemory.Store do
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
+  def handle_continue(:drain_deferred, state) do
+    case :queue.out(state.deferred) do
+      {:empty, _queue} ->
+        {:noreply, state}
+
+      {{:value, message}, queue} ->
+        state = %{state | deferred: queue}
+
+        result =
+          case message do
+            {:call, message, from} ->
+              case handle_call(message, from, state) do
+                {:reply, reply, state} ->
+                  GenServer.reply(from, reply)
+                  {:noreply, state}
+
+                result ->
+                  result
+              end
+
+            {:cast, message} ->
+              handle_cast(message, state)
+          end
+
+        case result do
+          {:noreply, %{snapshot_task: nil} = state} ->
+            {:noreply, state, {:continue, :drain_deferred}}
+
+          result ->
+            result
+        end
+    end
+  end
+
+  @impl true
   def terminate(_reason, state) do
+    if state.snapshot_task, do: Process.exit(state.snapshot_task.pid, :kill)
     _ = Sqlite3.close(state.conn)
     :ok
   rescue
@@ -1196,6 +1283,32 @@ defmodule LemonMemory.Store do
   end
 
   # ── Private helpers ────────────────────────────────────────────────────────────
+  defp start_snapshot(state, from, fun) do
+    task =
+      Task.Supervisor.async_nolink(state.task_supervisor, fn ->
+        try do
+          fun.()
+        rescue
+          _ -> {:error, :memory_unavailable}
+        catch
+          _, _ -> {:error, :memory_unavailable}
+        end
+      end)
+
+    {:noreply, %{state | snapshot_task: task, snapshot_from: from}}
+  rescue
+    _ -> {:reply, finish_transfer_transaction(state, {:error, :memory_unavailable}), state}
+  catch
+    :exit, _ -> {:reply, finish_transfer_transaction(state, {:error, :memory_unavailable}), state}
+  end
+
+  defp finish_snapshot(state, result) do
+    result = finish_transfer_transaction(state, result)
+    GenServer.reply(state.snapshot_from, result)
+    state = %{state | snapshot_task: nil, snapshot_from: nil}
+    {:noreply, state, {:continue, :drain_deferred}}
+  end
+
   defp transfer_documents(state, agent, home) do
     with {:ok, docs} <- do_query_result(state, state.stmts.get_by_agent, [agent, 2001]),
          true <- length(docs) <= 2000 do
@@ -1270,25 +1383,7 @@ defmodule LemonMemory.Store do
 
   defp transfer_transaction(state, fun) do
     with :ok <- Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
-      result = fun.()
-
-      case result do
-        {:ok, _} ->
-          case Sqlite3.execute(state.conn, "COMMIT") do
-            :ok ->
-              result
-
-            _ ->
-              _ = Sqlite3.execute(state.conn, "ROLLBACK")
-              {:error, :transfer_pending}
-          end
-
-        _ ->
-          case Sqlite3.execute(state.conn, "ROLLBACK") do
-            :ok -> result
-            _ -> {:error, :transfer_pending}
-          end
-      end
+      finish_transfer_transaction(state, fun.())
     end
   rescue
     _ ->
@@ -1296,6 +1391,24 @@ defmodule LemonMemory.Store do
         :ok -> {:error, :memory_unavailable}
         _ -> {:error, :transfer_pending}
       end
+  end
+
+  defp finish_transfer_transaction(state, {:ok, _} = result) do
+    case Sqlite3.execute(state.conn, "COMMIT") do
+      :ok ->
+        result
+
+      _ ->
+        _ = Sqlite3.execute(state.conn, "ROLLBACK")
+        {:error, :transfer_pending}
+    end
+  end
+
+  defp finish_transfer_transaction(state, result) do
+    case Sqlite3.execute(state.conn, "ROLLBACK") do
+      :ok -> result
+      _ -> {:error, :transfer_pending}
+    end
   end
 
   defp transfer_delete_rows(state, docs) do

@@ -47,6 +47,9 @@ defmodule CodingAgent.Session.UserPrompt do
   `html_forms: true`, so a surface that cannot render forms never waits on one.
   """
   def request(session_key, run_id, questions, opts \\ []) do
+    # Human response time is intentionally unbounded by default. The callback
+    # only registers a monitored waiter; surface/caller death, cancellation and
+    # the caller's :timeout_ms policy settle it without blocking the server.
     GenServer.call(__MODULE__, {:request, session_key, run_id, questions, opts}, :infinity)
   catch
     :exit, _ -> {:error, :client_down}

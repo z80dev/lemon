@@ -18,6 +18,34 @@ defmodule LemonControlPlane.Methods.KnowledgeMethodsTest do
     conn_pid: nil
   }
 
+  defmodule RefreshUnavailableSource do
+    use GenServer
+
+    def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+
+    @impl true
+    def init(state), do: {:ok, state}
+
+    @impl true
+    def handle_call(:refresh, _from, state),
+      do: {:reply, {:error, :task_capacity_reached}, state}
+  end
+
+  test "bounded MCP refresh worker failures return unavailable rather than crashing" do
+    previous = Application.get_env(:lemon_control_plane, :mcp_source)
+    start_supervised!(RefreshUnavailableSource)
+    Application.put_env(:lemon_control_plane, :mcp_source, RefreshUnavailableSource)
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:lemon_control_plane, :mcp_source),
+        else: Application.put_env(:lemon_control_plane, :mcp_source, previous)
+    end)
+
+    assert {:error, {:unavailable, "MCP refresh is unavailable"}} =
+             call("mcp.servers.refresh", %{})
+  end
+
   defp call(method, params, ctx \\ @operator),
     do: Registry.dispatch(method, params, Map.put(ctx, :conn_pid, self()))
 

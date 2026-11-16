@@ -41,6 +41,35 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
     @impl true
     def list(%{failure: {:list, table}}, table), do: {:error, :injected_resume_failure}
 
+    def list(%{failure: {:block_list, table, owner, token}} = state, table) do
+      store = self()
+
+      # Release through a one-shot relay: normal completion and teardown may
+      # both release the gate, but Store must receive exactly one such message.
+      gate =
+        spawn(fn ->
+          store_ref = Process.monitor(store)
+          owner_ref = Process.monitor(owner)
+
+          receive do
+            {:release_startup_scan, ^token} ->
+              send(store, {:release_startup_scan, token})
+
+            {:DOWN, ^owner_ref, :process, ^owner, _reason} ->
+              send(store, {:release_startup_scan, token})
+
+            {:DOWN, ^store_ref, :process, ^store, _reason} ->
+              :ok
+          end
+        end)
+
+      send(owner, {:startup_scan_entered, gate, token})
+
+      receive do
+        {:release_startup_scan, ^token} -> list(%{state | failure: nil}, table)
+      end
+    end
+
     def list(%{failure: {:list_after, table, 0}}, table),
       do: {:error, :injected_resume_failure}
 
@@ -101,6 +130,100 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
     %{now: now, paused_at: paused_at}
   end
 
+  for table <- [:cron_jobs, :cron_runs] do
+    @startup_scan_table table
+    test "slow durable #{@startup_scan_table} startup keeps manager status responsive and serializes inventory mutations",
+         context do
+      job = store_job("slow_startup_inventory", context.now + 3_600_000, false)
+      token = make_ref()
+      inject({:block_list, @startup_scan_table, self(), token})
+      {:ok, manager} = GenServer.start_link(CronManager, [])
+
+      assert_receive {:startup_scan_entered, gate, ^token}, 1_000
+
+      on_exit(fn ->
+        send(gate, {:release_startup_scan, token})
+        if Process.alive?(manager), do: GenServer.stop(manager)
+      end)
+
+      assert {:status, ^manager, _, _} = :sys.get_status(manager, 1_000)
+
+      assert {:ok, %{paused: true, restoration_pending: true}} =
+               GenServer.call(manager, :pause_status, 1_000)
+
+      # Calls queue in manager order rather than observing an empty inventory or
+      # having a mutation overwritten by the restoration worker's stale snapshot.
+      inventory = :gen_server.send_request(manager, :list)
+
+      mutation =
+        :gen_server.send_request(manager, {:update, job.id, %{name: "updated while loading"}})
+
+      state = :sys.get_state(manager, 1_000)
+      assert :queue.len(state.restoration_deferred) == 2
+      assert :gen_server.wait_response(inventory, 0) == :timeout
+      assert :gen_server.wait_response(mutation, 0) == :timeout
+
+      send(gate, {:release_startup_scan, token})
+      assert {:reply, [%CronJob{id: id}]} = :gen_server.receive_response(inventory, 1_000)
+      assert id == job.id
+      assert {:reply, {:ok, updated}} = :gen_server.receive_response(mutation, 1_000)
+      assert updated.name == "updated while loading"
+      refute :sys.get_state(manager).restoration_pending
+      assert CronStore.get_job(job.id).name == updated.name
+    end
+  end
+
+  test "startup restoration worker death keeps status responsive and recovers in process",
+       context do
+    job = store_job("startup_worker_death", context.now + 3_600_000, false)
+    token = make_ref()
+    inject({:block_list, :cron_jobs, self(), token})
+    {:ok, manager} = GenServer.start_link(CronManager, [])
+    assert_receive {:startup_scan_entered, gate, ^token}, 1_000
+
+    on_exit(fn ->
+      send(gate, {:release_startup_scan, token})
+      if Process.alive?(manager), do: GenServer.stop(manager)
+    end)
+
+    worker = :sys.get_state(manager, 1_000).restoration_task.pid
+    ref = Process.monitor(worker)
+    Process.exit(worker, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^worker, :killed}, 1_000
+    assert {:status, ^manager, _, _} = :sys.get_status(manager, 1_000)
+
+    assert {:ok, %{paused: true, restoration_pending: true}} =
+             GenServer.call(manager, :pause_status, 1_000)
+
+    send(gate, {:release_startup_scan, token})
+    send(manager, :restore_schedules)
+    assert eventually(fn -> not :sys.get_state(manager, 1_000).restoration_pending end)
+    assert [%CronJob{id: id}] = GenServer.call(manager, :list, 1_000)
+    assert id == job.id
+  end
+
+  test "startup worker admission failure keeps calls queued until readiness", context do
+    job = store_job("startup_worker_admission", context.now + 3_600_000, false)
+
+    {:ok, manager} =
+      GenServer.start_link(CronManager, task_supervisor: __MODULE__.MissingTaskSupervisor)
+
+    on_exit(fn -> if Process.alive?(manager), do: GenServer.stop(manager) end)
+    assert {:status, ^manager, _, _} = :sys.get_status(manager, 1_000)
+    assert {:error, :store_unavailable} = GenServer.call(manager, :pause_status, 1_000)
+    inventory = :gen_server.send_request(manager, :list)
+    state = :sys.get_state(manager, 1_000)
+    assert state.restoration_initial
+    assert state.restoration_task == nil
+    assert :queue.len(state.restoration_deferred) == 1
+
+    :sys.replace_state(manager, &%{&1 | task_supervisor: LemonAutomation.TaskSupervisor})
+    send(manager, :restore_schedules)
+    assert {:reply, [%CronJob{id: id}]} = :gen_server.receive_response(inventory, 1_000)
+    assert id == job.id
+    refute :sys.get_state(manager).restoration_pending
+  end
+
   test "strict job enumeration distinguishes unavailable storage from an empty inventory" do
     assert {:ok, []} = CronStore.list_jobs_result()
     inject({:list, :cron_jobs})
@@ -116,7 +239,7 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
     source = pending_retry(id, due)
 
     inject({:list, :cron_jobs})
-    {:ok, restarted} = CronManager.init([])
+    {:ok, restarted} = initialized_manager()
     assert restarted.jobs == %{}
     assert restarted.restoration_pending
 
@@ -151,7 +274,7 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
 
     # The default catch-up policy on a later restart cannot recover either
     # missed occurrence after the marker has been cleared.
-    {:ok, after_resume} = CronManager.init([])
+    {:ok, after_resume} = initialized_manager()
     assert after_resume.jobs[id].next_run_at_ms == resumed.jobs[id].next_run_at_ms
     refute Map.has_key?(after_resume.catch_up_slots, id)
     assert_held(after_resume, id)
@@ -174,17 +297,14 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
 
       inject(startup_failure_operation(failure, once, id))
 
-      assert {:ok, pending} = CronManager.init([])
+      assert {:ok, pending} = initialized_manager()
       assert pending.restoration_pending
       assert is_reference(pending.restoration_timer)
       assert pending.restoration_backoff_ms == 500
       assert pending.jobs[id].next_run_at_ms == due
       assert CronStore.get_job(id).next_run_at_ms == due
 
-      if failure == :durable_skip do
-        assert {:ok, nil} = CronStore.global_pause()
-        assert_pending_status(pending, true)
-      end
+      assert_startup_failure_status(failure, pending)
 
       assert_held(pending, id)
 
@@ -221,7 +341,7 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
     :ok = CronStore.clear_global_pause()
     inject({:get, :cron_settings, :global_pause})
 
-    assert {:ok, pending} = CronManager.init(task_supervisor: tasks)
+    assert {:ok, pending} = initialized_manager(task_supervisor: tasks)
     assert pending.restoration_pending
     assert CronStore.get_run(retry_id) == nil
 
@@ -232,6 +352,8 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
     refute_receive {:cron_submit, ^id, _, _}, 20
 
     assert {:noreply, restored} = restore_schedules(pending)
+    if restored.retry_timer, do: Process.cancel_timer(restored.retry_timer)
+    assert {:noreply, restored} = CronManager.handle_info(:retry_tick, restored)
     refute restored.restoration_pending
     assert_receive {:cron_submit, ^id, ^retry_id, :retry}, 1_000
     assert %CronRun{triggered_by: :retry} = CronStore.get_run(retry_id)
@@ -239,7 +361,7 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
 
   test "restoration retries back off from 250 milliseconds to a five-second cap" do
     inject({:get, :cron_settings, :global_pause})
-    assert {:ok, pending} = CronManager.init([])
+    assert {:ok, pending} = initialized_manager()
     assert pending.restoration_pending
     assert is_reference(pending.restoration_timer)
     assert pending.restoration_backoff_ms == 500
@@ -282,8 +404,7 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
       assert initial.task_supervisor == __MODULE__.RecoveryTaskSupervisor
       assert {:ok, nil} = CronStore.global_pause()
 
-      assert {:ok, %{paused: false, paused_at_ms: nil, restoration_pending: true}} =
-               GenServer.call(manager, :pause_status)
+      assert_live_pending_status(manager)
 
       GenServer.cast(manager, :tick)
       send(manager, :retry_tick)
@@ -301,8 +422,7 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
       pending = :sys.get_state(manager)
       assert pending.restoration_pending
 
-      assert {:ok, %{paused: false, restoration_pending: true}} =
-               GenServer.call(manager, :pause_status)
+      assert_live_pending_status(manager)
 
       refute pending.restoration_timer == initial.restoration_timer
       assert CronStore.get_job(id).next_run_at_ms == due
@@ -311,11 +431,15 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
       assert_sibling_responds(sibling)
 
       inject(nil)
-      # Deliver the retry explicitly, then use the server mailbox as a barrier.
+      # Deliver the retry explicitly and wait for its monitored restoration.
       send(manager, :restore_schedules)
 
-      assert {:ok, %{paused: false, restoration_pending: false}} =
-               GenServer.call(manager, :pause_status)
+      assert eventually(fn ->
+               match?(
+                 {:ok, %{paused: false, restoration_pending: false}},
+                 GenServer.call(manager, :pause_status)
+               )
+             end)
 
       restored = :sys.get_state(manager)
       assert_recovered_skip(restored, id, due, once, context.now)
@@ -373,7 +497,7 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
       retry_job_id = id <> "_retry"
       store_job(retry_job_id, context.now + 3_600_000, false)
       source = pending_retry(retry_job_id, due)
-      {:ok, state} = CronManager.init([])
+      {:ok, state} = initialized_manager()
 
       inject(failure_operation(failure, id, source.id))
 
@@ -387,7 +511,7 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
       # cannot turn the failed resume into catch-up dispatch in either lane.
       inject(nil)
       assert_held(state, id)
-      {:ok, restarted} = CronManager.init([])
+      {:ok, restarted} = initialized_manager()
       assert_held(restarted, id)
       assert {:ok, %{paused_at_ms: ^paused_at}} = CronStore.global_pause()
       assert CronStore.get_run(CronStore.scheduled_run_id(id, job.next_run_at_ms)) == nil
@@ -419,9 +543,33 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
 
   defp failure_operation(:retry_abandonment, _id, source_id), do: {:put, :cron_runs, source_id}
 
+  defp initialized_manager(opts \\ []) do
+    {:ok, state, {:continue, :restore_startup}} = CronManager.init(opts)
+    {:noreply, state} = CronManager.handle_continue(:restore_startup, state)
+    {:noreply, state} = await_restoration(state)
+    {:ok, state}
+  end
+
   defp restore_schedules(state) do
     if state.restoration_timer, do: Process.cancel_timer(state.restoration_timer)
-    CronManager.handle_info(:restore_schedules, state)
+    {:noreply, state} = CronManager.handle_info(:restore_schedules, state)
+    await_restoration(state)
+  end
+
+  defp await_restoration(state) do
+    ref = state.restoration_task.ref
+    token = state.restoration_token
+
+    receive do
+      {:restoration_pause, ^token, result} ->
+        {:noreply, state} = CronManager.handle_info({:restoration_pause, token, result}, state)
+        await_restoration(state)
+
+      {^ref, result} ->
+        CronManager.handle_info({ref, result}, state)
+    after
+      5_000 -> flunk("startup restoration did not finish")
+    end
   end
 
   defp assert_recovered_skip(state, id, due, once, now) do
@@ -495,6 +643,22 @@ defmodule LemonAutomation.CronManagerPauseFailureTest do
     token = make_ref()
     assert {:ok, _} = Task.Supervisor.start_child(sibling, fn -> send(test_pid, token) end)
     assert_receive ^token, 1_000
+  end
+
+  defp assert_startup_failure_status(:marker_read, _state), do: :ok
+
+  defp assert_startup_failure_status(:durable_skip, state) do
+    assert {:ok, nil} = CronStore.global_pause()
+    assert_pending_status(state, true)
+  end
+
+  defp assert_live_pending_status(manager) do
+    assert eventually(fn ->
+             match?(
+               {:ok, %{paused: false, paused_at_ms: nil, restoration_pending: true}},
+               GenServer.call(manager, :pause_status, 1_000)
+             )
+           end)
   end
 
   defp assert_pending_status(state, pending?) do
