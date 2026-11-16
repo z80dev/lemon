@@ -19,9 +19,30 @@ defmodule CodingAgent.ExecutionNode.Worker do
   `services`, separate from per-connection and per-invocation state, so state
   transitions share their configuration and keep the worker struct within the
   BEAM's small-map representation.
+
+  ## Link transitions
+
+  | State | Event | Next state / action |
+  | --- | --- | --- |
+  | `:connecting` | Authenticated hello with the expected node ID | `:online` |
+  | `:connecting` / `:reconnecting` | Pairing response | Advance the existing pairing exchange; never replay an uncertain invite |
+  | `:online` | Targeted invocation / control / cancellation | Stay online; preserve invocation binding |
+  | Any connected state | Disconnect or transient connect failure | `:reconnecting`; cancel all destination work |
+  | Any connected state | Credential rejection or identity mismatch | `{:parked, kind, reason}`; cancel work and stop the socket |
+  | Parked | Credential-watch state timeout, changed saved token | `:connecting` with the replacement credential |
+  | Parked | Reprobe timeout | `:connecting` with the current credential, or rearm while parked |
+  | Parked | Unchanged or unavailable saved credential | Stay parked and rearm the credential watch |
+  | Any state | Current socket exits / worker stops | Stop and cancel all destination work |
+
+  Only `:online` admits node events. Reconnecting never resumes disconnected
+  invocations, and messages from replaced sockets are ignored. The credential
+  watch uses `state_timeout`, so unrelated traffic cannot postpone it and leaving
+  the parked state cancels it. The independent reprobe uses a named generic
+  timeout, explicitly cancelled when credentials resume the connection. Neither
+  deadline is stored as a timer reference in the worker data.
   """
 
-  use GenServer
+  @behaviour :gen_statem
 
   require Logger
 
@@ -156,10 +177,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :watch_interval_ms,
     :probe_interval_ms,
     :rejected_fingerprint,
-    :watch_timer,
-    :probe_timer,
     services: %{execution_capabilities: :all},
-    link_state: :connecting,
     shells: %{},
     process_tasks: %{},
     capability_probe: nil,
@@ -167,14 +185,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
     run_refs: %{}
   ]
 
-  @spec start_link(keyword()) :: GenServer.on_start()
+  @spec start_link(keyword()) :: :gen_statem.start_ret()
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts)
+    :gen_statem.start_link(__MODULE__, opts, [])
   end
+
+  def child_spec(opts) do
+    %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
+  end
+
+  @impl true
+  def callback_mode, do: :handle_event_function
 
   @doc "Returns the current link state of the worker (:connecting | :online | :reconnecting | {:parked, kind, reason})."
   def link_state(worker) when is_pid(worker) or is_atom(worker) do
-    GenServer.call(worker, :get_link_state)
+    :gen_statem.call(worker, :get_link_state)
   end
 
   @impl true
@@ -188,10 +213,14 @@ defmodule CodingAgent.ExecutionNode.Worker do
              Keyword.get(opts, :allow_insecure_controller, false)
            ),
          {:ok, default_cwd} <- existing_directory(Keyword.get(opts, :cwd, File.cwd!())),
-         {:ok, state} <- build_state(opts, name, controller, default_cwd),
-         {:ok, state} <- connect_initial(state, opts) do
+         {:ok, state} <- build_state(opts, name, controller, default_cwd) do
       :ok = Bus.subscribe("exec_approvals")
-      {:ok, state}
+
+      case connect_initial(state, opts) do
+        {:ok, state} -> {:ok, :connecting, state}
+        {:next_state, link_state, state, actions} -> {:ok, link_state, state, actions}
+        {:error, reason} -> {:stop, reason}
+      end
     else
       {:error, reason} -> {:stop, reason}
     end
@@ -227,8 +256,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
        max_payload_bytes: LemonCore.JSONPayload.default_max_bytes(),
        token_opt: Keyword.get(opts, :token),
        watch_interval_ms: Keyword.get(opts, :watch_interval_ms),
-       probe_interval_ms: Keyword.get(opts, :probe_interval_ms),
-       link_state: :connecting
+       probe_interval_ms: Keyword.get(opts, :probe_interval_ms)
      }}
   end
 
@@ -249,16 +277,16 @@ defmodule CodingAgent.ExecutionNode.Worker do
           connect_authenticated(state, token, expected_node_id)
 
         {:error, :missing_node_token} ->
-          {:ok, park(state, {:needs_enrollment, "credential_missing"})}
+          park(state, {:needs_enrollment, "credential_missing"})
 
         {:error, :stored_token_controller_mismatch} ->
-          {:ok, park(state, {:needs_enrollment, "controller_mismatch"})}
+          park(state, {:needs_enrollment, "controller_mismatch"})
 
         {:error, :stored_token_missing_node_id} ->
-          {:ok, park(state, {:needs_enrollment, "credential_unreadable"})}
+          park(state, {:needs_enrollment, "credential_unreadable"})
 
         {:error, {:token_load_failed, _reason}} ->
-          {:ok, park(state, {:needs_enrollment, "credential_unreadable"})}
+          park(state, {:needs_enrollment, "credential_unreadable"})
       end
     end
   end
@@ -293,15 +321,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
        %{
          state
          | current_token: token,
-           expected_node_id: expected_node_id,
-           link_state: :connecting
+           expected_node_id: expected_node_id
        }}
     end
-  end
-
-  @impl true
-  def handle_call(:get_link_state, _from, state) do
-    {:reply, state.link_state, state}
   end
 
   defp start_socket(state, mode, connect_params) do
@@ -319,16 +341,20 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   @impl true
-  def handle_info(
+  def handle_event(
+        :info,
         {:execution_node_socket, socket, {:connected, _hello}},
+        _link_state,
         %{socket: socket, socket_mode: :pairing, invite_code: code, pairing_stage: stage} = state
       )
       when is_binary(code) and not is_nil(stage) do
     {:stop, {:pairing_failed, :outcome_unknown}, state}
   end
 
-  def handle_info(
+  def handle_event(
+        :info,
         {:execution_node_socket, socket, {:connected, hello}},
+        _link_state,
         %{socket: socket} = state
       ) do
     case state.socket_mode do
@@ -336,7 +362,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         state = update_payload_limit(state, hello)
         state = resume_pairing(state)
         notify(state, {:status, :pairing})
-        {:noreply, state}
+        {:keep_state, state}
 
       :node ->
         state = update_payload_limit(state, hello)
@@ -344,65 +370,77 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         cond do
           not is_binary(node_id) or node_id == "" ->
-            {:noreply, park(state, {:needs_reauthorization, "node_identity_mismatch"})}
+            park(state, {:needs_reauthorization, "node_identity_mismatch"})
 
           is_binary(state.expected_node_id) and state.expected_node_id != node_id ->
-            {:noreply, park(state, {:needs_reauthorization, "node_identity_mismatch"})}
+            park(state, {:needs_reauthorization, "node_identity_mismatch"})
 
           true ->
-            state = cancel_timers(state)
-            state = %{state | link_state: :online, node_id: node_id, rejected_fingerprint: nil}
+            state = %{state | node_id: node_id, rejected_fingerprint: nil}
             write_status(state, "online", nil, node_id)
             notify(state, {:status, :online, node_id})
-            {:noreply, state}
+            {:next_state, :online, state}
         end
     end
   end
 
-  def handle_info(
+  def handle_event(
+        :info,
         {:execution_node_socket, socket, {:response, tag, result}},
+        _link_state,
         %{socket: socket} = state
       ) do
     handle_socket_response(tag, result, state)
   end
 
-  def handle_info(
+  def handle_event(
+        :info,
         {:execution_node_socket, socket, {:event, event, payload}},
+        :online,
         %{socket: socket, socket_mode: :node} = state
       ) do
     handle_node_event(event, payload, state)
   end
 
-  def handle_info(
+  def handle_event(
+        :info,
         {:execution_node_socket, socket, {:disconnected, _reason}},
+        _link_state,
         %{socket: socket, socket_mode: :pairing, invite_code: code} = state
       )
       when is_binary(code) do
     {:stop, {:pairing_failed, :outcome_unknown}, state}
   end
 
-  def handle_info(
+  def handle_event(
+        :info,
         {:execution_node_socket, socket, {:connect_retry, _code}},
+        _link_state,
         %{socket: socket} = state
       ) do
+    state = cancel_all_invocations(state)
     notify(state, {:status, :reconnecting})
     write_status(state, "reconnecting", nil, state.node_id)
-    {:noreply, %{state | link_state: :reconnecting}}
+    {:next_state, :reconnecting, %{state | node_id: nil}}
   end
 
-  def handle_info(
+  def handle_event(
+        :info,
         {:execution_node_socket, socket, {:disconnected, reason}},
+        _link_state,
         %{socket: socket} = state
       ) do
     state = cancel_all_invocations(state)
     notify(state, {:status, :reconnecting})
     write_status(state, "reconnecting", nil, nil)
     Logger.warning("Execution node connection lost; reconnecting: #{safe_reason(reason)}")
-    {:noreply, %{state | node_id: nil, link_state: :reconnecting}}
+    {:next_state, :reconnecting, %{state | node_id: nil}}
   end
 
-  def handle_info(
+  def handle_event(
+        :info,
         {:execution_node_socket, socket, {:authentication_error, error}},
+        _link_state,
         %{socket: socket} = state
       ) do
     case state.socket_mode do
@@ -411,13 +449,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         case classification do
           {kind, reason} ->
-            {:noreply, park(state, {kind, reason})}
+            park(state, {kind, reason})
 
           :transient ->
             state = cancel_all_invocations(state)
             notify(state, {:status, :reconnecting})
             write_status(state, "reconnecting", nil, nil)
-            {:noreply, %{state | node_id: nil, link_state: :reconnecting}}
+            {:next_state, :reconnecting, %{state | node_id: nil}}
         end
 
       :pairing ->
@@ -428,22 +466,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
           {:stop_after_authentication_error, pairing_authentication_failure(error, state)}
         )
 
-        {:noreply, state}
+        {:keep_state, state}
     end
   end
 
-  def handle_info({:stop_after_authentication_error, reason}, state) do
+  def handle_event(:info, {:stop_after_authentication_error, reason}, _link_state, state) do
     {:stop, reason, state}
   end
 
-  def handle_info(:credential_watch, %{link_state: {:parked, _kind, _reason}} = state) do
+  def handle_event(:state_timeout, :credential_watch, {:parked, _kind, _reason}, state) do
     case resolve_token(state, nil) do
       {:ok, token, node_id} ->
         new_fp = token_fingerprint(token)
 
         if new_fp != state.rejected_fingerprint do
           Logger.info("Saved credentials updated for node #{state.name}; resuming")
-          state = cancel_timers(state)
           notify(state, {:status, :starting})
 
           state_to_connect = %{
@@ -456,25 +493,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
           case connect_authenticated(state_to_connect, token, node_id) do
             {:ok, new_state} ->
-              {:noreply, %{new_state | link_state: :connecting}}
+              {:next_state, :connecting, new_state, [{{:timeout, :reprobe}, :cancel}]}
 
             {:error, _reason} ->
-              {:noreply, %{state | watch_timer: schedule_watch_timer(state)}}
+              {:keep_state, state, [credential_watch_timeout(state)]}
           end
         else
-          {:noreply, %{state | watch_timer: schedule_watch_timer(state)}}
+          {:keep_state, state, [credential_watch_timeout(state)]}
         end
 
       _ ->
-        {:noreply, %{state | watch_timer: schedule_watch_timer(state)}}
+        {:keep_state, state, [credential_watch_timeout(state)]}
     end
   end
 
-  def handle_info(:credential_watch, state) do
-    {:noreply, %{state | watch_timer: nil}}
-  end
-
-  def handle_info(:reprobe, %{link_state: {:parked, kind, reason}} = state) do
+  def handle_event({:timeout, :reprobe}, :reprobe, {:parked, kind, reason}, state) do
     token_result =
       if is_binary(state.current_token) and state.current_token != "" do
         {:ok, state.current_token, state.expected_node_id || state.node_id}
@@ -485,7 +518,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
     case token_result do
       {:ok, token, node_id} ->
         Logger.info("Re-probing connection for node #{state.name}")
-        state = cancel_timers(state)
         notify(state, {:status, :starting})
 
         state_to_connect = %{
@@ -496,26 +528,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         case connect_authenticated(state_to_connect, token, node_id) do
           {:ok, new_state} ->
-            {:noreply, %{new_state | link_state: :connecting}}
+            {:next_state, :connecting, new_state}
 
           {:error, _reason} ->
-            parked = park(state, {kind, reason})
-            {:noreply, parked}
+            park(state, {kind, reason})
         end
 
       _ ->
-        {:noreply, %{state | probe_timer: schedule_probe_timer(state, kind)}}
+        {:keep_state, state, [reprobe_timeout(state, kind)]}
     end
   end
 
-  def handle_info(:reprobe, state) do
-    {:noreply, %{state | probe_timer: nil}}
-  end
-
-  def handle_info({:node_pty, invoke_id, type, payload}, state) do
+  def handle_event(:info, {:node_pty, invoke_id, type, payload}, _link_state, state) do
     case state.shells[invoke_id] do
       nil ->
-        {:noreply, state}
+        {:keep_state, state}
 
       shell ->
         frame = Map.put(payload, "type", type)
@@ -535,30 +562,31 @@ defmodule CodingAgent.ExecutionNode.Worker do
             {:invoke_result, invoke_id}
           )
 
-          {:noreply, %{state | shells: Map.delete(state.shells, invoke_id)}}
+          {:keep_state, %{state | shells: Map.delete(state.shells, invoke_id)}}
         else
           _ = shell
-          {:noreply, state}
+          {:keep_state, state}
         end
     end
   end
 
-  def handle_info({:process_service_result, invoke_id, pid, result}, state) do
+  def handle_event(:info, {:process_service_result, invoke_id, pid, result}, _link_state, state) do
     case state.process_tasks[invoke_id] do
       %{pid: ^pid, monitor_ref: ref} ->
         Process.demonitor(ref, [:flush])
         state = %{state | process_tasks: Map.delete(state.process_tasks, invoke_id)}
-        {:noreply, send_host_io_result(state, invoke_id, result)}
+        {:keep_state, send_host_io_result(state, invoke_id, result)}
 
       _ ->
-        {:noreply, state}
+        {:keep_state, state}
     end
   end
 
-  def handle_info({:engine_delta, run_ref, text}, state) when is_binary(text) do
+  def handle_event(:info, {:engine_delta, run_ref, text}, _link_state, state)
+      when is_binary(text) do
     case Map.get(state.run_refs, run_ref) do
       nil ->
-        {:noreply, state}
+        {:keep_state, state}
 
       invoke_id ->
         invocation = Map.fetch!(state.invocations, invoke_id)
@@ -574,7 +602,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
             |> send_invoke_error(invoke_id, :result_payload_limit_exceeded)
             |> remove_invocation(invoke_id)
 
-          {:noreply, state}
+          {:keep_state, state}
         else
           invocations =
             Map.update!(state.invocations, invoke_id, fn current ->
@@ -587,40 +615,47 @@ defmodule CodingAgent.ExecutionNode.Worker do
             end)
 
           state = %{state | invocations: invocations}
-          {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_delta(text))}
+          {:keep_state, forward_event(state, invoke_id, RemoteEventCodec.encode_delta(text))}
         end
     end
   end
 
-  def handle_info({:engine_event, run_ref, %{__event__: :completed} = completed}, state) do
+  def handle_event(
+        :info,
+        {:engine_event, run_ref, %{__event__: :completed} = completed},
+        _link_state,
+        state
+      ) do
     case Map.get(state.run_refs, run_ref) do
       nil ->
-        {:noreply, state}
+        {:keep_state, state}
 
       invoke_id ->
         invocation = Map.fetch!(state.invocations, invoke_id)
         if invocation.monitor_ref, do: Process.demonitor(invocation.monitor_ref, [:flush])
         invocation = %{invocation | completed: completed, monitor_ref: nil}
         state = put_invocation(state, invoke_id, invocation)
-        {:noreply, drain_events(state, invoke_id)}
+        {:keep_state, drain_events(state, invoke_id)}
     end
   end
 
-  def handle_info({:engine_event, run_ref, event}, state) do
+  def handle_event(:info, {:engine_event, run_ref, event}, _link_state, state) do
     case Map.get(state.run_refs, run_ref) do
       nil ->
-        {:noreply, state}
+        {:keep_state, state}
 
       invoke_id ->
-        {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_engine(event))}
+        {:keep_state, forward_event(state, invoke_id, RemoteEventCodec.encode_engine(event))}
     end
   end
 
-  def handle_info(
+  def handle_event(
+        :info,
         %LemonCore.Event{
           type: :approval_requested,
           payload: %{pending: %{session_id: session_id}} = payload
         },
+        _link_state,
         state
       )
       when is_binary(session_id) do
@@ -628,62 +663,72 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
     case invocation_for_run(state, pending.run_id) do
       nil ->
-        {:noreply, state}
+        {:keep_state, state}
 
       {invoke_id, %{session_key: session_key} = invocation}
       when session_key == pending.session_key ->
         invocation = %{invocation | approvals: MapSet.put(invocation.approvals, pending.id)}
         state = put_invocation(state, invoke_id, invocation)
-        {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_approval(pending))}
+        {:keep_state, forward_event(state, invoke_id, RemoteEventCodec.encode_approval(pending))}
 
       _ ->
-        {:noreply, state}
+        {:keep_state, state}
     end
   end
 
-  def handle_info(%LemonCore.Event{type: type, payload: payload, meta: meta}, state)
+  def handle_event(
+        :info,
+        %LemonCore.Event{type: type, payload: payload, meta: meta},
+        _link_state,
+        state
+      )
       when type in [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted] and
              is_map(meta) and not is_map_key(meta, :remote_node) do
     case invocation_for_run(state, meta[:run_id]) do
       nil ->
-        {:noreply, state}
+        {:keep_state, state}
 
       {invoke_id, _invocation} ->
-        {:noreply,
+        {:keep_state,
          forward_event(state, invoke_id, RemoteEventCodec.encode_checkpoint(type, payload))}
     end
   end
 
-  def handle_info(
+  def handle_event(
+        :info,
         {monitor_ref, result},
+        _link_state,
         %{capability_probe: %{task: %{ref: monitor_ref}}} = state
       ),
-      do: {:noreply, finish_capability_probe(state, result)}
+      do: {:keep_state, finish_capability_probe(state, result)}
 
-  def handle_info({monitor_ref, result}, state) when is_reference(monitor_ref) do
+  def handle_event(:info, {monitor_ref, result}, _link_state, state)
+      when is_reference(monitor_ref) do
     case Enum.find(state.invocations, fn {_id, invocation} ->
            Map.get(invocation, :service_task) != nil and invocation.monitor_ref == monitor_ref
          end) do
       {invoke_id, _invocation} ->
-        {:noreply, complete_service_task(state, invoke_id, result)}
+        {:keep_state, complete_service_task(state, invoke_id, result)}
 
       nil ->
-        {:noreply, state}
+        {:keep_state, state}
     end
   end
 
-  def handle_info(
+  def handle_event(
+        :info,
         {:DOWN, monitor_ref, :process, _pid, _reason},
+        _link_state,
         %{capability_probe: %{task: %{ref: monitor_ref}}} = state
       ),
-      do: {:noreply, finish_capability_probe(state, :down)}
+      do: {:keep_state, finish_capability_probe(state, :down)}
 
-  def handle_info({:DOWN, monitor_ref, :process, _pid, reason}, state) do
+  def handle_event(:info, {:DOWN, monitor_ref, :process, _pid, reason}, _link_state, state) do
     case Enum.find(state.process_tasks, fn {_, task} -> task.monitor_ref == monitor_ref end) do
       {invoke_id, _} ->
         _ = CodingAgent.ExecutionNode.ProcessService.cancel_invocation(self(), invoke_id)
         state = %{state | process_tasks: Map.delete(state.process_tasks, invoke_id)}
-        {:noreply, send_invoke_error(state, invoke_id, :process_outcome_unknown)}
+        {:keep_state, send_invoke_error(state, invoke_id, :process_outcome_unknown)}
 
       nil ->
         case Enum.find(state.invocations, fn {_id, invocation} ->
@@ -696,34 +741,37 @@ defmodule CodingAgent.ExecutionNode.Worker do
                 else: {:runner_down, reason}
 
             state = send_invoke_error(state, invoke_id, reason)
-            {:noreply, remove_invocation(state, invoke_id)}
+            {:keep_state, remove_invocation(state, invoke_id)}
 
           nil ->
-            {:noreply, state}
+            {:keep_state, state}
         end
     end
   end
 
-  def handle_info({:EXIT, socket, reason}, %{socket: socket} = state) do
+  def handle_event(:info, {:EXIT, socket, reason}, _link_state, %{socket: socket} = state) do
     {:stop, {:socket_exited, reason}, state}
   end
 
-  def handle_info({:EXIT, pid, _reason}, state) do
+  def handle_event(:info, {:EXIT, pid, _reason}, _link_state, state) do
     case Enum.find(state.shells, fn {_, shell} -> shell.pid == pid end) do
       {invoke_id, _} ->
         state = send_invoke_error(state, invoke_id, :pty_closed)
-        {:noreply, %{state | shells: Map.delete(state.shells, invoke_id)}}
+        {:keep_state, %{state | shells: Map.delete(state.shells, invoke_id)}}
 
       nil ->
-        {:noreply, state}
+        {:keep_state, state}
     end
   end
 
-  def handle_info(_message, state), do: {:noreply, state}
+  def handle_event({:call, from}, :get_link_state, link_state, _state) do
+    {:keep_state_and_data, [{:reply, from, link_state}]}
+  end
+
+  def handle_event(:info, _message, _link_state, _state), do: :keep_state_and_data
 
   @impl true
-  def terminate(_reason, state) do
-    _ = cancel_timers(state)
+  def terminate(_reason, _link_state, state) do
     _ = cancel_all_invocations(state)
     :ok
   end
@@ -732,6 +780,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
   def format_status(status) do
     status
     |> Map.put(:state, :private_execution_node)
+    |> Map.put(:data, :private_execution_node)
+    |> Map.put(:queue, [])
+    |> Map.put(:postponed, [])
     |> Map.put(:message, :redacted)
     |> Map.put(:log, [])
   end
@@ -753,14 +804,14 @@ defmodule CodingAgent.ExecutionNode.Worker do
       end
     end
 
-    {:noreply, state}
+    {:keep_state, state}
   end
 
   defp handle_socket_response(:pair_request, {:ok, payload}, state) when is_map(payload) do
     case payload["pairingId"] do
       pairing_id when is_binary(pairing_id) and pairing_id != "" ->
         request(state, "node.pair.approve", %{"pairingId" => pairing_id}, :pair_approve)
-        {:noreply, %{state | pairing_id: pairing_id, pairing_stage: :approving}}
+        {:keep_state, %{state | pairing_id: pairing_id, pairing_stage: :approving}}
 
       _ ->
         {:stop, {:pairing_failed, :missing_pairing_id}, state}
@@ -774,7 +825,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         request(state, "connect.challenge", %{"challenge" => challenge}, tag)
 
         recovery_token = payload["token"] || state.recovery_token
-        {:noreply, %{state | pairing_stage: :challenging, recovery_token: recovery_token}}
+        {:keep_state, %{state | pairing_stage: :challenging, recovery_token: recovery_token}}
 
       _ ->
         {:stop, {:pairing_failed, :missing_challenge_token}, state}
@@ -809,7 +860,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
            ) do
         {:ok, new_state} ->
           notify(new_state, {:status, :paired, node_id})
-          {:noreply, new_state}
+          {:next_state, :connecting, new_state}
 
         {:error, reason} ->
           {:stop, reason, state}
@@ -821,10 +872,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp handle_socket_response({:invoke_result, _invoke_id}, _result, state),
-    do: {:noreply, state}
+    do: {:keep_state, state}
 
   defp handle_socket_response({:invoke_control_result, _control_id}, _result, state),
-    do: {:noreply, state}
+    do: {:keep_state, state}
 
   defp handle_socket_response(
          :pair_request,
@@ -849,18 +900,18 @@ defmodule CodingAgent.ExecutionNode.Worker do
         case result do
           {:ok, %{"received" => true, "seq" => ^seq}} ->
             state = put_invocation(state, invoke_id, %{invocation | inflight: nil})
-            {:noreply, drain_events(state, invoke_id)}
+            {:keep_state, drain_events(state, invoke_id)}
 
           _ ->
-            {:noreply, fail_stream(state, invoke_id, :event_delivery_failed)}
+            {:keep_state, fail_stream(state, invoke_id, :event_delivery_failed)}
         end
 
       _ ->
-        {:noreply, state}
+        {:keep_state, state}
     end
   end
 
-  defp handle_socket_response(_tag, _result, state), do: {:noreply, state}
+  defp handle_socket_response(_tag, _result, state), do: {:keep_state, state}
 
   defp handle_pairing_error(reason, %{invite_code: code} = state)
        when is_binary(code) and reason in [:disconnected, :timeout] do
@@ -872,7 +923,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp handle_pairing_error(reason, state) when reason in [:disconnected, :timeout] do
     state = if reason == :timeout, do: resume_pairing(state), else: state
-    {:noreply, state}
+    {:keep_state, state}
   end
 
   defp handle_pairing_error(reason, state),
@@ -918,31 +969,31 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
       cond do
         not is_binary(invoke_id) or invoke_id == "" ->
-          {:noreply, state}
+          {:keep_state, state}
 
         known_invocation?(state, invoke_id) ->
-          {:noreply, state}
+          {:keep_state, state}
 
         not is_map(args) ->
-          {:noreply, send_invoke_error(state, invoke_id, :invalid_arguments)}
+          {:keep_state, send_invoke_error(state, invoke_id, :invalid_arguments)}
 
         payload_error = validate_invocation_payload(method, args, state) ->
-          {:noreply, send_invoke_error(state, invoke_id, payload_error)}
+          {:keep_state, send_invoke_error(state, invoke_id, payload_error)}
 
         method in CodingAgent.ExecutionNode.MemoryTransfer.methods() ->
-          {:noreply, invoke_memory_transfer(state, invoke_id, method, args)}
+          {:keep_state, invoke_memory_transfer(state, invoke_id, method, args)}
 
         method in ["memory.list", "memory.search", "memory.get", "memory.add", "memory.delete"] ->
-          {:noreply, invoke_memory(state, invoke_id, method, args)}
+          {:keep_state, invoke_memory(state, invoke_id, method, args)}
 
         method == "node.mcp.discover" ->
-          {:noreply, start_discovery(state, invoke_id, args)}
+          {:keep_state, start_discovery(state, invoke_id, args)}
 
         method == "node.profile.sync" ->
           sync_module = state.services.profile_sync_module
           cwd = state.default_cwd
 
-          {:noreply,
+          {:keep_state,
            start_service_task(state, invoke_id, :profile_sync_failed, fn ->
              sync_module.apply(args, cwd)
            end)}
@@ -951,38 +1002,38 @@ defmodule CodingAgent.ExecutionNode.Worker do
           sync_module = state.services.profile_sync_module
           cwd = state.default_cwd
 
-          {:noreply,
+          {:keep_state,
            start_service_task(state, invoke_id, :profile_sync_failed, fn ->
              sync_module.status(args, cwd)
            end)}
 
         method == "node.profile.paths" ->
-          {:noreply,
+          {:keep_state,
            start_service_task(state, invoke_id, :profile_paths_failed, fn ->
              CodingAgent.ExecutionNode.ProfilePaths.get(args)
            end)}
 
         method == "coding_agent.run" ->
-          {:noreply, start_invocation(state, invoke_id, args)}
+          {:keep_state, start_invocation(state, invoke_id, args)}
 
         method == CodingAgent.NodeTools.method() ->
-          {:noreply, start_tool_call(state, invoke_id, args)}
+          {:keep_state, start_tool_call(state, invoke_id, args)}
 
         method in @process_methods and
             (not is_binary(state.node_id) or payload["nodeId"] != state.node_id) ->
-          {:noreply, send_invoke_error(state, invoke_id, :node_mismatch)}
+          {:keep_state, send_invoke_error(state, invoke_id, :node_mismatch)}
 
         method in @process_methods ->
-          {:noreply,
+          {:keep_state,
            start_process_task(state, invoke_id, method, args, payload["nodeGeneration"])}
 
         method in @provider_methods and
             (not is_binary(state.node_id) or payload["nodeId"] != state.node_id) ->
-          {:noreply, send_invoke_error(state, invoke_id, :node_mismatch)}
+          {:keep_state, send_invoke_error(state, invoke_id, :node_mismatch)}
 
         method in @provider_methods and
             (not is_integer(payload["nodeGeneration"]) or payload["nodeGeneration"] < 0) ->
-          {:noreply, send_invoke_error(state, invoke_id, :invalid_node_generation)}
+          {:keep_state, send_invoke_error(state, invoke_id, :invalid_node_generation)}
 
         method in @provider_methods ->
           node_id = state.node_id
@@ -990,7 +1041,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
           operation = String.replace_prefix(method, "node.providers.management.", "")
           authority = {self(), payload["nodeGeneration"]}
 
-          {:noreply,
+          {:keep_state,
            start_service_task(state, invoke_id, :provider_management_failed, fn ->
              LemonCore.ProviderManagement.execute(operation, args,
                node_id: node_id,
@@ -1000,23 +1051,23 @@ defmodule CodingAgent.ExecutionNode.Worker do
            end)}
 
         method == "node.runtime.features" ->
-          {:noreply, send_host_io_result(state, invoke_id, {:ok, runtime_features()})}
+          {:keep_state, send_host_io_result(state, invoke_id, {:ok, runtime_features()})}
 
         method == "node.capabilities.get" ->
-          {:noreply, request_capabilities(state, invoke_id)}
+          {:keep_state, request_capabilities(state, invoke_id)}
 
         method in @host_io_methods ->
           result = CodingAgent.ExecutionNode.HostIO.handle(method, args, host_io_opts(state))
-          {:noreply, send_host_io_result(state, invoke_id, result)}
+          {:keep_state, send_host_io_result(state, invoke_id, result)}
 
         method in @shell_methods ->
-          {:noreply, dispatch_shell(state, invoke_id, method, args)}
+          {:keep_state, dispatch_shell(state, invoke_id, method, args)}
 
         true ->
-          {:noreply, send_invoke_error(state, invoke_id, :unsupported_method)}
+          {:keep_state, send_invoke_error(state, invoke_id, :unsupported_method)}
       end
     else
-      {:noreply, state}
+      {:keep_state, state}
     end
   end
 
@@ -1034,28 +1085,28 @@ defmodule CodingAgent.ExecutionNode.Worker do
       case state.shells[invoke_id] do
         %{pid: pid} ->
           GenServer.stop(pid, :normal)
-          {:noreply, %{state | shells: Map.delete(state.shells, invoke_id)}}
+          {:keep_state, %{state | shells: Map.delete(state.shells, invoke_id)}}
 
         nil ->
           case Map.get(state.invocations, invoke_id) do
             nil ->
-              {:noreply, state}
+              {:keep_state, state}
 
             invocation ->
               _ = cancel_invocation_execution(state, invocation)
-              {:noreply, remove_invocation(state, invoke_id)}
+              {:keep_state, remove_invocation(state, invoke_id)}
           end
       end
     else
-      {:noreply, state}
+      {:keep_state, state}
     end
   end
 
   defp handle_node_event("node.invoke.control", payload, state) do
     if targeted?(payload, state) do
-      {:noreply, apply_invocation_control(state, payload)}
+      {:keep_state, apply_invocation_control(state, payload)}
     else
-      {:noreply, state}
+      {:keep_state, state}
     end
   end
 
@@ -1074,22 +1125,22 @@ defmodule CodingAgent.ExecutionNode.Worker do
                ) do
             {:ok, %{run_id: ^run_id, session_key: ^session_key, decision: ^decision}} ->
               invocation = %{invocation | approvals: MapSet.delete(approvals, approval_id)}
-              {:noreply, put_invocation(state, invoke_id, invocation)}
+              {:keep_state, put_invocation(state, invoke_id, invocation)}
 
             {:error, _} ->
               # Keep it owned so invocation teardown still cancels its waiter.
-              {:noreply, state}
+              {:keep_state, state}
           end
         else
-          {:noreply, state}
+          {:keep_state, state}
         end
 
       _ ->
-        {:noreply, state}
+        {:keep_state, state}
     end
   end
 
-  defp handle_node_event(_event, _payload, state), do: {:noreply, state}
+  defp handle_node_event(_event, _payload, state), do: {:keep_state, state}
 
   defp validate_invocation_payload("coding_agent.run", args, _state) do
     case LemonCore.JSONPayload.validate(args, LemonCore.ToolPolicy.execution_json_opts()) do
@@ -2502,8 +2553,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
     notify(state, {:status, kind, reason})
     write_status(state, to_string(kind), reason, state.node_id || state.expected_node_id)
 
-    state = cancel_timers(state)
-
     fingerprint =
       cond do
         is_binary(state.current_token) and state.current_token != "" ->
@@ -2516,34 +2565,23 @@ defmodule CodingAgent.ExecutionNode.Worker do
           state.rejected_fingerprint
       end
 
-    watch_timer = schedule_watch_timer(state)
-    probe_timer = schedule_probe_timer(state, kind)
-
-    %{
+    state = %{
       state
       | socket: nil,
         socket_mode: :node,
-        link_state: {:parked, kind, reason},
-        rejected_fingerprint: fingerprint,
-        watch_timer: watch_timer,
-        probe_timer: probe_timer
+        rejected_fingerprint: fingerprint
     }
+
+    {:next_state, {:parked, kind, reason}, state,
+     [credential_watch_timeout(state), reprobe_timeout(state, kind)]}
   end
 
-  defp cancel_timers(state) do
-    if state.watch_timer, do: Process.cancel_timer(state.watch_timer)
-    if state.probe_timer, do: Process.cancel_timer(state.probe_timer)
-    %{state | watch_timer: nil, probe_timer: nil}
+  defp credential_watch_timeout(state) do
+    {:state_timeout, state.watch_interval_ms || 5_000, :credential_watch}
   end
 
-  defp schedule_watch_timer(state) do
-    interval = state.watch_interval_ms || 5_000
-    Process.send_after(self(), :credential_watch, interval)
-  end
-
-  defp schedule_probe_timer(state, kind) do
-    interval = probe_interval_ms(state, kind)
-    Process.send_after(self(), :reprobe, interval)
+  defp reprobe_timeout(state, kind) do
+    {{:timeout, :reprobe}, probe_interval_ms(state, kind), :reprobe}
   end
 
   defp probe_interval_ms(%{probe_interval_ms: ms}, _kind) when is_integer(ms) and ms > 0, do: ms

@@ -74,7 +74,7 @@ defmodule CodingAgent.Tools.EvalTest do
   end
 
   defp assert_group_child(ctx, pid) do
-    %{kernel_group: %{pgid: pgid}, os_pid: host_pid} = :sys.get_state(slot!(ctx, "js"))
+    {_, %{kernel_group: %{pgid: pgid}, os_pid: host_pid}} = :sys.get_state(slot!(ctx, "js"))
     {output, 0} = System.cmd("/bin/ps", ["-o", "pgid=,ppid=", "-p", Integer.to_string(pid)])
     [child_pgid, parent] = output |> String.split() |> Enum.map(&String.to_integer/1)
     assert pgid != host_pid
@@ -343,7 +343,7 @@ defmodule CodingAgent.Tools.EvalTest do
     test "handoff rebinds the durable kernel and ignores the old owner's queued DOWN", ctx do
       run(ctx, "py", "kept = 41")
       slot = slot!(ctx, "py")
-      old_ref = :sys.get_state(slot).owner_ref
+      {_, %{owner_ref: old_ref}} = :sys.get_state(slot)
       assert :ok = CodingAgent.ToolResources.handoff(ctx.session_id, ctx.owner)
       next_owner = spawn(fn -> receive do: (:stop -> :ok) end)
       on_exit(fn -> send(next_owner, :stop) end)

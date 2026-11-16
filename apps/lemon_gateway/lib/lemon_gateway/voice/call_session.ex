@@ -1,24 +1,37 @@
 defmodule LemonGateway.Voice.CallSession do
   @moduledoc """
-  GenServer that manages a single voice call session.
+  State machine owning one voice call and its supervised LLM/TTS tasks.
 
-  Handles:
-  - WebSocket connections (Twilio + Deepgram)
-  - Audio streaming and buffering
-  - Speech-to-text processing
-  - LLM response generation
-  - Text-to-speech synthesis
-  - Call state management
+  | State | Event | Next state |
+  | --- | --- | --- |
+  | `:idle` | queued transcript / speech | `:generating` / `:synthesizing` |
+  | `:generating` | LLM result | `:synthesizing` |
+  | `:synthesizing` | audio, failure or timeout | next queued job, or `:idle` |
+  | `:generating` | failure or timeout | next queued job, or `:idle` |
+  | any active state | silence deadline | `:closing` (bounded goodbye) |
+  | `:closing` | shutdown deadline | stopped |
+  | any state | end call | stopped |
+
+  Incoming work is FIFO; a generated answer is synthesized before the next job.
+  Task results are matched by monitor reference, so expired work cannot publish
+  audio or advance another job. Twilio playback marks are best-effort and never
+  advance synthesis. Generic inactivity timeouts reset only on incoming audio;
+  unrelated traffic cannot postpone either a task deadline or call shutdown.
+
+  `start_link/1` accepts `:llm_timeout_ms` (30 seconds) and `:tts_timeout_ms`
+  (10 seconds), matching the existing HTTP request policies, and
+  `:silence_timeout_ms` (the configured voice silence policy). Per-call
+  `:llm_fun`, `:tts_fun` and `:task_supervisor` dependencies can be supplied by
+  embedders; defaults use the gateway providers and `LemonGateway.TaskSupervisor`.
   """
 
-  use GenServer, restart: :temporary
+  @behaviour :gen_statem
 
   require Logger
 
   alias LemonCore.Httpc
   alias LemonGateway.Voice.{AudioConversion, Config, DeepgramClient}
 
-  # Call states
   defstruct [
     :call_sid,
     :from_number,
@@ -28,53 +41,39 @@ defmodule LemonGateway.Voice.CallSession do
     :started_at,
     :last_activity_at,
     :current_utterance,
-    :is_speaking,
-    :is_processing,
-    :response_queue,
     :session_key,
     :conversation_history,
-    :interruption_detected
+    :task,
+    :speech_text,
+    :llm_fun,
+    :tts_fun,
+    :task_supervisor,
+    :llm_timeout_ms,
+    :tts_timeout_ms,
+    :silence_timeout_ms,
+    jobs: {[], []}
   ]
 
-  @type t :: %__MODULE__{
-          call_sid: String.t(),
-          from_number: String.t(),
-          to_number: String.t(),
-          twilio_ws_pid: pid() | nil,
-          deepgram_ws_pid: pid() | nil,
-          started_at: DateTime.t(),
-          last_activity_at: DateTime.t(),
-          current_utterance: String.t(),
-          is_speaking: boolean(),
-          is_processing: boolean(),
-          response_queue: list(),
-          session_key: String.t(),
-          conversation_history: list(),
-          interruption_detected: boolean()
-        }
+  @type t :: %__MODULE__{}
 
-  # Client API
-
-  @doc """
-  Starts a new call session.
-  """
+  @doc "Starts a new call session."
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     call_sid = Keyword.fetch!(opts, :call_sid)
-    GenServer.start_link(__MODULE__, opts, name: via_tuple(call_sid))
+    :gen_statem.start_link(via_tuple(call_sid), __MODULE__, opts, [])
   end
 
-  @doc """
-  Returns the via tuple for registry lookup.
-  """
+  def child_spec(opts) do
+    %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}, restart: :temporary}
+  end
+
+  @doc "Returns the via tuple for registry lookup."
   @spec via_tuple(String.t()) :: {:via, Registry, {atom(), String.t()}}
   def via_tuple(call_sid) do
     {:via, Registry, {LemonGateway.Voice.CallRegistry, call_sid}}
   end
 
-  @doc """
-  Looks up a call session by call SID.
-  """
+  @doc "Looks up a call session by call SID."
   @spec lookup(String.t()) :: pid() | nil
   def lookup(call_sid) do
     case Registry.lookup(LemonGateway.Voice.CallRegistry, call_sid) do
@@ -83,257 +82,244 @@ defmodule LemonGateway.Voice.CallSession do
     end
   end
 
-  @doc """
-  Registers the Twilio WebSocket connection.
-  """
+  @doc "Registers the Twilio WebSocket connection."
   @spec register_twilio_ws(pid(), pid()) :: :ok
   def register_twilio_ws(session_pid, ws_pid) do
-    GenServer.cast(session_pid, {:register_twilio_ws, ws_pid})
+    :gen_statem.cast(session_pid, {:register_twilio_ws, ws_pid})
   end
 
-  @doc """
-  Registers the Deepgram WebSocket connection.
-  """
+  @doc "Registers the Deepgram WebSocket connection."
   @spec register_deepgram_ws(pid(), pid()) :: :ok
   def register_deepgram_ws(session_pid, ws_pid) do
-    GenServer.cast(session_pid, {:register_deepgram_ws, ws_pid})
+    :gen_statem.cast(session_pid, {:register_deepgram_ws, ws_pid})
   end
 
-  @doc """
-  Handles incoming audio from Twilio (mulaw 8kHz).
-  """
+  @doc "Handles incoming audio from Twilio (mulaw 8kHz)."
   @spec handle_audio(pid(), binary()) :: :ok
   def handle_audio(session_pid, audio_data) do
-    GenServer.cast(session_pid, {:audio_from_twilio, audio_data})
+    :gen_statem.cast(session_pid, {:audio_from_twilio, audio_data})
   end
 
-  @doc """
-  Handles transcript from Deepgram.
-  """
+  @doc "Handles transcript from Deepgram."
   @spec handle_transcript(pid(), map()) :: :ok
   def handle_transcript(session_pid, transcript_data) do
-    GenServer.cast(session_pid, {:transcript, transcript_data})
+    :gen_statem.cast(session_pid, {:transcript, transcript_data})
   end
 
-  @doc """
-  Sends a text response to be spoken.
-  """
+  @doc "Sends a text response to be spoken."
   @spec speak(pid(), String.t()) :: :ok
   def speak(session_pid, text) do
-    GenServer.cast(session_pid, {:speak, text})
+    :gen_statem.cast(session_pid, {:speak, text})
   end
 
-  @doc """
-  Ends the call session.
-  """
+  @doc "Ends the call session."
   @spec end_call(pid()) :: :ok
   def end_call(session_pid) do
-    GenServer.cast(session_pid, :end_call)
+    :gen_statem.cast(session_pid, :end_call)
   end
 
-  # Server Callbacks
+  @impl true
+  def callback_mode, do: :handle_event_function
 
   @impl true
   def init(opts) do
+    # Supervised tasks are also linked to this owner, so even an untrappable
+    # owner death cannot leave provider work running. Task failures arrive as DOWN.
+    Process.flag(:trap_exit, true)
+
     call_sid = Keyword.fetch!(opts, :call_sid)
     from_number = Keyword.get(opts, :from_number, "unknown")
-    to_number = Keyword.get(opts, :to_number, "unknown")
 
-    # Generate session key from phone number
-    session_key = "voice:#{from_number}"
-
-    state = %__MODULE__{
+    data = %__MODULE__{
       call_sid: call_sid,
       from_number: from_number,
-      to_number: to_number,
-      twilio_ws_pid: nil,
-      deepgram_ws_pid: nil,
+      to_number: Keyword.get(opts, :to_number, "unknown"),
       started_at: DateTime.utc_now(),
       last_activity_at: DateTime.utc_now(),
       current_utterance: "",
-      is_speaking: false,
-      is_processing: false,
-      response_queue: [],
-      session_key: session_key,
+      session_key: "voice:#{from_number}",
       conversation_history: [],
-      interruption_detected: false
+      llm_fun: Keyword.get(opts, :llm_fun, &generate_llm_response/1),
+      tts_fun: Keyword.get(opts, :tts_fun, &synthesize_speech/1),
+      task_supervisor: Keyword.get(opts, :task_supervisor, LemonGateway.TaskSupervisor),
+      llm_timeout_ms: Keyword.get(opts, :llm_timeout_ms, 30_000),
+      tts_timeout_ms: Keyword.get(opts, :tts_timeout_ms, 10_000),
+      silence_timeout_ms: Keyword.get(opts, :silence_timeout_ms, Config.silence_timeout_ms())
     }
-
-    # Start call timeout timer
-    schedule_call_timeout()
-
-    # Send welcome message
-    send(self(), :send_welcome)
 
     Logger.info("Voice call session started: #{call_sid} from #{from_number}")
 
-    {:ok, state}
+    {:ok, :idle, data,
+     [
+       {{:timeout, :silence}, data.silence_timeout_ms, :inactive},
+       {:next_event, :internal, {:speak, "Hey there! This is zeebot. What can I help you with?"}}
+     ]}
   end
 
   @impl true
-  def handle_cast({:register_twilio_ws, ws_pid}, state) do
-    Logger.debug("Twilio WebSocket registered for call #{state.call_sid}")
-    {:noreply, %{state | twilio_ws_pid: ws_pid}}
+  def handle_event(:cast, :end_call, _state, data), do: {:stop, :normal, data}
+
+  def handle_event(:cast, {:register_twilio_ws, pid}, _state, data) do
+    {:keep_state, %{data | twilio_ws_pid: pid}}
   end
 
-  def handle_cast({:register_deepgram_ws, ws_pid}, state) do
-    Logger.debug("Deepgram WebSocket registered for call #{state.call_sid}")
-    {:noreply, %{state | deepgram_ws_pid: ws_pid}}
+  def handle_event(:cast, {:register_deepgram_ws, pid}, _state, data) do
+    {:keep_state, %{data | deepgram_ws_pid: pid}}
   end
 
-  def handle_cast({:audio_from_twilio, audio_data}, state) do
-    # Forward audio to Deepgram for transcription
-    if state.deepgram_ws_pid do
-      DeepgramClient.send_audio(state.deepgram_ws_pid, audio_data)
-    end
+  def handle_event(:cast, _event, :closing, _data), do: :keep_state_and_data
 
-    {:noreply, %{state | last_activity_at: DateTime.utc_now()}}
+  def handle_event(:cast, {:audio_from_twilio, audio}, _state, data) do
+    if data.deepgram_ws_pid, do: DeepgramClient.send_audio(data.deepgram_ws_pid, audio)
+
+    {:keep_state, %{data | last_activity_at: DateTime.utc_now()},
+     [{{:timeout, :silence}, data.silence_timeout_ms, :inactive}]}
   end
 
-  def handle_cast(
+  def handle_event(
+        :cast,
         {:transcript, %{"is_final" => true, "channel" => %{"alternatives" => alternatives}}},
-        state
+        state,
+        data
       ) do
-    transcript = get_best_transcript(alternatives)
+    case get_best_transcript(alternatives) do
+      "" ->
+        :keep_state_and_data
 
-    if transcript != "" do
-      Logger.info("Final transcript for #{state.call_sid}: #{transcript}")
-
-      # Add to conversation history (prepend for O(1), reverse when needed)
-      history = [%{role: "user", content: transcript} | state.conversation_history]
-
-      # Generate response
-      new_state = %{state | conversation_history: history, current_utterance: ""}
-      send(self(), :generate_response)
-
-      {:noreply, new_state}
-    else
-      {:noreply, state}
+      transcript ->
+        history = [%{role: "user", content: transcript} | data.conversation_history]
+        data = %{data | conversation_history: history, current_utterance: ""}
+        enqueue({:generate, history}, state, data)
     end
   end
 
-  def handle_cast(
+  def handle_event(
+        :cast,
         {:transcript, %{"is_final" => false, "channel" => %{"alternatives" => alternatives}}},
-        state
+        _state,
+        data
       ) do
-    # Interim transcript - update current utterance for interruption detection
-    transcript = get_best_transcript(alternatives)
-    {:noreply, %{state | current_utterance: transcript}}
+    {:keep_state, %{data | current_utterance: get_best_transcript(alternatives)}}
   end
 
-  def handle_cast({:transcript, _}, state) do
-    {:noreply, state}
+  def handle_event(:cast, {:transcript, _}, _state, _data), do: :keep_state_and_data
+
+  def handle_event(type, {:speak, text}, state, data) when type in [:cast, :internal] do
+    enqueue({:speak, text}, state, data)
   end
 
-  def handle_cast({:speak, text}, state) do
-    if state.is_speaking do
-      # Queue the response (prepend for O(1), process from end)
-      {:noreply, %{state | response_queue: [text | state.response_queue]}}
-    else
-      # Start speaking immediately
-      send(self(), {:synthesize_speech, text})
-      {:noreply, %{state | is_speaking: true}}
-    end
+  def handle_event(:info, {ref, result}, state, %{task: %Task{ref: ref}} = data) do
+    Process.demonitor(ref, [:flush])
+    data = %{data | task: nil}
+    finish_job(state, result, data)
   end
 
-  def handle_cast(:end_call, state) do
-    Logger.info("Ending call session: #{state.call_sid}")
-    {:stop, :normal, state}
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, reason},
+        state,
+        %{task: %Task{ref: ref}} = data
+      ) do
+    Logger.warning("Voice task failed for #{data.call_sid}: #{inspect(reason)}")
+    advance(state, %{data | task: nil})
   end
+
+  def handle_event({:timeout, :job}, :expired, state, data) do
+    Logger.warning("Voice #{state} task timed out for #{data.call_sid}")
+    stop_task(data.task)
+    advance(state, %{data | task: nil})
+  end
+
+  def handle_event({:timeout, :silence}, :inactive, _state, data) do
+    stop_task(data.task)
+    data = %{data | task: nil, jobs: :queue.new()}
+    {:next_state, :closing, data, [{:next_event, :internal, :goodbye}]}
+  end
+
+  def handle_event(:internal, :goodbye, :closing, data) do
+    text = "Thanks for calling! Goodbye."
+    fun = data.tts_fun
+    task = start_task(data, fn -> fun.(text) end)
+
+    {:keep_state, %{data | task: task, speech_text: text},
+     [
+       {{:timeout, :job}, data.tts_timeout_ms, :expired},
+       {:state_timeout, 3_000, :end_call}
+     ]}
+  end
+
+  def handle_event(:state_timeout, :end_call, :closing, data), do: {:stop, :normal, data}
+
+  # Playback marks are not synthesis completions; stale task messages are ignored.
+  def handle_event(:info, _message, _state, _data), do: :keep_state_and_data
 
   @impl true
-  def handle_info(:send_welcome, state) do
-    welcome_text = "Hey there! This is zeebot. What can I help you with?"
-    send(self(), {:synthesize_speech, welcome_text})
-    {:noreply, %{state | is_speaking: true}}
-  end
-
-  def handle_info(:generate_response, state) do
-    owner = self()
-    history = state.conversation_history
-
-    # Call LLM to generate response
-    Task.start(fn ->
-      response = generate_llm_response(history)
-      speak(owner, response)
-    end)
-
-    {:noreply, %{state | is_processing: true}}
-  end
-
-  def handle_info({:synthesize_speech, text}, state) do
-    owner = self()
-
-    # Synthesize speech using ElevenLabs
-    Task.start(fn ->
-      case synthesize_speech(text) do
-        {:ok, audio_data} ->
-          send(owner, {:audio_ready, audio_data, text})
-
-        {:error, reason} ->
-          Logger.error("TTS failed: #{inspect(reason)}")
-          send(owner, :speech_complete)
-      end
-    end)
-
-    {:noreply, state}
-  end
-
-  def handle_info({:audio_ready, audio_data, text}, state) do
-    # Convert PCM to mulaw and send to Twilio
-    mulaw_audio = convert_pcm_to_mulaw(audio_data)
-
-    if state.twilio_ws_pid do
-      send(state.twilio_ws_pid, {:send_audio, mulaw_audio})
-    else
-      Logger.warning("No Twilio WebSocket registered for call #{state.call_sid}; audio dropped")
-    end
-
-    # Add assistant response to history (prepend for O(1), reverse when needed)
-    history = [%{role: "assistant", content: text} | state.conversation_history]
-
-    # Always advance speech state; Twilio mark callbacks are best-effort and
-    # welcome audio can be synthesized before stream wiring is complete.
-    send(self(), :speech_complete)
-
-    {:noreply, %{state | conversation_history: history, is_processing: false}}
-  end
-
-  def handle_info(:speech_complete, state) do
-    # Check if there are more responses in queue (FIFO - take from end since we prepend)
-    case List.last(state.response_queue) do
-      nil ->
-        {:noreply, %{state | is_speaking: false}}
-
-      next ->
-        rest = List.delete_at(state.response_queue, -1)
-        send(self(), {:synthesize_speech, next})
-        {:noreply, %{state | response_queue: rest}}
-    end
-  end
-
-  def handle_info(:call_timeout, state) do
-    # Check if call has been inactive
-    inactive_ms = DateTime.diff(DateTime.utc_now(), state.last_activity_at, :millisecond)
-
-    if inactive_ms > Config.silence_timeout_ms() do
-      Logger.info("Call #{state.call_sid} timed out due to inactivity")
-      speak(self(), "Thanks for calling! Goodbye.")
-      Process.send_after(self(), :end_call, 3000)
-    end
-
-    schedule_call_timeout()
-    {:noreply, state}
-  end
-
-  def handle_info(:end_call, state) do
-    {:stop, :normal, state}
-  end
-
-  @impl true
-  def terminate(_reason, state) do
-    Logger.info("Call session terminated: #{state.call_sid}")
+  def terminate(_reason, _state, data) do
+    stop_task(data.task)
+    Logger.info("Call session terminated: #{data.call_sid}")
     :ok
+  end
+
+  defp enqueue(job, :idle, data), do: start_job(job, data)
+
+  defp enqueue(job, _state, data) do
+    {:keep_state, %{data | jobs: :queue.in(job, data.jobs)}}
+  end
+
+  defp start_job({:generate, history}, data) do
+    fun = data.llm_fun
+    task = start_task(data, fn -> fun.(history) end)
+
+    {:next_state, :generating, %{data | task: task},
+     [{{:timeout, :job}, data.llm_timeout_ms, :expired}]}
+  end
+
+  defp start_job({:speak, text}, data) do
+    fun = data.tts_fun
+    task = start_task(data, fn -> fun.(text) end)
+
+    {:next_state, :synthesizing, %{data | task: task, speech_text: text},
+     [{{:timeout, :job}, data.tts_timeout_ms, :expired}]}
+  end
+
+  defp start_task(data, fun) do
+    Task.Supervisor.async(data.task_supervisor, fun)
+  end
+
+  defp stop_task(nil), do: :ok
+  defp stop_task(%Task{} = task), do: Task.shutdown(task, :brutal_kill)
+
+  defp finish_job(:generating, text, data) when is_binary(text) do
+    start_job({:speak, text}, data)
+  end
+
+  defp finish_job(state, {:ok, audio}, data) when state in [:synthesizing, :closing] do
+    mulaw_audio = convert_pcm_to_mulaw(audio)
+
+    if data.twilio_ws_pid do
+      send(data.twilio_ws_pid, {:send_audio, mulaw_audio})
+    else
+      Logger.warning("No Twilio WebSocket registered for call #{data.call_sid}; audio dropped")
+    end
+
+    history = [%{role: "assistant", content: data.speech_text} | data.conversation_history]
+    advance(state, %{data | conversation_history: history})
+  end
+
+  defp finish_job(state, _failure, data), do: advance(state, data)
+
+  defp advance(:closing, data) do
+    {:keep_state, data, [{{:timeout, :job}, :cancel}]}
+  end
+
+  defp advance(_state, data) do
+    case :queue.out(data.jobs) do
+      {:empty, _queue} ->
+        {:next_state, :idle, data, [{{:timeout, :job}, :cancel}]}
+
+      {{:value, job}, jobs} ->
+        start_job(job, %{data | jobs: jobs})
+    end
   end
 
   # Private Functions
@@ -453,9 +439,5 @@ defmodule LemonGateway.Voice.CallSession do
         # Assume 16-bit signed little-endian PCM — encode to mu-law
         AudioConversion.pcm16_to_mulaw(audio_binary)
     end
-  end
-
-  defp schedule_call_timeout do
-    Process.send_after(self(), :call_timeout, 5000)
   end
 end

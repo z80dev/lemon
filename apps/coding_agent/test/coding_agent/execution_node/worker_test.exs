@@ -191,6 +191,21 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     end
   end
 
+  defmodule ControlledTokenStore do
+    def load(_name, opts) do
+      ref = make_ref()
+      send(Keyword.fetch!(opts, :test_pid), {:credential_load, self(), ref})
+
+      receive do
+        {:credential_result, ^ref, result} -> result
+      end
+    end
+  end
+
+  defmodule RefusingSocket do
+    def start_link(_opts), do: {:error, :offline}
+  end
+
   setup do
     Process.register(self(), :execution_node_worker_test)
 
@@ -1135,7 +1150,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     })
 
     assert_receive {:discovery_started, task_pid, _, _}
-    state = :sys.get_state(worker)
+    {_link_state, state} = :sys.get_state(worker)
     refute inspect(state.invocations) =~ "private-header-token"
 
     service_invoke(worker, socket, "discovery", "node-1", "node.mcp.discover", %{
@@ -1150,7 +1165,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
                     {:invoke_result, "discovery"}, 30_000}
 
     refute inspect(params) =~ "private-header-token"
-    assert :sys.get_state(worker).invocations == %{}
+    assert {_link_state, %{invocations: invocations}} = :sys.get_state(worker)
+    assert invocations == %{}
     GenServer.stop(worker)
   end
 
@@ -1339,10 +1355,12 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
       if operation == :disconnect do
         assert_receive {:native_drain_cancelled, ^active_runner}
-        assert :sys.get_state(worker).invocations == %{}
+        assert {_link_state, %{invocations: invocations}} = :sys.get_state(worker)
+        assert invocations == %{}
       else
         assert Process.alive?(active_runner)
-        assert Map.has_key?(:sys.get_state(worker).invocations, active_id)
+        {_link_state, state} = :sys.get_state(worker)
+        assert Map.has_key?(state.invocations, active_id)
       end
 
       stop_supervised(Worker)
@@ -1374,7 +1392,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
           )
 
         :removal ->
-          task = :sys.get_state(worker).invocations["discovery"].service_task
+          {_link_state, state} = :sys.get_state(worker)
+          task = state.invocations["discovery"].service_task
           send(worker, {task.ref, {:error, :connection_failed}})
 
         :stop ->
@@ -1387,7 +1406,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
         do: refute_receive({:socket_request, ^socket, "node.invoke.result", _, _, _}, 50)
 
       if action != :stop do
-        assert :sys.get_state(worker).invocations == %{}
+        assert {_link_state, %{invocations: invocations}} = :sys.get_state(worker)
+        assert invocations == %{}
         GenServer.stop(worker)
       end
     end
@@ -1445,7 +1465,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   defp await_completed_drain(worker, invoke_id, attempts \\ 300) do
-    invocation = :sys.get_state(worker).invocations[invoke_id]
+    {_link_state, state} = :sys.get_state(worker)
+    invocation = state.invocations[invoke_id]
 
     if invocation && invocation.completed do
       :ok
@@ -1457,7 +1478,9 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   defp await_invocation_removed(worker, invoke_id, attempts \\ 300) do
-    if Map.has_key?(:sys.get_state(worker).invocations, invoke_id) do
+    {_link_state, state} = :sys.get_state(worker)
+
+    if Map.has_key?(state.invocations, invoke_id) do
       assert attempts > 0, "invocation did not release its transport state"
       Process.sleep(10)
       await_invocation_removed(worker, invoke_id, attempts - 1)
@@ -1538,7 +1561,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert_receive {:socket_request, ^socket, "node.invoke.result",
                     %{"invokeId" => "down", "error" => "discovery_failed"}, _, _}
 
-    assert :sys.get_state(worker).invocations == %{}
+    assert {_link_state, %{invocations: invocations}} = :sys.get_state(worker)
+    assert invocations == %{}
     GenServer.stop(worker)
   end
 
@@ -2454,9 +2478,13 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert_receive {:execution_node_worker, ^worker,
                     {:status, :needs_reauthorization, "session_expired"}}
 
-    Process.sleep(50)
-    refute_receive {:socket_started, _, _}
-    assert Worker.link_state(worker) == {:parked, :needs_reauthorization, "session_expired"}
+    {parked, data} = :sys.get_state(worker)
+
+    assert {:keep_state, ^data, [{:state_timeout, 10, :credential_watch}]} =
+             Worker.handle_event(:state_timeout, :credential_watch, parked, data)
+
+    assert Worker.link_state(worker) == parked
+    refute_receive {:socket_started, _, _}, 0
   end
 
   @tag :tmp_dir
@@ -2742,5 +2770,256 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert_receive {:status_written, "newphy", %{"state" => "reconnecting"}}
     assert Process.alive?(worker)
     assert Worker.link_state(worker) == :reconnecting
+  end
+
+  @tag :tmp_dir
+  test "link states gate admission and reconnect never resumes cancelled service work", %{
+    tmp_dir: tmp_dir
+  } do
+    {:ok, worker} =
+      start_worker(tmp_dir, token: "node-token", mcp_discovery_module: FakeDiscovery)
+
+    assert_receive {:socket_started, socket, _opts}
+    assert Worker.link_state(worker) == :connecting
+    assert {:connecting, %Worker{} = data} = :sys.get_state(worker)
+    refute Map.has_key?(data, :link_state)
+    refute Map.has_key?(data, :watch_timer)
+    refute Map.has_key?(data, :probe_timer)
+
+    event =
+      {:execution_node_socket, socket,
+       {:event, "node.invoke.request",
+        %{
+          "invokeId" => "state-machine-discovery",
+          "nodeName" => "newphy",
+          "method" => "node.mcp.discover",
+          "args" => %{"server" => discovery_server()}
+        }}}
+
+    send(worker, event)
+    assert {:connecting, %{invocations: invocations}} = :sys.get_state(worker)
+    assert invocations == %{}
+    refute_receive {:discovery_started, _, _, _}, 0
+
+    hello = {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}}
+    send(worker, hello)
+    assert Worker.link_state(worker) == :online
+    send(worker, event)
+    assert_receive {:discovery_started, task_pid, _, _}
+    task_monitor = Process.monitor(task_pid)
+    {:online, data} = :sys.get_state(worker)
+    task = data.invocations["state-machine-discovery"].service_task
+
+    send(worker, {:execution_node_socket, socket, {:disconnected, :closed}})
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}
+    assert Worker.link_state(worker) == :reconnecting
+
+    send(worker, event)
+    send(worker, {task.ref, {:ok, discovery_result()}})
+    assert {:reconnecting, %{invocations: invocations}} = :sys.get_state(worker)
+    assert invocations == %{}
+    refute_receive {:discovery_started, _, _, _}, 0
+    refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 0
+
+    send(worker, hello)
+    assert Worker.link_state(worker) == :online
+    refute_receive {:discovery_started, _, _, _}, 0
+    send(worker, event)
+    assert_receive {:discovery_started, fresh_task, _, _}
+    refute fresh_task == task_pid
+    fresh_monitor = Process.monitor(fresh_task)
+    GenServer.stop(worker)
+    assert_receive {:DOWN, ^fresh_monitor, :process, ^fresh_task, :killed}
+  end
+
+  @tag :tmp_dir
+  test "parked state ignores replaced sockets and obsolete timer messages", %{tmp_dir: tmp_dir} do
+    {:ok, worker} =
+      start_worker(tmp_dir,
+        token: "rejected-token",
+        watch_interval_ms: 60_000,
+        probe_interval_ms: 60_000
+      )
+
+    assert_receive {:socket_started, socket, _opts}
+    socket_monitor = Process.monitor(socket)
+
+    send(
+      worker,
+      {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}}
+    )
+
+    assert Worker.link_state(worker) == :online
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:authentication_error, %{"code" => "CONFLICT", "message" => "Name conflict"}}
+    })
+
+    assert_receive {:DOWN, ^socket_monitor, :process, ^socket, :normal}
+    parked = {:parked, :conflict, "node_name_conflict"}
+    assert Worker.link_state(worker) == parked
+    assert {^parked, %{socket: nil} = data} = :sys.get_state(worker)
+
+    send(worker, :credential_watch)
+    send(worker, :reprobe)
+
+    send(
+      worker,
+      {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}}
+    )
+
+    send(worker, {:execution_node_socket, socket, {:connect_retry, "UNAVAILABLE"}})
+    invoke(worker, socket, "stale-socket", "node-1", %{"prompt" => "must not run"})
+    assert {^parked, ^data} = :sys.get_state(worker)
+    refute_receive {:socket_started, _, _}, 0
+    refute_receive {:executor_started, _, _, _, _, _}, 0
+
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "credential state timeout rearms until the saved credential changes", %{tmp_dir: tmp_dir} do
+    {:ok, worker} =
+      start_worker(tmp_dir,
+        token: "rejected-token",
+        token_store_module: ControlledTokenStore,
+        token_store_opts: [test_pid: self()],
+        watch_interval_ms: 0,
+        probe_interval_ms: 60_000
+      )
+
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:authentication_error, %{"code" => "CONFLICT", "message" => "Name conflict"}}
+    })
+
+    assert_receive {:credential_load, ^worker, first}
+
+    record = %{
+      "token" => "rejected-token",
+      "nodeId" => "node-1",
+      "controller" => "ws://controller:4040/ws"
+    }
+
+    send(worker, :unrelated_traffic)
+    send(worker, {:credential_result, first, {:ok, record}})
+    assert_receive {:credential_load, ^worker, second}
+    refute first == second
+    refute_receive {:socket_started, _, _}, 0
+
+    send(worker, {:credential_result, second, {:ok, %{record | "token" => "fresh-token"}}})
+    assert_receive {:socket_started, new_socket, opts}
+    refute new_socket == socket
+    assert get_in(opts, [:connect_params, "auth", "token"]) == "fresh-token"
+    assert Worker.link_state(worker) == :connecting
+    refute_receive {:credential_load, ^worker, _}, 0
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "credential recovery cancels an already delivered independent reprobe timeout", %{
+    tmp_dir: tmp_dir
+  } do
+    {:ok, worker} =
+      start_worker(tmp_dir,
+        token: "rejected-token",
+        token_store_module: ControlledTokenStore,
+        token_store_opts: [test_pid: self()],
+        watch_interval_ms: 0,
+        probe_interval_ms: 1
+      )
+
+    assert_receive {:socket_started, socket, _opts}
+    :erlang.trace(worker, true, [:receive])
+
+    try do
+      send(worker, {
+        :execution_node_socket,
+        socket,
+        {:authentication_error, %{"code" => "CONFLICT", "message" => "Name conflict"}}
+      })
+
+      assert_receive {:credential_load, ^worker, ref}
+
+      assert_receive {:trace, ^worker, :receive, {:timeout, _, {:timeout, :reprobe}}}, 1_000
+
+      send(worker, {
+        :credential_result,
+        ref,
+        {:ok,
+         %{
+           "token" => "fresh-token",
+           "nodeId" => "node-1",
+           "controller" => "ws://controller:4040/ws"
+         }}
+      })
+
+      assert_receive {:socket_started, new_socket, _opts}
+      refute new_socket == socket
+      assert Worker.link_state(worker) == :connecting
+      refute_receive {:socket_started, _, _}, 0
+      refute_receive {:credential_load, ^worker, _}, 0
+    after
+      if Process.alive?(worker), do: :erlang.trace(worker, false, [:receive])
+    end
+
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "failed parked reconnect attempts retain both independent timeout policies", %{
+    tmp_dir: tmp_dir
+  } do
+    {:ok, worker} =
+      start_worker(tmp_dir, watch_interval_ms: 60_000, probe_interval_ms: 60_000)
+
+    {parked, data} = :sys.get_state(worker)
+    assert parked == {:parked, :needs_enrollment, "credential_missing"}
+    GenServer.stop(worker)
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "saved-token",
+                 "nodeId" => "node-1",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: Path.join(tmp_dir, "tokens")
+             )
+
+    data = %{data | services: %{data.services | socket_module: RefusingSocket}}
+
+    assert {:keep_state, ^data, [{:state_timeout, 60_000, :credential_watch}]} =
+             Worker.handle_event(:state_timeout, :credential_watch, parked, data)
+
+    assert {:next_state, ^parked, ^data,
+            [
+              {:state_timeout, 60_000, :credential_watch},
+              {{:timeout, :reprobe}, 60_000, :reprobe}
+            ]} = Worker.handle_event({:timeout, :reprobe}, :reprobe, parked, data)
+  end
+
+  test "state-machine diagnostics redact data and queued invocation payloads" do
+    secret = "private-worker-credential"
+
+    status = %{
+      state: :online,
+      data: %Worker{current_token: secret},
+      queue: [{:info, {:invoke, secret}}],
+      postponed: [{:info, secret}],
+      log: [{:in, secret}],
+      timeouts: [{:state_timeout, :credential_watch}]
+    }
+
+    formatted = Worker.format_status(status)
+    refute inspect(formatted) =~ secret
+    assert formatted.timeouts == status.timeouts
+    assert formatted.data == :private_execution_node
   end
 end

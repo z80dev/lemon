@@ -24,8 +24,28 @@ defmodule CodingAgent.Tools.Task.Control do
   family traversal. That topology change is not needed to move message content
   and admission into child owners; retained identities still use their captured
   owner/session scope, including foreign-ID not-found behavior.
+
+  ## Per-child transitions
+
+  The coordinator's `:ready` state owns independent child lifecycles. Named
+  `:gen_statem` timeouts are keyed by task ID, so traffic for another child
+  cannot reset a park or force-cancel deadline. Entry phases are the single
+  lifecycle authority; there are no cancellation flags or timer tokens.
+
+  | Child phase | Event | Next phase / timeout |
+  | --- | --- | --- |
+  | running | completed with retained session | idle / park TTL (zero disables) |
+  | running | completed without live session | parked |
+  | idle | park timeout or session DOWN | parked / park timeout cancelled |
+  | idle or parked | message accepted | running / park timeout cancelled |
+  | live | cancel, parent abort or owner DOWN | cancelling / force-cancel grace |
+  | cancelling | complete or worker DOWN | killed / force timeout cancelled |
+  | cancelling | force timeout | killed / worker and session stopped |
+  | running | worker or inbox DOWN | aborted |
+  | any | parent DOWN | removed / all child timeouts cancelled |
+  | unchanged | query, repeated cancel, unrelated child event | deadlines unchanged |
   """
-  use GenServer
+  @behaviour :gen_statem
 
   alias CodingAgent.{Session, TaskStore}
   alias CodingAgent.Tools.Task.{Async, ChildInbox}
@@ -33,7 +53,11 @@ defmodule CodingAgent.Tools.Task.Control do
 
   @max_message_bytes 32 * 1024
 
-  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(opts), do: :gen_statem.start_link({:local, __MODULE__}, __MODULE__, opts, [])
+
+  def child_spec(opts) do
+    %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
+  end
 
   def owner(opts) do
     {Keyword.get(opts, :parent_session) || Keyword.get(opts, :session_key) ||
@@ -54,24 +78,21 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   def register(task_id, signal, parent_signal, parent, on_failure, owner_pid \\ nil) do
-    GenServer.call(
-      __MODULE__,
-      {:register, task_id, signal, parent_signal, parent, on_failure, owner_pid}
-    )
+    call({:register, task_id, signal, parent_signal, parent, on_failure, owner_pid})
   end
 
-  def attach_worker(task_id), do: GenServer.call(__MODULE__, {:worker, task_id, self()})
+  def attach_worker(task_id), do: call({:worker, task_id, self()})
 
   @doc false
   def worker_pids(task_ids) do
-    GenServer.call(__MODULE__, {:worker_pids, task_ids})
+    call({:worker_pids, task_ids})
   catch
     :exit, _ -> []
   end
 
   def attach_session(task_id, session, session_id \\ nil) do
     with_delivery_reply(fn reply_to ->
-      case GenServer.call(__MODULE__, {:session, task_id, session, session_id, reply_to}) do
+      case call({:session, task_id, session, session_id, reply_to}) do
         {:deliver_pending, deliveries} ->
           Enum.reduce_while(deliveries, :ok, fn delivery, :ok ->
             case resolve_delivery(delivery) do
@@ -87,16 +108,16 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   def configure(task_id, context),
-    do: GenServer.call(__MODULE__, {:configure, task_id, context})
+    do: call({:configure, task_id, context})
 
   def retain_session(task_id, session, resume),
-    do: GenServer.call(__MODULE__, {:retain_session, task_id, session, resume})
+    do: call({:retain_session, task_id, session, resume})
 
   @doc "Send peer content to a task ID, unique name, parent, or all immediate relatives."
   def send_message(target, text, opts) do
     with :ok <- validate_message(text) do
       with_delivery_reply(fn reply_to ->
-        case GenServer.call(__MODULE__, {:send_message, target, text, opts, reply_to}) do
+        case call({:send_message, target, text, opts, reply_to}) do
           {:ok, reply} ->
             recipients =
               Enum.map(reply.recipients, fn recipient ->
@@ -113,19 +134,19 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   @doc "Return public identities for the authenticated caller and its immediate family."
-  def roster(opts), do: GenServer.call(__MODULE__, {:roster, opts})
+  def roster(opts), do: call({:roster, opts})
 
-  def complete(task_id), do: GenServer.call(__MODULE__, {:complete, task_id})
-  def cancel_parent(parent), do: GenServer.cast(__MODULE__, {:cancel_parent, parent})
+  def complete(task_id), do: call({:complete, task_id})
+  def cancel_parent(parent), do: :gen_statem.cast(__MODULE__, {:cancel_parent, parent})
 
   @doc false
   def cancel_owned(task_id \\ :all),
-    do: GenServer.call(__MODULE__, {:cancel_owned, task_id})
+    do: call({:cancel_owned, task_id})
 
   def command(task_id, action, text, opts) do
     with :ok <- authorize(task_id, opts) do
       with_delivery_reply(fn reply_to ->
-        case GenServer.call(__MODULE__, {:command, task_id, action, text, reply_to}) do
+        case call({:command, task_id, action, text, reply_to}) do
           {:delivery, pending} ->
             case resolve_delivery(pending) do
               :injected -> :ok
@@ -144,7 +165,7 @@ defmodule CodingAgent.Tools.Task.Control do
   operator Agent Hub. Tasks without a control entry are omitted.
   """
   def hub_state(task_ids) when is_list(task_ids),
-    do: GenServer.call(__MODULE__, {:hub_state, task_ids})
+    do: call({:hub_state, task_ids})
 
   @doc """
   Deliver a human operator's message to one task, using the family delivery
@@ -157,7 +178,7 @@ defmodule CodingAgent.Tools.Task.Control do
   def operator_send(task_id, text) do
     with :ok <- validate_message(text) do
       with_delivery_reply(fn reply_to ->
-        case GenServer.call(__MODULE__, {:operator_send, task_id, text, reply_to}) do
+        case call({:operator_send, task_id, text, reply_to}) do
           {:ok, delivery} -> {:ok, resolve_delivery(delivery)}
           error -> error
         end
@@ -167,17 +188,22 @@ defmodule CodingAgent.Tools.Task.Control do
 
   @doc "Cancel a task the operator Agent Hub has already proven it owns."
   def operator_cancel(task_id),
-    do: GenServer.call(__MODULE__, {:command, task_id, "cancel", nil, nil})
+    do: call({:command, task_id, "cancel", nil, nil})
+
+  # Preserve the public API's former GenServer.call/2 deadline.
+  defp call(request), do: :gen_statem.call(__MODULE__, request, 5_000)
 
   @impl true
-  def init(_opts) do
-    {:ok, %{}}
-  end
+  def callback_mode, do: :handle_event_function
 
   @impl true
-  def handle_call(
+  def init(_opts), do: {:ok, :ready, %{}}
+
+  @impl true
+  def handle_event(
+        {:call, from},
         {:register, id, signal, parent_signal, parent, on_failure, owner_pid},
-        _from,
+        :ready,
         state
       ) do
     AbortSignal.subscribe(parent_signal)
@@ -215,45 +241,43 @@ defmodule CodingAgent.Tools.Task.Control do
       phase: :running,
       resume: nil,
       continuation: nil,
-      idle_token: nil,
       metadata: metadata,
       inbox: inbox,
       inbox_ref: inbox_ref,
-      cancelled: false,
       on_failure: on_failure
     }
 
     entry = if AbortSignal.aborted?(parent_signal), do: cancel(id, entry), else: entry
-    {:reply, :ok, Map.put(state, id, entry)}
+    reply(from, :ok, state, id, entry)
   end
 
-  def handle_call({:worker, id, worker}, _from, state) do
+  def handle_event({:call, from}, {:worker, id, worker}, :ready, state) do
     case state[id] do
-      nil ->
-        {:reply, {:error, "Task aborted"}, state}
-
-      entry ->
+      %{phase: :running} = entry ->
         entry = %{detach_worker(entry) | worker: worker, worker_ref: Process.monitor(worker)}
         notify_worker(entry)
-        {:reply, :ok, Map.put(state, id, entry)}
+        reply(from, :ok, state, id, entry)
+
+      _ ->
+        reply(from, {:error, "Task aborted"}, state)
     end
   end
 
-  def handle_call({:worker_pids, ids}, _from, state) do
+  def handle_event({:call, from}, {:worker_pids, ids}, :ready, state) do
     workers = for id <- ids, entry = state[id], entry && is_pid(entry.worker), do: entry.worker
-    {:reply, Enum.uniq(workers), state}
+    reply(from, Enum.uniq(workers), state)
   end
 
-  def handle_call({:session, id, session, session_id, reply_to}, _from, state) do
+  def handle_event({:call, from}, {:session, id, session, session_id, reply_to}, :ready, state) do
     case state[id] do
       nil ->
         Session.abort(session)
-        {:reply, {:error, "Task aborted"}, state}
+        reply(from, {:error, "Task aborted"}, state)
 
       entry ->
         if unavailable(entry, id) do
           Session.abort(session)
-          {:reply, {:error, "Task aborted"}, state}
+          reply(from, {:error, "Task aborted"}, state)
         else
           case ChildInbox.attach(entry.inbox, session, reply_to) do
             {:deliver_pending, deliveries} ->
@@ -266,104 +290,103 @@ defmodule CodingAgent.Tools.Task.Control do
                   session_id: session_id
               }
 
-              {:reply, {:deliver_pending, deliveries}, Map.put(state, id, entry)}
+              reply(from, {:deliver_pending, deliveries}, state, id, entry)
 
             {:error, _} = error ->
               Session.abort(session)
-              {:reply, error, state}
+              reply(from, error, state)
           end
         end
     end
   end
 
-  def handle_call({:configure, id, context}, _from, state) do
+  def handle_event({:call, from}, {:configure, id, context}, :ready, state) do
     case state[id] do
-      nil -> {:reply, {:error, "Task aborted"}, state}
-      entry -> {:reply, :ok, Map.put(state, id, %{entry | continuation: context})}
+      nil -> reply(from, {:error, "Task aborted"}, state)
+      entry -> reply(from, :ok, state, id, %{entry | continuation: context})
     end
   end
 
-  def handle_call({:retain_session, id, session, resume}, _from, state) do
+  def handle_event({:call, from}, {:retain_session, id, session, resume}, :ready, state) do
     case state[id] do
-      %{session: ^session, cancelled: false} = entry ->
+      %{session: ^session, phase: :running} = entry ->
         TaskStore.set_agent_state(id, :running, %{
           session_id: entry.session_id,
           session_file: resume.start_opts[:session_file],
           cwd: resume.start_opts[:cwd]
         })
 
-        {:reply, :ok, Map.put(state, id, %{entry | resume: resume})}
+        reply(from, :ok, state, id, %{entry | resume: resume})
 
       _ ->
-        {:reply, {:error, "Task aborted"}, state}
+        reply(from, {:error, "Task aborted"}, state)
     end
   end
 
-  def handle_call({:complete, id}, _from, state) do
+  def handle_event({:call, from}, {:complete, id}, :ready, state) do
     case state[id] do
       nil ->
-        {:reply, :ok, state}
+        reply(from, :ok, state)
 
       entry ->
         entry = detach_worker(entry)
 
-        if (status(entry, id) == :completed and entry.resume) && not entry.cancelled do
+        if (status(entry, id) == :completed and entry.resume) &&
+             entry.phase not in [:cancelling, :killed] do
           phase = if is_pid(entry.session), do: :idle, else: :parked
-          token = if phase == :idle, do: make_ref()
-          ttl = Keyword.get(entry.resume.opts, :idle_ttl_ms, 300_000)
-          if token && ttl > 0, do: Process.send_after(self(), {:park, id, token}, ttl)
           TaskStore.set_agent_state(id, phase)
-          {:reply, :ok, Map.put(state, id, %{entry | phase: phase, idle_token: token})}
+          reply(from, :ok, state, id, %{entry | phase: phase})
         else
           stop_child(entry)
-          phase = if entry.cancelled, do: :killed, else: :aborted
+          phase = if entry.phase in [:cancelling, :killed], do: :killed, else: :aborted
           TaskStore.set_agent_state(id, phase)
           entry = entry |> detach_session() |> close_inbox()
-          {:reply, :ok, Map.put(state, id, %{entry | phase: phase, resume: nil})}
+          reply(from, :ok, state, id, %{entry | phase: phase, resume: nil})
         end
     end
   end
 
-  def handle_call({:cancel_owned, target}, {owner, _}, state) do
-    state =
-      Map.new(state, fn {id, entry} ->
-        owned? = entry.owner_pid == owner and (target == :all or target == id)
-        {id, if(owned?, do: cancel(id, entry), else: entry)}
+  def handle_event({:call, {owner, _} = from}, {:cancel_owned, target}, :ready, state) do
+    changes =
+      Enum.reduce(state, {state, []}, fn {id, entry}, acc ->
+        if entry.owner_pid == owner and (target == :all or target == id),
+          do: put_entry(acc, id, cancel(id, entry)),
+          else: acc
       end)
 
-    {:reply, :ok, state}
+    reply_changes(from, :ok, changes)
   end
 
-  def handle_call({:command, id, action, text, reply_to}, _from, state) do
+  def handle_event({:call, from}, {:command, id, action, text, reply_to}, :ready, state) do
     case state[id] do
       nil ->
-        {:reply, {:error, "Task is no longer running"}, state}
+        reply(from, {:error, "Task is no longer running"}, state)
 
       entry when action == "cancel" ->
-        {:reply, :ok, Map.put(state, id, cancel(id, entry))}
+        reply(from, :ok, state, id, cancel(id, entry))
 
-      %{cancelled: true} ->
-        {:reply, {:error, "Task is being cancelled"}, state}
+      %{phase: phase} when phase in [:cancelling, :killed] ->
+        reply(from, {:error, "Task is being cancelled"}, state)
 
       entry ->
         case enqueue(entry, id, text, reply_to) do
-          {:ok, entry} -> {:reply, :ok, Map.put(state, id, entry)}
-          {:delivery, pending} -> {:reply, {:delivery, pending}, state}
-          {:error, reason} -> {:reply, {:error, reason}, state}
+          {:ok, entry} -> reply(from, :ok, state, id, entry)
+          {:delivery, pending} -> reply(from, {:delivery, pending}, state)
+          {:error, reason} -> reply(from, {:error, reason}, state)
         end
     end
   end
 
-  def handle_call({:roster, opts}, _from, state) do
+  def handle_event({:call, from}, {:roster, opts}, :ready, state) do
     reply =
       with {:ok, _caller, family} <- family(state, opts) do
         {:ok, Enum.map(family, &public_identity/1)}
       end
 
-    {:reply, reply, state}
+    reply(from, reply, state)
   end
 
-  def handle_call({:hub_state, ids}, _from, state) do
+  def handle_event({:call, from}, {:hub_state, ids}, :ready, state) do
     reply =
       for id <- ids, Map.has_key?(state, id), into: %{} do
         entry = state[id]
@@ -378,108 +401,111 @@ defmodule CodingAgent.Tools.Task.Control do
          }}
       end
 
-    {:reply, reply, state}
+    reply(from, reply, state)
   end
 
-  def handle_call({:operator_send, id, text, reply_to}, _from, state) do
+  def handle_event({:call, from}, {:operator_send, id, text, reply_to}, :ready, state) do
     with entry when not is_nil(entry) <- state[id],
          recipient = member(id, entry, :child),
          :ok <- prepare_delivery([recipient], text) do
       {entry, delivery} = deliver_recipient(recipient, text, reply_to)
-      {:reply, {:ok, delivery}, Map.put(state, id, entry)}
+      reply(from, {:ok, delivery}, state, id, entry)
     else
-      nil -> {:reply, {:error, "Unknown or unavailable agent target: #{id}"}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      nil -> reply(from, {:error, "Unknown or unavailable agent target: #{id}"}, state)
+      {:error, reason} -> reply(from, {:error, reason}, state)
     end
   end
 
-  def handle_call({:send_message, target, text, opts, reply_to}, _from, state) do
+  def handle_event({:call, from}, {:send_message, target, text, opts, reply_to}, :ready, state) do
     with {:ok, caller, family} <- family(state, opts),
          {:ok, recipients} <- resolve_target(target, family),
          envelope = peer_envelope(caller, text),
          :ok <- prepare_delivery(recipients, envelope) do
-      {state, deliveries} =
-        Enum.reduce(recipients, {state, []}, fn recipient, {acc, receipts} ->
+      {changes, deliveries} =
+        Enum.reduce(recipients, {{state, []}, []}, fn recipient, {acc, receipts} ->
           {entry, delivery} = deliver_recipient(recipient, envelope, reply_to)
-          acc = if recipient.id, do: Map.put(acc, recipient.id, entry), else: acc
+          acc = if recipient.id, do: put_entry(acc, recipient.id, entry), else: acc
           receipt = Map.put(public_identity(recipient), :delivery, delivery)
           {acc, [receipt | receipts]}
         end)
 
-      {:reply, {:ok, %{sender: address(caller), recipients: Enum.reverse(deliveries)}}, state}
+      result = {:ok, %{sender: address(caller), recipients: Enum.reverse(deliveries)}}
+      reply_changes(from, result, changes)
     else
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} -> reply(from, {:error, reason}, state)
     end
   end
 
-  @impl true
-  def handle_cast({:cancel_parent, parent}, state) do
-    {:noreply,
-     Map.new(state, fn {id, entry} ->
-       {id, if(entry.parent == parent, do: cancel(id, entry), else: entry)}
-     end)}
-  end
-
-  @impl true
-  def handle_info({:lemon_abort, signal, _kind}, state) do
-    state =
-      Map.new(state, fn {id, entry} ->
-        {id, if(entry.parent_signal == signal, do: cancel(id, entry), else: entry)}
+  def handle_event(:cast, {:cancel_parent, parent}, :ready, state) do
+    {state, actions} =
+      Enum.reduce(state, {state, []}, fn {id, entry}, acc ->
+        if entry.parent == parent, do: put_entry(acc, id, cancel(id, entry)), else: acc
       end)
 
-    {:noreply, state}
+    {:keep_state, state, actions}
   end
 
-  def handle_info({:park, id, token}, state) do
+  def handle_event(:info, {:lemon_abort, signal, _kind}, :ready, state) do
+    {state, actions} =
+      Enum.reduce(state, {state, []}, fn {id, entry}, acc ->
+        if entry.parent_signal == signal, do: put_entry(acc, id, cancel(id, entry)), else: acc
+      end)
+
+    {:keep_state, state, actions}
+  end
+
+  def handle_event({:timeout, {:park, id}}, :park, :ready, state) do
     case state[id] do
-      %{phase: :idle, idle_token: ^token} = entry ->
+      %{phase: :idle} = entry ->
         stop_child(entry)
         TaskStore.set_agent_state(id, :parked)
-        entry = detach_session(entry)
-        {:noreply, Map.put(state, id, %{entry | phase: :parked, idle_token: nil})}
+        entry = %{detach_session(entry) | phase: :parked}
+        {state, actions} = put_entry({state, []}, id, entry)
+        {:keep_state, state, actions}
 
       _ ->
-        {:noreply, state}
+        :keep_state_and_data
     end
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
-    state =
-      Enum.reduce(state, state, fn {id, entry}, acc ->
+  def handle_event(:info, {:DOWN, ref, :process, _pid, reason}, :ready, state) do
+    {state, actions} =
+      Enum.reduce(state, {state, []}, fn {id, entry}, acc ->
         cond do
           entry.owner_ref == ref ->
-            Map.put(acc, id, cancel(id, entry))
+            put_entry(acc, id, cancel(id, entry))
 
           entry.parent_ref == ref ->
             entry = cancel(id, entry)
             stop_child(entry)
             if is_pid(entry.worker), do: Process.exit(entry.worker, :kill)
             if is_pid(entry.worker), do: entry.on_failure.("Task aborted")
-            remove(acc, id)
+            remove_entry(acc, id)
 
           entry.worker_ref == ref ->
             stop_child(entry)
 
             failure =
-              if entry.cancelled,
+              if entry.phase in [:cancelling, :killed],
                 do: "Task aborted",
                 else: "Task worker exited: #{inspect(reason)}"
 
             entry.on_failure.(failure)
-            TaskStore.set_agent_state(id, :aborted)
+            phase = if entry.phase in [:cancelling, :killed], do: :killed, else: :aborted
+            TaskStore.set_agent_state(id, phase)
             entry = entry |> detach_worker() |> detach_session() |> close_inbox()
-            Map.put(acc, id, %{entry | phase: :aborted, resume: nil})
+            put_entry(acc, id, %{entry | phase: phase, resume: nil})
 
           entry.session_ref == ref ->
             phase =
-              cond do
-                entry.cancelled -> :killed
-                entry.phase in [:idle, :parked] -> :parked
-                true -> :dead
+              case entry.phase do
+                :cancelling -> :cancelling
+                phase when phase in [:idle, :parked] -> :parked
+                _ -> :dead
               end
 
             if phase == :parked, do: TaskStore.set_agent_state(id, :parked)
-            Map.put(acc, id, %{detach_session(entry) | phase: phase, idle_token: nil})
+            put_entry(acc, id, %{detach_session(entry) | phase: phase})
 
           entry.inbox_ref == ref ->
             entry = cancel(id, entry)
@@ -487,30 +513,78 @@ defmodule CodingAgent.Tools.Task.Control do
             if is_pid(entry.worker), do: Process.exit(entry.worker, :kill)
             entry.on_failure.("Task inbox exited")
             entry = entry |> detach_worker() |> detach_session()
-            Map.put(acc, id, %{entry | phase: :aborted, resume: nil})
+            put_entry(acc, id, %{entry | phase: :aborted, resume: nil})
 
           true ->
             acc
         end
       end)
 
-    {:noreply, state}
+    {:keep_state, state, actions}
   end
 
-  def handle_info({:force_cancel, id}, state) do
+  def handle_event({:timeout, {:force_cancel, id}}, :force_cancel, :ready, state) do
     case state[id] do
-      %{cancelled: true} = entry ->
+      %{phase: :cancelling} = entry ->
         stop_child(entry)
         if is_pid(entry.worker), do: Process.exit(entry.worker, :kill)
         if is_pid(entry.worker), do: entry.on_failure.("Task aborted")
         TaskStore.set_agent_state(id, :killed)
 
         entry = entry |> detach_worker() |> detach_session() |> close_inbox()
-        {:noreply, Map.put(state, id, %{entry | phase: :killed, resume: nil})}
+        {state, actions} = put_entry({state, []}, id, %{entry | phase: :killed, resume: nil})
+        {:keep_state, state, actions}
 
       _ ->
-        {:noreply, state}
+        :keep_state_and_data
     end
+  end
+
+  def handle_event(:info, _message, :ready, _state), do: :keep_state_and_data
+
+  defp reply(from, result, state), do: {:keep_state, state, [{:reply, from, result}]}
+
+  defp reply(from, result, state, id, entry) do
+    reply_changes(from, result, put_entry({state, []}, id, entry))
+  end
+
+  defp reply_changes(from, result, {state, actions}) do
+    {:keep_state, state, [{:reply, from, result} | actions]}
+  end
+
+  defp put_entry({state, actions}, id, entry) do
+    actions = transition_timeouts(id, state[id], entry) ++ actions
+    {Map.put(state, id, entry), actions}
+  end
+
+  defp remove_entry({state, actions}, id) do
+    {remove(state, id), transition_timeouts(id, state[id], nil) ++ actions}
+  end
+
+  defp transition_timeouts(_id, %{phase: phase}, %{phase: phase}), do: []
+
+  defp transition_timeouts(id, previous, entry) do
+    cancelled =
+      case previous do
+        %{phase: :idle} -> [{{:timeout, {:park, id}}, :cancel}]
+        %{phase: :cancelling} -> [{{:timeout, {:force_cancel, id}}, :cancel}]
+        _ -> []
+      end
+
+    scheduled =
+      case entry do
+        %{phase: :idle, resume: resume} ->
+          ttl = Keyword.get(resume.opts, :idle_ttl_ms, 300_000)
+          if ttl > 0, do: [{{:timeout, {:park, id}}, ttl, :park}], else: []
+
+        %{phase: :cancelling} ->
+          [{{:timeout, {:force_cancel, id}}, 2_000, :force_cancel}]
+
+        _ ->
+          []
+      end
+
+    cancelled ++ scheduled
   end
 
   defp family(state, opts) do
@@ -588,7 +662,7 @@ defmodule CodingAgent.Tools.Task.Control do
       worker: nil,
       signal: nil,
       parent_signal: nil,
-      cancelled: false,
+      phase: :running,
       metadata: %{run_id: child.metadata[:parent_run_id]}
     }
 
@@ -727,7 +801,7 @@ defmodule CodingAgent.Tools.Task.Control do
        when phase in [:idle, :parked] do
     case TaskStore.begin_agent_turn(id) do
       :ok ->
-        entry = %{entry | phase: :running, idle_token: nil}
+        entry = %{entry | phase: :running}
 
         case Async.resume(id, entry, text) do
           {:ok, worker} ->
@@ -810,7 +884,7 @@ defmodule CodingAgent.Tools.Task.Control do
       end
 
     cond do
-      entry.cancelled or AbortSignal.aborted?(entry.signal) or
+      entry.phase in [:cancelling, :killed] or AbortSignal.aborted?(entry.signal) or
           AbortSignal.aborted?(entry.parent_signal) ->
         :cancelled
 
@@ -837,15 +911,14 @@ defmodule CodingAgent.Tools.Task.Control do
     end
   end
 
-  defp cancel(_id, %{cancelled: true} = entry), do: entry
+  defp cancel(_id, %{phase: phase} = entry) when phase in [:cancelling, :killed], do: entry
 
   defp cancel(id, entry) do
     TaskStore.cancel(id, "Task aborted")
     TaskStore.set_agent_state(id, :killed)
     AbortSignal.abort(entry.signal)
     if is_pid(entry.session), do: Session.abort(entry.session)
-    Process.send_after(self(), {:force_cancel, id}, 2_000)
-    %{close_inbox(entry) | cancelled: true}
+    %{close_inbox(entry) | phase: :cancelling}
   end
 
   defp stop_child(%{session: session}) when is_pid(session) do

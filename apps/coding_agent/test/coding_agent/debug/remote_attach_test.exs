@@ -55,7 +55,7 @@ defmodule CodingAgent.Debug.RemoteAttachTest do
              )
 
     assert_receive {:remote_attach, %{"connect" => %{"host" => "127.0.0.1", "port" => ^port}}}
-    client = :sys.get_state(SessionServer.whereis(key)).session.client
+    {_, %{session: %{client: client}}} = :sys.get_state(SessionServer.whereis(key))
     assert Client.os_pid(client) == nil
     assert {:ok, _} = SessionServer.call(key, %{action: "terminate"}, timeout_ms: 5_000)
     assert_receive {:remote_disconnect, %{"terminateDebuggee" => false}}

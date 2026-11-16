@@ -149,7 +149,7 @@ defmodule CodingAgent.SessionToolResourcesLifecycleTest do
 
       refute Process.alive?(session)
       assert Process.alive?(server)
-      assert :sys.get_state(server).owner_pid == nil
+      assert {_phase, %{owner_pid: nil}} = :sys.get_state(server)
 
       next_owner = spawn(fn -> receive do: (:stop -> :ok) end)
       on_exit(fn -> send(next_owner, :stop) end)
@@ -302,7 +302,7 @@ defmodule CodingAgent.SessionToolResourcesLifecycleTest do
     refute set_breakpoint.().is_error
     new_server = SessionServer.whereis(new_id)
     assert is_pid(new_server)
-    assert :sys.get_state(new_server).owner_pid == session
+    assert {_phase, %{owner_pid: ^session}} = :sys.get_state(new_server)
     assert_eventually(fn -> SessionServer.whereis(old_id) == nil end, timeout: 5_000)
   end
 end
