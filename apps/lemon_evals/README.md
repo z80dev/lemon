@@ -339,6 +339,10 @@ provider with `auth_source = "api_key"`; omp with `PI_CODEX_WEBSOCKET=0`, becaus
 its default WebSocket transport cannot pass through the HTTP proxy). omp's model
 roles all point at the group's model so its subagents cannot switch models.
 
+The Lemon image includes Deno 2.5.6, with architecture-specific archive SHA-256
+checks, for the opt-in `--agents lemon-coding,lemon-code-mode` comparison.
+Code-mode requires Deno on PATH and does not fall back to an unsandboxed kernel.
+
 The report is per model: pass rates with Wilson intervals, an exact McNemar
 test over same-model (task, repetition) pairs, failure modes, tool calls and
 median wall time, request count and wire tokens. A pooled section covers only
