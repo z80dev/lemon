@@ -8,17 +8,7 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 **Release version: 0.3.0.**
 
-### Breaking (0.3.0)
-
-- Agent events are delta-only (#571). Migration: handlers must accumulate
-  deltas instead of expecting full partial messages on every event.
-- Agent queue hooks changed with durable steering (#559). Migration: steering
-  and follow-up acceptance is acknowledged and journaled; update custom queue
-  hooks to the new acknowledged contract and use
-  `Agent.has_steering_messages?/2` for queue checks.
-- Retry helpers move to `LemonAi.Retry` (#592).
-
-### Added (wave 3)
+### Added
 
 - `submit_result` structured subagent results (#602); task-tool action
   telemetry only (#604); optional advisor reviewing each turn (#600);
@@ -28,9 +18,6 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - `gen_statem` lifecycles (#588), non-blocking callbacks (#587), hibernating
   idle subagents with batched completions (#597), supervision subtrees with
   bounded task admission (#585).
-
-### Added
-
 - `LemonAgent.InterruptedToolResult`: one builder for interrupted tool results
   with structured `outcome` (`:unknown | :not_started`) and `reason` (#552).
 - `LemonAgent.AbortSignal.subscribe/1`: abort and redirect are delivered as
@@ -67,6 +54,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- **Breaking (0.3.0):** agent events are delta-only (#571). Migration: handlers
+  must accumulate deltas instead of expecting full partial messages on every
+  event; `{:message_update, message, event}` becomes `{:message_update, event}`.
+- **Breaking (0.3.0):** steering and follow-up acceptance is acknowledged and
+  journaled, and queue settings live in `AgentLoopConfig.hooks` (#559).
+  Migration: update custom queue hooks to the acknowledged contract and use
+  `Agent.has_steering_messages?/2` for queue checks.
+- **Breaking (0.3.0):** retry helpers move to `LemonAi.Retry` (#592).
 - **Breaking:** `AgentLoopConfig.emit_system_prompt`, `.stream_rules` and
   `.on_stream_rule` moved into the new `.hooks` map (same keys, defaults `false`,
   `[]`, `nil`). Struct literals and field reads using the old fields must change.

@@ -7,7 +7,7 @@ defmodule CodingAgent.Eval.KernelTest do
   @python System.find_executable("python3")
 
   @tag :tmp_dir
-  @tag skip: is_nil(@python)
+  @tag :python3
   test "status stays responsive while process-group observation waits", %{tmp_dir: cwd} do
     test_pid = self()
 
@@ -37,7 +37,7 @@ defmodule CodingAgent.Eval.KernelTest do
   end
 
   @tag :tmp_dir
-  @tag skip: is_nil(@python)
+  @tag :python3
   test "status stays responsive during SIGINT and cleanup IO", %{tmp_dir: cwd} do
     test_pid = self()
 
