@@ -505,8 +505,11 @@ glibc and OpenSSL; the installer currently targets Debian/Ubuntu Linux tasks.
 On Linux select a host gateway IP/name reachable from the task container;
 the adapter adds that host to Harbor's agent-phase network allowlist. Do not
 mount the operator's HOME or inject provider credentials with Harbor flags.
-For the first authorized run, `--keep-containers` retains private containers
-for inspection: inspect their environment, `/tmp/lemon-arena-home`, installed
+For the first authorized run, `--keep-containers` sets Harbor's Docker
+`kwargs.keep_containers = true`: containers are stopped rather than removed.
+Setting only `delete = false` preserves images, not containers, on the pinned
+Harbor revision. Inspect retained containers' environment,
+`/tmp/lemon-arena-home`, installed
 bundles and process environment, and verify that every provider bearer is a
 trial token, not a real credential. Remove those containers manually after
 the audit. Do not publish that raw inspection or raw Harbor logs.

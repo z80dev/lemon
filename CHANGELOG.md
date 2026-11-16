@@ -22,7 +22,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   - Optional advisor: a second model that reviews each turn (#600).
   - Experimental, opt-in `code_mode` tool profile
     (`profile = "code_mode"` / `LEMON_TOOL_DISCLOSURE_PROFILE=code_mode`);
-    legacy, coding and auto defaults are unchanged (#598).
+    legacy, coding and auto defaults are unchanged (#598). The arena Lemon
+    image includes checksum-pinned Deno 2 for sandboxed code-mode trials.
   - Gateway admission: the EngineLock FIFO is replaced by a fail-fast
     engine-session claim (#610), the Run is the slot waiter and `ThreadWorker`
     is deleted (#611), the router no longer retries gateway admission (#612),

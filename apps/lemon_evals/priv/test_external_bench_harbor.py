@@ -155,6 +155,12 @@ class HarborResultParsingTests(unittest.TestCase):
             self.assertEqual(agent['kwargs']['effort'], 'medium')
             self.assertEqual(agent['model_name'], 'glm-5.3')
         self.assertEqual(config['datasets'][0]['n_tasks'], 2)
+        self.assertTrue(config['environment']['delete'])
+        self.assertFalse(config['environment']['kwargs']['keep_containers'])
+        args.keep_containers = True
+        retained = terminal.job_config(args, 'glm-5.3', 2, Path('/tmp/out'))
+        self.assertFalse(retained['environment']['delete'])
+        self.assertTrue(retained['environment']['kwargs']['keep_containers'])
 
     def test_artifact_paths_must_be_outside_checkout(self):
         with self.assertRaises(ValueError):

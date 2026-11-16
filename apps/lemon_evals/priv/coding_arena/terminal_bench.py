@@ -40,7 +40,8 @@ def job_config(args, model, rep, out):
     dataset, version = args.dataset.rsplit('@', 1)
     return {'job_name': name, 'jobs_dir': str(out / 'jobs'), 'n_attempts': 1,
             'n_concurrent_trials': 1, 'retry': {'max_retries': 0},
-            'environment': {'type': 'docker', 'delete': not args.keep_containers},
+            'environment': {'type': 'docker', 'delete': not args.keep_containers,
+                            'kwargs': {'keep_containers': args.keep_containers}},
             'agents': agents, 'datasets': [{'name': dataset, 'version': version,
                                            'task_names': args.tasks.split(','), 'n_tasks': args.max_tasks}]}
 
