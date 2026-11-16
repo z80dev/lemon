@@ -1398,36 +1398,12 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core, :lemon_gateway]
     },
     %{
-      name: :lemon_gateway_engine_lock_timeout_ms,
-      env_var: "LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS",
-      aliases: [],
-      type: :integer,
-      default: 60_000,
-      doc: "Engine lock acquisition timeout, in milliseconds.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_gateway]
-    },
-    %{
       name: :lemon_gateway_max_concurrent_runs,
       env_var: "LEMON_GATEWAY_MAX_CONCURRENT_RUNS",
       aliases: [],
       type: :integer,
       default: 2,
       doc: "Maximum concurrent agent runs the gateway will schedule.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_gateway]
-    },
-    %{
-      name: :lemon_gateway_require_engine_lock,
-      env_var: "LEMON_GATEWAY_REQUIRE_ENGINE_LOCK",
-      aliases: [],
-      type: :boolean,
-      default: true,
-      doc: "Whether an engine lock is required before starting a gateway run.",
       secret?: false,
       required?: false,
       area: :gateway,

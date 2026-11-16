@@ -12,7 +12,7 @@ Channel transport or gateway-native ingress
   -> LemonRouter.SessionCoordinator
   -> LemonRouter.RunProcess
   -> configured LemonCore.EngineRuntime.submit_execution/1
-  -> gateway runtime scheduler / thread worker / run
+  -> gateway Runtime -> Run -> EngineSessionClaim -> Slots -> executor
   -> LemonCore.Bus run events
   -> LemonRouter semantic coalescers / output tracking
   -> LemonCore.DeliveryIntent
@@ -131,7 +131,11 @@ of pending prompt text and 16 MiB of encoded pending image data. A new submissio
 exceeding a bound returns `:session_queue_full` without mutating the queue or
 interrupting the active run;
 replaying an already retained fixed run ID remains an acknowledgement lookup.
-Gateway admission additionally bounds launch queues and global slot waiters.
+Gateway bounds executing Runs, not its waiter population. Router's run-process
+limit bounds normal routed waiters; direct runtime submissions bypass that cap.
+Coordinators are never stopped on idle and their supervisor is uncapped: one
+process remains per distinct conversation for the VM lifetime. See the canonical
+[admission inventory](../../docs/architecture/admission-gates.md).
 
 Each accepted submission retains a durable terminal receipt even if it never
 starts an executor. A merged followup ends with `error.type: :superseded` and its
@@ -155,10 +159,10 @@ Stale markers and markers with no usable history clear eagerly. Prior run
 summaries are carried as JSONL with escaped envelope characters and are bounded
 by dropping complete oldest run entries rather than slicing through role data.
 
-Run admission is terminally bounded at both router boundaries. `RunProcess`
-backs off through transient runtime outages only until its pre-start deadline;
-persistent unavailability or rejection emits one structured synthetic
-`:run_completed` event so the active conversation is released. If a queued child
+`RunProcess` retries runtime unavailability only, until its pre-start deadline;
+definite gateway rejection terminalizes immediately rather than retrying admission.
+Persistent unavailability emits one structured synthetic `:run_completed` event
+so the active conversation is released. If a queued child
 cannot start later, `SessionCoordinator` emits the corresponding structured
 start-failure completion before cleaning up its event-bridge subscription and
 continues with the next queued submission. A child already registered after an

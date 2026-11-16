@@ -19,7 +19,7 @@ defmodule LemonGateway.QueueModeTest do
     refute Map.has_key?(Map.from_struct(request), :queue_mode)
   end
 
-  test "Scheduler.submit_execution/1 requires router-owned conversation_key" do
+  test "Runtime.submit_execution/1 requires router-owned conversation_key" do
     request = %ExecutionRequest{
       run_id: "run_missing_conversation",
       session_key: "agent:test:main",
@@ -28,7 +28,9 @@ defmodule LemonGateway.QueueModeTest do
 
     assert_raise ArgumentError,
                  ~r/missing router-owned conversation_key/,
-                 fn -> LemonGateway.Scheduler.submit_execution(request) end
+                 fn ->
+                   LemonGateway.Runtime.submit_execution(ExecutionRequest.to_command(request))
+                 end
   end
 
   test "Runtime.submit_execution/1 accepts only core execution commands" do

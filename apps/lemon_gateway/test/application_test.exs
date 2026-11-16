@@ -254,16 +254,10 @@ defmodule LemonGateway.ApplicationTest do
       assert_eventually(fn -> match?(%{test: true}, LemonCore.ChatStateStore.get(scope)) end)
     end
 
-    test "ThreadRegistry is available for ThreadWorker registration" do
+    test "RunRegistry is available for run-owned session registration" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      # Registry should be running
-      registry_pid = Process.whereis(Elixir.LemonGateway.ThreadRegistry)
-      assert is_pid(registry_pid)
-
-      # Registry should accept lookups
-      result = Elixir.LemonGateway.ThreadRegistry.whereis(:nonexistent)
-      assert result == nil
+      assert is_pid(Process.whereis(LemonGateway.RunRegistry))
+      assert Registry.lookup(LemonGateway.RunRegistry, {:session, :nonexistent}) == []
     end
   end
 
@@ -410,13 +404,13 @@ defmodule LemonGateway.ApplicationTest do
 
       # Verify processes are registered
       assert is_pid(Process.whereis(Elixir.LemonGateway.Config))
-      assert is_pid(Process.whereis(Elixir.LemonGateway.Scheduler))
+      assert is_pid(Process.whereis(Elixir.LemonGateway.Slots))
 
       :ok = Application.stop(:lemon_gateway)
 
       # Names should be freed
       assert Process.whereis(Elixir.LemonGateway.Config) == nil
-      assert Process.whereis(Elixir.LemonGateway.Scheduler) == nil
+      assert Process.whereis(Elixir.LemonGateway.Slots) == nil
     end
 
     test "application can be restarted after shutdown" do
@@ -431,25 +425,11 @@ defmodule LemonGateway.ApplicationTest do
       assert is_pid(Process.whereis(Elixir.LemonGateway.Config))
     end
 
-    test "DynamicSupervisors have no children after clean shutdown" do
+    test "RunSupervisor starts without children after clean shutdown" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      # Verify supervisors exist
-      assert is_pid(Process.whereis(Elixir.LemonGateway.RunSupervisor))
-      assert is_pid(Process.whereis(Elixir.LemonGateway.ThreadWorkerSupervisor))
-
-      # Stop and restart
       :ok = Application.stop(:lemon_gateway)
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      # DynamicSupervisors should start fresh with no children
-      run_children = DynamicSupervisor.which_children(Elixir.LemonGateway.RunSupervisor)
-
-      thread_children =
-        DynamicSupervisor.which_children(Elixir.LemonGateway.ThreadWorkerSupervisor)
-
-      assert run_children == []
-      assert thread_children == []
+      assert DynamicSupervisor.which_children(LemonGateway.RunSupervisor) == []
     end
   end
 
@@ -497,15 +477,10 @@ defmodule LemonGateway.ApplicationTest do
       :ok
     end
 
-    test "EngineLock process is registered and responding" do
+    test "Slots publishes counters without a claim server" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      pid = Process.whereis(Elixir.LemonGateway.EngineLock)
-      assert is_pid(pid)
-
-      # Should respond to acquire calls
-      {:ok, release_fn} = Elixir.LemonGateway.EngineLock.acquire(:test_key, 1000)
-      release_fn.()
+      assert is_pid(Process.whereis(LemonGateway.Slots))
+      assert {:ok, %{max: 2, in_flight: 0, waitq: 0}} = LemonGateway.Slots.stats()
     end
 
     test "Store process is registered and responding" do
@@ -568,7 +543,7 @@ defmodule LemonGateway.ApplicationTest do
       }
 
       # Submit should succeed
-      assert :ok = Elixir.LemonGateway.Scheduler.submit_execution(request)
+      assert :ok = LemonGateway.Runtime.submit_execution(ExecutionRequest.to_command(request))
     end
 
     test "Store persists data across operations" do
@@ -588,34 +563,13 @@ defmodule LemonGateway.ApplicationTest do
       assert LemonCore.ChatStateStore.get(scope) == nil
     end
 
-    test "EngineLock provides mutual exclusion" do
+    test "engine session claims reject a second owner immediately" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      thread_key = {:lock_test, System.unique_integer()}
-
-      # First acquire should succeed
-      {:ok, release1} = Elixir.LemonGateway.EngineLock.acquire(thread_key, 1000)
-
-      # Start a task that tries to acquire the same lock
-      parent = self()
-
-      task =
-        Task.async(fn ->
-          result = Elixir.LemonGateway.EngineLock.acquire(thread_key, 100)
-          send(parent, {:task_result, result})
-        end)
-
-      # Should timeout waiting for lock
-      assert_receive {:task_result, {:error, :timeout}}
-
-      Task.shutdown(task, :brutal_kill)
-
-      # Release first lock
-      release1.()
-
-      # Now should be able to acquire again
-      {:ok, release2} = Elixir.LemonGateway.EngineLock.acquire(thread_key, 1000)
-      release2.()
+      key = {:session, make_ref()}
+      assert :ok = LemonGateway.EngineSessionClaim.claim(key)
+      task = Task.async(fn -> LemonGateway.EngineSessionClaim.claim(key) end)
+      assert Task.await(task) == {:error, :session_in_use}
+      assert :ok = LemonGateway.EngineSessionClaim.release(key)
     end
   end
 
@@ -654,16 +608,16 @@ defmodule LemonGateway.ApplicationTest do
       assert is_map(config)
     end
 
-    test "Scheduler process is restarted if it crashes" do
+    test "Slots process is restarted if it crashes" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      original_pid = Process.whereis(Elixir.LemonGateway.Scheduler)
+      original_pid = Process.whereis(Elixir.LemonGateway.Slots)
       assert is_pid(original_pid)
 
       # Kill the process
       Process.exit(original_pid, :kill)
 
-      new_pid = await_restart(Elixir.LemonGateway.Scheduler, original_pid)
+      new_pid = await_restart(Elixir.LemonGateway.Slots, original_pid)
       assert is_pid(new_pid)
       assert new_pid != original_pid
     end
@@ -686,22 +640,13 @@ defmodule LemonGateway.ApplicationTest do
       assert result == nil
     end
 
-    test "EngineLock process is restarted if it crashes" do
+    test "session ownership registry is supervised" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      children = Supervisor.which_children(LemonGateway.Supervisor)
 
-      original_pid = Process.whereis(Elixir.LemonGateway.EngineLock)
-      assert is_pid(original_pid)
-
-      # Kill the process
-      Process.exit(original_pid, :kill)
-
-      new_pid = await_restart(Elixir.LemonGateway.EngineLock, original_pid)
-      assert is_pid(new_pid)
-      assert new_pid != original_pid
-
-      # Should still be functional
-      {:ok, release} = Elixir.LemonGateway.EngineLock.acquire(:restart_test, 1000)
-      release.()
+      assert Enum.any?(children, fn {id, pid, _, _} ->
+               id == LemonGateway.RunRegistry and is_pid(pid)
+             end)
     end
   end
 end

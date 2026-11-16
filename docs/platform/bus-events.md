@@ -185,7 +185,7 @@ The busiest topic and the only one whose subscribers span the umbrella.
 |---|---|---|
 | `:run_started` (typed) | `LemonGateway.Run` | `Events.RunStarted` (`run_id`, `session_key`, `engine: "lemon"`, optional `model`, `provider`, `thinking_level`) |
 | `:delta` (typed) | `LemonGateway.Run` | `Events.Delta` (`run_id`, `seq`, `text`, `ts_ms`, `meta`) |
-| `:run_completed` (typed) | `LemonGateway.Run`; synthetic completions from `LemonRouter.RunProcess`, `RunProcess.Watchdog`, `SessionCoordinator`, `LemonGateway.Scheduler` and `ThreadWorker` (admission failures) | `Events.RunCompleted` wrapping `Events.Completion`; synthetic ones carry `meta.synthetic == true` |
+| `:run_completed` (typed) | `LemonGateway.Run` (including admission failures); synthetic completions from `LemonRouter.RunProcess`, `RunProcess.Watchdog`, and `SessionCoordinator` | `Events.RunCompleted` wrapping `Events.Completion`; synthetic ones carry `meta.synthetic == true` |
 | `:run_failed` (typed) | `LemonRouter.RunProcess` (abnormal termination) | `Events.RunFailed` (`run_id`, `session_key`, `reason`) |
 | `:run_phase_changed` (typed) | `LemonRouter.PhasePublisher` (the only publisher; the gateway tracks phases but does not broadcast them) | `Events.RunPhaseChanged`, built with `RunPhaseChanged.build/1` |
 | `:engine_action` (typed) | `LemonGateway.Run`; `CodingAgent.Tools.Task.LiveBridge` and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |

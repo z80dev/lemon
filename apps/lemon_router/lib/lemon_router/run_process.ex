@@ -275,8 +275,16 @@ defmodule LemonRouter.RunProcess do
                    |> cancel_gateway_submit_deadline()
                    |> Map.merge(%{gateway_submitted?: true, gateway_submit_attempt: 0})}
 
+                {:error, :runtime_unavailable} ->
+                  retry_runtime_submission(
+                    state,
+                    :runtime_unavailable,
+                    "Engine runtime unavailable"
+                  )
+
                 {:error, reason} ->
-                  retry_runtime_submission(state, reason, "Engine runtime rejected submit")
+                  {:noreply,
+                   terminalize_gateway_submission(%{state | gateway_submit_last_error: reason})}
               end
             else
               retry_runtime_submission(state, :runtime_unavailable, "Engine runtime unavailable")

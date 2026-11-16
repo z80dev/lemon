@@ -16,16 +16,16 @@ messaging adapters; gateway-native SMS/voice/webhook ingress remains opt-in thro
 - The public submission boundary is
   `LemonGateway.Runtime.submit_execution(%LemonCore.ExecutionCommand{})`.
   Gateway constructs its private `ExecutionRequest`; consumers do not.
-- `Scheduler` grants slots for the router-supplied conversation key.
-  `ThreadWorker` only launches runs; run-owned unique Registry names provide
-  session isolation, with `EngineLock` retaining FIFO admission, not a product queue.
-- Slot requests carry a generation token. Timeout retries cancel the prior
-  generation before requesting again. Bounded failed launch attempts produce
-  one structured terminal completion and advance the worker.
-- A live lock owner is never displaced solely because it is old. Transfer on
-  explicit release or confirmed owner death.
-- Completion stores native resume state, releases lock/slot and notifies bus
-  observers. Cancel by exact run ID; top-level resume accepts native tokens only.
+- `Runtime` starts `Run` directly; `Slots` is the sole global permit authority,
+  with live Runs as FIFO waiters. Router `SessionCoordinator` alone orders conversations.
+- Claim the engine session through `EngineSessionClaim` before requesting a
+  permit. Contention is `:session_in_use`, not a wait while holding capacity.
+- Check the durable terminal fence before admission and recheck terminal/cancel
+  state after grant. Release permits and claims idempotently; owner death cleans up.
+- Completion persists its receipt before notifying observers. Cancel by exact
+  run ID, including waiting Runs; top-level resume accepts native tokens only.
+- Direct execution callers bypass router backlog/process limits. See the
+  [admission inventory](../../docs/architecture/admission-gates.md) for bounds.
 
 ## Ingress and idempotency
 
@@ -54,15 +54,13 @@ Webhook mutation boundaries are deliberately conservative:
 
 ## Operations
 
-For stuck execution, inspect scheduler in-flight slots, lock waiters and live
-run/worker children. For an unready executor, call
+For stuck execution, inspect Slots counters, live Run children and router
+conversation backlogs. For an unready executor, call
 `LemonGateway.Executor.validate_configured/0`, not an engine registry lookup.
 Resume state lives in `LemonCore.ChatStateStore` and the native session.
 
 ```elixir
-LemonGateway.Scheduler.stats()
-:sys.get_state(LemonGateway.EngineLock)
-DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)
+LemonGateway.Slots.stats()
 DynamicSupervisor.which_children(LemonGateway.RunSupervisor)
 ```
 
@@ -76,5 +74,5 @@ From the umbrella root: `mix test apps/lemon_gateway/test`.
 Tests stopping runtime applications restore exactly the original running set
 with `Application.ensure_all_started/1`. Gateway transport tests may own gateway/
 channels but must not stop unrelated consumers such as the control plane.
-Exercise slot timeouts, owner death, cancellation races, restart and replay-store
+Exercise FIFO admission, owner death, cancellation races, restart and replay-store
 failure, not just happy-path submission.

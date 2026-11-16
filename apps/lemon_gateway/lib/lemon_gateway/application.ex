@@ -3,7 +3,7 @@ defmodule LemonGateway.Application do
   OTP application for LemonGateway.
 
   Starts the execution supervision tree: configuration, the singleton executor,
-  schedulers, run supervisors, and the health check server.
+  execution permits, run supervisors, and the health check server.
 
   Gateway-owned ingress (transport, SMS, voice) is off by default and
   starts only when `:gateway_ingress_enabled` is set for `:lemon_gateway`. See
@@ -18,13 +18,10 @@ defmodule LemonGateway.Application do
       children =
         [
           LemonGateway.Config,
-          LemonGateway.EngineLock,
           {Registry, keys: :unique, name: LemonGateway.RunRegistry},
-          LemonGateway.ThreadRegistry,
+          LemonGateway.Slots,
           LemonGateway.RunSupervisor,
-          LemonGateway.ThreadWorkerSupervisor,
-          {Task.Supervisor, name: LemonGateway.TaskSupervisor},
-          LemonGateway.Scheduler
+          {Task.Supervisor, name: LemonGateway.TaskSupervisor}
           # lemon_channels is started explicitly by the top-level runtime app (or by
           # starting :lemon_control_plane / lemon_channels directly). LemonGateway
           # does not attempt to orchestrate startup of sibling applications.
@@ -41,9 +38,9 @@ defmodule LemonGateway.Application do
       # exists, so ask it to mirror the table into its read cache.
       LemonCore.Store.register_cached_table(LemonGateway.ProgressStore.table())
 
-      # See https://hexdocs.pm/elixir/Supervisor.html
-      # for other strategies and supported options
-      opts = [strategy: :one_for_one, name: LemonGateway.Supervisor]
+      # A lost permit authority or registry must stop its Runs before admitting
+      # new work; otherwise a restarted counter could oversubscribe execution.
+      opts = [strategy: :rest_for_one, name: LemonGateway.Supervisor]
       Supervisor.start_link(children, opts)
     end
   end

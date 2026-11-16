@@ -87,12 +87,13 @@ defmodule LemonCore.EngineRuntime do
 
   `LemonGateway.Runtime` is the implementation the platform ships.
   `submit_execution/1` fills in the command's conversation key, converts it to
-  the gateway-private `LemonGateway.ExecutionRequest`, and hands that to
-  `LemonGateway.Scheduler`, which owns slot limits and engine locks.
-  `run_pid/1` is a lookup in `LemonGateway.RunRegistry`, and `available?/0` is
-  simply whether the scheduler process is alive. The command→request
-  conversion is the point of the indirection: `ExecutionRequest` is gateway
-  private state and must not leak back into the router.
+  the gateway-private `LemonGateway.ExecutionRequest`, and starts a supervised
+  `LemonGateway.Run`. The Run claims its engine session before waiting for a
+  permit from `LemonGateway.Slots`, the global execution-slot authority.
+  `run_pid/1` is a lookup in `LemonGateway.RunRegistry`; `available?/0` checks
+  the execution runtime's supervision and slot authority. The command→request
+  conversion keeps `ExecutionRequest` gateway-private; it must not leak back
+  into the router.
 
   ## Implementing a runtime
 

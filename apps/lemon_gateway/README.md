@@ -1,98 +1,46 @@
 # LemonGateway
 
-Gateway for Lemon's configured singleton native executor. It sits behind router-owned conversations and handles execution-slot scheduling, per-conversation launch isolation, session resumption, and streaming native-executor output via the event bus.
+Gateway for Lemon's configured singleton native executor. It sits behind router-owned conversations and handles global execution permits, fail-fast engine-session ownership, session resumption, and streaming native-executor output via the event bus.
 
 Part of the `lemon` Elixir umbrella project.
 
 ## Architecture
 
-```
-                        +-----------------------------------------+
-                        |   Router / Explicit Legacy Ingress       |
-                        | Email  SMS  Voice  Webhook              |
-                        +-------------------+---------------------+
-                                            |
-                               ExecutionCommand
-                                            |
-                                            v
-                        +-------------------+---------------------+
-                        |           LemonGateway.Runtime           |
-                        |  submit_execution/1 -> ExecutionRequest  |
-                        +-------------------+---------------------+
-                                            |
-                                            v
-                        +-------------------+---------------------+
-                        |         LemonGateway.Scheduler           |
-                        | slot allocation + conversation-key       |
-                        | routing from router-supplied requests    |
-                        +-------------------+---------------------+
-                                            |
-                                    slot_granted
-                                            |
-                                            v
-                        +-------------------+---------------------+
-                        |       LemonGateway.ThreadWorker          |
-                        |   trivial per-conversation launcher      |
-                        |   (no queue semantics)                   |
-                        +-------------------+---------------------+
-                                            |
-                                     RunSupervisor
-                                     .start_run
-                                            |
-                                            v
-                        +-------------------+---------------------+
-                        |          LemonGateway.Run                |
-                        |  native execution lifecycle, bus events, |
-                        |       streaming deltas, steer/cancel     |
-                        +-------------------+---------------------+
-                                            |
-                                            v
-                        +-------------------+---------------------+
-                        |       CodingAgent.Executor               |
-                        |    configured native executor            |
-                        +-------------------+---------------------+
-                                            |
-                                  events & deltas
-                                            |
-                                            v
-                        +-------------------+---------------------+
-                        |          LemonCore.Bus                   |
-                        |     topic "run:<run_id>"                 |
-                        |   -> LemonRouter -> LemonChannels        |
-                        +-----------------------------------------+
+```text
+Router SessionCoordinator (conversation ordering)
+  -> EngineRuntime / LemonGateway.Runtime.submit_execution/1
+  -> RunSupervisor -> Run (unique run_id)
+  -> EngineSessionClaim (fail fast)
+  -> RunStore terminal fence
+  -> Slots (global FIFO; Run is the waiter)
+  -> cancellation / terminal recheck
+  -> CodingAgent.Executor
+  -> LemonCore.Bus -> router semantic output -> channels delivery
 ```
 
 ### Flow
 
 1. Router-owned `SessionCoordinator` decides queue semantics (`collect`, `followup`, `steer`, `interrupt`) and hands queue-semantic-free `%LemonCore.ExecutionCommand{}` values to `LemonGateway.Runtime`.
 2. Gateway-owned transports that still live in this app submit `%LemonCore.RunRequest{}` through `LemonCore.RouterBridge`, not directly into gateway internals.
-3. The submitting process resolves or starts the unique **ThreadWorker** for the router-supplied `conversation_key` and synchronously acknowledges enqueue. The **Scheduler** only deduplicates tokenized worker generations and allocates slots; it never waits on a worker.
-4. The **ThreadWorker** is only a per-conversation launcher/slot waiter. It does not own product queue semantics. Its run-start attempt budget persists across slot grants; exhausted requests receive one structured terminal completion before later FIFO work advances.
-5. On slot grant, the worker starts a **Run** via `RunSupervisor`. Startup acknowledges immediately; the Run acquires its engine-session Registry name in `handle_continue/2`, then starts Lemon's native executor.
-6. The native executor executes the AI request and streams lifecycle events and deltas back to the Run process.
-7. The **Run** broadcasts all events to `LemonCore.Bus` on topic `"run:<run_id>"`. Router and channels consume those events and handle semantic output plus channel rendering.
-8. On completion, the Run durably stores its terminal receipt and releases the engine lock and scheduler slot; router stores resume state before advancing the conversation.
+3. `Runtime.submit_execution/1` starts a temporary **Run** directly under `RunSupervisor`; `:ok` acknowledges a started or already-live child, not executor admission or completion.
+4. The **Run** claims its engine session before requesting capacity. A conflicting claim completes with `:session_in_use` without consuming a permit.
+5. After the terminal fence, the Run waits asynchronously in **Slots**' global FIFO. It rechecks terminal/cancellation state before invoking the executor.
+6. The native executor streams lifecycle events and deltas back to the Run.
+7. The **Run** broadcasts events on `"run:<run_id>"`; router and channels own semantic output and rendering.
+8. Completion persists the terminal receipt before notification and releases the claim and permit.
 
-Exact-run cancellation also removes executions waiting for a slot; cancelled
-waiters cannot launch later. Worker enqueue is acknowledged synchronously, so a
-worker finishing its previous run cannot silently lose the next request.
-Only a definite missing worker permits retry; a lost acknowledgement remains
-`:outcome_unknown` and is never automatically re-enqueued.
-Normally drained workers are temporary children, not restarted empty shells;
-the next submission gets a newly acknowledged worker instead of being cast
-into a retiring mailbox.
-Dead Registry entries do not consume enqueue attempts. Resolution retries retain
-the existing five-second startup budget, and live workers retain the existing
-two attempts for definite pre-enqueue rejection. Normally retiring workers remove
-their name before exiting. A definite admission failure returns a classified
-`{:error, reason}` to the submitter and persists/notifies a terminal failure;
-only a lost acknowledgement remains `:outcome_unknown`.
+Exact-run cancellation removes slot waiters; a late grant cannot authorize a
+terminal run to execute. RunRegistry prevents two live Runs for the same run ID.
+Router retries only runtime unavailability, bounded by its pre-start deadline;
+definite rejection terminalizes once rather than retrying gateway admission.
 
-Gateway limits each worker's pending launch queue to 128 requests and the global
-slot-wait queue to 1,024 workers. Overflow terminalizes the rejected run with
-`:execution_queue_full` instead of leaving its router conversation busy.
+Gateway has no separate per-conversation launch queue and no independent waiter
+count or wait-time cap. The router's run-process cap bounds normal routed waiters,
+but direct runtime callers bypass that protection. See the canonical
+[admission inventory and ADR](../../docs/architecture/admission-gates.md).
+
 Native executor death publishes an immediate structured `:executor_down`
-completion and releases the slot/lock. The native session runner monitors its
+completion and releases the permit/claim. The native session runner monitors its
 event sink and aborts/saves/stops its owned session when that sink disappears.
 Terminal receipts are durable before their bus notification is emitted.
 Cancellation of a running native session retains its slot until ordered terminal
@@ -173,13 +121,13 @@ with `retry_safe: false` and never submit another run.
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway` | `lemon_gateway.ex` | Public API entry point for `submit_execution/1` and health helpers |
+| `LemonGateway` | `lemon_gateway.ex` | Public execution-command facade `submit/1` |
 | `LemonGateway.Application` | `application.ex` | Execution runtime supervision tree with optional health and explicit legacy ingress children |
 | `LemonGateway.IngressSupervisor` | `ingress_supervisor.ex` | Supervisor for gateway-owned transport, SMS, and voice startup |
 | `LemonGateway.Runtime` | `runtime.ex` | Execution submission and cancellation API |
 | `LemonGateway.Config` | `config.ex` | TOML-backed runtime configuration GenServer |
 | `LemonGateway.ConfigLoader` | `config_loader.ex` | Loads and parses TOML config into typed structs |
-| `LemonGateway.ExecutionRequest` | `execution_request.ex` | Gateway-private scheduler adapter with no queue semantics |
+| `LemonGateway.ExecutionRequest` | `execution_request.ex` | Gateway-private execution adapter with no queue semantics |
 | `LemonGateway.Types` | `types.ex` | Shared gateway lane type |
 | `LemonGateway.Event` | `event.ex` | Run lifecycle events (plain tagged maps with guards) and `Delta` struct |
 | `LemonCore.ChatState` | `../lemon_core/lib/lemon_core/chat_state.ex` | Session state struct for auto-resume tracking |
@@ -191,21 +139,17 @@ with `retry_safe: false` and never submit another run.
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Scheduler` | `scheduler.ex` | Concurrency-limited slot allocator keyed by router-supplied conversation keys, with tokenized request deduplication |
-| `LemonGateway.ThreadWorker` | `thread_worker.ex` | Per-conversation launcher / slot waiter with no queue-mode logic and bounded total start attempts |
-| `LemonGateway.ThreadRegistry` | `thread_registry.ex` | Registry for thread workers (unique key by `thread_key`) |
-| `LemonGateway.ThreadWorkerSupervisor` | `thread_worker_supervisor.ex` | DynamicSupervisor for thread workers |
+| `LemonGateway.Slots` | `slots.ex` | Global FIFO execution permits; live Run processes are the waiters |
 | `LemonGateway.Run` | `run.ex` | Individual run GenServer: native execution lifecycle, bus events, steer/cancel |
 | `LemonGateway.RunSupervisor` | `run_supervisor.ex` | DynamicSupervisor for run processes (temporary restart) |
-| `LemonGateway.EngineLock` | `engine_lock.ex` | FIFO admission queue for run-owned engine-session Registry names, with monitored waiters and timeouts |
+| `LemonGateway.EngineSessionClaim` | `engine_session_claim.ex` | Fail-fast Run-owned engine-session Registry claim |
 | `LemonGateway.ProgressStore` | `progress_store.ex` | Progress/status message → run id index in the `:progress` store table (registered for the store read cache at boot); backs cancel-by-message |
 
 Engine-session ownership is a unique `{:engine_session, key}` name in
-`RunRegistry`, held by the Run itself. FIFO waiting and the configured
-`engine_lock_timeout_ms` remain contractual; `EngineLock` only coordinates
-admission reservations and monitored waiters. Explicit release unregisters the
-name before advancing the queue; owner death releases it through Registry.
-There is no periodic sweep, age threshold, or over-age-owner telemetry.
+`RunRegistry`, held by the Run itself. `EngineSessionClaim.claim/1` returns
+`:ok` or `{:error, :session_in_use}` without waiting. Explicit release and
+owner death release the name. There is no lock process, timeout, or ownership
+transfer queue.
 
 Gateway action events preserve nested `action.detail.result_meta` metadata,
 including safe failure fields such as `error_type`, `timeout_ms`, and
@@ -287,8 +231,8 @@ in-process subagents.
 
 ### Start
 
-1. `Run.init/1` returns without waiting for session ownership. In `handle_continue/2`, the Run waits in FIFO order and registers its engine-session key in the unique `RunRegistry` (or completes with `:lock_timeout`).
-2. The Run resolves the working directory and invokes the configured `CodingAgent.Executor` through `LemonGateway.Executor`.
+1. `Run.init/1` registers its run ID without waiting for capacity. Admission claims the engine session, checks the terminal fence, then requests a permit.
+2. After grant and a terminal/cancellation recheck, the Run resolves the working directory and invokes `CodingAgent.Executor` through `LemonGateway.Executor`.
 3. The native executor starts the session and returns the run and cancellation state; vendor CLI subprocesses are never started for a Gateway run.
 
 ### Streaming
@@ -300,7 +244,7 @@ in-process subagents.
 ### Completion
 
 - The native executor sends `{:engine_event, run_ref, completed_event}` when done.
-- The Run process stores chat state for auto-resume, emits `:run_completed` to the bus, finalizes the run in `LemonCore.Store`, releases the engine lock and scheduler slot, and notifies the worker and `meta.notify_pid`.
+- The Run persists its terminal receipt before publishing `:run_completed`, releases its engine-session claim and permit, and notifies `meta.notify_pid`.
 - On context-length overflow errors, the `ChatState` is automatically cleared so the next run starts fresh.
 
 ### Steering
@@ -382,8 +326,6 @@ Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `L
 | `max_concurrent_runs` | `2` | Maximum concurrent AI runs across all threads |
 | `default_cwd` | `nil` | Default working directory (falls back to `$HOME`) |
 | `auto_resume` | `false` | Automatically resume sessions from stored `ChatState` |
-| `require_engine_lock` | `true` | Acquire the per-session mutex before native execution |
-| `engine_lock_timeout_ms` | `60000` | Timeout for native-execution lock acquisition |
 
 ### Startup Options
 
@@ -423,7 +365,6 @@ Discord and email are not gateway transports. If a `discord` or `email` module i
 [gateway]
 max_concurrent_runs = 2
 auto_resume = true
-require_engine_lock = true
 
 [gateway.queue]
 mode = "followup"
@@ -473,10 +414,9 @@ The health endpoint runs on port 4042 (configurable via `:health_port` or
 `LEMON_GATEWAY_HEALTH_PORT`). `GET /healthz` returns JSON with built-in checks for:
 
 - Supervisor process liveness
-- Scheduler-published ETS counters (in_flight count, waitq length, max slots), read without calling the Scheduler
+- Slots-published ETS counters (`in_flight`, `waitq`, `max`), read without calling the permit server
 - Configured executor readiness
 - RunSupervisor active children
-- EngineLock process liveness
 
 Custom health checks can be registered via the `:health_checks` application environment.
 
@@ -514,4 +454,4 @@ mix test apps/lemon_gateway/test/run_test.exs
 mix test apps/lemon_gateway --trace
 ```
 
-Tests use `async: false` by default due to shared GenServer state (Config, Scheduler, and the singleton executor boundary). The test helper sets up an isolated lock directory to avoid collisions with running development instances.
+Tests use `async: false` by default due to shared GenServer state (Config, Slots, and the singleton executor boundary).

@@ -186,7 +186,7 @@ repeats once per tool-calling turn.
 sequenceDiagram
     participant Ch as Channel adapter
     participant R as LemonRouter
-    participant S as Gateway Scheduler
+    participant S as Gateway Run / Slots
     participant L as LemonAgent.Loop
     participant P as LemonAi.CallDispatcher
     participant M as LemonMemory.Ingest
@@ -195,9 +195,9 @@ sequenceDiagram
     Ch->>R: inbound message
     Note over Ch: [:lemon, :channels, :inbound]
     Note over R: [:lemon, :run, :submit]
-    R->>S: request execution slot
-    Note over S: [:lemon, :gateway, :scheduler, :slot_queued]<br/>then :slot_granted
-    S->>L: run accepted
+    R->>S: start Run; claim engine session; request permit
+    Note over S: Slots.stats exposes in_flight, waitq, max
+    S->>L: permit granted; executor starts
     Note over L: [:lemon_agent, :loop, :start]<br/>[:lemon_agent, :tool_schema_snapshot, :created]
 
     loop each turn
@@ -208,7 +208,6 @@ sequenceDiagram
 
     Note over L: [:lemon_agent, :loop, :end]
     L->>S: release slot
-    Note over S: [:lemon, :gateway, :scheduler, :slot_released]
     L->>M: finalize run
     Note over M: [:lemon, :memory, :ingest, :ok] or :failure
     R->>O: enqueue reply
@@ -289,20 +288,15 @@ behind earlier calls. Existing `tool_task` and `tool_result` events are unchange
 | `[:lemon, :channels, :deliver, :stop]` | `duration` (native) | delivery meta plus `ok` (boolean) | [`outbox.ex:608`](../apps/lemon_channels/lib/lemon_channels/outbox.ex); fires for both success and `{:error, _}` — check `ok` |
 | `[:lemon, :channels, :deliver, :exception]` | `duration` (native) | delivery meta plus `kind: :exception`, `reason`, `stacktrace` | [`outbox.ex:591`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), only when the plugin raises |
 
-### Engine scheduling — `[:lemon, :gateway, :scheduler, ...]`
+### Gateway execution permits
 
-Last segment is built at runtime from an atom argument
-([`scheduler.ex:477`](../apps/lemon_gateway/lib/lemon_gateway/scheduler.ex)). Values:
-`:slot_granted`, `:slot_queued`, `:slot_released`.
-
-| Event | Measurements | Metadata |
-|---|---|---|
-| `[:lemon, :gateway, :scheduler, :slot_granted]` | `in_flight`, `max`, `waitq`, `wait_ms`, `count: 1` | `%{}` (empty) |
-| `[:lemon, :gateway, :scheduler, :slot_queued]` | `in_flight`, `max`, `waitq`, `count: 1` | `%{}` (empty) |
-| `[:lemon, :gateway, :scheduler, :slot_released]` | `in_flight`, `max`, `waitq`, `count: 1` | `%{}` (empty) |
-
-These are the clearest saturation signal in the system: `waitq > 0` means runs are waiting
-for an engine slot. The empty metadata means they cannot be correlated to a run or session.
+`LemonGateway.Slots.stats/0` reads an ETS snapshot containing `in_flight`,
+`waitq`, and `max`, or returns `{:error, :not_running}`. Health and status can
+read it without calling a busy permit server. `waitq > 0` indicates saturation.
+The removed scheduler's `:slot_queued`, `:slot_granted`, and `:slot_released`
+telemetry family is not emitted by Slots; do not attach consumers to it.
+Aggregate snapshots do not provide per-run wait latency. See the
+[admission measurement protocol](architecture/admission-gates.md#measurement-methodology).
 
 ### Agent loop — `[:lemon_agent, ...]`
 
@@ -430,7 +424,6 @@ defmodule MyApp.TelemetryLogger do
 
   @events [
     [:lemon, :channels, :outbox, :rejected],
-    [:lemon, :gateway, :scheduler, :slot_queued],
     [:lemon_ai, :dispatcher, :rejected],
     [:lemon_ai, :circuit_breaker, :opened],
     [:lemon_agent, :tool_task, :error],
@@ -452,10 +445,6 @@ defmodule MyApp.TelemetryLogger do
       "outbox rejected channel=#{meta.channel_id} reason=#{meta.reason} " <>
         "depth=#{m.queue_depth}/#{m.max_queue_size}"
     )
-  end
-
-  def handle_event([:lemon, :gateway, :scheduler, :slot_queued], m, _meta, _config) do
-    Logger.warning("engine slots saturated in_flight=#{m.in_flight}/#{m.max} waitq=#{m.waitq}")
   end
 
   def handle_event([:lemon_ai, :dispatcher, :rejected], _m, meta, _config) do
@@ -536,8 +525,7 @@ import Telemetry.Metrics
 
 def metrics do
   [
-    # Saturation: the two signals that mean "shed load or add capacity".
-    last_value("lemon.gateway.scheduler.waitq", tags: []),
+    # Outbox overload; gateway permit pressure is sampled separately via Slots.stats/0.
     counter("lemon.channels.outbox.rejected.count", tags: [:channel_id, :reason]),
 
     # Provider health.
@@ -588,15 +576,13 @@ emit site.
 These are recorded, not fixed. Renaming events is a breaking change for any attached
 consumer and belongs in its own change.
 
-**Two families build their final segment at runtime**, so they cannot be discovered by
-searching for a literal event name, and `attach_many/4` requires knowing every value in
-advance: `[:lemon, :gateway, :scheduler, _]` and `[:coding_agent, :session, :overflow_recovery, _]`.
-The known values are listed in the catalog above.
+**Session recovery builds its final segment at runtime**, so literal event-name
+searches cannot discover every `[:coding_agent, :session, :overflow_recovery, _]`
+event. The known values are listed in the catalog above.
 
 **Measurement gaps.** `[:lemon_agent, :loop, :end]`
-reports `duration: nil` when the process-dictionary start time is missing. The scheduler
-family emits empty metadata, so slot pressure cannot be attributed to a run, session, or
-engine.
+reports `duration: nil` when the process-dictionary start time is missing.
+Gateway slot statistics are aggregate snapshots, not per-run wait spans.
 
 **Coverage gaps.** `[:lemon_agent, :subagent, :end]` fires only on explicit stop, so a
 crashed subagent produces a `:spawn` with no matching `:end`. There is no telemetry on the
@@ -657,8 +643,6 @@ Every atom below appears in a live `LemonCore.Introspection.record/3` call.
 | `LemonRouter.RunProcess` | `:run_started`, `:run_completed`, `:run_failed` |
 | `LemonRouter.RunOrchestrator` | `:orchestration_started`, `:orchestration_resolved`, `:orchestration_failed` |
 | Router answer finalization | `:answer_finalize_started`, `:answer_finalize_dispatch`, `:answer_finalize_completed`, `:answer_artifact_finalize_failed`, `:answer_media_jobs_record_failed` |
-| `LemonGateway.ThreadWorker` | `:thread_started`, `:thread_message_dispatched`, `:thread_terminated` |
-| `LemonGateway.Scheduler` | `:scheduled_job_triggered`, `:scheduled_job_completed` |
 | `CodingAgent.Session` | `:session_started`, `:session_ended`, `:compaction_triggered` |
 | `CodingAgent.Session.EventHandler` | `:tool_call_dispatched`, `:engine_event_ignored` |
 | `LemonAgent.Agent` | `:agent_loop_started`, `:agent_turn_observed` (inferred), `:agent_loop_ended`, `:agent_progress_snapshot` |

@@ -130,14 +130,8 @@ defmodule LemonGateway.RunTransportAgnosticTest do
     }
   end
 
-  defp start_run_direct(request, slot_ref \\ make_ref()) do
-    args = %{
-      execution_request: request,
-      slot_ref: slot_ref,
-      worker_pid: self()
-    }
-
-    Run.start_link(args)
+  defp start_run_direct(request) do
+    Run.start_link(%{execution_request: request})
   end
 
   describe "delta event emission" do
@@ -171,14 +165,14 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       send(sink_pid, :complete)
 
       # Wait for the run to finish
-      assert_receive {:run_complete, _pid, %{__event__: :completed}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^request, %{__event__: :completed}}, 2000
     end
 
     test "accumulates delta text into final answer when executor answer is empty" do
       scope = make_scope()
       request = make_request(scope, meta: %{notify_pid: self(), controller_pid: self()})
 
-      {:ok, pid} = start_run_direct(request)
+      {:ok, _pid} = start_run_direct(request)
 
       assert_receive {:executor_started, _run_ref, sink_pid}, 2000
 
@@ -189,10 +183,9 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       send(sink_pid, :complete)
 
       # Should receive completion with accumulated answer
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: answer}},
+      assert_receive {:lemon_gateway_run_completed, ^request,
+                      %{__event__: :completed, ok: true, answer: answer}},
                      2000
-
-      assert_receive {:lemon_gateway_run_completed, ^request, %{answer: ^answer}}, 2000
 
       # Answer should contain the accumulated delta text
       assert answer == "Hello World"
@@ -213,7 +206,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
           }
         )
 
-      {:ok, pid} = start_run_direct(request)
+      {:ok, _pid} = start_run_direct(request)
 
       assert_receive {:executor_started, _run_ref, sink_pid}, 2000
 
@@ -225,7 +218,8 @@ defmodule LemonGateway.RunTransportAgnosticTest do
 
       # Should complete successfully without crashing
       # (Old code would try to call Telegram.Outbox)
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^request, %{__event__: :completed, ok: true}},
+                     2000
     end
 
     test "emits run_started event to bus" do
@@ -245,7 +239,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
         LemonCore.Bus.subscribe("run:#{run_id}")
       end
 
-      {:ok, pid} = start_run_direct(request)
+      {:ok, _pid} = start_run_direct(request)
 
       # Should receive run_started event
       if Code.ensure_loaded?(LemonCore.Bus) do
@@ -258,7 +252,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       end
 
       # Wait for completion
-      assert_receive {:run_complete, ^pid, _}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
     end
 
     test "emits run_completed event to bus" do
@@ -278,10 +272,10 @@ defmodule LemonGateway.RunTransportAgnosticTest do
         LemonCore.Bus.subscribe("run:#{run_id}")
       end
 
-      {:ok, pid} = start_run_direct(request)
+      {:ok, _pid} = start_run_direct(request)
 
       # Wait for completion
-      assert_receive {:run_complete, ^pid, _}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
 
       # Should have received run_completed event on bus
       if Code.ensure_loaded?(LemonCore.Bus) do

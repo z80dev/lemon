@@ -119,6 +119,13 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  defmodule UnavailableRuntime do
+    @moduledoc false
+
+    def available?, do: true
+    def submit_execution(%LemonCore.ExecutionCommand{}), do: {:error, :runtime_unavailable}
+  end
+
   defmodule TupleAcceptingRuntime do
     @moduledoc false
     @behaviour LemonCore.EngineRuntime
@@ -667,7 +674,7 @@ defmodule LemonRouter.RunProcessTest do
       GenServer.stop(pid)
     end
 
-    test "terminalizes exactly once when runtime submission never succeeds" do
+    test "a definite rejection terminalizes exactly once without retrying" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
       job = make_test_request(run_id)
@@ -684,9 +691,12 @@ defmodule LemonRouter.RunProcessTest do
                  run_id: run_id,
                  session_key: session_key,
                  execution_request: job,
-                 gateway_scheduler: RejectingScheduler,
-                 gateway_submit_deadline_ms: 120
+                 engine_runtime: RejectingScheduler,
+                 gateway_submit_deadline_ms: 30_000
                })
+
+      monitor = Process.monitor(pid)
+      assert_receive {:rejecting_scheduler_submit, %LemonCore.ExecutionCommand{run_id: ^run_id}}
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
@@ -708,42 +718,49 @@ defmodule LemonRouter.RunProcessTest do
                      },
                      1_000
 
-      refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}, 300
-      assert eventually(fn -> not Process.alive?(pid) end)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}
+      refute_received {:rejecting_scheduler_submit, _request}
+      refute_received %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}
     end
 
-    test "does not mark run submitted when scheduler rejects execution" do
+    test "runtime unavailability retries only until the submission deadline" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")
-      job = make_test_request(run_id)
-
-      :persistent_term.put({RejectingScheduler, :notify_pid}, self())
-
-      on_exit(fn ->
-        :persistent_term.erase({RejectingScheduler, :notify_pid})
-      end)
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 execution_request: job,
-                 gateway_scheduler: RejectingScheduler
+                 execution_request: make_test_request(run_id),
+                 engine_runtime: UnavailableRuntime,
+                 gateway_submit_deadline_ms: 30_000
                })
 
-      assert_receive {:rejecting_scheduler_submit,
-                      %LemonCore.ExecutionCommand{
-                        run_id: ^run_id,
-                        session_key: ^session_key
-                      }},
-                     500
+      # The initial submit message precedes this synchronous state barrier.
+      state = :sys.get_state(pid)
+      assert state.gateway_submit_attempt == 1
+      assert state.gateway_submit_last_error == :runtime_unavailable
+      refute state.gateway_submitted?
+      monitor = Process.monitor(pid)
+      send(pid, {:gateway_submit_deadline, state.gateway_submit_deadline_ref})
 
-      assert eventually(fn ->
-               state = :sys.get_state(pid)
-               state.gateway_submitted? == false and state.gateway_submit_attempt > 0
-             end)
+      assert_receive %LemonCore.Event{
+        type: :run_completed,
+        payload: %{
+          completed: %{
+            error: %{
+              type: :runtime_submission_failed,
+              reason: :runtime_unavailable,
+              attempts: 1
+            }
+          }
+        },
+        meta: %{run_id: ^run_id}
+      }
 
-      GenServer.stop(pid)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}
+      refute_received %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}
     end
 
     test "retries until scheduler becomes available and submits the job once" do
