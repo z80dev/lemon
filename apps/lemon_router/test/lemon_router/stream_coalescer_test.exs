@@ -5,7 +5,7 @@ defmodule LemonRouter.StreamCoalescerTest do
 
   alias Elixir.LemonRouter.StreamCoalescer
   alias LemonChannels.Outbox.Dedupe
-  alias LemonChannels.Outbox.RateLimiter
+  alias LemonCore.RateLimiter
   alias LemonChannels.Telegram.ResumeIndexStore
   alias LemonChannels.Telegram.Truncate
   alias LemonCore.DeliveryIntent
@@ -124,7 +124,7 @@ defmodule LemonRouter.StreamCoalescerTest do
       {:ok, _} = LemonChannels.Outbox.start_link([])
     end
 
-    if is_nil(Process.whereis(RateLimiter)) do
+    if is_nil(Process.whereis(LemonChannels.Outbox.RateLimiter)) do
       {:ok, _} = RateLimiter.start_link([])
     end
 

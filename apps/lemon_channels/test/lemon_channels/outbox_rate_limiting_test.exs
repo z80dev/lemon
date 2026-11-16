@@ -5,11 +5,11 @@ defmodule LemonChannels.OutboxRateLimitingTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Outbox.RateLimiter
+  alias LemonCore.RateLimiter
 
   setup do
     # Start the RateLimiter if not running
-    case Process.whereis(RateLimiter) do
+    case Process.whereis(LemonChannels.Outbox.RateLimiter) do
       nil ->
         {:ok, pid} = RateLimiter.start_link([])
 

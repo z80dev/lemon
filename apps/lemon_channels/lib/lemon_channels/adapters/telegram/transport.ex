@@ -192,6 +192,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {:reply, :ok, Map.put(state, :drain_paused?, true)}
   end
 
+  # Polling is an ongoing subscription, not an outbound delivery retry budget.
+  # Preserve the fixed cadence on both successful and failed polls.
+  defp poll_delay(state) do
+    policy =
+      LemonCore.Retry.policy(
+        max_attempts: 2,
+        base_delay_ms: state.poll_interval_ms,
+        max_delay_ms: state.poll_interval_ms,
+        jitter: :none
+      )
+
+    LemonCore.Retry.delay(policy, 0)
+  end
+
   @impl true
   def handle_info(:poll, %{drain_paused?: true} = state), do: {:noreply, state}
 
@@ -221,12 +235,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         do: state,
         else: Poller.apply_result(state, result, pipeline_callbacks())
 
-    Process.send_after(self(), :poll, state.poll_interval_ms)
+    Process.send_after(self(), :poll, poll_delay(state))
     {:noreply, state}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{poll_task: %Task{ref: ref}} = state) do
-    Process.send_after(self(), :poll, state.poll_interval_ms)
+    Process.send_after(self(), :poll, poll_delay(state))
     {:noreply, Map.delete(state, :poll_task)}
   end
 

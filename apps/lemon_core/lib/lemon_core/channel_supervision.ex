@@ -28,15 +28,15 @@ defmodule LemonCore.ChannelSupervision do
   @doc "Registers a complete provider without requiring a live worker."
   @spec register(module()) :: :ok | {:error, :not_a_provider}
   def register(module) do
-    case LemonCore.Contract.validate(module, __MODULE__) do
-      :ok -> Application.put_env(:lemon_core, @provider_key, module)
+    case LemonCore.RuntimeSeam.register(@provider_key, module, __MODULE__) do
+      :ok -> :ok
       {:error, _} -> {:error, :not_a_provider}
     end
   end
 
   @doc "The registered implementation, or `nil` when absent."
   @spec provider() :: module() | nil
-  def provider, do: Application.get_env(:lemon_core, @provider_key)
+  def provider, do: LemonCore.RuntimeSeam.provider(@provider_key)
 
   @spec bind_run(binary(), binary(), target()) :: mutation_result()
   def bind_run(run_id, session_key, target),
@@ -50,18 +50,15 @@ defmodule LemonCore.ChannelSupervision do
   def notify(target, notice), do: invoke(:notify, [target, notice], :mutation)
 
   defp invoke(function, args, kind) do
-    module = provider()
+    result =
+      LemonCore.RuntimeSeam.invoke(provider(), function, args,
+        unavailable: {:error, :channels_unavailable},
+        exception: failed(kind),
+        exit: failed(kind),
+        throw: failed(kind)
+      )
 
-    if is_atom(module) and not is_nil(module) and Code.ensure_loaded?(module) and
-         function_exported?(module, function, length(args)) do
-      normalize(apply(module, function, args), kind)
-    else
-      {:error, :channels_unavailable}
-    end
-  rescue
-    _ -> failed(kind)
-  catch
-    _, _ -> failed(kind)
+    normalize(result, kind)
   end
 
   defp normalize(:ok, :mutation), do: :ok

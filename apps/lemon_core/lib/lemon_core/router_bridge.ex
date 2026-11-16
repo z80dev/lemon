@@ -61,10 +61,7 @@ defmodule LemonCore.RouterBridge do
   never formatted or inspected for logs.
   """
 
-  alias LemonCore.Contract
   alias LemonCore.RunRequest
-
-  require Logger
 
   @bridge_key :router_bridge
   @roles [
@@ -106,14 +103,12 @@ defmodule LemonCore.RouterBridge do
   """
   @spec configure(keyword(), keyword()) :: :ok | {:error, term()}
   def configure(opts, config_opts) when is_list(opts) and is_list(config_opts) do
-    mode = Keyword.get(config_opts, :mode, :replace)
-    incoming = opts |> Enum.into(%{}) |> Map.take(@config_keys)
-
-    with :ok <- validate_config(incoming),
-         {:ok, config} <- merge_config(current_config(), incoming, mode) do
-      Application.put_env(:lemon_core, @bridge_key, config)
-      :ok
-    end
+    LemonCore.RuntimeSeam.configure(
+      @bridge_key,
+      opts,
+      @roles,
+      Keyword.get(config_opts, :mode, :replace)
+    )
   end
 
   @doc """
@@ -295,63 +290,18 @@ defmodule LemonCore.RouterBridge do
   # ---------------------------------------------------------------------------
 
   defp call(role, function, args, operation_kind) do
-    case impl(role) do
-      nil ->
-        {:error, :unavailable}
-
-      module ->
-        invoke(module, function, args, operation_kind)
-    end
+    LemonCore.RuntimeSeam.invoke(impl(role), function, args,
+      unavailable: {:error, :unavailable},
+      missing: failure(operation_kind, :query_failed),
+      exception: failure(operation_kind, :query_failed),
+      exit: failure(operation_kind, :unavailable),
+      throw: failure(operation_kind, :unavailable),
+      log: "RouterBridge"
+    )
   end
 
-  defp invoke(module, function, args, operation_kind) do
-    apply(module, function, args)
-  rescue
-    exception ->
-      Logger.error(
-        "RouterBridge callback failed callback=#{callback_mfa(module, function, args)} " <>
-          "failure_class=exception"
-      )
-
-      exception_result(operation_kind, exception)
-  catch
-    :exit, reason ->
-      failure_class = exit_failure_class(reason)
-
-      Logger.warning(
-        "RouterBridge callback failed callback=#{callback_mfa(module, function, args)} " <>
-          "failure_class=#{failure_class}"
-      )
-
-      exit_result(operation_kind, failure_class)
-
-    :throw, _reason ->
-      Logger.error(
-        "RouterBridge callback failed callback=#{callback_mfa(module, function, args)} " <>
-          "failure_class=throw"
-      )
-
-      throw_result(operation_kind)
-  end
-
-  defp callback_mfa(module, function, args) do
-    Exception.format_mfa(module, function, length(args))
-  end
-
-  defp exit_failure_class(:noproc), do: :no_process
-  defp exit_failure_class({:noproc, _call}), do: :no_process
-  defp exit_failure_class(:timeout), do: :timeout
-  defp exit_failure_class({:timeout, _call}), do: :timeout
-  defp exit_failure_class(_reason), do: :exit
-
-  defp exit_result(:query, _failure_class), do: {:error, :unavailable}
-  defp exit_result(:mutation, _failure_class), do: {:error, :outcome_unknown}
-
-  defp exception_result(:query, _exception), do: {:error, :query_failed}
-  defp exception_result(:mutation, _exception), do: {:error, :outcome_unknown}
-
-  defp throw_result(:query), do: {:error, :unavailable}
-  defp throw_result(:mutation), do: {:error, :outcome_unknown}
+  defp failure(:mutation, _reason), do: {:error, :outcome_unknown}
+  defp failure(:query, reason), do: {:error, reason}
 
   defp expect_run_id({:ok, run_id}) when is_binary(run_id) and run_id != "",
     do: {:ok, run_id}
@@ -381,60 +331,5 @@ defmodule LemonCore.RouterBridge do
     Map.get(current_config(), key)
   end
 
-  defp current_config do
-    case Application.get_env(:lemon_core, @bridge_key, %{}) do
-      config when is_map(config) -> Map.take(config, @config_keys)
-      _ -> %{}
-    end
-  end
-
-  defp validate_config(config) do
-    Enum.reduce_while(config, :ok, fn
-      {key, nil}, :ok when key in @config_keys ->
-        {:cont, :ok}
-
-      {key, module}, :ok when key in @config_keys ->
-        case Contract.validate(module, Keyword.fetch!(@roles, key)) do
-          :ok -> {:cont, :ok}
-          {:error, reason} -> {:halt, {:error, {:invalid_implementation, key, reason}}}
-        end
-
-      {key, module}, :ok ->
-        {:halt, {:error, {:invalid_module, key, module}}}
-    end)
-  end
-
-  defp merge_config(_current, incoming, :replace), do: {:ok, compact_config(incoming)}
-
-  defp merge_config(current, incoming, :merge) do
-    {:ok, current |> Map.merge(incoming) |> compact_config()}
-  end
-
-  defp merge_config(current, incoming, :safe_merge) do
-    conflicts =
-      Enum.filter(@config_keys, fn key ->
-        current_val = Map.get(current, key)
-        incoming_val = Map.get(incoming, key, :__missing__)
-
-        current_val != nil and incoming_val not in [:__missing__, nil, current_val]
-      end)
-
-    case conflicts do
-      [] ->
-        merge_config(current, incoming, :merge)
-
-      [key | _] ->
-        {:error,
-         {:already_configured, key, Map.get(current, key), Map.get(incoming, key, :__missing__)}}
-    end
-  end
-
-  defp merge_config(_current, _incoming, mode), do: {:error, {:invalid_mode, mode}}
-
-  defp compact_config(config) when is_map(config) do
-    Enum.reduce(config, %{}, fn
-      {_key, nil}, acc -> acc
-      {key, value}, acc -> Map.put(acc, key, value)
-    end)
-  end
+  defp current_config, do: LemonCore.RuntimeSeam.config(@bridge_key, @config_keys)
 end

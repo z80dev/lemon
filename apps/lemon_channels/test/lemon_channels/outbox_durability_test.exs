@@ -432,13 +432,20 @@ defmodule LemonChannels.OutboxDurabilityTest do
     outbox = start_outbox()
     test_pid = self()
     handler = "outbox-retry-#{System.unique_integer([:positive])}"
+    retry_barrier = make_ref()
 
     :telemetry.attach(
       handler,
       [:lemon, :channels, :outbox, :queue],
-      fn _, _, metadata, _ ->
-        if metadata[:event] == :retry_scheduled and metadata[:channel_id] == Adapter.id(),
-          do: send(test_pid, :retry_durable)
+      fn _, _measurements, metadata, _ ->
+        if metadata[:event] == :retry_scheduled and metadata[:channel_id] == Adapter.id() do
+          send(test_pid, {:retry_durable, metadata.delay_ms})
+
+          # Crash at the durable transition, never after an old worker dispatch.
+          receive do
+            {:release_retry, ^retry_barrier} -> :ok
+          end
+        end
       end,
       nil
     )
@@ -449,13 +456,18 @@ defmodule LemonChannels.OutboxDurabilityTest do
       assert {:ok, _} = Outbox.enqueue(outbox, first)
       assert_receive {:attempt, "retry-head", _, worker}, 1_000
       assert {:ok, _} = Outbox.enqueue(outbox, second)
+      failed_at_ms = System.system_time(:millisecond)
       send(worker, {:finish, {:error, {:outcome_unknown, :lost_ack}}})
-      assert_receive :retry_durable, 1_000
+      assert_receive {:retry_durable, 1_000}, 1_000
       assert {:ok, records} = Store.fetch_all(@store, QueueStore.pending_table())
 
-      assert Enum.any?(records, fn {_id, entry} ->
-               entry.payload.idempotency_key == first.idempotency_key and entry.attempts == 1
-             end)
+      {_id, retry} =
+        Enum.find(records, fn {_id, entry} ->
+          entry.payload.idempotency_key == first.idempotency_key
+        end)
+
+      assert retry.attempts == 1
+      assert retry.available_at_ms >= failed_at_ms + 1_000
 
       crash(outbox)
       restarted = start_outbox()
@@ -473,6 +485,7 @@ defmodule LemonChannels.OutboxDurabilityTest do
 
       assert Outbox.stats(restarted).queue_depth == 0
     after
+      send(outbox, {:release_retry, retry_barrier})
       :telemetry.detach(handler)
     end
   end

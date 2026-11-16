@@ -134,7 +134,7 @@ LemonAi.complete(model, context, retry: [max_attempts: 2, max_delay_ms: 10_000])
 LemonAi.complete(model, context, retry: [max_attempts: 1])
 ```
 
-`LemonAi.OneshotRetry.run/2` provides the same bounded policy for side-effect-free
+`LemonAi.Retry.run/2` provides the same bounded policy for side-effect-free
 completion callbacks, with per-call `sleep_fun`, `cancelled?` and
 `subscribe_cancel` hooks. A subscription returns
 `{:message, cancellation_message, unsubscribe_fun}`; backoff waits receive that
@@ -641,6 +641,14 @@ caller can schedule its own retry.
 config :lemon_ai, :provider_retry,
   max_attempts: 4, base_delay_ms: 1_000, max_delay_ms: 30_000, max_retry_after_ms: 60_000
 ```
+
+`LemonAi.Retry` owns retry budgets, delay parsing and bounded timing for provider
+and completion retries. `LemonAi.Provider.retry_policy/1` adapts application defaults
+and `StreamOptions.provider_retry` overrides into its policy, supplying
+`LemonAi.Error.classify/1` and provider-specific retry timing. Classification and
+same-credential HTTP, transport and text eligibility belong to `LemonAi.Error`.
+Per-request `sleep_fun` and `jitter_fun` override the configured callbacks.
+
 Authentication failures, invalid requests, context overflow and exhausted billing
 or subscription quotas are not retried in place. Quota exhaustion remains
 `:rate_limit` for credential rotation, but `LemonAi.Error.retryable?/1` returns

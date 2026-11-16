@@ -49,7 +49,8 @@ defmodule LemonAgent.Loop.CancellationNotificationsTest do
       signal = AbortSignal.new()
       {:ok, stream} = EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
 
-      stream_fn = fn _, _, _ ->
+      stream_fn = fn _, _, options ->
+        assert options.provider_retry.max_attempts == 1
         send(parent, :provider_request)
         {:error, :timeout}
       end
@@ -67,8 +68,10 @@ defmodule LemonAgent.Loop.CancellationNotificationsTest do
         end)
 
       assert_receive :provider_request, 1_000
-      assert_waiting(runner, Streaming, :wait_for_retry, 2)
+      assert_waiting(runner, LemonAi.Retry, :wait_until, 2)
       assert_subscribed(runner.pid, signal)
+      unrelated_notification = {:lemon_abort, make_ref(), unquote(kind)}
+      send(runner.pid, unrelated_notification)
       notify(signal, unquote(kind))
       assert_notification_without_tick(runner.pid, signal, unquote(kind))
 
@@ -77,6 +80,8 @@ defmodule LemonAgent.Loop.CancellationNotificationsTest do
 
       assert_receive {:waiter_result, ^pid, {:ok, %{stop_reason: ^stop_reason}, _}}, 1_000
       refute_received :provider_request
+      assert {:messages, messages} = Process.info(runner.pid, :messages)
+      assert unrelated_notification in messages
       finish_waiter(runner, signal)
       EventStream.complete(stream, [])
 
@@ -208,7 +213,9 @@ defmodule LemonAgent.Loop.CancellationNotificationsTest do
         [
           model: Mocks.mock_model(),
           convert_to_llm: Mocks.simple_convert_to_llm(),
-          stream_options: %StreamOptions{}
+          # The umbrella AI test helper installs a no-op provider sleeper.
+          # Exercise the real notification-aware deadline regardless of it.
+          stream_options: %StreamOptions{provider_retry: %{sleep_fun: nil}}
         ],
         opts
       )

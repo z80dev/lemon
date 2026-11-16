@@ -29,21 +29,11 @@ defmodule LemonCore.AgentRuntime do
 
   @doc "The registered provider module, or `nil`."
   @spec provider() :: module() | nil
-  def provider do
-    case Application.get_env(:lemon_core, @setting) do
-      module when is_atom(module) and not is_nil(module) -> module
-      _ -> nil
-    end
-  end
+  def provider, do: LemonCore.RuntimeSeam.provider(@setting)
 
   @doc "Whether an agent runtime is registered and loadable."
   @spec available?() :: boolean()
-  def available? do
-    case provider() do
-      nil -> false
-      module -> Code.ensure_loaded?(module)
-    end
-  end
+  def available?, do: LemonCore.RuntimeSeam.available?(provider())
 
   @doc """
   Registers an agent runtime provider.
@@ -53,11 +43,9 @@ defmodule LemonCore.AgentRuntime do
   """
   @spec register(module()) :: :ok | {:error, :not_a_provider}
   def register(module) when is_atom(module) do
-    if Code.ensure_loaded?(module) do
-      Application.put_env(:lemon_core, @setting, module)
-      :ok
-    else
-      {:error, :not_a_provider}
+    case LemonCore.RuntimeSeam.register(@setting, module) do
+      :ok -> :ok
+      {:error, _} -> {:error, :not_a_provider}
     end
   end
 
@@ -72,17 +60,7 @@ defmodule LemonCore.AgentRuntime do
   """
   @spec call(atom(), [term()], term()) :: term()
   def call(function, args, fallback) when is_atom(function) and is_list(args) do
-    with module when not is_nil(module) <- provider(),
-         true <- Code.ensure_loaded?(module),
-         true <- function_exported?(module, function, length(args)) do
-      apply(module, function, args)
-    else
-      _ -> fallback
-    end
-  rescue
-    _ -> fallback
-  catch
-    _kind, _reason -> fallback
+    LemonCore.RuntimeSeam.invoke(provider(), function, args, unavailable: fallback)
   end
 
   @doc "The behaviour providers implement, for `@behaviour` and docs references."

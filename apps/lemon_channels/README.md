@@ -61,6 +61,15 @@ duplicate-ambiguous delivery returns a 200 `outcome unknown` receipt only after
 that state is durable, preventing a provider retry from creating a second run
 without claiming acceptance.
 
+All volatile channel deduplication uses `LemonCore.Dedupe.Ets`: provisional
+inbound claims use atomic `insert_new`, while the outbox's policy wrapper only
+marks confirmed deliveries and restores durable receipt TTLs. Telegram and
+Discord keep their configured TTLs; WhatsApp retains its 20-minute TTL; XMTP
+retains its last 2,000 accepted or uncertain inbound identities (without a TTL).
+The core supervisor owns these volatile ETS tables; transport initialization
+clears its inbound table. This does not replace email's durable compare-and-swap
+claims or inbound Message-ID receipts, which remain fail-closed across restarts.
+
 Telegram run-control callbacks distinguish definite rejection from an
 unacknowledged mutation. An unknown cancel or keepalive outcome tells the user
 to check run status before retrying, and failed keepalive callbacks leave the
@@ -211,8 +220,8 @@ The Outbox preserves FIFO ordering within each "delivery group", including acros
 LemonChannels.Application
 +-- LemonChannels.Registry                (GenServer - plugin registry)
 +-- LemonChannels.PresentationState       (GenServer - message-id/send-vs-edit state)
-+-- LemonChannels.Outbox.RateLimiter      (GenServer - ETS bucket table owner)
-+-- LemonChannels.Outbox.Dedupe           (GenServer - confirmed-key ETS table owner)
++-- LemonCore.RateLimiter      (GenServer - ETS bucket table owner)
++-- LemonChannels.Outbox.Dedupe           (GenServer - confirmed-key cleanup policy)
 +-- Outbox.WorkerSupervisor               (Task.Supervisor - max_children delivery cap)
 +-- LemonChannels.Outbox                  (GenServer - delivery queue)
 +-- WhatsApp.ModelPolicyAdapter           (GenServer - session-override ETS owner)
@@ -235,9 +244,9 @@ LemonChannels.Application
 
 Adapters are selected from `config :lemon_channels, :adapters` during application boot. Each adapter runs under the `AdapterSupervisor` DynamicSupervisor; adapter modules may still no-op internally when credentials or transport-specific enablement are absent.
 
-Named volatile tables have supervised owners: the outbox dedupe and rate-limit
-children own their tables, WhatsApp's transport owns its inbound dedupe table,
-and the application-owned `WhatsApp.ModelPolicyAdapter` child owns session model
+Named volatile dedupe tables belong to `LemonCore.Dedupe.Owner` workers under
+the core dynamic supervisor, not short-lived callers or channel transports.
+The application-owned `WhatsApp.ModelPolicyAdapter` child owns session model
 overrides. Session override reads/writes use ETS directly; they never create a
 table in a short-lived command process. An unavailable owner is an explicit
 failure, and owner restart clears those ephemeral overrides.
@@ -522,7 +531,7 @@ end
 |--------|---------|
 | `Outbox.Chunker` | Splits long messages at sentence/word boundaries respecting per-channel `chunk_limit` |
 | `Outbox.Dedupe` | ETS-based deduplication using idempotency keys with a 1-hour TTL and periodic cleanup |
-| `Outbox.RateLimiter` | Token bucket algorithm (GenServer), per channel/account, default 30 msg/sec with burst of 5 |
+| `LemonCore.RateLimiter` | Shared ETS token bucket, supervised here as `LemonChannels.Outbox.RateLimiter`, per channel/account, default 30 msg/sec with burst of 5 |
 
 ### Retry Behavior
 
@@ -577,10 +586,10 @@ Outbox.stats()
 ### Rate Limit Status
 
 ```elixir
-LemonChannels.Outbox.RateLimiter.status("telegram", "default")
+LemonCore.RateLimiter.status("telegram", "default")
 # %{tokens: 28.5, rate: 30, burst: 5}
 
-LemonChannels.Outbox.RateLimiter.check("telegram", "default")
+LemonCore.RateLimiter.check("telegram", "default")
 # :ok | {:rate_limited, wait_ms}
 ```
 
@@ -1052,7 +1061,7 @@ per-request state or mutable cache is written to persistent-term.
 | `LemonChannels.Outbox` | GenServer delivery queue with retry |
 | `LemonChannels.Outbox.Chunker` | Message splitting at sentence/word boundaries |
 | `LemonChannels.Outbox.Dedupe` | ETS-based deduplication (1h TTL) |
-| `LemonChannels.Outbox.RateLimiter` | Token bucket rate limiter |
+| `LemonCore.RateLimiter` | Token bucket rate limiter |
 
 ### Telegram
 

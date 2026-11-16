@@ -6,6 +6,8 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   Exhaustion, logout, and replacement stop this transient child with a shutdown
   reason and record redacted health; an operator must restart/re-link the adapter.
   The bridge never schedules a competing restart.
+  `LemonCore.Retry.Policy` supplies reconnect budgets and symmetric-jitter
+  backoff; this transport retains ownership of timers and connection state.
   A command deadline terminates the old bridge group before replying
   `:outcome_unknown` to every pending send; reconnect never replays those sends.
   """
@@ -21,7 +23,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   alias LemonChannels.Adapters.WhatsApp.{
     AccessControl,
     Bridge,
-    Dedupe,
     Inbound,
     ModelPolicyAdapter
   }
@@ -35,6 +36,10 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   alias LemonChannels.{BindingResolver, GatewayConfig, PortBridge, SubmissionOutcome}
   alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, RouterBridge}
+  alias LemonCore.Dedupe.Ets
+
+  @dedupe_table :whatsapp_dedupe
+  @dedupe_ttl_ms 1_200_000
 
   @default_debounce_ms 1_500
   @reconnect_initial_ms 2_000
@@ -94,7 +99,8 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
 
     account_id = cfg_get(cfg, :account_id, "default")
 
-    :ok = Dedupe.init()
+    :ok = Ets.init(@dedupe_table)
+    :ets.delete_all_objects(@dedupe_table)
 
     {:ok, port_server} =
       PortBridge.start_link({@bridge_spec, [config: cfg, notify_pid: self(), restart: :manual]})
@@ -346,12 +352,14 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
         Logger.debug("whatsapp inbound blocked by access control: jid=#{inspect(jid)}")
         state
 
-      Dedupe.seen?(jid, message_id) ->
+      Ets.check_and_mark(@dedupe_table, {jid, message_id}, @dedupe_ttl_ms) == :seen ->
         Logger.debug("whatsapp duplicate inbound ignored: jid=#{jid} message_id=#{message_id}")
         state
 
       true ->
-        Dedupe.mark(jid, message_id)
+        if :ets.info(@dedupe_table, :size) > 5_000 do
+          Ets.cleanup_expired(@dedupe_table, @dedupe_ttl_ms)
+        end
 
         case Inbound.normalize(event) do
           {:ok, inbound} ->
@@ -561,7 +569,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   defp handle_submission_failure(dedupe_refs, inbound, state, error, context) do
     if SubmissionOutcome.retry_safe?(error) do
       Enum.each(dedupe_refs, fn
-        {jid, message_id} -> Dedupe.forget(jid, message_id)
+        {jid, message_id} -> Ets.forget(@dedupe_table, {jid, message_id})
         _ -> :ok
       end)
     end
@@ -808,23 +816,24 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     {:noreply, state}
   end
 
-  defp reconnect_or_stop(%{reconnect_attempts: attempts} = state)
-       when attempts >= @reconnect_max_attempts do
-    Logger.error("whatsapp reconnect budget exhausted; operator restart required")
-    stop_reconnecting(state, :reconnect_exhausted)
-  end
-
   defp reconnect_or_stop(state) do
-    delay = backoff_delay(state.reconnect_attempts)
-    reconnect_ref = make_ref()
-    timer = Process.send_after(self(), {:reconnect, reconnect_ref}, delay)
+    policy = reconnect_policy()
 
-    {:noreply,
-     %{
-       state
-       | reconnect_timer: {timer, reconnect_ref},
-         reconnect_attempts: state.reconnect_attempts + 1
-     }}
+    if LemonCore.Retry.retry_allowed?(state.reconnect_attempts, policy) do
+      delay = LemonCore.Retry.delay(policy, state.reconnect_attempts)
+      reconnect_ref = make_ref()
+      timer = Process.send_after(self(), {:reconnect, reconnect_ref}, delay)
+
+      {:noreply,
+       %{
+         state
+         | reconnect_timer: {timer, reconnect_ref},
+           reconnect_attempts: state.reconnect_attempts + 1
+       }}
+    else
+      Logger.error("whatsapp reconnect budget exhausted; operator restart required")
+      stop_reconnecting(state, :reconnect_exhausted)
+    end
   end
 
   defp stop_reconnecting(state, reason) do
@@ -833,13 +842,14 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     {:stop, {:shutdown, reason}, state}
   end
 
-  defp backoff_delay(attempt) do
-    LemonCore.Retry.capped_backoff(
-      @reconnect_initial_ms,
-      attempt,
-      @reconnect_max_ms,
+  defp reconnect_policy do
+    LemonCore.Retry.policy(
+      max_attempts: @reconnect_max_attempts + 1,
+      base_delay_ms: @reconnect_initial_ms,
+      max_delay_ms: @reconnect_max_ms,
       factor: @reconnect_factor,
-      jitter: @reconnect_jitter
+      jitter: :symmetric,
+      jitter_fraction: @reconnect_jitter
     )
   end
 

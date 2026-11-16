@@ -88,6 +88,27 @@ the dependency policy above, not these source-level rules:
 - The shared CLI registry dispatches Mix-free command modules in their owning apps. Its `lemon_channels` and `lemon_media` references are runtime-only so setup and other one-shot commands do not start channel services through an application dependency. Source Mix tasks are thin adapters; packaged runtime profiles include the same handlers.
 - `coding_agent` declares a direct `lemon_mcp` dependency for native MCP capability discovery; `lemon_router` declares the same edge to reuse MCP HTTP origin validation during native follow-up admission, `lemon_automation` declares it for the same validation in cron admission, and `lemon_cli` and `lemon_control_plane` declare it so local and remote `lemon doctor` runs compare Lemon Bot admission origins with that same canonicalization. All five use `runtime: false`: the minimal and full runtime releases explicitly include `lemon_mcp: :load`, making these library modules available without starting an application callback. Consuming apps supervise any clients and transports they create. Origin validation stays in `lemon_mcp`, not duplicated in router or moved into dependency-free `lemon_core` / `lemon_ai`.
 
+### Shared mechanisms without foundation dependencies
+
+`lemon_ai` and `lemon_core` remain independent foundations: neither may acquire
+an umbrella dependency merely to share a mechanism. Consolidation means **one
+implementation per foundation package**, not a new dependency between them.
+Provider retries and rate limiting live in `lemon_ai`; platform/channel retries,
+dedupe and rate limiting live in `lemon_core`. The agent loop uses the AI retry
+policy rather than adding another retry implementation. Retry policies in both
+foundations use bounded attempts, capped delays and caller-selected retryability;
+they never implicitly retry an unknown mutation outcome. A single response owns
+one retry budget even when more than one provider layer is involved.
+
+`LemonCore.RuntimeSeam` implements optional-consumer configuration, validation
+and protected dispatch. `AgentRuntime`, `ChannelSupervision`, `AgentMessaging`,
+`RouterBridge`, `EventBridge` and `EngineInfoBridge` retain only their domain
+contracts, acknowledgement checks and failure policies; `EngineRuntime` retains
+its execution behaviour and delegates implementation validation to the same
+seam. These domain APIs are not interchangeable registries. Missing consumers
+retain their documented degradation; reached mutation failures remain
+`:outcome_unknown` and queries never masquerade as successful empty state.
+
 ## Skill Source Taxonomy
 
 Skills are classified by source kind and trust level (`LemonSkills.Entry`). Routing from user-facing identifiers to sources is `LemonSkills.SourceRouter`; install/update/audit rules are `LemonSkills.TrustPolicy`. New source kinds must be added here before being used in code, and the trust-level set may only be extended via a documented invariant update. See the [skills reference](skills.md) and the [skills guide](../apps/lemon_skills/AGENTS.md) for operational detail.

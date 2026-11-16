@@ -600,7 +600,7 @@ defmodule LemonAi.Providers.GoogleShared do
   """
   @spec extract_retry_delay(String.t(), map()) :: non_neg_integer() | nil
   def extract_retry_delay(error_text, headers \\ %{}) do
-    LemonAi.Providers.RetryHelper.extract_retry_delay_ms(error_text, headers)
+    LemonAi.Retry.extract_retry_delay_ms(error_text, headers)
   end
 
   @doc """
@@ -608,7 +608,7 @@ defmodule LemonAi.Providers.GoogleShared do
   """
   @spec retryable_error?(non_neg_integer(), String.t()) :: boolean()
   def retryable_error?(status, error_text) do
-    LemonAi.Providers.RetryHelper.retryable_http_error?(status, error_text)
+    LemonAi.Error.retryable_http_error?(status, error_text)
   end
 
   @doc """

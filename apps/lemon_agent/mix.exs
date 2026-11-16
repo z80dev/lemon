@@ -1,7 +1,7 @@
 defmodule LemonAgent.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.2.1"
   @source_url "https://github.com/z80dev/lemon"
 
   # This file ships verbatim in the hex tarball, so it must not read anything
@@ -17,7 +17,7 @@ defmodule LemonAgent.MixProject do
               System.get_env("LEMON_HEX_PUBLISH") not in ["1", "true"]
 
   # What a published release requires of its sibling Lemon packages.
-  @lemon_requirement "~> 0.2"
+  @lemon_requirements %{lemon_ai: "~> 0.3", lemon_core: "~> 0.3"}
 
   def project do
     [
@@ -107,7 +107,7 @@ defmodule LemonAgent.MixProject do
         if Keyword.get(opts, :in_umbrella, false) do
           if @umbrella,
             do: {app, Keyword.delete(opts, :optional)},
-            else: {app, @lemon_requirement, Keyword.delete(opts, :in_umbrella)}
+            else: {app, Map.fetch!(@lemon_requirements, app), Keyword.delete(opts, :in_umbrella)}
         else
           dep
         end

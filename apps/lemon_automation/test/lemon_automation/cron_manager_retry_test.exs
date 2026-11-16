@@ -64,6 +64,24 @@ defmodule LemonAutomation.CronManagerRetryTest do
     {:ok, job: job}
   end
 
+  test "cron policy keeps a fixed delay and counts retries after the initial run" do
+    for retries <- [0, 1, 3] do
+      policy =
+        LemonCore.Retry.policy(
+          max_attempts: retries + 1,
+          base_delay_ms: 30_000,
+          max_delay_ms: 30_000,
+          jitter: :none
+        )
+
+      for attempt <- 0..3 do
+        assert LemonCore.Retry.retry_allowed?(attempt, policy) == attempt < retries
+        expected = if attempt < retries, do: 30_000, else: :give_up
+        assert LemonCore.Retry.delay(policy, attempt) == expected
+      end
+    end
+  end
+
   test "failed scheduled runs retry after the configured backoff", %{job: job} do
     %CronJob{} = job
     replace_job_state(%{job | next_run_at_ms: LemonCore.Clock.now_ms() - 1_000})

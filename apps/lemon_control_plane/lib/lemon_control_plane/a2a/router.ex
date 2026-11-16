@@ -3,7 +3,8 @@ defmodule LemonControlPlane.A2A.Router do
 
   use Plug.Router
 
-  alias LemonControlPlane.A2A.{Auth, Config, Handler, RateLimiter, TaskView}
+  alias LemonControlPlane.A2A.{Auth, Config, Handler, TaskView}
+  alias LemonCore.RateLimiter
   alias LemonCore.A2A.Protocol
   alias LemonCore.A2AStore
 

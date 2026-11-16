@@ -14,7 +14,8 @@ defmodule LemonChannels.OutboxGracefulDegradationTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.Outbox
-  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Dedupe}
+  alias LemonCore.RateLimiter
   alias LemonChannels.OutboundPayload
 
   # Temporarily unregister a named process, run the given function,
@@ -34,7 +35,7 @@ defmodule LemonChannels.OutboxGracefulDegradationTest do
 
   describe "RateLimiter graceful degradation" do
     test "check returns fallback rate_limited tuple when process is unavailable" do
-      with_process_unavailable(RateLimiter, fn ->
+      with_process_unavailable(LemonChannels.Outbox.RateLimiter, fn ->
         # GenServer.call exits with :noproc when the name is unregistered.
         # The catch :exit clause returns a conservative fallback.
         assert RateLimiter.check("ch1", "acc1") == {:rate_limited, 1_000}
@@ -46,7 +47,7 @@ defmodule LemonChannels.OutboxGracefulDegradationTest do
     end
 
     test "consume returns fallback rate_limited tuple when process is unavailable" do
-      with_process_unavailable(RateLimiter, fn ->
+      with_process_unavailable(LemonChannels.Outbox.RateLimiter, fn ->
         assert RateLimiter.consume("ch1", "acc1") == {:rate_limited, 1_000}
       end)
 

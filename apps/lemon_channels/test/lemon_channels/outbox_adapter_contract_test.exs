@@ -24,7 +24,8 @@ defmodule LemonChannels.OutboxAdapterContractTest do
   alias LemonChannels.Adapters.WhatsApp.Transport, as: WhatsAppTransport
   alias LemonChannels.Adapters.Xmtp.Transport, as: XmtpTransport
   alias LemonChannels.{DeliveryError, OutboundPayload, Outbox, Registry}
-  alias LemonChannels.Outbox.{Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Dedupe}
+  alias LemonCore.RateLimiter
 
   @adapters [Telegram, Discord, Email, WhatsApp, Xmtp]
   @gateway_config_key :"Elixir.LemonGateway.Config"
@@ -210,7 +211,14 @@ defmodule LemonChannels.OutboxAdapterContractTest do
   describe "outbox redelivery of a WhatsApp bridge send exception" do
     setup do
       for module <- [Registry, RateLimiter, Dedupe, Outbox] do
-        if is_nil(Process.whereis(module)), do: start_supervised!(module)
+        if is_nil(
+             Process.whereis(
+               if(module == LemonCore.RateLimiter,
+                 do: LemonChannels.Outbox.RateLimiter,
+                 else: module
+               )
+             )
+           ), do: start_supervised!(module)
       end
 
       _ = Registry.register(WhatsApp)

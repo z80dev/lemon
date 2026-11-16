@@ -37,52 +37,11 @@ defmodule LemonCore.EventBridge do
   """
   @spec configure(module() | nil, keyword()) :: :ok | {:error, term()}
   def configure(nil, opts) when is_list(opts) do
-    mode = Keyword.get(opts, :mode, :replace)
-
-    case mode do
-      :replace ->
-        Application.delete_env(:lemon_core, @impl_key)
-        :ok
-
-      :if_unset ->
-        case current_impl() do
-          nil ->
-            Application.delete_env(:lemon_core, @impl_key)
-            :ok
-
-          _ ->
-            {:error, :already_configured}
-        end
-
-      other ->
-        {:error, {:invalid_mode, other}}
-    end
+    LemonCore.RuntimeSeam.configure_provider(@impl_key, nil, Keyword.get(opts, :mode, :replace))
   end
 
   def configure(mod, opts) when is_atom(mod) and is_list(opts) do
-    mode = Keyword.get(opts, :mode, :replace)
-
-    case mode do
-      :replace ->
-        Application.put_env(:lemon_core, @impl_key, %{impl: mod})
-        :ok
-
-      :if_unset ->
-        case current_impl() do
-          nil ->
-            Application.put_env(:lemon_core, @impl_key, %{impl: mod})
-            :ok
-
-          ^mod ->
-            :ok
-
-          existing ->
-            {:error, {:already_configured, existing}}
-        end
-
-      other ->
-        {:error, {:invalid_mode, other}}
-    end
+    LemonCore.RuntimeSeam.configure_provider(@impl_key, mod, Keyword.get(opts, :mode, :replace))
   end
 
   @doc """
@@ -114,23 +73,9 @@ defmodule LemonCore.EventBridge do
   end
 
   defp dispatch(fun, args) do
-    mod = current_impl()
-
-    if Code.ensure_loaded?(mod) and function_exported?(mod, fun, length(args)) do
-      _ = apply(mod, fun, args)
-      :ok
-    else
-      :ok
-    end
-  rescue
-    _ -> :ok
+    _ = LemonCore.RuntimeSeam.invoke(current_impl(), fun, args, unavailable: :ok)
+    :ok
   end
 
-  defp current_impl do
-    case Application.get_env(:lemon_core, @impl_key) do
-      %{impl: mod} when is_atom(mod) -> mod
-      mod when is_atom(mod) -> mod
-      _ -> nil
-    end
-  end
+  defp current_impl, do: LemonCore.RuntimeSeam.provider(@impl_key)
 end

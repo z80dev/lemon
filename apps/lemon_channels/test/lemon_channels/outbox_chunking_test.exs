@@ -2,7 +2,8 @@ defmodule LemonChannels.OutboxChunkingTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.{Outbox, OutboundPayload, Registry}
-  alias LemonChannels.Outbox.{Chunker, Dedupe, RateLimiter}
+  alias LemonChannels.Outbox.{Chunker, Dedupe}
+  alias LemonCore.RateLimiter
 
   defmodule TrackingPlugin do
     @behaviour LemonChannels.Plugin
@@ -33,7 +34,14 @@ defmodule LemonChannels.OutboxChunkingTest do
 
   setup do
     for module <- [Registry, RateLimiter, Dedupe, Outbox] do
-      if is_nil(Process.whereis(module)), do: start_supervised!(module)
+      if is_nil(
+           Process.whereis(
+             if(module == LemonCore.RateLimiter,
+               do: LemonChannels.Outbox.RateLimiter,
+               else: module
+             )
+           )
+         ), do: start_supervised!(module)
     end
 
     :ok = Registry.register(TrackingPlugin)

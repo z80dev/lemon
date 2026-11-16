@@ -5,7 +5,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
   alias CodingAgent.Session.ProviderFallback
   alias CodingAgent.SettingsManager
   alias LemonAgent.ModelRuntime.{CredentialHealth, SessionPins}
-  alias LemonAi.Providers.RetryHelper
+  alias LemonAi.Retry
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -49,17 +49,17 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
       send(parent, {:attempt, options.api_key, options.provider_retry.alternate_available})
 
       if options.api_key == "fake-key-a" do
-        policy = RetryHelper.policy(options)
+        policy = LemonAi.Provider.retry_policy(options)
 
         delay =
-          RetryHelper.http_retry_delay_ms(
+          Retry.http_retry_delay_ms(
             0,
             %{"retry-after" => "30"},
             policy,
             {:http_error, 429, "rate limited"}
           )
 
-        if is_integer(delay), do: RetryHelper.sleep(delay)
+        if is_integer(delay), do: LemonAi.Provider.retry_sleep(delay, policy)
         failure(model, 429, "insufficient_quota", :request)
       else
         {:ok, terminal_stream(model, :stop, [%TextContent{text: "ok"}])}

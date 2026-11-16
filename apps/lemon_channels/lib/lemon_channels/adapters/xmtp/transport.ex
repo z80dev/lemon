@@ -11,6 +11,9 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, SessionKey}
   alias LemonCore.Secrets
+  alias LemonCore.Dedupe.Ets
+
+  @dedupe_table :lemon_channels_xmtp_dedupe
 
   @default_poll_interval_ms 1_500
   @default_connect_timeout_ms 15_000
@@ -45,6 +48,9 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       |> merge_config(Keyword.get(opts, :config))
       |> merge_config(Keyword.drop(opts, [:config]))
 
+    :ok = Ets.init(@dedupe_table)
+    :ets.delete_all_objects(@dedupe_table)
+
     {:ok, port_server} = PortBridge.start_link({@bridge_spec, [config: cfg, notify_pid: self()]})
 
     Bridge.connect(port_server, cfg)
@@ -69,8 +75,8 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
        poll_timer_ref: nil,
        connect_timer_ref: connect_timer_ref,
        account_id: normalize_account_id(cfg),
-       seen_inbound_keys: MapSet.new(),
-       seen_inbound_order: :queue.new()
+       seen_inbound_order: :queue.new(),
+       seen_inbound_count: 0
      }}
   rescue
     error ->
@@ -312,7 +318,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       dedupe_key = inbound_dedupe_key(normalized, event)
       bridge_dedupe_key = normalize_blank(event["bridge_dedupe_key"])
 
-      if MapSet.member?(state.seen_inbound_keys, dedupe_key) do
+      if Ets.check_and_mark(@dedupe_table, dedupe_key, :infinity) == :seen do
         _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
         Logger.debug("xmtp duplicate inbound ignored")
         state
@@ -328,6 +334,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
                 _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
                 remember_new_inbound_key(state, dedupe_key)
               else
+                Ets.forget(@dedupe_table, dedupe_key)
                 state
               end
 
@@ -559,40 +566,23 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     end
   end
 
-  defp remember_inbound_key(state, dedupe_key) do
-    if MapSet.member?(state.seen_inbound_keys, dedupe_key) do
-      {:duplicate, state}
-    else
-      seen_inbound_keys = MapSet.put(state.seen_inbound_keys, dedupe_key)
-      seen_inbound_order = :queue.in(dedupe_key, state.seen_inbound_order)
-
-      {seen_inbound_keys, seen_inbound_order} =
-        trim_inbound_keys(seen_inbound_keys, seen_inbound_order)
-
-      {:ok,
-       %{state | seen_inbound_keys: seen_inbound_keys, seen_inbound_order: seen_inbound_order}}
-    end
-  end
-
   defp remember_new_inbound_key(state, dedupe_key) do
-    case remember_inbound_key(state, dedupe_key) do
-      {:ok, state} -> state
-      {:duplicate, state} -> state
-    end
-  end
+    order = :queue.in(dedupe_key, state.seen_inbound_order)
 
-  defp trim_inbound_keys(seen_inbound_keys, seen_inbound_order) do
-    if MapSet.size(seen_inbound_keys) > @max_inbound_dedupe_entries do
-      case :queue.out(seen_inbound_order) do
-        {{:value, oldest}, rest} ->
-          trim_inbound_keys(MapSet.delete(seen_inbound_keys, oldest), rest)
-
-        {:empty, rest} ->
-          {seen_inbound_keys, rest}
+    order =
+      if state.seen_inbound_count == @max_inbound_dedupe_entries do
+        {{:value, oldest}, rest} = :queue.out(order)
+        Ets.forget(@dedupe_table, oldest)
+        rest
+      else
+        order
       end
-    else
-      {seen_inbound_keys, seen_inbound_order}
-    end
+
+    %{
+      state
+      | seen_inbound_order: order,
+        seen_inbound_count: min(state.seen_inbound_count + 1, @max_inbound_dedupe_entries)
+    }
   end
 
   defp raw_content_digest(value) do

@@ -7,7 +7,7 @@ defmodule LemonAi.CompletionRetryTest do
   defmodule FakeProvider do
     @behaviour LemonAi.Provider
     alias LemonAi.{EventStream, Error}
-    alias LemonAi.Providers.RetryHelper
+    alias LemonAi.Retry
     alias LemonAi.Types.{AssistantMessage, StreamOptions}
 
     @impl true
@@ -17,7 +17,7 @@ defmodule LemonAi.CompletionRetryTest do
 
     @impl true
     def stream(_model, _context, %StreamOptions{} = options) do
-      policy = RetryHelper.policy(options)
+      policy = LemonAi.Provider.retry_policy(options)
       request(options, policy, 0)
     end
 
@@ -32,7 +32,7 @@ defmodule LemonAi.CompletionRetryTest do
 
       case result do
         {:request_error, error} ->
-          if RetryHelper.retry_allowed?(attempt, policy) and Error.retryable?(error) do
+          if Retry.retry_allowed?(attempt, policy) and Error.retryable?(error) do
             request(options, policy, attempt + 1)
           else
             {:error, error}
@@ -116,9 +116,34 @@ defmodule LemonAi.CompletionRetryTest do
 
     for _ <- 1..2 do
       assert_receive {:private_stream, stream}
+      refute Process.alive?(stream)
       monitor = Process.monitor(stream)
       assert_receive {:DOWN, ^monitor, :process, ^stream, _}, 1_000
     end
+  end
+
+  test "complete releases a failed private stream before retry backoff" do
+    failed = message({:http_error, 503, "Service unavailable"})
+    success = message(nil)
+    {model, context, options} = invocation([failed, success], :oneshot_cleanup_test)
+    parent = self()
+
+    options = %{
+      options
+      | retry:
+          Keyword.put(options.retry, :sleep_fun, fn _ ->
+            assert_receive {:private_stream, stream}
+            refute Process.alive?(stream)
+            send(parent, :checked_failed_cleanup)
+            :ok
+          end)
+    }
+
+    assert LemonAi.complete(model, context, options) == {:ok, success}
+    assert_received :checked_failed_cleanup
+    assert_receive {:private_stream, stream}
+    refute Process.alive?(stream)
+    refute_received {:private_stream, _}
   end
 
   test "public complete handles overloaded terminal errors" do

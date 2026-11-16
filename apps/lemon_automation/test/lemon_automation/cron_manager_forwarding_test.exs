@@ -634,7 +634,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
 
   defp ensure_channel_rate_limiter_started do
     if is_nil(Process.whereis(LemonChannels.Outbox.RateLimiter)) do
-      case start_supervised(LemonChannels.Outbox.RateLimiter) do
+      case start_supervised({LemonCore.RateLimiter, []}) do
         {:ok, _pid} -> :ok
         {:error, {:already_started, _pid}} -> :ok
       end

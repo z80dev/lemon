@@ -37,6 +37,9 @@ defmodule LemonAutomation.CronManager do
   failures are retryable. Pausing prevents future scheduled runs; aborting
   cancels the exact owned router run and does not repeat an ambiguous abort.
 
+  Scheduled retries use `LemonCore.Retry.Policy` for their shared retry budget
+  and fixed, jitter-free delay. Durable lineage, claims and timers remain here.
+
   ## API
 
       # List all jobs
@@ -2085,11 +2088,11 @@ defmodule LemonAutomation.CronManager do
 
   defp persist_retry_intent(%CronJob{} = job, %CronRun{} = run) do
     current_attempt = retry_attempt(run)
-    max_retries = max_retries(job)
+    policy = retry_policy(job)
 
-    if retryable_run?(run) and current_attempt < max_retries do
+    if retryable_run?(run) and LemonCore.Retry.retry_allowed?(current_attempt, policy) do
       next_attempt = current_attempt + 1
-      due_at_ms = LemonCore.Clock.now_ms() + retry_delay_ms(job)
+      due_at_ms = LemonCore.Clock.now_ms() + LemonCore.Retry.delay(policy, current_attempt)
 
       meta =
         (run.meta || %{})
@@ -2264,6 +2267,17 @@ defmodule LemonAutomation.CronManager do
 
   defp max_retries(%CronJob{max_retries: value}) when is_integer(value) and value > 0, do: value
   defp max_retries(_job), do: 0
+
+  defp retry_policy(job) do
+    delay = retry_delay_ms(job)
+
+    LemonCore.Retry.policy(
+      max_attempts: max_retries(job) + 1,
+      base_delay_ms: delay,
+      max_delay_ms: delay,
+      jitter: :none
+    )
+  end
 
   defp retry_delay_ms(%CronJob{retry_backoff_ms: value}) when is_integer(value) and value >= 0,
     do: value

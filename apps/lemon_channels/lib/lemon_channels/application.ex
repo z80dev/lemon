@@ -27,7 +27,7 @@ defmodule LemonChannels.Application do
       # Best-effort chat-originated run activity
       LemonChannels.TypingIndicator,
       # Rate limiter
-      LemonChannels.Outbox.RateLimiter,
+      {LemonCore.RateLimiter, name: LemonChannels.Outbox.RateLimiter},
       # Dedupe
       LemonChannels.Outbox.Dedupe,
       # Outbox worker supervisor (tasks)

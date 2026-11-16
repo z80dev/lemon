@@ -11,7 +11,8 @@ defmodule LemonWeb.LoginController do
 
   use LemonWeb, :controller
 
-  alias LemonWeb.{Auth, LoginThrottle}
+  alias LemonWeb.{Auth}
+  alias LemonCore.RateLimiter, as: LoginThrottle
 
   plug(:put_layout, false)
   plug(:put_root_layout, html: {LemonWeb.Layouts, :root})
