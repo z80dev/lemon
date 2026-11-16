@@ -718,7 +718,7 @@ defmodule LemonRouter.NativeLineageTest do
 
     assert query.(unrelated_profile)["presence"] == baseline[unrelated_profile]
 
-    active_command = :sys.get_state(active).execution_request
+    active_command = run_command(active)
     ref = Process.monitor(active)
     complete_presence_run(active_command, true)
     assert_receive {:DOWN, ^ref, :process, ^active, :normal}, 2000
@@ -739,7 +739,7 @@ defmodule LemonRouter.NativeLineageTest do
 
     [{queued, _}] = Registry.lookup(LemonRouter.RunRegistry, queued_id)
     queued_ref = Process.monitor(queued)
-    complete_presence_run(:sys.get_state(queued).execution_request, false)
+    complete_presence_run(run_command(queued), false)
     assert_receive {:DOWN, ^queued_ref, :process, ^queued, :normal}, 2000
     assert eventually(fn -> LemonRouter.SessionCoordinator.active_run(conversation) == :none end)
     for id <- fresh_ids, do: Store.delete(:runs, id)
@@ -1232,7 +1232,7 @@ defmodule LemonRouter.NativeLineageTest do
           else: %{"toolPolicy" => %{"allow" => []}}
 
       assert {:ok, _} = ProfileStore.update(target_id, change)
-      complete_presence_run(:sys.get_state(active).execution_request, true)
+      complete_presence_run(run_command(active), true)
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
@@ -1292,12 +1292,16 @@ defmodule LemonRouter.NativeLineageTest do
     assert_receive {:native_dispatch, submission}
     assert :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(id))
 
+    # Narrow the ceiling after activation; the run's initial submission (#588
+    # submits from init, with no external trigger) must re-check it before sending.
+    assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"mcpServers" => []})
+
     assert {:ok, run} =
              LemonRouter.RunProcess.start_link(%{
                run_id: id,
                session_key: submission.session_key,
                execution_request: submission.execution_request,
-               submit_to_gateway?: false,
+               submit_to_gateway?: true,
                engine_runtime: RuntimeObserver
              })
 
@@ -1307,9 +1311,6 @@ defmodule LemonRouter.NativeLineageTest do
       Store.delete(:run_receipts, id)
       Store.delete(:sessions_index, submission.session_key)
     end)
-
-    assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"mcpServers" => []})
-    send(run, :submit_to_gateway)
 
     assert_receive %LemonCore.Event{
                      type: :run_completed,
@@ -1899,4 +1900,10 @@ defmodule LemonRouter.NativeLineageTest do
 
   defp restore_env(app, key, {:ok, value}), do: Application.put_env(app, key, value)
   defp restore_env(app, key, :error), do: Application.delete_env(app, key)
+
+  # RunProcess is a gen_statem (#588): its state reads as {phase, data}.
+  defp run_command(run) do
+    {_phase, data} = :sys.get_state(run)
+    data.execution_request
+  end
 end
