@@ -13,6 +13,14 @@ defmodule CodingAgent.StateStorageContractTest do
     "coding_agent/tools/todo_store_owner.ex" => CodingAgent.Tools.TodoStoreOwner,
     "coding_agent/workspace_reads.ex" => CodingAgent.WorkspaceReads
   }
+  # These owners delegate their named-table creation to DurableTable.open/3.
+  # TaskProgressBindingServer also creates its independent projection directly.
+  @delegated_creation_paths [
+    "coding_agent/parent_question_store_server.ex",
+    "coding_agent/process_store_server.ex",
+    "coding_agent/run_graph_server.ex",
+    "coding_agent/task_store_server.ex"
+  ]
 
   test "persistent_term writes are limited to explicit search-provider configuration" do
     sites =
@@ -63,13 +71,29 @@ defmodule CodingAgent.StateStorageContractTest do
       |> Enum.uniq()
       |> Enum.sort()
 
-    assert sites == Enum.sort(Map.keys(@named_table_owners))
-    children = Supervisor.which_children(CodingAgent.Supervisor)
+    direct_paths = Map.keys(@named_table_owners) -- @delegated_creation_paths
+    assert sites == Enum.sort(["coding_agent/durable_table.ex" | direct_paths])
+
+    for path <- @delegated_creation_paths do
+      assert File.read!(Path.join(@lib_dir, path)) =~ "use CodingAgent.DurableTable"
+    end
+
+    children = descendants(CodingAgent.Supervisor)
 
     for owner <- Map.values(@named_table_owners) do
       assert {^owner, pid, :worker, [^owner]} = List.keyfind(children, owner, 0)
       assert is_pid(pid)
     end
+  end
+
+  defp descendants(supervisor) do
+    Enum.flat_map(Supervisor.which_children(supervisor), fn
+      {_id, pid, :supervisor, _modules} = child when is_pid(pid) ->
+        [child | descendants(pid)]
+
+      child ->
+        [child]
+    end)
   end
 
   defp sources do

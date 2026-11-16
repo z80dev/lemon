@@ -723,27 +723,30 @@ defmodule LemonAutomation.GoalLoopManager do
           send(manager, {:goal_loop_run_terminal, session_key, self(), run_id})
         end)
 
-      task =
-        Task.Supervisor.async_nolink(LemonAutomation.TaskSupervisor, fn ->
-          apply(loop_mod, operation, [session_key, opts])
-        end)
+      case LemonCore.TaskSupervisor.async_nolink(LemonAutomation.TaskSupervisor, fn ->
+             apply(loop_mod, operation, [session_key, opts])
+           end) do
+        {:ok, task} ->
+          loop = %{
+            session_key: session_key,
+            ref: task.ref,
+            pid: task.pid,
+            status: "running",
+            active_run: nil,
+            started_at_ms: now_ms(),
+            max_ticks: Keyword.get(opts, :max_ticks, 3)
+          }
 
-      loop = %{
-        session_key: session_key,
-        ref: task.ref,
-        pid: task.pid,
-        status: "running",
-        active_run: nil,
-        started_at_ms: now_ms(),
-        max_ticks: Keyword.get(opts, :max_ticks, 3)
-      }
+          state =
+            state
+            |> put_in([:loops, session_key], loop)
+            |> put_in([:loop_refs, task.ref], session_key)
 
-      state =
-        state
-        |> put_in([:loops, session_key], loop)
-        |> put_in([:loop_refs, task.ref], session_key)
+          {:ok, loop, state}
 
-      {:ok, loop, state}
+        {:error, _reason} ->
+          fail_loop_admission(session_key, state)
+      end
     end
   rescue
     _error -> fail_loop_admission(session_key, state)

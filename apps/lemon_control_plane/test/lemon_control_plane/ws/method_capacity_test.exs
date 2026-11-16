@@ -34,9 +34,10 @@ defmodule LemonControlPlane.WS.MethodCapacityTest do
 
     unless Process.whereis(LemonControlPlane.MethodTaskSupervisor) do
       start_supervised!(
-        {Task.Supervisor,
-         name: LemonControlPlane.MethodTaskSupervisor,
-         max_children: Connection.global_method_limit()}
+        LemonCore.TaskSupervisor.child_spec(
+          name: LemonControlPlane.MethodTaskSupervisor,
+          max_children: Connection.global_method_limit()
+        )
       )
     end
 
@@ -124,7 +125,7 @@ defmodule LemonControlPlane.WS.MethodCapacityTest do
     workers =
       for _ <- 1..Connection.global_method_limit() do
         {:ok, pid} =
-          Task.Supervisor.start_child(LemonControlPlane.MethodTaskSupervisor, fn ->
+          LemonCore.TaskSupervisor.start_child(LemonControlPlane.MethodTaskSupervisor, fn ->
             receive do
               :finish -> :ok
             end
@@ -141,6 +142,22 @@ defmodule LemonControlPlane.WS.MethodCapacityTest do
     after
       for pid <- workers,
           do: Task.Supervisor.terminate_child(LemonControlPlane.MethodTaskSupervisor, pid)
+    end
+  end
+
+  test "missing supervisor rejects without dispatching or occupying a connection slot", %{
+    state: state
+  } do
+    supervisor = Process.whereis(LemonControlPlane.MethodTaskSupervisor)
+    true = Process.unregister(LemonControlPlane.MethodTaskSupervisor)
+
+    try do
+      assert {:push, {:text, frame}, ^state} = request(state, "unavailable", BlockingHandler)
+      assert Jason.decode!(frame)["error"]["code"] == "UNAVAILABLE"
+      assert state.method_tasks == %{}
+      refute_received {:capacity_started, _}
+    after
+      true = Process.register(supervisor, LemonControlPlane.MethodTaskSupervisor)
     end
   end
 

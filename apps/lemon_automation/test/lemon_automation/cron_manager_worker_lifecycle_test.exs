@@ -121,6 +121,28 @@ defmodule LemonAutomation.CronManagerWorkerLifecycleTest do
            end)
   end
 
+  test "full task supervisor terminalizes manual work without submitting it", %{job: job} do
+    supervisor = start_supervised!(LemonCore.TaskSupervisor.child_spec(max_children: 1))
+
+    assert {:ok, _blocker} =
+             LemonCore.TaskSupervisor.start_child(supervisor, fn ->
+               receive do
+                 :release -> :ok
+               end
+             end)
+
+    :sys.replace_state(CronManager, &Map.put(&1, :task_supervisor, supervisor))
+    assert {:ok, %CronRun{id: run_id}} = CronManager.run_now(job.id)
+
+    state = :sys.get_state(CronManager)
+    run = CronStore.get_run(run_id)
+    assert run.status == :failed
+    assert run.error =~ "task_capacity_reached"
+    refute Map.has_key?(state.tasks, run_id)
+    refute_receive {:submitter_started, _job_id, ^run_id}, 0
+    assert Process.alive?(Process.whereis(CronManager))
+  end
+
   test "accepted coding timeout cannot schedule duplicate retries and keeps its session link", %{
     job: job
   } do

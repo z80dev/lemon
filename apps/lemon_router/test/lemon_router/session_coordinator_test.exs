@@ -540,7 +540,10 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
   test "query helpers report unavailable while the session registry cannot be consulted" do
     assert :ok =
-             Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
+             Supervisor.terminate_child(
+               LemonRouter.ConversationSupervisor,
+               LemonRouter.SessionRegistry
+             )
 
     try do
       assert {:error, :unavailable} =
@@ -550,7 +553,10 @@ defmodule LemonRouter.SessionCoordinatorTest do
       assert {:error, :unavailable} = SessionCoordinator.list_active_sessions()
     after
       assert {:ok, _pid} =
-               Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
+               Supervisor.restart_child(
+                 LemonRouter.ConversationSupervisor,
+                 LemonRouter.SessionRegistry
+               )
     end
   end
 
@@ -2695,18 +2701,23 @@ defmodule LemonRouter.SessionCoordinatorTest do
     do: Application.put_env(:lemon_router, :engine_runtime, value)
 
   defp with_stopped_run_registry(fun) when is_function(fun, 0) do
-    registry_pid = Process.whereis(LemonRouter.RunRegistry)
-
-    if is_pid(registry_pid) do
-      GenServer.stop(registry_pid)
-    end
+    # Deliberate child termination holds the registry unavailable without
+    # triggering dependency recovery (this fixture replaces the coordinator
+    # supervisor's registered name for isolated fake runs).
+    assert :ok =
+             Supervisor.terminate_child(
+               LemonRouter.ConversationSupervisor,
+               LemonRouter.RunRegistry
+             )
 
     try do
       fun.()
     after
-      start_if_needed(LemonRouter.RunRegistry, fn ->
-        Registry.start_link(keys: :unique, name: LemonRouter.RunRegistry)
-      end)
+      assert {:ok, _pid} =
+               Supervisor.restart_child(
+                 LemonRouter.ConversationSupervisor,
+                 LemonRouter.RunRegistry
+               )
     end
   end
 end

@@ -198,8 +198,18 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   def handle_info(:poll, %{poll_task: %Task{}} = state), do: {:noreply, state}
 
   def handle_info(:poll, state) do
-    task = Task.Supervisor.async_nolink(async_supervisor_name(), fn -> Poller.fetch(state) end)
-    {:noreply, Map.put(state, :poll_task, task)}
+    case LemonCore.TaskSupervisor.async_nolink(async_supervisor_name(), fn ->
+           Poller.fetch(state)
+         end) do
+      {:ok, task} ->
+        {:noreply, Map.put(state, :poll_task, task)}
+
+      {:error, _reason} ->
+        LemonChannels.Registry.record_status("telegram", {:error, :poll_unavailable})
+        Logger.warning("telegram poll task admission failed")
+        Process.send_after(self(), :poll, state.poll_interval_ms)
+        {:noreply, state}
+    end
   end
 
   def handle_info({ref, result}, %{poll_task: %Task{ref: ref}} = state) do
@@ -1511,10 +1521,29 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       end
 
       if command == "btw" do
-        _ =
-          send_system_message(state, chat_id, thread_id, user_msg_id, "Answering side question…")
+        case start_async_task(state, fn ->
+               send_system_message(
+                 state,
+                 chat_id,
+                 thread_id,
+                 user_msg_id,
+                 "Answering side question…"
+               )
 
-        _ = start_async_task(state, run)
+               run.()
+             end) do
+          {:ok, _pid} ->
+            :ok
+
+          {:error, _reason} ->
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              "Side question could not be started."
+            )
+        end
       else
         _ = run.()
       end
@@ -1674,12 +1703,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp maybe_put_kw(opts, key, value) when is_list(opts), do: [{key, value} | opts]
 
   defp start_async_task(_state, fun) when is_function(fun, 0) do
-    supervisor = async_supervisor_name()
+    case LemonCore.TaskSupervisor.start_child(async_supervisor_name(), fun) do
+      {:ok, _pid} = result ->
+        result
 
-    if is_pid(Process.whereis(supervisor)) do
-      Task.Supervisor.start_child(supervisor, fun)
-    else
-      {:error, :async_supervisor_unavailable}
+      {:error, :task_supervisor_unavailable} ->
+        Logger.warning("telegram background task supervisor unavailable")
+        {:error, :async_supervisor_unavailable}
+
+      {:error, _reason} = error ->
+        Logger.warning("telegram background task admission failed")
+        error
     end
   end
 

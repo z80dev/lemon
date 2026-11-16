@@ -75,8 +75,11 @@ defmodule LemonMCP.Client.SSE do
       timeout_ms: Keyword.get(opts, :timeout_ms, 30_000)
     }
 
+    {:ok, task_supervisor} = Protocol.start_notification_supervisor(opts)
+
     state = %{
       state: :initializing,
+      task_supervisor: task_supervisor,
       config: config,
       stream_request_id: nil,
       stream_conn: nil,
@@ -92,7 +95,9 @@ defmodule LemonMCP.Client.SSE do
          {:ok, state} <- open_stream(state) do
       initialize_stream(state)
     else
-      {:error, reason} -> {:stop, reason}
+      {:error, reason} ->
+        Protocol.stop_notification_supervisor(task_supervisor)
+        {:stop, reason}
     end
   end
 
@@ -104,6 +109,7 @@ defmodule LemonMCP.Client.SSE do
     else
       {:error, reason} ->
         close_stream(state)
+        Protocol.stop_notification_supervisor(state.task_supervisor)
         {:stop, reason}
     end
   end
@@ -273,7 +279,10 @@ defmodule LemonMCP.Client.SSE do
   end
 
   @impl true
-  def terminate(_reason, state), do: close_stream(state)
+  def terminate(_reason, state) do
+    close_stream(state)
+    Protocol.stop_notification_supervisor(state.task_supervisor)
+  end
 
   defp handle_stream_message(message, state) do
     case stream_events(message, state) do
@@ -514,7 +523,11 @@ defmodule LemonMCP.Client.SSE do
       %{event: "message", data: data} ->
         case Jason.decode(data) do
           {:ok, message} ->
-            Protocol.dispatch_notification(message, state.config.notification_handler)
+            Protocol.dispatch_notification(
+              message,
+              state.config.notification_handler,
+              state.task_supervisor
+            )
 
           _ ->
             :ok

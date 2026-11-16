@@ -15,7 +15,7 @@ defmodule LemonChannels.Adapters.Discord.Supervision581Test do
     end
   end
 
-  setup do
+  setup context do
     old_config = Application.get_env(:lemon_gateway, @config_key)
     old_mode = Application.get_env(:lemon_core, :config_test_mode)
     old_health = :sys.get_state(LemonChannels.Registry).health
@@ -39,7 +39,13 @@ defmodule LemonChannels.Adapters.Discord.Supervision581Test do
       end)
     end)
 
-    start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Discord.AsyncSupervisor})
+    start_supervised!(
+      LemonCore.TaskSupervisor.child_spec(
+        name: LemonChannels.Adapters.Discord.AsyncSupervisor,
+        max_children: context[:task_limit] || 1024
+      )
+    )
+
     :ok
   end
 
@@ -89,6 +95,44 @@ defmodule LemonChannels.Adapters.Discord.Supervision581Test do
     assert %{task: nil, queue: empty, data: data} = :sys.get_state(transport)
     assert MapSet.member?(data.allowed_channel_ids, 999)
     assert :queue.is_empty(empty)
+  end
+
+  @tag task_limit: 1
+  test "full and missing supervisors reject events without stopping or replaying the transport" do
+    supervisor = Process.whereis(LemonChannels.Adapters.Discord.AsyncSupervisor)
+    owner = self()
+
+    assert {:ok, blocker} =
+             LemonCore.TaskSupervisor.start_child(supervisor, fn ->
+               send(owner, :capacity_occupied)
+
+               receive do
+                 :release -> :ok
+               end
+             end)
+
+    assert_receive :capacity_occupied
+    transport = start_supervised!({Transport, config: %{unauthorized_dm_behavior: "pair"}})
+    send(transport, {:discord_event, {:MESSAGE_CREATE, %{}, nil}})
+    assert %{task: nil, queue: queue} = :sys.get_state(transport)
+    assert :queue.is_empty(queue)
+
+    Process.unregister(LemonChannels.Adapters.Discord.AsyncSupervisor)
+
+    try do
+      send(transport, {:discord_event, {:MESSAGE_CREATE, %{}, nil}})
+      assert %{task: nil, queue: queue} = :sys.get_state(transport)
+      assert :queue.is_empty(queue)
+    after
+      Process.register(supervisor, LemonChannels.Adapters.Discord.AsyncSupervisor)
+    end
+
+    monitor = Process.monitor(blocker)
+    send(blocker, :release)
+    assert_receive {:DOWN, ^monitor, :process, ^blocker, :normal}
+    assert %{task: nil, queue: queue} = :sys.get_state(transport)
+    assert :queue.is_empty(queue)
+    refute_receive {:event_blocked, _, _}, 0
   end
 
   test "transport contains neither global Nostrum configuration nor bare tasks" do

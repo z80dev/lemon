@@ -202,7 +202,7 @@ defmodule CodingAgent.Eval.Bridge do
       Kernel.tool_reply(slot, ref, call, run_call(resolver, tool, tool_call_id, args, signal))
     end
 
-    case Task.Supervisor.start_child(CodingAgent.TaskSupervisor, task) do
+    case LemonCore.TaskSupervisor.start_child(CodingAgent.TaskSupervisor, task) do
       {:ok, pid} ->
         entry = %{pid: pid, signal: signal, call: call, tool: tool}
         %{bridge | running: Map.put(bridge.running, Process.monitor(pid), entry)}

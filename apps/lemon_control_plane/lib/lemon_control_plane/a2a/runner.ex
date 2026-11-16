@@ -74,9 +74,8 @@ defmodule LemonControlPlane.A2A.Runner do
       }
 
       with :ok <- A2AStore.put_task(task),
-           {:ok, %{task_id: ^task_id}} <- A2AStore.append_message(message),
-           {:ok, _task} <- launch_submitted(task, context, peer, config, text) do
-        {:ok, A2AStore.get_task(task_id)}
+           {:ok, %{task_id: ^task_id}} <- A2AStore.append_message(message) do
+        launch_submitted(task, context, peer, config, text)
       else
         {:ok, _other_message} -> {:error, :message_id_conflict}
         {:error, _reason} -> {:error, :a2a_store_unavailable}
@@ -100,7 +99,7 @@ defmodule LemonControlPlane.A2A.Runner do
   defp launch_submitted(task, context, peer, config, text) do
     case claim_runner_lease(task.id) do
       {:ok, :claimed, claimed_task, lease_id} ->
-        case Task.Supervisor.start_child(LemonControlPlane.A2A.TaskSupervisor, fn ->
+        case LemonCore.TaskSupervisor.start_child(LemonControlPlane.A2A.TaskSupervisor, fn ->
                execute(claimed_task, context, peer, config, text, lease_id)
              end) do
           {:ok, _pid} ->

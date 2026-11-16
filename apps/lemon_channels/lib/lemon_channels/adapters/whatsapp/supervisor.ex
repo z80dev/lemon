@@ -27,7 +27,9 @@ defmodule LemonChannels.Adapters.WhatsApp.Supervisor do
     children =
       if is_binary(credentials_path) and credentials_path != "" do
         [
-          {Task.Supervisor, name: LemonChannels.Adapters.WhatsApp.AsyncSupervisor},
+          LemonCore.TaskSupervisor.child_spec(
+            name: LemonChannels.Adapters.WhatsApp.AsyncSupervisor
+          ),
           {LemonChannels.Adapters.WhatsApp.Transport, [config: config]}
         ]
       else

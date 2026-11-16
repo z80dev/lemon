@@ -170,6 +170,31 @@ defmodule LemonGateway.ApplicationTest do
       refute Elixir.LemonGateway.EngineRegistry in child_ids
     end
 
+    test "execution registry dependencies form a bounded restart subtree without a dead task child" do
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+      assert {:ok, %{start: {Supervisor, :start_link, [children, opts]}}} =
+               :supervisor.get_childspec(
+                 LemonGateway.Supervisor,
+                 LemonGateway.ExecutionSupervisor
+               )
+
+      assert opts[:strategy] == :rest_for_one
+      assert opts[:max_restarts] == 10
+      assert opts[:max_seconds] == 5
+
+      assert Enum.map(children, &Supervisor.child_spec(&1, []).id) == [
+               LemonGateway.RunRegistry,
+               LemonGateway.ThreadRegistry,
+               LemonGateway.RunSupervisor,
+               LemonGateway.ThreadWorkerSupervisor,
+               LemonGateway.Scheduler
+             ]
+
+      assert {:error, :not_found} =
+               :supervisor.get_childspec(LemonGateway.Supervisor, LemonGateway.TaskSupervisor)
+    end
+
     test "all child processes are running" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 

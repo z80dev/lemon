@@ -172,11 +172,23 @@ defmodule LemonOmp.Manager do
       if worktree && not Map.has_key?(wire["worktree"] || %{}, "kept") do
         # A hard-killed Session cannot run terminate/2. Give omp's stdin EOF
         # shutdown time to finish before inspecting the owned worktree.
-        Task.start(fn ->
-          Process.sleep(1_500)
-          cleaned = LemonOmp.Worktree.cleanup(worktree)
-          publish(pid, Map.put(wire, "worktree", cleaned), "exited")
-        end)
+        case LemonCore.TaskSupervisor.start_child(LemonOmp.TaskSupervisor, fn ->
+               Process.sleep(1_500)
+               cleaned = LemonOmp.Worktree.cleanup(worktree)
+               publish(pid, Map.put(wire, "worktree", cleaned), "exited")
+             end) do
+          {:ok, _task} ->
+            :ok
+
+          {:error, reason} ->
+            kept =
+              Map.merge(wire["worktree"] || %{}, %{
+                "kept" => true,
+                "reason" => Atom.to_string(reason)
+              })
+
+            publish(pid, Map.put(wire, "worktree", kept), "exited")
+        end
       end
     end
 

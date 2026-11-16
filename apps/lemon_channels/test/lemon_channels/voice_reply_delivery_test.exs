@@ -4,9 +4,14 @@ defmodule LemonChannels.VoiceReplyDeliveryTest do
   alias LemonChannels.{OutboundPayload, VoiceReplyDelivery}
   alias LemonCore.{DeliveryIntent, DeliveryRoute}
 
-  setup do
+  setup context do
     server = start_supervised!({VoiceReplyDelivery, name: nil})
-    supervisor = start_supervised!({Task.Supervisor, name: nil})
+
+    supervisor =
+      start_supervised!(
+        LemonCore.TaskSupervisor.child_spec(max_children: context[:task_limit] || 1024)
+      )
+
     owner = self()
 
     opts = [
@@ -175,6 +180,36 @@ defmodule LemonChannels.VoiceReplyDeliveryTest do
     end
 
     refute_receive {:synthesized, _, _}
+  end
+
+  @tag task_limit: 1
+  test "full and missing supervisors fail synthesis admission without losing text", %{opts: opts} do
+    supervisor = Keyword.fetch!(opts, :task_supervisor)
+
+    assert {:ok, blocker} =
+             LemonCore.TaskSupervisor.start_child(supervisor, fn ->
+               receive do
+                 :release -> :ok
+               end
+             end)
+
+    for {label, target} <- [{"full", supervisor}, {"missing", :missing_voice_reply_supervisor}] do
+      rejected_opts = Keyword.put(opts, :task_supervisor, target)
+      prepared = VoiceReplyDelivery.prepare(%{intent() | run_id: label}, rejected_opts)
+      VoiceReplyDelivery.expect(prepared, ["transcript"], rejected_opts)
+      receipt(prepared, "transcript", {:ok, 1}, :final, rejected_opts)
+      entries = :sys.get_state(Keyword.fetch!(opts, :server))
+
+      assert Enum.any?(entries, fn {_id, entry} ->
+               entry.intent.run_id == label and entry.status == :failed
+             end)
+    end
+
+    monitor = Process.monitor(blocker)
+    send(blocker, :release)
+    assert_receive {:DOWN, ^monitor, :process, ^blocker, :normal}
+    refute_receive {:synthesized, _, _}, 0
+    refute_receive {:enqueued, _}, 0
   end
 
   test "synthesis failures retain text-only delivery", %{opts: opts} do

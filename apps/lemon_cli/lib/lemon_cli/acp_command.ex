@@ -2,6 +2,8 @@ defmodule LemonCli.AcpCommand do
   @moduledoc """
   ACP stdio client of the authenticated local runtime. This VM starts only
   transport dependencies, never Lemon's router, scheduler or session store.
+  A private one-task supervisor owns the blocking stdin reader and is stopped
+  when the command exits; this does not start any runtime application.
   """
   use WebSockex
 
@@ -10,13 +12,9 @@ defmodule LemonCli.AcpCommand do
          {:ok, _apps} <- Application.ensure_all_started(:websockex),
          {:ok, socket} <-
            WebSockex.start(url(), __MODULE__, %{owner: self()}, extra_headers: headers()) do
-      owner = self()
-      reader = spawn(fn -> read_input(owner) end)
-
       try do
-        loop(socket, %{}, false)
+        run_input(socket)
       after
-        Process.exit(reader, :kill)
         if Process.alive?(socket), do: WebSockex.cast(socket, :close)
       end
     else
@@ -49,6 +47,28 @@ defmodule LemonCli.AcpCommand do
 
   @impl true
   def handle_cast(:close, state), do: {:close, state}
+
+  defp run_input(socket) do
+    owner = self()
+    # Caller policy: exactly one blocking stdin reader per command connection.
+    %{start: {module, function, args}} =
+      LemonCore.TaskSupervisor.child_spec(max_children: 1)
+
+    case apply(module, function, args) do
+      {:ok, supervisor} ->
+        try do
+          case LemonCore.TaskSupervisor.start_child(supervisor, fn -> read_input(owner) end) do
+            {:ok, _reader} -> loop(socket, %{}, false)
+            {:error, _reason} -> disconnected()
+          end
+        after
+          Supervisor.stop(supervisor)
+        end
+
+      {:error, _reason} ->
+        disconnected()
+    end
+  end
 
   defp read_input(owner) do
     case IO.read(:stdio, :line) do

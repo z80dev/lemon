@@ -348,10 +348,14 @@ defmodule LemonAi.CallDispatcher do
           "CallDispatcher failed to start stream tracking for #{inspect(provider)}: #{inspect(reason)}"
         )
 
+        # The provider callback already ran. Cancel its stream before releasing
+        # admission, but never label this as a request that did not start.
+        LemonAi.EventStream.cancel(stream_pid, {:stream_tracking_start_failed, reason})
+        _ = LemonAi.EventStream.result(stream_pid)
         LemonAi.ModelCallTelemetry.stop_failure(span, :error, :stream_tracking_failed)
         release_slot(slot_ref)
         LemonAi.CircuitBreaker.record_failure(provider, {:stream_tracking_start_failed, reason})
-        result
+        {:error, :outcome_unknown}
     end
   end
 
@@ -374,7 +378,7 @@ defmodule LemonAi.CallDispatcher do
   end
 
   defp start_stream_tracking(provider, slot_ref, stream_pid, opts, span) do
-    case Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
+    case LemonAi.StreamTaskSupervisor.start_child(fn ->
            track_stream_result(provider, slot_ref, stream_pid, span)
          end) do
       {:ok, tracker_pid} ->

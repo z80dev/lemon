@@ -198,7 +198,11 @@ defmodule LemonGateway.ThreadWorkerTest do
   end
 
   test "definite admission failure is returned and terminalized for the fixed ID" do
-    :ok = Supervisor.terminate_child(LemonGateway.Supervisor, LemonGateway.ThreadWorkerSupervisor)
+    :ok =
+      Supervisor.terminate_child(
+        LemonGateway.ExecutionSupervisor,
+        LemonGateway.ThreadWorkerSupervisor
+      )
 
     request =
       request("admission-failure:#{System.unique_integer([:positive])}", "rejected", self())
@@ -215,7 +219,10 @@ defmodule LemonGateway.ThreadWorkerTest do
       assert %{summary: %{completed: %{ok: false}}} = LemonCore.RunStore.get(request.run_id)
     after
       {:ok, _pid} =
-        Supervisor.restart_child(LemonGateway.Supervisor, LemonGateway.ThreadWorkerSupervisor)
+        Supervisor.restart_child(
+          LemonGateway.ExecutionSupervisor,
+          LemonGateway.ThreadWorkerSupervisor
+        )
     end
   end
 

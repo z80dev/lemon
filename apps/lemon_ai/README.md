@@ -693,6 +693,23 @@ The hard ceiling never resets; its reasons remain `:timeout` and
 (default 5 minutes). Its supervised process owns the ETS table; caller exits do not
 discard entries, while restarting the owner creates an empty cache.
 
+`LemonAi.StreamTaskSupervisor` caps provider workers and stream-result trackers
+at **1024** concurrent tasks by default. This standalone package owns its cap:
+
+```elixir
+config :lemon_ai, :task_supervisor_max_children, %{
+  LemonAi.StreamTaskSupervisor => 1024
+}
+```
+
+The cap must be a positive integer and applies at application startup. Provider
+worker rejection returns `{:error, :task_capacity_reached}` or
+`{:error, :task_supervisor_unavailable}` without invoking the provider callback.
+If a result tracker cannot start after the callback has returned a stream, the
+dispatcher cancels that stream, releases admission, and returns
+`{:error, :outcome_unknown}`: cancellation is not proof the request had no effects.
+These local task-admission failures do not automatically retry the request.
+
 ## Key types
 
 All defined in `LemonAi.Types`:

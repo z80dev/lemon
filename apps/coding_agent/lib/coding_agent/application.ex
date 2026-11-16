@@ -22,18 +22,19 @@ defmodule CodingAgent.Application do
 
     children = [
       CodingAgent.RuntimeTables,
-      {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
-      {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
-      {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
-      {Registry, keys: :unique, name: CodingAgent.Eval.Registry},
-      CodingAgent.Eval.KernelSupervisor,
-      {Registry, keys: :unique, name: CodingAgent.Tools.Lsp.Registry},
-      {DynamicSupervisor, name: CodingAgent.Tools.Lsp.Supervisor, strategy: :one_for_one},
-      {Registry, keys: :unique, name: CodingAgent.Debug.Registry},
-      {DynamicSupervisor, name: CodingAgent.Debug.Supervisor, strategy: :one_for_one},
-      CodingAgent.ToolResources,
-      {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
-      CodingAgent.Search.SingleFlight,
+      LemonCore.Supervision.subtree(CodingAgent.ToolResourceSupervisor, [
+        {Registry, keys: :unique, name: CodingAgent.Eval.Registry},
+        {Registry, keys: :unique, name: CodingAgent.Tools.Lsp.Registry},
+        {Registry, keys: :unique, name: CodingAgent.Debug.Registry},
+        CodingAgent.Eval.KernelSupervisor,
+        {DynamicSupervisor, name: CodingAgent.Tools.Lsp.Supervisor, strategy: :one_for_one},
+        {DynamicSupervisor, name: CodingAgent.Debug.Supervisor, strategy: :one_for_one},
+        CodingAgent.ToolResources
+      ]),
+      LemonCore.Supervision.subtree(CodingAgent.Search.Supervisor, [
+        {LemonCore.TaskSupervisor, name: CodingAgent.Search.TaskSupervisor},
+        CodingAgent.Search.SingleFlight
+      ]),
       CodingAgent.Tools.TodoStoreOwner,
       CodingAgent.Tools.Bash.ShellState,
       CodingAgent.Session.UserPrompt,
@@ -43,24 +44,35 @@ defmodule CodingAgent.Application do
       CodingAgent.ConflictStore,
       CodingAgent.ExecutionNode.FileService,
       CodingAgent.ExecutionNode.ProcessService,
-      {Registry, keys: :unique, name: CodingAgent.ExecutionNode.ToolSession.Registry},
-      {DynamicSupervisor,
-       name: CodingAgent.ExecutionNode.ToolSession.Supervisor, strategy: :one_for_one},
-      CodingAgent.SessionSupervisor,
-      CodingAgent.BackgroundRun.Supervisor,
+      LemonCore.Supervision.subtree(CodingAgent.ExecutionNode.ToolSession.Tree, [
+        {Registry, keys: :unique, name: CodingAgent.ExecutionNode.ToolSession.Registry},
+        {DynamicSupervisor,
+         name: CodingAgent.ExecutionNode.ToolSession.Supervisor, strategy: :one_for_one}
+      ]),
       CodingAgent.Wasm.SidecarSupervisor,
-      CodingAgent.Tools.Task.LiveBridgeSupervisor,
-      {Task.Supervisor, name: CodingAgent.TaskSupervisor},
+      {LemonCore.TaskSupervisor, name: CodingAgent.TaskSupervisor},
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
       CodingAgent.Tools.Task.Control,
       CodingAgent.Tools.Task.Speculation,
       {CodingAgent.TaskProgressBindingServer, name: CodingAgent.TaskProgressBindingServer},
       {CodingAgent.ParentQuestionStoreServer, name: CodingAgent.ParentQuestionStoreServer},
       {CodingAgent.RunGraphServer, name: CodingAgent.RunGraphServer},
-      {CodingAgent.ProcessStoreServer, name: CodingAgent.ProcessStoreServer},
-      {CodingAgent.ProcessManager, name: CodingAgent.ProcessManager},
-      {CodingAgent.LaneQueue,
-       name: CodingAgent.LaneQueue, caps: lane_caps, task_supervisor: CodingAgent.TaskSupervisor},
+      LemonCore.Supervision.subtree(CodingAgent.ProcessSupervisor, [
+        {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
+        {CodingAgent.ProcessStoreServer, name: CodingAgent.ProcessStoreServer},
+        {CodingAgent.ProcessManager, name: CodingAgent.ProcessManager},
+        {CodingAgent.LaneQueue,
+         name: CodingAgent.LaneQueue, caps: lane_caps, task_supervisor: CodingAgent.TaskSupervisor}
+      ]),
+      LemonCore.Supervision.subtree(CodingAgent.SessionTree, [
+        {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
+        CodingAgent.SessionSupervisor,
+        CodingAgent.Tools.Task.LiveBridgeSupervisor
+      ]),
+      LemonCore.Supervision.subtree(CodingAgent.BackgroundRun.Tree, [
+        {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
+        CodingAgent.BackgroundRun.Supervisor
+      ]),
       {CodingAgent.Parallel.Semaphore, max: task_max_concurrency, name: CodingAgent.TaskSemaphore}
     ]
 

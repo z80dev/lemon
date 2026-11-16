@@ -19,15 +19,15 @@ defmodule LemonGateway.Application do
         [
           LemonGateway.Config,
           LemonGateway.EngineLock,
-          {Registry, keys: :unique, name: LemonGateway.RunRegistry},
-          LemonGateway.ThreadRegistry,
-          LemonGateway.RunSupervisor,
-          LemonGateway.ThreadWorkerSupervisor,
-          {Task.Supervisor, name: LemonGateway.TaskSupervisor},
-          LemonGateway.Scheduler
-          # lemon_channels is started explicitly by the top-level runtime app (or by
-          # starting :lemon_control_plane / lemon_channels directly). LemonGateway
-          # does not attempt to orchestrate startup of sibling applications.
+          LemonCore.Supervision.subtree(LemonGateway.ExecutionSupervisor, [
+            {Registry, keys: :unique, name: LemonGateway.RunRegistry},
+            LemonGateway.ThreadRegistry,
+            LemonGateway.RunSupervisor,
+            LemonGateway.ThreadWorkerSupervisor,
+            LemonGateway.Scheduler
+          ])
+          # Channels and the control plane are started by their consumers, not
+          # orchestrated as sibling applications by the gateway.
         ] ++ maybe_health_server_child() ++ maybe_gateway_ingress_children()
 
       # Channels and the control plane ask core for transport/config facts rather

@@ -18,6 +18,11 @@ defmodule CodingAgent.ProcessSession do
   path with background sessions. Workload reconciliation is event-driven (root
   exit, explicit cancellation and boot recovery), not a periodic host `ps` scan.
 
+  Exit callbacks are best-effort temporary tasks under
+  `CodingAgent.TaskSupervisor`. If admission is unavailable or at capacity,
+  completion remains recorded and the callback is skipped with a warning,
+  never run outside supervision or retried.
+
   ## Output capture
 
   Received bytes go to two bounded destinations:
@@ -894,9 +899,18 @@ defmodule CodingAgent.ProcessSession do
     ProcessStore.confirm_termination(state.process_id)
 
     if state.on_exit do
-      spawn(fn ->
-        state.on_exit.(%{process_id: state.process_id, status: status, exit_code: exit_code})
-      end)
+      callback = state.on_exit
+      result = %{process_id: state.process_id, status: status, exit_code: exit_code}
+
+      case LemonCore.TaskSupervisor.start_child(CodingAgent.TaskSupervisor, fn ->
+             callback.(result)
+           end) do
+        {:ok, _pid} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("process exit callback not started: #{inspect(reason)}")
+      end
     end
 
     Process.send_after(self(), :stop_after_exit, 5_000)

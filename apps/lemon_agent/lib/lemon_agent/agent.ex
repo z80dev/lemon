@@ -198,6 +198,8 @@ defmodule LemonAgent.Agent do
 
   Returns `:ok` immediately. Use `wait_for_idle/1` to wait for completion.
   Returns `{:error, :already_streaming}` if a prompt is already being processed.
+  Returns `{:error, :task_capacity_reached | :task_supervisor_unavailable}` when
+  the loop cannot be admitted; the agent state and conversation are unchanged.
 
   ## Examples
 
@@ -209,7 +211,8 @@ defmodule LemonAgent.Agent do
           GenServer.server(),
           String.t() | Types.agent_message() | list(Types.agent_message())
         ) ::
-          :ok | {:error, :already_streaming}
+          :ok
+          | {:error, :already_streaming | :task_capacity_reached | :task_supervisor_unavailable}
   def prompt(agent, message) do
     GenServer.call(agent, {:prompt, message})
   end
@@ -221,9 +224,16 @@ defmodule LemonAgent.Agent do
   Returns `{:error, :already_streaming}` if already processing.
   Returns `{:error, :no_messages}` if there are no messages to continue from.
   Returns `{:error, :cannot_continue}` if the last message is from the assistant.
+  Task admission errors match `prompt/2` and leave the current context unchanged.
   """
   @spec continue(GenServer.server()) ::
-          :ok | {:error, :already_streaming | :no_messages | :cannot_continue}
+          :ok
+          | {:error,
+             :already_streaming
+             | :no_messages
+             | :cannot_continue
+             | :task_capacity_reached
+             | :task_supervisor_unavailable}
   def continue(agent) do
     GenServer.call(agent, :continue)
   end
@@ -551,8 +561,11 @@ defmodule LemonAgent.Agent do
       {:reply, {:error, :already_streaming}, state}
     else
       messages = normalize_prompt_input(message)
-      new_state = start_loop(messages, state)
-      {:reply, :ok, new_state}
+
+      case start_loop(messages, state) do
+        {:ok, new_state} -> {:reply, :ok, new_state}
+        {:error, reason} -> {:reply, {:error, reason}, state}
+      end
     end
   end
 
@@ -572,8 +585,10 @@ defmodule LemonAgent.Agent do
         {:reply, {:error, :cannot_continue}, state}
 
       true ->
-        new_state = start_loop(nil, state)
-        {:reply, :ok, new_state}
+        case start_loop(nil, state) do
+          {:ok, new_state} -> {:reply, :ok, new_state}
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
     end
   end
 
@@ -977,7 +992,8 @@ defmodule LemonAgent.Agent do
   defp normalize_prompt_input(input) when is_list(input), do: input
   defp normalize_prompt_input(input) when is_map(input), do: [input]
 
-  @spec start_loop(list(Types.agent_message()) | nil, state()) :: state()
+  @spec start_loop(list(Types.agent_message()) | nil, state()) ::
+          {:ok, state()} | {:error, term()}
   defp start_loop(messages, state) do
     abort_ref = AbortSignal.new()
     agent_pid = self()
@@ -1002,38 +1018,40 @@ defmodule LemonAgent.Agent do
     # Build config for the loop
     config = build_loop_config(%{state | agent_state: new_agent_state}, abort_ref, agent_pid)
 
-    # Emit introspection event for loop start
-    model_id =
-      case new_agent_state.model do
-        %{id: id} when is_binary(id) -> id
-        _ -> ""
-      end
+    case LemonCore.TaskSupervisor.async_nolink(LemonAgent.LoopTaskSupervisor, fn ->
+           run_agent_loop(messages, context, config, abort_ref, agent_pid, state.stream_fn)
+         end) do
+      {:ok, task} ->
+        model_id =
+          case new_agent_state.model do
+            %{id: id} when is_binary(id) -> id
+            _ -> ""
+          end
 
-    Introspection.record(
-      :agent_loop_started,
-      %{
-        model: model_id,
-        tool_count: length(new_agent_state.tools),
-        message_count: length(new_agent_state.messages),
-        is_continue: messages == nil
-      },
-      session_key: state.session_id,
-      provenance: :direct
-    )
+        Introspection.record(
+          :agent_loop_started,
+          %{
+            model: model_id,
+            tool_count: length(new_agent_state.tools),
+            message_count: length(new_agent_state.messages),
+            is_continue: messages == nil
+          },
+          session_key: state.session_id,
+          provenance: :direct
+        )
 
-    # Spawn a supervised task to run the loop
-    task =
-      Task.Supervisor.async_nolink(LemonAgent.LoopTaskSupervisor, fn ->
-        run_agent_loop(messages, context, config, abort_ref, agent_pid, state.stream_fn)
-      end)
+        {:ok,
+         %{
+           state
+           | agent_state: new_agent_state,
+             response_system_prompt: context.system_prompt,
+             abort_ref: abort_ref,
+             running_task: task
+         }}
 
-    %{
-      state
-      | agent_state: new_agent_state,
-        response_system_prompt: context.system_prompt,
-        abort_ref: abort_ref,
-        running_task: task
-    }
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @spec build_loop_config(state(), reference(), pid()) :: AgentLoopConfig.t()

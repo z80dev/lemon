@@ -154,8 +154,12 @@ defmodule LemonChannels.VoiceReplyDelivery do
       supervisor =
         Keyword.get(entry.opts, :task_supervisor, LemonChannels.VoiceReplyTaskSupervisor)
 
-      Task.Supervisor.start_child(supervisor, fn -> synthesize_and_deliver(entry) end)
-      %{entry | remaining: remaining, status: :started}
+      case LemonCore.TaskSupervisor.start_child(supervisor, fn ->
+             synthesize_and_deliver(entry)
+           end) do
+        {:ok, _pid} -> %{entry | remaining: remaining, status: :started}
+        {:error, _reason} -> %{entry | remaining: remaining, status: :failed}
+      end
     else
       %{entry | remaining: remaining}
     end

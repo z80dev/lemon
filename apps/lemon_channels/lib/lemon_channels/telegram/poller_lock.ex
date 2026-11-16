@@ -52,7 +52,7 @@ defmodule LemonChannels.Telegram.PollerLock do
     ref = make_ref()
 
     result =
-      Task.Supervisor.start_child(@supervisor, fn ->
+      LemonCore.TaskSupervisor.start_child(@supervisor, fn ->
         monitor = Process.monitor(owner)
 
         result =

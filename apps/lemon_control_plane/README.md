@@ -120,12 +120,13 @@ on partial usage does not attest a free request. Legacy `usage.cost`/`usage.stat
 daily projections remain known-value subtotals, not complete provider-usage or
 spend-enforcement authority; canonical `usage.records` retains the null counters.
 
-Slow/approval-gated handlers run under a dedicated `Task.Supervisor` so events
-and approval resolution can continue while their correlated request remains
-pending. Caller-policy caps admit at most eight outstanding async methods per
-connection and 256 globally. Excess requests return `UNAVAILABLE` before work
-starts; completion or worker death releases the connection slot. Disconnect
-does not replay a request or cancel a mutation already admitted.
+Slow/approval-gated handlers run under a dedicated bounded task supervisor so
+events and approval resolution can continue while their correlated request
+remains pending. Caller-policy caps admit at most eight outstanding async methods
+per connection and 256 globally. Excess requests or an unavailable supervisor
+return `UNAVAILABLE` before work starts; completion or worker death releases the
+connection slot. Disconnect does not replay a request or cancel a mutation already
+admitted.
 
 Connection membership uses a duplicate-key Registry; event fan-out dispatches
 directly over its entries without calling a presence server. Registry removes
@@ -1552,6 +1553,13 @@ See [attaching a bot machine](../../docs/user-guide/attaching-a-bot-machine.md).
   (default 9901) enabled by `[gateway] enable_a2a = true`. Peers are independent
   principals. Task access is peer-scoped and message IDs durably replay the
   original task. Unknown submissions reconcile; cancellation is first-writer-wins.
+  A2A runner admission is bounded separately (1024 concurrent runners by default).
+  Capacity or supervisor unavailability returns the existing internal-error
+  response without submitting a run. The durable message/task identity remains
+  available for explicit replay, with its runner lease released; no automatic
+  resubmission is scheduled. Configure the cap through
+  `:lemon_core, :task_supervisor_max_children`, keyed by
+  `LemonControlPlane.A2A.TaskSupervisor`.
 
 `:lemon_control_plane, :port` controls the listener; test default `0` chooses a
 free port. `:git_commit` may supply server version metadata. Runtime configuration

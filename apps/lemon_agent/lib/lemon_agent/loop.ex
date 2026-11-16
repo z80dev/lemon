@@ -143,7 +143,7 @@ defmodule LemonAgent.Loop do
       end
 
     # Run the loop in a supervised task
-    case Task.Supervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
+    case LemonCore.TaskSupervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
            try do
              run_agent_loop(prompts, context, config, signal, stream_fn, stream)
            rescue
@@ -160,9 +160,6 @@ defmodule LemonAgent.Loop do
            end
          end) do
       {:ok, pid} ->
-        EventStream.attach_task(stream, pid)
-
-      {:ok, pid, _info} ->
         EventStream.attach_task(stream, pid)
 
       {:error, reason} ->
@@ -269,7 +266,7 @@ defmodule LemonAgent.Loop do
         )
       end
 
-    case Task.Supervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
+    case LemonCore.TaskSupervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
            try do
              run_continue_loop(context, config, signal, stream_fn, stream)
            rescue
@@ -286,9 +283,6 @@ defmodule LemonAgent.Loop do
            end
          end) do
       {:ok, pid} ->
-        EventStream.attach_task(stream, pid)
-
-      {:ok, pid, _info} ->
         EventStream.attach_task(stream, pid)
 
       {:error, reason} ->

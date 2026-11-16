@@ -20,6 +20,41 @@ Channel transport or gateway-native ingress
   -> channel-specific renderer / outbox
 ```
 
+## Supervision tree
+
+```text
+LemonRouter.Supervisor (one_for_one)
+  +-- RestartCarryover (drain admission owner)
+  +-- AgentProfiles
+  +-- CoalescingSupervisor (rest_for_one)
+  |     +-- CoalescerRegistry
+  |     +-- CoalescerSupervisor (DynamicSupervisor)
+  +-- ToolStatusTree (rest_for_one)
+  |     +-- ToolStatusRegistry
+  |     +-- ToolStatusSupervisor (DynamicSupervisor)
+  +-- AsyncTaskSurfaceTree (rest_for_one)
+  |     +-- AsyncTaskSurfaceRegistry
+  |     +-- AsyncTaskSurfaceSupervisor (DynamicSupervisor)
+  +-- RoutingFeedbackStore
+  +-- ConversationSupervisor (rest_for_one)
+  |     +-- RunRegistry, SessionRegistry, ConversationRegistry
+  |     +-- RunSupervisor (DynamicSupervisor, run_process_limit)
+  |     +-- SessionCoordinatorSupervisor (DynamicSupervisor)
+  |     +-- RunCountTracker
+  |     +-- RunOrchestrator
+  |     +-- AgentMessaging
+  |     +-- RestartCarryover.Replayer
+  +-- Health.Server (optional)
+```
+
+Every dependency subtree has its own budget of 10 restarts per 5 seconds
+(caller containment policy, not a measured capacity). Registry failure stops
+later dependants in reverse order and restarts them in list order. Conversation
+registries therefore cannot disappear while old runs/coordinators remain alive.
+Temporary run children are never replayed by supervision; the graceful-restart
+replayer retains its explicit durable carryover contract. Coalescing/surface
+failures are isolated from the conversation subtree and from each other.
+
 ## Ownership
 
 - Router owns:

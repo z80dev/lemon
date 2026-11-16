@@ -774,7 +774,9 @@ defmodule CodingAgent.Tools.Agent do
 
     task_supervisor = Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
 
-    case start_watcher(task_supervisor, watcher_opts) do
+    case LemonCore.TaskSupervisor.start_child(task_supervisor, fn ->
+           monitor_completion(watcher_opts)
+         end) do
       {:ok, _pid} ->
         receive do
           {:agent_tool_watcher_ready, ^ready_ref} -> :ok
@@ -787,14 +789,6 @@ defmodule CodingAgent.Tools.Agent do
       {:error, reason} ->
         {:error, reason}
     end
-  end
-
-  defp start_watcher(task_supervisor, watcher_opts) do
-    Task.Supervisor.start_child(task_supervisor, fn -> monitor_completion(watcher_opts) end)
-  rescue
-    error -> {:error, {:exception, error}}
-  catch
-    kind, reason -> {:error, {kind, reason}}
   end
 
   defp monitor_completion(%{

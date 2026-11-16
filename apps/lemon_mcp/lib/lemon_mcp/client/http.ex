@@ -95,10 +95,12 @@ defmodule LemonMCP.Client.HTTP do
     with {:ok, pin} <-
            destination_pin(config.url, config.origin_policy, Keyword.get(opts, :destination_pin)),
          :ok <- ensure_http_apps(),
-         {:ok, profile} <- start_http_profile(config.origin_policy) do
+         {:ok, profile} <- start_http_profile(config.origin_policy),
+         {:ok, task_supervisor} <- Protocol.start_notification_supervisor(opts) do
       state =
         %{
           state: :initializing,
+          task_supervisor: task_supervisor,
           config: %{config | destination_pin: pin, http_profile: profile},
           server_info: nil,
           server_capabilities: nil,
@@ -115,11 +117,17 @@ defmodule LemonMCP.Client.HTTP do
         {:ok, %{state | state: :ready}}
       else
         {:error, reason} ->
+          Protocol.stop_notification_supervisor(task_supervisor)
           {:stop, reason}
       end
     else
       {:error, reason} -> {:stop, reason}
     end
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    Protocol.stop_notification_supervisor(state.task_supervisor)
   end
 
   @impl true
@@ -236,6 +244,7 @@ defmodule LemonMCP.Client.HTTP do
 
   @impl true
   def handle_call(:close, _from, state) do
+    Protocol.stop_notification_supervisor(state.task_supervisor)
     {:reply, :ok, %{state | state: :disconnected}}
   end
 
@@ -332,7 +341,11 @@ defmodule LemonMCP.Client.HTTP do
 
           case Jason.decode(normalized_body) do
             {:ok, message} ->
-              Protocol.dispatch_notification(message, state.config.notification_handler)
+              Protocol.dispatch_notification(
+                message,
+                state.config.notification_handler,
+                state.task_supervisor
+              )
 
             _ ->
               :ok
@@ -416,7 +429,12 @@ defmodule LemonMCP.Client.HTTP do
       Enum.reject(events, fn %{data: data} ->
         case Jason.decode(data) do
           {:ok, %{"method" => _} = message} when not is_map_key(message, "id") ->
-            Protocol.dispatch_notification(message, state.config.notification_handler)
+            Protocol.dispatch_notification(
+              message,
+              state.config.notification_handler,
+              state.task_supervisor
+            )
+
             true
 
           _ ->

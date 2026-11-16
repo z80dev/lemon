@@ -104,6 +104,7 @@ defmodule LemonChannels.OutboxDurabilityTest do
       end
     end
 
+    @impl true
     def close(state), do: SqliteBackend.close(state.backend)
 
     defp gate(state, operation) do
@@ -136,7 +137,7 @@ defmodule LemonChannels.OutboxDurabilityTest do
     ]
 
     start_store(store_opts)
-    start_supervised!({Task.Supervisor, name: @workers, max_children: 2})
+    start_supervised!(LemonCore.TaskSupervisor.child_spec(name: @workers, max_children: 2))
     :ok = Registry.register(Adapter)
     previous_keys = :ets.match_object(:lemon_channels_outbox_dedupe, {{Adapter.id(), :_}, :_})
 
@@ -324,7 +325,10 @@ defmodule LemonChannels.OutboxDurabilityTest do
     assert first != second
     assert Outbox.stats(outbox).processing_count == 2
     assert %{active: 2} = Supervisor.count_children(@workers)
-    assert {:error, :max_children} = Task.Supervisor.start_child(@workers, fn -> :unexpected end)
+
+    assert {:error, :task_capacity_reached} =
+             LemonCore.TaskSupervisor.start_child(@workers, fn -> :unexpected end)
+
     refute_receive {:attempt, _, _, _}, 0
     send(worker1, {:finish, {:ok, :accepted}})
     assert_receive {:attempt, _, _, worker3}

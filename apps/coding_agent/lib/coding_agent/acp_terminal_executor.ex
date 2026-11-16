@@ -6,6 +6,10 @@ defmodule CodingAgent.ACPTerminalExecutor do
   the client terminal, including allocations which finish after cancellation.
   Client snapshots are bounded. If the client discarded output, results say so
   rather than claiming a complete local spill file exists.
+
+  Asynchronous ACP requests use `CodingAgent.TaskSupervisor`. Admission failure
+  refuses terminal creation before dispatch; the existing lifetime guardian
+  still handles late allocations after tool cancellation.
   """
   alias CodingAgent.BashExecutor
   alias LemonAgent.AbortSignal
@@ -68,6 +72,9 @@ defmodule CodingAgent.ACPTerminalExecutor do
         reply.({:ok, result(%{output: "", truncated: false}, nil, reason, nil)})
         cleanup_late_create(create, run_id)
         :already_replied
+
+      {:error, reason} when reason in [:task_capacity_reached, :task_supervisor_unavailable] ->
+        {:error, reason}
 
       _ ->
         {:error, :acp_terminal_create_failed}
@@ -283,16 +290,23 @@ defmodule CodingAgent.ACPTerminalExecutor do
     caller = self()
     tag = make_ref()
 
-    pid =
-      spawn(fn ->
-        response = request(run_id, method, params, timeout)
-        send(caller, {tag, response})
-      end)
+    case LemonCore.TaskSupervisor.start_child(CodingAgent.TaskSupervisor, fn ->
+           response = request(run_id, method, params, timeout)
+           send(caller, {tag, response})
+         end) do
+      {:ok, pid} ->
+        {pid, tag}
 
-    {pid, tag}
+      {:error, reason} ->
+        send(caller, {tag, {:error, reason}})
+        {nil, tag}
+    end
   end
 
-  defp stop_request({pid, _ref}), do: Process.exit(pid, :kill)
+  defp stop_request({pid, _ref}) do
+    if is_pid(pid), do: Process.exit(pid, :kill)
+    :ok
+  end
 
   defp cleanup(run_id, id, kill?) do
     if kill?, do: request(run_id, "terminal/kill", %{"terminalId" => id}, 1_000)

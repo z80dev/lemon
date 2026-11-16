@@ -36,7 +36,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAsyncPollTest do
 
   setup do
     unless Process.whereis(@supervisor) do
-      start_supervised!({Task.Supervisor, name: @supervisor})
+      start_supervised!(LemonCore.TaskSupervisor.child_spec(name: @supervisor))
     end
 
     :ok
@@ -110,6 +110,50 @@ defmodule LemonChannels.Adapters.Telegram.TransportAsyncPollTest do
     refute Map.has_key?(finished, :poll_task)
   end
 
+  test "full and missing supervisors leave polling unstarted and release rejected lock claims" do
+    tasks =
+      start_supervised!(
+        Supervisor.child_spec(
+          LemonCore.TaskSupervisor.child_spec(max_children: 1),
+          id: :saturated_poll_tasks
+        )
+      )
+
+    assert {:ok, _blocker} =
+             LemonCore.TaskSupervisor.start_child(tasks, fn ->
+               receive do
+                 :release -> :ok
+               end
+             end)
+
+    state =
+      RuntimeState.new(%{
+        token: self(),
+        api_mod: BlockingAPI,
+        offset: 7,
+        poll_interval_ms: 60_000
+      })
+
+    original = Process.whereis(@supervisor)
+    Process.unregister(@supervisor)
+    token = "rejected-lock-#{System.unique_integer([:positive])}"
+
+    try do
+      assert {:noreply, ^state} = Transport.handle_info(:poll, state)
+      assert {:error, :locked} = PollerLock.acquire("missing", token)
+      Process.register(tasks, @supervisor)
+      assert {:noreply, ^state} = Transport.handle_info(:poll, state)
+      assert {:error, :locked} = PollerLock.acquire("full", token)
+      refute_receive {:poll_started, _, _}, 0
+    after
+      if Process.whereis(@supervisor) == tasks, do: Process.unregister(@supervisor)
+      Process.register(original, @supervisor)
+    end
+
+    assert :ok = PollerLock.acquire("restored", token)
+    assert :ok = PollerLock.release("restored", token)
+  end
+
   test "init only defers bootstrap and never invokes the supplied API" do
     opts = [config: %{bot_token: "not-a-real-token", api_mod: BlockingAPI}]
     assert {:ok, ^opts, {:continue, :start}} = Transport.init(opts)
@@ -145,7 +189,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportAsyncPollTest do
       {output, status} =
         System.cmd(
           System.find_executable("elixir"),
-          ["--erl", "+S 1:1"] ++ paths ++ ["-e", script], stderr_to_stdout: true)
+          ["--erl", "+S 1:1"] ++ paths ++ ["-e", script],
+          stderr_to_stdout: true
+        )
 
       assert status == 0, output
       assert output =~ "{:error, :locked}"

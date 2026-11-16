@@ -199,29 +199,32 @@ defmodule LemonAgent.AutoThinking do
     timeout_ms = timeout_ms(opts)
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
-    task =
-      Task.Supervisor.async_nolink(LemonAgent.LoopTaskSupervisor, fn ->
-        # The independent deadline also bounds a resolver if the loop owner dies.
-        {:ok, timer} = :timer.exit_after(timeout_ms, self(), :shutdown)
+    case LemonCore.TaskSupervisor.async_nolink(LemonAgent.LoopTaskSupervisor, fn ->
+           # The independent deadline also bounds a resolver if the loop owner dies.
+           {:ok, timer} = :timer.exit_after(timeout_ms, self(), :shutdown)
+
+           try do
+             run_classifier(message, opts, timeout_ms)
+           rescue
+             _ -> :fallback
+           catch
+             _, _ -> :fallback
+           after
+             :timer.cancel(timer)
+           end
+         end) do
+      {:ok, task} ->
+        AbortSignal.subscribe(signal)
 
         try do
-          run_classifier(message, opts, timeout_ms)
-        rescue
-          _ -> :fallback
-        catch
-          _, _ -> :fallback
+          await_classifier(task, signal, deadline)
         after
-          :timer.cancel(timer)
+          AbortSignal.unsubscribe(signal)
+          Task.shutdown(task, :brutal_kill)
         end
-      end)
 
-    AbortSignal.subscribe(signal)
-
-    try do
-      await_classifier(task, signal, deadline)
-    after
-      AbortSignal.unsubscribe(signal)
-      Task.shutdown(task, :brutal_kill)
+      {:error, _reason} ->
+        :fallback
     end
   rescue
     _ -> :fallback

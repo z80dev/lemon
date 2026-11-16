@@ -26,13 +26,13 @@ defmodule CodingAgent.ProcessStoreServerTest do
       after
         if canonical_running? do
           assert {:ok, _pid} =
-                   Supervisor.restart_child(CodingAgent.Supervisor, ProcessStoreServer)
+                   Supervisor.restart_child(CodingAgent.ProcessSupervisor, ProcessStoreServer)
         end
       end
     end)
 
     if canonical_running? do
-      assert :ok = Supervisor.terminate_child(CodingAgent.Supervisor, ProcessStoreServer)
+      assert :ok = Supervisor.terminate_child(CodingAgent.ProcessSupervisor, ProcessStoreServer)
     end
 
     assert :ets.whereis(:coding_agent_processes) == :undefined

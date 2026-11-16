@@ -693,15 +693,13 @@ defmodule LemonChannels.Outbox do
       launcher = self()
 
       try do
-        task =
-          Task.Supervisor.async_nolink(worker_supervisor, fn ->
-            Process.link(launcher)
-            do_deliver(payload)
-          end)
-
-        Task.await(task, :infinity)
-      rescue
-        _ -> {:error, {:delivery_not_started, :capacity}}
+        case LemonCore.TaskSupervisor.async_nolink(worker_supervisor, fn ->
+               Process.link(launcher)
+               do_deliver(payload)
+             end) do
+          {:ok, task} -> Task.await(task, :infinity)
+          {:error, reason} -> {:error, {:delivery_not_started, reason}}
+        end
       catch
         :exit, _ -> {:error, {:outcome_unknown, :worker_exit}}
       end
@@ -713,7 +711,10 @@ defmodule LemonChannels.Outbox do
 
     case Process.whereis(worker_supervisor) do
       nil ->
-        case Task.Supervisor.start_link(worker_supervisor_options(opts)) do
+        %{start: {module, function, args}} =
+          LemonCore.TaskSupervisor.child_spec(worker_supervisor_options(opts))
+
+        case apply(module, function, args) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
           {:error, _} = err -> err

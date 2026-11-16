@@ -67,6 +67,7 @@ defmodule LemonMCP.NotificationsTest do
     socket = Mint.HTTP.get_socket(conn)
 
     state = %{
+      task_supervisor: start_supervised!({Task.Supervisor, max_children: 32}),
       stream_request_id: request_id,
       stream_conn: conn,
       stream_socket: socket,
@@ -137,18 +138,77 @@ defmodule LemonMCP.NotificationsTest do
       client = start_supervised!({module, Keyword.put(opts, :notification_handler, handler)})
       await_ready(module, client, 500)
 
-      if mode != :none do
-        assert_receive {:notification, %{method: "notifications/tools/list_changed", params: %{}},
-                        worker},
-                       5_000
-
-        assert worker != client
-      end
+      assert_notification(mode, client)
 
       assert module.state(client) == :ready
       assert {:ok, []} = module.list_tools(client)
       assert Process.alive?(client)
     end
+  end
+
+  test "HTTP client close stops notification workers without waiting for the callback" do
+    owner = self()
+    {module, opts} = transport(:http)
+
+    handler = fn _notification ->
+      send(owner, {:blocked_notification, self()})
+
+      receive do
+        :finish -> :ok
+      end
+    end
+
+    client =
+      start_supervised!(
+        Supervisor.child_spec(
+          {module, Keyword.put(opts, :notification_handler, handler)},
+          restart: :temporary
+        )
+      )
+
+    assert_receive {:blocked_notification, worker}, 5_000
+    supervisor = :sys.get_state(client).task_supervisor
+    assert worker in Task.Supervisor.children(supervisor)
+    worker_ref = Process.monitor(worker)
+    supervisor_ref = Process.monitor(supervisor)
+
+    assert :ok = module.close(client)
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 1_000
+    assert_receive {:DOWN, ^supervisor_ref, :process, ^supervisor, _reason}, 1_000
+  end
+
+  test "notification capacity never starts an unsupervised callback" do
+    owner = self()
+    supervisor = start_supervised!({Task.Supervisor, max_children: 1})
+    message = %{"method" => "notifications/tools/list_changed"}
+
+    handler = fn _notification ->
+      send(owner, {:blocked_notification, self()})
+
+      receive do
+        :finish -> :ok
+      end
+    end
+
+    assert :ok = LemonMCP.Protocol.dispatch_notification(message, handler, supervisor)
+    assert_receive {:blocked_notification, worker}
+    assert :ok = LemonMCP.Protocol.dispatch_notification(message, handler, supervisor)
+    assert Task.Supervisor.children(supervisor) == [worker]
+    refute_received {:blocked_notification, _other}
+
+    ref = Process.monitor(worker)
+    send(worker, :finish)
+    assert_receive {:DOWN, ^ref, :process, ^worker, :normal}
+  end
+
+  defp assert_notification(:none, _client), do: :ok
+
+  defp assert_notification(_mode, client) do
+    assert_receive {:notification, %{method: "notifications/tools/list_changed", params: %{}},
+                    worker},
+                   5_000
+
+    assert worker != client
   end
 
   defp notification_handler(:none, _owner), do: nil

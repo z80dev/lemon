@@ -28,6 +28,13 @@ LemonAutomation.Supervisor
   |-- SynthesisRunnerManager (GenServer - scheduled skill synthesis)
 ```
 
+Task supervisors use `LemonCore.TaskSupervisor` for bounded admission (1024
+workers by default, configurable per supervisor in
+`:lemon_core, :task_supervisor_max_children`). Capacity exhaustion and an absent
+supervisor use the caller's existing failure contract; they never launch an
+unsupervised fallback except in explicitly requested standalone cron mode.
+Existing cron retry and kanban lease/reconciliation policies remain unchanged.
+
 ### Execution Flow
 
 CronManager arms one timer for the earliest enabled job's next run, re-arming on

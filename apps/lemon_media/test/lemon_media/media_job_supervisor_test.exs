@@ -235,6 +235,99 @@ defmodule LemonMedia.MediaJobSupervisorTest do
     assert recent.status == :running
   end
 
+  test "capacity rejection records failure without running or retrying the job" do
+    tmp_dir = tmp_dir()
+    jobs_dir = Path.join(tmp_dir, "jobs")
+    parent = self()
+    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+    Phoenix.PubSub.subscribe(LemonCore.PubSub, "media_jobs")
+
+    original_supervisor = Process.whereis(MediaJobSupervisor)
+    true = Process.unregister(MediaJobSupervisor)
+
+    try do
+      supervisor = start_supervised!({MediaJobSupervisor, max_children: 1})
+
+      assert {:ok, blocker} =
+               LemonCore.TaskSupervisor.start_child(supervisor, fn ->
+                 receive do
+                   :finish -> :ok
+                 end
+               end)
+
+      runner = fn attrs ->
+        send(parent, {:admitted_media_job, attrs.job_id})
+        {:ok, %{}}
+      end
+
+      assert {:error, :task_capacity_reached} =
+               MediaJobSupervisor.start_job(
+                 %{job_id: "over-capacity", type: :image},
+                 dir: jobs_dir,
+                 runner: runner
+               )
+
+      assert_receive {:media_job, :failed,
+                      %{job_id: "over-capacity", error_kind: "task_capacity_reached"}}
+
+      assert [%{status: :failed, error_kind: "task_capacity_reached"}] =
+               MediaJobs.recent(dir: jobs_dir)
+
+      refute_received {:admitted_media_job, _}
+      refute_received {:media_job, :running, %{job_id: "over-capacity"}}
+
+      :ok = Task.Supervisor.terminate_child(supervisor, blocker)
+
+      assert {:ok, _pid, %{job_id: "after-capacity"}} =
+               MediaJobSupervisor.start_job(
+                 %{job_id: "after-capacity", type: :image},
+                 dir: jobs_dir,
+                 runner: runner
+               )
+
+      assert_receive {:admitted_media_job, "after-capacity"}
+      assert_receive {:media_job, :completed, %{job_id: "after-capacity"}}
+      refute_received {:admitted_media_job, "over-capacity"}
+    after
+      stop_supervised(MediaJobSupervisor)
+      true = Process.register(original_supervisor, MediaJobSupervisor)
+    end
+  end
+
+  test "unavailable supervisor records admission failure without running the job" do
+    tmp_dir = tmp_dir()
+    jobs_dir = Path.join(tmp_dir, "jobs")
+    parent = self()
+    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+    Phoenix.PubSub.subscribe(LemonCore.PubSub, "media_jobs")
+
+    supervisor = Process.whereis(MediaJobSupervisor)
+    true = Process.unregister(MediaJobSupervisor)
+
+    try do
+      assert {:error, :task_supervisor_unavailable} =
+               MediaJobSupervisor.start_job(
+                 %{job_id: "unavailable", type: :image},
+                 dir: jobs_dir,
+                 runner: fn _attrs ->
+                   send(parent, :unavailable_job_ran)
+                   {:ok, %{}}
+                 end
+               )
+
+      assert_receive {:media_job, :failed,
+                      %{job_id: "unavailable", error_kind: "task_supervisor_unavailable"}}
+
+      assert [%{status: :failed, error_kind: "task_supervisor_unavailable"}] =
+               MediaJobs.recent(dir: jobs_dir)
+
+      refute_received :unavailable_job_ran
+      refute_received {:media_job, :running, %{job_id: "unavailable"}}
+    after
+      true = Process.register(supervisor, MediaJobSupervisor)
+    end
+  end
+
   defp assert_eventually(fun, attempts \\ 300)
 
   defp assert_eventually(fun, attempts) when attempts > 0 do

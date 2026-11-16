@@ -91,8 +91,8 @@ defmodule CodingAgent.Session.ProviderFallback do
     {:ok, output_stream} =
       LemonAi.EventStream.start_link(timeout: :infinity, idle_timeout: :infinity)
 
-    {:ok, task_pid} =
-      Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
+    task_result =
+      LemonCore.TaskSupervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
         candidates =
           [primary_model | fallback_models]
           |> Enum.reject(&is_nil/1)
@@ -120,8 +120,15 @@ defmodule CodingAgent.Session.ProviderFallback do
         end
       end)
 
-    LemonAi.EventStream.attach_task(output_stream, task_pid)
-    {:ok, output_stream}
+    case task_result do
+      {:ok, task_pid} ->
+        LemonAi.EventStream.attach_task(output_stream, task_pid)
+        {:ok, output_stream}
+
+      {:error, reason} = error ->
+        LemonAi.EventStream.cancel(output_stream, reason)
+        error
+    end
   end
 
   defp run_candidates([], ctx, last_error) do

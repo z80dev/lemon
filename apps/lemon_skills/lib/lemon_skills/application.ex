@@ -19,7 +19,7 @@ defmodule LemonSkills.Application do
 
     children = [
       LemonSkills.Registry,
-      {Task.Supervisor, name: LemonSkills.ReviewSupervisor},
+      LemonCore.TaskSupervisor.child_spec(name: LemonSkills.ReviewSupervisor),
       LemonSkills.LearningNudge,
       # MCP source for external tool discovery
       {LemonSkills.McpSource, []},

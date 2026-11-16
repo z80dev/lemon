@@ -189,19 +189,19 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
   @spec report_block(atom() | String.t(), map() | nil, integer(), integer()) :: :ok
   def report_block(provider, provider_cfg, id, blocked_until_ms)
       when is_integer(id) and is_integer(blocked_until_ms) do
-    start = fn ->
-      Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
-        case block(provider, provider_cfg, id, blocked_until_ms) do
-          :ok -> :ok
-          {:error, reason} -> log_block_failure(provider, reason)
-        end
-      end)
-    end
-
     try do
-      start.()
+      case LemonCore.TaskSupervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
+             case block(provider, provider_cfg, id, blocked_until_ms) do
+               :ok -> :ok
+               {:error, reason} -> log_block_failure(provider, reason)
+             end
+           end) do
+        {:ok, _pid} -> :ok
+        {:error, reason} -> log_block_failure(provider, reason)
+      end
     catch
-      :exit, _ -> log_block_failure(provider, :broker_unreachable)
+      :exit, _ ->
+        Logger.warning("omp auth broker rate-limit block report outcome unknown")
     end
 
     :ok
@@ -244,6 +244,12 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
 
   def error_message(:refresh_rejected),
     do: "the omp auth broker returned the rejected token again."
+
+  def error_message(:task_capacity_reached),
+    do: "the streaming task supervisor is at capacity."
+
+  def error_message(:task_supervisor_unavailable),
+    do: "the streaming task supervisor is unavailable."
 
   def error_message(reason), do: OmpAuthBroker.error_message(reason)
 
