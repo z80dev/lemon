@@ -778,6 +778,11 @@ defmodule LemonAgent.Agent do
     {:reply, state.session_id, state}
   end
 
+  def handle_call({:has_steering_messages, abort_ref}, _from, state) do
+    {has_steering, state} = drain_loop_queue(state, :has_steering)
+    {:reply, state.abort_ref == abort_ref and has_steering, state}
+  end
+
   def handle_call({:withdraw_steer, id}, _from, state) when is_binary(id) and id != "" do
     {withdrawn, queue} = Enum.split_with(state.steering_queue, &(input_id(&1) == id))
     result = if withdrawn == [], do: {:error, :not_found}, else: :ok
