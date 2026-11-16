@@ -527,6 +527,8 @@ attempted failures, turns, failed tools, wall time, and proxy input/output/
 cache-read tokens. `wire_input_tokens` is **uncached** input; add the separately
 reported cache reads only when that counter is known. Missing, partial or
 interrupted wire usage remains null, never a CLI fallback or an inferred zero.
+The adapter explicitly collects terminal metrics and redacts trial tokens after
+agent execution; overriding Harbor's base `run` does not invoke its post-run hook.
 Harbor verifier rewards, not agent claims, determine task success. The report
 records operator-attested Lemon/omp revisions, bundle SHA-256 and the pinned
 Harbor API revision; retain Harbor's private task checksums/configs alongside

@@ -208,6 +208,9 @@ class HarborInstalledAdapterTests(unittest.IsolatedAsyncioTestCase):
                 class Environment:
                     async def exec(self, **kwargs):
                         commands.append(kwargs)
+                        (adapter.logs_dir / 'agent.stdout').write_text(json.dumps({
+                            'type': 'result', 'ok': True, 'answer': adapter.token,
+                            'usage': {'turns': 3, 'tool_errors': 1}}))
                         return types.SimpleNamespace(return_code=0)
 
                 context = types.SimpleNamespace(metadata=None)
@@ -221,6 +224,9 @@ class HarborInstalledAdapterTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('lemon daemon', retained)
                 self.assertEqual(context.metadata['deadline'], 123)
                 self.assertNotIn(adapter.token, json.dumps(context.metadata))
+                self.assertEqual(context.metadata['turns'], 3)
+                self.assertEqual(context.metadata['tool_errors'], 1)
+                self.assertNotIn(adapter.token, (adapter.logs_dir / 'agent.stdout').read_text())
                 with self.assertRaisesRegex(ValueError, 'extra_env'):
                     module.HarborLemon(root, model_name='k3.1-pro', agent_bundle=bundle,
                         agent_revision='fixture', proxy_url='http://proxy:18787', extra_env={'KIMI_API_KEY': 'real'})
