@@ -128,7 +128,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
   test "daily count failures stay null with per-field availability" do
     {:ok, started} = Application.ensure_all_started(:lemon_router)
     on_exit(fn -> Enum.each(Enum.reverse(started), &Application.stop/1) end)
-    :ok = Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.RunCountTracker)
+    :ok = Supervisor.terminate_child(LemonRouter.ConversationSupervisor, LemonRouter.RunCountTracker)
 
     try do
       assert {:ok, result} = Status.handle(%{}, %{})
@@ -140,7 +140,7 @@ defmodule LemonControlPlane.Methods.StatusTest do
       assert result["subsystems"]["router"]["fields"]["completed_today"] == "unavailable"
       assert result["subsystems"]["router"]["fields"]["failed_today"] == "unavailable"
     after
-      Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.RunCountTracker)
+      Supervisor.restart_child(LemonRouter.ConversationSupervisor, LemonRouter.RunCountTracker)
     end
   end
 
