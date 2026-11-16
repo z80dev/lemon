@@ -134,7 +134,7 @@ defmodule LemonAgent.Loop.ToolCalls do
          base_new_message_count,
          config
        ) do
-    queue_ref = config.queue_ref || signal
+    queue_ref = Map.get(config.hooks, :queue_ref) || signal
 
     # Retain only the current worker set so a failed output push can unwind
     # without leaving supervised tools running after their collector exits.

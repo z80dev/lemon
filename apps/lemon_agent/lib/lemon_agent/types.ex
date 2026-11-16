@@ -431,9 +431,6 @@ defmodule LemonAgent.Types do
     - `thinking_prompt` - Last classified user-prompt marker, retained across continuation
     - `resolved_thinking` - Concrete auto selection, reclamped without reclassifying on model switches
     - `on_thinking_resolved` - Internal cache callback; does not publish classifier events
-    - `queue_owner` - Queue-owning Agent pid; takes precedence over standalone callbacks
-    - `queue_ref` - Active run's abort reference, binding queue requests and notifications
-    - `queue_timeout` - Queue reply deadline (default 30 minutes; `:infinity` opts out)
     - `get_steering_messages` - Standalone-loop callback for messages to inject mid-run
     - `has_steering_messages` - Standalone-loop non-consuming peek at tool boundaries
     - `get_follow_up_messages` - Standalone-loop callback after the agent would stop
@@ -454,13 +451,19 @@ defmodule LemonAgent.Types do
     - `budget` - Budget state, including run totals when continuing a prompt
     - `stream_options` - Options for streaming requests
     - `stream_fn` - Custom stream function (defaults to LemonAi.stream_simple/3)
-    - `emit_system_prompt` - Internal journal transport; the Agent consumes these
-      snapshots without publishing them to ordinary subscribers
-    - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
-    - `on_stream_rule` - Synchronous rule receipt/redirect callback; returns `:ok`
-      only after durable acceptance, or `{:error, :injection_limit}` when spent
+    - `hooks` - Optional queue transport, prompt observation and stream-rule hooks:
+      - `queue_owner` - Queue-owning Agent pid; takes precedence over standalone callbacks
+      - `queue_ref` - Active run's abort reference, binding requests and notifications
+      - `queue_timeout` - Queue reply deadline (default 30 minutes; `:infinity` opts out)
+      - `emit_system_prompt` - Internal journal transport; the Agent consumes these
+        snapshots without publishing them to ordinary subscribers (default false)
+      - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
+        (default [])
+      - `on_stream_rule` - Synchronous rule receipt/redirect callback; returns `:ok`
+        only after durable acceptance, or `{:error, :injection_limit}` when spent
+        (default nil)
 
-    With `queue_owner`, the loop sends
+    With `hooks.queue_owner`, the loop sends
     `{:loop_queue, loop_pid, request_ref, queue_ref, kind}` where `kind` is
     `:steering`, `:has_steering` or `:follow_up`. The owner replies
     `{:loop_queue, request_ref, result}` with a message list, or a boolean for
@@ -505,6 +508,15 @@ defmodule LemonAgent.Types do
              LemonAi.Types.StreamOptions.t() ->
                {:ok, LemonAi.EventStream.t()} | LemonAi.EventStream.t() | {:error, term()})
 
+    @type hooks :: %{
+            optional(:queue_owner) => pid() | nil,
+            optional(:queue_ref) => reference() | nil,
+            optional(:queue_timeout) => timeout(),
+            optional(:emit_system_prompt) => boolean(),
+            optional(:stream_rules) => [map()] | (-> [map()]),
+            optional(:on_stream_rule) => (map() -> :ok | {:error, term()}) | nil
+          }
+
     @type t :: %__MODULE__{
             model: LemonAi.Types.Model.t(),
             convert_to_llm: convert_to_llm_fn(),
@@ -518,9 +530,6 @@ defmodule LemonAgent.Types do
             thinking_prompt: term() | nil,
             resolved_thinking: LemonAi.Types.StreamOptions.thinking_level() | nil,
             on_thinking_resolved: on_thinking_resolved_fn() | nil,
-            queue_owner: pid() | nil,
-            queue_ref: reference() | nil,
-            queue_timeout: timeout(),
             get_steering_messages: get_steering_messages_fn() | nil,
             has_steering_messages: has_steering_messages_fn() | nil,
             get_follow_up_messages: get_follow_up_messages_fn() | nil,
@@ -539,7 +548,7 @@ defmodule LemonAgent.Types do
             stream_options: LemonAi.Types.StreamOptions.t(),
             stream_options_model: LemonAi.Types.Model.t() | nil,
             stream_fn: stream_fn() | nil,
-            emit_system_prompt: boolean()
+            hooks: hooks()
           }
     defstruct model: nil,
               convert_to_llm: nil,
@@ -553,9 +562,6 @@ defmodule LemonAgent.Types do
               thinking_prompt: nil,
               resolved_thinking: nil,
               on_thinking_resolved: nil,
-              queue_owner: nil,
-              queue_ref: nil,
-              queue_timeout: :timer.minutes(30),
               get_steering_messages: nil,
               has_steering_messages: nil,
               get_follow_up_messages: nil,
@@ -573,10 +579,8 @@ defmodule LemonAgent.Types do
               budget: nil,
               stream_options: %StreamOptions{},
               stream_options_model: nil,
-              stream_rules: [],
-              on_stream_rule: nil,
               stream_fn: nil,
-              emit_system_prompt: false
+              hooks: %{}
   end
 
   # ============================================================================

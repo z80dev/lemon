@@ -1450,8 +1450,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     config = %AgentLoopConfig{
       model: Mocks.mock_model(),
       convert_to_llm: Mocks.simple_convert_to_llm(),
-      queue_owner: queue_owner,
-      queue_ref: signal,
+      hooks: %{queue_owner: queue_owner, queue_ref: signal},
       max_tool_concurrency: 1,
       tool_timeout_ms: :infinity,
       tool_task_supervisor: supervisor

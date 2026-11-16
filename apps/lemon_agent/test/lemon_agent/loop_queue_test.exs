@@ -25,9 +25,7 @@ defmodule LemonAgent.LoopQueueTest do
     config = %AgentLoopConfig{
       model: Mocks.mock_model(),
       convert_to_llm: Mocks.simple_convert_to_llm(),
-      queue_owner: owner,
-      queue_ref: signal,
-      emit_system_prompt: true,
+      hooks: %{queue_owner: owner, queue_ref: signal, emit_system_prompt: true},
       stream_fn: fn model, context, options ->
         send(owner, {:model_context, context})
         Mocks.mock_stream_fn_single(Mocks.assistant_message("done")).(model, context, options)
@@ -91,8 +89,7 @@ defmodule LemonAgent.LoopQueueTest do
     config = %AgentLoopConfig{
       model: Mocks.mock_model(),
       convert_to_llm: Mocks.simple_convert_to_llm(),
-      queue_owner: owner,
-      queue_ref: signal,
+      hooks: %{queue_owner: owner, queue_ref: signal},
       stream_fn: fn model, context, options ->
         send(owner, {:model_attempt, context.messages})
 

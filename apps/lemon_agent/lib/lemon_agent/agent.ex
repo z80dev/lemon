@@ -1069,9 +1069,6 @@ defmodule LemonAgent.Agent do
             | run_usage: state.agent_state.run_usage
           }
         end,
-      queue_owner: agent_pid,
-      queue_ref: abort_ref,
-      queue_timeout: state.queue_call_timeout,
       max_tool_turns: state.max_tool_turns,
       max_tool_concurrency: state.max_tool_concurrency,
       max_retries: state.max_retries,
@@ -1080,9 +1077,14 @@ defmodule LemonAgent.Agent do
       tool_timeout_ms: state.tool_timeout_ms,
       intent_tracing: state.intent_tracing,
       stream_options: stream_options,
-      emit_system_prompt: is_pid(state.system_prompt_observer),
-      stream_rules: state.stream_rules,
-      on_stream_rule: state.on_stream_rule,
+      hooks: %{
+        queue_owner: agent_pid,
+        queue_ref: abort_ref,
+        queue_timeout: state.queue_call_timeout,
+        emit_system_prompt: is_pid(state.system_prompt_observer),
+        stream_rules: state.stream_rules,
+        on_stream_rule: state.on_stream_rule
+      },
       stream_fn: state.stream_fn
     }
   end

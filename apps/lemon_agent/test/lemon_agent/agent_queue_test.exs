@@ -660,8 +660,7 @@ defmodule LemonAgent.AgentQueueTest do
     config = %LemonAgent.Types.AgentLoopConfig{
       model: Mocks.mock_model(),
       convert_to_llm: Mocks.simple_convert_to_llm(),
-      queue_owner: owner,
-      queue_ref: signal
+      hooks: %{queue_owner: owner, queue_ref: signal}
     }
 
     stream_fn = fn model, context, options ->

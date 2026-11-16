@@ -77,7 +77,8 @@ defmodule CodingAgent.Wasm.SidecarSessionTest do
     assert {:ok, %{tools: [], warnings: [], errors: []}} = SidecarSession.discover(sidecar)
   end
 
-  test "deadlines complete callers and expire parent scopes while a host callback is blocked", context do
+  test "deadlines complete callers and expire parent scopes while a host callback is blocked",
+       context do
     test_pid = self()
 
     sidecar =
@@ -90,6 +91,7 @@ defmodule CodingAgent.Wasm.SidecarSessionTest do
       end)
 
     state = :sys.get_state(sidecar)
+
     caller =
       Task.async(fn ->
         ToolIntent.with_parent_scope("parent", fn _scope ->
@@ -100,6 +102,7 @@ defmodule CodingAgent.Wasm.SidecarSessionTest do
     assert_receive {:host_waiting, ^sidecar,
                     %{owner: owner, parent_intent_scope: {"parent", scope_owner, live}}},
                    5_000
+
     assert scope_owner == owner
     assert :atomics.get(live, 1) == 1
     assert owner == caller.pid

@@ -13,8 +13,7 @@ defmodule LemonAgent.Loop.QueueTest do
     unexpected_callback = fn -> flunk("owner-backed queues must not invoke callbacks") end
 
     config = %AgentLoopConfig{
-      queue_owner: owner,
-      queue_ref: queue_ref,
+      hooks: %{queue_owner: owner, queue_ref: queue_ref},
       get_steering_messages: unexpected_callback,
       has_steering_messages: unexpected_callback,
       get_follow_up_messages: unexpected_callback
@@ -57,7 +56,7 @@ defmodule LemonAgent.Loop.QueueTest do
         end
       end)
 
-    config = %AgentLoopConfig{queue_owner: owner, queue_ref: make_ref()}
+    config = %AgentLoopConfig{hooks: %{queue_owner: owner, queue_ref: make_ref()}}
     task = Task.async(fn -> catch_exit(Queue.follow_up(config)) end)
 
     assert_receive :request_received
@@ -65,7 +64,10 @@ defmodule LemonAgent.Loop.QueueTest do
   end
 
   test "a missing reply fails at the configured deadline without consuming other messages" do
-    config = %AgentLoopConfig{queue_owner: self(), queue_ref: make_ref(), queue_timeout: 0}
+    config = %AgentLoopConfig{
+      hooks: %{queue_owner: self(), queue_ref: make_ref(), queue_timeout: 0}
+    }
+
     monitors_before = Process.info(self(), :monitors)
     send(self(), :unrelated)
 
@@ -73,7 +75,7 @@ defmodule LemonAgent.Loop.QueueTest do
     assert_received {:loop_queue, loop_pid, request_ref, queue_ref, :steering}
     assert loop_pid == self()
     assert is_reference(request_ref)
-    assert queue_ref == config.queue_ref
+    assert queue_ref == config.hooks.queue_ref
     assert_received :unrelated
     assert Process.info(self(), :monitors) == monitors_before
   end

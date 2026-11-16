@@ -211,32 +211,49 @@ defmodule LemonCore.ToolPolicyTest do
     assert {:error, _} = ToolPolicy.parse(%{blocked_commands: ["rm\n-rf"]})
   end
 
-  test "sandbox is validated, serialized and sticky across child intersections" do
-    for key <- [:sandbox, "sandbox"], value <- [true, false] do
-      assert {:ok, policy} = ToolPolicy.parse(%{key => value})
-      assert policy.sandbox == value
-      assert ToolPolicy.to_map(policy)["sandbox"] == value
-      assert {:ok, %{"sandbox" => ^value}} = ToolPolicy.normalize(%{key => value})
-    end
+  test "legacy sandbox input warns once per process and never changes authority" do
+    baseline = %{allow: ["read", "write"], deny: ["bash"], require_approval: ["write"]}
+    expected = ToolPolicy.parse!(baseline)
 
-    for value <- ["true", nil, 1, %{}] do
-      assert {:error, {:invalid_policy_field, :sandbox}} = ToolPolicy.parse(%{sandbox: value})
-    end
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        for value <- [true, false, "false", nil, %{}],
+            key <- [:sandbox, "sandbox"] do
+          legacy = Map.put(baseline, key, value)
+          assert ToolPolicy.parse!(legacy) == expected
+          assert ToolPolicy.to_map(legacy) == ToolPolicy.to_map(expected)
+          assert ToolPolicy.normalize(legacy) == ToolPolicy.normalize(baseline)
+          assert ToolPolicy.subset?(legacy, baseline)
+          assert ToolPolicy.subset?(baseline, legacy)
+          refute Map.has_key?(ToolPolicy.parse!(legacy), :sandbox)
+          refute ToolPolicy.allowed?(legacy, "bash")
+          assert ToolPolicy.requires_approval?(legacy, "write")
+          assert {:ok, child} = ToolPolicy.restrict(legacy, %{allow: :all})
+          assert ToolPolicy.subset?(child, baseline)
+        end
 
-    assert {:error, {:conflicting_policy_key, :sandbox}} =
-             ToolPolicy.parse(%{:sandbox => true, "sandbox" => false})
+        assert {:error, _} = ToolPolicy.parse(%{sandbox: true, allow: 123})
+      end)
 
-    parent = ToolPolicy.parse!(%{sandbox: true})
+    assert length(Regex.scan(~r/Tool policy sandbox is unsupported and ignored/, log)) == 1
+    refute log =~ "123"
 
-    for request <- [%{}, %{sandbox: false}, %{"sandbox" => true}] do
-      assert {:ok, child} = ToolPolicy.restrict(parent, request)
-      assert child.sandbox
-      assert ToolPolicy.subset?(child, parent)
-      assert ToolPolicy.intersect(ToolPolicy.to_map(parent), request).sandbox
-    end
+    assert ExUnit.CaptureLog.capture_log(fn ->
+             ToolPolicy.parse!(%{"sandbox" => true})
+           end) == ""
 
-    refute ToolPolicy.subset?(%{sandbox: false}, parent)
-    assert ToolPolicy.subset?(parent, %{sandbox: false})
+    child_log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        task =
+          Task.async(fn ->
+            assert ToolPolicy.parse!(%{sandbox: true}) == ToolPolicy.parse!(%{})
+            assert ToolPolicy.parse!(%{"sandbox" => false}) == ToolPolicy.parse!(%{})
+          end)
+
+        Task.await(task)
+      end)
+
+    assert length(Regex.scan(~r/Tool policy sandbox is unsupported and ignored/, child_log)) == 1
   end
 
   test "validation cannot trust malformed defaults or forged structs" do
@@ -368,11 +385,10 @@ defmodule LemonCore.ToolPolicyTest do
       requested = ToolPolicy.custom(allow: requested_allow, deny: requested_deny)
       assert {:ok, restricted} = ToolPolicy.restrict(parent, requested)
 
-      for sandbox <- [true, false] do
-        sandbox_parent = Map.put(ToolPolicy.to_map(parent), "sandbox", sandbox)
-        sandbox_requested = Map.put(ToolPolicy.to_map(requested), "sandbox", not sandbox)
-        assert {:ok, child} = ToolPolicy.restrict(sandbox_parent, sandbox_requested)
-        assert child == %{restricted | sandbox: true}
+      for legacy_value <- [true, false] do
+        legacy_parent = Map.put(ToolPolicy.to_map(parent), "sandbox", legacy_value)
+        legacy_requested = Map.put(ToolPolicy.to_map(requested), :sandbox, not legacy_value)
+        assert {:ok, ^restricted} = ToolPolicy.restrict(legacy_parent, legacy_requested)
       end
 
       for tool <- tools, ToolPolicy.allowed?(restricted, tool) do

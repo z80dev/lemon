@@ -17,8 +17,7 @@ defmodule CodingAgent.Tools.Bash.Managed do
         cwd: cwd,
         env: Keyword.fetch!(opts, :env),
         owner: Keyword.get(opts, :session_id),
-        owner_pid: Keyword.get(opts, :session_pid),
-        tool_policy: Keyword.get(opts, :tool_policy)
+        owner_pid: Keyword.get(opts, :session_pid)
       ] ++ Keyword.take(opts, [:before_start])
 
     case ProcessManager.exec(launch) do

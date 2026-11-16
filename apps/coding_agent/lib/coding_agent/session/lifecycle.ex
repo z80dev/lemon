@@ -484,7 +484,6 @@ defmodule CodingAgent.Session.Lifecycle do
     # (provider prompt caches are keyed per provider+credential).
     agent_registry_key = {session_manager.header.id, :main, 0}
     agent_name = LemonAgent.AgentRegistry.via(agent_registry_key)
-    base_stream_fn = Keyword.get(opts, :stream_fn) || (&LemonAi.stream/3)
 
     # Consult the live branch policy even when the session started explicitly
     # pinned: navigation can restore an automatic branch (and vice versa).
@@ -495,6 +494,9 @@ defmodule CodingAgent.Session.Lifecycle do
                {:check_model_cost, candidate, context, options},
                :infinity
              ) do
+        {base_stream_fn, options} =
+          GenServer.call(session_pid, {:invocation_stream, options}, :infinity)
+
         base_stream_fn.(candidate, context, options)
       end
     end
@@ -749,6 +751,7 @@ defmodule CodingAgent.Session.Lifecycle do
         wasm_sidecar_pid: wasm_reload.sidecar_pid,
         wasm_tool_names: wasm_reload.wasm_tool_names,
         wasm_status: wasm_reload.wasm_status,
+        tool_opts: Keyword.merge(state.tool_opts, tool_opts),
         journaled_prompt: nil
     }
 
@@ -846,6 +849,13 @@ defmodule CodingAgent.Session.Lifecycle do
   defp wait_for_reset_abort(state, reset_abort_wait_ms) do
     LemonAgent.Agent.abort(state.agent)
     LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
+  end
+
+  @doc false
+  def rebind_invocation(%Session{} = state) do
+    state
+    |> rebuild_tools(state.session_manager.header.id)
+    |> Planning.refresh()
   end
 
   # Rebuild closures and hook/approval contexts for the fresh journal identity
@@ -954,7 +964,8 @@ defmodule CodingAgent.Session.Lifecycle do
 
   defp maybe_put_workspace_scope_root(context, _execution_context), do: context
 
-  defp resolve_approval_context(opts, session_id, tool_policy) do
+  @doc false
+  def resolve_approval_context(opts, session_id, tool_policy) do
     approval_context = Keyword.get(opts, :approval_context)
 
     channel_identity =

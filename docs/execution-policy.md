@@ -25,10 +25,10 @@ for malformed supplied data. Unknown profiles, unknown fields, conflicting
 atom/string keys, invalid allow values, malformed tool lists, and unsupported
 approval modes are rejected.
 
-`sandbox` is a strict boolean, serialized with the policy. `true` forces
-terminal execution through network-isolated Docker and the host credential
-broker; it is sticky under intersection. It does not sandbox other tools.
-See [egress broker](security/egress-broker.md).
+The removed `sandbox` key is the sole legacy exception: atom- and string-keyed
+input is accepted and ignored, with a warning once per parsing process. Its
+value never changes authority, and it is omitted from normalized/serialized
+policies. Remove it from configuration; tool policy provides no OS sandbox.
 
 `CodingAgent.ToolPolicy` remains a compatibility facade. Authorization helpers
 fail closed when called with malformed data.
@@ -42,7 +42,7 @@ fail closed when called with malformed data.
 - approval requirements form a union and the stricter per-tool mode wins;
 - command allowlists intersect and blocklists form a union;
 - numeric limits take the lower value;
-- silent-mode and sandbox restrictions cannot be removed.
+- silent-mode restrictions cannot be removed.
 
 Router policy layers and child requests use this operation. A later policy
 layer can narrow authority but cannot undo an earlier restriction.

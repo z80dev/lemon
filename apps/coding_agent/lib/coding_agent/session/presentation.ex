@@ -68,7 +68,7 @@ defmodule CodingAgent.Session.Presentation do
         nil
       end
 
-    [cwd: cwd, register: true]
+    [cwd: cwd, register: true, executor_root: true]
     |> maybe_add_opt(:model, Keyword.get(opts, :model))
     |> maybe_add_opt(:model_explicit, boolean_or_nil(Keyword.get(opts, :model_explicit)))
     |> maybe_add_opt(:thinking_level, Keyword.get(opts, :thinking_level))
@@ -140,41 +140,8 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:workspace_read_fenced, Keyword.get(opts, :workspace_read_fenced))
   end
 
-  @doc """
-  Validates an explicit resume before starting a linked session runner.
-
-  Auto-resume (`resume_source: :auto`) may fall back to a fresh session only for
-  an unbound native token. A token mapped to an existing logical session must
-  remain loadable in the supplied cwd; never replace that session's history.
-  """
-  @spec validate_resume_for_start(ResumeToken.t() | nil, keyword(), binary()) ::
-          :ok | {:error, term()}
-  def validate_resume_for_start(nil, _session_opts, _cwd), do: :ok
-
-  def validate_resume_for_start(
-        %ResumeToken{engine: @engine, value: session_id},
-        session_opts,
-        cwd
-      ) do
-    case resume_session_file(session_id, cwd) do
-      {:ok, _session_file, _loaded_session} ->
-        :ok
-
-      {:error, reason} ->
-        if fresh_resume_fallback?(session_id, session_opts) do
-          :ok
-        else
-          {:error, explicit_resume_error(session_id, reason)}
-        end
-    end
-  end
-
-  def validate_resume_for_start(%ResumeToken{engine: other}, _session_opts, _cwd) do
-    {:error, {:wrong_engine, other, @engine}}
-  end
-
   def start_or_resume_session(nil, session_opts, state) do
-    case CodingAgent.Session.start_link(session_opts) do
+    case CodingAgent.SessionSupervisor.start_session(session_opts) do
       {:ok, session} ->
         session_id = get_session_id(session)
         {:ok, session, session_id, state}
@@ -189,6 +156,23 @@ defmodule CodingAgent.Session.Presentation do
         session_opts,
         state
       ) do
+    case CodingAgent.Session.RootLifecycle.checkout(session_id, session_opts) do
+      {:ok, session} ->
+        {:ok, session, session_id, state}
+
+      :missing ->
+        restore_session(session_id, session_opts, state)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  def start_or_resume_session(%ResumeToken{engine: other}, _session_opts, _state) do
+    {:error, {:wrong_engine, other, @engine}}
+  end
+
+  defp restore_session(session_id, session_opts, state) do
     case resume_session_file(session_id, state.cwd) do
       {:ok, session_file, loaded_session} ->
         start_existing_session(
@@ -200,11 +184,6 @@ defmodule CodingAgent.Session.Presentation do
 
       {:error, reason} ->
         if fresh_resume_fallback?(session_id, session_opts) do
-          Logger.warning(
-            "LemonRunner auto-resume unavailable for session #{inspect(session_id)}: " <>
-              "#{inspect(reason)}; starting a fresh session"
-          )
-
           start_fresh_session(
             session_opts,
             state,
@@ -214,10 +193,6 @@ defmodule CodingAgent.Session.Presentation do
           {:error, explicit_resume_error(session_id, reason)}
         end
     end
-  end
-
-  def start_or_resume_session(%ResumeToken{engine: other}, _session_opts, _state) do
-    {:error, {:wrong_engine, other, @engine}}
   end
 
   defp resume_session_file(session_id, cwd) when is_binary(session_id) and session_id != "" do
@@ -239,7 +214,7 @@ defmodule CodingAgent.Session.Presentation do
     session_opts =
       session_opts |> Keyword.delete(:session_id) |> Keyword.put(:session_file, session_file)
 
-    case CodingAgent.Session.start_link(session_opts) do
+    case CodingAgent.SessionSupervisor.start_session(session_opts) do
       {:ok, session} -> {:ok, session, session_id, state}
       {:error, reason} -> {:error, reason}
     end
@@ -248,7 +223,7 @@ defmodule CodingAgent.Session.Presentation do
   defp start_fresh_session(session_opts, state, diagnostic) do
     session_opts = Keyword.drop(session_opts, [:session_file, :session_id])
 
-    case CodingAgent.Session.start_link(session_opts) do
+    case CodingAgent.SessionSupervisor.start_session(session_opts) do
       {:ok, session} ->
         {:ok, session, get_session_id(session), Map.put(state, :resume_diagnostic, diagnostic)}
 
@@ -296,39 +271,36 @@ defmodule CodingAgent.Session.Presentation do
     CodingAgent.SessionManager.session_file_path(cwd, session_id)
   end
 
-  # Preserve resources only after both persistence and the complete handoff
-  # succeed. Otherwise normal Session termination disposes them.
-  def finalize_session(state, preserve_tool_resources \\ false) do
+  # A synchronous call is the prior-turn mailbox barrier: the Session has
+  # processed the terminal event and all preceding message entries before the
+  # gateway is allowed to launch a queued auto-resume.
+  def finalize_session(state, retain \\ false) do
     session = state.session
 
     if is_pid(session) and Process.alive?(session) do
-      case safe_save_session(session) do
+      result =
+        if retain,
+          do: CodingAgent.Session.RootLifecycle.retain(session),
+          else: safe_save_session(session)
+
+      case result do
         :ok ->
-          if preserve_tool_resources, do: handoff_tool_resources(session, state.session_id)
+          :ok
+
+        {:error, :session_busy} when retain ->
+          # A durable follow-up may already have started another Agent run.
+          # Finalizing the previous runner must not stop that live work.
+          :ok
 
         {:error, reason} ->
           Logger.warning("LemonRunner finalize_session save failed: #{inspect(reason)}")
       end
 
-      :ok = safe_stop_session(session)
+      if not retain or result not in [:ok, {:error, :session_busy}],
+        do: safe_stop_session(session)
     end
 
     state
-  end
-
-  defp handoff_tool_resources(session, session_id) do
-    case CodingAgent.Session.handoff_tool_resources(session) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("LemonRunner finalize_session handoff failed: #{inspect(reason)}")
-    end
-  catch
-    :exit, reason ->
-      # An uncertain handoff may have detached resources from a lost owner.
-      Logger.warning("LemonRunner finalize_session handoff failed: #{inspect({:exit, reason})}")
-      CodingAgent.ToolResources.stop(session_id)
   end
 
   @spec safe_save_session(pid()) :: :ok | {:error, term()}
