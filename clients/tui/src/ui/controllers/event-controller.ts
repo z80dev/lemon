@@ -15,10 +15,7 @@
 
 import type { Component, TUI } from "@oh-my-pi/pi-tui/tui";
 import type { ControlPlaneClient } from "../../protocol/client.ts";
-import {
-	parseSessionEventBatch,
-	sameSessionEventStream,
-} from "../../protocol/session-events.ts";
+import { parseSessionEventBatch, sameSessionEventStream } from "../../protocol/session-events.ts";
 import type {
 	AgentCompletedEvent,
 	AgentEvent,
@@ -500,7 +497,9 @@ export class EventController {
 				const completed = event as AgentCompletedEvent;
 				const session = this.#sessionFor(completed.sessionKey);
 				const focused = session === this.#store.focused;
-				const advancesQueue = !canonical || !session.isRunTerminal(completed.runId) ||
+				const advancesQueue =
+					!canonical ||
+					!session.isRunTerminal(completed.runId) ||
 					session.lastRunOutcome === "aborted";
 				// Token counts for the context gauge, which is the only per-session
 				// number available — `usage.status` is today-wide across all sessions.

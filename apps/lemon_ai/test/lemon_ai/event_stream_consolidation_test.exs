@@ -163,6 +163,45 @@ defmodule LemonAi.EventStreamConsolidationTest do
     assert Enum.to_list(EventStream.events(stream)) == [{:error, :tool_failed, partial}]
   end
 
+  test "cancel releases completed provider streams and their attached tasks" do
+    for {finish, result_tag, message} <- [
+          {&EventStream.complete/2, :ok, %AssistantMessage{stop_reason: :stop}},
+          {&EventStream.error/2, :error,
+           %AssistantMessage{stop_reason: :error, error_details: %{category: :transient}}}
+        ] do
+      stream = start_stream()
+      worker = waiting_process()
+      stream_monitor = Process.monitor(stream)
+      worker_monitor = Process.monitor(worker)
+      result = {result_tag, message}
+      :ok = EventStream.attach_task(stream, worker)
+      {:ok, subscription} = EventStream.subscribe_result(stream)
+      assert :ok = EventStream.push(stream, :accepted)
+      assert :ok = finish.(stream, message)
+      assert EventStream.result(stream, 1_000) == result
+      assert EventStream.stats(stream).queue_size == 2
+      assert_receive {:event_stream_result, ^subscription, ^result}, 1_000
+
+      assert :ok = EventStream.cancel(stream, :completion_collected)
+      assert_receive {:DOWN, ^stream_monitor, :process, ^stream, :normal}, 1_000
+      assert_receive {:DOWN, ^worker_monitor, :process, ^worker, :shutdown}, 1_000
+      refute_receive {:event_stream_result, ^subscription, _}, 0
+    end
+  end
+
+  test "cancel preserves a completed agent stream's queued events and result" do
+    parent = self()
+    stream = start_stream(event_format: :agent, on_cancel: fn -> send(parent, :canceled) end)
+    assert :ok = EventStream.push(stream, :accepted)
+    assert :ok = EventStream.complete(stream, [])
+    assert EventStream.result(stream, 1_000) == {:ok, []}
+
+    assert :ok = EventStream.cancel(stream, :late_cancel)
+    assert EventStream.result(stream, 1_000) == {:ok, []}
+    assert Enum.to_list(EventStream.events(stream)) == [:accepted, {:agent_end, []}]
+    refute_receive :canceled, 0
+  end
+
   test "overflow is explicit and cannot discard the completion terminal" do
     stream = start_stream(max_queue: 1, drop_strategy: :error)
     message = %AssistantMessage{stop_reason: :stop}

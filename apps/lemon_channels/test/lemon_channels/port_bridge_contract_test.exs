@@ -202,7 +202,7 @@ defmodule LemonChannels.PortBridgeContractTest do
     end
   end
 
-  @tag skip: is_nil(System.find_executable("node"))
+  @tag :node
   test "stopping either bridge kills orphaned grandchildren before returning", %{tmp_dir: tmp_dir} do
     script = Path.join(tmp_dir, "process_tree.mjs")
     File.write!(script, process_tree_script())
@@ -216,7 +216,7 @@ defmodule LemonChannels.PortBridgeContractTest do
     end
   end
 
-  @tag skip: is_nil(System.find_executable("node"))
+  @tag :node
   test "manual bridge exit cleans its group before notifying its owner", %{tmp_dir: tmp_dir} do
     script = Path.join(tmp_dir, "process_tree.mjs")
     File.write!(script, process_tree_script())
@@ -238,7 +238,7 @@ defmodule LemonChannels.PortBridgeContractTest do
     end
   end
 
-  @tag skip: is_nil(System.find_executable("node"))
+  @tag :node
   test "WhatsApp timeout kills its group and fails all pending sends without replay", %{
     tmp_dir: tmp_dir
   } do

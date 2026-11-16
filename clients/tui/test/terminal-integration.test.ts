@@ -354,7 +354,11 @@ test("Tern reports pending action summaries, questions and failures, but not com
 		expect(terminal.writes.at(-1)).toBe(report("blocked:kind=question", "Which branch?"));
 		store.removeUserPrompt("question");
 		for (const error of ["Provider\nfailed", { message: "Unavailable", code: "offline" }]) {
-			client.events.emit("agent-applied", { type: "started", runId: "run", sessionKey: "attention" });
+			client.events.emit("agent-applied", {
+				type: "started",
+				runId: "run",
+				sessionKey: "attention",
+			});
 			client.events.emit("agent-applied", {
 				type: "completed",
 				runId: "run",
@@ -368,7 +372,11 @@ test("Tern reports pending action summaries, questions and failures, but not com
 				report("error", typeof error === "string" ? error : JSON.stringify(error)),
 			);
 		}
-		client.events.emit("agent-applied", { type: "started", runId: "done", sessionKey: "attention" });
+		client.events.emit("agent-applied", {
+			type: "started",
+			runId: "done",
+			sessionKey: "attention",
+		});
 		client.events.emit("agent-applied", {
 			type: "completed",
 			runId: "done",

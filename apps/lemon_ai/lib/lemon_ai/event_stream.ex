@@ -251,7 +251,11 @@ defmodule LemonAi.EventStream do
   1. Mark the stream as canceled
   2. Shutdown any attached streaming task
   3. Wake up all waiters with a terminal event
-  4. Stop the GenServer
+  4. Stop provider streams immediately; agent streams drain accepted events first
+
+  Provider streams are released even after completion, without replacing their
+  terminal result. Cancellation of an already-finished agent stream is ignored
+  so its queued terminal events remain available.
   """
   @spec cancel(t(), term()) :: :ok
   def cancel(stream, reason \\ :canceled) do
@@ -631,7 +635,8 @@ defmodule LemonAi.EventStream do
     {:noreply, state}
   end
 
-  def handle_cast({:cancel, _reason}, %{done: true} = state), do: {:noreply, state}
+  def handle_cast({:cancel, _reason}, %{done: true, event_format: :agent} = state),
+    do: {:noreply, state}
 
   def handle_cast({:cancel, reason}, state) do
     state = do_cancel(state, reason)

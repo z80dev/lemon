@@ -107,7 +107,6 @@ defmodule LemonCore.Secrets.MasterKey do
               result
 
             _ ->
-              Process.delete({__MODULE__, :memo})
               result = resolve(opts)
 
               if match?({:ok, _, _}, result) do

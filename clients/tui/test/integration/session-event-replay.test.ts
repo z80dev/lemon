@@ -63,10 +63,12 @@ function snapshot(
 function delta(seq: number, text: string): SessionEventBatch {
 	return {
 		cursor: cursor(seq),
-		events: [{
-			event: "chat",
-			payload: { type: "delta", runId: "run-1", sessionKey: KEY, seq: 1, text },
-		}],
+		events: [
+			{
+				event: "chat",
+				payload: { type: "delta", runId: "run-1", sessionKey: KEY, seq: 1, text },
+			},
+		],
 	};
 }
 
@@ -123,18 +125,20 @@ describe("session cursor replay through the real client and controllers", () => 
 		const second = deferred<SessionsEventsResult>();
 		const completed: SessionEventBatch = {
 			cursor: cursor(4),
-			events: [{
-				event: "agent",
-				payload: {
-					type: "completed",
-					sessionKey: KEY,
-					runId: "run-1",
-					ok: true,
-					answer: "truncated",
-					durationMs: 12,
-					usage: { costUsd: 0.25 },
+			events: [
+				{
+					event: "agent",
+					payload: {
+						type: "completed",
+						sessionKey: KEY,
+						runId: "run-1",
+						ok: true,
+						answer: "truncated",
+						durationMs: 12,
+						usage: { costUsd: 0.25 },
+					},
 				},
-			}],
+			],
 		};
 		const observed: string[] = [];
 		teardown.push(app.client.events.on("agent-applied", (event) => observed.push(event.type)));
@@ -152,7 +156,9 @@ describe("session cursor replay through the real client and controllers", () => 
 		await waitFor(() => server.requestsFor(METHOD.sessionsEvents).length === 2);
 		expect(app.store.focused.bufferFor("run-1")).toBe("AB");
 		second.resolve(page([delta(3, "C"), completed], 4));
-		await waitFor(() => app.store.focused.eventCursor?.seq === 5 && !app.store.focused.eventRecovery);
+		await waitFor(
+			() => app.store.focused.eventCursor?.seq === 5 && !app.store.focused.eventRecovery,
+		);
 		await push(app, server, delta(1, "B"));
 		await push(app, server, completed);
 		const legacy = app.client.events.waitFor("chat");
@@ -215,9 +221,11 @@ describe("session cursor replay through the real client and controllers", () => 
 			expect(app.store.focused.eventCursor).toEqual(cursor(0));
 			expect(app.store.focused.eventRecovery).toBe(true);
 			expect(app.store.focused.busy).toBe(true);
-			expect(app.store.focused.blocks.some(
-				(block) => block.kind === "notice" && block.text.includes("could not replay"),
-			)).toBe(true);
+			expect(
+				app.store.focused.blocks.some(
+					(block) => block.kind === "notice" && block.text.includes("could not replay"),
+				),
+			).toBe(true);
 		});
 	}
 
@@ -300,17 +308,19 @@ describe("session cursor replay through the real client and controllers", () => 
 		const tail = deferred<SessionsEventsResult>();
 		const completed: SessionEventBatch = {
 			cursor: cursor(1),
-			events: [{
-				event: "agent",
-				payload: {
-					type: "completed",
-					sessionKey: KEY,
-					runId: "run-1",
-					ok: true,
-					answer: "A",
-					durationMs: 1,
+			events: [
+				{
+					event: "agent",
+					payload: {
+						type: "completed",
+						sessionKey: KEY,
+						runId: "run-1",
+						ok: true,
+						answer: "A",
+						durationMs: 1,
+					},
 				},
-			}],
+			],
 		};
 		server.onMethod(METHOD.sessionsEvents, ({ cursor: after }: { cursor: SessionEventCursor }) =>
 			after.seq === 0 ? page([completed], 1, true) : tail.promise,
@@ -334,10 +344,12 @@ describe("session cursor replay through the real client and controllers", () => 
 		await app.submit("must wait for the new run");
 		const completed: SessionEventBatch = {
 			cursor: cursor(1),
-			events: [{
-				event: "agent",
-				payload: { type: "completed", sessionKey: KEY, runId: "run-1", ok: true },
-			}],
+			events: [
+				{
+					event: "agent",
+					payload: { type: "completed", sessionKey: KEY, runId: "run-1", ok: true },
+				},
+			],
 		};
 		const started: SessionEventBatch = {
 			cursor: cursor(2),
