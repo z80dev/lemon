@@ -580,8 +580,9 @@ Every adaptation is intentional:
    patch call, including recovered failures. Neither tool implementation or
    disclosure defaults is tuned for the fixtures.
 4. Lemon uses production `lemon -p --output stream-json` so tool results and
-   identities are observable; Harbor uses plain JSON. Repeated streamed
-   completion IDs are deduplicated. Projected/clipped errors that cannot be
+   identities are observable; Harbor uses plain JSON. Non-tool agent events and
+   non-dictionary actions are ignored; repeated streamed completion IDs are
+   deduplicated. Projected/clipped errors that cannot be
    classified stay `unclassified_tool_error`; missing target information makes
    retry counts unknown rather than guessed.
 5. Upstream at the pinned revision is **not byte-exact**: `verify.ts` applies

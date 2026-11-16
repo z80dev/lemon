@@ -54,7 +54,7 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   with credentials held only by the arena proxy, paired statistics, retained
   audit containers and explicit post-run metric collection (#544),
   and a re-runnable omp edit-fixture comparison for the `edit` and `patch`
-  tools with failure-site attribution (#545).
+  tools with failure-site attribution and non-tool event filtering (#545).
 - `mix lemon.eval.latency`: an offline harness that measures harness overhead
   (request dispatch, token delivery, queued-run handoff, readiness, per-turn
   session stages) with a nightly regression lane (#546).

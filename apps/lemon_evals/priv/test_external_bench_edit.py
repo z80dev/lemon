@@ -67,6 +67,20 @@ class ExternalEditParsingTests(unittest.TestCase):
         self.assertEqual(sum(entry['failed'] for entry in attempts), 1)
         self.assertNotIn('a.ts', json.dumps(attempts))
 
+    def test_non_tool_and_non_dictionary_agent_actions_are_ignored(self):
+        valid = lemon_event('completed', 'edit-one', 'edit', {'path': 'a.ts'})
+        other = lemon_event('completed', 'not-a-tool', 'edit', {'path': 'b.ts'})
+        other['payload']['type'] = 'status'
+        events = [
+            {'event': 'agent', 'payload': 'heartbeat'},
+            {'event': 'agent', 'payload': {'type': 'status', 'action': 'started'}},
+            {'event': 'agent', 'payload': {'type': 'tool_use', 'action': 'started'}},
+            {'event': 'agent', 'payload': {'type': 'tool_use', 'action': {'detail': 'started'}}},
+            other, valid,
+        ]
+        self.assertEqual(edit_errors.edit_attempts('lemon', '\n'.join(map(json.dumps, events))),
+                         [{'tool': 'edit', 'failed': False, 'retry': False}])
+
     def test_unknown_targets_and_external_errors_are_not_falsely_attributed(self):
         events = [{'type': 'tool_execution_end', 'toolCallId': 'one', 'toolName': 'edit',
                    'isError': True, 'result': {'content': [{'text': 'Context not found for patch hunk'}]}}]
