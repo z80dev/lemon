@@ -45,6 +45,12 @@ defmodule CodingAgent.Tools.Eval do
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
+    if CodingAgent.Tools.CodeMode.enabled?(opts),
+      do: CodingAgent.Tools.CodeMode.tool(cwd, opts),
+      else: kernel_tool(cwd, opts)
+  end
+
+  defp kernel_tool(cwd, opts) do
     %AgentTool{
       name: "eval",
       timeout_ms: :infinity,

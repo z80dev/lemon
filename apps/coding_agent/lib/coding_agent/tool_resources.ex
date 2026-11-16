@@ -111,7 +111,7 @@ defmodule CodingAgent.ToolResources do
 
   defp resources(id) do
     eval =
-      Enum.flat_map(["py", "js"], fn language ->
+      Enum.flat_map(["py", "js", "code_mode"], fn language ->
         lookup(CodingAgent.Eval.Registry, {id, language}, CodingAgent.Eval.KernelSupervisor)
       end)
 

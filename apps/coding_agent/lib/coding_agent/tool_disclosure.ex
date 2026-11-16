@@ -53,8 +53,13 @@ defmodule CodingAgent.ToolDisclosure do
       registry resolved — optional built-ins such as browser, media and
       automation tools included — is deferred behind the bridge whenever there
       is anything to defer. The budget is not consulted.
+    * `:code_mode` (opt-in experiment) — expose permissionless `eval`,
+      `eval_wait` and a small direct core; render the frozen session catalog as
+      TypeScript declarations in `eval`. Discovery tools remain available until
+      a measured promotion decision. Runtime construction belongs to
+      `CodingAgent.Tools.CodeMode`; neither direct profile changes.
 
-  Both profiles honour `pinned` (names kept disclosed) and both always keep
+  All profiles honour `pinned` (names kept disclosed) and always keep
   caller-supplied `extra_tools` disclosed. The core is a list of names, not a
   catalog: the inventory itself always comes from the registry, so a core name
   the registry did not resolve (unavailable or policy-denied) is simply absent.
@@ -89,7 +94,7 @@ defmodule CodingAgent.ToolDisclosure do
 
   @bridge_names ["tool_search", "tool_invoke"]
 
-  @profiles [:legacy, :coding]
+  @profiles [:legacy, :coding, :code_mode]
 
   @defaults %{
     enabled: true,
@@ -113,12 +118,15 @@ defmodule CodingAgent.ToolDisclosure do
   }
 
   @coding_core_names @coding_core |> Map.values() |> List.flatten() |> Enum.sort()
+  # Experimental surface only: all other wrapped capabilities remain callable
+  # through the sandbox's typed bridge. Discovery remains until promotion.
+  @code_mode_core ~w(eval eval_wait read ask todo wait nodes)
 
   @max_limit 20
   @description_line_length 100
   @digest_name_length 80
 
-  @type profile :: :legacy | :coding
+  @type profile :: :legacy | :coding | :code_mode
 
   @type config :: %{
           enabled: boolean(),
@@ -373,6 +381,9 @@ defmodule CodingAgent.ToolDisclosure do
       not cfg.enabled ->
         passthrough(tool_tuples, extra_tools, :disabled, estimated, cfg, authority)
 
+      cfg.profile == :code_mode ->
+        activate(tool_tuples, extra_tools, estimated, cfg, authority)
+
       # Coding defers optional tools regardless of the legacy budget trigger.
       cfg.profile == :legacy and estimated <= cfg.budget_tokens ->
         passthrough(tool_tuples, extra_tools, :under_budget, estimated, cfg, authority)
@@ -448,7 +459,11 @@ defmodule CodingAgent.ToolDisclosure do
         Enum.map(real_extras, &{&1.name, &1, :extra}) ++
         [{search_tool.name, search_tool, :bridge}, {invoke_tool.name, invoke_tool, :bridge}]
 
-    tools = Enum.map(exposed, fn {_name, tool, _source} -> tool end)
+    tools =
+      exposed
+      |> Enum.map(fn {_name, tool, _source} -> tool end)
+      |> attach_code_declarations(catalog, cfg.profile)
+
     disclosed_count = length(pinned) + length(real_extras)
 
     %{
@@ -474,6 +489,29 @@ defmodule CodingAgent.ToolDisclosure do
     }
   end
 
+  defp attach_code_declarations(tools, catalog, :code_mode) do
+    declarations =
+      catalog
+      |> Enum.reject(fn {name, _entry} -> name in (["eval", "eval_wait"] ++ @bridge_names) end)
+      |> Enum.map(fn {_name, entry} -> entry.tool end)
+      |> CodingAgent.Eval.TypeScript.render()
+
+    Enum.map(tools, fn
+      %AgentTool{name: "eval"} = tool ->
+        %{
+          tool
+          | description:
+              tool.description <>
+                "\n\nSession tool declarations:\n```ts\n" <> declarations <> "```"
+        }
+
+      tool ->
+        tool
+    end)
+  end
+
+  defp attach_code_declarations(tools, _catalog, _profile), do: tools
+
   # A pin always wins. Otherwise the profile decides: the legacy profile keeps
   # every built-in (satellite tools merged in by the registry included)
   # disclosed and defers only the long tail that arrives from MCP servers,
@@ -484,6 +522,7 @@ defmodule CodingAgent.ToolDisclosure do
   end
 
   defp profile_defers?(:coding, name, _source), do: name not in @coding_core_names
+  defp profile_defers?(:code_mode, name, _source), do: name not in @code_mode_core
   defp profile_defers?(:legacy, _name, {:mcp, _}), do: true
   defp profile_defers?(:legacy, _name, {:extension, _}), do: true
   defp profile_defers?(:legacy, _name, {:wasm, _}), do: true

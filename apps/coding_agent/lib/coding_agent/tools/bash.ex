@@ -23,6 +23,13 @@ defmodule CodingAgent.Tools.Bash do
   `artifact://` references in `command` are replaced by their shell-quoted
   absolute paths before the command starts; an unresolvable reference fails
   the call without running anything.
+
+  Completed foreground results include structured `output`, `exit_code`,
+  `stdout`, `stderr` and `output_combined` details. Local non-PTY code-mode
+  calls use a Python3 relay to capture streams separately (Python3 is required).
+  Merged-output backends report null `stdout`/`stderr` (unavailable, not empty)
+  and `output_combined: true`; `output` is the bounded capture without
+  presentation notices. Launch receipts and failures need not contain captures.
   """
 
   alias CodingAgent.BashExecutor
@@ -352,6 +359,14 @@ defmodule CodingAgent.Tools.Bash do
 
   defp shell_quote(value), do: "'" <> String.replace(value, "'", "'\\''") <> "'"
 
+  defp code_mode?(opts) do
+    case Keyword.get(opts, :tool_disclosure) do
+      %{profile: profile} -> profile in [:code_mode, "code_mode"]
+      %{"profile" => profile} -> profile in [:code_mode, "code_mode"]
+      _ -> false
+    end
+  end
+
   defp resolve_timeout(params, opts) do
     default =
       Keyword.get(opts, :timeout_ms, Keyword.get(opts, :bash_timeout_ms, @default_timeout_ms))
@@ -374,7 +389,8 @@ defmodule CodingAgent.Tools.Bash do
         signal: signal,
         timeout: timeout_ms,
         pty: use_pty,
-        env: env
+        env: env,
+        capture_streams: code_mode?(opts) and not use_pty
       ]
 
     executor =
@@ -382,6 +398,7 @@ defmodule CodingAgent.Tools.Bash do
         sandboxed?(opts) -> CodingAgent.Tools.Bash.Managed
         use_pty -> BashExecutor
         Keyword.get(opts, :acp_client_terminal) == true -> CodingAgent.ACPTerminalExecutor
+        code_mode?(opts) -> BashExecutor
         true -> CodingAgent.Tools.Bash.Managed
       end
 
@@ -631,6 +648,11 @@ defmodule CodingAgent.Tools.Bash do
   defp build_details(%BashExecutor.Result{} = result) do
     details = %{
       exit_code: result.exit_code,
+      stdout: Map.get(result, :stdout),
+      stderr: Map.get(result, :stderr),
+      output: result.output || "",
+      output_combined:
+        not (is_binary(Map.get(result, :stdout)) and is_binary(Map.get(result, :stderr))),
       truncated: result.truncated,
       pty_fallback: result.pty_fallback
     }

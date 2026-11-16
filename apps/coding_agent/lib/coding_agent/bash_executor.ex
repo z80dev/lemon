@@ -23,6 +23,8 @@ defmodule CodingAgent.BashExecutor do
       :cancelled,
       :truncated,
       :full_output_path,
+      :stdout,
+      :stderr,
       timed_out: false,
       pty_fallback: false,
       terminal_id: nil,
@@ -35,6 +37,8 @@ defmodule CodingAgent.BashExecutor do
             cancelled: boolean(),
             truncated: boolean(),
             full_output_path: String.t() | nil,
+            stdout: String.t() | nil,
+            stderr: String.t() | nil,
             timed_out: boolean(),
             pty_fallback: boolean(),
             terminal_id: String.t() | nil,
@@ -63,6 +67,8 @@ defmodule CodingAgent.BashExecutor do
     * `:pty` - When `true`, run the command in a pseudo-terminal (default: `false`)
     * `:env` - Extra environment variables (`%{name => value}`) layered over the
       inherited environment (default: `%{}`)
+    * `:capture_streams` - Use the private Python3 relay for authentic bounded
+      stdout/stderr on local non-PTY calls. Missing Python fails closed.
 
   ## Returns
 
@@ -87,11 +93,26 @@ defmodule CodingAgent.BashExecutor do
 
     command = wrap_command_with_cwd(command, cwd)
 
+    capture_streams = Keyword.get(opts, :capture_streams, false) and not use_pty
+    python = if capture_streams, do: System.find_executable("python3")
+
+    if capture_streams and is_nil(python) do
+      raise "Python3 is required for separated shell stream capture"
+    end
+
     {spawn_path, spawn_args, pty_fallback} =
       if use_pty do
         wrap_with_pty(shell_path, shell_args, command)
       else
         {shell_path, shell_args ++ [command], false}
+      end
+
+    {spawn_path, spawn_args} =
+      if capture_streams do
+        relay = Application.app_dir(:coding_agent, "priv/bash_stream_relay.py")
+        {python, ["-u", relay, spawn_path | spawn_args]}
+      else
+        {spawn_path, spawn_args}
       end
 
     port_opts =
@@ -142,7 +163,12 @@ defmodule CodingAgent.BashExecutor do
           temp_file_path: nil,
           cancelled: false,
           exit_code: nil,
-          timeout_ref: timeout_ref
+          timeout_ref: timeout_ref,
+          capture_streams: capture_streams,
+          relay_buffer: "",
+          relay_exit: nil,
+          stdout: "",
+          stderr: ""
         }
 
         result =
@@ -169,7 +195,7 @@ defmodule CodingAgent.BashExecutor do
       {port, {:data, data}} when port == state.port ->
         # Buffer the chunk before honoring an abort so output that raced the
         # abort is still part of the partial result.
-        state = buffer_chunk(state, data)
+        state = receive_chunk(state, data)
 
         if state.signal && AbortSignal.aborted?(state.signal) do
           handle_abort(state)
@@ -189,6 +215,30 @@ defmodule CodingAgent.BashExecutor do
       _other ->
         collect_output(state)
     end
+  end
+
+  defp receive_chunk(%{capture_streams: false} = state, data), do: buffer_chunk(state, data)
+
+  defp receive_chunk(state, data) do
+    frames = String.split(state.relay_buffer <> data, "\n")
+    state = %{state | relay_buffer: List.last(frames)}
+
+    frames
+    |> Enum.drop(-1)
+    |> Enum.reduce(state, fn frame, state ->
+      case Jason.decode!(frame) do
+        %{"stream" => stream, "data" => text} when stream in ["stdout", "stderr"] ->
+          key = if stream == "stdout", do: :stdout, else: :stderr
+          text = sanitize_output(text)
+          remaining = max(state.max_bytes - byte_size(Map.fetch!(state, key)), 0)
+          kept = LemonAi.Text.truncate_bytes_utf8(text, remaining, marker: "")
+          state = Map.update!(state, key, &(&1 <> kept))
+          buffer_chunk(state, text)
+
+        %{"exit_code" => code} when is_integer(code) ->
+          %{state | relay_exit: code}
+      end
+    end)
   end
 
   defp buffer_chunk(state, data) do
@@ -252,7 +302,7 @@ defmodule CodingAgent.BashExecutor do
 
   defp drain_output(%{port: port} = state) do
     receive do
-      {^port, {:data, data}} -> drain_output(buffer_chunk(state, data))
+      {^port, {:data, data}} -> drain_output(receive_chunk(state, data))
     after
       0 -> state
     end
@@ -353,7 +403,13 @@ defmodule CodingAgent.BashExecutor do
 
     %Result{
       output: output,
-      exit_code: state.exit_code,
+      exit_code:
+        if(state.capture_streams and not state.cancelled,
+          do: state.relay_exit,
+          else: state.exit_code
+        ),
+      stdout: if(state.capture_streams, do: state.stdout),
+      stderr: if(state.capture_streams, do: state.stderr),
       cancelled: state.cancelled,
       truncated: was_truncated,
       pty_fallback: state.pty_fallback,

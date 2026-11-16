@@ -27,6 +27,13 @@ defmodule CodingAgent.Eval.KernelSupervisor do
   """
   @spec ensure_slot(term(), keyword()) :: {:ok, pid()} | {:error, term()}
   def ensure_slot(key, opts) do
+    ensure_runtime(key, opts, Kernel)
+  end
+
+  @doc "Returns the separate permissionless code-mode slot for the session."
+  def ensure_sandbox(key, opts), do: ensure_runtime(key, opts, CodingAgent.Eval.Sandbox)
+
+  defp ensure_runtime(key, opts, module) do
     case lookup(key) do
       {:ok, pid} ->
         with :ok <- CodingAgent.ToolResources.bind(pid, Keyword.get(opts, :owner_pid)),
@@ -40,7 +47,7 @@ defmodule CodingAgent.Eval.KernelSupervisor do
 
         opts = Keyword.merge(opts, key: key, name: {:via, Registry, {@registry, key, value}})
 
-        case DynamicSupervisor.start_child(__MODULE__, {Kernel, opts}) do
+        case DynamicSupervisor.start_child(__MODULE__, {module, opts}) do
           {:ok, pid} ->
             {:ok, pid}
 

@@ -185,6 +185,8 @@ defmodule CodingAgent.ExtensionLifecycle do
         Keyword.get(tool_opts, :session_mode, :chat)
       )
 
+    tool_opts = Keyword.put(tool_opts, :tool_disclosure, disclosure_cfg)
+
     hook_context = tool_hook_context(cwd, tool_opts)
     obfuscator = Keyword.get(opts, :secret_obfuscator)
 
@@ -348,6 +350,8 @@ defmodule CodingAgent.ExtensionLifecycle do
          hooks,
          obfuscator
        ) do
+    tool_opts = Keyword.put(tool_opts, :tool_disclosure, disclosure_cfg)
+
     hook_context = tool_hook_context(cwd, tool_opts)
 
     case custom_tools do

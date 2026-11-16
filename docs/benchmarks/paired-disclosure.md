@@ -22,6 +22,45 @@ or `LEMON_TOOL_DISCLOSURE_PROFILE=legacy` restores the previous coding inventory
 The runner below remains a separately authorized experiment path; this decision
 does not imply that its live plan gate has been exercised or authorize paid runs.
 
+### Code-mode experiment (#598): keep opt-in
+
+`lemon-code-mode` is an explicit arena arm requesting `code_mode`; the arena's
+default agents remain `lemon,omp`. No code-mode gain or promotion is established.
+After building the arena images from the candidate revision and starting the
+credential proxy as described in the evaluation app guide, an operator can run:
+
+```bash
+python3 apps/lemon_evals/priv/coding_arena/arena.py run \
+  --agents lemon-coding,lemon-code-mode --models glm-5.3=1 \
+  --thinking high --repetitions 3 --seed 598 \
+  --output-dir /OPERATOR/PATH/code-mode-arena \
+  --proxy-log /OPERATOR/PATH/proxy.jsonl
+python3 apps/lemon_evals/priv/coding_arena/arena.py report \
+  --output-dir /OPERATOR/PATH/code-mode-arena \
+  --proxy-log /OPERATOR/PATH/proxy.jsonl
+```
+
+This is a paid-run recipe, **not authorization to execute it**. It requires Docker,
+the freshly built `lemon-arena-lemon` image, the host proxy with operator-managed
+credentials, and matching `ARENA_PROXY_SECRET` in proxy and runner. The Lemon image
+must contain Deno for code-mode cells; a runtime without Deno fails closed rather
+than providing an equivalent treatment. Use a new output directory per revision.
+
+The scheduler keeps all arms of a task/repetition on the same model; JSON includes
+same-model paired success and per-model usage summaries. Success is checked by
+the hidden verifier. Requested profiles are recorded, but the production CLI
+does not export the applied session disclosure report: observed profiles remain
+null and attribution is explicitly unverified. These outcomes alone therefore
+cannot prove a code-mode treatment or justify promotion.
+
+Usage/cost accounting includes all recorded attempts (including infrastructure
+failures and superseded attempts), separately from scored comparisons. Missing
+wire usage remains null, with observed sums/counts retained. The proxy's
+subscription credentials supply no trustworthy dollar price, so cost per verified
+success is null with `unknown_pricing`, never zero or an invented API price.
+Keep code mode opt-in pending an authorized, attributable paired report with an
+explicit pricing basis.
+
 ### Local prompt accounting after rollout
 
 A native print-equivalent fixture (empty repository, fresh template workspace,
