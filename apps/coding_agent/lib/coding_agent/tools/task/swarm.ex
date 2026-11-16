@@ -3,6 +3,7 @@ defmodule CodingAgent.Tools.Task.Swarm do
   Runs a validated task DAG through the native task lifecycle. The coordinator
   owns no model slot; launched children (including queued children) consume the
   swarm's concurrency allowance until their TaskStore records are terminal.
+  Ready nodes retain declaration order while waiting for native budget capacity.
   """
 
   alias CodingAgent.TaskStore
@@ -223,44 +224,56 @@ defmodule CodingAgent.Tools.Task.Swarm do
   end
 
   defp launch_ready(state, cap, signal, update, cwd, opts) do
-    Enum.reduce(state.pending, state, fn node, acc ->
+    Enum.reduce_while(state.pending, state, fn node, acc ->
       ready? = Enum.all?(node.depends_on, &match?(%{status: "completed"}, acc.completed[&1]))
 
-      if ready? and map_size(acc.active) < cap and not AbortSignal.aborted?(signal) and
-           budget_slot_available?(opts) do
-        validated =
-          node
-          |> Graph.with_dependencies(acc.completed)
-          |> Map.merge(%{async: true, auto_followup: false})
+      cond do
+        map_size(acc.active) >= cap or AbortSignal.aborted?(signal) ->
+          {:halt, acc}
 
-        outcome =
-          with {:ok, validated} <- Params.restrict_to_parent(validated, cwd, opts),
-               :ok <- Params.check_budget_and_policy(validated, opts) do
-            Execution.run(nil, validated, signal, update, cwd, opts)
-          end
+        ready? and not budget_slot_available?(opts) ->
+          # A completion may release capacity during this fold. Do not let a
+          # later ready node overtake one already waiting for that capacity.
+          {:halt, acc}
 
-        acc = %{acc | pending: Enum.reject(acc.pending, &(&1.name == node.name))}
+        ready? ->
+          validated =
+            node
+            |> Graph.with_dependencies(acc.completed)
+            |> Map.merge(%{async: true, auto_followup: false})
 
-        case outcome do
-          %AgentToolResult{details: %{task_id: task_id, run_id: run_id}}
-          when is_binary(task_id) and is_binary(run_id) ->
-            put_in(acc.active[node.name], %{
-              task_id: task_id,
-              run_id: run_id,
-              status: "queued"
-            })
+          outcome =
+            with {:ok, validated} <- Params.restrict_to_parent(validated, cwd, opts),
+                 :ok <- Params.check_budget_and_policy(validated, opts) do
+              Execution.run(nil, validated, signal, update, cwd, opts)
+            end
 
-          {:error, reason} ->
-            put_in(acc.completed[node.name], %{status: "error", error: visible_error(reason)})
+          acc = %{acc | pending: Enum.reject(acc.pending, &(&1.name == node.name))}
 
-          _ ->
-            put_in(acc.completed[node.name], %{
-              status: "error",
-              error: "Native task admission returned no identity"
-            })
-        end
-      else
-        acc
+          acc =
+            case outcome do
+              %AgentToolResult{details: %{task_id: task_id, run_id: run_id}}
+              when is_binary(task_id) and is_binary(run_id) ->
+                put_in(acc.active[node.name], %{
+                  task_id: task_id,
+                  run_id: run_id,
+                  status: "queued"
+                })
+
+              {:error, reason} ->
+                put_in(acc.completed[node.name], %{status: "error", error: visible_error(reason)})
+
+              _ ->
+                put_in(acc.completed[node.name], %{
+                  status: "error",
+                  error: "Native task admission returned no identity"
+                })
+            end
+
+          {:cont, acc}
+
+        true ->
+          {:cont, acc}
       end
     end)
   end

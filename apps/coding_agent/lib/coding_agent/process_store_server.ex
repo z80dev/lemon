@@ -6,6 +6,9 @@ defmodule CodingAgent.ProcessStoreServer do
   every record mutation. Reload preserves surviving registered sessions,
   cancels unclaimed queued launches and marks missing live owners as :lost
   without treating their absence as proof of external workload termination.
+  A lost unmanaged row without a live owner or a valid workload witness has no
+  admission charge. Explicit managed reservations remain charged until external
+  termination is confirmed, even when their BEAM owner has disappeared.
   """
 
   use CodingAgent.DurableTable
@@ -556,11 +559,22 @@ defmodule CodingAgent.ProcessStoreServer do
   end
 
   defp capacity_held?(record) do
-    if Map.has_key?(record, :capacity_held) do
-      Map.get(record, :capacity_held) and not Map.get(record, :termination_confirmed, false)
-    else
-      Map.get(record, :status) in [:running, :starting, :killing, :lost] and
-        not Map.get(record, :termination_confirmed, false)
+    unwitnessed_lost? =
+      Map.get(record, :status) == :lost and
+        not is_binary(Map.get(record, :launch_fingerprint)) and
+        not LemonCore.ProcessGroup.valid_identity?(Map.get(record, :workload_identity)) and
+        not session_alive?(Map.get(record, :id))
+
+    cond do
+      unwitnessed_lost? ->
+        false
+
+      Map.has_key?(record, :capacity_held) ->
+        Map.get(record, :capacity_held) and not Map.get(record, :termination_confirmed, false)
+
+      true ->
+        Map.get(record, :status) in [:running, :starting, :killing, :lost] and
+          not Map.get(record, :termination_confirmed, false)
     end
   end
 
@@ -692,17 +706,27 @@ defmodule CodingAgent.ProcessStoreServer do
   end
 
   defp lose_live_owner(state, id) do
-    case :ets.lookup(@table, id) do
-      [{^id, record, logs}] ->
-        if capacity_held?(record) do
-          record = Map.merge(record, %{status: :lost, launch_classification: :outcome_unknown})
-          persist_launch(id, record, logs)
-          notify_capacity(state, {:background_launch_classified, id, :outcome_unknown})
-        end
+    state =
+      case :ets.lookup(@table, id) do
+        [{^id, record, logs}] ->
+          if capacity_held?(record) do
+            record = Map.merge(record, %{status: :lost, launch_classification: :outcome_unknown})
+            persist_launch(id, record, logs)
+            notify_capacity(state, {:background_launch_classified, id, :outcome_unknown})
 
-      _ ->
-        :ok
-    end
+            if capacity_held?(record) do
+              state
+            else
+              notify_capacity(state, :background_capacity_changed)
+              %{state | occupied: state.occupied - 1}
+            end
+          else
+            state
+          end
+
+        _ ->
+          state
+      end
 
     forget_live(state, id)
   end

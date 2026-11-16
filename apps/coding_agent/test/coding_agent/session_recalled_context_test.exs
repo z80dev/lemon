@@ -757,7 +757,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
   defp assert_stripped_error_event(mode, partial_state) do
     Contributor.answer([@stable, @volatile])
-    session = start_session(session_mode: mode)
+    session = start_session(session_mode: mode, tools: [])
     unsubscribe = Session.subscribe(session)
 
     :ok = Session.prompt(session, "why is the build slow?")
@@ -767,10 +767,9 @@ defmodule CodingAgent.SessionRecalledContextTest do
                     {:message_end, %UserMessage{content: "why is the build slow?"}}, _},
                    2_000
 
-    # The runtime agent state retains the attachment. Real provider/loop errors
-    # carry messages, not executable tools: serializing coding bridge closures
-    # in a synthetic full-state event would exceed bounded delivery's byte limit.
-    # Retain the original full-state shape coverage in the assistant-mode case.
+    # Keep the full agent-state shape in chat mode, but no executable tool
+    # closures: provider errors contain messages, not a serialized tool registry.
+    # Coding mode also covers the provider's messages-only partial-state shape.
     partial = partial_state.(agent_state(session))
     assert Enum.any?(partial.messages, &(inspect(&1) =~ @volatile.body))
 

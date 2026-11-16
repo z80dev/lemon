@@ -96,6 +96,35 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     :ok
   end
 
+  test "an already-dead parent cancels the task before its run can start" do
+    {parent, monitor} = spawn_monitor(fn -> :ok end)
+    assert_receive {:DOWN, ^monitor, :process, ^parent, :normal}
+    owner = self()
+
+    result =
+      Task.execute(
+        "dead-parent",
+        %{"description" => "Orphaned task", "prompt" => "Never execute", "auto_followup" => true},
+        nil,
+        nil,
+        "/tmp",
+        session_pid: parent,
+        session_key: "agent:main:main",
+        run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator,
+        run_override: fn _on_update, _signal ->
+          send(owner, :unexpected_execution)
+          %LemonAgent.Types.AgentToolResult{content: [], details: %{status: "completed"}}
+        end
+      )
+
+    CodingAgent.AsyncHelpers.assert_eventually(fn ->
+      match?({:ok, %{status: :cancelled}}, TaskStore.get_record(result.details.task_id))
+    end)
+
+    refute_receive :unexpected_execution
+    refute_received {:router_submit, %RunRequest{}, _}
+  end
+
   describe "execute/6 - async auto followup" do
     test "omitted async defaults to background launch" do
       result =
@@ -285,10 +314,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
 
     test "queue_mode followup falls back to router when session pid is unavailable" do
-      dead_pid = spawn(fn -> :ok end)
-      ref = Process.monitor(dead_pid)
-      assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
-
       parent_cwd = "/tmp/task_async_parent"
 
       result =
@@ -311,7 +336,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             }
           end,
           session_module: __MODULE__.TaskAsyncSessionSpy,
-          session_pid: dead_pid,
+          session_pid: nil,
           session_key: "agent:main:main",
           agent_id: "main",
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
@@ -338,10 +363,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
 
     test "queue_mode followup preserves long router followup output" do
-      dead_pid = spawn(fn -> :ok end)
-      ref = Process.monitor(dead_pid)
-      assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
-
       long_output =
         "START_LONG_ROUTER\n" <>
           String.duplicate("router followup body ", 300) <>
@@ -367,7 +388,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             }
           end,
           session_module: __MODULE__.TaskAsyncSessionSpy,
-          session_pid: dead_pid,
+          session_pid: nil,
           session_key: "agent:main:main",
           agent_id: "main",
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
@@ -1504,10 +1525,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       start_supervised!(UnknownAgentOrchestrator)
       UnknownAgentOrchestrator.configure(self())
 
-      dead_pid = spawn(fn -> :ok end)
-      ref = Process.monitor(dead_pid)
-      assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
-
       result =
         Task.execute(
           "call_unknown_agent",
@@ -1527,7 +1544,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             }
           end,
           session_module: __MODULE__.TaskAsyncSessionSpy,
-          session_pid: dead_pid,
+          session_pid: nil,
           session_key: "agent:unknown_agent:main",
           agent_id: "unknown_agent",
           run_orchestrator: UnknownAgentOrchestrator

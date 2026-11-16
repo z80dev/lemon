@@ -134,7 +134,10 @@ defmodule CodingAgent.Session.TodoJournalTest do
   end
 
   test "host journal failure remains a failure with unchanged durable state", %{tmp_dir: root} do
-    session = start_session(root)
+    # Keep dispatch intents durable so this fault reaches todo's own append.
+    session =
+      start_session(root, tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(root))
+
     original = host(session, %{"action" => "write", "todos" => pending()})["todos"]
     before = Session.get_state(session)
 
@@ -560,7 +563,10 @@ defmodule CodingAgent.Session.TodoJournalTest do
   test "journal append failure reports failure and leaves both journal and cache unchanged", %{
     tmp_dir: root
   } do
-    session = start_session(root)
+    # Keep dispatch intents durable so getters can verify the failed todo write.
+    session =
+      start_session(root, tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(root))
+
     original = write(session, pending()).details.todos
     before = Session.get_state(session)
 

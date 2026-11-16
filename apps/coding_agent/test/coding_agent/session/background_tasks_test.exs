@@ -53,7 +53,7 @@ defmodule CodingAgent.Session.BackgroundTasksTest do
       state
       | session_manager:
           SessionManager.append_label(
-            %{session_manager | file_path: nil},
+            %{session_manager | file_path: nil, append_device: nil},
             session_manager.leaf_id,
             "keep"
           )

@@ -10,7 +10,12 @@ defmodule CodingAgent.VendorToolDialects603Test do
     ToolRegistry.get_tools(
       cwd,
       Keyword.merge(
-        [include_extensions: false, include_mcp: false, enabled_only: ~w(read edit bash patch)],
+        [
+          include_extensions: false,
+          include_mcp: false,
+          enabled_only: ~w(read edit bash patch),
+          tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(cwd)
+        ],
         opts
       )
     )
@@ -349,7 +354,8 @@ defmodule CodingAgent.VendorToolDialects603StaleTest do
         include_mcp: false,
         enabled_only: ~w(read edit patch),
         session_id: session_id,
-        filesystem_checkpoints: false
+        filesystem_checkpoints: false,
+        tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(cwd)
       )
 
     claude =
