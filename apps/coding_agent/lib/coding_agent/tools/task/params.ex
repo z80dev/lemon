@@ -716,7 +716,7 @@ defmodule CodingAgent.Tools.Task.Params do
     [
       Keyword.get(opts, :system_prompt),
       validated[:persona] && validated.persona.prompt,
-      StructuredOutput.instruction(validated[:output_schema]),
+      StructuredOutput.instruction(validated[:output_schema], validated[:schema_mode]),
       if(validated[:plan_mode], do: @plan_child_prompt),
       communication_instructions(opts, validated)
     ]
@@ -789,8 +789,8 @@ defmodule CodingAgent.Tools.Task.Params do
         "Workers are leaf-only unless tool_policy or persona spawns permits delegation, capped by " <>
         "[runtime.task].max_depth; scout/reviewer stay read-only. " <>
         "Worktrees start at HEAD; merge=patch also copies uncommitted parent work and applies successful changes back (conflicts keep the patch), merge=branch commits them to a kept review branch, none retains the worktree.\n" <>
-        "output_schema re-prompts invalid JSON up to twice; schema_mode=permissive then returns text " <>
-        "with structured_output_error instead of failing.\n" <>
+        "output_schema uses submit_result in strict mode with two corrections; permissive re-prompts final text " <>
+        "and returns structured_output_error on exhaustion instead of failing.\n" <>
         "Message via agent_message or write agent://<name-or-id>, agent://parent, agent://all; " <>
         "read agent:// for the roster, agent://<id> for an owned child's status/output, " <>
         "agent://<id>/<key>/... for a structured_output field. wait returns the first unobserved native child result, " <>
@@ -862,7 +862,12 @@ defmodule CodingAgent.Tools.Task.Params do
   @spec build_session_opts(String.t(), keyword(), map()) :: keyword()
   def build_session_opts(cwd, opts, validated) do
     inherited_extra_tools = normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
-    child_extra_tools = inherited_extra_tools ++ maybe_build_ask_parent_tools(cwd, opts)
+
+    child_extra_tools =
+      StructuredOutput.tools(validated[:output_schema], validated[:schema_mode]) ++
+        Enum.reject(inherited_extra_tools, &(&1.name == "submit_result")) ++
+        maybe_build_ask_parent_tools(cwd, opts)
+
     {task_model, settings} = resolve_task_model(cwd, opts, validated)
     parent_session = Keyword.get(opts, :parent_session)
     parent_state = if is_pid(parent_session), do: inherited_session_state(opts)

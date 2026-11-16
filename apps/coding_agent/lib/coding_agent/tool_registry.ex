@@ -588,12 +588,22 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   @doc false
+  def trusted_terminal?(%AgentTool{trusted_terminal: true, execute: execute})
+      when is_function(execute, 4) do
+    :erlang.fun_info(execute, :module) == {:module, CodingAgent.Tools.Task.StructuredOutput}
+  end
+
+  def trusted_terminal?(_tool), do: false
+
+  @doc false
   def wrap_unmanaged_tool(%AgentTool{} = tool) do
     execute = tool.execute
+    trusted_terminal = trusted_terminal?(tool)
 
     %{
       tool
-      | execute: fn tool_call_id, params, signal, on_update ->
+      | trusted_terminal: trusted_terminal,
+        execute: fn tool_call_id, params, signal, on_update ->
           LemonCore.NativeProcess.unsupported!()
           execute.(tool_call_id, params, signal, on_update)
         end
@@ -1061,6 +1071,7 @@ defmodule CodingAgent.ToolRegistry do
 
   defp maybe_wrap_approval(tools, tool_policy, approval_context) do
     Enum.map(tools, fn {name, tool, source} ->
+      tool = if source == :builtin, do: tool, else: %{tool | trusted_terminal: false}
       original_execute = tool.execute
 
       execute = fn tool_call_id, params, signal, on_update ->

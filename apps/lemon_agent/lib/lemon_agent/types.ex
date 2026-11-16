@@ -80,9 +80,10 @@ defmodule LemonAgent.Types do
             content: [content_block()],
             details: any(),
             trust: LemonAi.Types.trust_level(),
-            is_error: boolean()
+            is_error: boolean(),
+            terminate_turn: boolean()
           }
-    defstruct content: [], details: nil, trust: :trusted, is_error: false
+    defstruct content: [], details: nil, trust: :trusted, is_error: false, terminate_turn: false
   end
 
   # ============================================================================
@@ -244,6 +245,7 @@ defmodule LemonAgent.Types do
             parameters: map(),
             label: String.t(),
             parallel_safe: boolean(),
+            trusted_terminal: boolean(),
             effect: :none | :idempotent | :external,
             timeout_ms: pos_integer() | :infinity | nil,
             execute: execute_fn() | nil,
@@ -254,6 +256,7 @@ defmodule LemonAgent.Types do
               parameters: %{},
               label: "",
               parallel_safe: false,
+              trusted_terminal: false,
               effect: :external,
               timeout_ms: nil,
               execute: nil,
@@ -339,9 +342,10 @@ defmodule LemonAgent.Types do
     @type t :: %__MODULE__{
             system_prompt: LemonAi.SystemPrompt.t(),
             messages: [LemonAgent.Types.agent_message()],
-            tools: [LemonAgent.Types.AgentTool.t()]
+            tools: [LemonAgent.Types.AgentTool.t()],
+            terminate_turn: boolean()
           }
-    defstruct system_prompt: nil, messages: [], tools: []
+    defstruct system_prompt: nil, messages: [], tools: [], terminate_turn: false
 
     @doc "Create a new empty agent context"
     def new(opts \\ []) do

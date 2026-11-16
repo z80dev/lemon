@@ -628,7 +628,34 @@ Pass `agent: "scout"`, `"reviewer"`, `"security-reviewer"`, `"sonic"`, or `"task
 
 A `seance` child consults a past session: pass `agent: "seance"` with `source_session` set to a session id or journal path in the current project's sessions directory. The source must belong to the caller's own conversation: the caller's session or one of its header ancestors (forks, task parents); a `task` child of the caller with the same principal; or a session whose last journaled run is recorded in `RunStore` under the caller's session key with the same principal. Unscoped callers (no session id/key), other conversations, other projects or profiles, symlinks, renamed journals and missing sessions are refused before launch; a caller fenced by an unreviewed workspace read may consult only its own lineage. At launch the source's active branch is forked into a fresh child journal next to it (`SessionManager.fork_file/3` with `fresh_budget: true`), so compaction summaries restore as on resume, the source file is never written, and the source's historical spend does not count against the consult (the fork's spend reports to the parent's budget scope). The fork is listed like other task child journals and is deleted if the child never produced an assistant message. The child keeps the source's model unless `model` is given, gets the read-only `read`, `grep`, `find`, `ls` tool set, receives no personal workspace memory, and does not accept `worktree`.
 
-Set `output_schema` on a task or batch child to require a JSON-only final response. Validated data appears as `structured_output` in completion, `poll`, `get`, `join` task rows, and live final progress; JSON `null` remains an explicitly present field. When the final response is invalid JSON or mismatches the schema, the same child session is re-prompted with the validation error up to two more times before the session ends. With the default `schema_mode: "strict"` a still-invalid response fails the task rather than silently accepting prose; `schema_mode: "permissive"` instead completes with the visible text and `details.structured_output_error` (no `structured_output`), so worktree merge-back still runs. Supported JSON Schema constraints include types/unions, objects (`properties`, `required`, `additionalProperties`), arrays (`items`, bounds, uniqueness), strings (length and Unicode regex `pattern`), numeric bounds/`multipleOf`, `enum`, `const`, and `allOf`/`anyOf`/`oneOf`/`not`. Boolean schemas are supported. References, formats, and unsupported keywords are rejected before launching work. Schemas are bounded to 64 KiB encoded JSON and 32 nesting levels; validation errors name the failed JSON path without echoing response values.
+Set `output_schema` on a task or batch child to require a structured result.
+With default `schema_mode: "strict"`, the child receives `submit_result` with
+the schema as its parameters. Validation errors return as tool errors in the
+same turn; the existing caller policy allows the first attempt plus two
+corrections. A third invalid submission fails the task. Acceptance ends the
+turn without another model call, and the validated value becomes
+`structured_output` in completion, `poll`, `get`, `join` and live final progress.
+JSON `null` remains an explicitly present field. A child ending without a
+submission receives at most two reminders in the same session, then fails even
+if its prose happens to be valid JSON. Completion tools remain available to
+read-only personas without granting workspace or external authority.
+
+`schema_mode: "permissive"` retains final-text JSON parsing and two correction
+prompts; exhaustion completes with visible text and
+`details.structured_output_error` (no `structured_output`), allowing worktree
+merge-back. Supported JSON Schema constraints include types/unions, objects
+(`properties`, `required`, `additionalProperties`), arrays (`items`, bounds,
+uniqueness), strings (length and Unicode regex `pattern`), numeric
+bounds/`multipleOf`, `enum`, `const`, and `allOf`/`anyOf`/`oneOf`/`not`.
+Boolean schemas are supported. References, formats and unsupported keywords
+are rejected before launch. Schemas are bounded to 64 KiB encoded JSON and 32
+nesting levels; errors name the failed JSON path without echoing response values.
+
+The deterministic paired fixtures in
+`test/coding_agent/tools/task/submit_result_test.exs` compare malformed text
+(prose, Markdown fences, bare JSON) with schema-valid tool arguments: the
+asserted malformed counts are 2/3 before and 0/3 after. This is a protocol
+fixture comparison, not a measured live-model pass-rate or latency claim.
 
 Task state uses a single-writer contract. `TaskStoreServer` serializes record changes, bounded event appends, explicit-join followup reservations/suppression, and terminalization. Competing completion/error callbacks are first-writer-wins, repeated terminal callbacks are idempotent, and late running/progress updates preserve the terminal state. `RunGraphServer` completes its DETS recovery before reporting startup readiness, then serializes live inserts, transitions, budget updates, and deletes so recovery cannot overwrite accepted live state.
 

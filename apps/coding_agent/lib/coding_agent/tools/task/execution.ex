@@ -345,6 +345,15 @@ defmodule CodingAgent.Tools.Task.Execution do
   end
 
   # Lets the runner re-prompt the same child session before it is stopped.
+  defp output_validator_opts(%{output_schema: schema, schema_mode: mode})
+       when not is_nil(schema) and mode != "permissive" do
+    [
+      validate_output: fn _text ->
+        {:error, "Call submit_result to submit the required result."}
+      end
+    ]
+  end
+
   defp output_validator_opts(%{output_schema: schema}) when not is_nil(schema) do
     [
       validate_output: fn text ->
@@ -359,6 +368,26 @@ defmodule CodingAgent.Tools.Task.Execution do
   defp output_validator_opts(_validated), do: []
 
   @doc false
+  def validate_output(
+        %LemonAgent.Types.AgentToolResult{details: %{structured_output: _}} = result,
+        %{schema_mode: mode}
+      )
+      when mode != "permissive",
+      do: result
+
+  def validate_output(
+        %LemonAgent.Types.AgentToolResult{details: %{submission_exhausted: true}} = result,
+        _validated
+      ),
+      do: %{result | is_error: true}
+
+  def validate_output(%LemonAgent.Types.AgentToolResult{} = result, %{
+        output_schema: schema,
+        schema_mode: mode
+      })
+      when not is_nil(schema) and mode != "permissive",
+      do: {:error, result.details[:structured_output_error] || "Task ended without submit_result"}
+
   def validate_output(%LemonAgent.Types.AgentToolResult{} = result, validated) do
     case validated[:output_schema] do
       nil ->
