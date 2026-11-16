@@ -420,17 +420,22 @@ defmodule LemonRouter.RestartCarryover do
   @doc """
   Submit every persisted carryover item in recorded order and delete settled
   records. Returns counts; a store failure leaves records for the next boot.
+
+  Options `:submit` and `:store` select the submission callback and Store instance;
+  the defaults use the live router and its ordinary Store. Isolated recovery
+  tests must keep both boundaries scoped to their own fixture.
   """
   @spec replay(keyword()) :: {:ok, map()} | {:error, term()}
   def replay(opts \\ []) do
     submit = Keyword.get(opts, :submit, &LemonRouter.submit/1)
+    store = Keyword.get(opts, :store, Store)
 
-    with {:ok, rows} <- Store.fetch_all(@table) do
+    with {:ok, rows} <- Store.fetch_all(store, @table) do
       summary =
         rows
         |> Enum.sort_by(fn {key, _record} -> key end)
         |> Enum.reduce(%{submitted: 0, rejected: 0, pending: 0}, fn {key, record}, acc ->
-          replay_record(key, record, submit, acc)
+          replay_record(store, key, record, submit, acc)
         end)
 
       if rows != [], do: Logger.warning("Restart carryover replayed: #{inspect(summary)}")
@@ -438,7 +443,7 @@ defmodule LemonRouter.RestartCarryover do
     end
   end
 
-  defp replay_record(key, %{items: items} = record, submit, acc) do
+  defp replay_record(store, key, %{items: items} = record, submit, acc) do
     {remaining, acc} =
       Enum.reduce(items, {[], acc}, fn item, {remaining, acc} ->
         case submit.(item.request) do
@@ -463,16 +468,20 @@ defmodule LemonRouter.RestartCarryover do
 
     _ =
       if remaining == [] or attempts >= @max_replay_attempts do
-        Store.delete(@table, key)
+        Store.delete(store, @table, key)
       else
-        Store.put(@table, key, %{record | items: Enum.reverse(remaining), attempts: attempts})
+        Store.put(store, @table, key, %{
+          record
+          | items: Enum.reverse(remaining),
+            attempts: attempts
+        })
       end
 
     acc
   end
 
-  defp replay_record(key, _malformed, _submit, acc) do
-    _ = Store.delete(@table, key)
+  defp replay_record(store, key, _malformed, _submit, acc) do
+    _ = Store.delete(store, @table, key)
     acc
   end
 
