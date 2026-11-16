@@ -55,7 +55,7 @@ defmodule CodingAgent.ProcessManager do
   defp exec_launch(identity, opts) do
     with {:ok, limits} <- background_limits(),
          :ok <- validate_launch(identity, opts),
-         {:ok, backend} <- LemonCore.TerminalBackends.Docker.Sandbox.backend(opts) do
+         {:ok, backend} <- TerminalBackends.validate(Keyword.get(opts, :backend, :local)) do
       opts =
         opts
         |> Keyword.put(:backend, backend)
@@ -279,7 +279,7 @@ defmodule CodingAgent.ProcessManager do
        Keyword.get(opts, :owner_pid), Keyword.get(opts, :restarted_from),
        Keyword.get(opts, :restart_generation, 0), Keyword.get(opts, :max_retained_bytes),
        Keyword.get(opts, :max_artifact_bytes), Keyword.get(opts, :max_owner_artifact_bytes),
-       Keyword.get(opts, :max_runtime_artifact_bytes), Keyword.get(opts, :tool_policy)}
+       Keyword.get(opts, :max_runtime_artifact_bytes)}
 
     :crypto.hash(:sha256, :erlang.term_to_binary(request))
   end
@@ -628,7 +628,6 @@ defmodule CodingAgent.ProcessManager do
                 cwd: Map.get(record, :cwd),
                 env: Map.get(record, :env, %{}) || %{},
                 backend: Map.get(record, :backend, :local),
-                tool_policy: Map.get(record, :tool_policy),
                 max_log_lines: Map.get(record, :max_log_lines, 1000),
                 timeout_ms: Keyword.get(opts, :timeout_ms, Map.get(record, :timeout_ms)),
                 owner: Map.get(record, :owner),

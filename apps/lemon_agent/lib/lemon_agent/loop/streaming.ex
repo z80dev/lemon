@@ -574,8 +574,10 @@ defmodule LemonAgent.Loop.Streaming do
          llm_context,
          options
        ) do
+    on_stream_rule = Map.get(config.hooks, :on_stream_rule)
+
     rules =
-      case config.stream_rules do
+      case Map.get(config.hooks, :stream_rules, []) do
         resolve when is_function(resolve, 0) -> resolve.()
         rules -> rules
       end
@@ -590,8 +592,8 @@ defmodule LemonAgent.Loop.Streaming do
           event = validate_terminal_arguments(event, partial, ctx.tools, raw_arguments)
           {matcher, matched_rule} = LemonAgent.StreamRules.feed(matcher, event)
 
-          if matched_rule != nil and is_function(config.on_stream_rule, 1) do
-            case config.on_stream_rule.(matched_rule) do
+          if matched_rule != nil and is_function(on_stream_rule, 1) do
+            case on_stream_rule.(matched_rule) do
               :ok -> AbortSignal.request_redirect(signal)
               {:error, :injection_limit} -> :ok
               {:error, reason} -> raise "stream rule injection failed: #{inspect(reason)}"
@@ -1032,7 +1034,7 @@ defmodule LemonAgent.Loop.Streaming do
 
   @doc false
   def record_system_prompt(context, config, stream) do
-    if config.emit_system_prompt,
+    if Map.get(config.hooks, :emit_system_prompt, false),
       do: EventStream.push!(stream, {:system_prompt, context.system_prompt})
 
     :ok

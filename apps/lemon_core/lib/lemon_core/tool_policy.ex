@@ -11,10 +11,12 @@ defmodule LemonCore.ToolPolicy do
   delegated work so a child request cannot remove a parent denial or approval
   requirement.
 
-  `sandbox: true` forces terminal execution into a network-isolated Docker
-  container whose sole egress is the credential broker. Intersection keeps this
-  restriction sticky for children. Other tools are not OS-sandboxed.
+  Legacy `sandbox` input (atom or string key) is accepted and ignored, with one
+  warning per parsing process. It never changes grants or restrictions. Tool
+  policy does not provide operating-system sandboxing.
   """
+
+  require Logger
 
   @type approval_mode :: :always | :dangerous | :never
   @type tier :: :read | :write | :exec
@@ -38,7 +40,6 @@ defmodule LemonCore.ToolPolicy do
           approvals: %{optional(String.t()) => approval_mode()},
           approval_mode: global_approval_mode(),
           no_reply: boolean(),
-          sandbox: boolean(),
           profile: profile() | nil,
           allowed_commands: :all | [String.t()],
           blocked_commands: [String.t()],
@@ -59,7 +60,7 @@ defmodule LemonCore.ToolPolicy do
     :blocked_commands,
     :max_file_size
   ]
-  defstruct @enforce_keys ++ [workspace_read_exempt: nil, sandbox: false]
+  defstruct @enforce_keys ++ [workspace_read_exempt: nil]
 
   @profiles [
     :full_access,
@@ -81,7 +82,6 @@ defmodule LemonCore.ToolPolicy do
     :approvals,
     :approval_mode,
     :no_reply,
-    :sandbox,
     :profile,
     :allowed_commands,
     :blocked_commands,
@@ -487,7 +487,6 @@ defmodule LemonCore.ToolPolicy do
         approvals: intersect_approvals(parent, requested),
         approval_mode: stricter_mode(parent.approval_mode, requested.approval_mode),
         no_reply: parent.no_reply or requested.no_reply,
-        sandbox: parent.sandbox or requested.sandbox,
         profile: :custom,
         allowed_commands: intersect_allow(parent.allowed_commands, requested.allowed_commands),
         blocked_commands: union(parent.blocked_commands, requested.blocked_commands),
@@ -527,7 +526,6 @@ defmodule LemonCore.ToolPolicy do
           end
         ) and
         (not parent.no_reply or child.no_reply) and
-        (not parent.sandbox or child.sandbox) and
         (is_nil(parent.max_file_size) or
            (is_integer(child.max_file_size) and child.max_file_size <= parent.max_file_size)) and
         workspace_read_exempt_subset?(child, parent)
@@ -670,7 +668,6 @@ defmodule LemonCore.ToolPolicy do
         Map.new(policy.approvals, fn {tool, mode} -> {tool, Atom.to_string(mode)} end),
       "approval_mode" => if(policy.approval_mode, do: Atom.to_string(policy.approval_mode)),
       "no_reply" => policy.no_reply,
-      "sandbox" => policy.sandbox,
       "profile" => if(policy.profile, do: Atom.to_string(policy.profile)),
       "allowed_commands" => encode_allow(policy.allowed_commands),
       "blocked_commands" => policy.blocked_commands,
@@ -723,6 +720,8 @@ defmodule LemonCore.ToolPolicy do
   def filter_no_reply(messages), do: Enum.split_with(messages, &(not message_no_reply?(&1)))
 
   defp parse_map(map) do
+    map = drop_legacy_sandbox(map)
+
     with :ok <- validate_known_keys(map),
          {:ok, fields} <- extract_fields(map),
          {:ok, base} <- parse_base_profile(fields),
@@ -739,7 +738,6 @@ defmodule LemonCore.ToolPolicy do
            parse_approvals(Map.get(fields, :approvals, base.approvals)),
          {:ok, mode} <- parse_global_mode(Map.get(fields, :approval_mode, base.approval_mode)),
          {:ok, no_reply} <- parse_boolean(Map.get(fields, :no_reply, base.no_reply), :no_reply),
-         {:ok, sandbox} <- parse_boolean(Map.get(fields, :sandbox, base.sandbox), :sandbox),
          {:ok, allowed_commands} <-
            parse_allow(
              Map.get(fields, :allowed_commands, base.allowed_commands),
@@ -767,7 +765,6 @@ defmodule LemonCore.ToolPolicy do
         approvals: merge_approvals(base.approvals, approvals),
         approval_mode: mode,
         no_reply: no_reply,
-        sandbox: sandbox,
         profile: base.profile,
         allowed_commands: intersect_allow(base.allowed_commands, allowed_commands),
         blocked_commands: union(base.blocked_commands, blocked_commands),
@@ -796,6 +793,20 @@ defmodule LemonCore.ToolPolicy do
     if within_entry_limit? and map_size(policy.approvals) <= @max_tool_entries,
       do: {:ok, policy},
       else: {:error, :tool_policy_too_large}
+  end
+
+  defp drop_legacy_sandbox(map) do
+    if Map.has_key?(map, :sandbox) or Map.has_key?(map, "sandbox") do
+      unless Process.put({__MODULE__, :sandbox_warning}, true) do
+        Logger.warning(
+          "Tool policy sandbox is unsupported and ignored; no operating-system sandbox is enforced"
+        )
+      end
+
+      Map.drop(map, [:sandbox, "sandbox"])
+    else
+      map
+    end
   end
 
   defp parse_base_profile(fields) do

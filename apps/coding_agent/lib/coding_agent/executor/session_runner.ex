@@ -34,7 +34,6 @@ defmodule CodingAgent.Executor.SessionRunner do
     :run_id,
     :session_key,
     :agent_id,
-    :mcp_session_id,
     :translator
   ]
 
@@ -95,9 +94,9 @@ defmodule CodingAgent.Executor.SessionRunner do
     def emit_completed(state, fields) do
       fields = attach_context_budget(state, fields)
       event = Event.completed(fields)
-      # A queued auto-resume may start as soon as the gateway sees completion.
-      # Save and stop this session first so it loads the complete prior turn.
-      state = Presentation.finalize_session(state, fields.ok == true)
+      # Retain only after the prior-turn mailbox/persistence barrier. A queued
+      # auto-resume can now prompt this same owner with the complete history.
+      state = Presentation.finalize_session(state, true)
 
       emit_event(state, event)
       state
@@ -121,6 +120,8 @@ defmodule CodingAgent.Executor.SessionRunner do
       send(state.sink_pid, {:engine_event, state.run_ref, event})
     end
   end
+
+  def start(opts), do: GenServer.start(__MODULE__, opts)
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
@@ -320,21 +321,8 @@ defmodule CodingAgent.Executor.SessionRunner do
          }}
 
       {:error, reason} ->
-        emit_resume_failure(state, reason)
         {:stop, reason}
     end
-  end
-
-  defp emit_resume_failure(state, reason) do
-    completed =
-      LemonGateway.Event.completed(%{
-        engine: @engine,
-        ok: false,
-        error: reason,
-        answer: ""
-      })
-
-    send(state.sink_pid, {:engine_event, state.run_ref, completed})
   end
 
   @impl true
@@ -416,14 +404,16 @@ defmodule CodingAgent.Executor.SessionRunner do
         terminal_event -> terminal_event
       end
 
-    {:noreply, %{state | translator: RunTranslator.handle_event(translator, event)}}
+    state = %{state | translator: RunTranslator.handle_event(translator, event)}
+    if state.translator.completed_emitted, do: {:stop, :normal, state}, else: {:noreply, state}
   end
 
   def handle_info({:session_event, _, _, _}, %{translator: %{completed_emitted: true}} = state),
     do: {:noreply, state}
 
   def handle_info({:session_event, session_id, event, _cursor}, %{session_id: session_id} = state) do
-    {:noreply, %{state | translator: RunTranslator.handle_event(state.translator, event)}}
+    state = %{state | translator: RunTranslator.handle_event(state.translator, event)}
+    if state.translator.completed_emitted, do: {:stop, :normal, state}, else: {:noreply, state}
   end
 
   def handle_info(
@@ -447,9 +437,8 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   @impl true
   def terminate(_reason, state) do
-    if state.mcp_session_id, do: LemonSkills.McpSession.close(state.mcp_session_id)
-
-    if is_pid(state.session) and Process.alive?(state.session) do
+    if not state.translator.completed_emitted and is_pid(state.session) and
+         Process.alive?(state.session) do
       CodingAgent.Session.abort(state.session)
       Presentation.finalize_session(state)
     end
@@ -459,19 +448,8 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   defp start_session(resume, session_opts, state, meta) do
     with :ok <- register_native_source_floor(session_opts, state.run_id),
-         :ok <- CodingAgent.Workspace.validate_profile_instructions(meta[:profile_instructions]),
-         {:ok, mcp_session_id} <- open_profile_mcp(meta, state.cwd) do
-      state = %{state | mcp_session_id: mcp_session_id}
-      session_opts = Keyword.put(session_opts, :mcp_session_id, mcp_session_id)
-
-      case Presentation.start_or_resume_session(resume, session_opts, state) do
-        {:ok, _session, _session_id, _state} = result ->
-          result
-
-        {:error, _reason} = error ->
-          if mcp_session_id, do: LemonSkills.McpSession.close(mcp_session_id)
-          error
-      end
+         :ok <- CodingAgent.Workspace.validate_profile_instructions(meta[:profile_instructions]) do
+      Presentation.start_or_resume_session(resume, session_opts, state)
     end
   end
 
@@ -498,21 +476,6 @@ defmodule CodingAgent.Executor.SessionRunner do
     end
   catch
     _, _ -> {:error, :native_source_floor_unavailable}
-  end
-
-  defp open_profile_mcp(meta, cwd) do
-    case Map.get(meta, :mcp_servers) do
-      servers when servers in [nil, []] ->
-        {:ok, nil}
-
-      servers ->
-        id = "profile-mcp-#{System.unique_integer([:positive, :monotonic])}"
-
-        case LemonSkills.McpSession.open_http(id, cwd, servers, self()) do
-          :ok -> {:ok, id}
-          {:error, reason} -> {:error, {:profile_mcp, reason}}
-        end
-    end
   end
 
   defp extra_tools(%ExecutionRequest{} = request, opts) do

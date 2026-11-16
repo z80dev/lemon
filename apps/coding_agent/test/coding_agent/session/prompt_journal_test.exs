@@ -140,10 +140,16 @@ defmodule CodingAgent.Session.PromptJournalTest do
     second = [%{text: "shared", directory_derived: true}]
     manager = SessionManager.new(dir) |> reply(first) |> reply(second)
     state = %{session_manager: manager, model: nil, settings_manager: nil}
-    agent = %{system_prompt: second, tools: [], messages: []}
+    messages = [
+      %LemonAi.Types.AssistantMessage{
+        content: [],
+        usage: %LemonAi.Types.Usage{input: 10, output: 1}
+      }
+    ]
+
+    agent = %{system_prompt: second, tools: [], messages: messages}
     live = ContextUsage.measure(state, agent)
-    profile = ContextUsage.overhead(state, agent)
-    assert {:ok, durable} = ContextUsage.measure_durable(state, [], profile)
+    assert {:ok, durable} = ContextUsage.measure_durable(state, messages)
     assert live.prompt_cache == durable.prompt_cache
     assert live.prompt_cache.status == :digest_changed
     assert live.used_tokens == durable.used_tokens

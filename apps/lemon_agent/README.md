@@ -159,6 +159,15 @@ assistant `:message_end`, including partial/synthetic completions. The prompt co
 from the actual response context rather than mutable queued state. This is an
 opt-in content-bearing notification: ordinary event subscribers never receive it.
 
+`LemonAgent.Types.AgentLoopConfig` now groups the former top-level
+`emit_system_prompt`, `stream_rules`, and `on_stream_rule` fields under `hooks`.
+Construct or update configs with `hooks: %{emit_system_prompt: true,
+stream_rules: rules, on_stream_rule: callback}` rather than those top-level fields.
+The default is `hooks: %{}`; omitted keys retain the previous defaults of `false`,
+`[]`, and `nil`, respectively. This is a breaking published-package struct API
+change. `Agent.start_link/1` options, including `system_prompt_observer`,
+`stream_rules`, and `on_stream_rule`, are unchanged.
+
 ### Cooperative Abort
 
 `LemonAgent.AbortSignal` uses an atomics reference with separate abort and redirect slots. Abort is monotonic; references are garbage collected when no longer retained, without explicit cleanup. Blocking waiters subscribe idempotently per process through the duplicate-key `LemonAgent.AbortSignal.Registry`, receive `{:lemon_abort, signal, :abort \| :redirect}` notifications, and unsubscribe when done. Tools check `AbortSignal.aborted?(signal)` in their execute functions. The loop checks before each LLM call, during retry backoff, while waiting for idle provider streams, and during tool execution. On cancellation, supervised tool workers get up to 250ms to observe the signal and finish resource cleanup before remaining workers are terminated. The abort signal remains set throughout and after this drain. Cancellation also stops provider streams, cancels tool timers, and leaves queued steering and follow-up messages available for the next run. Tools owning external processes must additionally clean them up on worker death. Incomplete assistant tool calls are removed from canceled model responses so continuing never sends an unpaired tool transcript.
