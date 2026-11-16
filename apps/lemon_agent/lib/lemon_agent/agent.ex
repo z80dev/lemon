@@ -419,7 +419,11 @@ defmodule LemonAgent.Agent do
       if Keyword.get(opts, :preempt, true) do
         queued
       else
-        wrapper = if Map.has_key?(queued, :message), do: queued, else: %{message: queued}
+        wrapper =
+          if is_map(queued) and Map.has_key?(queued, :message),
+            do: queued,
+            else: %{message: queued}
+
         Map.put(wrapper, :preempt, false)
       end
 

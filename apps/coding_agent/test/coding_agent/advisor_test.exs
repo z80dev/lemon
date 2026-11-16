@@ -157,14 +157,14 @@ defmodule CodingAgent.AdvisorTest do
     send(advisor, {:session_event, "session", {:turn_end, :first, []}, %{"seq" => 1}})
     assert_receive {:review, worker, ^advisor, token, [{:turn_end, :first, []}]}
     assert :ok = Advisor.advise(advisor, token, "critical", "  Fix   this ")
-    assert_receive {:primary_cast, {:steer, _}}
+    assert_receive {:primary_call, {:steer, "Advisor (critical): Fix this", false}}
     assert :suppressed = Advisor.advise(advisor, token, "info", "another")
     send(advisor, {:session_event, "session", {:turn_end, :second, []}, %{"seq" => 2}})
     send(worker, :finish)
     assert_receive {:review, worker2, ^advisor, token2, [{:turn_end, :second, []}]}
     assert :suppressed = Advisor.advise(advisor, token2, "warning", "fix this")
     assert :ok = Advisor.advise(advisor, token2, "warning", "different")
-    assert_receive {:primary_call, {:steer, %{preempt: false}}}
+    assert_receive {:primary_call, {:steer, %{preempt: false}, false}}
     send(worker2, :finish)
     GenServer.stop(advisor)
   end
