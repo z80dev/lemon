@@ -100,6 +100,8 @@ defmodule LemonGateway.WebhookTransportTest do
 
   setup do
     {:ok, _} = Application.ensure_all_started(:lemon_core)
+    local_sweep_owner? = Process.whereis(Idempotency) == nil
+    if local_sweep_owner?, do: start_supervised!(Idempotency)
 
     original_webhook_env = Application.get_env(:lemon_gateway, :webhook)
     original_override = Application.get_env(:lemon_gateway, LemonGateway.Config)
@@ -142,7 +144,7 @@ defmodule LemonGateway.WebhookTransportTest do
       clear_idempotency_table()
     end)
 
-    :ok
+    %{local_sweep_owner?: local_sweep_owner?}
   end
 
   test "ambiguous submission returns a non-retryable HTTP receipt without claiming acceptance" do
@@ -258,6 +260,38 @@ defmodule LemonGateway.WebhookTransportTest do
 
     assert response_payload.status == "reservation_pending"
     assert response_payload.retry_safe == true
+  end
+
+  test "contended idempotency admission preserves its unavailable error and durable fence" do
+    suffix = System.unique_integer([:positive])
+    integration_id = "contended-#{suffix}"
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", "contended-key-#{suffix}")
+
+    config = Config.config()
+
+    assert {:ok, %{store_key: store_key}} =
+             Idempotency.context(conn, %{}, integration_id, %{}, config)
+
+    stored = Store.get(Idempotency.table(), store_key)
+    lock = {{Idempotency, store_key}, self()}
+    assert :global.set_lock(lock, [node()], 0)
+
+    try do
+      contender =
+        Task.async(fn -> Idempotency.context(conn, %{}, integration_id, %{}, config) end)
+
+      assert {:error, :idempotency_unavailable} = Task.await(contender, 10_000)
+      assert Store.get(Idempotency.table(), store_key) == stored
+      refute_received {:webhook_submit, _}
+    after
+      :global.del_lock(lock, [node()])
+    end
+
+    assert {:duplicate, 503, %{status: "reservation_pending"}} =
+             Idempotency.context(conn, %{}, integration_id, %{}, config)
   end
 
   test "legacy raw-key receipts migrate without creating a second run" do
@@ -627,15 +661,18 @@ defmodule LemonGateway.WebhookTransportTest do
   end
 
   test "sweep list failure propagates and does not advance its schedule" do
-    sweep_key = {Idempotency, :last_response_sweep_ms}
-    original_sweep_ms = :persistent_term.get(sweep_key, 0)
+    sweep_key = :last_response_sweep_ms
+    original_sweep_ms = :ets.lookup_element(Idempotency, sweep_key, 2)
     original_store_state = :sys.get_state(Store)
 
-    :persistent_term.put(sweep_key, 0)
+    :ets.insert(Idempotency, {sweep_key, 0})
 
     on_exit(fn ->
       :sys.replace_state(Store, fn _state -> original_store_state end)
-      :persistent_term.put(sweep_key, original_sweep_ms)
+
+      if :ets.whereis(Idempotency) != :undefined do
+        :ets.insert(Idempotency, {sweep_key, original_sweep_ms})
+      end
     end)
 
     Enum.each(
@@ -655,7 +692,63 @@ defmodule LemonGateway.WebhookTransportTest do
 
     conn = Test.conn(:post, "/webhooks/no-idempotency", "")
     assert {:ok, nil} = Idempotency.context(conn, %{}, "no-idempotency", %{}, Config.config())
-    assert :persistent_term.get(sweep_key) == 0
+    assert :ets.lookup(Idempotency, sweep_key) == [{sweep_key, 0}]
+  end
+
+  test "sweep watermark belongs to supervision, not the HTTP caller" do
+    owner = Process.whereis(Idempotency)
+    assert :ets.info(Idempotency, :owner) == owner
+    :ets.insert(Idempotency, {:last_response_sweep_ms, 0})
+    :ok = :sys.suspend(owner)
+
+    try do
+      task =
+        Task.async(fn ->
+          receive do
+            :sweep ->
+              conn = Test.conn(:post, "/webhooks/no-idempotency", "")
+              Idempotency.context(conn, %{}, "no-idempotency", %{}, Config.config())
+          end
+        end)
+
+      monitor = Process.monitor(task.pid)
+      send(task.pid, :sweep)
+      assert Task.await(task, 1_000) == {:ok, nil}
+      assert_receive {:DOWN, ^monitor, :process, _, :normal}
+      assert :ets.info(Idempotency, :owner) == owner
+      assert :ets.lookup_element(Idempotency, :last_response_sweep_ms, 2) > 0
+    after
+      :sys.resume(owner)
+    end
+  end
+
+  test "restarting the sweep owner resets only volatile scheduling", context do
+    conn =
+      Test.conn(:post, "/webhooks/owner-restart", "")
+      |> Conn.put_req_header("idempotency-key", "owner-restart")
+
+    assert {:ok, reservation} =
+             Idempotency.context(conn, %{}, "owner-restart", %{}, Config.config())
+
+    entry = Store.get(Idempotency.table(), reservation.store_key)
+    assert is_map(entry)
+    old_table = :ets.whereis(Idempotency)
+    :ets.insert(Idempotency, {:last_response_sweep_ms, 123})
+
+    if context.local_sweep_owner? do
+      :ok = stop_supervised(Idempotency)
+      assert :ets.whereis(Idempotency) == :undefined
+      start_supervised!(Idempotency)
+    else
+      :ok = Supervisor.terminate_child(LemonGateway.IngressSupervisor, Idempotency)
+      assert :ets.whereis(Idempotency) == :undefined
+      {:ok, _} = Supervisor.restart_child(LemonGateway.IngressSupervisor, Idempotency)
+    end
+
+    assert :ets.whereis(Idempotency) != old_table
+    assert :ets.info(Idempotency, :owner) == Process.whereis(Idempotency)
+    assert :ets.lookup(Idempotency, :last_response_sweep_ms) == [{:last_response_sweep_ms, 0}]
+    assert Store.get(Idempotency.table(), reservation.store_key) == entry
   end
 
   test "an expired pending lease is reclaimed with the same durable run id" do

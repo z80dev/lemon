@@ -32,9 +32,18 @@ defmodule LemonCli.Setup.Gateway.AllowlistConfig do
   defp update(platform, chat_id, path, fun) do
     path = Path.expand(path)
 
-    :global.trans({{__MODULE__, path}, self()}, fn ->
-      update_locked(platform, chat_id, path, fun)
-    end)
+    :global.trans(
+      {{__MODULE__, path}, self()},
+      fn ->
+        update_locked(platform, chat_id, path, fun)
+      end,
+      [node()],
+      3
+    )
+    |> case do
+      :aborted -> {:error, :config_write_failed}
+      result -> result
+    end
   end
 
   defp update_locked(platform, chat_id, path, fun) do

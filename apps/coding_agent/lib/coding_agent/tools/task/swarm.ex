@@ -12,8 +12,6 @@ defmodule CodingAgent.Tools.Task.Swarm do
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
-  @poll_ms 20
-
   def execute(tool_call_id, params, signal, on_update, cwd, opts) do
     # Capture the caller's execution context once; the coordinator outlives this call
     # and must not re-read parent session state for each node.
@@ -83,6 +81,8 @@ defmodule CodingAgent.Tools.Task.Swarm do
       |> Keyword.put(:surface, context.surface)
 
     AbortSignal.subscribe(signal)
+    topics = ["run_graph:#{context.run_id}", LemonCore.Bus.run_topic(context.run_id)]
+    Enum.each(topics, &LemonCore.Bus.subscribe/1)
     state = %{pending: graph.nodes, active: %{}, completed: %{}}
 
     try do
@@ -91,6 +91,7 @@ defmodule CodingAgent.Tools.Task.Swarm do
       Graph.report(graph.nodes, completed)
     after
       AbortSignal.unsubscribe(signal)
+      Enum.each(topics, &LemonCore.Bus.unsubscribe/1)
       # Covers normal cancellation and unexpected scheduler failure. Control's
       # independent owner monitor also covers an untrappable coordinator death.
       Control.cancel_owned()
@@ -115,8 +116,9 @@ defmodule CodingAgent.Tools.Task.Swarm do
     else
       receive do
         {:lemon_abort, ^signal, _kind} -> :ok
-      after
-        @poll_ms -> :ok
+        {:task_state, :changed, _task_id} -> :ok
+        {:run_graph, :state_changed, _run_id} -> :ok
+        %LemonCore.Event{type: :run_graph_changed} -> :ok
       end
 
       schedule(graph, state, signal, update, cwd, opts)

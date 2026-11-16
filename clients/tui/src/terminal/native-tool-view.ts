@@ -956,7 +956,7 @@ const TODO_STATUS: Record<string, TodoItem["status"]> = {
 	pending: "pending",
 	in_progress: "in_progress",
 	completed: "completed",
-	blocked: "blocked",
+	blocked: "pending",
 	cancelled: "abandoned",
 	abandoned: "abandoned",
 };
@@ -969,9 +969,10 @@ function todoItems(value: unknown): (TodoItem & { phase?: string })[] {
 		const content = str(todo?.content);
 		if (!todo || !content) continue;
 		const status = TODO_STATUS[String(todo.status)] ?? "pending";
-		const blocker = status === "blocked" ? str(todo.blocker) : undefined;
+		const blocked = todo.status === "blocked";
+		const blocker = blocked ? str(todo.blocker) : undefined;
 		items.push({
-			content: blocker ? `${content} — blocked: ${blocker}` : content,
+			content: blocked ? `${content} — blocked${blocker ? `: ${blocker}` : ""}` : content,
 			status,
 			phase: str(todo.phase),
 		});

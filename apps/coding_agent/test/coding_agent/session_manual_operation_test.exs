@@ -117,7 +117,7 @@ defmodule CodingAgent.SessionManualOperationTest do
       assert {:error, :busy} = Session.summarize_current_branch(session)
       assert {:error, :busy} = Session.navigate_tree(session, :root)
       assert {:error, :busy} = Session.plan(session, :enter)
-      assert {:error, :already_streaming} = Session.prompt(session, "hello")
+      assert {:error, :busy} = Session.prompt(session, "hello")
       assert {:error, :already_streaming} = Session.reload_extensions(session)
 
       task_ref = Process.monitor(task_pid(session))
@@ -143,8 +143,8 @@ defmodule CodingAgent.SessionManualOperationTest do
 
       assert :ok = Task.await(caller, 5_000)
 
-      assert_receive {:session_event, _, {:compaction_start, %{reason: :manual}}}
-      assert_receive {:session_event, _, {:compaction_complete, %{summary: "manual summary"}}}
+      assert_receive {:session_event, _, {:compaction_start, %{reason: :manual}}, _}
+      assert_receive {:session_event, _, {:compaction_complete, %{summary: "manual summary"}}, _}
 
       state = Session.get_state(session)
       assert state.manual_operation == nil
@@ -245,7 +245,7 @@ defmodule CodingAgent.SessionManualOperationTest do
       assert_responsive(session)
       assert {:error, :busy} = Session.compact(session)
       assert {:error, :busy} = Session.summarize_current_branch(session)
-      assert {:error, :already_streaming} = Session.prompt(session, "hello")
+      assert {:error, :busy} = Session.prompt(session, "hello")
 
       task_ref = Process.monitor(task_pid(session))
       :ok = Session.abort(session)
@@ -266,7 +266,7 @@ defmodule CodingAgent.SessionManualOperationTest do
       send(provider, {:release, "branch summary"})
 
       assert :ok = Task.await(caller, 5_000)
-      assert_receive {:session_event, _, {:branch_summarized, %{summary: "branch summary"}}}
+      assert_receive {:session_event, _, {:branch_summarized, %{summary: "branch summary"}}, _}
 
       state = Session.get_state(session)
       assert state.manual_operation == nil

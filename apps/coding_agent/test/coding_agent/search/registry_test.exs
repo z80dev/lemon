@@ -18,6 +18,19 @@ defmodule CodingAgent.Search.RegistryTest do
     :ok
   end
 
+  test "reads before initialization do not publish persistent terms" do
+    key = {Registry, :providers}
+    :persistent_term.erase(key)
+
+    assert {:ok, %{source: "builtin"}} = Registry.fetch("brave")
+    assert Registry.list(capability: :search) != []
+    assert Registry.status().count > 0
+    refute Registry.initialized?()
+
+    assert :ok = Registry.init()
+    assert Registry.initialized?()
+  end
+
   test "lists bundled providers with capability metadata" do
     ids = Registry.list(capability: :search) |> Enum.map(& &1.id)
 

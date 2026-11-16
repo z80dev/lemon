@@ -124,13 +124,24 @@ defmodule CodingAgent.Session.ContextUsageTest do
     assert length(report.top) <= 10
     assert report.top == Enum.sort_by(report.top, & &1.tokens, :desc)
 
-    other =
-      Enum.find(
-        ContextUsage.overhead(state, agent).items,
-        &(&1.label == "Other system prompt text")
-      )
+    section_tokens =
+      Enum.map(state.prompt_sections, fn section ->
+        {section.category, Compaction.estimate_text_tokens(section.text)}
+      end)
 
-    assert other.category == :system_prompt
+    remainder =
+      Compaction.estimate_text_tokens(prompt) -
+        Enum.reduce(section_tokens, 0, fn {_category, count}, total -> count + total end)
+
+    assert remainder > 0
+
+    system_sections =
+      Enum.reduce(section_tokens, 0, fn
+        {:system_prompt, count}, total -> count + total
+        {_category, _count}, total -> total
+      end)
+
+    assert tokens(report, :system_prompt) == system_sections + remainder
     refute Enum.any?(labels, &String.contains?(&1, tmp_dir))
   end
 
@@ -259,62 +270,37 @@ defmodule CodingAgent.Session.ContextUsageTest do
     assert sum(report) == report.used_tokens
   end
 
-  test "compaction replaces message share with a summary in durable reads", %{
+  test "compaction invalidates durable accounting without retaining stale overhead", %{
     tmp_dir: tmp_dir,
     settings: settings
   } do
     manager =
-      transcript()
+      transcript(usage: %Usage{input: 9_000, output: 100})
       |> Enum.map(&CodingAgent.Session.MessageSerialization.serialize_message/1)
       |> Enum.reduce(SessionManager.new(tmp_dir), &SessionManager.append_message(&2, &1))
 
-    overhead = %{
-      items: [
-        %{category: :system_prompt, label: "Identity", tokens: 400},
-        %{category: :tool_definitions, label: "read", tokens: 300}
-      ],
-      measured_at: 1
-    }
-
     state = %{session_manager: manager, model: model(100_000), settings_manager: settings}
     messages = Persistence.restore_messages_from_session(manager)
-    assert {:ok, before} = ContextUsage.measure_durable(state, messages, overhead)
-
-    assert before.overhead == :snapshot
+    assert {:ok, before} = ContextUsage.measure_durable(state, messages)
+    assert before.overhead == :unavailable
     assert before.live == false
     assert sum(before) == before.used_tokens
-    assert tokens(before, :system_prompt) == 400
-    assert tokens(before, :summaries) == 0
-
-    kept_id = manager.leaf_id
+    assert tokens(before, :system_prompt) == 0
 
     compacted =
       SessionManager.append_compaction(
         manager,
         "Read lib/app.ex; nothing left.",
-        kept_id,
+        manager.leaf_id,
         before.used_tokens
       )
 
     state = %{state | session_manager: compacted}
     messages = Persistence.restore_messages_from_session(compacted)
-    assert {:ok, after_compaction} = ContextUsage.measure_durable(state, messages, overhead)
-
-    assert sum(after_compaction) == after_compaction.used_tokens
-    assert tokens(after_compaction, :summaries) > 0
-    assert tokens(after_compaction, :tool_results) == 0
-    assert after_compaction.used_tokens < before.used_tokens
-
-    message_ids = [:user_messages, :assistant_messages, :tool_results, :summaries]
-
-    share = fn report ->
-      Enum.sum(Enum.map(message_ids, &tokens(report, &1))) / report.used_tokens
-    end
-
-    assert share.(after_compaction) < share.(before)
+    assert {:error, :unavailable} = ContextUsage.measure_durable(state, messages)
   end
 
-  test "durable reads without a recorded overhead profile", %{
+  test "durable reads report unknown overhead honestly", %{
     tmp_dir: tmp_dir,
     settings: settings
   } do
@@ -324,10 +310,10 @@ defmodule CodingAgent.Session.ContextUsageTest do
       settings_manager: settings
     }
 
-    assert {:error, :unavailable} = ContextUsage.measure_durable(state, transcript(), nil)
+    assert {:error, :unavailable} = ContextUsage.measure_durable(state, transcript())
 
     measured = transcript(usage: %Usage{input: 9_000, output: 100})
-    assert {:ok, report} = ContextUsage.measure_durable(state, measured, nil)
+    assert {:ok, report} = ContextUsage.measure_durable(state, measured)
     assert report.overhead == :unavailable
     assert report.used_tokens == 9_100
     assert sum(report) == 9_100
@@ -336,36 +322,10 @@ defmodule CodingAgent.Session.ContextUsageTest do
 
     # Messages estimated above the reported total are scaled down, never negative overhead.
     small = transcript(usage: %Usage{input: 10, output: 1})
-    assert {:ok, scaled} = ContextUsage.measure_durable(state, small, nil)
+    assert {:ok, scaled} = ContextUsage.measure_durable(state, small)
     assert scaled.used_tokens == 11
     assert sum(scaled) == 11
     refute Enum.any?(scaled.categories, &(&1.id == :unattributed))
-  end
-
-  test "overhead profiles round-trip through the store and skip identical rewrites", %{
-    tmp_dir: tmp_dir,
-    settings: settings
-  } do
-    id = "context-usage-test-" <> LemonCore.Id.uuid()
-    on_exit(fn -> LemonCore.Store.delete(:session_context_overhead, id) end)
-
-    state = live_state(tmp_dir, settings, 100_000)
-
-    agent = %{
-      system_prompt: CodingAgent.SystemPrompt.join_sections(state.prompt_sections),
-      tools: tools()
-    }
-
-    profile = ContextUsage.overhead(state, agent)
-
-    assert ContextUsage.record_overhead(id, profile) == profile
-    stored = ContextUsage.stored_overhead(id)
-    assert stored.items == profile.items
-
-    LemonCore.Store.delete(:session_context_overhead, id)
-    assert ContextUsage.record_overhead(id, %{profile | measured_at: 2}, profile) == profile
-    assert ContextUsage.stored_overhead(id) == nil
-    assert ContextUsage.record_overhead(nil, profile) == nil
   end
 
   describe "session usage" do

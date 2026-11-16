@@ -11,6 +11,8 @@ defmodule CodingAgent.Session.PlanningTest do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{AssistantMessage, Model, ModelCost, TextContent, ToolCall}
 
+  defp intent_recorder(cwd), do: CodingAgent.Test.ToolIntentRecorder.new(cwd)
+
   setup do
     fixture = Path.join(System.tmp_dir!(), "lemon-plan-#{System.unique_integer([:positive])}")
     root = Path.join(fixture, "project")
@@ -112,10 +114,10 @@ defmodule CodingAgent.Session.PlanningTest do
     assert {:ok, %{"mode" => "plan", "path" => nil}} = Session.plan(session, :enter)
     assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
     assert :ok = Session.prompt(session, "Plan, then write the result.")
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
 
     assert_receive {:provider_context, 1, planning}
-    assert planning.system_prompt =~ "Plan mode is active"
+    assert LemonAi.SystemPrompt.text(planning.system_prompt) =~ "Plan mode is active"
     assert ~w(read write bash propose_plan) -- Enum.map(planning.tools, & &1.name) == []
 
     errors = tool_errors(Session.get_messages(session))
@@ -134,9 +136,9 @@ defmodule CodingAgent.Session.PlanningTest do
     refute String.starts_with?(plan_file, root <> "/")
 
     assert_receive {:provider_context, 5, executing}
-    refute executing.system_prompt =~ "Plan mode is active"
-    assert executing.system_prompt =~ "## Approved plan"
-    assert executing.system_prompt =~ plan_text
+    refute LemonAi.SystemPrompt.text(executing.system_prompt) =~ "Plan mode is active"
+    assert LemonAi.SystemPrompt.text(executing.system_prompt) =~ "## Approved plan"
+    assert LemonAi.SystemPrompt.text(executing.system_prompt) =~ plan_text
     assert File.read!(target) == "EXECUTED"
 
     assert {:ok, %{"mode" => "code", "path" => ^plan_file, "content" => ^plan_text}} =
@@ -191,7 +193,7 @@ defmodule CodingAgent.Session.PlanningTest do
     assert pending.invocation_context_key == "key-only-planning-client"
     assert pending.agent_id == "key-only-planner"
     LemonCore.ExecApprovals.resolve(approval_id, :deny)
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     assert {:ok, %{"mode" => "plan"}} = Session.plan(session)
   end
 
@@ -424,7 +426,7 @@ defmodule CodingAgent.Session.PlanningTest do
       assert File.read!(plan_file) == host_content
 
       assert :ok = Session.prompt(session, placeholder)
-      assert_receive {:session_event, ^native_id, {:agent_end, _}}, 5_000
+      assert_receive {:session_event, ^native_id, {:agent_end, _}, _}, 5_000
       bridge_content = secret <> "/bridge-#{revision}"
       assert_receive {:native_plan_hook, ^bridge_content}
       refute_received {:native_plan_hook, _}
@@ -470,7 +472,7 @@ defmodule CodingAgent.Session.PlanningTest do
     Session.subscribe(session)
     assert {:ok, _} = Session.plan(session, :enter)
     assert :ok = Session.prompt(session, "Plan it.")
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     assert_receive {:refinement_approval, request}
     assert request.agent_id == "refiner"
     assert request.invocation_context_key == "refinement-client"
@@ -508,7 +510,7 @@ defmodule CodingAgent.Session.PlanningTest do
     assert {:error, :busy} = Session.plan(session, :enter)
     assert {:ok, %{"mode" => "code"}} = Session.plan(session, :status)
     send(pid, :release)
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
   end
 
@@ -585,6 +587,7 @@ defmodule CodingAgent.Session.PlanningTest do
       gate: gate,
       cwd: root,
       session_pid: self(),
+      tool_intent_recorder: intent_recorder(root),
       session_id: manager.header.id,
       run_id: "run",
       session_key: "key",
@@ -675,6 +678,7 @@ defmodule CodingAgent.Session.PlanningTest do
       gate: Planning.new_gate(),
       cwd: root,
       session_pid: self(),
+      tool_intent_recorder: intent_recorder(root),
       session_id: manager.header.id,
       run_id: "run",
       session_key: "key",
@@ -898,8 +902,8 @@ defmodule CodingAgent.Session.PlanningTest do
       assert context.model_explicit
       assert :ok = Session.prompt(session, "Execute the plan.")
       assert_receive {:routing_provider_call, "gpt-4"}, 5_000
-      assert_receive {:session_event, _, {:agent_end, _}}, 5_000
-      refute_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 50
+      assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
+      refute_receive {:session_event, _, {:error, :model_routing_cost_cap, _}, _}, 50
     end
   end
 
@@ -935,7 +939,7 @@ defmodule CodingAgent.Session.PlanningTest do
     Session.subscribe(session)
     assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
     assert :ok = Session.prompt(session, "Plan and execute.")
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
     assert_receive {:planning_model, 1, "gpt-4o-mini"}
     assert_receive {:planning_model, 2, "gpt-4o-mini"}
     assert_receive {:planning_model, 3, "gpt-4"}
@@ -1255,7 +1259,7 @@ defmodule CodingAgent.Session.PlanningTest do
     context = SessionManager.build_session_context(Session.get_state(session).session_manager)
     refute context.model_explicit
     assert :ok = Session.prompt(session, "Continue.")
-    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}}, 5_000
+    assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}, _}, 5_000
     refute_receive {:routing_provider_call, _}, 50
   end
 
@@ -1391,7 +1395,7 @@ defmodule CodingAgent.Session.PlanningTest do
 
   # Plan-mode prompts name the plan directory; later (code-mode) calls do not.
   defp plan_dir(system_prompt) do
-    case Regex.run(~r/The plan directory `([^`]+)`/, system_prompt) do
+    case Regex.run(~r/The plan directory `([^`]+)`/, LemonAi.SystemPrompt.text(system_prompt)) do
       [_, dir] -> dir
       nil -> ""
     end

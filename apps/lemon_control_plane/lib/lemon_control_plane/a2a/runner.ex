@@ -13,9 +13,14 @@ defmodule LemonControlPlane.A2A.Runner do
 
   @spec start(binary(), binary(), binary(), binary()) :: {:ok, map()} | {:error, term()}
   def start(peer_id, context_id, text, message_id) do
-    case :global.trans({{__MODULE__, {:inbound_message, message_id}}, self()}, fn ->
-           start_once(peer_id, context_id, text, message_id)
-         end) do
+    case :global.trans(
+           {{__MODULE__, {:inbound_message, message_id}}, self()},
+           fn ->
+             start_once(peer_id, context_id, text, message_id)
+           end,
+           [node()],
+           3
+         ) do
       :aborted -> {:error, :replay_lock_unavailable}
       {:aborted, _reason} -> {:error, :replay_lock_unavailable}
       result -> result

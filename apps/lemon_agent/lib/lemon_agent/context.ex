@@ -86,7 +86,7 @@ defmodule LemonAgent.Context do
   ## Parameters
 
   - `messages` - List of agent messages
-  - `system_prompt` - Optional system prompt string
+  - `system_prompt` - Optional system prompt text or ordered blocks
 
   ## Returns
 
@@ -98,9 +98,9 @@ defmodule LemonAgent.Context do
       iex> LemonAgent.Context.estimate_size(messages, "Be helpful")
       20  # "Hello" + "World" + "Be helpful"
   """
-  @spec estimate_size([Types.agent_message()], String.t() | nil) :: non_neg_integer()
+  @spec estimate_size([Types.agent_message()], LemonAi.SystemPrompt.t()) :: non_neg_integer()
   def estimate_size(messages, system_prompt \\ nil) do
-    system_size = if system_prompt, do: String.length(system_prompt), else: 0
+    system_size = String.length(LemonAi.SystemPrompt.text(system_prompt))
 
     message_size =
       messages
@@ -154,7 +154,7 @@ defmodule LemonAgent.Context do
       iex> LemonAgent.Context.large_context?(huge_messages, "Prompt", threshold: 1000)
       true
   """
-  @spec large_context?([Types.agent_message()], String.t() | nil, keyword()) :: boolean()
+  @spec large_context?([Types.agent_message()], LemonAi.SystemPrompt.t(), keyword()) :: boolean()
   def large_context?(messages, system_prompt \\ nil, opts \\ []) do
     threshold = Keyword.get(opts, :threshold, @warning_threshold)
     estimate_size(messages, system_prompt) > threshold
@@ -186,7 +186,7 @@ defmodule LemonAgent.Context do
         :critical -> truncate_context()
       end
   """
-  @spec check_size([Types.agent_message()], String.t() | nil, keyword()) ::
+  @spec check_size([Types.agent_message()], LemonAi.SystemPrompt.t(), keyword()) ::
           :ok | :warning | :critical
   def check_size(messages, system_prompt \\ nil, opts \\ []) do
     warning_threshold = Keyword.get(opts, :warning_threshold, @warning_threshold)
@@ -356,7 +356,7 @@ defmodule LemonAgent.Context do
       #   by_role: %{user: 5, assistant: 4, tool_result: 1}
       # }
   """
-  @spec stats([Types.agent_message()], String.t() | nil) :: map()
+  @spec stats([Types.agent_message()], LemonAi.SystemPrompt.t()) :: map()
   def stats(messages, system_prompt \\ nil) do
     char_count = estimate_size(messages, system_prompt)
 
@@ -371,7 +371,7 @@ defmodule LemonAgent.Context do
       char_count: char_count,
       estimated_tokens: estimate_tokens(char_count),
       by_role: by_role,
-      system_prompt_chars: if(system_prompt, do: String.length(system_prompt), else: 0)
+      system_prompt_chars: String.length(LemonAi.SystemPrompt.text(system_prompt))
     }
   end
 

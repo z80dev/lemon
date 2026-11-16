@@ -501,7 +501,7 @@ defmodule LemonAgent.Workspace.KanbanStore do
   end
 
   defp with_board_lock(board_id, fun) do
-    case :global.trans({{__MODULE__, board_id}, self()}, fun, [node()]) do
+    case :global.trans({{__MODULE__, board_id}, self()}, fun, [node()], 3) do
       :aborted -> {:error, :lock_aborted}
       result -> result
     end

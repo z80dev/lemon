@@ -8,6 +8,9 @@ defmodule CodingAgent.ToolRegistry do
   2. WASM tools
   3. Extension tools
   4. MCP (Model Context Protocol) tools
+
+  Extension snapshots live in ETS owned by the supervised `CodingAgent.RuntimeTables`,
+  not the session or tool task that first discovers an extension.
   """
 
   require Logger
@@ -16,6 +19,7 @@ defmodule CodingAgent.ToolRegistry do
   alias CodingAgent.MutationLock
   alias CodingAgent.NodeTools
   alias CodingAgent.ToolExecutor
+  alias CodingAgent.ToolIntent
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools
   alias CodingAgent.Wasm.Policy, as: WasmPolicy
@@ -108,6 +112,9 @@ defmodule CodingAgent.ToolRegistry do
     {:tool_auth, Tools.ToolAuth},
     {:extensions_status, Tools.ExtensionsStatus}
   ]
+  @builtin_tool_name_strings Enum.map(@builtin_tools, fn {name, _module} ->
+                               Atom.to_string(name)
+                             end)
 
   @browser_tool_names @builtin_tools
                       |> Enum.map(&elem(&1, 0))
@@ -119,12 +126,17 @@ defmodule CodingAgent.ToolRegistry do
 
   An omitted or `nil` optional `:tool_policy` uses the full-access baseline.
   Supplied policies still pass through canonical validation and approval gating.
+
+  `:vendor_tool_dialects` (or `runtime.tools.vendor_dialects`) projects the final
+  inventory for `:model` through `CodingAgent.ToolDialects`. Session builders use
+  native tuples and project only after adding their plan gate.
   """
   @spec get_tools(String.t(), tool_opts()) :: [AgentTool.t()]
   def get_tools(cwd, opts \\ []) do
     cwd
     |> get_tool_tuples(opts)
     |> Enum.map(fn {_name, tool, _source} -> tool end)
+    |> CodingAgent.ToolDialects.apply(opts)
   end
 
   @doc """
@@ -242,6 +254,9 @@ defmodule CodingAgent.ToolRegistry do
     |> filter_policy_blocked(tool_policy)
     |> configure_bash(cwd, opts)
     |> NodeTools.wrap_tuples(Keyword.put(opts, :cwd, cwd))
+    |> Enum.map(fn {name, tool, source} ->
+      {name, ToolIntent.wrap(tool, opts), source}
+    end)
     |> maybe_wrap_approval(tool_policy, approval_ctx)
   end
 
@@ -249,8 +264,13 @@ defmodule CodingAgent.ToolRegistry do
     opts = Keyword.put(opts, :available_tools, Enum.map(tools, &elem(&1, 0)))
 
     Enum.map(tools, fn
-      {"bash", _tool, :builtin} -> {"bash", Tools.Bash.tool(cwd, opts), :builtin}
-      other -> other
+      {"bash", _tool, :builtin} ->
+        %AgentTool{} = tool = Tools.Bash.tool(cwd, opts)
+        tool = %{tool | effect: :external}
+        {"bash", maybe_serialize_mutation(tool, "bash", cwd, opts), :builtin}
+
+      other ->
+        other
     end)
   end
 
@@ -274,9 +294,14 @@ defmodule CodingAgent.ToolRegistry do
       )
     end
 
-    case Enum.find(tuples, fn {_name, tool, _source} -> tool.name == normalized_name end) do
+    tools =
+      tuples
+      |> Enum.map(fn {_name, tool, _source} -> tool end)
+      |> CodingAgent.ToolDialects.apply(opts)
+
+    case Enum.find(tools, &(&1.name == normalized_name)) do
       nil -> {:error, :not_found}
-      {_name, tool, _source} -> {:ok, tool}
+      tool -> {:ok, tool}
     end
   end
 
@@ -550,8 +575,13 @@ defmodule CodingAgent.ToolRegistry do
       tool_opts = if name in @browser_tool_names, do: browser_opts, else: opts
       if ownership == :unknown, do: LemonCore.NativeProcess.unsupported!()
       tool = module.tool(cwd, tool_opts)
-      tool = if ownership == :unknown, do: wrap_unmanaged_tool(tool), else: tool
+      %AgentTool{} = tool = if ownership == :unknown, do: wrap_unmanaged_tool(tool), else: tool
       name = Atom.to_string(name)
+
+      tool =
+        if name in @builtin_tool_name_strings,
+          do: %{tool | effect: ToolIntent.builtin_effect(name)},
+          else: tool
 
       {name, maybe_serialize_mutation(tool, name, cwd, tool_opts), :builtin}
     end)
@@ -862,64 +892,24 @@ defmodule CodingAgent.ToolRegistry do
     |> Enum.map(&Path.expand/1)
   end
 
-  defp ensure_cache_table do
-    case :ets.whereis(@extension_cache_table) do
-      :undefined ->
-        try do
-          :ets.new(@extension_cache_table, [:set, :public, :named_table])
-          :ok
-        rescue
-          ArgumentError -> :ok
-        end
-
-      _tid ->
-        :ok
-    end
-  end
-
   defp cache_insert(key, snapshot) do
-    with_cache_table(fn ->
-      :ets.insert(@extension_cache_table, {key, snapshot})
-    end)
+    :ets.insert(@extension_cache_table, {key, snapshot})
   end
 
   defp cache_delete_all do
-    with_cache_table(fn ->
-      :ets.delete_all_objects(@extension_cache_table)
-    end)
+    :ets.delete_all_objects(@extension_cache_table)
   end
 
   defp cache_delete(key) do
-    with_cache_table(fn ->
-      :ets.delete(@extension_cache_table, key)
-    end)
+    :ets.delete(@extension_cache_table, key)
   end
 
   defp cache_tab2list do
-    with_cache_table(fn ->
-      :ets.tab2list(@extension_cache_table)
-    end)
+    :ets.tab2list(@extension_cache_table)
   end
 
   defp cache_lookup(key) do
-    with_cache_table(fn ->
-      :ets.lookup(@extension_cache_table, key)
-    end)
-  end
-
-  defp with_cache_table(operation, attempts_left \\ 2) do
-    ensure_cache_table()
-
-    try do
-      operation.()
-    rescue
-      ArgumentError ->
-        if attempts_left > 1 do
-          with_cache_table(operation, attempts_left - 1)
-        else
-          reraise ArgumentError, __STACKTRACE__
-        end
-    end
+    :ets.lookup(@extension_cache_table, key)
   end
 
   @spec resolve_tools(

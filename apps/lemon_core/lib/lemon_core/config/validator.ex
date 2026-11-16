@@ -736,6 +736,7 @@ defmodule LemonCore.Config.Validator do
     errors
     |> validate_boolean(Map.get(tools, :auto_resize_images), "tools.auto_resize_images")
     |> validate_boolean(Map.get(tools, :intent_tracing), "tools.intent_tracing")
+    |> validate_boolean(Map.get(tools, :vendor_dialects), "tools.vendor_dialects")
     |> validate_tool_approval_mode(Map.get(tools, :approval_mode))
     |> validate_edit(Map.get(tools, :edit))
     |> Bash.validate(Map.get(tools, :bash))

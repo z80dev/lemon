@@ -785,18 +785,8 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp ensure_rate_limit_table do
-    case :ets.whereis(@rate_limit_table) do
-      :undefined ->
-        try do
-          :ets.new(@rate_limit_table, [:named_table, :set, :public, read_concurrency: true])
-          :ok
-        rescue
-          ArgumentError -> :ok
-        end
-
-      _ ->
-        :ok
-    end
+    CodingAgent.RuntimeTables.ensure_table(@rate_limit_table)
+    :ok
   end
 
   defp read_integer(params, keys, fallback) do

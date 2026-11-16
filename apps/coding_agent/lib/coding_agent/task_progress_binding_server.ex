@@ -4,15 +4,15 @@ defmodule CodingAgent.TaskProgressBindingServer do
 
   This store is intentionally ETS-only and transient. It maintains a primary
   binding table keyed by `child_run_id` plus a secondary index keyed by
-  `task_id`, and periodically prunes stale entries.
+  `task_id`, and uses `CodingAgent.DurableTable` for indexed expiration with
+  deliberately nil DETS backing.
   """
 
-  use GenServer
+  use CodingAgent.DurableTable
 
   @binding_table :coding_agent_task_progress_bindings
   @task_index_table :coding_agent_task_progress_binding_task_index
   @default_ttl_seconds 86_400
-  @cleanup_interval_seconds 300
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -63,18 +63,18 @@ defmodule CodingAgent.TaskProgressBindingServer do
   end
 
   @impl true
-  def init(_opts) do
-    Process.flag(:trap_exit, true)
+  def init(opts) do
+    state =
+      DurableTable.open(%{}, opts,
+        table: @binding_table,
+        access: :protected,
+        row_arity: 2,
+        timestamp: &__MODULE__.expiry_timestamp/1,
+        ttl_key: :task_progress_binding_store_ttl_seconds,
+        interval_key: :task_progress_binding_store_cleanup_interval_seconds
+      )
 
-    state = %{
-      binding_table: @binding_table,
-      task_index_table: @task_index_table,
-      initialized: false
-    }
-
-    state = ensure_state_tables(state)
-    _ = do_cleanup(startup_ttl_seconds())
-    schedule_cleanup()
+    :ets.new(@task_index_table, [:named_table, :protected, :set, read_concurrency: true])
     {:ok, state}
   end
 
@@ -86,7 +86,7 @@ defmodule CodingAgent.TaskProgressBindingServer do
 
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_state_tables(state)
-    {:reply, {:ok, do_cleanup(ttl_seconds)}, state}
+    {:reply, {:ok, DurableTable.cleanup(state, ttl_seconds, &delete_binding_row/1)}, state}
   end
 
   def handle_call({:put_binding, binding}, _from, state) do
@@ -105,7 +105,7 @@ defmodule CodingAgent.TaskProgressBindingServer do
           |> Map.put(:status, :completed)
           |> Map.put(:completed_at_ms, System.system_time(:millisecond))
 
-        :ets.insert(@binding_table, {child_run_id, updated_binding})
+        DurableTable.put(@binding_table, {child_run_id, updated_binding})
         {:reply, :ok, state}
 
       [] ->
@@ -120,7 +120,7 @@ defmodule CodingAgent.TaskProgressBindingServer do
 
   def handle_call(:clear, _from, state) do
     state = ensure_state_tables(state)
-    :ets.delete_all_objects(@binding_table)
+    DurableTable.clear(state)
     :ets.delete_all_objects(@task_index_table)
     {:reply, :ok, state}
   end
@@ -156,58 +156,20 @@ defmodule CodingAgent.TaskProgressBindingServer do
   def handle_info(:cleanup, state) do
     state = ensure_state_tables(state)
 
-    ttl_seconds =
-      Application.get_env(
-        :coding_agent,
-        :task_progress_binding_store_ttl_seconds,
-        @default_ttl_seconds
-      )
-
-    _deleted_count = do_cleanup(ttl_seconds)
-    schedule_cleanup()
+    DurableTable.periodic_cleanup(state, &delete_binding_row/1)
     {:noreply, state}
   end
 
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
-  defp ensure_state_tables(%{initialized: true} = state), do: state
+  defp ensure_state_tables(state), do: DurableTable.ensure(state)
 
-  defp ensure_state_tables(state) do
-    if :ets.whereis(@binding_table) == :undefined do
-      :ets.new(@binding_table, [:named_table, :protected, :set, read_concurrency: true])
+  @doc false
+  def expiry_timestamp({_id, binding}) do
+    case binding[:inserted_at_ms] do
+      timestamp when is_integer(timestamp) -> timestamp
+      _ -> nil
     end
-
-    if :ets.whereis(@task_index_table) == :undefined do
-      :ets.new(@task_index_table, [:named_table, :protected, :set, read_concurrency: true])
-    end
-
-    %{state | initialized: true}
-  end
-
-  defp do_cleanup(ttl_seconds) do
-    now_ms = System.system_time(:millisecond)
-
-    expired_child_run_ids =
-      :ets.foldl(
-        fn {child_run_id, binding}, acc ->
-          if expired?(binding, now_ms, ttl_seconds) do
-            [child_run_id | acc]
-          else
-            acc
-          end
-        end,
-        [],
-        @binding_table
-      )
-
-    Enum.each(expired_child_run_ids, &delete_binding_row/1)
-    length(expired_child_run_ids)
-  end
-
-  defp expired?(binding, now_ms, ttl_seconds) do
-    ttl_ms = ttl_seconds * 1_000
-    inserted_at_ms = Map.get(binding, :inserted_at_ms)
-    is_integer(inserted_at_ms) and now_ms - inserted_at_ms >= ttl_ms
   end
 
   defp upsert_binding(%{child_run_id: child_run_id, task_id: task_id} = binding) do
@@ -218,7 +180,7 @@ defmodule CodingAgent.TaskProgressBindingServer do
       [] -> :ok
     end
 
-    :ets.insert(@binding_table, {child_run_id, binding})
+    DurableTable.put(@binding_table, {child_run_id, binding})
     :ets.insert(@task_index_table, {task_id, child_run_id})
     :ok
   end
@@ -233,31 +195,12 @@ defmodule CodingAgent.TaskProgressBindingServer do
   defp delete_binding_row(child_run_id) do
     case :ets.lookup(@binding_table, child_run_id) do
       [{^child_run_id, binding}] ->
-        :ets.delete(@binding_table, child_run_id)
+        DurableTable.delete(@binding_table, child_run_id)
         :ets.delete(@task_index_table, binding.task_id)
         :ok
 
       [] ->
         :ok
     end
-  end
-
-  defp schedule_cleanup do
-    interval =
-      Application.get_env(
-        :coding_agent,
-        :task_progress_binding_store_cleanup_interval_seconds,
-        @cleanup_interval_seconds
-      )
-
-    Process.send_after(self(), :cleanup, interval * 1_000)
-  end
-
-  defp startup_ttl_seconds do
-    Application.get_env(
-      :coding_agent,
-      :task_progress_binding_store_ttl_seconds,
-      @default_ttl_seconds
-    )
   end
 end

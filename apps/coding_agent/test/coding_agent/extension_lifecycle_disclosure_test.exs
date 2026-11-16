@@ -78,7 +78,11 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [mcp_tools: inventory, tool_disclosure: [budget_tokens: 1]]
+          tool_opts: [
+            mcp_tools: inventory,
+            tool_disclosure: [budget_tokens: 1],
+            tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir)
+          ]
         )
 
       tool_names = names(result.tools)
@@ -159,7 +163,11 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
           cwd: tmp_dir,
           settings_manager: settings(),
           secret_obfuscator: obfuscator,
-          tool_opts: [mcp_tools: inventory, tool_disclosure: disclosure]
+          tool_opts: [
+            mcp_tools: inventory,
+            tool_disclosure: disclosure,
+            tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir)
+          ]
         ]
 
         initial = ExtensionLifecycle.initialize(opts)
@@ -381,7 +389,10 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
           ExtensionLifecycle.initialize(
             cwd: tmp_dir,
             settings_manager: settings(),
-            tool_opts: [tool_disclosure: [budget_tokens: 1, profile: profile]],
+            tool_opts: [
+              tool_disclosure: [budget_tokens: 1, profile: profile],
+              tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir)
+            ],
             custom_tools: [custom]
           )
 
@@ -503,25 +514,26 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         )
       ]
 
-      build = fn decision ->
+      build = fn decision, recorder_opts ->
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [
-            mcp_tools: inventory,
-            tool_disclosure: [budget_tokens: 1],
-            tool_policy: ToolPolicy.custom(require_approval: ["mcp_srv_danger"]),
-            approval_context: %{
-              run_id: "run-1",
-              session_id: "session-1",
-              session_key: "key-1",
-              approval_request_fun: decision
-            }
-          ]
+          tool_opts:
+            [
+              mcp_tools: inventory,
+              tool_disclosure: [budget_tokens: 1],
+              tool_policy: ToolPolicy.custom(require_approval: ["mcp_srv_danger"]),
+              approval_context: %{
+                run_id: "run-1",
+                session_id: "session-1",
+                session_key: "key-1",
+                approval_request_fun: decision
+              }
+            ] ++ recorder_opts
         )
       end
 
-      denied = build.(fn _ -> {:ok, :denied} end)
+      denied = build.(fn _ -> {:ok, :denied} end, [])
       invoke = find(denied.tools, "tool_invoke")
 
       result = invoke.execute.("id", %{"name" => "mcp_srv_danger", "args" => %{}}, nil, nil)
@@ -530,7 +542,11 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
       assert %AgentToolResult{} = result
       assert result.content |> hd() |> Map.get(:text) =~ "denied"
 
-      approved = build.(fn _ -> {:ok, :approved, :once} end)
+      approved =
+        build.(fn _ -> {:ok, :approved, :once} end,
+          tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir)
+        )
+
       approved_invoke = find(approved.tools, "tool_invoke")
 
       approved_result =

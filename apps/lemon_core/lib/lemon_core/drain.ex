@@ -42,7 +42,7 @@ defmodule LemonCore.Drain do
   """
   @callback drain(:ingress | :work, ctx()) :: :ok | {:ok, map()} | {:error, term()}
 
-  @phase_key {__MODULE__, :phase}
+  @phase_table __MODULE__
   @default_grace_ms 5_000
   @default_timeout_ms 20_000
   @ingress_budget_ms 5_000
@@ -61,7 +61,14 @@ defmodule LemonCore.Drain do
 
   @doc "Current runtime phase; `:serving` when the coordinator is not running."
   @spec phase() :: phase()
-  def phase, do: :persistent_term.get(@phase_key, :serving)
+  def phase do
+    case :ets.lookup(@phase_table, :phase) do
+      [{:phase, phase}] -> phase
+      [] -> :serving
+    end
+  rescue
+    ArgumentError -> :serving
+  end
 
   @spec draining?() :: boolean()
   def draining?, do: phase() != :serving
@@ -181,7 +188,8 @@ defmodule LemonCore.Drain do
 
   @impl true
   def init(_opts) do
-    :persistent_term.put(@phase_key, :serving)
+    :ets.new(@phase_table, [:named_table, :protected, :set, read_concurrency: true])
+    put_phase(:serving)
     {:ok, %{participants: %{}, phase: :serving, stop_requested?: false, last_report: nil}}
   end
 
@@ -230,12 +238,6 @@ defmodule LemonCore.Drain do
   def handle_call({:finished, report}, _from, state) do
     put_phase(:stopping)
     {:reply, :ok, %{state | phase: :stopping, last_report: report}}
-  end
-
-  @impl true
-  def terminate(_reason, _state) do
-    :persistent_term.erase(@phase_key)
-    :ok
   end
 
   # ── Phases ───────────────────────────────────────────────────────────────
@@ -308,7 +310,7 @@ defmodule LemonCore.Drain do
   defp ingress_ctx(ctx),
     do: %{ctx | deadline_ms: min(ctx.deadline_ms, ctx.started_at_ms + @ingress_budget_ms)}
 
-  defp put_phase(phase), do: :persistent_term.put(@phase_key, phase)
+  defp put_phase(phase), do: :ets.insert(@phase_table, {:phase, phase})
 
   defp safe_call(message) do
     GenServer.call(__MODULE__, message, 5_000)

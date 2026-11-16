@@ -2,7 +2,7 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
   # Swaps Req's global default plug and process environment.
   use ExUnit.Case, async: false
 
-  alias LemonAi.Auth.AnthropicOAuth
+  alias LemonAi.Auth.{AnthropicOAuth, Cache}
 
   @client_id "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
   @code_page "https://platform.claude.com/oauth/code/callback"
@@ -496,9 +496,7 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
   end
 
   describe "request fingerprint" do
-    test "uses the newer of the installed Claude Code version and the pinned floor", %{
-      home: home
-    } do
+    test "keeps the reviewed identity even when a newer Claude CLI is installed", %{home: home} do
       bin_dir = Path.join(home, "bin-#{System.unique_integer([:positive])}")
       File.mkdir_p!(bin_dir)
       script = Path.join(bin_dir, "claude-code")
@@ -506,13 +504,26 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
       File.chmod!(script, 0o755)
       System.put_env("PATH", bin_dir)
 
-      headers = Map.new(AnthropicOAuth.oauth_headers())
-      assert headers["user-agent"] == "claude-cli/9.9.9 (external, cli)"
+      task = Task.async(fn -> AnthropicOAuth.oauth_headers() end)
+      headers = task |> Task.await() |> Map.new()
+      monitor = Process.monitor(task.pid)
+      assert_receive {:DOWN, ^monitor, :process, _, _}
+
+      # A pinned identity needs no caller-dependent runtime cache. Retain the
+      # auth-cache migration's guarantee that no persistent_term entry is written.
+      assert Cache.get({AnthropicOAuth, :claude_code_version, bin_dir}) == nil
+      assert :persistent_term.get({AnthropicOAuth, :claude_code_version, bin_dir}, :missing) ==
+               :missing
+
+      assert headers["user-agent"] == "claude-cli/2.1.296 (external, cli)"
       assert headers["x-app"] == "cli"
 
       File.write!(script, "#!/bin/sh\necho \"1.0.0 (Claude Code)\"\n")
+      assert Map.new(AnthropicOAuth.oauth_headers()) == headers
       System.put_env("PATH", bin_dir <> ":")
-      assert {"user-agent", "claude-cli/2.1." <> _} = hd(AnthropicOAuth.oauth_headers())
+
+      assert {"user-agent", "claude-cli/2.1.296 (external, cli)"} =
+               hd(AnthropicOAuth.oauth_headers())
     end
   end
 

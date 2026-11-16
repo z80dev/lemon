@@ -1,6 +1,6 @@
 defmodule CodingAgent.ExecutionNode.PythonTest do
-  # Resolution caches the Command Line Tools probe in :persistent_term, which is
-  # global state; this module therefore runs serially and restores the cache.
+  # The supervised Command Line Tools cache is shared and restored by each test
+  # that mutates it.
   use ExUnit.Case, async: false
   alias CodingAgent.ExecutionNode.Python
 
@@ -99,21 +99,35 @@ defmodule CodingAgent.ExecutionNode.PythonTest do
              )
   end
 
-  test "the Command Line Tools probe runs once and is cached", %{tmp_dir: tmp_dir} do
+  test "the Command Line Tools probe is cached beyond the requesting task", %{tmp_dir: tmp_dir} do
     on_exit(&Python.forget_command_line_tools/0)
     Python.forget_command_line_tools()
+    parent = self()
 
     opts = [
       root: tmp_dir,
       find_executable: fn _ -> "/usr/bin/python3" end,
-      os_type: {:unix, :darwin}
+      os_type: {:unix, :darwin},
+      clt_probe: fn ->
+        send(parent, :clt_probed)
+        true
+      end
     ]
 
-    first = Python.executable(opts)
+    task = Task.async(fn -> Python.executable(opts) end)
+    monitor = Process.monitor(task.pid)
+    assert Task.await(task) == {:ok, "/usr/bin/python3"}
+    assert_receive {:DOWN, ^monitor, :process, _, _}
+    assert_received :clt_probed
 
-    assert first in [{:ok, "/usr/bin/python3"}, {:error, :not_installed}]
-    assert is_boolean(:persistent_term.get({Python, :command_line_tools?}))
-    assert Python.executable(opts) == first
+    assert Python.executable(opts) == {:ok, "/usr/bin/python3"}
+    refute_received :clt_probed
+    assert :persistent_term.get({Python, :command_line_tools?}, :missing) == :missing
+
+    assert :ok = Python.forget_command_line_tools()
+
+    assert Python.executable(Keyword.put(opts, :clt_probe, fn -> false end)) ==
+             {:error, :not_installed}
   end
 
   test "the capability probe exposes the same resolution" do

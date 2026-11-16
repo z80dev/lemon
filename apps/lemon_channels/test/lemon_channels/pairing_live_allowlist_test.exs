@@ -58,10 +58,6 @@ defmodule LemonChannels.PairingLiveAllowlistTest do
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
   setup do
-    unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
-      start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor})
-    end
-
     stop_transport()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
@@ -252,6 +248,10 @@ defmodule LemonChannels.PairingLiveAllowlistTest do
   end
 
   defp start_transport(overrides) do
+    unless Process.whereis(LemonChannels.Adapters.Telegram.AsyncSupervisor) do
+      start_supervised!({Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor})
+    end
+
     token = "pairing-test-#{System.pid()}-#{System.unique_integer([:positive])}"
 
     Transport.start_link(

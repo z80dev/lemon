@@ -83,6 +83,18 @@ defmodule LemonSkills.McpSourceLifecycleTest do
     %{source: source, script: script}
   end
 
+  test "only explicit boolean MCP readOnlyHint opts out of durable intent", %{source: source} do
+    tools = McpSource.discover_tools(source, [])
+    echo = Enum.find(tools, &(&1.label == "MCP echo"))
+    extra = Enum.find(tools, &(&1.label == "MCP extra0"))
+    assert echo.effect == :none
+    assert extra.effect == :external
+
+    for suffix <- ~w(resources_list resource_read prompts_list prompt_get) do
+      assert Enum.find(tools, &(&1.label == "MCP #{suffix}")).effect == :none
+    end
+  end
+
   test "each real list_changed notification refreshes tools, resources and prompts", %{
     source: source
   } do
@@ -192,7 +204,7 @@ defmodule LemonSkills.McpSourceLifecycleTest do
         reply(id, %{"protocolVersion" => "2024-11-05", "capabilities" => %{"tools" => %{}, "resources" => %{}, "prompts" => %{}}, "serverInfo" => %{"name" => "fixture", "version" => "1"}})
       end
       defp handle(%{"method" => "tools/list", "id" => id}) do
-        tools = [%{"name" => "echo", "inputSchema" => %{"type" => "object"}}] ++ Enum.map(items(), &%{"name" => "extra#{&1}", "inputSchema" => %{"type" => "object"}})
+        tools = [%{"name" => "echo", "annotations" => %{"readOnlyHint" => true}, "inputSchema" => %{"type" => "object"}}] ++ Enum.map(items(), &%{"name" => "extra#{&1}", "annotations" => %{"readOnlyHint" => "true"}, "inputSchema" => %{"type" => "object"}})
         reply(id, %{"tools" => tools})
       end
       defp handle(%{"method" => "resources/list", "id" => id}), do: reply(id, %{"resources" => Enum.map(items(), &%{"uri" => "fixture://#{&1}", "name" => "resource#{&1}"})})

@@ -3,6 +3,30 @@ defmodule LemonEvals.SupportTest do
 
   alias LemonEvals.Support
 
+  @tag :tmp_dir
+  test "standalone registry writes fail closed but eval helper records before execution", %{
+    tmp_dir: dir
+  } do
+    path = Path.join(dir, "result.txt")
+
+    {:ok, tool} =
+      CodingAgent.ToolRegistry.get_tool(dir, "write",
+        include_extensions: false,
+        include_mcp: false
+      )
+
+    result = tool.execute.("without-owner", %{"path" => path, "content" => "not run"}, nil, nil)
+    assert result.is_error
+    assert result.details.outcome == :not_started
+    refute File.exists?(path)
+
+    assert {:ok, _text} =
+             Support.run_tool(dir, "write", %{"path" => path, "content" => "recorded"})
+
+    assert File.read!(path) == "recorded"
+    refute Enum.any?(File.ls!(dir), &String.starts_with?(&1, "lemon_eval_intent_"))
+  end
+
   describe "run_contract/2" do
     test "normalizes errors and exceptions" do
       assert %{name: "error", status: :fail, details: %{reason: ":boom"}} =

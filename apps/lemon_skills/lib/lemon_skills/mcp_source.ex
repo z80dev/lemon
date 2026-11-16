@@ -1753,12 +1753,21 @@ defmodule LemonSkills.McpSource do
 
     {%AgentTool{
        name: tool_name,
+       effect: mcp_effect(mcp_tool),
        timeout_ms: :infinity,
        description: description,
        parameters: parameters,
        label: "MCP #{original_name}",
        execute: nil
      }, {:tool, original_name}}
+  end
+
+  defp mcp_effect(tool) do
+    annotations = map_value(tool, "annotations") || map_value(tool, :annotations) || %{}
+
+    if (map_value(annotations, "readOnlyHint") || map_value(annotations, :readOnlyHint)) === true,
+      do: :none,
+      else: :external
   end
 
   defp list_advertised_tools(_client_mod, _client, %{tools: false}), do: {:ok, []}
@@ -1858,6 +1867,7 @@ defmodule LemonSkills.McpSource do
 
     {%AgentTool{
        name: tool_name,
+       effect: :none,
        timeout_ms: :infinity,
        description: description,
        parameters: parameters,

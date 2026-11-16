@@ -18,17 +18,16 @@ defmodule CodingAgent.Session.PromptComposer do
   @doc """
   Compose system prompt from multiple sources:
 
-  1. Explicit system_prompt option (highest priority)
-  2. Prompt template content (if prompt_template option provided)
-  3. Lemon base prompt (coding rules + skills + workspace context)
-  4. CLAUDE.md/AGENTS.md/... content from ResourceLoader, then always-apply
-     rules and the rulebook index from `CodingAgent.Rules`
-  5. The session's environment block (`build_opts[:environment]`, captured once
-     per session by `CodingAgent.SystemPrompt.Environment`)
+  1. Explicit system_prompt option
+  2. Directory-independent Lemon guidance (identity, coding rules and runtime)
+  3. Directory-derived footer: prompt template, skills, contributed context,
+     workspace files, instruction files, rules and captured environment
 
-  The journaled orientation block goes last and stays byte-identical on resume.
-  Layout and instruction paths are deliberately stable session-start snapshots;
-  current date and Git status belong in user-turn context, not this prefix.
+  `prompt_blocks/2` preserves these exact bytes while separating the shared
+  static prefix from the directory-derived footer. Anthropic caches the prefix
+  before that footer; other providers concatenate the blocks.
+  Layout and instruction paths are stable session-start snapshots. Current date
+  and Git status belong in user-turn context, not this prefix.
 
   `build_opts` is merged into the map handed to `CodingAgent.SystemPrompt.build/2`.
   It carries the run identifiers used for skill-resolution tracing, and — from a
@@ -128,22 +127,71 @@ defmodule CodingAgent.Session.PromptComposer do
         |> Map.merge(build_opts)
       )
 
-    # Explicit > template > base > instructions > rules > journaled environment.
-    [
-      top_level(:system_prompt, "Custom system prompt", explicit_prompt),
-      top_level(:system_prompt, "Prompt template", template_content),
-      base_sections,
-      # Instructions (CLAUDE.md, AGENTS.md, ...) from global, ancestor and cwd scopes
-      ResourceLoader.instruction_sections(cwd),
-      # Rule files (.cursor/rules, .windsurf/rules, .lemon/rules, ...)
-      Rules.sections(cwd),
-      top_level(:system_prompt, "Environment", environment)
-    ]
-    |> List.flatten()
+    # Only these built-in sections are independent of cwd. Skill discovery,
+    # contributed context, templates and bootstrap files can all depend on it.
+    {static, directory} =
+      Enum.split_with(base_sections, fn section ->
+        section.label in [
+          "Identity",
+          "Coding guidance",
+          "Terminal visuals",
+          "Runtime",
+          "Memory guidance",
+          "Learning workflow"
+        ]
+      end)
+
+    static_sections =
+      [top_level(:system_prompt, "Custom system prompt", explicit_prompt), static]
+      |> List.flatten()
+      |> Enum.map(&Map.put(&1, :directory_derived, false))
+
+    directory_sections =
+      [
+        top_level(:system_prompt, "Prompt template", template_content),
+        directory,
+        ResourceLoader.instruction_sections(cwd),
+        Rules.sections(cwd),
+        top_level(:system_prompt, "Environment", environment)
+      ]
+      |> List.flatten()
+      |> Enum.map(&Map.put(&1, :directory_derived, true))
+
+    static_sections ++ directory_sections
   end
 
   defp top_level(_category, _label, text) when text in [nil, ""], do: []
   defp top_level(category, label, text), do: [%{category: category, label: label, text: text}]
+
+  @doc """
+  Convert the composed text to ordered provider blocks without changing bytes.
+
+  The shared static prefix is one block; directory-derived sections form the
+  footer. Separators belong to the footer, so the prefix is identical even when
+  directories have different instruction files. An unmatched prompt (for example
+  a planning overlay or restored legacy prompt) is conservatively directory-derived.
+  """
+  @spec prompt_blocks(String.t(), [map()]) :: [map()]
+  def prompt_blocks(prompt, sections) when is_binary(prompt) and is_list(sections) do
+    if CodingAgent.SystemPrompt.join_sections(sections) == prompt do
+      {static, directory} =
+        Enum.split_while(sections, &(Map.get(&1, :directory_derived, true) == false))
+
+      prefix = CodingAgent.SystemPrompt.join_sections(static)
+      footer = CodingAgent.SystemPrompt.join_sections(directory)
+
+      [
+        %{text: prefix, directory_derived: false},
+        %{
+          text: if(prefix != "" and footer != "", do: "\n\n" <> footer, else: footer),
+          directory_derived: true
+        }
+      ]
+      |> Enum.reject(&(&1.text == ""))
+    else
+      [%{text: prompt, directory_derived: true}]
+    end
+  end
 
   @doc """
   Classify native sessions without treating every session with a cwd as chat.

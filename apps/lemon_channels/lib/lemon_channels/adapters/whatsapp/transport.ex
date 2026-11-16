@@ -6,6 +6,8 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   Exhaustion, logout, and replacement stop this transient child with a shutdown
   reason and record redacted health; an operator must restart/re-link the adapter.
   The bridge never schedules a competing restart.
+  A command deadline terminates the old bridge group before replying
+  `:outcome_unknown` to every pending send; reconnect never replays those sends.
   """
 
   use GenServer
@@ -93,7 +95,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     account_id = cfg_get(cfg, :account_id, "default")
 
     :ok = Dedupe.init()
-    ModelPolicyAdapter.ensure_session_table()
 
     {:ok, port_server} =
       PortBridge.start_link({@bridge_spec, [config: cfg, notify_pid: self(), restart: :manual]})
@@ -265,14 +266,21 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   # ============================================================================
 
   def handle_info({:command_timeout, correlation_id}, state) do
-    case Map.pop(state.pending_commands, correlation_id) do
-      {nil, _} ->
+    case Map.fetch(state.pending_commands, correlation_id) do
+      :error ->
         {:noreply, state}
 
-      {{from, _timer_ref}, pending_commands} ->
+      {:ok, _pending} ->
         Logger.warning("whatsapp command timed out: correlation_id=#{correlation_id}")
-        GenServer.reply(from, {:error, :outcome_unknown})
-        {:noreply, %{state | pending_commands: pending_commands}}
+        :ok = PortBridge.stop_port(state.port_server)
+
+        Enum.each(state.pending_commands, fn {_id, {from, timer}} ->
+          Process.cancel_timer(timer)
+          GenServer.reply(from, {:error, :outcome_unknown})
+        end)
+
+        LemonChannels.Registry.record_status("whatsapp", {:error, :disconnected})
+        reconnect_or_stop(%{state | pending_commands: %{}, connected?: false, own_jid: nil})
     end
   end
 

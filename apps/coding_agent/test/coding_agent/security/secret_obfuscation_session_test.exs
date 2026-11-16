@@ -107,7 +107,7 @@ defmodule CodingAgent.Security.SecretObfuscationSessionTest do
 
     Session.subscribe(session)
     assert :ok = Session.prompt(session, "deploy with #{secret}")
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
 
     assert_receive {:provider_context, first}
     refute inspect(first, limit: :infinity, printable_limit: :infinity) =~ secret

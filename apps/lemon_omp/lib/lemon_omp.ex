@@ -758,15 +758,13 @@ defmodule LemonOmp do
         _ -> nil
       end
 
-    key = {__MODULE__, :version, executable, mtime}
-
-    case :persistent_term.get(key, :unknown) do
-      :unknown ->
+    case Manager.cached_version(executable, mtime) do
+      :miss ->
         value = probe_version(executable)
-        :persistent_term.put(key, value)
+        Manager.cache_version(executable, mtime, value)
         value
 
-      value ->
+      {:ok, value} ->
         value
     end
   end

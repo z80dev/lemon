@@ -1,15 +1,18 @@
 defmodule CodingAgent.Debug.Protocol do
   @moduledoc """
-  Debug Adapter Protocol wire framing.
+  Debug Adapter Protocol framing policy over `LemonCore.Rpc`.
 
-  DAP messages are JSON bodies preceded by a `Content-Length` header block
-  terminated by `\\r\\n\\r\\n` (the same framing as LSP). `decode/1` drains every
-  complete message from a buffer and returns the unparsed remainder. Bytes that
-  precede a header block (an adapter printing to stdout/stderr) are returned
-  separately as `junk` so callers can surface them as adapter diagnostics
-  instead of stalling on them.
+  Encoding uses the shared Content-Length framer. Decoding retains DAP's
+  tolerant stdout policy: malformed frames are skipped and non-protocol bytes
+  are returned as diagnostics rather than closing the adapter connection.
+  `decode/1` returns `{messages, remainder, junk}` for standalone consumers.
+  `Framing` adapts this policy to the shared RPC client's incremental buffer;
+  diagnostic bytes arrive as `{:rpc_message, {:diagnostic, bytes}}`.
   """
 
+  alias LemonCore.Rpc.ContentLength
+
+  @headers ["Content-Length:", "content-length:", "CONTENT-LENGTH:"]
   @header_terminator "\r\n\r\n"
   @max_body_bytes 64 * 1024 * 1024
   @max_header_bytes 4096
@@ -19,8 +22,8 @@ defmodule CodingAgent.Debug.Protocol do
   @doc "Encode one DAP message (request/response/event map) as framed iodata."
   @spec encode(map()) :: iodata()
   def encode(message) when is_map(message) do
-    body = Jason.encode!(message)
-    ["Content-Length: ", Integer.to_string(byte_size(body)), @header_terminator, body]
+    {:ok, framed} = ContentLength.encode(message)
+    framed
   end
 
   @doc """
@@ -37,7 +40,9 @@ defmodule CodingAgent.Debug.Protocol do
     case header_start(buffer) do
       nil ->
         # Keep a short tail in case it is the start of a split header.
-        keep = min(byte_size(buffer), byte_size("Content-Length:") - 1)
+        keep =
+          header_prefix_size(buffer, min(byte_size(buffer), byte_size("Content-Length:") - 1))
+
         {dropped, tail} = :erlang.split_binary(buffer, byte_size(buffer) - keep)
         finish(messages, tail, [junk, dropped])
 
@@ -69,10 +74,20 @@ defmodule CodingAgent.Debug.Protocol do
   end
 
   defp header_start(buffer) do
-    case :binary.match(buffer, ["Content-Length:", "content-length:", "CONTENT-LENGTH:"]) do
+    case :binary.match(buffer, @headers) do
       {index, _length} -> index
       :nomatch -> nil
     end
+  end
+
+  defp header_prefix_size(_buffer, 0), do: 0
+
+  defp header_prefix_size(buffer, size) do
+    tail = binary_part(buffer, byte_size(buffer) - size, size)
+
+    if Enum.any?(@headers, &(binary_part(&1, 0, size) == tail)),
+      do: size,
+      else: header_prefix_size(buffer, size - 1)
   end
 
   defp parse_frame(framed) do
@@ -117,5 +132,26 @@ defmodule CodingAgent.Debug.Protocol do
           nil
       end
     end)
+  end
+
+  defmodule Framing do
+    @moduledoc """
+    Shared RPC framing callbacks with DAP's tolerant diagnostic handling.
+
+    The RPC engine owns the incomplete buffer. Complete non-protocol text is
+    delivered to the debug client as a diagnostic, never as a DAP response.
+    """
+
+    @behaviour LemonCore.Rpc.Framing
+
+    @impl true
+    def encode(message), do: LemonCore.Rpc.ContentLength.encode(message)
+
+    @impl true
+    def decode(buffer) do
+      {messages, rest, junk} = CodingAgent.Debug.Protocol.decode(buffer)
+      messages = if junk == "", do: messages, else: [{:diagnostic, junk} | messages]
+      {:ok, messages, rest}
+    end
   end
 end

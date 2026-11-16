@@ -111,25 +111,10 @@ defmodule LemonCore.ConfigReloader.DigestTest do
   end
 
   describe "secrets_digest/1" do
-    test "produces digest from metadata list" do
-      metadata = [
-        %{owner: "default", name: "API_KEY", updated_at: 1000, version: "v1"},
-        %{owner: "default", name: "DB_PASS", updated_at: 2000, version: "v1"}
-      ]
-
-      digest = Digest.secrets_digest(metadata)
-
+    test "uses only the event revision" do
+      digest = Digest.secrets_digest(3)
       assert digest.source == :secrets
-      assert length(digest.fingerprints) == 2
-      # Should be sorted by {owner, name}
-      assert hd(digest.fingerprints).name == "API_KEY"
-    end
-
-    test "handles empty metadata list" do
-      digest = Digest.secrets_digest([])
-
-      assert digest.source == :secrets
-      assert digest.fingerprints == []
+      assert digest.fingerprints == [%{revision: 3}]
     end
   end
 
@@ -165,7 +150,7 @@ defmodule LemonCore.ConfigReloader.DigestTest do
       old = %{}
 
       new = %{
-        secrets: Digest.secrets_digest([%{owner: "x", name: "y", updated_at: 1, version: "v1"}])
+        secrets: Digest.secrets_digest(0)
       }
 
       {changed, _merged} = Digest.compare(old, new)
@@ -173,12 +158,9 @@ defmodule LemonCore.ConfigReloader.DigestTest do
       assert :secrets in changed
     end
 
-    test "detects secret metadata changes" do
-      meta1 = [%{owner: "default", name: "KEY", updated_at: 1000, version: "v1"}]
-      meta2 = [%{owner: "default", name: "KEY", updated_at: 2000, version: "v1"}]
-
-      old = %{secrets: Digest.secrets_digest(meta1)}
-      new = %{secrets: Digest.secrets_digest(meta2)}
+    test "detects secret event revision changes" do
+      old = %{secrets: Digest.secrets_digest(0)}
+      new = %{secrets: Digest.secrets_digest(1)}
 
       {changed, _merged} = Digest.compare(old, new)
 
@@ -188,12 +170,12 @@ defmodule LemonCore.ConfigReloader.DigestTest do
 
   describe "compare/2 with missing sources" do
     test "nil to something is a change" do
-      digest = Digest.secrets_digest([])
+      digest = Digest.secrets_digest(0)
       assert {[:secrets], _} = Digest.compare(%{}, %{secrets: digest})
     end
 
     test "something to nil is a change" do
-      digest = Digest.secrets_digest([])
+      digest = Digest.secrets_digest(0)
       assert {[:secrets], %{}} = Digest.compare(%{secrets: digest}, %{})
     end
 

@@ -175,8 +175,10 @@ defmodule LemonAi.Providers.Google do
 
     body =
       if context.system_prompt do
+        system_prompt = LemonAi.SystemPrompt.text(context.system_prompt)
+
         Map.put(body, "systemInstruction", %{
-          "parts" => [%{"text" => GoogleShared.sanitize_surrogates(context.system_prompt)}]
+          "parts" => [%{"text" => GoogleShared.sanitize_surrogates(system_prompt)}]
         })
       else
         body

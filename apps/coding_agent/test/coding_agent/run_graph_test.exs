@@ -281,7 +281,7 @@ defmodule CodingAgent.RunGraphTest do
     test "considers lost, killed and cancelled runs terminal" do
       for status <- [:lost, :killed, :cancelled] do
         run_id = RunGraph.new_run(%{type: :task})
-        :ets.insert(:coding_agent_run_graph, {run_id, %{id: run_id, status: status}})
+        RunGraph.insert_record(run_id, %{id: run_id, status: status})
 
         assert {:ok, %{mode: :wait_all, runs: [%{status: ^status}]}} =
                  RunGraph.await([run_id], :wait_all, 100)

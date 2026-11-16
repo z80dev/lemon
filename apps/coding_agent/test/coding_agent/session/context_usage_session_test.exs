@@ -20,7 +20,7 @@ defmodule CodingAgent.Session.ContextUsageSessionTest do
     %{root: root, key: key}
   end
 
-  test "live and durable reads report the same server accounting", %{root: root, key: key} do
+  test "parking keeps measured totals but does not store prompt overhead", %{root: root, key: key} do
     calls = :counters.new(1, [:atomics])
 
     reader = %AgentTool{
@@ -72,7 +72,7 @@ defmodule CodingAgent.Session.ContextUsageSessionTest do
 
     Session.subscribe(session)
     assert :ok = Session.prompt(session, "How many lines does a.txt have?")
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
 
     assert {:ok, live} = ControlPlaneProvider.session_context_usage(key, root)
     assert live.live
@@ -87,7 +87,7 @@ defmodule CodingAgent.Session.ContextUsageSessionTest do
     assert category(live, :context_files).tokens > 0
     assert Enum.any?(live.top, &(&1.label == "read result #3"))
 
-    # Sessions stop between turns: the save records the overhead profile.
+    # A parked session retains provider totals, not a second overhead snapshot.
     header_id = Session.get_state(session).session_manager.header.id
     assert :ok = Session.save(session)
     stop_supervised!(Session)
@@ -98,24 +98,20 @@ defmodule CodingAgent.Session.ContextUsageSessionTest do
       updated_at: System.system_time(:millisecond)
     })
 
-    on_exit(fn -> LemonCore.Store.delete(:session_context_overhead, header_id) end)
-
     assert {:ok, durable} = ControlPlaneProvider.session_context_usage(key, root)
     refute durable.live
-    assert durable.overhead == :snapshot
+    assert durable.overhead == :unavailable
     assert durable.used_tokens == live.used_tokens
     # The mock model is not registered, so its window is honestly unknown.
     assert durable.window == nil
     assert durable.percent_used == nil
     assert Enum.sum(Enum.map(durable.categories, & &1.tokens)) == durable.used_tokens
 
-    # The recorded profile itemises the same prompt sections and tools; scaled
-    # tokens differ only through the durable message estimate.
     for id <- [:system_prompt, :tool_definitions, :skills, :context_files] do
-      assert category(durable, id).items == category(live, id).items
+      assert category(durable, id).items == 0
     end
 
-    assert category(durable, :context_files).tokens > 0
+    assert category(durable, :unattributed).tokens > 0
 
     assert {:error, :session_not_found} =
              ControlPlaneProvider.session_context_usage("agent:unknown:main", root)
@@ -137,7 +133,7 @@ defmodule CodingAgent.Session.ContextUsageSessionTest do
       )
 
     header_id = Session.get_state(session).session_manager.header.id
-    assert {:ok, live} = ControlPlaneProvider.session_context_usage(key, root)
+    assert {:ok, _live} = ControlPlaneProvider.session_context_usage(key, root)
     assert :ok = Session.save(session)
 
     LemonCore.ChatStateStore.put(key, %LemonCore.ChatState{
@@ -146,8 +142,6 @@ defmodule CodingAgent.Session.ContextUsageSessionTest do
       updated_at: System.system_time(:millisecond)
     })
 
-    on_exit(fn -> LemonCore.Store.delete(:session_context_overhead, header_id) end)
-
     # Suspend the actual owner so retirement happens after the public query has
     # selected it, rather than relying on registry-unregistration timing.
     :ok = :sys.suspend(session)
@@ -155,11 +149,7 @@ defmodule CodingAgent.Session.ContextUsageSessionTest do
     await_context_read(session, System.monotonic_time(:millisecond) + 5_000)
     Process.exit(session, :kill)
 
-    assert {:ok, durable} = Task.await(reader, 5_000)
-    refute durable.live
-    assert durable.overhead == :snapshot
-    assert durable.used_tokens == live.used_tokens
-    assert Enum.sum(Enum.map(durable.categories, & &1.tokens)) == durable.used_tokens
+    assert {:error, :unavailable} = Task.await(reader, 5_000)
   end
 
   defp await_context_read(session, deadline) do

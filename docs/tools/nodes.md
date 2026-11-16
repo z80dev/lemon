@@ -77,9 +77,18 @@ Run the cell on the controller to reach several machines.
 | The node's capability ceiling (`--capabilities`) or the session policy excludes the tool | Error (`forbidden`); nothing ran. |
 | The connection drops, the routing deadline passes, or the call is cancelled while running | **Outcome unknown**: the call may have taken effect. It is never retried and never falls back to another machine. |
 | The result exceeds the transport limit | Error saying the call ran but its output was too large. |
+| Intent append or sync fails on the controller | Tool not run (`not_started`); no node invocation is sent. |
+| An effectful request lacks a controller intent marker bound to its call ID | Tool not run on the node; update older controllers before using an updated destination. |
 
 Cancelling a routed call aborts the tool on the node (killing a shell
 command's process tree) and stops it after a two-second grace.
+
+The controller, not the node, owns durable tool intent. It syncs a
+`lemon.tool_intent` before sending an effectful `node.invoke`, and sends only
+an invocation-bound acknowledgement marker alongside the request. Results do
+not add a per-result sync. Read-only calls add no intent sync.
+Nested tools in a node eval cell are covered by that parent eval's intent only
+while it is live; an interrupted parent reports all nested effects as unknown.
 
 ## Authority
 

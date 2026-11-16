@@ -11,6 +11,7 @@ defmodule LemonEvals.Support do
   """
 
   alias CodingAgent.Session.EventHandler
+  alias CodingAgent.SessionManager
   alias CodingAgent.ToolRegistry
   alias LemonAgent.Types.AgentToolResult
   alias LemonCore.Introspection
@@ -30,11 +31,43 @@ defmodule LemonEvals.Support do
     %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
 
+  @doc """
+  Execute one registry tool with an eval-only temporary durable intent journal.
+
+  The journal is outside the workspace and survives until execution returns;
+  it is then removed. Read-only tools never create it or add an intent sync.
+  Production sessions use their own persistent journal owner instead.
+  """
   def run_tool(cwd, tool_name, params) do
-    with {:ok, tool} <- ToolRegistry.get_tool(cwd, tool_name, include_extensions: false),
-         {:ok, result} <-
-           normalize_tool_result(tool.execute.("eval-#{tool_name}", params, nil, nil)) do
-      {:ok, flatten_text(result)}
+    scratch =
+      Path.join(System.tmp_dir!(), "lemon_eval_intent_#{System.unique_integer([:positive])}")
+
+    recorder = fn data ->
+      session =
+        SessionManager.new(cwd) |> SessionManager.persist(Path.join(scratch, "session.jsonl"))
+
+      try do
+        case SessionManager.record_tool_intent(session, data) do
+          {:ok, _session} -> :ok
+          {:error, reason, _session} -> {:error, reason}
+        end
+      after
+        SessionManager.close(session)
+      end
+    end
+
+    try do
+      with {:ok, tool} <-
+             ToolRegistry.get_tool(cwd, tool_name,
+               include_extensions: false,
+               tool_intent_recorder: recorder
+             ),
+           {:ok, result} <-
+             normalize_tool_result(tool.execute.("eval-#{tool_name}", params, nil, nil)) do
+        {:ok, flatten_text(result)}
+      end
+    after
+      File.rm_rf(scratch)
     end
   end
 
@@ -977,31 +1010,37 @@ defmodule LemonEvals.Support do
   def response_stream(%AssistantMessage{} = response) do
     {:ok, stream} = LemonAi.EventStream.start_link()
 
-    _ =
+    {:ok, task_pid} =
       Task.start(fn ->
-        _ = LemonAi.EventStream.push(stream, {:start, response})
+        try do
+          LemonAi.EventStream.push!(stream, {:start, response})
 
-        response.content
-        |> Enum.with_index()
-        |> Enum.each(fn {content, index} ->
-          case content do
-            %TextContent{text: text} ->
-              _ = LemonAi.EventStream.push(stream, {:text_start, index, response})
-              _ = LemonAi.EventStream.push(stream, {:text_delta, index, text, response})
-              LemonAi.EventStream.push(stream, {:text_end, index, text, response})
+          response.content
+          |> Enum.with_index()
+          |> Enum.each(fn {content, index} ->
+            case content do
+              %TextContent{text: text} ->
+                LemonAi.EventStream.push!(stream, {:text_start, index, response})
+                LemonAi.EventStream.push!(stream, {:text_delta, index, text, response})
+                LemonAi.EventStream.push!(stream, {:text_end, index, text, response})
 
-            %ToolCall{} = tool_call ->
-              _ = LemonAi.EventStream.push(stream, {:tool_call_start, index, response})
-              LemonAi.EventStream.push(stream, {:tool_call_end, index, tool_call, response})
+              %ToolCall{} = tool_call ->
+                LemonAi.EventStream.push!(stream, {:tool_call_start, index, response})
+                LemonAi.EventStream.push!(stream, {:tool_call_end, index, tool_call, response})
 
-            _ ->
-              :ok
-          end
-        end)
+              _ ->
+                :ok
+            end
+          end)
 
-        _ = LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
-        LemonAi.EventStream.complete(stream, response)
+          LemonAi.EventStream.complete(stream, response)
+        catch
+          :throw, {:event_stream_push_failed, _reason} ->
+            :ok
+        end
       end)
+
+    LemonAi.EventStream.attach_task(stream, task_pid)
 
     stream
   end

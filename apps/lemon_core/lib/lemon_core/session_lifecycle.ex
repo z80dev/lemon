@@ -318,6 +318,18 @@ defmodule LemonCore.SessionLifecycle do
     end
   end
 
+  @doc """
+  Preview or execute native journal maintenance through the registered runtime.
+
+  `:older_than_ms` is an exact positive millisecond cutoff; `:dry_run` defaults
+  to true. Execution requires the preview's single-use `:confirm_token`.
+  Maintenance archives cold inactive journals, retaining their artifacts, and
+  sweeps only managed orphan spill directories. Reports contain bounded hashes,
+  never filesystem paths. Failed or unknown mutations must not be retried.
+  """
+  @spec maintenance(keyword()) :: {:ok, map()} | {:error, term()}
+  def maintenance(opts) when is_list(opts), do: LemonCore.SessionMaintenance.maintenance(opts)
+
   @doc "Delete core-owned state and release only the deleted session incarnation's identity."
   @spec delete(String.t()) :: {:ok, map()} | {:error, term()}
   def delete(session_key) when is_binary(session_key), do: delete(session_key, [])

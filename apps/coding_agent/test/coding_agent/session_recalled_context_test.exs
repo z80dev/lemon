@@ -247,14 +247,14 @@ defmodule CodingAgent.SessionRecalledContextTest do
     :ok = Session.prompt(session, "first")
     {messages, _} = await_sent()
     refute last_user_content(messages) =~ "Learning reminder"
-    assert_receive {:session_event, _, {:agent_end, _}}, 2_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 2_000
 
     :ok = Session.prompt(session, "second")
     {messages, system_prompt} = await_sent()
     assert last_user_content(messages) =~ "Learning reminder"
     assert last_user_content(messages) =~ "durable facts/preferences with remember"
-    refute system_prompt =~ "Learning reminder"
-    assert_receive {:session_event, _, {:agent_end, _}}, 2_000
+    refute LemonAi.SystemPrompt.text(system_prompt) =~ "Learning reminder"
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 2_000
     assert transcript_contents(session) == ["first", "second"]
 
     assert session
@@ -272,6 +272,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       :ok = Session.prompt(session, "why is the build slow?")
       {messages, system_prompt} = await_sent()
+      system_prompt = LemonAi.SystemPrompt.text(system_prompt)
 
       content = last_user_content(messages)
 
@@ -297,7 +298,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
       await_sent()
 
       assert_receive {:session_event, _id,
-                      {:message_end, %UserMessage{content: "why is the build slow?"}}},
+                      {:message_end, %UserMessage{content: "why is the build slow?"}}, _},
                      2_000
 
       user_contents =
@@ -386,6 +387,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
       eventually_idle(session)
 
       assert first_system_prompt == second_system_prompt
+      first_system_prompt = LemonAi.SystemPrompt.text(first_system_prompt)
       refute first_system_prompt =~ "<relevant-skills>"
       assert first_system_prompt =~ "<key>cache-probe</key>"
       refute "cache-probe" in Session.get_state(session).relevant_skill_keys
@@ -411,7 +413,8 @@ defmodule CodingAgent.SessionRecalledContextTest do
       # The model gets the typed block followed by current environment.
       assert_environment_only(messages, @typed_block)
 
-      assert_receive {:session_event, _id, {:message_end, %UserMessage{content: @typed_block}}},
+      assert_receive {:session_event, _id, {:message_end, %UserMessage{content: @typed_block}},
+                      _},
                      2_000
 
       # The visible and persisted records keep exactly the user's pasted block.
@@ -441,7 +444,8 @@ defmodule CodingAgent.SessionRecalledContextTest do
       assert String.starts_with?(sent, @typed_block)
       assert sent =~ @volatile.body
 
-      assert_receive {:session_event, _id, {:message_end, %UserMessage{content: @typed_block}}},
+      assert_receive {:session_event, _id, {:message_end, %UserMessage{content: @typed_block}},
+                      _},
                      2_000
 
       user_contents =
@@ -462,6 +466,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       :ok = Session.prompt(session, "why is the build slow?")
       {messages, system_prompt} = await_sent()
+      system_prompt = LemonAi.SystemPrompt.text(system_prompt)
 
       assert_environment_only(messages, "why is the build slow?")
       assert system_prompt =~ @stable.body
@@ -553,7 +558,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       assert content =~ "the build finished"
       assert content =~ @volatile.body
-      refute system_prompt =~ @volatile.body
+      refute LemonAi.SystemPrompt.text(system_prompt) =~ @volatile.body
 
       # This site builds its message before it refreshes and persists that
       # message directly, so it is the site where an attachment would most
@@ -759,7 +764,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
     await_sent()
 
     assert_receive {:session_event, _id,
-                    {:message_end, %UserMessage{content: "why is the build slow?"}}},
+                    {:message_end, %UserMessage{content: "why is the build slow?"}}, _},
                    2_000
 
     # The runtime agent state retains the attachment. Real provider/loop errors
@@ -771,9 +776,9 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
     send(session, {:agent_event, {:error, :boom, partial}})
 
-    assert_receive {:session_event, _id, {:error, :boom, broadcast}}, 2_000
+    assert_receive {:session_event, _id, {:error, :boom, broadcast}, _}, 2_000
     refute Enum.any?(broadcast.messages, &(inspect(&1) =~ @volatile.body))
-    refute_receive {:session_event, _id, {:stream_resync, _}}
+    refute_receive {:session_event, _id, {:stream_resync, _}, _}
 
     assert Enum.any?(
              broadcast.messages,

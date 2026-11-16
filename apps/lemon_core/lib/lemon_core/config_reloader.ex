@@ -5,6 +5,10 @@ defmodule LemonCore.ConfigReloader do
   Detects config changes from files, environment, and secrets, reloads the
   canonical config, computes a redacted diff, and broadcasts update events
   on `LemonCore.Bus`.
+  Secret changes are driven by `:secret_changed` events on the system Bus.
+  Their process-local revision supplies the secrets digest without enumerating
+  the secret store. Subscription precedes the initial snapshot so mutations
+  during startup are queued for reload.
 
   ## Reload Pipeline
 
@@ -104,6 +108,7 @@ defmodule LemonCore.ConfigReloader do
   def init(opts) do
     cwd = Keyword.get(opts, :cwd)
     initial_snapshot = Keyword.get(opts, :initial_snapshot, &default_initial_snapshot/1)
+    :ok = LemonCore.Bus.subscribe("system")
 
     state = %{
       cwd: cwd,
@@ -113,6 +118,7 @@ defmodule LemonCore.ConfigReloader do
       last_error: nil,
       reload_count: 0,
       lock: false,
+      secrets_revision: 0,
       initial_snapshot: initial_snapshot
     }
 
@@ -163,6 +169,15 @@ defmodule LemonCore.ConfigReloader do
     end
   end
 
+  @impl true
+  def handle_info(%LemonCore.Event{type: :secret_changed}, state) do
+    state = %{state | secrets_revision: state.secrets_revision + 1}
+    {_result, state} = do_reload([sources: [:secrets], reason: :secrets_event], state)
+    {:noreply, state}
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
+
   # ---------------------------------------------------------------------------
   # Core reload logic
   # ---------------------------------------------------------------------------
@@ -186,7 +201,7 @@ defmodule LemonCore.ConfigReloader do
 
     try do
       # 1. Compute current digests
-      new_digests = compute_digests(sources, cwd)
+      new_digests = compute_digests(sources, cwd, state.secrets_revision)
 
       # 2. Determine changed sources
       {changed_sources, merged_digests} =
@@ -334,9 +349,13 @@ defmodule LemonCore.ConfigReloader do
   # Digest computation
   # ---------------------------------------------------------------------------
 
-  defp compute_digests(sources, cwd) do
+  defp compute_digests(sources, cwd, secrets_revision) do
     Enum.reduce(sources, %{}, fn source, acc ->
-      digest = compute_source_digest(source, cwd)
+      digest =
+        if source == :secrets,
+          do: Digest.secrets_digest(secrets_revision),
+          else: compute_source_digest(source, cwd)
+
       Map.put(acc, source, digest)
     end)
   end
@@ -349,11 +368,6 @@ defmodule LemonCore.ConfigReloader do
   defp compute_source_digest(:env, cwd) do
     dotenv_path = LemonCore.Dotenv.path_for(dotenv_dir(cwd))
     Digest.env_digest(dotenv_path)
-  end
-
-  defp compute_source_digest(:secrets, _cwd) do
-    {:ok, metadata_list} = LemonCore.Secrets.list()
-    Digest.secrets_digest(metadata_list)
   end
 
   # ---------------------------------------------------------------------------
@@ -409,7 +423,7 @@ defmodule LemonCore.ConfigReloader do
 
   defp default_initial_snapshot(state) do
     config = LemonCore.Config.load(state.cwd)
-    digests = compute_digests(@default_sources, state.cwd)
+    digests = compute_digests(@default_sources, state.cwd, state.secrets_revision)
 
     %{state | last_snapshot: config, digests: digests}
   end

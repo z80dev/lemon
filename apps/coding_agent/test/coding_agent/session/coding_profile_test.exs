@@ -106,7 +106,7 @@ defmodule CodingAgent.Session.CodingProfileTest do
     stream = LemonAgent.Test.Mocks.mock_stream_fn_single(response)
 
     stream_fn = fn model, context, options ->
-      send(parent, {:request_prompt, context.system_prompt})
+      send(parent, {:request_prompt, LemonAi.SystemPrompt.text(context.system_prompt)})
       stream.(model, context, options)
     end
 

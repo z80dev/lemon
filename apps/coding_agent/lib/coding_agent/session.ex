@@ -15,6 +15,19 @@ defmodule CodingAgent.Session do
   idle prompt also cancels any background auto-compaction snapshot before
   dispatch, so stale compaction cannot delay or mutate the new turn.
 
+  Prompt admission and completion share the session's GenServer state:
+  `prompt/3` marks the turn streaming before replying `:ok`, including deferred
+  dispatch, and rejects another prompt with `{:error, :busy}`. `streaming?/1`
+  reads only that boolean, without copying the transcript or querying the agent.
+  Calls made after a terminal event wait for its session handler to finish, so
+  callers can start the next turn without polling or retrying admission.
+
+  Accepted steering and redirects notify internal waiters with
+  `{:session_coord, :steering_changed}` on the Bus topic
+  `"session_coord:" <> List.to_string(:erlang.pid_to_list(session_pid))`, after
+  the agent acknowledges queue admission. Waiters subscribe before checking
+  their interruption predicate; the notification is a wake-up, not queue data.
+
   ## Non-blocking model calls
 
   The session process never waits on a model call inside `handle_call`. Manual
@@ -61,7 +74,7 @@ defmodule CodingAgent.Session do
       :ok = CodingAgent.Session.prompt(session, "Help me write a function")
 
       receive do
-        {:session_event, session_id, event} -> IO.inspect({session_id, event})
+        {:session_event, session_id, event, cursor} -> IO.inspect({session_id, event, cursor})
       end
 
       # Unsubscribe when done
@@ -123,7 +136,6 @@ defmodule CodingAgent.Session do
   alias LemonAgent.ContextRegistry
   alias LemonAgent.ModelRuntime.SessionPins
   alias LemonAgent.Types.AgentTool
-  alias LemonCore.Bus.Delivery
   alias LemonCore.Introspection
 
   # ============================================================================
@@ -148,7 +160,8 @@ defmodule CodingAgent.Session do
     :system_prompt,
     :base_system_prompt,
     :prompt_sections,
-    :context_overhead,
+    :journaled_prompt,
+    :response_system_prompt,
     :base_tools,
     :prompt_environment,
     :relevant_skill_keys,
@@ -172,6 +185,7 @@ defmodule CodingAgent.Session do
     :pending_prompt_timer_ref,
     :event_listeners,
     :event_streams,
+    :event_log,
     :abort_signal,
     :steering_queue,
     :follow_up_queue,
@@ -198,13 +212,16 @@ defmodule CodingAgent.Session do
     :config_cwd,
     :native_source_profile_id,
     branch_generation: 0,
+    recovery_requests: %{},
     todo_projection: {:ok, []},
     tool_started_at: %{},
     wasm_host_calls: %{},
+    pending_tool_intents: %{},
     auto_compaction: %CompactionLifecycle.State{},
     manual_operation: nil,
     overflow_recovery: %OverflowRecovery.State{},
-    tool_resources_handed_off: false
+    root_idle_token: nil,
+    root_idle_timer: nil
   ]
 
   @type session_signature ::
@@ -226,7 +243,8 @@ defmodule CodingAgent.Session do
           system_prompt: String.t(),
           base_system_prompt: String.t(),
           prompt_sections: [CodingAgent.SystemPrompt.section()],
-          context_overhead: map() | nil,
+          journaled_prompt: map() | nil,
+          response_system_prompt: LemonAi.SystemPrompt.t() | nil,
           base_tools: [AgentTool.t()],
           prompt_environment: String.t() | nil,
           relevant_skill_keys: [String.t()],
@@ -420,8 +438,6 @@ defmodule CodingAgent.Session do
 
   @doc false
   def validate_execution_options(opts) when is_list(opts) do
-    alias LemonCore.{ExecutionContext, ToolPolicy}
-
     opts =
       if is_nil(opts[:session_file]) or
            CodingAgent.SessionManager.current_snapshot?(
@@ -435,6 +451,36 @@ defmodule CodingAgent.Session do
           {:error, _} -> Keyword.delete(opts, :loaded_session)
         end
       end
+
+    validate_execution_authority(opts)
+  end
+
+  def validate_execution_options(_opts), do: {:error, :invalid_session_options}
+
+  @doc false
+  def validate_live_execution_options(
+        opts,
+        %Session{file_path: path} = manager
+      )
+      when is_list(opts) and is_binary(path) do
+    # The active journal owner already has every append in memory. Its startup
+    # source_revision intentionally predates those appends; do not mistake that
+    # for an untrusted/stale resume snapshot and parse the journal every turn.
+    if Ownership.owner(path) == self() do
+      opts
+      |> Keyword.put(:session_file, path)
+      |> Keyword.put(:loaded_session, manager)
+      |> validate_execution_authority()
+    else
+      {:error, :not_session_owner}
+    end
+  end
+
+  def validate_live_execution_options(_opts, _manager),
+    do: {:error, :invalid_session_options}
+
+  defp validate_execution_authority(opts) do
+    alias LemonCore.{ExecutionContext, ToolPolicy}
 
     with {:ok, context} <- resolve_session_execution_context(opts),
          {:ok, context} <- restrict_durable_execution_context(context, opts),
@@ -450,8 +496,6 @@ defmodule CodingAgent.Session do
        |> Keyword.put(:tool_policy, policy)}
     end
   end
-
-  def validate_execution_options(_opts), do: {:error, :invalid_session_options}
 
   defp resolve_session_execution_context(opts) do
     case Keyword.get(opts, :execution_context) do
@@ -510,14 +554,15 @@ defmodule CodingAgent.Session do
   @doc """
   Send a user prompt to the session.
 
-  Returns `:ok` if the prompt was accepted, `{:error, :already_streaming}` if
-  the session is already processing a prompt.
+  Returns `:ok` after marking the accepted turn streaming, or `{:error, :busy}`
+  if a prompt or manual compaction/summary is already in progress. Deferred
+  prompt dispatch is part of the accepted turn and also reports busy.
 
   ## Options
 
     * `:images` - List of image content blocks to include
   """
-  @spec prompt(GenServer.server(), String.t(), keyword()) :: :ok | {:error, :already_streaming}
+  @spec prompt(GenServer.server(), String.t(), keyword()) :: :ok | {:error, :busy}
   def prompt(session, text, opts \\ []) do
     GenServer.call(session, {:prompt, text, opts})
   end
@@ -543,13 +588,9 @@ defmodule CodingAgent.Session do
   # Control sends ordered requests without waiting on a busy recipient. The
   # caller owns the reply alias and waits outside Control's critical path.
   def request_steering(session, text, reply_to) when is_pid(session) do
-    if Process.alive?(session) do
-      token = make_ref()
-      GenServer.cast(session, {:steer, text, false, reply_to, token})
-      {:pending, session, token, System.monotonic_time(:millisecond) + 5_000}
-    else
-      :failed
-    end
+    token = make_ref()
+    GenServer.cast(session, {:steer, text, false, reply_to, token})
+    {:pending, session, token, System.monotonic_time(:millisecond) + 5_000}
   end
 
   @doc false
@@ -630,15 +671,12 @@ defmodule CodingAgent.Session do
     GenServer.cast(session, :abort)
   end
 
-  @doc false
-  def handoff_tool_resources(session), do: GenServer.call(session, :handoff_tool_resources)
-
   @doc """
   Subscribe to session events.
 
-  Events are sent as `{:session_event, session_id, event}`. Each new
-  subscription first receives the selected branch's journal todo truth, sent
-  only to that subscriber: `{:todos_changed, todos}`, or
+  Events are sent as `{:session_event, session_id, event, cursor}`. Each new
+  subscription broadcasts the selected branch's journal todo truth with a fresh
+  cursor: `{:todos_changed, todos}`, or
   `{:todos_unavailable, :unsupported_todo_entry}` when the governing journal
   entry cannot be read (never an empty list in its place). A branch with no
   todo entry or legacy plan emits no initial empty event.
@@ -649,7 +687,7 @@ defmodule CodingAgent.Session do
     * `:max_queue` - Mailbox admission bound (direct default 256, stream default 1000)
     * `:max_bytes` - Per-event admission limit (default 1 MiB)
     * On overflow, delivery is fenced with `{:stream_resync, %{reason: :overflow}}`.
-      Read authoritative state and explicitly re-subscribe. A fenced direct
+      Replay from the last cursor, or snapshot on expiry, then re-subscribe. A fenced direct
       subscription reserves one compact `{:session_terminal, session_id, status}`
       notification; terminal answer text remains available from the session owner.
 
@@ -665,7 +703,7 @@ defmodule CodingAgent.Session do
       # Bounded direct mailbox delivery (default)
       unsub = Session.subscribe(session)
       receive do
-        {:session_event, _id, event} -> IO.inspect(event)
+        {:session_event, _id, event, _cursor} -> IO.inspect(event)
       end
       unsub.()
 
@@ -673,13 +711,25 @@ defmodule CodingAgent.Session do
       {:ok, stream} = Session.subscribe(session, mode: :stream)
       stream
       |> LemonAgent.EventStream.events()
-      |> Enum.each(fn {:session_event, _id, event} -> IO.inspect(event) end)
+      |> Enum.each(fn {:session_event, _id, event, _cursor} -> IO.inspect(event) end)
   """
   @spec subscribe(GenServer.server(), keyword()) ::
           (-> :ok) | {(-> :ok), LemonCore.Bus.Delivery.t()} | {:ok, pid()}
   def subscribe(session, opts \\ []) do
     mode = Keyword.get(opts, :mode, :direct)
     GenServer.call(session, {:subscribe, self(), mode, opts})
+  end
+
+  @doc """
+  Return whether the session has an accepted prompt still in progress.
+
+  Includes deferred dispatch and prompt recovery. This scalar state query does
+  not copy session history or consult the underlying agent. Manual operations
+  can make `prompt/3` busy without making the session streaming.
+  """
+  @spec streaming?(GenServer.server()) :: boolean()
+  def streaming?(session) do
+    GenServer.call(session, :streaming?)
   end
 
   @doc """
@@ -914,6 +964,15 @@ defmodule CodingAgent.Session do
   def recovery_snapshot(session), do: GenServer.call(session, :recovery_snapshot, 5_000)
 
   @doc """
+  Replay events strictly after a versioned native-session cursor, in broadcast
+  order. A dead/replaced owner or evicted prefix yields `:cursor_expired`.
+  This local API is trusted; boundary callers must reauthorize every read.
+  """
+  def replay_events(session, cursor, limit \\ 100) do
+    GenServer.call(session, {:replay_events, cursor, limit}, 5_000)
+  end
+
+  @doc """
   Resolve a session tool for the `eval` code-mode bridge (`tools.<name>(...)`).
 
   The tool comes from the session's frozen, policy/approval/hook-wrapped
@@ -982,11 +1041,26 @@ defmodule CodingAgent.Session do
   # GenServer Callbacks
   # ============================================================================
 
-  @spec init(keyword()) :: {:ok, t()} | {:error, {:already_started, pid()}}
+  @spec init(keyword()) ::
+          {:ok, t()} | {:error, {:already_started, pid()}} | {:stop, term()}
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    Ownership.initialize(opts, &initialize_owned_session/1)
+
+    Ownership.initialize(opts, fn owned_opts ->
+      connection =
+        if Keyword.get(owned_opts, :executor_root, false),
+          do: CodingAgent.Session.Invocation.open_mcp(owned_opts),
+          else: {:ok, Keyword.get(owned_opts, :mcp_session_id)}
+
+      case connection do
+        {:ok, id} ->
+          initialize_owned_session(Keyword.put(owned_opts, :mcp_session_id, id))
+
+        {:error, reason} ->
+          {:stop, reason}
+      end
+    end)
   end
 
   defp initialize_owned_session(opts) do
@@ -1030,11 +1104,59 @@ defmodule CodingAgent.Session do
     {:ok, state}
   end
 
-  @spec handle_call(term(), GenServer.from(), t()) :: {:reply, term(), t()} | {:noreply, t()}
+  @spec handle_call(term(), GenServer.from(), t()) ::
+          {:reply, term(), t()} | {:noreply, t()} | {:stop, term(), term(), t()}
   @impl true
   def handle_call(request, _from, %{manual_operation: %ManualOperation.State{}} = state)
       when is_tuple(request) and elem(request, 0) in @manual_operation_busy_calls,
       do: {:reply, {:error, :busy}, state}
+
+  def handle_call({:prepare_root_turn, opts}, _from, state) do
+    if state.is_streaming or not is_nil(state.pending_prompt_timer_ref) or
+         ManualOperation.in_flight?(state) do
+      {:reply, {:error, :session_busy}, state}
+    else
+      case CodingAgent.Session.Invocation.prepare(state, opts) do
+        {:ok, state} -> {:reply, :ok, clear_root_idle(state)}
+        {:error, reason} -> {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
+  def handle_call({:retain_root, ttl}, _from, state) do
+    if state.is_streaming or not is_nil(state.pending_prompt_timer_ref) do
+      {:reply, {:error, :session_busy}, state}
+    else
+      case Persistence.save(state) do
+        {:ok, state} ->
+          state = clear_root_idle(state)
+          token = System.unique_integer([:positive, :monotonic])
+          timer = Process.send_after(self(), {:park_root, token}, ttl)
+          update_root_idle(state, token)
+          {:reply, :ok, %{state | root_idle_token: token, root_idle_timer: timer}}
+
+        {:error, reason, state} ->
+          {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
+  def handle_call({:park_root, token}, _from, state) do
+    if state.root_idle_token == token and not state.is_streaming and
+         is_nil(state.pending_prompt_timer_ref) do
+      {:stop, :normal, :ok, state}
+    else
+      {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:invocation_stream, options}, _from, state) do
+    {:reply, CodingAgent.Session.Invocation.stream(state, options), state}
+  end
+
+  def handle_call({:record_tool_intent, data, signal, parent_id}, from, state) do
+    CodingAgent.Session.ToolIntentGate.request(state, data, signal, parent_id, from)
+  end
 
   def handle_call(:context_budget, _from, state) do
     budget =
@@ -1068,6 +1190,17 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_call({:available_stream_rules, rules}, _from, state) do
+    {:reply, CodingAgent.Session.StreamRules.available(state.session_manager, rules), state}
+  end
+
+  def handle_call({:inject_stream_rule, rule}, _from, state) do
+    case CodingAgent.Session.StreamRules.inject(state, rule) do
+      {:ok, state} -> {:reply, :ok, state}
+      {:error, reason, state} -> {:reply, {:error, reason}, state}
+    end
+  end
+
   # Called from the todo tools; this process is the only journal writer.
   def handle_call(:todos, _from, state), do: {:reply, Todos.read(state), state}
 
@@ -1098,7 +1231,7 @@ defmodule CodingAgent.Session do
 
   def handle_call({:prompt, text, opts}, _from, state) do
     if state.is_streaming or ManualOperation.in_flight?(state) do
-      {:reply, {:error, :already_streaming}, state}
+      {:reply, {:error, :busy}, state}
     else
       state = CompactionLifecycle.cancel_for_new_prompt(state)
       state = %{state | terminal_event: nil}
@@ -1141,10 +1274,13 @@ defmodule CodingAgent.Session do
     outgoing = attach_recalled_context(message, recalled)
 
     if state.is_streaming do
-      LemonAgent.Agent.steer(state.agent, outgoing,
-        system_prompt: state.system_prompt,
-        preempt: false
-      )
+      :ok =
+        LemonAgent.Agent.steer(state.agent, outgoing,
+          system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
+          preempt: false
+        )
+
+      notify_steering_changed()
 
       queue = :queue.in(message, state.follow_up_queue)
       {:reply, :ok, %{state | follow_up_queue: queue}}
@@ -1172,10 +1308,13 @@ defmodule CodingAgent.Session do
     outgoing = attach_recalled_context(message, recalled)
 
     if state.is_streaming do
-      LemonAgent.Agent.steer(state.agent, outgoing,
-        system_prompt: state.system_prompt,
-        preempt: false
-      )
+      :ok =
+        LemonAgent.Agent.steer(state.agent, outgoing,
+          system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
+          preempt: false
+        )
+
+      notify_steering_changed()
 
       queue = :queue.in(message, state.follow_up_queue)
       {:reply, :ok, %{state | follow_up_queue: queue}}
@@ -1187,15 +1326,14 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_call({:replay_events, cursor, limit}, _from, state) do
+    {:reply, CodingAgent.Session.EventLog.replay(state.event_log, cursor, limit), state}
+  end
+
   def handle_call({:subscribe, pid, :stream, opts}, _from, state) do
     {:ok, stream, new_state} = Notifier.subscribe_stream(state, pid, opts)
 
-    {_ref, %{delivery: delivery}} =
-      Enum.find(new_state.event_streams, &match?({_ref, %{stream: ^stream}}, &1))
-
-    if event = initial_todos(new_state) do
-      Delivery.send(delivery, {:"$gen_cast", {:push, event}})
-    end
+    if event = initial_todos(new_state), do: Notifier.broadcast_event(new_state, event)
 
     {:reply, {:ok, stream}, new_state}
   end
@@ -1211,6 +1349,10 @@ defmodule CodingAgent.Session do
     {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self())
     send_initial_todos(new_state, pid)
     {:reply, unsubscribe, new_state}
+  end
+
+  def handle_call(:streaming?, _from, state) do
+    {:reply, state.is_streaming, state}
   end
 
   def handle_call(:get_state, _from, state) do
@@ -1286,7 +1428,7 @@ defmodule CodingAgent.Session do
     case Lifecycle.reset(state, @reset_abort_wait_ms) do
       {:ok, new_state} ->
         CodingAgent.ToolResources.stop(state.session_manager.header.id)
-        {:reply, :ok, %{new_state | tool_resources_handed_off: false}}
+        {:reply, :ok, new_state}
 
       {:error, reason, new_state} ->
         {:reply, {:error, reason}, new_state}
@@ -1311,7 +1453,8 @@ defmodule CodingAgent.Session do
 
     session_manager = SessionManager.append_entry(state.session_manager, entry)
 
-    {:reply, :ok, %{state | model: model, session_manager: session_manager}}
+    next_state = Planning.refresh(%{state | model: model, session_manager: session_manager})
+    {:reply, :ok, next_state}
   end
 
   def handle_call({:set_thinking_level, level}, _from, state) do
@@ -1454,16 +1597,6 @@ defmodule CodingAgent.Session do
     end
   end
 
-  def handle_call(:handoff_tool_resources, _from, %{is_streaming: false} = state) do
-    case CodingAgent.ToolResources.handoff(state.session_manager.header.id, self()) do
-      :ok -> {:reply, :ok, %{state | tool_resources_handed_off: true}}
-      error -> {:reply, error, state}
-    end
-  end
-
-  def handle_call(:handoff_tool_resources, _from, state),
-    do: {:reply, {:error, :session_busy}, state}
-
   # The agent's list is the wire history and still carries each turn's attached
   # recalled context; this call is the conversation as a person reads it, and
   # `CodingAgent.Session.Presentation` renders from it. See
@@ -1473,21 +1606,12 @@ defmodule CodingAgent.Session do
     {:reply, Enum.map(agent_state.messages, &strip_recalled_context/1), state}
   end
 
-  def handle_call(:recovery_snapshot, _from, state) do
-    agent_state = LemonAgent.Agent.get_state(state.agent)
-
-    snapshot =
-      Recovery.snapshot(state.session_manager,
-        run_id: state.run_id,
-        streaming: state.is_streaming or agent_state.is_streaming,
-        messages: Enum.map(agent_state.messages, &strip_recalled_context/1),
-        partial: agent_state.stream_message,
-        pending: MapSet.to_list(agent_state.pending_tool_calls),
-        failed: not is_nil(agent_state.error),
-        turn: state.turn_index
-      )
-
-    {:reply, {:ok, snapshot}, state}
+  def handle_call(:recovery_snapshot, from, state) do
+    # A selective receive here would overtake queued broadcasts and pair future
+    # text with an old cursor. Process the agent response in mailbox order.
+    request = :gen_server.send_request(state.agent, :get_state)
+    requests = Map.put(state.recovery_requests, request, {from, state.branch_generation})
+    {:noreply, %{state | recovery_requests: requests}}
   end
 
   def handle_call(:context_snapshot, _from, state) do
@@ -1521,7 +1645,7 @@ defmodule CodingAgent.Session do
 
   def handle_call(:save, _from, state) do
     case Persistence.save(state) do
-      {:ok, new_state} -> {:reply, :ok, record_context_overhead(new_state)}
+      {:ok, new_state} -> {:reply, :ok, new_state}
       {:error, reason, unchanged_state} -> {:reply, {:error, reason}, unchanged_state}
     end
   end
@@ -1567,7 +1691,12 @@ defmodule CodingAgent.Session do
 
     outgoing = attach_recalled_context(message, recalled)
 
-    LemonAgent.Agent.redirect(state.agent, outgoing, system_prompt: state.system_prompt)
+    :ok =
+      LemonAgent.Agent.redirect(state.agent, outgoing,
+        system_prompt: CodingAgent.Session.PromptJournal.blocks(state)
+      )
+
+    notify_steering_changed()
     queue = :queue.in(message, state.steering_queue)
 
     {:noreply, %{state | steering_queue: queue}}
@@ -1584,7 +1713,10 @@ defmodule CodingAgent.Session do
 
     outgoing = attach_recalled_context(message, recalled)
 
-    LemonAgent.Agent.follow_up(state.agent, outgoing, system_prompt: state.system_prompt)
+    LemonAgent.Agent.follow_up(state.agent, outgoing,
+      system_prompt: CodingAgent.Session.PromptJournal.blocks(state)
+    )
+
     queue = :queue.in(message, state.follow_up_queue)
 
     {:noreply, %{state | follow_up_queue: queue}}
@@ -1609,7 +1741,6 @@ defmodule CodingAgent.Session do
     # Signal the run before disposing resources so blocked tool calls can unwind
     # instead of holding abort until the resource's supervisor shutdown timeout.
     CodingAgent.ToolResources.stop(state.session_manager.header.id)
-    state = %{state | tool_resources_handed_off: false}
 
     if had_pending_prompt do
       # If abort lands before deferred prompt dispatch, emit a terminal canceled
@@ -1646,17 +1777,39 @@ defmodule CodingAgent.Session do
       timestamp: System.system_time(:millisecond)
     }
 
-    LemonAgent.Agent.steer(state.agent, attach_recalled_context(message, recalled),
-      system_prompt: state.system_prompt,
-      preempt: preempt
-    )
+    :ok =
+      LemonAgent.Agent.steer(state.agent, attach_recalled_context(message, recalled),
+        system_prompt: CodingAgent.Session.PromptJournal.blocks(state),
+        preempt: preempt
+      )
+
+    # Human steering uses an Agent cast. A scalar call from this same sender
+    # fences that cast before waking joiners that query the Agent's queue.
+    if preempt, do: LemonAgent.Agent.has_steering_messages?(state.agent, nil)
+    notify_steering_changed()
 
     key = if preempt, do: :steering_queue, else: :follow_up_queue
     Map.update!(state, key, &:queue.in(message, &1))
   end
 
+  defp notify_steering_changed do
+    LemonCore.Bus.broadcast(
+      "session_coord:#{:erlang.pid_to_list(self())}",
+      {:session_coord, :steering_changed}
+    )
+  end
+
   @spec handle_info(term(), t()) :: {:noreply, t()} | {:stop, term(), t()}
   @impl true
+  def handle_info({:park_root, token}, state) do
+    if state.root_idle_token == token and not state.is_streaming and
+         is_nil(state.pending_prompt_timer_ref) do
+      {:stop, :normal, state}
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info({:task_progress, tool_call_id, result}, state) do
     Notifier.broadcast_event(state, {:tool_execution_update, tool_call_id, "task", %{}, result})
     {:noreply, state}
@@ -1686,9 +1839,14 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_info({:agent_system_prompt, agent, prompt}, %{agent: agent} = state) do
+    {:noreply, %{state | response_system_prompt: prompt}}
+  end
+
   def handle_info({:agent_event, {:message_end, _message} = raw_event}, state) do
     event = strip_recalled_context_from_event(raw_event)
     state = handle_agent_event(event, state)
+    state = CodingAgent.Session.ToolIntentGate.flush(state)
     {:noreply, state}
   end
 
@@ -1711,7 +1869,9 @@ defmodule CodingAgent.Session do
     # generated block to the person who typed the message.
     event = strip_recalled_context_from_event(event)
 
-    # Broadcast to listeners FIRST (before state changes that might clear streams)
+    # Keep terminal streams available while broadcasting. GenServer calls from
+    # subscribers cannot run until handle_agent_event commits the transition
+    # below, even when the terminal notification reaches them before it finishes.
     Notifier.broadcast_event(state, event)
 
     # Process the event and update state
@@ -1729,7 +1889,17 @@ defmodule CodingAgent.Session do
   end
 
   def handle_info({:lemon_abort, signal, _kind}, state) do
+    state = CodingAgent.Session.ToolIntentGate.cancel_signal(state, signal)
     {:noreply, WasmBridge.abort_host_calls(state, signal)}
+  end
+
+  def handle_info({:tool_intent_wait_expired, ref}, state) do
+    {:noreply, CodingAgent.Session.ToolIntentGate.cancel(state, ref, :assistant_not_recorded)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
+      when is_map_key(state.pending_tool_intents, ref) do
+    {:noreply, CodingAgent.Session.ToolIntentGate.cancel(state, ref, :caller_down)}
   end
 
   def handle_info({:DOWN, ref, :process, pid, reason}, state)
@@ -1885,7 +2055,12 @@ defmodule CodingAgent.Session do
         state
       ) do
     if state.pending_prompt_timer_ref do
-      :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
+      :ok =
+        LemonAgent.Agent.set_system_prompt(
+          state.agent,
+          CodingAgent.Session.PromptJournal.blocks(state, system_prompt)
+        )
+
       # Send to agent (user message will be persisted on :message_end event)
       _ = LemonAgent.Agent.prompt(state.agent, user_message)
       {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
@@ -1897,7 +2072,12 @@ defmodule CodingAgent.Session do
 
   def handle_info({:dispatch_prompt, %CustomMessage{} = message, system_prompt}, state) do
     if state.pending_prompt_timer_ref do
-      :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
+      :ok =
+        LemonAgent.Agent.set_system_prompt(
+          state.agent,
+          CodingAgent.Session.PromptJournal.blocks(state, system_prompt)
+        )
+
       _ = LemonAgent.Agent.prompt(state.agent, message)
       {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
     else
@@ -1913,8 +2093,46 @@ defmodule CodingAgent.Session do
     handle_info({:do_prompt, message, state.system_prompt}, state)
   end
 
-  def handle_info(_msg, state) do
-    {:noreply, state}
+  def handle_info(message, state) do
+    case recovery_response(message, state.recovery_requests) do
+      nil ->
+        {:noreply, state}
+
+      {request, from, branch, {:reply, agent_state}} ->
+        result =
+          if branch == state.branch_generation,
+            do: {:ok, recovery_projection(state, agent_state)},
+            else: {:error, :unavailable}
+
+        GenServer.reply(from, result)
+        {:noreply, %{state | recovery_requests: Map.delete(state.recovery_requests, request)}}
+
+      {request, from, _branch, {:error, _reason}} ->
+        GenServer.reply(from, {:error, :unavailable})
+        {:noreply, %{state | recovery_requests: Map.delete(state.recovery_requests, request)}}
+    end
+  end
+
+  defp recovery_response(message, requests) do
+    Enum.find_value(requests, fn {request, {from, branch}} ->
+      case :gen_server.check_response(message, request) do
+        :no_reply -> nil
+        response -> {request, from, branch, response}
+      end
+    end)
+  end
+
+  defp recovery_projection(state, agent_state) do
+    Recovery.snapshot(state.session_manager,
+      run_id: state.run_id,
+      streaming: state.is_streaming or agent_state.is_streaming,
+      messages: Enum.map(agent_state.messages, &strip_recalled_context/1),
+      partial: agent_state.stream_message,
+      pending: MapSet.to_list(agent_state.pending_tool_calls),
+      failed: not is_nil(agent_state.error),
+      turn: state.turn_index
+    )
+    |> Map.put(:event_cursor, CodingAgent.Session.EventLog.cursor(state.event_log))
   end
 
   @spec terminate(term(), t()) :: :ok
@@ -1937,8 +2155,11 @@ defmodule CodingAgent.Session do
       reason: reason
     })
 
-    if state.session_manager && not state.tool_resources_handed_off,
+    if state.session_manager,
       do: CodingAgent.ToolResources.stop(state.session_manager.header.id)
+
+    if Keyword.get(state.tool_opts || [], :executor_root, false) and state.mcp_session_id,
+      do: LemonSkills.McpSession.close(state.mcp_session_id)
 
     # Emit introspection event for session end
     Introspection.record(
@@ -2272,6 +2493,7 @@ defmodule CodingAgent.Session do
     do: {state, []}
 
   defp refresh_turn_context(state, skill_context, user_turn) do
+    state = clear_root_idle(state)
     relevant_skill_keys = relevant_skill_keys(state, skill_context)
 
     {system_sections, user_sections} =
@@ -2363,6 +2585,14 @@ defmodule CodingAgent.Session do
   end
 
   @spec refresh_system_prompt(t(), String.t(), [ContextRegistry.section()]) :: t()
+  defp refresh_system_prompt(
+         %{journaled_prompt: prompt} = state,
+         _skill_context,
+         _system_sections
+       )
+       when not is_nil(prompt),
+       do: Planning.refresh(state)
+
   defp refresh_system_prompt(state, skill_context, system_sections) do
     case PromptComposer.maybe_refresh_system_prompt(
            state.config_cwd || state.cwd,
@@ -2395,25 +2625,22 @@ defmodule CodingAgent.Session do
     end
   end
 
-  # Sessions stop between turns, so a save records the prompt/tool overhead
-  # profile (counts and safe labels only) for durable context-usage reads.
-  # Frozen side-query sessions are ephemeral and record nothing.
-  defp record_context_overhead(%{context_frozen: true} = state), do: state
+  defp clear_root_idle(state) do
+    if state.root_idle_timer, do: Process.cancel_timer(state.root_idle_timer)
+    update_root_idle(state, nil)
+    %{state | root_idle_token: nil, root_idle_timer: nil}
+  end
 
-  defp record_context_overhead(state) do
-    profile =
-      ContextUsage.overhead(state, LemonAgent.Agent.get_state(state.agent))
+  defp update_root_idle(state, token) do
+    if state.register_session do
+      Registry.update_value(state.session_registry, state.session_manager.header.id, fn value ->
+        value = Map.merge(value, %{session_key: state.session_key, cwd: state.cwd})
 
-    recorded =
-      ContextUsage.record_overhead(
-        state.session_manager && state.session_manager.header.id,
-        profile,
-        state.context_overhead
-      )
-
-    %{state | context_overhead: recorded}
-  catch
-    :exit, _ -> state
+        if is_nil(token),
+          do: Map.delete(value, :root_idle),
+          else: Map.put(value, :root_idle, token)
+      end)
+    end
   end
 
   # Only the events that carry a message the user is credited with. Every other
@@ -2594,11 +2821,10 @@ defmodule CodingAgent.Session do
 
   defp maybe_subscribe_exec_approvals(_state), do: :ok
 
-  # Only the new handle receives selected-branch truth; existing listeners must
-  # not see a duplicate, and an unreadable entry must never look like a clear.
-  defp send_initial_todos(state, pid) do
-    [{^pid, _ref, delivery} | _] = state.event_listeners
-    if event = initial_todos(state), do: Delivery.send(delivery, event)
+  # Subscription bootstrap is a broadcast too: record it once and give every
+  # observer the same cursor instead of emitting an unsequenced private delta.
+  defp send_initial_todos(state, _pid) do
+    if event = initial_todos(state), do: Notifier.broadcast_event(state, event)
   end
 
   defp initial_todos(state) do
@@ -2614,7 +2840,7 @@ defmodule CodingAgent.Session do
           {:todos_unavailable, :unsupported_todo_entry}
       end
 
-    if event, do: {:session_event, state.session_manager.header.id, event}
+    event
   end
 
   defp approval_event_payload(payload, state) when is_map(payload) do
@@ -2795,6 +3021,7 @@ defmodule CodingAgent.Session do
         model: model,
         thinking_level: context.thinking_level
     }
+    |> CodingAgent.Session.PromptJournal.restore_state()
     |> BranchState.restore()
   end
 end

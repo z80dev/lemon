@@ -55,7 +55,14 @@ defmodule CodingAgent.Tools.LspTest do
 
   test "navigation sends UTF-16 positions and reports code-point path:line:col", ctx do
     # Obtain the tool exactly as sessions do.
-    tool = Enum.find(ToolRegistry.get_tools(ctx.tmp, ctx.opts), &(&1.name == "lsp"))
+    opts =
+      Keyword.put(
+        ctx.opts,
+        :tool_intent_recorder,
+        CodingAgent.Test.ToolIntentRecorder.new(ctx.tmp)
+      )
+
+    tool = Enum.find(ToolRegistry.get_tools(ctx.tmp, opts), &(&1.name == "lsp"))
     exec = &tool.execute.("call", &1, nil, nil)
 
     definition =
@@ -359,29 +366,23 @@ defmodule CodingAgent.Tools.LspTest do
              LemonLsp.ServerManager.stop_session(managed_session_id)
   end
 
-  test "workspace requests rebind a handed-off client before using it", ctx do
+  test "workspace requests retain the same live client owner across turns", ctx do
     assert %AgentToolResult{} =
              run(ctx, %{"action" => "hover", "file" => "src/main.c", "line" => 1})
 
     assert [%{pid: pid}] = Client.list(ctx.session_id)
-    next_owner = spawn(fn -> receive do: (:stop -> :ok) end)
-    on_exit(fn -> send(next_owner, :stop) end)
-    next = %{ctx | opts: Keyword.put(ctx.opts, :session_pid, next_owner)}
 
-    # Raw requests and workspace symbol search both take the workspace path.
-    for {previous, params} <- [
-          {ctx.owner, %{"action" => "request", "query" => "fake/state"}},
-          {next_owner, %{"action" => "symbols", "query" => "value"}}
+    for params <- [
+          %{"action" => "request", "query" => "fake/state"},
+          %{"action" => "symbols", "query" => "value"}
         ] do
-      assert :ok = CodingAgent.ToolResources.handoff(ctx.session_id, previous)
-      assert :sys.get_state(pid).owner_pid == nil
-      assert %AgentToolResult{} = run(next, params)
-      assert :sys.get_state(pid).owner_pid == next_owner
+      assert %AgentToolResult{} = run(ctx, params)
+      assert :sys.get_state(pid).owner_pid == ctx.owner
       assert [%{pid: ^pid}] = Client.list(ctx.session_id)
     end
 
     ref = Process.monitor(pid)
-    Process.exit(next_owner, :kill)
+    send(ctx.owner, :stop)
     assert_receive {:DOWN, ^ref, :process, ^pid, _}, 5_000
   end
 

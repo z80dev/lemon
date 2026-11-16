@@ -36,7 +36,7 @@ defmodule LemonAi.PromptDiagnostics do
   @doc "Compute a conservative size breakdown for an LLM context."
   @spec stats(Context.t()) :: map()
   def stats(%Context{} = ctx) do
-    system_prompt = ctx.system_prompt || ""
+    system_prompt = LemonAi.SystemPrompt.text(ctx.system_prompt)
     system_prompt_bytes = byte_size(system_prompt)
 
     {messages_bytes, per_role_bytes, per_role_counts, largest_messages} =
@@ -49,6 +49,7 @@ defmodule LemonAi.PromptDiagnostics do
     %{
       system_prompt_bytes: system_prompt_bytes,
       system_prompt_sha256: sha256_hex(system_prompt),
+      system_prompt_digest: LemonAi.SystemPrompt.digest(ctx.system_prompt),
       message_count: length(ctx.messages),
       messages_bytes: messages_bytes,
       messages_bytes_by_role: per_role_bytes,

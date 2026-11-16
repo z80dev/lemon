@@ -8,7 +8,11 @@ defmodule LemonCore.DrainTest do
 
     @impl true
     def drain(phase, ctx) do
-      send(:persistent_term.get({__MODULE__, :test_pid}), {:drained, __MODULE__, phase, ctx})
+      send(
+        LemonCore.RuntimeCache.get({__MODULE__, :test_pid}),
+        {:drained, __MODULE__, phase, ctx}
+      )
+
       {:ok, %{phase: phase, phase_seen: Drain.phase()}}
     end
   end
@@ -34,14 +38,37 @@ defmodule LemonCore.DrainTest do
     # Drain the real coordinator only with this test's participants.
     saved = Drain.participants()
     Enum.each(saved, fn {name, _module, _order} -> Drain.unregister(name) end)
-    :persistent_term.put({Recorder, :test_pid}, self())
+    LemonCore.RuntimeCache.put({Recorder, :test_pid}, self())
 
     on_exit(fn ->
       Enum.each(Drain.participants(), fn {name, _module, _order} -> Drain.unregister(name) end)
       Enum.each(saved, fn {name, module, order} -> Drain.register(name, module, order: order) end)
       Drain.reset()
-      :persistent_term.erase({Recorder, :test_pid})
+      :ets.delete(LemonCore.RuntimeCache, {Recorder, :test_pid})
     end)
+  end
+
+  test "phase belongs to the supervised coordinator and resets after its restart" do
+    owner = Process.whereis(Drain)
+    assert :ets.info(Drain, :owner) == owner
+    assert :ets.info(Drain, :protection) == :protected
+    assert {Drain, owner, :worker, [Drain]} in Supervisor.which_children(LemonCore.Supervisor)
+
+    assert {:ok, _report} = Drain.run(grace_ms: 0, timeout_ms: 1_000)
+    assert Drain.phase() == :stopping
+
+    :ok = Supervisor.terminate_child(LemonCore.Supervisor, Drain)
+
+    try do
+      assert :ets.whereis(Drain) == :undefined
+      assert Drain.phase() == :serving
+      refute Drain.draining?()
+    after
+      {:ok, _pid} = Supervisor.restart_child(LemonCore.Supervisor, Drain)
+    end
+
+    assert Drain.phase() == :serving
+    refute :ets.info(Drain, :owner) == owner
   end
 
   test "runs every participant through ingress, then work, while reporting draining" do

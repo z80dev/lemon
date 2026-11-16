@@ -17,8 +17,8 @@ defmodule CodingAgent.Tools.Eval do
   from stdout. Text output follows the `bash` cap and spills to an artifact.
 
   Options: `:session_id` is the durable kernel identity and `:session_pid`
-  binds its current owner. Successful native turn handoff detaches that owner
-  before stop; unexpected owner death still disposes of the kernel.
+  binds its owner. Native turns reuse that live owner; idle parking and
+  unexpected owner death dispose of the kernel.
   `:eval_idle_timeout_ms` (default 30 minutes) kills idle kernels, and
   `:eval_runtimes` (`%{"py" => exe, "js" => exe}`) overrides the runtime
   executables.
@@ -106,17 +106,21 @@ defmodule CodingAgent.Tools.Eval do
           String.t(),
           keyword()
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, on_update, cwd, opts) do
+  def execute(tool_call_id, params, signal, on_update, cwd, opts) do
     started = System.monotonic_time(:millisecond)
 
     with {:ok, request} <- validate(params) do
       if AbortSignal.aborted?(signal) do
         finish(request, :not_started, Output.new(), nil, started)
       else
-        request
-        |> run(signal, on_update, cwd, opts, started)
-        |> CodingAgent.Artifacts.attach(cwd, opts)
-        |> ToolResultTrust.untrusted(:shell)
+        CodingAgent.ToolIntent.with_parent_scope(tool_call_id, fn scope ->
+          opts = Keyword.put(opts, :tool_intent_parent_scope, scope)
+
+          request
+          |> run(signal, on_update, cwd, opts, started)
+          |> CodingAgent.Artifacts.attach(cwd, opts)
+          |> ToolResultTrust.untrusted(:shell)
+        end)
       end
     end
   end
@@ -208,10 +212,22 @@ defmodule CodingAgent.Tools.Eval do
   end
 
   defp tool_resolver(opts) do
-    case {Keyword.get(opts, :tool_resolver), Keyword.get(opts, :session_pid)} do
-      {resolver, _pid} when is_function(resolver, 1) -> resolver
-      {nil, pid} when is_pid(pid) -> &CodingAgent.Session.bridge_tool(pid, &1)
-      _ -> nil
+    resolver =
+      case {Keyword.get(opts, :tool_resolver), Keyword.get(opts, :session_pid)} do
+        {resolver, _pid} when is_function(resolver, 1) -> resolver
+        {nil, pid} when is_pid(pid) -> &CodingAgent.Session.bridge_tool(pid, &1)
+        _ -> nil
+      end
+
+    if resolver do
+      scope = Keyword.fetch!(opts, :tool_intent_parent_scope)
+
+      fn name ->
+        case resolver.(name) do
+          {:ok, tool} -> {:ok, CodingAgent.ToolIntent.inherit_parent_scope(tool, scope)}
+          error -> error
+        end
+      end
     end
   end
 

@@ -94,6 +94,12 @@ runner ever selects or replaces the Gateway executor.
 
 Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor` only when gateway ingress is explicitly enabled with `config :lemon_gateway, gateway_ingress_enabled: true`. Telegram, Discord, XMTP and email are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services included in the same explicit ingress startup.
 
+`TransportRegistry` publishes the transport map and enabled-transport list as one
+immutable persistent-term snapshot at startup. All lookups, including enabled
+transport enumeration, are process-call-free. Restart the registry after changing
+transport configuration; restart ingress to apply that configuration to running
+transport children. A stopped registry exposes no stale registrations.
+
 Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email was the one surface that genuinely was a channel, and it moved to `lemon_channels` in phase 2.4 — `LemonChannels.Adapters.Email`. See decision D2 in `docs/platform-split.md`.
 
 Webhook submissions use a caller-fixed run ID. If the router cannot confirm
@@ -114,6 +120,13 @@ or reservation. A legacy pending receipt without a run ID remains a permanent
 ambiguous fence after upgrade because its original acceptance outcome cannot be
 proven safely; retries receive a duplicate `200 legacy_outcome_unknown` receipt
 with `retry_safe: false` and never submit another run.
+
+The webhook idempotency sweep watermark is volatile ETS state owned by the
+supervised `Transports.Webhook.Idempotency` ingress child, not by an HTTP caller.
+Only successful cleanup advances it. Owner restart resets the schedule without
+changing durable reservations or response receipts; missing supervision skips
+opportunistic cleanup rather than creating a caller-owned table. Scheduler's
+named stats table is likewise created and owned by its existing supervised child.
 
 ## Module Inventory
 

@@ -515,7 +515,7 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
 
   defp await(kind, events) do
     receive do
-      {:session_event, _, event} when kind == :session -> next(kind, event, events)
+      {:session_event, _, event, _cursor} when kind == :session -> next(kind, event, events)
       {:agent_event, event} when kind == :agent -> next(kind, event, events)
     after
       15_000 -> raise "public lifecycle fixture did not terminate"

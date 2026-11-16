@@ -89,6 +89,7 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
 
       {:ok, tool} =
         CodingAgent.ToolRegistry.get_tool(tmp_dir, "bash",
+          tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir),
           session_id: session_id,
           session_pid: self(),
           include_extensions: false,

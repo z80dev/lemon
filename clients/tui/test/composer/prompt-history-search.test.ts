@@ -107,6 +107,69 @@ describe("PromptHistoryStore search", () => {
 });
 
 describe("createHistorySource", () => {
+	test("uses stable stored IDs and deletes only the selected saved prompt", () => {
+		const store = new PromptHistoryStore(file);
+		store.append("keep this");
+		store.append("remove this");
+		const removed: string[] = [];
+		const source = createHistorySource({
+			store,
+			memory: () => ["remove this"],
+			onDeleteMemory: (prompt) => removed.push(prompt),
+		});
+		const selected = source.getRecent(10)[0]!;
+		expect(source.search("remove", 10)[0]?.id).toBe(selected.id);
+		source.delete(selected.id);
+		expect(store.load()).toEqual(["keep this"]);
+		expect(source.getRecent(10).map((entry) => entry.prompt)).toEqual(["keep this"]);
+		expect(removed).toEqual(["remove this"]);
+	});
+
+	test("a stale selection cannot delete a different prompt that reused its SQLite ID", () => {
+		const store = new PromptHistoryStore(file);
+		store.append("old prompt");
+		const selected = store.recent(1)[0]!;
+		store.clear();
+		store.append("new prompt");
+		store.delete(selected);
+		expect(store.load()).toEqual(["new prompt"]);
+	});
+
+	test("ring IDs survive filtering and deletion stays removed on later searches", () => {
+		const removed: string[] = [];
+		const source = createHistorySource({
+			memory: () => ["alpha", "beta"],
+			onDeleteMemory: (prompt) => removed.push(prompt),
+		});
+		const selected = source.getRecent(10)[0]!;
+		expect(selected.id).toBeLessThan(0);
+		expect(source.search("beta", 1)[0]?.id).toBe(selected.id);
+		source.delete(selected.id);
+		expect(source.getRecent(10).map((entry) => entry.prompt)).toEqual(["alpha"]);
+		expect(source.search("beta", 10)).toEqual([]);
+		expect(removed).toEqual(["beta"]);
+	});
+
+	test("failed deletion reports once without dropping a prompt from the recall ring", () => {
+		const store = new PromptHistoryStore(file);
+		store.append("retained");
+		const errors: unknown[] = [];
+		const removed: string[] = [];
+		const source = createHistorySource({
+			store,
+			memory: () => ["retained"],
+			onStorageError: (error) => errors.push(error),
+			onDeleteMemory: (prompt) => removed.push(prompt),
+		});
+		const selected = source.getRecent(1)[0]!;
+		rmSync(file);
+		mkdirSync(file);
+		source.delete(selected.id);
+		expect(source.getRecent(10).map((entry) => entry.prompt)).toEqual(["retained"]);
+		expect(errors).toHaveLength(1);
+		expect(removed).toEqual([]);
+	});
+
 	test("searches the store when persistence is on, ignoring the ring", () => {
 		const store = new PromptHistoryStore(file);
 		store.append("saved prompt");
