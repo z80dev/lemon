@@ -18,6 +18,14 @@ defmodule CodingAgent.ProcessSession do
   path with background sessions. Workload reconciliation is event-driven (root
   exit, explicit cancellation and boot recovery), not a periodic host `ps` scan.
 
+  Lifecycle telemetry uses `[:lemon, :process_session, event]`: `:start` after
+  successful initialization, `:failure` on initialization failure, and `:stop`
+  when the owner terminates. Measurements are `count: 1` and native monotonic
+  `duration` since initialization began. Metadata contains only `mode`
+  (`:managed` or `:oneshot`) and `outcome` (`:running`, `:startup_failed`,
+  `:stopped` or `:owner_failed`). Owner stop is not proof of workload completion;
+  exit codes remain in the process API, not telemetry.
+
   ## Output capture
 
   Received bytes go to two bounded destinations:
@@ -219,7 +227,22 @@ defmodule CodingAgent.ProcessSession do
   def stop_oneshot(pid), do: stop_session(pid)
 
   @impl true
-  def init({:oneshot, owner, ref, path, opts, use_pty}) do
+  def init(argument) do
+    started = System.monotonic_time()
+    mode = if match?({:oneshot, _, _, _, _, _}, argument), do: :oneshot, else: :managed
+
+    case init_owner(argument) do
+      {:ok, state} ->
+        lifecycle_event(:start, started, mode, :running)
+        {:ok, Map.merge(state, %{lifecycle_started: started, lifecycle_mode: mode})}
+
+      other ->
+        lifecycle_event(:failure, started, mode, :startup_failed)
+        other
+    end
+  end
+
+  defp init_owner({:oneshot, owner, ref, path, opts, use_pty}) do
     Process.flag(:trap_exit, true)
     if use_pty, do: LemonCore.NativeProcess.unsupported!()
     port = LemonCore.NativeProcess.open({:spawn_executable, path}, opts)
@@ -241,7 +264,7 @@ defmodule CodingAgent.ProcessSession do
       {:stop, RuntimeError.exception("#{kind}: #{inspect(reason)}")}
   end
 
-  def init({process_id, opts}) do
+  defp init_owner({process_id, opts}) do
     # Trap exits so `terminate/2` runs on supervisor shutdown and stops the group.
     Process.flag(:trap_exit, true)
 
@@ -647,13 +670,16 @@ defmodule CodingAgent.ProcessSession do
   end
 
   @impl true
-  def terminate(_reason, %{mode: :oneshot} = state) do
+  def terminate(reason, %{mode: :oneshot} = state) do
+    lifecycle_stop(state, reason)
     if state.os_pid, do: LemonCore.ProcessGroup.terminate(state.os_pid)
     if Port.info(state.port), do: Port.close(state.port)
     :ok
   end
 
-  def terminate(_reason, state) do
+  def terminate(reason, state) do
+    lifecycle_stop(state, reason)
+
     try do
       finalize_output(state)
     catch
@@ -692,6 +718,19 @@ defmodule CodingAgent.ProcessSession do
   defp stop_live_workload(_state), do: :ok
 
   # Private Functions
+
+  defp lifecycle_stop(state, reason) do
+    outcome = if reason in [:normal, :shutdown], do: :stopped, else: :owner_failed
+    lifecycle_event(:stop, state.lifecycle_started, state.lifecycle_mode, outcome)
+  end
+
+  defp lifecycle_event(event, started, mode, outcome) do
+    LemonCore.Telemetry.emit(
+      [:lemon, :process_session, event],
+      %{count: 1, duration: System.monotonic_time() - started},
+      %{mode: mode, outcome: outcome}
+    )
+  end
 
   defp via_tuple(process_id) do
     {:via, Registry, {CodingAgent.ProcessRegistry, process_id}}

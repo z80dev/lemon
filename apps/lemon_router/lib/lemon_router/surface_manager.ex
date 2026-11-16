@@ -365,23 +365,12 @@ defmodule LemonRouter.SurfaceManager do
   defp any_live_subscriber_for_surface?(surface) do
     entries =
       Registry.select(LemonRouter.AsyncTaskSurfaceRegistry, [
-        {{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}
+        {{:_, :"$1", %{surface: surface}}, [], [:"$1"]}
       ])
 
-    Enum.any?(entries, fn {_child_run_id, pid} ->
-      Process.alive?(pid) and subscriber_owns_surface?(pid, surface)
-    end)
+    Enum.any?(entries, &Process.alive?/1)
   rescue
     ArgumentError -> false
-  end
-
-  defp subscriber_owns_surface?(pid, surface) when is_pid(pid) do
-    try do
-      state = :sys.get_state(pid)
-      state.binding.surface == surface
-    catch
-      _, _ -> false
-    end
   end
 
   defp task_surface(task_id), do: {:status_task, task_id}

@@ -3,6 +3,45 @@ defmodule LemonCore.ProcessGroupTest do
 
   alias LemonCore.ProcessGroup
 
+  test "termination telemetry contains only bounded classifications" do
+    handler = {__MODULE__, make_ref()}
+    events = Enum.map([:start, :stop, :failure], &[:lemon, :process_group, &1])
+    parent = self()
+
+    :ok =
+      :telemetry.attach_many(
+        handler,
+        events,
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert :ok =
+             ProcessGroup.terminate(2,
+               scope: :process,
+               command: fn _, _ -> {"secret command output", 0} end
+             )
+
+    assert_receive {:telemetry, [:lemon, :process_group, :start], %{count: 1}, %{scope: :process}}
+
+    assert_receive {:telemetry, [:lemon, :process_group, :stop], %{count: 1, duration: duration},
+                    %{scope: :process, outcome: :signaled}}
+
+    assert is_integer(duration) and duration >= 0
+    identity = %{secret: "private path and environment"}
+    assert {:error, :workload_unobservable, ^identity} = ProcessGroup.terminate(identity)
+    assert_receive {:telemetry, [:lemon, :process_group, :start], _, %{scope: :group}}
+
+    assert_receive {:telemetry, [:lemon, :process_group, :failure], _,
+                    %{scope: :group, outcome: :unobservable} = metadata}
+
+    assert map_size(metadata) == 2
+  end
+
   test "malformed, missing and lost ownership never establish termination or authorize signals" do
     base = %{
       pgid: 2,

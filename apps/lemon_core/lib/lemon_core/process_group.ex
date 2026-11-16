@@ -14,6 +14,14 @@ defmodule LemonCore.ProcessGroup do
   justifies replacing the gated native launcher and durable birth-bound ledger
   without platform crash tests. Boot reconciliation preserves unknown outcomes
   rather than replaying commands or signalling recycled PIDs.
+
+  Termination telemetry uses `[:lemon, :process_group, :start | :stop | :failure]`.
+  Start measurements contain `count: 1`; terminal measurements also include
+  native monotonic `duration`. Metadata contains only `scope` (`:group` or
+  `:process`) and, on terminal events, `outcome`: `:terminated` or `:signaled`
+  for stop, `:alive` or `:unobservable` for failure. Process-scoped TERM success
+  acknowledges signalling only, not confirmed exit. No process identities,
+  commands, paths, output, environment or raw errors are emitted.
   """
 
   def valid_identity?(%{
@@ -128,9 +136,32 @@ defmodule LemonCore.ProcessGroup do
   signal. The caller retains its existing service shutdown wait. `:command`
   injects that caller's command adapter (executable and argv to `{output, status}`).
   """
-  def terminate(group, opts \\ [])
+  def terminate(group, opts \\ []) do
+    started = System.monotonic_time()
+    metadata = %{scope: if(Keyword.get(opts, :scope) == :process, do: :process, else: :group)}
+    LemonCore.Telemetry.emit([:lemon, :process_group, :start], %{count: 1}, metadata)
+    result = do_terminate(group, opts)
 
-  def terminate(pid, opts) when is_integer(pid) and pid > 1 do
+    outcome =
+      case result do
+        :ok -> if metadata.scope == :process, do: :signaled, else: :terminated
+        {:terminated, _} -> :terminated
+        :alive -> :alive
+        _ -> :unobservable
+      end
+
+    event = if outcome in [:terminated, :signaled], do: :stop, else: :failure
+
+    LemonCore.Telemetry.emit(
+      [:lemon, :process_group, event],
+      %{count: 1, duration: System.monotonic_time() - started},
+      Map.put(metadata, :outcome, outcome)
+    )
+
+    result
+  end
+
+  defp do_terminate(pid, opts) when is_integer(pid) and pid > 1 do
     if Keyword.get(opts, :scope, :group) == :process do
       command =
         Keyword.get(opts, :command, fn executable, args ->
@@ -146,7 +177,7 @@ defmodule LemonCore.ProcessGroup do
     end
   end
 
-  def terminate(identity, opts) when is_map(identity) do
+  defp do_terminate(identity, opts) when is_map(identity) do
     root_exited = Keyword.get(opts, :root_exited, false)
     before_signal = Keyword.get(opts, :before_signal, fn _observed -> :ok end)
     signal = Keyword.get(opts, :signal, :sigterm)
@@ -161,7 +192,7 @@ defmodule LemonCore.ProcessGroup do
                 Keyword.get(opts, :grace_ms, @default_grace_ms)
 
             if not wait_gone(observed.pgid, deadline) do
-              terminate(observed, Keyword.put(opts, :signal, :sigkill))
+              do_terminate(observed, Keyword.put(opts, :signal, :sigkill))
             else
               {:terminated, observed}
             end
@@ -182,7 +213,7 @@ defmodule LemonCore.ProcessGroup do
     _, _ -> {:error, :workload_unobservable, identity}
   end
 
-  def terminate(identity, _opts), do: {:error, :workload_unobservable, identity}
+  defp do_terminate(identity, _opts), do: {:error, :workload_unobservable, identity}
 
   defp terminate_group(pgid, opts) do
     grace_ms = Keyword.get(opts, :grace_ms, @default_grace_ms)

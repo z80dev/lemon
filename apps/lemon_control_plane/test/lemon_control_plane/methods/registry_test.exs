@@ -137,6 +137,61 @@ defmodule LemonControlPlane.Methods.RegistryTest do
              Registry.dispatch(method, %{}, ctx)
   end
 
+  test "unknown method names are omitted from telemetry" do
+    unknown_method = "private-token-unknown-method"
+    attach_method_telemetry()
+    assert {:error, _} = Registry.dispatch(unknown_method, %{}, ctx_with_scopes([]))
+    assert_receive {:method_telemetry, :start, %{system_time: time}, %{method: :unknown}}
+    assert is_integer(time)
+    assert_receive {:method_telemetry, :stop, %{duration: duration}, metadata}
+    assert is_integer(duration) and duration >= 0
+    assert metadata == %{method: :unknown, outcome: :error}
+  end
+
+  test "real dispatch emits content-free native timing for success, error and exception" do
+    attach_method_telemetry()
+
+    for {handler, outcome} <- [
+          {PublicDispatchHandler, :ok},
+          {AdminScopedHandler, :error},
+          {RaisingHandler, :exception}
+        ] do
+      method = register_for_cleanup(handler)
+      Registry.dispatch(method, %{"token" => "private-param"}, ctx_with_scopes([]))
+      assert_receive {:method_telemetry, :start, %{system_time: time}, %{method: ^method}}
+      assert is_integer(time)
+      assert_receive {:method_telemetry, :stop, %{duration: duration}, metadata}
+      assert is_integer(duration) and duration >= 0
+      assert metadata == %{method: method, outcome: outcome}
+    end
+  end
+
+  test "status callback redacts state, current message and failure reason" do
+    status = %{
+      state: %{table: "secret-table"},
+      message: {:register, "secret-message"},
+      reason: {:error, "secret-reason"}
+    }
+
+    assert Registry.format_status(status) == %{
+             state: %{module: Registry},
+             message: :redacted,
+             reason: :redacted,
+             log: []
+           }
+  end
+
+  defp attach_method_telemetry do
+    id = {__MODULE__, make_ref()}
+    events = for event <- [:start, :stop], do: [:lemon, :control_plane, :method, event]
+    :ok = :telemetry.attach_many(id, events, &__MODULE__.capture_method_telemetry/4, self())
+    on_exit(fn -> :telemetry.detach(id) end)
+  end
+
+  def capture_method_telemetry([:lemon, :control_plane, :method, event], values, metadata, pid) do
+    send(pid, {:method_telemetry, event, values, metadata})
+  end
+
   test "dispatch/3 returns method_not_found for unknown method" do
     unknown_method = "#{@test_method_prefix}unknown.#{System.unique_integer([:positive])}"
     ctx = ctx_with_scopes([])
