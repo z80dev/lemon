@@ -38,10 +38,13 @@ defmodule CodingAgent.SessionToolResourcesLifecycleTest do
   end
 
   defp start_session(tmp_dir, opts \\ []) do
-    {:ok, session} =
-      Session.start_link(Keyword.merge([cwd: tmp_dir, model: mock_model()], opts))
-
-    session
+    start_supervised!(
+      Supervisor.child_spec(
+        {Session, Keyword.merge([cwd: tmp_dir, model: mock_model()], opts)},
+        id: make_ref(),
+        restart: :temporary
+      )
+    )
   end
 
   defp session_id(session), do: Session.get_state(session).session_manager.header.id
@@ -140,49 +143,18 @@ defmodule CodingAgent.SessionToolResourcesLifecycleTest do
       assert_receive {:DOWN, ^ref, :process, ^server, _reason}, 5_000
     end
 
-    test "a successful save hands the resources off for the next turn", %{tmp_dir: tmp_dir} do
+    test "a successful save retains the live resource owner for the next turn", %{
+      tmp_dir: tmp_dir
+    } do
       session = start_session(tmp_dir)
       id = session_id(session)
       server = bind_debug_resource(session, id, tmp_dir)
 
       Presentation.finalize_session(%{session: session, session_id: id}, true)
 
-      refute Process.alive?(session)
+      assert Process.alive?(session)
       assert Process.alive?(server)
-      assert {_phase, %{owner_pid: nil}} = :sys.get_state(server)
-
-      next_owner = spawn(fn -> receive do: (:stop -> :ok) end)
-      on_exit(fn -> send(next_owner, :stop) end)
-      assert :ok = CodingAgent.ToolResources.bind(server, next_owner)
-    end
-
-    test "an uncertain handoff disposes resources already detached from their owner", %{
-      tmp_dir: tmp_dir
-    } do
-      id = "uncertain-handoff-#{System.unique_integer([:positive])}"
-
-      # Model a Session that saves and detaches resources, then dies before the
-      # handoff reply reaches its executor. Detached resources no longer monitor it.
-      session =
-        spawn(fn ->
-          receive do
-            {:"$gen_call", from, :save} -> GenServer.reply(from, :ok)
-          end
-
-          receive do
-            {:"$gen_call", _from, :handoff_tool_resources} ->
-              :ok = CodingAgent.ToolResources.handoff(id, self())
-          end
-        end)
-
-      on_exit(fn -> Process.exit(session, :kill) end)
-      server = bind_debug_resource(session, id, tmp_dir)
-      ref = Process.monitor(server)
-
-      Presentation.finalize_session(%{session: session, session_id: id}, true)
-
-      refute Process.alive?(session)
-      assert_receive {:DOWN, ^ref, :process, ^server, _reason}, 5_000
+      assert {_phase, %{owner_pid: ^session}} = :sys.get_state(server)
     end
   end
 

@@ -210,9 +210,8 @@ defmodule CodingAgent.Eval.Kernel do
   end
 
   @impl true
-  def handle_event({:call, from}, {operation, owner}, _phase, state)
-      when operation in [:bind_owner, :detach_owner] do
-    {:reply, reply, state} = CodingAgent.ToolResources.owner_reply(operation, owner, state)
+  def handle_event({:call, from}, {:bind_owner, owner}, _phase, state) do
+    {:reply, reply, state} = CodingAgent.ToolResources.owner_reply(:bind_owner, owner, state)
     {:keep_state, state, [{:reply, from, reply}]}
   end
 

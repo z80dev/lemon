@@ -237,6 +237,18 @@ defmodule CodingAgent.Session.Persistence do
   end
 
   defp repair_missing_tool_results(messages, violations, session) do
+    # Intent is execution history, even if navigation later selected an older
+    # leaf. A rewind cannot turn a previously dispatched call into "not started".
+    intents =
+      session.entries_rev
+      |> Enum.reduce(MapSet.new(), fn
+        %{type: :custom, custom_type: "lemon.tool_intent", data: %{"toolCallId" => id}}, acc ->
+          MapSet.put(acc, id)
+
+        _entry, acc ->
+          acc
+      end)
+
     repaired =
       messages
       |> Enum.with_index()
@@ -245,7 +257,8 @@ defmodule CodingAgent.Session.Persistence do
           message
           | synthetic_results_for(
               message,
-              Map.get(missing_results_by_index(violations), index, [])
+              Map.get(missing_results_by_index(violations), index, []),
+              intents
             )
         ]
       end)
@@ -301,10 +314,11 @@ defmodule CodingAgent.Session.Persistence do
     Map.new(violations, fn violation -> {violation.index, violation.tool_call_ids || []} end)
   end
 
-  defp synthetic_results_for(message, tool_call_ids) do
+  defp synthetic_results_for(message, tool_call_ids, intents) do
     Enum.map(tool_call_ids, fn tool_call_id ->
       result =
         LemonAgent.InterruptedToolResult.build(:interrupted,
+          started: MapSet.member?(intents, tool_call_id),
           details: %{restored_session_repair: true}
         )
 

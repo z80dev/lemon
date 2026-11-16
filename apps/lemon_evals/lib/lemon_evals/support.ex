@@ -11,6 +11,7 @@ defmodule LemonEvals.Support do
   """
 
   alias CodingAgent.Session.EventHandler
+  alias CodingAgent.SessionManager
   alias CodingAgent.ToolRegistry
   alias LemonAgent.Types.AgentToolResult
   alias LemonCore.Introspection
@@ -30,11 +31,43 @@ defmodule LemonEvals.Support do
     %{name: name, status: :fail, details: Map.merge(%{reason: reason}, details)}
   end
 
+  @doc """
+  Execute one registry tool with an eval-only temporary durable intent journal.
+
+  The journal is outside the workspace and survives until execution returns;
+  it is then removed. Read-only tools never create it or add an intent sync.
+  Production sessions use their own persistent journal owner instead.
+  """
   def run_tool(cwd, tool_name, params) do
-    with {:ok, tool} <- ToolRegistry.get_tool(cwd, tool_name, include_extensions: false),
-         {:ok, result} <-
-           normalize_tool_result(tool.execute.("eval-#{tool_name}", params, nil, nil)) do
-      {:ok, flatten_text(result)}
+    scratch =
+      Path.join(System.tmp_dir!(), "lemon_eval_intent_#{System.unique_integer([:positive])}")
+
+    recorder = fn data ->
+      session =
+        SessionManager.new(cwd) |> SessionManager.persist(Path.join(scratch, "session.jsonl"))
+
+      try do
+        case SessionManager.record_tool_intent(session, data) do
+          {:ok, _session} -> :ok
+          {:error, reason, _session} -> {:error, reason}
+        end
+      after
+        SessionManager.close(session)
+      end
+    end
+
+    try do
+      with {:ok, tool} <-
+             ToolRegistry.get_tool(cwd, tool_name,
+               include_extensions: false,
+               tool_intent_recorder: recorder
+             ),
+           {:ok, result} <-
+             normalize_tool_result(tool.execute.("eval-#{tool_name}", params, nil, nil)) do
+        {:ok, flatten_text(result)}
+      end
+    after
+      File.rm_rf(scratch)
     end
   end
 

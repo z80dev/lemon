@@ -6,6 +6,8 @@ defmodule CodingAgent.Wasm.SidecarSession do
   owns framing, pending callers and request deadlines. Public calls return
   `{:error, :timeout}` when their deadline expires, even while a host callback
   is running. Late responses cannot complete a later invocation.
+  Parent-intent scopes remain local invocation metadata, forwarded only to the
+  trusted host callback and never encoded into sidecar JSON.
   """
 
   use GenServer
@@ -163,10 +165,11 @@ defmodule CodingAgent.Wasm.SidecarSession do
       ) do
     started_at_ms = now_ms()
     deadline = request_deadline(timeout, @invoke_timeout)
+    scope = CodingAgent.ToolIntent.current_parent_scope()
 
     case GenServer.call(
            pid,
-           {:invoke, tool, params_json, context_json, deadline, signal},
+           {:invoke, tool, params_json, context_json, deadline, signal, scope},
            :infinity
          ) do
       {:invoke_response, result, metadata} ->
@@ -294,7 +297,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
   end
 
   def handle_call(
-        {:invoke, _tool, _params_json, _context_json, _deadline, _signal},
+        {:invoke, _tool, _params_json, _context_json, _deadline, _signal, _scope},
         _from,
         %{invocation: invocation} = state
       )
@@ -302,7 +305,11 @@ defmodule CodingAgent.Wasm.SidecarSession do
     {:reply, {:error, :busy}, state}
   end
 
-  def handle_call({:invoke, tool, params_json, context_json, deadline, signal}, from, state) do
+  def handle_call(
+        {:invoke, tool, params_json, context_json, deadline, signal, scope},
+        from,
+        state
+      ) do
     AbortSignal.subscribe(signal)
 
     cond do
@@ -340,6 +347,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
               owner: elem(from, 0),
               deadline: deadline,
               signal: signal,
+              parent_intent_scope: scope,
               started_at_ms: now_ms()
             }
 
@@ -556,7 +564,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
         {:error, :timeout}
 
       true ->
-        context = Map.take(invocation, [:owner, :deadline, :signal])
+        context = Map.take(invocation, [:owner, :deadline, :signal, :parent_intent_scope])
 
         safe_host_invoke(
           fn name, params ->

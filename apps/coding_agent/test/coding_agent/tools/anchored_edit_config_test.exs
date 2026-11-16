@@ -107,6 +107,7 @@ defmodule CodingAgent.Tools.AnchoredEditConfigTest do
   defp options(session_id, settings) do
     [
       session_id: session_id,
+      tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(session_id),
       settings_manager: settings,
       enabled_only: ["read", "edit"],
       include_extensions: false,

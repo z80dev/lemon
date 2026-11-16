@@ -1113,9 +1113,11 @@ defmodule LemonAgent.Agent do
       tool_timeout_ms: state.tool_timeout_ms,
       intent_tracing: state.intent_tracing,
       stream_options: stream_options,
-      emit_system_prompt: is_pid(state.system_prompt_observer),
-      stream_rules: state.stream_rules,
-      on_stream_rule: state.on_stream_rule,
+      hooks: %{
+        emit_system_prompt: is_pid(state.system_prompt_observer),
+        stream_rules: state.stream_rules,
+        on_stream_rule: state.on_stream_rule
+      },
       stream_fn: state.stream_fn
     }
   end

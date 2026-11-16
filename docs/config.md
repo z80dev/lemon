@@ -322,11 +322,10 @@ or `nil` when omitted) controlling approval exemption for workspace reads.
 Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
 default; supplying an invalid table produces a deny-all policy.
 
-`sandbox` is a validated boolean (default `false`). When true, terminal calls
-are forced into Docker with no external network interface; their only egress is the
-host allowlisting credential broker. Children cannot clear it. This does not
-isolate other tools. See [egress broker](security/egress-broker.md) for setup,
-the threat model and limitations.
+The removed legacy tool-policy key `sandbox` is accepted but ignored, with one
+warning per parsing process. It never changes tool grants, denials, approval
+requirements or other restrictions, and is not serialized. Remove it from old
+configuration: tool policy does not provide operating-system sandboxing.
 
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected

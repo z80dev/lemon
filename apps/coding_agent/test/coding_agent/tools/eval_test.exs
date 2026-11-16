@@ -340,17 +340,16 @@ defmodule CodingAgent.Tools.EvalTest do
       assert text(result) =~ "NameError"
     end
 
-    test "handoff rebinds the durable kernel and ignores the old owner's queued DOWN", ctx do
+    test "the same live owner retains the kernel and another owner cannot take it over", ctx do
       run(ctx, "py", "kept = 41")
       slot = slot!(ctx, "py")
-      {_, %{owner_ref: old_ref}} = :sys.get_state(slot)
-      assert :ok = CodingAgent.ToolResources.handoff(ctx.session_id, ctx.owner)
+      {_, %{owner_ref: owner_ref}} = :sys.get_state(slot)
       next_owner = spawn(fn -> receive do: (:stop -> :ok) end)
       on_exit(fn -> send(next_owner, :stop) end)
       next = %{ctx | opts: [session_id: ctx.session_id, session_pid: next_owner]}
-      assert text(run(next, "py", "kept")) == "41"
-      send(slot, {:DOWN, old_ref, :process, ctx.owner, :normal})
-      assert text(run(next, "py", "kept + 1")) == "42"
+      assert {:error, :owner_conflict} = run(next, "py", "kept")
+      assert text(run(ctx, "py", "kept + 1")) == "42"
+      assert {_, %{owner_ref: ^owner_ref}} = :sys.get_state(slot)
     end
 
     test "kernels die with the owning session", ctx do

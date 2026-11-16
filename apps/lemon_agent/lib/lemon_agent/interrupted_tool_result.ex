@@ -21,6 +21,7 @@ defmodule LemonAgent.InterruptedToolResult do
     notice =
       if started do
         "Tool execution #{reason}; no final result was recorded. Outcome is unknown. " <>
+          "Any nested tool effects are also unknown. " <>
           "Do not assume it did not run or automatically repeat it."
       else
         "Tool execution #{reason} before the call started. Outcome: not started. " <>
