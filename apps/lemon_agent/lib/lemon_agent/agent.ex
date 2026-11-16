@@ -1002,9 +1002,9 @@ defmodule LemonAgent.Agent do
   defp normalize_prompt_input(input) when is_list(input), do: input
   defp normalize_prompt_input(input) when is_map(input), do: [input]
 
-  @spec start_loop(list(Types.agent_message()) | nil, state()) ::
+  @spec start_loop(list(Types.agent_message()) | nil, state(), keyword()) ::
           {:ok, state()} | {:error, term()}
-  defp start_loop(messages, state) do
+  defp start_loop(messages, state, opts \\ []) do
     abort_ref = AbortSignal.new()
     agent_pid = self()
 
@@ -1027,6 +1027,11 @@ defmodule LemonAgent.Agent do
 
     # Build config for the loop
     config = build_loop_config(%{state | agent_state: new_agent_state}, abort_ref, agent_pid)
+
+    config =
+      if Keyword.get(opts, :queued_start, false),
+        do: %{config | hooks: Map.put(config.hooks, :queued_start, true)},
+        else: config
 
     case LemonCore.TaskSupervisor.async_nolink(LemonAgent.LoopTaskSupervisor, fn ->
            run_agent_loop(messages, context, config, abort_ref, agent_pid, state.stream_fn)
@@ -1520,7 +1525,7 @@ defmodule LemonAgent.Agent do
           follow_up_queue: []
       }
 
-      case start_loop(nil, queued) do
+      case start_loop(nil, queued, queued_start: true) do
         {:ok, started} ->
           started
 

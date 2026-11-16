@@ -239,15 +239,16 @@ defmodule LemonAgent.Loop do
           pid() | nil
         ) :: EventStream.t()
   def agent_loop_continue(context, config, signal, stream_fn, owner) do
-    # Validate context
-    if context.messages == [] do
-      raise ArgumentError, "Cannot continue: no messages in context"
-    end
+    # A queue-started run continues from accepted input that its first steering
+    # drain supplies, so its history may be empty or end with an assistant turn.
+    unless Map.get(config.hooks || %{}, :queued_start, false) do
+      if context.messages == [] do
+        raise ArgumentError, "Cannot continue: no messages in context"
+      end
 
-    last_message = List.last(context.messages)
-
-    if assistant_message?(last_message) do
-      raise ArgumentError, "Cannot continue from message role: assistant"
+      if assistant_message?(List.last(context.messages)) do
+        raise ArgumentError, "Cannot continue from message role: assistant"
+      end
     end
 
     {:ok, stream} =

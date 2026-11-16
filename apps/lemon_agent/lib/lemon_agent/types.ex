@@ -459,6 +459,9 @@ defmodule LemonAgent.Types do
       - `queue_owner` - Queue-owning Agent pid; takes precedence over standalone callbacks
       - `queue_ref` - Active run's abort reference, binding requests and notifications
       - `queue_timeout` - Queue reply deadline (default 30 minutes; `:infinity` opts out)
+      - `queued_start` - Internal: the owner started this continue run from queued
+        input, so `agent_loop_continue` accepts an empty or assistant-final history
+        (default false)
       - `emit_system_prompt` - Internal journal transport; the Agent consumes these
         snapshots without publishing them to ordinary subscribers (default false)
       - `stream_rules` - Dormant rules, or a zero-arity resolver returning active rules
@@ -516,6 +519,7 @@ defmodule LemonAgent.Types do
             optional(:queue_owner) => pid() | nil,
             optional(:queue_ref) => reference() | nil,
             optional(:queue_timeout) => timeout(),
+            optional(:queued_start) => boolean(),
             optional(:emit_system_prompt) => boolean(),
             optional(:stream_rules) => [map()] | (-> [map()]),
             optional(:on_stream_rule) => (map() -> :ok | {:error, term()}) | nil

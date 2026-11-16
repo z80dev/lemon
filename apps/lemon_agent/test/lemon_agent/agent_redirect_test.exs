@@ -138,9 +138,11 @@ defmodule LemonAgent.AgentRedirectTest do
 
       {:ok, agent} = start_agent(stream_fn: Mocks.mock_stream_fn([response1, response2]))
 
-      # Redirect with no run active: should queue as a follow-up
+      # Redirect with no run active degrades to follow-up semantics: idle
+      # follow-ups start their own run deterministically (#559).
       :ok = CoreAgent.redirect(agent, user_message("Queued while idle"))
-      assert length(:sys.get_state(agent).follow_up_queue) == 1
+      assert :sys.get_state(agent).follow_up_queue == []
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 10_000)
 
       :ok = CoreAgent.prompt(agent, "Hello")
       assert :ok = CoreAgent.wait_for_idle(agent, timeout: 10_000)
