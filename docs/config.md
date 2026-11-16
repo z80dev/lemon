@@ -1607,10 +1607,24 @@ and continuation state are never written to session history or restored after
 parking/restart. Summary/classifier calls do not borrow the conversation's
 transport.
 
+Contexts use chronological message order (oldest first), including histories
+built with `LemonAi.Types.Context.add_*`. Reordering prior input or assistant
+output invalidates the continuation prefix and correctly forces a full replay.
+
 An invalid continuation anchor triggers a full replay. Three anchor rejections
 disable chaining for that logical session, including across compaction resets.
 This feature is experimental and off by default; no token or latency improvement
 is claimed without a measured workload.
+
+A bounded follow-up on 2026-11-16 used two `openai-codex:gpt-6.1-sol`
+requests through a real `CodingAgent.Session` with low reasoning and provider
+retries disabled. Both requests succeeded on the same connection with zero
+anchor rejections. Turn 2 carried the preceding completed response ID and only
+one new user input item instead of the three-item replay; encoded input was
+1,619 then 1,621 bytes. The earlier non-chaining diagnostic used context helpers
+that prepended history, unlike the provider/session chronological contract.
+The helpers now append chronologically. Five live requests total were used for
+diagnosis and this verification; this is not a latency or token-savings benchmark.
 
 ## OpenAI-Compatible Endpoints
 

@@ -851,13 +851,17 @@ All defined in `LemonAi.Types`:
 
 %LemonAi.Types.Context{
   system_prompt: LemonAi.SystemPrompt.t(),  # binary | ordered blocks | nil
-  messages: [message()],       # stored newest-first for O(1) append
+  messages: [message()],       # chronological, oldest first
   tools: [Tool.t()]
 }
 ```
 
-> `Context.messages` is stored reversed (newest first). Use
-> `LemonAi.Types.Context.get_messages_chronological/1` when passing to an API directly.
+> `Context.messages` and the `Context.add_*` helpers use chronological order
+> (oldest first), the same order sent to providers. Do not reverse helper-built
+> history before sending it.
+> Earlier releases prepended helper messages and exposed a reversing
+> `get_messages_chronological/1` accessor. That accessor is removed; use
+> `context.messages` without reversing it.
 
 `LemonAi.ImageInputs.validate/1` validates the JSON image block array
 `[{"type":"image","mime_type":"image/png","data":"<canonical Base64>"}]`

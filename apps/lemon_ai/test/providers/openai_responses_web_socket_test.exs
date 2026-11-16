@@ -208,6 +208,47 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocketTest do
     end
   end
 
+  test "context helpers preserve the anchored prefix on a second turn", state do
+    for provider <- [OpenAIResponses, OpenAICodexResponses] do
+      OpenAIResponsesWebSocket.reset(state.transport)
+      model = model(provider, state.base_url)
+      opts = options(provider, state.transport)
+
+      context =
+        Context.new(system_prompt: "Stable instructions")
+        |> Context.add_user_message("first")
+
+      {:ok, stream} = provider.stream(model, context, opts)
+      assert_receive {:ws_request, socket, first}, 2_000
+      refute Map.has_key?(first, "previous_response_id")
+      send(socket, {:events, completed("resp_helper_first")})
+
+      assistant =
+        stream
+        |> EventStream.events()
+        |> Enum.find_value(fn
+          {:done, _, message} -> message
+          _ -> nil
+        end)
+
+      assert [%TextContent{text_signature: "msg_resp_helper_first"}] = assistant.content
+      assert :sys.get_state(state.transport).baseline != nil
+
+      context =
+        context
+        |> Context.add_assistant_message(assistant)
+        |> Context.add_user_message("second")
+
+      {:ok, stream} = provider.stream(model, context, opts)
+      assert_receive {:ws_request, next_socket, second}, 2_000
+      assert second["previous_response_id"] == "resp_helper_first"
+      assert next_socket == socket
+      assert [%{"role" => "user", "content" => [%{"text" => "second"}]}] = second["input"]
+      send(next_socket, {:events, completed("resp_helper_second")})
+      assert {:ok, _} = EventStream.result(stream, 2_000)
+    end
+  end
+
   test "tool-result continuation sends only the new result", state do
     for provider <- [OpenAIResponses, OpenAICodexResponses] do
       OpenAIResponsesWebSocket.reset(state.transport)
@@ -253,7 +294,11 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocketTest do
         content: [%TextContent{text: "found"}]
       }
 
-      context = %{context | messages: context.messages ++ [assistant, result]}
+      context =
+        context
+        |> Context.add_assistant_message(assistant)
+        |> Context.add_tool_result(result)
+
       {:ok, stream} = provider.stream(model, context, opts)
       assert_receive {:ws_request, ^socket, body}, 2_000
       assert body["previous_response_id"] == "resp_tool"
@@ -483,8 +528,12 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocketTest do
         | provider_options: %{responses_websocket: false, responses_transport: state.transport}
       }
 
-      {:ok, stream} = provider.stream(model(provider, state.base_url), context("first"), opts)
-      assert {:ok, _} = EventStream.result(stream, 2_000)
+      context =
+        Context.new(system_prompt: "Stable instructions")
+        |> Context.add_user_message("first")
+
+      {:ok, stream} = provider.stream(model(provider, state.base_url), context, opts)
+      assert {:ok, assistant} = EventStream.result(stream, 2_000)
       assert_receive {:sse_request, _path, headers, %{"stream" => true} = body}
 
       if provider == OpenAICodexResponses do
@@ -493,6 +542,22 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocketTest do
 
       refute Map.has_key?(body, "previous_response_id")
       refute Map.has_key?(body, "type")
+
+      context =
+        context
+        |> Context.add_assistant_message(assistant)
+        |> Context.add_user_message("second")
+
+      {:ok, stream} = provider.stream(model(provider, state.base_url), context, opts)
+      assert {:ok, _} = EventStream.result(stream, 2_000)
+      assert_receive {:sse_request, _path, _headers, body}
+      refute Map.has_key?(body, "previous_response_id")
+
+      assert [
+               %{"role" => "user", "content" => [%{"text" => "first"}]},
+               %{"role" => "assistant", "content" => [%{"text" => "Answer"}]},
+               %{"role" => "user", "content" => [%{"text" => "second"}]}
+             ] = Enum.filter(body["input"], &(&1["role"] in ["user", "assistant"]))
     end
 
     refute_receive {:ws_connected, _socket, _headers}, 50

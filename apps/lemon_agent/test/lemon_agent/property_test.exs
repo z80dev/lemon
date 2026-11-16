@@ -872,7 +872,7 @@ defmodule LemonAgent.TypesPropertyTest do
       end
     end
 
-    property "Context.add_user_message prepends message (O(1) performance)" do
+    property "Context.add_user_message appends without reordering history" do
       check all(
               initial_count <- integer(0..5),
               content <- non_empty_string()
@@ -886,15 +886,10 @@ defmodule LemonAgent.TypesPropertyTest do
         updated = Context.add_user_message(ctx, content)
 
         assert length(updated.messages) == initial_count + 1
-        # Messages are prepended for O(1) performance, so new message is at head
-        first_msg = hd(updated.messages)
-        assert %UserMessage{} = first_msg
-        assert first_msg.content == content
-
-        # Chronological order can be obtained with get_messages_chronological/1
-        chronological = Context.get_messages_chronological(updated)
-        last_msg = List.last(chronological)
+        last_msg = List.last(updated.messages)
+        assert %UserMessage{} = last_msg
         assert last_msg.content == content
+        assert updated.messages == initial_messages ++ [last_msg]
       end
     end
 
