@@ -57,12 +57,12 @@ export function parseSessionsEvents(value: unknown): SessionsEventsResult {
 		return { status: "cursor_expired", sessionKey: result.sessionKey };
 	if (
 		result.status !== "ok" ||
-		!Array.isArray(result.events) ||
+		!Array.isArray(result.entries) ||
 		typeof result.hasMore !== "boolean"
 	) {
 		throw new Error("invalid sessions.events response");
 	}
 	parseSessionEventCursor(result.cursor);
-	for (const entry of result.events) parseSessionEventBatch(entry, result.sessionKey);
+	for (const entry of result.entries) parseSessionEventBatch(entry, result.sessionKey);
 	return result as SessionsEventsResult;
 }

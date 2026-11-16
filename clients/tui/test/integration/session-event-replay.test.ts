@@ -73,7 +73,7 @@ function delta(seq: number, text: string): SessionEventBatch {
 }
 
 function page(events: SessionEventBatch[], last: number, hasMore = false): SessionsEventsResult {
-	return { status: "ok", sessionKey: KEY, events, cursor: cursor(last), hasMore };
+	return { status: "ok", sessionKey: KEY, entries: events, cursor: cursor(last), hasMore };
 }
 
 function deferred<T>() {

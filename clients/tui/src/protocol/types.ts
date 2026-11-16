@@ -44,7 +44,7 @@ export type SessionsEventsResult =
 	| {
 			status: "ok";
 			sessionKey: string;
-			events: SessionEventBatch[];
+			entries: SessionEventBatch[];
 			cursor: SessionEventCursor;
 			hasMore: boolean;
 	  }

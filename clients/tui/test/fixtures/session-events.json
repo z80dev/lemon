@@ -1,0 +1,34 @@
+{
+  "page": {
+    "status": "ok",
+    "sessionKey": "session-contract",
+    "entries": [
+      {
+        "cursor": {"version": 1, "sessionId": "native-owner", "streamId": "owner-stream", "seq": 1},
+        "eventId": "owner-stream:1",
+        "events": [{"event": "chat", "payload": {"type": "delta", "runId": "replay-run", "sessionKey": "session-contract", "seq": 1, "text": "hello"}}]
+      },
+      {
+        "cursor": {"version": 1, "sessionId": "native-owner", "streamId": "owner-stream", "seq": 2},
+        "eventId": "owner-stream:2",
+        "events": []
+      }
+    ],
+    "cursor": {"version": 1, "sessionId": "native-owner", "streamId": "owner-stream", "seq": 2},
+    "hasMore": true
+  },
+  "empty": {
+    "status": "ok",
+    "sessionKey": "session-contract",
+    "entries": [],
+    "cursor": {"version": 1, "sessionId": "native-owner", "streamId": "owner-stream", "seq": 2},
+    "hasMore": false
+  },
+  "expired": {
+    "status": "cursor_expired",
+    "sessionKey": "session-contract",
+    "entries": [],
+    "cursor": null,
+    "hasMore": false
+  }
+}
