@@ -514,7 +514,7 @@ export class SessionController {
 				}
 				// Validate the whole page before committing any of its projection.
 				let seq = cursor.seq;
-				for (const batch of result.events) {
+				for (const batch of result.entries) {
 					if (!sameSessionEventStream(cursor, batch.cursor))
 						throw new SessionEventCursorError("session event owner incarnation changed");
 					if (batch.cursor.seq !== seq + 1) throw new Error("noncontiguous session event replay");
@@ -522,10 +522,10 @@ export class SessionController {
 				}
 				if (!sameSessionEventStream(cursor, result.cursor))
 					throw new SessionEventCursorError("session event owner incarnation changed");
-				if (result.cursor.seq !== seq || (result.hasMore && result.events.length === 0))
+				if (result.cursor.seq !== seq || (result.hasMore && result.entries.length === 0))
 					throw new Error("invalid session event replay continuation");
 				const raced = eventVersion !== session.recoveryEventVersion;
-				for (const batch of result.events) {
+				for (const batch of result.entries) {
 					if (!this.#events.applySessionBatch(session, batch))
 						throw new Error("session event replay lost its cursor");
 				}

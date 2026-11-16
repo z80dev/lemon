@@ -657,6 +657,16 @@ callers must pass `StreamOptions.session_id`; the library does not invent one.
 
 Session and cwd identifiers in the WASM events are hashed, not raw.
 
+### Session lifecycle counters and tool intents — `[:coding_agent, ...]`
+
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:coding_agent, :session, :environment_capture]` | `count: 1` | `session_id` | [`session_manager.ex:531`](../apps/coding_agent/lib/coding_agent/session_manager.ex) |
+| `[:coding_agent, :session, :journal_load]` | `count: 1` | `session_id` | [`session_manager.ex:1354`](../apps/coding_agent/lib/coding_agent/session_manager.ex) |
+| `[:coding_agent, :tool_intent, :stop]` | `duration_us` (digest, owner queueing, append and sync; not tool execution) | `effect`, `status: :ok \| :error` | [`tool_intent.ex`](../apps/coding_agent/lib/coding_agent/tool_intent.ex) |
+
+The session counters count actual captures/parses and carry no content.
+
 ### Session recovery — `[:coding_agent, :session, :overflow_recovery, ...]`
 
 The last segment is built at runtime.

@@ -328,9 +328,8 @@ if [ "$MODE" = "release" ]; then
   "$RELEASE_BIN" daemon
 else
   echo "[smoke] Booting dev runtime via bin/lemon (log: $WORK/runtime.log)..."
-  ./bin/lemon start \
+  RELEASE_COOKIE="$COOKIE" ./bin/lemon start \
     --sname "$SNAME" \
-    --cookie "$COOKIE" \
     --port "$CONTROL_PORT" \
     --web-port "$WEB_PORT" \
     > "$WORK/runtime.log" 2>&1 &

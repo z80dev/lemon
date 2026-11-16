@@ -7,7 +7,7 @@ and their full-authority stateful Python/JavaScript `eval` kernels below are
 unchanged. Select the experiment with:
 
 ```toml
-[tools.disclosure]
+[runtime.tools.disclosure]
 profile = "code_mode"
 ```
 
@@ -56,8 +56,8 @@ Terminal statuses are `ok`, `error`, `timeout` or `aborted`. One cell runs per
 session; a second `eval` refuses while it is running. Its bounded result
 (last 50 KiB; `details.truncated` reports clipping) remains attachable until a
 new cell replaces it, the resource expires after 30 idle minutes, or the session
-is disposed. Cells survive successful session-resource handoff; new bridged
-calls pause while detached, and re-attachment refreshes the session resolver.
+is disposed. A later `eval_wait` re-attaches to the cell by `cell_id` and refreshes the
+session resolver; there is no resource handoff or detached state.
 They are volatile: a node/runtime crash does not journal or replay a cell.
 Cancellation/deadline terminates the cell and aborts/joins outstanding tools.
 

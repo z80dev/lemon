@@ -3,7 +3,7 @@
 # lemon-gateway - Launch Lemon's Telegram runtime from source.
 #
 # Usage:
-#   ./bin/lemon-gateway [--debug] [--name <name@host> | --sname <name>] [--cookie <cookie>] [--no-distribution]
+#   ./bin/lemon-gateway [--debug] [--name <name@host> | --sname <name>] [--no-distribution]
 #
 # Reads configuration from:
 #   ~/.lemon/config.toml
@@ -35,7 +35,6 @@ Options:
   --debug                 Enable debug logging
   --name <name@host>      Start as a distributed long-name node
   --sname <name>          Start as a distributed short-name node (default: lemon_gateway)
-  --cookie <cookie>       Distributed Erlang cookie (default: env override or ~/.lemon/cookie)
   --no-distribution       Disable distributed node startup
   --help, -h              Show this help
 
@@ -43,6 +42,7 @@ Environment overrides:
   LEMON_GATEWAY_NODE_NAME      Default node name when using distribution (default: lemon_gateway)
   LEMON_GATEWAY_NODE_COOKIE    Override the per-install ~/.lemon/cookie
   LEMON_GATEWAY_COOKIE         Legacy fallback cookie env var
+  RELEASE_COOKIE              Fallback distribution cookie (never use argv)
   LEMON_DOTENV_DIR             Directory whose .env file should be loaded
 EOF
 }
@@ -50,7 +50,7 @@ EOF
 DEBUG=""
 NODE_MODE=""
 NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon_gateway}"
-NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-}}"
+NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-${RELEASE_COOKIE:-}}}"
 DISTRIBUTED=1
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -76,15 +76,6 @@ while [[ $# -gt 0 ]]; do
 
       NODE_MODE="sname"
       NODE_NAME="$2"
-      shift 2
-      ;;
-    --cookie)
-      if [[ -z "${2:-}" ]]; then
-        echo "Missing value for --cookie" >&2
-        exit 1
-      fi
-
-      NODE_COOKIE="$2"
       shift 2
       ;;
     --no-distribution)
@@ -131,7 +122,7 @@ if [[ "$DISTRIBUTED" == "1" && -z "$NODE_COOKIE" ]]; then
 fi
 
 if [[ "$DISTRIBUTED" == "1" ]] && [[ -z "$NODE_COOKIE" ]]; then
-  echo "Distributed mode requires a non-empty cookie. Pass --cookie or set LEMON_GATEWAY_NODE_COOKIE." >&2
+  echo "Distributed mode requires a non-empty cookie. Set LEMON_GATEWAY_NODE_COOKIE or RELEASE_COOKIE." >&2
   exit 1
 fi
 
@@ -207,12 +198,11 @@ if [[ "$DISTRIBUTED" == "1" ]]; then
 
   echo "[lemon-gateway] Distributed node: --$NODE_MODE $NODE_NAME"
   echo "[lemon-gateway] Remote shell target: $REMSH_TARGET"
-  if [[ "$NODE_MODE" == "name" ]]; then
-    echo "[lemon-gateway] Attach example: iex --name <attach@host> --cookie <same-cookie> --remsh $REMSH_TARGET"
-  else
-    echo "[lemon-gateway] Attach example: iex --sname <attach_name> --cookie <same-cookie> --remsh $REMSH_TARGET"
-  fi
-  exec elixir "--$NODE_MODE" "$NODE_NAME" --cookie "$NODE_COOKIE" -S mix run --no-start --no-halt -e 'LemonCore.Dotenv.load_and_log(System.get_env("LEMON_DOTENV_DIR")); Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_channels)'
+  echo "[lemon-gateway] Attach using the guarded source remsh in docs/security/threat-model.md#distribution-cookie"
+  export RELEASE_COOKIE="$NODE_COOKIE"
+  exec elixir --erl "-kernel start_distribution false -nocookie" "--$NODE_MODE" "$NODE_NAME" \
+    -r "$LEMON_ROOT/apps/lemon_cli/lib/lemon_cli/distribution.ex" -e 'LemonCli.Distribution.boot()' \
+    -S mix run --no-start --no-halt -e 'LemonCore.Dotenv.load_and_log(System.get_env("LEMON_DOTENV_DIR")); Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_channels)'
 else
   echo "[lemon-gateway] Distribution disabled (--no-distribution); remote attach is unavailable."
   exec mix run --no-start --no-halt -e 'LemonCore.Dotenv.load_and_log(System.get_env("LEMON_DOTENV_DIR")); Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_channels)'

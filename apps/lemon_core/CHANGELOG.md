@@ -10,6 +10,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
+- **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,
+  `signal_pids/2` and `signal_workload_group/3,4`; migrate to
+  `LemonCore.ProcessGroup.terminate/2` (#586).
+- **Breaking (0.3.0):** removed `LemonCore.Store.get_run_history/2,3` and the
+  `:run_history_provider` option; migrate to `LemonCore.RunHistoryStore.get/2,3`
+  or `fetch/2` (#579).
 - `LemonCore.Service.Lock` recovers stale locks and `:global.trans` callers use
   `[node()]` with finite retries; `Lemon.Reload` fails fast by default (#589).
 - `Store` secondary work moved out of the Store process: run-history reads go

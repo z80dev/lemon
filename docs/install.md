@@ -359,8 +359,9 @@ Differences:
   `bun install --frozen-lockfile` if `clients/tui/node_modules` is missing, and
   compiles the project when needed.
 - `./bin/lemon start` accepts `--port`, `--web-port`, `--name`,
-  `--sname`, `--cookie`, `--debug` and `--no-distribution`; see
-  `./bin/lemon start --help`.
+  `--sname`, `--debug` and `--no-distribution`; see `./bin/lemon start --help`.
+  Select an explicit cookie through `RELEASE_COOKIE` or
+  `LEMON_GATEWAY_NODE_COOKIE`, not a command-line flag.
 - `./bin/lemon update plan|apply|rollback` fail closed; update with your Git
   workflow (see [Source checkouts](user-guide/updates.md#source-checkouts-and-other-layouts)).
 - Commands that only exist in packaged releases (`remote`, `eval`, `rpc`) are not

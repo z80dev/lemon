@@ -339,9 +339,12 @@ The registry defines their help and completion; the launcher executes them:
 
 Source runtime options go after `start`, `daemon`, or `restart`:
 `--debug`, `--port N`, `--web-port N`, `--name name@host`,
-`--sname name`, `--cookie C`, and `--no-distribution`. For example,
+`--sname name`, and `--no-distribution`. For example,
 `./bin/lemon start --no-distribution`. Runtime options are accepted after the
-relevant lifecycle command, not as bare launcher flags.
+relevant lifecycle command, not as bare launcher flags. Select an explicit cookie
+through `RELEASE_COOKIE` or `LEMON_GATEWAY_NODE_COOKIE`; the `--cookie` option
+is removed because its value is visible in process argv. See
+[distribution cookie security](../security/threat-model.md#distribution-cookie).
 
 Both ports must be integers from 1 through 65535. Environment defaults are
 `LEMON_CONTROL_PLANE_PORT=4040` and `LEMON_WEB_PORT=4080`; source `status` and

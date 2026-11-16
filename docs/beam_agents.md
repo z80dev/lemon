@@ -92,6 +92,13 @@ from its cursor and falling back to `sessions.snapshot` only on expiry. Snapshot
 collection includes the native cursor so replacement text and later deltas have
 an explicit boundary. Failed reads never imply an empty/idle session.
 
+Successful replay pages contain `status: "ok"`, `sessionKey`, `entries`, `cursor`,
+and `hasMore`. Each entry contains its `cursor`, `eventId`, and projected `events`
+array (which may be empty while still advancing the cursor). `cursor_expired`
+returns empty `entries`, a null `cursor`, and `hasMore: false`. The method schema
+in `protocol/schemas.ex` validates request parameters; the method's response uses
+these camel-case wire fields, not the native provider's `events`/`has_more` page.
+
 Subscriber monitoring removes dead listeners and cancels/demonitors owned
 streams. Fences are transport control messages, not sequenced session events.
 Every terminal/error path releases subscriptions without inventing success.
@@ -142,7 +149,7 @@ than claim registration succeeded. Do not run the callback without the lock,
 fabricate success, or retry a callback's `:outcome_unknown` result. Retrying lock
 acquisition is not permission to repeat a side effect.
 
-`LemonCore.MutationLock` owns reentrant multi-key in-VM mutations; callers use
+`CodingAgent.MutationLock` owns reentrant multi-key in-VM mutations; callers use
 its bounded acquisition and sorted key ordering rather than composing ad-hoc
 nested locks. Cross-process file mutations use `LemonCore.Service.Lock`;
 `LemonCore.Secrets.Lock` retains the secret-store transaction boundary.

@@ -6,16 +6,38 @@ import {
 	SessionEventCursorError,
 	sameSessionEventStream,
 } from "../../src/protocol/session-events.ts";
+import fixture from "../fixtures/session-events.json";
 
 const cursor = { version: 1 as const, sessionId: "native", streamId: "owner:branch", seq: 5 };
 
 describe("versioned session event wire boundaries", () => {
+	test("parses the exact server method fixture, asserted by ExUnit", () => {
+		for (const wire of [fixture.page, fixture.empty]) {
+			const result = parseSessionsEvents(wire);
+			expect<unknown>(result).toBe(wire);
+			if (result.status !== "ok") throw new Error("expected replay page");
+			expect<unknown>(result.entries).toEqual(wire.entries);
+			expect(result.hasMore).toBe(wire.hasMore);
+			expect<unknown>(result.cursor).toEqual(wire.cursor);
+		}
+		expect(parseSessionsEvents(fixture.expired)).toEqual({
+			status: "cursor_expired",
+			sessionKey: fixture.expired.sessionKey,
+		});
+		expect(() =>
+			parseSessionsEvents({ ...fixture.page, entries: undefined, events: [] }),
+		).toThrow();
+		expect(() =>
+			parseSessionsEvents({ ...fixture.page, hasMore: undefined, has_more: true }),
+		).toThrow();
+	});
+
 	test("keeps cursor and event identity unchanged, including empty projections", () => {
 		const batch = { cursor, eventId: "owner:branch:5", events: [] };
 		const result = {
 			status: "ok" as const,
 			sessionKey: "session",
-			events: [batch],
+			entries: [batch],
 			cursor,
 			hasMore: false,
 		};
@@ -68,12 +90,12 @@ describe("versioned session event wire boundaries", () => {
 			),
 		).toThrow("invalid session event projection");
 		for (const value of [
-			{ status: "ok", sessionKey: "session", events: [], cursor },
+			{ status: "ok", sessionKey: "session", entries: [], cursor },
 			{ status: "unknown", sessionKey: "session" },
 			{
 				status: "ok",
 				sessionKey: "session",
-				events: [{ cursor, events: null }],
+				entries: [{ cursor, events: null }],
 				cursor,
 				hasMore: false,
 			},

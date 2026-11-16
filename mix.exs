@@ -1,3 +1,5 @@
+Code.require_file("rel/distribution.exs", __DIR__)
+
 defmodule Lemon.MixProject do
   use Mix.Project
 
@@ -82,7 +84,14 @@ defmodule Lemon.MixProject do
           lemon_control_plane: :permanent
         ],
         include_executables_for: [:unix],
-        steps: [:assemble, &bundle_python/1, &bundle_browser_driver/1, &stamp_build/1, :tar]
+        steps: [
+          :assemble,
+          &Lemon.DistributionRelease.secure/1,
+          &bundle_python/1,
+          &bundle_browser_driver/1,
+          &stamp_build/1,
+          :tar
+        ]
       ],
       lemon_runtime_full: [
         applications: [
@@ -108,7 +117,14 @@ defmodule Lemon.MixProject do
           lemon_web: :permanent
         ],
         include_executables_for: [:unix],
-        steps: [:assemble, &bundle_python/1, &bundle_browser_driver/1, &stamp_build/1, :tar]
+        steps: [
+          :assemble,
+          &Lemon.DistributionRelease.secure/1,
+          &bundle_python/1,
+          &bundle_browser_driver/1,
+          &stamp_build/1,
+          :tar
+        ]
       ]
     ]
   end

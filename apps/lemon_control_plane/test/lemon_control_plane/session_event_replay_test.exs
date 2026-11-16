@@ -109,6 +109,29 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     assert key == c.key
   end
 
+  test "shared TUI fixture matches the exact method JSON responses", c do
+    fixture =
+      Path.expand("../../../../clients/tui/test/fixtures/session-events.json", __DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    c = %{c | key: fixture["page"]["sessionKey"]}
+    set_result(c, page([entry(1, [delta(c.key, "hello")]), entry(2, [])], cursor(2), true))
+    assert {:ok, result} = SessionsEvents.handle(params(c), ctx())
+    assert Jason.decode!(Jason.encode!(result)) == fixture["page"]
+
+    set_result(c, page([], cursor(2)))
+
+    assert {:ok, result} =
+             SessionsEvents.handle(Map.put(params(c), "cursor", cursor(2)), ctx())
+
+    assert Jason.decode!(Jason.encode!(result)) == fixture["empty"]
+
+    set_result(c, {:error, :cursor_expired})
+    assert {:ok, result} = SessionsEvents.handle(params(c), ctx())
+    assert Jason.decode!(Jason.encode!(result)) == fixture["expired"]
+  end
+
   test "replay preserves order, identity, empty batches, and exact live projections", c do
     first = entry(1, [delta(c.key, "a"), delta(c.key, "b")])
     second = entry(2, [])
@@ -451,7 +474,12 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     do: {:ok, %{events: entries, cursor: cursor, has_more: more}}
 
   defp delta(key, text),
-    do: Event.new(:delta, %{text: text, seq: 1}, %{session_key: key, run_id: "replay-run"})
+    do:
+      Event.new(
+        :delta,
+        %LemonCore.Events.Delta{run_id: "replay-run", text: text, seq: 1},
+        %{session_key: key, run_id: "replay-run"}
+      )
 
   defp envelope(key, entry),
     do:
