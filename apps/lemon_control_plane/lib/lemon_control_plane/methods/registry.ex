@@ -73,6 +73,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ProcessJobsCancel,
     # Models
     LemonControlPlane.Methods.ModelsList,
+    LemonControlPlane.Methods.ModelsPreconnect,
     LemonControlPlane.Methods.ProvidersManagementList,
     LemonControlPlane.Methods.ProvidersManagementApiKeySet,
     LemonControlPlane.Methods.ProvidersManagementDisconnect,

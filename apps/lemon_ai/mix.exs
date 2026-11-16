@@ -86,6 +86,8 @@ defmodule LemonAi.MixProject do
     [
       # HTTP client with streaming support
       {:req, "~> 0.5"},
+      # Direct access to Req's connection pool for unpaid preconnect hints
+      {:finch, "~> 0.21"},
       # JSON encoding/decoding
       {:jason, "~> 1.4"},
       # Options validation

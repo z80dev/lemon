@@ -280,6 +280,13 @@ export class AppShell {
 			vimMode: options.vimMode,
 			modelMentions: this.#modelMentions,
 			theme: getEditorTheme(),
+			onComposeStart: () => {
+				const model = this.store.focused.model;
+				if (!model || !this.client.online || !this.methods.supports("models.preconnect")) return;
+				void this.client
+					.request("models.preconnect", { model }, { queueIfOffline: false })
+					.catch(() => {});
+			},
 			onSubmit: async (text) => {
 				const sessionKey = this.store.focusedKey;
 				const disposition = await this.submit(text);

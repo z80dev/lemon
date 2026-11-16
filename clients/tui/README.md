@@ -12,6 +12,18 @@ Installed users get this client as a compiled per-platform binary
 (`~/.lemon/versions/<v>/tui/bin/lemon-tui`); plain `lemon` in an interactive
 terminal launches it, auto-starting the daemon first. See `docs/install.md`.
 
+Native session startup and the first change from an empty to nonempty prompt
+(terminal typing, native Tern editing, paste or draft restoration) hint the
+selected model's HTTP pool to warm. The TUI sends only the catalog model ID via
+`models.preconnect` (operator write scope), only when advertised and online;
+hints are never queued offline. The daemon coalesces origins for 30 seconds,
+accepting at most eight distinct origins in that window and running at most eight
+warm-up tasks concurrently. Warming sends an unauthenticated `HEAD /`
+through the same stock `Req.Finch` pool as provider calls: no prompt, credentials,
+model generation, retry or redirect. Failures are silent and cannot prevent
+submission. Servers may close idle connections; latency gains are not guaranteed
+and still require the opt-in latency measurements.
+
 The source launcher `../../bin/lemon-tui` securely bootstraps a fresh local
 runtime: when no runtime is listening and no token is configured, it generates
 a high-entropy process-scoped `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, passes the

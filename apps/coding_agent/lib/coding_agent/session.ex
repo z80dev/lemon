@@ -1067,6 +1067,7 @@ defmodule CodingAgent.Session do
     {:ok, state, extension_status_report} = Lifecycle.initialize(opts, self())
     # A resumed or forked file starts on its selected branch like any other.
     state = BranchState.restore(state)
+    LemonAi.preconnect(state.model)
 
     maybe_register_session(
       state.session_manager,
