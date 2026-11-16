@@ -196,11 +196,13 @@ defmodule LemonAi.Retry do
 
   defp default_failure(
          %{__struct__: LemonAi.Types.AssistantMessage, stop_reason: :error} = error
-       ), do: {:failed, error}
+       ),
+       do: {:failed, error}
 
   defp default_failure(
          {:ok, %{__struct__: LemonAi.Types.AssistantMessage, stop_reason: :error} = error}
-       ), do: {:failed, error}
+       ),
+       do: {:failed, error}
 
   defp default_failure(
          {:error, %{__struct__: LemonAi.Types.AssistantMessage, stop_reason: reason}}

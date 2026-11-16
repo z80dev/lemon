@@ -205,6 +205,7 @@ export default {
             collapsed: true,
             items: [
               { text: "Overview", link: "/architecture/overview" },
+              { text: "Admission gates", link: "/architecture/admission-gates" },
               { text: "BEAM agents", link: "/beam_agents" },
               { text: "App boundaries", link: "/architecture_boundaries" },
               { text: "omp port ledger", link: "/omp-port-ledger" },
@@ -249,6 +250,7 @@ export default {
           { text: "Platform microbenchmarks", link: "/benchmarks/platform-microbenchmarks" },
           { text: "Paired disclosure protocol", link: "/benchmarks/paired-disclosure" },
           { text: "Latency budget", link: "/benchmarks/latency-sla" },
+          { text: "Session memory", link: "/benchmarks/session-memory" },
         ],
       },
     ],

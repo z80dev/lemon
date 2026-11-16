@@ -14,7 +14,9 @@ test("compose hint fires on first edit, not navigation or every character, and r
 	const editor = new CustomEditor({
 		theme: getEditorTheme(),
 		onSubmit: () => {},
-		onComposeStart: () => { hints += 1; },
+		onComposeStart: () => {
+			hints += 1;
+		},
 	});
 	editor.handleInput("\x1b[D");
 	expect(hints).toBe(0);
@@ -32,16 +34,50 @@ test("native edits and paste share the first-compose hint, but caret and stale e
 	const editor = new CustomEditor({
 		theme: getEditorTheme(),
 		onSubmit: () => {},
-		onComposeStart: () => { hints += 1; },
+		onComposeStart: () => {
+			hints += 1;
+		},
 	});
-	editor.handleNativeEvent({ type: "edit", key: "line/input", from: 0, to: 0, text: "", cursor: 0, len: 0 });
+	editor.handleNativeEvent({
+		type: "edit",
+		key: "line/input",
+		from: 0,
+		to: 0,
+		text: "",
+		cursor: 0,
+		len: 0,
+	});
 	expect(hints).toBe(0);
-	editor.handleNativeEvent({ type: "edit", key: "line/input", from: 0, to: 0, text: "a", cursor: 1, len: 0 });
+	editor.handleNativeEvent({
+		type: "edit",
+		key: "line/input",
+		from: 0,
+		to: 0,
+		text: "a",
+		cursor: 1,
+		len: 0,
+	});
 	expect(hints).toBe(1);
-	editor.handleNativeEvent({ type: "edit", key: "line/input", from: 1, to: 1, text: "b", cursor: 2, len: 1 });
+	editor.handleNativeEvent({
+		type: "edit",
+		key: "line/input",
+		from: 1,
+		to: 1,
+		text: "b",
+		cursor: 2,
+		len: 1,
+	});
 	expect(hints).toBe(1);
 	editor.setText("");
-	editor.handleNativeEvent({ type: "edit", key: "line/input", from: 0, to: 0, text: "stale", cursor: 5, len: 9 });
+	editor.handleNativeEvent({
+		type: "edit",
+		key: "line/input",
+		from: 0,
+		to: 0,
+		text: "stale",
+		cursor: 5,
+		len: 9,
+	});
 	expect(hints).toBe(1);
 	await editor.pasteContent("pasted");
 	expect(hints).toBe(2);
