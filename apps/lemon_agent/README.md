@@ -2,6 +2,15 @@
 
 Core agent runtime for the Lemon umbrella project. LemonAgent provides OTP-native building blocks for AI agents: a supervised GenServer for stateful agent lifecycle management, a stateless agentic loop with streaming events, bounded event streams with backpressure, cooperative abort signaling, context window management, and a subagent supervision/registry infrastructure.
 
+Agent processes use OTP `hibernate_after: 5_000` to reclaim idle heaps between
+turns, without a polling timer or a delayed wake-up. `Agent.start_link/1` accepts
+`:hibernate_after` in milliseconds or `:infinity` to opt out; coding sessions
+apply the same option to themselves and their owned agent. Hibernation preserves
+state, subscriptions and OTP system/code-change handling; it does not park or
+terminate a live root session. This is an additive published-package option.
+See [session memory measurements](../../docs/benchmarks/session-memory.md)
+for the opt-in measurement procedure and latency comparison.
+
 ## Architecture Overview
 
 ```

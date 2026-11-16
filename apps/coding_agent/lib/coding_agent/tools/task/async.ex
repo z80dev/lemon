@@ -274,11 +274,7 @@ defmodule CodingAgent.Tools.Task.Async do
   end
 
   defp maybe_send_async_followup(followup_context, task_id, run_id, outcome) do
-    if is_binary(task_id) and task_id != "" and TaskStore.auto_followup_suppressed?(task_id) do
-      :ok
-    else
-      Followup.maybe_send_async_followup(followup_context, task_id, run_id, outcome)
-    end
+    Followup.maybe_send_async_followup(followup_context, task_id, run_id, outcome)
   end
 
   defp async_result_type({:ok, %AgentToolResult{details: %{status: "completed"}}}), do: :completed

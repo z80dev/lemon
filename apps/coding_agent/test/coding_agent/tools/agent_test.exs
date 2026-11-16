@@ -620,6 +620,102 @@ defmodule CodingAgent.Tools.AgentTest do
     assert session_key_1 == session_key_2
   end
 
+  test "delegated completions and native completions batch into one parent followup" do
+    owner = self()
+    watcher_supervisor = start_supervised!({Task.Supervisor, []})
+
+    server =
+      start_supervised!(
+        {CodingAgent.AsyncFollowups,
+         name: nil,
+         schedule_flush: fn destination, message, delay ->
+           send(owner, {:flush_scheduled, destination, message, delay})
+           make_ref()
+         end}
+      )
+
+    opts = [
+      run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+      session_module: __MODULE__.AgentTestSessionSpy,
+      session_pid: owner,
+      session_key: "agent:main:main",
+      session_id: "sess_main",
+      agent_id: "main",
+      task_supervisor: watcher_supervisor,
+      async_followup_server: server
+    ]
+
+    results =
+      for n <- 1..3 do
+        result =
+          AgentTool.execute(
+            "call_batch_#{n}",
+            %{"agent_id" => "oracle", "prompt" => "update #{n}", "async" => true},
+            nil,
+            nil,
+            "/tmp",
+            opts
+          )
+
+        assert_receive {:router_submit, %RunRequest{}, ^n}
+        result
+      end
+
+    watchers =
+      Enum.map(Task.Supervisor.children(watcher_supervisor), &{&1, Process.monitor(&1)})
+
+    assert length(watchers) == 3
+
+    for result <- results do
+      :ok =
+        Bus.broadcast(
+          Bus.run_topic(result.details.run_id),
+          Event.new(
+            :run_completed,
+            EventsFixtures.run_completed(answer: "answer #{result.details.task_id}")
+          )
+        )
+    end
+
+    # Watcher completion acknowledges synchronous enqueue, so firing the test
+    # timer below never depends on scheduler speed or a wall-clock sleep.
+    for {watcher, ref} <- watchers do
+      assert_receive {:DOWN, ^ref, :process, ^watcher, :normal}, 1_000
+    end
+
+    assert :ok =
+             CodingAgent.Tools.Task.Followup.maybe_send_async_followup(
+               opts
+               |> Map.new()
+               |> Map.merge(%{
+                 parent_session_key: "agent:main:main",
+                 parent_agent_id: "main",
+                 cwd: "/tmp"
+               }),
+               "native_batch_task",
+               "native_batch_run",
+               {:ok, "native completion"}
+             )
+
+    assert map_size(:sys.get_state(server).batches) == 1
+    assert_receive {:flush_scheduled, ^server, message, 50}
+    send(server, message)
+    assert_receive {:session_async_followup, %CustomMessage{} = followup}, 1_000
+    assert length(followup.details.async_followups) == 4
+
+    expected_ids = MapSet.new(["native_batch_task" | Enum.map(results, & &1.details.task_id)])
+    assert MapSet.new(followup.details.async_followups, & &1.task_id) == expected_ids
+    assert followup.content =~ "native completion"
+
+    for result <- results do
+      assert followup.content =~ "answer #{result.details.task_id}"
+    end
+
+    refute_receive {:flush_scheduled, _, _, _}, 0
+    refute_receive {:session_async_followup, _}, 0
+    refute_receive {:router_submit, _, _}, 0
+  end
+
   test "followup_queue_mode followup uses the live session when session pid is available" do
     result =
       AgentTool.execute(

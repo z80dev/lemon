@@ -828,7 +828,7 @@ defmodule CodingAgent.Tools.Agent do
           node: result_node(validated)
         })
 
-        if validated.auto_followup and not TaskStore.auto_followup_suppressed?(task_id) do
+        if validated.auto_followup do
           maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts)
         end
 
@@ -887,7 +887,7 @@ defmodule CodingAgent.Tools.Agent do
           role: validated.role_id
         })
 
-        if validated.auto_followup and not TaskStore.auto_followup_suppressed?(task_id) do
+        if validated.auto_followup do
           maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts)
         end
 
@@ -904,55 +904,30 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts) do
-    text = auto_followup_text(completion, run_id, validated)
+    context =
+      opts
+      |> Map.new()
+      |> Map.put(:parent_session_key, Keyword.get(opts, :session_key))
+      |> Map.put(:parent_agent_id, Keyword.get(opts, :agent_id))
+      |> Map.put(
+        :queue_mode,
+        AsyncFollowups.resolve_async_followup_queue_mode(validated.followup_queue_mode, :followup)
+      )
+      |> Map.put(:run_orchestrator, run_orchestrator(opts))
+      |> Map.put(:meta, %{})
 
-    followup_queue_mode =
-      AsyncFollowups.resolve_async_followup_queue_mode(validated.followup_queue_mode, :followup)
-
-    target_agent_id = validated.agent_id
-    session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
-    session_pid = Keyword.get(opts, :session_pid)
-
-    target =
-      if Params.managed_context?(Map.new(opts)),
-        do: {:router, :collect},
-        else: AsyncFollowups.dispatch_target(followup_queue_mode, session_module, session_pid)
-
-    case target do
-      {:live, delivery_mode} ->
-        if send_followup_via_live_session(
-             text,
-             run_id,
-             task_id,
-             target_agent_id,
-             request,
-             opts,
-             delivery_mode
-           ) do
-          :ok
-        else
-          send_followup_via_router(
-            text,
-            run_id,
-            task_id,
-            target_agent_id,
-            request,
-            opts,
-            AsyncFollowups.router_fallback_queue_mode(delivery_mode)
-          )
-        end
-
-      {:router, router_queue_mode} ->
-        send_followup_via_router(
-          text,
-          run_id,
-          task_id,
-          target_agent_id,
-          request,
-          opts,
-          router_queue_mode
-        )
-    end
+    AsyncFollowups.enqueue(
+      context,
+      auto_followup_text(completion, run_id, validated),
+      %{
+        source: :agent,
+        task_id: task_id,
+        run_id: run_id,
+        agent_id: validated.agent_id,
+        session_key: request.session_key
+      },
+      Keyword.get(opts, :async_followup_server, AsyncFollowups)
+    )
   rescue
     error ->
       Logger.warning(
@@ -968,143 +943,6 @@ defmodule CodingAgent.Tools.Agent do
       )
 
       :ok
-  end
-
-  defp send_followup_via_live_session(
-         text,
-         run_id,
-         task_id,
-         target_agent_id,
-         request,
-         opts,
-         delivery_mode
-       ) do
-    session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
-    session_pid = Keyword.get(opts, :session_pid)
-
-    case session_module.handle_async_followup(
-           session_pid,
-           build_async_followup_message(
-             text,
-             run_id,
-             task_id,
-             target_agent_id,
-             request.session_key,
-             delivery_mode
-           )
-         ) do
-      :ok -> true
-      {:error, _reason} -> false
-      _other -> true
-    end
-  rescue
-    _ -> false
-  end
-
-  defp send_followup_via_router(
-         text,
-         run_id,
-         task_id,
-         target_agent_id,
-         request,
-         opts,
-         queue_mode
-       ) do
-    parent_session_key = Keyword.get(opts, :session_key)
-
-    router = run_orchestrator(opts)
-    delegated_session_key = request.session_key
-
-    if is_binary(parent_session_key) and parent_session_key != "" do
-      parent_agent_id =
-        Keyword.get(opts, :agent_id) ||
-          SessionKey.agent_id(parent_session_key) ||
-          "default"
-
-      followup =
-        RunRequest.new(%{
-          run_id: LemonCore.Id.run_id(),
-          origin: :node,
-          session_key: parent_session_key,
-          agent_id: parent_agent_id,
-          prompt: text,
-          queue_mode: queue_mode,
-          cwd: Keyword.get(opts, :cwd),
-          tool_policy: Keyword.get(opts, :tool_policy),
-          meta: %{
-            :delegated_auto_followup => true,
-            :delegated_run_id => run_id,
-            :delegated_task_id => task_id,
-            :delegated_agent_id => target_agent_id,
-            :delegated_session_key => delegated_session_key,
-            :invocation_context_key =>
-              LemonCore.MapHelpers.get_key(request.meta, :invocation_context_key),
-            :memory_context_key => Keyword.get(opts, :memory_context_key),
-            :memory_context_verified => Keyword.get(opts, :memory_context_verified) == true,
-            :shared_memory_grant => Keyword.get(opts, :shared_memory_grant) == true,
-            :mcp_servers => Keyword.get(opts, :invocation_mcp_servers),
-            "async_followups" => [
-              async_followup_entry(
-                run_id,
-                task_id,
-                target_agent_id,
-                delegated_session_key,
-                queue_mode
-              )
-            ]
-          }
-        })
-
-      managed? = Params.managed_context?(Map.new(opts))
-
-      followup = %{
-        followup
-        | meta: Params.continuation_metadata(followup.meta, Map.new(opts))
-      }
-
-      result =
-        if managed? do
-          Params.submit_native_followup(
-            Map.new(opts),
-            %{
-              followup
-              | queue_mode: :collect,
-                meta: LemonCore.RunStore.execution_projection(followup.meta || %{})
-            }
-          )
-        else
-          submit_with_orchestrator(router, followup)
-        end
-
-      case result do
-        {:ok, _} ->
-          Logger.info(
-            "Agent tool followup submitted for task_id=#{task_id} " <>
-              "session_key=#{inspect(parent_session_key)} agent_id=#{inspect(parent_agent_id)}"
-          )
-
-        {:error, {:unknown_agent_id, _}} when parent_agent_id != "default" and not managed? ->
-          fallback = %{followup | agent_id: "default"}
-
-          case submit_with_orchestrator(router, fallback) do
-            {:ok, _} ->
-              Logger.info(
-                "Agent tool followup submitted with fallback agent_id=\"default\" " <>
-                  "for task_id=#{task_id} session_key=#{inspect(parent_session_key)}"
-              )
-
-            {:error, reason} ->
-              Logger.warning("Agent tool followup submit failed: #{inspect(reason)}")
-          end
-
-        {:error, reason} ->
-          Logger.warning("Agent tool followup submit failed: #{inspect(reason)}")
-      end
-    else
-      Logger.warning(
-        "Agent tool cannot auto-followup delegated run #{run_id}: parent session key unavailable"
-      )
-    end
   end
 
   defp run_orchestrator(opts) do
@@ -1359,41 +1197,6 @@ defmodule CodingAgent.Tools.Agent do
   defp format_duration(ms) when ms < 1000, do: "#{ms}ms"
   defp format_duration(ms) when ms < 60_000, do: "#{Float.round(ms / 1000, 1)}s"
   defp format_duration(ms), do: "#{Float.round(ms / 60_000, 1)}m"
-
-  defp build_async_followup_message(
-         text,
-         run_id,
-         task_id,
-         target_agent_id,
-         delegated_session_key,
-         delivery
-       ) do
-    %{
-      content: text,
-      details: %{
-        source: :agent,
-        task_id: task_id,
-        run_id: run_id,
-        agent_id: target_agent_id,
-        session_key: delegated_session_key,
-        delivery: delivery
-      },
-      async_followups: [
-        async_followup_entry(run_id, task_id, target_agent_id, delegated_session_key, delivery)
-      ]
-    }
-  end
-
-  defp async_followup_entry(run_id, task_id, target_agent_id, delegated_session_key, delivery) do
-    %{
-      source: :agent,
-      task_id: task_id,
-      run_id: run_id,
-      agent_id: target_agent_id,
-      session_key: delegated_session_key,
-      delivery: delivery
-    }
-  end
 
   defp validate_run_params(params, cwd, opts) when is_map(params) do
     agent_id = Map.get(params, "agent_id") |> normalize_optional_string()

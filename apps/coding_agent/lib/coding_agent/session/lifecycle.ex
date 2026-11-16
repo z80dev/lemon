@@ -521,6 +521,7 @@ defmodule CodingAgent.Session.Lifecycle do
         convert_to_llm: convert_to_llm,
         stream_fn: stream_fn,
         system_prompt_observer: session_pid,
+        hibernate_after: Keyword.get(opts, :hibernate_after, 5_000),
         stream_rules: fn ->
           GenServer.call(session_pid, {:available_stream_rules, stream_rules}, :infinity)
         end,

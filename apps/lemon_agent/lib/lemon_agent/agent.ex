@@ -129,6 +129,7 @@ defmodule LemonAgent.Agent do
           tool_timeout_ms: pos_integer() | :infinity | nil,
           intent_tracing: boolean(),
           queue_call_timeout: timeout(),
+          hibernate_after: timeout(),
           name: GenServer.name()
         ]
 
@@ -169,6 +170,8 @@ defmodule LemonAgent.Agent do
   - `:intent_tracing` - Include optional provider-only tool intent (default true)
   - `:queue_call_timeout` - Timeout for loop queue polling GenServer calls (`:infinity` or ms, default: 30 minutes)
   - `:name` - Optional GenServer name
+  - `:hibernate_after` - Idle milliseconds before OTP hibernation (default 5,000);
+    `:infinity` disables it. Does not delay incoming messages or system/code-change requests.
 
   ## Examples
 
@@ -180,12 +183,10 @@ defmodule LemonAgent.Agent do
   @spec start_link(opts()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     {name, opts} = Keyword.pop(opts, :name)
-
-    if name do
-      GenServer.start_link(__MODULE__, opts, name: name)
-    else
-      GenServer.start_link(__MODULE__, opts)
-    end
+    # Keep short inter-message gaps warm; reclaim heaps between user turns.
+    server_opts = [hibernate_after: Keyword.get(opts, :hibernate_after, 5_000)]
+    server_opts = if name, do: Keyword.put(server_opts, :name, name), else: server_opts
+    GenServer.start_link(__MODULE__, opts, server_opts)
   end
 
   @doc """

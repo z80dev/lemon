@@ -373,6 +373,8 @@ defmodule CodingAgent.Session do
     * `:context_guardrails` - Optional map/list overrides for built-in context guardrails
       (for example `max_tool_result_bytes`, `max_tool_result_images`, `spill_dir`)
     * `:name` - GenServer name for registration
+    * `:hibernate_after` - Idle milliseconds before OTP hibernation (default 5,000);
+      `:infinity` disables it. Also applies to the owned agent process.
     * `:max_tool_turns` - Cap on tool-using assistant turns per prompt. Defaults to
       `[runtime] max_tool_turns`, which is unlimited (`:infinity`) unless configured.
 
@@ -427,12 +429,10 @@ defmodule CodingAgent.Session do
   def start_link(opts) do
     with {:ok, opts} <- validate_execution_options(opts) do
       {name, opts} = Keyword.pop(opts, :name)
-
-      if name do
-        GenServer.start_link(__MODULE__, opts, name: name)
-      else
-        GenServer.start_link(__MODULE__, opts)
-      end
+      # Keep short inter-message gaps warm; reclaim heaps between user turns.
+      server_opts = [hibernate_after: Keyword.get(opts, :hibernate_after, 5_000)]
+      server_opts = if name, do: Keyword.put(server_opts, :name, name), else: server_opts
+      GenServer.start_link(__MODULE__, opts, server_opts)
     end
   end
 

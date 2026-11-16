@@ -347,6 +347,45 @@ defmodule CodingAgent.MessagesTest do
       assert result.content =~ "active_run_id: active-run"
     end
 
+    test "renders every batched completion's identity and delivery receipt" do
+      original_content = "first answer\n\nsecond answer"
+
+      msg = %CustomMessage{
+        custom_type: "async_followup",
+        content: original_content,
+        details: %{
+          "run_id" => "legacy-latest-run",
+          "async_followups" => [
+            %{
+              source: :task,
+              task_id: "task-first",
+              run_id: "run-first",
+              delivery: :followup,
+              delivery_receipt: %{actual_mode: :followup, status: :queued}
+            },
+            %{
+              "source" => "agent",
+              "task_id" => "task-second",
+              "run_id" => "run-second",
+              "agent_id" => "oracle",
+              "session_key" => "agent:oracle:child",
+              "delivery" => "followup",
+              "delivery_receipt" => %{"actual_mode" => "collect", "status" => "collected"}
+            }
+          ]
+        }
+      }
+
+      [result] = Messages.to_llm([msg])
+      assert_async_followup_envelope(result.content, original_content)
+      assert result.content =~ "task_id: task-first\nrun_id: run-first"
+      assert result.content =~ "actual_delivery: followup\ndelivery_status: queued"
+      assert result.content =~ "task_id: task-second\nrun_id: run-second"
+      assert result.content =~ "agent_id: oracle\nsession_key: agent:oracle:child"
+      assert result.content =~ "actual_delivery: collect\ndelivery_status: collected"
+      refute result.content =~ "legacy-latest-run"
+    end
+
     test "wraps async followup custom messages with fallback values for missing metadata" do
       msg = %CustomMessage{
         custom_type: "async_followup",
