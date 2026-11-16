@@ -128,6 +128,7 @@ export function parseSessionsContext(raw: unknown): SessionsContextResult {
 			: "estimate",
 		estimatedTokens: count(pickNumber(record, "estimatedTokens")),
 		autoCompaction: window === null ? null : autoCompaction(record.autoCompaction),
+		promptCache: promptCache(record.promptCache),
 		categories,
 		otherTokens: Math.max(0, usedTokens - known),
 		top: top.slice(0, TOP_LIMIT),
@@ -135,6 +136,16 @@ export function parseSessionsContext(raw: unknown): SessionsContextResult {
 		usage: sessionUsage(record.usage),
 		measuredAt: positive(pickNumber(record, "measuredAt")),
 	};
+}
+
+function promptCache(raw: unknown): { explanation: string } | undefined {
+	const explanation = pickString(raw, "explanation");
+	if (!explanation) return undefined;
+	const printable = Array.from(explanation, (char) => {
+		const code = char.charCodeAt(0);
+		return code < 0x20 || code === 0x7f ? " " : char;
+	}).join("");
+	return { explanation: printable.slice(0, 240) };
 }
 
 function autoCompaction(raw: unknown): ContextAutoCompaction | null {

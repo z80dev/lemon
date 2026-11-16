@@ -11,11 +11,13 @@ defmodule CodingAgent.ExecutionNode.Python do
 
   On darwin, `/usr/bin/python3` is Apple's developer-tools shim: running it
   without the Command Line Tools installed opens the CLT installer. It is
-  therefore accepted only when `xcode-select -p` succeeds. That probe runs at
-  most once per node and is cached in `:persistent_term`.
+  therefore accepted only when `xcode-select -p` succeeds. The result is cached
+  in supervised ETS until explicitly forgotten or the cache owner restarts.
+  Pre-boot CLI feature checks probe without caching until that owner is running;
+  they never start an unconfigured application or create their own table.
 
   Test options: `:root` (code root), `:find_executable` (1-arity lookup),
-  `:os_type` and `:clt?` (skips the `xcode-select` probe and its cache).
+  `:os_type`, `:clt_probe` (0-arity probe), and `:clt?` (skips the probe/cache).
   """
 
   import Bitwise
@@ -34,8 +36,7 @@ defmodule CodingAgent.ExecutionNode.Python do
   @doc false
   @spec forget_command_line_tools() :: :ok
   def forget_command_line_tools do
-    _ = :persistent_term.erase(@clt_key)
-    :ok
+    CodingAgent.RuntimeTables.delete(@clt_key)
   end
 
   defp bundled(opts) do
@@ -68,14 +69,12 @@ defmodule CodingAgent.ExecutionNode.Python do
         installed? == true
 
       :error ->
-        case :persistent_term.get(@clt_key, :unknown) do
-          :unknown ->
-            installed? = probe_command_line_tools()
-            :persistent_term.put(@clt_key, installed?)
-            installed?
+        probe = Keyword.get(opts, :clt_probe, &probe_command_line_tools/0)
 
-          cached ->
-            cached
+        if CodingAgent.RuntimeTables.available?() do
+          CodingAgent.RuntimeTables.fetch(@clt_key, probe)
+        else
+          probe.()
         end
     end
   end

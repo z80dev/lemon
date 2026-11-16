@@ -17,6 +17,10 @@ defmodule CodingAgent.NodeTools do
   call that was dispatched but did not report back (timeout or dropped
   connection) is returned as an unknown outcome: it may have run.
 
+  Effectful calls pass the controller's durable intent gate before transmission.
+  Their JSON request includes a `toolIntent` acknowledgement bound to the exact
+  call ID; the destination does not create a second journal.
+
   The same module owns the JSON result codec shared with the destination
   (`CodingAgent.ExecutionNode.ToolService`).
   """
@@ -211,6 +215,7 @@ defmodule CodingAgent.NodeTools do
          "toolCallId" => to_string(tool_call_id),
          "sessionId" => session_id(opts),
          "runId" => context.run_id,
+         "toolIntent" => CodingAgent.ToolIntent.controller_receipt(tool_call_id),
          "executionContext" => encoded
        }}
     else

@@ -158,9 +158,8 @@ defmodule LemonCore.Testing.AsyncHelpers do
   """
   @spec barrier(pos_integer()) :: reference()
   def barrier(count) when is_integer(count) and count > 0 do
-    ref = make_ref()
-    :ets.new(barrier_table(ref), [:set, :public, :named_table])
-    :ets.insert(barrier_table(ref), {:count, 0, count})
+    ref = :ets.new(__MODULE__, [:set, :public])
+    :ets.insert(ref, {:count, 0, count})
     ref
   end
 
@@ -170,14 +169,14 @@ defmodule LemonCore.Testing.AsyncHelpers do
   """
   @spec arrive(reference()) :: :ok
   def arrive(ref) do
-    :ets.update_counter(barrier_table(ref), :count, {2, 1})
+    :ets.update_counter(ref, :count, {2, 1})
     :ok
   end
 
   @doc """
   Waits until all participants have arrived at the barrier.
-  Multiple callers can safely call this on the same barrier — the last caller
-  cleans up the ETS table.
+  Multiple callers can safely call this on the same barrier. Its creator owns
+  the unnamed ETS table, which is released when that process exits.
   """
   @spec await_barrier(reference(), keyword()) :: :ok
   def await_barrier(ref, opts \\ []) do
@@ -186,7 +185,7 @@ defmodule LemonCore.Testing.AsyncHelpers do
     assert_eventually(
       fn ->
         try do
-          case :ets.lookup(barrier_table(ref), :count) do
+          case :ets.lookup(ref, :count) do
             [{:count, arrived, total}] -> arrived >= total
             _ -> false
           end
@@ -197,17 +196,7 @@ defmodule LemonCore.Testing.AsyncHelpers do
       opts
     )
 
-    try do
-      :ets.delete(barrier_table(ref))
-    catch
-      :error, :badarg -> :ok
-    end
-
     :ok
-  end
-
-  defp barrier_table(ref) do
-    :"async_helpers_barrier_#{:erlang.phash2(ref)}"
   end
 
   # ---------------------------------------------------------------------------

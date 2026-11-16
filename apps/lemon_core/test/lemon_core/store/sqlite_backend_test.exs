@@ -95,6 +95,19 @@ defmodule LemonCore.Store.SqliteBackendTest do
                SqliteBackend.init(path: invalid_path)
     end
 
+    test "closes an opened connection when database initialization fails", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "invalid.sqlite3")
+      File.write!(path, "not a SQLite database")
+
+      {result, calls} =
+        trace_sqlite_calls(fn -> SqliteBackend.init(path: path) end, open: 1, close: 1)
+
+      assert {:error, {:sqlite_init_failed, ^path, _}} = result
+      assert [{:ok, conn}] = returned_calls(calls, :open)
+      assert [{Sqlite3, :close, [^conn]}] = called_functions(calls, :close)
+      assert [:ok] = returned_calls(calls, :close)
+    end
+
     test "ping checks the connection without writing a probe row", %{tmp_dir: tmp_dir} do
       assert {:ok, state} = SqliteBackend.init(path: tmp_dir)
       assert {:ok, ^state} = SqliteBackend.ping(state)
@@ -344,6 +357,273 @@ defmodule LemonCore.Store.SqliteBackendTest do
 
       assert {:ok, nil, _} = SqliteBackend.get(state, :table_a, "shared_key")
       assert {:ok, "value_b", _} = SqliteBackend.get(state, :table_b, "shared_key")
+    end
+  end
+
+  describe "sweep/3" do
+    test "persistent and ephemeral predicates preserve timestamp precedence", %{tmp_dir: tmp_dir} do
+      cases = [
+        {:chat, :expires_at, 1,
+         [
+           {:old, %{expires_at: 9}},
+           {:boundary, %{expires_at: 10}},
+           {:string, %{"expires_at" => 1}},
+           {:float, %{expires_at: 1.0}},
+           {:missing, nil}
+         ]},
+        {:idempotency, :inserted_at_ms, 1,
+         [
+           {:old, %{"inserted_at_ms" => 9}},
+           {:boundary, %{"inserted_at_ms" => 10}},
+           {:atom, %{inserted_at_ms: 1}},
+           {:invalid, %{"inserted_at_ms" => "1"}}
+         ]},
+        {:cron_runs, :started_at_ms, 3,
+         [
+           {:atom, %{started_at_ms: 9}},
+           {:string, %{"started_at_ms" => 9}},
+           {:fallback, %{"started_at_ms" => 9, :started_at_ms => :invalid}},
+           {:boundary, %{"started_at_ms" => 1, :started_at_ms => 10}},
+           {:future, %{"started_at_ms" => 1, :started_at_ms => 11}},
+           {:float, %{started_at_ms: 1.0}}
+         ]},
+        {:introspection_log, :introspection_timestamp, 6,
+         [
+           {{9, :old}, nil},
+           {:atom, %{ts_ms: 9}},
+           {:string, %{"ts_ms" => 9}},
+           {:nil_fallback, %{"ts_ms" => 9, :ts_ms => nil}},
+           {:false_fallback, %{"ts_ms" => 9, :ts_ms => false}},
+           {{:not_integer, :fallback}, %{ts_ms: 9}},
+           {{10, :boundary}, %{ts_ms: 1}},
+           {{11, :future}, %{"ts_ms" => 1}},
+           {:atom_boundary, %{"ts_ms" => 1, :ts_ms => 10}},
+           {:invalid_atom, %{"ts_ms" => 1, :ts_ms => :invalid}},
+           {:invalid_float, %{"ts_ms" => 1, :ts_ms => 1.0}},
+           {:missing, nil}
+         ]}
+      ]
+
+      for mode <- [:persistent, :ephemeral] do
+        ephemeral = if mode == :ephemeral, do: Enum.map(cases, &elem(&1, 0)), else: []
+        path = Path.join(tmp_dir, "#{mode}.sqlite3")
+        {:ok, state} = SqliteBackend.init(path: path, ephemeral_tables: ephemeral)
+
+        state =
+          Enum.reduce(cases, state, fn {table, field, count, entries}, state ->
+            state = put_entries(state, table, entries)
+            assert {:ok, ^count, state} = SqliteBackend.sweep(state, table, {field, 10})
+            assert {:ok, remaining, state} = SqliteBackend.list(state, table)
+            assert Map.new(remaining) == Map.new(Enum.drop(entries, count))
+            assert {:ok, 0, state} = SqliteBackend.sweep(state, table, {field, 10})
+            state
+          end)
+
+        assert {:ok, 0, _} = SqliteBackend.sweep(state, :unknown, {:expires_at, 10})
+        :ok = SqliteBackend.close(state)
+      end
+    end
+
+    test "a persistent sweep executes one delete without reading rows", %{tmp_dir: tmp_dir} do
+      {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      state = put_entries(state, :chat, for(key <- 1..25, do: {key, %{expires_at: 1}}))
+      {:ok, state} = SqliteBackend.put(state, :progress, :old, %{expires_at: 1})
+      statement = state.statements[{:sweep, :expires_at}]
+      conn = state.conn
+
+      {result, calls} =
+        trace_sqlite_calls(
+          fn -> SqliteBackend.sweep(state, :chat, {:expires_at, 10}) end,
+          step: 2,
+          fetch_all: 2,
+          execute: 2,
+          prepare: 2
+        )
+
+      assert {:ok, 25, ^state} = result
+      assert [{Sqlite3, :step, [^conn, ^statement]}] = called_functions(calls, :step)
+      assert [] == called_functions(calls, :fetch_all)
+      assert [] == called_functions(calls, :execute)
+      assert [] == called_functions(calls, :prepare)
+      assert {:ok, %{expires_at: 1}, _} = SqliteBackend.get(state, :progress, :old)
+      :ok = SqliteBackend.close(state)
+    end
+
+    test "overwrites, put_new and compare-and-swap keep retention metadata current", %{
+      tmp_dir: tmp_dir
+    } do
+      {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      {:ok, state} = SqliteBackend.put(state, :chat, :refresh, %{expires_at: 1})
+      {:ok, state} = SqliteBackend.put(state, :chat, :refresh, %{expires_at: 20})
+      {:ok, state} = SqliteBackend.put(state, :chat, :clear, %{expires_at: 1})
+      {:ok, state} = SqliteBackend.put(state, :chat, :clear, %{})
+      {:ok, state} = SqliteBackend.put_new(state, :chat, :claim, %{expires_at: 20})
+      {:exists, state} = SqliteBackend.put_new(state, :chat, :claim, %{expires_at: 1})
+      {:ok, state} = SqliteBackend.put_new(state, :chat, :expired_claim, %{expires_at: 1})
+      {:ok, state} = SqliteBackend.put(state, :chat, :swap, %{expires_at: 20})
+
+      assert {:ok, state} =
+               SqliteBackend.with_durability(state, fn ->
+                 SqliteBackend.compare_and_swap(
+                   state,
+                   :chat,
+                   :swap,
+                   %{expires_at: 20},
+                   %{expires_at: 1}
+                 )
+               end)
+
+      assert {:ok, 2, state} = SqliteBackend.sweep(state, :chat, {:expires_at, 10})
+      assert {:ok, state} = SqliteBackend.sync(state)
+      :ok = SqliteBackend.close(state)
+
+      {:ok, reopened} = SqliteBackend.init(path: tmp_dir)
+      assert {:ok, rows, _} = SqliteBackend.list(reopened, :chat)
+
+      assert Map.new(rows) == %{
+               refresh: %{expires_at: 20},
+               clear: %{},
+               claim: %{expires_at: 20}
+             }
+
+      :ok = SqliteBackend.close(reopened)
+    end
+
+    test "large Erlang timestamps round-trip without narrowing retention comparisons", %{
+      tmp_dir: tmp_dir
+    } do
+      {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      beyond = 9_223_372_036_854_775_809
+      {:ok, state} = SqliteBackend.put(state, :chat, :past, %{expires_at: -beyond})
+      {:ok, state} = SqliteBackend.put(state, :chat, :future, %{expires_at: beyond})
+      assert {:ok, %{expires_at: ^beyond}, _} = SqliteBackend.get(state, :chat, :future)
+
+      assert {:ok, 1, state} =
+               SqliteBackend.sweep(state, :chat, {:expires_at, -9_223_372_036_854_775_808})
+
+      assert {:ok, 0, state} =
+               SqliteBackend.sweep(state, :chat, {:expires_at, 9_223_372_036_854_775_807})
+
+      :ok = SqliteBackend.close(state)
+    end
+  end
+
+  describe "retention metadata migration" do
+    test "backfills existing term rows without changing blobs or concealing corruption", %{
+      tmp_dir: tmp_dir
+    } do
+      path = Path.join(tmp_dir, "legacy.sqlite3")
+      conn = legacy_database!(path)
+
+      for {table, key, value} <- [
+            {:chat, {:old, :atom_key}, %{expires_at: 9, nested: %{atom: :value}}},
+            {:chat, :live, %{expires_at: 10}},
+            {:idempotency, :old, %{"inserted_at_ms" => 9}},
+            {:cron_runs, :old, %{"started_at_ms" => 9}},
+            {:introspection_log, {9, :old}, %{ts_ms: 100}}
+          ] do
+        insert_corrupt_row!(%{conn: conn}, table, key, :erlang.term_to_binary(value))
+      end
+
+      insert_corrupt_row!(%{conn: conn}, :chat, :corrupt, <<0>>)
+
+      assert :ok =
+               Sqlite3.execute(conn, """
+               INSERT INTO lemon_store_kv (table_name, key_blob, value_blob, updated_at_ms)
+               VALUES ('broken_keys', X'00', X'00', 0)
+               """)
+
+      original = query_rows!(conn, "SELECT * FROM lemon_store_kv ORDER BY rowid")
+      :ok = Sqlite3.close(conn)
+      assert {:ok, state} = SqliteBackend.init(path: path)
+
+      assert original ==
+               query_rows!(
+                 state.conn,
+                 "SELECT table_name, key_blob, value_blob, updated_at_ms FROM lemon_store_kv ORDER BY rowid"
+               )
+
+      for {table, field} <- [
+            chat: :expires_at,
+            idempotency: :inserted_at_ms,
+            cron_runs: :started_at_ms,
+            introspection_log: :introspection_timestamp
+          ] do
+        assert {:ok, 1, _} = SqliteBackend.sweep(state, table, {field, 10})
+      end
+
+      assert {:ok, %{expires_at: 10}, _} = SqliteBackend.get(state, :chat, :live)
+
+      assert {:error, {:sqlite_corrupt_data, _, _}} =
+               SqliteBackend.get(state, :chat, :corrupt)
+
+      assert {:error, {:sqlite_corrupt_data, _, _}} = SqliteBackend.list(state, :broken_keys)
+      assert {:ok, 0, _} = SqliteBackend.sweep(state, :broken_keys, {:expires_at, 10})
+      assert {:ok, state} = SqliteBackend.sync(state)
+      :ok = SqliteBackend.close(state)
+
+      assert {:ok, reopened} = SqliteBackend.init(path: path)
+      assert {:ok, 0, _} = SqliteBackend.sweep(reopened, :chat, {:expires_at, 10})
+      assert {:ok, %{expires_at: 10}, _} = SqliteBackend.get(reopened, :chat, :live)
+
+      assert {:error, {:sqlite_corrupt_data, _, _}} =
+               SqliteBackend.get(reopened, :chat, :corrupt)
+
+      :ok = SqliteBackend.close(reopened)
+    end
+
+    test "failed backfills roll back schema changes and close their connection", %{
+      tmp_dir: tmp_dir
+    } do
+      path = Path.join(tmp_dir, "legacy.sqlite3")
+      conn = legacy_database!(path)
+      insert_corrupt_row!(%{conn: conn}, :chat, :old, :erlang.term_to_binary(%{expires_at: 9}))
+
+      assert :ok =
+               Sqlite3.execute(conn, """
+               CREATE TRIGGER reject_backfill BEFORE UPDATE ON lemon_store_kv
+               BEGIN SELECT RAISE(ABORT, 'backfill rejected'); END
+               """)
+
+      :ok = Sqlite3.close(conn)
+
+      {result, calls} =
+        trace_sqlite_calls(
+          fn -> SqliteBackend.init(path: path) end,
+          open: 1,
+          close: 1,
+          prepare: 2,
+          release: 2
+        )
+
+      assert {:error, {:sqlite_init_failed, ^path, _}} = result
+      assert [{:ok, failed_conn}] = returned_calls(calls, :open)
+      assert [{Sqlite3, :close, [^failed_conn]}] = called_functions(calls, :close)
+      assert [:ok] = returned_calls(calls, :close)
+      prepared = for {:ok, statement} <- returned_calls(calls, :prepare), do: statement
+
+      released =
+        for {Sqlite3, :release, [_, statement]} <- called_functions(calls, :release),
+            do: statement
+
+      assert Enum.sort(prepared) == Enum.sort(released)
+
+      {:ok, conn} = Sqlite3.open(path)
+      columns = query_rows!(conn, "PRAGMA table_info(lemon_store_kv)")
+
+      assert Enum.map(columns, &Enum.at(&1, 1)) == [
+               "table_name",
+               "key_blob",
+               "value_blob",
+               "updated_at_ms"
+             ]
+
+      assert [[1]] = query_rows!(conn, "SELECT COUNT(*) FROM lemon_store_kv")
+      assert :ok = Sqlite3.execute(conn, "DROP TRIGGER reject_backfill")
+      :ok = Sqlite3.close(conn)
+      assert {:ok, state} = SqliteBackend.init(path: path)
+      assert {:ok, 1, _} = SqliteBackend.sweep(state, :chat, {:expires_at, 10})
+      :ok = SqliteBackend.close(state)
     end
   end
 
@@ -948,6 +1228,99 @@ defmodule LemonCore.Store.SqliteBackendTest do
       :ok = SqliteBackend.close(reader)
       :ok = SqliteBackend.close(state)
     end
+  end
+
+  defp put_entries(state, table, entries) do
+    Enum.reduce(entries, state, fn {key, value}, state ->
+      {:ok, state} = SqliteBackend.put(state, table, key, value)
+      state
+    end)
+  end
+
+  defp legacy_database!(path) do
+    {:ok, conn} = Sqlite3.open(path)
+
+    :ok =
+      Sqlite3.execute(conn, """
+      CREATE TABLE lemon_store_kv (
+        table_name TEXT NOT NULL,
+        key_blob BLOB NOT NULL,
+        value_blob BLOB NOT NULL,
+        updated_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (table_name, key_blob)
+      )
+      """)
+
+    conn
+  end
+
+  defp query_rows!(conn, sql) do
+    {:ok, statement} = Sqlite3.prepare(conn, sql)
+
+    try do
+      {:ok, rows} = Sqlite3.fetch_all(conn, statement)
+      rows
+    after
+      :ok = Sqlite3.release(conn, statement)
+    end
+  end
+
+  defp trace_sqlite_calls(operation, functions) do
+    caller = self()
+
+    worker =
+      spawn_link(fn ->
+        receive do
+          :run ->
+            send(caller, {:trace_result, self(), operation.()})
+
+            receive do
+              :stop -> :ok
+            end
+        end
+      end)
+
+    for {name, arity} <- functions do
+      :erlang.trace_pattern({Sqlite3, name, arity}, [{:_, [], [{:return_trace}]}], [])
+    end
+
+    :erlang.trace(worker, true, [:call])
+
+    try do
+      send(worker, :run)
+      assert_receive {:trace_result, ^worker, result}, 5_000
+      barrier = :erlang.trace_delivered(worker)
+      assert_receive {:trace_delivered, ^worker, ^barrier}
+      {result, collect_trace_calls(worker, [])}
+    after
+      :erlang.trace(worker, false, [:call])
+
+      for {name, arity} <- functions do
+        :erlang.trace_pattern({Sqlite3, name, arity}, false, [])
+      end
+
+      send(worker, :stop)
+    end
+  end
+
+  defp collect_trace_calls(worker, acc) do
+    receive do
+      {:trace, ^worker, :call, call} ->
+        collect_trace_calls(worker, [{:call, call} | acc])
+
+      {:trace, ^worker, :return_from, mfa, result} ->
+        collect_trace_calls(worker, [{:return, mfa, result} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  defp called_functions(calls, name) do
+    for {:call, {Sqlite3, ^name, _args} = call} <- calls, do: call
+  end
+
+  defp returned_calls(calls, name) do
+    for {:return, {Sqlite3, ^name, _arity}, result} <- calls, do: result
   end
 
   defp insert_corrupt_row!(state, table, key, corrupt_value_blob) do

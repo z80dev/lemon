@@ -26,6 +26,8 @@ defmodule LemonRouter.RestartCarryover do
   term (including funs) cannot outlive the VM and is skipped and counted.
   """
 
+  use GenServer
+
   @behaviour LemonCore.Drain
 
   require Logger
@@ -34,7 +36,7 @@ defmodule LemonRouter.RestartCarryover do
   alias LemonRouter.{RunProcess, SessionCoordinator, Submission}
 
   @table :router_restart_carryover
-  @admission_key {__MODULE__, :admission}
+  @admission_table __MODULE__
   @poll_ms 100
   @force_margin_ms 3_000
   @settle_margin_ms 1_000
@@ -50,18 +52,45 @@ defmodule LemonRouter.RestartCarryover do
 
   @doc "Whether queued work must stay queued (a drain is in progress)."
   @spec holding?() :: boolean()
-  def holding?, do: :persistent_term.get(@admission_key, :open) != :open
+  def holding?, do: admission() != :open
 
   @doc "Whether new submissions must be refused (the carryover is persisted)."
   @spec sealed?() :: boolean()
-  def sealed?, do: :persistent_term.get(@admission_key, :open) == :sealed
+  def sealed?, do: admission() == :sealed
 
   @doc false
   # Tests only: reopen admission and restart held queues.
   def reset do
-    :persistent_term.put(@admission_key, :open)
+    :ok = GenServer.call(__MODULE__, {:admission, :open})
     SessionCoordinator.resume_all()
     :ok
+  end
+
+  def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+
+  @impl GenServer
+  def init(_opts) do
+    :ets.new(@admission_table, [:named_table, :protected, read_concurrency: true])
+    # Losing the owner during a runtime drain must never reopen admission.
+    admission = if LemonCore.Drain.draining?(), do: :sealed, else: :open
+    :ets.insert(@admission_table, {:admission, admission})
+    {:ok, nil}
+  end
+
+  @impl GenServer
+  def handle_call({:admission, admission}, _from, state)
+      when admission in [:open, :holding, :sealed] do
+    :ets.insert(@admission_table, {:admission, admission})
+    {:reply, :ok, state}
+  end
+
+  defp admission do
+    case :ets.lookup(@admission_table, :admission) do
+      [{:admission, admission}] -> admission
+      [] -> :sealed
+    end
+  rescue
+    ArgumentError -> :sealed
   end
 
   # ── Drain ────────────────────────────────────────────────────────────────
@@ -70,7 +99,7 @@ defmodule LemonRouter.RestartCarryover do
   def drain(:ingress, _ctx), do: :ok
 
   def drain(:work, ctx) do
-    :persistent_term.put(@admission_key, :holding)
+    :ok = GenServer.call(__MODULE__, {:admission, :holding})
     await_no_runs(ctx.grace_deadline_ms)
 
     %{snapshots: before} = SessionCoordinator.restart_snapshots()
@@ -82,7 +111,7 @@ defmodule LemonRouter.RestartCarryover do
       |> suspend_runs(ctx.deadline_ms)
 
     await_no_runs(ctx.deadline_ms - @settle_margin_ms)
-    :persistent_term.put(@admission_key, :sealed)
+    :ok = GenServer.call(__MODULE__, {:admission, :sealed})
 
     %{snapshots: after_suspend, unavailable: unavailable} =
       SessionCoordinator.restart_snapshots()

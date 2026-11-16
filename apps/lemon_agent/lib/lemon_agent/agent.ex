@@ -83,6 +83,8 @@ defmodule LemonAgent.Agent do
           convert_to_llm: convert_to_llm_fn(),
           transform_context: transform_context_fn() | nil,
           stream_fn: stream_fn() | nil,
+          system_prompt_observer: pid() | nil,
+          response_system_prompt: LemonAi.SystemPrompt.t(),
           session_id: String.t() | nil,
           get_api_key: get_api_key_fn() | nil,
           resolve_stream_options: AgentLoopConfig.resolve_stream_options_fn() | nil,
@@ -109,6 +111,7 @@ defmodule LemonAgent.Agent do
           convert_to_llm: convert_to_llm_fn(),
           transform_context: transform_context_fn(),
           stream_fn: stream_fn() | nil,
+          system_prompt_observer: pid(),
           session_id: String.t(),
           get_api_key: get_api_key_fn(),
           resolve_stream_options: AgentLoopConfig.resolve_stream_options_fn(),
@@ -142,6 +145,9 @@ defmodule LemonAgent.Agent do
   - `:convert_to_llm` - Function to convert agent messages to LLM messages (required)
   - `:transform_context` - Optional function to transform context before conversion
   - `:stream_fn` - Custom stream function (defaults to Loop's `LemonAi.stream/3`)
+  - `:system_prompt_observer` - Optional journal owner. Receives the exact ordered
+    prompt as `{:agent_system_prompt, agent, prompt}` immediately before each
+    assistant `:message_end`; ordinary subscribers never receive prompt snapshots.
   - `:session_id` - Optional session identifier for provider caching
   - `:get_api_key` - Function to dynamically resolve API keys
   - `:resolve_stream_options` - Rebuilds options for idle/live model switches in the loop task
@@ -324,8 +330,8 @@ defmodule LemonAgent.Agent do
   @doc """
   Sets the system prompt.
   """
-  @spec set_system_prompt(GenServer.server(), String.t()) :: :ok
-  def set_system_prompt(agent, prompt) when is_binary(prompt) do
+  @spec set_system_prompt(GenServer.server(), LemonAi.SystemPrompt.t()) :: :ok
+  def set_system_prompt(agent, prompt) when is_binary(prompt) or is_list(prompt) do
     GenServer.call(agent, {:set_system_prompt, prompt})
   end
 
@@ -340,6 +346,16 @@ defmodule LemonAgent.Agent do
   @spec set_model(GenServer.server(), LemonAi.Types.Model.t(), keyword()) :: :ok
   def set_model(agent, model, opts \\ []) do
     GenServer.call(agent, {:set_model, model, Keyword.get(opts, :model_routing)})
+  end
+
+  @doc """
+  Replaces options for subsequent turns, owned by the currently selected model.
+
+  Provider switches still rebuild and sanitize these options in the loop.
+  """
+  @spec set_stream_options(GenServer.server(), StreamOptions.t()) :: :ok
+  def set_stream_options(agent, %StreamOptions{} = options) do
+    GenServer.call(agent, {:set_stream_options, options})
   end
 
   @doc """
@@ -511,6 +527,10 @@ defmodule LemonAgent.Agent do
       convert_to_llm: convert_to_llm,
       transform_context: transform_context,
       stream_fn: stream_fn,
+      system_prompt_observer: Keyword.get(opts, :system_prompt_observer),
+      response_system_prompt: agent_state.system_prompt,
+      stream_rules: Keyword.get(opts, :stream_rules, []),
+      on_stream_rule: Keyword.get(opts, :on_stream_rule),
       session_id: Keyword.get(opts, :session_id),
       get_api_key: Keyword.get(opts, :get_api_key),
       resolve_stream_options: Keyword.get(opts, :resolve_stream_options),
@@ -635,6 +655,11 @@ defmodule LemonAgent.Agent do
          model_routing: model_routing,
          stream_options_model: state.stream_options_model || model
      }}
+  end
+
+  def handle_call({:set_stream_options, options}, _from, state) do
+    {:reply, :ok,
+     %{state | stream_options: options, stream_options_model: state.agent_state.model}}
   end
 
   def handle_call({:set_thinking_level, level}, _from, state) do
@@ -861,8 +886,20 @@ defmodule LemonAgent.Agent do
     end
   end
 
+  def handle_info({:agent_event, {:system_prompt, prompt}}, state) do
+    {:noreply, %{state | response_system_prompt: prompt}}
+  end
+
   def handle_info({:agent_event, event}, state) do
     # Event from the running task - update state and broadcast
+    if match?({:message_end, %LemonAi.Types.AssistantMessage{}}, event) and
+         is_pid(state.system_prompt_observer) do
+      send(
+        state.system_prompt_observer,
+        {:agent_system_prompt, self(), state.response_system_prompt}
+      )
+    end
+
     new_state = handle_agent_event(event, state)
     broadcast_event(new_state, event)
     {:noreply, new_state}
@@ -928,8 +965,11 @@ defmodule LemonAgent.Agent do
 
   defp queued_message(message, opts) do
     case Keyword.get(opts, :system_prompt) do
-      prompt when is_binary(prompt) and prompt != "" -> %{message: message, system_prompt: prompt}
-      _ -> message
+      prompt when (is_binary(prompt) and prompt != "") or is_list(prompt) ->
+        %{message: message, system_prompt: prompt}
+
+      _ ->
+        message
     end
   end
 
@@ -1005,6 +1045,7 @@ defmodule LemonAgent.Agent do
     %{
       state
       | agent_state: new_agent_state,
+        response_system_prompt: context.system_prompt,
         abort_ref: abort_ref,
         running_task: task
     }
@@ -1087,6 +1128,11 @@ defmodule LemonAgent.Agent do
       tool_timeout_ms: state.tool_timeout_ms,
       intent_tracing: state.intent_tracing,
       stream_options: stream_options,
+      hooks: %{
+        emit_system_prompt: is_pid(state.system_prompt_observer),
+        stream_rules: state.stream_rules,
+        on_stream_rule: state.on_stream_rule
+      },
       stream_fn: state.stream_fn
     }
   end

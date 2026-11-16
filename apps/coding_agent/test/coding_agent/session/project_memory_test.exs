@@ -23,9 +23,12 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
 
     def stream(model, context, _opts) do
       kind =
-        if String.contains?(context.system_prompt || "", "Extract durable repository facts"),
-          do: :project_memory,
-          else: :other_completion
+        if String.contains?(
+             LemonAi.SystemPrompt.text(context.system_prompt),
+             "Extract durable repository facts"
+           ),
+           do: :project_memory,
+           else: :other_completion
 
       send(model.compat.test_owner, {:unexpected_print_auxiliary_request, kind})
       {:ok, stream} = LemonAi.EventStream.start_link()
@@ -76,7 +79,7 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     %{state: state, store: store}
   end
 
-  test "print session runner completes and tears down without an auxiliary provider request", %{
+  test "print session runner completes without auxiliary work and retains its idle root", %{
     state: state
   } do
     owner = self()
@@ -118,13 +121,16 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     session = :sys.get_state(runner).session
     session_state = CodingAgent.Session.get_state(session)
     assert session_state.project_memory_capture == false
-    session_monitor = Process.monitor(session)
+    runner_monitor = Process.monitor(runner)
+    on_exit(fn -> CodingAgent.Session.Presentation.safe_stop_session(session) end)
     message = assistant("Run mix test from the umbrella root.", :stop)
     LemonAi.EventStream.push(stream, {:done, :stop, message})
     LemonAi.EventStream.complete(stream, message)
 
     assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: true}}, 5_000
-    assert_receive {:DOWN, ^session_monitor, :process, ^session, _}, 1_000
+    assert_receive {:DOWN, ^runner_monitor, :process, ^runner, _}, 1_000
+    refute CodingAgent.Session.streaming?(session)
+    assert CodingAgent.Session.get_state(session).root_idle_token
     assert :ok = ProjectMemory.flush(session_state, 1_000)
     refute_received {:unexpected_print_auxiliary_request, _kind}
   end

@@ -5,14 +5,48 @@ defmodule LemonMCP.Transport.StdioTest do
 
   test "subprocess exit terminates the transport so clients observe disconnect" do
     port = make_ref()
-    state = %{port: port, buffer: ""}
+    state = %{port: port}
     assert {:stop, :normal, %{port: nil}} = Stdio.handle_info({port, {:exit_status, 0}}, state)
   end
 
-  test "rejects an unterminated protocol frame larger than eight MiB" do
+  test "forwards incoming byte chunks without parsing or buffering" do
+    owner = self()
     port = make_ref()
-    state = %{port: port, buffer: String.duplicate("x", 8 * 1024 * 1024)}
-    assert {:stop, :message_too_large, ^state} = Stdio.handle_info({port, {:data, "x"}}, state)
+    state = %{port: port, message_handler: fn bytes -> send(owner, {:bytes, bytes}) end}
+
+    for bytes <- ["startup log\n{\"json", "rpc\":\"2.0\"}\n\n"] do
+      assert {:noreply, ^state} = Stdio.handle_info({port, {:data, bytes}}, state)
+      assert_receive {:bytes, ^bytes}
+    end
+  end
+
+  test "transport callback sends exact bytes while send_message keeps its line API" do
+    owner = self()
+
+    transport =
+      start_supervised!(
+        {Stdio, command: "cat", message_handler: fn bytes -> send(owner, {:bytes, bytes}) end}
+      )
+
+    assert :ok = Stdio.send(transport, "fragment")
+    assert_bytes("fragment")
+    assert :ok = Stdio.send(transport, "\n")
+    assert_bytes("\n")
+    assert :ok = Stdio.send_message(transport, "line")
+    assert_bytes("line\n")
+    assert :ok = Stdio.send_message(transport, "line\n")
+    assert_bytes("line\n")
+  end
+
+  defp assert_bytes(expected, received \\ "") do
+    if received == expected do
+      :ok
+    else
+      assert_receive {:bytes, bytes}, 5_000
+      received = received <> bytes
+      assert String.starts_with?(expected, received)
+      assert_bytes(expected, received)
+    end
   end
 
   test "rejects empty command strings" do

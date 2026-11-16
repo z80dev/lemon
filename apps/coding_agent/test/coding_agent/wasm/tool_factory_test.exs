@@ -15,9 +15,19 @@ defmodule CodingAgent.Wasm.ToolFactoryTest do
     def init(opts), do: {:ok, Map.new(opts)}
 
     @impl true
-    def handle_call({:invoke, tool, params_json, context_json, deadline, signal}, _from, state) do
+    def handle_call(
+          {:invoke, tool, params_json, context_json, deadline, signal, scope},
+          _from,
+          state
+        ) do
+      assert_live_scope(scope)
       send(state.owner, {:fake_wasm_invoke, tool, params_json, context_json, deadline, signal})
       {:reply, state.response, state}
+    end
+
+    defp assert_live_scope({_id, owner, live}) do
+      true = Process.alive?(owner)
+      1 = :atomics.get(live, 1)
     end
   end
 

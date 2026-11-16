@@ -101,7 +101,7 @@ defmodule CodingAgent.Session.DefaultProviderAuthorityWireTest do
     assert String.ends_with?(path, "/chat/completions")
     assert headers["authorization"] == "Bearer " <> @aggregator_key
     assert Jason.decode!(body)["model"] == @aggregator_id
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
 
     refute_received {:wire, :trap, _, _, _, _}
     refute Enum.any?(Session.get_messages(session), &(inspect(&1) =~ @ambient_trap))
@@ -117,7 +117,7 @@ defmodule CodingAgent.Session.DefaultProviderAuthorityWireTest do
     assert_receive {:wire, :aggregator, "POST", _path, headers, body}, 5_000
     assert headers["authorization"] == "Bearer " <> @aggregator_key
     assert Jason.decode!(body)["model"] == @aggregator_id
-    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 5_000
 
     refute_received {:wire, :trap, _, _, _, _}
   end

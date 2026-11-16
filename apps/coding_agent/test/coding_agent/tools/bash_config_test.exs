@@ -38,6 +38,7 @@ defmodule CodingAgent.Tools.BashConfigTest do
     for {tools, blocked} <- [{["bash", "read"], true}, {["bash"], false}] do
       {:ok, bash} =
         ToolRegistry.get_tool(cwd, "bash",
+          tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(cwd),
           settings_manager: settings,
           enabled_only: tools,
           include_extensions: false,
@@ -63,6 +64,7 @@ defmodule CodingAgent.Tools.BashConfigTest do
 
     {:ok, bash} =
       ToolRegistry.get_tool(cwd, "bash",
+        tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(cwd),
         settings_manager: settings,
         enabled_only: ["bash", "read"],
         include_extensions: false,
@@ -101,6 +103,7 @@ defmodule CodingAgent.Tools.BashConfigTest do
 
       {:ok, bash} =
         ToolRegistry.get_tool(cwd, "bash",
+          tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(cwd),
           settings_manager: settings,
           enabled_only: ["bash"],
           include_extensions: false,

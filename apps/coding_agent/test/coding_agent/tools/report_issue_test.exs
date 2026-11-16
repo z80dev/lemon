@@ -113,6 +113,7 @@ defmodule CodingAgent.Tools.ReportIssueTest do
       opts ++
         [
           include_extensions: false,
+          tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(cwd),
           include_mcp: false,
           approval_request_fun: fn _ -> flunk("default approval must be never") end
         ]

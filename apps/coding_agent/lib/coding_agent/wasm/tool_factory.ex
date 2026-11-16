@@ -64,7 +64,12 @@ defmodule CodingAgent.Wasm.ToolFactory do
       started_at = System.monotonic_time(:microsecond)
 
       try do
-        case SidecarSession.invoke(sidecar_pid, name, params_json, context_json, 120_000, signal) do
+        result =
+          CodingAgent.ToolIntent.with_parent_scope(tool_call_id, fn _scope ->
+            SidecarSession.invoke(sidecar_pid, name, params_json, context_json, 120_000, signal)
+          end)
+
+        case result do
           {:ok, invoke_result} ->
             emit_stop(telemetry_metadata, started_at, wasm_tool_status(invoke_result))
             build_success_result(name, invoke_result, metadata)

@@ -141,12 +141,16 @@ defmodule LemonCore.Secrets.RevisionTest do
   test "usage reads preserve an outstanding revision and CAS consumes it", ctx do
     assert {:ok, initial} = Secrets.set("credential", "original", ctx.opts)
     assert {:ok, "original", revision} = Secrets.get_with_revision("credential", ctx.opts)
+    assert :ok = LemonCore.Secrets.Usage.flush()
 
     for _ <- 1..3 do
       assert {:ok, "original"} = Secrets.get("credential", ctx.opts)
+      assert :ok = LemonCore.Secrets.Usage.flush()
       assert {:ok, "original", ^revision} = Secrets.get_with_revision("credential", ctx.opts)
+      assert :ok = LemonCore.Secrets.Usage.flush()
     end
 
+    assert :ok = LemonCore.Secrets.Usage.flush()
     assert {:ok, [used]} = Secrets.list(ctx.opts)
     assert used.usage_count == 7
     assert used.updated_at == initial.updated_at
@@ -321,6 +325,7 @@ defmodule LemonCore.Secrets.RevisionTest do
     assert :ok = Store.put(ctx.store, Secrets.table(), {"default", "credential"}, legacy)
     assert {:ok, "original", revision} = Secrets.get_with_revision("credential", ctx.opts)
     assert {:ok, "original", ^revision} = Secrets.get_with_revision("credential", ctx.opts)
+    assert :ok = LemonCore.Secrets.Usage.flush()
     assert {:ok, touched} = Store.fetch(ctx.store, Secrets.table(), {"default", "credential"})
 
     assert Map.drop(touched, [:usage_count, :last_used_at]) ==
@@ -363,9 +368,11 @@ defmodule LemonCore.Secrets.RevisionTest do
   test "usage-touch failure is best effort without changing the revision", ctx do
     assert {:ok, _} = Secrets.set("credential", "original", ctx.opts)
     assert {:ok, "original", revision} = Secrets.get_with_revision("credential", ctx.opts)
+    assert :ok = LemonCore.Secrets.Usage.flush()
     assert {:ok, before_read} = Store.fetch(ctx.store, Secrets.table(), {"default", "credential"})
     control(ctx.store, :fail_cas)
     assert {:ok, "original", ^revision} = Secrets.get_with_revision("credential", ctx.opts)
+    assert :ok = LemonCore.Secrets.Usage.flush()
 
     assert {:ok, ^before_read} =
              Store.fetch(ctx.store, Secrets.table(), {"default", "credential"})
@@ -460,6 +467,7 @@ defmodule LemonCore.Secrets.RevisionTest do
   end
 
   defp control(store, mode) do
+    assert :ok = LemonCore.Secrets.Usage.flush()
     assert :ok = Store.put(store, :revision_test_control, :mode, mode)
   end
 

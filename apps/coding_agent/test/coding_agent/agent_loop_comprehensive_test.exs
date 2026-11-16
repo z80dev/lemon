@@ -74,20 +74,20 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       Enum.reverse(events ++ [{:timeout, timeout}])
     else
       receive do
-        {:session_event, _session_id, {:agent_end, _messages}} ->
+        {:session_event, _session_id, {:agent_end, _messages}, _} ->
           Enum.reverse(events ++ [{:agent_end, []}])
 
-        {:session_event, _session_id, {:error, reason, _partial}} ->
+        {:session_event, _session_id, {:error, reason, _partial}, _} ->
           Enum.reverse(events ++ [{:error, reason}])
 
-        {:session_event, _session_id, {:canceled, reason}} ->
+        {:session_event, _session_id, {:canceled, reason}, _} ->
           Enum.reverse(events ++ [{:canceled, reason}])
 
         {:session_event, _session_id,
-         {:turn_end, %AssistantMessage{stop_reason: :aborted} = message, messages}} ->
+         {:turn_end, %AssistantMessage{stop_reason: :aborted} = message, messages}, _} ->
           Enum.reverse(events ++ [{:turn_end, message, messages}])
 
-        {:session_event, _session_id, event} ->
+        {:session_event, _session_id, event, _} ->
           collect_events(events ++ [event], timeout, deadline)
       after
         remaining ->
@@ -362,7 +362,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         stream
         |> LemonAgent.EventStream.events()
         |> Enum.take_while(fn
-          {:session_event, _, {:agent_end, _}} -> false
+          {:session_event, _, {:agent_end, _}, _} -> false
           _ -> true
         end)
         |> Enum.to_list()

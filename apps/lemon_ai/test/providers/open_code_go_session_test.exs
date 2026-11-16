@@ -83,6 +83,13 @@ defmodule LemonAi.Providers.OpenCodeGoSessionTest do
                OpenCodeGoSession.headers(model, Context.new(messages: []), opts)
 
       assert nil_prompt_id != ""
+
+      blocks = [
+        %{text: "prompt ", directory_derived: false},
+        %{text: "A", directory_derived: true}
+      ]
+
+      assert %{@header => ^id} = OpenCodeGoSession.headers(model, context(blocks), opts)
     end
   end
 

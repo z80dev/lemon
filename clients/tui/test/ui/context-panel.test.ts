@@ -56,6 +56,16 @@ function nodes(root: NativeChild | null): NativeNode[] {
 }
 
 describe("row rendering", () => {
+	test("explains a prompt digest cache miss", () => {
+		const raw = {
+			...reportedContextFixture("s1"),
+			promptCache: {
+				explanation: "Prompt digest changed; the previous prompt cache prefix may miss.",
+			},
+		};
+		expect(renderPlain(panel(raw).component.render(100))).toContain("Prompt digest changed");
+	});
+
 	test("never exceeds the width, at any width", () => {
 		for (const raw of [reportedContextFixture("s1"), estimatedContextFixture("s2")]) {
 			for (const width of [1, 10, 20, 40, 63, 80, 100, 160]) {

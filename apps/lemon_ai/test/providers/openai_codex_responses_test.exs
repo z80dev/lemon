@@ -481,6 +481,20 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
       refute Enum.any?(body["input"], fn msg -> msg["role"] in ["system", "developer"] end)
 
       EventStream.result(stream, 1000)
+
+      blocks = [
+        %{text: "You are a ", directory_derived: false},
+        %{text: "helpful assistant", directory_derived: true}
+      ]
+
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, %{context | system_prompt: blocks}, %StreamOptions{
+          api_key: make_jwt()
+        })
+
+      assert_receive {:request_body, block_body}, 1000
+      assert block_body == body
+      assert {:error, _} = EventStream.result(stream, 1000)
     end
 
     test "uses default instructions when system prompt is missing" do

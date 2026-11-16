@@ -4,7 +4,8 @@ defmodule CodingAgent.BackgroundRun.Worker do
   use GenServer
 
   alias CodingAgent.BackgroundRun.Registry
-  alias CodingAgent.{LaneQueue, Session, SessionRegistry, TaskStore}
+  alias CodingAgent.{Session, SessionRegistry, TaskStore}
+  alias CodingAgent.Parallel.Semaphore
   alias CodingAgent.Tools.Task.{Result, Runner}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
@@ -115,16 +116,13 @@ defmodule CodingAgent.BackgroundRun.Worker do
       end
     end
 
-    if Process.whereis(LaneQueue) do
-      case LaneQueue.run(LaneQueue, :subagent, run, %{
-             task_id: state.id,
-             kind: :background_command
-           }) do
-        {:ok, result} -> result
-        {:error, reason} -> {:error, reason}
-      end
-    else
+    semaphore = Process.whereis(CodingAgent.TaskSemaphore)
+    if semaphore, do: Semaphore.acquire(semaphore)
+
+    try do
       run.()
+    after
+      if semaphore, do: Semaphore.release(semaphore)
     end
   end
 

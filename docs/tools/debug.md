@@ -130,9 +130,9 @@ src/main.c:
 - When breakpoints are pending at launch, the program runs straight to them.
   Without breakpoints the adapter's stop-on-entry default applies (for
   `lldb-dap` that is the process entry point, before `main`).
-- Native turns preserve the debugger across save/stop/resume only after saving
-  and every resource handoff succeed; failure disposes the resources. Reset
-  rebuilds tools for the fresh session id and disposes old-id resources.
+- Native turns keep the debugger in the same live session. Idle root parking
+  (five minutes, or eviction from the 32-root idle budget) disposes resources.
+  Reset rebuilds tools for the fresh session id and disposes old-id resources.
   Explicit abort signals the run before disposal so blocked tool calls can
   unwind. Explicit stop, logical delete, failed launch, unexpected owner death
   (including during adapter disposal) and 10-minute idle expiry also dispose of it.

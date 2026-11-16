@@ -5,7 +5,8 @@ defmodule LemonCore.Store.Backend do
   A backend provides key-value storage across multiple logical tables. It is the
   half of `LemonCore.Store` that persists: the store owns the process and
   serialises access, the backend owns the bytes. Backends are plain modules —
-  they have no process, no supervision and no lifecycle beyond `c:init/1`.
+  they have no process or supervision. The store owns their lifecycle through
+  `c:init/1` and the optional `c:close/1`.
 
   `LemonCore.Store.EtsBackend` (ephemeral) and `LemonCore.Store.SqliteBackend`
   (durable) are the built-ins.
@@ -55,12 +56,11 @@ defmodule LemonCore.Store.Backend do
   classification (retryable vs fatal) is ever needed it has to be added to the
   behaviour first.
 
-  ## No teardown callback
+  ## Resource cleanup
 
-  There is deliberately no `close/1`/`terminate/2`: `LemonCore.Store` never
-  tells a backend it is going away, so a backend holding a connection or file
-  handle must be able to lose it to process exit. `SqliteBackend.close/1`
-  exists but is not part of this behaviour and is not called by the store.
+  The store invokes optional `c:close/1` during orderly termination. Backends
+  must still tolerate abrupt owner death, when termination callbacks cannot
+  run. An unsuccessful `c:init/1` must release any resources it already opened.
   """
 
   @typedoc "Opaque backend state, threaded through every callback."
@@ -76,6 +76,12 @@ defmodule LemonCore.Store.Backend do
   @type value :: term()
 
   @type opts :: keyword()
+
+  @typedoc "Indexed retention predicate; timestamps strictly before the cutoff expire."
+  @type sweep_field ::
+          :expires_at | :introspection_timestamp | :inserted_at_ms | :started_at_ms
+  @type sweep_cutoff :: -9_223_372_036_854_775_808..9_223_372_036_854_775_807
+  @type sweep_predicate :: {sweep_field(), sweep_cutoff()}
 
   @typedoc """
   Backend-specific failure description. Not portable: log it, do not match on it.
@@ -131,6 +137,27 @@ defmodule LemonCore.Store.Backend do
   idempotent.
   """
   @callback delete(state(), table(), key()) :: {:ok, state()}
+
+  @doc """
+  Deletes expired rows in one storage-engine operation for the given table.
+
+  Optional. A backend that omits this capability receives no automatic retention
+  sweeps; Store does not fall back to listing rows and deleting them individually.
+  Returns the deleted count in one operation. Comparisons are strict integer
+  timestamp `< cutoff`:
+
+    * `:expires_at` reads only the value's atom `:expires_at` key.
+    * `:introspection_timestamp` prefers an integer first element of a two-tuple
+      row key, then the value's `:ts_ms || "ts_ms"` field.
+    * `:inserted_at_ms` reads only the value's string `"inserted_at_ms"` key.
+    * `:started_at_ms` prefers an integer atom field, then an integer string field.
+
+  Missing and non-integer timestamps remain untouched. Cutoffs are signed
+  64-bit millisecond timestamps; values remain arbitrary Erlang integers.
+  Callers must evict matching cached rows after success, using the same predicate.
+  """
+  @callback sweep(state(), table(), sweep_predicate()) ::
+              {:ok, non_neg_integer(), state()} | {:error, error_reason()}
 
   @doc """
   Conditionally deletes several exact snapshots as one backend operation.
@@ -213,11 +240,21 @@ defmodule LemonCore.Store.Backend do
   @doc "Confirms visible authority; transaction-durable backends need no additional barrier."
   @callback confirm_durable(state()) :: {:ok, state()} | {:error, error_reason()}
 
+  @doc """
+  Releases backend resources during orderly Store termination.
+
+  Optional. This is not a durability barrier: callers requiring one must use
+  `c:sync/1` before closing. Initialization failures must clean themselves up.
+  """
+  @callback close(state()) :: :ok | {:error, error_reason()}
+
   @optional_callbacks list_recent: 3,
                       ping: 1,
                       compare_and_delete_many: 2,
                       compare_and_swap: 5,
                       with_durability: 2,
                       confirm_durable: 1,
-                      sync: 1
+                      sync: 1,
+                      sweep: 3,
+                      close: 1
 end

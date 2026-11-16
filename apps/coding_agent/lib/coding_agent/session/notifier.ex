@@ -1,6 +1,8 @@
 defmodule CodingAgent.Session.Notifier do
   @moduledoc false
 
+  alias CodingAgent.Session.EventLog
+
   @spec subscribe_stream(map(), pid(), keyword()) :: {:ok, pid(), map()}
   def subscribe_stream(state, pid, opts) do
     max_queue = Keyword.get(opts, :max_queue, 1000)
@@ -14,7 +16,7 @@ defmodule CodingAgent.Session.Notifier do
         owner: pid,
         overflow_event:
           {:session_event, state.session_manager.header.id,
-           {:stream_resync, %{reason: :overflow}}},
+           {:stream_resync, %{reason: :overflow}}, nil},
         timeout: timeout,
         # This is a session subscription, not a provider response. Quiet sessions
         # and tools may outlive the provider inactivity window.
@@ -49,7 +51,7 @@ defmodule CodingAgent.Session.Notifier do
         tagged: Keyword.get(opts, :tagged, false),
         overflow_message:
           {:session_event, state.session_manager.header.id,
-           {:stream_resync, %{reason: :overflow}}}
+           {:stream_resync, %{reason: :overflow}}, nil}
       )
 
     new_listeners = [{pid, monitor_ref, delivery} | state.event_listeners]
@@ -80,7 +82,20 @@ defmodule CodingAgent.Session.Notifier do
 
   @spec broadcast_event(map(), LemonAgent.Types.agent_event()) :: :ok
   def broadcast_event(state, event) do
-    session_event = {:session_event, state.session_manager.header.id, event}
+    entry = EventLog.append(state.event_log, event, state.run_id)
+    session_event = {:session_event, state.session_manager.header.id, event, entry.cursor}
+
+    LemonCore.Bus.broadcast(
+      "session_events",
+      LemonCore.Event.new(:session_event, Map.take(entry, [:cursor, :event_id, :events]), %{
+        session_key: state.session_key,
+        run_id: state.run_id,
+        schema_version: 1,
+        event_id: entry.event_id,
+        session_seq: entry.cursor["seq"],
+        cursor: entry.cursor
+      })
+    )
 
     Enum.each(state.event_listeners, fn {_pid, _ref, delivery} ->
       LemonCore.Bus.Delivery.send(delivery, session_event)

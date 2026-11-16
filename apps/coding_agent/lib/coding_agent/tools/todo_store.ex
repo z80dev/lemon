@@ -9,6 +9,8 @@ defmodule CodingAgent.Tools.TodoStore do
   readers (progress snapshots, control-plane summaries, checkpoint creation).
   Session reads never consult it, so clearing it or restarting its owner loses
   nothing, and `put/2` cannot change what a session or its tools read.
+  The application-supervised `TodoStoreOwner` alone creates the table; standalone
+  callers must start coding_agent rather than creating a caller-owned fallback.
 
   ## Usage
 
@@ -338,40 +340,8 @@ defmodule CodingAgent.Tools.TodoStore do
 
   defp ensure_table do
     case :ets.whereis(@table) do
-      :undefined ->
-        # Try hard to avoid the ETS table being owned by a short-lived process
-        # (e.g. Task processes in async tests). If a stable, supervised process
-        # exists, set it as the ETS heir so the table survives owner exits.
-        heir_opt =
-          cond do
-            is_pid(Process.whereis(CodingAgent.Tools.TodoStoreOwner)) ->
-              [{:heir, Process.whereis(CodingAgent.Tools.TodoStoreOwner), @table}]
-
-            is_pid(Process.whereis(CodingAgent.Supervisor)) ->
-              [{:heir, Process.whereis(CodingAgent.Supervisor), @table}]
-
-            true ->
-              []
-          end
-
-        :ets.new(
-          @table,
-          [
-            :named_table,
-            :public,
-            :set,
-            read_concurrency: true,
-            write_concurrency: true
-          ] ++ heir_opt
-        )
-
-        :ok
-
-      _ ->
-        :ok
+      :undefined -> GenServer.call(CodingAgent.Tools.TodoStoreOwner, :ensure_table)
+      _ -> :ok
     end
-  rescue
-    ArgumentError ->
-      :ok
   end
 end

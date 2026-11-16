@@ -38,6 +38,27 @@ defmodule LemonAi.ProviderRegistryComprehensiveTest do
     :ok
   end
 
+  test "contended mutation raises instead of reporting a registration that never happened" do
+    lock = {{ProviderRegistry, :mutation_lock}, self()}
+    assert :global.set_lock(lock, [node()], 0)
+
+    try do
+      contender =
+        Task.async(fn ->
+          assert_raise RuntimeError, "Provider registry lock unavailable", fn ->
+            ProviderRegistry.register(:test_api, TestProvider1)
+          end
+        end)
+
+      Task.await(contender, 10_000)
+      assert ProviderRegistry.get(:test_api) == {:error, :not_found}
+    after
+      :global.del_lock(lock, [node()])
+    end
+
+    assert :ok = ProviderRegistry.register(:test_api, TestProvider1)
+  end
+
   defp snapshot_registry do
     ProviderRegistry.list()
     |> Enum.reduce(%{}, fn api_id, acc ->
@@ -152,12 +173,11 @@ defmodule LemonAi.ProviderRegistryComprehensiveTest do
       assert {:error, :not_found} = ProviderRegistry.get(:test_api)
     end
 
-    test "initializes registry if not already initialized" do
-      # Clear to simulate uninitialized state
+    test "reads a cleared registry without restoring providers" do
       ProviderRegistry.clear()
       assert ProviderRegistry.list() == []
 
-      # get/1 should auto-initialize
+      # Clearing is an explicit configuration write; reads leave that map alone.
       assert {:error, :not_found} = ProviderRegistry.get(:any_api)
       assert ProviderRegistry.initialized?()
     end
@@ -319,10 +339,8 @@ defmodule LemonAi.ProviderRegistryComprehensiveTest do
   # ============================================================================
 
   describe "initialized?/0" do
-    test "returns false for uninitialized registry" do
+    test "remains initialized after clearing registrations" do
       ProviderRegistry.clear()
-      # Need to actually delete the persistent_term to test uninitialized state
-      # This is handled by clear/0, so we test the transition
       assert ProviderRegistry.initialized?()
     end
 

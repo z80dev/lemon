@@ -60,12 +60,10 @@ defmodule LemonChannels.Adapters.WhatsApp.BridgeScriptTest do
 
     File.write!(Path.join(baileys, "index.js"), @fake_baileys)
 
-    {:ok, port_server} =
-      PortBridge.start_link(
-        {@bridge_spec, [config: %{bridge_script: script}, notify_pid: self()]}
-      )
+    bridge = {@bridge_spec, [config: %{bridge_script: script}, notify_pid: self()]}
 
-    on_exit(fn -> if Process.alive?(port_server), do: GenServer.stop(port_server) end)
+    port_server =
+      start_supervised!(%{id: PortBridge, start: {PortBridge, :start_link, [bridge]}})
 
     %{port_server: port_server, credentials_path: Path.join(tmp_dir, "auth")}
   end

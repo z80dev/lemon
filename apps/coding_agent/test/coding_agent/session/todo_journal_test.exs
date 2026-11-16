@@ -134,7 +134,10 @@ defmodule CodingAgent.Session.TodoJournalTest do
   end
 
   test "host journal failure remains a failure with unchanged durable state", %{tmp_dir: root} do
-    session = start_session(root)
+    # Keep dispatch intents durable so this fault reaches todo's own append.
+    session =
+      start_session(root, tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(root))
+
     original = host(session, %{"action" => "write", "todos" => pending()})["todos"]
     before = Session.get_state(session)
 
@@ -560,7 +563,10 @@ defmodule CodingAgent.Session.TodoJournalTest do
   test "journal append failure reports failure and leaves both journal and cache unchanged", %{
     tmp_dir: root
   } do
-    session = start_session(root)
+    # Keep dispatch intents durable so getters can verify the failed todo write.
+    session =
+      start_session(root, tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(root))
+
     original = write(session, pending()).details.todos
     before = Session.get_state(session)
 
@@ -595,15 +601,15 @@ defmodule CodingAgent.Session.TodoJournalTest do
     session = start_session(root)
     Session.subscribe(session)
     original = write(session, pending()).details.todos
-    assert_receive {:session_event, _, {:todos_changed, ^original}}
+    assert_receive {:session_event, _, {:todos_changed, ^original}, _}
     a = leaf(session)
     assert {:ok, ^original, old} = Session.todos(session)
     done = write(session, Enum.map(original, &Map.put(&1, "status", "completed"))).details.todos
-    assert_receive {:session_event, _, {:todos_changed, ^done}}
+    assert_receive {:session_event, _, {:todos_changed, ^done}, _}
     assert {:error, :stale_revision} = Session.write_todos(session, original, old)
     assert_views(session, done)
     navigate(session, a)
-    assert_receive {:session_event, _, {:todos_changed, ^original}}
+    assert_receive {:session_event, _, {:todos_changed, ^original}, _}
     assert {:ok, ^original, prepared} = Session.todos(session)
     navigate(session, leaf_id_of_latest_todo(session))
     navigate(session, a)

@@ -391,8 +391,8 @@ defmodule CodingAgent.Debug.SessionServerTest do
         call(ctx.key, %{action: "continue"}, timeout_ms: 30_000, signal: signal)
       end)
 
-    assert_receive {:trace, ^server, :send, {:"$gen_call", _from, {:request, "continue", _args}},
-                    _client},
+    assert_receive {:trace, ^server, :send,
+                    {:"$gen_call", _from, {:request, "continue", _args, _timeout}}, _client},
                    5_000
 
     :erlang.trace(server, false, [:send])

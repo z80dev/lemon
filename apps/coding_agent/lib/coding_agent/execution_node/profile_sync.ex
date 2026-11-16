@@ -27,7 +27,12 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
   def apply(args, _cwd \\ nil) do
     with :ok <- ProfileSnapshot.validate(args),
          {:ok, paths} <- ProfileStore.paths(args["profileId"]) do
-      :global.trans({{__MODULE__, paths["home"]}, self()}, fn -> persist(args, paths) end)
+      :global.trans(
+        {{__MODULE__, paths["home"]}, self()},
+        fn -> persist(args, paths) end,
+        [node()],
+        3
+      )
       |> normalize_result()
     else
       {:error, _} = error -> error
@@ -42,7 +47,12 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
   def status(args, _cwd \\ nil) do
     with :ok <- ProfileSnapshot.validate_status(args),
          {:ok, paths} <- ProfileStore.paths(args["profileId"]) do
-      :global.trans({{__MODULE__, paths["home"]}, self()}, fn -> lookup_status(args, paths) end)
+      :global.trans(
+        {{__MODULE__, paths["home"]}, self()},
+        fn -> lookup_status(args, paths) end,
+        [node()],
+        3
+      )
       |> normalize_result()
     else
       {:error, _} = error -> error

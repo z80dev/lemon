@@ -42,7 +42,8 @@ defmodule LemonCore.Store.ReadCache do
   `init/1` returns a map of `domain => table reference`. The owning Store keeps
   that map in its state and passes it back on the server side; client-side
   callers pass the store *name* and the table references are resolved from
-  `:persistent_term` instead of being rebuilt from atoms on every call.
+  supervised `LemonCore.RuntimeCache` ETS storage instead of being rebuilt
+  from atoms on every call.
 
   ## Usage
 
@@ -66,8 +67,9 @@ defmodule LemonCore.Store.ReadCache do
   Initialize the cache ETS tables for `store`. Called during Store init.
 
   Creates a table for each intrinsic domain plus each of `generic_tables`, and
-  publishes the `domain => table` map to `:persistent_term` so client processes
-  can resolve tables without re-deriving atom names.
+  publishes the `domain => table` map to `LemonCore.RuntimeCache` so client
+  processes can resolve tables without re-deriving atom names. Runtime table
+  additions and Store restarts update this metadata without global GC scans.
 
   Additive: domains already published for this store whose tables are still
   alive are carried over, so a caller that re-initializes with a smaller set
@@ -120,7 +122,7 @@ defmodule LemonCore.Store.ReadCache do
   store has never initialized its cache.
   """
   @spec tables(store()) :: tables() | nil
-  def tables(store) when is_atom(store), do: :persistent_term.get(pt_key(store), nil)
+  def tables(store) when is_atom(store), do: LemonCore.RuntimeCache.get(runtime_key(store))
   def tables(_store), do: nil
 
   @doc """
@@ -201,6 +203,19 @@ defmodule LemonCore.Store.ReadCache do
     ArgumentError -> :ok
   end
 
+  @doc "Applies the backend's expiry predicate to the mirrored rows without clearing live entries."
+  def sweep(store, domain, field, cutoff) do
+    case resolve(store, domain) do
+      nil ->
+        :ok
+
+      table ->
+        :ets.select_delete(table, LemonCore.Store.EtsBackend.sweep_match_spec(field, cutoff))
+    end
+
+    :ok
+  end
+
   @doc """
   Return the ETS table name for a domain of a store instance.
 
@@ -243,7 +258,7 @@ defmodule LemonCore.Store.ReadCache do
   # caller-supplied table names would leak atoms, and a store that has not
   # published a map has no live tables anyway.
   defp resolve(store, domain) when is_atom(store) and not is_nil(store) do
-    case :persistent_term.get(pt_key(store), nil) do
+    case tables(store) do
       nil -> nil
       tables -> Map.get(tables, domain)
     end
@@ -251,18 +266,10 @@ defmodule LemonCore.Store.ReadCache do
 
   defp resolve(_store, _domain), do: nil
 
-  defp pt_key(store), do: {__MODULE__, store}
+  defp runtime_key(store), do: {__MODULE__, store}
 
   defp publish(store, tables) do
-    key = pt_key(store)
-
-    # persistent_term writes trigger a global GC scan; skip the no-op case so
-    # repeated init/1 calls (tests, store restarts onto live tables) are cheap.
-    if :persistent_term.get(key, nil) != tables do
-      :persistent_term.put(key, tables)
-    end
-
-    :ok
+    LemonCore.RuntimeCache.put(runtime_key(store), tables)
   end
 
   defp ensure_table(store, domain) do

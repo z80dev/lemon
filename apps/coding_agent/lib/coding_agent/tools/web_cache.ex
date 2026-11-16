@@ -139,21 +139,7 @@ defmodule CodingAgent.Tools.WebCache do
     :ok
   end
 
-  defp ensure_table(table) do
-    case :ets.whereis(table) do
-      :undefined ->
-        try do
-          :ets.new(table, [:named_table, :set, :public, read_concurrency: true])
-        rescue
-          ArgumentError ->
-            # Another process created the table first.
-            :ets.whereis(table)
-        end
-
-      table_id ->
-        table_id
-    end
-  end
+  defp ensure_table(table), do: CodingAgent.RuntimeTables.ensure_table(table)
 
   defp maybe_load_persistent_table(_table, %{persistent: false}), do: :ok
 
@@ -345,19 +331,7 @@ defmodule CodingAgent.Tools.WebCache do
     end
   end
 
-  defp ensure_state_table do
-    case :ets.whereis(@state_table) do
-      :undefined ->
-        try do
-          :ets.new(@state_table, [:named_table, :set, :public, read_concurrency: true])
-        rescue
-          ArgumentError -> :ets.whereis(@state_table)
-        end
-
-      table_id ->
-        table_id
-    end
-  end
+  defp ensure_state_table, do: CodingAgent.RuntimeTables.ensure_table(@state_table)
 
   defp evict_expired_entries(table, now) do
     :ets.foldl(

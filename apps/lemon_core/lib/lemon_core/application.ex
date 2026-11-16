@@ -9,8 +9,11 @@ defmodule LemonCore.Application do
     `phoenix_pubsub` is not available
   - `LemonCore.ACPClientBridge` - Registry for direct ACP client request/reply
   - `LemonCore.NodeRegistry` - Socket-owned Registry and temporary invocation supervisors
+  - `LemonCore.RuntimeCache` - Supervised runtime metadata and hook registrations
+  - `LemonCore.Dedupe.Supervisor` - Supervises each named deduplication table owner
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
+  - `LemonCore.Secrets.Usage` - Batched asynchronous secret usage metadata
   - `LemonCore.UsageLedger` - Serialized per-run usage/cost aggregation (finalize-run hook)
   - `LemonCore.ExecApprovalExpiry` - Expires pending exec approvals whose run or
     session ended (finalize-run hook)
@@ -64,16 +67,19 @@ defmodule LemonCore.Application do
     _ = LemonCore.Logging.maybe_add_file_handler()
 
     config_cache_opts = Application.get_env(:lemon_core, LemonCore.ConfigCache, [])
-    _ = LemonCore.ExecApprovalExpiry.runtime_id()
+    _ = LemonCore.ExecApprovalExpiry.init_runtime_id()
 
     children =
       [
+        LemonCore.RuntimeCache,
+        {DynamicSupervisor, strategy: :one_for_one, name: LemonCore.Dedupe.Supervisor},
         LemonCore.Bus.child_spec_for_backend(),
         LemonCore.Drain,
         LemonCore.ACPClientBridge,
         LemonCore.NodeRegistry,
         {LemonCore.ConfigCache, config_cache_opts},
         LemonCore.Store,
+        LemonCore.Secrets.Usage,
         LemonCore.UsageLedger,
         LemonCore.ExecApprovalExpiry,
         {Task.Supervisor, name: LemonCore.Secrets.SourceTaskSupervisor},

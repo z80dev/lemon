@@ -1,9 +1,15 @@
 defmodule LemonAutomation.CronCommandRunner do
   @moduledoc """
   Runs operator-owned no-agent cron commands through a supervised BEAM task.
+
+  A timeout terminates the owned local process group through
+  `LemonCore.ProcessGroup.terminate/2` before closing the port. Descendants that
+  ignore stdin EOF are included, with SIGKILL escalation after a bounded SIGTERM
+  grace period. Descendants that deliberately leave the group are not contained.
   """
 
   alias LemonAutomation.{CronJob, CronRun}
+  alias LemonCore.ProcessGroup
 
   @max_output_bytes 12_000
 
@@ -92,9 +98,18 @@ defmodule LemonAutomation.CronCommandRunner do
         {:error, "Command exited #{status}: #{output(chunks, truncated?)}"}
     after
       timeout ->
-        Port.close(port)
+        terminate_port(port)
         :timeout
     end
+  end
+
+  defp terminate_port(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, pid} -> ProcessGroup.terminate(pid, [])
+      nil -> :ok
+    end
+  after
+    if Port.info(port), do: Port.close(port)
   end
 
   defp append_output(chunks, byte_count, truncated?, data) do

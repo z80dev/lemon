@@ -285,6 +285,10 @@ defmodule LemonEvals.PairedCleanupTest do
     [path] = System.argv()
     identity = #{inspect(identity)}
     Application.put_env(:coding_agent, :process_store_path, path)
+    # ProcessStore publishes lifecycle changes; start only its bus, not a runtime.
+    {:ok, _} = Application.ensure_all_started(:phoenix_pubsub)
+    {:ok, _pubsub} =
+      Supervisor.start_link([{Phoenix.PubSub, name: LemonCore.PubSub}], strategy: :one_for_one)
     {:ok, server} = CodingAgent.ProcessStoreServer.start_link()
     "live" = CodingAgent.ProcessStore.new_process(%{
       id: "live", backend: :local, workload_identity: identity,
@@ -427,7 +431,7 @@ defmodule LemonEvals.PairedCleanupTest do
 
       Code.ensure_loaded!(Durable)
       :erlang.trace_pattern({Durable, :sync_file, 1}, [{:_, [], [{:return_trace}]}], [:local])
-      :erlang.trace_pattern({ProcessGroup, :signal_workload_group, 4}, true, [:local])
+      :erlang.trace_pattern({ProcessGroup, :terminate, 2}, true, [:local])
       :erlang.trace(worker, true, [:call, {:tracer, self()}])
 
       try do
@@ -439,7 +443,7 @@ defmodule LemonEvals.PairedCleanupTest do
         sync = Enum.find_index(events, &(&1 == {:return_from, {Durable, :sync_file, 1}, :ok}))
 
         signal =
-          Enum.find_index(events, &match?({:call, {ProcessGroup, :signal_workload_group, _}}, &1))
+          Enum.find_index(events, &match?({:call, {ProcessGroup, :terminate, _}}, &1))
 
         assert is_integer(sync) and is_integer(signal) and sync < signal
         assert {:call, {Durable, :sync_file, [file]}} in events
@@ -450,7 +454,7 @@ defmodule LemonEvals.PairedCleanupTest do
         assert_receive {^port, {:exit_status, _}}, 5_000
       after
         :erlang.trace_pattern({Durable, :sync_file, 1}, false, [:local])
-        :erlang.trace_pattern({ProcessGroup, :signal_workload_group, 4}, false, [:local])
+        :erlang.trace_pattern({ProcessGroup, :terminate, 2}, false, [:local])
         send(worker, :finish)
       end
     end
@@ -482,7 +486,7 @@ defmodule LemonEvals.PairedCleanupTest do
         result
       end
 
-      result = ProcessGroup.signal_workload_group(first, :sigkill, false, persist)
+      result = ProcessGroup.terminate(first, signal: :sigkill, before_signal: persist)
       assert_receive {:barrier, final, barrier}
       assert [{"growing", %{workload_identity: ^final}, %{}}] = read_ledger(path)
 
@@ -493,7 +497,9 @@ defmodule LemonEvals.PairedCleanupTest do
         refute_receive {^port, {:exit_status, _}}, 25
       else
         assert barrier == :ok
-        assert {:ok, ^final} = result
+        assert {:terminated, terminated} = result
+        assert terminated.root_pid == final.root_pid
+        assert terminated.root_birth == final.root_birth
         assert_receive {^port, {:exit_status, _}}, 5_000
       end
     end
@@ -623,7 +629,7 @@ defmodule LemonEvals.PairedCleanupTest do
     assert {:ok, identity} = ProcessGroup.capture_workload_group(pid)
 
     on_exit(fn ->
-      ProcessGroup.signal_workload_group(identity, :sigkill)
+      ProcessGroup.terminate(identity, signal: :sigkill)
       if Port.info(port), do: Port.close(port)
     end)
 

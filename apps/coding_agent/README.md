@@ -82,6 +82,7 @@ passes tool/reasoning payloads, or appends review output to session history.
 
 ```
 CodingAgent.Supervisor (one_for_one)
+  +-- RuntimeTables (extension/web/capability caches)
   +-- Registry (SessionRegistry)
   +-- Registry (BackgroundRun.Registry)
   +-- Registry (ProcessRegistry)
@@ -95,9 +96,31 @@ CodingAgent.Supervisor (one_for_one)
   +-- RunGraphServer (ETS+DETS persistent run graph)
   +-- ProcessStoreServer (background process state)
   +-- ProcessManager (DynamicSupervisor for exec processes)
-  +-- LaneQueue (concurrency-capped lane FIFO)
++-- LaneQueue (background process launch FIFO)
   +-- Parallel.Semaphore (task concurrency limit)
 ```
+
+### Runtime table ownership
+
+`RuntimeTables` creates the extension inventory, extension source/error metadata,
+web cache/state and websearch rate-limit tables before sessions start. Additional
+web-cache tables are created by that same supervised owner, never by a tool task.
+Python/CLT and ripgrep/PCRE2 probe results and the fallback secret-placeholder key
+use its protected ETS cache. Probes execute outside the owner; concurrent misses
+publish one canonical value. Reads stay direct ETS lookups.
+
+These caches survive requesting-process exits, but are disposable on owner
+restart. Web entries reload from their configured disk cache; extension inventory
+and capability results repopulate on demand. The fallback placeholder key is
+runtime-ephemeral and changes after owner restart; persisted keys are unaffected.
+`TodoStoreOwner` owns the todo projection without a caller-created fallback.
+Direct tool/store callers must start the `coding_agent` application.
+Pre-boot Python feature checks may run uncached without starting the application
+or creating a table, preserving CLI capability inspection before worker setup.
+
+Search provider specifications remain in `:persistent_term`: only explicit
+startup/config-registration operations (`init`, `reset`, `register`,
+`unregister`) publish them. Provider reads never initialize or mutate the map.
 
 ## Module Inventory
 
@@ -439,6 +462,18 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.RunGraph` | ETS-backed parent/child run graph with monotonic state machine (`queued -> running -> completed/error/killed/cancelled/lost`); await via PubSub |
 | `CodingAgent.RunGraphServer` | GenServer owning RunGraph ETS/DETS state, serialized lifecycle/budget writes, synchronous startup recovery, and TTL cleanup |
 
+Task, process, run-graph and parent-question stores share
+`CodingAgent.DurableTable`: each domain server remains the serialized owner,
+loads its existing DETS tuples before readiness, and normalizes interrupted work
+through a domain callback. File names and tuple layouts are unchanged.
+Task-progress bindings use the same lifecycle with no DETS backing and remain
+transient. Expiration uses a private timestamp/key index rather than folding
+every retained record or log buffer; sweeps run in the owner mailbox, not an
+unsupervised task. Failed process-artifact deletion retains both the record and
+its expiration entry for a later sweep; unknown launches and cleared identity
+tombstones still have no TTL. ProcessSession's bounded owner ETS tail and its
+transition/debounced persistence cadence are unchanged.
+
 ### Memory and Context
 
 | Module | Description |
@@ -468,10 +503,10 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.LaneQueue` | Lane-aware FIFO queue with per-lane concurrency caps (default: main=4, subagent=8, background_exec=2) |
+| `CodingAgent.LaneQueue` | FIFO background process launch admission with durable receipts |
 | `CodingAgent.BackgroundRun` | Durable `/bg` lifecycle facade (`start`, `list`, `status`, `result`, `cancel`) for isolated full-tool sessions |
 | `CodingAgent.SideQuery` | Bounded `/btw` query facade using an immutable live snapshot or durable session-key history with tools disabled |
-| `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
+| `CodingAgent.Parallel` | Monitored semaphore for shared native child concurrency |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background processes started by `bash` with `run_in_background`, read with `bash_output`, stopped with `kill_process` |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
@@ -597,6 +632,17 @@ Set `output_schema` on a task or batch child to require a JSON-only final respon
 
 Task state uses a single-writer contract. `TaskStoreServer` serializes record changes, bounded event appends, explicit-join followup reservations/suppression, and terminalization. Competing completion/error callbacks are first-writer-wins, repeated terminal callbacks are idempotent, and late running/progress updates preserve the terminal state. `RunGraphServer` completes its DETS recovery before reporting startup readiness, then serializes live inserts, transitions, budget updates, and deletes so recovery cannot overwrite accepted live state.
 
+Native joins and swarm dependency scheduling subscribe before reading state and
+wake from existing Bus run/task notifications and process monitors, not refresh
+polls. Parent-question delivery acknowledgements and queued steering wake joins
+too. Each join keeps one absolute deadline across all wake-ups; cancellation,
+followup reservations and owner-scoped task identity are unchanged. Foreground
+Bash attachments likewise wake on published owner-tail/output and lifecycle
+changes, retaining the original detach deadline and fixed process identity.
+Unattached child inbox admission runs in a per-child mailbox owner with the
+existing 64-message / 256-KiB cap, rather than a queue in the shared control
+coordinator.
+
 For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. Joins reserve followup delivery while waiting. `wait_all` permanently suppresses completed joined tasks, while `wait_any` suppresses only its completed winner and releases every loser; failure, abort, an unknown run, or a child clarification releases the reservation without permanent suppression. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup preserves the full visible task answer and submits router fallbacks as native followup runs; delivery failures are contained after task/run state is terminalized. Async launches fail immediately when their supervised worker cannot start, rather than returning a task id that remains queued forever. Async completions default to `:followup`; `:steer` and `:steer_backlog` also use non-preempting delivery. Live parents finish every already-issued tool call, then receive the completion before their next model request; unavailable parents fall back to router followup runs.
 
 The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
@@ -609,13 +655,13 @@ Unknown Bash admissions are structured error receipts carrying their original
 process identity; the tool card and compact shelf say `background outcome
 unknown`, never successful start or failed start. Late/reopened durable storage
 restores occupied capacity before admission. Cleared identity tombstones and
-historical unknown receipts have no TTL; local retained groups incur a
-system-wide `ps` reconciliation scan after 100 ms plus scan cost.
+historical unknown receipts have no TTL. Local groups reconcile on Port exit,
+explicit cancellation and boot recovery; no periodic host `ps` scan is scheduled.
 
 Hermes-compatible background commands use the same native runtime. Call
 `CodingAgent.BackgroundRun.start/2` to receive a durable id immediately, then
 use `list/1`, `status/1`, `result/1`, or `cancel/2`. Each run owns a fresh
-full-tool session on the subagent lane; `:session_key` is retained only as
+full-tool session sharing the native task semaphore;
 lineage metadata, and neither the prompt nor result is appended to that parent.
 Channel surfaces use `list_scoped/2`, `status_scoped/2`, `result_scoped/2`, and
 `cancel_scoped/3`, which require that lineage key and make a foreign id
@@ -757,6 +803,11 @@ The Session queue fields are diagnostic mirrors; `LemonAgent.Agent` owns actual
 delivery and consumption. Terminal, cancel, error, abort, and agent-exit paths
 clear the mirrors so `diagnostics/1` cannot report stale follow-ups.
 
+`Session.streaming?/1` reads only the streaming flag. A prompt is admitted from
+the Session's authoritative state; another prompt after that transition returns
+`{:error, :busy}`. Native child continuations do not copy full Session state or
+retry `:already_streaming` on a timer.
+
 Sessions are started under `SessionSupervisor` (dynamic) and registered in
 `SessionRegistry` by their persisted UUID. Registry metadata also retains the
 logical runtime session key used by clients.
@@ -769,6 +820,10 @@ so they cannot overwrite a starting session's snapshot. A second startup for an
 owned file returns `{:error, {:already_started, owner_pid}}` before loading it,
 without an abnormal linked exit to the caller. Reset transfers ownership to the
 new journal. The owning process's exit releases its registration.
+Startup, ownership changes and spill writers share root admission concurrently;
+maintenance takes exclusive admission. Acquisition is node-local and re-entrant,
+with finite retries returning `{:error, :lock_timeout}` without running the
+operation. A holder's exit releases its admission.
 
 Live sessions synchronously append completed messages, tool calls/results, model
 changes and compaction entries to their JSONL file. They do not depend on a
@@ -807,7 +862,48 @@ working directory. Automatic resume refuses a missing or corrupt mapped journal
 instead of replacing that session's history with a fresh conversation. Unbound
 automatic native tokens retain their fresh-session fallback.
 
-`SessionManager.list_sessions/1` lists most recently modified sessions first.
+Each assistant message also stores a versioned `system-prompt-digest` snapshot in
+the same JSONL append: the digest, exact ordered prompt blocks and resume metadata.
+The digest includes block order and directory-derived flags, not just flattened
+text. Resume and branch restoration adopt a rebuilt prompt only when its digest
+matches the selected branch's latest reply; otherwise they retain the journaled
+prompt, including its cache boundary, through subsequent turns. Explicit extension
+reload opts back into prompt recomposition; plan-mode changes still take effect.
+Legacy replies without a snapshot rebuild normally. Malformed snapshots or digests
+that do not match their saved blocks fail rather than silently discard history.
+
+Native requests send shared instruction blocks before one directory-derived footer.
+Built-in identity/coding/runtime/memory guidance and explicit custom instructions
+form the shared prefix; skills, contributed/bootstrap context, templates, project
+instructions, rules and environment belong to the footer. Anthropic places the
+system cache breakpoint before that footer; other providers concatenate the exact
+block text without adding separators. Journal files now include full system-prompt
+text and should be treated as private conversation data, not diagnostic output.
+
+`SessionManager.list_sessions/1` lists most recently active sessions first.
+Each cwd's `.index.sqlite3` caches journal header fields, the latest session-info
+title and activity time. Appends, snapshots and turn checkpoints update it;
+listing stats files but opens only new or mismatched journals. Removing a journal
+removes its row, and deleting or corrupting the derived index rebuilds it from
+JSONL. Atomic replacement, size, inode, mtime and ctime changes invalidate rows.
+Integer and legacy ISO-8601 journal timestamps remain discoverable; cached
+activity times are always epoch milliseconds.
+The cache is not a durability boundary and never makes a successful journal
+write fail. JSONL remains the source of truth.
+
+Journal loading streams and migrates one record at a time, including large
+journals; it does not retain a whole-file binary, split-line list or second
+raw-entry history. Parser overhead is bounded by the largest input record plus
+the file read buffer; the returned session still holds its materialized entry
+tree. Latest checkpoint selection, legacy migrations and torn-tail recovery
+have the same semantics at every file size.
+
+`lemon sessions maintain --older-than 90d` previews archival of cold inactive
+journals and cleanup of managed orphan spill directories. Confirmation uses
+the exact preview cutoff/token and fails if candidates or their contents change.
+Archived journals retain their spill artifacts; live owners and external artifact
+targets are never swept. See the [CLI guide](../../docs/user-guide/cli.md).
+
 `Session.navigate_tree/3` persists branch selection even before another message
 is sent. `SessionManager.fork_file/3` creates an independent branch file with
 parent-session provenance; it refuses to overwrite an existing destination.
@@ -911,11 +1007,29 @@ messages, tool results and summaries, plus the largest contributors. The prompt
 composer keeps labelled sections (`PromptComposer.compose_sections/7`) whose texts
 join to the exact prompt; only sections present in the prompt being sent are
 attributed. Splits use the shared ~4 chars/token estimator and are scaled by
-largest remainder to a provider-reported total. Each save records a bounded
-overhead profile (counts and labels, no text) keyed by native session id, so
-`ControlPlaneProvider.session_context_usage/2` can answer for stopped sessions from
-durable history; without a profile, a measured total reports the overhead as
-unattributed and an estimate-only cold read is unavailable.
+largest remainder to a provider-reported total. Live roots stay registered between
+executor turns for five minutes, bounded by a 32-root idle budget (oldest idle
+first); running roots and task children are not counted. These caller-policy
+limits match the task idle TTL and bound retained roots without claiming a
+measured memory guarantee. Parking saves history and stops the temporary session,
+disposing volatile tools; the next turn restores history transparently. A queued
+auto-resume is released only after the prior turn's synchronous save barrier.
+Each new invocation rebinds approvals, lineage, tool closures and trace context.
+Code reload continues to refresh registered idle sessions through
+`CodingAgent.CodeReload`. `ControlPlaneProvider.session_context_usage/2` answers
+for parked sessions from provider-measured durable history with overhead
+unattributed; an estimate-only cold read is unavailable. No overhead table is
+written. Content-free `[:coding_agent, :session, :journal_load]` and
+`[:coding_agent, :session, :environment_capture]` telemetry events count actual
+loads/captures with `%{count: 1}` and `%{session_id: id}` for lifecycle tests and
+before/after latency measurements.
+
+The report's `prompt_cache` compares current and previous reply digests. `/context`
+explains changed bytes or block boundaries as a possible cache-miss cause and
+identifies when resume retained a journaled prompt instead of a changed rebuild.
+Unchanged digests do not guarantee a provider cache hit: expiry, credentials and
+other request content still matter. Reports expose digests and bounded explanations,
+never the saved prompt text.
 
 If the live owner retires between registry lookup and the context read, the query
 uses the same durable-history path. Timeouts and unexpected owner crashes remain
@@ -1044,8 +1158,8 @@ result.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `:lane_caps` | `%{main: 4, subagent: 8, background_exec: 2}` | Per-lane callback concurrency; `background_exec` bounds launches, not live process lifetimes |
-| `:task_max_concurrency` | `8` | Max concurrently executing native `task` children; excess children queue on the monitored semaphore |
+| `:lane_caps` | `%{background_exec: 2}` | Background process launch callback concurrency, not live process lifetimes |
+| `:task_max_concurrency` | `8` | Shared maximum for executing native `task` children and background sessions; excess children queue on the same monitored semaphore |
 | `:primary_session` | `nil` | Keyword list of opts to auto-start a session on boot |
 
 Live background capacity, bounded pending admission, deadlines, and recovery are
@@ -1126,9 +1240,9 @@ see [`docs/user-guide/reminders-and-heartbeats.md`](../../docs/user-guide/remind
 # Bounded direct mode (default)
 unsubscribe = CodingAgent.Session.subscribe(session, max_queue: 1000)
 receive do
-  {:session_event, session_id, {:stream_resync, %{reason: :overflow}}} ->
+  {:session_event, session_id, {:stream_resync, %{reason: :overflow}}, nil} ->
     IO.puts("recover from the session owner")
-  {:session_event, session_id, event} -> IO.inspect(event)
+  {:session_event, session_id, event, cursor} -> IO.inspect({event, cursor})
   {:session_terminal, session_id, status} -> IO.inspect({:owner_terminal, status})
 end
 unsubscribe.()
@@ -1136,6 +1250,12 @@ unsubscribe.()
 # Existing EventStream, with bounded mailbox ingress and explicit resync
 {:ok, stream_pid} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 1000)
 ```
+
+Native events preserve the raw event in the third element and carry a cursor in
+the fourth: `%{"version" => 1, "sessionId" => session_id, "streamId" => stream_id,
+"seq" => seq}`. Sequence numbers are gap-free within that live session stream;
+the stream ID distinguishes owner lifetimes. Overflow fences carry `nil` instead
+of a cursor because they are subscription controls, not session events.
 
 Both subscription modes bound delivery before the subscriber mailbox accepts an
 event. Overflow fences that subscription and explicitly requests recovery; it

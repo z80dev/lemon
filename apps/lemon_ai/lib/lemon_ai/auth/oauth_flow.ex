@@ -351,8 +351,13 @@ defmodule LemonAi.Auth.OAuthFlow do
             end
           end
         end,
-        [node()]
+        [node()],
+        3
       )
+      |> case do
+        :aborted -> {:error, :refresh_lock_unavailable}
+        result -> result
+      end
     else
       usable(secret, spec)
     end

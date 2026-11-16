@@ -224,11 +224,11 @@ defmodule CodingAgent.ExecutorTest do
 
       assert run_ref == run.run_ref
       session_id = run.session_id
-      assert_receive {:session_event, ^session_id, {:agent_end, messages}}, 5_000
+      assert_receive {:session_event, ^session_id, {:agent_end, messages}, _}, 5_000
       assert List.last(messages) |> LemonAi.get_text() == answer
 
       assert_question_run_stopped(run)
-      refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+      refute_receive {:session_event, ^session_id, {:agent_end, _}, _}, 0
       refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
     end
 
@@ -254,11 +254,11 @@ defmodule CodingAgent.ExecutorTest do
       assert failure =~ error
       session_id = run.session_id
 
-      assert_receive {:session_event, ^session_id, {:error, {:assistant_error, ^error}, _}},
+      assert_receive {:session_event, ^session_id, {:error, {:assistant_error, ^error}, _}, _},
                      5_000
 
       assert_question_run_stopped(run)
-      refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+      refute_receive {:session_event, ^session_id, {:agent_end, _}, _}, 0
       refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
     end
 
@@ -279,7 +279,7 @@ defmodule CodingAgent.ExecutorTest do
       assert failure =~ "Cancelled"
       assert_question_run_stopped(run)
       session_id = run.session_id
-      refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+      refute_receive {:session_event, ^session_id, {:agent_end, _}, _}, 0
       refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
     end
 
@@ -326,7 +326,7 @@ defmodule CodingAgent.ExecutorTest do
 
       session_id = run.session_id
 
-      assert_receive {:session_event, ^session_id, {:compaction_start, %{reason: :overflow}}},
+      assert_receive {:session_event, ^session_id, {:compaction_start, %{reason: :overflow}}, _},
                      5_000
 
       assert_receive {:question_compaction, summary_provider, _context}, 5_000
@@ -335,13 +335,13 @@ defmodule CodingAgent.ExecutorTest do
       assert state.is_streaming
       assert state.terminal_event == nil
       assert Process.alive?(run.runner)
-      refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
-      refute_receive {:session_event, ^session_id, {:error, _, _}}, 0
+      refute_receive {:session_event, ^session_id, {:agent_end, _}, _}, 0
+      refute_receive {:session_event, ^session_id, {:error, _, _}, _}, 0
       run_ref = run.run_ref
       refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
       send(summary_provider, {:respond, assistant_message("Earlier join history summarized.")})
 
-      assert_receive {:session_event, ^session_id, {:compaction_complete, _}}, 5_000
+      assert_receive {:session_event, ^session_id, {:compaction_complete, _}, _}, 5_000
       assert_receive {:question_provider, recovered_provider, recovered_context}, 5_000
 
       assert Enum.any?(recovered_context.messages, fn
@@ -367,12 +367,12 @@ defmodule CodingAgent.ExecutorTest do
       assert {:engine_event, ^run_ref, %{__event__: :completed, ok: true, answer: ^answer}} =
                List.last(collect_until_completed(run_ref))
 
-      assert_receive {:session_event, ^session_id, {:agent_end, messages}}, 5_000
+      assert_receive {:session_event, ^session_id, {:agent_end, messages}, _}, 5_000
       assert List.last(messages) |> LemonAi.get_text() == answer
       assert_question_run_stopped(run)
-      refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
-      refute_receive {:session_event, ^session_id, {:error, _, _}}, 0
-      refute_receive {:session_event, ^session_id, {:compaction_start, _}}, 0
+      refute_receive {:session_event, ^session_id, {:agent_end, _}, _}, 0
+      refute_receive {:session_event, ^session_id, {:error, _, _}, _}, 0
+      refute_receive {:session_event, ^session_id, {:compaction_start, _}, _}, 0
       refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
     end
 
@@ -632,7 +632,7 @@ defmodule CodingAgent.ExecutorTest do
 
     @tag :tmp_dir
     @tag :python3
-    test "completed native turns hand off eval and debugger state; logical reset kills descendants",
+    test "completed native turns retain eval and debugger state; logical reset kills descendants",
          %{tmp_dir: tmp_dir} do
       parent = self()
       File.write!(Path.join(tmp_dir, "prog.fake"), "")
@@ -670,7 +670,7 @@ defmodule CodingAgent.ExecutorTest do
 
       first =
         request(tmp_dir,
-          run_id: "handoff-first",
+          run_id: "live-first",
           prompt: "initialize kernel",
           stream_fn: stream,
           meta: %{session_mode: :chat}
@@ -725,7 +725,7 @@ defmodule CodingAgent.ExecutorTest do
       assert {:engine_event, ^first_ref, %{__event__: :completed, ok: true}} =
                List.last(collect_until_completed(first_ref))
 
-      refute Process.alive?(session)
+      assert Process.alive?(session)
       assert Process.alive?(kernel)
       assert Process.alive?(debug_server)
 
@@ -745,7 +745,7 @@ defmodule CodingAgent.ExecutorTest do
 
       second = %{
         request(tmp_dir,
-          run_id: "handoff-second",
+          run_id: "live-second",
           prompt: "reuse resources",
           resume: resume,
           stream_fn: capture,
@@ -1240,8 +1240,7 @@ defmodule CodingAgent.ExecutorTest do
       assert {:error, {:resume_session_missing, ^id}} =
                Executor.start_run(req, %{stream_fn: req.meta[:stream_fn]}, self())
 
-      # The preflight and actual start both fail closed, including a file disappearing
-      # between validation and startup.
+      # The actual start fails closed without a validation-only journal parse.
       assert {:error, {:resume_session_missing, ^id}} =
                CodingAgent.Session.Presentation.start_or_resume_session(
                  req.resume,
@@ -1493,7 +1492,7 @@ defmodule CodingAgent.ExecutorTest do
         assert Process.alive?(runner)
         assert {:ok, %{auto_followup_join_tokens: [_]}} = TaskStore.get_record(task_id)
         refute_receive {:question_provider, _, _}, 0
-        refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
+        refute_receive {:session_event, ^session_id, {:agent_end, _}, _}, 0
         refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
         {child, sender, delivery_ref, delivery, pending.id}
       after
@@ -1514,7 +1513,7 @@ defmodule CodingAgent.ExecutorTest do
                     {:tool_execution_end, "question-join", "task",
                      %AgentToolResult{
                        details: %{status: "needs_parent_answer", request_id: ^request_id}
-                     }, false}},
+                     }, false}, _},
                    5_000
 
     assert {:ok, %{delivery_pending: false}, _events} = ParentQuestions.get(request_id)
@@ -1549,9 +1548,9 @@ defmodule CodingAgent.ExecutorTest do
     assert state.terminal_event == nil
     session_id = run.session_id
     run_ref = run.run_ref
-    refute_receive {:session_event, ^session_id, {:agent_end, _}}, 0
-    refute_receive {:session_event, ^session_id, {:error, _, _}}, 0
-    refute_receive {:session_event, ^session_id, {:canceled, _}}, 0
+    refute_receive {:session_event, ^session_id, {:agent_end, _}, _}, 0
+    refute_receive {:session_event, ^session_id, {:error, _, _}, _}, 0
+    refute_receive {:session_event, ^session_id, {:canceled, _}, _}, 0
     refute_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 0
   end
 
@@ -1569,6 +1568,7 @@ defmodule CodingAgent.ExecutorTest do
 
   defp assert_question_run_stopped(run) do
     %{session_ref: session_ref, session: session, runner_ref: runner_ref, runner: runner} = run
+    CodingAgent.Session.Presentation.safe_stop_session(session)
     assert_receive {:DOWN, ^session_ref, :process, ^session, _}, 5_000
     assert_receive {:DOWN, ^runner_ref, :process, ^runner, _}, 5_000
   end
@@ -1590,6 +1590,24 @@ defmodule CodingAgent.ExecutorTest do
   defp collect_until_completed(run_ref, acc \\ []) do
     receive do
       {:engine_event, ^run_ref, %{__event__: :completed}} = msg ->
+        case msg do
+          {:engine_event, _, %{resume: %ResumeToken{value: id}}} ->
+            on_exit(fn ->
+              case CodingAgent.SessionRegistry.lookup(id) do
+                {:ok, session} ->
+                  monitor = Process.monitor(session)
+                  CodingAgent.Session.Presentation.safe_stop_session(session)
+                  assert_receive {:DOWN, ^monitor, :process, ^session, _reason}, 5_000
+
+                :error ->
+                  :ok
+              end
+            end)
+
+          _ ->
+            :ok
+        end
+
         Enum.reverse([msg | acc])
 
       {:engine_event, ^run_ref, _event} = msg ->

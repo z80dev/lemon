@@ -750,7 +750,12 @@ defmodule CodingAgent.Tools.Task.Worktree do
   end
 
   # Applies to the same parent checkout are serialized across concurrent children.
-  defp serialized(root, fun), do: :global.trans({{__MODULE__, root}, self()}, fun, [node()])
+  defp serialized(root, fun) do
+    case :global.trans({{__MODULE__, root}, self()}, fun, [node()], 3) do
+      :aborted -> {:error, :lock_unavailable}
+      result -> result
+    end
+  end
 
   defp conflicting_files(output) do
     ~r/^error: (?:patch failed: (.+):\d+|(.+?): (?:patch does not apply|already exists in working directory|does not exist in index|No such file or directory))$/m

@@ -55,14 +55,60 @@ defmodule LemonCore.ApplicationTest do
   end
 
   describe "supervisor children specification" do
-    test "supervisor has exactly 13 children" do
+    test "supervisor has exactly the expected children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
-      # Includes LemonCore.UsageLedger, which records finished-run usage,
-      # LemonCore.ExecApprovalExpiry, which expires approvals of ended owners,
-      # and LemonCore.Drain, which drains participants before a graceful stop.
-      assert length(children) == 13
+      expected = [
+        LemonCore.RuntimeCache,
+        LemonCore.Dedupe.Supervisor,
+        if(LemonCore.Bus.pubsub?(), do: Phoenix.PubSub.Supervisor, else: LemonCore.Bus.Registry),
+        LemonCore.Drain,
+        LemonCore.ACPClientBridge,
+        LemonCore.NodeRegistry,
+        LemonCore.ConfigCache,
+        LemonCore.Store,
+        LemonCore.Secrets.Usage,
+        LemonCore.UsageLedger,
+        LemonCore.ExecApprovalExpiry,
+        LemonCore.Secrets.SourceTaskSupervisor,
+        LemonCore.Secrets.SourceCache,
+        LemonCore.ConfigReloader,
+        LemonCore.ConfigReloader.Watcher
+      ]
+
+      expected =
+        if Code.ensure_loaded?(Exqlite.Sqlite3),
+          do: [LemonCore.RunHistoryStore | expected],
+          else: expected
+
+      assert children |> Enum.map(&elem(&1, 0)) |> Enum.sort() == Enum.sort(expected)
+    end
+
+    test "named core cache tables belong to supervised services" do
+      root_children = Supervisor.which_children(LemonCore.Supervisor)
+
+      for owner <- [LemonCore.RuntimeCache, LemonCore.Drain, LemonCore.ConfigCache] do
+        pid = Process.whereis(owner)
+        assert is_pid(pid)
+        assert Enum.any?(root_children, fn {_, child, _, _} -> child == pid end)
+      end
+
+      assert :ets.info(LemonCore.RuntimeCache, :owner) == Process.whereis(LemonCore.RuntimeCache)
+      assert :ets.info(LemonCore.Drain, :owner) == Process.whereis(LemonCore.Drain)
+      assert :ets.info(:lemon_core_config_cache, :owner) == Process.whereis(LemonCore.ConfigCache)
+
+      generations = LemonCore.NodeRegistry.Generations
+      assert :ets.info(generations, :owner) == Process.whereis(generations)
+
+      assert Enum.any?(Supervisor.which_children(LemonCore.NodeRegistry), fn
+               {^generations, pid, :worker, _} -> pid == Process.whereis(generations)
+               _ -> false
+             end)
+
+      for {_domain, table} <- LemonCore.Store.ReadCache.tables(Store) do
+        assert :ets.info(table, :owner) == Process.whereis(Store)
+      end
     end
   end
 

@@ -1,5 +1,6 @@
 defmodule LemonCore.Service.Identity do
   @moduledoc "Same-user process identity checks. Signals are bound to PID and start time."
+  alias LemonCore.ProcessGroup
   alias LemonCore.Service.{Command, Role, Unit}
 
   def uid(opts) do
@@ -53,9 +54,21 @@ defmodule LemonCore.Service.Identity do
 
   def terminate(identity, opts) do
     if same?(identity, opts) do
-      with :ok <- Command.ok("kill", ["-TERM", to_string(identity.pid)], opts) do
-        deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :stop_timeout, 15_000)
-        wait_gone(identity, deadline, opts)
+      result =
+        ProcessGroup.terminate(identity.pid,
+          scope: :process,
+          command: fn executable, args -> Command.run(executable, args, opts) end
+        )
+
+      case result do
+        :ok ->
+          deadline =
+            System.monotonic_time(:millisecond) + Keyword.get(opts, :stop_timeout, 15_000)
+
+          wait_gone(identity, deadline, opts)
+
+        _ ->
+          {:error, :service_command_failed}
       end
     else
       {:error, :process_identity_changed}

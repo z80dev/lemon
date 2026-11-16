@@ -69,12 +69,11 @@ then definitions, then use.
   unwind; after grace the kernel/process tree is killed and the next call starts
   fresh. The result explicitly says whether state was preserved or lost.
   Cancellation still kills immediately.
-- **Lifetime.** State survives native executor turns only when saving succeeds
-  and every tool resource accepts handoff; failure disposes the resources.
-  A resumed turn reuses the same kernel. Reset rebuilds tools for the fresh
-  session id and disposes old-id kernels. Explicit abort signals the run before
-  disposal; explicit stop, delete, unexpected owner death, or 30 minutes without
-  use also dispose of kernels. A root
+- **Lifetime.** State survives turns in the same live native session. Idle
+  roots park after five minutes or eviction from the 32-root idle budget, disposing
+  of kernels; the next turn restores conversation history, not kernel variables.
+  Reset disposes old-id kernels. Explicit abort, stop, delete, unexpected owner
+  death, or 30 minutes without use also dispose of kernels. A kernel
   that exits (`os._exit()` or `process.exit()`) also kills its owned process group
   and reports its exit status; the next call starts fresh.
 

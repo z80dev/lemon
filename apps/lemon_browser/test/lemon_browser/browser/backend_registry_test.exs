@@ -21,6 +21,28 @@ defmodule LemonBrowser.BackendRegistryTest do
     on_exit(&BackendRegistry.reset/0)
   end
 
+  test "contended register and unregister fail without changing the registry" do
+    assert :ok = BackendRegistry.register(:test_browser_backend, TestBackend)
+    lock = {{BackendRegistry, :mutation}, self()}
+    assert :global.set_lock(lock, [node()], 0)
+
+    try do
+      register =
+        Task.async(fn -> BackendRegistry.register(:another_browser_backend, TestBackend) end)
+
+      unregister = Task.async(fn -> BackendRegistry.unregister(:test_browser_backend) end)
+
+      assert {:error, :registry_unavailable} = Task.await(register, 10_000)
+      assert {:error, :registry_unavailable} = Task.await(unregister, 10_000)
+      assert BackendRegistry.fetch(:another_browser_backend) == :error
+      assert BackendRegistry.fetch(:test_browser_backend) == {:ok, TestBackend}
+    after
+      :global.del_lock(lock, [node()])
+    end
+
+    assert :ok = BackendRegistry.unregister(:test_browser_backend)
+  end
+
   test "built-in local backend cannot be replaced" do
     assert {:ok, LemonBrowser.Backends.Local} = BackendRegistry.fetch(:local)
     assert {:error, :builtin_backend} = BackendRegistry.register(:local, TestBackend)

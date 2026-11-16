@@ -180,6 +180,8 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     assert {:ok, "alpha-value", credential_revision} =
              Secrets.get_with_revision("ALPHA", ctx.opts)
 
+    assert {:ok, ^old_key, :file} = LemonCore.Secrets.MasterKey.resolve_cached(ctx.opts)
+
     assert {:ok, preview} = KeyRotation.preview(ctx.opts)
     assert %{source: :file, count: 3, expired: 0, resumed: 0} = preview
     assert preview.key_file == ctx.key_file
@@ -193,6 +195,8 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     assert byte_size(new_key) == 32
     refute new_key == old_key
     assert Bitwise.band(File.stat!(ctx.key_file).mode, 0o777) == 0o600
+    assert {:ok, ^new_key, :file} = LemonCore.Secrets.MasterKey.resolve_cached(ctx.opts)
+    assert {:ok, "alpha-value"} = Secrets.get("ALPHA", ctx.opts)
 
     for {{owner, name}, value} <- values do
       assert {:ok, ^value} = Secrets.get(name, [owner: owner] ++ ctx.opts)
@@ -315,6 +319,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     old_key = read_key(ctx.key_file)
     assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", ctx.opts)
     assert {:ok, _} = Secrets.set("BETA", "beta-value", ctx.opts)
+    assert {:ok, "alpha-value"} = Secrets.get("ALPHA", ctx.opts)
 
     crashing = Keyword.put(ctx.opts, :key_providers, [CrashAfterSwitch])
     assert {:ok, %{confirmation_token: token}} = KeyRotation.preview(crashing)

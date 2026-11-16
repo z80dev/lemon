@@ -2,9 +2,9 @@ defmodule LemonMCP.Transport.Stdio do
   @moduledoc """
   Stdio transport for MCP servers.
 
-  This transport spawns an MCP server as a child process and communicates
-  with it via stdin/stdout using JSON-RPC 2.0 messages over newline-delimited
-  JSON (JSONL).
+  This transport owns the MCP server's Port and process group. It implements
+  `LemonCore.Rpc.Transport`, sending already-framed bytes and forwarding incoming
+  chunks to its message handler. JSON-line framing belongs to `LemonMCP.Framing.Stdio`.
 
   ## Usage
 
@@ -15,11 +15,12 @@ defmodule LemonMCP.Transport.Stdio do
         args: ["-y", "@modelcontextprotocol/server-filesystem", "/path"]
       )
 
-  Send a message:
+  Send already-framed bytes:
 
-      :ok = LemonMCP.Transport.Stdio.send_message(transport, json_message)
+      :ok = LemonMCP.Transport.Stdio.send(transport, json_message <> "\\n")
 
-  Receive messages via the message handler callback.
+  Receive byte chunks via the message handler callback. Stderr remains merged
+  into stdout; the MCP framing module tolerates non-protocol log lines.
 
   ## Message Format
 
@@ -40,6 +41,8 @@ defmodule LemonMCP.Transport.Stdio do
   """
 
   use GenServer
+  @behaviour LemonCore.Rpc.Transport
+  import Kernel, except: [send: 2]
 
   require Logger
 
@@ -57,10 +60,8 @@ defmodule LemonMCP.Transport.Stdio do
           args: [String.t()],
           env: [{String.t(), String.t()}],
           port_open: (term(), list() -> port()),
-          message_handler: (String.t() -> any()) | nil,
-          buffer: String.t(),
-          os_pid: pos_integer() | nil,
-          pending: map()
+          message_handler: (binary() -> any()) | nil,
+          os_pid: pos_integer() | nil
         }
 
   # ============================================================================
@@ -77,7 +78,7 @@ defmodule LemonMCP.Transport.Stdio do
   - `:env` - Additional environment variables as keyword list or map
   - `:port_open` - Host opener `(spec, options -> port)` (default: `&Port.open/2`).
     Must have arity two and return a port; refusals never fall back to `Port.open/2`.
-  - `:message_handler` - Callback function for received messages `(String.t() -> any())`
+  - `:message_handler` - Callback for received byte chunks `(binary() -> any())`
   - `:name` - GenServer name registration
 
   ## Examples
@@ -101,15 +102,26 @@ defmodule LemonMCP.Transport.Stdio do
   """
   @spec send_message(GenServer.server(), String.t()) :: :ok | {:error, term()}
   def send_message(server, message) do
-    GenServer.call(server, {:send, message})
+    bytes = if String.ends_with?(message, "\n"), do: message, else: message <> "\n"
+    send(server, bytes)
+  end
+
+  @doc "Sends already-framed bytes without adding a newline."
+  @impl LemonCore.Rpc.Transport
+  @spec send(GenServer.server(), binary()) :: :ok | {:error, term()}
+  def send(server, bytes) do
+    GenServer.call(server, {:send, bytes})
   end
 
   @doc """
   Closes the transport connection.
   """
+  @impl LemonCore.Rpc.Transport
   @spec close(GenServer.server()) :: :ok
   def close(server) do
-    GenServer.call(server, :close)
+    GenServer.call(server, :close, :infinity)
+  catch
+    :exit, _ -> :ok
   end
 
   @doc """
@@ -139,9 +151,7 @@ defmodule LemonMCP.Transport.Stdio do
       env: normalize_env(env),
       port_open: Keyword.get(opts, :port_open, &Port.open/2),
       message_handler: message_handler,
-      buffer: "",
-      os_pid: nil,
-      pending: %{}
+      os_pid: nil
     }
 
     # Trap exits so `terminate/2` runs (and stops the server's process group)
@@ -164,14 +174,11 @@ defmodule LemonMCP.Transport.Stdio do
   end
 
   @impl true
-  def handle_call({:send, message}, _from, %{port: port} = state) do
-    # Ensure message ends with newline
-    message_with_nl = if String.ends_with?(message, "\n"), do: message, else: message <> "\n"
-
-    case Port.command(port, message_with_nl) do
-      true ->
-        {:reply, :ok, state}
-    end
+  def handle_call({:send, bytes}, _from, %{port: port} = state) do
+    true = Port.command(port, bytes)
+    {:reply, :ok, state}
+  rescue
+    ArgumentError -> {:reply, {:error, :not_connected}, state}
   end
 
   @impl true
@@ -191,16 +198,9 @@ defmodule LemonMCP.Transport.Stdio do
   end
 
   @impl true
-  def handle_info({port, {:data, data}}, %{port: port, buffer: buffer} = state) do
-    new_buffer = buffer <> data
-
-    if byte_size(new_buffer) > 8 * 1024 * 1024 do
-      {:stop, :message_too_large, state}
-    else
-      {messages, remaining} = extract_messages(new_buffer)
-      Enum.each(messages, &handle_message(&1, state))
-      {:noreply, %{state | buffer: remaining}}
-    end
+  def handle_info({port, {:data, data}}, %{port: port} = state) do
+    handle_message(data, state)
+    {:noreply, state}
   end
 
   @impl true
@@ -322,37 +322,16 @@ defmodule LemonMCP.Transport.Stdio do
     |> normalize_env()
   end
 
-  defp extract_messages(buffer) do
-    buffer
-    |> String.split("\n")
-    |> extract_messages_acc([])
-  end
-
-  defp extract_messages_acc([last], acc) do
-    # Last element is the incomplete line (or empty if buffer ended with newline)
-    {Enum.reverse(acc), last}
-  end
-
-  defp extract_messages_acc([line | rest], acc) do
-    line = String.trim(line)
-
-    if line == "" do
-      extract_messages_acc(rest, acc)
-    else
-      extract_messages_acc(rest, [line | acc])
-    end
-  end
-
-  defp handle_message(message, %{message_handler: nil}) do
-    Logger.debug("Received MCP message (no handler): #{inspect(message)}")
+  defp handle_message(_bytes, %{message_handler: nil}) do
+    :ok
   end
 
   defp handle_message(message, %{message_handler: handler}) when is_function(handler, 1) do
     try do
       handler.(message)
     rescue
-      e ->
-        Logger.error("Message handler failed: #{Exception.message(e)}")
+      _ ->
+        Logger.error("MCP transport message handler failed")
     end
   end
 end

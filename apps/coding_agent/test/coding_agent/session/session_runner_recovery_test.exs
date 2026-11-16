@@ -19,8 +19,8 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     def handle_call(:save, _from, messages), do: {:reply, :ok, messages}
 
-    def handle_call(:handoff_tool_resources, {caller, _tag}, messages) do
-      send(caller, :owner_resources_handed_off)
+    def handle_call({:retain_root, _ttl}, {caller, _tag}, messages) do
+      send(caller, :owner_retained)
       {:reply, :ok, messages}
     end
   end
@@ -33,30 +33,30 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
     run_ref = state.run_ref
     state = %{state | translator: %{state.translator | accumulated_text: "missing tail"}}
 
-    assert {:noreply, state} =
+    assert {:stop, :normal, state} =
              SessionRunner.handle_info({:session_terminal, "session-1", :completed}, state)
 
     assert_receive {:engine_event, ^run_ref,
                     %{__event__: :completed, ok: true, answer: "complete canonical answer"}}
 
     assert state.translator.completed_emitted
-    assert_received :owner_resources_handed_off
+    assert_received :owner_retained
+    assert Process.alive?(owner)
 
-    # Even after owner teardown, a delayed terminal cannot re-read or revive it.
-    refute Process.alive?(owner)
+    # A delayed terminal cannot re-read the retained owner.
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info({:session_terminal, "session-1", :canceled}, state)
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "session-1", {:tool_execution_start, "late", "bash", %{}}},
+               {:session_event, "session-1", {:tool_execution_start, "late", "bash", %{}}, nil},
                state
              )
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "session-1", {:message_update, %{}, "late delta"}},
+               {:session_event, "session-1", {:message_update, %{}, "late delta"}, nil},
                state
              )
 
@@ -73,7 +73,7 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
 
     assert {:noreply, ^state} =
              SessionRunner.handle_info(
-               {:session_event, "other-session", {:message_update, %{}, "foreign"}},
+               {:session_event, "other-session", {:message_update, %{}, "foreign"}, nil},
                state
              )
 
@@ -86,14 +86,14 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
     state = runner(owner)
     run_ref = state.run_ref
 
-    assert {:noreply, state} =
+    assert {:stop, :normal, state} =
              SessionRunner.handle_info({:session_terminal, "session-1", :canceled}, state)
 
     assert_receive {:engine_event, ^run_ref,
                     %{__event__: :completed, ok: false, answer: "canonical partial answer"}}
 
     assert state.translator.completed_emitted
-    refute Process.alive?(owner)
+    assert Process.alive?(owner)
   end
 
   test "cancel before this turn has an assistant message cannot recycle the preceding turn's answer" do
@@ -115,14 +115,14 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
       | translator: %{state.translator | accumulated_text: "Current partial prefix"}
     }
 
-    assert {:noreply, state} =
+    assert {:stop, :normal, state} =
              SessionRunner.handle_info({:session_terminal, "session-1", :canceled}, state)
 
     assert_receive {:engine_event, ^run_ref,
                     %{__event__: :completed, ok: false, answer: "Current partial prefix"}}
 
     assert state.translator.completed_emitted
-    refute Process.alive?(owner)
+    assert Process.alive?(owner)
   end
 
   test "a fenced real session retains the current loop crash instead of the preceding success" do
@@ -166,7 +166,7 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
     session_id = CodingAgent.Session.get_stats(session).session_id
     _unsubscribe = CodingAgent.Session.subscribe(session)
     assert :ok = CodingAgent.Session.prompt(session, "Previous prompt")
-    assert_receive {:session_event, ^session_id, {:agent_end, _}}, 5_000
+    assert_receive {:session_event, ^session_id, {:agent_end, _}, _}, 5_000
     refute CodingAgent.Session.get_state(session).is_streaming
 
     # Fence this turn on lifecycle traffic before releasing the failing provider.
@@ -190,7 +190,7 @@ defmodule CodingAgent.Executor.SessionRunnerRecoveryTest do
     }
 
     run_ref = state.run_ref
-    assert {:noreply, state} = SessionRunner.handle_info(terminal, state)
+    assert {:stop, :normal, state} = SessionRunner.handle_info(terminal, state)
 
     assert_receive {:engine_event, ^run_ref,
                     %{__event__: :completed, ok: false, answer: "", error: error}}

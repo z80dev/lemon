@@ -3,6 +3,11 @@ defmodule LemonChannels.PortBridge do
   Owns a Node bridge port. Automatic port restart/replay is the default (XMTP).
   With `restart: :manual` (WhatsApp), port failures emit `bridge_down`; only an
   explicit connect command reopens the port, leaving all retry policy to its owner.
+
+  Stop and port exit synchronously terminate the bridge's process group through
+  `LemonCore.ProcessGroup.terminate/2` before closing the port or scheduling a
+  restart. This includes descendants that ignore stdin EOF; the port's OS pid is
+  discarded after cleanup rather than retained for delayed signalling.
   """
 
   @behaviour GenServer
@@ -19,6 +24,7 @@ defmodule LemonChannels.PortBridge do
 
   @type state :: %{
           port: port() | nil,
+          os_pid: pos_integer() | nil,
           buffer: String.t(),
           notify_pid: pid() | nil,
           unavailable_reason: term() | nil,
@@ -38,12 +44,18 @@ defmodule LemonChannels.PortBridge do
     GenServer.cast(server, {:command, command})
   end
 
+  @doc "Terminates the current port's group and forgets its remembered connect command."
+  @spec stop_port(pid()) :: :ok
+  def stop_port(server), do: GenServer.call(server, :stop_port)
+
   @impl true
   def init({bridge, opts}) do
+    Process.flag(:trap_exit, true)
     cfg = normalize_config(Keyword.get(opts, :config, %{}))
 
     state = %{
       port: nil,
+      os_pid: nil,
       buffer: "",
       notify_pid: Keyword.get(opts, :notify_pid),
       unavailable_reason: nil,
@@ -54,6 +66,21 @@ defmodule LemonChannels.PortBridge do
     }
 
     {:ok, maybe_open_port(state)}
+  end
+
+  @impl true
+  def handle_call(:stop_port, _from, state) do
+    close_port(state)
+
+    {:reply, :ok,
+     %{
+       state
+       | port: nil,
+         os_pid: nil,
+         buffer: "",
+         connect_command: nil,
+         unavailable_reason: :stopped
+     }}
   end
 
   @impl true
@@ -109,11 +136,19 @@ defmodule LemonChannels.PortBridge do
   end
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
+    close_port(state)
+
     Logger.warning("#{bridge_label(state)} bridge exited (status=#{status})")
 
     emit_error(state, "#{bridge_label(state)} bridge exited", %{status: status})
 
-    state = %{state | port: nil, buffer: "", unavailable_reason: {:exit_status, status}}
+    state = %{
+      state
+      | port: nil,
+        os_pid: nil,
+        buffer: "",
+        unavailable_reason: {:exit_status, status}
+    }
 
     case state.restart do
       :automatic -> Process.send_after(self(), :restart_port, @restart_delay_ms)
@@ -135,9 +170,21 @@ defmodule LemonChannels.PortBridge do
 
   @impl true
   def terminate(_reason, state) do
-    if is_port(state.port), do: Port.close(state.port)
+    close_port(state)
     :ok
   end
+
+  defp close_port(%{port: port, os_pid: os_pid}) when is_port(port) do
+    if is_integer(os_pid), do: LemonCore.ProcessGroup.terminate(os_pid, [])
+
+    try do
+      Port.close(port)
+    rescue
+      ArgumentError -> :ok
+    end
+  end
+
+  defp close_port(_state), do: :ok
 
   defp maybe_open_port(state) do
     with {:ok, node_path} <- node_path(),
@@ -152,8 +199,14 @@ defmodule LemonChannels.PortBridge do
           {:args, [state.script_path]}
         ])
 
+      os_pid =
+        case Port.info(port, :os_pid) do
+          {:os_pid, pid} -> pid
+          _ -> nil
+        end
+
       state
-      |> Map.merge(%{port: port, buffer: "", unavailable_reason: nil})
+      |> Map.merge(%{port: port, os_pid: os_pid, buffer: "", unavailable_reason: nil})
       |> replay_connect_command()
     else
       {:error, reason} ->

@@ -17,6 +17,11 @@ defmodule CodingAgent.MutationLock do
   tool task is killed). Callers that need several locks must take them through
   `with_locks/2`, which acquires in sorted order to avoid lock-order deadlocks.
 
+  Queued callers are monitored and removed immediately on `:DOWN`. Acquisition
+  returns `{:error, :lock_timeout}` without running the callback after 30 seconds
+  by default (a caller policy, not an execution deadline). Pass a finite
+  millisecond timeout as the third argument to override it.
+
   ## Inheritance
 
   A holder that runs work in helper processes and waits for them (the `eval`
@@ -44,27 +49,47 @@ defmodule CodingAgent.MutationLock do
   end
 
   @doc """
-  Run `fun` while holding `key`. Blocks until the lock is available. A key
-  inherited through `inherit/2` is already held by the holder, so this takes
-  the holder-scoped substitute key, shared only with the holder's other helpers.
+  Run `fun` while holding `key`, or return `{:error, :lock_timeout}`.
+  A key inherited through `inherit/2` takes the holder-scoped substitute key,
+  shared only with the holder's other helpers.
   """
-  @spec with_lock(key(), (-> result)) :: result when result: var
-  def with_lock(key, fun) when is_function(fun, 0) do
+  @spec with_lock(key(), (-> result), non_neg_integer()) ::
+          result | {:error, :lock_timeout}
+        when result: var
+  def with_lock(key, fun, timeout \\ 30_000)
+      when is_function(fun, 0) and is_integer(timeout) and timeout >= 0 do
     case Process.get(@inherited_key, %{}) do
-      %{^key => holder} -> acquire({:inherited, key, holder}, fun)
-      _ -> acquire(key, fun)
+      %{^key => holder} -> acquire({:inherited, key, holder}, fun, timeout)
+      _ -> acquire(key, fun, timeout)
     end
   end
 
-  defp acquire(key, fun) do
-    :ok = GenServer.call(__MODULE__, {:acquire, key, self()}, :infinity)
-    Process.put(@held_key, [key | Process.get(@held_key, [])])
+  defp acquire(key, fun, timeout) do
+    request = make_ref()
+    deadline = System.monotonic_time(:millisecond) + timeout
 
-    try do
-      fun.()
-    after
-      Process.put(@held_key, List.delete(Process.get(@held_key, []), key))
-      GenServer.call(__MODULE__, {:release, key, self()}, :infinity)
+    result =
+      try do
+        GenServer.call(__MODULE__, {:acquire, key, self(), request, deadline}, timeout + 1_000)
+      catch
+        :exit, {:timeout, _} ->
+          GenServer.cast(__MODULE__, {:cancel, key, request})
+          {:error, :lock_timeout}
+      end
+
+    case result do
+      :ok ->
+        Process.put(@held_key, [key | Process.get(@held_key, [])])
+
+        try do
+          fun.()
+        after
+          Process.put(@held_key, List.delete(Process.get(@held_key, []), key))
+          GenServer.cast(__MODULE__, {:release, key, self()})
+        end
+
+      {:error, :lock_timeout} = error ->
+        error
     end
   end
 
@@ -90,13 +115,20 @@ defmodule CodingAgent.MutationLock do
   @doc """
   Run `fun` while holding every key in `keys` (acquired in sorted order).
   """
-  @spec with_locks([key()], (-> result)) :: result when result: var
-  def with_locks(keys, fun) when is_list(keys) and is_function(fun, 0) do
+  @spec with_locks([key()], (-> result), non_neg_integer()) ::
+          result | {:error, :lock_timeout}
+        when result: var
+  def with_locks(keys, fun, timeout \\ 30_000)
+      when is_list(keys) and is_function(fun, 0) and is_integer(timeout) and timeout >= 0 do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
     keys
     |> Enum.uniq()
     |> Enum.sort()
     |> Enum.reverse()
-    |> Enum.reduce(fun, fn key, inner -> fn -> with_lock(key, inner) end end)
+    |> Enum.reduce(fun, fn key, inner ->
+      fn -> with_lock(key, inner, max(deadline - System.monotonic_time(:millisecond), 0)) end
+    end)
     |> then(& &1.())
   end
 
@@ -110,57 +142,92 @@ defmodule CodingAgent.MutationLock do
   def init(:ok), do: {:ok, %{locks: %{}, monitors: %{}}}
 
   @impl true
-  def handle_call({:acquire, key, pid}, from, state) do
+  def handle_call({:acquire, key, pid, request, deadline}, from, state) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
     case Map.fetch(state.locks, key) do
-      :error ->
-        {:reply, :ok, grant(state, key, pid, :queue.new())}
+      _ when remaining < 0 ->
+        {:reply, {:error, :lock_timeout}, state}
 
       {:ok, %{holder: ^pid} = lock} ->
         {:reply, :ok, put_in(state.locks[key], %{lock | count: lock.count + 1})}
 
+      :error ->
+        {:reply, :ok, grant(state, key, pid, :queue.new(), request)}
+
       {:ok, lock} ->
-        lock = %{lock | waiters: :queue.in({from, pid}, lock.waiters)}
-        {:noreply, put_in(state.locks[key], lock)}
+        ref = Process.monitor(pid)
+        timer = Process.send_after(self(), {:expire, key, request}, remaining)
+
+        waiter = %{
+          from: from,
+          pid: pid,
+          ref: ref,
+          timer: timer,
+          request: request,
+          deadline: deadline
+        }
+
+        state = put_in(state.monitors[ref], {:waiter, key, request})
+        {:noreply, put_in(state.locks[key].waiters, :queue.in(waiter, lock.waiters))}
     end
   end
 
-  def handle_call({:release, key, pid}, _from, state) do
+  @impl true
+  def handle_cast({:release, key, pid}, state) do
     case Map.fetch(state.locks, key) do
       {:ok, %{holder: ^pid, count: count} = lock} when count > 1 ->
-        {:reply, :ok, put_in(state.locks[key], %{lock | count: count - 1})}
+        {:noreply, put_in(state.locks[key], %{lock | count: count - 1})}
 
       {:ok, %{holder: ^pid} = lock} ->
-        Process.demonitor(lock.monitor, [:flush])
-        state = %{state | monitors: Map.delete(state.monitors, lock.monitor)}
-        {:reply, :ok, grant_next(state, key, lock.waiters)}
+        {:noreply, release(state, key, lock)}
 
       _ ->
-        {:reply, :ok, state}
+        {:noreply, state}
+    end
+  end
+
+  def handle_cast({:cancel, key, request}, state) do
+    case Map.get(state.locks, key) do
+      %{request: ^request} = lock -> {:noreply, release(state, key, lock)}
+      _ -> {:noreply, remove_waiter(state, key, request, false)}
     end
   end
 
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
-    case Map.pop(state.monitors, ref) do
-      {nil, _monitors} ->
+    case Map.get(state.monitors, ref) do
+      nil ->
         {:noreply, state}
 
-      {key, monitors} ->
-        lock = Map.fetch!(state.locks, key)
-        {:noreply, grant_next(%{state | monitors: monitors}, key, lock.waiters)}
+      {:holder, key} ->
+        {:noreply, release(state, key, Map.fetch!(state.locks, key))}
+
+      {:waiter, key, request} ->
+        {:noreply, remove_waiter(state, key, request, false)}
     end
+  end
+
+  def handle_info({:expire, key, request}, state) do
+    {:noreply, remove_waiter(state, key, request, true)}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
 
-  defp grant(state, key, pid, waiters) do
+  defp release(state, key, lock) do
+    Process.demonitor(lock.monitor, [:flush])
+    state = %{state | monitors: Map.delete(state.monitors, lock.monitor)}
+    grant_next(state, key, lock.waiters)
+  end
+
+  defp grant(state, key, pid, waiters, request) do
     ref = Process.monitor(pid)
-    lock = %{holder: pid, count: 1, monitor: ref, waiters: waiters}
+    lock = %{holder: pid, count: 1, monitor: ref, waiters: waiters, request: request}
 
     %{
       state
       | locks: Map.put(state.locks, key, lock),
-        monitors: Map.put(state.monitors, ref, key)
+        monitors: Map.put(state.monitors, ref, {:holder, key})
     }
   end
 
@@ -169,13 +236,41 @@ defmodule CodingAgent.MutationLock do
       {:empty, _} ->
         %{state | locks: Map.delete(state.locks, key)}
 
-      {{:value, {from, pid}}, rest} ->
-        if Process.alive?(pid) do
-          GenServer.reply(from, :ok)
-          grant(state, key, pid, rest)
-        else
+      {{:value, waiter}, rest} ->
+        state = forget_waiter(state, waiter)
+
+        if waiter.deadline < System.monotonic_time(:millisecond) do
+          GenServer.reply(waiter.from, {:error, :lock_timeout})
           grant_next(state, key, rest)
+        else
+          GenServer.reply(waiter.from, :ok)
+          grant(state, key, waiter.pid, rest, waiter.request)
         end
     end
+  end
+
+  defp remove_waiter(state, key, request, reply?) do
+    case Map.get(state.locks, key) do
+      nil ->
+        state
+
+      lock ->
+        {removed, kept} =
+          lock.waiters |> :queue.to_list() |> Enum.split_with(&(&1.request == request))
+
+        state =
+          Enum.reduce(removed, state, fn waiter, acc ->
+            if reply?, do: GenServer.reply(waiter.from, {:error, :lock_timeout})
+            forget_waiter(acc, waiter)
+          end)
+
+        put_in(state.locks[key].waiters, :queue.from_list(kept))
+    end
+  end
+
+  defp forget_waiter(state, waiter) do
+    Process.cancel_timer(waiter.timer)
+    Process.demonitor(waiter.ref, [:flush])
+    %{state | monitors: Map.delete(state.monitors, waiter.ref)}
   end
 end

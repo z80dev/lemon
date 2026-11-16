@@ -79,8 +79,8 @@ test.each(["bell", "off"] as const)("approvals and run completion share %s mode"
 			action: { command: "PRIVATE" },
 			expiresAtMs: Date.now() + 60000,
 		});
-		client.events.emit("agent", { type: "started", runId: "run", sessionKey: "attention" });
-		client.events.emit("agent", {
+		client.events.emit("agent-applied", { type: "started", runId: "run", sessionKey: "attention" });
+		client.events.emit("agent-applied", {
 			type: "completed",
 			runId: "run",
 			sessionKey: "attention",
@@ -282,7 +282,7 @@ test("publishes the finalized native frame before terminal completion becomes ob
 	try {
 		integration.start();
 		store.focused.busy = true;
-		client.events.emit("agent", {
+		client.events.emit("agent-applied", {
 			type: "started",
 			runId: "native-run",
 			sessionKey: store.focusedKey,
@@ -292,7 +292,7 @@ test("publishes the finalized native frame before terminal completion becomes ob
 		store.focused.busy = false;
 		store.events.emit("blocks-changed", { key: store.focusedKey });
 		frame = "complete final answer";
-		client.events.emit("agent", {
+		client.events.emit("agent-applied", {
 			type: "completed",
 			runId: "native-run",
 			sessionKey: store.focusedKey,
@@ -354,8 +354,12 @@ test("Tern reports pending action summaries, questions and failures, but not com
 		expect(terminal.writes.at(-1)).toBe(report("blocked:kind=question", "Which branch?"));
 		store.removeUserPrompt("question");
 		for (const error of ["Provider\nfailed", { message: "Unavailable", code: "offline" }]) {
-			client.events.emit("agent", { type: "started", runId: "run", sessionKey: "attention" });
-			client.events.emit("agent", {
+			client.events.emit("agent-applied", {
+				type: "started",
+				runId: "run",
+				sessionKey: "attention",
+			});
+			client.events.emit("agent-applied", {
 				type: "completed",
 				runId: "run",
 				sessionKey: "attention",
@@ -368,8 +372,12 @@ test("Tern reports pending action summaries, questions and failures, but not com
 				report("error", typeof error === "string" ? error : JSON.stringify(error)),
 			);
 		}
-		client.events.emit("agent", { type: "started", runId: "done", sessionKey: "attention" });
-		client.events.emit("agent", {
+		client.events.emit("agent-applied", {
+			type: "started",
+			runId: "done",
+			sessionKey: "attention",
+		});
+		client.events.emit("agent-applied", {
 			type: "completed",
 			runId: "done",
 			sessionKey: "attention",
@@ -447,14 +455,14 @@ test.each([
 		try {
 			integration.start();
 			store.focused.busy = true;
-			client.events.emit("agent", {
+			client.events.emit("agent-applied", {
 				type: "started",
 				runId: "cancelled-run",
 				sessionKey: store.focusedKey,
 			});
 			terminal.writes.length = 0;
 			store.focused.busy = false;
-			client.events.emit("agent", {
+			client.events.emit("agent-applied", {
 				type: "completed",
 				runId: "cancelled-run",
 				sessionKey: store.focusedKey,
