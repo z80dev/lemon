@@ -91,31 +91,58 @@ user identity.
 
 The source and packaged launchers persist the generated distribution cookie at
 `~/.lemon/cookie` with mode `0600`. Treat it as a full remote-code-execution
-credential, not as a scoped operator token. Source startup reads it into
-`RELEASE_COOKIE` and supplies Erlang's `-setcookie` through the `ERL_FLAGS`
-environment; packaged startup uses the release's `RELEASE_COOKIE` environment
-contract. Neither launcher command nor the lifecycle driver's detached restart
-argv contains the cookie. Restart passes the running node's cookie through the
-child environment, preserving explicit cookie selection rather than silently
-switching back to the file.
+credential, not as a scoped operator token. Both modes pass the selected secret
+through `RELEASE_COOKIE`, never a cookie argument. Source mode also accepts
+`LEMON_GATEWAY_NODE_COOKIE` / `LEMON_GATEWAY_COOKIE`. The source `--cookie`
+option is removed: its value was visible even in the invoking shell's argv.
+Restart preserves the running node's cookie in the child environment.
+
+**Boot ordering matters.** On OTP 29, `ERL_FLAGS` and `vm.args` are expanded
+into `beam.smp`'s argv, so moving `-setcookie` there does **not** hide it.
+Lemon disables automatic distribution and cookie-file lookup with
+`-kernel start_distribution false -nocookie`. `LemonCli.Distribution` reuses
+OTP's distribution supervisor specification, replacing only the authentication
+child's start function. It sets the cookie after `auth` starts but **before**
+the `net_kernel` child starts or opens a listener. It never reads or creates
+`~/.erlang.cookie`, changes `HOME`, or exposes a listener with another cookie.
+
+This ordering depends on the **private OTP 29 `:erl_distribution` and `:auth`
+APIs**, not a public OTP cookie-before-distribution API. Only OTP 29 is
+supported by this bootstrap. A different OTP major, changed supervisor contract,
+or missing boot guard fails closed with an OTP-versioned error; there is no
+argv-cookie fallback. `scripts/test_lemon_launcher_cookie.sh` pins that
+contract, checks real `ps` and native OS argv (`/proc/PID/cmdline` on Linux,
+`KERN_PROCARGS2` on macOS), and connects actual source and packaged nodes.
+
+The release assembly step removes the stock Elixir launcher's four `--cookie`
+options and inserts the initializer immediately after kernel startup in both
+server and clean/client boot scripts. Thus `start`, `rpc`, `remote`, and
+lifecycle clients use the same ordering; `eval` stays non-distributed unless
+explicitly named. Direct release-profile commands select the same per-user
+cookie as `bin/lemon`, rather than a cookie baked into the release archive.
+The IEx user driver is deferred too: stock IEx can otherwise start a remote
+connection while kernel is still booting, before the cookie initializer runs.
+
 
 Environment variables are still secrets: do not log command environments or
 expose them through diagnostics. This does not protect against root or another
 process with permission to inspect the runtime's environment or memory.
-Prefer environment configuration over a literal `--cookie` command-line option,
-which is visible while the invoking launcher runs. Loopback epmd/distribution
-defaults and production rejection of the development cookie remain unchanged.
+Do not supply literal cookies through command-line arguments, `ERL_FLAGS`, or
+`vm.args`. Loopback defaults and production rejection of the development
+cookie remain unchanged.
 
-Remote shells must use the same cookie. For source mode, without placing the
-secret in the shell command's argv:
+Packaged `bin/lemon remote` uses the guarded client boot automatically. For a
+source remote shell, compile first, then use the same early initializer (from
+the checkout root):
 
 ```bash
-export ERL_FLAGS="-setcookie \"$(cat "$HOME/.lemon/cookie")\""
-iex --sname lemon_console --remsh lemon@localhost
+export RELEASE_COOKIE="$(cat "$HOME/.lemon/cookie")"
+elixir --no-halt \
+  --erl "-user Elixir.LemonCli.Distribution -kernel start_distribution false -nocookie -pa $PWD/_build/dev/lib/lemon_cli/ebin -s Elixir.LemonCli.Distribution boot" \
+  +iex --sname lemon_console --remsh lemon@localhost
 ```
 
-Use the runtime's actual node name (and `--name` for long names). Packaged
-`bin/lemon remote` uses the release cookie environment automatically.
+Use the runtime's actual node name (and `--name` for long names).
 
 ### Passwordless local owner
 

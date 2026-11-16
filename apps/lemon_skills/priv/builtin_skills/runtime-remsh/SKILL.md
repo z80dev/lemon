@@ -31,24 +31,28 @@ Start gateway (terminal 1):
 ./bin/lemon-gateway
 ```
 
-Attach from another terminal (short-name default):
+Attach from another terminal, from the checkout root (short-name default):
 
 ```bash
-iex --sname lemon_attach --cookie lemon_gateway_dev_cookie --remsh "lemon_gateway@$(hostname -s)"
+export RELEASE_COOKIE="$(cat "$HOME/.lemon/cookie")"
+LEMON_ATTACH_ERL="-user Elixir.LemonCli.Distribution -kernel start_distribution false -nocookie -pa $PWD/_build/dev/lib/lemon_cli/ebin -s Elixir.LemonCli.Distribution boot"
+elixir --no-halt --erl "$LEMON_ATTACH_ERL" +iex \
+  --sname lemon_attach --remsh "lemon_gateway@$(hostname -s)"
 ```
 
-If gateway was started with explicit settings, use those exact values:
-
-```bash
-./bin/lemon-gateway --sname lemon_gateway --cookie "change-me"
-iex --sname lemon_attach --cookie "change-me" --remsh "lemon_gateway@$(hostname -s)"
-```
+The gateway compiles the bootstrap module before launch. Its deferred IEx user
+driver installs the cookie before opening distribution or connecting the shell.
+Never pass a cookie as a command-line argument, in `ERL_FLAGS`, or in `vm.args`:
+OTP expands those flags into process argv. If the gateway uses an explicit
+environment cookie, securely supply the same `RELEASE_COOKIE` in the attaching
+terminal instead of reading the per-install file.
 
 For long-name mode:
 
 ```bash
-./bin/lemon-gateway --name lemon_gateway@my-host.example.com --cookie "change-me"
-iex --name lemon_attach@my-host.example.com --cookie "change-me" --remsh lemon_gateway@my-host.example.com
+./bin/lemon-gateway --name lemon_gateway@my-host.example.com
+elixir --no-halt --erl "$LEMON_ATTACH_ERL" +iex \
+  --name lemon_attach@my-host.example.com --remsh lemon_gateway@my-host.example.com
 ```
 
 Tip: `./bin/lemon-gateway` prints the exact `Remote shell target` to use.
@@ -86,14 +90,22 @@ LemonGateway.Config.get(:default_engine)
 Non-interactive one-off (`--rpc-eval`) example:
 
 ```bash
-elixir --sname lemon_probe --cookie lemon_gateway_dev_cookie --rpc-eval "lemon_gateway@$(hostname -s)" "IO.inspect(LemonGateway.Config.get(:default_engine))"
+elixir --erl "-dist_listen false -nocookie" --sname lemon_probe \
+  -e 'Node.set_cookie(String.to_atom(System.fetch_env!("RELEASE_COOKIE")))' \
+  --rpc-eval "lemon_gateway@$(hostname -s)" "IO.inspect(LemonGateway.Config.get(:default_engine))"
 ```
 
 Long-name one-off:
 
 ```bash
-elixir --name lemon_probe@my-host.example.com --cookie "change-me" --rpc-eval "lemon_gateway@my-host.example.com" "IO.puts(node())"
+elixir --erl "-dist_listen false -nocookie" --name lemon_probe@my-host.example.com \
+  -e 'Node.set_cookie(String.to_atom(System.fetch_env!("RELEASE_COOKIE")))' \
+  --rpc-eval "lemon_gateway@my-host.example.com" "IO.puts(node())"
 ```
+
+These non-listening clients set the environment cookie before their first RPC;
+`-nocookie` prevents reading or creating `~/.erlang.cookie`. Packaged installs
+can use `lemon remote` and `lemon rpc EXPR` directly with the same guarded boot.
 
 ## Troubleshooting
 

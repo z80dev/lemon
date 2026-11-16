@@ -514,14 +514,13 @@ parse_runtime_options() {
     case "$1" in
       --debug) DEBUG=1 ;;
       --no-distribution) DISTRIBUTED=0 ;;
-      --port|--web-port|--name|--sname|--cookie)
+      --port|--web-port|--name|--sname)
         [ -n "${2:-}" ] || { error "missing value for $1"; exit 2; }
         case "$1" in
           --port) PORT="$2" ;;
           --web-port) WEB_PORT="$2" ;;
           --name) NODE_MODE="name" NODE_NAME="$2" ;;
           --sname) NODE_MODE="sname" NODE_NAME="$2" ;;
-          --cookie) NODE_COOKIE="$2" ;;
         esac
         shift
         ;;
@@ -607,17 +606,16 @@ start_runtime() {
       ) || exit 1
       NODE_COOKIE="$(cat "$LEMON_HOME_DIR/cookie")"
     fi
-    [ -n "$NODE_COOKIE" ] || { error "distributed mode requires a non-empty --cookie"; exit 2; }
+    [ -n "$NODE_COOKIE" ] || { error "distributed mode requires a non-empty cookie"; exit 2; }
     if [ -z "$NODE_MODE" ]; then
       if [[ "$NODE_NAME" == *@* ]]; then NODE_MODE="name"; else NODE_MODE="sname"; fi
     fi
-    # Erlang reads ERL_FLAGS from the environment; never interpolate the
-    # distribution secret into the launcher command's positional arguments.
+    # ERL_FLAGS and vm.args are expanded into beam.smp's argv on OTP 29.
+    # Install the environment secret in auth before net_kernel can listen.
     export RELEASE_COOKIE="$NODE_COOKIE"
-    local escaped_cookie="${NODE_COOKIE//\\/\\\\}"
-    escaped_cookie="${escaped_cookie//\"/\\\"}"
-    export ERL_FLAGS="${ERL_FLAGS:-} -setcookie \"$escaped_cookie\""
-    cmd=(elixir "--$NODE_MODE" "$NODE_NAME" -S "${cmd[@]}")
+    cmd=(elixir --erl "-kernel start_distribution false -nocookie" "--$NODE_MODE" "$NODE_NAME"
+      -r "$LEMON_ROOT/apps/lemon_cli/lib/lemon_cli/distribution.ex"
+      -e 'LemonCli.Distribution.boot()' -S "${cmd[@]}")
   fi
   ensure_managed_token || exit 1
   export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}" LEMON_CONTROL_PLANE_PORT="$PORT"

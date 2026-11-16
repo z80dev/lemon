@@ -5,7 +5,7 @@
 #
 set -e
 
-COOKIE="lemon_gateway_dev_cookie"
+export RELEASE_COOKIE="${RELEASE_COOKIE:-$(cat "$HOME/.lemon/cookie")}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -15,7 +15,8 @@ echo "Refreshing copilot token..."
 
 erlc "$SCRIPT_DIR/copilot_check.erl" 2>/dev/null
 
-TOKEN=$(erl -noshell -sname tmp_refresh_$$ -setcookie "$COOKIE" -eval "
+TOKEN=$(erl -noshell -sname tmp_refresh_$$ -nocookie -dist_listen false -eval "
+  erlang:set_cookie(list_to_atom(os:getenv(\"RELEASE_COOKIE\"))),
   {ok, Raw, _} = rpc:call('lemon@newphy', 'Elixir.LemonCore.Secrets', resolve,
     [<<\"llm_github_copilot_api_key\">>, [[{env_fallback, true}]]]),
   case rpc:call('lemon@newphy', 'Elixir.Ai.Auth.GitHubCopilotOAuth', resolve_api_key_from_secret,
