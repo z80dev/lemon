@@ -5,7 +5,7 @@ and the live-root retention introduced by
 [#564](https://github.com/z80dev/lemon/issues/564). It measures real
 `CodingAgent.Session` processes and their owned `LemonAgent.Agent` processes,
 not empty stand-in GenServers. It is outside the test suite and nightly latency
-lane. No measurements have been run or published by this implementation.
+lane. Measured local evidence is recorded below.
 
 ## Run locally
 
@@ -130,29 +130,51 @@ its heap slack is intentionally part of the comparison with OTP hibernation's
 collection. Transcript length, tools and configured integrations change the
 result; these small synthetic transcripts are not a universal per-agent price.
 
-## Evidence reserved for orchestrator measurement
+## Measured local evidence
 
-**All numbers below are reserved for the orchestrator's actual measurement.**
-No savings, budget compliance or comparable vendor result is claimed. Replace
-PENDING only after retaining the JSON artifact with the exact tested revision,
-date, CPU/RAM, OS, OTP/ERTS/Elixir, scheduler count and workload/timeout settings.
-The report includes runtime/revision/settings metadata; record CPU model, RAM
-and competing host load alongside the artifact.
+Measured 2026-11-16 at `abc566dcdb83f35d311fb9c2c66b889e3b6fcc9d` on
+MacBook Pro Mac15,9 / Apple M3 Max / 128 GB RAM / macOS 15.6 /
+OTP 29 (ERTS 17.1.1) / Elixir 1.20.5, two schedulers:
+
+```bash
+python3 -B bench/session_memory.py --revision $(git rev-parse HEAD) \
+  --samples 20 --turns 4 --hibernate-after-ms 5000 \
+  --output /tmp/session-memory.json
+```
+
+Twenty samples per cohort, four fixture turns, production five-second timeout.
+CPU benchmarks were serialized, but bounded provider measurements ran during
+this probe; other host activity was uncontrolled. The pre-epic `4d94b3c8e`
+checkout has no session-memory probe or retained-root/hibernation implementation,
+so there is no historical baseline; the idle arm is the same-revision control.
 
 | Cohort | Session bytes p50 / p99 | Agent bytes p50 / p99 | Pair bytes p50 / p99 | Artifact / tested revision |
 | --- | --- | --- | --- | --- |
-| Child idle | PENDING | PENDING | PENDING | PENDING orchestrator |
-| Child hibernated | PENDING | PENDING | PENDING | PENDING orchestrator |
-| Live root idle (#564) | PENDING | PENDING | PENDING | PENDING orchestrator |
-| Live root hibernated (#564) | PENDING | PENDING | PENDING | PENDING orchestrator |
+| Child idle | 14,709,512 / 14,709,704 | 4,721,088 / 4,729,680 | 19,430,616 / 19,439,192 | Local report / revision above |
+| Child hibernated | 94,744 / 94,744 | 1,808,128 / 1,808,128 | 1,902,872 / 1,902,872 | Local report / revision above |
+| Live root idle (#564) | 58,313,296 / 58,313,296 | 28,656,024 / 28,656,560 | 86,969,320 / 86,969,856 | Local report / revision above |
+| Live root hibernated (#564) | 97,592 / 97,592 | 11,458,952 / 11,458,952 | 11,556,544 / 11,556,544 | Local report / revision above |
 
 | Latency evidence | Idle p50 / p99 | Hibernated p50 / p99 | Artifact / tested revision |
 | --- | --- | --- | --- |
-| Child Session / Agent scalar calls | PENDING | PENDING | PENDING orchestrator |
-| Live-root Session / Agent scalar calls | PENDING | PENDING | PENDING orchestrator |
-| Child next turn → fixture request | PENDING | PENDING | PENDING orchestrator |
-| Live-root checkout → fixture request | PENDING | PENDING | PENDING orchestrator |
-| Child / root session-refresh hook | PENDING | PENDING | PENDING orchestrator |
+| Child Session scalar call (us) | 2 / 2 | 185 / 262 | Local report / revision above |
+| Child Agent scalar call (us) | 2 / 14 | 2,641 / 2,873 | Local report / revision above |
+| Live-root Session scalar call (us) | 4 / 8 | 116 / 158 | Local report / revision above |
+| Live-root Agent scalar call (us) | 2 / 4 | 10,348 / 14,724 | Local report / revision above |
+| Child next turn → fixture request (us) | 18,068 / 27,207 | 50,931 / 57,607 | Local report / revision above |
+| Live-root checkout → fixture request (us) | 269,739 / 334,497 | 290,307 / 303,041 | Local report / revision above |
+| Child session-refresh hook (us) | 191,252 / 214,415 | 227,996 / 245,042 | Local report / revision above |
+| Root session-refresh hook (us) | 190,718 / 211,483 | 217,168 / 235,759 | Local report / revision above |
+
+BudgetScope was 13,984 bytes p50/p99 in every cohort. Unique referenced binary
+bytes p50/p99 were child idle 158,226 / 158,234, child hibernated
+104,898 / 104,898, root idle 171,521 / 171,521 and root hibernated
+107,612 / 107,612. The pair-process p50 reductions are approximately 90.2%
+for children and 86.7% for roots; these are not RSS or concurrency-capacity gains.
+All samples passed identity, hibernation and reload-refresh checks. Hibernation
+increased the local p50 next-request boundary by 32.863 ms for children and
+20.568 ms for roots; these are separate-distribution differences, not paired
+per-session wake estimates.
 
 The local wake probes are not the #546 end-to-end budget. Run the existing
 [latency harness](latency-sla.md) before and after integration on the same
@@ -178,10 +200,11 @@ baseline.
 ## Defaults decision
 
 Keep task depth **2**, task concurrency **8**, root idle TTL **300,000 ms** and
-root idle cap **32** unchanged pending the recorded evidence above. Session and
-Agent `hibernate_after` default to **5,000 ms** (or caller-supplied `:infinity` to
-disable). Five seconds is a caller policy to leave short inter-message gaps warm,
-**not a measured optimum or a claimed performance gain**. Hibernation retains the
+root idle cap **32** unchanged: sequential synthetic cohorts do not justify
+raising concurrent capacity. Session and Agent `hibernate_after` default to
+**5,000 ms** (or caller-supplied `:infinity` to disable). Five seconds leaves
+short inter-message gaps warm; this run establishes savings at that setting,
+not that it is optimal. Hibernation retains the
 live PID and state; TTL parking saves and stops the owner and is a different
 lifecycle transition. Before raising concurrency/depth or changing the timeout,
 measure realistic transcript/tool workloads and concurrent-population memory,

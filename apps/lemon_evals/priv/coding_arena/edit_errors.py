@@ -83,9 +83,15 @@ def edit_attempts(agent, output):
         else:
             if event.get('event') != 'agent':
                 continue
-            payload = event.get('payload') or {}
-            action = payload.get('action') or {}
+            payload = event.get('payload')
+            if not isinstance(payload, dict) or payload.get('type') != 'tool_use':
+                continue
+            action = payload.get('action')
+            if not isinstance(action, dict):
+                continue
             detail = action.get('detail') or {}
+            if not isinstance(detail, dict):
+                continue
             identifier = detail.get('tool_call_id')
             if payload.get('phase') == 'started':
                 started[identifier] = (detail.get('name'), detail.get('args') or {})

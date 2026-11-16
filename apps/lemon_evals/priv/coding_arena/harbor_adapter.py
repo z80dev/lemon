@@ -95,8 +95,9 @@ class ArenaInstalledAgent(BaseInstalledAgent):
         result = await environment.exec(command=f'{invocation} > {log} 2> {err}',
                                         timeout_sec=self.deadline + 15)
         self.record['exit_code'] = result.return_code
-        self._save()
-        context.metadata = dict(self.record)
+        # This adapter overrides BaseInstalledAgent.run, which normally calls
+        # the post-run hook. Populate metrics and redact logs here as well.
+        self.populate_context_post_run(context)
         if result.return_code != 0:
             raise RuntimeError(f'{self.arm} exited with code {result.return_code}; see private agent logs')
 

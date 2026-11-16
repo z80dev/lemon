@@ -22,7 +22,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   - Optional advisor: a second model that reviews each turn (#600).
   - Experimental, opt-in `code_mode` tool profile
     (`profile = "code_mode"` / `LEMON_TOOL_DISCLOSURE_PROFILE=code_mode`);
-    legacy, coding and auto defaults are unchanged (#598).
+    legacy, coding and auto defaults are unchanged (#598). The arena Lemon
+    image includes checksum-pinned Deno 2 for sandboxed code-mode trials.
   - Gateway admission: the EngineLock FIFO is replaced by a fail-fast
     engine-session claim (#610), the Run is the slot waiter and `ThreadWorker`
     is deleted (#611), the router no longer retries gateway admission (#612),
@@ -50,9 +51,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its
   caller (#555).
 - Opt-in Terminal-Bench comparisons through a Harbor adapter for Lemon and omp,
-  with credentials held only by the arena proxy and paired statistics (#544),
+  with credentials held only by the arena proxy, paired statistics, retained
+  audit containers and explicit post-run metric collection (#544),
   and a re-runnable omp edit-fixture comparison for the `edit` and `patch`
-  tools with failure-site attribution (#545).
+  tools with failure-site attribution and non-tool event filtering (#545).
 - `mix lemon.eval.latency`: an offline harness that measures harness overhead
   (request dispatch, token delivery, queued-run handoff, readiness, per-turn
   session stages) with a nightly regression lane (#546).
