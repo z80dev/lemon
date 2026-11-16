@@ -165,8 +165,111 @@ defmodule LemonAi.Providers.BedrockLegacyTest do
 
     {:ok, stream} = Bedrock.stream(model, %{context | system_prompt: blocks}, opts)
     assert_receive {:request_body, block_body}, 1000
-    assert block_body == expected
+
+    assert block_body ==
+             Map.put(expected, "system", [
+               %{"text" => "Sys"},
+               %{"cachePoint" => %{"type" => "default"}},
+               %{"text" => "tem"}
+             ])
+
     assert {:error, _} = EventStream.result(stream, 1000)
+  end
+
+  test "wire cache point stays at the shared prefix when the directory footer changes" do
+    for {model_id, supported?} <- [
+          {"anthropic.claude-3-5-haiku-20241022-v1:0", true},
+          {"anthropic.claude-3-haiku-20240307-v1:0", false}
+        ] do
+      model = %Model{
+        id: model_id,
+        name: "Claude",
+        api: :bedrock_converse_stream,
+        provider: :amazon,
+        base_url: "",
+        input: [:text]
+      }
+
+      shared = [
+        %{text: "Shared instructions\n", directory_derived: false},
+        %{text: "\nShared tools\n", directory_derived: false}
+      ]
+
+      shared_text = LemonAi.SystemPrompt.text(shared)
+
+      systems =
+        for directory <- ["workspace-alpha", "workspace-beta"] do
+          blocks =
+            shared ++
+              [
+                %{text: "\nDirectory: #{directory}\n", directory_derived: true},
+                %{text: "Trailing instructions\n", directory_derived: false}
+              ]
+
+          context = Context.new(system_prompt: blocks, messages: [%UserMessage{content: "Hi"}])
+          body = capture_request(model, nil, context)
+          system = body["system"]
+
+          assert Enum.map_join(system, &Map.get(&1, "text", "")) ==
+                   LemonAi.SystemPrompt.text(blocks)
+
+          if supported? do
+            assert system == [
+                     %{"text" => shared_text},
+                     %{"cachePoint" => %{"type" => "default"}},
+                     %{"text" => "\nDirectory: #{directory}\nTrailing instructions\n"}
+                   ]
+          else
+            assert system == [%{"text" => LemonAi.SystemPrompt.text(blocks)}]
+          end
+
+          system
+        end
+
+      if supported? do
+        assert Enum.take(Enum.at(systems, 0), 2) == Enum.take(Enum.at(systems, 1), 2)
+      end
+
+      for blocks <- [
+            shared,
+            [],
+            [%{text: "Directory only\n", directory_derived: true}],
+            [
+              %{text: "", directory_derived: false},
+              %{text: "Directory only\n", directory_derived: true}
+            ]
+          ] do
+        context = Context.new(system_prompt: blocks, messages: [%UserMessage{content: "Hi"}])
+        body = capture_request(model, nil, context)
+        text = LemonAi.SystemPrompt.text(blocks)
+
+        expected =
+          if supported? and blocks == shared do
+            [%{"text" => text}, %{"cachePoint" => %{"type" => "default"}}]
+          else
+            [%{"text" => text}]
+          end
+
+        assert body["system"] == expected
+      end
+
+      context =
+        Context.new(system_prompt: "Legacy\n\nprompt", messages: [%UserMessage{content: "Hi"}])
+
+      body = capture_request(model, nil, context)
+
+      expected =
+        if supported? do
+          [
+            %{"text" => "Legacy\n\nprompt"},
+            %{"cachePoint" => %{"type" => "default"}}
+          ]
+        else
+          [%{"text" => "Legacy\n\nprompt"}]
+        end
+
+      assert body["system"] == expected
+    end
   end
 
   test "adaptive thinking uses capabilities and keeps xhigh distinct from max" do

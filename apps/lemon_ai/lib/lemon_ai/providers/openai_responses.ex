@@ -248,6 +248,11 @@ defmodule LemonAi.Providers.OpenAIResponses do
     # Add optional parameters
     params = maybe_add_param(params, "prompt_cache_key", opts.session_id)
 
+    params =
+      if model.provider in [:vercel_ai_gateway, "vercel_ai_gateway"],
+        do: maybe_add_param(params, "session_id", opts.session_id),
+        else: params
+
     params = add_cache_retention(params, model)
 
     params = maybe_add_param(params, "max_output_tokens", opts.max_tokens)
