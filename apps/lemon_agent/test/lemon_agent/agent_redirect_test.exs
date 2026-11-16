@@ -62,7 +62,8 @@ defmodule LemonAgent.AgentRedirectTest do
 
             Task.start(fn ->
               response = Mocks.assistant_message("Partial before redirect")
-              LemonAi.EventStream.push(stream, {:start, response})
+              LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
+              LemonAi.EventStream.push(stream, {:text_start, 0})
 
               for i <- 1..20 do
                 send(parent, {:streaming_chunk, i})
@@ -78,7 +79,7 @@ defmodule LemonAgent.AgentRedirectTest do
                   Process.sleep(30)
                 end
 
-                LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}", response})
+                LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}"})
               end
 
               LemonAi.EventStream.push(stream, {:done, :stop, response})

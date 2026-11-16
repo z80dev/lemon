@@ -444,22 +444,28 @@ defmodule CodingAgent.Tools.Task.Runner do
           budget
         )
 
-      {:session_event, ^session_id,
-       {:message_update, %LemonAi.Types.AssistantMessage{} = msg, _event}, _cursor} ->
-        text = LemonAi.get_text(msg)
-        thinking = LemonAi.get_thinking(msg)
+      {:session_event, ^session_id, {:message_start, %LemonAi.Types.AssistantMessage{}}, _cursor} ->
+        await_result(
+          session,
+          session_ref,
+          delivery_gate,
+          session_id,
+          signal,
+          on_update,
+          description,
+          "",
+          "",
+          role_id,
+          timeout_ms,
+          deadline_ms,
+          budget
+        )
 
-        {last_text, last_thinking} =
-          maybe_emit_update(
-            on_update,
-            text,
-            thinking,
-            last_text,
-            last_thinking,
-            description,
-            session_id,
-            role_id
-          )
+      {:session_event, ^session_id, {:message_update, {:text_delta, _index, delta}}, _cursor}
+      when is_binary(delta) ->
+        # Progress carries only new visible text; the authoritative full output
+        # is emitted at message_end. Never snapshot a growing assistant message.
+        maybe_emit_update(on_update, delta, "", "", "", description, session_id, role_id)
 
         await_result(
           session,
@@ -469,7 +475,7 @@ defmodule CodingAgent.Tools.Task.Runner do
           signal,
           on_update,
           description,
-          last_text,
+          last_text <> delta,
           last_thinking,
           role_id,
           timeout_ms,
@@ -487,7 +493,7 @@ defmodule CodingAgent.Tools.Task.Runner do
             on_update,
             text,
             thinking,
-            last_text,
+            "",
             last_thinking,
             description,
             session_id,

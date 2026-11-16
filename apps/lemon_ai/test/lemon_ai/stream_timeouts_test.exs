@@ -18,7 +18,16 @@ defmodule LemonAi.StreamTimeoutsTest do
       message = %AssistantMessage{stop_reason: :stop}
       started = System.monotonic_time(:millisecond)
 
-      for kind <- [:start, :thinking_delta, :text_delta, :tool_call_delta, :text_end, :heartbeat] do
+      events = [
+        {:start, message},
+        {:thinking_delta, 0, "delta"},
+        {:text_delta, 1, "delta"},
+        {:tool_call_delta, 2, "delta"},
+        {:text_end, 1, "delta"},
+        {:heartbeat, 1}
+      ]
+
+      for event <- events do
         # Short windows reproduce a generation lasting longer than the old
         # absolute-limit equivalent without a multi-minute test.
         receive do
@@ -26,7 +35,7 @@ defmodule LemonAi.StreamTimeoutsTest do
           60 -> :ok
         end
 
-        send(provider, {:emit, {kind, 0, "delta", message}, self()})
+        send(provider, {:emit, event, self()})
         assert_receive {:emitted, ^provider, :ok}, 1_000
       end
 
@@ -53,7 +62,7 @@ defmodule LemonAi.StreamTimeoutsTest do
           50 -> :ok
         end
 
-        send(provider, {:emit, {:thinking_delta, 0, "thinking", %AssistantMessage{}}, self()})
+        send(provider, {:emit, {:thinking_delta, 0, "thinking"}, self()})
         assert_receive {:emitted, ^provider, :ok}, 1_000
       end
 

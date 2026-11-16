@@ -458,7 +458,18 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedExtendedTest do
       assert tc.name == "read_file"
       assert tc.arguments == %{"path" => "/test.txt"}
 
-      EventStream.cancel(stream, :test_cleanup)
+      EventStream.complete(stream, final)
+      emitted = Enum.to_list(EventStream.events(stream))
+
+      assert [
+               {:tool_call_start, 0, %ToolCall{id: "call_abc|fc_123", name: "read_file"}},
+               {:tool_call_delta, 0, "{\"path\": \""},
+               {:tool_call_delta, 0, "/test.txt\"}"},
+               {:tool_call_end, 0, ^tc},
+               {:done, :tool_use, ^final}
+             ] = emitted
+
+      GenServer.stop(stream)
     end
   end
 

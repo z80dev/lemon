@@ -1013,20 +1013,24 @@ defmodule LemonEvals.Support do
     {:ok, task_pid} =
       Task.start(fn ->
         try do
-          LemonAi.EventStream.push!(stream, {:start, response})
+          LemonAi.EventStream.push!(stream, {:start, %{response | content: []}})
 
           response.content
           |> Enum.with_index()
           |> Enum.each(fn {content, index} ->
             case content do
               %TextContent{text: text} ->
-                LemonAi.EventStream.push!(stream, {:text_start, index, response})
-                LemonAi.EventStream.push!(stream, {:text_delta, index, text, response})
-                LemonAi.EventStream.push!(stream, {:text_end, index, text, response})
+                LemonAi.EventStream.push!(stream, {:text_start, index})
+                LemonAi.EventStream.push!(stream, {:text_delta, index, text})
+                LemonAi.EventStream.push!(stream, {:text_end, index, text})
 
               %ToolCall{} = tool_call ->
-                LemonAi.EventStream.push!(stream, {:tool_call_start, index, response})
-                LemonAi.EventStream.push!(stream, {:tool_call_end, index, tool_call, response})
+                LemonAi.EventStream.push!(
+                  stream,
+                  {:tool_call_start, index, %{tool_call | arguments: %{}}}
+                )
+
+                LemonAi.EventStream.push!(stream, {:tool_call_end, index, tool_call})
 
               _ ->
                 :ok

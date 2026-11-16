@@ -354,7 +354,18 @@ defmodule LemonAi.Providers.Anthropic do
     end)
   end
 
-  defp finalize_stream(%{output: output, stream: stream, terminal?: terminal?}) do
+  defp finalize_stream(%{stream: stream, terminal?: terminal?} = state) do
+    output =
+      state.blocks
+      |> Enum.with_index()
+      |> Enum.reduce(state.output, fn
+        {{_index, %ToolCall{} = block, chunks}, content_index}, output ->
+          update_content_at_index(output, content_index, finalize_tool_arguments(block, chunks))
+
+        _, output ->
+          output
+      end)
+
     output =
       if not terminal? and output.stop_reason not in [:error, :aborted] do
         %{
@@ -615,7 +626,12 @@ defmodule LemonAi.Providers.Anthropic do
         content_index = length(state.output.content)
         blocks = state.blocks ++ [{index, text_block}]
         output = %{state.output | content: state.output.content ++ [text_block]}
-        EventStream.push_async(state.stream, {:text_start, content_index, output})
+        EventStream.push_async(state.stream, {:text_start, content_index})
+
+        if text_block.text != "" do
+          EventStream.push_async(state.stream, {:text_delta, content_index, text_block.text})
+        end
+
         %{state | blocks: blocks, output: output, committed?: true}
 
       "thinking" ->
@@ -628,7 +644,15 @@ defmodule LemonAi.Providers.Anthropic do
         content_index = length(state.output.content)
         blocks = state.blocks ++ [{index, thinking_block}]
         output = %{state.output | content: state.output.content ++ [thinking_block]}
-        EventStream.push_async(state.stream, {:thinking_start, content_index, output})
+        EventStream.push_async(state.stream, {:thinking_start, content_index})
+
+        if thinking_block.thinking != "" do
+          EventStream.push_async(
+            state.stream,
+            {:thinking_delta, content_index, thinking_block.thinking}
+          )
+        end
+
         %{state | blocks: blocks, output: output, committed?: true}
 
       "tool_use" ->
@@ -640,9 +664,9 @@ defmodule LemonAi.Providers.Anthropic do
         }
 
         content_index = length(state.output.content)
-        blocks = state.blocks ++ [{index, tool_call, ""}]
+        blocks = state.blocks ++ [{index, tool_call, []}]
         output = %{state.output | content: state.output.content ++ [tool_call]}
-        EventStream.push_async(state.stream, {:tool_call_start, content_index, output})
+        EventStream.push_async(state.stream, {:tool_call_start, content_index, tool_call})
         %{state | blocks: blocks, output: output, committed?: true}
 
       _ ->
@@ -676,20 +700,23 @@ defmodule LemonAi.Providers.Anthropic do
   defp process_sse_event({"content_block_stop", %{"index" => index}}, state) do
     case find_block_by_index(state.blocks, index) do
       {content_index, %TextContent{} = block} ->
-        EventStream.push_async(state.stream, {:text_end, content_index, block.text, state.output})
+        EventStream.push_async(state.stream, {:text_end, content_index, block.text})
         %{state | committed?: true}
 
       {content_index, %ThinkingContent{} = block} ->
         EventStream.push_async(
           state.stream,
-          {:thinking_end, content_index, block.thinking, state.output}
+          {:thinking_end, content_index, block.thinking}
         )
 
         %{state | committed?: true}
 
-      {content_index, %ToolCall{} = block, _partial_json} ->
-        EventStream.push_async(state.stream, {:tool_call_end, content_index, block, state.output})
-        %{state | committed?: true}
+      {content_index, %ToolCall{} = block, chunks} ->
+        block = finalize_tool_arguments(block, chunks)
+        output = update_content_at_index(state.output, content_index, block)
+        blocks = update_tool_block_at_index(state.blocks, index, block, [])
+        EventStream.push_async(state.stream, {:tool_call_end, content_index, block})
+        %{state | output: output, blocks: blocks, committed?: true}
 
       _ ->
         state
@@ -860,7 +887,7 @@ defmodule LemonAi.Providers.Anthropic do
         updated_block = %{block | text: block.text <> delta_text}
         blocks = update_block_at_index(state.blocks, index, updated_block)
         output = update_content_at_index(state.output, content_index, updated_block)
-        EventStream.push_async(state.stream, {:text_delta, content_index, delta_text, output})
+        EventStream.push_async(state.stream, {:text_delta, content_index, delta_text})
         %{state | blocks: blocks, output: output, committed?: true}
 
       _ ->
@@ -877,7 +904,7 @@ defmodule LemonAi.Providers.Anthropic do
 
         EventStream.push_async(
           state.stream,
-          {:thinking_delta, content_index, delta_thinking, output}
+          {:thinking_delta, content_index, delta_thinking}
         )
 
         %{state | blocks: blocks, output: output, committed?: true}
@@ -903,24 +930,26 @@ defmodule LemonAi.Providers.Anthropic do
 
   defp update_tool_call_block(state, index, partial_json) do
     case find_block_by_index(state.blocks, index) do
-      {content_index, %ToolCall{} = block, current_json} ->
-        new_json = current_json <> partial_json
-        # Parse the accumulated JSON to update arguments
-        arguments = parse_partial_json(new_json)
-        updated_block = %{block | arguments: arguments}
-        blocks = update_tool_block_at_index(state.blocks, index, updated_block, new_json)
-        output = update_content_at_index(state.output, content_index, updated_block)
+      {content_index, %ToolCall{} = block, chunks} ->
+        blocks = update_tool_block_at_index(state.blocks, index, block, [partial_json | chunks])
 
         EventStream.push_async(
           state.stream,
-          {:tool_call_delta, content_index, partial_json, output}
+          {:tool_call_delta, content_index, partial_json}
         )
 
-        %{state | blocks: blocks, output: output, committed?: true}
+        %{state | blocks: blocks, committed?: true}
 
       _ ->
         state
     end
+  end
+
+  defp finalize_tool_arguments(block, []), do: block
+
+  defp finalize_tool_arguments(block, chunks) do
+    arguments = chunks |> Enum.reverse() |> IO.iodata_to_binary() |> parse_partial_json()
+    %{block | arguments: arguments}
   end
 
   defp find_block_by_index(blocks, target_index) do

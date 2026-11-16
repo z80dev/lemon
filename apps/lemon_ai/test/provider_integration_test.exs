@@ -169,7 +169,7 @@ defmodule LemonAi.ProviderIntegrationTest do
           assert length(start_events) == 1
 
           # Check for text deltas
-          text_deltas = Enum.filter(events, &match?({:text_delta, _, _, _}, &1))
+          text_deltas = Enum.filter(events, &match?({:text_delta, _, _}, &1))
           assert text_deltas != []
 
           # Check for done event
@@ -179,7 +179,7 @@ defmodule LemonAi.ProviderIntegrationTest do
           # Collect text from deltas
           collected_text =
             text_deltas
-            |> Enum.map(fn {:text_delta, _idx, delta, _partial} -> delta end)
+            |> Enum.map(fn {:text_delta, _idx, delta} -> delta end)
             |> Enum.join("")
 
           assert String.downcase(collected_text) =~ "hello"
@@ -269,7 +269,7 @@ defmodule LemonAi.ProviderIntegrationTest do
 
           # Should have tool call events
           tool_call_starts = Enum.filter(events, &match?({:tool_call_start, _, _}, &1))
-          tool_call_ends = Enum.filter(events, &match?({:tool_call_end, _, _, _}, &1))
+          tool_call_ends = Enum.filter(events, &match?({:tool_call_end, _, _}, &1))
 
           assert tool_call_starts != []
           assert tool_call_ends != []

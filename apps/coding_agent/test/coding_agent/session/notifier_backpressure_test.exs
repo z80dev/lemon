@@ -4,6 +4,138 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
   alias CodingAgent.Session.{EventLog, Notifier}
   alias LemonAgent.EventStream
 
+  test "adjacent text from different indices cannot merge" do
+    consumer = frozen_consumer()
+    {_unsubscribe, state} = Notifier.subscribe_direct(state(), consumer, self())
+
+    for {index, text} <- [{0, "a"}, {1, "b"}, {1, "c"}] do
+      Notifier.broadcast_event(state, {:message_update, {:text_delta, index, text}})
+    end
+
+    Notifier.flush_pending()
+
+    assert [
+             {:session_event, "session-1", {:message_update, {:text_delta, 0, "a"}}, first},
+             {:session_event, "session-1", {:message_update, {:text_delta, 1, "bc"}}, last}
+           ] = drain(consumer)
+
+    assert first["seq"] == 1
+    assert last["seq"] == 3
+  end
+
+  test "adjacent text batches preserve boundaries, latest cursor, and uncoalesced replay" do
+    consumer = frozen_consumer()
+    {_unsubscribe, state} = Notifier.subscribe_direct(state(), consumer, self())
+    initial = EventLog.cursor(state.event_log)
+    call = %LemonAi.Types.ToolCall{id: "call", name: "read", arguments: %{}}
+
+    events = [
+      {:message_start, %LemonAi.Types.AssistantMessage{}},
+      {:message_update, {:text_start, 0}},
+      {:message_update, {:text_delta, 0, "hel"}},
+      {:message_update, {:text_delta, 0, "lo"}},
+      {:message_update, {:text_end, 0, "hello"}},
+      {:message_update, {:tool_call_start, 1, call}},
+      {:message_update, {:tool_call_delta, 1, "{"}},
+      {:message_update, {:tool_call_delta, 1, "}"}},
+      {:message_update, {:tool_call_end, 1, call}},
+      {:agent_end, []}
+    ]
+
+    Enum.each(events, &Notifier.broadcast_event(state, &1))
+    Notifier.flush_pending()
+    delivered = drain(consumer)
+
+    assert Enum.map(delivered, &elem(&1, 2)) ==
+             Enum.take(events, 2) ++
+               [{:message_update, {:text_delta, 0, "hello"}}] ++ Enum.drop(events, 4)
+
+    assert elem(Enum.at(delivered, 2), 3)["seq"] == 4
+    assert {:ok, replay} = EventLog.replay(state.event_log, initial, 100)
+    assert Enum.map(replay.events, & &1.event) == events
+    assert replay.cursor["seq"] == length(events)
+  end
+
+  test "each subscriber batches within its own count budget and terminal flushes first" do
+    small = frozen_consumer()
+    large = frozen_consumer()
+    {_unsubscribe, state} = Notifier.subscribe_direct(state(), small, self(), max_queue: 2)
+    {_unsubscribe, state} = Notifier.subscribe_direct(state, large, self(), max_queue: 8)
+
+    for text <- ["a", "b", "c"] do
+      Notifier.broadcast_event(state, {:message_update, {:text_delta, 0, text}})
+    end
+
+    # The first subscriber has already filled its two-fragment batch.
+    assert {:message_queue_len, 1} = Process.info(small, :message_queue_len)
+    assert {:message_queue_len, 0} = Process.info(large, :message_queue_len)
+    Notifier.flush_pending()
+
+    assert Enum.map(drain(small), &elem(&1, 2)) ==
+             [{:message_update, {:text_delta, 0, "ab"}}, {:message_update, {:text_delta, 0, "c"}}]
+
+    assert [{:session_event, "session-1", {:message_update, {:text_delta, 0, "abc"}}, _}] =
+             drain(large)
+
+    {:ok, stream, state} = Notifier.subscribe_stream(state(), self(), [])
+    Notifier.broadcast_event(state, {:message_update, {:text_delta, 0, "before terminal"}})
+    Notifier.complete_event_streams(state, {:agent_end, []})
+
+    assert [
+             {:session_event, "session-1", {:message_update, {:text_delta, 0, "before terminal"}},
+              _},
+             {:agent_end, []}
+           ] = stream |> EventStream.events() |> Enum.to_list()
+  end
+
+  test "byte budgets split text batches and oversized deltas fence without late revival" do
+    consumer = frozen_consumer()
+
+    {_unsubscribe, state} =
+      Notifier.subscribe_direct(state(), consumer, self(), max_bytes: 512, max_queue: 8)
+
+    text = String.duplicate("a", 180)
+
+    for _ <- 1..3, do: Notifier.broadcast_event(state, {:message_update, {:text_delta, 0, text}})
+    Notifier.flush_pending()
+    messages = drain(consumer)
+
+    assert Enum.map_join(messages, fn {:session_event, _,
+                                       {:message_update, {:text_delta, 0, delta}}, _} ->
+             delta
+           end) == String.duplicate(text, 3)
+
+    assert Enum.all?(messages, &(:erlang.external_size(&1) <= 512))
+
+    oversized = frozen_consumer()
+
+    {_unsubscribe, state} =
+      Notifier.subscribe_direct(state(), oversized, self(), max_bytes: 512)
+
+    Notifier.broadcast_event(
+      state,
+      {:message_update, {:text_delta, 0, String.duplicate("x", 1024)}}
+    )
+
+    Notifier.broadcast_event(state, {:message_update, {:text_delta, 0, "late"}})
+    Notifier.flush_pending()
+
+    assert [{:session_event, "session-1", {:stream_resync, %{reason: :overflow}}, nil}] =
+             drain(oversized)
+  end
+
+  test "replacing a subscriber discards its undelivered text batch" do
+    consumer = frozen_consumer()
+    {_unsubscribe, state} = Notifier.subscribe_direct(state(), consumer, self())
+    Notifier.broadcast_event(state, {:message_update, {:text_delta, 0, "stale"}})
+    {_unsubscribe, state} = Notifier.subscribe_direct(state, consumer, self())
+    Notifier.broadcast_event(state, {:message_update, {:text_delta, 0, "fresh"}})
+    Notifier.flush_pending()
+
+    assert [{:session_event, "session-1", {:message_update, {:text_delta, 0, "fresh"}}, _}] =
+             drain(consumer)
+  end
+
   test "quiet session subscriptions do not inherit a provider inactivity timer" do
     {:ok, stream, _state} = Notifier.subscribe_stream(state(), self(), timeout: 5_000)
     timers = :sys.get_state(stream)
@@ -72,7 +204,9 @@ defmodule CodingAgent.Session.NotifierBackpressureTest do
     ref = Process.monitor(stream)
     :ok = :sys.suspend(stream)
 
-    for n <- 1..1000, do: Notifier.broadcast_event(state, {:message_update, %{}, "delta #{n}"})
+    for n <- 1..1000,
+        do: Notifier.broadcast_event(state, {:message_update, {:text_delta, 0, "delta #{n}"}})
+
     assert {:message_queue_len, count} = Process.info(stream, :message_queue_len)
     assert count <= 9
     :ok = :sys.resume(stream)

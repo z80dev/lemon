@@ -67,7 +67,7 @@ defmodule LemonAgent do
         {:agent_event, {:message_start, msg}} ->
           IO.puts("Assistant started responding...")
 
-        {:agent_event, {:message_update, msg, delta}} ->
+        {:agent_event, {:message_update, {:text_delta, _index, delta}}} ->
           IO.write(delta)
 
         {:agent_event, {:tool_execution_start, id, name, args}} ->
@@ -124,7 +124,8 @@ defmodule LemonAgent do
 
   ### Message Lifecycle
   - `{:message_start, message}` - Message processing started
-  - `{:message_update, message, delta}` - Streaming update
+  - `{:message_update, provider_event}` - Delta-only streaming update; partial
+    messages are available through `get_state/1`
   - `{:message_end, message}` - Message processing complete
 
   ### Tool Execution

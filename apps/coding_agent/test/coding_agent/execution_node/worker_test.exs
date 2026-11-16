@@ -110,8 +110,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
                 timestamp: System.system_time(:millisecond)
               }
 
-              LemonAi.EventStream.push(stream, {:start, response})
-              LemonAi.EventStream.push(stream, {:text_delta, 0, "finished", response})
+              LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
+              LemonAi.EventStream.push(stream, {:text_delta, 0, "finished"})
               LemonAi.EventStream.push(stream, {:done, :stop, response})
               LemonAi.EventStream.complete(stream, response)
           end

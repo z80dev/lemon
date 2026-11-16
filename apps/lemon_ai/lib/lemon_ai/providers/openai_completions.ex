@@ -1340,7 +1340,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
       state = %{state | output: %{output | content: new_content}}
 
       # Push delta event
-      EventStream.push_async(stream, {:text_delta, block_index, content, state.output})
+      EventStream.push_async(stream, {:text_delta, block_index, content})
 
       %{state | committed?: true}
     else
@@ -1373,7 +1373,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         state = %{state | output: %{output | content: new_content}}
 
         # Push delta event
-        EventStream.push_async(stream, {:thinking_delta, block_index, text, state.output})
+        EventStream.push_async(stream, {:thinking_delta, block_index, text})
 
         %{state | committed?: true}
 
@@ -1425,19 +1425,18 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
     block = %{block | name: merge_tool_name(block.name, func_name)}
 
-    new_partial_args = info.partial_args <> func_args
-    block = %{block | arguments: parse_partial_json(new_partial_args)}
+    argument_chunks = [func_args | info.argument_chunks]
 
     output = state.output
     new_content = List.replace_at(output.content, info.block_index, block)
     output = %{output | content: new_content}
 
-    new_info = %{info | block: block, partial_args: new_partial_args}
+    new_info = %{info | block: block, argument_chunks: argument_chunks}
     tool_call_blocks = Map.put(state.tool_call_blocks, index, new_info)
 
     state = %{state | output: output, tool_call_blocks: tool_call_blocks}
 
-    EventStream.push_async(stream, {:tool_call_delta, info.block_index, func_args, state.output})
+    EventStream.push_async(stream, {:tool_call_delta, info.block_index, func_args})
 
     %{state | committed?: true}
   end
@@ -1502,7 +1501,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         state = %{state | current_block: new_block, output: %{output | content: new_content}}
 
         # Push start event
-        EventStream.push_async(stream, {:text_start, block_index, state.output})
+        EventStream.push_async(stream, {:text_start, block_index})
 
         {%{state | committed?: true}, block_index}
     end
@@ -1525,7 +1524,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         state = %{state | current_block: new_block, output: %{output | content: new_content}}
 
         # Push start event
-        EventStream.push_async(stream, {:thinking_start, block_index, state.output})
+        EventStream.push_async(stream, {:thinking_start, block_index})
 
         {%{state | committed?: true}, block_index}
     end
@@ -1535,12 +1534,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
     case state.current_block do
       %TextContent{text: text} ->
         block_index = length(state.output.content) - 1
-        EventStream.push_async(stream, {:text_end, block_index, text, state.output})
+        EventStream.push_async(stream, {:text_end, block_index, text})
         %{state | current_block: nil, committed?: true}
 
       %ThinkingContent{thinking: thinking} ->
         block_index = length(state.output.content) - 1
-        EventStream.push_async(stream, {:thinking_end, block_index, thinking, state.output})
+        EventStream.push_async(stream, {:thinking_end, block_index, thinking})
         %{state | current_block: nil, committed?: true}
 
       nil ->
@@ -1566,9 +1565,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
         block_index = length(new_content) - 1
         output = %{output | content: new_content}
 
-        EventStream.push_async(stream, {:tool_call_start, block_index, output})
+        EventStream.push_async(stream, {:tool_call_start, block_index, new_block})
 
-        info = %{block_index: block_index, block: new_block, partial_args: ""}
+        info = %{block_index: block_index, block: new_block, argument_chunks: []}
         tool_call_blocks = Map.put(state.tool_call_blocks, index, info)
 
         {%{state | output: output, tool_call_blocks: tool_call_blocks, committed?: true}, info}
@@ -1638,10 +1637,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
     final_state =
       Enum.reduce(sorted, state, fn {_index, info}, acc_state ->
+        arguments = info.argument_chunks |> Enum.reverse() |> IO.iodata_to_binary()
+
         final_args =
-          case Jason.decode(info.partial_args) do
+          case Jason.decode(arguments) do
             {:ok, args} when is_map(args) -> args
-            _ -> parse_partial_json(info.partial_args)
+            _ -> LemonAi.PartialJson.decode(arguments)
           end
 
         final_block = %{info.block | arguments: final_args}
@@ -1649,7 +1650,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
         new_content = List.replace_at(output.content, info.block_index, final_block)
         output = %{output | content: new_content}
 
-        EventStream.push_async(stream, {:tool_call_end, info.block_index, final_block, output})
+        EventStream.push_async(stream, {:tool_call_end, info.block_index, final_block})
 
         %{acc_state | output: output, committed?: true}
       end)
@@ -1697,65 +1698,4 @@ defmodule LemonAi.Providers.OpenAICompletions do
   end
 
   defp sanitize_json_value(value), do: value
-
-  defp parse_partial_json(""), do: %{}
-
-  defp parse_partial_json(json) do
-    # Try to parse as complete JSON first
-    case Jason.decode(json) do
-      {:ok, result} when is_map(result) ->
-        result
-
-      _ ->
-        # Attempt recovery for partial JSON by closing brackets
-        attempt_partial_json_recovery(json)
-    end
-  end
-
-  defp attempt_partial_json_recovery(json) do
-    json = String.trim(json)
-    completed = complete_partial_json(json)
-
-    [completed, json <> "}", json <> "\"}"]
-    |> Enum.uniq()
-    |> Enum.find_value(%{}, fn attempt ->
-      case Jason.decode(attempt) do
-        {:ok, result} when is_map(result) -> result
-        _ -> nil
-      end
-    end)
-  end
-
-  defp complete_partial_json(json) do
-    {stack, in_string?, escaped?} =
-      json
-      |> String.graphemes()
-      |> Enum.reduce({[], false, false}, fn
-        "\\", {stack, true, false} ->
-          {stack, true, true}
-
-        _char, {stack, true, true} ->
-          {stack, true, false}
-
-        "\"", {stack, in_string?, false} ->
-          {stack, not in_string?, false}
-
-        "{", {stack, false, false} ->
-          {["}" | stack], false, false}
-
-        "[", {stack, false, false} ->
-          {["]" | stack], false, false}
-
-        "}", {["}" | rest], false, false} ->
-          {rest, false, false}
-
-        "]", {["]" | rest], false, false} ->
-          {rest, false, false}
-
-        _char, acc ->
-          acc
-      end)
-
-    json <> if(in_string? and not escaped?, do: "\"", else: "") <> Enum.join(stack, "")
-  end
 end

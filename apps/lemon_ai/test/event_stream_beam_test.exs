@@ -81,7 +81,7 @@ defmodule LemonAi.EventStreamBeamTest do
       {:ok, stream} = EventStream.start_link()
 
       # Push some events
-      EventStream.push_async(stream, {:text_delta, 0, "test", make_message()})
+      EventStream.push_async(stream, {:text_delta, 0, "test"})
 
       # Stream should still be alive
       assert Process.alive?(stream)
@@ -192,12 +192,11 @@ defmodule LemonAi.EventStreamBeamTest do
              end),
              "take waiter did not register"
 
-      partial = make_message()
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "Hello", partial})
+      assert :ok = EventStream.push(stream, {:text_delta, 0, "Hello"})
       EventStream.complete(stream, make_message())
 
       events = Task.await(take_task, 1000)
-      assert [{:text_delta, 0, "Hello", _}] = events
+      assert [{:text_delta, 0, "Hello"}] = events
 
       assert {:ok, _} = Task.await(result_task, 1000)
     end
@@ -207,15 +206,13 @@ defmodule LemonAi.EventStreamBeamTest do
     test "queue respects max_queue limit with :error strategy" do
       {:ok, stream} = EventStream.start_link(max_queue: 5, drop_strategy: :error)
 
-      partial = make_message()
-
       # Fill the queue
       for i <- 1..5 do
-        assert :ok = EventStream.push(stream, {:text_delta, 0, "#{i}", partial})
+        assert :ok = EventStream.push(stream, {:text_delta, 0, "#{i}"})
       end
 
       # Next push should overflow
-      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "6", partial})
+      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "6"})
 
       # Stats should show queue at max
       stats = EventStream.stats(stream)
@@ -226,11 +223,9 @@ defmodule LemonAi.EventStreamBeamTest do
     test "overflow increments dropped count with :error strategy" do
       {:ok, stream} = EventStream.start_link(max_queue: 2, drop_strategy: :error)
 
-      partial = make_message()
-
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_1", partial})
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_2", partial})
-      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "msg_3", partial})
+      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_1"})
+      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_2"})
+      assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "msg_3"})
 
       stats = EventStream.stats(stream)
       assert stats.queue_size == 2
@@ -240,11 +235,9 @@ defmodule LemonAi.EventStreamBeamTest do
     test "terminal event is delivered even when queue is full with :error strategy" do
       {:ok, stream} = EventStream.start_link(max_queue: 2, drop_strategy: :error)
 
-      partial = make_message()
-
       # Fill the queue
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_1", partial})
-      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_2", partial})
+      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_1"})
+      assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_2"})
 
       # Complete should still enqueue terminal event by dropping the oldest
       EventStream.complete(stream, make_message())
@@ -253,7 +246,7 @@ defmodule LemonAi.EventStreamBeamTest do
 
       assert Enum.any?(events, &match?({:done, :stop, _}, &1))
 
-      text_events = Enum.filter(events, &match?({:text_delta, _, _, _}, &1))
+      text_events = Enum.filter(events, &match?({:text_delta, _, _}, &1))
       assert length(text_events) == 1
 
       stats = EventStream.stats(stream)
@@ -263,12 +256,10 @@ defmodule LemonAi.EventStreamBeamTest do
     test "queue drops oldest with :drop_oldest strategy" do
       {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :drop_oldest)
 
-      partial = make_message()
-
       # Fill and overflow: push 5 events with max_queue=3
       # After all pushes: queue=[3,4,5], dropped=2
       for i <- 1..5 do
-        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       # complete() adds done event, drops oldest (msg_3)
@@ -278,7 +269,7 @@ defmodule LemonAi.EventStreamBeamTest do
       events = EventStream.events(stream) |> Enum.to_list()
 
       # Should have 2 text events (4 and 5) plus done
-      text_events = Enum.filter(events, &match?({:text_delta, _, _, _}, &1))
+      text_events = Enum.filter(events, &match?({:text_delta, _, _}, &1))
       assert length(text_events) == 2
 
       # Check stats for dropped count (3 events dropped: 1, 2, and 3)
@@ -289,12 +280,10 @@ defmodule LemonAi.EventStreamBeamTest do
     test "queue drops newest with :drop_newest strategy" do
       {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :drop_newest)
 
-      partial = make_message()
-
       # Fill and overflow: push 5 events with max_queue=3
       # Events 1,2,3 go in queue, events 4,5 are dropped
       for i <- 1..5 do
-        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}", partial})
+        assert :ok = EventStream.push(stream, {:text_delta, 0, "msg_#{i}"})
       end
 
       # complete() forces room for the terminal event by dropping the oldest
@@ -304,7 +293,7 @@ defmodule LemonAi.EventStreamBeamTest do
       events = EventStream.events(stream) |> Enum.to_list()
 
       # Should have kept events 2 and 3, plus the done event
-      text_events = Enum.filter(events, &match?({:text_delta, _, _, _}, &1))
+      text_events = Enum.filter(events, &match?({:text_delta, _, _}, &1))
       assert length(text_events) == 2
       assert Enum.any?(events, &match?({:done, :stop, _}, &1))
 
@@ -316,11 +305,9 @@ defmodule LemonAi.EventStreamBeamTest do
     test "push_async ignores backpressure" do
       {:ok, stream} = EventStream.start_link(max_queue: 3, drop_strategy: :error)
 
-      partial = make_message()
-
       # Push more than max_queue with async
       for i <- 1..10 do
-        EventStream.push_async(stream, {:text_delta, 0, "#{i}", partial})
+        EventStream.push_async(stream, {:text_delta, 0, "#{i}"})
       end
 
       # Async push doesn't return errors, but events may be dropped
@@ -333,10 +320,8 @@ defmodule LemonAi.EventStreamBeamTest do
     test "push_async increments dropped count on overflow with :error strategy" do
       {:ok, stream} = EventStream.start_link(max_queue: 1, drop_strategy: :error)
 
-      partial = make_message()
-
-      EventStream.push_async(stream, {:text_delta, 0, "msg_1", partial})
-      EventStream.push_async(stream, {:text_delta, 0, "msg_2", partial})
+      EventStream.push_async(stream, {:text_delta, 0, "msg_1"})
+      EventStream.push_async(stream, {:text_delta, 0, "msg_2"})
 
       assert wait_until(fn ->
                stats = EventStream.stats(stream)
@@ -353,7 +338,7 @@ defmodule LemonAi.EventStreamBeamTest do
     test "cancel/2 stops the stream" do
       {:ok, stream} = EventStream.start_link()
 
-      EventStream.push_async(stream, {:text_delta, 0, "hello", make_message()})
+      EventStream.push_async(stream, {:text_delta, 0, "hello"})
 
       # Cancel
       stream_ref = Process.monitor(stream)
@@ -366,8 +351,7 @@ defmodule LemonAi.EventStreamBeamTest do
     test "cancel emits canceled event" do
       {:ok, stream} = EventStream.start_link()
 
-      partial = make_message()
-      EventStream.push_async(stream, {:text_delta, 0, "hello", partial})
+      EventStream.push_async(stream, {:text_delta, 0, "hello"})
 
       # Start reader in background
       reader =
@@ -384,7 +368,7 @@ defmodule LemonAi.EventStreamBeamTest do
       events = Task.await(reader, 1000)
 
       # Should have text_delta and canceled events
-      assert Enum.any?(events, &match?({:text_delta, _, _, _}, &1))
+      assert Enum.any?(events, &match?({:text_delta, _, _}, &1))
       assert Enum.any?(events, &match?({:canceled, :test_reason}, &1))
     end
 
@@ -422,7 +406,7 @@ defmodule LemonAi.EventStreamBeamTest do
       assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
 
       # Push should return canceled error
-      result = EventStream.push(stream, {:text_delta, 0, "test", make_message()})
+      result = EventStream.push(stream, {:text_delta, 0, "test"})
       assert {:error, :canceled} = result
     end
   end
@@ -479,10 +463,8 @@ defmodule LemonAi.EventStreamBeamTest do
     test "stats returns queue information" do
       {:ok, stream} = EventStream.start_link(max_queue: 100)
 
-      partial = make_message()
-
       for i <- 1..10 do
-        EventStream.push_async(stream, {:text_delta, 0, "#{i}", partial})
+        EventStream.push_async(stream, {:text_delta, 0, "#{i}"})
       end
 
       stats = EventStream.stats(stream)
@@ -497,26 +479,24 @@ defmodule LemonAi.EventStreamBeamTest do
     test "events enumerable still works" do
       {:ok, stream} = EventStream.start_link()
 
-      partial = make_message()
-      EventStream.push_async(stream, {:text_delta, 0, "Hello", partial})
-      EventStream.push_async(stream, {:text_delta, 0, " World", partial})
+      EventStream.push_async(stream, {:text_delta, 0, "Hello"})
+      EventStream.push_async(stream, {:text_delta, 0, " World"})
       EventStream.complete(stream, make_message(content: [%TextContent{text: "Hello World"}]))
 
       events = EventStream.events(stream) |> Enum.to_list()
 
       assert length(events) == 3
-      assert {:text_delta, 0, "Hello", _} = Enum.at(events, 0)
-      assert {:text_delta, 0, " World", _} = Enum.at(events, 1)
+      assert {:text_delta, 0, "Hello"} = Enum.at(events, 0)
+      assert {:text_delta, 0, " World"} = Enum.at(events, 1)
       assert {:done, :stop, _} = Enum.at(events, 2)
     end
 
     test "collect_text still works" do
       {:ok, stream} = EventStream.start_link()
 
-      partial = make_message()
-      EventStream.push_async(stream, {:text_delta, 0, "Hello", partial})
-      EventStream.push_async(stream, {:text_delta, 0, " ", partial})
-      EventStream.push_async(stream, {:text_delta, 0, "World!", partial})
+      EventStream.push_async(stream, {:text_delta, 0, "Hello"})
+      EventStream.push_async(stream, {:text_delta, 0, " "})
+      EventStream.push_async(stream, {:text_delta, 0, "World!"})
       EventStream.complete(stream, make_message())
 
       text = EventStream.collect_text(stream)

@@ -320,18 +320,6 @@ defmodule CodingAgent.Session.Presentation do
       :ok
   end
 
-  @doc false
-  def text_delta_from_message_update(msg, event, accumulated_text \\ "") do
-    case extract_delta_text(event) do
-      text when is_binary(text) and text != "" ->
-        text
-
-      _ ->
-        visible_text_delta(msg, accumulated_text)
-    end
-  end
-
-  def extract_delta_text({:text_delta, _idx, text, _partial}) when is_binary(text), do: text
   def extract_delta_text({:text_delta, _idx, text}) when is_binary(text), do: text
   def extract_delta_text(_), do: nil
 
@@ -339,47 +327,57 @@ defmodule CodingAgent.Session.Presentation do
     %ReasoningAccumulator{threshold: @reasoning_update_threshold}
   end
 
-  def reasoning_action({:thinking_start, idx, partial}, %ReasoningAccumulator{} = acc) do
-    {block, acc} = new_reasoning_block(idx, partial, acc)
-    delta = block.text
-    block = %{block | emitted_bytes: byte_size(block.text)}
-    acc = put_reasoning_block(acc, idx, block)
-    {:emit, reasoning_action(block, :started, nil, delta), acc}
+  # Provider starts carry only an index. Wait for content before publishing the
+  # client action; an end without content still emits a paired start/completion.
+  def reasoning_action({:thinking_start, idx}, %ReasoningAccumulator{} = acc) do
+    {_block, acc} = new_reasoning_block(idx, acc)
+    {:skip, acc}
   end
 
   def reasoning_action(
-        {:thinking_delta, idx, text, _partial},
+        {:thinking_delta, idx, text},
         %ReasoningAccumulator{} = acc
       )
       when is_binary(text) do
     {block, acc} = get_or_new_reasoning_block(idx, acc)
     block = %{block | text: block.text <> text}
 
-    if byte_size(block.text) - block.emitted_bytes >= acc.threshold do
-      delta = un_emitted_reasoning(block)
-      block = %{block | emitted_bytes: byte_size(block.text)}
-      acc = put_reasoning_block(acc, idx, block)
-      {:emit, reasoning_action(block, :updated, nil, delta), acc}
-    else
-      {:skip, put_reasoning_block(acc, idx, block)}
+    cond do
+      not block.started and block.text != "" ->
+        block = %{block | started: true, emitted_bytes: byte_size(block.text)}
+        acc = put_reasoning_block(acc, idx, block)
+        {:emit, reasoning_action(block, :started, nil, block.text), acc}
+
+      block.started and byte_size(block.text) - block.emitted_bytes >= acc.threshold ->
+        delta = un_emitted_reasoning(block)
+        block = %{block | emitted_bytes: byte_size(block.text)}
+        acc = put_reasoning_block(acc, idx, block)
+        {:emit, reasoning_action(block, :updated, nil, delta), acc}
+
+      true ->
+        {:skip, put_reasoning_block(acc, idx, block)}
     end
   end
 
   def reasoning_action(
-        {:thinking_end, idx, text, partial},
+        {:thinking_end, idx, text},
         %ReasoningAccumulator{} = acc
-      ) do
+      )
+      when is_binary(text) do
     {block, acc} = get_or_new_reasoning_block(idx, acc)
-    text = reasoning_end_text(text, partial, idx, block.text)
     block = %{block | text: text}
-    delta = un_emitted_reasoning(block)
-    block = %{block | emitted_bytes: byte_size(text)}
     acc = delete_reasoning_block(acc, idx)
-    {:emit, reasoning_action(block, :completed, true, delta), acc}
-  end
 
-  def reasoning_action({:thinking_end, idx, partial}, %ReasoningAccumulator{} = acc) do
-    reasoning_action({:thinking_end, idx, nil, partial}, acc)
+    if block.started do
+      {:emit, reasoning_action(block, :completed, true, un_emitted_reasoning(block)), acc}
+    else
+      actions = [
+        reasoning_action(block, :started, nil, text),
+        reasoning_action(block, :completed, true, "")
+      ]
+
+      {:emit_many, actions, acc}
+    end
   end
 
   def reasoning_action(_event, %ReasoningAccumulator{} = acc), do: {:ignore, acc}
@@ -426,31 +424,6 @@ defmodule CodingAgent.Session.Presentation do
       messages_from_session(Map.get(state, :session))
     ]
     |> Enum.find_value(&build_usage/1)
-  end
-
-  def visible_text_delta(msg, accumulated_text) do
-    text = safe_get_visible_text(msg)
-
-    cond do
-      text == "" ->
-        nil
-
-      accumulated_text == "" ->
-        text
-
-      String.starts_with?(text, accumulated_text) ->
-        case binary_part(
-               text,
-               byte_size(accumulated_text),
-               byte_size(text) - byte_size(accumulated_text)
-             ) do
-          "" -> nil
-          suffix -> suffix
-        end
-
-      true ->
-        nil
-    end
   end
 
   def safe_get_visible_text(msg) do
@@ -1149,12 +1122,13 @@ defmodule CodingAgent.Session.Presentation do
 
   defp cost_component(_cost, _key), do: nil
 
-  defp new_reasoning_block(idx, partial, %ReasoningAccumulator{} = acc) do
+  defp new_reasoning_block(idx, %ReasoningAccumulator{} = acc) do
     seq = acc.seq + 1
 
     block = %{
       id: "lemon.reasoning.#{idx}.#{seq}",
-      text: thinking_text_from_partial(partial, idx),
+      text: "",
+      started: false,
       emitted_bytes: 0
     }
 
@@ -1163,7 +1137,7 @@ defmodule CodingAgent.Session.Presentation do
 
   defp get_or_new_reasoning_block(idx, %ReasoningAccumulator{} = acc) do
     case Map.get(acc.blocks, idx) do
-      nil -> new_reasoning_block(idx, nil, acc)
+      nil -> new_reasoning_block(idx, acc)
       block -> {block, acc}
     end
   end
@@ -1219,24 +1193,6 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   defp reasoning_title(_), do: "reasoning"
-
-  defp reasoning_end_text(text, _partial, _idx, _fallback) when is_binary(text), do: text
-
-  defp reasoning_end_text(_text, partial, idx, fallback) do
-    case thinking_text_from_partial(partial, idx) do
-      "" -> fallback || ""
-      text -> text
-    end
-  end
-
-  defp thinking_text_from_partial(%{content: content}, idx) when is_list(content) do
-    case Enum.at(content, idx) do
-      %{thinking: thinking} when is_binary(thinking) -> thinking
-      _ -> ""
-    end
-  end
-
-  defp thinking_text_from_partial(_partial, _idx), do: ""
 
   defp messages_from_partial_state(%{agent_state: agent_state}) do
     messages_from_partial_state(agent_state)

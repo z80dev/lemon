@@ -27,7 +27,7 @@ defmodule LemonAgent.Loop do
       {:message_start, prompt}
       {:message_end, prompt}
       {:message_start, assistant_msg}
-      {:message_update, assistant_msg, event}
+      {:message_update, event}
       ...
       {:message_end, assistant_msg}
       {:tool_execution_start, id, name, args}

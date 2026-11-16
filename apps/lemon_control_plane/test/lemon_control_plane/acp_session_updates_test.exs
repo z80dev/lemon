@@ -131,13 +131,13 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     {text_updates, state} =
       SessionUpdates.map_event(
         state,
-        {:message_update, message, {:text_delta, 0, "hello", message}}
+        {:message_update, {:text_delta, 0, "hello"}}
       )
 
     {thought_updates, state} =
       SessionUpdates.map_event(
         state,
-        {:message_update, message, {:thinking_delta, 0, "thinking", message}}
+        {:message_update, {:thinking_delta, 0, "thinking"}}
       )
 
     assert update(hd(text_updates))["messageId"] == update(hd(thought_updates))["messageId"]
@@ -405,9 +405,9 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
   test "thought deltas continue beyond the cumulative preview bound" do
     presentation = CodingAgent.Session.Presentation
 
-    {:emit, _start, accumulator} =
+    {:skip, accumulator} =
       presentation.reasoning_action(
-        {:thinking_start, 0, nil},
+        {:thinking_start, 0},
         presentation.new_reasoning_accumulator()
       )
 
@@ -418,7 +418,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
                                                                               {accumulator,
                                                                                mapper, emitted} ->
         {:emit, action, accumulator} =
-          presentation.reasoning_action({:thinking_delta, 0, piece, nil}, accumulator)
+          presentation.reasoning_action({:thinking_delta, 0, piece}, accumulator)
 
         {updates, mapper} =
           SessionUpdates.map_event(mapper, %{
@@ -431,7 +431,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
 
     {:emit, action, _accumulator} =
       presentation.reasoning_action(
-        {:thinking_end, 0, String.duplicate(piece, 40), nil},
+        {:thinking_end, 0, String.duplicate(piece, 40)},
         accumulator
       )
 

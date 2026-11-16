@@ -150,7 +150,7 @@ defmodule CodingAgent.Session.EventLogCursorTest do
     pid = owner()
     cursor = GenServer.call(pid, :cursor)
     append(pid, {:agent_start})
-    append(pid, {:message_update, %{}, "hello"})
+    append(pid, {:message_update, {:text_delta, 0, "hello"}})
     assert {:ok, %{events: [started, delta]}} = replay(pid, cursor)
     assert [%LemonCore.Event{type: :run_started, meta: meta}] = started.events
     assert meta.schema_version == 1

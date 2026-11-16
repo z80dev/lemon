@@ -72,8 +72,8 @@ keys explicitly or rely on the environment.
 stream
 |> LemonAi.EventStream.events()
 |> Enum.each(fn
-  {:text_delta, _idx, delta, _partial} -> IO.write(delta)
-  {:thinking_delta, _idx, delta, _partial} -> IO.write([IO.ANSI.faint(), delta, IO.ANSI.reset()])
+  {:text_delta, _idx, delta} -> IO.write(delta)
+  {:thinking_delta, _idx, delta} -> IO.write([IO.ANSI.faint(), delta, IO.ANSI.reset()])
   {:done, _reason, _message} -> IO.puts("\n-- done --")
   {:error, _reason, message} -> IO.puts("Error: #{message.error_message}")
   _ -> :ok
@@ -93,6 +93,31 @@ Non-blocking lifecycle observers can call
 `LemonAi.EventStream.subscribe_result/2`; it synchronously registers the
 subscriber and later sends `{:event_stream_result, reference, result}`. This
 guarantees that a subsequent cancellation cannot overtake result registration.
+
+### Delta-only event contract (breaking package change)
+
+Provider content events no longer carry an `AssistantMessage` snapshot:
+
+- Starts: `{:text_start, index}`, `{:thinking_start, index}`,
+  `{:tool_call_start, index, tool_call}` (tool identity/initial arguments).
+- Deltas: `{:text_delta | :thinking_delta | :tool_call_delta, index, delta}`.
+  Tool argument deltas are JSON fragments.
+- Ends: `{:text_end, index, text}`, `{:thinking_end, index, thinking}`,
+  `{:tool_call_end, index, tool_call}`.
+- `{:start, message}`, `{:done, reason, message}` and
+  `{:error, reason, message}` retain their existing shapes. Terminal messages
+  retain complete content, usage and provider signatures.
+
+Render delta bytes in order; subscriber transports may combine adjacent text
+deltas for the same block without changing their concatenated bytes. Consumers
+that need partial answers can keep `LemonAi.StreamAccumulator.new(message)`, feed
+events through `apply/2`, and call `snapshot/1` on demand. It retains chunks rather
+than copying a growing binary on every event. Do not materialize a snapshot on
+each delta. `result/2` and `collect_text/1` still return the same final text.
+
+The opt-in 100 KiB tool-argument benchmark is excluded from default tests; see
+`apps/lemon_ai/test/lemon_ai/stream_delta_benchmark_test.exs` for its focused command
+and the byte-copy accounting method. No live provider calls are required.
 
 `LemonAi.complete/3` collects the stream privately and retries classified transient
 completion errors, including resolved error messages, up to **three total attempts**.
@@ -795,13 +820,15 @@ Events emitted by `LemonAi.EventStream`:
 
 ```elixir
 {:start, message}
-{:text_start, idx, message}
-{:text_delta, idx, delta, message}
-{:text_end, idx, text, message}
-{:thinking_start | :thinking_delta | :thinking_end, idx, ..., message}
-{:tool_call_start, idx, message}
-{:tool_call_delta, idx, json_fragment, message}
-{:tool_call_end, idx, tool_call, message}
+{:text_start, idx}
+{:text_delta, idx, delta}
+{:text_end, idx, text}
+{:thinking_start, idx}
+{:thinking_delta, idx, delta}
+{:thinking_end, idx, thinking}
+{:tool_call_start, idx, tool_call}
+{:tool_call_delta, idx, json_fragment}
+{:tool_call_end, idx, tool_call}
 {:done, stop_reason, message}
 {:error, stop_reason, message}
 {:canceled, reason}

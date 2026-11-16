@@ -476,15 +476,15 @@ defmodule CodingAgent.Session.ProviderFallback do
   defp terminal_event?({:canceled, _reason}), do: true
   defp terminal_event?(_), do: false
 
-  defp useful_event?({:text_delta, _idx, text, _message}) when is_binary(text),
+  defp useful_event?({:text_delta, _idx, text}) when is_binary(text),
     do: text != ""
 
-  defp useful_event?({:thinking_delta, _idx, text, _message}) when is_binary(text),
+  defp useful_event?({:thinking_delta, _idx, text}) when is_binary(text),
     do: text != ""
 
-  defp useful_event?({:tool_call_start, _idx, _message}), do: true
-  defp useful_event?({:tool_call_end, _idx, _tool_call, _message}), do: true
-  defp useful_event?({:tool_call_delta, _idx, _delta, _message}), do: true
+  defp useful_event?({:tool_call_start, _idx, _tool_call}), do: true
+  defp useful_event?({:tool_call_end, _idx, _tool_call}), do: true
+  defp useful_event?({:tool_call_delta, _idx, _delta}), do: true
 
   defp useful_event?({kind, _reason, %{content: content}}) when kind in [:done, :error],
     do: Enum.any?(content, &nonempty_content?/1)

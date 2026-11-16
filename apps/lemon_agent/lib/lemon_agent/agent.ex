@@ -47,6 +47,7 @@ defmodule LemonAgent.Agent do
   alias LemonAgent.{AbortSignal, AutoThinking, Budget}
   alias LemonAgent.Types
   alias LemonAgent.Types.{AgentLoopConfig, AgentState}
+  alias LemonAi.StreamAccumulator
   alias LemonAi.Types.StreamOptions
   alias LemonCore.Introspection
 
@@ -75,6 +76,7 @@ defmodule LemonAgent.Agent do
 
   @type state :: %{
           agent_state: AgentState.t(),
+          stream_accumulator: StreamAccumulator.t() | nil,
           listeners: list({pid(), reference()}),
           abort_ref: reference() | nil,
           running_task: Task.t() | nil,
@@ -452,7 +454,8 @@ defmodule LemonAgent.Agent do
   # ============================================================================
 
   @doc """
-  Gets the current agent state.
+  Gets the current agent state, materializing the in-flight assistant message
+  from its accumulated chunks only for this snapshot.
   """
   @spec get_state(GenServer.server()) :: AgentState.t()
   def get_state(agent) do
@@ -508,6 +511,7 @@ defmodule LemonAgent.Agent do
 
     state = %{
       agent_state: agent_state,
+      stream_accumulator: nil,
       listeners: [],
       abort_ref: nil,
       running_task: nil,
@@ -620,6 +624,7 @@ defmodule LemonAgent.Agent do
     new_state = %{
       state
       | agent_state: new_agent_state,
+        stream_accumulator: nil,
         steering_queue: [],
         follow_up_queue: [],
         thinking_prompt: nil,
@@ -675,7 +680,16 @@ defmodule LemonAgent.Agent do
   end
 
   def handle_call(:get_state, _from, state) do
-    {:reply, state.agent_state, state}
+    agent_state =
+      case state.stream_accumulator do
+        nil ->
+          state.agent_state
+
+        accumulator ->
+          %{state.agent_state | stream_message: StreamAccumulator.snapshot(accumulator)}
+      end
+
+    {:reply, agent_state, state}
   end
 
   def handle_call(:get_model, _from, state) do
@@ -1030,6 +1044,7 @@ defmodule LemonAgent.Agent do
     %{
       state
       | agent_state: new_agent_state,
+        stream_accumulator: nil,
         response_system_prompt: context.system_prompt,
         abort_ref: abort_ref,
         running_task: task
@@ -1162,21 +1177,21 @@ defmodule LemonAgent.Agent do
         LemonAgent.Loop.agent_loop_continue(context, config, abort_ref, stream_fn, agent_pid)
       end
 
-    # Consume the stream and forward events
-    partial_message =
+    # Forward deltas without maintaining another copy of the partial message.
+    message_open? =
       event_stream
       |> LemonAgent.EventStream.events()
-      |> Enum.reduce_while(nil, fn event, partial ->
-        # Send event to GenServer
+      |> Enum.reduce(false, fn event, message_open? ->
         send(agent_pid, {:agent_event, event})
-
-        # Track partial message state
-        new_partial = track_partial_message(event, partial)
-        {:cont, new_partial}
+        track_message_open(event, message_open?)
       end)
 
-    # Handle any remaining partial message
-    handle_remaining_partial(partial_message, agent_pid, abort_ref, config)
+    # This ordered call snapshots the Agent's accumulator only if the stream
+    # stopped without closing its last message.
+    if message_open? do
+      partial_message = get_state(agent_pid).stream_message
+      handle_remaining_partial(partial_message, agent_pid, abort_ref, config)
+    end
 
     :ok
   rescue
@@ -1191,16 +1206,18 @@ defmodule LemonAgent.Agent do
 
   defp aborted?(abort_ref), do: AbortSignal.aborted?(abort_ref)
 
-  defp track_partial_message({:message_start, message}, _partial), do: message
-  defp track_partial_message({:message_update, message, _delta}, _partial), do: message
-  defp track_partial_message({:message_end, _message}, _partial), do: nil
-  defp track_partial_message(_event, partial), do: partial
+  defp track_message_open({:message_start, %{role: :assistant}}, _open?), do: true
+  defp track_message_open({:message_start, _message}, _open?), do: false
+  defp track_message_open({:message_end, _message}, _open?), do: false
+  defp track_message_open({:provider_retry, _details}, _open?), do: false
+  defp track_message_open(_event, open?), do: open?
 
   defp handle_remaining_partial(nil, _agent_pid, _abort_ref, _config), do: :ok
 
   defp handle_remaining_partial(partial, agent_pid, abort_ref, config) do
     # Check if partial has meaningful content
-    if partial[:role] == :assistant and has_meaningful_content?(partial[:content] || []) do
+    if Map.get(partial, :role) == :assistant and
+         has_meaningful_content?(Map.get(partial, :content, [])) do
       # Append the partial message
       send(agent_pid, {:agent_event, {:message_end, partial}})
     else
@@ -1253,14 +1270,24 @@ defmodule LemonAgent.Agent do
   end
 
   @spec handle_agent_event(Types.agent_event(), state()) :: state()
-  defp handle_agent_event({:message_start, message}, state) do
-    new_agent_state = %{state.agent_state | stream_message: message}
-    %{state | agent_state: new_agent_state}
+  defp handle_agent_event({:message_start, %LemonAi.Types.AssistantMessage{} = message}, state) do
+    %{
+      state
+      | agent_state: %{state.agent_state | stream_message: nil},
+        stream_accumulator: StreamAccumulator.new(message)
+    }
   end
 
-  defp handle_agent_event({:message_update, message, _delta}, state) do
+  defp handle_agent_event({:message_start, message}, state) do
     new_agent_state = %{state.agent_state | stream_message: message}
-    %{state | agent_state: new_agent_state}
+    %{state | agent_state: new_agent_state, stream_accumulator: nil}
+  end
+
+  defp handle_agent_event({:message_update, event}, state) do
+    case state.stream_accumulator do
+      nil -> state
+      accumulator -> %{state | stream_accumulator: StreamAccumulator.apply(accumulator, event)}
+    end
   end
 
   defp handle_agent_event({:message_end, message}, state) do
@@ -1272,7 +1299,7 @@ defmodule LemonAgent.Agent do
         messages: new_messages
     }
 
-    %{state | agent_state: new_agent_state}
+    %{state | agent_state: new_agent_state, stream_accumulator: nil}
   end
 
   defp handle_agent_event({:tool_execution_start, id, _name, _args}, state) do
@@ -1320,7 +1347,7 @@ defmodule LemonAgent.Agent do
         stream_message: nil
     }
 
-    %{state | agent_state: new_agent_state}
+    %{state | agent_state: new_agent_state, stream_accumulator: nil}
   end
 
   defp handle_agent_event(
@@ -1339,7 +1366,11 @@ defmodule LemonAgent.Agent do
   end
 
   defp handle_agent_event({:provider_retry, _details}, state) do
-    %{state | agent_state: %{state.agent_state | stream_message: nil, error: nil}}
+    %{
+      state
+      | agent_state: %{state.agent_state | stream_message: nil, error: nil},
+        stream_accumulator: nil
+    }
   end
 
   defp handle_agent_event(_event, state), do: state
@@ -1378,6 +1409,7 @@ defmodule LemonAgent.Agent do
     %{
       state
       | agent_state: new_agent_state,
+        stream_accumulator: nil,
         abort_ref: nil,
         running_task: nil,
         waiters: []

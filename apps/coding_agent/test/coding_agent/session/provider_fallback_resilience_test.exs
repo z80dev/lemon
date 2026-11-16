@@ -121,10 +121,9 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     monitor = Process.monitor(producer)
     LemonAi.EventStream.attach_task(provider, producer)
     on_exit(fn -> Process.exit(producer, :kill) end)
-    partial = message(primary, :stop, [%TextContent{text: "partial"}])
 
     for _ <- 1..(capacity + 1) do
-      assert :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "partial", partial})
+      assert :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "partial"})
     end
 
     send(relay, {:provider_stream, provider})
@@ -498,13 +497,13 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
         {events, content} =
           case gate do
             :whitespace_text ->
-              {[{:text_delta, 0, " \n", error}], []}
+              {[{:text_delta, 0, " \n"}], []}
 
             :thinking ->
-              {[{:thinking_delta, 0, "private thinking", error}], []}
+              {[{:thinking_delta, 0, "private thinking"}], []}
 
             :tool_delta ->
-              {[{:tool_call_delta, 0, "{", error}], []}
+              {[{:tool_call_delta, 0, "{"}], []}
 
             gate when gate in [:terminal_text, :direct_text] ->
               {[], [%TextContent{text: " "}]}

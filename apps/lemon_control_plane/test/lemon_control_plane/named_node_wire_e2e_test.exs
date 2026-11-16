@@ -113,12 +113,12 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
       {:ok, task} =
         Task.start(fn ->
           response = assistant_message("partial native answer")
-          LemonAi.EventStream.push(stream, {:start, response})
+          LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
           for chunk <- 1..100 do
             send(owner, {:native_stream_chunk, chunk})
             Process.sleep(20)
-            LemonAi.EventStream.push(stream, {:text_delta, 0, "native #{chunk} ", response})
+            LemonAi.EventStream.push(stream, {:text_delta, 0, "native #{chunk} "})
           end
 
           LemonAi.EventStream.push(stream, {:done, :stop, response})
@@ -134,14 +134,14 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
       {:ok, stream} = LemonAi.EventStream.start_link()
 
       Task.start(fn ->
-        LemonAi.EventStream.push(stream, {:start, response})
+        LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
 
         Enum.with_index(response.content)
         |> Enum.each(fn
           {%TextContent{text: text}, index} ->
-            LemonAi.EventStream.push(stream, {:text_start, index, response})
-            LemonAi.EventStream.push(stream, {:text_delta, index, text, response})
-            LemonAi.EventStream.push(stream, {:text_end, index, response})
+            LemonAi.EventStream.push(stream, {:text_start, index})
+            LemonAi.EventStream.push(stream, {:text_delta, index, text})
+            LemonAi.EventStream.push(stream, {:text_end, index, text})
 
           _other ->
             :ok
@@ -784,7 +784,9 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
         }
       )
 
-    assert_receive {:execution_node_socket, ^expired_socket, {:authentication_error, error}}, 3_000
+    assert_receive {:execution_node_socket, ^expired_socket, {:authentication_error, error}},
+                   3_000
+
     assert error["code"] == "UNAUTHORIZED"
     assert error["message"] =~ "Token has expired"
     assert error["details"] == %{"reason" => "session_expired"}
@@ -882,7 +884,9 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
         }
       )
 
-    assert_receive {:execution_node_socket, ^reconnect_socket, {:authentication_error, error}}, 3_000
+    assert_receive {:execution_node_socket, ^reconnect_socket, {:authentication_error, error}},
+                   3_000
+
     assert error["code"] == "UNAUTHORIZED"
     assert error["message"] =~ "Invalid token"
     assert error["details"] == %{"reason" => "session_invalid"}

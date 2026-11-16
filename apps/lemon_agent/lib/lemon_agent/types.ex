@@ -605,7 +605,8 @@ defmodule LemonAgent.Types do
   ## Message Lifecycle
   Emitted for user, assistant, and tool_result messages.
   - `{:message_start, message}` - Message processing started
-  - `{:message_update, message, assistant_event}` - Streaming update (assistant only)
+  - `{:message_update, assistant_event}` - Delta-only provider update (assistant only);
+    use `LemonAgent.Agent.get_state/1` for a partial message snapshot
   - `{:message_end, message}` - Message processing complete
 
   ## Tool Execution Lifecycle
@@ -633,7 +634,7 @@ defmodule LemonAgent.Types do
           | {:budget_exceeded, details :: LemonAgent.Budget.details()}
           | {:budget_warning, details :: %{message: String.t()}}
           | {:message_start, message :: agent_message()}
-          | {:message_update, message :: agent_message(), assistant_event :: term()}
+          | {:message_update, assistant_event :: LemonAi.EventStream.event()}
           | {:message_end, message :: agent_message()}
           | {:system_prompt, LemonAi.SystemPrompt.t()}
           | {:tool_execution_start, id :: String.t(), name :: String.t(), args :: map()}

@@ -19,7 +19,7 @@ defmodule LemonAi do
 
       for event <- LemonAi.EventStream.events(stream) do
         case event do
-          {:text_delta, _idx, delta, _partial} -> IO.write(delta)
+          {:text_delta, _idx, delta} -> IO.write(delta)
           {:done, _reason, message} -> IO.puts("\\nDone!")
           _ -> :ok
         end

@@ -24,7 +24,7 @@ defmodule LemonAi.ModelCallTelemetryTest do
     def stream(_model, _context, _options) do
       {:ok, stream} = LemonAi.EventStream.start_link()
       message = LemonAi.ModelCallTelemetryTest.message()
-      LemonAi.EventStream.push(stream, {:text_delta, 0, "hi", message})
+      LemonAi.EventStream.push(stream, {:text_delta, 0, "hi"})
       LemonAi.EventStream.complete(stream, message)
       {:ok, stream}
     end
@@ -92,8 +92,8 @@ defmodule LemonAi.ModelCallTelemetryTest do
     # dispatch/3 already returned: the span must stay open until the terminal event.
     refute_received {:model_call, :stop, _, _}
 
-    :ok = EventStream.push(stream, {:text_start, 0, message()})
-    :ok = EventStream.push(stream, {:text_delta, 0, "hello", message()})
+    :ok = EventStream.push(stream, {:text_start, 0})
+    :ok = EventStream.push(stream, {:text_delta, 0, "hello"})
     EventStream.complete(stream, message())
 
     assert_receive {:model_call, :stop, measurements, metadata}, 1_000
@@ -124,7 +124,7 @@ defmodule LemonAi.ModelCallTelemetryTest do
         provider,
         fn ->
           {:ok, stream} = EventStream.start_link(owner: self())
-          :ok = EventStream.push(stream, {:thinking_delta, 0, "hm", message()})
+          :ok = EventStream.push(stream, {:thinking_delta, 0, "hm"})
           {:ok, stream}
         end,
         labels()

@@ -378,10 +378,11 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     translator = state.translator
 
-    translator = %{
-      translator
-      | accumulated_text: Presentation.extract_answer(messages, translator.accumulated_text)
-    }
+    translator =
+      RunTranslator.replace_text(
+        translator,
+        Presentation.extract_answer(messages, nil) || RunTranslator.snapshot_text(translator)
+      )
 
     event =
       case status do

@@ -3,8 +3,8 @@ defmodule LemonAgent.Proxy do
   Proxy stream function for apps that route LLM calls through a server.
 
   The server manages authentication and proxies requests to LLM providers.
-  This module reconstructs partial messages from server-sent events (SSE)
-  that have the `partial` field stripped to reduce bandwidth.
+  This module emits delta-only provider events and retains chunks locally for
+  block-end and terminal results. Message signatures survive in the final result.
 
   ## Usage
 
@@ -27,7 +27,7 @@ defmodule LemonAgent.Proxy do
   """
 
   alias LemonAgent.AbortSignal
-  alias LemonAi.EventStream
+  alias LemonAi.{EventStream, StreamAccumulator}
   alias LemonAi.Types.{AssistantMessage, TextContent, ThinkingContent, ToolCall, Usage, Cost}
 
   # ============================================================================
@@ -102,8 +102,8 @@ defmodule LemonAgent.Proxy do
   @doc """
   Stream function that proxies through a server instead of calling LLM providers directly.
 
-  The server strips the partial field from delta events to reduce bandwidth.
-  We reconstruct the partial message client-side.
+  Intermediate events never include partial messages. The proxy accumulates
+  chunks locally and materializes content only at block ends or termination.
 
   ## Parameters
 
@@ -155,11 +155,7 @@ defmodule LemonAgent.Proxy do
       timestamp: System.system_time(:millisecond)
     }
 
-    # State for tracking partial JSON in tool calls
-    state = %{
-      partial: partial,
-      partial_json: %{}
-    }
+    state = %{accumulator: StreamAccumulator.new(partial), signatures: %{}}
 
     url = "#{options.proxy_url}/api/stream"
 
@@ -199,18 +195,18 @@ defmodule LemonAgent.Proxy do
               _ -> "Proxy error: #{response.status}"
             end
 
-          error_partial = %{state.partial | stop_reason: :error, error_message: error_message}
+          error_partial = %{snapshot(state) | stop_reason: :error, error_message: error_message}
           EventStream.error(stream, error_partial)
 
         {:error, reason} ->
           error_message = "Proxy connection error: #{inspect(reason)}"
-          error_partial = %{state.partial | stop_reason: :error, error_message: error_message}
+          error_partial = %{snapshot(state) | stop_reason: :error, error_message: error_message}
           EventStream.error(stream, error_partial)
       end
     rescue
       e ->
         error_message = "Proxy error: #{Exception.message(e)}"
-        error_partial = %{state.partial | stop_reason: :error, error_message: error_message}
+        error_partial = %{snapshot(state) | stop_reason: :error, error_message: error_message}
         EventStream.error(stream, error_partial)
     catch
       :throw, {:event_stream_push_failed, _reason} ->
@@ -232,7 +228,7 @@ defmodule LemonAgent.Proxy do
     # Check for abort
     if AbortSignal.aborted?(signal) do
       error_partial = %{
-        state.partial
+        snapshot(state)
         | stop_reason: :aborted,
           error_message: "Request aborted by user"
       }
@@ -299,7 +295,7 @@ defmodule LemonAgent.Proxy do
   @doc false
   @spec process_proxy_event(map(), map(), EventStream.t()) :: map()
   defp process_proxy_event(%{"type" => "start"}, state, stream) do
-    event = {:start, state.partial}
+    event = {:start, snapshot(state)}
     EventStream.push!(stream, event)
     state
   end
@@ -309,13 +305,7 @@ defmodule LemonAgent.Proxy do
          state,
          stream
        ) do
-    new_content = %TextContent{type: :text, text: ""}
-    partial = update_content_at(state.partial, content_index, new_content)
-    state = %{state | partial: partial}
-
-    event = {:text_start, content_index, partial}
-    EventStream.push!(stream, event)
-    state
+    emit(state, stream, {:text_start, content_index})
   end
 
   defp process_proxy_event(
@@ -323,17 +313,7 @@ defmodule LemonAgent.Proxy do
          state,
          stream
        ) do
-    partial =
-      update_content_at(state.partial, content_index, fn
-        %TextContent{} = content -> %{content | text: content.text <> delta}
-        other -> other
-      end)
-
-    state = %{state | partial: partial}
-
-    event = {:text_delta, content_index, delta, partial}
-    EventStream.push!(stream, event)
-    state
+    emit(state, stream, {:text_delta, content_index, delta})
   end
 
   defp process_proxy_event(
@@ -341,26 +321,9 @@ defmodule LemonAgent.Proxy do
          state,
          stream
        ) do
-    content_signature = Map.get(event_data, "contentSignature")
-
-    partial =
-      update_content_at(state.partial, content_index, fn
-        %TextContent{} = content -> %{content | text_signature: content_signature}
-        other -> other
-      end)
-
-    state = %{state | partial: partial}
-
-    # Get the text content for the end event
-    text =
-      case Enum.at(partial.content, content_index) do
-        %TextContent{text: t} -> t
-        _ -> ""
-      end
-
-    event = {:text_end, content_index, text, partial}
-    EventStream.push!(stream, event)
-    state
+    state = put_signature(state, content_index, :text_signature, event_data)
+    %TextContent{text: text} = Enum.at(snapshot(state).content, content_index)
+    emit(state, stream, {:text_end, content_index, text})
   end
 
   defp process_proxy_event(
@@ -368,13 +331,7 @@ defmodule LemonAgent.Proxy do
          state,
          stream
        ) do
-    new_content = %ThinkingContent{type: :thinking, thinking: ""}
-    partial = update_content_at(state.partial, content_index, new_content)
-    state = %{state | partial: partial}
-
-    event = {:thinking_start, content_index, partial}
-    EventStream.push!(stream, event)
-    state
+    emit(state, stream, {:thinking_start, content_index})
   end
 
   defp process_proxy_event(
@@ -382,17 +339,7 @@ defmodule LemonAgent.Proxy do
          state,
          stream
        ) do
-    partial =
-      update_content_at(state.partial, content_index, fn
-        %ThinkingContent{} = content -> %{content | thinking: content.thinking <> delta}
-        other -> other
-      end)
-
-    state = %{state | partial: partial}
-
-    event = {:thinking_delta, content_index, delta, partial}
-    EventStream.push!(stream, event)
-    state
+    emit(state, stream, {:thinking_delta, content_index, delta})
   end
 
   defp process_proxy_event(
@@ -400,26 +347,9 @@ defmodule LemonAgent.Proxy do
          state,
          stream
        ) do
-    content_signature = Map.get(event_data, "contentSignature")
-
-    partial =
-      update_content_at(state.partial, content_index, fn
-        %ThinkingContent{} = content -> %{content | thinking_signature: content_signature}
-        other -> other
-      end)
-
-    state = %{state | partial: partial}
-
-    # Get the thinking content for the end event
-    thinking =
-      case Enum.at(partial.content, content_index) do
-        %ThinkingContent{thinking: t} -> t
-        _ -> ""
-      end
-
-    event = {:thinking_end, content_index, thinking, partial}
-    EventStream.push!(stream, event)
-    state
+    state = put_signature(state, content_index, :thinking_signature, event_data)
+    %ThinkingContent{thinking: thinking} = Enum.at(snapshot(state).content, content_index)
+    emit(state, stream, {:thinking_end, content_index, thinking})
   end
 
   defp process_proxy_event(
@@ -439,13 +369,7 @@ defmodule LemonAgent.Proxy do
       arguments: %{}
     }
 
-    partial = update_content_at(state.partial, content_index, new_content)
-    partial_json = Map.put(state.partial_json, content_index, "")
-    state = %{state | partial: partial, partial_json: partial_json}
-
-    event = {:tool_call_start, content_index, partial}
-    EventStream.push!(stream, event)
-    state
+    emit(state, stream, {:tool_call_start, content_index, new_content})
   end
 
   defp process_proxy_event(
@@ -453,25 +377,7 @@ defmodule LemonAgent.Proxy do
          state,
          stream
        ) do
-    # Accumulate partial JSON
-    current_json = Map.get(state.partial_json, content_index, "")
-    new_json = current_json <> delta
-    partial_json = Map.put(state.partial_json, content_index, new_json)
-
-    # Try to parse the partial JSON
-    parsed_args = parse_streaming_json(new_json)
-
-    partial =
-      update_content_at(state.partial, content_index, fn
-        %ToolCall{} = content -> %{content | arguments: parsed_args}
-        other -> other
-      end)
-
-    state = %{state | partial: partial, partial_json: partial_json}
-
-    event = {:tool_call_delta, content_index, delta, partial}
-    EventStream.push!(stream, event)
-    state
+    emit(state, stream, {:tool_call_delta, content_index, delta})
   end
 
   defp process_proxy_event(
@@ -479,16 +385,8 @@ defmodule LemonAgent.Proxy do
          state,
          stream
        ) do
-    # Get the final tool call
-    tool_call = Enum.at(state.partial.content, content_index)
-
-    # Clean up partial JSON state
-    partial_json = Map.delete(state.partial_json, content_index)
-    state = %{state | partial_json: partial_json}
-
-    event = {:tool_call_end, content_index, tool_call, state.partial}
-    EventStream.push!(stream, event)
-    state
+    tool_call = Enum.at(snapshot(state).content, content_index)
+    emit(state, stream, {:tool_call_end, content_index, tool_call})
   end
 
   defp process_proxy_event(
@@ -499,8 +397,8 @@ defmodule LemonAgent.Proxy do
     usage = decode_usage(usage_data)
     stop_reason = decode_stop_reason(reason)
 
-    partial = %{state.partial | stop_reason: stop_reason, usage: usage}
-    state = %{state | partial: partial}
+    partial = %{snapshot(state) | stop_reason: stop_reason, usage: usage}
+    state = %{state | accumulator: StreamAccumulator.new(partial)}
 
     EventStream.complete(stream, partial)
     state
@@ -516,13 +414,13 @@ defmodule LemonAgent.Proxy do
     error_message = Map.get(event_data, "errorMessage")
 
     partial = %{
-      state.partial
+      snapshot(state)
       | stop_reason: stop_reason,
         usage: usage,
         error_message: error_message
     }
 
-    state = %{state | partial: partial}
+    state = %{state | accumulator: StreamAccumulator.new(partial)}
 
     EventStream.error(stream, partial)
     state
@@ -537,32 +435,31 @@ defmodule LemonAgent.Proxy do
   # Helpers
   # ============================================================================
 
-  defp update_content_at(partial, index, content_or_fn) do
-    # Ensure content list is long enough
-    content_list = partial.content
-    padded = pad_list(content_list, index + 1, nil)
-
-    updated =
-      case content_or_fn do
-        fun when is_function(fun, 1) ->
-          current = Enum.at(padded, index)
-          List.replace_at(padded, index, fun.(current))
-
-        value ->
-          List.replace_at(padded, index, value)
-      end
-
-    %{partial | content: updated}
+  defp emit(state, stream, event) do
+    state = %{state | accumulator: StreamAccumulator.apply(state.accumulator, event)}
+    EventStream.push!(stream, event)
+    state
   end
 
-  defp pad_list(list, target_length, padding) do
-    current_length = length(list)
+  defp put_signature(state, index, key, event) do
+    signature = Map.get(event, "contentSignature")
+    %{state | signatures: Map.put(state.signatures, index, {key, signature})}
+  end
 
-    if current_length >= target_length do
-      list
-    else
-      list ++ List.duplicate(padding, target_length - current_length)
-    end
+  defp snapshot(state) do
+    message = StreamAccumulator.snapshot(state.accumulator)
+
+    content =
+      message.content
+      |> Enum.with_index()
+      |> Enum.map(fn {block, index} ->
+        case Map.get(state.signatures, index) do
+          {key, signature} -> Map.put(block, key, signature)
+          nil -> block
+        end
+      end)
+
+    %{message | content: content}
   end
 
   defp decode_stop_reason("stop"), do: :stop

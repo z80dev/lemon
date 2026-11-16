@@ -1837,6 +1837,11 @@ defmodule CodingAgent.Session do
     {:noreply, state}
   end
 
+  def handle_info({Notifier, :flush}, state) do
+    Notifier.flush_pending()
+    {:noreply, state}
+  end
+
   def handle_info({:agent_event, {:error, _reason, _partial_state} = raw_event}, state) do
     # Stripped here, before the recovery branch, for the same reason the clause
     # below strips: everything this event reaches is a record of the

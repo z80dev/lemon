@@ -45,6 +45,47 @@ defmodule LemonAgent.Loop.StreamingTest do
     }
   end
 
+  test "delta-only updates preserve exact text without forwarding partial snapshots" do
+    context = simple_context(messages: [user_message("hi")])
+    metadata = %{Mocks.assistant_message("") | content: []}
+    final = %{metadata | stop_reason: :stop}
+
+    stream_fn = fn _, _, _ ->
+      {:ok, provider} = LemonAi.EventStream.start_link()
+      :ok = LemonAi.EventStream.push(provider, {:start, metadata})
+      :ok = LemonAi.EventStream.push(provider, {:text_start, 0})
+      :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "Hello "})
+      :ok = LemonAi.EventStream.push(provider, {:text_delta, 0, "world"})
+      LemonAi.EventStream.complete(provider, final)
+      {:ok, provider}
+    end
+
+    {:ok, output} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, message, updated_context} =
+             Streaming.stream_assistant_response(
+               context,
+               simple_config(stream_fn: stream_fn),
+               nil,
+               stream_fn,
+               output
+             )
+
+    assert [%{text: "Hello world"}] = message.content
+    assert List.last(updated_context.messages) == message
+    EventStream.complete(output, [])
+    events = Enum.to_list(EventStream.events(output))
+
+    assert [
+             {:message_update, {:text_start, 0}},
+             {:message_update, {:text_delta, 0, "Hello "}},
+             {:message_update, {:text_delta, 0, "world"}}
+           ] = Enum.filter(events, &(elem(&1, 0) == :message_update))
+
+    assert {:message_start, ^metadata} = Enum.find(events, &(elem(&1, 0) == :message_start))
+    assert {:message_end, ^message} = Enum.find(events, &(elem(&1, 0) == :message_end))
+  end
+
   test "short-circuits before stream_fn when signal is already aborted" do
     context = simple_context(messages: [user_message("hi")])
     signal = AbortSignal.new()
@@ -135,7 +176,7 @@ defmodule LemonAgent.Loop.StreamingTest do
 
       Task.start(fn ->
         LemonAi.EventStream.push(ai_stream, {:start, %{partial | content: []}})
-        LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "streamed answer", partial})
+        LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "streamed answer"})
         LemonAi.EventStream.push(ai_stream, {:done, :stop, final})
         LemonAi.EventStream.complete(ai_stream, final)
       end)
@@ -173,8 +214,8 @@ defmodule LemonAgent.Loop.StreamingTest do
 
       Task.start(fn ->
         LemonAi.EventStream.push(ai_stream, {:start, %{partial | content: []}})
-        LemonAi.EventStream.push(ai_stream, {:tool_call_start, 0, partial})
-        LemonAi.EventStream.push(ai_stream, {:tool_call_end, 0, tool_call, partial})
+        LemonAi.EventStream.push(ai_stream, {:tool_call_start, 0, %{tool_call | arguments: %{}}})
+        LemonAi.EventStream.push(ai_stream, {:tool_call_end, 0, tool_call})
         LemonAi.EventStream.push(ai_stream, {:done, :tool_use, final})
         LemonAi.EventStream.complete(ai_stream, final)
       end)
@@ -210,11 +251,9 @@ defmodule LemonAgent.Loop.StreamingTest do
     signal = AbortSignal.new()
 
     empty_tool_call = Mocks.tool_call("read_file", %{}, id: "call_read_args")
-    partial_tool_call = Mocks.tool_call("read_file", %{"path" => "mix"}, id: "call_read_args")
     final_tool_call = Mocks.tool_call("read_file", %{"path" => "mix.exs"}, id: "call_read_args")
 
     started_partial = Mocks.assistant_message_with_tool_calls([empty_tool_call])
-    delta_partial = Mocks.assistant_message_with_tool_calls([partial_tool_call])
     completed_partial = Mocks.assistant_message_with_tool_calls([final_tool_call])
     final = %{completed_partial | content: [], stop_reason: :tool_use}
 
@@ -223,18 +262,18 @@ defmodule LemonAgent.Loop.StreamingTest do
 
       Task.start(fn ->
         LemonAi.EventStream.push(ai_stream, {:start, %{started_partial | content: []}})
-        LemonAi.EventStream.push(ai_stream, {:tool_call_start, 0, started_partial})
+        LemonAi.EventStream.push(ai_stream, {:tool_call_start, 0, empty_tool_call})
 
         LemonAi.EventStream.push(
           ai_stream,
-          {:tool_call_delta, 0, ~s({"path":"mix), delta_partial}
+          {:tool_call_delta, 0, ~s({"path":"mix)}
         )
 
-        LemonAi.EventStream.push(ai_stream, {:tool_call_delta, 0, ~s(.exs"}), completed_partial})
+        LemonAi.EventStream.push(ai_stream, {:tool_call_delta, 0, ~s(.exs"})})
 
         LemonAi.EventStream.push(
           ai_stream,
-          {:tool_call_end, 0, final_tool_call, completed_partial}
+          {:tool_call_end, 0, final_tool_call}
         )
 
         LemonAi.EventStream.push(ai_stream, {:done, :tool_use, final})
@@ -260,8 +299,7 @@ defmodule LemonAgent.Loop.StreamingTest do
     events = EventStream.events(stream) |> Enum.to_list()
 
     assert Enum.any?(events, fn
-             {:message_update, %{content: [%ToolCall{arguments: %{"path" => "mix"}}]},
-              {:tool_call_delta, 0, ~s({"path":"mix), _}} ->
+             {:message_update, {:tool_call_delta, 0, ~s({"path":"mix)}} ->
                true
 
              _ ->
@@ -774,8 +812,8 @@ defmodule LemonAgent.Loop.StreamingTest do
     stream_fn = fn _, _, _ ->
       send(parent, :upstream_attempt)
       {:ok, ai_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
-      LemonAi.EventStream.push(ai_stream, {:start, partial})
-      LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "partial output", partial})
+      LemonAi.EventStream.push(ai_stream, {:start, %{partial | content: []}})
+      LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "partial output"})
       LemonAi.EventStream.push(ai_stream, {:canceled, :stream_idle_timeout})
       {:ok, ai_stream}
     end
@@ -811,15 +849,15 @@ defmodule LemonAgent.Loop.StreamingTest do
     }
 
     for {event, terminal} <- [
-          {{:text_start, 0, empty}, :error},
-          {{:text_delta, 0, " ", empty}, :done},
-          {{:text_end, 0, "", empty}, :error},
-          {{:thinking_start, 0, empty}, :error},
-          {{:thinking_delta, 0, " ", empty}, :done},
-          {{:thinking_end, 0, "", empty}, :error},
-          {{:tool_call_start, 0, empty}, :error},
-          {{:tool_call_delta, 0, "{}", empty}, :done},
-          {{:tool_call_end, 0, Mocks.tool_call("echo", %{}), empty}, :error}
+          {{:text_start, 0}, :error},
+          {{:text_delta, 0, " "}, :done},
+          {{:text_end, 0, ""}, :error},
+          {{:thinking_start, 0}, :error},
+          {{:thinking_delta, 0, " "}, :done},
+          {{:thinking_end, 0, ""}, :error},
+          {{:tool_call_start, 0, Mocks.tool_call("echo", %{})}, :error},
+          {{:tool_call_delta, 0, "{}"}, :done},
+          {{:tool_call_end, 0, Mocks.tool_call("echo", %{})}, :error}
         ] do
       stream_fn = fn _, _, _ ->
         send(parent, :committed_attempt)
