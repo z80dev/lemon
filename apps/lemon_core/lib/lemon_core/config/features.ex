@@ -11,8 +11,9 @@ defmodule LemonCore.Config.Features do
       session_search             = "default-on" # disable with "off"
       routing_feedback           = "default-on" # disable with "off"
       skill_synthesis_drafts     = "default-on" # disable with "off"
+      crash_resume               = "off"        # explicit hard-crash continuation
 
-  All three flags ship enabled by default; each is an operator kill switch:
+  The first three flags ship enabled by default; `crash_resume` defaults off:
 
       export LEMON_FEATURE_ROUTING_FEEDBACK=off
       export LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off
@@ -45,7 +46,7 @@ defmodule LemonCore.Config.Features do
   ## Kill-switch behaviour
 
   Set any flag to `"off"` to disable the feature regardless of code state.
-  Every shipped flag defaults to `"default-on"`; the fastest rollback is:
+  The default-on flags can be rolled back immediately:
 
       export LEMON_FEATURE_SESSION_SEARCH=off
       export LEMON_FEATURE_ROUTING_FEEDBACK=off
@@ -64,25 +65,28 @@ defmodule LemonCore.Config.Features do
     session_search
     routing_feedback
     skill_synthesis_drafts
+    crash_resume
   ]
 
   defstruct session_search: :"default-on",
             routing_feedback: :"default-on",
-            skill_synthesis_drafts: :"default-on"
+            skill_synthesis_drafts: :"default-on",
+            crash_resume: :off
 
   @type rollout_state :: :off | :"opt-in" | :"default-on"
 
   @type t :: %__MODULE__{
           session_search: rollout_state(),
           routing_feedback: rollout_state(),
-          skill_synthesis_drafts: rollout_state()
+          skill_synthesis_drafts: rollout_state(),
+          crash_resume: rollout_state()
         }
 
   @doc """
   Resolves feature flags from the merged TOML settings map.
 
   Priority: environment variables > `[features]` TOML section > per-flag defaults
-  (all three flags are `:"default-on"`).
+  (`crash_resume` defaults off; the other flags default on).
   """
   @spec resolve(map()) :: t()
   def resolve(settings) do
@@ -91,7 +95,8 @@ defmodule LemonCore.Config.Features do
     %__MODULE__{
       session_search: resolve_flag("session_search", features),
       routing_feedback: resolve_flag("routing_feedback", features),
-      skill_synthesis_drafts: resolve_flag("skill_synthesis_drafts", features)
+      skill_synthesis_drafts: resolve_flag("skill_synthesis_drafts", features),
+      crash_resume: resolve_flag("crash_resume", features)
     }
   end
 
@@ -167,9 +172,8 @@ defmodule LemonCore.Config.Features do
     if raw == nil, do: default_state(name), else: parse_state(raw)
   end
 
-  # All flags are enabled by default (LEMON_FEATURE_<FLAG>=off is the kill
-  # switch). "opt-in" remains a valid, parseable state for configs that still
-  # carry it, but nothing defaults to it.
+  # Crash continuation requires an explicit operator opt-in. Existing rollout
+  # flags retain their promoted defaults.
   defp default_state("session_search"), do: :"default-on"
   defp default_state("routing_feedback"), do: :"default-on"
   defp default_state("skill_synthesis_drafts"), do: :"default-on"

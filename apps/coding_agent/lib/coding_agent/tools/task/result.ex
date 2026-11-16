@@ -500,6 +500,8 @@ defmodule CodingAgent.Tools.Task.Result do
   defp join_error_for_status(:error, run), do: format_error(run[:error])
   defp join_error_for_status("error", run), do: format_error(run[:error])
   defp join_error_for_status(:cancelled, run), do: format_error(run[:error])
+  defp join_error_for_status(:interrupted, run), do: format_error(run[:error])
+  defp join_error_for_status(:lost, run), do: format_error(run[:error])
   defp join_error_for_status(_, _run), do: nil
 
   defp join_tasks_text(tasks) do

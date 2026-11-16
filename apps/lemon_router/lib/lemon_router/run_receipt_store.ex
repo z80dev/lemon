@@ -75,7 +75,8 @@ defmodule LemonRouter.RunReceiptStore do
       {:ok, record} when is_map(record) ->
         if is_map(MapHelpers.get_key(record, :summary)) do
           with :ok <- mark_terminal(server, LemonRouter.RunOrchestrator.admission_table(), run_id),
-               :ok <- mark_terminal(server, @table, run_id) do
+               :ok <- mark_terminal(server, @table, run_id),
+               :ok <- LemonRouter.RestartCarryover.CrashRecovery.settle(server, run_id) do
             :ok
           end
         else

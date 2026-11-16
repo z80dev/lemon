@@ -285,6 +285,14 @@ defmodule CodingAgent.Executor.SessionRunner do
       {:ok, session, session_id, state} ->
         _unsub = CodingAgent.Session.subscribe(session)
 
+        :ok =
+          CodingAgent.Tools.Task.Restore.restore_parent(run_id, meta,
+            parent_session: session_id,
+            session_pid: session,
+            agent_id: agent_id,
+            session_key: session_key
+          )
+
         case async_followups do
           list when is_list(list) and list != [] ->
             :ok =
@@ -465,12 +473,45 @@ defmodule CodingAgent.Executor.SessionRunner do
       session_opts = Keyword.put(session_opts, :mcp_session_id, mcp_session_id)
 
       case Presentation.start_or_resume_session(resume, session_opts, state) do
-        {:ok, _session, _session_id, _state} = result ->
-          result
+        {:ok, session, session_id, next_state} = result ->
+          case checkpoint_native_resume(session, session_id, state.run_id, meta) do
+            :ok ->
+              result
+
+            {:error, _reason} = error ->
+              GenServer.stop(session, :normal)
+
+              if next_state.mcp_session_id,
+                do: LemonSkills.McpSession.close(next_state.mcp_session_id)
+
+              error
+          end
 
         {:error, _reason} = error ->
           if mcp_session_id, do: LemonSkills.McpSession.close(mcp_session_id)
           error
+      end
+    end
+  end
+
+  defp checkpoint_native_resume(_session, _session_id, nil, _meta), do: :ok
+
+  defp checkpoint_native_resume(session, session_id, run_id, meta) do
+    if CodingAgent.Tools.Task.Restore.enabled?(),
+      do: persist_native_resume(session, session_id, run_id, meta),
+      else: :ok
+  end
+
+  defp persist_native_resume(session, session_id, run_id, meta) do
+    token = %LemonCore.ResumeToken{engine: @engine, value: session_id}
+
+    with :ok <- CodingAgent.Session.save(session) do
+      case LemonCore.RouterBridge.register_native_resume(run_id, token) do
+        {:error, :unavailable} = error ->
+          if Params.managed_metadata?(meta), do: error, else: :ok
+
+        result ->
+          result
       end
     end
   end

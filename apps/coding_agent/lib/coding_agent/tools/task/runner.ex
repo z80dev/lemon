@@ -9,7 +9,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   """
 
   alias CodingAgent.Session
-  alias CodingAgent.Tools.Task.{Control, Result}
+  alias CodingAgent.Tools.Task.{Control, Restore, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
@@ -81,7 +81,17 @@ defmodule CodingAgent.Tools.Task.Runner do
 
     try do
       result =
-        with :ok <- attach_control_session(opts[:task_id], session, session_id) do
+        with :ok <- attach_control_session(opts[:task_id], session, session_id),
+             :ok <-
+               Restore.record_launch(
+                 opts[:task_id],
+                 session,
+                 start_opts,
+                 description,
+                 role_id,
+                 opts
+               ),
+             :ok <- restore_descendants(session, session_id, start_opts, signal, opts) do
           await = fn next_prompt, budget ->
             {unsubscribe, delivery} = Session.subscribe(session, tagged: true)
 
@@ -172,6 +182,19 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   defp retain_session(_result, _session, _start_opts, _description, _role_id, _opts),
     do: false
+
+  defp restore_descendants(session, session_id, start_opts, signal, opts) do
+    Restore.restore_parent(
+      start_opts[:run_id],
+      %{crash_resume: opts[:crash_resume] == true},
+      parent_session: session_id,
+      session_pid: session,
+      parent_signal: signal,
+      crash_resume_root_run_id: opts[:crash_resume_root_run_id],
+      session_key: start_opts[:session_key],
+      agent_id: start_opts[:agent_id]
+    )
+  end
 
   # Sends each stage to the same child session in order. Only the last stage's
   # answer is the task result and faces the caller's validator; an error, an

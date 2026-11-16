@@ -110,6 +110,8 @@ defmodule CodingAgent.Tools.Task.Execution do
             orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
             role: role_id,
             queue_mode: validated.queue_mode,
+            output_schema: validated[:output_schema],
+            schema_mode: validated[:schema_mode],
             meta: validated.meta
           })
 
