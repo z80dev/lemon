@@ -33,8 +33,6 @@ defmodule CodingAgent.Eval.Sandbox do
     output: "",
     buffer: "",
     truncated: false,
-    detached: false,
-    pending_calls: [],
     waiters: %{}
   ]
 
@@ -63,9 +61,8 @@ defmodule CodingAgent.Eval.Sandbox do
   end
 
   @impl true
-  def handle_call({operation, owner}, _from, state)
-      when operation in [:bind_owner, :detach_owner],
-      do: owner_reply(operation, owner, state)
+  def handle_call({:bind_owner, owner}, _from, state),
+    do: CodingAgent.ToolResources.owner_reply(:bind_owner, owner, state)
 
   def handle_call(
         {:start, _code, _resolver, _signal, _timeout},
@@ -92,7 +89,7 @@ defmodule CodingAgent.Eval.Sandbox do
       state = finish(state, :aborted, "cell cancelled")
       {:reply, snapshot(state), state}
     else
-      state = resume_calls(state, resolver)
+      state = refresh_resolver(state, resolver)
       attach_waiter(state, from, wait_ms, signal)
     end
   end
@@ -226,9 +223,7 @@ defmodule CodingAgent.Eval.Sandbox do
         truncated: false,
         deadline: Process.send_after(self(), {:deadline, ref}, timeout),
         idle: nil,
-        waiters: %{},
-        detached: false,
-        pending_calls: []
+        waiters: %{}
     }
 
     {:reply, {:ok, id}, state}
@@ -266,12 +261,6 @@ defmodule CodingAgent.Eval.Sandbox do
 
   defp consume_frame(state, %{"type" => "output", "text" => text}) when is_binary(text),
     do: state |> append(text) |> consume()
-
-  defp consume_frame(%{detached: true} = state, %{"type" => "tool_call"} = frame) do
-    if length(state.pending_calls) < 1_000,
-      do: consume(%{state | pending_calls: [frame | state.pending_calls]}),
-      else: finish(state, :error, "a cell may make at most 1000 tool calls")
-  end
 
   defp consume_frame(state, %{
          "type" => "tool_call",
@@ -355,25 +344,9 @@ defmodule CodingAgent.Eval.Sandbox do
   defp cancel_timer(nil), do: :ok
   defp cancel_timer(timer), do: Process.cancel_timer(timer)
 
-  defp owner_reply(operation, owner, state) do
-    case CodingAgent.ToolResources.owner_reply(operation, owner, state) do
-      {:reply, :ok, updated} when operation == :detach_owner ->
-        {:reply, :ok, %{updated | detached: true}}
+  defp refresh_resolver(%{bridge: %Bridge{} = bridge} = state, resolver)
+       when is_function(resolver, 1),
+       do: %{state | bridge: %{bridge | resolver: resolver}}
 
-      reply ->
-        reply
-    end
-  end
-
-  defp resume_calls(%{bridge: nil} = state, _resolver), do: state
-
-  defp resume_calls(%{bridge: %Bridge{} = bridge} = state, resolver) do
-    bridge = if is_function(resolver, 1), do: %{bridge | resolver: resolver}, else: bridge
-    pending = Enum.reverse(state.pending_calls)
-    state = %{state | bridge: bridge, detached: false, pending_calls: []}
-
-    Enum.reduce(pending, state, fn frame, acc ->
-      %{acc | bridge: Bridge.request(acc.bridge, frame["call"], frame["tool"], frame["args"])}
-    end)
-  end
+  defp refresh_resolver(state, _resolver), do: state
 end

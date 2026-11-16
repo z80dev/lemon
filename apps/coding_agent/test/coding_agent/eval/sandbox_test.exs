@@ -157,7 +157,7 @@ defmodule CodingAgent.Eval.SandboxTest do
     refute File.exists?(target)
   end
 
-  test "handoff pauses new bridged calls and re-attachment uses the current resolver", %{
+  test "re-attachment dispatches later bridged calls through the current resolver", %{
     cwd: cwd,
     id: id,
     opts: opts
@@ -166,10 +166,10 @@ defmodule CodingAgent.Eval.SandboxTest do
 
     gate = %AgentTool{
       name: "gate",
-      description: "Controlled handoff gate",
+      description: "Controlled re-attachment gate",
       parameters: %{"type" => "object", "properties" => %{}},
       execute: fn _id, _args, _signal, _update ->
-        send(parent, {:handoff_gate, self()})
+        send(parent, {:reattach_gate, self()})
 
         receive do
           :release -> %AgentToolResult{content: [%TextContent{text: "first"}]}
@@ -182,9 +182,7 @@ defmodule CodingAgent.Eval.SandboxTest do
     first =
       execute(cwd, original, "await tools.gate({}); return (await tools.current({})).text;", 0)
 
-    assert_receive {:handoff_gate, gate_pid}, 10_000
-    assert :ok = ToolResources.handoff(id, self())
-    send(gate_pid, :release)
+    assert_receive {:reattach_gate, gate_pid}, 10_000
 
     current = %AgentTool{
       name: "current",
@@ -197,14 +195,21 @@ defmodule CodingAgent.Eval.SandboxTest do
 
     resumed = Keyword.put(opts, :tool_resolver, fn "current" -> {:ok, current} end)
 
-    final =
-      CodeMode.wait_tool(cwd, resumed).execute.(
-        "wait",
-        %{"cell_id" => first.details.cell_id},
-        nil,
-        nil
-      )
+    waiter =
+      Task.async(fn ->
+        CodeMode.wait_tool(cwd, resumed).execute.(
+          "wait",
+          %{"cell_id" => first.details.cell_id},
+          nil,
+          nil
+        )
+      end)
 
+    assert {:ok, slot} = KernelSupervisor.lookup({id, "code_mode"})
+    await_waiter(slot)
+    send(gate_pid, :release)
+
+    final = Task.await(waiter, 15_000)
     assert final.details.status == :ok
     assert text(final) =~ "current catalog"
   end
@@ -265,6 +270,20 @@ defmodule CodingAgent.Eval.SandboxTest do
       nil,
       nil
     )
+  end
+
+  defp await_waiter(slot, attempts \\ 200) do
+    cond do
+      map_size(:sys.get_state(slot).waiters) > 0 ->
+        :ok
+
+      attempts > 0 ->
+        Process.sleep(10)
+        await_waiter(slot, attempts - 1)
+
+      true ->
+        flunk("eval_wait never attached to the code-mode cell")
+    end
   end
 
   defp text(%AgentToolResult{content: [%TextContent{text: text}]}), do: text
