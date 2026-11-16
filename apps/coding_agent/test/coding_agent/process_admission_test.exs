@@ -1156,6 +1156,43 @@ defmodule CodingAgent.ProcessAdmissionTest do
 
   test "queue and store restart reconcile surviving and confirmed terminated processes before admitting",
        context do
+    {a, counter, opts, b, recovered} = restart_after_unknown_launch(context, false)
+    assert {:ok, %{termination_confirmed: true, capacity_held: false}, _} = ProcessStore.get(a)
+    assert {:ok, %{classification: :accepted}} = ProcessManager.receipt(a, "admission-test")
+    {d, _, _, _} = start_blocking(recovered, "restart-d")
+    {c, waiting_counter, _} = enqueue(recovered, "restart-c")
+    assert %{occupied: 2, unknown: 0, queued: 1} = ProcessManager.admission_counts()
+
+    # Independent boot-time workload evidence resolves the unknown termination;
+    # repeating the fixed launch identity still returns its receipt, never reruns.
+    assert {:ok, ^a} = ProcessManager.exec(Keyword.put(opts, :lane_queue, recovered.queue))
+
+    refute File.exists?(waiting_counter)
+    assert File.read!(counter) == "x"
+    assert :ok = ProcessManager.cancel(c, "admission-test")
+    terminate(b)
+    terminate(d)
+  end
+
+  test "queue and store restart keep unwitnessed unknown processes before admitting", context do
+    {a, counter, opts, b, recovered} = restart_after_unknown_launch(context, true)
+    {c, waiting_counter, _} = enqueue(recovered, "restart-c")
+    assert %{occupied: 2, unknown: 1, queued: 1} = ProcessManager.admission_counts()
+
+    assert {:error, {:outcome_unknown, ^a}} =
+             ProcessManager.exec(Keyword.put(opts, :lane_queue, recovered.queue))
+
+    refute File.exists?(waiting_counter)
+    assert File.read!(counter) == "x"
+    assert :ok = ProcessManager.cancel(c, "admission-test")
+    terminate(b)
+  end
+
+  # Leaves an owner-killed launch with an unknown receipt, then restarts the
+  # store and queue. The native owner kills its group on death, so boot
+  # reconciliation can prove the witnessed empty group terminated; losing that
+  # witness keeps the launch's capacity unknown across the restart.
+  defp restart_after_unknown_launch(context, lose_witness?) do
     {a, counter, opts} = unknown_launch(context, "restart-a")
     caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
     session = boundary(a)
@@ -1172,17 +1209,16 @@ defmodule CodingAgent.ProcessAdmissionTest do
 
     assert {:error, :process_not_terminal} = ProcessStore.delete(a)
 
-    # The native owner now kills its group on death, and boot reconciliation
-    # can prove the witnessed empty group terminated. Lose that witness
-    # explicitly so this fixture still exercises unknown capacity on restart.
-    assert {:ok, record, _logs} = ProcessStore.get(a)
+    if lose_witness? do
+      assert {:ok, record, _logs} = ProcessStore.get(a)
 
-    assert :ok =
-             ProcessStore.update_workload_identity(
-               a,
-               %{record.workload_identity | ownership_lost: true},
-               Map.get(record, :root_exited, false)
-             )
+      assert :ok =
+               ProcessStore.update_workload_identity(
+                 a,
+                 %{record.workload_identity | ownership_lost: true},
+                 Map.get(record, :root_exited, false)
+               )
+    end
 
     assert :ok = stop_supervised(LaneQueue)
 
@@ -1207,22 +1243,7 @@ defmodule CodingAgent.ProcessAdmissionTest do
          task_supervisor: context.task_sup}
       )
 
-    recovered = %{context | queue: queue}
-    assert {:ok, %{termination_confirmed: true, capacity_held: false}, _} = ProcessStore.get(a)
-    assert {:ok, %{classification: :accepted}} = ProcessManager.receipt(a, "admission-test")
-    {d, _, _, _} = start_blocking(recovered, "restart-d")
-    {c, waiting_counter, _} = enqueue(recovered, "restart-c")
-    assert %{occupied: 2, unknown: 0, queued: 1} = ProcessManager.admission_counts()
-
-    # Independent boot-time workload evidence resolves the unknown termination;
-    # repeating the fixed launch identity still returns its receipt, never reruns.
-    assert {:ok, ^a} = ProcessManager.exec(Keyword.put(opts, :lane_queue, queue))
-
-    refute File.exists?(waiting_counter)
-    assert File.read!(counter) == "x"
-    assert :ok = ProcessManager.cancel(c, "admission-test")
-    terminate(b)
-    terminate(d)
+    {a, counter, opts, b, %{context | queue: queue}}
   end
 
   test "long-running owned process remains inspectable and cancellable after caller yield",

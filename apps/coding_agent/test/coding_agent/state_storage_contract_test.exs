@@ -74,8 +74,7 @@ defmodule CodingAgent.StateStorageContractTest do
       |> Enum.uniq()
       |> Enum.sort()
 
-    direct_paths = Map.keys(@named_table_owners) -- @delegated_creation_paths
-    assert sites == Enum.sort(["coding_agent/durable_table.ex" | direct_paths])
+    assert sites == Enum.sort(Map.keys(@named_table_owners))
 
     for path <- @delegated_creation_paths do
       assert File.read!(Path.join(@lib_dir, path)) =~ "use CodingAgent.DurableTable"

@@ -10,7 +10,7 @@ defmodule CodingAgent.AbortWaitersTest do
 
     pid =
       spawn(fn ->
-        assert {:ok, %{}} = Control.init([])
+        assert {:ok, :ready, %{}} = Control.init([])
         send(parent, {:initialized, self()})
 
         receive do
@@ -26,7 +26,7 @@ defmodule CodingAgent.AbortWaitersTest do
   end
 
   test "parent abort is delivered to control without a sweep" do
-    {:ok, server} = GenServer.start_link(Control, [])
+    {:ok, server} = :gen_statem.start_link(Control, [], [])
     signal = AbortSignal.new()
     parent_signal = AbortSignal.new()
     id = TaskStore.new_task(%{prompt: "abort regression"})
@@ -44,7 +44,7 @@ defmodule CodingAgent.AbortWaitersTest do
 
     assert [{^server, _}] = Registry.lookup(LemonAgent.AbortSignal.Registry, parent_signal)
     AbortSignal.abort(parent_signal)
-    assert :sys.get_state(server)[id].cancelled
+    assert {:ready, %{^id => %{phase: :cancelling}}} = :sys.get_state(server)
     assert AbortSignal.aborted?(signal)
   end
 

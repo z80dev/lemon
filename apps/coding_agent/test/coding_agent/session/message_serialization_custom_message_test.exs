@@ -207,6 +207,7 @@ defmodule CodingAgent.Session.MessageSerializationCustomMessageTest do
     assert entry.type == :custom_message
 
     assert entry.details == %{
+             "id" => nil,
              "role" => "custom",
              "custom_type" => "nested",
              "content" => "inner",

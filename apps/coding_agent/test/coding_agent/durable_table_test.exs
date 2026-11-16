@@ -92,9 +92,21 @@ defmodule CodingAgent.DurableTableContractTest do
       assert :ets.info(state.table, :read_concurrency)
 
       # Recovery is a projection, not a format migration. Even interrupted rows
-      # retain their original disk representation until a domain mutation.
+      # retain their original disk representation until a domain mutation. The
+      # task store's restart outcome (:lost/:interrupted) is that mutation: it is
+      # persisted so crash resume (#556) cannot reopen it after another restart.
       Enum.each(ctx.fixtures[fixture], fn row ->
-        assert :dets.lookup(dets, elem(row, 0)) == [row]
+        expected =
+          case :ets.lookup(state.table, elem(row, 0)) do
+            [{_, %{status: status}, _} = restored]
+            when module == TaskStoreServer and status in [:lost, :interrupted] ->
+              restored
+
+            _ ->
+              row
+          end
+
+        assert :dets.lookup(dets, elem(row, 0)) == [expected]
       end)
     end)
 
@@ -107,13 +119,12 @@ defmodule CodingAgent.DurableTableContractTest do
     refute Map.has_key?(task, :auto_followup_join_tokens)
     assert is_integer(task.completed_at)
 
-    for id <- ["task-tracking", "task-background"] do
+    # The in-memory admission queue does not survive a restart, so a queued task
+    # can never start; crash resume (#556) settles it as lost with the others.
+    for id <- ["task-tracking", "task-background", "task-queued"] do
       assert [{^id, %{status: :lost, error: :lost_on_restart}, []}] =
                :ets.lookup(TaskStoreServer.table_name(), id)
     end
-
-    assert [{"task-queued", %{status: :queued}, []}] =
-             :ets.lookup(TaskStoreServer.table_name(), "task-queued")
 
     assert [{"process-running", process, ["new", "old"]}] =
              :ets.lookup(ProcessStoreServer.table_name(), "process-running")

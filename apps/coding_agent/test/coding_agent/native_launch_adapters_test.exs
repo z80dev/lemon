@@ -104,7 +104,7 @@ defmodule CodingAgent.NativeLaunchAdaptersTest do
 
     assert {:ok, %{ref: ref}} = CodingAgent.Eval.Kernel.run(slot, "1 + 1")
     assert_receive {:lemon_eval, ^ref, {:result, _}}, 5_000
-    state = :sys.get_state(slot)
+    {_phase, state} = :sys.get_state(slot)
     kernel = state.kernel_group
     assert kernel.pgid != state.os_pid
 
