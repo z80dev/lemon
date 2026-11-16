@@ -418,10 +418,13 @@ and resumes: it supplies the prompt-cache key and matching `session_id`,
 `conversation_id` and `x-client-request-id` affinity headers. IDs longer than
 64 wire bytes become deterministic SHA-256-derived keys; IDs are never truncated
 or replaced with a per-request random identity. Native coding sessions supply their
-persisted session ID automatically. Provider cache hits appear in `usage.cache_read`;
-hits depend on the provider's prefix length, retention and routing, not merely on
-sending a key. Sampling temperature and output-token caps are deliberately omitted
-because the Codex endpoint rejects them.
+persisted session ID automatically. Direct `LemonAi.complete/3` and `stream/3`
+callers must supply `StreamOptions.session_id` themselves; a missing ID does not
+create a cache key. OpenAI and Azure Responses also send it as `prompt_cache_key`.
+Provider cache hits appear in `usage.cache_read`; hits depend on the provider's
+prefix length, retention and routing, not merely on sending a key. Sampling
+temperature and output-token caps are deliberately omitted because the Codex
+endpoint rejects them.
 Codex sends the same pinned `version: 0.159.0` used for live model discovery;
 caller headers cannot accidentally override that capability version. Function
 tools explicitly use `strict: false` so optional parameters remain optional rather
@@ -468,6 +471,37 @@ context limits include current 1M-context Claude models without adding an obsole
 context beta. Provider conversion preserves full history; preflight compaction is
 the caller's responsibility rather than silent wire truncation.
 
+### Session cache routing
+
+Native coding sessions use their persisted journal ID, not a per-run ID, for
+`StreamOptions.session_id`. The ID survives turns and session-file resume; a new
+session gets a distinct ID. The request controls are provider-specific:
+
+| Transport / provider | Session cache-routing control |
+|---|---|
+| OpenAI / Azure Responses | `prompt_cache_key` |
+| Codex Responses | `prompt_cache_key` plus matching affinity headers described above |
+| OpenAI, [Mistral](https://docs.mistral.ai/inference/conversations/advanced/prompt-caching), [Together](https://docs.together.ai/docs/inference/chat/prompt-caching) Chat Completions | `prompt_cache_key` |
+| [OpenRouter](https://openrouter.ai/docs/guides/best-practices/prompt-caching) Chat Completions | `session_id` |
+| [Vercel AI Gateway](https://vercel.com/docs/ai-gateway/models-and-providers/session-affinity) Chat Completions, Anthropic Messages, Responses | `session_id`, which pins both provider and credential rather than relying on prompt fingerprinting |
+| [xAI](https://docs.x.ai/developers/advanced-api-usage/prompt-caching/maximizing-cache-hits) Chat Completions | `x-grok-conv-id` header |
+| [Fireworks](https://docs.fireworks.ai/guides/prompt-caching) Chat Completions | `x-session-affinity` header |
+| Kimi Code Anthropic compatibility | Stable hashed `metadata.user_id` when the model's `anthropic_session_user_id` capability is enabled and caching is not disabled |
+| Gemini CLI / Antigravity | Existing `sessionId` |
+
+Chat Completions routing IDs reuse the deterministic 64-byte normalization above.
+Missing/empty IDs omit these controls. Explicit model/request headers retain their
+normal override precedence over generated xAI/Fireworks defaults. Unrelated
+OpenAI-compatible providers do not receive these endpoint-specific fields.
+
+Google/Vertex, Groq, Cerebras, DeepSeek, ZAI, MiniMax, Qwen and Kimi offer
+automatic prefix caching on supported models; no additional session-key field
+is assumed for them. Managed explicit cache resources (for example Google's
+`cachedContent`) are a separate API, not a per-request session key. Provider
+thresholds, cache lifetime and matching prompt bytes still determine actual hits.
+See the bounded [native-session cache measurement](../../docs/telemetry.md#prompt-cache-read-share-measurement-562)
+for observed counters rather than an assumed cache-hit guarantee.
+
 ### Ordered system prompts (Hex API addition)
 
 `Context.system_prompt` continues to accept a binary or `nil`, and now also accepts
@@ -494,6 +528,11 @@ Empty/whitespace-only blocks are omitted from Anthropic requests. With no static
 prefix, API-key requests omit the system marker. Together with the last-user
 marker this uses at most two of Anthropic's four permitted breakpoints, regardless
 of block count. `cache_retention: :none` removes both markers.
+
+Bedrock's supported prompt-caching models also stop their system `cachePoint` at
+the shared prefix before the first directory-derived block. The remaining text
+follows the cache point unchanged; directory-only structured prompts have no
+system cache point. Legacy binary prompts keep their existing cache point.
 
 Every other transport concatenates the block texts into its existing binary
 system-prompt shape, retaining existing provider-specific sanitization, defaults,

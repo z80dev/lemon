@@ -1170,6 +1170,7 @@ defmodule LemonAi.Providers.Anthropic do
 
     body = maybe_apply_tool_choice(body, opts.tool_choice, oauth_request?)
     body = maybe_put_session_user_id(body, compat, cache_control, opts.session_id)
+    body = maybe_put_gateway_session_id(body, model.provider, opts.session_id)
 
     # Thinking request shape is driven by the model's capability flags:
     # adaptive-thinking models take effort levels, older models a manual budget.
@@ -1265,6 +1266,15 @@ defmodule LemonAi.Providers.Anthropic do
       body
     end
   end
+
+  # Gateway's explicit session id pins both the provider and credential; its
+  # prompt_cache_key/fingerprint fallback pins only the provider.
+  defp maybe_put_gateway_session_id(body, provider, session_id)
+       when provider in [:vercel_ai_gateway, "vercel_ai_gateway"] and
+              is_binary(session_id) and session_id != "",
+       do: Map.put(body, "session_id", session_id)
+
+  defp maybe_put_gateway_session_id(body, _provider, _session_id), do: body
 
   @doc """
   Message-count hint for caller-owned compaction. Requests preserve all messages.

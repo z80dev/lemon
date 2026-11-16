@@ -275,6 +275,36 @@ defmodule LemonAi.Providers.Bedrock do
     config
   end
 
+  defp build_system_prompt(blocks, model) when is_list(blocks) do
+    if supports_prompt_caching?(model) do
+      {prefix, footer} = Enum.split_while(blocks, &(!&1.directory_derived))
+      prefix_text = LemonAi.SystemPrompt.text(prefix)
+      footer_text = LemonAi.SystemPrompt.text(footer)
+
+      # A Bedrock cache point covers everything before it, so stop at the
+      # first directory-derived block rather than caching the directory footer.
+      cached =
+        if prefix_text == "" do
+          []
+        else
+          build_system_prompt(prefix_text, model)
+        end
+
+      cond do
+        footer_text != "" ->
+          cached ++ [%{"text" => sanitize_surrogates(footer_text)}]
+
+        cached == [] ->
+          [%{"text" => ""}]
+
+        true ->
+          cached
+      end
+    else
+      build_system_prompt(LemonAi.SystemPrompt.text(blocks), model)
+    end
+  end
+
   defp build_system_prompt(system_prompt, model) do
     blocks = [%{"text" => sanitize_surrogates(LemonAi.SystemPrompt.text(system_prompt))}]
 

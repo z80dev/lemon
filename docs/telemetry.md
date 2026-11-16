@@ -482,6 +482,55 @@ Aggregate snapshots do not provide per-run wait latency. See the
 | `[:lemon_ai, :circuit_breaker, :reopened]` | `system_time` | `provider`, `reason` | [`circuit_breaker.ex:317`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), probe failed during half-open |
 | `[:lemon_ai, :prompt_diagnostics, :llm_call]` | `system_time` | `data`, `engine: "ai"`, `session_key`, `agent_id`, `run_id` | [`prompt_diagnostics.ex:158`](../apps/lemon_ai/lib/lemon_ai/prompt_diagnostics.ex). Correlation fields come from `x-lemon-*` request headers and are `nil` when absent |
 
+#### Prompt cache-read share measurement (#562)
+
+A bounded 2026-11-16 follow-up on `openai_codex` / `gpt-6.1-sol` compared
+omitting the session key with retaining the native coding session's persisted
+identity. Both variants ran through `CodingAgent.Session` → `LemonAgent` and a
+completion adapter calling production `LemonAi.complete/3` over HTTP/SSE. The
+adapter removed only `StreamOptions.session_id` in the no-key variant. This is
+an **existing-path control comparison**, not a before/after Codex code-change
+claim: native sessions already supplied a stable key at revision `abc566dcd`.
+
+Six successful requests were made, three turns per variant, retaining assistant
+replies. The synthetic custom prefix was 53,393 bytes; the complete native system
+prompt was 55,984 bytes with SHA-256
+`2b7f5347798c17322647112d97c773a7664aed8e2e454e2391d78fd4de60dcc2`,
+identical across all six requests. Disposable paths were replaced by `<fixture>`
+before transmission. There were no tools, reasoning was minimal, and the stream
+deadline was 90 seconds. Provider and agent retries were disabled. A host Codex
+credential was obtained in-process with `omp token openai-codex` and never logged
+or persisted. One earlier local startup failed on an occupied health-listener
+port before any model request; the measurement disabled that listener.
+
+| Variant / turn | Uncached input | Cache read | Cache write | Output | Read share |
+|---|---:|---:|---:|---:|---:|
+| No key / 1 | 9,767 | 0 | 0 | 5 | 0% |
+| No key / 2 | 10,042 | 0 | 0 | 5 | 0% |
+| No key / 3 | 10,317 | 0 | 0 | 5 | 0% |
+| Native key / 1 | 9,767 | 0 | 0 | 5 | 0% |
+| Native key / 2 | 442 | 9,600 | 0 | 5 | 95.60% |
+| Native key / 3 | 461 | 9,856 | 0 | 5 | 95.53% |
+| No-key aggregate | 30,126 | 0 | 0 | 15 | **0%** |
+| Native-key aggregate | 10,670 | 19,456 | 0 | 15 | **64.58%** |
+
+Share is `sum(cache_read) / sum(input + cache_read + cache_write)`, excluding
+output. Native-key turns 2–3 aggregate to **95.56%**. Raw
+`input_tokens_details.cached_tokens` agreed with Lemon's normalized cache-read
+counters (0, 9,600, 9,856); raw cache-write counters were zero throughout.
+The same prompt and input counts produced hits once the session key was retained,
+so insufficient prefix length does not explain this sample. This small,
+fixed-order pair does not establish that missing keys caused the earlier report:
+provider routing, retention and warmup were not controlled, and no latency claim
+is made. OpenAI's public [prompt-caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
+also warns that keys do not guarantee hits; its public Responses behavior is not
+a guarantee about the ChatGPT Codex endpoint.
+
+Native-session wire tests cover persisted identity across turns and restart for
+OpenAI Responses and Codex, matching Codex affinity headers, distinct new-session
+keys, and Anthropic's shared-prefix/last-user breakpoints. Direct `LemonAi`
+callers must pass `StreamOptions.session_id`; the library does not invent one.
+
 ### Memory — `[:lemon, :memory, ...]`
 
 | Event | Measurements | Metadata | Emitter |
