@@ -38,6 +38,34 @@ defmodule LemonCore.DurableTest do
     assert {:error, :enoent} = Durable.sync_file(Path.join(dir, "missing"))
   end
 
+  test "file flushes leave a trapping caller's mailbox empty", %{tmp_dir: dir} do
+    if match?({:unix, :darwin}, :os.type()) do
+      path = Path.join(dir, "data")
+      File.write!(path, "contents")
+      parent = self()
+
+      {caller, monitor} =
+        spawn_monitor(fn ->
+          Process.flag(:trap_exit, true)
+
+          results = [
+            Durable.sync_file(path),
+            Durable.sync_file(path),
+            Durable.sync_file(Path.join(dir, "missing")),
+            Durable.sync_file(dir)
+          ]
+
+          send(parent, {:sync_results, results, Process.info(self(), :messages)})
+        end)
+
+      assert_receive {:sync_results, results, messages}, 5_000
+      assert results == [:ok, :ok, {:error, :enoent}, {:error, {:full_sync_failed, 65}}]
+      assert messages == {:messages, []}
+
+      assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}
+    end
+  end
+
   test "Darwin rejects wrong descriptor kinds instead of claiming a weaker barrier", %{
     tmp_dir: dir
   } do

@@ -14,12 +14,16 @@ defmodule LemonCore.Durable do
   mutations), native-process cleanup ledgers (recovery authority), eval paired
   cleanup manifests (cleanup authority), and coding-session atomic snapshots
   (history replacement). Directory sync orders namespace changes only.
+
+  The Darwin subprocess runs in an unlinked monitored owner. Its port messages
+  never enter the calling process's mailbox, including when that caller traps
+  exits. Returning still waits for the same full file barrier.
   """
 
   @spec sync_file(Path.t()) :: :ok | {:error, term()}
   def sync_file(path) do
     if match?({:unix, :darwin}, :os.type()) do
-      darwin_sync(path, "file", :file_sync_unsupported)
+      isolated_darwin_sync(path)
     else
       with {:ok, device} <- :file.open(path, [:read, :raw, :binary]) do
         result = :file.sync(device)
@@ -37,6 +41,33 @@ defmodule LemonCore.Durable do
       after
         :file.close(device)
       end
+    end
+  end
+
+  defp isolated_darwin_sync(path) do
+    {worker, monitor} =
+      spawn_monitor(fn ->
+        outcome =
+          try do
+            {:returned, darwin_sync(path, "file", :file_sync_unsupported)}
+          catch
+            kind, reason -> {:raised, kind, reason, __STACKTRACE__}
+          end
+
+        # Carry the outcome in the single monitor message: no reply or normal
+        # port EXIT can remain in the caller's mailbox after this receive.
+        exit({__MODULE__, outcome})
+      end)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^worker, {__MODULE__, {:returned, result}}} ->
+        result
+
+      {:DOWN, ^monitor, :process, ^worker, {__MODULE__, {:raised, kind, reason, stacktrace}}} ->
+        :erlang.raise(kind, reason, stacktrace)
+
+      {:DOWN, ^monitor, :process, ^worker, reason} ->
+        exit(reason)
     end
   end
 
