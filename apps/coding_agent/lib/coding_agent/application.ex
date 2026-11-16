@@ -47,6 +47,7 @@ defmodule CodingAgent.Application do
       {DynamicSupervisor,
        name: CodingAgent.ExecutionNode.ToolSession.Supervisor, strategy: :one_for_one},
       CodingAgent.SessionSupervisor,
+      {DynamicSupervisor, name: CodingAgent.AdvisorSupervisor, strategy: :one_for_one},
       CodingAgent.BackgroundRun.Supervisor,
       CodingAgent.Wasm.SidecarSupervisor,
       CodingAgent.Tools.Task.LiveBridgeSupervisor,

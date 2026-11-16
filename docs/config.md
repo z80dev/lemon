@@ -480,6 +480,49 @@ Tool calls requested by the response that exhausts a cap are recorded as rejecte
 error results without executing their side effects. Increase the configured cap
 if you intentionally want to continue an exhausted session.
 
+## Optional session advisor
+
+The native session API accepts `advisor: [...]`; it is **off by default**.
+This is an explicit local session option, not a TOML setting. For example:
+
+```elixir
+CodingAgent.start_session(
+  cwd: cwd,
+  model: primary_model,
+  advisor: [
+    model: reviewer_model,
+    max_notes: 3,
+    max_note_chars: 2000,
+    max_events: 1000,
+    timeout_ms: 30_000,
+    agent_options: [stream_options: reviewer_stream_options, get_api_key: reviewer_credentials]
+  ]
+)
+```
+
+The reviewer inherits the primary model unless `model:` is supplied. Supply
+provider credentials/options through `agent_options`, using the same trusted
+local API as `LemonAgent.Agent`. No paid review runs occur unless enabled.
+Each review starts with only the newly subscribed event delta, at a primary
+tool-turn boundary. Pending deltas wait for the current review, never for the
+primary turn. Subscription overflow, buffer overflow, timeout or reviewer
+failure retires the temporary advisor without restarting or failing the primary.
+
+Its tools are the intersection of primary authority and the built-in `read`,
+`grep`, `find`, `ls` allowlist; extensions and MCP cannot override those tools.
+Inherited denials and approvals remain in force. Tool results are fenced as
+untrusted context. The local `advise` tool normalizes whitespace, deduplicates
+case-insensitively across updates and caps accepted notes per update.
+Oversized/empty notes are suppressed. `critical` notes preempt the primary's
+remaining tool queue; `warning` and `info` notes use non-preempting follow-up
+delivery. Notes are advisory, not new user authority.
+
+The numbers above are caller-policy defaults, not measured tuning results.
+Completed advisor responses charge the primary run's `BudgetTracker`, including
+unknown usage; an already-exhausted budget prevents another review. Concurrent
+primary/reviewer requests can still finish after a limit is reached. No latency
+or quality improvement is claimed; measure before enabling by default.
+
 ## Native Execution and Subagents
 
 Lemon uses its native executor for every top-level TUI and gateway run. Configure
