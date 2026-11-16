@@ -1062,12 +1062,22 @@ defmodule CodingAgent.Session do
     maybe_subscribe_exec_approvals(state)
 
     :ok = LemonCore.ExecApprovalExpiry.watch_session(state.session_manager.header.id, self())
+    advisor = Keyword.get(opts, :advisor, false)
+
+    if is_list(advisor) do
+      cursor = CodingAgent.Session.EventLog.cursor(state.event_log)
+      send(self(), {:start_advisor, Keyword.put(advisor, :initial_cursor, cursor)})
+    end
 
     {:ok, state}
   end
 
   @spec handle_call(term(), GenServer.from(), t()) :: {:reply, term(), t()} | {:noreply, t()}
   @impl true
+  def handle_call(:advisor_context, _from, state) do
+    {:reply, Map.take(state, [:agent, :model, :cwd, :run_id, :tool_policy]), state}
+  end
+
   def handle_call(request, _from, %{manual_operation: %ManualOperation.State{}} = state)
       when is_tuple(request) and elem(request, 0) in @manual_operation_busy_calls,
       do: {:reply, {:error, :busy}, state}
@@ -1726,6 +1736,16 @@ defmodule CodingAgent.Session do
 
   @spec handle_info(term(), t()) :: {:noreply, t()} | {:stop, term(), t()}
   @impl true
+  def handle_info({:start_advisor, opts}, state) do
+    session = self()
+
+    Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
+      CodingAgent.Advisor.start(session, opts)
+    end)
+
+    {:noreply, state}
+  end
+
   def handle_info({:task_progress, tool_call_id, result}, state) do
     Notifier.broadcast_event(state, {:tool_execution_update, tool_call_id, "task", %{}, result})
     {:noreply, state}
