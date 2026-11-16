@@ -9,6 +9,15 @@ host registry must attest, never infer from result details. CodingAgent strips
 this capability from MCP, extension, WASM and unmanaged tools; its built-in
 `submit_result` is the sole approved completion tool.
 
+Agent processes use OTP `hibernate_after: 5_000` to reclaim idle heaps between
+turns, without a polling timer or a delayed wake-up. `Agent.start_link/1` accepts
+`:hibernate_after` in milliseconds or `:infinity` to opt out; coding sessions
+apply the same option to themselves and their owned agent. Hibernation preserves
+state, subscriptions and OTP system/code-change handling; it does not park or
+terminate a live root session. This is an additive published-package option.
+See [session memory measurements](../../docs/benchmarks/session-memory.md)
+for the opt-in measurement procedure and latency comparison.
+
 ## Architecture Overview
 
 ```

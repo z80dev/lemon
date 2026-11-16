@@ -8,7 +8,6 @@ defmodule CodingAgent.Tools.Task.Followup do
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task.Result
-  alias LemonCore.{RunRequest, SessionKey}
 
   @default_run_orchestrator_parts ["LemonRouter", "RunOrchestrator"]
   @max_inline_followup_chars 12_000
@@ -26,44 +25,13 @@ defmodule CodingAgent.Tools.Task.Followup do
       when is_map(followup_context) do
     ensure_terminal_state(task_id, run_id, outcome)
     text = task_auto_followup_text(followup_context, task_id, run_id, outcome)
-    queue_mode = Map.get(followup_context, :queue_mode, :followup)
-    session_module = Map.get(followup_context, :session_module, CodingAgent.Session)
-    session_pid = Map.get(followup_context, :session_pid)
 
-    target =
-      if CodingAgent.Tools.Task.Params.managed_context?(followup_context),
-        do: {:router, :collect},
-        else: AsyncFollowups.dispatch_target(queue_mode, session_module, session_pid)
-
-    case target do
-      {:live, delivery_mode} ->
-        if send_async_followup_to_live_session(
-             followup_context,
-             text,
-             task_id,
-             run_id,
-             delivery_mode
-           ) do
-          :ok
-        else
-          submit_async_followup_via_router(
-            followup_context,
-            task_id,
-            run_id,
-            text,
-            AsyncFollowups.router_fallback_queue_mode(delivery_mode)
-          )
-        end
-
-      {:router, router_queue_mode} ->
-        submit_async_followup_via_router(
-          followup_context,
-          task_id,
-          run_id,
-          text,
-          router_queue_mode
-        )
-    end
+    AsyncFollowups.enqueue(
+      followup_context,
+      text,
+      %{source: :task, task_id: task_id, run_id: run_id},
+      Map.get(followup_context, :async_followup_server, AsyncFollowups)
+    )
   rescue
     error ->
       log_auto_followup_failure(task_id, run_id, {:exception, error})
@@ -216,141 +184,6 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   defp maybe_fail_run(_run_id, _reason), do: :ok
 
-  defp send_async_followup_to_live_session(
-         followup_context,
-         text,
-         task_id,
-         run_id,
-         delivery_mode
-       ) do
-    session_module = Map.get(followup_context, :session_module, CodingAgent.Session)
-    session_pid = Map.get(followup_context, :session_pid)
-
-    case session_module.handle_async_followup(
-           session_pid,
-           build_async_followup_message(text, task_id, run_id, delivery_mode)
-         ) do
-      :ok -> true
-      {:error, _reason} -> false
-      _other -> true
-    end
-  rescue
-    _ -> false
-  end
-
-  defp submit_async_followup_via_router(
-         followup_context,
-         task_id,
-         run_id,
-         text,
-         queue_mode
-       ) do
-    parent_session_key = Map.get(followup_context, :parent_session_key)
-    extra_meta = Map.get(followup_context, :meta, %{})
-    cwd = Map.get(followup_context, :cwd)
-
-    if is_binary(parent_session_key) and parent_session_key != "" do
-      parent_agent_id =
-        Map.get(followup_context, :parent_agent_id) ||
-          SessionKey.agent_id(parent_session_key) ||
-          "default"
-
-      run_orchestrator =
-        Map.get(followup_context, :run_orchestrator, default_run_orchestrator())
-
-      followup =
-        RunRequest.new(%{
-          run_id: LemonCore.Id.run_id(),
-          origin: :node,
-          session_key: parent_session_key,
-          agent_id: parent_agent_id,
-          prompt: text,
-          queue_mode: queue_mode,
-          cwd: cwd,
-          tool_policy: Map.get(followup_context, :tool_policy),
-          meta:
-            Map.merge(
-              Map.drop(extra_meta, [
-                :invocation_context_key,
-                "invocation_context_key",
-                :invocationContextKey,
-                "invocationContextKey",
-                :memory_context_key,
-                "memory_context_key",
-                :memoryContextKey,
-                "memoryContextKey",
-                :memory_context_verified,
-                "memory_context_verified",
-                :memoryContextVerified,
-                "memoryContextVerified",
-                :shared_memory_grant,
-                "shared_memory_grant",
-                :sharedMemoryGrant,
-                "sharedMemoryGrant",
-                :mcp_servers,
-                "mcp_servers"
-              ]),
-              %{
-                :task_auto_followup => true,
-                :task_id => task_id,
-                :run_id => run_id,
-                :invocation_context_key => Map.get(followup_context, :invocation_context_key),
-                :memory_context_key => Map.get(followup_context, :memory_context_key),
-                :memory_context_verified =>
-                  Map.get(followup_context, :memory_context_verified) == true,
-                :shared_memory_grant => Map.get(followup_context, :shared_memory_grant) == true,
-                :mcp_servers => Map.get(followup_context, :invocation_mcp_servers),
-                "async_followups" => [async_followup_entry(task_id, run_id, queue_mode)]
-              }
-            )
-        })
-
-      managed? = CodingAgent.Tools.Task.Params.managed_context?(followup_context)
-
-      followup = %{
-        followup
-        | meta:
-            CodingAgent.Tools.Task.Params.continuation_metadata(followup.meta, followup_context)
-      }
-
-      result =
-        if managed? do
-          request = %{
-            followup
-            | queue_mode: :collect,
-              meta: LemonCore.RunStore.execution_projection(followup.meta || %{})
-          }
-
-          CodingAgent.Tools.Task.Params.submit_native_followup(followup_context, request)
-        else
-          run_orchestrator.submit(followup)
-        end
-
-      case result do
-        {:ok, _run_id} ->
-          :ok
-
-        {:error, {:unknown_agent_id, _}} when parent_agent_id != "default" and not managed? ->
-          fallback = %{followup | agent_id: "default"}
-
-          case run_orchestrator.submit(fallback) do
-            {:ok, _fallback_run_id} ->
-              :ok
-
-            {:error, reason} ->
-              log_followup_failure(task_id, run_id, reason)
-          end
-
-        {:error, reason} ->
-          log_followup_failure(task_id, run_id, reason)
-      end
-    else
-      Logger.debug(
-        "Task tool skipping auto-followup task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: parent session key unavailable"
-      )
-    end
-  end
-
   defp normalize_followup_outcome({:ok, %AgentToolResult{} = result}) do
     answer = Result.visible_output_text(result)
     details = result.details || %{}
@@ -391,34 +224,6 @@ defmodule CodingAgent.Tools.Task.Followup do
   defp format_error(reason) do
     Logger.warning("Task followup failed: #{inspect(reason)}")
     "The task failed unexpectedly. Run `lemon doctor` before trying again."
-  end
-
-  defp build_async_followup_message(text, task_id, run_id, delivery) do
-    %{
-      content: text,
-      details: %{
-        source: :task,
-        task_id: task_id,
-        run_id: run_id,
-        delivery: delivery
-      },
-      async_followups: [async_followup_entry(task_id, run_id, delivery)]
-    }
-  end
-
-  defp async_followup_entry(task_id, run_id, delivery) do
-    %{
-      source: :task,
-      task_id: task_id,
-      run_id: run_id,
-      delivery: delivery
-    }
-  end
-
-  defp log_followup_failure(task_id, run_id, reason) do
-    Logger.warning(
-      "Task tool followup submit failed for task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: #{inspect(reason)}"
-    )
   end
 
   defp log_auto_followup_failure(task_id, run_id, reason) do

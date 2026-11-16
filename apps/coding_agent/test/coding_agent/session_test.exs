@@ -211,6 +211,60 @@ defmodule CodingAgent.SessionTest do
     start_supervised!(Supervisor.child_spec({Session, opts}, id: make_ref(), restart: :temporary))
   end
 
+  test "hibernated session and owned agent handle code changes and another prompt" do
+    session = start_session(hibernate_after: 0)
+    agent = :sys.get_state(session).agent
+
+    for {pid, module} <- [{session, Session}, {agent, LemonAgent.Agent}] do
+      await_hibernation(pid)
+      :ok = :sys.suspend(pid)
+      assert :ok = :sys.change_code(pid, module, :hibernate_regression, [])
+      :ok = :sys.resume(pid)
+    end
+
+    assert :ok = Session.prompt(session, "Wake after code change")
+    wait_for_streaming_complete(session)
+    state = LemonAgent.Agent.get_state(agent)
+    assert Process.alive?(session)
+    assert Process.alive?(agent)
+
+    assert Enum.any?(state.messages, fn
+             %AssistantMessage{content: content} ->
+               Enum.any?(content, &match?(%TextContent{text: "Hello!"}, &1))
+
+             _message ->
+               false
+           end)
+
+    await_hibernation(session)
+    await_hibernation(agent)
+    assert {:ok, _report} = Session.reload_extensions(session)
+    assert Session.get_state(session).agent == agent
+    assert Process.alive?(agent)
+  end
+
+  defp await_hibernation(pid, attempts \\ 200)
+
+  defp await_hibernation(pid, 0),
+    do: flunk("process did not hibernate: #{inspect(Process.info(pid, :current_function))}")
+
+  defp await_hibernation(pid, attempts) do
+    case Process.info(pid, :current_function) do
+      {:current_function, {module, function, arity}}
+      when {module, function, arity} in [
+             {:erlang, :hibernate, 3},
+             {:gen_server, :loop_hibernate, 4}
+           ] ->
+        :ok
+
+      _other ->
+        receive do
+        after
+          5 -> await_hibernation(pid, attempts - 1)
+        end
+    end
+  end
+
   defp wait_for_streaming_complete(session) do
     # Poll until not streaming
     state = Session.get_state(session)

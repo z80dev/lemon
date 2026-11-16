@@ -160,6 +160,8 @@ defmodule CodingAgent.Tools.Task.Execution do
             model: validated.model,
             session_pid: Keyword.get(opts, :session_pid),
             session_module: Keyword.get(opts, :session_module, Session),
+            async_followup_server:
+              Keyword.get(opts, :async_followup_server, CodingAgent.AsyncFollowups),
             run_orchestrator:
               Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
           }

@@ -564,6 +564,21 @@ defmodule CodingAgent.Messages do
   end
 
   defp async_followup_provenance_lines(details) when is_map(details) do
+    entries =
+      case get_detail(details, :async_followups) do
+        entries when is_list(entries) -> Enum.filter(entries, &is_map/1)
+        _ -> []
+      end
+
+    case entries do
+      [] -> async_followup_entry_lines(details)
+      entries -> Enum.map_join(entries, "\n\n", &async_followup_entry_lines/1)
+    end
+  end
+
+  defp async_followup_provenance_lines(_details), do: ""
+
+  defp async_followup_entry_lines(details) do
     delivery = get_detail(details, :delivery)
     delivery_receipt = get_detail(details, :delivery_receipt)
 
@@ -586,8 +601,6 @@ defmodule CodingAgent.Messages do
 
     Enum.join(fields, "\n")
   end
-
-  defp async_followup_provenance_lines(_details), do: ""
 
   defp get_detail(details, key) do
     Map.get(details, key) || Map.get(details, Atom.to_string(key))
