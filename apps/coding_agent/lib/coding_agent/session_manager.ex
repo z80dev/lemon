@@ -1352,6 +1352,7 @@ defmodule CodingAgent.SessionManager do
 
   defp finish_load({:ok, %{header: %SessionHeader{} = header} = state}, path) do
     lifecycle_observation(:journal_load, header.id)
+
     leaf_id =
       if header.checkpoint_entry_count == state.count,
         do: header.active_leaf_id,

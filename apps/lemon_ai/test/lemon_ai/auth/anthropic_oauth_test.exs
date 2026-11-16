@@ -512,6 +512,7 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
       # A pinned identity needs no caller-dependent runtime cache. Retain the
       # auth-cache migration's guarantee that no persistent_term entry is written.
       assert Cache.get({AnthropicOAuth, :claude_code_version, bin_dir}) == nil
+
       assert :persistent_term.get({AnthropicOAuth, :claude_code_version, bin_dir}, :missing) ==
                :missing
 

@@ -63,14 +63,15 @@ defmodule LemonOmp.NativeProcessTest do
     assert_local_work_terminated()
   end
 
-  test "catalog timeout tracks its kill helper and confirms the local work ended" do
+  test "catalog timeout confirms termination of its audited workload" do
     System.put_env("FAKE_OMP_MODELS_MODE", "timeout")
     put_app_env(:models_timeout_ms, 100)
 
     assert {:error, {:catalog_failed, message}} = LemonOmp.models()
     assert message =~ "timed out"
-    assert length(local_records()) == 2
+    assert [{_, %{workload_identity: identity}, _}] = local_records()
     assert_local_work_terminated()
+    assert :terminated = ProcessGroup.workload_group_status(identity)
   end
 
   test "status version probing is tracked without unknown work" do
@@ -147,13 +148,13 @@ defmodule LemonOmp.NativeProcessTest do
            end)
   end
 
-  test "delegate shutdown tracks liveness, descendant discovery and signal helpers" do
+  test "centralized delegate shutdown terminates the audited group and its descendants" do
     workspace = workspace!("ignore-term")
     assert {:ok, wire} = LemonOmp.start(%{cwd: workspace, prompt: "HOLD"})
     root = fake_pid(workspace)
     child = fake_pid(workspace, ".fake_omp.child")
     kill_on_exit([root, child])
-    assert [{_, %{workload_identity: identity}, _}] = local_records()
+    assert [{launch_id, %{workload_identity: identity}, _}] = local_records()
     assert identity.root_pid == root
     assert {:alive, observed} = ProcessGroup.workload_group_status(identity)
     assert Map.has_key?(observed.members, child)
@@ -162,12 +163,16 @@ defmodule LemonOmp.NativeProcessTest do
     assert {:ok, _} = LemonOmp.close(wire["id"])
     refute Process.alive?(session)
     wait_until(fn -> ProcessGroup.workload_group_status(observed) == :terminated end)
-    assert length(local_records()) > 3
+    refute os_alive?(root)
+    refute os_alive?(child)
     assert [{_, %{backend: :unsupported, capacity_held: true}, _}] = unsupported_records()
 
     wait_until(fn ->
       Enum.all?(local_records(), fn {_, record, _} -> record.termination_confirmed end)
     end)
+
+    assert [{^launch_id, %{termination_confirmed: true, capacity_held: false}, _}] =
+             local_records()
   end
 
   defp local_records do

@@ -140,6 +140,7 @@ defmodule CodingAgent.Session.PromptJournalTest do
     second = [%{text: "shared", directory_derived: true}]
     manager = SessionManager.new(dir) |> reply(first) |> reply(second)
     state = %{session_manager: manager, model: nil, settings_manager: nil}
+
     messages = [
       %LemonAi.Types.AssistantMessage{
         content: [],

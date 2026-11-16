@@ -21,7 +21,9 @@ turn projection and message-driven approval/cancellation handling. Configuration
 steps run sequentially in the calling process; losing that caller removes its
 pending command and cannot launch the remaining steps.
 
-Control acknowledgements remain correlated to omp's response. A deadline is
+Control acknowledgements remain correlated to omp's response and reach callers
+only after the session publishes the acknowledged turn projection. The RPC client
+still monitors the original caller, not the session's reply relay. A deadline is
 reported as `:outcome_unknown`, never retried; a closed connection is
 `:not_running`. Late replies cannot acknowledge a newer request or reopen a
 completed turn. A redirect's later prompt failure still updates its turn after

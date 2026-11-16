@@ -5,7 +5,6 @@ defmodule CodingAgent.SessionMaintenance do
   alias CodingAgent.Session.Ownership
 
   @root_lock {__MODULE__, :root_lock}
-  @lock_retries 3
   # Maintenance reads headers only; this operator policy bounds corrupt headers.
   @header_bytes 65_536
   @hash_chunk_bytes 65_536
@@ -41,7 +40,7 @@ defmodule CodingAgent.SessionMaintenance do
           end
         end,
         [node()],
-        @lock_retries
+        3
       )
 
     case result do

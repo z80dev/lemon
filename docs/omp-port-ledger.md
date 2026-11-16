@@ -49,6 +49,7 @@ app-suite references below.
 | --- | --- | --- | --- |
 | `apps/lemon_core/lib/lemon_core/tool_policy.ex` | omp approval-mode vocabulary; source revision unknown | native port | `apps/lemon_core/test/lemon_core/tool_policy_test.exs` |
 | `apps/coding_agent/lib/coding_agent/commands.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/commands_test.exs` |
+| `apps/coding_agent/lib/coding_agent/compaction.ex` | omp compaction pruning policy and #2275 recovery band; source revision unknown | native port | `apps/coding_agent/test/coding_agent/compaction_pruning_test.exs`, `apps/coding_agent/test/coding_agent/compaction_pruning_wire_test.exs`, `apps/coding_agent/test/coding_agent/compaction_test.exs` |
 | `apps/coding_agent/lib/coding_agent/debug/adapters.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/debug/adapters_test.exs` |
 | `apps/coding_agent/lib/coding_agent/resource_loader.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test/coding_agent/resource_loader_test.exs` |
 | `apps/coding_agent/lib/coding_agent/security/secret_obfuscator/loader.ex` | omp / pi-mono; source revision unknown | native port | `apps/coding_agent/test` |

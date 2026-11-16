@@ -90,11 +90,13 @@ Additional nuance:
 ### Runtime read cache and usage metadata
 
 Encrypted-secret reads use `MasterKey.resolve_cached/1`: one successful resolved
-key is retained in VM-local `:persistent_term`, shared by callers with identical
-options and provider configuration. A warm read does not invoke any key provider
-or spawn `security`. Different options replace the single cache entry rather
-than growing an unbounded key cache; failures are not retained. External changes
-to a key file or Keychain entry require `MasterKey.resolve_fresh/1` or a VM restart.
+key is retained in the supervised `LemonCore.RuntimeCache` ETS table, shared by
+callers with identical options and provider configuration. A warm read does not
+invoke any key provider or spawn `security`. Different options replace the single
+cache entry rather than growing an unbounded key cache; failures are not retained.
+Cache-owner restarts discard the entry; without the owner, reads resolve uncached.
+External changes to a key file or Keychain entry require
+`MasterKey.resolve_fresh/1` or a cache-owner restart.
 Use supported key rotation rather than replacing a key in use.
 
 Writers continue to resolve the key freshly while holding `Secrets.Lock`, then

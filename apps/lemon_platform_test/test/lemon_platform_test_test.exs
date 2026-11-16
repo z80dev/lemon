@@ -48,11 +48,13 @@ defmodule LemonPlatformTest.HelpersTest do
         LemonPlatformTest.callbacks(LemonCore.Store.Backend)
 
       assert Enum.sort(optional) == [
+               close: 1,
                compare_and_delete_many: 2,
                compare_and_swap: 5,
                confirm_durable: 1,
                list_recent: 3,
                ping: 1,
+               sweep: 3,
                sync: 1,
                with_durability: 2
              ]

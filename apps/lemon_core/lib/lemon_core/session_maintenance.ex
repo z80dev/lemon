@@ -210,7 +210,7 @@ defmodule LemonCore.SessionMaintenance do
   end
 
   defp locked(fun) do
-    case :global.trans({{__MODULE__, :previews}, self()}, fun, [node()]) do
+    case :global.trans({{__MODULE__, :previews}, self()}, fun, [node()], 3) do
       :aborted -> {:error, :maintenance_unavailable}
       result -> result
     end

@@ -55,12 +55,34 @@ defmodule LemonCore.ApplicationTest do
   end
 
   describe "supervisor children specification" do
-    test "supervisor has exactly 15 children" do
+    test "supervisor has exactly the expected children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
-      # RuntimeCache and the dynamic dedupe owner supervisor precede consumers.
-      assert length(children) == 15
+      expected = [
+        LemonCore.RuntimeCache,
+        LemonCore.Dedupe.Supervisor,
+        if(LemonCore.Bus.pubsub?(), do: Phoenix.PubSub.Supervisor, else: LemonCore.Bus.Registry),
+        LemonCore.Drain,
+        LemonCore.ACPClientBridge,
+        LemonCore.NodeRegistry,
+        LemonCore.ConfigCache,
+        LemonCore.Store,
+        LemonCore.Secrets.Usage,
+        LemonCore.UsageLedger,
+        LemonCore.ExecApprovalExpiry,
+        LemonCore.Secrets.SourceTaskSupervisor,
+        LemonCore.Secrets.SourceCache,
+        LemonCore.ConfigReloader,
+        LemonCore.ConfigReloader.Watcher
+      ]
+
+      expected =
+        if Code.ensure_loaded?(Exqlite.Sqlite3),
+          do: [LemonCore.RunHistoryStore | expected],
+          else: expected
+
+      assert children |> Enum.map(&elem(&1, 0)) |> Enum.sort() == Enum.sort(expected)
     end
 
     test "named core cache tables belong to supervised services" do

@@ -351,6 +351,11 @@ defmodule LemonOmp.Session do
       when reason in [:connection_closed, :send_failed],
       do: {:noreply, fail_waiters(state, "omp connection closed")}
 
+  def handle_info({{:rpc_reply, {pid, _tag} = caller}, result}, state) when is_pid(pid) do
+    GenServer.reply(caller, result)
+    {:noreply, state}
+  end
+
   def handle_info(:idle_timeout, %{projection: %{status: :idle}} = state),
     do: {:stop, :normal, %{state | close_reason: :idle_timeout}}
 
@@ -760,11 +765,11 @@ defmodule LemonOmp.Session do
 
   defp request(state, type, fields, caller) do
     seq = state.seq + 1
-    # Only non-sensitive protocol context travels in the opaque correlation id.
-    # The client owns all caller references and deadlines; no local pending map
-    # is needed to apply an acknowledgement to the correct turn generation.
+    # Relay replies through the owner so the acknowledged projection is published
+    # before a caller can read it. The RPC client still monitors the real caller.
     id = "lemon-#{seq}-#{state.agent_starts}-#{type}"
-    from = if is_atom(caller), do: {self(), {:rpc_reply, caller}}, else: caller
+    from = {self(), {:rpc_reply, caller}}
+    monitor_pid = if is_atom(caller), do: self(), else: elem(caller, 0)
     state = %{state | seq: seq}
     state = if caller == :initial_prompt, do: %{state | initial_prompt_id: id}, else: state
 
@@ -774,7 +779,8 @@ defmodule LemonOmp.Session do
              id,
              Rpc.command(type, id, fields),
              from,
-             Config.command_timeout_ms()
+             Config.command_timeout_ms(),
+             monitor_pid
            )
          end) do
       :ok when type == "abort_and_prompt" ->
@@ -836,8 +842,21 @@ defmodule LemonOmp.Session do
     ArgumentError -> {:error, :connection_closed}
   end
 
-  defp fail_commands(state),
-    do: rpc_call(fn -> Client.fail_all(state.rpc_client, {:error, :connection_closed}) end)
+  defp fail_commands(state) do
+    rpc_call(fn -> Client.fail_all(state.rpc_client, {:error, :connection_closed}) end)
+    flush_command_replies()
+  end
+
+  # Teardown stops this relay before its normal mailbox loop can forward replies.
+  defp flush_command_replies do
+    receive do
+      {{:rpc_reply, {pid, _tag} = caller}, result} when is_pid(pid) ->
+        GenServer.reply(caller, result)
+        flush_command_replies()
+    after
+      0 -> :ok
+    end
+  end
 
   defp rpc_call(fun) do
     fun.()

@@ -61,6 +61,27 @@ defmodule LemonCore.Secrets.ReadCacheTest do
     assert Agent.get(ctx.agent, & &1.reads) == 1
   end
 
+  test "resolved keys live in supervised ETS and cached reads bypass its owner", ctx do
+    assert {:ok, key, :counting} =
+             Task.async(fn -> MasterKey.resolve_cached(ctx.opts) end) |> Task.await()
+
+    cache_key = {MasterKey, :resolved_key}
+    assert {_, {:ok, ^key, :counting}} = LemonCore.RuntimeCache.get(cache_key)
+    assert :persistent_term.get(cache_key, :missing) == :missing
+    owner = Process.whereis(LemonCore.RuntimeCache)
+    assert :ets.info(LemonCore.RuntimeCache, :owner) == owner
+    :ok = :sys.suspend(owner)
+
+    try do
+      assert {:ok, ^key, :counting} =
+               Task.async(fn -> MasterKey.resolve_cached(ctx.opts) end) |> Task.await()
+
+      assert Agent.get(ctx.agent, & &1.reads) == 1
+    after
+      :sys.resume(owner)
+    end
+  end
+
   test "failed resolutions are not retained", ctx do
     Agent.update(ctx.agent, &%{&1 | result: {:error, :missing}})
     assert {:error, :missing_master_key} = MasterKey.resolve_cached(ctx.opts)

@@ -220,7 +220,9 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     refute pending.run_id == c.id
     refute pending.session_id == root_owner
 
-    assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals]))
+    # The approval's mirrored owner event may advance the cursor between the
+    # two reads. Honor the explicit safe-read retry without resolving approval.
+    result = stable_snapshot(params(c), ctx([:read, :approvals]), 10)
     assert result["identity"]["sessionId"] == root_owner
     assert result["identity"]["runId"] == c.id
 
@@ -1383,6 +1385,21 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
   end
 
   defp params(c), do: %{"sessionKey" => c.key}
+
+  defp stable_snapshot(params, context, attempts) when attempts > 0 do
+    case SessionsSnapshot.handle(params, context) do
+      {:ok, %{"status" => "ok"} = result} ->
+        result
+
+      {:ok, %{"status" => "retry", "reason" => "snapshot_raced", "retrySafe" => true}} ->
+        stable_snapshot(params, context, attempts - 1)
+
+      other ->
+        flunk("Unexpected snapshot response: #{inspect(other)}")
+    end
+  end
+
+  defp stable_snapshot(_params, _context, 0), do: flunk("Snapshot never stabilized")
   defp ctx(scopes \\ [:read]), do: %{auth: %{role: :operator, scopes: scopes}}
 
   defp finalize(c, completed),

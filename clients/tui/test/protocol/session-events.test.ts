@@ -12,7 +12,7 @@ const cursor = { version: 1 as const, sessionId: "native", streamId: "owner:bran
 describe("versioned session event wire boundaries", () => {
 	test("keeps cursor and event identity unchanged, including empty projections", () => {
 		const batch = { cursor, eventId: "owner:branch:5", events: [] };
-		const result = { status: "ok", sessionKey: "session", events: [batch], cursor, hasMore: false };
+		const result = { status: "ok" as const, sessionKey: "session", events: [batch], cursor, hasMore: false };
 		expect(parseSessionEventCursor(cursor)).toBe(cursor);
 		expect(parseSessionEventBatch(batch, "session")).toBe(batch);
 		expect(parseSessionsEvents(result)).toBe(result);
