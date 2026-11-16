@@ -667,7 +667,7 @@ defmodule LemonGateway.ApplicationTest do
 
     test "session ownership registry is supervised" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-      children = Supervisor.which_children(LemonGateway.Supervisor)
+      children = Supervisor.which_children(LemonGateway.ExecutionSupervisor)
 
       assert Enum.any?(children, fn {id, pid, _, _} ->
                id == LemonGateway.RunRegistry and is_pid(pid)

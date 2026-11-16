@@ -98,7 +98,7 @@ CodingAgent.Supervisor (one_for_one)
   |     +-- ExecutionNode.ToolSession.Supervisor (DynamicSupervisor)
   +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (bounded Task.Supervisor)
-  +-- TaskStoreServer, Tools.Task.Control, Tools.Task.Speculation
+  +-- TaskStoreServer, AsyncFollowups, Tools.Task.Control, Tools.Task.Speculation
   +-- TaskProgressBindingServer, ParentQuestionStoreServer, RunGraphServer
   +-- ProcessSupervisor (rest_for_one)
   |     +-- ProcessRegistry
@@ -109,6 +109,7 @@ CodingAgent.Supervisor (one_for_one)
   |     +-- SessionRegistry
   |     +-- SessionSupervisor (DynamicSupervisor)
   |     +-- Tools.Task.LiveBridgeSupervisor
+  +-- AdvisorSupervisor (DynamicSupervisor; temporary session reviewers)
   +-- BackgroundRun.Tree (rest_for_one)
   |     +-- BackgroundRun.Registry
   |     +-- BackgroundRun.Supervisor (DynamicSupervisor)

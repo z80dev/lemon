@@ -31,14 +31,10 @@ defmodule LemonCore.RawProcessArchitectureTest do
     "apps/lemon_core/lib/lemon_core/drain.ex" =>
       {2,
        "VM drain coordinator and deadline failsafe must survive application supervisor shutdown to stop the VM."},
-    "apps/lemon_core/lib/lemon_core/egress_broker.ex" =>
-      {1, "Private-directory reaper survives forced broker death, which cannot run terminate/2."},
     "apps/lemon_core/lib/lemon_core/testing/async_helpers.ex" =>
       {1, "Documentation-only latch example; no production task is launched by this literal."},
     "apps/lemon_gateway/lib/lemon_gateway/transports/webhook/response.ex" =>
       {1, "Channel callback-delivery ownership is excluded from #585 and tracked by #580/#581."},
-    "apps/lemon_gateway/lib/lemon_gateway/voice/call_session.ex" =>
-      {2, "Voice-call operation ownership belongs to #588."},
     "apps/lemon_gateway/lib/lemon_gateway/voice/twilio_websocket.ex" =>
       {1, "Voice WebSocket operation ownership belongs to #588."},
     "apps/lemon_gateway/lib/lemon_gateway/voice/webhook_router.ex" =>

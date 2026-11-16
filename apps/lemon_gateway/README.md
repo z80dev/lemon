@@ -23,25 +23,22 @@ Router SessionCoordinator (conversation ordering)
 ```text
 LemonGateway.Supervisor (one_for_one)
   +-- Config
-  +-- EngineLock
   +-- ExecutionSupervisor (rest_for_one)
   |     +-- RunRegistry
-  |     +-- ThreadRegistry
+  |     +-- Slots (execution permits)
   |     +-- RunSupervisor (DynamicSupervisor)
-  |     +-- ThreadWorkerSupervisor (DynamicSupervisor)
-  |     +-- Scheduler
+  +-- TaskSupervisor (bounded Task.Supervisor; voice-call LLM/TTS tasks)
   +-- Health.Server (optional)
   +-- IngressSupervisor (opt-in)
 ```
 
 The execution subtree has a separate budget of 10 restarts per 5 seconds,
-an explicit containment policy. Registry loss stops downstream run/worker
-supervisors and the scheduler in reverse order and restarts them in list order.
-No surviving worker can keep stale registry or scheduler state. Temporary
+an explicit containment policy. Losing the run registry or the permit authority
+stops the run supervisor before new work is admitted, then restarts them in list
+order, so a restarted counter cannot oversubscribe execution. Temporary
 executions are not replayed; durable receipts and normal reconciliation retain
-their existing unknown-outcome semantics. Configuration, launch locks and ingress
-remain independently supervised. The unused gateway `TaskSupervisor` is removed;
-ingress owns any task supervisor it needs.
+their existing unknown-outcome semantics. Configuration, voice tasks and ingress
+remain independently supervised.
 
 ### Flow
 
