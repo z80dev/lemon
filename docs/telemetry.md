@@ -484,6 +484,82 @@ Aggregate snapshots do not provide per-run wait latency. See the
 
 #### Prompt cache-read share measurement (#562)
 
+Define aggregate cache-read share as
+`sum(cache_read) / sum(input + cache_read + cache_write)` across all calls in
+the multi-turn workload. Lemon's normalized `input` excludes cache reads and
+writes. Missing provider counters or a zero denominator make the share
+**unavailable**, not zero. Preserve per-turn counters and include failed calls
+when usage is reported.
+
+Measured 2026-11-16 at pre-epic `4d94b3c8e` and candidate
+`abc566dcdb83f35d311fb9c2c66b889e3b6fcc9d`, using the production
+`LemonAi.complete/3` route, `:openai_codex` / `gpt-6.1-sol`.
+Environment: MacBook Pro Mac15,9, Apple M3 Max, 128 GB RAM, macOS 15.6,
+OTP 29 / ERTS 17.1.1, Elixir 1.20.5; `ERL_FLAGS='+S 2:2'`.
+
+| Revision | Turn | Uncached input | Cache-read | Cache-write | Output | Cache-read share |
+|---|---:|---:|---:|---:|---:|---:|
+| Pre-epic | 1 | 10,617 | 0 | 0 | 5 | 0% |
+| Pre-epic | 2 | 10,638 | 0 | 0 | 5 | 0% |
+| Pre-epic | 3 | 10,659 | 0 | 0 | 5 | 0% |
+| Candidate | 1 | 10,616 | 0 | 0 | 5 | 0% |
+| Candidate | 2 | 10,682 | 0 | 0 | 5 | 0% |
+| Candidate | 3 | 10,748 | 0 | 0 | 5 | 0% |
+| **Pre-epic aggregate** | **3** | **31,914** | **0** | **0** | **15** | **0%** |
+| **Candidate aggregate** | **3** | **32,046** | **0** | **0** | **15** | **0%** |
+
+First-call and subsequent-call aggregate shares were also 0% in both variants.
+This small live sample demonstrates **no observed cache-share improvement**.
+System bytes were 53,569 on all baseline turns but their SHA-256 identities
+changed every turn. Candidate system bytes were 53,393 and their SHA-256 identity
+was identical across all three turns. Stable bytes alone do not guarantee a
+provider cache hit.
+
+The same bounded synthetic workload used an 800-item public reference prefix,
+three user turns with prior assistant replies retained, no tools, a 64-token
+output cap, `reasoning: :minimal`, and a 90-second per-call stream deadline.
+Each turn changed the fixture branch, dirty-file content and supplied date.
+Baseline re-captured the environment; candidate captured its stable block once
+and appended `Environment.turn_section/2` to each user turn. Fixture paths were
+replaced by `<workspace>` before provider transmission. No credentials, private
+prompts or conversation content were published.
+
+The disposable helper obtained the host-configured credential in-process with
+`System.cmd("omp", ["token", "openai-codex"])` and passed the trimmed value as
+`api_key` with `api_key_authoritative: true`. It started only `:lemon_ai` and
+`:req`, avoiding runtime listeners. Because baseline prebuilt modules initially
+showed candidate behavior, each final run explicitly loaded its checkout's
+`apps/coding_agent/lib/coding_agent/system_prompt/environment.ex` with
+`Code.compile_file/1`. This compiled one source module in-memory, not an umbrella
+build. Exact invocation forms below substitute shell variables for private
+checkout and fixture locations:
+
+```bash
+# From the pre-epic checkout root:
+CACHE_FIXTURE="$FIXTURE" CACHE_MODE=before ERL_FLAGS='+S 2:2' \
+  mix run --no-start --no-compile --no-deps-check "$CANDIDATE/cache_share_measure.exs" \
+  2>&1 | grep -E '^CACHE_|^\*\*'
+# From the candidate checkout root:
+CACHE_FIXTURE="$PWD/.cache-share-fixture" CACHE_MODE=after ERL_FLAGS='+S 2:2' \
+  mix run --no-start --no-compile --no-deps-check cache_share_measure.exs \
+  2>&1 | grep -E '^CACHE_|^\*\*'
+```
+
+Earlier route exploration is excluded from this paired table: three ZAI
+`glm-4.7-flash` completions reported cache-read counts 2, 2 and 11,100 but missing
+input/cache-write counters and an unverified baseline module; two Kimi attempts
+failed before completing; one direct ZAI request timed out at 60 seconds and
+another returned HTTP 429. These seven invocations are not zero-spend evidence;
+their full spend is unknown. The final six Codex calls supersede the initial
+credential-preflight blocker.
+
+Caveats: single three-turn pair, fixed baseline-then-candidate order, synthetic
+environment-level workload rather than a full coding-session/arena run, and
+uncontrolled provider cache regime. Fresh local state does not flush provider
+caches. Concurrent local CPU benchmarks were running; no latency comparison is
+claimed. The helper and fixture were removed after measurement. No tests or
+umbrella builds were run.
+
 A bounded 2026-11-16 follow-up on `openai_codex` / `gpt-6.1-sol` compared
 omitting the session key with retaining the native coding session's persisted
 identity. Both variants ran through `CodingAgent.Session` → `LemonAgent` and a

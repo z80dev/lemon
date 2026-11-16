@@ -1616,6 +1616,65 @@ disable chaining for that logical session, including across compaction resets.
 This feature is experimental and off by default; no token or latency improvement
 is claimed without a measured workload.
 
+### Bounded live comparison (2026-11-16)
+
+At source revision `abc566dcdb83f35d311fb9c2c66b889e3b6fcc9d`, ten paired
+turns used the production `LemonAi.stream/3` API with
+`openai-codex:gpt-6.1-sol`, low reasoning, a synthetic growing conversation,
+and one session-owned WebSocket transport. SSE was the current-revision
+`responses_websocket: false` control; arm order alternated each turn. This
+was not a pre-epic comparison or an arena run: `4d94b3c8e` has no session-owned
+WebSocket transport or this measurement helper, so the current disabled-feature
+arm is the control rather than an old-revision harness.
+
+| Measurement | SSE, n=10 | WebSocket enabled, n=10 |
+| --- | ---: | ---: |
+| First-content median / nearest-rank p90 (ms) | 1,857.10 / 2,345.51 | 2,047.72 / 2,383.22 |
+| Terminal median / nearest-rank p90 (ms) | 1,914.61 / 2,417.77 | 2,160.04 / 2,458.52 |
+| Uncached input tokens, sum | 11,050 | 10,026 |
+| Cache-read tokens, sum | 0 | 1,024 |
+| Total input including cache, sum | 11,050 | 11,050 |
+| Output tokens, sum | 50 | 50 |
+| Successful requests | 10 | 10 |
+
+The median within-pair WebSocket-minus-SSE difference was **+79.75 ms** to first
+content and **+85.48 ms** to terminal completion. Total reported input did not
+decrease. One WebSocket response reported a cache hit; the arms shared a
+prompt-cache key and caching was not disabled, so the uncached-input difference
+is not evidence that continuation reduced model input or billing. The transport
+retained an anchor after every completed turn and recorded zero anchor rejection
+strikes. Small samples and provider/network variability do not establish a tail
+latency improvement or a general regression.
+
+A separate two-turn wire diagnostic (two additional requests per arm, excluded
+from the table) reduced transport send traces to numerical metadata in memory.
+Neither WebSocket frame contained `previous_response_id`: input item counts
+were **1 then 3**, and encoded input sizes were **4,048 then 4,303 bytes**.
+Therefore this live workload exercised WebSocket **full replay**, not successful
+continuation; it does not establish a chaining benefit. Anchor presence alone
+was insufficient. The live chaining measurement remains unmet for this workload;
+the source behavior was not changed to force a result.
+
+The exact measurement invocation was:
+
+```sh
+ERL_FLAGS='+S 2:2' mix run --no-compile --no-deps-check --no-start .transport_measure.exs websocket
+ERL_FLAGS='+S 2:2' mix run --no-compile --no-deps-check --no-start .transport_measure.exs websocket-wire
+```
+
+The temporary helper was removed after publishing aggregate numerical results.
+It resolved a host-configured Codex credential in memory through `omp token`,
+disabled provider retries, consumed production `EventStream` events, and timed
+from immediately before `LemonAi.stream/3` to first content and terminal
+consumption. Credential resolution and VM/application startup were outside the
+timed interval; no prompts, responses, credentials or raw traces were published.
+Environment: MacBook Pro Mac15,9, Apple M3 Max, 128 GB, macOS 15.6, OTP 29
+(ERTS 17.1.1), Elixir 1.20.5, two BEAM schedulers. The existing prepared dev
+build was used without recompilation; its build provenance was not independently
+attested. The sequential local session-memory probe ran concurrently; Docker
+image builds had not started. Other host load was uncontrolled. See
+[#566](https://github.com/z80dev/lemon/issues/566) for the published run report.
+
 A bounded follow-up on 2026-11-16 used two `openai-codex:gpt-6.1-sol`
 requests through a real `CodingAgent.Session` with low reasoning and provider
 retries disabled. Both requests succeeded on the same connection with zero

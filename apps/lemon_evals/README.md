@@ -339,6 +339,10 @@ provider with `auth_source = "api_key"`; omp with `PI_CODEX_WEBSOCKET=0`, becaus
 its default WebSocket transport cannot pass through the HTTP proxy). omp's model
 roles all point at the group's model so its subagents cannot switch models.
 
+The Lemon image includes Deno 2.5.6, with architecture-specific archive SHA-256
+checks, for the opt-in `--agents lemon-coding,lemon-code-mode` comparison.
+Code-mode requires Deno on PATH and does not fall back to an unsandboxed kernel.
+
 The report is per model: pass rates with Wilson intervals, an exact McNemar
 test over same-model (task, repetition) pairs, failure modes, tool calls and
 median wall time, request count and wire tokens. A pooled section covers only
@@ -501,8 +505,11 @@ glibc and OpenSSL; the installer currently targets Debian/Ubuntu Linux tasks.
 On Linux select a host gateway IP/name reachable from the task container;
 the adapter adds that host to Harbor's agent-phase network allowlist. Do not
 mount the operator's HOME or inject provider credentials with Harbor flags.
-For the first authorized run, `--keep-containers` retains private containers
-for inspection: inspect their environment, `/tmp/lemon-arena-home`, installed
+For the first authorized run, `--keep-containers` sets Harbor's Docker
+`kwargs.keep_containers = true`: containers are stopped rather than removed.
+Setting only `delete = false` preserves images, not containers, on the pinned
+Harbor revision. Inspect retained containers' environment,
+`/tmp/lemon-arena-home`, installed
 bundles and process environment, and verify that every provider bearer is a
 trial token, not a real credential. Remove those containers manually after
 the audit. Do not publish that raw inspection or raw Harbor logs.
@@ -520,6 +527,8 @@ attempted failures, turns, failed tools, wall time, and proxy input/output/
 cache-read tokens. `wire_input_tokens` is **uncached** input; add the separately
 reported cache reads only when that counter is known. Missing, partial or
 interrupted wire usage remains null, never a CLI fallback or an inferred zero.
+The adapter explicitly collects terminal metrics and redacts trial tokens after
+agent execution; overriding Harbor's base `run` does not invoke its post-run hook.
 Harbor verifier rewards, not agent claims, determine task success. The report
 records operator-attested Lemon/omp revisions, bundle SHA-256 and the pinned
 Harbor API revision; retain Harbor's private task checksums/configs alongside
@@ -571,8 +580,9 @@ Every adaptation is intentional:
    patch call, including recovered failures. Neither tool implementation or
    disclosure defaults is tuned for the fixtures.
 4. Lemon uses production `lemon -p --output stream-json` so tool results and
-   identities are observable; Harbor uses plain JSON. Repeated streamed
-   completion IDs are deduplicated. Projected/clipped errors that cannot be
+   identities are observable; Harbor uses plain JSON. Non-tool agent events and
+   non-dictionary actions are ignored; repeated streamed completion IDs are
+   deduplicated. Projected/clipped errors that cannot be
    classified stay `unclassified_tool_error`; missing target information makes
    retry counts unknown rather than guessed.
 5. Upstream at the pinned revision is **not byte-exact**: `verify.ts` applies

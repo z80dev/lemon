@@ -15,6 +15,10 @@ defmodule CodingAgent.Extensions do
   - Project-local extensions (`.lemon/extensions/`)
   - Explicit paths
 
+  Concurrent loads wait for the node-local reload lock with a finite retry limit.
+  Exhausted lock acquisition is reported as a load error (and logged by
+  `load_extensions/1`), rather than silently omitting an extension.
+
   ## Extension Discovery
 
   Extensions are discovered by looking for modules that implement
@@ -954,6 +958,32 @@ defmodule CodingAgent.Extensions do
   end
 
   @doc """
+  Unload the given extension modules and remove their source-path metadata.
+
+  Callers must ensure no other extension inventory still needs these modules.
+  Old code still in use is never hard-purged.
+  """
+  @spec unload_extensions(loaded_extensions()) :: :ok
+  def unload_extensions(modules) when is_list(modules) do
+    for module <- modules do
+      case Reload.soft_purge_module(module, lock_retries: 10) do
+        {:ok, %{status: :ok}} ->
+          _ = :code.delete(module)
+
+        _ ->
+          :ok
+      end
+
+      case :ets.whereis(@source_path_table) do
+        :undefined -> :ok
+        _tid -> :ets.delete(@source_path_table, module)
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
   Clear all cached extension modules and data.
 
   This function:
@@ -988,16 +1018,7 @@ defmodule CodingAgent.Extensions do
           |> Enum.map(fn {module, _path} -> module end)
       end
 
-    # Soft purge each module, then delete if it was purged successfully.
-    for module <- modules do
-      case Reload.soft_purge_module(module) do
-        {:ok, %{status: :ok}} ->
-          _ = :code.delete(module)
-
-        _ ->
-          :ok
-      end
-    end
+    unload_extensions(modules)
 
     # Clear the source path table
     case :ets.whereis(@source_path_table) do
@@ -1165,8 +1186,12 @@ defmodule CodingAgent.Extensions do
   @spec load_extension_file(String.t()) :: [module()]
   defp load_extension_file(path) do
     case load_extension_file_safe(path) do
-      {:ok, modules} -> modules
-      {:error, _error, _message} -> []
+      {:ok, modules} ->
+        modules
+
+      {:error, _error, message} ->
+        Logger.warning("Failed to load extension #{path}: #{message}")
+        []
     end
   end
 
@@ -1175,7 +1200,7 @@ defmodule CodingAgent.Extensions do
   @spec load_extension_file_safe(String.t()) ::
           {:ok, [module()]} | {:error, term(), String.t()}
   defp load_extension_file_safe(path) do
-    case Reload.reload_extension(path) do
+    case Reload.reload_extension(path, lock_retries: 10) do
       {:ok,
        %{status: :error, metadata: %{error_message: message}, errors: [%{reason: reason} | _]}} ->
         {:error, reason, message}

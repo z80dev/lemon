@@ -197,6 +197,72 @@ defmodule CodingAgent.ExtensionsTest do
   end
 
   describe "load_extensions/1" do
+    test "concurrent loaders wait for an in-progress reload", %{tmp_dir: tmp_dir} do
+      parent = self()
+
+      holder =
+        Task.async(fn ->
+          Lemon.Reload.reload_system(
+            compile: true,
+            compile_fn: fn ->
+              send(parent, :reload_locked)
+
+              receive do
+                :release_reload -> :ok
+              end
+            end
+          )
+        end)
+
+      modules = [ConcurrentPlainLoadExtension, ConcurrentTrackedLoadExtension]
+      on_exit(fn -> Enum.each(modules, &:code.delete/1) end)
+
+      try do
+        assert_receive :reload_locked, 1_000
+
+        loaders =
+          for {module, load} <-
+                Enum.zip(modules, [
+                  &Extensions.load_extensions/1,
+                  &Extensions.load_extensions_with_errors/1
+                ]) do
+            dir = Path.join(tmp_dir, inspect(module))
+            File.mkdir_p!(dir)
+
+            File.write!(Path.join(dir, "extension.ex"), """
+            defmodule #{inspect(module)} do
+              @behaviour CodingAgent.Extensions.Extension
+              def name, do: "#{inspect(module)}"
+              def version, do: "1.0.0"
+            end
+            """)
+
+            Task.async(fn ->
+              send(parent, {:loader_started, self()})
+              load.([dir])
+            end)
+          end
+
+        for loader <- loaders do
+          pid = loader.pid
+          assert_receive {:loader_started, ^pid}, 1_000
+        end
+
+        waiting = Task.yield_many(loaders, 100)
+        send(holder.pid, :release_reload)
+        assert Enum.all?(waiting, fn {_task, reply} -> is_nil(reply) end)
+
+        assert [
+                 {:ok, [ConcurrentPlainLoadExtension]},
+                 {:ok, [ConcurrentTrackedLoadExtension], [], []}
+               ] =
+                 Task.await_many(loaders, 30_000)
+      after
+        send(holder.pid, :release_reload)
+        Task.await(holder)
+      end
+    end
+
     test "returns ok with empty list for non-existent paths" do
       result = Extensions.load_extensions(["/nonexistent/path"])
       assert result == {:ok, []}

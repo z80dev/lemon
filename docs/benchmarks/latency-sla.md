@@ -83,24 +83,36 @@ measurement as a pixel-render measurement.
 
 ## Targets and first measured evidence
 
-**Pending orchestrator's first measurement. No values or targets have been
-invented.** Replace every `PENDING` below with the first retained artifact and
-its measured revision, hardware, date and sample counts. Vendor-reported
-nanocode 5/10 ms p50/p99 is context, not a measured Lemon target or a comparable
-protocol/hardware baseline.
+Measured 2026-11-16 at `abc566dcdb83f35d311fb9c2c66b889e3b6fcc9d` on a
+MacBook Pro (Mac15,9), Apple M3 Max, 128 GB RAM, macOS 15.6, OTP 29 /
+ERTS 17.1.1, Elixir 1.20.5, two benchmark schedulers. Command:
+`mix lemon.eval.latency --boots 5 --turns 20 --revision $(git rev-parse HEAD) --output /tmp/latency.json`.
+The retained report has five boot/readiness observations and 100 turn/stage
+observations. Targets below are initial same-machine warning budgets, set to
+the first observation plus the existing regression policy's larger allowance
+(25% or 2 ms); they are not production SLAs. Other host activity was not
+controlled. The pre-epic `4d94b3c8e` checkout has no latency harness, so no
+before/after improvement is established. Vendor nanocode figures are not a
+comparable baseline.
 
 | Budget | Current p50 / p99 | Target p50 / p99 | Source |
 | --- | --- | --- | --- |
-| Enter → mock request | PENDING | PENDING | First orchestrator report/revision PENDING |
-| Mock token → WebSocket client | PENDING | PENDING | First orchestrator report/revision PENDING |
-| Completion → queued start | PENDING | PENDING | First orchestrator report/revision PENDING |
-| Cold ready / warm ready | PENDING | PENDING | First orchestrator report/revision PENDING |
-| Journal / environment / prompt / tools | PENDING | PENDING | First orchestrator report/revision PENDING |
+| Enter → mock request | 513.103 / 892.480 ms | 641.379 / 1115.600 ms | First local report, revision above |
+| Mock token → WebSocket client | 1.068 / 6.671 ms | 3.068 / 8.671 ms | First local report, revision above |
+| Completion → queued start | 30.042 / 52.982 ms | 37.553 / 66.228 ms | First local report, revision above |
+| Cold ready | 1156.292 / 1382.840 ms | 1445.365 / 1728.550 ms | First local report, n=5 |
+| Warm ready | 1.133 / 1.149 ms | 3.133 / 3.149 ms | First local report, n=5 |
+| Journal load | 20.029 / 30.787 ms | 25.036 / 38.484 ms | First local report, n=100 |
+| Environment capture | 77.494 / 129.851 ms | 96.868 / 162.314 ms | First local report, n=100 |
+| Prompt composition | 2.777 / 10.915 ms | 4.777 / 13.644 ms | First local report, n=100 |
+| Tool registry | 195.275 / 281.042 ms | 244.094 / 351.303 ms | First local report, n=100 |
 
-Top three measured session-start contributors: **PENDING first report**. The
-artifact ranks them in `top_three_session_contributors`; do not describe the
-10 ms prompt defer or 50 ms follow-up timeout as measured contributors merely
-because those constants exist in source.
+Top three measured session-start contributors by p50: **tool registry
+(195.275 ms), environment capture (77.494 ms), journal load (20.029 ms)**.
+Production boot-to-ready was 575.901 / 743.024 ms p50/p99; mock-token to
+gateway was 0.368 / 3.991 ms, and gateway-token to client 0.508 / 2.809 ms.
+These stage percentiles are not additive. With only five boot samples p99
+is the maximum; no terminal-render or literal launcher timing is claimed.
 
 ## Nightly regression policy
 
@@ -119,7 +131,7 @@ must match; mismatches fail closed and require an intentional new baseline.
 These are coarse shared-runner warning thresholds, not production SLAs or proof
 of statistical significance. Confirm a flag with same-machine before/after
 measurements before making an architectural claim. The initial fixed budgets
-remain pending the first orchestrator measurement.
+above come from the first local report.
 
 Issues #547, #559, #564 and #567 must record before/after artifacts from this
 command, exact revisions/settings and p50/p99 changes before claiming latency

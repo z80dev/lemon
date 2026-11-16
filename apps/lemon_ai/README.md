@@ -152,8 +152,8 @@ failed attempts remains charged to the cumulative agent budget.
 an unauthenticated `HEAD /` to the model's origin. It never generates tokens or
 sends credentials/prompts; failure does not affect calls. Caller policy coalesces
 each origin for 30 seconds and permits eight distinct origins per window, with
-eight concurrent tasks maximum. Servers may close connections;
-first-request latency improvements still require the #546 measurement.
+eight concurrent tasks maximum. Servers may close connections; bounded live
+measurements below are not a latency guarantee.
 
 Request hedging is **off for every provider by default**, including subscription
 providers whose quotas count duplicate calls. Enable only selected providers:
@@ -187,6 +187,75 @@ Published-package API additions: `LemonAi.preconnect/1`,
 `LemonAi.CallDispatcher.hedging_state/2`, per-provider `:hedging` configuration,
 and the dispatch option `:hedge_input_tokens` (zero-arity estimate callback;
 supplied automatically by `LemonAi.stream/3` and `complete/3`).
+
+#### Bounded live latency comparison (2026-11-16)
+
+At source revision `abc566dcdb83f35d311fb9c2c66b889e3b6fcc9d`, each comparison
+used ten paired requests per arm through production `LemonAi.stream/3` and
+`EventStream`, with `openai-codex:gpt-6.1-sol`, low reasoning and a short synthetic
+request. Arm order alternated by pair; all 40 logical requests succeeded.
+Controls disabled the feature at the same revision. Pre-epic `4d94b3c8e` has
+neither preconnect/hedging nor this helper; no historical or arena harness
+comparison is claimed.
+
+| Experiment / request latency | Feature off, n=10 | Feature on, n=10 |
+| --- | ---: | ---: |
+| Preconnect first-content median / nearest-rank p90 (ms) | 2,424.35 / 2,568.68 | 1,910.57 / 2,178.07 |
+| Preconnect terminal median / nearest-rank p90 (ms) | 2,458.93 / 2,689.25 | 1,974.80 / 2,224.24 |
+| Hedging first-content median / nearest-rank p90 (ms) | 1,938.03 / 2,259.22 | 2,029.52 / 3,234.00 |
+| Hedging terminal median / nearest-rank p90 (ms) | 2,014.51 / 2,380.72 | 2,093.59 / 3,303.62 |
+
+**Preconnect:** every request used a fresh BEAM/Finch pool. The enabled arm called
+`LemonAi.preconnect(model)` with **1,500 ms** lead time before the timed model
+request. The median within-pair on-minus-off difference was **−509.80 ms** to
+first content and **−512.96 ms** to terminal completion. Each arm reported
+**210 input / 50 output tokens**, with zero cache reads. The lead time and
+VM/application startup were excluded; OS DNS caches were not reset. These are
+whole model-request timings, not isolated DNS/TCP/TLS measurements. Hint/HEAD
+success and physical connection reuse were not instrumented, so provider
+variability cannot be separated from warming. An instrumentation-only helper
+syntax interruption occurred between the two halves of pair 6; the remaining
+calls resumed without repeating completed requests.
+
+**Hedging:** one BEAM retained the production latency/budget window across both
+arms. Configuration enabled only `openai_codex` on enabled requests; observations
+were real, not injected, and admission/cap/deadline behavior was unchanged.
+**One duplicate** started across **20 logical requests (5%)**; another deadline
+crossing emitted `hedge_skipped` with `budget_exhausted`. The admitted duplicate
+used the observed **2,608 ms p90 deadline** and charged **14 estimated duplicate
+input tokens**. Logical input totals were **210 off / 224 on**, including that
+estimate; output totals were **50 per arm**. The estimate is not vendor billing
+for the cancelled/losing request. The median within-pair on-minus-off difference
+was **+383.63 ms** to first content and **+409.44 ms** to terminal completion.
+The enabled arm did not demonstrate a tail-latency win. One duplicate is
+insufficient to assess efficacy; winning-transport identity, loser cancellation
+and loser billing were not independently observed, and saturated admission was
+not exercised.
+
+Commands used (numerical-output redirection omitted):
+
+```sh
+for pair in {1..10}; do
+  if (( pair % 2 )); then arms='off on'; else arms='on off'; fi
+  for arm in $arms; do
+    ERL_FLAGS='+S 2:2' mix run --no-compile --no-deps-check --no-start .transport_measure.exs preconnect "$arm" "$pair"
+  done
+done
+ERL_FLAGS='+S 2:2' mix run --no-compile --no-deps-check --no-start .transport_measure.exs hedge
+```
+
+The temporary helper and numerical scratch files were removed after publication;
+this is a bounded measurement report, not a retained replay harness. It obtained
+a host-configured Codex credential through `omp token` in memory, disabled
+provider retries, and timed immediately before `LemonAi.stream/3` through first
+content and terminal event consumption. No credentials, prompts, responses or
+raw traces were published. Environment: MacBook Pro Mac15,9, Apple M3 Max,
+128 GB, macOS 15.6, OTP 29 (ERTS 17.1.1), Elixir 1.20.5, two BEAM schedulers.
+The existing prepared dev build was used without recompilation or independent
+build-provenance attestation. The sequential local session-memory probe ran
+concurrently; Docker image builds had not started. Other host load was
+uncontrolled. These small network/provider samples are not an SLA or a causal
+estimate. See [#567](https://github.com/z80dev/lemon/issues/567).
 
 ## Tool use
 
