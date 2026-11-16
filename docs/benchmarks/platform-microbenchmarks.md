@@ -394,3 +394,124 @@ coalescer section, which was re-measured on the same machine later that day
 after the answer-trim fix described above. If you re-run them and the ratios
 hold but the absolutes differ, that is the expected outcome, and the ratios
 were the point.
+
+## Epic #543 local measurements (2026-11-16)
+
+Candidate `abc566dcdb83f35d311fb9c2c66b889e3b6fcc9d`; pre-epic
+`4d94b3c8e` checked out with `git worktree add /tmp/lemon-pre 4d94b3c8e`.
+MacBook Pro Mac15,9, Apple M3 Max, 128 GB RAM, macOS 15.6, OTP 29
+(ERTS 17.1.1), Elixir 1.20.5. These runs use the default 16 schedulers;
+CPU benchmarks were serialized. Other host load was uncontrolled. These are
+separate from the older Linux figures above.
+
+### Mixed Store workload
+
+Command on the candidate:
+`MIX_ENV=test mix run --no-start apps/lemon_core/bench/store_workload.exs`.
+The script does not exist at the pre-epic revision, but is explicitly
+cross-revision compatible. Run the unchanged candidate script by absolute path
+from the baseline checkout with
+`MIX_ENV=test mix run --no-start "$CANDIDATE/apps/lemon_core/bench/store_workload.exs"`.
+`CANDIDATE` denotes the candidate checkout, not a second copy of its BEAMs:
+Mix compiled each checkout's test sources before its run.
+Both runs use 16 workers, 500 iterations, 10,000 initial rows per table;
+8,000 observations per operation, 24,000 Store-call observations.
+
+| Metric | Pre-epic | Candidate |
+| --- | ---: | ---: |
+| Workload elapsed (ms) | 2176.126 | 1042.372 |
+| Peak Store mailbox length | 27 | 24 |
+| Store calls p50 / p99 (us) | 167 / 17271 | 241 / 18085 |
+| Read p50 / p99 (us) | 200 / 18452 | 245 / 6691 |
+| Write p50 / p99 (us) | 186 / 18481 | 252 / 18819 |
+| History p50 / p99 (us) | 243 / 575 | 18 / 43 |
+| Secret p50 / p99 (us) | 546 / 1105 | 253 / 18387 |
+| Sweep/ping p50 / p99 (us) | 103 / 320 | 224 / 13585 |
+
+The workload finished faster, but not every operation improved: Store-call
+p50 and p99 and secret/sweep tails worsened. A single sequential run per
+revision is not a statistically controlled effect estimate.
+
+### Durable tool-intent overhead
+
+Command: `mix run --no-start bench/tool_intent.exs`; 1,000 calls per class,
+APFS temporary directory, synthetic 1,024-byte parameters, no actual tool effect.
+
+| Class | Mean (us) | p50 / p95 / p99 (us) |
+| --- | ---: | ---: |
+| No effect / no intent | 0.06 | 0 / 0 / 0 |
+| External effect / append + datasync | 193.34 | 142 / 357 / 621 |
+
+Added mean: **193.28 us**. Zero integer-microsecond samples mean below the
+clock resolution, not free execution. The pre-epic revision has neither this
+benchmark nor the durable intent API, so it cannot run the same workload.
+
+### EventStream transport and delta-byte model (#571 / #570)
+
+Command:
+`LEMON_EVENT_STREAM_BENCH=1 LEMON_BENCH_REVISION=$(git rev-parse HEAD) MIX_ENV=test mix run --no-start apps/lemon_ai/bench/event_stream.exs`.
+Twenty measured batches after two warmups; 10,000 ordered 128-byte deltas.
+Startup/teardown and payload creation are excluded.
+
+| Transport | Batch p50 / p95 (us) | p50 per event (us) |
+| --- | ---: | ---: |
+| Raw mailbox | 1410 / 1661 | 0.141 |
+| One EventStream | 20964 / 22888 | 2.096 |
+| Two EventStreams with relay | 44546 / 58746 | 4.455 |
+
+Ratios to raw mailbox p50: **14.87x / 31.59x**. The raw path does not
+preserve EventStream backpressure, timeout, cancellation or subscription semantics.
+
+The script is absent pre-epic but applies unchanged there. Baseline command
+from that checkout:
+`LEMON_EVENT_STREAM_BENCH=1 LEMON_BENCH_REVISION=$(git rev-parse HEAD) MIX_ENV=test mix run --no-start "$CANDIDATE/apps/lemon_ai/bench/event_stream.exs"`.
+Baseline batch p50/p95 us: raw **1373/1559**, one stream **20150/24090**,
+two streams **48185/58798**; ratios **14.68x/35.09x**. Candidate versus baseline
+median changes were +814 us for one stream and −3639 us for two streams.
+These small differences are not a demonstrated architectural speedup. The
+delta-byte test is absent pre-epic; its old/new arithmetic arms are a model,
+not a historical runtime benchmark.
+
+Command:
+`scripts/test path apps/lemon_ai/test/lemon_ai/stream_delta_benchmark_test.exs --include benchmark`
+passed **1 test**. This is an arithmetic byte model, not allocator measurement:
+
+| Argument bytes | Old materialized / sent bytes | New materialized / sent bytes |
+| ---: | ---: | ---: |
+| 51200 | 1305600 / 1356800 | 51200 / 51200 |
+| 102400 | 5171200 / 5273600 | 102400 / 102400 |
+| 204800 | 20582400 / 20787200 | 204800 / 204800 |
+
+### Task worktree CoW warm build (#601)
+
+Same-revision control/treatment at the candidate revision above, using the
+production `CodingAgent.Tools.Task.Worktree.prepare/3` in `"none"` mode.
+An isolated local clone kept the task worktrees and branches separate from
+the main repository. Its ignored `_build` (164 MiB) and `deps` (43 MiB) were
+seeded using APFS `cp -c -R`; only these two cache directories were allowlisted.
+The mechanism probes CoW, checks Git-ignored eligibility and traverses the cache
+against its entry/size/time guards; it is not just a direct `cp` stopwatch.
+
+| Backend | Prepare (ms) | `mix deps.get --check-locked && mix compile` (ms) | Combined (ms) |
+| --- | ---: | ---: | ---: |
+| `:git_worktree` | 803.140 | 66053.169 | 66856.309 |
+| `:auto` → observed `:cow` | 2450.438 | 18821.822 | 21272.260 |
+
+Both builds exited zero. The cold child initially had neither cache; the CoW
+child had both. Warming added 1647.298 ms preparation and reduced the subsequent
+dependency/build command by 47231.347 ms (combined reduction 45584.049 ms).
+One cold-then-warm sample is not a distribution; dependency download/network,
+OS caches and incremental recompilation are included, and ordering favors the
+warm arm. It was not a zero-work incremental build. The source fixture used
+the supplied prepared development artifacts without an independent build
+provenance attestation.
+
+Command was `mix run --no-start bench/measure_cow_tmp.exs`; the temporary helper
+set `Application.put_env(:coding_agent, :task_clone_directories, ["_build", "deps"])`,
+selected `:task_workspace_backend` as `:git_worktree` then `:auto`, timed
+`Worktree.prepare(fixture, generated_id, "none")` with `:timer.tc/1`,
+then timed `System.cmd("sh", ["-c", "mix deps.get --check-locked && mix compile"],
+cd: prepared.cwd)`. It checked cache presence/backend/build exit, removed
+its own task worktrees/branches, and was discarded with the fixture.
+Pre-epic has no CoW backend or this helper, so the feature-off candidate is the
+comparison control; no historical warm-build improvement is claimed.
