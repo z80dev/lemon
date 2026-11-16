@@ -12,6 +12,14 @@ defmodule LemonAi.Providers.OpenAICompletions do
   - OpenRouter (openrouter.ai)
   - Local servers (llama.cpp, etc.)
 
+  With `StreamOptions.session_id`, documented cache routing controls are sent
+  only to their supported providers: OpenAI/Mistral/Together's `prompt_cache_key`,
+  OpenRouter/Vercel AI Gateway's `session_id`, xAI's `x-grok-conv-id`, and
+  Fireworks' `x-session-affinity`.
+  Missing or empty IDs omit these controls; long IDs use the same stable,
+  bounded identity as the Responses providers. Explicit headers still override
+  generated affinity headers.
+
   ## SSE Format
 
   The API returns Server-Sent Events (SSE) with `data:` lines containing JSON chunks:
@@ -58,7 +66,14 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   alias LemonAi.EventStream
   alias LemonAi.Models.Presets
-  alias LemonAi.Providers.{OpenCodeGoSession, RequestHeaders, StreamingHelper}
+
+  alias LemonAi.Providers.{
+    OpenAIResponsesShared,
+    OpenCodeGoSession,
+    RequestHeaders,
+    StreamingHelper
+  }
+
   alias LemonAi.Retry
 
   require Logger
@@ -298,11 +313,31 @@ defmodule LemonAi.Providers.OpenAICompletions do
     # Merge headers - later entries override earlier ones
     base_headers
     |> RequestHeaders.merge(session_headers)
+    |> RequestHeaders.merge(cache_routing_headers(model, opts))
     |> RequestHeaders.merge(model.headers)
     |> RequestHeaders.merge(copilot_headers)
     |> RequestHeaders.merge(opts.headers)
     |> Map.to_list()
   end
+
+  # These headers are endpoint-specific, not general OpenAI compatibility flags.
+  # https://docs.x.ai/developers/advanced-api-usage/prompt-caching/maximizing-cache-hits
+  # https://docs.fireworks.ai/guides/prompt-caching
+  defp cache_routing_headers(%{provider: provider}, opts)
+       when provider in [:xai, "xai", :fireworks, "fireworks"] do
+    case OpenAIResponsesShared.normalize_prompt_cache_key(opts.session_id) do
+      nil ->
+        %{}
+
+      id ->
+        header =
+          if provider in [:xai, "xai"], do: "x-grok-conv-id", else: "x-session-affinity"
+
+        %{header => id}
+    end
+  end
+
+  defp cache_routing_headers(_model, _opts), do: %{}
 
   defp build_copilot_headers(context) do
     messages = context.messages || []
@@ -355,6 +390,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
     }
     |> maybe_add_stream_options(compat)
     |> maybe_add_store(compat)
+    |> maybe_add_cache_routing(model, opts)
     |> maybe_add_max_tokens(model, opts, compat)
     |> maybe_add_temperature(opts)
     |> maybe_add_tools(context, compat)
@@ -374,6 +410,41 @@ defmodule LemonAi.Providers.OpenAICompletions do
   end
 
   defp maybe_add_store(params, _compat), do: params
+
+  # Do not send cache parameters to arbitrary OpenAI-compatible endpoints.
+  # https://developers.openai.com/api/docs/guides/prompt-caching
+  # https://openrouter.ai/docs/guides/best-practices/prompt-caching
+  # https://docs.mistral.ai/inference/conversations/advanced/prompt-caching
+  # https://docs.together.ai/docs/inference/chat/prompt-caching
+  # https://vercel.com/docs/ai-gateway/models-and-providers/session-affinity
+  defp maybe_add_cache_routing(params, %{provider: provider}, opts)
+       when provider in [
+              :openai,
+              "openai",
+              :mistral,
+              "mistral",
+              :together,
+              "together",
+              :openrouter,
+              "openrouter",
+              :vercel_ai_gateway,
+              "vercel_ai_gateway"
+            ] do
+    case OpenAIResponsesShared.normalize_prompt_cache_key(opts.session_id) do
+      nil ->
+        params
+
+      id ->
+        field =
+          if provider in [:openrouter, "openrouter", :vercel_ai_gateway, "vercel_ai_gateway"],
+            do: "session_id",
+            else: "prompt_cache_key"
+
+        Map.put(params, field, id)
+    end
+  end
+
+  defp maybe_add_cache_routing(params, _model, _opts), do: params
 
   defp maybe_add_max_tokens(params, model, opts, %{max_tokens_field: field}) do
     default_max_tokens =
