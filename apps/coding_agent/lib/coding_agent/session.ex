@@ -1150,8 +1150,10 @@ defmodule CodingAgent.Session do
     end
   end
 
-  def handle_call({:invocation_stream, options}, _from, state) do
-    {:reply, CodingAgent.Session.Invocation.stream(state, options), state}
+  def handle_call({:invocation_stream, model, options}, _from, state) do
+    {stream_fn, options} = CodingAgent.Session.Invocation.stream(state, options)
+    {state, options} = CodingAgent.Session.ResponsesTransport.prepare(state, model, options)
+    {:reply, {stream_fn, options}, state}
   end
 
   def handle_call({:record_tool_intent, data, signal, parent_id}, from, state) do
@@ -1436,6 +1438,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:switch_model, model}, _from, state) do
+    state = CodingAgent.Session.ResponsesTransport.switch_model(state, model)
     :ok = LemonAgent.Agent.set_model(state.agent, model)
 
     # An explicit model choice outranks stickiness from a previous fallback

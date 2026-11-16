@@ -356,6 +356,11 @@ defmodule LemonAi.Types do
     `caller_headers` retains the original caller override layer when Lemon-owned
     options are rebuilt for another model. Derived provider/model headers must
     not become caller overrides on the next request.
+
+    `provider_options.responses_websocket` opts OpenAI/Codex Responses into
+    WebSocket transport; `provider_options.responses_transport` must be the PID
+    of a live `LemonAi.Providers.OpenAIResponsesWebSocket` owned by the caller's
+    conversation. Omit/disable the flag to retain the unchanged SSE path.
     """
     @type thinking_level :: LemonAi.Types.Model.reasoning_level()
     @type t :: %__MODULE__{

@@ -56,6 +56,19 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   # ============================================================================
   # Utilities
   # ============================================================================
+  @doc false
+  def request_stream(opts, url, headers, body, sse_request) do
+    case opts.provider_options do
+      %{responses_websocket: true, responses_transport: transport} when is_pid(transport) ->
+        LemonAi.Providers.OpenAIResponsesWebSocket.request(transport, url, headers, body)
+
+      %{responses_websocket: true} ->
+        {:error, "Responses WebSocket requires a live session transport", nil}
+
+      _ ->
+        sse_request.()
+    end
+  end
 
   @doc """
   Stable OpenAI prompt-cache/routing identity, bounded to 64 wire bytes.

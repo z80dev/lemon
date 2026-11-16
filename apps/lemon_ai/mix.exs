@@ -86,6 +86,8 @@ defmodule LemonAi.MixProject do
     [
       # HTTP client with streaming support
       {:req, "~> 0.5"},
+      # Session-owned Responses WebSocket transport
+      {:websockex, "~> 0.5"},
       # JSON encoding/decoding
       {:jason, "~> 1.4"},
       # Options validation

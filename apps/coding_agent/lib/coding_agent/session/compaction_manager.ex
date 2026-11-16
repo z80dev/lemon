@@ -350,6 +350,8 @@ defmodule CodingAgent.Session.CompactionManager do
       ) do
     case result do
       {:ok, compaction_result} ->
+        state = CodingAgent.Session.ResponsesTransport.reset(state)
+
         session_manager =
           SessionManager.append_pruning(
             state.session_manager,

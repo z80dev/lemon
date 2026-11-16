@@ -109,6 +109,7 @@ defmodule LemonCore.Config.Providers do
           api_key_env: String.t() | nil,
           auth: String.t() | nil,
           headers: %{optional(String.t()) => String.t()} | nil,
+          provider_options: %{optional(String.t()) => term()} | nil,
           discovery: String.t() | nil,
           discovery_timeout_ms: pos_integer() | nil,
           models: [map()] | nil
@@ -217,6 +218,7 @@ defmodule LemonCore.Config.Providers do
       api_key_env: normalize_optional_string(config["api_key_env"]),
       auth: normalize_enum(config["auth"], &canonical_auth/1),
       headers: normalize_headers(config["headers"]),
+      provider_options: normalize_provider_options(config["provider_options"]),
       discovery: normalize_enum(discovery_type(config["discovery"]), &canonical_discovery/1),
       discovery_timeout_ms: discovery_timeout_ms(config["discovery"]),
       models: normalize_models(config["models"])
@@ -292,6 +294,11 @@ defmodule LemonCore.Config.Providers do
   defp normalize_headers(%{} = headers), do: Map.new(headers, fn {k, v} -> {to_string(k), v} end)
   defp normalize_headers(nil), do: nil
   defp normalize_headers(other), do: other
+
+  defp normalize_provider_options(%{} = options),
+    do: Map.new(options, fn {key, value} -> {to_string(key), value} end)
+
+  defp normalize_provider_options(_), do: nil
 
   defp normalize_models(models) when is_list(models), do: Enum.map(models, &normalize_model/1)
   defp normalize_models(nil), do: nil

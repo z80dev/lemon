@@ -1495,6 +1495,38 @@ To force a token explicitly, set:
 - `OPENAI_CODEX_API_KEY` (preferred)
 - `CHATGPT_TOKEN` (fallback)
 
+## OpenAI Responses WebSocket (opt-in)
+
+Native live coding sessions can reuse an OpenAI Responses WebSocket across turns.
+Enable it separately for each provider in `~/.lemon/config.toml` or the project's
+`.lemon/config.toml`:
+
+```toml
+[providers.openai.provider_options]
+responses_websocket = true
+
+[providers.openai-codex.provider_options]
+responses_websocket = true
+```
+
+This applies only to the `openai_responses` and `openai_codex_responses` wire
+APIs, including custom providers using `api = "openai_responses"`. Azure Responses,
+Chat Completions and other APIs keep their existing transport. Omit the setting
+or set it to `false` to keep the default SSE path.
+
+The live session owns the transport; subsequent turns reuse it and may send only
+new input with `previous_response_id`. Model switches and compaction close the
+connection and discard the continuation baseline. Credential/header changes
+invalidate it on the next request. The transport dies with its session; its pid
+and continuation state are never written to session history or restored after
+parking/restart. Summary/classifier calls do not borrow the conversation's
+transport.
+
+An invalid continuation anchor triggers a full replay. Three anchor rejections
+disable chaining for that logical session, including across compaction resets.
+This feature is experimental and off by default; no token or latency improvement
+is claimed without a measured workload.
+
 ## OpenAI-Compatible Endpoints
 
 Lemon ships built-in presets for local inference servers and hosted open-model
