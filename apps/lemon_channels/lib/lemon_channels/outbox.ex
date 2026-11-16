@@ -574,7 +574,11 @@ defmodule LemonChannels.Outbox do
   end
 
   defp dispatch_entry(state, entry, queue, min_wait_ms) do
-    case RateLimiter.consume(entry.payload.channel_id, entry.payload.account_id) do
+    case RateLimiter.consume(
+           LemonChannels.Outbox.RateLimiter,
+           entry.payload.channel_id,
+           entry.payload.account_id
+         ) do
       :ok ->
         task = start_delivery_task(entry, state.worker_supervisor)
         entry = Map.put(entry, :worker_pid, task.pid)

@@ -195,7 +195,7 @@ defmodule LemonChannels.OutboxTest do
 
       # Exhaust rate limit
       for _ <- 1..20 do
-        RateLimiter.consume(channel, account)
+        RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel, account)
       end
 
       initial_stats = Outbox.stats()

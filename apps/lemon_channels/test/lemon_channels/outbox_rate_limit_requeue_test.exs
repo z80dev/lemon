@@ -79,7 +79,7 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
 
       # Exhaust rate limiter tokens
       for _ <- 1..10 do
-        RateLimiter.consume(channel_id, "multi-account")
+        RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel_id, "multi-account")
       end
 
       # Enqueue multiple messages
@@ -120,7 +120,7 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
 
       # Exhaust rate limiter
       for _ <- 1..10 do
-        RateLimiter.consume(channel_id, account)
+        RateLimiter.consume(LemonChannels.Outbox.RateLimiter, channel_id, account)
       end
 
       payload = %OutboundPayload{

@@ -12,7 +12,10 @@ defmodule LemonWeb.LoginController do
   use LemonWeb, :controller
 
   alias LemonWeb.{Auth}
-  alias LemonCore.RateLimiter, as: LoginThrottle
+  alias LemonCore.RateLimiter
+
+  # Supervised by LemonWeb.Application with the core limiter's :login profile.
+  @throttle LemonWeb.LoginThrottle
 
   plug(:put_layout, false)
   plug(:put_root_layout, html: {LemonWeb.Layouts, :root})
@@ -36,9 +39,9 @@ defmodule LemonWeb.LoginController do
     peer = conn.remote_ip
     return_to = safe_return_to(params["return_to"])
 
-    with :ok <- LoginThrottle.check(peer),
+    with :ok <- RateLimiter.check(@throttle, peer),
          {:ok, marker} <- Auth.login(params["token"], peer) do
-      LoginThrottle.clear(peer)
+      RateLimiter.clear(@throttle, peer)
 
       conn
       |> configure_session(renew: true)
@@ -55,7 +58,7 @@ defmodule LemonWeb.LoginController do
         conn |> put_status(503) |> render_login(return_to, :not_configured)
 
       {:error, :invalid_token} ->
-        LoginThrottle.record_failure(peer)
+        RateLimiter.record_failure(@throttle, peer)
         conn |> put_status(401) |> render_login(return_to, :invalid_token)
     end
   end
