@@ -24,8 +24,12 @@ describe("versioned session event wire boundaries", () => {
 			status: "cursor_expired",
 			sessionKey: fixture.expired.sessionKey,
 		});
-		expect(() => parseSessionsEvents({ ...fixture.page, entries: undefined, events: [] })).toThrow();
-		expect(() => parseSessionsEvents({ ...fixture.page, hasMore: undefined, has_more: true })).toThrow();
+		expect(() =>
+			parseSessionsEvents({ ...fixture.page, entries: undefined, events: [] }),
+		).toThrow();
+		expect(() =>
+			parseSessionsEvents({ ...fixture.page, hasMore: undefined, has_more: true }),
+		).toThrow();
 	});
 
 	test("keeps cursor and event identity unchanged, including empty projections", () => {
