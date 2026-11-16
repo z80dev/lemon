@@ -5,6 +5,7 @@ defmodule LemonChannels.UserPromptSurfaceTest do
   alias CodingAgent.Tools.Ask
   alias LemonChannels.Adapters.Telegram.Outbound
   alias LemonChannels.Adapters.Telegram.Transport.{CallbackHandler, InboundContext, Pipeline}
+  alias LemonChannels.Telegram.TransportShared
   alias LemonChannels.{RunRequestBuilder, UserPromptSurface}
   alias LemonCore.{Bus, Event, InboundMessage}
 
@@ -21,6 +22,8 @@ defmodule LemonChannels.UserPromptSurfaceTest do
   end
 
   setup do
+    # Calling the pipeline directly bypasses transport startup, which owns dedupe initialization.
+    :ok = TransportShared.init_dedupe()
     original = :sys.get_state(UserPromptSurface).enqueue
     owner = self()
 
@@ -94,17 +97,11 @@ defmodule LemonChannels.UserPromptSurfaceTest do
     {request, inbound} = register("telegram")
     task = ask(request, [%{"id" => "text", "question" => "Explain", "options" => []}])
     assert_receive {:rendered, _}
-    reply = %{inbound | message: %{id: "new-reply", text: "My actual answer"}}
+    reply = %{inbound | message: %{id: "#{inbound.message.id}-reply", text: "My actual answer"}}
     ctx = %InboundContext{kind: :message, raw_update: %{"message" => %{}}, inbound: reply}
     state = telegram_state() |> Map.merge(%{dedupe_ttl_ms: 60_000, allow_queue_override: false})
 
-    Pipeline.run(ctx, state, %{
-      index_known_target: fn st, _update -> st end,
-      execute_inbound_message: fn st, _inbound ->
-        send(self(), :submitted)
-        st
-      end
-    })
+    Pipeline.run(ctx, state, pipeline_callbacks())
 
     refute_receive :submitted
     assert hd(Task.await(task).details.results)["customInput"] == "My actual answer"
@@ -370,6 +367,26 @@ defmodule LemonChannels.UserPromptSurfaceTest do
       allowed_chat_ids: [-100],
       deny_unbound_chats: false
     }
+
+  defp pipeline_callbacks do
+    %{
+      submit_buffer: fn _, _ -> flunk("unexpected buffer submission") end,
+      process_media_group: fn _, _ -> flunk("unexpected media group") end,
+      start_async_task: fn _, _ -> flunk("unexpected async task") end,
+      send_approval_request: fn _, _ -> flunk("unexpected approval request") end,
+      index_known_target: fn state, _ -> state end,
+      handle_callback_query: fn _, _ -> flunk("unexpected callback query") end,
+      reply_whoami: fn _, _ -> flunk("unexpected /whoami reply") end,
+      execute_inbound_message: fn state, _ ->
+        send(self(), :submitted)
+        state
+      end,
+      maybe_log_drop: fn _, _, reason ->
+        flunk("unexpected Telegram inbound drop: #{inspect(reason)}")
+      end,
+      send_unpaired_notice: fn _, _ -> flunk("unexpected unpaired notice") end
+    }
+  end
 
   defp callback(data, _inbound),
     do: %{
