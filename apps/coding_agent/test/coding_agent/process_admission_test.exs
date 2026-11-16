@@ -118,12 +118,40 @@ defmodule CodingAgent.ProcessAdmissionTest do
         session = self()
         Agent.update(context.sessions, &[{identity, session} | &1])
         send(test, {:start_boundary, identity, session})
-        receive do: (:release_start -> :ok)
+        await_start_release(test)
       end,
       on_exit: fn result -> send(test, {:external_terminated, result.process_id}) end
     ]
 
     {id, counter, opts}
+  end
+
+  defp await_start_release(owner) do
+    monitor = Process.monitor(owner)
+
+    try do
+      receive do
+        :release_start -> :ok
+        {:DOWN, ^monitor, :process, ^owner, _reason} -> :ok
+      end
+    after
+      Process.demonitor(monitor, [:flush])
+    end
+  end
+
+  test "the startup fixture releases admission when its test owner dies" do
+    {owner, monitor} =
+      spawn_monitor(fn ->
+        receive do
+          :finish -> :ok
+        end
+      end)
+
+    on_exit(fn -> Process.exit(owner, :kill) end)
+    task = Task.async(fn -> await_start_release(owner) end)
+    send(owner, :finish)
+    assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}
+    assert Task.await(task) == :ok
   end
 
   defp boundary(id) do
@@ -1146,6 +1174,18 @@ defmodule CodingAgent.ProcessAdmissionTest do
              ProcessManager.receipt(a, "admission-test")
 
     assert {:error, :process_not_terminal} = ProcessStore.delete(a)
+
+    # The native owner now kills its group on death, and boot reconciliation
+    # can prove the witnessed empty group terminated. Lose that witness
+    # explicitly so this fixture still exercises unknown capacity on restart.
+    assert {:ok, record, _logs} = ProcessStore.get(a)
+
+    assert :ok =
+             ProcessStore.update_workload_identity(
+               a,
+               %{record.workload_identity | ownership_lost: true},
+               Map.get(record, :root_exited, false)
+             )
 
     assert :ok = stop_supervised(LaneQueue)
 

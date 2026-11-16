@@ -5,22 +5,34 @@ defmodule CodingAgent.SessionMaintenance do
   alias CodingAgent.Session.Ownership
 
   @root_lock {__MODULE__, :root_lock}
+  @lock_retries 3
   # Maintenance reads headers only; this operator policy bounds corrupt headers.
   @header_bytes 65_536
   @hash_chunk_bytes 65_536
 
-  # Shared by startup/ownership changes and managed spill writers. Re-entrancy
-  # is explicit: nested :global.trans calls must not release an outer lock.
-  def with_root_lock(fun) do
+  # Writers/startups may proceed together; only maintenance needs an exclusive
+  # root snapshot. A common requester lets :global track every shared holder
+  # independently and release its admission on death. Nested calls must not
+  # release an outer transaction's lock.
+  def with_root_lock(fun, mode \\ :shared) when mode in [:shared, :exclusive] do
     root = root()
 
-    if Process.get(@root_lock) == root do
-      fun.()
-    else
+    case Process.get(@root_lock) do
+      {^root, :exclusive} -> fun.()
+      {^root, ^mode} -> fun.()
+      {^root, :shared} -> {:error, :lock_upgrade}
+      previous -> lock_root(root, mode, previous, fun)
+    end
+  end
+
+  defp lock_root(root, mode, previous, fun) do
+    requester = if mode == :shared, do: {__MODULE__, :shared}, else: self()
+
+    result =
       :global.trans(
-        {{__MODULE__, root}, self()},
+        {{__MODULE__, root}, requester},
         fn ->
-          previous = Process.put(@root_lock, root)
+          Process.put(@root_lock, {root, mode})
 
           try do
             fun.()
@@ -28,40 +40,48 @@ defmodule CodingAgent.SessionMaintenance do
             if previous, do: Process.put(@root_lock, previous), else: Process.delete(@root_lock)
           end
         end,
-        [node()]
+        [node()],
+        @lock_retries
       )
+
+    case result do
+      :aborted -> {:error, :lock_timeout}
+      result -> result
     end
   end
 
   def plan(cutoff) when is_integer(cutoff) and cutoff > 0 do
-    guarded(fn -> with_root_lock(fn -> snapshot(root(), cutoff) end) end)
+    guarded(fn -> with_root_lock(fn -> snapshot(root(), cutoff) end, :exclusive) end)
   end
 
   def execute(%{root: root, older_than_ms: cutoff} = expected, opts \\ []) do
     guarded(fn ->
-      with_root_lock(fn ->
-        if root == root() do
-          with {:ok, initial} <- snapshot(root, cutoff) do
-            paths = Enum.map(initial.journals, & &1.path)
+      with_root_lock(
+        fn ->
+          if root == root() do
+            with {:ok, initial} <- snapshot(root, cutoff) do
+              paths = Enum.map(initial.journals, & &1.path)
 
-            with_files(Enum.sort(paths), fn ->
-              with_directories(initial.directories, fn ->
-                with {:ok, current} <- snapshot(root, cutoff),
-                     true <- current == expected do
-                  execute_candidates(
-                    current,
-                    Keyword.get(opts, :remove_index, &SessionIndex.remove/1)
-                  )
-                else
-                  _ -> {:error, :confirmation_mismatch}
-                end
+              with_files(Enum.sort(paths), fn ->
+                with_directories(initial.directories, fn ->
+                  with {:ok, current} <- snapshot(root, cutoff),
+                       true <- current == expected do
+                    execute_candidates(
+                      current,
+                      Keyword.get(opts, :remove_index, &SessionIndex.remove/1)
+                    )
+                  else
+                    _ -> {:error, :confirmation_mismatch}
+                  end
+                end)
               end)
-            end)
+            end
+          else
+            {:error, :confirmation_mismatch}
           end
-        else
-          {:error, :confirmation_mismatch}
-        end
-      end)
+        end,
+        :exclusive
+      )
     end)
   end
 
