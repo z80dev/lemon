@@ -150,6 +150,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
+  preventing component-linker failures when building the command tools.
 - Source and packaged Erlang distribution now install the cookie before the
   listener starts, without putting it in any VM or release-client argv. OTP 29
   expands both `ERL_FLAGS` and `vm.args` into argv, so neither is a safe cookie
@@ -186,6 +188,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- The WASM sidecar now uses patched Wasmtime/WASI 36 LTS (36.0.21), closing
+  sandbox escape and filesystem permission bypass advisories. All native WASM
+  crate lockfiles are refreshed, including TLS, Tokio, and compression fixes.
 - The Erlang distribution cookie no longer appears in process arguments of the
   launcher or lifecycle restarts (#551).
 
