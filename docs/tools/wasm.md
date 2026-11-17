@@ -49,6 +49,9 @@ Each module is discovered as:
 
 ## Runtime Build
 
+The runtime and bundled tools require Rust 1.93 or newer. The runtime uses the
+Wasmtime 36 LTS series (36.0.21 or newer), with WASI Preview 2 component bindings.
+
 If `runtime_path` is unset, Lemon expects the runtime binary at:
 
 - `<repo>/_build/lemon-wasm-runtime/release/lemon-wasm-runtime`
@@ -64,6 +67,24 @@ Manual build example:
 ```bash
 CARGO_TARGET_DIR=_build/lemon-wasm-runtime cargo build --release --manifest-path native/lemon-wasm-runtime/Cargo.toml
 ```
+
+## Bundled Tool Builds
+
+The bundled tools are WASI Preview 2 components. Install the target, then build
+each crate (including the shared support library) from the repository root:
+
+```bash
+rustup target add wasm32-wasip2
+for manifest in native/wasm-tools/*/Cargo.toml; do
+  cargo build --release --target wasm32-wasip2 --manifest-path "$manifest"
+done
+```
+
+Each tool component is written to
+`native/wasm-tools/<crate>/target/wasm32-wasip2/release/<crate_name>.wasm`
+(crate names use underscores). The `common` crate is a library, not a
+discoverable tool. Copy the desired components and their accompanying
+`*.capabilities.json` files, when present, into a discovery directory.
 
 ## Troubleshooting
 

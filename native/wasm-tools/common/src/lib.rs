@@ -3,6 +3,8 @@ use serde_json::{Value, json};
 wit_bindgen::generate!({
     path: "../../lemon-wasm-runtime/wit",
     world: "sandboxed-tool",
+    // Tools generate this world too; keep their component metadata sections distinct.
+    type_section_suffix: "wasm-tools-common",
 });
 
 use near::agent::host;

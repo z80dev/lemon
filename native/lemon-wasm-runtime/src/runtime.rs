@@ -11,9 +11,9 @@ use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use thiserror::Error;
 use url::Url;
-use wasmtime::component::{Component, Linker};
+use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine as WasmEngine, OptLevel, ResourceLimiter, Store};
-use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::capabilities::{CapabilitiesFile, CredentialLocationSchema, host_matches_pattern};
 use crate::protocol::{
@@ -23,7 +23,6 @@ use crate::protocol::{
 wasmtime::component::bindgen!({
     path: "wit/tool.wit",
     world: "sandboxed-tool",
-    async: false,
     with: {},
 });
 
@@ -379,9 +378,9 @@ fn extract_metadata(
     store.limiter(|state| &mut state.limiter);
 
     let mut linker = Linker::new(engine);
-    wasmtime_wasi::add_to_linker_sync(&mut linker)
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
         .map_err(|err| anyhow!("failed to add wasi linker bindings: {}", err))?;
-    near::agent::host::add_to_linker(&mut linker, |state| state)
+    near::agent::host::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
         .map_err(|err| anyhow!("failed to add host linker bindings: {}", err))?;
 
     let instance = SandboxedTool::instantiate(&mut store, &component, &linker)
@@ -499,12 +498,12 @@ fn invoke_tool_internal(
     store.limiter(|state| &mut state.limiter);
 
     let mut linker = Linker::new(&snapshot.engine);
-    wasmtime_wasi::add_to_linker_sync(&mut linker).map_err(|err| {
+    wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|err| {
         RuntimeError::Instantiation(format!("failed to add wasi linker: {}", err))
     })?;
-    near::agent::host::add_to_linker(&mut linker, |state| state).map_err(|err| {
-        RuntimeError::Instantiation(format!("failed to add host linker bindings: {}", err))
-    })?;
+    near::agent::host::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state).map_err(
+        |err| RuntimeError::Instantiation(format!("failed to add host linker bindings: {}", err)),
+    )?;
 
     let instance = SandboxedTool::instantiate(&mut store, &tool.component, &linker)
         .map_err(|err| RuntimeError::Instantiation(err.to_string()))?;
@@ -823,12 +822,11 @@ fn parse_host_secret_value(raw: &str) -> Option<String> {
 }
 
 impl WasiView for StoreData {
-    fn ctx(&mut self) -> &mut WasiCtx {
-        &mut self.wasi
-    }
-
-    fn table(&mut self) -> &mut ResourceTable {
-        &mut self.table
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
 
