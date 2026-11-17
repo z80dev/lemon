@@ -90,7 +90,7 @@ defmodule LemonMemory.MixProject do
       {:lemon_core, in_umbrella: true},
       # Durable memory is SQLite-backed; unlike lemon_core, which only needs it
       # for optional subsystems, this app's whole reason to exist is the store.
-      {:exqlite, "~> 0.34.0"},
+      {:exqlite, "~> 0.43.0"},
       {:jason, "~> 1.4"},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}

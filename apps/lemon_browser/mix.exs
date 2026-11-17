@@ -28,7 +28,7 @@ defmodule LemonBrowser.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:jason, "~> 1.4"},
-      {:req, "~> 0.5"}
+      {:req, "~> 0.6.0"}
     ]
   end
 end

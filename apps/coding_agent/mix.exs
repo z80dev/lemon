@@ -42,10 +42,10 @@ defmodule CodingAgent.MixProject do
       {:jason, "~> 1.4"},
       {:mime, "~> 2.0"},
       {:yaml_elixir, "~> 2.9"},
-      {:websockex, "~> 0.4"},
-      {:req, "~> 0.5"},
+      {:websockex, "~> 0.5"},
+      {:req, "~> 0.6.0"},
       {:readability, "~> 0.12"},
-      {:exqlite, "~> 0.34.0"},
+      {:exqlite, "~> 0.43.0"},
       {:floki, "~> 0.38"},
       {:httpoison, "~> 3.0", override: true},
       {:stream_data, "~> 1.1", only: :test}

@@ -103,13 +103,13 @@ defmodule LemonCore.MixProject do
       # Required by LemonCore.Store.SqliteBackend and RunHistoryStore; the ETS
       # backend needs none of them. (Durable memory moved to lemon_memory,
       # which depends on exqlite directly.)
-      {:exqlite, "~> 0.34.0", optional: true},
+      {:exqlite, "~> 0.43.0", optional: true},
       # LemonCore.ConfigReloader.Watcher polls when absent.
       {:file_system, "~> 1.0", optional: true},
       # Error reporting sink (see docs/error-reporting.md). Dormant unless
       # SENTRY_DSN is set at runtime; the handler is skipped when the modules
       # are missing. Finch is Sentry's HTTP client as of v12+.
-      {:sentry, "~> 13.0", optional: true},
+      {:sentry, "~> 14.0", optional: true},
       {:finch, "~> 0.21", optional: true},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},

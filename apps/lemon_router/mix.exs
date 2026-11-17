@@ -36,10 +36,10 @@ defmodule LemonRouter.MixProject do
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},
       {:jason, "~> 1.4"},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6.0"},
       # RoutingFeedbackStore talks to SQLite directly; lemon_core only carries
       # :exqlite as an optional dep.
-      {:exqlite, "~> 0.34.0"},
+      {:exqlite, "~> 0.43.0"},
       # Property-based tests (StreamCoalescer byte-cap invariants).
       {:stream_data, "~> 1.1", only: :test}
     ]

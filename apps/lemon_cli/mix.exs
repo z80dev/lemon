@@ -27,9 +27,9 @@ defmodule LemonCli.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
-      {:websockex, "~> 0.4"},
+      {:websockex, "~> 0.5"},
       {:toml, "~> 0.7"},
-      {:exqlite, "~> 0.34.0"},
+      {:exqlite, "~> 0.43.0"},
       {:yaml_elixir, "~> 2.9"},
       {:lemon_core, in_umbrella: true},
       {:lemon_mcp, in_umbrella: true, runtime: false},

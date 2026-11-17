@@ -57,7 +57,7 @@ end
 
 ## Implementation
 
-- Dependencies: `apps/lemon_core/mix.exs` adds `{:sentry, "~> 13.0"}` and
+- Dependencies: `apps/lemon_core/mix.exs` adds `{:sentry, "~> 14.0"}` and
   `{:finch, "~> 0.21"}` (Sentry's default HTTP client since v12; the built-in
   `JSON` module is used on Elixir 1.19, so no separate JSON dependency is
   needed).
