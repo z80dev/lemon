@@ -109,7 +109,7 @@ defmodule LemonCore.MixProject do
       # Error reporting sink (see docs/error-reporting.md). Dormant unless
       # SENTRY_DSN is set at runtime; the handler is skipped when the modules
       # are missing. Finch is Sentry's HTTP client as of v12+.
-      {:sentry, "~> 13.0", optional: true},
+      {:sentry, "~> 14.0", optional: true},
       {:finch, "~> 0.21", optional: true},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
