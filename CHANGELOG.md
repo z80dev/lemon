@@ -186,6 +186,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Updated the XMTP bridge's viem pin to 2.57.20, the browser driver's
+  Playwright pin to 1.65.1, and patched documentation/browser development
+  dependencies within their supported ranges. XMTP's npm audit is clean.
+  The remaining documentation and browser audit findings stem from
+  picomatch's unfixed repeated-extglob ReDoS (GHSA-fc5q-39xc-vjpf), propagated
+  through fdir/tinyglobby into Vite/VitePress and browser development tools.
+- OSV now scans the WASM runtime and all WASM tool Cargo lockfiles. Removed
+  the unused diagram npm project and its scanner entries.
+
 - The Erlang distribution cookie no longer appears in process arguments of the
   launcher or lifecycle restarts (#551).
 
