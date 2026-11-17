@@ -103,7 +103,7 @@ defmodule LemonCore.MixProject do
       # Required by LemonCore.Store.SqliteBackend and RunHistoryStore; the ETS
       # backend needs none of them. (Durable memory moved to lemon_memory,
       # which depends on exqlite directly.)
-      {:exqlite, "~> 0.34.0", optional: true},
+      {:exqlite, "~> 0.43.0", optional: true},
       # LemonCore.ConfigReloader.Watcher polls when absent.
       {:file_system, "~> 1.0", optional: true},
       # Error reporting sink (see docs/error-reporting.md). Dormant unless
