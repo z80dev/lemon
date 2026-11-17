@@ -38,7 +38,7 @@ defmodule LemonAutomation.MixProject do
       {:lemon_skills, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:tzdata, "~> 1.2"},
-      {:req, "~> 0.6"}
+      {:req, "~> 0.6.0"}
     ]
   end
 end

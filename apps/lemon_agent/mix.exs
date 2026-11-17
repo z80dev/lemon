@@ -88,7 +88,7 @@ defmodule LemonAgent.MixProject do
     lemon_deps([
       {:lemon_ai, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6.0"},
       {:jason, "~> 1.4"},
       {:opentelemetry_api, "~> 1.5", optional: true},
       {:stream_data, "~> 1.1", only: :test},

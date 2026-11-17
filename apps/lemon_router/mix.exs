@@ -36,7 +36,7 @@ defmodule LemonRouter.MixProject do
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},
       {:jason, "~> 1.4"},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6.0"},
       # RoutingFeedbackStore talks to SQLite directly; lemon_core only carries
       # :exqlite as an optional dep.
       {:exqlite, "~> 0.34.0"},

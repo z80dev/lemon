@@ -43,7 +43,7 @@ defmodule LemonChannels.MixProject do
       # LemonChannels.Adapters.Email — message building and SMTP submission.
       {:gen_smtp, "~> 1.2"},
       {:mail, "~> 0.4"},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6.0"},
       {:nostrum, "~> 0.9"},
       {:stream_data, "~> 1.1", only: :test}
     ]

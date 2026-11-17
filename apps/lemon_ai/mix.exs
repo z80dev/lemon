@@ -85,7 +85,7 @@ defmodule LemonAi.MixProject do
   defp deps do
     [
       # HTTP client with streaming support
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6.0"},
       # Direct access to Req's connection pool for unpaid preconnect hints
       {:finch, "~> 0.21"},
       # Session-owned Responses WebSocket transport

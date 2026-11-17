@@ -37,7 +37,7 @@ defmodule LemonHoncho.MixProject do
       # The satellite proves its provider against the published contract kit
       # the same way any third-party integration would.
       {:lemon_platform_test, in_umbrella: true, only: :test, runtime: false},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6.0"},
       {:jason, "~> 1.4"},
       # Required for Req.Test stubs, which is how the HTTP client is tested.
       {:plug, "~> 1.16", only: :test}
