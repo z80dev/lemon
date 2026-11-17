@@ -156,6 +156,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
+- `kill_process` reports `killing` instead of `running` when the signal ends the
+  workload before the root process's exit has been observed.
 - Source and packaged Erlang distribution now install the cookie before the
   listener starts, without putting it in any VM or release-client argv. OTP 29
   expands both `ERL_FLAGS` and `vm.args` into argv, so neither is a safe cookie

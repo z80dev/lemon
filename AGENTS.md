@@ -46,7 +46,11 @@ scripts/test path apps/lemon_ai/test --seed 1
 Use `mix format` for changed Elixir files. Use `mix dialyzer --format dialyzer`;
 the other Dialyxir formatters do not handle OTP 28.5's `:exact_compare` tag.
 See [testing](docs/testing.md) for lane ownership and integration requirements.
-Do not run overlapping umbrella builds from concurrent workers; integrate first.
+Each worktree has its own `_build`, `deps` and per-run test `HOME`, so workers in
+separate worktrees may compile and run targeted `scripts/test path` checks
+concurrently. Never share one checkout between concurrent builds. Concurrent full
+lanes (`fast`, `premerge`) contend for CPU; rerun a timing failure alone before
+blaming the change, and run the final premerge once on the integrated tree.
 
 ## Ownership and app guides
 

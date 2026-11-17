@@ -887,7 +887,9 @@ defmodule CodingAgent.ProcessSession do
               {{:error, {:outcome_unknown, state.process_id}}, retain_workload(state, observed)}
           end
         else
-          {:ok, state}
+          # The workload is gone but the root's exit has not been observed yet;
+          # report the stop as in progress until that exit arrives.
+          {:ok, sync_output(%{state | status: :killing})}
         end
 
       {:error, _reason, identity} ->
