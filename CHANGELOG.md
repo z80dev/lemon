@@ -84,6 +84,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
+  3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
+  `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
+  redacts scrubbed values as `[Filtered]`.
 - The current date and git status now travel in the user turn instead of the
   system prompt, and the stable environment block is journaled once and reused
   on resume, so the cached system prompt stays byte-identical across turns (#562).
@@ -188,6 +192,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - The Erlang distribution cookie no longer appears in process arguments of the
   launcher or lifecycle restarts (#551).
+- `plug` 1.20.4 fixes EEF-CVE-2026-120287 (multipart length limit) for the
+  channel and SMS webhook routers.
 
 ---
 
