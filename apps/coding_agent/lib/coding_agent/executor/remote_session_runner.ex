@@ -276,17 +276,25 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   def handle_info({ref, result}, state) when is_reference(ref) do
     case Enum.find(state.approvals, fn {_id, approval} -> approval.task.ref == ref end) do
-      {worker_id, _approval} ->
+      {worker_id, approval} ->
         Process.demonitor(ref, [:flush])
 
         decision =
           case result do
+            {:ok, :approved, _scope} when approval.once_only ->
+              "approve_once"
+
             {:ok, :approved, scope}
             when scope in [:approve_once, :approve_session, :approve_agent, :approve_global] ->
               Atom.to_string(scope)
 
             {:ok, :approved, _persisted_scope} ->
               "approve_once"
+
+            # The controller could not confirm its decision: relay it as
+            # unknown so the worker settles its waiter without a denial.
+            {:error, :outcome_unknown} ->
+              "outcome_unknown"
 
             _ ->
               "deny"
@@ -353,7 +361,8 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
           action: approval.action,
           invocation_context_key: state.invocation_context_key,
           rationale: approval.rationale,
-          expires_in_ms: min(remaining, 600_000)
+          expires_in_ms: min(remaining, 600_000),
+          once_only: approval.once_only == true
         }
 
         owner = self()
@@ -365,7 +374,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
             LemonCore.ExecApprovals.request(params)
           end)
 
-        entry = %{task: task, controller_id: controller_id}
+        entry = %{task: task, controller_id: controller_id, once_only: approval.once_only == true}
         %{state | approvals: Map.put(state.approvals, worker_id, entry)}
     end
   end

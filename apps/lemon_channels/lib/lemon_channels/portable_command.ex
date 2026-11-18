@@ -86,6 +86,10 @@ defmodule LemonChannels.PortableCommand do
       {:error, :run_ended} ->
         {:error, "That approval expired because its run ended; nothing was approved."}
 
+      {:error, :outcome_unknown} ->
+        {:error,
+         "Approval outcome unknown: the store did not confirm it. The action did not run; check the approval status before answering again."}
+
       {:error, reason} when reason in [:not_pending, :expired] ->
         {:error,
          "No matching pending approval in this chat. It may have expired or already been resolved."}

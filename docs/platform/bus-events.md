@@ -259,6 +259,13 @@ finalize-run hook and `CodingAgent.Session.terminate/2` through
 `LemonCore.ExecApprovalExpiry`). It is immediate and grants nothing; `:timeout` stays
 the clock deadline. Channel prompts and TUI records are edited to say the run ended.
 
+`decision: :outcome_unknown` means a store write timed out while resolving: the
+completion receipt or the standing grant may still apply. The waiting request
+gets `{:error, :outcome_unknown}` and the gated call does not run; it is never
+reported as denied or cancelled and is never retried automatically. Grants are
+written only after the completion receipt commits, so any late grant is backed by
+a completed approval.
+
 Subscribers: `ExecApprovals` itself (the requester awaiting resolution),
 `CodingAgent.Session`, `CodingAgent.ExecutionNode.Worker`, the Discord and Telegram
 transports, `LemonChannels.ApprovalPromptTracker`, control-plane `ACP`, `EventBridge`, and `LemonWeb` (`ShellLive`,

@@ -82,6 +82,8 @@ defmodule LemonCore.ExecApprovals do
   - `{:error, :timeout}` - Request timed out. The timeout competes through
     the same exact-record atomic transition as `resolve/3` and `cancel/2`.
     A losing timeout emits no events and installs no policy.
+  - `{:error, :outcome_unknown}` - A resolver's store write timed out, so the
+    approval's outcome is unknown. The gated call does not run; never retried.
   """
   @spec request(map()) ::
           {:ok, :approved, scope :: atom()}
@@ -190,7 +192,13 @@ defmodule LemonCore.ExecApprovals do
 
           {:error, reason} ->
             LemonCore.Bus.unsubscribe("exec_approvals")
-            {:error, if(reason == :exists, do: :already_pending, else: :store_unavailable)}
+
+            {:error,
+             case reason do
+               :exists -> :already_pending
+               :outcome_unknown -> :outcome_unknown
+               _ -> :store_unavailable
+             end}
         end
     end
   end
@@ -208,43 +216,98 @@ defmodule LemonCore.ExecApprovals do
     * `:ok` — this call took the pending record and cancelled it
     * `{:error, :not_pending}` — nothing was pending under `approval_id`
       (unknown, already resolved, or already cancelled); a no-op
+    * `{:error, :outcome_unknown}` — the cancellation write timed out and may
+      still apply; the waiter wakes with `{:error, :outcome_unknown}`
   """
-  @spec cancel(approval_id(), binary() | nil) :: :ok | {:error, :not_pending | :store_unavailable}
+  @spec cancel(approval_id(), binary() | nil) ::
+          :ok | {:error, :not_pending | :store_unavailable | :outcome_unknown}
   def cancel(approval_id, reason \\ nil) when is_binary(approval_id) do
-    with {:ok, pending} when not is_nil(pending) <- ExecApprovalStore.fetch_pending(approval_id),
-         :ok <- retain_terminal(approval_id, pending, :cancelled, :cancelled) do
-      record_approval_event(:approval_cancelled, pending, %{
-        approval_id: approval_id,
-        tool: pending.tool,
-        reason: reason
-      })
-
-      LemonCore.Telemetry.approval_resolved(approval_id, :cancelled, %{
-        tool: pending.tool,
-        run_id: pending.run_id
-      })
-
-      LemonCore.Bus.broadcast(
-        "exec_approvals",
-        LemonCore.Event.new(
-          :approval_resolved,
-          ApprovalResolved.new(%{
+    with {:ok, pending} when not is_nil(pending) <- ExecApprovalStore.fetch_pending(approval_id) do
+      case retain_terminal(approval_id, pending, :cancelled, :cancelled) do
+        :ok ->
+          record_approval_event(:approval_cancelled, pending, %{
             approval_id: approval_id,
-            decision: :cancelled,
-            pending: pending
-          }),
-          %{
-            run_id: pending.run_id,
-            session_id: Map.get(pending, :session_id),
-            session_key: pending.session_key
-          }
-        )
-      )
+            tool: pending.tool,
+            reason: reason
+          })
 
-      :ok
+          LemonCore.Telemetry.approval_resolved(approval_id, :cancelled, %{
+            tool: pending.tool,
+            run_id: pending.run_id
+          })
+
+          LemonCore.Bus.broadcast(
+            "exec_approvals",
+            LemonCore.Event.new(
+              :approval_resolved,
+              ApprovalResolved.new(%{
+                approval_id: approval_id,
+                decision: :cancelled,
+                pending: pending
+              }),
+              %{
+                run_id: pending.run_id,
+                session_id: Map.get(pending, :session_id),
+                session_key: pending.session_key
+              }
+            )
+          )
+
+          :ok
+
+        {:error, :mismatch} ->
+          {:error, :not_pending}
+
+        {:error, :outcome_unknown} = error ->
+          emit_resolution(approval_id, pending, :outcome_unknown)
+          error
+
+        {:error, _} ->
+          {:error, :store_unavailable}
+      end
     else
       {:ok, nil} -> {:error, :not_pending}
-      {:error, :mismatch} -> {:error, :not_pending}
+      {:error, _} -> {:error, :store_unavailable}
+    end
+  end
+
+  @doc """
+  Settle an exact pending approval whose decision is unknown.
+
+  Used when the authority deciding the approval (for example a remote
+  controller) could not confirm its outcome. The record is atomically replaced
+  by an `:outcome_unknown` receipt, the waiter wakes with
+  `{:error, :outcome_unknown}` (the gated call does not run), no policy is
+  installed, and later `resolve/3` calls return `{:error, :outcome_unknown}`.
+  Nothing is retried. `expected_session_key`/`expected_run_id` bind the owner.
+  """
+  @spec settle_unknown(approval_id(), keyword()) ::
+          :ok
+          | {:error,
+             :not_pending | :mismatch | :invalid_binding | :store_unavailable | :outcome_unknown}
+  def settle_unknown(approval_id, opts \\ []) when is_binary(approval_id) and is_list(opts) do
+    with :ok <- validate_bindings(opts),
+         {:ok, pending} when not is_nil(pending) <- ExecApprovalStore.fetch_pending(approval_id),
+         :ok <- match_identity(pending, opts) do
+      case retain_terminal(approval_id, pending, :outcome_unknown, :outcome_unknown) do
+        :ok ->
+          emit_resolution(approval_id, pending, :outcome_unknown)
+          :ok
+
+        {:error, :mismatch} ->
+          {:error, :not_pending}
+
+        {:error, :outcome_unknown} = error ->
+          emit_resolution(approval_id, pending, :outcome_unknown)
+          error
+
+        {:error, _} ->
+          {:error, :store_unavailable}
+      end
+    else
+      {:ok, nil} -> {:error, :not_pending}
+      {:error, :mismatch} = error -> error
+      {:error, :invalid_binding} = error -> error
       {:error, _} -> {:error, :store_unavailable}
     end
   end
@@ -269,10 +332,14 @@ defmodule LemonCore.ExecApprovals do
     * `{:ok, count}` — the number of approvals this call expired (0 is normal)
     * `{:error, :store_unavailable}` — pending requests could not be read, or an
       expiry could not be recorded (that approval stays pending and unapproved)
+    * `{:error, :outcome_unknown}` — an expiry write timed out and may still
+      apply; its waiter wakes with `{:error, :outcome_unknown}` and nothing is
+      retried
     * `{:error, :invalid_owner}` — the owner is not a non-empty run or session id
   """
   @spec expire_owner({:run | :session, binary()}) ::
-          {:ok, non_neg_integer()} | {:error, :store_unavailable | :invalid_owner}
+          {:ok, non_neg_integer()}
+          | {:error, :store_unavailable | :outcome_unknown | :invalid_owner}
   def expire_owner({kind, id}) when kind in [:run, :session] and is_binary(id) and id != "" do
     with {:ok, rows} <- ExecApprovalStore.fetch_pending_list() do
       results =
@@ -280,9 +347,11 @@ defmodule LemonCore.ExecApprovals do
           expire_pending(approval_id, pending, kind)
         end
 
-      if :error in results,
-        do: {:error, :store_unavailable},
-        else: {:ok, Enum.count(results, &(&1 == :expired))}
+      cond do
+        :unknown in results -> {:error, :outcome_unknown}
+        :error in results -> {:error, :store_unavailable}
+        true -> {:ok, Enum.count(results, &(&1 == :expired))}
+      end
     end
   end
 
@@ -297,6 +366,7 @@ defmodule LemonCore.ExecApprovals do
             case expire_pending(id, pending, owner_kind(pending)) do
               :expired -> {:cont, {:ok, count + 1}}
               :lost -> {:cont, {:ok, count}}
+              :unknown -> {:halt, {:error, :outcome_unknown}}
               :error -> {:halt, {:error, :store_unavailable}}
             end
 
@@ -358,6 +428,11 @@ defmodule LemonCore.ExecApprovals do
       {:error, :mismatch} ->
         :lost
 
+      # The expiry may still apply: wake the waiter as unknown, never retry.
+      {:error, :outcome_unknown} ->
+        emit_resolution(approval_id, pending, :outcome_unknown)
+        :unknown
+
       {:error, _} ->
         :error
     end
@@ -396,6 +471,11 @@ defmodule LemonCore.ExecApprovals do
   `expected_pending` binds the entire preview snapshot. The owner compares and
   replaces the exact validated record atomically; a replacement request is never
   consumed. Expiry is checked after the claim and before installing any policy.
+  A standing grant is written only after the completion CAS has committed the
+  approved receipt, so a losing or unconfirmed transition installs nothing.
+  After that commit the run is read again: a run already finalized (even when
+  its asynchronous expiry scan has not run yet) turns the approval into an
+  `:expired` receipt and installs no grant.
 
   Decisions are `:approve_once`, `:approve_session`, `:approve_agent`,
   `:approve_global`, or `:deny`. Success is `{:ok, receipt}` with approval/run/
@@ -406,7 +486,12 @@ defmodule LemonCore.ExecApprovals do
 
   Errors distinguish `:not_found`, `:mismatch`, `:expired`, `:cancelled`,
   `:conflict`, `:already_resolved`, `:resolution_in_progress`,
-  `:invalid_decision`, `:invalid_binding`, and `:store_unavailable`.
+  `:invalid_decision`, `:invalid_binding`, `:store_unavailable`, and
+  `:outcome_unknown`. `:outcome_unknown` means a store write timed out and may
+  still apply: the waiter gets `{:error, :outcome_unknown}` (the gated call does
+  not run) and listeners see `decision: :outcome_unknown`, never `:cancelled`.
+  Callers must not retry it automatically. A grant that applies late is always
+  backed by the completed approved receipt.
   Missing retained state is never treated as proof of an earlier resolution.
   """
   @spec resolve(approval_id(), atom(), keyword()) :: {:ok, map()} | {:error, atom()}
@@ -438,9 +523,19 @@ defmodule LemonCore.ExecApprovals do
             claim = %{resolution: resolution_receipt(pending, decision, :resolving)}
 
             case ExecApprovalStore.transition(approval_id, pending, claim) do
-              :ok -> resolve_claim(approval_id, pending, decision, claim)
-              {:error, :mismatch} -> lost_resolution(approval_id, decision, opts)
-              {:error, _} -> {:error, :store_unavailable}
+              :ok ->
+                resolve_claim(approval_id, pending, decision, claim)
+
+              {:error, :mismatch} ->
+                lost_resolution(approval_id, decision, opts)
+
+              # The claim may still apply; settle the waiter as unknown.
+              {:error, :outcome_unknown} = error ->
+                emit_resolution(approval_id, pending, :outcome_unknown)
+                error
+
+              {:error, _} ->
+                {:error, :store_unavailable}
             end
           end
 
@@ -495,38 +590,133 @@ defmodule LemonCore.ExecApprovals do
     cond do
       (not is_nil(Map.get(pending, :owner_runtime_id)) and orphaned_runtime?(pending)) or
           dead_session?(pending) ->
-        result = finish_resolution(approval_id, claim, :expired, :expired)
-        emit_expiry(approval_id, pending, owner_kind(pending))
-        if match?({:ok, _}, result), do: {:error, :expired}, else: result
+        settle(
+          finish_resolution(approval_id, claim, :expired, :expired),
+          approval_id,
+          pending,
+          fn ->
+            emit_expiry(approval_id, pending, owner_kind(pending))
+          end
+        )
 
       expired?(pending) ->
-        result = finish_resolution(approval_id, claim, :expired, :timeout)
-        emit_approval_timeout(approval_id, pending)
-        if match?({:ok, _}, result), do: {:error, :expired}, else: result
+        settle(
+          finish_resolution(approval_id, claim, :expired, :timeout),
+          approval_id,
+          pending,
+          fn ->
+            emit_approval_timeout(approval_id, pending)
+          end
+        )
 
       decision == :deny ->
         result = finish_resolution(approval_id, claim, :denied, decision)
-        emit_resolution(approval_id, pending, decision)
+
+        settle(result, approval_id, pending, fn ->
+          emit_resolution(approval_id, pending, :deny)
+        end)
+
         result
 
       true ->
-        case store_approval(pending, decision) do
-          :ok ->
-            result = finish_resolution(approval_id, claim, :approved, decision)
-            # Without a retained, verified completion, execution stays denied.
-            emitted_decision = if match?({:ok, _}, result), do: decision, else: :cancelled
-            emit_resolution(approval_id, pending, emitted_decision)
-            result
+        # The completion CAS commits the approval before any grant exists, so a
+        # losing or unconfirmed transition installs nothing.
+        case complete(approval_id, claim, :approved, decision) do
+          {:ok, completed} ->
+            commit_approval(approval_id, pending, decision, completed)
 
-          _ ->
-            _ = finish_resolution(approval_id, claim, :cancelled, :cancelled)
+          {:error, :outcome_unknown} = error ->
+            emit_resolution(approval_id, pending, :outcome_unknown)
+            error
+
+          error ->
             emit_resolution(approval_id, pending, :cancelled)
-            {:error, :store_unavailable}
+            error
         end
     end
   end
 
-  defp finish_resolution(approval_id, %{resolution: receipt} = claim, outcome, decision) do
+  # Expiry and denial wake the waiter with their definite decision only when the
+  # completion committed (or definitely failed, which still grants nothing). An
+  # unconfirmed completion is reported as unknown.
+  defp settle({:error, :outcome_unknown} = error, approval_id, pending, _emit) do
+    emit_resolution(approval_id, pending, :outcome_unknown)
+    error
+  end
+
+  defp settle(result, _approval_id, _pending, emit) do
+    emit.()
+    if match?({:ok, _}, result), do: {:error, :expired}, else: result
+  end
+
+  # The run-end fence: Store serializes `finalize_run/3` with the completion CAS,
+  # so a run that is not finalized when read after the completion ended after the
+  # approval committed. A run finalized by then may have ended first: the
+  # approval is re-recorded as expired and no grant is installed.
+  defp commit_approval(approval_id, pending, decision, completed) do
+    case run_finalized?(pending) do
+      {:ok, false} ->
+        case store_approval(pending, decision) do
+          :ok ->
+            emit_resolution(approval_id, pending, decision)
+            {:ok, public_receipt(completed, false)}
+
+          # The grant write may still apply; it is backed by the completed
+          # receipt, but this invocation does not run on an unconfirmed grant.
+          {:error, _} ->
+            emit_resolution(approval_id, pending, :outcome_unknown)
+            {:error, :outcome_unknown}
+        end
+
+      {:ok, true} ->
+        expired = %{
+          completed
+          | outcome: :expired,
+            decision: :expired,
+            resolved_at_ms: LemonCore.Clock.now_ms()
+        }
+
+        case ExecApprovalStore.transition(
+               approval_id,
+               %{resolution: completed},
+               %{resolution: expired}
+             ) do
+          :ok ->
+            emit_expiry(approval_id, pending, :run)
+            {:error, :expired}
+
+          {:error, _} ->
+            emit_resolution(approval_id, pending, :outcome_unknown)
+            {:error, :outcome_unknown}
+        end
+
+      {:error, _} ->
+        emit_resolution(approval_id, pending, :outcome_unknown)
+        {:error, :outcome_unknown}
+    end
+  end
+
+  defp run_finalized?(pending) do
+    case Map.get(pending, :run_id) do
+      id when is_binary(id) and id != "" ->
+        case LemonCore.RunStore.fetch(id) do
+          {:ok, %{summary: summary}} when is_map(summary) -> {:ok, true}
+          {:ok, _} -> {:ok, false}
+          {:error, _} = error -> error
+        end
+
+      _ ->
+        {:ok, false}
+    end
+  end
+
+  defp finish_resolution(approval_id, claim, outcome, decision) do
+    with {:ok, completed} <- complete(approval_id, claim, outcome, decision) do
+      {:ok, public_receipt(completed, false)}
+    end
+  end
+
+  defp complete(approval_id, %{resolution: receipt} = claim, outcome, decision) do
     completed = %{
       receipt
       | outcome: outcome,
@@ -535,7 +725,8 @@ defmodule LemonCore.ExecApprovals do
     }
 
     case ExecApprovalStore.transition(approval_id, claim, %{resolution: completed}) do
-      :ok -> {:ok, public_receipt(completed, false)}
+      :ok -> {:ok, completed}
+      {:error, :outcome_unknown} -> {:error, :outcome_unknown}
       {:error, _} -> {:error, :store_unavailable}
     end
   end
@@ -589,6 +780,9 @@ defmodule LemonCore.ExecApprovals do
       cond do
         receipt.outcome == :expired ->
           {:error, :expired}
+
+        receipt.outcome == :outcome_unknown ->
+          {:error, :outcome_unknown}
 
         receipt.outcome == :cancelled ->
           {:error, :cancelled}
@@ -656,7 +850,7 @@ defmodule LemonCore.ExecApprovals do
       tool: pending.tool,
       decision: to_string(decision),
       scope: decision_scope(decision),
-      approved?: decision not in [:deny, :cancelled]
+      approved?: decision in [:approve_once, :approve_session, :approve_agent, :approve_global]
     })
 
     LemonCore.Bus.broadcast(
@@ -845,6 +1039,11 @@ defmodule LemonCore.ExecApprovals do
           :deny ->
             {:ok, :denied}
 
+          # The store could not confirm the approval or its grant: the gated
+          # call does not run, and the outcome is reported as unknown.
+          :outcome_unknown ->
+            {:error, :outcome_unknown}
+
           # An owner cancel (`cancel/2`) resolves the waiter like a denial:
           # nobody granted the approval, so the gated call must not run.
           :cancelled ->
@@ -875,6 +1074,12 @@ defmodule LemonCore.ExecApprovals do
 
           {:error, :mismatch} ->
             {:error, :timeout}
+
+          # The timeout receipt may still apply: report it as unknown to every
+          # listener, never as a confirmed timeout.
+          {:error, :outcome_unknown} = error ->
+            emit_resolution(approval_id, pending, :outcome_unknown)
+            error
 
           {:error, _} ->
             {:error, :store_unavailable}

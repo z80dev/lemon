@@ -64,7 +64,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
     "approve_session" => :approve_session,
     "approve_agent" => :approve_agent,
     "approve_global" => :approve_global,
-    "deny" => :deny
+    "deny" => :deny,
+    "outcome_unknown" => :outcome_unknown
   }
   @host_io_methods [
     "node.host.info",
@@ -1125,15 +1126,19 @@ defmodule CodingAgent.ExecutionNode.Worker do
       %{run_id: run_id, session_key: session_key, approvals: approvals} = invocation ->
         if targeted?(payload, state) and payload["runId"] == run_id and
              MapSet.member?(approvals, approval_id) and not is_nil(decision) do
-          case ExecApprovals.resolve(approval_id, decision,
-                 expected_run_id: run_id,
-                 expected_session_key: session_key
-               ) do
-            {:ok, %{run_id: ^run_id, session_key: ^session_key, decision: ^decision}} ->
+          case resolve_remote_approval(approval_id, decision, run_id, session_key) do
+            {:ok, %{run_id: ^run_id, session_key: ^session_key, decision: resolved}}
+            when resolved == decision or
+                   (resolved == :approve_once and decision != :deny) ->
               invocation = %{invocation | approvals: MapSet.delete(approvals, approval_id)}
               {:keep_state, put_invocation(state, invoke_id, invocation)}
 
-            {:error, _} ->
+            # Settled as unknown: the waiter woke without running the call.
+            :settled ->
+              invocation = %{invocation | approvals: MapSet.delete(approvals, approval_id)}
+              {:keep_state, put_invocation(state, invoke_id, invocation)}
+
+            _ ->
               # Keep it owned so invocation teardown still cancels its waiter.
               {:keep_state, state}
           end
@@ -1147,6 +1152,23 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp handle_node_event(_event, _payload, state), do: {:keep_state, state}
+
+  defp resolve_remote_approval(approval_id, :outcome_unknown, run_id, session_key) do
+    case ExecApprovals.settle_unknown(approval_id,
+           expected_run_id: run_id,
+           expected_session_key: session_key
+         ) do
+      result when result in [:ok, {:error, :outcome_unknown}] -> :settled
+      error -> error
+    end
+  end
+
+  defp resolve_remote_approval(approval_id, decision, run_id, session_key) do
+    ExecApprovals.resolve(approval_id, decision,
+      expected_run_id: run_id,
+      expected_session_key: session_key
+    )
+  end
 
   defp validate_invocation_payload("coding_agent.run", args, _state) do
     case LemonCore.JSONPayload.validate(args, LemonCore.ToolPolicy.execution_json_opts()) do

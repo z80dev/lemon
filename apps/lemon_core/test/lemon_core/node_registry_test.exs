@@ -592,7 +592,8 @@ defmodule LemonCore.NodeRegistryTest do
     assert {:error, :forbidden} = NodeRegistry.approval(invoke_id, "approval-1", "approve_once")
     refute_receive {:node_event, "node.invoke.approval", _}
 
-    for decision <- ~w(approve_once approve_session approve_agent approve_global deny) do
+    for decision <-
+          ~w(approve_once approve_session approve_agent approve_global deny outcome_unknown) do
       send(recipient, {:resolve, invoke_id, "approval-1", decision})
       assert_receive {:approval_reply, :ok}
 
