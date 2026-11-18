@@ -60,7 +60,8 @@ defmodule LemonCore.Secrets do
           required(:version) => String.t(),
           optional(:operation_id) => String.t(),
           optional(:status) => String.t(),
-          optional(:current_binding_matches) => boolean()
+          optional(:current_binding_matches) => boolean(),
+          optional(:incarnation) => String.t()
         }
 
   @spec table() :: atom()
@@ -96,6 +97,84 @@ defmodule LemonCore.Secrets do
   end
 
   def set(_, _, _), do: {:error, :invalid_secret_value}
+
+  @doc """
+  Stores `value` only when `name` has no stored value, like `set/3` otherwise.
+
+  The existence check and the write run under the same
+  `LemonCore.Secrets.Lock` lease as every other secret write, so a concurrent
+  `set/3` or `create/3` can never be silently replaced. Returns
+  `{:error, :already_exists}` when any value (including an expired one) exists.
+  On success the metadata also carries `:incarnation`, an opaque durable
+  identifier of exactly this stored value for `delete_if_incarnation/3`.
+  """
+  @spec create(name(), String.t(), keyword()) ::
+          {:ok, secret_metadata()} | {:error, error_reason()}
+  def create(name, value, opts \\ [])
+
+  def create(name, value, opts) when is_binary(value) do
+    with {:ok, name} <- normalize_name(name),
+         {:ok, owner} <- normalize_owner(opts),
+         :ok <- validate_operation(opts),
+         {:ok, server} <- storage_owner(opts) do
+      Lock.with_write_lock(
+        fn ->
+          with {:ok, entry} <- Store.fetch(server, @table, {owner, name}),
+               :ok <- ensure_absent_value(entry),
+               {:ok, metadata} <- store_secret(server, owner, name, value, opts),
+               {:ok, stored} <- Store.fetch(server, @table, {owner, name}) do
+            {:ok, Map.put(metadata, :incarnation, get_field(stored || %{}, :incarnation))}
+          end
+        end,
+        server
+      )
+    end
+  end
+
+  def create(_, _, _), do: {:error, :invalid_secret_value}
+
+  defp ensure_absent_value(nil), do: :ok
+
+  defp ensure_absent_value(entry),
+    do: if(Receipts.receipt_only?(entry), do: :ok, else: {:error, :already_exists})
+
+  @doc """
+  Deletes `name` only if its stored value is still the incarnation returned by
+  `create/3`. Unlike revisions, incarnations are durable across Store
+  processes, so a later process can compensate exactly the value it created.
+  A replaced, rotated or missing value returns `{:error, :stale_revision}` and
+  is left untouched.
+  """
+  @spec delete_if_incarnation(name(), String.t(), keyword()) :: :ok | {:error, error_reason()}
+  def delete_if_incarnation(name, incarnation, opts \\ []) when is_binary(incarnation) do
+    with {:ok, name} <- normalize_name(name),
+         {:ok, owner} <- normalize_owner(opts),
+         {:ok, server} <- storage_owner(opts) do
+      Lock.with_write_lock(
+        fn ->
+          with {:ok, entry} <- Store.fetch(server, @table, {owner, name}),
+               true <-
+                 (value_entry?(entry || %{}) and get_field(entry, :incarnation) == incarnation) ||
+                   {:error, :stale_revision},
+               {:ok, rows} <- fetch_receipt_rows(server),
+               {:ok, _} <- Receipts.find(rows, owner, nil, nil) do
+            case remove_value(server, owner, name, entry) do
+              :ok ->
+                emit_secret_event(owner, name, :delete)
+                :ok
+
+              {:error, :mismatch} ->
+                {:error, :stale_revision}
+
+              {:error, _reason} = error ->
+                error
+            end
+          end
+        end,
+        server
+      )
+    end
+  end
 
   defp validate_operation(opts) do
     if Keyword.has_key?(opts, :operation_id) do

@@ -2020,13 +2020,14 @@ The generated script matches the invoking launcher. Release VM tools (remote, ev
 Import user data from a Hermes home.
 
 ```text
-lemon migrate hermes [audit] [options]
+lemon migrate hermes [audit|rollback DIR] [options]
 ```
 
 | Subcommand | Purpose |
 | --- | --- |
 | `hermes` | Preview, then import a Hermes home into Lemon |
 | `audit` | Read-only compatibility audit (`migrate hermes audit`) |
+| `rollback` | Undo an applied migration from its report directory journal |
 
 | Option | Purpose |
 | --- | --- |
@@ -2036,10 +2037,11 @@ lemon migrate hermes [audit] [options]
 | `--preset user-data\|full` | Import scope (default: user-data) |
 | `--migrate-secrets` | Import allowlisted secrets |
 | `--skill-conflict skip\|rename` | Existing skill policy |
+| `--include-skill-assets` | Also copy unrecognised skill files |
 | `--dry-run` | Preview without writing |
 | `--yes` | Apply without prompting |
 | `--overwrite` | Replace conflicting target files |
-| `--no-backup` | Skip the pre-migration zip backup |
+| `--no-backup` | Skip the pre-migration lemon backup bundle |
 | `--json` | Emit the audit as JSON |
 
 Migration always previews first and refuses conflicts unless --overwrite is set. Without --yes it asks before writing. Secret values are never printed or written to reports.

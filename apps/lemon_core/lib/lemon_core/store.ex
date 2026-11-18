@@ -113,6 +113,14 @@ defmodule LemonCore.Store do
     GenServer.start_link(__MODULE__, Keyword.put(opts, :name, name), name: name)
   end
 
+  @doc """
+  Where a running store keeps its data: `{backend, path}`, where `path` is the
+  database file a file-backed backend actually opened, or `nil` for in-memory
+  backends. Lets callers check durable coverage without reading config.
+  """
+  @spec location(server()) :: {module(), Path.t() | nil}
+  def location(server \\ __MODULE__), do: GenServer.call(server, :location)
+
   # Run Events API
 
   @doc """
@@ -777,6 +785,17 @@ defmodule LemonCore.Store do
   end
 
   defp merge_runtime_override(config, _override), do: config
+
+  @impl true
+  def handle_call(:location, _from, state) do
+    path =
+      case state.backend_state do
+        %{path: path} when is_binary(path) -> path
+        _ -> nil
+      end
+
+    {:reply, {state.backend, path}, state}
+  end
 
   @impl true
   def handle_call(:ping, _from, state) do

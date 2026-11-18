@@ -34,6 +34,35 @@ defmodule LemonCore.SecretsTest do
     assert {:ok, "value-123"} = Secrets.get("demo_secret")
   end
 
+  test "create/3 stores only when no value exists, atomically under concurrency" do
+    assert {:ok, _} = Secrets.create("create_secret", "first")
+    assert {:error, :already_exists} = Secrets.create("create_secret", "second")
+    assert {:ok, "first"} = Secrets.get("create_secret")
+
+    results =
+      1..20
+      |> Enum.map(fn n -> Task.async(fn -> Secrets.create("race_secret", "v#{n}") end) end)
+      |> Enum.map(&Task.await/1)
+
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &(&1 == {:error, :already_exists})) == 19
+  end
+
+  test "delete_if_incarnation removes only the exact value create/3 stored" do
+    assert {:ok, %{incarnation: first}} = Secrets.create("owned_secret", "first")
+    assert is_binary(first)
+    assert {:ok, _} = Secrets.set("owned_secret", "replacement")
+
+    assert {:error, :stale_revision} = Secrets.delete_if_incarnation("owned_secret", first)
+    assert {:ok, "replacement"} = Secrets.get("owned_secret")
+
+    assert :ok = Secrets.delete("owned_secret")
+    assert {:ok, %{incarnation: second}} = Secrets.create("owned_secret", "second")
+    assert :ok = Secrets.delete_if_incarnation("owned_secret", second)
+    assert {:error, :not_found} = Secrets.get("owned_secret")
+    assert {:error, :stale_revision} = Secrets.delete_if_incarnation("owned_secret", second)
+  end
+
   test "expired secret returns expired error" do
     expires_at = Clock.now_ms() - 1_000
 
