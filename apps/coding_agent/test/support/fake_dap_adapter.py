@@ -167,6 +167,8 @@ def handle(request):
     elif command in ("launch", "attach"):
         state["mode"] = args.get("fakeMode", "normal")
         state["stop_on_entry"] = args.get("stopOnEntry", False)
+        # "reportedSource" lets tests make frames claim an arbitrary source path.
+        state["reported_source"] = args.get("reportedSource")
         state["launch_seq"] = request
         if state["mode"] == "crash":
             sys.stderr.write("fatal adapter error\n")
@@ -177,15 +179,20 @@ def handle(request):
             return
         state["debuggee"] = subprocess.Popen(
             ["sleep", "300"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        event("process", {"name": args.get("program"), "systemProcessId": state["debuggee"].pid})
+        # "reportedPid" lets tests make the adapter claim an arbitrary pid.
+        reported_pid = args.get("reportedPid", state["debuggee"].pid)
+        event("process", {"name": args.get("program"), "systemProcessId": reported_pid})
+        if args.get("bigOutput"):
+            event("output", {"category": "stdout", "output": "x" * int(args["bigOutput"]) + "\n"})
         if state["mode"] == "reverse":
             send({"type": "request", "command": "runInTerminal",
                   "arguments": {"kind": "integrated", "args": ["/bin/echo", "hi"], "cwd": "/"}})
-            send({"type": "request", "command": "startDebugging",
-                  "arguments": {"request": args.get("childRequest", "launch"),
-                                "configuration": args.get("childConfiguration", {
-                                    "program": "child", "stopOnEntry": True,
-                                    "__pendingTargetId": "target-42"})}})
+            for _ in range(int(args.get("childCount", 1))):
+                send({"type": "request", "command": "startDebugging",
+                      "arguments": {"request": args.get("childRequest", "launch"),
+                                    "configuration": args.get("childConfiguration", {
+                                        "program": "child", "stopOnEntry": True,
+                                        "__pendingTargetId": "target-42"})}})
         if state["mode"] != "no_initialized":
             event("initialized")
     elif command == "setBreakpoints":
@@ -213,9 +220,10 @@ def handle(request):
     elif command == "threads":
         respond(request, {"threads": [{"id": 1, "name": "main"}, {"id": 2, "name": "worker"}]})
     elif command == "stackTrace":
+        source = state.get("reported_source") or state["file"]
         frames = [
             {"id": 100, "name": "main", "line": state["line"], "column": 1,
-             "source": {"path": state["file"], "name": "main.c"} if state["file"] else None},
+             "source": {"path": source, "name": "main.c"} if source else None},
             {"id": 101, "name": "start", "line": 0, "column": 0},
         ]
         frames = [{k: v for k, v in frame.items() if v is not None} for frame in frames]

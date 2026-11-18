@@ -44,7 +44,7 @@ compiled binaries (`mode=exec`).
 | Action | Parameters | Result |
 | --- | --- | --- |
 | `launch` | `program` (required), `args`, `adapter`, `cwd`; optional initial breakpoint `file` + `line` or `function` (+ `condition`, `hit_condition`) | Starts the program under the debugger and waits for the first stop or exit |
-| `attach` | `pid` or `port` (+ `host`), `adapter`, `cwd` | Attaches to a running process or debug server |
+| `attach` | `pid` or `port` (+ `host`), `adapter`, `cwd` | Attaches to a running process or debug server; `host` must be loopback (`localhost`, `127.0.0.0/8`, `::1`) unless the tool is built with the `debug_allow_remote_attach: true` option |
 | `set_breakpoint` | `file` + `line` (or `function`), `condition`, `hit_condition` | Sets a source (or function) breakpoint |
 | `remove_breakpoint` | `file` + `line` (or `function`) | Removes it |
 | `set_function_breakpoint` | `function`, `condition`, `hit_condition` | Sets a function breakpoint |
@@ -136,15 +136,29 @@ src/main.c:
   Explicit abort signals the run before disposal so blocked tool calls can
   unwind. Explicit stop, logical delete, failed launch, unexpected owner death
   (including during adapter disposal) and 10-minute idle expiry also dispose of it.
-- Locally launched adapters and their debuggees are killed on teardown; a crashed
-  adapter also disposes of its launched debuggee. Attached targets are not owned:
-  `terminate` disconnects without terminating them.
+- Locally launched adapters are killed on teardown together with their process
+  group (the group Lemon spawned, tracked from the port's OS pid), which also
+  disposes of a debuggee the adapter started in that group. The adapter-reported
+  `systemProcessId` is display-only and is never signalled. Attached targets are
+  not owned: `terminate` disconnects without terminating them.
 - Debugpy port attach connects directly to the DAP endpoint exposed by
   `python -m debugpy --listen <port>`; no second local Python adapter is launched.
 - Adapter requests to open terminals (`runInTerminal`) are rejected;
-  `startDebugging` supports launch/attach child sessions. Debuggee output arrives
+  `startDebugging` supports launch/attach child sessions, at most 16 descendants
+  per root session across all generations (and at most 256 debug servers in
+  total), and is refused for sessions attached to a `host`/`port` endpoint.
+  Debuggee output arrives
   through the adapter and is available via `output` (a 128 KiB rolling buffer; output
-  over 16 KiB is returned as a tail with the full buffer saved to a file).
+  over 16 KiB is returned as a tail with the full buffer saved as an `artifact://`
+  handle in session storage; without a session nothing is saved).
+- Stop excerpts only read adapter-reported source files below the tool's working
+  directory, through `priv/debug_source_read.py`: it opens the canonical
+  workspace root and each path component relative to its parent's descriptor
+  with `O_NOFOLLOW` (any symlink fails), requires the leaf to be a single-link
+  regular file of at most 2 MB (`fstat`), and reads it from that descriptor.
+  Without `python3` or the helper no excerpt is shown. Remaining window: a
+  directory already opened can be moved elsewhere by another process; the
+  read then continues inside that moved directory (never through a symlink).
 - Results are bounded: up to 200 variables per call, long values clipped, and
   each result capped at 32 KiB. Program output and values are treated as
   untrusted data before they reach the model.

@@ -50,7 +50,6 @@ defmodule CodingAgent.Debug.SessionServer do
   alias CodingAgent.Debug.Adapters
   alias CodingAgent.Debug.Client
   alias LemonAgent.AbortSignal
-  alias LemonCore.ProcessGroup
 
   @registry CodingAgent.Debug.Registry
   @supervisor CodingAgent.Debug.Supervisor
@@ -59,6 +58,8 @@ defmodule CodingAgent.Debug.SessionServer do
   @max_output_bytes 128 * 1024
   @dispose_timeout_ms 2_000
   @call_slack_ms 15_000
+  # Adapter-requested (startDebugging) sessions per root, across all generations.
+  @max_descendants 16
 
   @start_actions ~w(launch attach set_breakpoint remove_breakpoint set_function_breakpoint remove_function_breakpoint)
 
@@ -174,6 +175,14 @@ defmodule CodingAgent.Debug.SessionServer do
       function_breakpoints: Keyword.get(opts, :function_breakpoints, []),
       session: nil,
       children: %{},
+      # Adapter-requested descendants of the root, shared by every generation:
+      # one atomics slot per descendant holding its reservation token.
+      descendants:
+        Keyword.get_lazy(opts, :descendants, fn ->
+          :atomics.new(@max_descendants, signed: true)
+        end),
+      descendant_slot: Keyword.get(opts, :descendant_slot),
+      child_slots: %{},
       id_prefix: Keyword.get(opts, :id_prefix, "debug"),
       next_id: 1,
       operation: nil,
@@ -333,6 +342,7 @@ defmodule CodingAgent.Debug.SessionServer do
   def terminate(_reason, _phase, state) do
     if state.operation, do: Process.exit(state.operation.pid, :kill)
     stop_children(state)
+    release_descendant(state.descendants, state.descendant_slot)
 
     case state.session do
       %{client: client} when is_pid(client) -> Client.stop(client)
@@ -380,7 +390,14 @@ defmodule CodingAgent.Debug.SessionServer do
 
     Map.merge(
       %{state | in_flight: nil},
-      Map.take(updated, [:session, :children, :breakpoints, :function_breakpoints, :next_id])
+      Map.take(updated, [
+        :session,
+        :children,
+        :child_slots,
+        :breakpoints,
+        :function_breakpoints,
+        :next_id
+      ])
     )
   end
 
@@ -1551,9 +1568,12 @@ defmodule CodingAgent.Debug.SessionServer do
       catch
         :exit, _ -> Process.exit(pid, :kill)
       end
+
+      # Idempotent: a no-op when the child already released its own slot.
+      release_descendant(state.descendants, state.child_slots[pid])
     end)
 
-    %{state | children: %{}}
+    %{state | children: %{}, child_slots: %{}}
   end
 
   defp apply_payload(state, {:start_debugging, message}) do
@@ -1561,52 +1581,31 @@ defmodule CodingAgent.Debug.SessionServer do
     configuration = arguments["configuration"]
     kind = arguments["request"]
 
-    if kind in ["launch", "attach"] and is_map(configuration) do
-      id = "#{state.session.id}-#{map_size(state.children) + 1}"
-      key = {state.key, id}
+    cond do
+      user_remote_root?(state.session.adapter) ->
+        # A user-chosen remote endpoint is not an adapter Lemon spawned: it must
+        # not be able to make Lemon open further sessions on its behalf.
+        reject_start_debugging(state, message, "startDebugging is not allowed for remote attach")
 
-      case DynamicSupervisor.start_child(
-             @supervisor,
-             {__MODULE__,
-              key: key,
-              owner: state.server,
-              id_prefix: id,
-              breakpoints: state.breakpoints,
-              function_breakpoints: state.function_breakpoints}
-           ) do
-        {:ok, pid} ->
-          request = %{
-            action: kind,
-            adapter: Client.child_adapter(state.session.client),
-            cwd: configuration["cwd"] || state.session.cwd,
-            program: configuration["program"],
-            args: configuration["args"] || [],
-            reverse_configuration: configuration
-          }
+      kind not in ["launch", "attach"] or not is_map(configuration) ->
+        reject_start_debugging(
+          state,
+          message,
+          "startDebugging requires request launch/attach and a configuration object"
+        )
 
-          # Acknowledge session creation before handshaking: adapters may wait
-          # for this response before allowing the child's initialize/attach.
-          Client.respond(state.session.client, message, :ok)
-          send(pid, {:start_child, request})
-          %{state | children: Map.put(state.children, id <> "-1", pid)}
+      true ->
+        case reserve_descendant(state.descendants) do
+          {:ok, slot} ->
+            start_child_session(state, message, kind, configuration, slot)
 
-        {:error, _reason} ->
-          Client.respond(
-            state.session.client,
-            message,
-            {:error, "Cannot create child debug session"}
-          )
-
-          state
-      end
-    else
-      Client.respond(
-        state.session.client,
-        message,
-        {:error, "startDebugging requires request launch/attach and a configuration object"}
-      )
-
-      state
+          :error ->
+            reject_start_debugging(
+              state,
+              message,
+              "startDebugging refused: at most #{@max_descendants} child sessions per debug session"
+            )
+        end
     end
   end
 
@@ -1631,23 +1630,85 @@ defmodule CodingAgent.Debug.SessionServer do
   defp apply_payload(state, {:exit, reason}) do
     state = stop_children(state)
 
+    # The adapter's own process group (the Port Lemon spawned) is killed by the
+    # client. The adapter-reported `systemProcessId` is untrusted and is never
+    # signalled: a hostile or remote adapter could name any process group.
     update_session(state, fn session ->
-      # The adapter may have died before disconnecting its launched program.
-      # Its children can already be reparented, so the adapter pid alone no
-      # longer identifies them. Never claim ownership of an attached process.
-      if session.status != :terminated and session.kind == :launch do
-        case session.process do
-          %{pid: pid} when is_integer(pid) and pid > 0 ->
-            ProcessGroup.terminate(pid, signal: :sigkill)
-
-          _ ->
-            :ok
-        end
-      end
-
       error = if session.status == :terminated, do: session.error, else: reason
       %{session | client: nil, status: :terminated, error: error}
     end)
+  end
+
+  # Children of a Lemon-spawned socket server reconnect to that loopback
+  # listener (`:via_local_server`); every other `:remote` adapter is a
+  # user-chosen endpoint.
+  defp user_remote_root?(adapter),
+    do: adapter[:connect_mode] == :remote and adapter[:via_local_server] != true
+
+  defp reject_start_debugging(state, message, reason) do
+    Client.respond(state.session.client, message, {:error, reason})
+    state
+  end
+
+  # A reservation stores a unique token in a free slot; releasing clears the
+  # slot only while it still holds that token, so each reservation is released
+  # exactly once even when both the child and its parent try, and a reused
+  # slot is never cleared by a stale release.
+  defp reserve_descendant(budget) do
+    token = System.unique_integer([:positive])
+
+    Enum.find_value(1..@max_descendants, :error, fn index ->
+      if :atomics.compare_exchange(budget, index, 0, token) == :ok, do: {:ok, {index, token}}
+    end)
+  end
+
+  defp release_descendant(budget, {index, token}) do
+    _ = :atomics.compare_exchange(budget, index, token, 0)
+    :ok
+  end
+
+  defp release_descendant(_budget, nil), do: :ok
+
+  defp start_child_session(state, message, kind, configuration, slot) do
+    id = "#{state.session.id}-#{map_size(state.children) + 1}"
+    key = {state.key, id}
+
+    case DynamicSupervisor.start_child(
+           @supervisor,
+           {__MODULE__,
+            key: key,
+            owner: state.server,
+            id_prefix: id,
+            breakpoints: state.breakpoints,
+            function_breakpoints: state.function_breakpoints,
+            descendants: state.descendants,
+            descendant_slot: slot}
+         ) do
+      {:ok, pid} ->
+        request = %{
+          action: kind,
+          adapter: Client.child_adapter(state.session.client),
+          cwd: configuration["cwd"] || state.session.cwd,
+          program: configuration["program"],
+          args: configuration["args"] || [],
+          reverse_configuration: configuration
+        }
+
+        # Acknowledge session creation before handshaking: adapters may wait
+        # for this response before allowing the child's initialize/attach.
+        Client.respond(state.session.client, message, :ok)
+        send(pid, {:start_child, request})
+
+        %{
+          state
+          | children: Map.put(state.children, id <> "-1", pid),
+            child_slots: Map.put(state.child_slots, pid, slot)
+        }
+
+      {:error, _reason} ->
+        release_descendant(state.descendants, slot)
+        reject_start_debugging(state, message, "Cannot create child debug session")
+    end
   end
 
   defp apply_event(session, "output", body) do

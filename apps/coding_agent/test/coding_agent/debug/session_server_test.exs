@@ -585,6 +585,165 @@ defmodule CodingAgent.Debug.SessionServerTest do
     assert {:ok, %{snapshot: %{status: :terminated}}} = call(ctx.key, %{action: "status"})
   end
 
+  test "an adapter-reported pid is never signalled when the adapter dies", ctx do
+    # A foreign process leading its own process group, unrelated to the adapter.
+    foreign_port =
+      Port.open({:spawn_executable, @python}, [
+        :binary,
+        args: ["-c", "import os, time; os.setpgrp(); print('ready', flush=True); time.sleep(300)"]
+      ])
+
+    assert_receive {^foreign_port, {:data, "ready" <> _}}, 5_000
+    {:os_pid, foreign} = Port.info(foreign_port, :os_pid)
+    on_exit(fn -> System.cmd("kill", ["-9", Integer.to_string(foreign)]) end)
+
+    assert {:ok, %{snapshot: %{process_id: ^foreign}}} =
+             launch(ctx, %{"reportedPid" => foreign})
+
+    assert {:error, _} = call(ctx.key, %{action: "custom_request", command: "crash"})
+    assert {:ok, %{snapshot: %{status: :terminated}}} = call(ctx.key, %{action: "status"})
+    Process.sleep(300)
+    assert os_alive?(foreign)
+  end
+
+  test "adapter-requested descendants share one budget per root across generations", ctx do
+    grandchild = %{"program" => "grandchild", "stopOnEntry" => true}
+
+    child = %{
+      "program" => "child",
+      "stopOnEntry" => true,
+      "fakeMode" => "reverse",
+      "childCount" => 10,
+      "childConfiguration" => grandchild
+    }
+
+    assert {:ok, _} =
+             launch(ctx, %{
+               "fakeMode" => "reverse",
+               "childCount" => 4,
+               "childConfiguration" => child
+             })
+
+    responses = fn ->
+      ctx.log
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+      |> Enum.filter(&match?(%{"reverse_response" => "startDebugging"}, &1))
+    end
+
+    # Root: 4 requests; each accepted child: 10 more (44 in total).
+    assert_eventually(fn -> length(responses.()) == 44 end, timeout: 15_000)
+    {accepted, rejected} = Enum.split_with(responses.(), & &1["success"])
+    assert length(accepted) == 16
+    assert length(rejected) == 28
+
+    assert {:ok, _} = call(ctx.key, %{action: "terminate"})
+
+    # Tearing the tree down returns the budget.
+    {_, %{descendants: budget}} = :sys.get_state(SessionServer.whereis(ctx.key))
+    assert_eventually(fn -> Enum.all?(1..16, &(:atomics.get(budget, &1) == 0)) end)
+  end
+
+  test "a descendant slot is released once: child death, then parent cleanup", ctx do
+    child = %{
+      "program" => "child",
+      "stopOnEntry" => true,
+      "fakeMode" => "reverse",
+      "childCount" => 2,
+      "childConfiguration" => %{"program" => "grandchild", "stopOnEntry" => true}
+    }
+
+    assert {:ok, _} =
+             launch(ctx, %{
+               "fakeMode" => "reverse",
+               "childCount" => 2,
+               "childConfiguration" => child
+             })
+
+    root = SessionServer.whereis(ctx.key)
+    {_, %{descendants: budget}} = :sys.get_state(root)
+
+    in_use = fn -> Enum.count(1..16, &(:atomics.get(budget, &1) != 0)) end
+
+    assert_eventually(fn -> in_use.() == 6 end, timeout: 15_000)
+
+    {_, %{children: root_children}} = :sys.get_state(root)
+    [branch | _] = root_children |> Map.values() |> Enum.sort()
+    assert_eventually(fn -> map_size(elem(:sys.get_state(branch), 1).children) == 2 end)
+    {_, %{children: grandchildren, session: %{client: client}}} = :sys.get_state(branch)
+    [doomed | _] = Map.values(grandchildren)
+
+    # The grandchild dies on its own, then its parent's adapter exits.
+    :ok = :gen_statem.stop(doomed)
+    assert in_use.() == 5
+    Client.stop(client)
+    assert_eventually(fn -> map_size(elem(:sys.get_state(branch), 1).children) == 0 end)
+
+    # Two children plus the other branch's two grandchildren remain.
+    assert_eventually(fn -> in_use.() == 4 end)
+    Process.sleep(200)
+    assert in_use.() == 4
+  end
+
+  test "a killed child's slot is released by parent cleanup and reused", ctx do
+    child = %{
+      "program" => "child",
+      "stopOnEntry" => true,
+      "fakeMode" => "reverse",
+      "childCount" => 2,
+      "childConfiguration" => %{"program" => "grandchild", "stopOnEntry" => true}
+    }
+
+    assert {:ok, _} =
+             launch(ctx, %{
+               "fakeMode" => "reverse",
+               "childCount" => 2,
+               "childConfiguration" => child
+             })
+
+    root = SessionServer.whereis(ctx.key)
+    {_, %{descendants: budget}} = :sys.get_state(root)
+    in_use = fn -> Enum.count(1..16, &(:atomics.get(budget, &1) != 0)) end
+    assert_eventually(fn -> in_use.() == 6 end, timeout: 15_000)
+
+    {_, %{children: root_children}} = :sys.get_state(root)
+    [branch | _] = root_children |> Map.values() |> Enum.sort()
+    assert_eventually(fn -> map_size(elem(:sys.get_state(branch), 1).children) == 2 end)
+    {_, %{children: grandchildren, session: %{client: client}}} = :sys.get_state(branch)
+    [doomed | _] = Map.values(grandchildren)
+
+    # Forced termination: the grandchild never runs terminate/3.
+    ref = Process.monitor(doomed)
+    Process.exit(doomed, :kill)
+    assert_receive {:DOWN, ^ref, _, _, :killed}
+    assert in_use.() == 6
+
+    Client.stop(client)
+    assert_eventually(fn -> in_use.() == 4 end)
+
+    assert {:ok, _} = call(ctx.key, %{action: "terminate"})
+    assert_eventually(fn -> in_use.() == 0 end)
+
+    # The full budget is available again.
+    File.write!(ctx.log, "")
+    assert {:ok, _} = launch(ctx, %{"fakeMode" => "reverse", "childCount" => 16})
+
+    assert_eventually(fn ->
+      ctx.log
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Jason.decode!/1)
+      |> Enum.count(&match?(%{"reverse_response" => "startDebugging", "success" => true}, &1))
+      |> Kernel.==(16)
+    end)
+  end
+
+  test "the global debug supervisor has a finite child limit" do
+    assert %{max_children: limit} = :sys.get_state(CodingAgent.Debug.Supervisor)
+    assert is_integer(limit) and limit > 0
+  end
+
   test "an idle server stops and kills its adapter", ctx do
     assert {:ok, %{snapshot: %{process_id: debuggee}}} = launch(ctx, %{}, idle_timeout_ms: 300)
     server = SessionServer.whereis(ctx.key)

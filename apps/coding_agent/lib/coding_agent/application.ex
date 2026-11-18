@@ -28,7 +28,9 @@ defmodule CodingAgent.Application do
         {Registry, keys: :unique, name: CodingAgent.Debug.Registry},
         CodingAgent.Eval.KernelSupervisor,
         {DynamicSupervisor, name: CodingAgent.Tools.Lsp.Supervisor, strategy: :one_for_one},
-        {DynamicSupervisor, name: CodingAgent.Debug.Supervisor, strategy: :one_for_one},
+        # Bounds debug servers (roots plus adapter-requested descendants).
+        {DynamicSupervisor,
+         name: CodingAgent.Debug.Supervisor, strategy: :one_for_one, max_children: 256},
         CodingAgent.ToolResources
       ]),
       LemonCore.Supervision.subtree(CodingAgent.Search.Supervisor, [
