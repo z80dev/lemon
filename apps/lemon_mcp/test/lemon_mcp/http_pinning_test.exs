@@ -59,7 +59,7 @@ defmodule LemonMCP.HTTPPinningTest.Fixture do
   get "/.well-known/oauth-authorization-server/oauth" do
     record(conn, :authorization_metadata)
     config = Agent.get(conn.assigns.store, & &1)
-    json(conn, %{"token_endpoint" => config.token_endpoint})
+    json(conn, %{"issuer" => config.issuer, "token_endpoint" => config.token_endpoint})
   end
 
   post "/oauth/token" do
@@ -466,7 +466,7 @@ defmodule LemonMCP.HTTPPinningTest do
   test "a challenge cannot cause a forbidden metadata request", ctx do
     Agent.update(
       ctx.store,
-      &%{&1 | oauth: true, metadata_url: "http://localhost:#{ctx.port}/target"}
+      &%{&1 | oauth: true, metadata_url: "http://127.0.0.2:#{ctx.port}/target"}
     )
 
     assert {:error, :origin_not_allowed} = GenServer.start(HTTP, oauth_opts(ctx))
@@ -474,7 +474,7 @@ defmodule LemonMCP.HTTPPinningTest do
   end
 
   test "authorization issuer discovery enforces its own origin", ctx do
-    Agent.update(ctx.store, &%{&1 | oauth: true, issuer: "http://localhost:#{ctx.port}/oauth"})
+    Agent.update(ctx.store, &%{&1 | oauth: true, issuer: "http://127.0.0.2:#{ctx.port}/oauth"})
     assert {:error, :origin_not_allowed} = GenServer.start(HTTP, oauth_opts(ctx))
     assert Enum.map(events(ctx), &elem(&1, 0)) == ["initialize", :metadata]
   end
@@ -482,7 +482,7 @@ defmodule LemonMCP.HTTPPinningTest do
   test "token endpoint origin is checked before posting client secrets", ctx do
     Agent.update(
       ctx.store,
-      &%{&1 | oauth: true, token_endpoint: "http://localhost:#{ctx.port}/target"}
+      &%{&1 | oauth: true, token_endpoint: "http://127.0.0.2:#{ctx.port}/target"}
     )
 
     assert {:error, :origin_not_allowed} = GenServer.start(HTTP, oauth_opts(ctx))

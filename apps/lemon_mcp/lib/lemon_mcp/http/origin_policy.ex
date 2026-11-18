@@ -83,6 +83,19 @@ defmodule LemonMCP.HTTP.OriginPolicy do
     end
   end
 
+  @doc """
+  Checks that a URL's canonical origin is in the policy's allowlist, without
+  resolving DNS. For URLs Lemon never fetches itself (such as an OAuth
+  authorization URL handed to a browser), where `pin/3` cannot apply.
+  """
+  @spec authorize_origin(term(), map()) :: :ok | {:error, error()}
+  def authorize_origin(url, policy) do
+    with {:ok, destination} <- parse_destination(url),
+         {:ok, allowed, _approved} <- policy_origins(policy) do
+      require_allowed(destination.origin, allowed)
+    end
+  end
+
   @doc false
   def ownership_required?(nil), do: false
 

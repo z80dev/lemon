@@ -185,12 +185,45 @@ without fetching the Location target. Policy/transport failures are classified
 atoms, including `:origin_not_allowed`, `:destination_not_public`,
 `:invalid_destination_pin`, `:http_transport_unavailable`,
 `:http_request_failed`, `:http_error`, `:auth_required`, `:invalid_metadata` and
-`:metadata_http_error`. With no policy, existing operator DNS/proxy networking
-is retained, except that redirects are still rejected. Policy requests use a
+`:metadata_http_error`. With no policy, MCP requests retain existing operator
+DNS/proxy networking, except that redirects are still rejected; OAuth requests
+are always pinned (below). Policy and OAuth requests use a
 dedicated direct HTTP profile without cookies or connection reuse, preventing
 IP-keyed pooled connections from crossing original TLS identities. Interactive
 authorization-code providers still own the browser/callback boundary; this
 library pins the HTTP requests it executes, not external browser navigation.
+
+OAuth discovery is bound to the configured server, with or without a policy.
+Protected-resource metadata must name the configured MCP URL as its `resource`
+(same canonical origin, path and query), and authorization-server metadata must
+return an `issuer` identical to the issuer Lemon requested; anything else fails
+with `:invalid_oauth_metadata` instead of being patched. Token and authorization
+endpoints come only from that validated issuer metadata (never from the
+protected-resource document; cached metadata is revalidated before use).
+Metadata, issuer and token URLs must be HTTPS or literal-loopback HTTP
+(`:insecure_oauth_endpoint`). Without `allowedOrigins`, the token endpoint must
+share the issuer's origin (`:origin_not_allowed`), and every OAuth connection is
+DNS-pinned to public addresses only, except the configured server's own origin
+and, for a literal-loopback server, other literal-loopback origins. With a
+policy, each OAuth URL must also be allowlisted. Validation runs before any
+client secret, code verifier or refresh token is sent. Authorization endpoints
+under a policy must themselves be allowlisted before the URL reaches a provider,
+observer or approval, since browser navigation is never pinned. Server JSON
+cannot supply Lemon's internal fields (`authorization_server_metadata`, etc.).
+
+Grants are bound to the issuer and client that produced them: the token cache
+payload records `issuer` and `client_id`. When a live session or a cached grant
+meets a different discovered issuer, the client fails with
+`:oauth_issuer_changed` before any refresh token or client secret is sent, and
+does not fall back to a fresh grant; the operator must re-authorize (clear the
+cached token). Cache entries for another client are ignored; entries without
+both a recorded issuer and the exact client id keep only their access token.
+
+Operator credentials are bound by the optional `oauth: [issuer: ...]` key. With
+it, the discovered issuer must be identical (`:oauth_issuer_mismatch`) before
+any token request. Without it, a client secret is sent only to an issuer on the
+configured server's own origin (`:oauth_issuer_required` otherwise), and a
+configured `refresh_token` is refused at startup with `:oauth_issuer_required`.
 
 
 When the server later rejects that bearer token with another 401 challenge,

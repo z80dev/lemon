@@ -1160,6 +1160,7 @@ defmodule LemonSkills.Config do
     opts =
       [
         client_id: Map.get(oauth, "client_id"),
+        issuer: Map.get(oauth, "issuer"),
         client_secret: Map.get(oauth, "client_secret") || Map.get(oauth, "client-secret"),
         client_secret_secret:
           Map.get(oauth, "client_secret_secret") || Map.get(oauth, "client-secret-secret"),
