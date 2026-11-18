@@ -935,9 +935,21 @@ defmodule LemonCore.Config.Validator do
     |> validate_non_empty_string(computer_use[:lcu_root], "tools.computer_use.lcu_root")
     |> validate_non_empty_string(computer_use[:node], "tools.computer_use.node")
     |> validate_origin_list(computer_use[:declined_origins])
+    |> validate_app_list(computer_use[:lasting_grant_apps])
   end
 
   defp validate_computer_use(errors, _), do: ["tools.computer_use: must be a table" | errors]
+
+  defp validate_app_list(errors, nil), do: errors
+
+  defp validate_app_list(errors, apps) when is_list(apps) do
+    if Enum.all?(apps, &(is_binary(&1) and String.trim(&1) != "")),
+      do: errors,
+      else: ["tools.computer_use.lasting_grant_apps: must be a list of app ids" | errors]
+  end
+
+  defp validate_app_list(errors, _),
+    do: ["tools.computer_use.lasting_grant_apps: must be a list of app ids" | errors]
 
   defp validate_origin_list(errors, nil), do: errors
 

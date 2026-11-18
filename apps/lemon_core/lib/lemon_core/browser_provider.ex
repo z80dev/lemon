@@ -21,7 +21,15 @@ defmodule LemonCore.BrowserProvider do
   exceptions, paths, URLs, and returned reason strings are never exposed; the
   local probe may return one of a fixed set of reason atoms, each mapped to a
   fixed message naming the missing prerequisite.
+
+  `lcu` is only a Chrome surface of native computer use: it is unavailable
+  unless computer use was enabled by its explicit switch at boot
+  (`computer_use_enabled?/0`, set by the computer-use app). Selecting `lcu`
+  never enables computer use. Tests may inject `:computer_use_enabled`.
   """
+
+  @computer_use_key {__MODULE__, :computer_use_enabled}
+  @computer_use_disabled "LCU Chrome needs computer use, which is disabled; set LEMON_COMPUTER_USE_ENABLED or [runtime.tools.computer_use] enabled and restart Lemon."
 
   alias LemonCore.BrowserProvider.LCUProbe
 
@@ -123,6 +131,18 @@ defmodule LemonCore.BrowserProvider do
   @doc "Whether passive resolution selects the given provider."
   def selected?(id), do: resolve().provider == normalize_id(id)
 
+  @doc """
+  The computer-use boot decision: whether the explicit computer-use switch
+  enabled native computer use for this runtime. `false` until set.
+  """
+  @spec computer_use_enabled?() :: boolean()
+  def computer_use_enabled?, do: :persistent_term.get(@computer_use_key, false) == true
+
+  @doc false
+  @spec put_computer_use_enabled(boolean()) :: :ok
+  def put_computer_use_enabled(enabled) when is_boolean(enabled),
+    do: :persistent_term.put(@computer_use_key, enabled)
+
   defp normalize_id(id) when is_atom(id), do: Atom.to_string(id)
   defp normalize_id(id), do: id
 
@@ -209,20 +229,25 @@ defmodule LemonCore.BrowserProvider do
     callback =
       Keyword.get(opts, :lcu_probe, Application.get_env(:lemon_core, :browser_provider_lcu_probe))
 
-    if is_nil(callback) do
-      # Two bounded subprocesses fit inside the overall callback deadline.
-      result =
-        LCUProbe.available?(
-          computer_use: section(config, :computer_use),
-          timeout_ms: max(div(timeout, 3), 1)
-        )
+    cond do
+      Keyword.get(opts, :computer_use_enabled, computer_use_enabled?()) != true ->
+        {:lcu_reason, false, @computer_use_disabled}
 
-      case result do
-        {:ok, reason} -> {:lcu_reason, true, reason}
-        {:error, reason} -> {:lcu_reason, false, reason}
-      end
-    else
-      callback.() |> classify()
+      is_nil(callback) ->
+        # Two bounded subprocesses fit inside the overall callback deadline.
+        result =
+          LCUProbe.available?(
+            computer_use: section(config, :computer_use),
+            timeout_ms: max(div(timeout, 3), 1)
+          )
+
+        case result do
+          {:ok, reason} -> {:lcu_reason, true, reason}
+          {:error, reason} -> {:lcu_reason, false, reason}
+        end
+
+      true ->
+        callback.() |> classify()
     end
   end
 

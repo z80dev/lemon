@@ -69,7 +69,10 @@ defmodule LemonComputerUse.ApprovalTest do
     assert %{action: "cancel"} = Approval.answer(request(), %{approval_request_fun: odd}, "id")
   end
 
-  test "the Lemon scope decides how long the runtime keeps the grant" do
+  test "for an allowlisted app the Lemon scope decides how long the runtime keeps the grant" do
+    Application.put_env(:lemon_computer_use, :lasting_grant_apps, ["COM.apple.calculator"])
+    on_exit(fn -> Application.delete_env(:lemon_computer_use, :lasting_grant_apps) end)
+
     answer = fn reply ->
       Approval.answer(request(), %{approval_request_fun: fn _ -> reply end}, "id")
     end
@@ -195,7 +198,10 @@ defmodule LemonComputerUse.ApprovalTest do
 
     Application.put_env(:lemon_computer_use, :declined_origins, ["http://[::1]:9000"])
 
-    assert LemonComputerUse.Config.declined_origins() == [
+    # An empty home: no installed backend unit adds origins to the exact list.
+    empty_home = Path.join(System.tmp_dir!(), "cua_empty_#{System.unique_integer([:positive])}")
+
+    assert LemonComputerUse.Config.declined_origins(home: empty_home, os: {:unix, :none}) == [
              "https://bot.tailnet-example.ts.net",
              "https://lemon.example:8443",
              "http://[::1]:9000"

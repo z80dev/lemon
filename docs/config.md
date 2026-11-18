@@ -2778,8 +2778,10 @@ max_tool_invoke_depth = 4
 
 ## Computer Use
 
-The explicit native computer-use switch defaults to off. Resolving browser
-provider `lcu` also starts the same runtime, including native app APIs protected
+The explicit computer-use switch (`enabled`) defaults to off and is the only
+thing that enables computer use; it is read once at boot. Browser provider `lcu`
+never enables it: with the switch off, `auto` skips `lcu` and an explicit `lcu`
+fails closed. With it on, LCU's native app APIs are protected
 by the existing approval policy. See
 [`docs/tools/computer-use.md`](tools/computer-use.md) for requirements and
 approvals. `LEMON_COMPUTER_USE_*` environment variables override these keys.
@@ -2789,7 +2791,8 @@ approvals. `LEMON_COMPUTER_USE_*` environment variables override these keys.
 enabled = false
 # lcu_root = "~/.local/share/lcu/current"
 # node = "<lcu_root>/agent-tools/node/bin/node"
-declined_origins = []
+declined_origins = []      # also list foreground/remote Lemon Bot public URLs here
+lasting_grant_apps = []    # bundle ids allowed lasting grants; default: every app once-only
 ```
 
 ## Conversation checkpoints

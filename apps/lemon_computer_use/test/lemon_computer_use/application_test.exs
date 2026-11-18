@@ -14,12 +14,12 @@ defmodule LemonComputerUse.ApplicationTest do
   end
 
   test "only the resolved LCU provider adds the Chrome surface" do
-    connected = [provider: "lcu", lcu_probe: fn -> {:ok, :connected} end]
-    unavailable = [provider: "lcu", lcu_probe: fn -> {:error, :disconnected} end]
-    local = [provider: "local", probe: fn "local" -> {:ok, :installed} end]
+    on = [computer_use_enabled: true]
+    connected = [provider: "lcu", lcu_probe: fn -> {:ok, :connected} end] ++ on
+    unavailable = [provider: "lcu", lcu_probe: fn -> {:error, :disconnected} end] ++ on
+    local = [provider: "local", probe: fn "local" -> {:ok, :installed} end] ++ on
 
     assert LemonComputerUse.Config.chrome?(connected)
-    assert LemonComputerUse.Config.enabled?(connected)
     assert List.last(LemonComputerUse.Config.command(connected)) == "--chrome"
     refute LemonComputerUse.Config.chrome?(unavailable)
     refute "--chrome" in LemonComputerUse.Config.command(unavailable)

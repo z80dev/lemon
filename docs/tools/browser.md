@@ -51,10 +51,12 @@ detection reason appears in `lemon doctor`, control-plane `status`, and the erro
 a browser request returns when no provider is available.
 
 With `lcu`, Chrome control is exposed through [`cua_js`](computer-use.md#chrome),
-not the `browser_*` tool family. It starts the shared computer-use runtime,
-including native app APIs under the existing app approval policy. The explicit
-native computer-use switch can also enable that runtime independently of browser
-selection; LCU does not provide a browser-only mode.
+not the `browser_*` tool family. `lcu` is available only when native computer
+use was enabled by its own explicit switch (`LEMON_COMPUTER_USE_ENABLED` /
+`[runtime.tools.computer_use] enabled`) at boot; selecting `lcu` never enables
+computer use, and with the switch off `auto` skips `lcu` and an explicit `lcu`
+fails closed. LCU does not provide a browser-only mode, so that runtime also
+exposes native app APIs under the existing app approval policy.
 LCU must already be installed, its browser connector configured, and the relay
 actively connected to Chrome. Installation or an enabled extension alone does
 not establish readiness; auto-selection never runs setup. For local browser

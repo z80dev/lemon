@@ -71,6 +71,9 @@ defmodule LemonCore.ExecApprovals do
   have to cancel the prompt before it resolves (for example, a dispatch that
   can be killed while waiting) allocate the id up front so they can name it to
   `cancel/2` with no registration race.
+  - `:once_only` - When `true`, no stored or wildcard grant answers this
+    request, any approving decision resolves it as `:approve_once`, and no
+    policy is written. For actions whose grants must never outlive one use.
 
   ## Returns
   - `{:ok, :approved, scope}` - Approved at the given scope
@@ -96,6 +99,7 @@ defmodule LemonCore.ExecApprovals do
     rationale = params[:rationale]
     # Tool calls should not enforce timeouts by default.
     expires_in_ms = params[:expires_in_ms] || :infinity
+    once_only = params[:once_only] == true
 
     approval_id =
       case params[:approval_id] do
@@ -103,14 +107,20 @@ defmodule LemonCore.ExecApprovals do
         _other -> LemonCore.Id.approval_id()
       end
 
-    case check_existing_approval(
-           tool,
-           action,
-           session_key,
-           agent_id,
-           node_id,
-           invocation_context_key
-         ) do
+    existing =
+      if once_only,
+        do: :not_approved,
+        else:
+          check_existing_approval(
+            tool,
+            action,
+            session_key,
+            agent_id,
+            node_id,
+            invocation_context_key
+          )
+
+    case existing do
       {:approved, scope} ->
         {:ok, :approved, scope}
 
@@ -140,7 +150,8 @@ defmodule LemonCore.ExecApprovals do
             action: action,
             rationale: rationale,
             requested_at_ms: LemonCore.Clock.now_ms(),
-            expires_at_ms: expires_at_ms
+            expires_at_ms: expires_at_ms,
+            once_only: once_only
           })
 
         case ExecApprovalStore.put_pending_new(approval_id, pending) do
@@ -416,6 +427,12 @@ defmodule LemonCore.ExecApprovals do
         %{id: ^approval_id, tool: tool, action: _, session_key: _, run_id: _, agent_id: _} =
             pending
         when is_binary(tool) ->
+          # A once-only request never installs a lasting policy.
+          decision =
+            if Map.get(pending, :once_only) == true and decision != :deny,
+              do: :approve_once,
+              else: decision
+
           with :ok <- match_pending(pending, opts),
                :ok <- ExecApprovalExpiry.ensure_ready() do
             claim = %{resolution: resolution_receipt(pending, decision, :resolving)}
@@ -755,13 +772,16 @@ defmodule LemonCore.ExecApprovals do
   defp policy_identity(identity, invocation_context_key),
     do: {:invocation_context, identity, invocation_context_key}
 
-  defp hash_action(action) when is_map(action) do
+  @doc false
+  # The policy key for an action; public so tests can seed real grants.
+  @spec hash_action(term()) :: String.t()
+  def hash_action(action) when is_map(action) do
     :crypto.hash(:sha256, :erlang.term_to_binary(action))
     |> Base.encode16(case: :lower)
     |> String.slice(0, 16)
   end
 
-  defp hash_action(action), do: inspect(action) |> hash_action_string()
+  def hash_action(action), do: inspect(action) |> hash_action_string()
 
   defp hash_action_string(str) when is_binary(str) do
     :crypto.hash(:sha256, str)

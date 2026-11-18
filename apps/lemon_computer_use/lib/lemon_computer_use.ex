@@ -13,16 +13,21 @@ defmodule LemonComputerUse do
   It is opt-in: see `LemonComputerUse.Config`.
   """
 
-  alias LemonComputerUse.{Config, Server}
+  alias LemonComputerUse.Server
 
-  @doc "Whether computer use is enabled for this runtime."
+  @doc """
+  Whether computer use is enabled for this runtime: the decision
+  `LemonComputerUse.Application` resolved once at boot from the explicit
+  switch (shared with the browser provider through
+  `LemonCore.BrowserProvider.computer_use_enabled?/0`). `false` before boot.
+  """
   @spec enabled?() :: boolean()
-  defdelegate enabled?, to: Config
+  defdelegate enabled?, to: LemonCore.BrowserProvider, as: :computer_use_enabled?
 
   @doc "Bounded, redaction-safe status."
   @spec status() :: map()
   def status do
-    if Config.enabled?(),
+    if enabled?(),
       do: Map.put(Server.status(), :enabled, true),
       else: %{enabled: false, running: false}
   end

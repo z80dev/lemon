@@ -19,6 +19,7 @@ defmodule LemonCore.PersistentTermHygieneTest do
     "apps/lemon_channels/lib/lemon_channels/inbound_http/routes.ex" => [:init, :handle_call],
     "apps/lemon_gateway/lib/lemon_gateway/transport_registry.ex" => [:init],
     "apps/lemon_core/lib/lemon_core/config_cache.ex" => [:init],
+    "apps/lemon_core/lib/lemon_core/browser_provider.ex" => [:put_computer_use_enabled],
     "apps/lemon_core/lib/lemon_core/bus.ex" => [:child_spec_for_backend],
     "apps/lemon_core/lib/lemon_core/exec_approval_expiry.ex" => [:init_runtime_id],
     "apps/lemon_skills/lib/lemon_skills/curator_references.ex" => [:register]

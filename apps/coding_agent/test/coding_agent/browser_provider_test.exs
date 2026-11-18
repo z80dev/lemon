@@ -11,6 +11,9 @@ defmodule CodingAgent.BrowserProviderTest do
   @base [include_extensions: false, include_mcp: false]
 
   setup do
+    cu = LemonCore.BrowserProvider.computer_use_enabled?()
+    LemonCore.BrowserProvider.put_computer_use_enabled(true)
+    on_exit(fn -> LemonCore.BrowserProvider.put_computer_use_enabled(cu) end)
     keys = [:browser_provider_probe, :browser_provider_lcu_probe]
     previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_core, &1)})
     test_pid = self()

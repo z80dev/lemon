@@ -24,7 +24,10 @@ approval routing and lifecycle. See [README](README.md) and the
   ended turn id; end turns on `:run_completed` or session exit.
 - Approvals go through `ExecApprovals` and fail closed: errors, unknown scopes,
   malformed requests cancel. Only native-app and exact http(s) website-origin
-  requests are answered. Lemon's own apps and local Lemon origins are declined.
+  requests are answered. Lemon's own apps and every local origin (any loopback,
+  link-local or interface address, `*.localhost`, hostnames resolving there, any
+  port) are declined; every app is once-only (`ExecApprovals` `once_only`) unless
+  listed in `lasting_grant_apps`.
   Never write LCU's always-allowed store.
 - Approvals ask with `expires_in_ms: :infinity`; the owner ending is their expiry.
   `ExecApprovals` expires a pending approval when its run or session ends (no

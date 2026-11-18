@@ -728,19 +728,25 @@ defmodule LemonCore.Config.ValidatorTest do
           enabled: true,
           lcu_root: "/opt/lcu/current",
           node: nil,
-          declined_origins: ["https://bot.example.ts.net", "http://127.0.0.1:4081"]
+          declined_origins: ["https://bot.example.ts.net", "http://127.0.0.1:4081"],
+          lasting_grant_apps: ["com.apple.calculator"]
         }
       }
 
       assert Validator.validate_tools(ok, []) == []
 
       bad = %{
-        computer_use: %{enabled: "yes", lcu_root: "", declined_origins: ["ftp://x"]}
+        computer_use: %{
+          enabled: "yes",
+          lcu_root: "",
+          declined_origins: ["ftp://x"],
+          lasting_grant_apps: [""]
+        }
       }
 
       errors = Validator.validate_tools(bad, [])
 
-      for path <- ~w(enabled lcu_root declined_origins) do
+      for path <- ~w(enabled lcu_root declined_origins lasting_grant_apps) do
         assert Enum.any?(errors, &String.contains?(&1, "tools.computer_use." <> path)), path
       end
     end

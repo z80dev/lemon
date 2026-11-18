@@ -36,6 +36,7 @@ defmodule LemonCore.Config.Tools do
       [runtime.tools.computer_use]
       enabled = false
       declined_origins = []
+      lasting_grant_apps = []
 
       [runtime.tools.wasm]
       enabled = false
@@ -257,7 +258,8 @@ defmodule LemonCore.Config.Tools do
       enabled: section["enabled"],
       lcu_root: section["lcu_root"],
       node: section["node"],
-      declined_origins: section["declined_origins"]
+      declined_origins: section["declined_origins"],
+      lasting_grant_apps: section["lasting_grant_apps"]
     }
   end
 
