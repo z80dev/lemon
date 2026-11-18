@@ -1263,7 +1263,7 @@ defmodule CodingAgent.Session.Presentation do
   def format_error(reason, _state) when is_atom(reason), do: Atom.to_string(reason)
 
   def format_error(reason, _state) do
-    Logger.warning("Session request failed: #{inspect(reason)}")
+    Logger.warning("Session request failed: #{LemonCore.StatusRedaction.inspect_reason(reason)}")
 
     "Something went wrong while running the request. Try again; if it keeps happening, run `lemon doctor`."
   end
@@ -1406,7 +1406,7 @@ defmodule CodingAgent.Session.Presentation do
        do: message
 
   defp format_circuit_failure_reason({:stream_tracking_exit, reason}) do
-    Logger.warning("Stream tracking exited: #{inspect(reason)}")
+    Logger.warning("Stream tracking exited: #{LemonCore.StatusRedaction.inspect_reason(reason)}")
     "Stream tracking stopped unexpectedly. Run `lemon doctor`."
   end
 
@@ -1430,7 +1430,7 @@ defmodule CodingAgent.Session.Presentation do
   defp format_circuit_failure_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp format_circuit_failure_reason(reason) do
-    Logger.warning("Circuit failure: #{inspect(reason)}")
+    Logger.warning("Circuit failure: #{LemonCore.StatusRedaction.inspect_reason(reason)}")
     "The provider request failed. Run `lemon doctor`."
   end
 

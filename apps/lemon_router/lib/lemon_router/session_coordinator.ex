@@ -19,6 +19,9 @@ defmodule LemonRouter.SessionCoordinator do
 
   use GenServer
 
+  @impl true
+  def format_status(status), do: LemonCore.StatusRedaction.gen_server(status, [])
+
   require Logger
 
   alias LemonCore.{Events, MapHelpers}

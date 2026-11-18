@@ -40,6 +40,15 @@ end
 # not exist. LemonCore.Application drops such handlers defensively as well.
 sentry_dsn = System.get_env("SENTRY_DSN")
 
+# Every Sentry event passes through LemonCore.SentryScrubber, which drops
+# process state, last messages, exit reasons and message/exception bodies so
+# prompts and answers never leave the node. Installed whenever :sentry is
+# present (not only inside the DSN block below) because Sentry also reads
+# SENTRY_DSN from the environment on its own.
+if Code.ensure_loaded?(Sentry) do
+  config :sentry, before_send: {LemonCore.SentryScrubber, :before_send}
+end
+
 if is_binary(sentry_dsn) and String.trim(sentry_dsn) != "" and
      Code.ensure_loaded?(Sentry.LoggerHandler) do
   sentry_environment =

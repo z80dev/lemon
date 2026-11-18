@@ -10,6 +10,11 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   use GenServer
 
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [:node, :run_id, :session_key, :agent_id])
+  end
+
   import CodingAgent.Executor, only: [get_opt: 2]
 
   alias CodingAgent.Executor.{RemoteEventCodec, RemoteRequestCodec}

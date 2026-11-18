@@ -82,6 +82,18 @@ defmodule CodingAgent.Session do
   """
 
   use GenServer
+
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [
+      :run_id,
+      :session_key,
+      :agent_id,
+      :is_streaming,
+      :turn_index
+    ])
+  end
+
   require Logger
 
   @reset_abort_wait_ms 5_000
@@ -2061,7 +2073,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_info({:EXIT, pid, reason}, state) when pid == state.agent do
-    Logger.warning("Agent process exited: #{inspect(reason)}")
+    Logger.warning("Agent process exited: #{LemonCore.StatusRedaction.inspect_reason(reason)}")
 
     # Let it crash: a dead agent cannot serve this session any more. Tell
     # subscribers the run failed, then stop; the next run resumes from the journal.

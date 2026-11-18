@@ -502,7 +502,7 @@ defmodule CodingAgent.Session.RunTranslator do
 
   def handle_session_down(%__MODULE__{} = t, reason) do
     if t.started_emitted and not t.completed_emitted do
-      Logger.warning("Session stopped: #{inspect(reason)}")
+      Logger.warning("Session stopped: #{LemonCore.StatusRedaction.inspect_reason(reason)}")
 
       error =
         if t.cancel_reason,

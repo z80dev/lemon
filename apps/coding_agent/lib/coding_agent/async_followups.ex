@@ -9,6 +9,12 @@ defmodule CodingAgent.AsyncFollowups do
   """
 
   use GenServer
+
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [:window_ms])
+  end
+
   require Logger
 
   alias CodingAgent.TaskStore

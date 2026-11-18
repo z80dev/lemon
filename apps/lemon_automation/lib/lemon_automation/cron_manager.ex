@@ -112,6 +112,15 @@ defmodule LemonAutomation.CronManager do
 
   use GenServer
 
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [
+      :restoration_pending,
+      :standalone_mode,
+      :state_vsn
+    ])
+  end
+
   @vsn 3
 
   alias LemonAutomation.{

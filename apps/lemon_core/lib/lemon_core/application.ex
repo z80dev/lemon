@@ -57,6 +57,10 @@ defmodule LemonCore.Application do
 
   @impl true
   def start(_type, _args) do
+    # Strip conversation content from OTP crash reports before any handler
+    # (console, file, Sentry) formats them. See docs/error-reporting.md.
+    :ok = LemonCore.CrashLogRedaction.install()
+
     # Attach any :logger handlers configured under :lemon_core, :logger (see
     # config/runtime.exs). A no-op when nothing is configured there.
     drop_unloadable_handlers()

@@ -241,6 +241,11 @@ defmodule LemonHoncho.SessionManager do
 
   use GenServer
 
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [:max_sessions])
+  end
+
   require Logger
 
   alias LemonHoncho.Config

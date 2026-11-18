@@ -30,6 +30,17 @@ defmodule LemonRouter.StreamCoalescer do
 
   use GenServer
 
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [
+      :session_key,
+      :channel_id,
+      :run_id,
+      :last_seq,
+      :finalized
+    ])
+  end
+
   require Logger
 
   alias LemonChannels.Dispatcher
