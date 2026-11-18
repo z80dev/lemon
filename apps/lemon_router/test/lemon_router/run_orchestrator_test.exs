@@ -1466,6 +1466,16 @@ defmodule LemonRouter.RunOrchestratorTest do
           run_process_module: BlockingRunProcess
         )
 
+      # Goal runs must carry the identity of their recorded directory.
+      goal_cwd = System.tmp_dir!()
+      stat = File.stat!(goal_cwd)
+
+      goal_cwd_identity = %{
+        "major" => stat.major_device,
+        "minor" => stat.minor_device,
+        "inode" => stat.inode
+      }
+
       run_ids =
         for iteration <- 1..32 do
           run_id = "run_abort_race_#{iteration}_#{System.unique_integer([:positive])}"
@@ -1484,7 +1494,9 @@ defmodule LemonRouter.RunOrchestratorTest do
                   origin: :goal,
                   session_key: session_key,
                   agent_id: "test",
-                  prompt: "race"
+                  prompt: "race",
+                  cwd: goal_cwd,
+                  meta: %{cwd_identity: goal_cwd_identity}
                 })
               )
             end)

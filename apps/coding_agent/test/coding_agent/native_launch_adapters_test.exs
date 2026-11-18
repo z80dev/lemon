@@ -155,11 +155,14 @@ defmodule CodingAgent.NativeLaunchAdaptersTest do
     end
   end
 
-  test "diagnostics and formatter keep bounded BashExecutor execution while tracking launches", %{
+  test "diagnostics and formatter keep bounded output while running under ProcessManager", %{
     tmp_dir: dir
   } do
+    # Operator tools live outside the project tree.
     bin = Path.join(dir, "bin")
+    project = Path.join(dir, "project")
     File.mkdir_p!(bin)
+    File.mkdir_p!(project)
     previous_path = System.fetch_env!("PATH")
     System.put_env("PATH", bin <> ":" <> previous_path)
     on_exit(fn -> System.put_env("PATH", previous_path) end)
@@ -170,25 +173,27 @@ defmodule CodingAgent.NativeLaunchAdaptersTest do
       File.chmod!(path, 0o755)
     end
 
-    File.write!(Path.join(dir, "go.mod"), "module fixture\n")
-    path = Path.join(dir, "main.go")
+    File.write!(Path.join(project, "go.mod"), "module fixture\n")
+    path = Path.join(project, "main.go")
     File.write!(path, "package main\n")
 
     assert {:ok, diagnostics} =
-             LspDiagnostics.diagnose_file(path, dir, diagnostics_timeout_ms: 5_000)
+             LspDiagnostics.diagnose_file(path, project, diagnostics_timeout_ms: 5_000)
 
     assert diagnostics.command_exit_status == 1
     assert byte_size(diagnostics.raw_output) <= 64_000
-    assert {:error, message} = LspFormatter.format_file(path, cwd: dir, timeout_ms: 5_000)
+    assert {:error, message} = LspFormatter.format_file(path, cwd: project, timeout_ms: 5_000)
     assert message =~ "formatter exited with status 1"
     assert byte_size(message) < 9_000
     assert File.read!(path) == "package main\n"
 
-    rows = NativeProcess.snapshot()
-    assert length(rows) == 2
+    launched =
+      for {_id, record} <- CodingAgent.ProcessManager.list(),
+          command = to_string(Map.get(record, :command)),
+          name <- ["go", "gofmt"],
+          command =~ ~r/#{Regex.escape(Path.join(bin, name))}(?!\w)/,
+          do: name
 
-    assert Enum.all?(rows, fn {_, record, _} ->
-             record.backend == :local and ProcessGroup.valid_identity?(record.workload_identity)
-           end)
+    assert Enum.sort(launched) == ["go", "gofmt"]
   end
 end

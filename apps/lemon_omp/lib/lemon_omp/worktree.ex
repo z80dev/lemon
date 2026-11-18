@@ -255,13 +255,15 @@ defmodule LemonOmp.Worktree do
     task =
       Task.async(fn ->
         try do
-          with {:ok, git} <- SafeGit.executable() do
-            LemonCore.NativeProcess.cmd(git, ["-C", cwd | args],
-              stderr_to_stdout: true,
-              env: [{"GIT_TERMINAL_PROMPT", "0"} | env]
-            )
-          else
-            _ -> {"", 1}
+          case SafeGit.executable() do
+            {:ok, git} ->
+              LemonCore.NativeProcess.cmd(git, ["-C", cwd | args],
+                stderr_to_stdout: true,
+                env: [{"GIT_TERMINAL_PROMPT", "0"} | env]
+              )
+
+            _ ->
+              {"", 1}
           end
         rescue
           _ -> {"", 1}

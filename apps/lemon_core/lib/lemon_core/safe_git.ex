@@ -292,16 +292,17 @@ defmodule LemonCore.SafeGit do
     end
   end
 
-  # Checked once per executable path and cached.
+  # Checked once per executable path and cached in the supervised runtime cache
+  # (rechecked on every call before it starts).
   defp supported_version(git, deadline) do
     key = {__MODULE__, :version, git}
 
-    case :persistent_term.get(key, nil) do
+    case LemonCore.RuntimeCache.get(key) do
       nil ->
         with {:ok, port} <- launch(git, base_env([]), "/", ["--version"]),
              {:ok, out, 0} <- collect(port, deadline, [], 0, 4_096) do
           result = if version(out) >= @minimum_version, do: :ok, else: :unsupported
-          :persistent_term.put(key, result)
+          cache_put(key, result)
           if result == :ok, do: :ok, else: {:error, :unsupported_git_version}
         else
           {:error, _} = error -> error
@@ -664,15 +665,22 @@ defmodule LemonCore.SafeGit do
   # The effective uid, read from a file this process creates; unknown (every
   # repository untrusted) when no such file can be created.
   defp current_uid do
-    case :persistent_term.get({__MODULE__, :uid}, nil) do
+    case LemonCore.RuntimeCache.get({__MODULE__, :uid}) do
       nil ->
         uid = probe_uid()
-        if is_integer(uid), do: :persistent_term.put({__MODULE__, :uid}, uid)
+        if is_integer(uid), do: cache_put({__MODULE__, :uid}, uid)
         uid
 
       uid ->
         uid
     end
+  end
+
+  # Outside a started application the cache table is absent; skip caching.
+  defp cache_put(key, value) do
+    LemonCore.RuntimeCache.put(key, value)
+  rescue
+    ArgumentError -> :ok
   end
 
   defp probe_uid do

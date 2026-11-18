@@ -19,6 +19,8 @@ defmodule LemonCore.RawProcessArchitectureTest do
       {1, "Secret-file guardian removes capture files even when the tool skips its after block."},
     "apps/coding_agent/lib/coding_agent/tools/bash/managed.ex" =>
       {1, "Foreground guardian kills its managed workload after brutal tool-owner death."},
+    "apps/coding_agent/lib/coding_agent/tools/checker_runner.ex" =>
+      {1, "Launch guardian kills the checker process group after brutal tool-caller death."},
     "apps/coding_agent/lib/coding_agent/tools/webfetch.ex" =>
       {1, "Staged-PDF reaper must remove private files after forced extractor cancellation."},
     "apps/lemon_ai/lib/lemon_ai/event_stream.ex" =>
