@@ -128,6 +128,13 @@ remote_http_apis =
 
 config :lemon_control_plane, :remote_http_apis, remote_http_apis
 
+config :lemon_control_plane,
+       :allowed_origins,
+       (normalized_env.("LEMON_CONTROL_PLANE_ALLOWED_ORIGINS") || "")
+       |> String.split(",", trim: true)
+       |> Enum.map(&String.trim/1)
+       |> Enum.reject(&(&1 == ""))
+
 config :lemon_web, LemonWeb.Endpoint, http: [ip: bind_ip.("LEMON_WEB_BIND_IP", "127.0.0.1")]
 
 uploads_dir = normalized_env.("LEMON_WEB_UPLOADS_DIR")
