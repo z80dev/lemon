@@ -187,6 +187,110 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
     refute log =~ session_key
   end
 
+  test "private cron forwarded history and foreign private runs never enter a legacy reflection" do
+    chat_id = System.unique_integer([:positive])
+    session_key = "telegram:reflection-private:#{chat_id}"
+    on_exit(fn -> RunStore.delete_history(session_key) end)
+
+    put = fn run_id, at, summary ->
+      :ok =
+        RunHistoryStore.put(session_key, at, run_id, %{
+          run_id: run_id,
+          session_key: session_key,
+          summary: summary
+        })
+    end
+
+    now = System.system_time(:millisecond)
+
+    # Exactly the summary CronManager forwards into the base session for a cron run.
+    put.("cron_notify_cron-#{chat_id}", now, %{
+      prompt: "Cron job summary",
+      completed: %{ok: true, answer: "PRIVATE-CRON-ANSWER"},
+      engine: "cron",
+      meta: %{
+        origin: :cron,
+        cron_forwarded_summary: true,
+        memory_ingest: false,
+        memory_scope: :unproven,
+        cron_run_id: "cron-#{chat_id}"
+      }
+    })
+
+    put.("private-#{chat_id}", now + 1, %{
+      prompt: "PRIVATE-ACTOR-PROMPT",
+      completed: %{answer: "PRIVATE-ACTOR-ANSWER"},
+      meta: %{
+        memory_context_key: "private-actor",
+        memory_context_verified: true,
+        invocation_context_key: "inv-1"
+      }
+    })
+
+    put.("unproven-#{chat_id}", now + 2, %{
+      prompt: "UNPROVEN-PROMPT",
+      completed: %{answer: "x"},
+      meta: %{"sharedMemoryGrant" => true}
+    })
+
+    put.("legacy-#{chat_id}", now + 3, %{
+      prompt: "Legacy preference stays reflectable.",
+      completed: %{answer: "Noted."}
+    })
+
+    inbound = %{
+      channel_id: "telegram",
+      account_id: "default",
+      peer: %{kind: :dm, id: Integer.to_string(chat_id)},
+      sender: %{id: "sender"},
+      raw: %{},
+      meta: %{}
+    }
+
+    callbacks = %{
+      maybe_subscribe_to_run: fn _ -> :ok end,
+      current_thread_generation: fn _state, _chat_id, _thread_id -> 0 end,
+      maybe_put: fn map, key, value -> Map.put(map, key, value) end
+    }
+
+    submit = fn inbound ->
+      MemoryReflection.submit_before_new(
+        %{account_id: "default"},
+        inbound,
+        %ChatScope{transport: :telegram, chat_id: chat_id},
+        session_key,
+        chat_id,
+        nil,
+        nil,
+        callbacks
+      )
+    end
+
+    assert :ok = submit.(inbound)
+    assert_receive {:submitted, %RunRequest{prompt: prompt}}
+    assert prompt =~ "Legacy preference stays reflectable."
+    refute prompt =~ "PRIVATE-CRON-ANSWER"
+    refute prompt =~ "PRIVATE-ACTOR"
+    refute prompt =~ "UNPROVEN-PROMPT"
+
+    # The matching private actor reflects only its own runs.
+    private_meta = %{
+      memory_context_key: "private-actor",
+      memory_context_verified: true,
+      invocation_context_key: "inv-2"
+    }
+
+    assert :ok = submit.(%{inbound | meta: private_meta})
+    assert_receive {:submitted, %RunRequest{prompt: prompt}}
+    assert prompt =~ "PRIVATE-ACTOR-PROMPT"
+    refute prompt =~ "Legacy preference"
+    refute prompt =~ "PRIVATE-CRON-ANSWER"
+
+    # An unproven reflection context reflects nothing.
+    assert :skip = submit.(%{inbound | meta: %{memory_context_key: "private-actor"}})
+    refute_receive {:submitted, _}
+  end
+
   test "reflection keys of canonical channel sessions are canonical sub-session keys" do
     key = "agent:default:telegram:default:group:-100:thread:7"
     reflection = MemoryReflection.reflection_session_key(key)

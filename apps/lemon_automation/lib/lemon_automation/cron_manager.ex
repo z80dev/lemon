@@ -2815,9 +2815,13 @@ defmodule LemonAutomation.CronManager do
         prompt: forwarded_prompt(run),
         duration_ms: run.duration_ms,
         engine: "cron",
+        # A notification-only duplicate of a run already ingested under its own
+        # admitted owner: never ingest it, and never let it read as legacy.
         meta: %{
           origin: :cron,
           cron_forwarded_summary: true,
+          memory_ingest: false,
+          memory_scope: :unproven,
           cron_job_id: run.job_id,
           cron_run_id: run.id,
           cron_router_run_id: run.run_id,

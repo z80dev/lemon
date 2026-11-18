@@ -2702,17 +2702,8 @@ defmodule CodingAgent.Session do
       []
   end
 
-  defp trusted_memory_context(state) do
-    Map.take(
-      state.approval_context || %{},
-      [
-        :invocation_context_key,
-        :memory_context_key,
-        :memory_context_verified,
-        :shared_memory_grant
-      ]
-    )
-  end
+  defp trusted_memory_context(state),
+    do: LemonMemory.ContextScope.admitted(state.approval_context)
 
   @spec refresh_system_prompt(t(), String.t(), [ContextRegistry.section()]) :: t()
   defp refresh_system_prompt(
