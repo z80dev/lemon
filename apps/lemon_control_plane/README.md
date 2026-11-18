@@ -27,6 +27,14 @@ token, or the operator token when unset). Remote HTTP additionally requires
 `LEMON_CONTROL_PLANE_REMOTE_HTTP=openai,acp` and each enabled API's dedicated token.
 Dedicated tokens are resolved through `LemonCore.Env`: `LEMON_OPENAI_COMPAT_API_TOKEN`
 (with `LEMON_OPENAI_COMPAT_TOKEN` as an alias) and `LEMON_ACP_API_TOKEN`.
+Each dedicated token is its own principal with read/write scopes only
+(`Authorize.authenticate_api/3`): no admin, approvals or pairing. The OpenAI
+token sees only its own runs, session namespace and workspace (see
+`docs/tools/openai-compatible-api.md`). The ACP token's `POST /acp` sessions are
+recorded with their owner: it can only load, resume, fork, prompt, configure,
+list or close sessions it created, `session/new` `cwd` must resolve inside the
+API workspace (`LemonControlPlane.APIWorkspace`), and it cannot set
+`approval=auto` (`/acp/ws` requires the operator approvals scope).
 RPC image arrays are validated directly by `LemonAi.ImageInputs`; usage records
 and summaries are owned by `LemonCore.UsageStore`.
 
@@ -60,8 +68,10 @@ initial snapshot, resolved auth scopes and payload/buffer/tick policy. Discover
 the actual supported surface there; do not assume an old method inventory.
 A second connect is rejected as already connected.
 
-Operator scopes include read, write, admin, approvals and pairing. Request only
-what the client needs; a method requires a matching authorized scope. Before
+Operator scopes include read, write, admin, approvals and pairing. The
+credential fixes the granted set; a client's `scopes` can only narrow it, never
+add to it. Request only what the client needs; a method requires a matching
+authorized scope declared by its handler's `scopes/0`. Before
 handshake, ordinary method calls are rejected. Unknown methods, invalid params,
 missing auth and insufficient scopes remain distinct protocol errors.
 

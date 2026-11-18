@@ -26,25 +26,25 @@ defmodule LemonControlPlane.HTTP.Router do
   end
 
   get "/v1/health" do
-    with_openai_auth(conn, fn conn ->
+    with_openai_auth(conn, fn conn, _auth ->
       json(conn, 200, LemonControlPlane.OpenAICompat.health())
     end)
   end
 
   get "/v1/capabilities" do
-    with_openai_auth(conn, fn conn ->
+    with_openai_auth(conn, fn conn, _auth ->
       json(conn, 200, LemonControlPlane.OpenAICompat.capabilities())
     end)
   end
 
   get "/v1/models" do
-    with_openai_auth(conn, fn conn ->
+    with_openai_auth(conn, fn conn, _auth ->
       json(conn, 200, LemonControlPlane.OpenAICompat.models())
     end)
   end
 
   get "/v1/models/*model_id" do
-    with_openai_auth(conn, fn conn ->
+    with_openai_auth(conn, fn conn, _auth ->
       model_id
       |> Enum.join("/")
       |> LemonControlPlane.OpenAICompat.model()
@@ -53,61 +53,64 @@ defmodule LemonControlPlane.HTTP.Router do
   end
 
   post "/v1/chat/completions" do
-    with_openai_auth(conn, fn conn ->
+    with_openai_auth(conn, fn conn, auth ->
       if LemonControlPlane.OpenAICompat.stream_requested?(conn.body_params) do
         conn.body_params
-        |> LemonControlPlane.OpenAICompat.chat_completion_stream()
+        |> LemonControlPlane.OpenAICompat.chat_completion_stream(auth)
         |> send_openai_stream(conn, :chat)
       else
         conn.body_params
-        |> LemonControlPlane.OpenAICompat.chat_completion()
+        |> LemonControlPlane.OpenAICompat.chat_completion(auth)
         |> send_openai_result(conn)
       end
     end)
   end
 
   post "/v1/responses" do
-    with_openai_auth(conn, fn conn ->
+    with_openai_auth(conn, fn conn, auth ->
       if LemonControlPlane.OpenAICompat.stream_requested?(conn.body_params) do
         conn.body_params
-        |> LemonControlPlane.OpenAICompat.response_stream()
+        |> LemonControlPlane.OpenAICompat.response_stream(auth)
         |> send_openai_stream(conn, :response)
       else
         conn.body_params
-        |> LemonControlPlane.OpenAICompat.response()
+        |> LemonControlPlane.OpenAICompat.response(auth)
         |> send_openai_result(conn)
       end
     end)
   end
 
   get "/v1/responses/:response_id" do
-    with_openai_auth(conn, fn conn ->
+    with_openai_auth(conn, fn conn, auth ->
       response_id
-      |> LemonControlPlane.OpenAICompat.stored_response()
+      |> LemonControlPlane.OpenAICompat.stored_response(auth)
       |> send_openai_result(conn)
     end)
   end
 
   get "/v1/runs/:run_id" do
-    with_openai_auth(conn, fn conn ->
+    with_openai_auth(conn, fn conn, auth ->
       run_id
-      |> LemonControlPlane.OpenAICompat.run_status()
+      |> LemonControlPlane.OpenAICompat.run_status(auth)
       |> send_openai_result(conn)
     end)
   end
 
   post "/v1/runs/:run_id/cancel" do
-    with_openai_auth(conn, fn conn ->
+    with_openai_auth(conn, fn conn, auth ->
       run_id
-      |> LemonControlPlane.OpenAICompat.cancel_run()
+      |> LemonControlPlane.OpenAICompat.cancel_run(auth)
       |> send_openai_result(conn)
     end)
   end
 
   post "/acp" do
-    with_acp_auth(conn, fn conn ->
+    with_acp_auth(conn, fn conn, auth ->
       conn.body_params
-      |> LemonControlPlane.ACP.handle_jsonrpc()
+      |> LemonControlPlane.ACP.handle_jsonrpc(
+        scopes: auth.scopes,
+        principal: Authorize.principal_id(auth)
+      )
       |> send_acp_result(conn)
     end)
   end
@@ -133,11 +136,15 @@ defmodule LemonControlPlane.HTTP.Router do
 
     params = %{"role" => "operator", "auth" => %{"token" => bearer_token(conn)}}
 
-    case LemonControlPlane.Auth.Authorize.from_params(params, local?: local?) do
-      {:ok, %{role: :operator, scopes: scopes}} ->
+    case Authorize.from_params(params, local?: local?) do
+      {:ok, %{role: :operator, scopes: scopes} = auth} ->
         if Enum.all?([:read, :write, :approvals], &(&1 in scopes)) do
           conn
-          |> WebSockAdapter.upgrade(LemonControlPlane.ACP.Connection, [], timeout: :infinity)
+          |> WebSockAdapter.upgrade(
+            LemonControlPlane.ACP.Connection,
+            [scopes: scopes, principal: Authorize.principal_id(auth)],
+            timeout: :infinity
+          )
           |> halt()
         else
           http_error(
@@ -416,16 +423,16 @@ defmodule LemonControlPlane.HTTP.Router do
   defp sse_event(event, data), do: "event: #{event}\n" <> sse_data(data)
 
   defp with_openai_auth(conn, fun) do
-    case openai_auth_result(conn) do
-      :ok -> fun.(conn)
+    case api_auth_result(conn, :openai, "LEMON_OPENAI_COMPAT_API_TOKEN") do
+      {:ok, auth} -> fun.(conn, auth)
       {:error, status, message} -> send_openai_result({:error, {status, message}}, conn)
     end
   end
 
   defp with_acp_auth(conn, fun) do
-    case acp_auth_result(conn) do
-      :ok ->
-        fun.(conn)
+    case api_auth_result(conn, :acp, "LEMON_ACP_API_TOKEN") do
+      {:ok, auth} ->
+        fun.(conn, auth)
 
       {:error, status, message} ->
         error =
@@ -435,29 +442,13 @@ defmodule LemonControlPlane.HTTP.Router do
     end
   end
 
-  defp openai_auth_result(conn),
-    do: api_auth_result(conn, :openai, "LEMON_OPENAI_COMPAT_API_TOKEN")
-
-  defp acp_auth_result(conn), do: api_auth_result(conn, :acp, "LEMON_ACP_API_TOKEN")
-
   defp api_auth_result(conn, api, env) do
-    expected = ListenerPolicy.api_token(api) || Authorize.configured_operator_token()
-    presented = presented_openai_token(conn)
+    case Authorize.authenticate_api(api, presented_openai_token(conn), conn.remote_ip) do
+      {:ok, auth} ->
+        {:ok, auth}
 
-    cond do
-      is_binary(expected) and is_binary(presented) and
-          Plug.Crypto.secure_compare(
-            :crypto.hash(:sha256, expected),
-            :crypto.hash(:sha256, presented)
-          ) ->
-        :ok
-
-      is_nil(expected) and is_nil(presented) and
-          Authorize.tokenless_loopback_allowed?(conn.remote_ip) ->
-        :ok
-
-      true ->
-        missing? = is_nil(presented) or is_nil(expected)
+      {:error, reason} ->
+        missing? = reason == :missing
         message = token_auth_message(missing?, env) |> operator_auth_message()
         {:error, if(missing?, do: 401, else: 403), message}
     end

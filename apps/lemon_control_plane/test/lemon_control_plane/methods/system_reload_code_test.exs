@@ -1,7 +1,6 @@
 defmodule LemonControlPlane.Methods.SystemReloadCodeTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.{Registry, SystemReloadCode}
   alias LemonControlPlane.Protocol.Schemas
 
@@ -59,7 +58,6 @@ defmodule LemonControlPlane.Methods.SystemReloadCodeTest do
 
   test "registered method requires admin and rejects read, write and node callers" do
     assert SystemReloadCode.name() in Registry.list_methods()
-    assert Authorize.required_scopes(SystemReloadCode.name()) == [:admin]
     assert SystemReloadCode.scopes() == [:admin]
 
     for auth <- [

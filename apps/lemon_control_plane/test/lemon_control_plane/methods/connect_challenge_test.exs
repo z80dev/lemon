@@ -366,9 +366,12 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
 
     test "Authorize.from_params rejects invalid token" do
       {:error, {:unauthorized, _, _}} =
-        Authorize.from_params(%{
-          "auth" => %{"token" => "invalid-token-12345"}
-        })
+        Authorize.from_params(
+          %{
+            "auth" => %{"token" => "invalid-token-12345"}
+          },
+          local?: false
+        )
     end
 
     test "node tokens get correct role and scopes" do
@@ -400,9 +403,12 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
 
       # Use token with Authorize
       {:ok, auth_ctx} =
-        Authorize.from_params(%{
-          "auth" => %{"token" => verify_result["token"]}
-        })
+        Authorize.from_params(
+          %{
+            "auth" => %{"token" => verify_result["token"]}
+          },
+          local?: false
+        )
 
       # Should have node role and scopes
       assert auth_ctx.role == :node

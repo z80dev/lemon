@@ -1,7 +1,6 @@
 defmodule LemonControlPlane.Methods.LearningTimelineTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.Registry
 
   setup do
@@ -57,7 +56,14 @@ defmodule LemonControlPlane.Methods.LearningTimelineTest do
     end
 
     assert {:error, {:unauthorized, _}} = call(%{}, %{})
-    assert {:error, {:forbidden, _}} = call(%{}, Authorize.node_context("node-test"))
+
+    assert {:error, {:forbidden, _}} =
+             call(%{}, %{
+               role: :node,
+               scopes: [:invoke, :event],
+               token: nil,
+               client_id: "node-test"
+             })
 
     assert {:error, {:forbidden, _}} =
              call(%{}, %{role: :operator, scopes: [:write], client_id: "writer"})

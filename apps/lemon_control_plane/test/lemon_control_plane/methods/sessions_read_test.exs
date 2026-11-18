@@ -1,7 +1,6 @@
 defmodule LemonControlPlane.Methods.SessionsReadTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.{Registry, SessionDetail, SessionsGet, SessionsHistory}
   alias LemonCore.{RunStore, SessionLifecycle}
 
@@ -72,8 +71,8 @@ defmodule LemonControlPlane.Methods.SessionsReadTest do
              SessionsHistory.handle(%{"sessionKey" => "missing", "limit" => 201}, %{})
 
     assert {:error, {:invalid_params, _, _}} = SessionsGet.handle(%{"sessionKey" => ""}, %{})
-    assert Authorize.required_scopes("sessions.get") == [:read]
-    assert Authorize.required_scopes("sessions.history") == [:read]
+    assert LemonControlPlane.Methods.SessionsGet.scopes() == [:read]
+    assert LemonControlPlane.Methods.SessionsHistory.scopes() == [:read]
 
     assert {:error, _} =
              Registry.dispatch("sessions.get", %{"sessionKey" => "missing"}, %{

@@ -25,7 +25,7 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
     :ok
   end
 
-  describe "from_params/1 with expired token" do
+  describe "from_params/2 with expired token" do
     test "returns unauthorized error for expired token" do
       token = "expired-auth-token-#{System.unique_integer([:positive])}"
 
@@ -40,9 +40,12 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
 
       # Should return unauthorized error, not fall through to params-based auth
       result =
-        Authorize.from_params(%{
-          "auth" => %{"token" => token}
-        })
+        Authorize.from_params(
+          %{
+            "auth" => %{"token" => token}
+          },
+          local?: false
+        )
 
       assert {:error, {:unauthorized, message, details}} = result
       assert message =~ "expired"
@@ -51,9 +54,12 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
 
     test "returns unauthorized error for invalid token" do
       result =
-        Authorize.from_params(%{
-          "auth" => %{"token" => "nonexistent-token-123"}
-        })
+        Authorize.from_params(
+          %{
+            "auth" => %{"token" => "nonexistent-token-123"}
+          },
+          local?: false
+        )
 
       assert {:error, {:unauthorized, message, details}} = result
       assert message =~ "Invalid"
@@ -73,9 +79,12 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
         end)
 
         result =
-          Authorize.from_params(%{
-            "auth" => %{"token" => "some-token-during-outage"}
-          })
+          Authorize.from_params(
+            %{
+              "auth" => %{"token" => "some-token-during-outage"}
+            },
+            local?: false
+          )
 
         assert {:error, {:unavailable, message}} = result
         assert message == "Session store is unavailable"
@@ -95,9 +104,12 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
         })
 
       {:ok, auth_ctx} =
-        Authorize.from_params(%{
-          "auth" => %{"token" => token}
-        })
+        Authorize.from_params(
+          %{
+            "auth" => %{"token" => token}
+          },
+          local?: false
+        )
 
       assert auth_ctx.role == :node
       assert :invoke in auth_ctx.scopes
@@ -107,10 +119,13 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
     test "empty token falls through to params-based auth" do
       # Empty token should not trigger token validation error
       {:ok, auth_ctx} =
-        Authorize.from_params(%{
-          "auth" => %{"token" => ""},
-          "role" => "operator"
-        })
+        Authorize.from_params(
+          %{
+            "auth" => %{"token" => ""},
+            "role" => "operator"
+          },
+          local?: true
+        )
 
       # Should use params-based auth
       assert auth_ctx.role == :operator
@@ -118,20 +133,26 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
 
     test "nil token cannot establish a node role" do
       assert {:error, {:unauthorized, message}} =
-               Authorize.from_params(%{
-                 "auth" => %{"token" => nil},
-                 "role" => "node"
-               })
+               Authorize.from_params(
+                 %{
+                   "auth" => %{"token" => nil},
+                   "role" => "node"
+                 },
+                 local?: false
+               )
 
       assert message =~ "node session token is required"
     end
 
     test "no token provided uses params-based auth" do
       {:ok, auth_ctx} =
-        Authorize.from_params(%{
-          "role" => "operator",
-          "scopes" => ["operator.admin", "operator.read"]
-        })
+        Authorize.from_params(
+          %{
+            "role" => "operator",
+            "scopes" => ["operator.admin", "operator.read"]
+          },
+          local?: true
+        )
 
       assert auth_ctx.role == :operator
       assert :admin in auth_ctx.scopes
@@ -139,7 +160,7 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
     end
   end
 
-  describe "from_params/1 with string keys (JSONL reload)" do
+  describe "from_params/2 with string keys (JSONL reload)" do
     test "handles expired token with string keys in store" do
       token = "expired-string-auth-#{System.unique_integer([:positive])}"
 
@@ -152,9 +173,12 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
       })
 
       result =
-        Authorize.from_params(%{
-          "auth" => %{"token" => token}
-        })
+        Authorize.from_params(
+          %{
+            "auth" => %{"token" => token}
+          },
+          local?: false
+        )
 
       assert {:error, {:unauthorized, message, details}} = result
       assert message =~ "expired"
@@ -172,9 +196,12 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
       })
 
       {:ok, auth_ctx} =
-        Authorize.from_params(%{
-          "auth" => %{"token" => token}
-        })
+        Authorize.from_params(
+          %{
+            "auth" => %{"token" => token}
+          },
+          local?: false
+        )
 
       assert auth_ctx.role == :node
       assert :invoke in auth_ctx.scopes

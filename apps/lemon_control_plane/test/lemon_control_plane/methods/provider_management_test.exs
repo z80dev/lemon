@@ -73,7 +73,7 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
 
       assert {:error, _} =
                Authorize.authorize(
-                 Authorize.node_context("offline-node"),
+                 %{role: :node, scopes: [:invoke, :event], token: nil, client_id: "offline-node"},
                  method,
                  module.scopes()
                )

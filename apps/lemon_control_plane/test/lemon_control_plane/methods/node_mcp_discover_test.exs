@@ -18,7 +18,6 @@ defmodule LemonControlPlane.Methods.NodeMcpDiscoverTest do
     assert Registry.lookup("node.mcp.discover") == {:ok, NodeMcpDiscover}
     assert Registry.dispatch_mode("node.mcp.discover") == :async
     assert NodeMcpDiscover.scopes() == [:admin]
-    assert LemonControlPlane.Auth.Authorize.required_scopes("node.mcp.discover") == [:admin]
 
     for auth <- [
           %{role: :operator, scopes: [:read, :write]},

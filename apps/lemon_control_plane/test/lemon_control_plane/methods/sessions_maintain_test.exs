@@ -1,7 +1,6 @@
 defmodule LemonControlPlane.Methods.SessionsMaintainTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.{Registry, SessionsMaintain}
   alias LemonControlPlane.Protocol.Schemas
   alias LemonCore.{AgentRuntime, Store}
@@ -55,7 +54,6 @@ defmodule LemonControlPlane.Methods.SessionsMaintainTest do
   test "maintenance is registered and requires admin even for previews" do
     assert Registry.lookup("sessions.maintain") == {:ok, SessionsMaintain}
     assert SessionsMaintain.scopes() == [:admin]
-    assert Authorize.required_scopes("sessions.maintain") == [:admin]
 
     for auth <- [
           %{role: :operator, scopes: [:read]},

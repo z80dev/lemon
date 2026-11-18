@@ -40,7 +40,6 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
     assert "node.invoke.event" in Registry.list_methods()
     assert Registry.dispatch_mode("node.invoke.event") == :inline
     assert Authorize.node_only_method?("node.invoke.event")
-    assert Authorize.required_scopes("node.invoke.event") == [:invoke, :event]
     assert NodeInvokeEvent.scopes() == [:invoke, :event]
 
     assert Schemas.get("node.invoke.event") == %{
@@ -196,7 +195,9 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
     assert {:ok, token} =
              TokenStore.replace_node_session(
                unique("event-token"),
-               %{"type" => "node", "nodeId" => node_id}, ttl_ms: 60_000)
+               %{"type" => "node", "nodeId" => node_id},
+               ttl_ms: 60_000
+             )
 
     generation = token.identity["sessionGeneration"]
     assert :ok = NodeRegistry.register_session(node_id, node_id, self(), generation)

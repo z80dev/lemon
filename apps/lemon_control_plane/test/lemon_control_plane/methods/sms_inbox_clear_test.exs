@@ -1,7 +1,6 @@
 defmodule LemonControlPlane.Methods.SmsInboxClearTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.{Registry, SmsInboxClear}
 
   @inbox :"Elixir.LemonGateway.Sms.Inbox"
@@ -23,7 +22,6 @@ defmodule LemonControlPlane.Methods.SmsInboxClearTest do
   end
 
   test "is an admin-only registered method" do
-    assert Authorize.required_scopes("sms.inbox.clear") == [:admin]
     assert SmsInboxClear.scopes() == [:admin]
     assert Registry.lookup("sms.inbox.clear") == {:ok, SmsInboxClear}
   end
