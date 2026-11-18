@@ -23,6 +23,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   @idle_keepalive_stop_callback_prefix "lemon:idle:k:"
   @cancel_callback_prefix "lemon:cancel"
   @model_callback_prefix "lemon:model"
+  @model_callback_unbound "-"
+  @model_picker_refusal "Only the member who opened this model picker can use it."
   @providers_per_page 8
   @models_per_page 8
   @model_picker_prev "<< Prev"
@@ -32,8 +34,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   @model_picker_scope_session "This session"
   @model_picker_scope_future "All future sessions"
 
-  def callback_model_provider_markup(providers, page) when is_list(providers) do
-    model_provider_markup(providers, page)
+  def callback_model_provider_markup(providers, page, owner) when is_list(providers) do
+    bind_markup(model_provider_markup(providers, page), owner)
   end
 
   def handle_callback_query(state, cb) when is_map(state) and is_map(cb) do
@@ -114,117 +116,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
     msg = cb["message"] || %{}
     chat_id = parse_int(get_in(msg, ["chat", "id"]))
     message_id = parse_int(msg["message_id"])
-    topic_id = parse_int(msg["message_thread_id"])
 
-    if not (is_integer(chat_id) and is_integer(message_id)) do
-      _ = answer_callback_query(state, cb_id, "Unknown")
-    else
-      case parse_model_callback(data) do
-        {:providers, page} ->
-          providers = available_model_providers()
+    cond do
+      not (is_integer(chat_id) and is_integer(message_id)) ->
+        _ = answer_callback_query(state, cb_id, "Unknown")
 
-          _ =
-            edit_message_text(
-              state,
-              chat_id,
-              message_id,
-              render_model_picker_text(nil, chat_default_model_preference(state, chat_id)),
-              %{"reply_markup" => model_provider_markup(providers, page)}
-            )
-
-          _ = answer_callback_query(state, cb_id, "Updated")
-
-        {:provider, provider, page} ->
-          case models_for_provider(provider) do
-            [] ->
-              _ = answer_callback_query(state, cb_id, "No models")
-
-            models ->
-              _ =
-                edit_message_text(
-                  state,
-                  chat_id,
-                  message_id,
-                  render_provider_models_text(provider),
-                  %{"reply_markup" => model_list_markup(provider, models, page)}
-                )
-
-              _ = answer_callback_query(state, cb_id, "Updated")
-          end
-
-        {:choose, provider, index, page} ->
-          case model_at_index(provider, index) do
-            nil ->
-              _ = answer_callback_query(state, cb_id, "Unknown model")
-
-            model ->
-              _ =
-                edit_message_text(
-                  state,
-                  chat_id,
-                  message_id,
-                  render_model_scope_text(model),
-                  %{"reply_markup" => model_scope_markup(provider, index, page)}
-                )
-
-              _ = answer_callback_query(state, cb_id, "Select scope")
-          end
-
-        {:set, scope, provider, index} ->
-          case model_at_index(provider, index) do
-            nil ->
-              _ = answer_callback_query(state, cb_id, "Unknown model")
-
-            model ->
-              model_spec = model_spec(model)
-              chat_scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
-
-              session_key =
-                SessionKey.channel_peer(%{
-                  agent_id: BindingResolver.resolve_agent_id(chat_scope),
-                  channel_id: "telegram",
-                  account_id: state.account_id || "default",
-                  peer_kind: peer_kind_from_chat_type(get_in(msg, ["chat", "type"])),
-                  peer_id: to_string(chat_id),
-                  thread_id: if(is_integer(topic_id), do: to_string(topic_id), else: nil)
-                })
-
-              _ = put_session_model_override(session_key, model_spec)
-
-              if scope == :future do
-                _ = put_default_model_preference(state, chat_id, nil, model_spec)
-              end
-
-              text =
-                if scope == :future do
-                  "Default model set to #{model_label(model)} for all future sessions in this chat."
-                else
-                  "Model set to #{model_label(model)} for this session."
-                end
-
-              _ =
-                edit_message_text(
-                  state,
-                  chat_id,
-                  message_id,
-                  text,
-                  %{"reply_markup" => %{"inline_keyboard" => []}}
-                )
-
-              _ = answer_callback_query(state, cb_id, "Saved")
-          end
-
-        :close ->
-          _ =
-            edit_message_text(state, chat_id, message_id, "Model picker closed.", %{
-              "reply_markup" => %{"inline_keyboard" => []}
-            })
-
-          _ = answer_callback_query(state, cb_id, "Closed")
-
-        _ ->
-          _ = answer_callback_query(state, cb_id, "Unknown")
-      end
+      true ->
+        case authorize_model_callback(state, cb, msg, chat_id, data) do
+          {:ok, owner, action} -> handle_model_action(state, cb_id, msg, owner, action)
+          :refused -> answer_callback_query(state, cb_id, @model_picker_refusal)
+        end
     end
 
     :ok
@@ -232,6 +133,181 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
     _ ->
       _ = answer_callback_query(state, cb_id, "Unknown")
       :ok
+  end
+
+  @doc """
+  Owner tag carried in every inline `/model` callback: an HMAC (keyed by the bot
+  token) of the chat and the opener's sender id, or `"-"` when the opener is
+  unknown. Only the opener's own presses verify, and unbound pickers are honored
+  only in private chats.
+  """
+  def model_callback_owner(state, chat_id, sender_id) when not is_nil(sender_id) do
+    :crypto.mac(
+      :hmac,
+      :sha256,
+      to_string(state.token),
+      "#{@model_callback_prefix}:#{chat_id}:#{sender_id}"
+    )
+    |> binary_part(0, 8)
+    |> Base.url_encode64(padding: false)
+  end
+
+  def model_callback_owner(_state, _chat_id, _sender_id), do: @model_callback_unbound
+
+  defp authorize_model_callback(state, cb, msg, chat_id, data) do
+    with [owner, action] <-
+           data
+           |> String.replace_prefix(@model_callback_prefix <> ":", "")
+           |> String.split(":", parts: 2),
+         true <- model_callback_owner_ok?(state, cb, msg, chat_id, owner) do
+      {:ok, owner, @model_callback_prefix <> ":" <> action}
+    else
+      _ -> :refused
+    end
+  end
+
+  defp model_callback_owner_ok?(_state, _cb, msg, _chat_id, @model_callback_unbound),
+    do: get_in(msg, ["chat", "type"]) == "private"
+
+  defp model_callback_owner_ok?(state, cb, _msg, chat_id, owner) do
+    from = cb["from"] || %{}
+
+    case {from["id"], from["is_bot"]} do
+      {from_id, is_bot} when is_integer(from_id) and is_bot != true ->
+        expected = model_callback_owner(state, chat_id, from_id)
+        byte_size(expected) == byte_size(owner) and :crypto.hash_equals(expected, owner)
+
+      _ ->
+        false
+    end
+  end
+
+  defp bind_markup(%{"inline_keyboard" => rows} = markup, owner) do
+    rows =
+      Enum.map(rows, fn row ->
+        Enum.map(row, fn
+          %{"callback_data" => @model_callback_prefix <> ":" <> action} = button ->
+            %{button | "callback_data" => "#{@model_callback_prefix}:#{owner}:#{action}"}
+
+          button ->
+            button
+        end)
+      end)
+
+    %{markup | "inline_keyboard" => rows}
+  end
+
+  defp handle_model_action(state, cb_id, msg, owner, data) do
+    chat_id = parse_int(get_in(msg, ["chat", "id"]))
+    message_id = parse_int(msg["message_id"])
+    topic_id = parse_int(msg["message_thread_id"])
+
+    case parse_model_callback(data) do
+      {:providers, page} ->
+        providers = available_model_providers()
+
+        _ =
+          edit_message_text(
+            state,
+            chat_id,
+            message_id,
+            render_model_picker_text(nil, chat_default_model_preference(state, chat_id)),
+            %{"reply_markup" => bind_markup(model_provider_markup(providers, page), owner)}
+          )
+
+        _ = answer_callback_query(state, cb_id, "Updated")
+
+      {:provider, provider, page} ->
+        case models_for_provider(provider) do
+          [] ->
+            _ = answer_callback_query(state, cb_id, "No models")
+
+          models ->
+            _ =
+              edit_message_text(
+                state,
+                chat_id,
+                message_id,
+                render_provider_models_text(provider),
+                %{"reply_markup" => bind_markup(model_list_markup(provider, models, page), owner)}
+              )
+
+            _ = answer_callback_query(state, cb_id, "Updated")
+        end
+
+      {:choose, provider, index, page} ->
+        case model_at_index(provider, index) do
+          nil ->
+            _ = answer_callback_query(state, cb_id, "Unknown model")
+
+          model ->
+            _ =
+              edit_message_text(
+                state,
+                chat_id,
+                message_id,
+                render_model_scope_text(model),
+                %{"reply_markup" => bind_markup(model_scope_markup(provider, index, page), owner)}
+              )
+
+            _ = answer_callback_query(state, cb_id, "Select scope")
+        end
+
+      {:set, scope, provider, index} ->
+        case model_at_index(provider, index) do
+          nil ->
+            _ = answer_callback_query(state, cb_id, "Unknown model")
+
+          model ->
+            model_spec = model_spec(model)
+            chat_scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
+
+            session_key =
+              SessionKey.channel_peer(%{
+                agent_id: BindingResolver.resolve_agent_id(chat_scope),
+                channel_id: "telegram",
+                account_id: state.account_id || "default",
+                peer_kind: peer_kind_from_chat_type(get_in(msg, ["chat", "type"])),
+                peer_id: to_string(chat_id),
+                thread_id: if(is_integer(topic_id), do: to_string(topic_id), else: nil)
+              })
+
+            _ = put_session_model_override(session_key, model_spec)
+
+            if scope == :future do
+              _ = put_default_model_preference(state, chat_id, nil, model_spec)
+            end
+
+            text =
+              if scope == :future do
+                "Default model set to #{model_label(model)} for all future sessions in this chat."
+              else
+                "Model set to #{model_label(model)} for this session."
+              end
+
+            _ =
+              edit_message_text(
+                state,
+                chat_id,
+                message_id,
+                text,
+                %{"reply_markup" => %{"inline_keyboard" => []}}
+              )
+
+            _ = answer_callback_query(state, cb_id, "Saved")
+        end
+
+      :close ->
+        _ =
+          edit_message_text(state, chat_id, message_id, "Model picker closed.", %{
+            "reply_markup" => %{"inline_keyboard" => []}
+          })
+
+        _ = answer_callback_query(state, cb_id, "Closed")
+
+      _ ->
+        _ = answer_callback_query(state, cb_id, "Unknown")
+    end
   end
 
   defp parse_model_callback(data) when is_binary(data) do

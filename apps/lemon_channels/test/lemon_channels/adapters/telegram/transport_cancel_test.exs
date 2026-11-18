@@ -766,29 +766,161 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     refute_receive {:inbound, _msg}, 200
   end
 
-  test "/model reopens the picker when follow-up sender key does not match" do
+  test "/model picker ignores another member's message, which routes as an ordinary message" do
     chat_id = 33_300_521
     user_msg_id = 13_021
 
     CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "/model")])
 
-    assert {:ok, _pid} =
+    assert {:ok, pid} =
              start_transport(%{
                allowed_chat_ids: [chat_id],
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
+    choice = provider_choice(opts)
+
+    CancelMockAPI.set_updates([message_update_from(chat_id, user_msg_id + 1, choice, 100)])
+
+    assert_receive {:inbound, msg}, 1_000
+    assert msg.message.text == choice
+    refute_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}, 200
+
+    assert [%{step: :provider}] = Map.values(:sys.get_state(pid).model_pickers)
+  end
+
+  test "/model pickers opened by two members cannot consume each other's input" do
+    chat_id = -1_003_330_522
+    user_msg_id = 13_022
+
+    :ok =
+      LemonChannels.Telegram.TriggerMode.set(
+        %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil},
+        "default",
+        :all
+      )
 
     CancelMockAPI.set_updates([
-      message_update_from(chat_id, user_msg_id + 1, "openai-codex", 100)
+      group_message_update(chat_id, user_msg_id, "/model", 99),
+      group_message_update(chat_id, user_msg_id + 1, "/model", 100)
     ])
 
-    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}
-    assert text =~ "Model picker"
-    assert text =~ "Choose a provider:"
-    assert is_list(get_in(opts, ["reply_markup", "keyboard"]))
-    refute_receive {:inbound, _msg}, 200
+    assert {:ok, pid} = start_transport(group_transport_config(chat_id))
+
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
+    assert_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}
+    assert get_in(opts, ["reply_markup", "selective"]) == true
+    choice = provider_choice(opts)
+
+    CancelMockAPI.set_updates([group_message_update(chat_id, user_msg_id + 2, choice, 99)])
+
+    assert_receive {:send_message, ^chat_id, provider_text, _opts, _parse_mode}
+    assert provider_text =~ "Provider: #{choice}"
+
+    pickers = :sys.get_state(pid).model_pickers
+    assert %{step: :model} = pickers[{chat_id, nil, "99"}]
+    assert %{step: :provider} = pickers[{chat_id, nil, "100"}]
+  end
+
+  test "/model picker in a mentions-only group does not swallow another member's message" do
+    chat_id = -1_003_330_523
+    user_msg_id = 13_023
+
+    CancelMockAPI.set_updates([group_message_update(chat_id, user_msg_id, "/model", 99)])
+
+    assert {:ok, pid} = start_transport(group_transport_config(chat_id))
+
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
+    choice = provider_choice(opts)
+
+    CancelMockAPI.set_updates([
+      group_message_update(chat_id, user_msg_id + 1, choice, 100),
+      group_message_update(chat_id, user_msg_id + 2, "lunch?", 100)
+    ])
+
+    refute_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}, 300
+    refute_receive {:inbound, _msg}, 100
+
+    CancelMockAPI.set_updates([
+      group_message_update(chat_id, user_msg_id + 3, "@lemon_test_bot hello", 100)
+    ])
+
+    assert_receive {:inbound, msg}, 1_000
+    assert msg.message.text =~ "hello"
+    assert [%{step: :provider}] = Map.values(:sys.get_state(pid).model_pickers)
+
+    # The opener answers through the trigger gate by replying to the bot.
+    reply =
+      group_message_update(chat_id, user_msg_id + 4, choice, 99)
+      |> put_in(["message", "reply_to_message"], %{
+        "message_id" => 1,
+        "from" => %{"id" => 4_242, "is_bot" => true}
+      })
+
+    CancelMockAPI.set_updates([reply])
+
+    assert_receive {:send_message, ^chat_id, provider_text, _opts, _parse_mode}
+    assert provider_text =~ "Provider: #{choice}"
+    refute_receive {:inbound, _msg}, 100
+  end
+
+  test "/model abandoned picker expires and releases its catalog snapshot" do
+    chat_id = 33_300_524
+    user_msg_id = 13_024
+
+    CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "/model")])
+
+    assert {:ok, pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
+    choice = provider_choice(opts)
+
+    key = {chat_id, nil, "99"}
+    assert %{expiry_token: token, catalog: _} = :sys.get_state(pid).model_pickers[key]
+    send(pid, {:model_picker_expired, key, token})
+    assert :sys.get_state(pid).model_pickers == %{}
+
+    CancelMockAPI.set_updates([message_update(chat_id, user_msg_id + 1, "/model")])
+    assert_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}
+
+    # A picker past its deadline is not answered even before its timer fires.
+    :sys.replace_state(pid, fn state ->
+      past = System.monotonic_time(:millisecond) - 1
+      update_in(state.model_pickers[key], &%{&1 | expires_at_ms: past})
+    end)
+
+    CancelMockAPI.set_updates([message_update(chat_id, user_msg_id + 2, choice)])
+
+    assert_receive {:inbound, msg}, 1_000
+    assert msg.message.text == choice
+    assert :sys.get_state(pid).model_pickers == %{}
+  end
+
+  defp group_transport_config(chat_id) do
+    %{
+      allowed_chat_ids: [chat_id],
+      deny_unbound_chats: false,
+      bot_id: 4_242,
+      bot_username: "lemon_test_bot"
+    }
+  end
+
+  defp group_message_update(chat_id, message_id, text, from_id) do
+    %{
+      "update_id" => System.unique_integer([:positive]),
+      "message" => %{
+        "message_id" => message_id,
+        "date" => 1,
+        "chat" => %{"id" => chat_id, "type" => "supergroup"},
+        "from" => %{"id" => from_id, "username" => "member#{from_id}", "first_name" => "M"},
+        "text" => text
+      }
+    }
   end
 
   test "/model invalid model text stays inside the picker flow" do
@@ -1030,7 +1162,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       })
 
     CancelMockAPI.set_updates([
-      model_callback_update(chat_id, topic_id, "cb-1", message_id, "lemon:model:providers:0")
+      model_callback_update(chat_id, topic_id, "cb-1", message_id, "lemon:model:-:providers:0")
     ])
 
     assert {:ok, _pid} =
@@ -1096,6 +1228,242 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     assert %{model_id: ^stored} = ModelPolicy.get(chat_route)
     assert nil == ModelPolicy.get(topic_route)
+  end
+
+  test "/model callbacks without an opener cannot change a group's model" do
+    chat_id = -1_003_330_601
+    message_id = 1_601
+
+    provider =
+      LemonAgent.ModelRuntime.ModelCatalog.available_catalog()
+      |> LemonAgent.ModelRuntime.ModelCatalog.providers()
+      |> List.first()
+
+    assert is_binary(provider)
+    route = ModelPolicyAdapter.route_for("default", chat_id, nil)
+
+    CancelMockAPI.set_updates([
+      group_callback_update(chat_id, "cb-g1", message_id, "lemon:model:set:f:#{provider}:0", 100),
+      group_callback_update(
+        chat_id,
+        "cb-g2",
+        message_id,
+        "lemon:model:-:set:f:#{provider}:0",
+        100
+      )
+    ])
+
+    assert {:ok, _pid} = start_transport(group_transport_config(chat_id))
+
+    assert_receive {:answer_callback, "cb-g1", %{"text" => refusal}}
+    assert refusal =~ "Only the member who opened"
+    assert_receive {:answer_callback, "cb-g2", %{"text" => ^refusal}}
+    refute_receive {:edit_message_text, ^chat_id, ^message_id, _text, _opts}, 100
+    assert nil == ModelPolicy.get(route)
+  end
+
+  test "/model callbacks bound to the opener refuse other members" do
+    chat_id = -1_003_330_602
+    message_id = 1_602
+    route = ModelPolicyAdapter.route_for("default", chat_id, nil)
+
+    assert {:ok, pid} = start_transport(group_transport_config(chat_id))
+    state = :sys.get_state(pid)
+
+    owner =
+      LemonChannels.Adapters.Telegram.Transport.CallbackHandler.model_callback_owner(
+        state,
+        chat_id,
+        "99"
+      )
+
+    forged =
+      LemonChannels.Adapters.Telegram.Transport.CallbackHandler.model_callback_owner(
+        %{token: "guess"},
+        chat_id,
+        "100"
+      )
+
+    CancelMockAPI.set_updates([
+      group_callback_update(chat_id, "cb-b1", message_id, "lemon:model:#{owner}:providers:0", 99)
+    ])
+
+    assert_receive {:edit_message_text, ^chat_id, ^message_id, _text, picker_opts}
+    assert_receive {:answer_callback, "cb-b1", %{"text" => "Updated"}}
+    provider_callback = provider_callback(picker_opts)
+    assert String.starts_with?(provider_callback, "lemon:model:#{owner}:provider:")
+
+    CancelMockAPI.set_updates([
+      group_callback_update(chat_id, "cb-b2", message_id, provider_callback, 99)
+    ])
+
+    assert_receive {:edit_message_text, ^chat_id, ^message_id, _text, provider_opts}
+
+    choose_callback =
+      provider_opts
+      |> get_in(["reply_markup", "inline_keyboard"])
+      |> hd()
+      |> hd()
+      |> Map.get("callback_data")
+
+    CancelMockAPI.set_updates([
+      group_callback_update(chat_id, "cb-b3", message_id, choose_callback, 99)
+    ])
+
+    assert_receive {:edit_message_text, ^chat_id, ^message_id, _text, scope_opts}
+
+    future_callback =
+      scope_opts
+      |> get_in(["reply_markup", "inline_keyboard"])
+      |> List.flatten()
+      |> Enum.find_value(&(&1["text"] == "All future sessions" && &1["callback_data"]))
+
+    "lemon:model:" <> rest = future_callback
+    [_owner, action] = String.split(rest, ":", parts: 2)
+
+    CancelMockAPI.set_updates([
+      group_callback_update(chat_id, "cb-b4", message_id, future_callback, 100),
+      group_callback_update(chat_id, "cb-b5", message_id, "lemon:model:#{forged}:#{action}", 100)
+    ])
+
+    assert_receive {:answer_callback, "cb-b4", %{"text" => refusal}}
+    assert refusal =~ "Only the member who opened"
+    assert_receive {:answer_callback, "cb-b5", %{"text" => ^refusal}}
+    refute_receive {:edit_message_text, ^chat_id, ^message_id, _text, _opts}, 100
+    assert nil == ModelPolicy.get(route)
+
+    CancelMockAPI.set_updates([
+      group_callback_update(chat_id, "cb-b6", message_id, future_callback, 99)
+    ])
+
+    assert_receive {:answer_callback, "cb-b6", %{"text" => "Saved"}}
+    assert %{model_id: _} = ModelPolicy.get(route)
+  end
+
+  @group_anonymous_bot_id 1_087_968_824
+
+  test "/model refuses anonymous admins, who never share a picker" do
+    chat_id = -1_003_330_603
+    user_msg_id = 1_603
+    route = ModelPolicyAdapter.route_for("default", chat_id, nil)
+
+    :ok =
+      LemonChannels.Telegram.TriggerMode.set(
+        %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil},
+        "default",
+        :all
+      )
+
+    provider =
+      LemonAgent.ModelRuntime.ModelCatalog.available_catalog()
+      |> LemonAgent.ModelRuntime.ModelCatalog.providers()
+      |> List.first()
+
+    CancelMockAPI.set_updates([anonymous_admin_update(chat_id, user_msg_id, "/model")])
+
+    assert {:ok, pid} = start_transport(group_transport_config(chat_id))
+
+    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}
+    assert text =~ "anonymous admins"
+    refute get_in(opts, ["reply_markup", "keyboard"])
+    refute get_in(opts, ["reply_markup", "inline_keyboard"])
+    assert :sys.get_state(pid).model_pickers == %{}
+
+    # A second anonymous admin's answer is an ordinary message.
+    CancelMockAPI.set_updates([anonymous_admin_update(chat_id, user_msg_id + 1, provider)])
+    assert_receive {:inbound, msg}, 1_000
+    assert msg.message.text == provider
+    assert :sys.get_state(pid).model_pickers == %{}
+
+    # Inline callbacks from the shared anonymous identity are refused too.
+    state = :sys.get_state(pid)
+
+    owner =
+      LemonChannels.Adapters.Telegram.Transport.CallbackHandler.model_callback_owner(
+        state,
+        chat_id,
+        Integer.to_string(@group_anonymous_bot_id)
+      )
+
+    cb =
+      group_callback_update(
+        chat_id,
+        "cb-anon",
+        user_msg_id,
+        "lemon:model:#{owner}:set:f:#{provider}:0",
+        @group_anonymous_bot_id
+      )
+      |> put_in(["callback_query", "from", "is_bot"], true)
+
+    CancelMockAPI.set_updates([cb])
+    assert_receive {:answer_callback, "cb-anon", %{"text" => refusal}}
+    assert refusal =~ "Only the member who opened"
+    assert nil == ModelPolicy.get(route)
+  end
+
+  test "/model closing one of two concurrent pickers keeps the other" do
+    chat_id = -1_003_330_604
+    user_msg_id = 1_604
+
+    :ok =
+      LemonChannels.Telegram.TriggerMode.set(
+        %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil},
+        "default",
+        :all
+      )
+
+    CancelMockAPI.set_updates([
+      group_message_update(chat_id, user_msg_id, "/model", 99),
+      group_message_update(chat_id, user_msg_id + 1, "/model", 100)
+    ])
+
+    assert {:ok, pid} = start_transport(group_transport_config(chat_id))
+    assert_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}
+    assert_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}
+
+    CancelMockAPI.set_updates([group_message_update(chat_id, user_msg_id + 2, "Close", 99)])
+
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
+    assert get_in(opts, ["reply_markup"]) == %{"remove_keyboard" => true, "selective" => true}
+    assert opts["reply_to_message_id"] == user_msg_id + 2
+
+    pickers = :sys.get_state(pid).model_pickers
+    refute Map.has_key?(pickers, {chat_id, nil, "99"})
+    assert %{step: :provider} = pickers[{chat_id, nil, "100"}]
+  end
+
+  defp anonymous_admin_update(chat_id, message_id, text) do
+    %{
+      "update_id" => System.unique_integer([:positive]),
+      "message" => %{
+        "message_id" => message_id,
+        "date" => 1,
+        "chat" => %{"id" => chat_id, "type" => "supergroup"},
+        "from" => %{
+          "id" => @group_anonymous_bot_id,
+          "is_bot" => true,
+          "username" => "GroupAnonymousBot",
+          "first_name" => "Group"
+        },
+        "sender_chat" => %{"id" => chat_id, "type" => "supergroup"},
+        "text" => text
+      }
+    }
+  end
+
+  defp group_callback_update(chat_id, cb_id, message_id, data, from_id) do
+    %{
+      "update_id" => System.unique_integer([:positive]),
+      "callback_query" => %{
+        "id" => cb_id,
+        "from" => %{"id" => from_id, "username" => "member#{from_id}", "first_name" => "M"},
+        "data" => data,
+        "message" => %{
+          "message_id" => message_id,
+          "chat" => %{"id" => chat_id, "type" => "supergroup"}
+        }
+      }
+    }
   end
 
   test "/model reply-keyboard flows remain independent across two topics in the same chat" do

@@ -699,6 +699,12 @@ Session and native-resume indices are scoped by a generation counter. `/new` inc
 
 `/model` uses a reply keyboard (bottom keyboard) flow for per-user selection in a chat/topic: provider -> model -> scope (`This session` or `All future sessions`). `This session` writes the current session override; `All future sessions` writes a chat-wide default even when invoked from a topic. Selection messages are intercepted by transport state and are not routed as normal inbound prompts. Provider/model lists are paginated in-keyboard with `<< Prev` / `Next >>`, plus `< Back` / `Close`. The model step accepts either the exact button label or raw model ids such as `gpt-5.4` and `provider:model_id`.
 
+The picker belongs to the member who sent `/model`: only that sender's later messages in the same chat/topic answer it, and the keyboard is sent with `selective: true`. Other members' messages are ordinary messages. Picker answers pass the group trigger gate first, so in a mentions-only group the opener answers by replying to the bot's picker message (or the chat uses `/trigger all`). An idle picker expires after ten minutes and releases its catalog snapshot; a later answer is then an ordinary message.
+
+Inline-keyboard `/model` callbacks carry an owner tag: an HMAC (keyed by the bot token) of the chat and the opener's sender id, or `-` when the opener had no sender id (the case in which `/model` uses the inline keyboard). A press from anyone but the opener, or with a forged or legacy tag, gets an "Only the member who opened this model picker can use it." callback answer and changes nothing. An unbound (`-`) picker is honored only in private chats, so a group callback without a verified opener never changes a model.
+
+Only an individual member owns a picker. Messages carrying `sender_chat` (anonymous admins posting as GroupAnonymousBot, channel posts) and bot senders are unbound: they never open or answer a reply-keyboard picker, `/model` from them in a group gets a refusal notice instead of a keyboard, and inline callbacks from bot identities are refused. Closing a picker removes the keyboard selectively (`remove_keyboard` with `selective: true`) and leaves other members' pickers open.
+
 #### Ownership Note
 
 Telegram transport owns Telegram-specific command UX, buffering, auth, and routing preparation. It does not own pending-compaction prompt mutation; router is the sole owner of rewriting the next inbound prompt for compaction recovery.

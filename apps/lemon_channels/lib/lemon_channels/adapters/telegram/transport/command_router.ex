@@ -48,107 +48,104 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
     inbound = %{inbound | message: Map.put(inbound.message, :text, text)}
     bot_username = callbacks.bot_username
 
-    {state, handled_model_picker?} =
-      callbacks.maybe_handle_model_picker_input.(state, inbound, original_text)
+    cond do
+      admin_command_refused?(original_text, bot_username, inbound) ->
+        callbacks.refuse_command.(state, inbound)
 
-    if handled_model_picker? do
-      state
-    else
-      cond do
-        admin_command_refused?(original_text, bot_username, inbound) ->
-          callbacks.refuse_command.(state, inbound)
+      MediaGroups.media_group_member?(inbound) and
+          MediaGroups.media_group_exists?(state, inbound) ->
+        MediaGroups.enqueue_media_group(state, inbound)
 
-        MediaGroups.media_group_member?(inbound) and
-            MediaGroups.media_group_exists?(state, inbound) ->
+      Commands.file_command?(original_text, bot_username) and
+          MediaGroups.media_group_member?(inbound) ->
+        MediaGroups.enqueue_media_group(state, inbound)
+
+      Commands.file_command?(original_text, bot_username) ->
+        FileOperations.handle_file_command(state, inbound)
+
+      Commands.checkpoint_command?(original_text, bot_username) or
+          Commands.rollback_command?(original_text, bot_username) ->
+        callbacks.handle_checkpoint_command.(state, inbound)
+
+      Commands.goal_command?(original_text, bot_username) ->
+        callbacks.handle_goal_command.(state, inbound)
+
+      Commands.kanban_command?(original_text, bot_username) ->
+        callbacks.handle_kanban_command.(state, inbound)
+
+      Commands.remind_command?(original_text, bot_username) ->
+        callbacks.handle_remind_command.(state, inbound)
+
+      Commands.reminders_command?(original_text, bot_username) ->
+        callbacks.handle_reminders_command.(state, inbound)
+
+      Commands.unremind_command?(original_text, bot_username) ->
+        callbacks.handle_unremind_command.(state, inbound)
+
+      Commands.media_command?(original_text, bot_username) ->
+        callbacks.handle_media_command.(state, inbound)
+
+      FileOperations.should_auto_put_media?(state, inbound) ->
+        if MediaGroups.media_group_member?(inbound) do
           MediaGroups.enqueue_media_group(state, inbound)
+        else
+          callbacks.handle_media_auto_put.(state, inbound)
+        end
 
-        Commands.file_command?(original_text, bot_username) and
-            MediaGroups.media_group_member?(inbound) ->
-          MediaGroups.enqueue_media_group(state, inbound)
+      Commands.trigger_command?(original_text, bot_username) ->
+        callbacks.handle_trigger_command.(state, inbound)
 
-        Commands.file_command?(original_text, bot_username) ->
-          FileOperations.handle_file_command(state, inbound)
+      Commands.cwd_command?(original_text, bot_username) ->
+        callbacks.handle_cwd_command.(state, inbound)
 
-        Commands.checkpoint_command?(original_text, bot_username) or
-            Commands.rollback_command?(original_text, bot_username) ->
-          callbacks.handle_checkpoint_command.(state, inbound)
+      Commands.topic_command?(original_text, bot_username) ->
+        callbacks.handle_topic_command.(state, inbound)
 
-        Commands.goal_command?(original_text, bot_username) ->
-          callbacks.handle_goal_command.(state, inbound)
+      Commands.resume_command?(original_text, bot_username) ->
+        callbacks.handle_resume_command.(state, inbound)
 
-        Commands.kanban_command?(original_text, bot_username) ->
-          callbacks.handle_kanban_command.(state, inbound)
+      Commands.model_command?(original_text, bot_username) ->
+        callbacks.handle_model_command.(state, inbound)
 
-        Commands.remind_command?(original_text, bot_username) ->
-          callbacks.handle_remind_command.(state, inbound)
+      Commands.thinking_command?(text, bot_username) ->
+        callbacks.handle_thinking_command.(state, inbound)
 
-        Commands.reminders_command?(original_text, bot_username) ->
-          callbacks.handle_reminders_command.(state, inbound)
+      Commands.new_command?(text, bot_username) ->
+        args = Commands.telegram_command_args(text, "new")
+        callbacks.handle_new_session.(state, inbound, args)
 
-        Commands.unremind_command?(original_text, bot_username) ->
-          callbacks.handle_unremind_command.(state, inbound)
+      Commands.cancel_command?(text, bot_username) ->
+        callbacks.maybe_cancel_by_reply.(state, inbound)
+        state
 
-        Commands.media_command?(original_text, bot_username) ->
-          callbacks.handle_media_command.(state, inbound)
+      Commands.portable_command?(text, bot_username) ->
+        callbacks.handle_portable_command.(state, inbound)
 
-        FileOperations.should_auto_put_media?(state, inbound) ->
-          if MediaGroups.media_group_member?(inbound) do
-            MediaGroups.enqueue_media_group(state, inbound)
-          else
-            callbacks.handle_media_auto_put.(state, inbound)
-          end
-
-        Commands.trigger_command?(original_text, bot_username) ->
-          callbacks.handle_trigger_command.(state, inbound)
-
-        Commands.cwd_command?(original_text, bot_username) ->
-          callbacks.handle_cwd_command.(state, inbound)
-
-        Commands.topic_command?(original_text, bot_username) ->
-          callbacks.handle_topic_command.(state, inbound)
-
-        Commands.resume_command?(original_text, bot_username) ->
-          callbacks.handle_resume_command.(state, inbound)
-
-        Commands.model_command?(original_text, bot_username) ->
-          callbacks.handle_model_command.(state, inbound)
-
-        Commands.thinking_command?(text, bot_username) ->
-          callbacks.handle_thinking_command.(state, inbound)
-
-        Commands.new_command?(text, bot_username) ->
-          args = Commands.telegram_command_args(text, "new")
-          callbacks.handle_new_session.(state, inbound, args)
-
-        Commands.cancel_command?(text, bot_username) ->
-          callbacks.maybe_cancel_by_reply.(state, inbound)
+      true ->
+        # The trigger gate runs before picker input: in a mentions-only group a
+        # member's ordinary message is never consumed as a picker answer.
+        if callbacks.should_ignore_for_trigger?.(state, inbound, original_text) do
+          callbacks.maybe_log_drop.(state, inbound, :trigger_mentions)
           state
+        else
+          {state, handled_model_picker?} =
+            callbacks.maybe_handle_model_picker_input.(state, inbound, original_text)
 
-        Commands.portable_command?(text, bot_username) ->
-          callbacks.handle_portable_command.(state, inbound)
+          if handled_model_picker? do
+            state
+          else
+            inbound = callbacks.maybe_mark_new_session_pending.(state, inbound)
+            inbound = callbacks.maybe_mark_fork_when_busy.(state, inbound)
+            {state, inbound} = callbacks.maybe_switch_session_from_reply.(state, inbound)
+            inbound = callbacks.maybe_apply_selected_resume.(state, inbound, original_text)
 
-        true ->
-          cond do
-            model_picker_active_for_scope?(state, inbound) ->
-              callbacks.handle_model_command.(state, inbound)
-
-            callbacks.should_ignore_for_trigger?.(state, inbound, original_text) ->
-              callbacks.maybe_log_drop.(state, inbound, :trigger_mentions)
-              state
-
-            true ->
-              inbound = callbacks.maybe_mark_new_session_pending.(state, inbound)
-              inbound = callbacks.maybe_mark_fork_when_busy.(state, inbound)
-              {state, inbound} = callbacks.maybe_switch_session_from_reply.(state, inbound)
-              inbound = callbacks.maybe_apply_selected_resume.(state, inbound, original_text)
-
-              if Commands.command_message_for_bot?(original_text, bot_username) do
-                callbacks.submit_inbound_now.(state, inbound)
-              else
-                MessageBuffer.enqueue_buffer(state, inbound)
-              end
+            if Commands.command_message_for_bot?(original_text, bot_username) do
+              callbacks.submit_inbound_now.(state, inbound)
+            else
+              MessageBuffer.enqueue_buffer(state, inbound)
+            end
           end
-      end
+        end
     end
   rescue
     e ->
@@ -173,31 +170,4 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
 
   defp sender_owner?(%{sender: %{owner?: true}}), do: true
   defp sender_owner?(_inbound), do: false
-
-  defp model_picker_active_for_scope?(state, inbound) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
-
-    Enum.any?(state.model_pickers || %{}, fn
-      {{picker_chat_id, picker_thread_id, _sender_id}, _picker} ->
-        picker_chat_id == chat_id and picker_thread_id == thread_id
-
-      _ ->
-        false
-    end)
-  rescue
-    _ -> false
-  end
-
-  defp parse_int(nil), do: nil
-  defp parse_int(i) when is_integer(i), do: i
-
-  defp parse_int(s) when is_binary(s) do
-    case Integer.parse(s) do
-      {i, _} -> i
-      :error -> nil
-    end
-  end
-
-  defp parse_int(_), do: nil
 end
