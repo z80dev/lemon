@@ -189,6 +189,15 @@ example, `model: "openrouter:openai/gpt-4o-mini"` resolves the OpenRouter
 credential and base URL from Lemon config/secrets, sends `openai/gpt-4o-mini`
 to the compatible `/chat/completions` endpoint, and keeps the full prefixed
 model id in redacted job metadata for operator visibility.
+A non-OpenAI prefix requires an explicit `base_url` in that provider's own
+`[providers.<name>]` config and only ever sends that provider's credential:
+there is no fallback to the OpenAI host, and the OpenAI-only overrides
+(`openai_vision_api_key`, `openai_vision_base_url`) never apply to it. A
+missing `base_url` fails the call before any job or HTTP request. Unprefixed
+and `openai:` models use the OpenAI credential with the configured OpenAI
+`base_url` or `https://api.openai.com/v1`. Every media tool resolves this
+credential/host pair through `MediaCommon.openai_compatible_endpoint/4`, which
+logs the provider and host (never the key).
 
 ## Video Generation
 
