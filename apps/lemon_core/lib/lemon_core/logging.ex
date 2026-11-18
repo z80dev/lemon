@@ -25,7 +25,8 @@ defmodule LemonCore.Logging do
     end
   end
 
-  @spec maybe_add_file_handler(LemonCore.Config.t(), keyword()) :: :ok | :skipped | {:error, term()}
+  @spec maybe_add_file_handler(LemonCore.Config.t(), keyword()) ::
+          :ok | :skipped | {:error, term()}
   def maybe_add_file_handler(%LemonCore.Config{} = cfg, opts) do
     handler_id = Keyword.get(opts, :handler_id, @default_handler_id)
 
@@ -140,4 +141,3 @@ defmodule LemonCore.Logging do
     Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0) and Mix.env() == :test
   end
 end
-

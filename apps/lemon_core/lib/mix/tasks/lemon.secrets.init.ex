@@ -16,7 +16,8 @@ defmodule Mix.Tasks.Lemon.Secrets.Init do
   Options:
 
     * `--target file` — force a specific provider (`keychain` or `file`)
-    * `--force` — overwrite an existing key file. Every secret encrypted under
+    * `--force` — replace an existing master key. Without it, init refuses when
+      any provider holds a key or cannot be read. Every secret encrypted under
       the previous key becomes unreadable; to change a key in use and keep its
       secrets, run `mix lemon.secrets.rotate_key` instead.
   """
@@ -42,11 +43,17 @@ defmodule Mix.Tasks.Lemon.Secrets.Init do
             "`config :lemon_core, LemonCore.Secrets, key_file: ...`."
         )
 
-      {:error, {:key_file_exists, path}} ->
+      {:error, :master_key_exists} ->
         Mix.raise(
-          "A secrets master key already exists at #{path}. Re-run with --force to " <>
-            "replace it — every secret encrypted under the old key becomes unreadable. " <>
-            "To change the key and keep secrets, run `mix lemon.secrets.rotate_key`."
+          "A secrets master key already exists (see mix lemon.secrets.status). Re-run with " <>
+            "--force to replace it — every secret encrypted under the old key becomes " <>
+            "unreadable. To change the key and keep secrets, run `mix lemon.secrets.rotate_key`."
+        )
+
+      {:error, {:master_key_check_failed, reason}} ->
+        Mix.raise(
+          "Could not check for an existing secrets master key: #{inspect(reason)}. Nothing " <>
+            "was written. Run mix lemon.secrets.status and restore access to the keychain or key file."
         )
 
       {:error, reason} ->

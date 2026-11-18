@@ -767,6 +767,10 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
     name = "profile-mcp-secret-#{System.unique_integer([:positive])}"
     Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
+    # A fresh master key: the store's key verifier and records from earlier
+    # tests belong to other keys and correctly refuse writes.
+    for {ref, _} <- LemonCore.Store.list(LemonCore.Secrets.table()),
+        do: LemonCore.Store.delete(LemonCore.Secrets.table(), ref)
 
     on_exit(fn ->
       LemonCore.Secrets.delete(name)

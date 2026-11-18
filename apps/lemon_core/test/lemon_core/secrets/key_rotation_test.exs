@@ -67,6 +67,32 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     end
   end
 
+  # A Keychain whose write times out without publishing: the written value is
+  # held back until the test "lands" it, as a late `security` process might.
+  defmodule TimeoutKeychain do
+    use LemonCore.Secrets.KeyProvider
+
+    @impl true
+    def name, do: :keychain
+
+    @impl true
+    def fetch(_opts), do: {:ok, Agent.get(__MODULE__, & &1.key)}
+
+    @impl true
+    def put(value, _opts) do
+      Agent.update(__MODULE__, &%{&1 | pending: value})
+      {:error, Agent.get(__MODULE__, & &1.error)}
+    end
+  end
+
+  # Backing module for the built-in keychain provider (so the launcher
+  # preload applies) over an Agent-held item.
+  defmodule AgentKeychain do
+    def available?, do: true
+    def get_master_key(_opts), do: {:ok, Agent.get(__MODULE__, & &1)}
+    def put_master_key(value, _opts), do: Agent.update(__MODULE__, fn _ -> value end)
+  end
+
   # Pauses inside the key switch until the test sends `:continue`.
   defmodule BlockingFile do
     use LemonCore.Secrets.KeyProvider
@@ -202,7 +228,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
       assert {:ok, ^value} = Secrets.get(name, [owner: owner] ++ ctx.opts)
     end
 
-    for {_ref, entry} <- Store.list(Secrets.table()) do
+    for {_ref, entry} <- secret_rows() do
       refute Map.has_key?(entry, :staged)
       assert {:ok, _} = Crypto.decrypt(entry, new_key)
       assert {:error, _} = Crypto.decrypt(entry, old_key)
@@ -255,7 +281,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     assert File.read!(ctx.key_file) == key_before
     assert Store.get(Secrets.table(), {"default", "ALPHA"}) == alpha_before
 
-    refute Enum.any?(Store.list(Secrets.table()), fn {_ref, entry} ->
+    refute Enum.any?(secret_rows(), fn {_ref, entry} ->
              Map.has_key?(entry, :staged)
            end)
 
@@ -270,7 +296,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     :ok = Store.put(Secrets.table(), {"default", "FOREIGN"}, record)
 
     key_before = File.read!(ctx.key_file)
-    rows_before = Enum.sort(Store.list(Secrets.table()))
+    rows_before = Enum.sort(secret_rows())
 
     assert {:error, {:undecryptable_secrets, [%{owner: "default", name: "FOREIGN"}]} = reason} =
              KeyRotation.preview(ctx.opts)
@@ -284,7 +310,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     refute message =~ "good-value"
 
     assert File.read!(ctx.key_file) == key_before
-    assert Enum.sort(Store.list(Secrets.table())) == rows_before
+    assert Enum.sort(secret_rows()) == rows_before
   end
 
   test "a crash after re-encryption but before the key switch leaves the store readable",
@@ -303,9 +329,20 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     # Every record was re-encrypted (staged) but the old key is still the one
     # loaded next, and it still opens everything.
     assert read_key(ctx.key_file) == old_key
-    assert Enum.all?(Store.list(Secrets.table()), fn {_ref, entry} -> is_map(entry.staged) end)
+    assert Enum.all?(secret_rows(), fn {_ref, entry} -> is_map(entry.staged) end)
     assert {:ok, "alpha-value"} = Secrets.get("ALPHA", ctx.opts)
     assert {:ok, "beta-value"} = Secrets.get("BETA", ctx.opts)
+
+    # The switch is unresolved: no new rotation starts until an operator
+    # settles it. --resume finds the old key still in place; --abandon needs
+    # explicit confirmation, then releases the store.
+    assert {:error, :key_rotation_unresolved} = KeyRotation.preview(ctx.opts)
+    assert {:error, :key_rotation_unresolved} = KeyRotation.rotate(token, ctx.opts)
+    assert {:error, :publication_unresolved} = KeyRotation.recover(:resume, ctx.opts)
+    assert {:error, :abandon_confirmation_required} = KeyRotation.recover(:abandon, ctx.opts)
+    confirmed = Keyword.put(ctx.opts, :confirm_abandon, true)
+    assert {:ok, %{action: :abandoned}} = KeyRotation.recover(:abandon, confirmed)
+    assert {:error, :no_pending_rotation} = KeyRotation.recover(:abandon, confirmed)
 
     # A later rotation starts from that state and completes.
     assert {:ok, %{count: 2, resumed: 0} = preview} = KeyRotation.preview(ctx.opts)
@@ -340,7 +377,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
 
     final_key = read_key(ctx.key_file)
 
-    for {_ref, entry} <- Store.list(Secrets.table()) do
+    for {_ref, entry} <- secret_rows() do
       refute Map.has_key?(entry, :staged)
       assert {:ok, _} = Crypto.decrypt(entry, final_key)
     end
@@ -371,44 +408,194 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     assert {:ok, "alpha-value"} = Secrets.get("ALPHA", env_opts)
   end
 
-  test "a key switch the provider cannot confirm keeps every secret readable with both keys",
-       ctx do
-    old_encoded = File.read!(ctx.key_file)
-    old_key = read_key(ctx.key_file)
+  for error <- [
+        :timeout,
+        {:command_failed, 36, "security: User interaction is not allowed."},
+        {:command_failed, "runner raised"},
+        {:keychain_failed, :eio},
+        :some_unknown_provider_error
+      ] do
+    @error error
+    test "an unconfirmed key switch (#{inspect(error)}) blocks writes and new rotations until settled",
+         ctx do
+      {:ok, _agent} =
+        Agent.start_link(
+          fn -> %{key: File.read!(ctx.key_file), pending: nil, error: @error} end,
+          name: TimeoutKeychain
+        )
 
+      opts = Keyword.put(ctx.opts, :key_providers, [TimeoutKeychain])
+      assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", opts)
+      File.rm!(ctx.key_file)
+      old_key = elem(LemonCore.Secrets.MasterKey.resolve(opts), 1)
+
+      {:ok, %{confirmation_token: token}} = KeyRotation.preview(opts)
+      assert {:error, {:key_switch_unverified, :keychain}} = KeyRotation.rotate(token, opts)
+      first_write = Agent.get(TimeoutKeychain, & &1.pending)
+
+      # The provider still answers with the old key, yet the write may land:
+      # no secret write and no new rotation generation is admitted.
+      assert {:ok, ^old_key, :keychain} = LemonCore.Secrets.MasterKey.resolve(opts)
+      assert {:error, :key_rotation_incomplete} = Secrets.set("ALPHA", "rewritten", opts)
+      assert {:error, :key_rotation_unresolved} = KeyRotation.preview(opts)
+      assert {:error, :key_rotation_unresolved} = KeyRotation.rotate(token, opts)
+      assert {:error, :publication_unresolved} = KeyRotation.recover(:resume, opts)
+      assert Agent.get(TimeoutKeychain, & &1.pending) == first_write
+
+      # The original delayed write lands: its staged ciphertext is intact.
+      Agent.update(TimeoutKeychain, &%{&1 | key: first_write})
+      {:ok, new_key, :keychain} = LemonCore.Secrets.MasterKey.resolve(opts)
+      refute new_key == old_key
+      assert {:ok, "alpha-value"} = Secrets.get("ALPHA", opts)
+
+      assert {:error, :key_already_published} =
+               KeyRotation.recover(:abandon, Keyword.put(opts, :confirm_abandon, true))
+
+      assert {:ok, %{action: :resumed}} = KeyRotation.recover(:resume, opts)
+      assert {:ok, _} = Secrets.set("BETA", "beta-value", opts)
+      assert {:ok, "alpha-value"} = Secrets.get("ALPHA", opts)
+    end
+  end
+
+  test "a write that lands after --abandon is recovered by restoring the verifier's key", ctx do
     {:ok, _agent} =
-      Agent.start_link(fn -> %{key: old_encoded, failures: 0, failures_after_put: 1_000} end,
+      Agent.start_link(
+        fn -> %{key: File.read!(ctx.key_file), pending: nil, error: :timeout} end,
+        name: TimeoutKeychain
+      )
+
+    opts = Keyword.put(ctx.opts, :key_providers, [TimeoutKeychain])
+    assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", opts)
+    File.rm!(ctx.key_file)
+    preserved_key = Agent.get(TimeoutKeychain, & &1.key)
+    fresh_readers = fn -> LemonCore.Secrets.MasterKey.with_cache_invalidation(fn -> :ok end) end
+
+    {:ok, %{confirmation_token: token}} = KeyRotation.preview(opts)
+    assert {:error, {:key_switch_unverified, :keychain}} = KeyRotation.rotate(token, opts)
+    delayed_write = Agent.get(TimeoutKeychain, & &1.pending)
+
+    # The operator (wrongly) asserts the write was cancelled and abandons it,
+    # then a secret is written under the previous key A.
+    assert {:ok, %{action: :abandoned}} =
+             KeyRotation.recover(:abandon, Keyword.put(opts, :confirm_abandon, true))
+
+    assert {:ok, _} = Secrets.set("GAMMA", "gamma-value", opts)
+
+    # The abandoned write lands after all: the provider now holds B.
+    Agent.update(TimeoutKeychain, &%{&1 | key: delayed_write})
+    fresh_readers.()
+
+    # Unchanged records still open through their staged copy, but the record
+    # written after abandoning opens only with A, and the verifier rejects B.
+    assert {:ok, "alpha-value"} = Secrets.get("ALPHA", opts)
+    assert {:error, :master_key_mismatch} = Secrets.get("GAMMA", opts)
+    assert {:error, :master_key_mismatch} = Secrets.set("DELTA", "delta-value", opts)
+    assert {:error, :master_key_mismatch} = Secrets.resolve("GAMMA", opts)
+
+    # Documented recovery: with writers stopped and both keys preserved,
+    # restore the key matching the verifier (A), restart cached readers and
+    # verify before rotating again.
+    Agent.update(TimeoutKeychain, &%{&1 | key: preserved_key, error: nil})
+    fresh_readers.()
+    assert {:ok, "alpha-value"} = Secrets.get("ALPHA", opts)
+    assert {:ok, "gamma-value"} = Secrets.get("GAMMA", opts)
+  end
+
+  test "only a failure the provider reports before writing releases the old key", ctx do
+    {:ok, _agent} =
+      Agent.start_link(
+        fn -> %{key: File.read!(ctx.key_file), pending: nil, error: :unavailable} end,
+        name: TimeoutKeychain
+      )
+
+    opts = Keyword.put(ctx.opts, :key_providers, [TimeoutKeychain])
+    assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", opts)
+    File.rm!(ctx.key_file)
+
+    {:ok, %{confirmation_token: token}} = KeyRotation.preview(opts)
+
+    assert {:error, {:key_switch_failed, :keychain, :unavailable}} =
+             KeyRotation.rotate(token, opts)
+
+    assert {:ok, _} = Secrets.set("BETA", "beta-value", opts)
+    assert {:error, :no_pending_rotation} = KeyRotation.recover(:resume, opts)
+  end
+
+  test "rotation verifies the Keychain itself, not the launcher preload", ctx do
+    encoded = File.read!(ctx.key_file) |> String.trim()
+    {:ok, _agent} = Agent.start_link(fn -> encoded end, name: AgentKeychain)
+
+    opts =
+      ctx.opts
+      |> Keyword.put(:key_providers, [:keychain])
+      |> Keyword.put(:keychain_module, AgentKeychain)
+
+    assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", opts)
+    File.rm!(ctx.key_file)
+
+    # A launcher preloaded the old key; the Keychain itself moves on.
+    with_preload = Keyword.put(opts, :keychain_preload, encoded)
+    {:ok, %{confirmation_token: token}} = KeyRotation.preview(with_preload)
+    assert {:ok, %{rotated: 1}} = KeyRotation.rotate(token, with_preload)
+    refute Agent.get(AgentKeychain, & &1) == encoded
+    assert {:ok, "alpha-value"} = Secrets.get("ALPHA", opts)
+  end
+
+  test "a second provider holding the key blocks rotation", ctx do
+    {:ok, _agent} =
+      Agent.start_link(
+        fn -> %{key: File.read!(ctx.key_file), failures: 0, failures_after_put: 0} end,
         name: FlakyKeychain
       )
 
-    # Keychain first, with a stale key file holding the same old key behind it.
+    # Rotation rewrites only the Keychain; the same key left in the file would
+    # then conflict with the new one (or, while the Keychain is unreachable,
+    # let writes land under the retired key).
     opts = Keyword.put(ctx.opts, :key_providers, [FlakyKeychain, :file])
     assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", opts)
+
+    assert {:error, {:multiple_key_sources, [:keychain, :file]}} = KeyRotation.preview(opts)
+    assert {:ok, "alpha-value"} = Secrets.get("ALPHA", opts)
+  end
+
+  test "a key switch the provider cannot confirm blocks writes until a rotation finishes it",
+       ctx do
+    old_key = read_key(ctx.key_file)
+
+    {:ok, _agent} =
+      Agent.start_link(
+        fn -> %{key: File.read!(ctx.key_file), failures: 0, failures_after_put: 1_000} end,
+        name: FlakyKeychain
+      )
+
+    opts = Keyword.put(ctx.opts, :key_providers, [FlakyKeychain])
+    assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", opts)
     assert {:ok, _} = Secrets.set("BETA", "beta-value", opts)
+    File.rm!(ctx.key_file)
 
     assert {:ok, %{source: :keychain, confirmation_token: token}} = KeyRotation.preview(opts)
     assert {:error, {:key_switch_unverified, :keychain}} = KeyRotation.rotate(token, opts)
 
-    # While the Keychain is unreachable the old key file is what loads.
-    assert {:ok, "alpha-value"} = Secrets.get("ALPHA", opts)
-    assert {:ok, "beta-value"} = Secrets.get("BETA", ctx.opts)
-
-    # The Keychain recovers holding the new key: still nothing is lost.
+    # The Keychain recovers holding the new key: nothing is lost, but no write
+    # may land under either key until the rotation is finished.
     Agent.update(FlakyKeychain, &%{&1 | failures: 0, failures_after_put: 0})
     {:ok, new_key, :keychain} = LemonCore.Secrets.MasterKey.resolve(opts)
     refute new_key == old_key
     assert {:ok, "alpha-value"} = Secrets.get("ALPHA", opts)
     assert {:ok, "beta-value"} = Secrets.get("BETA", opts)
+    assert {:error, :key_rotation_incomplete} = Secrets.set("GAMMA", "gamma-value", opts)
 
     # A fresh rotation finishes from that state.
     assert {:ok, %{resumed: 2} = preview} = KeyRotation.preview(opts)
     assert {:ok, %{rotated: 2}} = KeyRotation.rotate(preview.confirmation_token, opts)
     {:ok, final_key, :keychain} = LemonCore.Secrets.MasterKey.resolve(opts)
 
-    for {_ref, entry} <- Store.list(Secrets.table()) do
+    for {_ref, entry} <- secret_rows() do
       refute Map.has_key?(entry, :staged)
       assert {:ok, _} = Crypto.decrypt(entry, final_key)
     end
+
+    assert {:ok, _} = Secrets.set("GAMMA", "gamma-value", opts)
   end
 
   test "writes during a rotation are serialised and re-encrypted, never left under the old key",
@@ -447,7 +634,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     new_key = read_key(ctx.key_file)
     refute new_key == old_key
 
-    for {_ref, entry} <- Store.list(Secrets.table()) do
+    for {_ref, entry} <- secret_rows() do
       refute Map.has_key?(entry, :staged)
       assert {:ok, _} = Crypto.decrypt(entry, new_key)
     end
@@ -474,7 +661,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     assert KeyRotation.describe_error(:runtime_running) =~ "lemon stop"
     assert File.read!(ctx.key_file) == key_before
 
-    refute Enum.any?(Store.list(Secrets.table()), fn {_ref, entry} ->
+    refute Enum.any?(secret_rows(), fn {_ref, entry} ->
              Map.has_key?(entry, :staged)
            end)
   end
@@ -482,7 +669,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
   test "a key file is not rotated where its replacement cannot be made durable", ctx do
     assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", ctx.opts)
     key_before = File.read!(ctx.key_file)
-    rows_before = Enum.sort(Store.list(Secrets.table()))
+    rows_before = Enum.sort(secret_rows())
     {:ok, %{confirmation_token: token}} = KeyRotation.preview(ctx.opts)
 
     unsupported =
@@ -494,7 +681,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     assert {:error, ^reason} = KeyRotation.rotate(token, unsupported)
     assert KeyRotation.describe_error(reason) =~ "Keychain"
     assert File.read!(ctx.key_file) == key_before
-    assert Enum.sort(Store.list(Secrets.table())) == rows_before
+    assert Enum.sort(secret_rows()) == rows_before
     assert {:ok, "alpha-value"} = Secrets.get("ALPHA", ctx.opts)
   end
 
@@ -572,5 +759,12 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     Secrets.table()
     |> Store.list()
     |> Enum.each(fn {key, _value} -> Store.delete(Secrets.table(), key) end)
+  end
+
+  # Every secret record, without the store's key verifier row.
+  defp secret_rows do
+    Secrets.table()
+    |> Store.list()
+    |> Enum.reject(fn {key, _value} -> LemonCore.Secrets.KeyCheck.reserved?(key) end)
   end
 end

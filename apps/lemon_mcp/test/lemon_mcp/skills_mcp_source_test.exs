@@ -862,6 +862,9 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       previous_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
       master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
       System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
+      # A fresh master key: the store's key verifier and records from earlier
+      # tests belong to other keys and correctly refuse writes.
+      for {ref, _} <- Store.list(Secrets.table()), do: Store.delete(Secrets.table(), ref)
 
       on_exit(fn ->
         Store.delete(Secrets.table(), {Secrets.default_owner(), token_secret})

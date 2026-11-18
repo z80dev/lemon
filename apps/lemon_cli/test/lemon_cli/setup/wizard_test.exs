@@ -72,6 +72,12 @@ defmodule LemonCli.Setup.WizardTest do
     "LEMON_WEB_PORT"
   ]
 
+  defmodule FailingKeyProvider do
+    @moduledoc false
+    def name, do: :failing
+    def fetch(_opts), do: {:error, :io_timeout}
+  end
+
   setup do
     tmp_dir =
       Path.join(System.tmp_dir!(), "lemon_setup_wizard_#{System.unique_integer([:positive])}")
@@ -375,6 +381,47 @@ defmodule LemonCli.Setup.WizardTest do
       assert info_event?(events, &String.contains?(squish(&1), "[done] secrets"))
       assert info_event?(events, &String.contains?(squish(&1), "[pending] provider"))
       assert info_event?(events, &String.contains?(&1, "Setup unfinished"))
+    end
+
+    test "an unreadable key file is reported and never replaced", %{
+      config_path: config_path,
+      key_file: key_file
+    } do
+      File.mkdir_p!(Path.dirname(key_file))
+      original = Base.encode64(:crypto.strong_rand_bytes(32)) <> "\n"
+      File.write!(key_file, original)
+      File.chmod!(key_file, 0o000)
+      on_exit(fn -> File.chmod(key_file, 0o600) end)
+
+      refute Wizard.run_full([], recording_io(), non_interactive: true, config_path: config_path) ==
+               :ok
+
+      File.chmod!(key_file, 0o600)
+      assert File.read!(key_file) == original
+
+      assert error_event?(
+               drain_events([]),
+               &String.contains?(&1, "could not be loaded and will not be replaced")
+             )
+    end
+
+    test "a key provider read failure does not trigger initialization", %{
+      config_path: config_path,
+      key_file: key_file
+    } do
+      Application.put_env(:lemon_core, LemonCore.Secrets,
+        key_providers: [__MODULE__.FailingKeyProvider, :env, :file]
+      )
+
+      refute Wizard.run_full([], recording_io(), non_interactive: true, config_path: config_path) ==
+               :ok
+
+      refute File.exists?(key_file)
+
+      assert error_event?(
+               drain_events([]),
+               &String.contains?(&1, "could not be loaded and will not be replaced")
+             )
     end
   end
 

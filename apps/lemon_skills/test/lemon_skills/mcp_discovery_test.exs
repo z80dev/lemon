@@ -122,6 +122,9 @@ defmodule LemonSkills.McpDiscoveryTest do
     System.delete_env("LEMON_MCP_DISABLED")
     key = Base.encode64(:crypto.strong_rand_bytes(32))
     System.put_env("LEMON_SECRETS_MASTER_KEY", key)
+    # A fresh master key per test: the store's key verifier and records from
+    # earlier tests belong to other keys and correctly refuse writes.
+    for {ref, _} <- Store.list(Secrets.table()), do: Store.delete(Secrets.table(), ref)
     secret_name = "MCP_DISCOVERY_#{System.unique_integer([:positive])}"
     id = "mcp-http-test-#{System.unique_integer([:positive])}"
     cwd = System.tmp_dir!()

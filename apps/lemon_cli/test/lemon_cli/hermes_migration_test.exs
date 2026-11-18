@@ -23,6 +23,10 @@ defmodule LemonCli.HermesMigrationTest do
     Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env])
     System.put_env("HOME", home)
     System.delete_env("LEMON_SECRETS_MASTER_KEY")
+    # Tests import under different master keys; the store's key verifier and
+    # records from earlier tests belong to other keys and refuse those writes.
+    for {ref, _} <- LemonCore.Store.list(LemonCore.Secrets.table()),
+        do: LemonCore.Store.delete(LemonCore.Secrets.table(), ref)
 
     on_exit(fn ->
       Enum.each(saved_env, fn
@@ -1174,7 +1178,7 @@ defmodule LemonCli.HermesMigrationTest do
 
   defp honcho_secret_rows do
     LemonCore.Store.list(LemonCore.Secrets.table())
-    |> Enum.filter(fn {{_owner, name}, _value} -> name == "HONCHO_API_KEY" end)
+    |> Enum.filter(&match?({{_owner, "HONCHO_API_KEY"}, _value}, &1))
   end
 
   defp create_state_db(path) do

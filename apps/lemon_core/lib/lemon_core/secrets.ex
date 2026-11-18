@@ -35,7 +35,18 @@ defmodule LemonCore.Secrets do
 
   alias LemonCore.Clock
   alias LemonCore.MapHelpers
-  alias LemonCore.Secrets.{Crypto, External, KeyRotation, Lock, MasterKey, Receipts, Usage}
+
+  alias LemonCore.Secrets.{
+    Crypto,
+    External,
+    KeyCheck,
+    KeyRotation,
+    Lock,
+    MasterKey,
+    Receipts,
+    Usage
+  }
+
   alias LemonCore.Store
 
   @table :secrets_v1
@@ -189,7 +200,8 @@ defmodule LemonCore.Secrets do
     with {:ok, existing} <- Store.fetch(server, @table, {owner, name}),
          {:ok, rows} <- fetch_receipt_rows(server),
          {:ok, found} <- operation_receipt(rows, owner, opts),
-         {:ok, master_key, _source} <- MasterKey.resolve_fresh(opts) do
+         {:ok, master_key, _source} <- MasterKey.resolve_fresh(opts),
+         :ok <- KeyCheck.ensure(server, rows, master_key) do
       provider = normalize_optional_string(opts[:provider]) || @default_provider
       expires_at = normalize_optional_integer(opts[:expires_at])
 
@@ -265,9 +277,17 @@ defmodule LemonCore.Secrets do
   end
 
   defp fetch_receipt_rows(server) do
-    case Store.fetch_all(server, @table) do
+    case fetch_secret_rows(server) do
       {:ok, rows} -> {:ok, rows}
       {:error, _} -> {:error, :secret_store_failed}
+    end
+  end
+
+  @doc false
+  # Every secret row; the store's key verifier row is not a secret.
+  def fetch_secret_rows(server \\ Store) do
+    with {:ok, rows} <- Store.fetch_all(server, @table) do
+      {:ok, Enum.reject(rows, fn {key, _entry} -> KeyCheck.reserved?(key) end)}
     end
   end
 
@@ -417,6 +437,7 @@ defmodule LemonCore.Secrets do
               with {:ok, rows} <- fetch_receipt_rows(server),
                    {:ok, _} <- Receipts.find(rows, owner, nil, nil),
                    {:ok, master_key, _source} <- MasterKey.resolve_fresh(opts),
+                   :ok <- KeyCheck.ensure(server, rows, master_key),
                    {:ok, encrypted} <- encrypt_record(entry, value, master_key, []) do
                 record =
                   Enum.reduce(
@@ -469,6 +490,7 @@ defmodule LemonCore.Secrets do
                {:ok, rows} <- fetch_receipt_rows(server),
                {:ok, _} <- Receipts.find(rows, owner, nil, nil),
                {:ok, master_key, _source} <- MasterKey.resolve_fresh(opts),
+               :ok <- KeyCheck.ensure(server, rows, master_key),
                {:ok, record} <- encrypt_record(entry, value, master_key, opts) do
             swap_revision(server, owner, name, revision, entry, record)
           end
@@ -726,7 +748,7 @@ defmodule LemonCore.Secrets do
     with {:ok, owner} <- normalize_owner(opts),
          {:ok, server} <- storage_owner(opts),
          :ok <- Usage.flush(),
-         {:ok, rows} <- Store.fetch_all(server, @table),
+         {:ok, rows} <- fetch_secret_rows(server),
          {:ok, _} <- Receipts.find(rows, owner, nil, nil) do
       rows
       |> Enum.reduce_while({:ok, []}, fn
@@ -803,9 +825,25 @@ defmodule LemonCore.Secrets do
         {:ok, value, :store}
 
       {:error, reason} ->
-        resolve_after_store(name, reason, external_fallback, env_fallback, opts)
+        if master_key_failure?(reason),
+          do: {:error, reason},
+          else: resolve_after_store(name, reason, external_fallback, env_fallback, opts)
     end
   end
+
+  # A stored credential exists but its master key cannot be established: the
+  # store's key was rejected, providers disagree, a provider failed or holds
+  # unusable material. Answering with an external or environment credential
+  # instead would hide a key outage behind a different identity. Only a
+  # definitive "no key configured" (`:missing_master_key`) may fall back.
+  defp master_key_failure?(reason)
+       when reason in [:master_key_mismatch, :invalid_master_key, :weak_master_key, :lock_timeout],
+       do: true
+
+  defp master_key_failure?({:conflicting_master_keys, _sources}), do: true
+  defp master_key_failure?({:keychain_failed, _reason}), do: true
+  defp master_key_failure?({:key_provider_failed, _provider, _reason}), do: true
+  defp master_key_failure?(_reason), do: false
 
   defp resolve_after_store(name, store_reason, true, env_fallback, opts) do
     case External.resolve(name, opts) do
@@ -821,8 +859,13 @@ defmodule LemonCore.Secrets do
 
   defp resolve_from_store_local(name, env_fallback, opts) do
     case get(name, opts) do
-      {:ok, value} -> {:ok, value, :store}
-      {:error, reason} -> maybe_resolve_env(name, reason, env_fallback, opts)
+      {:ok, value} ->
+        {:ok, value, :store}
+
+      {:error, reason} ->
+        if master_key_failure?(reason),
+          do: {:error, reason},
+          else: maybe_resolve_env(name, reason, env_fallback, opts)
     end
   end
 
@@ -846,6 +889,38 @@ defmodule LemonCore.Secrets do
     end
   end
 
+  # An unchanged record that does not open under a key the store's verifier
+  # rejects is the wrong key (`:master_key_mismatch`), not one damaged record.
+  # Stores written before verifiers existed fall back to "the key opens no
+  # stored record".
+  defp decrypt_failure(server, opts) do
+    with {:ok, master_key, _source} <- MasterKey.resolve_cached(opts) do
+      case KeyCheck.matches?(server, master_key) do
+        false -> {:error, :master_key_mismatch}
+        true -> {:error, :decrypt_failed}
+        :unknown -> legacy_decrypt_failure(server, master_key)
+      end
+    else
+      _ -> {:error, :decrypt_failed}
+    end
+  end
+
+  defp legacy_decrypt_failure(server, master_key) do
+    case fetch_secret_rows(server) do
+      {:ok, rows} ->
+        opens_any? =
+          Enum.any?(rows, fn {_ref, entry} ->
+            is_map(entry) and value_entry?(entry) and
+              match?({:ok, _}, KeyRotation.decrypt(entry, master_key))
+          end)
+
+        if opens_any?, do: {:error, :decrypt_failed}, else: {:error, :master_key_mismatch}
+
+      _ ->
+        {:error, :decrypt_failed}
+    end
+  end
+
   # A cache miss may wait behind rotation after the caller fetched its snapshot.
   # Re-read only on authentication failure and retry only a changed record; never
   # reuse an old ciphertext with the newly published key or touch a replacement.
@@ -854,10 +929,10 @@ defmodule LemonCore.Secrets do
          {:ok, plaintext} <- KeyRotation.decrypt(entry, master_key) do
       {:ok, entry, plaintext}
     else
-      {:error, :decrypt_failed} = error ->
+      {:error, :decrypt_failed} ->
         case Store.fetch(server, @table, {owner, name}) do
           {:ok, ^entry} ->
-            error
+            decrypt_failure(server, opts)
 
           {:ok, current} when is_map(current) ->
             cond do

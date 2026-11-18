@@ -51,8 +51,10 @@ defmodule LemonCore.Secrets.KeyProvider.File do
           {:error, :enoent} ->
             {:error, :missing}
 
-          {:error, _reason} ->
-            {:error, :missing}
+          # Present but unreadable is a key we cannot see, not an absent one:
+          # reporting `:missing` would let `init` provision a replacement.
+          {:error, reason} ->
+            {:error, {:key_file_unreadable, reason}}
         end
     end
   end
@@ -64,10 +66,12 @@ defmodule LemonCore.Secrets.KeyProvider.File do
         {:error, :unavailable}
 
       path ->
-        if occupied?(path, opts) do
-          {:error, {:key_file_exists, path}}
-        else
-          write(path, value, opts)
+        force? = Keyword.get(opts, :force, false)
+
+        case occupancy(path, force?) do
+          :free -> write(path, value, force?, opts)
+          :occupied -> {:error, {:key_file_exists, path}}
+          {:error, reason} -> {:error, {:key_file_check_failed, reason}}
         end
     end
   end
@@ -99,29 +103,32 @@ defmodule LemonCore.Secrets.KeyProvider.File do
     do: KeyProvider.option(opts, :directory_sync, &LemonCore.Durable.sync_directory/1)
 
   # Refuse to overwrite key material: everything encrypted with the old key
-  # would become unreadable.
-  defp occupied?(path, opts) do
-    if Keyword.get(opts, :force, false) do
-      false
-    else
-      case reader(opts).(path) do
-        {:ok, value} when is_binary(value) -> String.trim(value) != ""
-        _ -> false
-      end
+  # would become unreadable. Existence is what counts, not readability: an
+  # unreadable, empty or dangling-symlink key file is still occupied, and a
+  # failed check is an error rather than "free".
+  defp occupancy(_path, true), do: :free
+
+  defp occupancy(path, false) do
+    case Elixir.File.lstat(path) do
+      {:ok, _stat} -> :occupied
+      {:error, :enoent} -> :free
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  # Create-then-restrict-then-fill, then rename: `File.write/2` alone would put
-  # key material on disk at whatever the umask allows, and rewriting the key
-  # file in place would leave a truncated key if interrupted. The temporary
-  # file is exclusive, `0600` before it holds key material, and synced before
-  # the rename makes it the key; the directory is then synced so the
-  # replacement itself survives a host crash. Where no synchronous directory
-  # flush exists (macOS) the rename is still atomic but its durability is not
-  # proven; key rotation checks `durable_replace/1` and refuses there. A
-  # failed flush on a host that supports it is reported even though the
-  # rename already happened.
-  defp write(path, value, opts) do
+  # Create-then-restrict-then-fill, then publish: `File.write/2` alone would
+  # put key material on disk at whatever the umask allows, and rewriting the
+  # key file in place would leave a truncated key if interrupted. The
+  # temporary file is exclusive, `0600` before it holds key material, and
+  # synced before it becomes the key; the directory is then synced so the
+  # publication survives a host crash. A new key is published with a hard
+  # link, which fails with `:eexist` instead of replacing a key file that
+  # appeared after the check; only `force: true` (rotation, `init --force`)
+  # replaces by atomic rename. Where no synchronous directory flush exists
+  # (macOS) durability is not proven; key rotation checks
+  # `durable_replace/1` and refuses there. A failed flush on a host that
+  # supports it is reported even though the key was already published.
+  defp write(path, value, force?, opts) do
     dir = Path.dirname(path)
     suffix = "#{System.pid()}.#{System.unique_integer([:positive])}"
     temporary = Path.join(dir, ".#{Path.basename(path)}.#{suffix}")
@@ -129,13 +136,26 @@ defmodule LemonCore.Secrets.KeyProvider.File do
     with :ok <- Elixir.File.mkdir_p(dir),
          _ <- Elixir.File.chmod(dir, @dir_mode),
          :ok <- write_private(temporary, String.trim(value) <> "\n"),
-         :ok <- Elixir.File.rename(temporary, path),
+         :ok <- publish(temporary, path, force?),
          :ok <- sync_written_directory(dir, opts) do
       :ok
     else
+      {:error, :eexist} ->
+        _ = Elixir.File.rm(temporary)
+        {:error, {:key_file_exists, path}}
+
       {:error, reason} ->
         _ = Elixir.File.rm(temporary)
         {:error, {:key_file_write_failed, reason}}
+    end
+  end
+
+  defp publish(temporary, path, true), do: Elixir.File.rename(temporary, path)
+
+  defp publish(temporary, path, false) do
+    with :ok <- Elixir.File.ln(temporary, path) do
+      _ = Elixir.File.rm(temporary)
+      :ok
     end
   end
 

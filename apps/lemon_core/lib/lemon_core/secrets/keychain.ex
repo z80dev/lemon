@@ -29,21 +29,21 @@ defmodule LemonCore.Secrets.Keychain do
     end
   end
 
+  @doc """
+  Adds the master key entry. Never replaces an existing entry unless
+  `force: true` (key rotation): without it, an existing item makes
+  `security(1)` exit with errSecDuplicateItem, reported as `{:error, :eexist}`.
+  """
   @spec put_master_key(String.t(), keyword()) :: :ok | {:error, term()}
   def put_master_key(value, opts \\ [])
 
   def put_master_key(value, opts) when is_binary(value) do
     if available?(opts) do
-      args = [
-        "add-generic-password",
-        "-U",
-        "-s",
-        service(opts),
-        "-a",
-        account(opts),
-        "-w",
-        value
-      ]
+      update = if Keyword.get(opts, :force, false), do: ["-U"], else: []
+
+      args =
+        ["add-generic-password"] ++
+          update ++ ["-s", service(opts), "-a", account(opts), "-w", value]
 
       case run_security(args, opts) do
         {:ok, _} -> :ok
@@ -90,6 +90,8 @@ defmodule LemonCore.Secrets.Keychain do
     case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:error, reason}} -> {:error, {:command_failed, reason}}
       {:ok, {_output, 44}} -> {:error, :missing}
+      # errSecDuplicateItem: add-generic-password without -U on an existing item.
+      {:ok, {_output, 45}} -> {:error, :eexist}
       {:ok, {output, 0}} -> {:ok, String.trim(output)}
       {:ok, {output, code}} -> {:error, {:command_failed, code, String.trim(output)}}
       nil -> {:error, :timeout}

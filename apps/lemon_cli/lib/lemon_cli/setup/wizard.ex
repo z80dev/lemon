@@ -21,7 +21,6 @@ defmodule LemonCli.Setup.Wizard do
   alias LemonCli.Setup.{Gateway, ModelReadiness, Omp, Ports, Provider, Scaffold, Verification}
   alias LemonCore.Config.Modular
   alias LemonCore.Runtime.{Env, Health, Profile}
-  alias LemonCore.Secrets
   alias LemonCore.Secrets.MasterKey
   alias LemonCore.Setup.Readiness
   alias LemonCore.Update.{ConfigMigrator, ManagedInstall, Remote}
@@ -486,42 +485,51 @@ defmodule LemonCli.Setup.Wizard do
   end
 
   # Drive the master-key API directly in both source and packaged setup.
-  # Initialization is automatic on every path because
-  # stopping to ask the user to run a second command before setup can proceed
-  # is exactly the dead end first-run onboarding must avoid.
+  # Initialization is automatic only when every provider reports that no key
+  # exists: stopping to ask the user to run a second command is the dead end
+  # first-run onboarding must avoid, but a key that exists and cannot be read
+  # (keychain hiccup, unreadable key file, invalid material) must never be
+  # replaced, since every secret written under it would be lost.
   defp ensure_secrets(io) do
-    if Secrets.status().configured do
-      :ok
-    else
-      case MasterKey.init() do
-        {:ok, %{source: :file, key_file: path}} ->
-          io.info.("Created a secrets key at #{path} (0600).")
-          :ok
+    case MasterKey.resolve() do
+      {:ok, _key, _source} ->
+        :ok
 
-        {:ok, _keychain} ->
-          :ok
+      {:error, :missing_master_key} ->
+        init_secrets(io)
 
-        {:error, :keychain_unavailable} ->
-          io.error.(
-            "The system keychain and key file are unavailable. Run `lemon secrets init --target file`, then run `lemon setup`."
-          )
+      {:error, reason} ->
+        io.error.(
+          "The secrets master key could not be loaded and will not be replaced. " <>
+            "Run `lemon secrets status` for diagnostics, restore access to the original key, then run `lemon setup`."
+        )
 
-          {:error, :secrets_init_failed}
+        {:error, {:secrets_init_failed, reason}}
+    end
+  end
 
-        {:error, {:key_file_exists, _path}} ->
-          io.error.(
-            "An existing secrets master key could not be loaded and will not be replaced. Restore access to the original key, then run `lemon secrets status`."
-          )
+  defp init_secrets(io) do
+    case MasterKey.init() do
+      {:ok, %{source: :file, key_file: path}} ->
+        io.info.("Created a secrets key at #{path} (0600).")
+        :ok
 
-          {:error, :secrets_init_failed}
+      {:ok, _keychain} ->
+        :ok
 
-        {:error, reason} ->
-          io.error.(
-            "Could not initialize the secrets master key. Run `lemon secrets init` for guidance."
-          )
+      {:error, :keychain_unavailable} ->
+        io.error.(
+          "The system keychain and key file are unavailable. Run `lemon secrets init --target file`, then run `lemon setup`."
+        )
 
-          {:error, {:secrets_init_failed, reason}}
-      end
+        {:error, :secrets_init_failed}
+
+      {:error, reason} ->
+        io.error.(
+          "Could not initialize the secrets master key (#{inspect(reason)}). Run `lemon secrets status` for diagnostics."
+        )
+
+        {:error, {:secrets_init_failed, reason}}
     end
   end
 

@@ -16,9 +16,12 @@ defmodule LemonCore.Secrets.ReceiptsTest do
     def init(_), do: {:ok, %{data: %{}, fault: nil, test_pid: nil}}
 
     @impl true
-    def put(%{fault: :write}, :secrets_v1, _, _), do: {:error, :injected_write_failure}
+    # Faults target secret records ({owner, name}); the store's key verifier
+    # row is written like any other table entry.
+    def put(%{fault: :write}, :secrets_v1, key, _) when is_tuple(key),
+      do: {:error, :injected_write_failure}
 
-    def put(state, :secrets_v1 = table, key, value) do
+    def put(state, :secrets_v1 = table, key, value) when is_tuple(key) do
       if state.test_pid do
         send(state.test_pid, {:vault_put, self(), key, value})
 
@@ -61,6 +64,10 @@ defmodule LemonCore.Secrets.ReceiptsTest do
       {:ok, _} -> :ok
       {:error, {:already_started, _}} -> :ok
     end
+
+    # Each test uses a fresh master key; the store's key verifier (and any
+    # record under another test's key) would correctly refuse it.
+    for {ref, _} <- Store.list(Secrets.table()), do: Store.delete(Secrets.table(), ref)
 
     owner = "receipt-test-#{System.unique_integer([:positive])}"
     key_file = Path.join(dir, "master-key")

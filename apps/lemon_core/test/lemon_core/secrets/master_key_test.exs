@@ -60,7 +60,9 @@ defmodule LemonCore.Secrets.MasterKeyTest do
       keychain_module: CountingKeychain,
       key_providers: [:keychain],
       env_getter: fn _ -> nil end,
-      target: :keychain
+      target: :keychain,
+      home_dir:
+        Path.join(System.tmp_dir!(), "lemon-mk-memo-#{System.unique_integer([:positive])}")
     ]
 
     Process.put(:master_key_result, {:error, :missing})
@@ -70,24 +72,33 @@ defmodule LemonCore.Secrets.MasterKeyTest do
       MasterKey.resolve(opts)
       assert Process.get(:master_key_reads) == 1
       assert {:ok, _} = MasterKey.init(opts)
+      # init re-reads every provider, unmemoized, before writing.
+      assert Process.get(:master_key_reads) == 2
       assert {:ok, key, :keychain} = MasterKey.resolve(opts)
       assert byte_size(key) == 32
-      assert Process.get(:master_key_reads) == 1
+      assert Process.get(:master_key_reads) == 2
     end)
 
     assert Process.get({MasterKey, :memo}) == nil
     MasterKey.resolve(opts)
     MasterKey.resolve(opts)
-    assert Process.get(:master_key_reads) == 3
+    assert Process.get(:master_key_reads) == 4
   end
 
   test "failed initialization invalidates the scoped fetch result" do
-    opts = [keychain_module: CountingKeychain, key_providers: [:keychain], target: :keychain]
+    opts = [
+      keychain_module: CountingKeychain,
+      key_providers: [:keychain],
+      target: :keychain,
+      home_dir:
+        Path.join(System.tmp_dir!(), "lemon-mk-memo-#{System.unique_integer([:positive])}")
+    ]
+
     Process.put(:master_key_put_result, {:error, :denied})
 
     MasterKey.scoped(fn ->
       assert {:ok, _, :keychain} = MasterKey.resolve(opts)
-      assert {:error, _} = MasterKey.init(opts)
+      assert {:error, _} = MasterKey.init([force: true] ++ opts)
       assert {:ok, _, :keychain} = MasterKey.resolve(opts)
       assert Process.get(:master_key_reads) == 2
     end)
@@ -263,7 +274,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
       on_exit(fn -> File.rm_rf!(home) end)
 
       env_getter = fn
-        "LEMON_SECRETS_MASTER_KEY" -> Base.encode64(:binary.copy(<<10>>, 32))
+        "LEMON_SECRETS_MASTER_KEY" -> Base.encode64(:binary.copy(<<9>>, 32))
         "HOME" -> home
       end
 
@@ -274,7 +285,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
       assert {:ok, key, :env} =
                MasterKey.resolve(keychain_module: KeychainUnavailable, env_getter: env_getter)
 
-      assert key == :binary.copy(<<10>>, 32)
+      assert key == :binary.copy(<<9>>, 32)
     end
 
     test "honours a caller-supplied order", %{env_getter: env_getter} do
@@ -309,7 +320,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
                  env_getter: env_getter
                )
 
-      assert key == :binary.copy(<<10>>, 32)
+      assert key == :binary.copy(<<9>>, 32)
     end
   end
 
@@ -424,7 +435,7 @@ defmodule LemonCore.Secrets.MasterKeyTest do
       assert {:ok, _} = MasterKey.init(keychain_module: KeychainUnavailable, home_dir: home)
       original = File.read!(key_path)
 
-      assert {:error, {:key_file_exists, ^key_path}} =
+      assert {:error, :master_key_exists} =
                MasterKey.init(keychain_module: KeychainUnavailable, home_dir: home)
 
       assert File.read!(key_path) == original

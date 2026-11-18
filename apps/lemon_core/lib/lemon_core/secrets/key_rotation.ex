@@ -79,7 +79,7 @@ defmodule LemonCore.Secrets.KeyRotation do
   alias LemonCore.MapHelpers
   alias LemonCore.Runtime
   alias LemonCore.Secrets
-  alias LemonCore.Secrets.{Crypto, KeyProvider, Lock, MasterKey}
+  alias LemonCore.Secrets.{Crypto, KeyCheck, KeyLock, KeyProvider, Lock, MasterKey}
   alias LemonCore.Store
 
   @token_version "lemon-secrets-rotate-key-v1"
@@ -170,21 +170,116 @@ defmodule LemonCore.Secrets.KeyRotation do
   def rotate(confirmation, opts \\ [])
 
   def rotate(confirmation, opts) when is_binary(confirmation) and confirmation != "" do
+    opts = provider_opts(opts)
+
     if runtime_running?(opts) do
       {:error, :runtime_running}
     else
-      Lock.with_rotation_lock(fn ->
-        MasterKey.with_cache_invalidation(fn ->
-          with {:ok, plan} <- plan(opts),
-               :ok <- confirm(plan, confirmation) do
-            execute(plan)
-          end
+      # A key that cannot be rewritten needs no lock to refuse; everything
+      # else is decided again under the locks.
+      with {:ok, _key, source} <- MasterKey.resolve(opts),
+           {:ok, _provider} <- writable_provider(source, opts) do
+        KeyLock.with_lock(opts, fn ->
+          Lock.with_rotation_lock(fn ->
+            MasterKey.with_cache_invalidation(fn ->
+              with {:ok, plan} <- plan(opts),
+                   :ok <- confirm(plan, confirmation) do
+                execute(plan)
+              end
+            end)
+          end)
         end)
-      end)
+      end
     end
   end
 
   def rotate(_confirmation, _opts), do: {:error, :confirmation_required}
+
+  @doc """
+  Settles a rotation whose key switch is pending, after reading the provider
+  that supplies the key directly (never the launcher preload):
+
+    * `:resume` — the provider holds the pending new key: the switch was
+      published, so the store's verifier moves to it. Staged copies are
+      promoted by the next rotation; until then reads use them.
+      `{:error, :publication_unresolved}` while it still holds the previous key.
+    * `:abandon` — the provider holds the previous key and the operator
+      asserts the earlier write was cancelled and can never land (for example
+      the rotation crashed before switching, or the process that issued it is
+      gone): the verifier returns to the previous key. Requires
+      `confirm_abandon: true`, otherwise `{:error, :abandon_confirmation_required}`.
+      `{:error, :key_already_published}` when the new key is already in place.
+
+      If the write lands after all, records not written since keep a staged
+      copy the new key opens, but every record written after abandoning is
+      encrypted under the previous key only, and the store's verifier now
+      rejects the new key (`:master_key_mismatch`). Recovering then needs the
+      previous key: see `abandon_warning/0` and the late-publication recovery
+      steps in `docs/security/secrets-and-keychain.md`.
+
+  Holds the same locks as `rotate/2` and refuses while a runtime is running.
+  """
+  @spec recover(:resume | :abandon, keyword()) :: {:ok, map()} | {:error, term()}
+  def recover(action, opts \\ [])
+
+  def recover(:abandon, opts) when is_list(opts) do
+    if Keyword.get(opts, :confirm_abandon) == true,
+      do: do_recover(:abandon, opts),
+      else: {:error, :abandon_confirmation_required}
+  end
+
+  def recover(:resume, opts) when is_list(opts), do: do_recover(:resume, opts)
+
+  @doc "Operator warning printed before `--abandon` is honoured."
+  @spec abandon_warning() :: String.t()
+  def abandon_warning do
+    """
+    WARNING: abandoning a pending key switch tells Lemon the earlier write of the new
+    master key was cancelled and can never land. Establish that first: the rotation
+    crashed before switching, or the process that issued the write is gone. Before
+    continuing, securely preserve a copy of the current master key and of the secrets
+    store. If the abandoned write lands later, secrets written after abandoning open
+    only with the current key, and recovery is impossible without that preserved copy.
+    """
+  end
+
+  defp do_recover(action, opts) do
+    opts = provider_opts(opts)
+
+    if runtime_running?(opts) do
+      {:error, :runtime_running}
+    else
+      with {:ok, _key, source} <- MasterKey.resolve(opts),
+           {:ok, provider} <- writable_provider(source, opts) do
+        KeyLock.with_lock(opts, fn ->
+          Lock.with_rotation_lock(fn ->
+            MasterKey.with_cache_invalidation(fn ->
+              settle(action, provider, source, opts)
+            end)
+          end)
+        end)
+      end
+    end
+  end
+
+  defp settle(action, provider, source, opts) do
+    with {:ok, %{next: next} = verifier} when is_binary(next) <- KeyCheck.fetch(),
+         {:ok, held} <- MasterKey.fetch_fresh(provider, opts) do
+      case {action, KeyCheck.side(verifier, held)} do
+        {:resume, :next} -> recovered(KeyCheck.commit(held), :resumed, source)
+        {:resume, :unresolved} -> {:error, :publication_unresolved}
+        {:abandon, :unresolved} -> recovered(KeyCheck.commit(held), :abandoned, source)
+        {:abandon, :next} -> {:error, :key_already_published}
+        {_action, :neither} -> {:error, :master_key_mismatch}
+      end
+    else
+      {:ok, _verifier} -> {:error, :no_pending_rotation}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp recovered(:ok, action, source), do: {:ok, %{action: action, source: source}}
+  defp recovered(error, _action, _source), do: error
 
   defp runtime_running?(opts) do
     opts
@@ -285,12 +380,62 @@ defmodule LemonCore.Secrets.KeyRotation do
         "move the key file aside, check `lemon secrets status` reports source keychain, " <>
         "then rotate."
 
+  def describe_error(:master_key_mismatch),
+    do:
+      "the resolved master key is not the key this secrets store belongs to; nothing " <>
+        "was changed. Run `lemon secrets status` and restore the original key."
+
+  def describe_error({:conflicting_master_keys, sources}),
+    do:
+      "key providers #{Enum.map_join(sources, ", ", &to_string/1)} hold different master " <>
+        "keys; nothing was changed. Keep only the key the store belongs to."
+
+  def describe_error({:multiple_key_sources, sources}),
+    do:
+      "the master key is held by #{Enum.map_join(sources, ", ", &to_string/1)}; rotation " <>
+        "rewrites only #{hd(sources)}, so remove the other copies first. Nothing was changed."
+
+  def describe_error(:key_rotation_unresolved),
+    do:
+      "an earlier rotation's key switch is unresolved: its new key may still be published, " <>
+        "so no new rotation may start. Run with --resume once the provider holds the new " <>
+        "key, or --abandon if that write can no longer land."
+
+  def describe_error(:no_pending_rotation), do: "no key rotation is pending; nothing to recover."
+
+  def describe_error(:publication_unresolved),
+    do:
+      "the key provider still holds the previous key, so the pending switch has not been " <>
+        "published (yet). Retry --resume after it lands, or --abandon if it can no longer land."
+
+  def describe_error(:abandon_confirmation_required),
+    do:
+      "abandoning a pending key switch needs explicit confirmation; nothing was changed. " <>
+        "Read the warning, preserve the current key and secrets store, then re-run with " <>
+        "--abandon --confirm-abandon."
+
+  def describe_error(:key_already_published),
+    do: "the key provider already holds the pending new key; run with --resume instead."
+
+  def describe_error(:secrets_key_locked),
+    do:
+      "another key initialization, rotation or credential restore is running; nothing " <>
+        "was changed. Retry when it finishes."
+
   def describe_error(reason), do: inspect(reason)
 
   # -- planning ---------------------------------------------------------------
 
+  # Rotation reads and verifies the providers themselves: a launcher's static
+  # Keychain preload says nothing about what the Keychain holds now.
+  defp provider_opts(opts), do: Keyword.put(opts, :keychain_preload, nil)
+
   defp plan(opts) do
+    opts = provider_opts(opts)
+
     with {:ok, key, source} <- MasterKey.resolve(opts),
+         :ok <- KeyCheck.check_rotation(key),
+         :ok <- single_key_source(source, opts),
          {:ok, provider} <- writable_provider(source, opts),
          :ok <- durable_key_switch(provider, opts),
          {:ok, rows} <- fetch_rows() do
@@ -342,7 +487,7 @@ defmodule LemonCore.Secrets.KeyRotation do
   end
 
   defp fetch_rows do
-    case Store.fetch_all(Secrets.table()) do
+    case Secrets.fetch_secret_rows() do
       {:ok, rows} ->
         # Receipt-only tombstones carry historical proof, not encrypted values.
         {:ok,
@@ -401,7 +546,8 @@ defmodule LemonCore.Secrets.KeyRotation do
     with :ok <- prune_expired(plan.expired),
          {:ok, staged} <- stage(plan, new_key),
          :ok <- verify_staged(staged, new_key),
-         :ok <- switch_key(plan, encoded, new_key),
+         :ok <- KeyCheck.begin_rotation(plan.key, new_key),
+         :ok <- switch_and_record(plan, encoded, new_key),
          :ok <- converge(plan.key, new_key, @converge_passes) do
       {:ok,
        %{
@@ -410,6 +556,33 @@ defmodule LemonCore.Secrets.KeyRotation do
          rotated: length(staged),
          pruned: length(plan.expired)
        }}
+    end
+  end
+
+  # The store's verifier follows the key: committed to the new key once the
+  # switch is verified, back to the current key when the provider provably
+  # kept it, and left pending (`:key_rotation_incomplete` for writes) when the
+  # outcome is unknown.
+  defp switch_and_record(plan, encoded, new_key) do
+    case switch_key(plan, encoded, new_key) do
+      :ok ->
+        KeyCheck.commit(new_key)
+
+      {:error, {:key_switch_failed, _source, _reason}} = error ->
+        _ = KeyCheck.commit(plan.key)
+        error
+
+      error ->
+        error
+    end
+  end
+
+  # Rotation rewrites one provider; another provider still holding the old key
+  # would then conflict with the new one and stop every resolution.
+  defp single_key_source(source, opts) do
+    case MasterKey.other_sources(source, opts) do
+      [] -> :ok
+      others -> {:error, {:multiple_key_sources, [source | others]}}
     end
   end
 
@@ -520,7 +693,9 @@ defmodule LemonCore.Secrets.KeyRotation do
       put_result == :ok and held == {:ok, new_key} and loads?(plan.opts, new_key) ->
         :ok
 
-      put_result != :ok and held == {:ok, plan.key} ->
+      # Only a write that provably did not run may count as failed: observing
+      # the old key after a timeout does not stop the write landing later.
+      put_result != :ok and held == {:ok, plan.key} and not_published?(put_result) ->
         {:error, {:key_switch_failed, plan.source, put_failure(put_result)}}
 
       true ->
@@ -528,10 +703,17 @@ defmodule LemonCore.Secrets.KeyRotation do
     end
   end
 
+  # Allowlist: only failures a provider reports *before* it attempts the
+  # write — no backend on this machine (`:unavailable`) or a value it refused
+  # to accept (`:invalid_value`) — prove nothing was published. Every other
+  # outcome, wrapped command failures and unknown errors included, may still
+  # land and keeps the rotation pending.
+  defp not_published?({:error, reason}), do: reason in [:unavailable, :invalid_value]
+  defp not_published?(_result), do: false
+
   defp loads?(opts, key), do: match?({:ok, ^key, _source}, MasterKey.resolve_fresh(opts))
 
   defp put_failure({:error, reason}), do: safe_reason(reason)
-  defp put_failure(_other), do: :unexpected_result
 
   # Brings every record to ciphertext under the new key alone. Staged copies
   # are durable (synced before the switch or at the end of an earlier pass)
