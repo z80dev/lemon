@@ -19,7 +19,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
   def kanban_command?(text, bot_username), do: telegram_command?(text, "kanban", bot_username)
   def media_command?(text, bot_username), do: telegram_command?(text, "media", bot_username)
   def thinking_command?(text, bot_username), do: telegram_command?(text, "thinking", bot_username)
-  def reload_command?(text, bot_username), do: telegram_command?(text, "reload", bot_username)
   def trigger_command?(text, bot_username), do: telegram_command?(text, "trigger", bot_username)
   def cwd_command?(text, bot_username), do: telegram_command?(text, "cwd", bot_username)
   def topic_command?(text, bot_username), do: telegram_command?(text, "topic", bot_username)

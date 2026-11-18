@@ -5,6 +5,16 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
   alias LemonChannels.CheckpointStatusMessage
   alias LemonCore.Checkpoint
 
+  @session_key "agent:test:telegram:default:group:-1001"
+
+  defp chat(owner, sender \\ "1"),
+    do: [checkpoint_owner: owner, session_key: @session_key, sender_id: sender]
+
+  defp tokens_in(text, command, checkpoint_id) do
+    Regex.scan(~r/#{command} #{checkpoint_id} ([A-Za-z0-9_-]{32,})/, text)
+    |> Enum.map(&List.last/1)
+  end
+
   defmodule BusyBackend do
     @behaviour LemonCore.Store.Backend
     def init(_), do: {:ok, %{}}
@@ -78,7 +88,7 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
     assert text =~ "Filesystem: 1"
     assert text =~ "chk_channel filesystem write (1 paths)"
     assert text =~ "/checkpoint diff <id>"
-    assert text =~ "/checkpoint restore <id> confirm"
+    assert text =~ "/checkpoint restore <id> (preview, then confirm with its token)"
     assert text =~ "Chat output is redacted"
     refute text =~ "agent:private-session"
     refute text =~ "/private/file.ex"
@@ -156,8 +166,7 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
 
     File.write!(path, "secret-after\n")
 
-    diff_text =
-      CheckpointStatusMessage.handle("diff #{checkpoint.id}", checkpoint_owner: session_id)
+    diff_text = CheckpointStatusMessage.handle("diff #{checkpoint.id}", chat(session_id))
 
     assert diff_text =~ "Checkpoint Diff"
     assert diff_text =~ "Changed paths: 1"
@@ -166,22 +175,129 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
     refute diff_text =~ "secret-before"
     refute diff_text =~ "secret-after"
 
-    restore_prompt =
-      CheckpointStatusMessage.handle("restore #{checkpoint.id}", checkpoint_owner: session_id)
+    restore_prompt = CheckpointStatusMessage.handle("restore #{checkpoint.id}", chat(session_id))
 
-    assert restore_prompt =~ "requires confirmation"
+    assert restore_prompt =~ "Restore Preview"
+    assert restore_prompt =~ "Changed paths: 1"
+    assert [token] = tokens_in(restore_prompt, "restore", checkpoint.id)
+    refute restore_prompt =~ path
+    assert File.read!(path) == "secret-after\n"
+
+    # The bare word is not a confirmation; it changes nothing.
+    word_text =
+      CheckpointStatusMessage.handle("restore #{checkpoint.id} confirm", chat(session_id))
+
+    assert word_text =~ "nothing was restored"
     assert File.read!(path) == "secret-after\n"
 
     restore_text =
-      CheckpointStatusMessage.handle("restore #{checkpoint.id} confirm",
-        checkpoint_owner: session_id
-      )
+      CheckpointStatusMessage.handle("restore #{checkpoint.id} #{token}", chat(session_id))
 
     assert restore_text =~ "Checkpoint Restored"
     assert restore_text =~ "Restored paths: 1"
     assert File.read!(path) == "secret-before\n"
     refute restore_text =~ path
     refute restore_text =~ "secret-before"
+  end
+
+  @tag :tmp_dir
+  test "a stale preview token restores nothing", %{tmp_dir: tmp_dir} do
+    session_id = "channel-stale-#{System.unique_integer([:positive])}"
+    path = Path.join(tmp_dir, "stale.txt")
+    File.write!(path, "v1\n")
+    on_exit(fn -> Checkpoint.delete_all(session_id) end)
+
+    assert {:ok, checkpoint} = Checkpoint.create_filesystem(session_id, [path], cwd: tmp_dir)
+    File.write!(path, "v2\n")
+
+    preview = CheckpointStatusMessage.handle("restore #{checkpoint.id}", chat(session_id))
+
+    assert [token] = tokens_in(preview, "restore", checkpoint.id)
+    File.write!(path, "v3\n")
+
+    text = CheckpointStatusMessage.handle("restore #{checkpoint.id} #{token}", chat(session_id))
+
+    assert text =~ "nothing was restored"
+    assert File.read!(path) == "v3\n"
+  end
+
+  @tag :tmp_dir
+  test "a preview token works once and only for the chat member it was issued to", %{
+    tmp_dir: tmp_dir
+  } do
+    session_id = "channel-member-#{System.unique_integer([:positive])}"
+    path = Path.join(tmp_dir, "member.txt")
+    File.write!(path, "v1\n")
+    on_exit(fn -> Checkpoint.delete_all(session_id) end)
+
+    assert {:ok, checkpoint} = Checkpoint.create_filesystem(session_id, [path], cwd: tmp_dir)
+    File.write!(path, "v2\n")
+
+    preview = CheckpointStatusMessage.handle("restore #{checkpoint.id}", chat(session_id, "1"))
+    assert [token] = tokens_in(preview, "restore", checkpoint.id)
+
+    other_member =
+      CheckpointStatusMessage.handle("restore #{checkpoint.id} #{token}", chat(session_id, "2"))
+
+    assert other_member =~ "nothing was restored"
+    assert File.read!(path) == "v2\n"
+
+    # The foreign attempt spent the token.
+    replay =
+      CheckpointStatusMessage.handle("restore #{checkpoint.id} #{token}", chat(session_id, "1"))
+
+    assert replay =~ "nothing was restored"
+    assert File.read!(path) == "v2\n"
+
+    preview = CheckpointStatusMessage.handle("restore #{checkpoint.id}", chat(session_id, "1"))
+    assert [token] = tokens_in(preview, "restore", checkpoint.id)
+
+    assert CheckpointStatusMessage.handle(
+             "restore #{checkpoint.id} #{token}",
+             chat(session_id, "1")
+           ) =~ "Checkpoint Restored"
+
+    assert File.read!(path) == "v1\n"
+    File.write!(path, "v2\n")
+
+    assert CheckpointStatusMessage.handle(
+             "restore #{checkpoint.id} #{token}",
+             chat(session_id, "1")
+           ) =~ "nothing was restored"
+
+    assert File.read!(path) == "v2\n"
+  end
+
+  @tag :tmp_dir
+  test "another session's checkpoint is refused for diff, preview and restore", %{
+    tmp_dir: tmp_dir
+  } do
+    owner = "channel-owner-#{System.unique_integer([:positive])}"
+    other = "channel-other-#{System.unique_integer([:positive])}"
+    path = Path.join(tmp_dir, "foreign.txt")
+    File.write!(path, "owner-before\n")
+    on_exit(fn -> Checkpoint.delete_all(owner) end)
+
+    assert {:ok, checkpoint} = Checkpoint.create_filesystem(owner, [path], cwd: tmp_dir)
+    File.write!(path, "owner-after\n")
+
+    {:ok, %{confirm_token: token}} =
+      Checkpoint.restore_preview(checkpoint.id, owner, caller: {:chat, @session_key, "1"})
+
+    for args <- [
+          "diff #{checkpoint.id}",
+          "restore #{checkpoint.id}",
+          "restore #{checkpoint.id} #{token}"
+        ] do
+      text = CheckpointStatusMessage.handle(args, chat(other))
+      assert text == "Checkpoint not found in this chat's session: #{checkpoint.id}"
+    end
+
+    # Without a resolvable owner nothing is reachable either.
+    assert CheckpointStatusMessage.handle("restore #{checkpoint.id} #{token}") =~
+             "not found in this chat's session"
+
+    assert File.read!(path) == "owner-after\n"
   end
 
   @tag :tmp_dir
@@ -202,10 +318,7 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
 
     File.write!(path, "secret-after\n")
 
-    diff_text =
-      CheckpointStatusMessage.handle_rollback("diff #{checkpoint.id}",
-        checkpoint_owner: session_id
-      )
+    diff_text = CheckpointStatusMessage.handle_rollback("diff #{checkpoint.id}", chat(session_id))
 
     assert diff_text =~ "Checkpoint Diff"
     assert diff_text =~ "Changed paths: 1"
@@ -213,16 +326,19 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
     refute diff_text =~ "secret-before"
     refute diff_text =~ "secret-after"
 
-    restore_prompt =
-      CheckpointStatusMessage.handle_rollback(checkpoint.id, checkpoint_owner: session_id)
+    restore_prompt = CheckpointStatusMessage.handle_rollback(checkpoint.id, chat(session_id))
 
-    assert restore_prompt =~ "Rollback requires confirmation"
+    assert restore_prompt =~ "Restore Preview"
+    assert [token] = tokens_in(restore_prompt, "rollback", checkpoint.id)
+    assert File.read!(path) == "secret-after\n"
+
+    assert CheckpointStatusMessage.handle_rollback("#{checkpoint.id} confirm", chat(session_id)) =~
+             "nothing was restored"
+
     assert File.read!(path) == "secret-after\n"
 
     restore_text =
-      CheckpointStatusMessage.handle_rollback("#{checkpoint.id} confirm",
-        checkpoint_owner: session_id
-      )
+      CheckpointStatusMessage.handle_rollback("#{checkpoint.id} #{token}", chat(session_id))
 
     assert restore_text =~ "Checkpoint Restored"
     assert restore_text =~ "Restored paths: 1"

@@ -1,11 +1,51 @@
 defmodule LemonChannels.CheckpointStatusMessage do
-  @moduledoc false
+  @moduledoc """
+  Chat `/checkpoint` and `/rollback` surface.
 
-  alias LemonCore.Checkpoint
+  Access is scoped to `:checkpoint_owner`, the native session id that owns the
+  chat's checkpoints; callers resolve it with `owner_for_session_key/1`, which
+  accepts a native session only when `LemonCore.NativeSessionOwner` binds it to
+  this chat's session key, never from chat input or from history alone.
+  Without an owner no checkpoint is reachable.
+
+  Restore previews first: `restore <id>` issues a random single-use token
+  bound to the caller (`:session_key` plus `:sender_id`), the checkpoint
+  revision, the selected roots and the current tree, valid for five minutes.
+  Only `restore <id> <token>` from the same caller restores files, once.
+  """
+
+  alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
+  alias LemonCore.{Checkpoint, NativeSessionOwner, ResumeToken}
   alias LemonCore.Doctor.CheckpointDiagnostics
   alias LemonCore.Introspection
 
   @checkpoint_events [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted]
+
+  @doc """
+  The native session that owns a chat session's checkpoints: the session of
+  the chat's most recent completed run, as recorded by the router, provided
+  that native session is bound to this same session key. A run that names
+  another chat's native session therefore never makes its checkpoints
+  reachable. Chat state that a user can select (such as `/resume` choices) is
+  deliberately not used.
+  """
+  @spec owner_for_session_key(term()) :: String.t() | nil
+  def owner_for_session_key(session_key) when is_binary(session_key) and session_key != "" do
+    case ResumeSelection.list_recent_sessions(session_key, limit: 1) do
+      [%{resume: %ResumeToken{engine: "lemon", value: owner} = resume} | _]
+      when is_binary(owner) and owner != "" ->
+        if NativeSessionOwner.owned_by?(resume, session_key), do: owner
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
+  def owner_for_session_key(_session_key), do: nil
 
   @spec handle(String.t() | nil, keyword()) :: String.t()
   def handle(args, opts \\ [])
@@ -31,17 +71,17 @@ defmodule LemonChannels.CheckpointStatusMessage do
       ["diff"] ->
         "Usage: /checkpoint diff <checkpoint_id>"
 
-      ["restore", checkpoint_id, "confirm" | _] ->
-        restore_text(checkpoint_id, opts)
+      ["restore", checkpoint_id, token | _] ->
+        restore_text(checkpoint_id, token, "/checkpoint restore", opts)
 
-      ["restore", checkpoint_id | _] ->
-        "Restore requires confirmation. Use /checkpoint restore #{checkpoint_id} confirm"
+      ["restore", checkpoint_id] ->
+        preview_text(checkpoint_id, "/checkpoint restore", opts)
 
       ["restore"] ->
-        "Usage: /checkpoint restore <checkpoint_id> confirm"
+        "Usage: /checkpoint restore <checkpoint_id> [token]"
 
       _ ->
-        "Usage: /checkpoint status | /checkpoint events [limit] | /checkpoint diff <checkpoint_id> | /checkpoint restore <checkpoint_id> confirm"
+        "Usage: /checkpoint status | /checkpoint events [limit] | /checkpoint diff <checkpoint_id> | /checkpoint restore <checkpoint_id> [token]"
     end
   end
 
@@ -69,20 +109,20 @@ defmodule LemonChannels.CheckpointStatusMessage do
       ["diff"] ->
         "Usage: /rollback diff <checkpoint_id>"
 
-      ["restore", checkpoint_id, "confirm" | _] ->
-        restore_text(checkpoint_id, opts)
+      ["restore", checkpoint_id, token | _] ->
+        restore_text(checkpoint_id, token, "/rollback restore", opts)
 
-      ["restore", checkpoint_id | _] ->
-        "Rollback requires confirmation. Use /rollback restore #{checkpoint_id} confirm"
+      ["restore", checkpoint_id] ->
+        preview_text(checkpoint_id, "/rollback restore", opts)
 
       ["restore"] ->
-        "Usage: /rollback restore <checkpoint_id> confirm"
+        "Usage: /rollback restore <checkpoint_id> [token]"
 
-      [checkpoint_id, "confirm" | _] ->
-        restore_text(checkpoint_id, opts)
+      [checkpoint_id, token | _] ->
+        restore_text(checkpoint_id, token, "/rollback", opts)
 
-      [checkpoint_id | _] ->
-        "Rollback requires confirmation. Use /rollback #{checkpoint_id} confirm"
+      [checkpoint_id] ->
+        preview_text(checkpoint_id, "/rollback", opts)
     end
   end
 
@@ -99,7 +139,7 @@ defmodule LemonChannels.CheckpointStatusMessage do
       "Recent: #{recent_line(summary.recent)}",
       "Events: #{event_counts_line(opts)}",
       "Recent events: #{recent_events_line(opts)}",
-      "Actions: /checkpoint diff <id>; /checkpoint restore <id> confirm. Chat output is redacted."
+      "Actions: /checkpoint diff <id>; /checkpoint restore <id> (preview, then confirm with its token). Chat output is redacted."
     ]
 
     Enum.join(lines, "\n")
@@ -126,9 +166,23 @@ defmodule LemonChannels.CheckpointStatusMessage do
     end
   end
 
-  # Checkpoint access is scoped to `:checkpoint_owner` (the owning session id).
-  # Callers that do not supply it see no checkpoints.
   defp checkpoint_owner(opts), do: Keyword.get(opts, :checkpoint_owner)
+
+  # The confirmation caller: the chat session and the sender within it.
+  defp confirmation_caller(opts) do
+    case Keyword.get(opts, :session_key) do
+      key when is_binary(key) and key != "" ->
+        {:chat, key, opts |> Keyword.get(:sender_id) |> normalize_sender()}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp normalize_sender(nil), do: nil
+  defp normalize_sender(sender) when is_binary(sender), do: sender
+  defp normalize_sender(sender) when is_integer(sender), do: Integer.to_string(sender)
+  defp normalize_sender(_sender), do: nil
 
   defp diff_text(checkpoint_id, opts) do
     case Checkpoint.diff_filesystem(checkpoint_id, checkpoint_owner(opts)) do
@@ -144,30 +198,74 @@ defmodule LemonChannels.CheckpointStatusMessage do
         ]
         |> Enum.join("\n")
 
-      {:error, :not_found} ->
-        "Checkpoint not found: #{checkpoint_id}"
-
       {:error, reason} ->
-        "Checkpoint diff failed: #{inspect(reason)}"
+        failure_text("diff", checkpoint_id, reason)
     end
   end
 
-  defp restore_text(checkpoint_id, opts) do
+  defp preview_text(checkpoint_id, confirm_command, opts) do
+    case Checkpoint.restore_preview(checkpoint_id, checkpoint_owner(opts),
+           caller: confirmation_caller(opts)
+         ) do
+      {:ok, %{checkpoint_id: id, changed: changed, confirm_token: token}} ->
+        [
+          "Restore Preview",
+          id,
+          "Changed paths: #{length(changed)}",
+          "Restoring replaces the current files with the checkpoint copy.",
+          "Confirm with: #{confirm_command} #{id} #{token}",
+          "The token works once, only for you, for five minutes, and only while these files are unchanged. Output is redacted in chat."
+        ]
+        |> Enum.join("\n")
+
+      {:error, reason} ->
+        failure_text("restore preview", checkpoint_id, reason)
+    end
+  end
+
+  defp restore_text(checkpoint_id, token, preview_command, opts) do
     event_opts =
       opts
       |> Keyword.take([:run_id, :session_key, :agent_id, :parent_run_id])
+      |> Keyword.put(:caller, confirmation_caller(opts))
 
-    case Checkpoint.restore_filesystem(checkpoint_id, checkpoint_owner(opts), event_opts) do
+    case Checkpoint.confirmed_restore_filesystem(
+           checkpoint_id,
+           checkpoint_owner(opts),
+           token,
+           event_opts
+         ) do
       {:ok, %{checkpoint_id: id, restored: restored}} ->
         "Checkpoint Restored\n#{id}\nRestored paths: #{length(restored)}\nOutput is redacted in chat."
 
-      {:error, :not_found} ->
-        "Checkpoint not found: #{checkpoint_id}"
+      {:error, reason}
+      when reason in [:confirmation_required, :invalid_confirmation, :stale_confirmation] ->
+        "Restore confirmation is missing, spent, expired or stale; nothing was restored. " <>
+          "Preview again with #{preview_command} #{checkpoint_id}"
 
       {:error, reason} ->
-        "Checkpoint restore failed: #{inspect(reason)}"
+        failure_text("restore", checkpoint_id, reason)
     end
   end
+
+  # Another session's checkpoint is indistinguishable from a missing one. Other
+  # failures are reduced to a bounded label so host paths never reach chat.
+  defp failure_text(_action, checkpoint_id, :not_found) do
+    if Checkpoint.valid_id?(checkpoint_id),
+      do: "Checkpoint not found in this chat's session: #{checkpoint_id}",
+      else: "Checkpoint not found in this chat's session."
+  end
+
+  defp failure_text(action, _checkpoint_id, reason) do
+    "Checkpoint #{action} failed: #{failure_label(reason)}"
+  end
+
+  defp failure_label(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  defp failure_label(reason) when is_tuple(reason) and is_atom(elem(reason, 0)),
+    do: Atom.to_string(elem(reason, 0))
+
+  defp failure_label(_reason), do: "error"
 
   defp recent_line([]), do: "none"
 

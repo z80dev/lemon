@@ -9,6 +9,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations
   alias LemonChannels.Adapters.Telegram.Transport.MediaGroups
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
+  alias LemonChannels.CommandAuthority
 
   @type callbacks :: %{
           bot_username: binary() | nil,
@@ -24,7 +25,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
           handle_reminders_command: (map(), map() -> map()),
           handle_unremind_command: (map(), map() -> map()),
           handle_portable_command: (map(), map() -> map()),
-          handle_reload_command: (map(), map() -> map()),
           handle_resume_command: (map(), map() -> map()),
           handle_thinking_command: (map(), map() -> map()),
           handle_topic_command: (map(), map() -> map()),
@@ -37,7 +37,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
           maybe_mark_new_session_pending: (map(), map() -> map()),
           maybe_switch_session_from_reply: (map(), map() -> {map(), map()}),
           should_ignore_for_trigger?: (map(), map(), binary() -> boolean()),
-          submit_inbound_now: (map(), map() -> map())
+          submit_inbound_now: (map(), map() -> map()),
+          refuse_command: (map(), map() -> map())
         }
 
   @spec handle_inbound_message(map(), map(), callbacks()) :: map()
@@ -54,6 +55,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
       state
     else
       cond do
+        admin_command_refused?(original_text, bot_username, inbound) ->
+          callbacks.refuse_command.(state, inbound)
+
         MediaGroups.media_group_member?(inbound) and
             MediaGroups.media_group_exists?(state, inbound) ->
           MediaGroups.enqueue_media_group(state, inbound)
@@ -112,9 +116,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
         Commands.thinking_command?(text, bot_username) ->
           callbacks.handle_thinking_command.(state, inbound)
 
-        Commands.reload_command?(original_text, bot_username) ->
-          callbacks.handle_reload_command.(state, inbound)
-
         Commands.new_command?(text, bot_username) ->
           args = Commands.telegram_command_args(text, "new")
           callbacks.handle_new_session.(state, inbound, args)
@@ -160,6 +161,18 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
 
       state
   end
+
+  # Every catalog `adminOnly` command is refused here, before any handler runs,
+  # unless the sender is the verified owner (an allowlisted human user id).
+  defp admin_command_refused?(text, bot_username, inbound) do
+    Enum.any?(CommandAuthority.admin_only_commands(), fn command ->
+      Commands.telegram_command?(text, command, bot_username) and
+        CommandAuthority.authorize(command, sender_owner?(inbound)) != :ok
+    end)
+  end
+
+  defp sender_owner?(%{sender: %{owner?: true}}), do: true
+  defp sender_owner?(_inbound), do: false
 
   defp model_picker_active_for_scope?(state, inbound) do
     chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)

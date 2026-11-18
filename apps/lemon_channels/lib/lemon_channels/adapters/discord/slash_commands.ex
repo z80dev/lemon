@@ -239,14 +239,14 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
       %{
         type: 1,
         name: "restore",
-        description: "Restore a checkpoint",
+        description: "Preview a restore, or confirm it with the preview's token",
         options: [
           %{type: 3, name: "checkpoint_id", description: "Checkpoint id", required: true},
           %{
-            type: 5,
-            name: "confirm",
-            description: "Must be true to restore files",
-            required: true
+            type: 3,
+            name: "token",
+            description: "Confirmation token from the restore preview",
+            required: false
           }
         ]
       }
@@ -551,12 +551,6 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
     ]
   }
 
-  @reload_command %{
-    name: "reload",
-    description: "Recompile code (dev only)",
-    type: 1
-  }
-
   @topic_command %{
     name: "topic",
     description: "Create a new thread or forum post",
@@ -640,7 +634,6 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
       @media_command,
       @trigger_command,
       @cwd_command,
-      @reload_command,
       @topic_command,
       @file_command
     ]

@@ -41,7 +41,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonCore.ChatScope
   alias LemonCore.Config
   alias LemonCore.MapHelpers
-  alias LemonCore.ProjectBindingStore
 
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
@@ -481,7 +480,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       handle_reminders_command: &handle_reminders_command/2,
       handle_unremind_command: &handle_unremind_command/2,
       handle_portable_command: &handle_portable_command/2,
-      handle_reload_command: &handle_reload_command/2,
       handle_resume_command: &handle_resume_command/2,
       handle_thinking_command: &handle_thinking_command/2,
       handle_topic_command: &handle_topic_command/2,
@@ -494,8 +492,26 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       maybe_mark_new_session_pending: &maybe_mark_new_session_pending/2,
       maybe_switch_session_from_reply: &maybe_switch_session_from_reply/2,
       should_ignore_for_trigger?: &should_ignore_for_trigger?/3,
-      submit_inbound_now: &submit_inbound_now/2
+      submit_inbound_now: &submit_inbound_now/2,
+      refuse_command: &refuse_admin_command/2
     })
+  end
+
+  defp refuse_admin_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if is_integer(chat_id) do
+      _ =
+        send_system_message(
+          state,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          LemonChannels.CommandAuthority.refusal_message()
+        )
+    end
+
+    state
   end
 
   defp inbound_action_callbacks do
@@ -657,75 +673,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
   end
 
-  defp maybe_select_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector) do
-    with {:ok, project} <- resolve_project_for_scope(scope, selector) do
-      persist_project_for_scope(scope, project)
-    end
-  end
-
-  defp resolve_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector) do
-    sel = String.trim(selector)
-
-    cond do
-      sel == "" ->
-        :noop
-
-      looks_like_path?(sel) ->
-        base =
-          case BindingResolver.resolve_cwd(scope) do
-            cwd when is_binary(cwd) and byte_size(cwd) > 0 -> cwd
-            _ -> Cwd.channel_default_cwd()
-          end
-
-        expanded =
-          case Path.type(sel) do
-            :absolute -> Path.expand(sel)
-            :relative -> Path.expand(sel, base)
-            _ -> Path.expand(sel, base)
-          end
-
-        if File.dir?(expanded) do
-          id = Path.basename(expanded)
-          {:ok, %{id: id, root: expanded, dynamic?: true}}
-        else
-          {:error, "Project path does not exist: #{expanded}"}
-        end
-
-      true ->
-        id = sel
-
-        case BindingResolver.lookup_project(id) do
-          %{root: root} when is_binary(root) and byte_size(root) > 0 ->
-            root = Path.expand(root)
-
-            if File.dir?(root) do
-              {:ok, %{id: id, root: root, dynamic?: false}}
-            else
-              {:error, "Configured project root does not exist: #{root}"}
-            end
-
-          _ ->
-            {:error, "Unknown project: #{id}"}
-        end
-    end
-  end
-
-  defp persist_project_for_scope(%ChatScope{} = scope, project) when is_map(project) do
-    id = project.id
-    root = project.root
-
-    if project.dynamic? do
-      ProjectBindingStore.put_dynamic(id, %{root: root})
-    end
-
-    ProjectBindingStore.put_override(scope, id)
-    {:ok, %{id: id, root: root}}
-  end
-
-  defp looks_like_path?(s) when is_binary(s) do
-    String.starts_with?(s, "/") or String.starts_with?(s, "~") or String.starts_with?(s, ".") or
-      String.contains?(s, "/")
-  end
+  defp maybe_select_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector),
+    do: LemonChannels.ProjectSelection.select(scope, selector)
 
   defp maybe_switch_session_from_reply(state, inbound) do
     ResumeSelection.maybe_switch_session_from_reply(state, inbound, %{
@@ -764,7 +713,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       project_result =
         case selector do
           nil -> :noop
-          sel -> resolve_project_for_scope(scope, sel)
+          sel -> LemonChannels.ProjectSelection.resolve(sel)
         end
 
       case project_result do
@@ -858,7 +807,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp persist_new_session_project(_scope, :noop), do: :noop
 
   defp persist_new_session_project(%ChatScope{} = scope, {:ok, project}) when is_map(project) do
-    persist_project_for_scope(scope, project)
+    LemonChannels.ProjectSelection.persist(scope, project)
   end
 
   defp persist_new_session_project(_scope, result), do: result
@@ -1295,50 +1244,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     })
   end
 
-  defp handle_reload_command(state, inbound) do
-    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
-
-    if not is_integer(chat_id) do
-      state
-    else
-      _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Recompiling...")
-
-      case IEx.Helpers.recompile() do
-        :ok ->
-          _ =
-            send_system_message(
-              state,
-              chat_id,
-              thread_id,
-              user_msg_id,
-              "Recompile complete."
-            )
-
-        :noop ->
-          _ =
-            send_system_message(
-              state,
-              chat_id,
-              thread_id,
-              user_msg_id,
-              "Nothing to recompile — code is up to date."
-            )
-
-        {:error, _} ->
-          _ =
-            send_system_message(
-              state,
-              chat_id,
-              thread_id,
-              user_msg_id,
-              "Recompile failed — check the build output on the server."
-            )
-      end
-
-      state
-    end
-  end
-
   defp handle_checkpoint_command(state, inbound) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
@@ -1361,7 +1266,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           user_msg_id,
           checkpoint_message(args, rollback?,
             agent_id: agent_id,
-            session_key: session_key
+            session_key: session_key,
+            sender_id: inbound.sender && inbound.sender.id,
+            checkpoint_owner:
+              LemonChannels.CheckpointStatusMessage.owner_for_session_key(session_key)
           )
         )
     end

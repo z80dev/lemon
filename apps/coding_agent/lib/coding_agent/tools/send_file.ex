@@ -9,13 +9,20 @@ defmodule CodingAgent.Tools.SendFile do
   `workspace/...`-prefixed or absolute). Both the lexical path and its real path
   after symlink resolution must lie inside one of those roots; anything else is
   a policy error, whether or not the target exists. A run with no root can send
-  nothing. Size limits come from `[gateway.<channel>.files] max_download_bytes`,
-  the same bound channels apply to outbound attachments.
+  nothing.
+
+  The resolved file is then read through `LemonCore.FileAccess.read_file/4`
+  beneath its physical root (no-follow walk, built-in secret denies plus
+  `[gateway.<channel>.files] deny_globs`, bounded by `max_download_bytes`), and
+  a private copy of those validated bytes (`LemonCore.FileAccess.retain_copy/2`)
+  is queued, never the source path, so a later change to the source cannot alter
+  what is delivered.
   """
 
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias LemonCore.FileAccess
 
   @channels %{
     "telegram" => %{label: "Telegram", config: :telegram, default_max_bytes: 50 * 1024 * 1024},
@@ -83,14 +90,15 @@ defmodule CodingAgent.Tools.SendFile do
          {:ok, path} <- fetch_path(params),
          {:ok, resolved} <- resolve(path, roots, workspace_dir),
          :ok <- ensure_type(resolved, channel, spec),
-         :ok <- ensure_size(resolved, spec),
+         {:ok, name, bytes} <- read_confined(resolved, roots, spec),
          {:ok, filename} <- optional_string(params, "filename"),
-         {:ok, caption} <- optional_string(params, "caption") do
-      filename = if filename, do: Path.basename(filename), else: Path.basename(resolved)
+         {:ok, caption} <- optional_string(params, "caption"),
+         {:ok, copy} <- FileAccess.retain_copy(name, bytes) do
+      filename = if filename, do: Path.basename(filename), else: name
 
       %AgentToolResult{
         content: [%TextContent{text: "Queued file for #{spec.label} delivery: #{filename}"}],
-        details: %{auto_send_files: [%{path: resolved, filename: filename, caption: caption}]}
+        details: %{auto_send_files: [%{path: copy, filename: filename, caption: caption}]}
       }
     else
       {:error, message} ->
@@ -175,35 +183,51 @@ defmodule CodingAgent.Tools.SendFile do
     if File.regular?(path), do: :ok, else: {:error, "Not a regular file: #{Path.basename(path)}"}
   end
 
-  defp ensure_size(path, spec) do
-    max_bytes = max_bytes(spec)
+  # `resolved` is a real path inside a root's real path; re-read it from that
+  # physical root without following links, under the channel's deny rules.
+  defp read_confined(resolved, roots, spec) do
+    files = files_config(spec)
+    max_bytes = max_bytes(files, spec)
 
-    case File.stat(path) do
-      {:ok, %File.Stat{size: size}} when size <= max_bytes ->
-        :ok
+    case Enum.find(roots, &within?(resolved, &1.real)) do
+      nil ->
+        {:error, @policy_error}
 
-      {:ok, %File.Stat{size: size}} ->
-        {:error, "File is too large (#{size} bytes). Max allowed is #{max_bytes} bytes."}
-
-      _ ->
-        {:error, "Failed to stat file: #{Path.basename(path)}"}
+      root ->
+        case FileAccess.read_file(root.real, Path.relative_to(resolved, root.real), deny_globs(files), max_bytes) do
+          {:ok, _name, _bytes} = ok -> ok
+          {:error, "File is too large."} -> {:error, "File is too large. Max allowed is #{max_bytes} bytes."}
+          {:error, "Not found."} -> {:error, "File not found."}
+          {:error, _message} = error -> error
+        end
     end
   end
 
-  defp max_bytes(%{config: key, default_max_bytes: default}) do
+  defp files_config(%{config: key}) do
     files =
       case LemonGateway.Config.get_or_env(key, %{}) do
-        %{} = cfg -> cfg[:files] || cfg["files"] || %{}
-        _ -> %{}
+        cfg when is_map(cfg) or is_list(cfg) -> setting(cfg, :files)
+        _ -> nil
       end
 
-    case files[:max_download_bytes] || files["max_download_bytes"] do
+    if is_map(files) or is_list(files), do: files, else: %{}
+  rescue
+    _ -> %{}
+  catch
+    :exit, _ -> %{}
+  end
+
+  defp deny_globs(files), do: setting(files, :deny_globs)
+
+  defp max_bytes(files, %{default_max_bytes: default}) do
+    case setting(files, :max_download_bytes) do
       n when is_integer(n) and n > 0 -> n
       _ -> default
     end
-  rescue
-    _ -> default
   end
+
+  defp setting(cfg, key) when is_map(cfg), do: Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
+  defp setting(cfg, key) when is_list(cfg), do: if(Keyword.keyword?(cfg), do: cfg[key])
 
   defp optional_string(params, key) do
     case Map.get(params, key) do

@@ -1,5 +1,6 @@
 defmodule CodingAgent.Tools.SendFileTest do
-  use ExUnit.Case, async: true
+  # Not async: one test swaps the running gateway config's `:discord` section.
+  use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.SendFile
 
@@ -93,17 +94,19 @@ defmodule CodingAgent.Tools.SendFileTest do
   end
 
   describe "positive controls" do
-    test "telegram queues an image under cwd with its real path", %{root: root} do
+    test "telegram queues a private copy of an image under cwd", %{root: root} do
       image = Path.join(root, "chart.png")
       File.write!(image, "PNG")
 
       result = send("telegram", root, %{"path" => "chart.png", "caption" => "Latest"})
 
       assert text(result) =~ "Queued file for Telegram delivery"
-      {:ok, real} = CodingAgent.WorkspaceReads.realpath(image)
 
-      assert %{auto_send_files: [%{path: ^real, filename: "chart.png", caption: "Latest"}]} =
+      assert %{auto_send_files: [%{path: copy, filename: "chart.png", caption: "Latest"}]} =
                result.details
+
+      refute copy == image
+      assert File.read!(copy) == "PNG"
     end
 
     test "discord queues any file, absolute or via workspace prefix", %{root: root} do
@@ -128,6 +131,72 @@ defmodule CodingAgent.Tools.SendFileTest do
 
       result = send("telegram", root, %{"path" => "alias.png"})
       assert %{auto_send_files: [%{filename: "real.png"}]} = result.details
+    end
+  end
+
+  describe "deny rules and private copies" do
+    test "the queued file keeps the validated bytes after the source changes", %{
+      root: root,
+      outside: outside
+    } do
+      source = Path.join(root, "report.txt")
+      File.write!(source, "VALIDATED")
+
+      assert %{auto_send_files: [file]} = send("discord", root, %{"path" => "report.txt"}).details
+      refute file.path == source
+      refute String.starts_with?(file.path, root <> "/")
+      assert File.read!(file.path) == "VALIDATED"
+      assert {:ok, %File.Stat{mode: mode}} = File.stat(Path.dirname(file.path))
+      assert Bitwise.band(mode, 0o077) == 0
+
+      File.write!(source, "CHANGED")
+      assert File.read!(file.path) == "VALIDATED"
+
+      File.rm!(source)
+      File.ln_s!(Path.join(outside, "secret.txt"), source)
+      assert File.read!(file.path) == "VALIDATED"
+    end
+
+    test "built-in secret names are refused, including through an in-root alias", %{root: root} do
+      File.write!(Path.join(root, ".env"), "API_KEY=1")
+      File.mkdir_p!(Path.join(root, ".git"))
+      File.write!(Path.join(root, ".git/config"), "[core]")
+      File.ln_s!(Path.join(root, ".env"), Path.join(root, "alias.txt"))
+
+      for path <- [".env", ".git/config", Path.join(root, ".env"), "alias.txt"] do
+        result = send("discord", root, %{"path" => path})
+        assert result.details == %{error: true}
+        assert text(result) =~ "Access denied"
+      end
+    end
+
+    test "configured files.deny_globs apply", %{root: root} do
+      File.mkdir_p!(Path.join(root, "keys"))
+      File.write!(Path.join(root, "keys/server.key"), "KEY")
+      File.write!(Path.join(root, "notes.txt"), "notes")
+      put_discord_config(%{files: %{deny_globs: ["**/*.{pem,key}"]}})
+
+      assert send("discord", root, %{"path" => "keys/server.key"}).details == %{error: true}
+      assert %{auto_send_files: [_]} = send("discord", root, %{"path" => "notes.txt"}).details
+    end
+  end
+
+  defp put_discord_config(discord) do
+    case Process.whereis(LemonGateway.Config) do
+      pid when is_pid(pid) ->
+        previous = :sys.get_state(LemonGateway.Config)
+        :sys.replace_state(LemonGateway.Config, &Map.put(&1, :discord, discord))
+        on_exit(fn -> :sys.replace_state(LemonGateway.Config, fn _ -> previous end) end)
+
+      nil ->
+        previous = Application.get_env(:lemon_gateway, :discord)
+        Application.put_env(:lemon_gateway, :discord, discord)
+
+        on_exit(fn ->
+          if previous,
+            do: Application.put_env(:lemon_gateway, :discord, previous),
+            else: Application.delete_env(:lemon_gateway, :discord)
+        end)
     end
   end
 

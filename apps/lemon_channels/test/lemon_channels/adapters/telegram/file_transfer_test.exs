@@ -124,7 +124,13 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   defp bind_project!(chat_id, root) do
     scope = %LemonCore.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
-    ProjectBindingStore.put_dynamic("testproj", %{root: root})
+    existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
+
+    Application.put_env(
+      :lemon_gateway,
+      @gateway_config_key,
+      Map.put(existing, :projects, %{"testproj" => %{root: root}})
+    )
 
     ProjectBindingStore.put_override(scope, "testproj")
   end
@@ -204,6 +210,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{
+            allowed_user_ids: [999],
             enabled: true,
             auto_put: false,
             uploads_dir: "incoming",
@@ -237,7 +244,12 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
-          files: %{enabled: true, auto_put: false, uploads_dir: "incoming"}
+          files: %{
+            allowed_user_ids: [999],
+            enabled: true,
+            auto_put: false,
+            uploads_dir: "incoming"
+          }
         }
       )
 
@@ -261,7 +273,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
-          files: %{enabled: true}
+          files: %{allowed_user_ids: [999], enabled: true}
         }
       )
 
@@ -303,7 +315,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
-          files: %{enabled: true}
+          files: %{allowed_user_ids: [999], enabled: true}
         }
       )
 
@@ -321,7 +333,8 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     ])
 
     assert_receive {:send_document, path, _opts}
-    assert String.starts_with?(path, Path.expand(root))
+    # Sent from a private verified copy, never the workspace path itself.
+    refute String.starts_with?(path, Path.expand(root))
     assert String.ends_with?(path, Path.basename(rel))
   end
 
@@ -336,7 +349,12 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
-          files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
+          files: %{
+            allowed_user_ids: [999],
+            enabled: true,
+            auto_put: true,
+            uploads_dir: "incoming"
+          }
         }
       )
 
@@ -361,6 +379,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{
+            allowed_user_ids: [999],
             enabled: true,
             auto_put: true,
             uploads_dir: "incoming",
@@ -505,7 +524,12 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
-          files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
+          files: %{
+            allowed_user_ids: [999],
+            enabled: true,
+            auto_put: true,
+            uploads_dir: "incoming"
+          }
         }
       )
 
@@ -531,7 +555,12 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
-          files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
+          files: %{
+            allowed_user_ids: [999],
+            enabled: true,
+            auto_put: true,
+            uploads_dir: "incoming"
+          }
         }
       )
 
@@ -553,7 +582,12 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
-          files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
+          files: %{
+            allowed_user_ids: [999],
+            enabled: true,
+            auto_put: true,
+            uploads_dir: "incoming"
+          }
         }
       )
 
@@ -579,7 +613,12 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           api_mod: FileTransferMockAPI,
           allow_all_chats: true,
           poll_interval_ms: 10,
-          files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
+          files: %{
+            allowed_user_ids: [999],
+            enabled: true,
+            auto_put: true,
+            uploads_dir: "incoming"
+          }
         }
       )
 
@@ -608,6 +647,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{
+            allowed_user_ids: [999],
             enabled: true,
             auto_put: true,
             uploads_dir: "incoming",
@@ -685,6 +725,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
           allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{
+            allowed_user_ids: [999],
             enabled: true,
             auto_put: true,
             uploads_dir: "incoming",

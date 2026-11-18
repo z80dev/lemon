@@ -102,6 +102,37 @@ defmodule LemonCore.Store.DurableWriteTest do
     refute_received :checkpoint
   end
 
+  test "durable take consumes under FULL and returns the value once", %{store: store} do
+    assert :ok = Store.put(store, :confirmations, "token", %{scope: 1})
+    assert %{scope: 1} = Store.take(store, :confirmations, "token", durable: true)
+    assert_received {:durable_mode, 2, _fullfsync}
+    assert {:ok, nil} = Store.fetch(store, :confirmations, "token")
+    assert Store.take(store, :confirmations, "token", durable: true) == nil
+    conn = :sys.get_state(store).backend_state.conn
+    assert pragma(conn, "synchronous") == 1
+  end
+
+  @tag capture_log: true
+  test "a failed durable take is outcome unknown and keeps the entry", %{store: store} do
+    conn = :sys.get_state(store).backend_state.conn
+    assert :ok = Store.put(store, :confirmations, "token", %{scope: 1})
+
+    :ok =
+      Sqlite3.execute(conn, """
+      PRAGMA foreign_keys=ON;
+      CREATE TABLE parent (id INTEGER PRIMARY KEY);
+      CREATE TABLE child (parent_id INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);
+      CREATE TRIGGER fail_take_at_commit AFTER DELETE ON lemon_store_kv
+      BEGIN INSERT INTO child VALUES (999); END;
+      """)
+
+    assert {:error, :outcome_unknown} =
+             Store.take(store, :confirmations, "token", durable: true)
+
+    assert {:ok, %{scope: 1}} = Store.fetch(store, :confirmations, "token")
+    assert pragma(conn, "synchronous") == 1
+  end
+
   defp pragma(conn, name) do
     {:ok, statement} = Sqlite3.prepare(conn, "PRAGMA " <> name)
 

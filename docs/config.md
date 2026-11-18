@@ -3273,11 +3273,12 @@ default_cwd = "~/"
 ```
 
 Tip:
-- In Telegram, you can set or inspect the current chat/topic working directory at runtime with
-  `/cwd [project_id|path|clear]`.
-- `/new <project_id|path>` still works, and setting `/cwd` makes future `/new` sessions in that chat/topic use the same directory.
+- In Telegram and Discord, you can set or inspect the current chat/topic working directory at runtime with
+  `/cwd [project_id|clear]`. Only ids configured under `[gateway.projects]` are accepted; host paths are
+  refused, and chat never creates or retargets a project.
+- `/new <project_id>` selects a configured project the same way, and setting `/cwd` makes future `/new`
+  sessions in that chat/topic use the same directory.
 - `/new` confirmation replies include model, provider, cwd, and session context details.
-- If you pass a path, Lemon will register it as a project named after the last path segment (e.g. `~/dev/lemon` => project `lemon`).
 
 ## XMTP (Base App / Wallet Chats)
 
@@ -3482,8 +3483,10 @@ uploads_dir = "incoming"
 media_group_debounce_ms = 1000  # optional (default: 1000ms)
 
 # Optional safety rails
-allowed_user_ids = [123456789]  # if empty, group uploads require admin
-deny_globs = [".git/**", ".env", ".envrc", "**/*.pem", "**/.ssh/**"]
+allowed_user_ids = [123456789]  # authoritative for DMs and groups when set; if empty, groups need a
+                                # Telegram group admin and DMs need the owner (Discord: Manage Server;
+                                # Discord auto-put needs a non-empty list)
+deny_globs = ["**/*.pem"]       # added to the built-in denies of .git, .ssh, .lemon, .netrc, .env, .envrc, .env.*
 max_upload_bytes = 20971520     # optional (default: 20MB)
 max_download_bytes = 52428800   # optional (default: 50MB)
 ```
@@ -3491,6 +3494,19 @@ max_download_bytes = 52428800   # optional (default: 50MB)
 Commands:
 - `/file put [--force] <path>`: upload a Telegram document into the active working root.
 - `/file get <path>`: fetch a file (or zip a directory) from the active working root back into Telegram.
+
+Paths are relative to the root; `..` and absolute paths are refused, and any symlink below the root
+(file or directory) is refused rather than followed. Deny rules are checked per entry at use time, so they also
+cover files created later; directory archives contain only allowed regular files and skip symlinks. Uploaded file
+names are reduced to their basename, and an existing symlink at the destination is never written through.
+
+Deny rules compare names case-insensitively against the actual directory entries, so `.ENV` or `.GiT/config`
+on a case-insensitive filesystem is denied like `.env` and `.git/config`. `deny_globs` use the `Path.wildcard`
+grammar: `**/` (zero or more directories), `**`, `*`, `?`, `{a,b}` alternatives (not nested, no `/` inside),
+`[abc]` and `[a-z]` classes, and `\` escapes. A malformed pattern (unbalanced or nested braces, an unterminated
+or empty class, a non-string entry) denies every path rather than being ignored. The same rules, with this
+channel's `deny_globs`, apply to the channel-keyed `send_file` tool, which re-reads the resolved file beneath its
+physical root and queues a private copy of the validated bytes rather than its source path.
 
 If no project is bound for the chat, the active root falls back to `gateway.default_cwd` (or the assistant home,
 `~/.lemon/agent/workspace`).
@@ -3631,11 +3647,14 @@ fails after consumption, fix the config and ask for a fresh request.
 
 Telegram group chats (like Discord) default to mentions-only: Lemon runs only on `@botname`, a reply to the bot, or a
 slash command. Direct messages always run.
+- `/trigger` is owner-only (a human user id listed in `allowed_chat_ids`); in
+  groups the owner must also be a group admin. On Discord it requires the
+  Administrator or Manage Server permission.
 - `/trigger`: show current trigger mode.
 - `/trigger mentions`: only run on `@botname`, reply-to-bot, or slash commands (default).
-- `/trigger all`: run on all messages in this chat or topic (group admins only).
+- `/trigger all`: run on all messages in this chat or topic.
 - `/trigger clear`: clear a topic override (forum topics only).
-- `/cwd [project_id|path|clear]`: show, set, or clear the chat/topic working directory override used by future `/new` sessions.
+- `/cwd [project_id|clear]`: show, set, or clear the chat/topic working directory override used by future `/new` sessions (configured project ids only).
 
 Forum topic management:
 - `/topic <name>`: create a new topic in the current Telegram forum supergroup.

@@ -417,8 +417,9 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     assert events_options["limit"].max_value == 20
     assert diff_options["checkpoint_id"].required
     assert restore_options["checkpoint_id"].required
-    assert restore_options["confirm"].type == 5
-    assert restore_options["confirm"].required
+    refute Map.has_key?(restore_options, "confirm")
+    assert restore_options["token"].type == 3
+    refute restore_options["token"].required
     assert "checkpoint" in Enum.map(Transport.slash_commands(), & &1.name)
   end
 
@@ -437,8 +438,8 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     restore_options = Map.new(subcommands["restore"].options, &{&1.name, &1})
 
     assert restore_options["checkpoint_id"].required
-    assert restore_options["confirm"].type == 5
-    assert restore_options["confirm"].required
+    refute Map.has_key?(restore_options, "confirm")
+    assert restore_options["token"].type == 3
     assert "rollback" in Enum.map(Transport.slash_commands(), & &1.name)
   end
 
@@ -756,19 +757,16 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
                interaction("checkpoint", subcommand("events", limit: 5))
              )
 
-    assert {:ok, %{command: "checkpoint", args: "restore chk_123 confirm"}} =
+    assert {:ok, %{command: "checkpoint", args: "restore chk_123"}} =
              Transport.slash_command_args_for_interaction(
-               interaction(
-                 "checkpoint",
-                 subcommand("restore", checkpoint_id: "chk_123", confirm: true)
-               )
+               interaction("checkpoint", subcommand("restore", checkpoint_id: "chk_123"))
              )
 
-    assert {:ok, %{command: "rollback", args: "restore chk_123 confirm"}} =
+    assert {:ok, %{command: "rollback", args: "restore chk_123 0011223344556677"}} =
              Transport.slash_command_args_for_interaction(
                interaction(
                  "rollback",
-                 subcommand("restore", checkpoint_id: "chk_123", confirm: true)
+                 subcommand("restore", checkpoint_id: "chk_123", token: "0011223344556677")
                )
              )
   end
@@ -939,6 +937,8 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   test "cancel component aborts the run through the runtime path" do
     with_interaction_responder(fn ->
       with_router_bridge(fn ->
+        # Component run controls act only on the clicker's own active run.
+        :persistent_term.put({FakeRouter, :active_run_result}, {:ok, "run_cancel_proof"})
         interaction = component_interaction("lemon:cancel:run_cancel_proof")
         state = %{}
 
@@ -967,6 +967,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     with_interaction_responder(fn ->
       with_router_bridge(fn ->
         :persistent_term.put({FakeRouter, :abort_run_result}, {:error, :outcome_unknown})
+        :persistent_term.put({FakeRouter, :active_run_result}, {:ok, "run_cancel_uncertain"})
         interaction = component_interaction("lemon:cancel:run_cancel_uncertain")
         state = %{}
 
@@ -997,6 +998,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   test "keepalive components route continue and stop decisions" do
     with_interaction_responder(fn ->
       with_router_bridge(fn ->
+        :persistent_term.put({FakeRouter, :active_run_result}, {:ok, "run_keepalive_proof"})
         continue_interaction = component_interaction("lemon:idle:c:run_keepalive_proof")
         cancel_interaction = component_interaction("lemon:idle:k:run_keepalive_proof")
         state = %{}
@@ -1036,6 +1038,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           {:error, {:unexpected_answer, {:ok, secret}}}
         )
 
+        :persistent_term.put({FakeRouter, :active_run_result}, {:ok, "run_keepalive_secret"})
         interaction = component_interaction("lemon:idle:c:run_keepalive_secret")
         state = %{}
 
@@ -1357,7 +1360,9 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
           trigger_interaction =
             interaction("trigger", option("mode", "all"), %{
-              channel_id: Integer.to_string(channel_id)
+              channel_id: Integer.to_string(channel_id),
+              # /trigger is adminOnly: the member holds Manage Server.
+              member: %{user: %{id: "1476753643834183691"}, permissions: "32"}
             })
 
           assert {:noreply, ^ignored_state} =
@@ -1403,7 +1408,8 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
           trigger_mentions_interaction =
             interaction("trigger", option("mode", "mentions"), %{
-              channel_id: Integer.to_string(channel_id)
+              channel_id: Integer.to_string(channel_id),
+              member: %{user: %{id: "1476753643834183691"}, permissions: "32"}
             })
 
           assert {:noreply, ^flushed_state} =

@@ -231,6 +231,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.BindingResolver` | Binding resolution logic |
 | `LemonCore.ChatScope` | Chat scope struct |
 | `LemonCore.ResumeToken` | Resume token for session continuity |
+| `LemonCore.NativeSessionOwner` | First-write-wins binding of a native session to the session key that created it; resume admission and chat checkpoint access require it |
 
 ### Operations
 
@@ -238,7 +239,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 |--------|---------|
 | `LemonCore.Idempotency` | At-most-once execution backed by Store; done results expire after 24h, unresolved claims never expire |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
-| `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events |
+| `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events; interactive restores need a random single-use preview token held server-side (`:checkpoint_restore_confirmations`), bound to caller, checkpoint revision, roots and tree fingerprint, with a five-minute TTL |
 | `LemonCore.Introspection` | Canonical introspection event builder and persistence |
 | `LemonCore.UsageStore` | Shared typed wrapper for usage records, current usage summaries, and quota counters |
 | `LemonCore.UsageDiagnostics` | Redacted aggregate usage diagnostics shared by doctor checks and support bundles |
@@ -254,6 +255,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.MapHelpers` | Map key access helpers (atom/string agnostic) |
 | `LemonCore.Telemetry` | Telemetry event helpers and named event emitters |
+| `LemonCore.FileAccess` | Shared root containment for chat `/file` transfers and the gateway send-file tools: symlink-free walk below a physical root, case-insensitive built-in and `deny_globs` denies, identity-checked reads, private copies for queued attachments. Parent-directory swap races remain open (see moduledoc) |
 | `Lemon.Reload` | Published low-level BEAM/extension reload API; see its moduledoc for retained contracts |
 | `LemonCore.CodeReload` | Soft-loads changed BEAM files and invokes the configured session refresher for source-development reload |
 | `LemonCore.Testing` | Test harness builder (Harness, Case, Helpers) |
@@ -526,7 +528,8 @@ For power-loss-sensitive writes, pass `durable: true` to the explicit-server
 mutation arity, for example
 `LemonCore.Store.put(LemonCore.Store, :receipts, id, receipt, durable: true)`.
 The option is also available on `put_new`, `compare_and_swap`, `delete`,
-`compare_and_delete` and `compare_and_delete_many`. SQLite scopes FULL
+`compare_and_delete`, `compare_and_delete_many` and `take` (which returns the
+removed value only after the barrier). SQLite scopes FULL
 synchronization (and Darwin fullfsync) to that mutation, restoring NORMAL for
 ordinary writes. Other backends sync before acknowledgement. A failed durable
 mutation returns `{:error, :outcome_unknown}` rather than permission to retry;
@@ -568,7 +571,7 @@ Shared-domain callers should prefer typed wrappers:
   `put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
 - **Idempotency**: `LemonCore.IdempotencyStore.fetch/2`, `put_new/3`, `compare_and_swap/4`, `compare_and_delete/3`, `put/3`, `delete/2`
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
-- **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`
+- **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `delete_override/1` (per-scope selection of an operator-configured project id; projects come only from config)
 - **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
 
 `RunStore.finalize/2` returns `:ok` only after the immutable final summary and
