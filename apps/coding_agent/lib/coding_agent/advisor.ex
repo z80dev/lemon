@@ -6,6 +6,11 @@ defmodule CodingAgent.Advisor do
   """
   use GenServer, restart: :temporary
 
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [:emitted, :ready])
+  end
+
   alias CodingAgent.{BudgetTracker, Session}
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.ToolPolicy

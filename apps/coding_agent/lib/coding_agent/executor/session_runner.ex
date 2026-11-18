@@ -3,6 +3,11 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   use GenServer
 
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [:session_id, :run_id, :session_key, :agent_id])
+  end
+
   import CodingAgent.Executor, only: [get_opt: 2, normalize_resume: 1]
 
   alias CodingAgent.Executor.RemoteRequestCodec
@@ -440,7 +445,9 @@ defmodule CodingAgent.Executor.SessionRunner do
         {:DOWN, ref, :process, pid, reason},
         %{session_ref: ref, session: pid} = state
       ) do
-    Logger.debug("Lemon SessionRunner: Session process down: #{inspect(reason)}")
+    Logger.debug(
+      "Lemon SessionRunner: Session process down: #{LemonCore.StatusRedaction.inspect_reason(reason)}"
+    )
 
     {:stop, :normal,
      %{state | translator: RunTranslator.handle_session_down(state.translator, reason)}}

@@ -3,6 +3,11 @@ defmodule CodingAgent.BackgroundRun.Worker do
 
   use GenServer
 
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [:id, :session_id, :timeout_ms])
+  end
+
   alias CodingAgent.BackgroundRun.Registry
   alias CodingAgent.{Session, SessionRegistry, TaskStore}
   alias CodingAgent.Parallel.Semaphore

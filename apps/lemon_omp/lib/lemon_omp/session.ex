@@ -36,6 +36,11 @@ defmodule LemonOmp.Session do
 
   use GenServer, restart: :temporary, shutdown: 5_000
 
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [:os_pid, :seq])
+  end
+
   alias LemonCore.Rpc.{Client, JsonLines}
   alias LemonCore.ProcessGroup
   alias LemonOmp.{Approval, Config, Manager, Projection, Rpc, Worktree}

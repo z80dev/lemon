@@ -84,7 +84,7 @@ defmodule LemonRouter.RunProcess.RetryHandler do
   def format_run_error(e) when is_atom(e), do: Atom.to_string(e)
 
   def format_run_error(error) do
-    Logger.warning("Run failed: #{inspect(error)}")
+    Logger.warning("Run failed: #{LemonCore.StatusRedaction.inspect_reason(error)}")
     "The model returned an error. Try again; if it keeps happening, run `lemon doctor`."
   end
 
