@@ -53,7 +53,7 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     assert {:ok, late} = KanbanStore.checkpoint_leased_workflow(task.id, lease_id, checkpoint)
     assert late.meta["codingWorkflow"]["cancelRequested"]
     assert {:error, :review_required} = KanbanStore.complete_leased_task(task.id, lease_id)
-    assert {:error, :review_required} = KanbanStore.update_task(task.id, status: "done")
+    assert {:error, :task_leased} = KanbanStore.update_task(task.id, status: "done")
   end
 
   test "creates boards, moves tasks, comments, lists, archives, and clears" do
@@ -76,7 +76,6 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
                description: "private details",
                assignee: "sonnet",
                worker_profile: "junior",
-               session_key: "session-private",
                depends_on: ["task-a", "task-a", ""]
              )
 
@@ -87,13 +86,11 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     assert {:ok, doing} =
              KanbanStore.update_task(task.id,
                status: "doing",
-               priority: "high",
-               runId: "run_1"
+               priority: "high"
              )
 
     assert doing.status == "doing"
     assert doing.priority == "high"
-    assert doing.run_id == "run_1"
 
     assert {:ok, commented} =
              KanbanStore.add_comment(task.id, "Needs live proof", author: "codex")
@@ -121,12 +118,15 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     assert {:ok, board} = KanbanStore.create_board("Secret board", workspace: "/private/repo")
 
     assert {:ok, task} =
-             KanbanStore.create_task(board.id, "Secret task",
-               description: "private description",
-               session_key: "session-secret"
-             )
+             KanbanStore.create_task(board.id, "Secret task", description: "private description")
 
     assert {:ok, _task} = KanbanStore.add_comment(task.id, "private comment")
+    {:ok, leased} = KanbanStore.lease_task(board.id, "dispatcher")
+
+    {:ok, %{session_key: "session-secret"}} =
+      KanbanStore.track_leased_run(task.id, leased.meta["kanbanLease"]["id"], "run_secret", %{
+        "sessionKey" => "session-secret"
+      })
 
     diagnostics = KanbanStore.diagnostics(limit: 10)
 
@@ -267,5 +267,103 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     assert done.meta["kanbanRun"]["cwd"] == "/scratch/worktree"
     assert done.meta["kanbanRun"]["status"] == "completed"
     refute done.meta["kanbanLease"]
+  end
+
+  test "update_task cannot re-point a leased card's run, session or routing" do
+    {:ok, board} = KanbanStore.create_board("Hijack guard")
+    {:ok, task} = KanbanStore.create_task(board.id, "Leased work")
+    {:ok, leased} = KanbanStore.lease_task(board.id, "dispatcher")
+    lease_id = leased.meta["kanbanLease"]["id"]
+
+    {:ok, tracked} =
+      KanbanStore.track_leased_run(task.id, lease_id, "run_live", %{
+        "sessionKey" => "agent:default:main:sub:kanban_live"
+      })
+
+    for attrs <- [
+          %{run_id: "run_other", session_key: "agent:victim:main"},
+          %{"runId" => "run_other"},
+          %{sessionKey: "agent:victim:main"},
+          %{meta: %{}},
+          %{assignee: "victim"},
+          %{description: "new instructions"}
+        ] do
+      assert {:error, _} = KanbanStore.update_task(task.id, attrs), inspect(attrs)
+      assert KanbanStore.get_task(task.id) == tracked
+    end
+
+    assert tracked.meta["kanbanRun"]["runId"] == "run_live"
+  end
+
+  test "update_task never writes router run or session identity" do
+    {:ok, board} = KanbanStore.create_board("Identity guard")
+    {:ok, task} = KanbanStore.create_task(board.id, "Idle", session_key: "agent:victim:main")
+    assert task.session_key == nil
+
+    assert {:error, _} = KanbanStore.update_task(task.id, run_id: "run_other")
+    assert {:error, _} = KanbanStore.update_task(task.id, session_key: "agent:victim:main")
+    assert KanbanStore.get_task(task.id) == task
+  end
+
+  test "reserved authority and run metadata have a single trusted writer" do
+    {:ok, board} =
+      KanbanStore.create_board("Reserved",
+        meta: %{"kanbanAuthority" => %{"forged" => true}, "deliverTo" => "none"}
+      )
+
+    assert board.meta == %{"deliverTo" => "none"}
+
+    {:ok, task} =
+      KanbanStore.create_task(board.id, "Forged",
+        meta: %{
+          "kanbanRun" => %{"sessionKey" => "agent:x:main:sub:kanban_x", "status" => "failed"},
+          "kanbanLease" => %{"id" => "lease_forged"},
+          "codingWorkflow" => %{"phase" => "completed"},
+          "dispatchPolicy" => %{},
+          "lastFailure" => %{"reason" => "x"},
+          "notes" => "kept"
+        }
+      )
+
+    assert task.meta == %{"notes" => "kept"}
+  end
+
+  test "archive cannot undo a concurrent authority narrowing" do
+    root = Path.join(System.tmp_dir!(), "kanban-archive-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+
+    {:ok, authority} =
+      LemonAgent.Workspace.KanbanAuthority.new(
+        %{agent_id: "default", session_key: "agent:default:main"},
+        nil,
+        root
+      )
+
+    {:ok, board} = KanbanStore.create_board("Archive race", workspace: root, authority: authority)
+    lock = {{KanbanStore, board.id}, self()}
+    assert :global.set_lock(lock, [node()], 0)
+
+    try do
+      # Archive needs the board lock that guards authority writes: while a
+      # narrowing holds it, archive cannot read and then rewrite a stale board.
+      archiver = Task.async(fn -> KanbanStore.archive_board(board.id) end)
+      assert {:error, :lock_aborted} = Task.await(archiver, 10_000)
+      assert KanbanStore.get_board(board.id).status == "active"
+
+      {:ok, _} =
+        KanbanStore.restrict_authority(board.id, LemonCore.ToolPolicy.custom(deny: ["bash"]))
+    after
+      :global.del_lock(lock, [node()])
+    end
+
+    assert {:ok, archived} = KanbanStore.archive_board(board.id)
+    assert archived.status == "archived"
+    refute LemonCore.ToolPolicy.allowed?(archived.meta["kanbanAuthority"]["policy"], "bash")
+
+    refute LemonCore.ToolPolicy.allowed?(
+             KanbanStore.get_board(board.id).meta["kanbanAuthority"]["policy"],
+             "bash"
+           )
   end
 end

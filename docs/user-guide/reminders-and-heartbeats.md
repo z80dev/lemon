@@ -391,6 +391,94 @@ These jobs edit the target directory directly; they do not create or merge Git
 worktrees automatically. Point `cwd` at a dedicated worktree when other agents
 or people are editing the same repository.
 
+### A kanban board
+
+The `kanban` tool creates boards and cards and starts a board dispatcher whose
+workers run each card as a native coding session. Workers act for the session
+that asked, never with more authority:
+
+- A board belongs to the session that created it. Only that session (and
+  sessions an operator explicitly shares it with through the operator-only
+  `LemonAutomation.KanbanDispatcher.share_board/3`) can list, read, edit, start
+  or stop it; another chat or A2A peer using the same agent cannot. The
+  model cannot set `session_key`, `run_id`, `owner` or `worker_profile`, and
+  cards are always assigned to the calling agent.
+- The workspace root is the session directory. A board `workspace` defaults to
+  it and must be an existing directory inside it after symlinks are resolved.
+  Every dispatch and recovery re-checks the path: a directory swapped for a
+  symlink fails as `workspace_changed`, and a workspace inside a larger Git
+  repository fails as `worktree_outside_authorized_root` instead of creating a
+  worktree of the whole repository.
+- Git workspaces run in a controller-created worktree under
+  `~/.lemon/kanban/worktrees` (outside the session directory, no symlinked
+  components). The worker records the directory's device and inode. The
+  session refuses to start, and every tool call is refused, once the path
+  resolves to any other directory (`cwd_identity_mismatch`). What remains
+  undetected is a swap during a single tool call, or of a subdirectory below
+  the working directory; both need write access to the Lemon-owned worktree
+  base or the worktree itself.
+- Worktrees belong to a Lemon-owned repository per board,
+  `~/.lemon/kanban/repos/<board>.git`, never to your repository. Lemon copies
+  your repository's current commit into it with `git fetch` (objects only) and
+  never checks out, stages or commits in your repository. Workers' branches
+  (`lemon-kanban/<card>`) and controller commits live there; to bring a
+  committed result into your repository without publishing, run
+  `git fetch ~/.lemon/kanban/repos/<board>.git lemon-kanban/<card>`.
+- Lemon writes that repository's whole Git configuration itself (no includes,
+  no per-worktree configuration, no filters, drivers, hooks or helpers) and
+  checks it byte-for-byte before every command it runs there, refusing on any
+  change (`controller_config_changed`). It also checks each worktree's
+  administrative files (`commondir`, `gitdir`, `HEAD`, no `config.worktree`)
+  before every command (`worktree_metadata_changed`), and pins Git's common
+  directory to the checked repository. Every controller Git command names
+  that repository explicitly, so neither your repository's configuration nor
+  a worktree's `.git` file can make the controller run a program, even if
+  changed while a card runs. Commands also ignore system and global Git
+  configuration and use an empty hooks directory. Only HTTPS remotes are
+  reachable, plus SSH when your own global Git configuration sets
+  `protocol.ssh.allow=always`; pushes use only your global credential helpers.
+- Workers' and reviewers' file-changing tools (write, edit, patch, ast_grep
+  rewrites, archive and SQLite writes, LSP edits) only change files inside
+  their own worktree (or the allowed in-place workspace); any other target,
+  absolute or `..`, is refused. Shell and code-execution tools are not
+  confined this way: deny `bash`/`eval` for cards that must not run code.
+- The tool policy of the board's creator, of every card creator/editor and of
+  every dispatch starter is recorded durably and intersected; restarting a
+  board (including from the web page) never widens it. Workers and reviewers
+  never get tools that start or route work elsewhere: `kanban`, `goal`, `cron`,
+  `agent_message`, `peer`, `agent`, `task` and `nodes`.
+- With `coding_workflow`, the controller commits only when the recorded policy
+  allows writes without approval. Each controller command is checked with all
+  of its arguments (for example `git commit-tree <tree> -p <parent> -m <title>`)
+  against `allowed_commands`, `blocked_commands` and approval rules before it
+  runs (`commit_not_authorized` otherwise). Requesting `publish` needs a
+  creator allowed to push and use the network, but publication itself needs
+  an operator **Grant publication** confirmation on the web Automation page.
+  The preview shows, and the confirmation binds, the exact push URL(s) the
+  configured remote resolves to at that moment plus the pull request
+  repository and base; a change between preview and confirmation refuses the
+  confirmation. Lemon then pushes only to those URLs (`git push -- <url>
+  <commit>:<branch>`): changing the remote later never redirects publication,
+  and publishing somewhere else needs a fresh confirmation. Before anything
+  reaches the network, every push, every `git ls-remote` check and every
+  `gh pr` call, with all of its arguments, must be allowed by the card's
+  current policy, with external tools allowed without approval
+  (`publication_not_authorized` otherwise). The same check runs again,
+  against the current grant and policy, before an uncertain publication is
+  reconciled or a stopped board's pending publication is checked.
+- A card that holds a dispatcher lease or a tracked run cannot be edited, and
+  stopping a board aborts only the runs its dispatcher recorded.
+- Boards created before this protection, or otherwise lacking recorded
+  authority, are **quarantined**: the dispatcher refuses them until an operator
+  reauthorizes them on the web Automation page.
+
+In chat, `/kanban` changes (create, task, comment, archive, dispatch start and
+stop) need the Telegram operator: a sender whose own user ID is in
+`allowed_chat_ids`. Membership of an allowed group is not enough, and Discord,
+which has no operator attestation, is read-only. Boards use the chat's bound
+project directory and the chat's own run policy; `--owner`, `--workspace`,
+`--assignee` and similar flags are rejected.
+
 ---
 
 ## Heartbeats

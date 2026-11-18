@@ -147,7 +147,22 @@ page says so.
 **Automation** (`/automation`, keys `1`/`2`/`3` switch tabs):
 
 - **Kanban:** boards in their configured column order with result, attempt and
-  retry state; start a board or stop its dispatcher.
+  retry state; start a board or stop its dispatcher. Boards without recorded
+  authority show **quarantined** and cannot start until you **Reauthorize**
+  them, which grants the board's existing cards full operator tool authority
+  (still without `kanban`, `goal`, `cron`, publication or in-place execution)
+  in its current workspace. Reauthorizing an idle board is also the only way
+  to widen authority a restricted session recorded. Boards that requested
+  publication show **Grant publication**; its preview lists the exact mode,
+  remote, the push URL(s) that remote resolves to now, repository and base,
+  and confirming lets the controller push with the server's Git credentials
+  to exactly those URLs. If the remote changes before you confirm, the
+  confirmation is refused; if it changes later, the board shows **Grant
+  publication** again and publication keeps using the confirmed URLs until
+  you confirm the new ones. **Allow in-place**
+  previews a fingerprint of the board's current workspace and lets workers run
+  directly in exactly that workspace; non-Git workspaces (and boards with
+  worktrees off) cannot run without it.
 - **Goals:** progress, loop status and verdicts; start, pause, resume, stop; set
   a new goal for a session.
 - **Cron:** schedules in plain words with next/last run; run now, pause/resume,

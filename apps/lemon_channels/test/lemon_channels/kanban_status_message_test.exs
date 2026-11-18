@@ -29,81 +29,119 @@ defmodule LemonChannels.KanbanStatusMessageTest do
   setup do
     Process.put(:kanban_status_message_test_pid, self())
 
+    workspace =
+      Path.join(System.tmp_dir!(), "kanban-chat-unit-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(workspace)
+
     on_exit(fn ->
-      KanbanStore.list_boards(limit: 100)
+      KanbanStore.list_boards(limit: 1_000)
       |> Enum.each(fn board -> KanbanStore.clear_board(board.id) end)
+
+      File.rm_rf!(workspace)
     end)
 
-    :ok
+    opts = [
+      agent_id: "codex",
+      session_key: "agent:codex:telegram:default:dm:42",
+      workspace: workspace,
+      operator?: true,
+      channel_context: %{channel_id: "telegram", peer_kind: :dm, peer_id: "42"},
+      meta: %{"notificationSessionKey" => "agent:codex:telegram:default:dm:42"},
+      dispatcher_module: KanbanDispatcherStub
+    ]
+
+    %{opts: opts}
   end
 
-  test "creates and renders redacted board and task status" do
+  test "creates and renders redacted board and task status", %{opts: opts} do
     private_board = "secret board #{System.unique_integer([:positive])}"
     private_task = "secret task #{System.unique_integer([:positive])}"
     private_comment = "secret comment #{System.unique_integer([:positive])}"
 
-    board_text =
-      KanbanStatusMessage.handle("create --workspace /tmp/lemon #{private_board}",
-        owner: "codex"
-      )
-
+    board_text = KanbanStatusMessage.handle("create #{private_board}", opts)
     assert board_text =~ "Kanban Board Created"
     refute board_text =~ private_board
     assert board_text =~ "Name bytes:"
 
-    [board] = KanbanStore.list_boards(owner: "codex", limit: 1)
+    [board] = Enum.filter(KanbanStore.list_boards(limit: 1_000), &(&1.name == private_board))
+    assert board.owner == "codex"
+    assert board.meta["kanbanAuthority"]["grantedBy"] == "channel"
 
     task_text =
-      KanbanStatusMessage.handle(
-        "task create #{board.id} --priority high --assignee sonnet #{private_task}"
-      )
+      KanbanStatusMessage.handle("task create #{board.id} --priority high #{private_task}", opts)
 
     assert task_text =~ "Kanban Task Created"
     assert task_text =~ "Priority: high"
     refute task_text =~ private_task
 
     [task] = KanbanStore.list_tasks(board.id, limit: 1)
+    assert task.assignee == "codex"
+    assert is_map(task.meta["dispatchPolicy"])
 
-    comment_text = KanbanStatusMessage.handle("comment #{task.id} #{private_comment}")
+    comment_text = KanbanStatusMessage.handle("comment #{task.id} #{private_comment}", opts)
     assert comment_text =~ "Kanban Task Commented"
     assert comment_text =~ "Comments: 1"
     refute comment_text =~ private_comment
 
-    show_text = KanbanStatusMessage.handle("show #{board.id}")
+    show_text = KanbanStatusMessage.handle("show #{board.id}", opts)
     assert show_text =~ board.id
     assert show_text =~ task.id
     refute show_text =~ private_board
     refute show_text =~ private_task
     refute show_text =~ private_comment
 
-    archive_text = KanbanStatusMessage.handle("archive #{board.id}")
+    archive_text = KanbanStatusMessage.handle("archive #{board.id}", opts)
     assert archive_text =~ "Kanban Board Archived"
     assert archive_text =~ "Status: archived"
     refute archive_text =~ private_board
   end
 
-  test "updates task and controls dispatcher through configured module" do
-    {:ok, board} = KanbanStore.create_board("dispatch board")
-    {:ok, task} = KanbanStore.create_task(board.id, "task title")
+  test "updates task and controls dispatcher through configured module", %{opts: opts} do
+    assert KanbanStatusMessage.handle("create dispatch board", opts) =~ "Kanban Board Created"
+    [board] = Enum.filter(KanbanStore.list_boards(limit: 1_000), &(&1.name == "dispatch board"))
+    assert KanbanStatusMessage.handle("task create #{board.id} task title", opts) =~ "Created"
+    [task] = KanbanStore.list_tasks(board.id)
 
-    update_text = KanbanStatusMessage.handle("task update #{task.id} --status doing")
+    update_text = KanbanStatusMessage.handle("task update #{task.id} --status doing", opts)
     assert update_text =~ "Kanban Task Updated"
     assert update_text =~ "Status: doing"
-
-    opts = [dispatcher_module: KanbanDispatcherStub]
 
     start_text =
       KanbanStatusMessage.handle("dispatch start #{board.id} --max-concurrency 2", opts)
 
     assert start_text =~ "Kanban Dispatcher Started"
     board_id = board.id
-    assert_receive {:start_board, ^board_id, [max_concurrency: 2]}
+    assert_receive {:start_board, ^board_id, start_opts}
+    assert start_opts[:max_concurrency] == 2
+    assert start_opts[:worker_id] == "codex"
 
     status_text = KanbanStatusMessage.handle("dispatch status #{board.id}", opts)
     assert status_text =~ "Running: true"
 
     stop_text = KanbanStatusMessage.handle("dispatch stop #{board.id}", opts)
     assert stop_text =~ "Kanban Dispatcher Stopped"
+  end
+
+  test "mutations need operator attestation and the board's principal", %{opts: opts} do
+    assert KanbanStatusMessage.handle("create owned board", opts) =~ "Kanban Board Created"
+    [board] = Enum.filter(KanbanStore.list_boards(limit: 1_000), &(&1.name == "owned board"))
+
+    member = Keyword.put(opts, :operator?, false)
+    assert KanbanStatusMessage.handle("dispatch stop #{board.id}", member) =~ "operator"
+    assert KanbanStatusMessage.handle("create another", member) =~ "operator"
+
+    other_chat = Keyword.put(opts, :session_key, "agent:codex:telegram:default:dm:43")
+    assert KanbanStatusMessage.handle("dispatch stop #{board.id}", other_chat) =~ "not authorized"
+    assert KanbanStatusMessage.handle("show #{board.id}", other_chat) =~ "not authorized"
+    refute KanbanStatusMessage.handle("boards", other_chat) =~ board.id
+
+    for flag <- ~w(--owner --workspace --assignee --worker-id --session-key --run-id) do
+      assert KanbanStatusMessage.handle("create flagged #{flag} x", opts) =~ "not accepted"
+    end
+
+    no_workspace = Keyword.delete(opts, :workspace)
+    assert KanbanStatusMessage.handle("create nowhere", no_workspace) =~ "bound project"
   end
 
   test "recognizes telegram kanban command for bot" do

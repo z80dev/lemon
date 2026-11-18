@@ -19,7 +19,8 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
                           native_lineage_handle native_lineage_run_id
                           agent_id async_followups resume_source acp_session_id project_memory_capture
                           acp_mcp_session_id acp_client_terminal acp_client_elicitation_form
-                          acp_client_fs_read_text_file acp_client_fs_write_text_file)a
+                          acp_client_fs_read_text_file acp_client_fs_write_text_file cwd_identity
+                          mutation_root)a
 
   @private_meta_aliases [
     {:invocation_context_key,

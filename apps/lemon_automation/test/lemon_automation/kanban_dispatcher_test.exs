@@ -104,7 +104,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   end
 
   test "leases and completes available board tasks" do
-    assert {:ok, board} = KanbanStore.create_board("Dispatch")
+    assert {:ok, board} = authorized_board("Dispatch")
     assert {:ok, task} = KanbanStore.create_task(board.id, "Task")
 
     name = :"kanban-dispatcher-#{System.unique_integer([:positive])}"
@@ -138,7 +138,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
 
   test "marks failed worker results as blocked" do
     assert {:ok, board} =
-             KanbanStore.create_board("Failures", columns: ["todo", "doing", "blocked", "done"])
+             authorized_board("Failures", columns: ["todo", "doing", "blocked", "done"])
 
     assert {:ok, task} = KanbanStore.create_task(board.id, "Task")
 
@@ -165,7 +165,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   end
 
   test "reclaims expired leases during dispatch ticks" do
-    assert {:ok, board} = KanbanStore.create_board("Reclaim")
+    assert {:ok, board} = authorized_board("Reclaim")
     assert {:ok, task} = KanbanStore.create_task(board.id, "Task")
     assert {:ok, leased} = KanbanStore.lease_task(board.id, "old-worker", lease_ms: 1)
     assert leased.id == task.id
@@ -192,7 +192,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   end
 
   test "runs board tasks up to the configured concurrency and starts more after workers finish" do
-    assert {:ok, board} = KanbanStore.create_board("Concurrency")
+    assert {:ok, board} = authorized_board("Concurrency")
     assert {:ok, task_a} = KanbanStore.create_task(board.id, "Task A")
     assert {:ok, task_b} = KanbanStore.create_task(board.id, "Task B")
     assert {:ok, task_c} = KanbanStore.create_task(board.id, "Task C")
@@ -249,11 +249,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   end
 
   test "dispatches real kanban run workers with bounded production-shaped concurrency" do
-    assert {:ok, board} =
-             KanbanStore.create_board("Real workers",
-               workspace: "/tmp/lemon-kanban",
-               columns: ["todo", "doing", "done"]
-             )
+    assert {:ok, board} = authorized_board("Real workers", columns: ["todo", "doing", "done"])
 
     assert {:ok, task_a} = KanbanStore.create_task(board.id, "Task A", assignee: "agent_a")
     assert {:ok, task_b} = KanbanStore.create_task(board.id, "Task B", assignee: "agent_b")
@@ -298,8 +294,11 @@ defmodule LemonAutomation.KanbanDispatcherTest do
 
     Enum.each(submitted, fn params ->
       assert params.origin == :kanban
-      assert params.cwd == "/tmp/lemon-kanban"
-      assert params.tool_policy == %{blocked_tools: ["kanban"]}
+      assert params.cwd == board.workspace
+
+      for tool <- ~w(kanban goal cron),
+          do: refute(LemonCore.ToolPolicy.allowed?(params.tool_policy, tool))
+
       assert params.meta.kanban_board_id == board.id
       assert params.meta.kanban_dispatcher
     end)
@@ -320,7 +319,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     assert_receive {:router_submit, %{meta: %{kanban_task_id: ^unstarted_task_id}} = next_params},
                    5_000
 
-    assert next_params.tool_policy == %{blocked_tools: ["kanban"]}
+    refute LemonCore.ToolPolicy.allowed?(next_params.tool_policy, "kanban")
     assert_receive {:waiter_started, next_pid, next_run_id, 1_000}, 5_000
     assert next_run_id == next_params.run_id
 
@@ -353,7 +352,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
 
   test "marks crashed workers as blocked without crashing the dispatcher" do
     assert {:ok, board} =
-             KanbanStore.create_board("Crash", columns: ["todo", "doing", "blocked", "done"])
+             authorized_board("Crash", columns: ["todo", "doing", "blocked", "done"])
 
     assert {:ok, task} = KanbanStore.create_task(board.id, "Task")
 
@@ -392,7 +391,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   end
 
   test "hard stop kills workers, reclaims leases, and ignores late results" do
-    assert {:ok, board} = KanbanStore.create_board("Hard stop")
+    assert {:ok, board} = authorized_board("Hard stop")
     assert {:ok, task} = KanbanStore.create_task(board.id, "Task")
 
     task_supervisor = :"kanban-task-supervisor-#{System.unique_integer([:positive])}"
@@ -457,7 +456,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   end
 
   test "starting a board reconciles unexpired leases left by a prior manager" do
-    assert {:ok, board} = KanbanStore.create_board("Restart reconcile")
+    assert {:ok, board} = authorized_board("Restart reconcile")
     assert {:ok, task} = KanbanStore.create_task(board.id, "Task")
 
     assert {:ok, orphaned} =
@@ -487,7 +486,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   end
 
   test "default boards require explicit retry after a worker failure" do
-    {:ok, board} = KanbanStore.create_board("No retry storm")
+    {:ok, board} = authorized_board("No retry storm")
     {:ok, task} = KanbanStore.create_task(board.id, "Fail once")
     name = :"kanban-retry-#{System.unique_integer([:positive])}"
     start_supervised!({KanbanDispatcher, name: name, worker_mod: KanbanDispatcherFailingWorker})
@@ -502,7 +501,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   end
 
   test "timeout retains the lease and reconciles a late durable completion without resubmission" do
-    {:ok, board} = KanbanStore.create_board("Ambiguous completion")
+    {:ok, board} = authorized_board("Ambiguous completion")
     {:ok, task} = KanbanStore.create_task(board.id, "Slow coding run")
     name = :"kanban-timeout-#{System.unique_integer([:positive])}"
     start_supervised!({KanbanDispatcher, name: name})
@@ -548,7 +547,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   end
 
   test "hard stop aborts the claimed router invocation, not only its waiter" do
-    {:ok, board} = KanbanStore.create_board("Router stop")
+    {:ok, board} = authorized_board("Router stop")
     {:ok, task} = KanbanStore.create_task(board.id, "In flight")
     name = :"kanban-abort-#{System.unique_integer([:positive])}"
     start_supervised!({KanbanDispatcher, name: name})
@@ -575,7 +574,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   end
 
   test "interactive kanban tool controls the running dispatcher" do
-    {:ok, board} = KanbanStore.create_board("Interactive control")
+    {:ok, board} = authorized_board("Interactive control")
 
     call = fn action, extra ->
       LemonSkills.Tools.Kanban.execute(
@@ -589,8 +588,9 @@ defmodule LemonAutomation.KanbanDispatcherTest do
         ),
         nil,
         nil,
-        File.cwd!(),
-        []
+        board.workspace,
+        agent_id: "default",
+        session_key: "agent:default:main"
       )
     end
 
@@ -601,6 +601,35 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     assert call.("dispatch_status", %{}).details.dispatch.running
     assert call.("dispatch_stop", %{}).details.dispatch.status == "stopped"
     refute call.("dispatch_status", %{}).details.dispatch.running
+  end
+
+  # Dispatch requires recorded authority; boards here are created by a trusted,
+  # unrestricted session rooted at a fresh (non-Git) directory, which an
+  # operator allowed workers to use in place.
+  defp authorized_board(name, opts \\ []) do
+    dir = Path.join(System.tmp_dir!(), "kanban-dispatch-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    {:ok, authority} =
+      LemonAgent.Workspace.KanbanAuthority.new(
+        %{agent_id: "default", session_key: "agent:default:main"},
+        nil,
+        dir
+      )
+
+    case KanbanStore.create_board(
+           name,
+           Keyword.merge([workspace: dir, authority: authority], opts)
+         ) do
+      {:ok, board} ->
+        digest = LemonAgent.Workspace.KanbanAuthority.workspace_digest(board.workspace)
+        assert {:ok, _} = KanbanStore.grant_in_place(board.id, digest)
+        {:ok, board}
+
+      other ->
+        other
+    end
   end
 
   defp receive_worker_ready(count) do

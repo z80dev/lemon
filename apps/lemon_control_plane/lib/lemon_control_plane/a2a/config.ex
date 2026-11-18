@@ -11,7 +11,9 @@ defmodule LemonControlPlane.A2A.Config do
   alias LemonCore.Config.Validator
   alias LemonCore.Env
 
-  @default_tools ~w(read read_skill recall grep find ls webfetch websearch kanban peer)
+  # Peers are untrusted principals: read/coordination only. Tools that start or
+  # steer local work (e.g. `kanban`) require an explicit per-peer `allow_tools`.
+  @default_tools ~w(read read_skill recall grep find ls webfetch websearch peer)
 
   @impl true
   def id, do: :a2a

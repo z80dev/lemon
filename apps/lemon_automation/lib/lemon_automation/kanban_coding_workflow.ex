@@ -7,13 +7,22 @@ defmodule LemonAutomation.KanbanCodingWorkflow do
   card. Local commits use a compare-and-swap branch update. Publication is never
   enabled implicitly and an uncertain push/PR creation is only queried, not retried.
   Restart recovery keeps the original lease, base tree, configuration and run IDs.
+
+  Controller-owned side effects are authorized against the card's current
+  recorded authority (`KanbanRunWorker.effective_policy/2`), not the workflow
+  settings: a commit needs workspace writes without approval
+  (`:commit_not_authorized`); a push or pull request additionally needs the
+  board's recorded publication grant for these exact settings and a policy that
+  permits shell and external access without approval
+  (`:publication_not_authorized`).
   """
 
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAgent.Workspace.{KanbanAuthority, KanbanStore}
   alias LemonAutomation.{KanbanGitWorkflow, KanbanReview, KanbanRunWorker, RunCompletionWaiter}
   alias LemonCore.{Id, RunStore}
 
   @reconcile_interval_ms 5_000
+  @session_provenance "kanban-dispatcher/v2"
 
   def run(task, workspace, raw_config, opts) do
     saved = task.meta["codingWorkflow"]
@@ -123,36 +132,37 @@ defmodule LemonAutomation.KanbanCodingWorkflow do
   defp code(context, checkpoint) do
     run_id = Id.run_id()
 
-    task = %{
-      context.task
-      | session_key: checkpoint["codingSessionKey"] || context.task.session_key
-    }
+    # Continue only a coding session this controller recorded in its own
+    # lease-guarded checkpoint; legacy checkpoints start a fresh session.
+    trusted =
+      if checkpoint["sessionProvenance"] == @session_provenance,
+        do: checkpoint["codingSessionKey"]
 
-    params = KanbanRunWorker.build_params(task, run_id, context.opts)
+    opts = Keyword.put(context.opts, :trusted_session_key, trusted)
 
-    checkpoint =
-      checkpoint
-      |> Map.merge(%{
-        "phase" => "coding",
-        "codingRunId" => run_id,
-        "codingSessionKey" => params.session_key
-      })
-      |> Map.delete("reconcileAfterMs")
+    with {:ok, params} <- KanbanRunWorker.build_params(context.task, run_id, opts) do
+      checkpoint =
+        checkpoint
+        |> Map.merge(%{
+          "phase" => "coding",
+          "codingRunId" => run_id,
+          "codingSessionKey" => params.session_key,
+          "sessionProvenance" => @session_provenance
+        })
+        |> Map.delete("reconcileAfterMs")
 
-    opts =
-      context.opts
-      |> Keyword.put(:run_id, run_id)
-      |> Keyword.put(:prompt, coding_prompt(params.prompt, checkpoint))
-      |> Keyword.put(:on_submitting, fn id, attrs -> claim(context, id, attrs, checkpoint) end)
+      opts =
+        opts
+        |> Keyword.put(:trusted_session_key, params.session_key)
+        |> Keyword.put(:run_id, run_id)
+        |> Keyword.put(:prompt, coding_prompt(params.prompt, checkpoint))
+        |> Keyword.put(:on_submitting, fn id, attrs -> claim(context, id, attrs, checkpoint) end)
 
-    case KanbanRunWorker.run_coding(
-           %{task | session_key: params.session_key},
-           context.workspace,
-           opts
-         ) do
-      {:ok, %{output: output}} -> coded(context, checkpoint, output)
-      {:outcome_unknown, _} -> unknown(context, checkpoint)
-      {:error, reason} -> {:error, reason}
+      case KanbanRunWorker.run_coding(context.task, context.workspace, opts) do
+        {:ok, %{output: output}} -> coded(context, checkpoint, output)
+        {:outcome_unknown, _} -> unknown(context, checkpoint)
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -181,7 +191,8 @@ defmodule LemonAutomation.KanbanCodingWorkflow do
              context.config,
              run_id,
              context.opts
-           ) do
+           ),
+         {:ok, params} <- KanbanRunWorker.bind_execution(params, context.workspace) do
       checkpoint =
         Map.merge(checkpoint, %{
           "phase" => "review",
@@ -248,11 +259,54 @@ defmodule LemonAutomation.KanbanCodingWorkflow do
            checkpoint,
            checkpoint["snapshot"],
            context.task.title,
-           context.git_opts
+           Keyword.put(context.git_opts, :authorize, commit_authorizer(context))
          ) do
       {:ok, sha} -> committed(context, checkpoint, sha)
       {:error, :commit_outcome_unknown} -> unknown(context, checkpoint)
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Each commit command, exactly as built and run, against the card's current
+  # recorded policy: workspace writes, command allow/block lists and approvals.
+  defp commit_authorizer(context) do
+    case KanbanRunWorker.effective_policy(context.task) do
+      {:ok, policy} ->
+        fn command ->
+          if KanbanAuthority.commit_permitted?(policy, [KanbanAuthority.command_text(command)]),
+            do: :ok,
+            else: {:error, :commit_not_authorized}
+        end
+
+      {:error, _} ->
+        fn _command -> {:error, :commit_not_authorized} end
+    end
+  end
+
+  # Publication and reconciliation: the board's current operator grant for
+  # exactly these settings (its pinned destinations are the only push URLs
+  # used) and the card's current recorded policy (external access without
+  # approval). Each command is then authorized exactly as built and run.
+  defp publication_opts(context, checkpoint) do
+    board = KanbanStore.get_board(context.task.board_id)
+    settings = get_in(checkpoint, ["config", "publish"])
+
+    with {:ok, authority} <- KanbanAuthority.fetch(board),
+         {:ok, destinations} <- KanbanAuthority.granted_destinations(authority, settings),
+         {:ok, policy} <- KanbanRunWorker.effective_policy(context.task, board),
+         true <- KanbanAuthority.publication_permitted?(policy, []) do
+      authorize = fn command ->
+        if KanbanAuthority.publication_permitted?(policy, [KanbanAuthority.command_text(command)]),
+          do: :ok,
+          else: {:error, :publication_not_authorized}
+      end
+
+      {:ok,
+       context.git_opts
+       |> Keyword.put(:authorize, authorize)
+       |> Keyword.put(:destinations, destinations["push"])}
+    else
+      _ -> {:error, :publication_not_authorized}
     end
   end
 
@@ -280,14 +334,16 @@ defmodule LemonAutomation.KanbanCodingWorkflow do
   defp publish(context, checkpoint) do
     checkpoint = Map.put(checkpoint, "phase", "publish_pending")
 
-    with :ok <- persist(context, checkpoint) do
+    # Refuse before recording a pending publication when nothing could run.
+    with {:ok, opts} <- publication_opts(context, checkpoint),
+         :ok <- persist(context, checkpoint) do
       case KanbanGitWorkflow.publish(
              checkpoint,
              checkpoint["commitSha"],
              context.config,
              context.task.title,
              publication_body(checkpoint),
-             context.git_opts
+             opts
            ) do
         {:ok, result} -> finish(context, Map.merge(checkpoint, result))
         {:error, :publication_outcome_unknown} -> unknown(context, checkpoint)
@@ -296,15 +352,20 @@ defmodule LemonAutomation.KanbanCodingWorkflow do
     end
   end
 
+  # Recovery runs only commands the current grant and policy authorize; a
+  # revoked grant or narrowed policy fails the card without network access.
   defp recover_publication(context, checkpoint) do
-    case KanbanGitWorkflow.reconcile_publication(
-           checkpoint,
-           checkpoint["commitSha"],
-           context.config,
-           context.git_opts
-         ) do
-      {:ok, result} -> finish(context, Map.merge(checkpoint, result))
-      {:error, _} -> unknown(context, checkpoint)
+    with {:ok, opts} <- publication_opts(context, checkpoint) do
+      case KanbanGitWorkflow.reconcile_publication(
+             checkpoint,
+             checkpoint["commitSha"],
+             context.config,
+             opts
+           ) do
+        {:ok, result} -> finish(context, Map.merge(checkpoint, result))
+        {:error, :publication_not_authorized} = denied -> denied
+        {:error, _} -> unknown(context, checkpoint)
+      end
     end
   end
 
@@ -336,17 +397,22 @@ defmodule LemonAutomation.KanbanCodingWorkflow do
   end
 
   defp cancel_recovery(context, %{"phase" => "publish_pending"} = checkpoint) do
-    case KanbanGitWorkflow.reconcile_publication(
-           checkpoint,
-           checkpoint["commitSha"],
-           context.config,
-           context.git_opts
-         ) do
-      {:ok, result} ->
-        with :ok <- persist(context, Map.merge(checkpoint, result)), do: {:error, :cancelled}
+    with {:ok, opts} <- publication_opts(context, checkpoint) do
+      case KanbanGitWorkflow.reconcile_publication(
+             checkpoint,
+             checkpoint["commitSha"],
+             context.config,
+             opts
+           ) do
+        {:ok, result} ->
+          with :ok <- persist(context, Map.merge(checkpoint, result)), do: {:error, :cancelled}
 
-      {:error, _} ->
-        unknown(context, checkpoint)
+        {:error, :publication_not_authorized} = denied ->
+          denied
+
+        {:error, _} ->
+          unknown(context, checkpoint)
+      end
     end
   end
 

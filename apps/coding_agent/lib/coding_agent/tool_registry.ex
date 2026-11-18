@@ -258,6 +258,29 @@ defmodule CodingAgent.ToolRegistry do
       {name, ToolIntent.wrap(tool, opts), source}
     end)
     |> maybe_wrap_approval(tool_policy, approval_ctx)
+    |> bind_cwd_identity(cwd, Keyword.get(opts, :cwd_identity))
+  end
+
+  # A session bound to a checked directory object (`cwd_identity`, see
+  # `CodingAgent.CwdIdentity`) re-verifies it before every tool call, so a
+  # working directory replaced after session start refuses the call instead of
+  # acting on the replacement.
+  defp bind_cwd_identity(tools, _cwd, nil), do: tools
+
+  defp bind_cwd_identity(tools, cwd, identity) do
+    Enum.map(tools, fn {name, tool, source} ->
+      execute = tool.execute
+
+      guarded = fn tool_call_id, params, signal, on_update ->
+        case CodingAgent.CwdIdentity.verify(cwd, identity) do
+          :ok -> execute.(tool_call_id, params, signal, on_update)
+          {:error, reason} -> {:error, "Working directory changed; refusing: #{reason}"}
+        end
+      end
+
+      # Streamed arguments act before dispatch and could bypass the check.
+      {name, %{tool | execute: guarded, on_stream: nil}, source}
+    end)
   end
 
   defp configure_bash(tools, cwd, opts) do

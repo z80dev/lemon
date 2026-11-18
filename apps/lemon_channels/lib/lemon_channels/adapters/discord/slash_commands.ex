@@ -406,7 +406,6 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
         description: "List kanban boards",
         options: [
           %{type: 3, name: "status", description: "Board status", required: false},
-          %{type: 3, name: "owner", description: "Board owner", required: false},
           %{
             type: 4,
             name: "limit",
@@ -421,8 +420,7 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
         name: "create",
         description: "Create a kanban board",
         options: [
-          %{type: 3, name: "name", description: "Board name", required: true},
-          %{type: 3, name: "workspace", description: "Workspace path", required: false}
+          %{type: 3, name: "name", description: "Board name", required: true}
         ]
       },
       %{
@@ -455,9 +453,7 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
         options: [
           %{type: 3, name: "board_id", description: "Board id", required: true},
           %{type: 3, name: "title", description: "Task title", required: true},
-          %{type: 3, name: "priority", description: "Task priority", required: false},
-          %{type: 3, name: "assignee", description: "Task assignee", required: false},
-          %{type: 3, name: "worker_profile", description: "Worker profile", required: false}
+          %{type: 3, name: "priority", description: "Task priority", required: false}
         ]
       },
       %{
@@ -467,9 +463,7 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
         options: [
           %{type: 3, name: "task_id", description: "Task id", required: true},
           %{type: 3, name: "status", description: "Task status", required: false},
-          %{type: 3, name: "priority", description: "Task priority", required: false},
-          %{type: 3, name: "assignee", description: "Task assignee", required: false},
-          %{type: 3, name: "worker_profile", description: "Worker profile", required: false}
+          %{type: 3, name: "priority", description: "Task priority", required: false}
         ]
       },
       %{
@@ -493,8 +487,7 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
             description: "Maximum concurrent tasks",
             required: false,
             min_value: 1
-          },
-          %{type: 3, name: "worker_profile", description: "Worker profile", required: false}
+          }
         ]
       },
       %{

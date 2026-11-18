@@ -16,6 +16,7 @@ defmodule LemonAutomation.KanbanReview do
          policy when is_map(policy) <- persona[:tool_policy] do
       allowed = Map.get(policy, :allow) || Map.get(policy, "allow") || @read_tools
       policy = Map.put(policy, :allow, Enum.filter(@read_tools, &(&1 in allowed)))
+      policy = LemonAutomation.KanbanRunWorker.confine(policy, task)
       agent_id = task.assignee || Keyword.get(opts, :agent_id, "default")
       session_key = "agent:#{agent_id}:main:sub:kanban_review_#{run_id}"
 

@@ -42,7 +42,26 @@ defmodule LemonAutomation.TaskAdmissionTest do
     on_exit(fn -> GoalStore.clear(session_key) end)
 
     manager = start_supervised!({GoalLoopManager, name: nil, scheduler_interval_ms: 0})
-    assert {:ok, board} = KanbanStore.create_board("Rejected task admission")
+
+    workspace =
+      Path.join(System.tmp_dir!(), "task-admission-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(workspace)
+    on_exit(fn -> File.rm_rf!(workspace) end)
+
+    {:ok, authority} =
+      LemonAgent.Workspace.KanbanAuthority.new(
+        %{agent_id: "default", session_key: "agent:default:main"},
+        nil,
+        workspace
+      )
+
+    assert {:ok, board} =
+             KanbanStore.create_board("Rejected task admission",
+               workspace: workspace,
+               authority: authority
+             )
+
     assert {:ok, card} = KanbanStore.create_task(board.id, "Do not lease rejected work")
     on_exit(fn -> KanbanStore.clear_board(board.id) end)
 

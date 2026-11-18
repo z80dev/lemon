@@ -7,12 +7,33 @@ defmodule LemonAutomation.KanbanGitWorkflow do
   current HEAD, never an inferred historical base. Snapshots stage ignored-aware
   changes and review the entire resulting tree against the recorded base. Binary,
   submodule and oversized diffs fail closed. Commits bypass hooks and signing,
-  use the configured Git identity, and update only the owned branch with CAS.
+  use the operator's global (else the workspace repository's configured) Git
+  identity, and update only the owned branch with CAS.
 
-  Publication is disabled unless explicitly configured. Persist publish_pending
-  before calling publish; after any dispatched publication failure, reconcile
-  instead of retrying. Reconciliation is read-only and requires exact remote SHA
-  and (for PRs) repository, head, base and head SHA agreement.
+  All of this happens in the board's controller-owned repository
+  (`LemonAutomation.KanbanGitSandbox`), never in the workspace repository:
+  every worktree command runs through `controller_git/3` with `GIT_DIR` set to
+  the worktree's administrative directory inside that repository and
+  `GIT_WORK_TREE` set to the worktree, after verifying the repository's
+  Lemon-written configuration. `git/3` (outside controller repositories) is
+  used only for repository discovery and `resolve_destinations/3`.
+
+  Publication is disabled unless explicitly configured. It pushes only to the
+  destinations an operator granted (`:destinations`, the push URLs resolved
+  when the grant was confirmed), as explicit `git push -- <url> <sha>:<ref>`
+  arguments; remote names and URL rewriting are never consulted. Persist
+  publish_pending before calling publish; after any dispatched publication
+  failure, reconcile instead of retrying. Reconciliation is read-only and
+  requires exact remote SHA and (for PRs) repository, head, base and head SHA
+  agreement.
+
+  Side-effecting and network commands (`commit-tree`, `update-ref`, every
+  `push`, every `ls-remote`, every `gh` call) are built once as
+  `{executable, args}`; that exact value is passed to the required `:authorize`
+  callback (`({exe, args}) -> :ok | {:error, _}`) and then run. Publication and
+  reconciliation authorize their whole command set before any network access.
+  A missing callback or a denial returns `{:error, :commit_not_authorized}` or
+  `{:error, :publication_not_authorized}` and runs nothing further.
 
   All operations accept optional trailing keyword options. `:runner` is a test
   seam of arity three `(program, argv, options)`, returning `{:ok, stdout}` or
@@ -28,20 +49,6 @@ defmodule LemonAutomation.KanbanGitWorkflow do
   alias LemonCore.ProcessGroup
 
   @diff_limit 128 * 1024
-  @git_options [
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "commit.gpgSign=false",
-    "-c",
-    "diff.external=",
-    "-c",
-    "core.quotePath=true",
-    "-c",
-    "user.useConfigOnly=true"
-  ]
 
   def normalize(raw) when raw in [nil, false], do: {:ok, nil}
   def normalize(%{"reviewModel" => nil}), do: {:error, :invalid_review_model}
@@ -149,16 +156,19 @@ defmodule LemonAutomation.KanbanGitWorkflow do
 
   def prepare(workspace, task, config, opts \\ []) do
     with {:ok, normalized} when not is_nil(normalized) <- normalize(config),
-         %{cwd: cwd, worktree: %{root: root, path: path, branch: branch}}
-         when is_binary(cwd) and is_binary(root) and is_binary(path) and is_binary(branch) <-
+         %{cwd: cwd, worktree: %{root: root, path: path, branch: branch, git_dir: git_dir}}
+         when is_binary(cwd) and is_binary(root) and is_binary(path) and is_binary(branch) and
+                is_binary(git_dir) <-
            workspace,
          true <- is_map(task),
          id when is_binary(id) <- Map.get(task, :id, Map.get(task, "id")),
          true <- cwd == path and branch == LemonAutomation.KanbanWorktree.branch_for(task),
-         true <- path == LemonAutomation.KanbanWorktree.path_for(root, task),
-         :ok <- validate_context(root, path, branch, opts),
-         {:ok, head} <- git(path, ["rev-parse", "HEAD"], opts),
-         {:ok, checkpoint} <- checkpoint(root, path, branch, String.trim(head), opts) do
+         {:ok, ^path} <- LemonAutomation.KanbanWorktree.path_for(task),
+         {:ok, ^git_dir} <- LemonAutomation.KanbanWorktree.controller_path(task),
+         :ok <- validate_context(git_dir, path, branch, opts),
+         base = %{"gitDir" => git_dir, "cwd" => path, "branch" => branch},
+         {:ok, head} <- worktree_git(base, ["rev-parse", "HEAD"], opts),
+         {:ok, checkpoint} <- checkpoint(root, git_dir, path, branch, String.trim(head), opts) do
       {:ok, checkpoint}
     else
       {:error, _} = error -> error
@@ -166,16 +176,28 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     end
   end
 
-  defp checkpoint(root, path, branch, head, opts) do
-    current = %{"baseCommit" => head, "branch" => branch, "cwd" => path, "root" => root}
+  defp checkpoint(root, git_dir, path, branch, head, opts) do
+    current = %{
+      "baseCommit" => head,
+      "branch" => branch,
+      "cwd" => path,
+      "root" => root,
+      "gitDir" => git_dir
+    }
 
     case Keyword.get(opts, :checkpoint) do
       nil ->
         {:ok, current}
 
-      %{"baseCommit" => base, "branch" => ^branch, "cwd" => ^path, "root" => ^root} = saved ->
+      %{
+        "baseCommit" => base,
+        "branch" => ^branch,
+        "cwd" => ^path,
+        "root" => ^root,
+        "gitDir" => ^git_dir
+      } = saved ->
         with true <- sha?(base),
-             {:ok, _} <- git(path, ["merge-base", "--is-ancestor", base, head], opts) do
+             {:ok, _} <- worktree_git(saved, ["merge-base", "--is-ancestor", base, head], opts) do
           {:ok, saved}
         else
           _ -> {:error, :invalid_checkpoint}
@@ -187,25 +209,24 @@ defmodule LemonAutomation.KanbanGitWorkflow do
   end
 
   @doc false
-  def validate_context(root, path, branch, opts \\ []) do
-    with true <- clean_path?(root) and clean_path?(path) and root != path and ref_name?(branch),
-         {:ok, root_top} <- git(root, ["rev-parse", "--show-toplevel"], opts),
-         true <- String.trim(root_top) == root,
-         {:ok, top} <- git(path, ["rev-parse", "--show-toplevel"], opts),
-         true <- String.trim(top) == path,
-         {:ok, common_root} <-
-           git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], opts),
-         {:ok, common_path} <-
-           git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"], opts),
-         true <- String.trim(common_root) == String.trim(common_path),
-         {:ok, git_dir} <- git(path, ["rev-parse", "--absolute-git-dir"], opts),
-         true <- String.trim(git_dir) != String.trim(common_path),
-         {:ok, actual_branch} <- git(path, ["symbolic-ref", "--quiet", "HEAD"], opts),
+  # The worktree must be registered in the controller repository `git_dir`
+  # (from the repository's own records) with `branch` checked out.
+  def validate_context(git_dir, path, branch, opts \\ []) do
+    with true <- clean_path?(git_dir) and clean_path?(path) and ref_name?(branch),
+         {:ok, repo} <- LemonAutomation.KanbanGitSandbox.worktree_repo(git_dir, path, branch),
+         {:ok, actual_branch} <- controller_git(repo, ["symbolic-ref", "--quiet", "HEAD"], opts),
          true <- String.trim(actual_branch) == "refs/heads/#{branch}",
-         {:ok, entries} <- git(root, ["worktree", "list", "--porcelain", "-z"], opts),
+         {:ok, entries} <-
+           controller_git(
+             %{repo | git_dir: git_dir, work_tree: nil},
+             ["worktree", "list", "--porcelain", "-z"],
+             opts
+           ),
          true <- registered_worktree?(entries, path, branch) do
       :ok
     else
+      {:error, :controller_config_changed} = error -> error
+      {:error, :worktree_metadata_changed} = error -> error
       _ -> {:error, :invalid_worktree}
     end
   end
@@ -243,15 +264,17 @@ defmodule LemonAutomation.KanbanGitWorkflow do
 
   def clean_path?(_), do: false
 
+  # Staging reads the worktree's files as data into the controller
+  # repository's index for this worktree.
   def snapshot(checkpoint, opts \\ []) do
     with :ok <- validate_checkpoint(checkpoint, opts),
-         cwd = checkpoint["cwd"],
-         {:ok, _} <- git(cwd, ["add", "-A", "--", "."], opts),
-         {:ok, head} <- git(cwd, ["rev-parse", "HEAD"], opts),
-         {:ok, tree} <- git(cwd, ["write-tree"], opts),
-         {:ok, base_tree} <- git(cwd, ["rev-parse", checkpoint["baseCommit"] <> "^{tree}"], opts),
-         {:ok, diff} <- review_diff(cwd, checkpoint["baseCommit"], String.trim(tree), opts),
-         :ok <- clean_index_worktree(cwd, opts) do
+         {:ok, _} <- worktree_git(checkpoint, ["add", "-A", "--", "."], opts),
+         {:ok, head} <- worktree_git(checkpoint, ["rev-parse", "HEAD"], opts),
+         {:ok, tree} <- worktree_git(checkpoint, ["write-tree"], opts),
+         {:ok, base_tree} <-
+           worktree_git(checkpoint, ["rev-parse", checkpoint["baseCommit"] <> "^{tree}"], opts),
+         {:ok, diff} <- review_diff(checkpoint, checkpoint["baseCommit"], String.trim(tree), opts),
+         :ok <- clean_index_worktree(checkpoint, opts) do
       {:ok,
        %{
          "headCommit" => String.trim(head),
@@ -263,7 +286,7 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     end
   end
 
-  defp review_diff(cwd, base, tree, opts) do
+  defp review_diff(checkpoint, base, tree, opts) do
     args = [
       "diff",
       "--no-ext-diff",
@@ -277,13 +300,14 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     ]
 
     with {:ok, stat} <-
-           git(
-             cwd,
+           worktree_git(
+             checkpoint,
              ["diff", "--numstat", "--no-ext-diff", "--no-textconv", base, tree, "--"],
              opts
            ),
          false <- Regex.match?(~r/^\-\t\-\t/m, stat),
-         {:ok, diff} <- git(cwd, args, Keyword.put(opts, :max_output_bytes, @diff_limit)),
+         {:ok, diff} <-
+           worktree_git(checkpoint, args, Keyword.put(opts, :max_output_bytes, @diff_limit)),
          true <- String.valid?(diff) and not String.contains?(diff, "\0"),
          false <-
            Regex.match?(
@@ -301,7 +325,7 @@ defmodule LemonAutomation.KanbanGitWorkflow do
   def commit(checkpoint, snapshot, title, opts \\ []) do
     with true <- text?(title, 4096),
          :ok <- validate_snapshot(checkpoint, snapshot, opts),
-         {:ok, head_tree} <- git(checkpoint["cwd"], ["rev-parse", "HEAD^{tree}"], opts) do
+         {:ok, head_tree} <- worktree_git(checkpoint, ["rev-parse", "HEAD^{tree}"], opts) do
       if String.trim(head_tree) == snapshot["tree"] do
         {:ok, snapshot["headCommit"]}
       else
@@ -314,27 +338,19 @@ defmodule LemonAutomation.KanbanGitWorkflow do
   end
 
   defp create_commit(checkpoint, snapshot, title, opts) do
-    cwd = checkpoint["cwd"]
+    commit_tree =
+      {"git", ["commit-tree", snapshot["tree"], "-p", snapshot["headCommit"], "-m", title]}
 
-    with {:ok, commit} <-
-           git(
-             cwd,
-             ["commit-tree", snapshot["tree"], "-p", snapshot["headCommit"], "-m", title],
-             opts
-           ),
+    with :ok <- authorize([commit_tree], opts, :commit_not_authorized),
+         {:ok, commit} <- run(commit_tree, checkpoint, commit_identity(checkpoint, opts)),
          commit = String.trim(commit),
          true <- sha?(commit),
-         :ok <- validate_snapshot(checkpoint, snapshot, opts) do
-      case git(
-             cwd,
-             [
-               "update-ref",
-               "refs/heads/" <> checkpoint["branch"],
-               commit,
-               snapshot["headCommit"]
-             ],
-             opts
-           ) do
+         :ok <- validate_snapshot(checkpoint, snapshot, opts),
+         update_ref =
+           {"git",
+            ["update-ref", "refs/heads/" <> checkpoint["branch"], commit, snapshot["headCommit"]]},
+         :ok <- authorize([update_ref], opts, :commit_not_authorized) do
+      case run(update_ref, checkpoint, opts) do
         {:ok, _} -> {:ok, commit}
         _ -> {:error, :commit_outcome_unknown}
       end
@@ -344,23 +360,79 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     end
   end
 
+  # The workspace repository's configured author identity, read as data
+  # (`git config --get`, which runs nothing); the operator's global identity
+  # still takes precedence in the sandbox.
+  defp commit_identity(%{"root" => root}, opts) when is_binary(root) do
+    identity =
+      for key <- ["user.name", "user.email"],
+          {:ok, value} <- [git(root, ["config", "--get", key], opts)],
+          value = String.trim(value),
+          value != "" and String.valid?(value),
+          do: {key, value}
+
+    Keyword.put(opts, :identity, identity)
+  end
+
+  defp commit_identity(_checkpoint, opts), do: opts
+
+  # Every side-effecting controller command is built exactly once as
+  # `{executable, args}` and that same value is authorized (`:authorize`
+  # option, required) and then run. A missing authorizer refuses.
+  defp authorize(commands, opts, denial) do
+    case Keyword.get(opts, :authorize) do
+      fun when is_function(fun, 1) ->
+        if Enum.all?(commands, &(fun.(&1) == :ok)), do: :ok, else: {:error, denial}
+
+      _ ->
+        {:error, denial}
+    end
+  end
+
+  # Worktree commands run in the controller repository with this worktree's
+  # administrative directory; network commands run against the controller
+  # repository itself and alone receive the operator's credential helpers.
+  defp run({"git", [sub | _] = args}, checkpoint, opts) when sub in ["push", "ls-remote"] do
+    with {:ok, repo} <- controller_repo(checkpoint),
+         do: controller_git(repo, args, Keyword.put(opts, :publication, true))
+  end
+
+  defp run({"git", args}, checkpoint, opts), do: worktree_git(checkpoint, args, opts)
+  defp run({"gh", args}, _checkpoint, opts), do: gh(args, opts)
+
+  defp controller_repo(%{"gitDir" => git_dir}) when is_binary(git_dir),
+    do: {:ok, %{git_dir: git_dir, common_dir: git_dir, work_tree: nil}}
+
+  defp controller_repo(_checkpoint), do: {:error, :invalid_checkpoint}
+
+  # A command in the checkpoint's worktree: `GIT_DIR` is the worktree's
+  # administrative directory inside the controller repository, found from the
+  # repository's own records and re-verified before the command, and
+  # `GIT_WORK_TREE` the worktree.
+  defp worktree_git(%{"gitDir" => git_dir, "cwd" => cwd, "branch" => branch}, args, opts) do
+    with {:ok, repo} <- LemonAutomation.KanbanGitSandbox.worktree_repo(git_dir, cwd, branch),
+         do: controller_git(repo, args, opts)
+  end
+
+  defp worktree_git(_checkpoint, _args, _opts), do: {:error, :invalid_checkpoint}
+
   def reconcile_commit(checkpoint, snapshot, opts \\ []) do
     with :ok <- validate_checkpoint(checkpoint, opts),
          true <- valid_snapshot?(checkpoint, snapshot),
-         {:ok, head} <- git(checkpoint["cwd"], ["rev-parse", "HEAD"], opts),
-         {:ok, tree} <- git(checkpoint["cwd"], ["rev-parse", "HEAD^{tree}"], opts),
+         {:ok, head} <- worktree_git(checkpoint, ["rev-parse", "HEAD"], opts),
+         {:ok, tree} <- worktree_git(checkpoint, ["rev-parse", "HEAD^{tree}"], opts),
          true <- String.trim(tree) == snapshot["tree"],
-         :ok <- commit_parent(checkpoint["cwd"], String.trim(head), snapshot["headCommit"], opts) do
+         :ok <- commit_parent(checkpoint, String.trim(head), snapshot["headCommit"], opts) do
       {:ok, String.trim(head)}
     else
       _ -> {:error, :commit_outcome_unknown}
     end
   end
 
-  defp commit_parent(_cwd, head, head, _opts), do: :ok
+  defp commit_parent(_checkpoint, head, head, _opts), do: :ok
 
-  defp commit_parent(cwd, head, parent, opts) do
-    case git(cwd, ["rev-list", "--parents", "-n", "1", head], opts) do
+  defp commit_parent(checkpoint, head, parent, opts) do
+    case worktree_git(checkpoint, ["rev-list", "--parents", "-n", "1", head], opts) do
       {:ok, result} ->
         if String.split(result) == [head, parent],
           do: :ok,
@@ -372,12 +444,13 @@ defmodule LemonAutomation.KanbanGitWorkflow do
   end
 
   defp validate_checkpoint(
-         %{"cwd" => cwd, "root" => root, "branch" => branch, "baseCommit" => base},
+         %{"cwd" => cwd, "gitDir" => git_dir, "branch" => branch, "baseCommit" => base} =
+           checkpoint,
          opts
        ) do
     with true <- sha?(base),
-         :ok <- validate_context(root, cwd, branch, opts),
-         {:ok, _} <- git(cwd, ["merge-base", "--is-ancestor", base, "HEAD"], opts) do
+         :ok <- validate_context(git_dir, cwd, branch, opts),
+         {:ok, _} <- worktree_git(checkpoint, ["merge-base", "--is-ancestor", base, "HEAD"], opts) do
       :ok
     else
       _ -> {:error, :invalid_checkpoint}
@@ -396,24 +469,24 @@ defmodule LemonAutomation.KanbanGitWorkflow do
   defp validate_snapshot(checkpoint, snapshot, opts) do
     with :ok <- validate_checkpoint(checkpoint, opts),
          true <- valid_snapshot?(checkpoint, snapshot),
-         {:ok, head} <- git(checkpoint["cwd"], ["rev-parse", "HEAD"], opts),
+         {:ok, head} <- worktree_git(checkpoint, ["rev-parse", "HEAD"], opts),
          true <- String.trim(head) == snapshot["headCommit"],
-         {:ok, tree} <- git(checkpoint["cwd"], ["write-tree"], opts),
+         {:ok, tree} <- worktree_git(checkpoint, ["write-tree"], opts),
          true <- String.trim(tree) == snapshot["tree"],
          {:ok, base_tree} <-
-           git(checkpoint["cwd"], ["rev-parse", checkpoint["baseCommit"] <> "^{tree}"], opts),
+           worktree_git(checkpoint, ["rev-parse", checkpoint["baseCommit"] <> "^{tree}"], opts),
          true <- String.trim(base_tree) != snapshot["tree"],
-         :ok <- clean_index_worktree(checkpoint["cwd"], opts) do
+         :ok <- clean_index_worktree(checkpoint, opts) do
       :ok
     else
       _ -> {:error, :changed_after_review}
     end
   end
 
-  defp clean_index_worktree(cwd, opts) do
+  defp clean_index_worktree(checkpoint, opts) do
     with {:ok, flags} <-
-           git(
-             cwd,
+           worktree_git(
+             checkpoint,
              ["ls-files", "-v", "-z"],
              Keyword.put(opts, :max_output_bytes, 8 * 1024 * 1024)
            ),
@@ -423,8 +496,13 @@ defmodule LemonAutomation.KanbanGitWorkflow do
              _ -> false
            end),
          {:ok, _} <-
-           git(cwd, ["diff", "--quiet", "--no-ext-diff", "--ignore-submodules=none", "--"], opts),
-         {:ok, untracked} <- git(cwd, ["ls-files", "--others", "--exclude-standard", "-z"], opts),
+           worktree_git(
+             checkpoint,
+             ["diff", "--quiet", "--no-ext-diff", "--ignore-submodules=none", "--"],
+             opts
+           ),
+         {:ok, untracked} <-
+           worktree_git(checkpoint, ["ls-files", "--others", "--exclude-standard", "-z"], opts),
          true <- untracked == "" do
       :ok
     else
@@ -452,13 +530,68 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     end
   end
 
+  # The full command set is built from the operator-granted destinations
+  # (`:destinations`, pinned push URLs) and authorized before anything touches
+  # the network: every push, every ls-remote verification and every `gh` call
+  # with all of its arguments. No remote name or URL rewriting is consulted.
   defp dispatch_publication(checkpoint, sha, publish, title, body, opts) do
-    # Pin the refspec to the reviewed commit, never a moving local branch.
-    refspec = sha <> ":refs/heads/" <> checkpoint["branch"]
+    case publication_plan(checkpoint, sha, publish, {title, body}, opts) do
+      {:ok, plan} ->
+        with :ok <- push_all(plan, checkpoint, opts),
+             :ok <- remote_commit(plan, checkpoint, sha, opts),
+             {:ok, url} <- publish_pr(plan, checkpoint, sha, publish, opts) do
+          {:ok, %{"published" => true, "prUrl" => url}}
+        else
+          _ -> {:error, :publication_outcome_unknown}
+        end
 
-    with {:ok, _} <-
-           git(
-             checkpoint["cwd"],
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp push_all(plan, checkpoint, opts) do
+    Enum.reduce_while(plan.push, :ok, fn command, :ok ->
+      case run(command, checkpoint, opts) do
+        {:ok, _} -> {:cont, :ok}
+        _ -> {:halt, {:error, :publication_outcome_unknown}}
+      end
+    end)
+  end
+
+  @doc """
+  Queries (never mutates) whether a dispatched publication landed at the
+  pinned destinations. Its commands (`ls-remote`, `gh pr list`) are authorized
+  through `:authorize` before any of them runs; a denial returns
+  `{:error, :publication_not_authorized}` without network access.
+  """
+  def reconcile_publication(checkpoint, commit_sha, config, opts \\ []) do
+    with {:ok, %{publish: publish}} when not is_nil(publish) <- normalize(config),
+         :ok <- validate_checkpoint(checkpoint, opts),
+         true <- sha?(commit_sha),
+         {:ok, plan} <- publication_plan(checkpoint, commit_sha, publish, nil, opts),
+         :ok <- remote_commit(plan, checkpoint, commit_sha, opts),
+         {:ok, url} <- existing_pr(plan, checkpoint, commit_sha, publish, opts),
+         true <- publish.mode == :branch or is_binary(url) do
+      {:ok, %{"published" => true, "prUrl" => url}}
+    else
+      {:error, :publication_not_authorized} = denied -> denied
+      _ -> {:error, :publication_outcome_unknown}
+    end
+  end
+
+  defp publication_plan(checkpoint, sha, publish, text, opts) do
+    ref = "refs/heads/" <> checkpoint["branch"]
+
+    with [_ | _] = urls <- Keyword.get(opts, :destinations),
+         true <- Enum.all?(urls, &destination_url?/1) do
+      plan = %{
+        # Pin the refspec to the reviewed commit, never a moving local branch,
+        # and the destination to the granted URL, never a remote name.
+        push:
+          Enum.map(
+            urls,
+            &{"git",
              [
                "push",
                "--no-verify",
@@ -466,36 +599,110 @@ defmodule LemonAutomation.KanbanGitWorkflow do
                "--no-follow-tags",
                "--no-mirror",
                "--recurse-submodules=no",
-               publish.remote,
-               refspec
-             ],
-             opts
-           ),
-         :ok <- remote_commit(checkpoint, sha, publish, opts),
-         {:ok, url} <- publish_pr(checkpoint, sha, publish, title, body, opts) do
-      {:ok, %{"published" => true, "prUrl" => url}}
+               "--",
+               &1,
+               sha <> ":" <> ref
+             ]}
+          ),
+        ls_remote: Enum.map(urls, &{"git", ["ls-remote", "--refs", "--", &1, ref]}),
+        pr_list: pr_list(checkpoint, publish),
+        pr_create: pr_create(checkpoint, publish, text)
+      }
+
+      commands =
+        if(text, do: plan.push, else: []) ++
+          plan.ls_remote ++ Enum.reject([plan.pr_list, plan.pr_create], &is_nil/1)
+
+      with :ok <- authorize(commands, opts, :publication_not_authorized), do: {:ok, plan}
     else
-      _ -> {:error, :publication_outcome_unknown}
+      _ -> {:error, :publication_not_authorized}
     end
   end
 
-  def reconcile_publication(checkpoint, commit_sha, config, opts \\ []) do
-    with {:ok, %{publish: publish}} when not is_nil(publish) <- normalize(config),
-         :ok <- validate_checkpoint(checkpoint, opts),
-         true <- sha?(commit_sha),
-         :ok <- remote_commit(checkpoint, commit_sha, publish, opts),
-         {:ok, url} <- existing_pr(checkpoint, commit_sha, publish, opts),
-         true <- publish.mode == :branch or is_binary(url) do
-      {:ok, %{"published" => true, "prUrl" => url}}
+  @doc """
+  Resolves the publication destinations an operator grant would bind: the
+  workspace repository's push URL(s) for the configured remote (after its URL
+  rewriting), plus the PR repository and base. Called only when an operator
+  previews or confirms a grant; publication itself never re-resolves them.
+  """
+  def resolve_destinations(workspace, settings, opts \\ []) do
+    with {:ok, %{publish: publish}} when not is_nil(publish) <-
+           normalize(%{"publish" => settings}),
+         {:ok, output} <-
+           git(workspace, ["remote", "get-url", "--push", "--all", "--", publish.remote], opts),
+         [_ | _] = urls <- String.split(output, "\n", trim: true),
+         true <- Enum.all?(urls, &destination_url?/1) do
+      {:ok, %{"push" => urls, "repository" => publish.repository, "base" => publish.base}}
     else
-      _ -> {:error, :publication_outcome_unknown}
+      _ -> {:error, :publication_destination_unavailable}
     end
+  end
+
+  # A push URL usable as one literal argument: no option or transport-helper
+  # syntax, no embedded credentials, no control characters or whitespace.
+  defp destination_url?(url) do
+    is_binary(url) and byte_size(url) in 1..2048 and String.valid?(url) and
+      not String.starts_with?(url, "-") and
+      not Regex.match?(~r/[\x00-\x20\x7f]/, url) and
+      not Regex.match?(~r/\A[A-Za-z][A-Za-z0-9+.-]*::/, url) and
+      no_credentials?(url)
+  end
+
+  defp no_credentials?(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, userinfo: info} when scheme in ["http", "https"] -> is_nil(info)
+      _ -> true
+    end
+  end
+
+  defp pr_list(_checkpoint, %{mode: :branch}), do: nil
+
+  defp pr_list(checkpoint, publish) do
+    {"gh",
+     [
+       "pr",
+       "list",
+       "--repo",
+       publish.repository,
+       "--head",
+       checkpoint["branch"],
+       "--base",
+       publish.base,
+       "--state",
+       "all",
+       "--limit",
+       "100",
+       "--json",
+       "url,headRefName,baseRefName,headRefOid,isCrossRepository"
+     ]}
+  end
+
+  defp pr_create(_checkpoint, %{mode: :branch}, _text), do: nil
+  defp pr_create(_checkpoint, _publish, nil), do: nil
+
+  defp pr_create(checkpoint, publish, {title, body}) do
+    args = [
+      "pr",
+      "create",
+      "--repo",
+      publish.repository,
+      "--head",
+      checkpoint["branch"],
+      "--base",
+      publish.base,
+      "--title",
+      title,
+      "--body",
+      body
+    ]
+
+    {"gh", if(publish.draft, do: args ++ ["--draft"], else: args)}
   end
 
   defp publication_ready(checkpoint, sha, opts) do
     with :ok <- validate_checkpoint(checkpoint, opts),
          true <- sha?(sha),
-         {:ok, head} <- git(checkpoint["cwd"], ["rev-parse", "HEAD"], opts),
+         {:ok, head} <- worktree_git(checkpoint, ["rev-parse", "HEAD"], opts),
          true <- String.trim(head) == sha do
       :ok
     else
@@ -503,55 +710,31 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     end
   end
 
-  defp remote_commit(checkpoint, sha, publish, opts) do
+  defp remote_commit(plan, checkpoint, sha, opts) do
     ref = "refs/heads/" <> checkpoint["branch"]
 
-    with {:ok, output} <-
-           git(checkpoint["cwd"], ["remote", "get-url", "--push", "--all", publish.remote], opts),
-         urls = String.split(output, "\n", trim: true),
-         true <- urls != [] do
-      Enum.reduce_while(urls, :ok, fn url, :ok ->
-        case git(checkpoint["cwd"], ["ls-remote", "--refs", "--", url, ref], opts) do
-          {:ok, observed} ->
-            if String.split(observed) == [sha, ref],
-              do: {:cont, :ok},
-              else: {:halt, {:error, :publication_outcome_unknown}}
+    Enum.reduce_while(plan.ls_remote, :ok, fn command, :ok ->
+      case run(command, checkpoint, opts) do
+        {:ok, observed} ->
+          if String.split(observed) == [sha, ref],
+            do: {:cont, :ok},
+            else: {:halt, {:error, :publication_outcome_unknown}}
 
-          _ ->
-            {:halt, {:error, :publication_outcome_unknown}}
-        end
-      end)
-    else
-      _ -> {:error, :publication_outcome_unknown}
-    end
+        _ ->
+          {:halt, {:error, :publication_outcome_unknown}}
+      end
+    end)
   end
 
-  defp publish_pr(_checkpoint, _sha, %{mode: :branch}, _title, _body, _opts), do: {:ok, nil}
+  defp publish_pr(%{pr_create: nil}, _checkpoint, _sha, _publish, _opts), do: {:ok, nil}
 
-  defp publish_pr(checkpoint, sha, publish, title, body, opts) do
-    case existing_pr(checkpoint, sha, publish, opts) do
+  defp publish_pr(plan, checkpoint, sha, publish, opts) do
+    case existing_pr(plan, checkpoint, sha, publish, opts) do
       {:ok, nil} ->
-        args = [
-          "pr",
-          "create",
-          "--repo",
-          publish.repository,
-          "--head",
-          checkpoint["branch"],
-          "--base",
-          publish.base,
-          "--title",
-          title,
-          "--body",
-          body
-        ]
-
-        args = if publish.draft, do: args ++ ["--draft"], else: args
-
-        with {:ok, output} <- command("gh", args, Keyword.put(opts, :cwd, checkpoint["cwd"])),
+        with {:ok, output} <- run(plan.pr_create, checkpoint, opts),
              url = String.trim(output),
              true <- pr_url?(url, publish.repository),
-             {:ok, ^url} <- existing_pr(checkpoint, sha, publish, opts) do
+             {:ok, ^url} <- existing_pr(plan, checkpoint, sha, publish, opts) do
           {:ok, url}
         else
           _ -> {:error, :publication_outcome_unknown}
@@ -562,27 +745,10 @@ defmodule LemonAutomation.KanbanGitWorkflow do
     end
   end
 
-  defp existing_pr(_checkpoint, _sha, %{mode: :branch}, _opts), do: {:ok, nil}
+  defp existing_pr(%{pr_list: nil}, _checkpoint, _sha, _publish, _opts), do: {:ok, nil}
 
-  defp existing_pr(checkpoint, sha, publish, opts) do
-    args = [
-      "pr",
-      "list",
-      "--repo",
-      publish.repository,
-      "--head",
-      checkpoint["branch"],
-      "--base",
-      publish.base,
-      "--state",
-      "all",
-      "--limit",
-      "100",
-      "--json",
-      "url,headRefName,baseRefName,headRefOid,isCrossRepository"
-    ]
-
-    with {:ok, output} <- command("gh", args, Keyword.put(opts, :cwd, checkpoint["cwd"])),
+  defp existing_pr(plan, checkpoint, sha, publish, opts) do
+    with {:ok, output} <- run(plan.pr_list, checkpoint, opts),
          {:ok, entries} when is_list(entries) <- Jason.decode(output) do
       case entries do
         [] ->
@@ -634,9 +800,35 @@ defmodule LemonAutomation.KanbanGitWorkflow do
   defp sha?(value),
     do: is_binary(value) and Regex.match?(~r/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/, value)
 
-  @doc false
+  @doc """
+  Runs `git -C cwd args` outside a controller repository in the sanitized
+  environment (`LemonAutomation.KanbanGitSandbox.env/1`). Controller code
+  uses it only for commands that run no configured program (repository
+  discovery and push-URL resolution).
+  """
   def git(cwd, args, opts \\ []) do
-    command("git", @git_options ++ ["-C", cwd | args], opts)
+    with {:ok, env} <- LemonAutomation.KanbanGitSandbox.env(opts) do
+      command("git", ["-C", cwd | args], Keyword.put(opts, :env, env))
+    end
+  end
+
+  @doc """
+  Runs `git args` against a controller repository (`GIT_DIR`, and
+  `GIT_WORK_TREE` for a worktree), after verifying the repository's
+  Lemon-written configuration (`KanbanGitSandbox.controller_env/2`).
+  """
+  def controller_git(repo, args, opts \\ []) do
+    with {:ok, env} <- LemonAutomation.KanbanGitSandbox.controller_env(repo, opts) do
+      cwd = Map.get(repo, :work_tree) || Map.fetch!(repo, :common_dir)
+      command("git", ["-C", cwd | args], Keyword.put(opts, :env, env))
+    end
+  end
+
+  @doc "Runs `gh` sanitized, from an empty Lemon-owned directory."
+  def gh(args, opts \\ []) do
+    with {:ok, env, neutral} <- LemonAutomation.KanbanGitSandbox.gh_env(opts) do
+      command("gh", args, opts |> Keyword.put(:env, env) |> Keyword.put(:cwd, neutral))
+    end
   end
 
   @doc false
@@ -650,6 +842,22 @@ defmodule LemonAutomation.KanbanGitWorkflow do
       runner when is_function(runner, 3) -> runner.(program, args, opts)
       nil -> supervised_command(program, args, opts)
     end
+  rescue
+    _ -> {:error, :command_failed}
+  catch
+    :exit, _ -> {:error, :command_failed}
+  end
+
+  @doc false
+  # Infrastructure reads for the sandbox itself: always a real supervised port
+  # with the given environment (never the test runner seam).
+  def raw_command(program, args, env, opts) do
+    opts =
+      opts
+      |> Keyword.take([:task_supervisor, :cwd])
+      |> Keyword.merge(env: env, max_output_bytes: 1024 * 1024, timeout_ms: 10_000)
+
+    supervised_command(program, args, opts)
   rescue
     _ -> {:error, :command_failed}
   catch
@@ -679,30 +887,15 @@ defmodule LemonAutomation.KanbanGitWorkflow do
   end
 
   defp run_port(program, args, opts, timeout, monitor) do
-    case System.find_executable(program) do
-      nil ->
+    case {System.find_executable(program), Keyword.get(opts, :env)} do
+      {nil, _env} ->
         {:error, :command_unavailable}
 
-      executable ->
-        # Ignore inherited Git plumbing overrides but retain operator credentials
-        # and configured identity. No identity is manufactured by this workflow.
-        identity =
-          ~w(GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL GIT_COMMITTER_DATE)
+      {_executable, env} when not is_list(env) ->
+        # Never run a controller command outside the sanitized environment.
+        {:error, :sandbox_unavailable}
 
-        removed =
-          System.get_env()
-          |> Map.keys()
-          |> Enum.filter(&(String.starts_with?(&1, "GIT_") and &1 not in identity))
-
-        env =
-          Enum.map(removed, &{String.to_charlist(&1), false}) ++
-            [
-              {~c"GIT_TERMINAL_PROMPT", ~c"0"},
-              {~c"GCM_INTERACTIVE", ~c"Never"},
-              {~c"GH_PROMPT_DISABLED", ~c"1"},
-              {~c"LC_ALL", ~c"C"}
-            ]
-
+      {executable, env} ->
         port_opts = [
           :binary,
           :exit_status,

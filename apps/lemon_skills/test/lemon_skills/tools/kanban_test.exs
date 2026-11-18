@@ -5,22 +5,36 @@ defmodule LemonSkills.Tools.KanbanTest do
   alias LemonSkills.Tools.Kanban
   alias LemonAgent.Workspace.KanbanStore
 
+  @session [agent_id: "agent_1", session_key: "agent:agent_1:main"]
+
   setup do
+    cwd = Path.join(System.tmp_dir!(), "lemon-kanban-tool-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(cwd)
+    {real, 0} = System.cmd("pwd", ["-P"], cd: cwd)
+
     on_exit(fn ->
-      KanbanStore.list_boards(limit: 100)
+      KanbanStore.list_boards(limit: 1_000)
       |> Enum.each(fn board -> KanbanStore.clear_board(board.id) end)
+
+      File.rm_rf!(cwd)
     end)
 
-    :ok
+    %{cwd: cwd, real_cwd: String.trim(real)}
   end
 
-  test "returns the kanban tool definition" do
-    tool = Kanban.tool("/tmp/lemon-kanban-tool")
+  defp kanban(params, cwd, opts \\ @session),
+    do: Kanban.execute("call", params, nil, nil, cwd, opts)
+
+  test "returns the kanban tool definition", %{cwd: cwd} do
+    tool = Kanban.tool(cwd)
 
     assert tool.name == "kanban"
     assert "board_create" in tool.parameters["properties"]["action"]["enum"]
     assert "task_comment" in tool.parameters["properties"]["action"]["enum"]
     refute Map.has_key?(tool.parameters["properties"], "meta")
+
+    for key <- ~w(session_key run_id owner worker_profile),
+        do: refute(Map.has_key?(tool.parameters["properties"], key))
 
     workflow = tool.parameters["properties"]["coding_workflow"]
     assert [disabled, settings] = workflow["anyOf"]
@@ -36,33 +50,46 @@ defmodule LemonSkills.Tools.KanbanTest do
     assert publish["properties"]["draft"]["default"] == true
   end
 
-  test "creates and lists boards with current cwd as default workspace" do
+  test "creates and lists boards with the canonical session cwd as workspace", %{
+    cwd: cwd,
+    real_cwd: real_cwd
+  } do
     assert %AgentToolResult{details: %{board: board}} =
-             Kanban.execute(
-               "call",
-               %{"action" => "board_create", "name" => "Launch board"},
-               nil,
-               nil,
-               "/tmp/lemon-kanban-tool",
-               agent_id: "agent_1"
-             )
+             kanban(%{"action" => "board_create", "name" => "Launch board"}, cwd)
 
     assert board.name == "Launch board"
-    assert board.workspace == "/tmp/lemon-kanban-tool"
+    assert board.workspace == real_cwd
     assert board.owner == "agent_1"
     refute Map.has_key?(board.meta, "codingWorkflow")
+    authority = board.meta["kanbanAuthority"]
+
+    assert authority["principal"] == %{
+             "agentId" => "agent_1",
+             "sessionKey" => "agent:agent_1:main"
+           }
+
+    assert authority["root"] == real_cwd
+    assert authority["unrestricted"] == true
 
     assert %AgentToolResult{details: %{boards: boards}} =
-             Kanban.execute("call", %{"action" => "board_list"}, nil, nil, "/tmp", [])
+             kanban(%{"action" => "board_list"}, "/tmp")
 
     assert Enum.any?(boards, &(&1.id == board.id))
   end
 
-  test "board supervision preserves origin and validates explicit destination before mutation" do
-    tool =
-      Kanban.tool(System.tmp_dir!(),
-        session_key: "agent:operator:telegram:work:group:-100:thread:77"
-      )
+  test "every action needs a trusted session identity", %{cwd: cwd} do
+    for params <- [
+          %{"action" => "board_list"},
+          %{"action" => "board_create", "name" => "Anonymous"}
+        ] do
+      assert {:error, message} = kanban(params, cwd, agent_id: "agent_1")
+      assert message =~ "session identity"
+    end
+  end
+
+  test "board supervision preserves origin and validates explicit destination before mutation",
+       %{cwd: cwd} do
+    tool = Kanban.tool(cwd, session_key: "agent:operator:telegram:work:group:-100:thread:77")
 
     assert %AgentToolResult{details: %{board: board}} =
              tool.execute.(
@@ -88,47 +115,40 @@ defmodule LemonSkills.Tools.KanbanTest do
     refute Enum.any?(KanbanStore.list_boards(), &(&1.name == "Rejected"))
   end
 
-  test "creates reviewed local boards without inventing publishing settings" do
+  test "creates reviewed local boards without inventing publishing settings", %{cwd: cwd} do
     for settings <- [%{}, %{"reviewModel" => "test:reviewer", "publish" => false}] do
       assert %AgentToolResult{details: %{board: board}} =
-               Kanban.execute(
-                 "call",
+               kanban(
                  %{
                    "action" => "board_create",
                    "name" => "Reviewed local board",
                    "coding_workflow" => settings
                  },
-                 nil,
-                 nil,
-                 "/tmp/lemon-kanban-tool",
-                 []
+                 cwd
                )
 
-      assert board.meta == %{"codingWorkflow" => settings}
+      assert board.meta["codingWorkflow"] == settings
+      assert board.meta["kanbanAuthority"]["publish"] == nil
       assert KanbanStore.get_board(board.id).meta == board.meta
       assert Jason.decode!(Jason.encode!(board.meta)) == board.meta
     end
   end
 
-  test "preserves explicit coding-only workflow opt-out" do
+  test "preserves explicit coding-only workflow opt-out", %{cwd: cwd} do
     assert %AgentToolResult{details: %{board: board}} =
-             Kanban.execute(
-               "call",
+             kanban(
                %{
                  "action" => "board_create",
                  "name" => "Coding-only board",
                  "coding_workflow" => false
                },
-               nil,
-               nil,
-               "/tmp/lemon-kanban-tool",
-               []
+               cwd
              )
 
-    assert board.meta == %{"codingWorkflow" => false}
+    assert board.meta["codingWorkflow"] == false
   end
 
-  test "accepts explicit branch and pull request publishing settings unchanged" do
+  test "accepts explicit branch and pull request publishing settings unchanged", %{cwd: cwd} do
     for publish <- [
           %{"mode" => "branch", "remote" => "origin"},
           %{
@@ -148,28 +168,27 @@ defmodule LemonSkills.Tools.KanbanTest do
       settings = %{"reviewModel" => "test:reviewer", "publish" => publish}
 
       assert %AgentToolResult{details: %{board: board}} =
-               Kanban.execute(
-                 "call",
+               kanban(
                  %{
                    "action" => "board_create",
                    "name" => "Explicit publish board",
                    "coding_workflow" => settings
                  },
-                 nil,
-                 nil,
-                 "/tmp/lemon-kanban-tool",
-                 []
+                 cwd
                )
 
-      assert board.meta == %{"codingWorkflow" => settings}
+      assert board.meta["codingWorkflow"] == settings
+      # Recorded as requested only: publishing needs a separate operator grant.
+      assert board.meta["kanbanAuthority"]["publish"] == nil
       assert KanbanStore.get_board(board.id).meta == board.meta
       assert Jason.decode!(Jason.encode!(board.meta)) == board.meta
     end
   end
 
-  test "rejects malformed workflow settings before creating a board" do
-    workspace = "/tmp/lemon-kanban-invalid-#{System.unique_integer([:positive])}"
-
+  test "rejects malformed workflow settings before creating a board", %{
+    cwd: cwd,
+    real_cwd: real_cwd
+  } do
     invalid_settings = [
       nil,
       true,
@@ -214,42 +233,34 @@ defmodule LemonSkills.Tools.KanbanTest do
 
     for settings <- invalid_settings do
       assert {:error, reason} =
-               Kanban.execute(
-                 "call",
+               kanban(
                  %{
                    "action" => "board_create",
                    "name" => "Invalid workflow board",
                    "coding_workflow" => settings
                  },
-                 nil,
-                 nil,
-                 workspace,
-                 []
+                 cwd
                )
 
       assert is_binary(reason)
-      assert KanbanStore.list_boards(workspace: workspace) == []
+      refute reason =~ "session identity"
+      assert KanbanStore.list_boards(workspace: real_cwd) == []
     end
   end
 
-  test "creates, updates, gets, and comments on tasks" do
+  test "creates, updates, gets, and comments on tasks", %{cwd: cwd} do
     assert %AgentToolResult{details: %{board: board}} =
-             Kanban.execute(
-               "call",
+             kanban(
                %{
                  "action" => "board_create",
                  "name" => "Task board",
                  "columns" => ["todo", "done"]
                },
-               nil,
-               nil,
-               "/tmp",
-               []
+               cwd
              )
 
     assert %AgentToolResult{details: %{task: task}} =
-             Kanban.execute(
-               "call",
+             kanban(
                %{
                  "action" => "task_create",
                  "board_id" => board.id,
@@ -257,69 +268,40 @@ defmodule LemonSkills.Tools.KanbanTest do
                  "description" => "Expose kanban to agents",
                  "assignee" => "agent_1"
                },
-               nil,
-               nil,
-               "/tmp",
-               []
+               cwd
              )
 
     assert task.status == "todo"
     assert task.assignee == "agent_1"
+    assert is_map(task.meta["dispatchPolicy"]) == false
 
     assert %AgentToolResult{details: %{task: updated}} =
-             Kanban.execute(
-               "call",
-               %{"action" => "task_update", "task_id" => task.id, "status" => "done"},
-               nil,
-               nil,
-               "/tmp",
-               []
-             )
+             kanban(%{"action" => "task_update", "task_id" => task.id, "status" => "done"}, cwd)
 
     assert updated.status == "done"
 
     assert %AgentToolResult{details: %{task: commented}} =
-             Kanban.execute(
-               "call",
+             kanban(
                %{
                  "action" => "task_comment",
                  "task_id" => task.id,
                  "body" => "Ready",
                  "author" => "me"
                },
-               nil,
-               nil,
-               "/tmp",
-               []
+               cwd
              )
 
     assert [%{"body" => "Ready", "author" => "me"}] = commented.comments
 
     assert %AgentToolResult{details: %{task: fetched}} =
-             Kanban.execute(
-               "call",
-               %{"action" => "task_get", "task_id" => task.id},
-               nil,
-               nil,
-               "/tmp",
-               []
-             )
+             kanban(%{"action" => "task_get", "task_id" => task.id}, cwd)
 
     assert fetched.id == task.id
   end
 
-  test "returns clear errors for missing identifiers" do
-    assert {:error, "board_id is required"} =
-             Kanban.execute(
-               "call",
-               %{"action" => "task_list"},
-               nil,
-               nil,
-               "/tmp",
-               []
-             )
+  test "returns clear errors for missing identifiers", %{cwd: cwd} do
+    assert {:error, "board_id is required"} = kanban(%{"action" => "task_list"}, cwd)
 
-    assert {:error, "unsupported kanban action: \"wat\""} =
-             Kanban.execute("call", %{"action" => "wat"}, nil, nil, "/tmp", [])
+    assert {:error, "unsupported kanban action: \"wat\""} = kanban(%{"action" => "wat"}, cwd)
   end
 end

@@ -283,11 +283,15 @@ defmodule CodingAgent.Executor.SessionRunner do
         stream_options: get_opt(run_opts, :stream_options),
         resume_source: get_in(meta, [:resume_source]) || get_in(meta, ["resume_source"]),
         workspace_dir: workspace_dir,
-        extra_tools: extra_tools
+        extra_tools: extra_tools,
+        cwd_identity: Map.get(meta, :cwd_identity),
+        # A trusted submitter (kanban) may confine file-mutation tools to one
+        # directory; see `CodingAgent.Tools.FileValidation.confined/2`.
+        confine_mutations_to: confinement(Map.get(meta, :mutation_root))
       ]
       |> Presentation.build_session_opts(cwd, run_id, session_key, agent_id)
 
-    case start_session(resume, session_opts, state, meta) do
+    case start_bound_session(cwd, resume, session_opts, state, meta) do
       {:ok, session, session_id, state} ->
         # Restored children launch before the prompt; subscription stays atomic
         # with the prompt (or the follow-up submission) below.
@@ -464,6 +468,21 @@ defmodule CodingAgent.Executor.SessionRunner do
     end
 
     :ok
+  end
+
+  # nil: unconfined. A malformed confinement fails closed (every mutation is
+  # refused) rather than lifting the restriction.
+  defp confinement(nil), do: nil
+  defp confinement(root) when is_binary(root) and root != "", do: Path.expand(root)
+  defp confinement(_root), do: :invalid
+
+  # A request may bind its working directory to the `{dev, inode}` identity a
+  # trusted submitter checked (`meta.cwd_identity`, e.g. kanban workers); see
+  # `CodingAgent.CwdIdentity`. The session starts only in that exact directory
+  # object, and its tools re-verify it before every call.
+  defp start_bound_session(cwd, resume, session_opts, state, meta) do
+    with :ok <- CodingAgent.CwdIdentity.verify(cwd, Map.get(meta, :cwd_identity)),
+         do: start_session(resume, session_opts, state, meta)
   end
 
   defp start_session(resume, session_opts, state, meta) do

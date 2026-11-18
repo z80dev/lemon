@@ -591,9 +591,28 @@ defmodule LemonWeb.WorkManagementLiveTest do
   end
 
   test "real dispatcher starts and stops only the previewed invocation", %{conn: conn} do
-    {:ok, board} = KanbanStore.create_board("Web controlled empty board")
+    workspace = Path.join(System.tmp_dir!(), "web-dispatch-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(workspace)
+
+    {:ok, authority} =
+      LemonAgent.Workspace.KanbanAuthority.new(
+        %{agent_id: "default", session_key: "agent:default:main"},
+        nil,
+        workspace
+      )
+
+    {:ok, board} =
+      KanbanStore.create_board("Web controlled empty board",
+        workspace: workspace,
+        authority: authority
+      )
+
     dispatcher = start_supervised!({KanbanDispatcher, name: __MODULE__.Dispatcher})
-    on_exit(fn -> KanbanStore.clear_board(board.id) end)
+
+    on_exit(fn ->
+      KanbanStore.clear_board(board.id)
+      File.rm_rf!(workspace)
+    end)
 
     Application.put_env(:lemon_web, :work_service_fun, fn
       KanbanStore, :list_boards, _ ->
@@ -636,6 +655,208 @@ defmodule LemonWeb.WorkManagementLiveTest do
 
     assert {:ok, %{running: true}} = KanbanDispatcher.status(board.id, name: dispatcher)
     KanbanDispatcher.stop_board(board.id, name: dispatcher)
+  end
+
+  test "work without recorded authority is quarantined until an operator reauthorizes it", %{
+    conn: conn
+  } do
+    workspace =
+      Path.join(System.tmp_dir!(), "web-quarantine-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(workspace)
+    {:ok, board} = KanbanStore.create_board("Legacy board", workspace: workspace)
+    {:ok, _task} = KanbanStore.create_task(board.id, "Legacy card")
+    dispatcher = start_supervised!({KanbanDispatcher, name: __MODULE__.QuarantineDispatcher})
+
+    on_exit(fn ->
+      KanbanStore.clear_board(board.id)
+      File.rm_rf!(workspace)
+    end)
+
+    Application.put_env(:lemon_web, :work_service_fun, fn
+      KanbanStore, :list_boards, _ ->
+        {:ok, [KanbanStore.get_board(board.id)]}
+
+      KanbanStore, :list_tasks, args ->
+        apply(KanbanStore, :list_tasks, args)
+
+      GoalStore, :list, _ ->
+        {:ok, []}
+
+      CronManager, :list, _ ->
+        []
+
+      KanbanDispatcher, :status, [id] ->
+        KanbanDispatcher.status(id, name: dispatcher)
+
+      KanbanDispatcher, fun, [id, opts] ->
+        apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
+    end)
+
+    {:ok, view, _} = live(conn, "/automation")
+    assert has_element?(view, "#work-board-#{board.id}", "quarantined")
+    refute has_element?(view, "#work-boards-#{board.id}-start")
+
+    assert {:error, :kanban_authority_missing} =
+             KanbanDispatcher.start_board(board.id, name: dispatcher)
+
+    preview(view, "boards", board.id, "reauthorize")
+    render_click(view, "confirm")
+    assert has_element?(view, "#work-boards-#{board.id}-start")
+    refute has_element?(view, "#work-board-#{board.id}", "quarantined")
+    assert KanbanStore.get_board(board.id).meta["kanbanAuthority"]["grantedBy"] == "operator"
+  end
+
+  test "publication needs an operator grant previewed with the exact destination", %{conn: conn} do
+    workspace = Path.join(System.tmp_dir!(), "web-publish-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(workspace)
+    {_, 0} = System.cmd("git", ["-C", workspace, "init", "-q"])
+    url = "https://example.invalid/owner/repo.git"
+    {_, 0} = System.cmd("git", ["-C", workspace, "remote", "add", "origin", url])
+    publish = %{"mode" => "branch", "remote" => "origin"}
+
+    {:ok, authority} =
+      LemonAgent.Workspace.KanbanAuthority.new(
+        %{agent_id: "default", session_key: "agent:default:main"},
+        nil,
+        workspace,
+        publish: publish
+      )
+
+    {:ok, board} =
+      KanbanStore.create_board("Publishing board",
+        workspace: workspace,
+        authority: authority,
+        meta: %{"codingWorkflow" => %{"publish" => publish}}
+      )
+
+    assert board.meta["kanbanAuthority"]["publish"] == nil
+    dispatcher = start_supervised!({KanbanDispatcher, name: __MODULE__.PublishDispatcher})
+
+    on_exit(fn ->
+      KanbanStore.clear_board(board.id)
+      File.rm_rf!(workspace)
+    end)
+
+    Application.put_env(:lemon_web, :work_service_fun, fn
+      KanbanStore, :list_boards, _ ->
+        {:ok, [KanbanStore.get_board(board.id)]}
+
+      KanbanStore, :list_tasks, args ->
+        apply(KanbanStore, :list_tasks, args)
+
+      GoalStore, :list, _ ->
+        {:ok, []}
+
+      CronManager, :list, _ ->
+        []
+
+      KanbanDispatcher, :status, [id] ->
+        KanbanDispatcher.status(id, name: dispatcher)
+
+      KanbanDispatcher, fun, [id, opts] ->
+        apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
+    end)
+
+    {:ok, view, _} = live(conn, "/automation")
+    assert has_element?(view, "#work-boards-#{board.id}-grant-publish")
+
+    # The previewed destination changed before confirmation: refused.
+    preview(view, "boards", board.id, "grant-publish")
+    assert has_element?(view, "#work-confirm-dialog", "push to " <> url)
+    moved = "https://example.invalid/other/repo.git"
+    {_, 0} = System.cmd("git", ["-C", workspace, "remote", "set-url", "--push", "origin", moved])
+    render_click(view, "confirm")
+    assert KanbanStore.get_board(board.id).meta["kanbanAuthority"]["publish"] == nil
+
+    # A fresh preview shows (and the confirmation binds) the new destination.
+    preview(view, "boards", board.id, "grant-publish")
+    assert has_element?(view, "#work-confirm-dialog", "push to " <> moved)
+    assert has_element?(view, "#work-confirm-dialog", "remote origin")
+    render_click(view, "confirm")
+
+    assert KanbanStore.get_board(board.id).meta["kanbanAuthority"]["publish"] == %{
+             "settings" => publish,
+             "destinations" => %{"push" => [moved], "repository" => nil, "base" => nil},
+             "grantedBy" => "operator"
+           }
+
+    refute has_element?(view, "#work-boards-#{board.id}-grant-publish")
+  end
+
+  test "in-place execution needs an operator grant bound to the previewed workspace", %{
+    conn: conn
+  } do
+    workspace = Path.join(System.tmp_dir!(), "web-in-place-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(workspace)
+
+    {:ok, authority} =
+      LemonAgent.Workspace.KanbanAuthority.new(
+        %{agent_id: "default", session_key: "agent:default:main"},
+        nil,
+        workspace
+      )
+
+    {:ok, board} =
+      KanbanStore.create_board("Plain folder board", workspace: workspace, authority: authority)
+
+    dispatcher = start_supervised!({KanbanDispatcher, name: __MODULE__.InPlaceDispatcher})
+
+    on_exit(fn ->
+      KanbanStore.clear_board(board.id)
+      File.rm_rf!(workspace)
+    end)
+
+    Application.put_env(:lemon_web, :work_service_fun, fn
+      KanbanStore, :list_boards, _ ->
+        {:ok, [KanbanStore.get_board(board.id)]}
+
+      KanbanStore, :list_tasks, args ->
+        apply(KanbanStore, :list_tasks, args)
+
+      GoalStore, :list, _ ->
+        {:ok, []}
+
+      CronManager, :list, _ ->
+        []
+
+      KanbanDispatcher, :status, [id] ->
+        KanbanDispatcher.status(id, name: dispatcher)
+
+      KanbanDispatcher, fun, [id, opts] ->
+        apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
+    end)
+
+    refute LemonAgent.Workspace.KanbanAuthority.in_place_granted?(
+             KanbanStore.get_board(board.id).meta["kanbanAuthority"],
+             board.workspace
+           )
+
+    {:ok, view, _} = live(conn, "/automation")
+    assert has_element?(view, "#work-boards-#{board.id}-allow-in-place")
+    preview(view, "boards", board.id, "allow-in-place")
+    digest = LemonAgent.Workspace.KanbanAuthority.workspace_digest(board.workspace)
+    assert has_element?(view, "#work-confirm-dialog", String.slice(digest, 0, 12))
+    refute render(view) =~ board.workspace
+    render_click(view, "confirm")
+
+    assert KanbanStore.get_board(board.id).meta["kanbanAuthority"]["inPlace"] == %{
+             "grantedBy" => "operator",
+             "workspace" => board.workspace
+           }
+
+    refute has_element?(view, "#work-boards-#{board.id}-allow-in-place")
+
+    # A digest of any workspace other than the board's current one is refused.
+    {:ok, status} = KanbanDispatcher.status(board.id, name: dispatcher)
+
+    assert {:error, :workspace_changed} =
+             KanbanDispatcher.grant_in_place(board.id,
+               name: dispatcher,
+               expected_revision: status.control_revision,
+               workspace_digest:
+                 LemonAgent.Workspace.KanbanAuthority.workspace_digest(System.tmp_dir!())
+             )
   end
 
   test "cron schedules are described in plain language" do
@@ -692,7 +913,8 @@ defmodule LemonWeb.WorkManagementLiveTest do
         name: "Safe board /private/work token=supersecretvalue",
         status: "active",
         columns: ~w(todo doing review done),
-        workspace: "/private/work"
+        workspace: "/private/work",
+        meta: %{"kanbanAuthority" => authority_fixture()}
       },
       card: %{
         id: "task_demo",
@@ -740,6 +962,19 @@ defmodule LemonWeb.WorkManagementLiveTest do
       unavailable: false,
       runtime_unavailable: false,
       unknown: false
+    }
+  end
+
+  defp authority_fixture do
+    %{
+      "version" => 1,
+      "principal" => %{"agentId" => "default", "sessionKey" => "agent:default:main"},
+      "grantedBy" => "session",
+      "unrestricted" => true,
+      "policy" => LemonCore.ToolPolicy.to_map(LemonCore.ToolPolicy.from_profile(:full_access)),
+      "root" => "/private/work",
+      "sharedWith" => [],
+      "publish" => nil
     }
   end
 

@@ -474,6 +474,39 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     Store.delete(:a2a_tasks, task_id)
   end
 
+  test "default inbound peer runs cannot call kanban; an explicit peer allow-list entry can" do
+    assert {:error, _} = submitted_kanban_policy()
+
+    config = Application.fetch_env!(:lemon_control_plane, :a2a_config)
+
+    Application.put_env(
+      :lemon_control_plane,
+      :a2a_config,
+      Map.put(config, :peers, %{
+        "local" => %{agent_id: "default", allow_tools: ["read", "kanban"]}
+      })
+    )
+
+    assert {:ok, policy} = submitted_kanban_policy()
+    refute LemonCore.ToolPolicy.allowed?(policy, "bash")
+  end
+
+  defp submitted_kanban_policy do
+    context_id = unique_id("kanban-policy-context")
+    message_id = unique_id("kanban-policy-message")
+
+    assert {:stream, task_id} = start_message(context_id, message_id)
+    assert_receive {:a2a_submit_blocked, request, runner_pid}
+    runner_ref = Process.monitor(runner_pid)
+    send(runner_pid, {:release_a2a_submit, {:error, :definite_rejection}})
+    assert_receive {:DOWN, ^runner_ref, :process, ^runner_pid, :normal}, 1_000
+    cleanup_task(task_id, context_id, message_id, request.run_id)
+
+    if LemonCore.ToolPolicy.allowed?(request.tool_policy, "kanban"),
+      do: {:ok, request.tool_policy},
+      else: {:error, request.tool_policy}
+  end
+
   test "runner capacity rejection releases the durable task lease without submitting" do
     name = LemonControlPlane.A2A.TaskSupervisor
     original_supervisor = Process.whereis(name)

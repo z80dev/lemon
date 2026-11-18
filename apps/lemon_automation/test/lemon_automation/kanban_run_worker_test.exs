@@ -61,19 +61,31 @@ defmodule LemonAutomation.KanbanRunWorkerTest do
 
   test "builds a router request with board and task provenance" do
     {:ok, task} = sample_task()
+    board = KanbanStore.get_board(task.board_id)
 
-    params = KanbanRunWorker.build_params(task, "run_kanban", model: "zai:glm-5-turbo")
+    assert {:ok, params} =
+             KanbanRunWorker.build_params(task, "run_kanban", model: "zai:glm-5-turbo")
 
     assert params.origin == :kanban
     assert params.run_id == "run_kanban"
     assert params.agent_id == task.assignee
     assert params.model == "zai:glm-5-turbo"
-    assert params.cwd == "/tmp/lemon-kanban"
-    assert params.tool_policy == %{blocked_tools: ["kanban"]}
+    assert params.cwd == board.workspace
+
+    for tool <- ~w(kanban goal cron),
+        do: refute(LemonCore.ToolPolicy.allowed?(params.tool_policy, tool))
+
+    assert LemonCore.ToolPolicy.allowed?(params.tool_policy, "bash")
     assert params.meta.kanban_board_id == task.board_id
     assert params.meta.kanban_task_id == task.id
     assert params.prompt =~ task.title
     assert params.prompt =~ "durable Lemon kanban task"
+  end
+
+  test "a board without recorded authority builds no request" do
+    {:ok, board} = KanbanStore.create_board("Quarantined", workspace: System.tmp_dir!())
+    {:ok, task} = KanbanStore.create_task(board.id, "Unauthorized")
+    assert {:error, :kanban_authority_missing} = KanbanRunWorker.build_params(task, "run_x")
   end
 
   test "submits through router and waits for the expected run" do
@@ -105,8 +117,10 @@ defmodule LemonAutomation.KanbanRunWorkerTest do
 
     assert_receive {:router_submit, params}
     assert params.run_id == "run_worktree"
-    expected_cwd = Path.join([repo, ".worktrees", "kanban-#{task.id}"])
-    assert File.stat!(params.cwd).inode == File.stat!(expected_cwd).inode
+    {:ok, expected_cwd} = LemonAutomation.KanbanWorktree.path_for(task)
+    assert params.cwd == expected_cwd
+    refute String.starts_with?(params.cwd, repo)
+    assert is_map(params.meta.cwd_identity)
     assert File.exists?(Path.join(params.cwd, ".git"))
     assert File.exists?(Path.join(params.cwd, "README.md"))
     assert File.stat!(params.meta.kanban_worktree_root).inode == File.stat!(repo).inode
@@ -144,13 +158,31 @@ defmodule LemonAutomation.KanbanRunWorkerTest do
   end
 
   defp sample_task(opts \\ []) do
-    workspace = Keyword.get(opts, :workspace, "/tmp/lemon-kanban")
+    workspace =
+      Keyword.get_lazy(opts, :workspace, fn ->
+        dir = Path.join(System.tmp_dir!(), "lemon-kanban-#{System.unique_integer([:positive])}")
+        File.mkdir_p!(dir)
+        on_exit(fn -> File.rm_rf!(dir) end)
+        dir
+      end)
+
+    {:ok, authority} =
+      LemonAgent.Workspace.KanbanAuthority.new(
+        %{agent_id: "agent_1", session_key: "agent:agent_1:main"},
+        nil,
+        workspace
+      )
 
     assert {:ok, board} =
              KanbanStore.create_board("Run worker board",
                workspace: workspace,
-               columns: ["todo", "doing", "done"]
+               columns: ["todo", "doing", "done"],
+               authority: authority
              )
+
+    # Non-Git sample workspaces run in place only with the operator grant.
+    digest = LemonAgent.Workspace.KanbanAuthority.workspace_digest(board.workspace)
+    assert {:ok, _} = KanbanStore.grant_in_place(board.id, digest)
 
     KanbanStore.create_task(board.id, "Implement worker",
       description: "Use LemonRouter",

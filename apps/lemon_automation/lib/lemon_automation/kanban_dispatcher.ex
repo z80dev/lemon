@@ -14,12 +14,18 @@ defmodule LemonAutomation.KanbanDispatcher do
   stop. The manager checks it before mutation, binding confirmation to the board,
   its durable cards and the exact dispatcher invocation and owned workers.
   Drift returns `{:error, :stale}` without touching the replacement invocation.
+
+  A board without recorded `LemonAgent.Workspace.KanbanAuthority` is
+  quarantined: `start_board/2` returns `{:error, :kanban_authority_missing}`.
+  Only the operator surfaces `reauthorize_board/2` (idle boards only) and
+  `share_board/3`, both bound to `expected_revision:`, change authority here.
+  Control paths use the lease-recorded `meta.kanbanRun.runId`.
   """
 
   use GenServer
 
-  alias LemonAgent.Workspace.KanbanStore
-  alias LemonAutomation.KanbanCodingWorkflow
+  alias LemonAgent.Workspace.{KanbanAuthority, KanbanStore}
+  alias LemonAutomation.{KanbanCodingWorkflow, KanbanGitWorkflow}
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -41,6 +47,81 @@ defmodule LemonAutomation.KanbanDispatcher do
 
   def status(board_id, opts \\ []) do
     GenServer.call(Keyword.get(opts, :name, __MODULE__), {:status, board_id})
+  end
+
+  @doc "Operator path: grant operator authority to an idle (e.g. quarantined) board."
+  def reauthorize_board(board_id, opts \\ []) do
+    GenServer.call(
+      Keyword.get(opts, :name, __MODULE__),
+      {:operator_authority, board_id, :reauthorize, Keyword.fetch!(opts, :expected_revision)}
+    )
+  end
+
+  @doc "Operator path: share a board with another trusted session key."
+  def share_board(board_id, session_key, opts \\ []) do
+    GenServer.call(
+      Keyword.get(opts, :name, __MODULE__),
+      {:operator_authority, board_id, {:share, session_key},
+       Keyword.fetch!(opts, :expected_revision)}
+    )
+  end
+
+  @doc """
+  What a publication grant for `board_id` would authorize right now: the
+  requested settings, the destinations resolved from the board workspace's
+  remote configuration (exact push URLs, PR repository and base) and the
+  `digest` binding both (`KanbanAuthority.publish_digest/2`).
+  """
+  def publication_preview(board_id, opts \\ []) do
+    board = KanbanStore.get_board(board_id)
+    settings = get_in(board, [:meta, "codingWorkflow", "publish"])
+
+    with true <- is_map(settings) or {:error, :publication_not_requested},
+         {:ok, authority} <- KanbanAuthority.fetch(board),
+         {:ok, workspace} <- KanbanAuthority.check_workspace(authority, board[:workspace]),
+         {:ok, destinations} <-
+           KanbanGitWorkflow.resolve_destinations(
+             workspace,
+             settings,
+             Keyword.take(opts, [:runner, :task_supervisor])
+           ) do
+      {:ok,
+       %{
+         settings: settings,
+         destinations: destinations,
+         digest: KanbanAuthority.publish_digest(settings, destinations)
+       }}
+    end
+  end
+
+  @doc """
+  Operator path: grant publication for the board's requested settings and the
+  destinations resolved now. Bound to `expected_revision:` and to the
+  `publish_digest:` of the previewed settings and destinations: a remote URL
+  that changed since the preview refuses with `:stale`.
+  """
+  def grant_publication(board_id, opts \\ []) do
+    with {:ok, %{destinations: destinations}} <- publication_preview(board_id, opts) do
+      GenServer.call(
+        Keyword.get(opts, :name, __MODULE__),
+        {:operator_authority, board_id,
+         {:publish, Keyword.fetch!(opts, :publish_digest), destinations},
+         Keyword.fetch!(opts, :expected_revision)}
+      )
+    end
+  end
+
+  @doc """
+  Operator path: allow in-place execution in the board's workspace (non-Git
+  workspaces). Bound to `expected_revision:` and to the previewed
+  `workspace_digest:` (`KanbanAuthority.workspace_digest/1`).
+  """
+  def grant_in_place(board_id, opts \\ []) do
+    GenServer.call(
+      Keyword.get(opts, :name, __MODULE__),
+      {:operator_authority, board_id, {:in_place, Keyword.fetch!(opts, :workspace_digest)},
+       Keyword.fetch!(opts, :expected_revision)}
+    )
   end
 
   @impl true
@@ -74,36 +155,69 @@ defmodule LemonAutomation.KanbanDispatcher do
         {:reply, {:error, :board_not_found}, state}
 
       board ->
-        if Map.has_key?(state.boards, board_id) do
-          {:reply, {:error, :already_running}, state}
-        else
-          worker_id = Keyword.get(opts, :worker_id, "kanban-dispatcher")
-          {:ok, _reclaimed} = KanbanStore.reclaim_worker_leases(board_id, worker_id)
+        cond do
+          Map.has_key?(state.boards, board_id) ->
+            {:reply, {:error, :already_running}, state}
 
-          dispatcher = %{
-            board_id: board.id,
-            invocation_id: make_ref(),
-            status: "running",
-            interval_ms: Keyword.get(opts, :interval_ms, 1_000),
-            max_concurrency: Keyword.get(opts, :max_concurrency, 1),
-            lease_ms: Keyword.get(opts, :lease_ms, 300_000),
-            worker_id: worker_id,
-            worker_profile: Keyword.get(opts, :worker_profile),
-            worker_mod: Keyword.get(opts, :worker_mod, state.worker_mod),
-            worker_opts: Keyword.get(opts, :worker_opts, []),
-            running: %{},
-            timer: nil,
-            started_at_ms: now_ms()
-          }
+          match?({:error, _}, KanbanAuthority.fetch(board)) ->
+            {:reply, {:error, :kanban_authority_missing}, state}
 
-          state =
-            state
-            |> put_in([:boards, board_id], dispatcher)
-            |> schedule_tick(board_id, 0)
+          true ->
+            worker_id = Keyword.get(opts, :worker_id, "kanban-dispatcher")
+            {:ok, _reclaimed} = KanbanStore.reclaim_worker_leases(board_id, worker_id)
 
-          {:reply, {:ok, public_dispatcher(dispatcher)}, state}
+            dispatcher = %{
+              board_id: board.id,
+              invocation_id: make_ref(),
+              status: "running",
+              interval_ms: Keyword.get(opts, :interval_ms, 1_000),
+              max_concurrency: Keyword.get(opts, :max_concurrency, 1),
+              lease_ms: Keyword.get(opts, :lease_ms, 300_000),
+              worker_id: worker_id,
+              worker_profile: Keyword.get(opts, :worker_profile),
+              worker_mod: Keyword.get(opts, :worker_mod, state.worker_mod),
+              worker_opts: Keyword.get(opts, :worker_opts, []),
+              running: %{},
+              timer: nil,
+              started_at_ms: now_ms()
+            }
+
+            state =
+              state
+              |> put_in([:boards, board_id], dispatcher)
+              |> schedule_tick(board_id, 0)
+
+            {:reply, {:ok, public_dispatcher(dispatcher)}, state}
         end
     end
+  end
+
+  def handle_call({:operator_authority, board_id, change, expected}, _from, state) do
+    reply =
+      cond do
+        expected != control_revision(board_id, state) ->
+          {:error, :stale}
+
+        change == :reauthorize and Map.has_key?(state.boards, board_id) ->
+          {:error, :already_running}
+
+        change == :reauthorize ->
+          KanbanStore.reauthorize_board(board_id)
+
+        match?({:in_place, _}, change) ->
+          {:in_place, digest} = change
+          KanbanStore.grant_in_place(board_id, digest)
+
+        match?({:publish, _, _}, change) ->
+          {:publish, digest, destinations} = change
+          KanbanStore.grant_publication(board_id, digest, destinations)
+
+        true ->
+          {:share, session_key} = change
+          KanbanStore.share_board(board_id, session_key)
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call({:claim_run, task_id, lease_id, run_id, attrs}, _from, state) do
@@ -213,7 +327,7 @@ defmodule LemonAutomation.KanbanDispatcher do
 
                 result = if workflow? and result == :ok, do: :outcome_unknown, else: result
 
-                %{run_id: task.run_id, result: result}
+                %{run_id: tracked_run_id(task), result: result}
               end)
 
             if Enum.any?(aborts, &(&1.result == :outcome_unknown)),
@@ -443,12 +557,12 @@ defmodule LemonAutomation.KanbanDispatcher do
           fail_card(task.id, lease_id(task), "cancelled")
         end
       else
-        case LemonCore.RunStore.get(task.run_id) do
+        case LemonCore.RunStore.get(tracked_run_id(task)) do
           %{summary: summary} when not is_nil(summary) ->
             case LemonAutomation.RunCompletionWaiter.extract_output_from_completion(summary) do
               {:ok, output} ->
                 complete_card(task.id, lease_id(task),
-                  run_id: task.run_id,
+                  run_id: tracked_run_id(task),
                   output: output
                 )
 
@@ -488,7 +602,7 @@ defmodule LemonAutomation.KanbanDispatcher do
   defp mark_unknown(task_id, lease_id) do
     task = KanbanStore.get_task(task_id)
     attrs = Map.put(task.meta["kanbanRun"], "status", "outcome_unknown")
-    KanbanStore.track_leased_run(task_id, lease_id, task.run_id, attrs)
+    KanbanStore.track_leased_run(task_id, lease_id, tracked_run_id(task), attrs)
   end
 
   defp request_abort(task, opts) do
@@ -499,8 +613,8 @@ defmodule LemonAutomation.KanbanDispatcher do
     else
       attrs = run |> Map.put("abortRequested", true) |> Map.put("status", "outcome_unknown")
 
-      case KanbanStore.track_leased_run(task.id, lease_id(task), task.run_id, attrs) do
-        {:ok, _} -> abort_run(task.run_id, opts)
+      case KanbanStore.track_leased_run(task.id, lease_id(task), run["runId"], attrs) do
+        {:ok, _} -> abort_run(run["runId"], opts)
         _ -> :outcome_unknown
       end
     end
@@ -508,6 +622,10 @@ defmodule LemonAutomation.KanbanDispatcher do
 
   defp tracked_run?(task),
     do: get_in(task, [:meta, "kanbanRun", "status"]) in ["running", "outcome_unknown"]
+
+  # The router invocation recorded under the exact lease by `track_leased_run/4`;
+  # the card's top-level `run_id` is a projection and never routes control.
+  defp tracked_run_id(task), do: get_in(task, [:meta, "kanbanRun", "runId"])
 
   defp abort_run(run_id, opts) do
     router = Keyword.get(opts, :router_mod, LemonRouter)

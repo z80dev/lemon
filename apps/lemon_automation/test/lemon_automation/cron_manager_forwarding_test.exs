@@ -91,20 +91,19 @@ defmodule LemonAutomation.CronManagerForwardingTest do
 
     on_exit(fn -> KanbanStore.clear_board(board.id) end)
 
-    {:ok, task} =
-      KanbanStore.create_task(board.id, "Remote card",
-        session_key: session,
-        run_id: "run_card_remote_#{token}"
-      )
+    {:ok, task} = KanbanStore.create_task(board.id, "Remote card")
+    run_id = "run_card_remote_#{token}"
+    {:ok, leased} = KanbanStore.lease_task(board.id, "worker")
+    lease = leased.meta["kanbanLease"]["id"]
 
     assert :ok =
-             LemonAutomation.RunNotifications.bind_kanban(task, %{
-               run_id: task.run_id,
+             LemonAutomation.RunNotifications.bind_kanban(leased, %{
+               run_id: run_id,
                session_key: session
              })
 
-    {:ok, leased} = KanbanStore.lease_task(board.id, "worker")
-    lease = leased.meta["kanbanLease"]["id"]
+    {:ok, _tracked} =
+      KanbanStore.track_leased_run(task.id, lease, run_id, %{"sessionKey" => session})
 
     {:ok, failed} =
       KanbanStore.fail_leased_task(task.id, lease, "run_failed")
@@ -116,7 +115,28 @@ defmodule LemonAutomation.CronManagerForwardingTest do
                    2_000
 
     assert content =~ task.id
-    assert content =~ task.run_id
+    assert content =~ run_id
+  end
+
+  test "kanban notices never route to a card-supplied session", %{token: token} do
+    register_forwarding_telegram_plugin()
+    {:ok, board} = KanbanStore.create_board("Unrouted")
+    on_exit(fn -> KanbanStore.clear_board(board.id) end)
+    {:ok, task} = KanbanStore.create_task(board.id, "Legacy card")
+    victim = "agent:operator:telegram:default:group:-100888:thread:5"
+    :ok = Store.put(:kanban_tasks, task.id, %{task | session_key: victim})
+    {:ok, leased} = KanbanStore.lease_task(board.id, "worker")
+    lease = leased.meta["kanbanLease"]["id"]
+
+    assert :ok =
+             LemonAutomation.RunNotifications.bind_kanban(leased, %{
+               run_id: "run_unrouted_#{token}",
+               session_key: victim
+             })
+
+    {:ok, failed} = KanbanStore.fail_leased_task(task.id, lease, "run_failed")
+    _ = LemonAutomation.RunNotifications.kanban_finished(failed, lease)
+    refute_receive {:cron_forwarded_channel_payload, %{peer: %{id: "-100888"}}}, 300
   end
 
   test "exact SILENT output is recorded but never forwarded or delivered", %{token: token} do
