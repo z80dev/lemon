@@ -10,6 +10,11 @@ defmodule LemonControlPlane.Methods.CronAdmissionSetTest do
     key_env = "LEMON_CRON_ADMISSION_RPC_TEST_KEY_" <> suffix
     System.put_env(key_env, Base.encode64(:crypto.strong_rand_bytes(32)))
     Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: key_env)
+    # A fresh master key per test: the store's key verifier and records from
+    # earlier tests belong to other keys and correctly refuse writes.
+    for {ref, _} <- LemonCore.Store.list(Secrets.table()),
+        do: LemonCore.Store.delete(Secrets.table(), ref)
+
     routine_id = "admission-routine-" <> suffix
 
     secret_name =

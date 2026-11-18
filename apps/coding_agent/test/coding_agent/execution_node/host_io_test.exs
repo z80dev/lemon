@@ -326,6 +326,7 @@ defmodule CodingAgent.ExecutionNode.HostIOTest do
     unless Process.whereis(LemonCore.Store), do: start_supervised!({LemonCore.Store, []})
     key_file = Path.join(ctx.home, "master-key")
     File.write!(key_file, Base.encode64(:crypto.strong_rand_bytes(32)))
+    wipe_secrets_store()
     owner = "host-io-test-#{System.unique_integer([:positive])}"
     secret_opts = [owner: owner, key_providers: [:file], key_file: key_file]
     opts = Keyword.put(ctx.opts, :secret_opts, secret_opts)
@@ -379,6 +380,7 @@ defmodule CodingAgent.ExecutionNode.HostIOTest do
     unless Process.whereis(LemonCore.Store), do: start_supervised!({LemonCore.Store, []})
     key_file = Path.join(ctx.home, "receipt-master-key")
     File.write!(key_file, Base.encode64(:crypto.strong_rand_bytes(32)))
+    wipe_secrets_store()
     File.chmod!(key_file, 0o600)
     owner = "host-receipt-#{System.unique_integer([:positive])}"
     secret_opts = [owner: owner, key_providers: [:file], key_file: key_file]
@@ -986,5 +988,12 @@ defmodule CodingAgent.ExecutionNode.HostIOTest do
       %{"path" => path, "confirm" => path, "confirmationToken" => preview["confirmationToken"]},
       opts
     )
+  end
+
+  # Each test uses a fresh master key; the shared store's key verifier and any
+  # record under another test's key would correctly refuse it.
+  defp wipe_secrets_store do
+    for {ref, _} <- LemonCore.Store.list(Secrets.table()),
+        do: LemonCore.Store.delete(Secrets.table(), ref)
   end
 end

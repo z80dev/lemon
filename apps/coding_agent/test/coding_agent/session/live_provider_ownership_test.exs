@@ -19,6 +19,11 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
     owner = self()
     CredentialHealth.reset()
     SessionPins.reset()
+    # The probe sandbox installs a fresh master key, but the running store is
+    # shared: its key verifier and records from earlier tests belong to other
+    # keys and correctly refuse writes.
+    for {ref, _} <- LemonCore.Store.list(LemonCore.Secrets.table()),
+        do: LemonCore.Store.delete(LemonCore.Secrets.table(), ref)
 
     on_exit(fn ->
       case :logger.get_handler_config(:live_provider_ownership_probe) do

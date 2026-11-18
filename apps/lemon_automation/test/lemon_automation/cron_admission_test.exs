@@ -19,10 +19,27 @@ defmodule LemonAutomation.CronAdmissionTest do
     key_env = "LEMON_CRON_ADMISSION_TEST_KEY_" <> suffix
     routine_id = "routine-admission-" <> suffix
 
+    on_exit(fn ->
+      restore_env(:lemon_automation, :cron_admission_allowed_origins, previous_origins)
+
+      if is_nil(previous_origin_env),
+        do: System.delete_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS"),
+        else: System.put_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS", previous_origin_env)
+
+      restore_env(:lemon_core, Secrets, previous_secrets)
+      System.delete_env(key_env)
+    end)
+
     System.put_env(key_env, Base.encode64(:crypto.strong_rand_bytes(32)))
     Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: key_env)
     Application.put_env(:lemon_automation, :cron_admission_allowed_origins, [@origin])
+    # A fresh master key per test: the store's key verifier and records from
+    # earlier tests belong to other keys and correctly refuse writes.
+    for {ref, _} <- LemonCore.Store.list(Secrets.table()),
+        do: LemonCore.Store.delete(Secrets.table(), ref)
+
     assert {:ok, secret_name} = CronAdmission.set_token(routine_id, @token)
+    on_exit(fn -> Secrets.delete(secret_name) end)
 
     admission = %{
       url: @origin <> "/cron/check",
@@ -52,18 +69,6 @@ defmodule LemonAutomation.CronAdmissionTest do
       triggered_by: :schedule,
       meta: %{scheduled_for_ms: 1_800_000_000_000}
     }
-
-    on_exit(fn ->
-      Secrets.delete(secret_name)
-      restore_env(:lemon_automation, :cron_admission_allowed_origins, previous_origins)
-
-      if is_nil(previous_origin_env),
-        do: System.delete_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS"),
-        else: System.put_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS", previous_origin_env)
-
-      restore_env(:lemon_core, Secrets, previous_secrets)
-      System.delete_env(key_env)
-    end)
 
     %{admission: admission, job: job, run: run, key_env: key_env, secret_name: secret_name}
   end

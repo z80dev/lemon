@@ -226,17 +226,18 @@ defmodule CodingAgent.Session.ModelResolverTest do
       File.rm_rf!(home)
     end)
 
+    # Provider routing is operator-only; the project contributes only the model.
     File.write!(Path.join(home, ".lemon/config.toml"), """
     [defaults]
     provider = "ollama"
     model = "qwen:7b"
+    [runtime.provider_routing]
+    enabled = false
     """)
 
     File.write!(Path.join(project, ".lemon/config.toml"), """
     [defaults]
     model = "anthropic:claude-sonnet-5"
-    [runtime.provider_routing]
-    enabled = false
     """)
 
     settings =

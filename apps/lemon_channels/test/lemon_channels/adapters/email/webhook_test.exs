@@ -799,20 +799,17 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
 
   describe "canonical TOML config" do
     test "a [gateway.email.inbound] table from a real config file governs the webhook" do
+      # Inbound sender policy and the webhook token are operator-only: a
+      # project `.lemon/config.toml` cannot set them, the global config does.
       project_dir =
-        Path.join(System.tmp_dir!(), "email_sender_auth_#{System.unique_integer([:positive])}")
+        with_global_config("email_sender_auth", """
+        [gateway.email]
+        webhook_token = "s3cret"
 
-      File.mkdir_p!(Path.join(project_dir, ".lemon"))
-      on_exit(fn -> File.rm_rf!(project_dir) end)
-
-      File.write!(Path.join(project_dir, ".lemon/config.toml"), """
-      [gateway.email]
-      webhook_token = "s3cret"
-
-      [gateway.email.inbound]
-      allowed_senders = ["Owner@Example.com"]
-      authserv_id = "mx.provider.test"
-      """)
+        [gateway.email.inbound]
+        allowed_senders = ["Owner@Example.com"]
+        authserv_id = "mx.provider.test"
+        """)
 
       gateway_key = :"Elixir.LemonGateway.Config"
       previous_gateway = Application.get_env(:lemon_gateway, gateway_key)
@@ -846,15 +843,10 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
 
     test "an invalid allowlist in a real config file fails validation" do
       project_dir =
-        Path.join(System.tmp_dir!(), "email_sender_bad_#{System.unique_integer([:positive])}")
-
-      File.mkdir_p!(Path.join(project_dir, ".lemon"))
-      on_exit(fn -> File.rm_rf!(project_dir) end)
-
-      File.write!(Path.join(project_dir, ".lemon/config.toml"), """
-      [gateway.email.inbound]
-      allowed_senders = "owner@example.com"
-      """)
+        with_global_config("email_sender_bad", """
+        [gateway.email.inbound]
+        allowed_senders = "owner@example.com"
+        """)
 
       error =
         assert_raise LemonCore.Config.ValidationError, fn ->
@@ -866,6 +858,27 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
                &String.contains?(&1, "gateway.email.inbound.allowed_senders")
              )
     end
+  end
+
+  defp with_global_config(prefix, toml) do
+    project_dir = Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(project_dir)
+    config_path = Path.join(project_dir, "global-config.toml")
+    File.write!(config_path, toml)
+    previous_paths = Application.get_env(:lemon_core, :paths)
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      Keyword.put(previous_paths || [], :global_config, config_path)
+    )
+
+    on_exit(fn ->
+      restore(:lemon_core, :paths, previous_paths)
+      File.rm_rf!(project_dir)
+    end)
+
+    project_dir
   end
 
   defp submit_with_id(fields) do

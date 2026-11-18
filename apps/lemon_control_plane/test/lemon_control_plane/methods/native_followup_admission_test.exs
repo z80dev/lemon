@@ -31,26 +31,6 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
     key_env = "NATIVE_CP_ISSUER_KEY_" <> suffix
     id = "native-cp-" <> suffix
 
-    System.put_env(key_env, Base.encode64(:crypto.strong_rand_bytes(32)))
-    System.delete_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
-
-    Application.put_env(:lemon_core, :paths,
-      home_state_dir: state,
-      global_config: Path.join(state, "config.toml")
-    )
-
-    Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: key_env)
-    Application.put_env(:lemon_router, :native_followup_allowed_origins, [@origin])
-
-    assert {:ok, _} =
-             ProfileStore.create(%{
-               "id" => id,
-               "name" => "Native admission CP",
-               "description" => "Untouched"
-             })
-
-    if Process.whereis(Registry) == nil, do: start_supervised!(Registry)
-
     on_exit(fn ->
       {:ok, secrets} = Secrets.list()
 
@@ -70,6 +50,30 @@ defmodule LemonControlPlane.Methods.NativeFollowupAdmissionTest do
       System.delete_env(key_env)
       File.rm_rf!(root)
     end)
+
+    System.put_env(key_env, Base.encode64(:crypto.strong_rand_bytes(32)))
+    System.delete_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
+
+    Application.put_env(:lemon_core, :paths,
+      home_state_dir: state,
+      global_config: Path.join(state, "config.toml")
+    )
+
+    Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: key_env)
+    Application.put_env(:lemon_router, :native_followup_allowed_origins, [@origin])
+
+    # A fresh master key per test: the store's key verifier and records from
+    # earlier tests belong to other keys and correctly refuse writes.
+    for {ref, _} <- Store.list(Secrets.table()), do: Store.delete(Secrets.table(), ref)
+
+    assert {:ok, _} =
+             ProfileStore.create(%{
+               "id" => id,
+               "name" => "Native admission CP",
+               "description" => "Untouched"
+             })
+
+    if Process.whereis(Registry) == nil, do: start_supervised!(Registry)
 
     %{
       id: id,

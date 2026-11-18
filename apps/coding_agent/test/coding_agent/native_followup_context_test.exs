@@ -258,6 +258,9 @@ defmodule CodingAgent.NativeFollowupContextTest do
     )
 
     Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: secret_env)
+    # A fresh master key per fixture: the store's key verifier and records from
+    # earlier tests belong to other keys and correctly refuse writes.
+    for {ref, _} <- Store.list(Secrets.table()), do: Store.delete(Secrets.table(), ref)
     Application.put_env(:lemon_router, :session_coordinator, Coordinator)
 
     Application.put_env(:lemon_router, :native_context_consumer, %{

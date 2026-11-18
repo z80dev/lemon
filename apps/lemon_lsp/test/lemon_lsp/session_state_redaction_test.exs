@@ -12,13 +12,27 @@ defmodule LemonLsp.SessionStateRedactionTest do
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
     secret = "lsp-secret-#{System.unique_integer([:positive])}-#{:erlang.phash2(make_ref())}"
 
-    File.write!(Path.join(tmp_dir, ".lemon/config.toml"), """
+    # Server initialization options are operator-only: the global config sets
+    # them, a project `.lemon/config.toml` cannot.
+    global_config = Path.join(tmp_dir, "global-config.toml")
+
+    File.write!(global_config, """
     [runtime.tools.lsp]
     idle_timeout_ms = 0
 
     [runtime.tools.lsp.servers.elixir_ls]
     initialization_options = { token = "#{secret}" }
     """)
+
+    previous_paths = Application.get_env(:lemon_core, :paths)
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      Keyword.put(previous_paths || [], :global_config, global_config)
+    )
+
+    LemonCore.ConfigCache.invalidate(tmp_dir)
 
     record_path = Path.join(tmp_dir, "init_options.json")
     server_path = Path.join(tmp_dir, "fake_server.exs")
@@ -32,6 +46,11 @@ defmodule LemonLsp.SessionStateRedactionTest do
     on_exit(fn ->
       _ = ServerManager.stop_session(session_id)
       if previous, do: System.put_env(@env, previous), else: System.delete_env(@env)
+
+      if is_nil(previous_paths),
+        do: Application.delete_env(:lemon_core, :paths),
+        else: Application.put_env(:lemon_core, :paths, previous_paths)
+
       File.rm_rf!(tmp_dir)
     end)
 

@@ -116,14 +116,6 @@ defmodule LemonRouter.NativeLineageTest do
     {:ok, server} = GenServer.start_link(RunOrchestrator, [])
     profile_id = prefix <> "-profile"
     run_id = prefix <> "-root"
-    assert {:ok, _} = ProfileStore.create(%{"id" => profile_id, "mcpServers" => templates()})
-
-    assert {:ok, _} =
-             NativeFollowupAdmission.configure(
-               profile_id,
-               origin <> "/check",
-               "private-issuer-bearer"
-             )
 
     on_exit(fn ->
       if Process.alive?(server), do: GenServer.stop(server)
@@ -148,6 +140,18 @@ defmodule LemonRouter.NativeLineageTest do
       System.delete_env(key_env)
       File.rm_rf!(root)
     end)
+
+    # A fresh master key per test: the store's key verifier and records from
+    # earlier tests belong to other keys and correctly refuse writes.
+    for {ref, _} <- Store.list(Secrets.table()), do: Store.delete(Secrets.table(), ref)
+    assert {:ok, _} = ProfileStore.create(%{"id" => profile_id, "mcpServers" => templates()})
+
+    assert {:ok, _} =
+             NativeFollowupAdmission.configure(
+               profile_id,
+               origin <> "/check",
+               "private-issuer-bearer"
+             )
 
     %{server: server, profile_id: profile_id, run_id: run_id, prefix: prefix, origin: origin}
   end

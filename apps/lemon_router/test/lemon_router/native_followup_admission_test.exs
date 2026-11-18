@@ -43,6 +43,22 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
     key_env = "NATIVE_ADMISSION_TEST_KEY_" <> suffix
     profile_id = "native-issuer-" <> suffix
 
+    on_exit(fn ->
+      {:ok, secrets} = Secrets.list()
+
+      for secret <- secrets,
+          String.starts_with?(secret.name, "native_followup/" <> profile_id <> "/"),
+          do: Secrets.delete(secret.name)
+
+      Store.delete(:native_followup_admission_configs, profile_id)
+      restore_env(:lemon_core, :paths, previous_paths)
+      restore_env(:lemon_core, Secrets, previous_secrets)
+      restore_env(:lemon_router, :native_followup_allowed_origins, previous_origins)
+      restore_system_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS", previous_origin_env)
+      System.delete_env(key_env)
+      File.rm_rf!(root)
+    end)
+
     System.put_env(key_env, Base.encode64(:crypto.strong_rand_bytes(32)))
     System.delete_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
 
@@ -53,6 +69,10 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
 
     Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: key_env)
     Application.put_env(:lemon_router, :native_followup_allowed_origins, [@origin])
+
+    # A fresh master key per test: the store's key verifier and records from
+    # earlier tests belong to other keys and correctly refuse writes.
+    for {ref, _} <- Store.list(Secrets.table()), do: Store.delete(Secrets.table(), ref)
 
     assert {:ok, _profile} =
              ProfileStore.create(%{
@@ -69,22 +89,6 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
              )
 
     assert {:ok, config} = NativeFollowupAdmission.fetch_config(profile_id)
-
-    on_exit(fn ->
-      {:ok, secrets} = Secrets.list()
-
-      for secret <- secrets,
-          String.starts_with?(secret.name, "native_followup/" <> profile_id <> "/"),
-          do: Secrets.delete(secret.name)
-
-      Store.delete(:native_followup_admission_configs, profile_id)
-      restore_env(:lemon_core, :paths, previous_paths)
-      restore_env(:lemon_core, Secrets, previous_secrets)
-      restore_env(:lemon_router, :native_followup_allowed_origins, previous_origins)
-      restore_system_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS", previous_origin_env)
-      System.delete_env(key_env)
-      File.rm_rf!(root)
-    end)
 
     %{
       profile_id: profile_id,
