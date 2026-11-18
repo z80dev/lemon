@@ -5,6 +5,11 @@ defmodule LemonAutomation.CronManagerPauseTest do
   alias LemonAutomation.Doctor.Checks.Cron, as: CronCheck
   alias LemonAutomation.Tools.Cron, as: CronTool
 
+  defmodule Clock do
+    @now_ms DateTime.to_unix(~U[2026-11-18 09:30:00Z], :millisecond)
+    def now_ms, do: @now_ms
+  end
+
   defmodule Submitter do
     def submit(_job, run, _opts) do
       send(
@@ -56,17 +61,18 @@ defmodule LemonAutomation.CronManagerPauseTest do
   end
 
   test "the pause survives a daemon restart and leaves stored schedules untouched", %{id: id} do
-    TestCronManager.isolate!()
-
-    # Inside catch-up grace, so an unpaused restart would claim this slot once.
-    due = LemonCore.Clock.now_ms() - 1_800_000
-    store_job(id, next_run_at_ms: due)
-
+    TestCronManager.isolate!(clock: Clock)
     assert {:ok, %{paused: true, paused_at_ms: paused_at}} = CronManager.pause_all()
+
+    # Store after pausing so initial unpaused restoration cannot consume the slot.
+    # This actual 09:00 UTC slot would be inside catch-up grace if not paused.
+    due = Clock.now_ms() - 1_800_000
+    store_job(id, next_run_at_ms: due)
 
     old_pid = Process.whereis(CronManager)
     GenServer.stop(CronManager)
     assert await(fn -> (pid = Process.whereis(CronManager)) && pid != old_pid end)
+    _ = CronManager.list()
 
     assert {:ok, %{paused: true, paused_at_ms: ^paused_at}} = CronManager.pause_status()
     state = :sys.get_state(CronManager)

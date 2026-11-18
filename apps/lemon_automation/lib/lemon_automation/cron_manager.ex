@@ -20,7 +20,8 @@ defmodule LemonAutomation.CronManager do
 
   The earliest next-run timer drives dispatch. A five-minute safety sweep
   recovers orphaned runs and wall-clock changes. Job mutations re-arm the timer.
-  Tests may inject a module implementing `now_ms/0` via the `:clock` start option.
+  Tests may inject a module implementing `now_ms/0` via the `:clock` start option,
+  including for startup schedule restoration.
   Each dispatch:
 
   1. Computes which jobs are due
@@ -1106,10 +1107,11 @@ defmodule LemonAutomation.CronManager do
     manager = self()
     token = make_ref()
     initial? = state.restoration_initial
+    clock = Map.get(state, :clock, LemonCore.Clock)
 
     work = fn ->
       try do
-        restore_startup_schedules(manager, token, initial?)
+        restore_startup_schedules(manager, token, initial?, clock)
       rescue
         _ -> {:failed, nil}
       catch
@@ -1126,7 +1128,7 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
-  defp restore_startup_schedules(manager, token, initial?) do
+  defp restore_startup_schedules(manager, token, initial?, clock) do
     config = Config.load().automation
     marker = CronStore.global_pause()
     send(manager, {:restoration_pause, token, marker})
@@ -1137,7 +1139,7 @@ defmodule LemonAutomation.CronManager do
            {:ok, jobs, slots} <-
              restore_schedules(
                jobs,
-               LemonCore.Clock.now_ms(),
+               clock.now_ms(),
                config.catch_up_missed,
                marker != nil
              ),

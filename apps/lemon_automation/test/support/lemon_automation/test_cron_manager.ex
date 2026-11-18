@@ -17,15 +17,15 @@ defmodule LemonAutomation.TestCronManager do
 
   alias LemonAutomation.CronManager
 
-  @doc "Replace the application-supervised CronManager for the current test."
-  @spec isolate!() :: pid()
-  def isolate! do
+  @doc "Replace the application-supervised CronManager, forwarding its start options."
+  @spec isolate!(keyword()) :: pid()
+  def isolate!(opts \\ []) do
     :ok = Supervisor.terminate_child(LemonAutomation.Supervisor, CronManager)
 
     on_exit(fn ->
       {:ok, _pid} = Supervisor.restart_child(LemonAutomation.Supervisor, CronManager)
     end)
 
-    start_supervised!(CronManager)
+    start_supervised!({CronManager, opts})
   end
 end
