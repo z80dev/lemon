@@ -11,6 +11,11 @@ defmodule LemonCore.NodeCredentials do
   filesystem, so no path can leave credentials behind. `consume_handoff/0`
   runs in the CLI entry expression, before any application starts, and drains
   the pipe; a handoff that cannot be read completely refuses to start.
+
+  The values live only in the consuming process's dictionary: the CLI entry
+  expression, `LemonCli.CLI.main/1` and `CodingAgent.ExecutionNode.CLI.run/2`
+  run in that one process, which `take/1` reads from. No other process can
+  see them, and nothing is published VM-wide.
   """
 
   @handoff "LEMON_NODE_CREDENTIAL_FD"
@@ -29,17 +34,18 @@ defmodule LemonCore.NodeCredentials do
         _ -> raise "invalid #{@handoff}"
       end
 
-    :persistent_term.put(@key, credentials)
+    Process.put(@key, credentials)
     :ok
   end
 
   @doc """
-  Returns and forgets a handed-over credential. Without a handoff (direct VM
-  invocation) the variable is read once and deleted from the VM environment.
+  Returns and forgets a credential handed over to the calling process. Without
+  a handoff (direct VM invocation) the variable is read once and deleted from
+  the VM environment.
   """
   @spec take(String.t()) :: String.t() | nil
   def take(name) when name in @names do
-    credentials = :persistent_term.get(@key, %{})
+    credentials = Process.get(@key, %{})
     env_value = System.get_env(name)
     System.delete_env(name)
 
@@ -48,7 +54,7 @@ defmodule LemonCore.NodeCredentials do
         env_value
 
       {value, rest} ->
-        :persistent_term.put(@key, rest)
+        Process.put(@key, rest)
         value
     end
   end

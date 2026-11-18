@@ -13,17 +13,15 @@ defmodule LemonCore.NodeCredentialsTest do
     end)
   end
 
-  test "drains a pipe handoff to EOF", %{tmp_dir: root} do
-    fifo = Path.join(root, "pipe")
-    {_, 0} = System.cmd("mkfifo", [fifo])
-
-    writer =
-      Task.async(fn ->
-        System.cmd("sh", ["-c", ~s(printf 'LEMON_NODE_TOKEN\\0node\\0' > "$1"), "sh", fifo])
-      end)
-
-    assert NodeCredentials.read_pipe!(fifo) == "LEMON_NODE_TOKEN\0node\0"
-    assert {_, 0} = Task.await(writer)
+  # The real fd-3 pipe is exercised end to end by the launcher test in
+  # CodingAgent.ExecutionNode.CredentialEnvTest; here only the drain itself.
+  test "drains the handoff descriptor to EOF, NUL bytes and newlines intact",
+       %{tmp_dir: root} do
+    path = Path.join(root, "handoff")
+    File.write!(path, "LEMON_NODE_TOKEN\0no\nde\0")
+    assert NodeCredentials.read_pipe!(path) == "LEMON_NODE_TOKEN\0no\nde\0"
+    File.write!(path, "")
+    assert NodeCredentials.read_pipe!(path) == ""
   end
 
   test "an unreadable or malformed handoff refuses to start", %{tmp_dir: root} do
