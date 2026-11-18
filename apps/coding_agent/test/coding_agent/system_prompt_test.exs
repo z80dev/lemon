@@ -107,6 +107,9 @@ defmodule CodingAgent.SystemPromptTest do
     )
 
     authorize_skill!(skill_dir, {:project, tmp_dir})
+    # The registry re-checks scope identity on a throttle; a global set cached
+    # from an earlier suite's agent dir could otherwise change between builds.
+    :ok = LemonSkills.refresh(cwd: tmp_dir)
 
     github_prompt =
       SystemPrompt.build(tmp_dir, %{
