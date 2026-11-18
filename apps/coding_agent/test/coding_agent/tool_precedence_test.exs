@@ -55,6 +55,7 @@ defmodule CodingAgent.ToolPrecedenceTest do
 
   test "each registered tool is contributed exactly once", %{tmp_dir: cwd} do
     SatelliteRegistry.register(:weather, PrecedenceWeather)
+
     :persistent_term.put(
       {SatelliteRegistry, :registered},
       [

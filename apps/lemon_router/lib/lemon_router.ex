@@ -198,14 +198,15 @@ defmodule LemonRouter do
   defp fenced_operation(session_key, operation, fun) do
     case fence_session_lifecycle(session_key, operation) do
       {:ok, generation} ->
-        with :ok <- prove_session_idle(session_key) do
-          result = fun.(generation)
-          # A release that fails leaves the row held; this owner's exit then
-          # reconciles it, and the marker records that `fun` returned.
-          _ = LemonCore.LifecycleFenceStore.mark_finished(session_key, generation)
-          release_session_lifecycle(session_key, generation)
-          result
-        else
+        case prove_session_idle(session_key) do
+          :ok ->
+            result = fun.(generation)
+            # A release that fails leaves the row held; this owner's exit then
+            # reconciles it, and the marker records that `fun` returned.
+            _ = LemonCore.LifecycleFenceStore.mark_finished(session_key, generation)
+            release_session_lifecycle(session_key, generation)
+            result
+
           error ->
             _ = LemonCore.LifecycleFenceStore.mark_finished(session_key, generation)
             release_session_lifecycle(session_key, generation)

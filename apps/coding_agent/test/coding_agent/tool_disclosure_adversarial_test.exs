@@ -580,7 +580,11 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [mcp_tools: inventory, tool_policy: full(), tool_disclosure: [budget_tokens: 1]]
+          tool_opts: [
+            mcp_tools: inventory,
+            tool_policy: full(),
+            tool_disclosure: [budget_tokens: 1]
+          ]
         )
 
       search = find(session.tools, "tool_search")
@@ -602,7 +606,11 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [mcp_tools: inventory, tool_policy: full(), tool_disclosure: [budget_tokens: 1]]
+          tool_opts: [
+            mcp_tools: inventory,
+            tool_policy: full(),
+            tool_disclosure: [budget_tokens: 1]
+          ]
         )
       end
 

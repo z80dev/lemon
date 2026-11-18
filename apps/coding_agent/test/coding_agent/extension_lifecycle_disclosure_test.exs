@@ -377,7 +377,11 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings_manager,
-          tool_opts: [mcp_tools: inventory, tool_policy: full(), tool_disclosure: [enabled: false]]
+          tool_opts: [
+            mcp_tools: inventory,
+            tool_policy: full(),
+            tool_disclosure: [enabled: false]
+          ]
         )
 
       assert overridden.tool_disclosure.active == false

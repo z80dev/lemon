@@ -488,9 +488,8 @@ defmodule LemonOmp.Tools.Omp do
         _cwd -> {:error, :invalid_cwd}
       end
 
-    with {:ok, cwd} <- bounded do
-      discover_result(cwd, LemonOmp.discover(cwd, limit: 20))
-    else
+    case bounded do
+      {:ok, cwd} -> discover_result(cwd, LemonOmp.discover(cwd, limit: 20))
       {:error, reason} -> error_result("discover", reason)
     end
   end
