@@ -61,6 +61,14 @@ defmodule LemonCore.SessionKey do
   Optional:
   - `:thread_id`
   - `:sub_id`
+
+  Components are never escaped or decoded. A component that contains `:` (or
+  already looks like a hashed component) is replaced by `component/1`'s
+  colon-free digest, so the key always parses and two distinct inputs never
+  share a key; every other component, and so every existing key, is written
+  byte-for-byte. A peer kind outside `allowed_peer_kinds/0` is written as
+  `unknown`. Callers that need the original value (for delivery or reply
+  threading) must keep it alongside the key rather than read it back.
   """
   @spec channel_peer(opts :: map()) :: binary()
   def channel_peer(
@@ -72,18 +80,139 @@ defmodule LemonCore.SessionKey do
           peer_id: peer_id
         } = opts
       ) do
-    base = "agent:#{agent_id}:#{channel_id}:#{account_id}:#{peer_kind}:#{peer_id}"
+    base =
+      Enum.map_join(
+        [agent_id, channel_id, account_id, key_peer_kind(peer_kind), peer_id],
+        ":",
+        &component/1
+      )
+
+    base = "agent:" <> base
 
     base =
       case opts[:thread_id] do
         nil -> base
-        thread_id -> "#{base}:thread:#{thread_id}"
+        thread_id -> base <> ":thread:" <> component(thread_id)
       end
 
     case opts[:sub_id] do
       nil -> base
-      sub_id -> "#{base}:sub:#{sub_id}"
+      sub_id -> base <> ":sub:" <> component(sub_id)
     end
+  end
+
+  @hashed_prefix "~sha256-"
+
+  @doc """
+  The session-key form of one routing component.
+
+  Colon-free values are returned unchanged. A value containing `:`, or one that
+  already starts with the reserved `~sha256-` prefix, becomes
+  `"~sha256-" <> hex(sha256(value))`; the prefix makes hashed and verbatim
+  components disjoint, so the mapping is injective up to SHA-256 collisions.
+
+  Compatibility edge: the `~sha256-` prefix is reserved. A key written before
+  this scheme whose component literally started with it keeps parsing and is
+  never rewritten by `rebuild/1` or `put_sub/2`, but generating a key from that
+  same raw value now yields its digest, so such a pre-existing conversation is
+  not reached again from fresh ingress. Only a literal of the exact digest
+  shape (`~sha256-` and 64 lowercase hex digits) is treated as opaque.
+
+  The digest is one-way: callers that need the original value (delivery,
+  reply threading) must keep it beside the key, and code that modifies an
+  existing key must use `rebuild/1` or `put_sub/2`, never feed parsed
+  components back through `channel_peer/1`.
+  """
+  @spec component(term()) :: binary()
+  def component(value) do
+    value = to_string(value)
+
+    if String.contains?(value, ":") or String.starts_with?(value, @hashed_prefix) do
+      @hashed_prefix <> Base.encode16(:crypto.hash(:sha256, value), case: :lower)
+    else
+      value
+    end
+  end
+
+  @doc "Whether a parsed key component is exactly a `component/1` digest."
+  @spec hashed_component?(term()) :: boolean()
+  def hashed_component?(value) when is_binary(value),
+    do: Regex.match?(~r/\A~sha256-[0-9a-f]{64}\z/, value)
+
+  def hashed_component?(_value), do: false
+
+  @doc """
+  Whether a parsed channel-peer key has a routing component (account, peer or
+  thread id) stored as a digest. Such a key is not a delivery address on its own.
+  """
+  @spec opaque_routing?(map()) :: boolean()
+  def opaque_routing?(%{kind: :channel_peer} = parsed) do
+    Enum.any?(
+      [parsed.channel_id, parsed.account_id, parsed.peer_id, parsed.thread_id],
+      &hashed_component?/1
+    )
+  end
+
+  def opaque_routing?(_parsed), do: false
+
+  @doc """
+  Serialize a parsed channel-peer key from its already-serialized components,
+  verbatim. `rebuild(parse(key)) == key` for every canonical channel-peer key
+  whose extras are in `thread`, `sub` order; use this (with an updated
+  `:sub_id` of `nil` to drop the sub-session) to derive a related key.
+  """
+  @spec rebuild(map()) :: binary()
+  def rebuild(%{kind: :channel_peer} = parsed) do
+    base =
+      Enum.join(
+        [
+          "agent",
+          parsed.agent_id,
+          parsed.channel_id,
+          parsed.account_id,
+          to_string(parsed.peer_kind),
+          parsed.peer_id
+        ],
+        ":"
+      )
+
+    base = if parsed.thread_id, do: base <> ":thread:" <> parsed.thread_id, else: base
+    if parsed.sub_id, do: base <> ":sub:" <> parsed.sub_id, else: base
+  end
+
+  @doc """
+  Set (or replace) the sub-session of a canonical channel-peer key.
+
+  The key's existing components are kept byte-for-byte (never re-derived from
+  parsed values) and only the new sub id goes through `component/1`. Returns
+  `{:error, :invalid}` for a key that is not a canonical channel-peer key.
+  """
+  @spec put_sub(binary(), term()) :: {:ok, binary()} | {:error, :invalid}
+  def put_sub(session_key, sub_id) when is_binary(session_key) and not is_nil(sub_id) do
+    case parse(session_key) do
+      %{kind: :channel_peer, sub_id: nil} ->
+        {:ok, session_key <> ":sub:" <> component(sub_id)}
+
+      %{kind: :channel_peer, sub_id: old} ->
+        suffix = ":sub:" <> old
+
+        if String.ends_with?(session_key, suffix) do
+          base = binary_part(session_key, 0, byte_size(session_key) - byte_size(suffix))
+          {:ok, base <> ":sub:" <> component(sub_id)}
+        else
+          {:error, :invalid}
+        end
+
+      _ ->
+        {:error, :invalid}
+    end
+  end
+
+  def put_sub(_session_key, _sub_id), do: {:error, :invalid}
+
+  defp key_peer_kind(kind) do
+    kind = to_string(kind)
+    if Map.has_key?(@allowed_peer_kinds, kind), do: kind, else: "unknown"
   end
 
   @doc """

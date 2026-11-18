@@ -9,11 +9,14 @@ defmodule LemonRouter.RouterPendingCompactionTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonRouter.{PendingCompaction, ResumeResolver, Router}
-  alias LemonCore.{ExecutionCommand, InboundMessage}
+  alias LemonRouter.{PendingCompaction, ResumeResolver}
+  alias LemonCore.{ExecutionCommand, InboundMessage, RouterBridge}
   alias LemonRouter.PendingCompactionStore
 
   defmodule RunOrchestratorStubPendingCompaction do
+    use LemonCore.RouterBridge.RunOrchestrator
+
+    @impl true
     def submit(request) do
       if pid = Process.get(:router_test_pid) do
         send(pid, {:orchestrator_submit, request})
@@ -32,16 +35,20 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       Registry.start_link(keys: :unique, name: LemonRouter.SessionRegistry)
     end)
 
-    previous_orchestrator = Application.get_env(:lemon_router, :run_orchestrator)
-    Application.put_env(:lemon_router, :run_orchestrator, RunOrchestratorStubPendingCompaction)
+    previous_bridge = Application.get_env(:lemon_core, :router_bridge)
+
+    :ok =
+      RouterBridge.configure([run_orchestrator: RunOrchestratorStubPendingCompaction],
+        mode: :merge
+      )
 
     Process.put(:router_test_pid, self())
     Process.delete(:router_submit_result)
 
     on_exit(fn ->
-      case previous_orchestrator do
-        nil -> Application.delete_env(:lemon_router, :run_orchestrator)
-        mod -> Application.put_env(:lemon_router, :run_orchestrator, mod)
+      case previous_bridge do
+        nil -> Application.delete_env(:lemon_core, :router_bridge)
+        config -> Application.put_env(:lemon_core, :router_bridge, config)
       end
 
       Process.delete(:router_test_pid)
@@ -196,7 +203,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
     end
   end
 
-  describe "handle_inbound/1 with pending compaction" do
+  describe "channel ingress with pending compaction" do
     test "defers compaction until the orchestrator resolves channel capabilities" do
       peer_id = "api_#{System.unique_integer([:positive])}"
       session_key = "agent:test-agent:api:default:dm:#{peer_id}"
@@ -220,7 +227,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
         context_window_tokens: 128_000
       })
 
-      assert :ok = Router.handle_inbound(msg)
+      assert :ok = LemonChannels.Runtime.submit_inbound(msg)
 
       assert_receive {:orchestrator_submit, request}
 
@@ -257,7 +264,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       PendingCompactionStore.put(session_key, marker)
       Process.put(:router_submit_result, {:error, :submit_failed})
 
-      assert {:error, :submit_failed} = Router.handle_inbound(msg)
+      assert {:error, :submit_failed} = LemonChannels.Runtime.submit_inbound(msg)
       assert_receive {:orchestrator_submit, request}
       assert request.prompt == "retry me"
       assert PendingCompactionStore.get(session_key) == marker

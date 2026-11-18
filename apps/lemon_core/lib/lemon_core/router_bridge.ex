@@ -2,12 +2,12 @@ defmodule LemonCore.RouterBridge do
   @moduledoc """
   Bridge to `:lemon_router` without compile-time coupling.
 
-  Channel adapters and other producers forward inbound messages and submit runs
-  through this module; `:lemon_router` registers its implementation at boot
-  with `configure/1`. Two roles are registered, each defined by a behaviour:
+  Channel adapters and other producers submit runs through this module;
+  `:lemon_router` registers its implementation at boot with `configure/1`.
+  Two roles are registered, each defined by a behaviour:
 
-    * `:router` — `LemonCore.RouterBridge.Router`: inbound routing, aborts,
-      keep-alive decisions and session queries.
+    * `:router` — `LemonCore.RouterBridge.Router`: aborts, keep-alive
+      decisions and session queries.
     * `:run_orchestrator` — `LemonCore.RouterBridge.RunOrchestrator`:
       `submit/1` for a canonical `%LemonCore.RunRequest{}`.
 
@@ -37,7 +37,7 @@ defmodule LemonCore.RouterBridge do
       after the side effect. The bridge logs only the callback MFA and the safe
       failure class `exception`; exception messages and stacktraces may contain
       request data or credentials and never cross this boundary.
-    * **Unacknowledged mutation** — a submission, inbound route, abort, or
+    * **Unacknowledged mutation** — a submission, abort, or
       keep-alive callback that raises, throws, returns a malformed
       acknowledgement, times out, or exits returns
       `{:error, :outcome_unknown}`. This includes `:noproc`: the callback may
@@ -196,14 +196,6 @@ defmodule LemonCore.RouterBridge do
       {:error, _} = error -> error
       _ -> {:error, :query_failed}
     end
-  end
-
-  @spec handle_inbound(term()) ::
-          :ok | unavailable() | outcome_unknown() | {:error, term()}
-  def handle_inbound(msg) do
-    :router
-    |> call(:handle_inbound, [msg], :mutation)
-    |> expect_ok()
   end
 
   @spec abort_session(binary(), term()) ::

@@ -1,22 +1,8 @@
 defmodule LemonRouter.RouterTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{InboundMessage, RouterBridge, RunRequest}
+  alias LemonCore.RouterBridge
   alias LemonRouter.Router
-
-  defmodule RunOrchestratorStubRouter do
-    def submit(request) do
-      if pid = Process.get(:router_test_pid) do
-        send(pid, {:orchestrator_submit, request})
-      end
-
-      Process.get(:router_submit_result, {:ok, "run_stub"})
-    end
-  end
-
-  defmodule RejectingRunOrchestrator do
-    def submit(%RunRequest{}), do: {:error, :capacity_rejected}
-  end
 
   defmodule SessionCoordinatorStubRouter do
     def abort_session(session_key, reason) do
@@ -57,26 +43,18 @@ defmodule LemonRouter.RouterTest do
       Registry.start_link(keys: :unique, name: LemonRouter.SessionRegistry)
     end)
 
-    previous_orchestrator = Application.get_env(:lemon_router, :run_orchestrator)
     previous_session_coordinator = Application.get_env(:lemon_router, :session_coordinator)
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
-    Application.put_env(:lemon_router, :run_orchestrator, RunOrchestratorStubRouter)
     Application.put_env(:lemon_router, :session_coordinator, SessionCoordinatorStubRouter)
     Application.put_env(:lemon_router, :router_test_pid, self())
 
     Process.put(:router_test_pid, self())
-    Process.delete(:router_submit_result)
     Process.delete(:router_busy_result)
     Process.delete(:router_active_sessions)
     Process.delete(:router_abort_session_result)
     Process.delete(:router_abort_run_result)
 
     on_exit(fn ->
-      case previous_orchestrator do
-        nil -> Application.delete_env(:lemon_router, :run_orchestrator)
-        mod -> Application.put_env(:lemon_router, :run_orchestrator, mod)
-      end
-
       case previous_session_coordinator do
         nil -> Application.delete_env(:lemon_router, :session_coordinator)
         mod -> Application.put_env(:lemon_router, :session_coordinator, mod)
@@ -88,7 +66,6 @@ defmodule LemonRouter.RouterTest do
       end
 
       Process.delete(:router_test_pid)
-      Process.delete(:router_submit_result)
       Process.delete(:router_busy_result)
       Process.delete(:router_active_sessions)
       Process.delete(:router_abort_session_result)
@@ -175,153 +152,5 @@ defmodule LemonRouter.RouterTest do
     assert {:error, :unavailable} = Router.session_busy?("agent:test:main")
     assert {:error, :unavailable} = Router.active_run("agent:test:main")
     assert {:error, :unavailable} = Router.list_active_sessions()
-  end
-
-  test "resolve_session_key/1 uses explicit meta.session_key when provided" do
-    msg = %InboundMessage{
-      channel_id: "telegram",
-      account_id: "default",
-      peer: %{kind: :dm, id: "123", thread_id: nil},
-      sender: nil,
-      message: %{id: "1", text: "hi", timestamp: nil, reply_to_id: nil},
-      raw: %{},
-      meta: %{
-        agent_id: "default",
-        session_key: "agent:default:telegram:default:dm:123:sub:999"
-      }
-    }
-
-    assert Router.resolve_session_key(msg) == "agent:default:telegram:default:dm:123:sub:999"
-  end
-
-  test "resolve_session_key/1 ignores invalid meta.session_key and falls back to computed" do
-    msg = %InboundMessage{
-      channel_id: "telegram",
-      account_id: "default",
-      peer: %{kind: :dm, id: "123", thread_id: nil},
-      sender: nil,
-      message: %{id: "1", text: "hi", timestamp: nil, reply_to_id: nil},
-      raw: %{},
-      meta: %{
-        agent_id: "default",
-        session_key: "not:a:valid:key"
-      }
-    }
-
-    assert Router.resolve_session_key(msg) == "agent:default:telegram:default:dm:123"
-  end
-
-  test "handle_inbound/1 forwards normalized request to orchestrator" do
-    msg = %InboundMessage{
-      channel_id: "telegram",
-      account_id: "default",
-      peer: %{kind: :dm, id: "42", thread_id: "99"},
-      sender: %{id: "sender-1"},
-      message: %{id: "1", text: "run this", timestamp: nil, reply_to_id: nil},
-      raw: %{"raw" => true},
-      meta: %{
-        "agent_id" => "agent-x",
-        "queue_mode" => :interrupt,
-        "custom" => "value"
-      }
-    }
-
-    assert :ok = Router.handle_inbound(msg)
-
-    assert_receive {:orchestrator_submit, request}
-    assert request.origin == :channel
-    assert request.agent_id == "agent-x"
-    assert request.session_key == "agent:agent-x:telegram:default:dm:42:thread:99"
-    assert request.prompt == "run this"
-    assert request.queue_mode == :interrupt
-    assert request.meta["custom"] == "value"
-    assert request.meta[:channel_id] == "telegram"
-    assert request.meta[:account_id] == "default"
-  end
-
-  test "handle_inbound/1 propagates orchestrator submit failures" do
-    Process.put(:router_submit_result, {:error, :submit_failed})
-
-    msg = %InboundMessage{
-      channel_id: "telegram",
-      account_id: "default",
-      peer: %{kind: :dm, id: "43", thread_id: nil},
-      sender: nil,
-      message: %{id: "1", text: "run", timestamp: nil, reply_to_id: nil},
-      raw: %{},
-      meta: %{"agent_id" => "agent-y"}
-    }
-
-    assert {:error, :submit_failed} = Router.handle_inbound(msg)
-    assert_receive {:orchestrator_submit, _request}
-  end
-
-  test "handle_inbound/1 treats malformed orchestrator acknowledgements as outcome unknown" do
-    msg = %InboundMessage{
-      channel_id: "email",
-      account_id: "default",
-      peer: %{kind: :dm, id: "sender@example.test", thread_id: nil},
-      sender: %{id: "sender@example.test"},
-      message: %{id: "mail-malformed", text: "run", timestamp: nil, reply_to_id: nil},
-      raw: %{},
-      meta: %{"agent_id" => "email-agent"}
-    }
-
-    for malformed <- [false, {:ok, 123}, {:ok, ""}] do
-      Process.put(:router_submit_result, malformed)
-      assert {:error, :outcome_unknown} = Router.handle_inbound(msg)
-      assert_receive {:orchestrator_submit, _request}
-    end
-  end
-
-  test "RouterBridge propagates a real Router rejection to the inbound application boundary" do
-    Application.put_env(:lemon_router, :run_orchestrator, RejectingRunOrchestrator)
-    :ok = RouterBridge.configure(router: Router)
-
-    msg = %InboundMessage{
-      channel_id: "email",
-      account_id: "default",
-      peer: %{kind: :dm, id: "sender@example.test", thread_id: nil},
-      sender: %{id: "sender@example.test"},
-      message: %{id: "mail-1", text: "run", timestamp: nil, reply_to_id: nil},
-      raw: %{},
-      meta: %{"agent_id" => "email-agent"}
-    }
-
-    assert {:error, :capacity_rejected} = RouterBridge.handle_inbound(msg)
-  end
-
-  test "handle_control_agent/2 builds control-plane request and default main session key" do
-    Process.put(:router_submit_result, {:ok, "run_control_1"})
-
-    params = %{
-      "agent_id" => "control-agent",
-      "prompt" => "continue",
-      "queue_mode" => :collect,
-      "cwd" => "/tmp/project",
-      "meta" => %{"source" => "ws"}
-    }
-
-    ctx = %{request_id: "req-1"}
-
-    assert {:ok, %{run_id: "run_control_1", session_key: "agent:control-agent:main"}} =
-             Router.handle_control_agent(params, ctx)
-
-    assert_receive {:orchestrator_submit, request}
-    assert request.origin == :control_plane
-    assert request.session_key == "agent:control-agent:main"
-    assert request.agent_id == "control-agent"
-    assert request.prompt == "continue"
-    assert request.queue_mode == :collect
-    assert request.cwd == "/tmp/project"
-    assert request.meta["source"] == "ws"
-    assert request.meta[:control_plane_ctx] == ctx
-  end
-
-  test "handle_control_agent/2 returns submit error payload when orchestrator fails" do
-    Process.put(:router_submit_result, {:error, :timeout})
-
-    assert {:error, %{code: "SUBMIT_FAILED", message: "Failed to submit run", details: :timeout}} =
-             Router.handle_control_agent(%{agent_id: "err-agent", prompt: "hi"}, %{})
   end
 end

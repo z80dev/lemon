@@ -7,7 +7,8 @@ It sits between channel transports and `lemon_gateway`.
 
 ```text
 Channel transport or gateway-native ingress
-  -> LemonRouter.Router.handle_inbound/1
+  -> LemonChannels.Runtime.submit_inbound/2 (RunRequestBuilder.from_inbound/1)
+  -> LemonCore.RouterBridge.submit_run/1
   -> LemonRouter.RunOrchestrator
   -> LemonRouter.SessionCoordinator
   -> LemonRouter.RunProcess
@@ -115,7 +116,7 @@ attachment policy.
   router still boots and runtime operations retain their existing
   unavailable-runtime handling.
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.
-- `Router.handle_inbound/1` returns the exact `RunOrchestrator.submit/1` error
+- `RouterBridge.submit_run/1` returns the exact `RunOrchestrator.submit/1` error
   when submission is rejected. Inbound transports must not acknowledge a
   message as accepted after that error, and pending-compaction markers remain
   available for a later valid submission. A malformed acknowledgement is
@@ -127,7 +128,9 @@ attachment policy.
   the bridge. These commands do not wait for synchronous application by every
   target run process.
 - Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd` (channel-origin runs default to the assistant home, not `$HOME`).
-- Channel ingress sets `meta.channel_context`, so group chats require approval for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call.
+- `LemonChannels.RunRequestBuilder.from_inbound/1` derives `meta.channel_context` and `meta.channel_identity` from the transport-normalized message (caller meta cannot supply them), so `channel_policies` rows apply and group chats require approval for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call.
+- `SubmissionBuilder` refuses a channel-origin request without that provenance (`{:error, :missing_channel_provenance}`). Graceful restart carryover counts it as rejected and crash recovery abandons it; work persisted before provenance existed is never run unrestricted.
+- `SessionKey.channel_peer/1` writes a routing component containing `:` as a colon-free `~sha256-` digest and never decodes components. `DeliveryRouteResolver` takes the delivery target for a hashed component from the run's transport `meta.peer`, and only when it hashes back to the key.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
 - Tool-status failure summaries preserve safe structured fields from
   `action.detail.result_meta`, including `error_type`, tool name, timeout,

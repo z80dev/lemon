@@ -187,6 +187,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
     refute log =~ session_key
   end
 
+  test "reflection keys of canonical channel sessions are canonical sub-session keys" do
+    key = "agent:default:telegram:default:group:-100:thread:7"
+    reflection = MemoryReflection.reflection_session_key(key)
+
+    assert %{kind: :channel_peer, channel_id: "telegram", peer_id: "-100", thread_id: "7"} =
+             parsed = LemonCore.SessionKey.parse(reflection)
+
+    assert parsed.sub_id == "new_reflection"
+    refute reflection == key
+
+    sub = MemoryReflection.reflection_session_key(key <> ":sub:abc")
+    assert %{kind: :channel_peer, sub_id: "abc_new_reflection"} = LemonCore.SessionKey.parse(sub)
+  end
+
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)
   defp restore_router_bridge(config), do: Application.put_env(:lemon_core, :router_bridge, config)
 end

@@ -47,7 +47,8 @@ defmodule LemonRouter.SubmissionBuilder do
     tool_policy_override = params.tool_policy
     run_id = params.run_id
 
-    with {:ok, session_config} <- get_session_config(session_key),
+    with :ok <- require_channel_provenance(origin, meta),
+         {:ok, session_config} <- get_session_config(session_key),
          {:ok, agent_profile} <- get_execution_profile(agent_id, meta),
          {:ok, tool_policy} <-
            resolve_tool_policy(agent_profile, tool_policy_override, %{
@@ -179,6 +180,29 @@ defmodule LemonRouter.SubmissionBuilder do
   end
 
   def build(_request, _opts), do: {:error, :invalid_run_request}
+
+  # Channel-origin runs carry the transport-derived context (channel policy and
+  # group approval floor) and sender identity (memory isolation, approvals) that
+  # `LemonChannels.RunRequestBuilder` attaches. A channel request without them,
+  # such as work persisted before they existed and replayed after an upgrade, is
+  # definitively refused rather than run with no channel restrictions.
+  defp require_channel_provenance(:channel, meta) do
+    context = MapHelpers.get_key(meta, :channel_context)
+    identity = MapHelpers.get_key(meta, :channel_identity)
+
+    with true <- is_map(context) and is_map(identity),
+         channel when is_binary(channel) and channel != "" <- Map.get(context, :channel_id),
+         ^channel <- Map.get(identity, :channel_id),
+         sender when is_binary(sender) and sender != "" <- Map.get(identity, :sender_id),
+         true <- is_boolean(Map.get(identity, :verified?)),
+         true <- is_boolean(Map.get(identity, :owner?)) do
+      :ok
+    else
+      _ -> {:error, :missing_channel_provenance}
+    end
+  end
+
+  defp require_channel_provenance(_origin, _meta), do: :ok
 
   @doc false
   def current_native_target_policy(profile_id, session_key, meta) do

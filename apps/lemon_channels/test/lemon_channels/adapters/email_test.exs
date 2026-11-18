@@ -148,4 +148,28 @@ defmodule LemonChannels.Adapters.EmailTest do
       assert Email.thread_id(parsed) == "subject:deploy plan"
     end
   end
+
+  describe "session keys of normalized messages" do
+    test "references containing colons still yield a parseable channel session key" do
+      {:ok, msg} =
+        Email.normalize_inbound(
+          payload(%{
+            "message_id" => "<m#{System.unique_integer([:positive])}:1@x.test>",
+            "references" => "<root:a:b@x.test>"
+          })
+        )
+
+      request = LemonChannels.RunRequestBuilder.from_inbound(msg)
+
+      assert %{kind: :channel_peer, channel_id: "email", thread_id: thread} =
+               LemonCore.SessionKey.parse(request.session_key)
+
+      # The key holds a colon-free hash of the reference; the original reference
+      # stays in the message metadata for reply threading.
+      assert msg.peer.thread_id == "root:a:b@x.test"
+      assert thread == LemonCore.SessionKey.component("root:a:b@x.test")
+      assert request.meta.peer.thread_id == "root:a:b@x.test"
+      assert request.meta.channel_identity.verified? == false
+    end
+  end
 end

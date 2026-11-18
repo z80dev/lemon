@@ -79,6 +79,27 @@ defmodule LemonAutomation.CronDeliveryTest do
                CronDelivery.target(job(), session_key)
     end
 
+    test "a chat session with hashed routing components never targets the digest" do
+      configure(%{enable_telegram: true, telegram: %{allowed_chat_ids: [42]}})
+
+      session_key =
+        LemonCore.SessionKey.channel_peer(%{
+          agent_id: "default",
+          channel_id: "telegram",
+          account_id: "default",
+          peer_kind: :group,
+          peer_id: "-100999",
+          thread_id: "a:b"
+        })
+
+      result = CronDelivery.target(job(), session_key)
+
+      refute match?({:ok, %{peer: %{id: "-100999"}}}, result),
+             "expected no origin delivery, got #{inspect(result)}"
+
+      refute inspect(result) =~ "~sha256-"
+    end
+
     test "explicit deliver_to wins and none opts out" do
       configure(%{enable_telegram: true, telegram: %{allowed_chat_ids: [42]}})
       chat_session = "agent:default:telegram:default:dm:42"

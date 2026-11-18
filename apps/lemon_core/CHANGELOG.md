@@ -13,6 +13,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,
   `signal_pids/2` and `signal_workload_group/3,4`; migrate to
   `LemonCore.ProcessGroup.terminate/2` (#586).
+- **Breaking (0.3.0):** removed `LemonCore.RouterBridge.handle_inbound/1` and
+  the `handle_inbound/1` callback of `LemonCore.RouterBridge.Router`; it had no
+  production caller and skipped channel policy. Migrate to canonical run
+  submission: build a `LemonCore.RunRequest` with
+  `LemonChannels.RunRequestBuilder.from_inbound/1` (or submit through
+  `LemonChannels.Runtime.submit_inbound/2`) and pass it to
+  `LemonCore.RouterBridge.submit_run/1`.
 - **Breaking (0.3.0):** removed `LemonCore.Store.get_run_history/2,3` and the
   `:run_history_provider` option; migrate to `LemonCore.RunHistoryStore.get/2,3`
   or `fetch/2` (#579).

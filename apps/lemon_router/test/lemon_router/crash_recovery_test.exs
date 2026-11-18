@@ -377,6 +377,102 @@ defmodule LemonRouter.CrashRecoveryTest do
     assert {:ok, []} = Store.fetch_all(RestartCarryover.table())
   end
 
+  describe "pre-fix channel requests without trusted provenance" do
+    test "graceful carryover replay refuses them instead of running them", ctx do
+      n = System.unique_integer([:positive])
+
+      legacy = %RunRequest{
+        run_id: "run_legacy_carry_#{n}",
+        session_key: "agent:default:telegram:default:group:-#{n}:new_reflection",
+        agent_id: "default",
+        origin: :channel,
+        prompt: "Before we start a new session, review the transcript",
+        cwd: ctx.cwd,
+        meta: %{
+          channel_id: "telegram",
+          account_id: "default",
+          peer: %{kind: :group, id: "-#{n}", thread_id: nil},
+          sender: %{id: "100"}
+        }
+      }
+
+      :ok =
+        Store.put(RestartCarryover.table(), {1, 0}, %{
+          items: [%{kind: :replay, request: legacy}],
+          attempts: 0
+        })
+
+      restart_router()
+      await_replayer()
+
+      refute_receive {:execution, _, _}
+      assert {:ok, []} = Store.fetch_all(RestartCarryover.table())
+    end
+
+    test "crash recovery abandons them truthfully instead of running them", ctx do
+      {request, pid} = start_channel_run(ctx.cwd)
+
+      assert {:ok, %{request: stored} = descriptor} =
+               Store.fetch(CrashRecovery.table(), request.run_id)
+
+      # Shape persisted before channel provenance existed.
+      legacy_meta = Map.drop(stored.meta, [:channel_context, :channel_identity])
+
+      :ok =
+        Store.put(CrashRecovery.table(), request.run_id, %{
+          descriptor
+          | request: %{stored | meta: legacy_meta}
+        })
+
+      brutal_restart(pid)
+      await_replayer()
+
+      refute_receive {:execution, _, _}
+      assert {:ok, %{summary: %{completed: completed}}} = RunStore.fetch(request.run_id)
+      assert completed.ok == false
+      assert completed.interrupted
+      assert {:ok, [%{state: :abandoned, reason: :rejected}]} = CrashRecovery.operator_view()
+    end
+  end
+
+  defp start_channel_run(cwd) do
+    n = System.unique_integer([:positive])
+    id = "run_crash_channel_#{n}"
+
+    request = %RunRequest{
+      run_id: id,
+      session_key: "agent:default:telegram:default:group:-#{n}",
+      agent_id: "default",
+      origin: :channel,
+      prompt: "Continue my original work",
+      cwd: cwd,
+      meta: %{
+        channel_id: "telegram",
+        account_id: "default",
+        peer: %{kind: :group, id: "-#{n}", thread_id: nil},
+        sender: %{id: "100"},
+        channel_context: %{
+          channel_id: "telegram",
+          account_id: "default",
+          peer_kind: :group,
+          peer_id: "-#{n}",
+          thread_id: nil
+        },
+        channel_identity: %{
+          channel_id: "telegram",
+          sender_id: "100",
+          is_bot: false,
+          owner?: false,
+          verified?: true
+        }
+      }
+    }
+
+    assert {:ok, ^id} = RunOrchestrator.submit(request)
+    assert_receive {:execution, pid, _command}, 5_000
+    {request, pid}
+  end
+
   defp start_run(cwd) do
     id = "run_crash_#{System.unique_integer([:positive])}"
 

@@ -126,6 +126,14 @@ contain 1–512 ASCII letters, digits, underscores or hyphens. Generated names
 are sanitized and bounded, with a digest when normalization is needed to avoid
 collisions.
 
+Unverified senders are the exception to every rule above. A message without a
+transport sender id (for example a Telegram channel post) and any email message
+(whose `From` address is asserted by the sender, not authenticated) get an
+identity marked unverified. Such a sender always gets its own peer, named
+`unverified_<channel>_<sender>` after `runtime_peer_prefix` (sanitized like
+other generated names). It never uses `user_peer`, a pin, or an alias, and it is
+never treated as the owner.
+
 **Behavior change:** previously, an unaliased sender with no prefix shared
 `user_peer`. Non-owner channel senders now receive separate peers by default;
 their old pooled history is not copied. Restore pooling explicitly with

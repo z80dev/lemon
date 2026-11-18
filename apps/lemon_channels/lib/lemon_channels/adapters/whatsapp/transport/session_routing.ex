@@ -149,10 +149,15 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
   defp maybe_with_sub_id(session_key, sub_id)
        when is_binary(session_key) and session_key != "" and
               (is_binary(sub_id) or is_integer(sub_id)) do
-    if String.contains?(session_key, ":sub:") do
-      session_key
-    else
-      session_key <> ":sub:" <> to_string(sub_id)
+    case SessionKey.parse(session_key) do
+      %{kind: :channel_peer, sub_id: nil} ->
+        case SessionKey.put_sub(session_key, sub_id) do
+          {:ok, key} -> key
+          {:error, :invalid} -> session_key
+        end
+
+      _ ->
+        session_key
     end
   end
 

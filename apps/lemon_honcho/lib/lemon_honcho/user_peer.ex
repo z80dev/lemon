@@ -3,13 +3,21 @@ defmodule LemonHoncho.UserPeer do
 
   alias LemonHoncho.Config
 
-  @doc "Only canonical channel sessions may supply channel identity."
+  @doc """
+  Only canonical channel sessions may supply a trusted channel identity.
+
+  A main (local) session ignores channel-shaped metadata. Any other session
+  that carries an identity but whose key is unparseable or names another
+  channel fails closed: the identity is kept but marked unverified and
+  non-owner, so it never falls back to the configured user peer.
+  """
   def identity(session_key, identity) when is_binary(session_key) and is_map(identity) do
     channel = Map.get(identity, :channel_id) || Map.get(identity, "channel_id")
 
     case LemonCore.SessionKey.parse(session_key) do
       %{kind: :channel_peer, channel_id: ^channel} -> identity
-      _ -> nil
+      %{kind: :main} -> nil
+      _ -> identity |> Map.put(:verified?, false) |> Map.put(:owner?, false)
     end
   end
 
@@ -26,7 +34,15 @@ defmodule LemonHoncho.UserPeer do
 
   def runtime_id(_), do: nil
 
-  @doc "Pin, alias, owner peer, then platform-qualified runtime peer; local sessions keep the configured peer."
+  @doc """
+  Pin, alias, owner peer, then platform-qualified runtime peer; local sessions
+  keep the configured peer.
+
+  An identity marked `verified?: false` (no transport sender id, or a sender
+  address asserted by the payload, such as email `From`) always gets its own
+  `unverified_`-namespaced runtime peer: it never selects the configured,
+  pinned or aliased peer, and never shares a peer with a verified sender.
+  """
   def resolve(%Config{} = config, identity) do
     case runtime_id(identity) do
       nil ->
@@ -34,6 +50,9 @@ defmodule LemonHoncho.UserPeer do
 
       runtime_id ->
         cond do
+          unverified?(identity) ->
+            sanitize(config.runtime_peer_prefix <> "unverified_" <> runtime_id)
+
           config.pin_user_peer ->
             config.user_peer
 
@@ -52,6 +71,10 @@ defmodule LemonHoncho.UserPeer do
   def bot?(%{is_bot: true}), do: true
   def bot?(%{"is_bot" => true}), do: true
   def bot?(_), do: false
+
+  defp unverified?(%{verified?: false}), do: true
+  defp unverified?(%{"verified?" => false}), do: true
+  defp unverified?(_), do: false
 
   defp owner?(%{owner?: true}), do: true
   defp owner?(%{"owner?" => true}), do: true

@@ -381,12 +381,18 @@ defmodule LemonChannels.Supervision do
 
   defp origin_target(session_key) do
     case SessionKey.parse(session_key) do
+      # Hashed routing ids are not delivery targets; only a bound target with
+      # retained provenance can address such a session.
       %{kind: :channel_peer} = parsed ->
-        SupervisionNotice.target(%{
-          channel_id: parsed.channel_id,
-          account_id: parsed.account_id,
-          peer: %{kind: parsed.peer_kind, id: parsed.peer_id, thread_id: parsed.thread_id}
-        })
+        if SessionKey.opaque_routing?(parsed) do
+          {:error, :opaque_session}
+        else
+          SupervisionNotice.target(%{
+            channel_id: parsed.channel_id,
+            account_id: parsed.account_id,
+            peer: %{kind: parsed.peer_kind, id: parsed.peer_id, thread_id: parsed.thread_id}
+          })
+        end
 
       %{kind: :main} ->
         :none

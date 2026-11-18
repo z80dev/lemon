@@ -827,7 +827,6 @@ Channel adapters forward runs to `:lemon_router` without compile-time coupling. 
 
 ```elixir
 {:ok, run_id} = LemonCore.RouterBridge.submit_run(run_request)
-:ok = LemonCore.RouterBridge.handle_inbound(inbound_message)
 :ok = LemonCore.RouterBridge.abort_session(session_key, :user_requested)
 {:ok, busy?} = LemonCore.RouterBridge.session_busy?(session_key)
 {:ok, active_run_id} = LemonCore.RouterBridge.active_run(session_key)

@@ -21,9 +21,11 @@ See [README](README.md) and [architecture](../../docs/architecture/overview.md).
 - Task/delegated auto-followups prefer steer with follow-up fallback. Do not merge
   separate provenance-bearing async completions during debounce. Record the final
   delivery disposition/receipt after router mutation, not before.
-- `Router.handle_inbound/1` propagates submission errors. Only a non-empty binary
-  run ID acknowledges success; malformed acknowledgements are outcome-unknown,
-  not permission for an automatic retry.
+- Channel ingress is `LemonChannels.Runtime.submit_inbound/2` ->
+  `RunRequestBuilder.from_inbound/1` -> `RouterBridge.submit_run/1`; there is no
+  router-side inbound entry point. Only a non-empty binary run ID acknowledges
+  success; malformed acknowledgements are outcome-unknown, not permission for
+  an automatic retry.
 - Public busy/active queries go through `Router`/`RouterBridge`. Registry and
   read-model failure is unavailable, never an invented idle or empty state.
 - Abort/keepalive `:ok` acknowledges dispatch, not synchronous target application.

@@ -116,7 +116,8 @@ defmodule LemonAutomation.CronDelivery do
   defp origin_target(session_key) when is_binary(session_key) do
     case SessionKey.parse(session_key) do
       %{kind: :channel_peer, channel_id: channel_id} = parsed ->
-        if channel_id in chat_channel_ids() do
+        # A key holding hashed routing ids is not a delivery address; fall back.
+        if channel_id in chat_channel_ids() and not SessionKey.opaque_routing?(parsed) do
           {:ok,
            %{
              channel_id: channel_id,

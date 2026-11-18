@@ -113,6 +113,22 @@ defmodule LemonChannels.SupervisionTest do
              Supervision.target_for_run(server, "unbound", "agent:a:telegram::group:-100")
   end
 
+  test "an unbound origin with hashed routing components is never a delivery target" do
+    server = worker()
+
+    session =
+      LemonCore.SessionKey.channel_peer(%{
+        agent_id: "operator",
+        channel_id: "telegram",
+        account_id: "work",
+        peer_kind: :group,
+        peer_id: "-100",
+        thread_id: "a:b"
+      })
+
+    assert {:error, :opaque_session} = Supervision.target_for_run(server, "unbound", session)
+  end
+
   test "missing store is not absence and never derives an origin or sends" do
     server = worker(store: __MODULE__.MissingStore)
     session = "agent:operator:telegram:work:group:-100:thread:77"

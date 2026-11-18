@@ -2878,15 +2878,8 @@ defmodule LemonAutomation.CronManager do
           {:ok, session_key}
 
         %{kind: :channel_peer} = parsed ->
-          base =
-            SessionKey.channel_peer(%{
-              agent_id: parsed.agent_id,
-              channel_id: parsed.channel_id,
-              account_id: parsed.account_id,
-              peer_kind: parsed.peer_kind,
-              peer_id: parsed.peer_id,
-              thread_id: parsed.thread_id
-            })
+          # Keep the serialized components verbatim (a digest is never re-hashed).
+          base = SessionKey.rebuild(%{parsed | sub_id: nil})
 
           {:ok, base}
 

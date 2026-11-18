@@ -61,6 +61,29 @@ defmodule LemonHoncho.UserPeerTest do
     end
   end
 
+  test "a channel identity on an unparseable session key is kept, unverified, never the owner" do
+    config = %Config{user_peer: "owner", pin_user_peer: true}
+    owner = %{channel_id: "telegram", sender_id: "123", owner?: true, verified?: true}
+
+    for key <- [
+          # Legacy reflection key shape: odd extras do not parse.
+          "agent:demo:telegram:default:group:42:new_reflection",
+          # Unescaped email thread id containing colons.
+          "agent:demo:email:default:dm:a@x.test:thread:root:a:b@x.test"
+        ] do
+      identity = UserPeer.identity(key, owner)
+      assert identity.verified? == false
+      assert identity.owner? == false
+      refute UserPeer.resolve(config, identity) == "owner"
+    end
+  end
+
+  test "genuinely local sessions still ignore channel-shaped metadata" do
+    identity = %{channel_id: "telegram", sender_id: "123"}
+    assert UserPeer.identity("agent:demo:main", identity) == nil
+    assert UserPeer.identity(nil, identity) == nil
+  end
+
   test "unsafe and long runtime names are bounded collision-resistant Honcho ids" do
     config = %Config{runtime_peer_prefix: "gateway_"}
     one = UserPeer.resolve(config, %{channel_id: "telegram", sender_id: "a/b"})

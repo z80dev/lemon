@@ -426,7 +426,7 @@ defmodule LemonCore.AgentIdentity do
         native_id(id, key, canonical)
 
       %{kind: :channel_peer} = parsed ->
-        native_id(id, key, SessionKey.channel_peer(parsed))
+        native_id(id, key, SessionKey.rebuild(parsed))
 
       _ ->
         {:error, :invalid_id}
@@ -450,7 +450,8 @@ defmodule LemonCore.AgentIdentity do
   defp native_id(id, key, canonical) do
     if key == canonical and
          Enum.all?(String.split(key, ":"), fn part ->
-           byte_size(part) in 1..256 and Regex.match?(~r/\A[A-Za-z0-9._@-]+\z/, part)
+           byte_size(part) in 1..256 and
+             (Regex.match?(~r/\A[A-Za-z0-9._@-]+\z/, part) or SessionKey.hashed_component?(part))
          end),
        do: {:ok, %{id: id, kind: :session, session_key: key}},
        else: {:error, :invalid_id}

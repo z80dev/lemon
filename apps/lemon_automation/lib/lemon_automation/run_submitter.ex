@@ -262,24 +262,10 @@ defmodule LemonAutomation.RunSubmitter do
       %{kind: :main, agent_id: parsed_agent_id} ->
         "agent:#{parsed_agent_id || agent_id}:main:sub:#{sub_id}"
 
-      %{
-        kind: :channel_peer,
-        agent_id: parsed_agent_id,
-        channel_id: channel_id,
-        account_id: account_id,
-        peer_kind: peer_kind,
-        peer_id: peer_id,
-        thread_id: thread_id
-      } ->
-        SessionKey.channel_peer(%{
-          agent_id: parsed_agent_id || agent_id,
-          channel_id: channel_id,
-          account_id: account_id,
-          peer_kind: peer_kind,
-          peer_id: peer_id,
-          thread_id: thread_id,
-          sub_id: sub_id
-        })
+      %{kind: :channel_peer} = parsed ->
+        # Keep the serialized components verbatim (a digest is never re-hashed).
+        {:ok, key} = SessionKey.put_sub(SessionKey.rebuild(%{parsed | sub_id: nil}), sub_id)
+        key
 
       _ ->
         "agent:#{agent_id}:main:sub:#{sub_id}"

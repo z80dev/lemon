@@ -20,18 +20,13 @@ defmodule LemonCore.RouterBridge.Router do
 
   ## Mutation error contract
 
-  For `handle_inbound/1`, `abort/2`, `abort_run/2`, and `keep_run_alive/2`, an
+  For `abort/2`, `abort_run/2`, and `keep_run_alive/2`, an
   `{:error, reason}` other than `{:error, :outcome_unknown}` is a definite
   rejection: implementations must return it only when they can guarantee the
   mutation did not take effect. If the outcome cannot be proved, return
   `{:error, :outcome_unknown}`. Raised exceptions, thrown terms, and malformed
   acknowledgements are normalized conservatively by the bridge.
   """
-
-  alias LemonCore.InboundMessage
-
-  @doc "Route an inbound channel message. `:ok` means the router accepted responsibility."
-  @callback handle_inbound(InboundMessage.t()) :: :ok | {:error, term()}
 
   @doc """
   Ask the router to abort every run of a session. `:ok` means the decision was
@@ -72,9 +67,6 @@ defmodule LemonCore.RouterBridge.Router do
       @behaviour LemonCore.RouterBridge.Router
 
       alias LemonCore.RouterBridge.NotImplementedError
-
-      def handle_inbound(_message),
-        do: raise(NotImplementedError, module: __MODULE__, function: :handle_inbound, arity: 1)
 
       def abort(_session_key, _reason),
         do: raise(NotImplementedError, module: __MODULE__, function: :abort, arity: 2)

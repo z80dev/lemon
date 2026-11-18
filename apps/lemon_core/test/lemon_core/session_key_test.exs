@@ -412,4 +412,117 @@ defmodule LemonCore.SessionKeyTest do
       assert SessionKey.channel_peer?("agent:my_agent:chan:acc:invalid:peer") == false
     end
   end
+
+  describe "channel_peer/1 with unsafe routing components" do
+    test "colon-bearing components are replaced by a hashed, colon-free component" do
+      key =
+        SessionKey.channel_peer(%{
+          agent_id: "default",
+          channel_id: "email",
+          account_id: "bot@example.test",
+          peer_kind: :dm,
+          peer_id: "a@example.test",
+          thread_id: "x:y:z@mail.example",
+          sub_id: "s:1"
+        })
+
+      parsed = SessionKey.parse(key)
+      assert %{kind: :channel_peer, peer_id: "a@example.test"} = parsed
+      assert parsed.thread_id == SessionKey.component("x:y:z@mail.example")
+      assert parsed.sub_id == SessionKey.component("s:1")
+      assert SessionKey.hashed_component?(parsed.thread_id)
+      refute String.contains?(parsed.thread_id, ":")
+    end
+
+    test "existing keys with percent text parse unchanged and are never decoded" do
+      old = "agent:a:email:x:dm:alice%25tag@example.test:thread:r%3A1"
+
+      assert %{peer_id: "alice%25tag@example.test", thread_id: "r%3A1"} =
+               SessionKey.parse(old)
+
+      base = %{agent_id: "a", channel_id: "email", account_id: "x", peer_kind: :dm}
+
+      assert SessionKey.channel_peer(
+               Map.merge(base, %{peer_id: "alice%25tag@example.test", thread_id: "r%3A1"})
+             ) == old
+
+      refute SessionKey.channel_peer(Map.put(base, :peer_id, "alice%tag@example.test")) ==
+               SessionKey.channel_peer(Map.put(base, :peer_id, "alice%25tag@example.test"))
+    end
+
+    test "distinct inputs never produce the same key, including hash look-alikes" do
+      base = %{agent_id: "a", channel_id: "email", account_id: "x", peer_kind: :dm}
+      hashed = SessionKey.component("p:q")
+
+      inputs = ["p:q", "p:r", "pq", hashed, "p%3Aq", "p%q"]
+      keys = Enum.map(inputs, &SessionKey.channel_peer(Map.put(base, :peer_id, &1)))
+
+      assert length(Enum.uniq(keys)) == length(inputs)
+      assert Enum.all?(keys, &SessionKey.valid?/1)
+    end
+
+    test "rebuilding a hash-bearing key from its parsed components preserves it byte-for-byte" do
+      key =
+        SessionKey.channel_peer(%{
+          agent_id: "a",
+          channel_id: "email",
+          account_id: "acct:1",
+          peer_kind: :dm,
+          peer_id: "p:q",
+          thread_id: "r:s"
+        })
+
+      parsed = SessionKey.parse(key)
+      assert SessionKey.rebuild(parsed) == key
+      assert SessionKey.rebuild(Map.put(parsed, :sub_id, nil)) == key
+      assert {:ok, with_sub} = SessionKey.put_sub(key, "fork:1")
+
+      assert SessionKey.rebuild(SessionKey.parse(with_sub)) == with_sub
+      assert String.starts_with?(with_sub, key <> ":sub:")
+    end
+
+    test "only exact digests count as hashed components" do
+      assert SessionKey.hashed_component?(SessionKey.component("a:b"))
+      refute SessionKey.hashed_component?("~sha256-short")
+      refute SessionKey.hashed_component?("plain")
+
+      parsed =
+        SessionKey.parse(
+          SessionKey.channel_peer(%{
+            agent_id: "a",
+            channel_id: "email",
+            account_id: "acct:1",
+            peer_kind: :dm,
+            peer_id: "p"
+          })
+        )
+
+      assert SessionKey.opaque_routing?(parsed)
+      refute SessionKey.opaque_routing?(SessionKey.parse("agent:a:telegram:x:dm:1:thread:2"))
+    end
+
+    test "an unsupported peer kind becomes a parseable unknown kind" do
+      key =
+        SessionKey.channel_peer(%{
+          agent_id: "a",
+          channel_id: "telegram",
+          account_id: "x",
+          peer_kind: nil,
+          peer_id: "1"
+        })
+
+      assert %{kind: :channel_peer, peer_kind: :unknown} = SessionKey.parse(key)
+    end
+
+    test "existing safe keys are unchanged" do
+      assert SessionKey.channel_peer(%{
+               agent_id: "a",
+               channel_id: "telegram",
+               account_id: "default",
+               peer_kind: :group,
+               peer_id: "-100",
+               thread_id: "7"
+             }) == "agent:a:telegram:default:group:-100:thread:7"
+    end
+  end
 end

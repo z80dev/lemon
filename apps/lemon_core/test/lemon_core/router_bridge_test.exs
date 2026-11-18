@@ -91,7 +91,6 @@ defmodule LemonCore.RouterBridgeTest do
 
     defp dead, do: exit({:noproc, {GenServer, :call, [__MODULE__, :anything, 5000]}})
 
-    def handle_inbound(_msg), do: dead()
     def abort(_session_key, _reason), do: dead()
     def abort_run(_run_id, _reason), do: dead()
     def keep_run_alive(_run_id, _decision), do: dead()
@@ -109,7 +108,8 @@ defmodule LemonCore.RouterBridgeTest do
     @moduledoc false
     use LemonCore.RouterBridge.Router
     # A mutation timeout cannot prove whether the process accepted the work.
-    def handle_inbound(_msg), do: exit({:timeout, {GenServer, :call, [__MODULE__, :x, 5000]}})
+    def abort(_session_key, _reason),
+      do: exit({:timeout, {GenServer, :call, [__MODULE__, :x, 5000]}})
   end
 
   defmodule BridgeTimingOutOrchestrator do
@@ -141,18 +141,13 @@ defmodule LemonCore.RouterBridgeTest do
   defmodule BridgeRaisingRouter do
     @moduledoc false
     use LemonCore.RouterBridge.Router
-    def handle_inbound(_msg), do: raise("router blew up")
+    def abort(_session_key, _reason), do: raise("router blew up")
     def session_busy?(_session_key), do: raise("query blew up")
   end
 
   defmodule BridgeMalformedCommandRouter do
     @moduledoc false
     use LemonCore.RouterBridge.Router
-
-    def handle_inbound(msg) do
-      send(self(), {:command_side_effect, :handle_inbound, msg})
-      false
-    end
 
     def abort(session_key, _reason) do
       send(self(), {:command_side_effect, :abort, session_key})
@@ -180,16 +175,16 @@ defmodule LemonCore.RouterBridgeTest do
     @moduledoc false
     use LemonCore.RouterBridge.Router
 
-    def handle_inbound(%{failure: :exception, secret: secret}) do
+    def keep_run_alive("exception:" <> secret, _decision) do
       raise "router exception contained #{secret}"
     end
 
-    def handle_inbound(%{failure: :timeout, secret: secret}) do
+    def keep_run_alive("timeout:" <> secret, _decision) do
       exit({:timeout, {GenServer, :call, [__MODULE__, {:secret, secret}, 5000]}})
     end
 
-    def handle_inbound(%{failure: :throw, secret: secret} = msg) do
-      send(self(), {:throw_side_effect, msg})
+    def keep_run_alive("throw:" <> secret = run_id, _decision) do
+      send(self(), {:throw_side_effect, run_id})
       throw({:secret, secret})
     end
 
@@ -513,12 +508,6 @@ defmodule LemonCore.RouterBridgeTest do
       assert {:error, :outcome_unknown} = RouterBridge.submit_run(request)
     end
 
-    test "handle_inbound/1 reports outcome unknown instead of exiting" do
-      :ok = RouterBridge.configure(router: BridgeDeadRouter)
-
-      assert {:error, :outcome_unknown} = RouterBridge.handle_inbound(%{any: :message})
-    end
-
     test "abort_session/2 reports outcome unknown instead of exiting" do
       :ok = RouterBridge.configure(router: BridgeDeadRouter)
 
@@ -551,15 +540,15 @@ defmodule LemonCore.RouterBridgeTest do
     test "a mutation timeout is outcome unknown because the work may have been taken" do
       :ok = RouterBridge.configure(router: BridgeTimingOutRouter)
 
-      assert {:error, :outcome_unknown} = RouterBridge.handle_inbound(%{any: :message})
+      assert {:error, :outcome_unknown} = RouterBridge.abort_session("agent:timeout:main")
     end
 
     test "does not mistake a configured mutation's noproc exit for definite non-acceptance" do
       :ok = RouterBridge.configure(router: BridgeDeadRouter)
-      dead = RouterBridge.handle_inbound(%{any: :message})
+      dead = RouterBridge.abort_session("agent:dead:main")
 
       :ok = RouterBridge.configure(run_orchestrator: RouterBridgeTestRunOrchestrator)
-      unconfigured = RouterBridge.handle_inbound(%{any: :message})
+      unconfigured = RouterBridge.abort_session("agent:dead:main")
 
       assert dead == {:error, :outcome_unknown}
       assert unconfigured == {:error, :unavailable}
@@ -572,11 +561,11 @@ defmodule LemonCore.RouterBridgeTest do
 
       log =
         capture_log(fn ->
-          assert {:error, :outcome_unknown} = RouterBridge.handle_inbound(%{any: :message})
+          assert {:error, :outcome_unknown} = RouterBridge.abort_session("agent:raise:main")
         end)
 
       assert log =~
-               "callback=LemonCore.RouterBridgeTest.BridgeRaisingRouter.handle_inbound/1"
+               "callback=LemonCore.RouterBridgeTest.BridgeRaisingRouter.abort/2"
 
       assert log =~ "failure_class=exception"
       refute log =~ "router blew up"
@@ -599,12 +588,6 @@ defmodule LemonCore.RouterBridgeTest do
     setup do
       :ok = RouterBridge.configure(router: BridgeMalformedCommandRouter)
       :ok
-    end
-
-    test "handle_inbound/1 treats false as an ambiguous acknowledgement" do
-      msg = %{any: :message}
-      assert {:error, :outcome_unknown} = RouterBridge.handle_inbound(msg)
-      assert_receive {:command_side_effect, :handle_inbound, ^msg}
     end
 
     test "abort_session/2 treats nil as an ambiguous acknowledgement" do
@@ -659,15 +642,15 @@ defmodule LemonCore.RouterBridgeTest do
       log =
         capture_log(fn ->
           assert {:error, :outcome_unknown} =
-                   RouterBridge.handle_inbound(%{failure: :exception, secret: secret})
+                   RouterBridge.keep_run_alive("exception:" <> secret, :continue)
 
           assert {:error, :outcome_unknown} =
-                   RouterBridge.handle_inbound(%{failure: :timeout, secret: secret})
+                   RouterBridge.keep_run_alive("timeout:" <> secret, :continue)
 
-          throw_msg = %{failure: :throw, secret: secret}
+          throw_run = "throw:" <> secret
 
-          assert {:error, :outcome_unknown} = RouterBridge.handle_inbound(throw_msg)
-          assert_receive {:throw_side_effect, ^throw_msg}
+          assert {:error, :outcome_unknown} = RouterBridge.keep_run_alive(throw_run, :continue)
+          assert_receive {:throw_side_effect, ^throw_run}
 
           assert {:error, :outcome_unknown} =
                    RouterBridge.abort_session("agent:secret:main", secret)
@@ -688,7 +671,7 @@ defmodule LemonCore.RouterBridgeTest do
       assert log =~ "failure_class=throw"
       assert log =~ "failure_class=exit"
       assert log =~ "failure_class=no_process"
-      assert log =~ "BridgeAdversarialRouter.handle_inbound/1"
+      assert log =~ "BridgeAdversarialRouter.keep_run_alive/2"
       assert log =~ "BridgeAdversarialRouter.abort/2"
       assert log =~ "BridgeAdversarialRouter.abort_run/2"
       assert log =~ "BridgeAdversarialRouter.session_busy?/1"
@@ -725,7 +708,7 @@ defmodule LemonCore.RouterBridgeTest do
                {:missing_callbacks, RouterBridgeTestRunOrchestrator, missing}}} =
                RouterBridge.configure(router: RouterBridgeTestRunOrchestrator)
 
-      assert Keyword.has_key?(missing, :handle_inbound)
+      assert Keyword.has_key?(missing, :abort)
       assert RouterBridge.active_run("agent:bridge:main") == {:ok, "run_for_agent:bridge:main"}
 
       assert {:error,

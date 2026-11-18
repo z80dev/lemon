@@ -1333,7 +1333,9 @@ defmodule LemonRouter.SessionCoordinator do
   defp notify_redirect_fallback(%Submission{run_id: run_id, session_key: session_key}) do
     parsed = LemonRouter.ChannelContext.parse_session_key(session_key)
 
+    # A key holding hashed routing ids is not a delivery address on its own.
     with :channel_peer <- parsed.kind,
+         false <- LemonCore.SessionKey.opaque_routing?(LemonCore.SessionKey.parse(session_key)),
          peer_kind when peer_kind in [:dm, :group, :channel] <- parsed.peer_kind,
          peer_id when is_binary(peer_id) and peer_id != "" <- parsed.peer_id do
       route = %LemonCore.DeliveryRoute{

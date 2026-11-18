@@ -195,6 +195,33 @@ defmodule LemonCore.AgentIdentityTest do
     assert {:ok, []} = AgentIdentity.list("operator", query: name)
   end
 
+  test "a generated hash-bearing channel key is a valid session address", %{suffix: suffix} do
+    key =
+      LemonCore.SessionKey.channel_peer(%{
+        agent_id: "identity_#{suffix}",
+        channel_id: "email",
+        account_id: "acct:1",
+        peer_kind: :dm,
+        peer_id: "alice@example.test",
+        thread_id: "root:a:b@x.test"
+      })
+
+    id = "session://" <> key
+
+    on_exit(fn ->
+      AgentIdentity.remove("operator", id)
+      RunStore.delete_session_index(key)
+    end)
+
+    assert :ok = RunStore.create_session_index(key, "identity_#{suffix}", :channel)
+    assert {:ok, entry} = AgentIdentity.register("operator", id, %{name: "hashed_#{suffix}"})
+    assert entry.session_key == key
+    assert {:ok, %{session_key: ^key}} = AgentIdentity.resolve("operator", id)
+
+    assert {:error, :invalid_id} =
+             AgentIdentity.register("operator", "session://agent:a:email:~sha256-x:dm:p", %{})
+  end
+
   test "deletion fences a pending claim and its retries cannot claim a replacement",
        %{suffix: suffix} do
     path = Path.join(System.tmp_dir!(), "agent_identity_fence_#{suffix}")

@@ -955,6 +955,70 @@ defmodule LemonHoncho.SessionManagerTest do
       end
     end
 
+    test "unverified channel identities never load the owner's or an aliased peer's memory" do
+      start_manager(
+        pin_user_peer: true,
+        user_peer_aliases: %{"email_owner@example.test" => "alice"}
+      )
+
+      cases = [
+        {"agent:demo:telegram:default:channel:-100777",
+         %{
+           channel_id: "telegram",
+           sender_id: "unidentified:channel:-100777",
+           is_bot: false,
+           owner?: false,
+           verified?: false
+         }},
+        {"agent:demo:email:default:dm:owner@example.test",
+         %{
+           channel_id: "email",
+           sender_id: "owner@example.test",
+           is_bot: false,
+           owner?: true,
+           verified?: false
+         }}
+      ]
+
+      for {key, identity} <- cases do
+        request = @request |> Map.put(:session_key, key) |> Map.put(:channel_identity, identity)
+        context = SessionManager.context_for(request)
+        refute context =~ "Knows user."
+        refute context =~ "Knows alice."
+
+        SessionManager.sync_document(
+          document(session_key: key, meta: %{channel_identity: identity})
+        )
+
+        assert_receive {:honcho_call, :add_messages, {_, [%{peer_id: peer}, _]}}, 1_000
+        refute peer in ["user", "alice"]
+        assert peer =~ "unverified"
+      end
+    end
+
+    test "channel identities on unparseable session keys never load or write owner memory" do
+      start_manager()
+
+      cases = [
+        {"agent:demo:telegram:default:group:42:new_reflection",
+         %{channel_id: "telegram", sender_id: "456", owner?: false, verified?: true}},
+        {"agent:demo:email:default:dm:a@x.test:thread:root:a:b@x.test",
+         %{channel_id: "email", sender_id: "a@x.test", owner?: false, verified?: false}}
+      ]
+
+      for {key, identity} <- cases do
+        request = @request |> Map.put(:session_key, key) |> Map.put(:channel_identity, identity)
+        refute SessionManager.context_for(request) =~ "Knows user."
+
+        SessionManager.sync_document(
+          document(session_key: key, meta: %{channel_identity: identity})
+        )
+
+        assert_receive {:honcho_call, :add_messages, {_, [%{peer_id: peer}, _]}}, 1_000
+        refute peer == "user"
+      end
+    end
+
     test "local sessions ignore channel-shaped metadata" do
       start_manager(runtime_peer_prefix: "gateway_")
       request = Map.put(@request, :channel_identity, %{channel_id: "telegram", sender_id: "123"})

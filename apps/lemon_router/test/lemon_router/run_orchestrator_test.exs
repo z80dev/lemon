@@ -2058,6 +2058,25 @@ defmodule LemonRouter.RunOrchestratorTest do
     {run_id, command}
   end
 
+  # Channel-origin requests carry transport provenance (see
+  # `LemonChannels.RunRequestBuilder`); admission refuses them otherwise.
+  defp request(%{origin: :channel} = attrs) do
+    provenance = %{
+      channel_context: %{channel_id: "test", peer_kind: :dm, peer_id: "1"},
+      channel_identity: %{
+        channel_id: "test",
+        sender_id: "1",
+        is_bot: false,
+        owner?: false,
+        verified?: true
+      }
+    }
+
+    attrs
+    |> Map.update(:meta, provenance, &Map.merge(provenance, &1))
+    |> RunRequest.new()
+  end
+
   defp request(attrs), do: RunRequest.new(attrs)
 
   defp eventually(fun, timeout_ms \\ 5_000) when is_function(fun, 0) do

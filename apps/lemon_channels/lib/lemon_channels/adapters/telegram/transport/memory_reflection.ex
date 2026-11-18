@@ -62,13 +62,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
         |> Map.put(:command, :new)
         |> Map.put(:record_memories, true)
         |> callbacks.maybe_put.(:thinking_level, thinking_hint)
-        |> Map.merge(%{
-          channel_id: inbound.channel_id,
-          account_id: inbound.account_id,
-          peer: inbound.peer,
-          sender: inbound.sender,
-          raw: inbound.raw
-        })
+        |> LemonChannels.RunRequestBuilder.put_transport_meta(inbound)
 
       request =
         RunRequest.new(%{
@@ -108,9 +102,24 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
       ),
       do: :skip
 
+  @doc """
+  The reflection run's session key: a canonical sub-session of a channel
+  session (`sub:new_reflection`, or `sub:<sub>_new_reflection`), so the key still
+  parses and keeps its channel identity downstream.
+  """
   @spec reflection_session_key(term()) :: binary()
-  def reflection_session_key(session_key) when is_binary(session_key),
-    do: session_key <> ":new_reflection"
+  def reflection_session_key(session_key) when is_binary(session_key) do
+    sub =
+      case LemonCore.SessionKey.parse(session_key) do
+        %{kind: :channel_peer, sub_id: sub} when is_binary(sub) -> sub <> "_new_reflection"
+        _ -> "new_reflection"
+      end
+
+    case LemonCore.SessionKey.put_sub(session_key, sub) do
+      {:ok, key} -> key
+      {:error, :invalid} -> session_key <> ":new_reflection"
+    end
+  end
 
   def reflection_session_key(_), do: "telegram:new_reflection"
 

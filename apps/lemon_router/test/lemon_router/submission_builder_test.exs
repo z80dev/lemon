@@ -402,7 +402,13 @@ defmodule LemonRouter.SubmissionBuilderTest do
 
   test "resolved capabilities and memory audience bind both native resume and compaction history" do
     session_key = unique_session_key("scoped-history")
-    meta = %{invocation_context_key: "same", memory_context_key: "private-room", mcp_servers: []}
+
+    meta =
+      Map.merge(channel_provenance(), %{
+        invocation_context_key: "same",
+        memory_context_key: "private-room",
+        mcp_servers: []
+      })
 
     initial = %{
       request(session_key, %{agent_id: "test", meta: meta})
@@ -548,7 +554,11 @@ defmodule LemonRouter.SubmissionBuilderTest do
         prompt: "prior work"
     }
 
-    initial = %{initial | meta: Map.merge(proof_meta(initial.run_id), identity)}
+    initial = %{
+      initial
+      | meta: proof_meta(initial.run_id) |> Map.merge(identity) |> Map.merge(channel_provenance())
+    }
+
     assert {:ok, owner} = SubmissionBuilder.build(initial, orchestrator_state())
     token = %ResumeToken{engine: "lemon", value: session_key}
     assert :ok = ResumeResolver.bind_run(owner.execution_request)
@@ -583,7 +593,11 @@ defmodule LemonRouter.SubmissionBuilderTest do
         prompt: "next work"
     }
 
-    next = %{next | meta: Map.merge(proof_meta(next.run_id), identity)}
+    next = %{
+      next
+      | meta: proof_meta(next.run_id) |> Map.merge(identity) |> Map.merge(channel_provenance())
+    }
+
     assert {:ok, resumed} = SubmissionBuilder.build(next, orchestrator_state())
     assert resumed.execution_request.resume == token
     assert resumed.execution_request.prompt =~ "prior work"
@@ -623,6 +637,27 @@ defmodule LemonRouter.SubmissionBuilderTest do
              LemonCore.ProfileStore.create(%{id: "submission-builder-managed", node: node})
 
     profile
+  end
+
+  # Transport provenance every channel-origin request carries (see
+  # `LemonChannels.RunRequestBuilder`).
+  defp channel_provenance do
+    %{
+      channel_context: %{
+        channel_id: "telegram",
+        account_id: "default",
+        peer_kind: :dm,
+        peer_id: "1",
+        thread_id: nil
+      },
+      channel_identity: %{
+        channel_id: "telegram",
+        sender_id: "1",
+        is_bot: false,
+        owner?: false,
+        verified?: true
+      }
+    }
   end
 
   defp proof_meta(run_id) do

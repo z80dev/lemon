@@ -171,8 +171,9 @@ defmodule LemonRouter.Policy do
         policy -> policy
       end
 
+    # Fail closed: only an explicit DM escapes the group floor.
     group_policy =
-      if peer_kind in [:group, :supergroup, :channel] do
+      if peer_kind != :dm do
         %{approvals: Map.new(@group_approval_tools, &{&1, :always})}
       else
         %{}
