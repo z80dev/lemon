@@ -473,7 +473,8 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
                  else: module
                )
              )
-           ), do: start_supervised!(module)
+           ),
+           do: start_supervised!(module)
       end
 
       :ok = Registry.register(Email)
