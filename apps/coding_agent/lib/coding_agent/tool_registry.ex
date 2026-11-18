@@ -194,6 +194,13 @@ defmodule CodingAgent.ToolRegistry do
         )
       )
 
+    opts =
+      Keyword.put_new(
+        opts,
+        :repo_local_tools,
+        Map.get(edit_config, :repo_local_tools, Map.get(edit_config, "repo_local_tools", false))
+      )
+
     # Only browser tools receive the provider resolution; other tool closures
     # capture `opts`, and none of them read it.
     {resolution, opts} = Keyword.pop(opts, :browser_provider_resolution)
@@ -1276,7 +1283,10 @@ defmodule CodingAgent.ToolRegistry do
             do: WorkspaceReads.resolve_params(name, params, approval_context),
             else: params
 
-        tier = if source == :builtin, do: ToolPolicy.tier(name, params), else: :exec
+        tier =
+          if source == :builtin,
+            do: ToolPolicy.tier(name, effective_args(tool, params)),
+            else: :exec
 
         policy_required =
           ToolPolicy.requires_approval?(tool_policy, name, params, tier) or
@@ -1322,8 +1332,11 @@ defmodule CodingAgent.ToolRegistry do
   # gate above for argument-free tiers; web tools stay gated by the dynamic fence.
   defp unreviewed_stream(%AgentTool{on_stream: nil}, _name, _source, _tool_policy), do: nil
 
-  defp unreviewed_stream(%AgentTool{on_stream: on_stream}, name, source, tool_policy) do
-    tier = if source == :builtin, do: ToolPolicy.tier(name, %{}), else: :exec
+  defp unreviewed_stream(%AgentTool{on_stream: on_stream} = tool, name, source, tool_policy) do
+    tier =
+      if source == :builtin,
+        do: ToolPolicy.tier(name, effective_args(tool, %{})),
+        else: :exec
 
     reviewed? =
       name in ["webfetch", "websearch"] or
@@ -1333,6 +1346,24 @@ defmodule CodingAgent.ToolRegistry do
 
     if reviewed?, do: nil, else: on_stream
   end
+
+  # Tiers see what the tool will actually do: trusted schema defaults (from
+  # host options such as `diagnostics`/`format`) fill omitted arguments, and a
+  # supplied string-keyed argument, including an explicit false, wins exactly
+  # as the tool's own option resolution does.
+  @doc false
+  def effective_args(%AgentTool{parameters: %{"properties" => properties}}, params)
+      when is_map(properties) and is_map(params) do
+    Enum.reduce(properties, params, fn
+      {key, %{"default" => default}}, acc when not is_nil(default) ->
+        Map.put_new(acc, key, default)
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  def effective_args(_tool, params), do: params
 
   defp mcp_requires_approval?({:mcp, %{approval: :always}}), do: true
   defp mcp_requires_approval?(_source), do: false

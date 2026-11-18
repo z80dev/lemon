@@ -7,8 +7,24 @@ defmodule LemonCore.Config.ToolsTest do
   alias LemonCore.Config.{Tools, Validator}
 
   test "anchored edit visibility defaults on and validates configured booleans" do
-    assert Tools.defaults()["edit"] == %{"enforce_seen_lines" => true}
-    assert Tools.resolve(%{}).edit == %{enforce_seen_lines: true}
+    assert Tools.defaults()["edit"] == %{
+             "enforce_seen_lines" => true,
+             "repo_local_tools" => false
+           }
+
+    assert Tools.resolve(%{}).edit == %{enforce_seen_lines: true, repo_local_tools: false}
+
+    assert Tools.resolve(%{"tools" => %{"edit" => %{"repo_local_tools" => true}}}).edit.repo_local_tools
+
+    assert "runtime.tools.edit.repo_local_tools: must be a boolean" in Validator.validate_tools(
+             Tools.resolve(%{"tools" => %{"edit" => %{"repo_local_tools" => "yes"}}}),
+             []
+           )
+
+    # A repo cannot opt itself into running its own binaries.
+    project = %{"runtime" => %{"tools" => %{"edit" => %{"repo_local_tools" => true}}}}
+    {merged, [_rejection]} = LemonCore.Config.ProjectLayer.merge(%{}, project)
+    refute get_in(merged, ["runtime", "tools", "edit", "repo_local_tools"])
 
     for enabled <- [true, false] do
       config = Tools.resolve(%{"tools" => %{"edit" => %{"enforce_seen_lines" => enabled}}})

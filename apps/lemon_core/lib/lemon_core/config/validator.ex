@@ -917,7 +917,9 @@ defmodule LemonCore.Config.Validator do
   defp validate_edit(errors, nil), do: errors
 
   defp validate_edit(errors, %{} = edit) do
-    validate_boolean(errors, edit[:enforce_seen_lines], "runtime.tools.edit.enforce_seen_lines")
+    errors
+    |> validate_boolean(edit[:enforce_seen_lines], "runtime.tools.edit.enforce_seen_lines")
+    |> validate_boolean(edit[:repo_local_tools], "runtime.tools.edit.repo_local_tools")
   end
 
   defp validate_edit(errors, _), do: ["runtime.tools.edit: must be a table" | errors]

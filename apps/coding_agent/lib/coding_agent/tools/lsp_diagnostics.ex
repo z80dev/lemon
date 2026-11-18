@@ -8,6 +8,7 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   """
 
   alias CodingAgent.Tools.Bash.CommandPolicy
+  alias CodingAgent.Tools.CheckerRunner
   alias CodingAgent.Tools.PathHelpers
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -44,9 +45,9 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   """
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t() | {:error, String.t()}
-  def execute(_tool_call_id, params, _signal, _on_update, cwd, opts) do
+  def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
     with {:ok, path} <- get_path(params),
-         {:ok, result} <- diagnose_file(path, cwd, opts) do
+         {:ok, result} <- diagnose_file(path, cwd, Keyword.put(opts, :signal, signal)) do
       %AgentToolResult{
         content: [%TextContent{text: render_result(result)}],
         details: result
@@ -63,6 +64,7 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   def diagnose_file(path, cwd, opts) when is_binary(path) and is_binary(cwd) do
     resolved_path = PathHelpers.resolve_path(path, cwd, Keyword.put(opts, :expand, false))
     ext = resolved_path |> Path.extname() |> String.downcase()
+    opts = Keyword.put(opts, :workspace_cwd, Path.expand(cwd))
 
     with :ok <- check_policy(opts),
          {:ok, _} <- ensure_regular_file(resolved_path) do
@@ -271,11 +273,8 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   end
 
   defp run_mix_compile(path, root, opts) do
-    case System.find_executable("mix") do
-      nil ->
-        {:ok, clean_result(path, :elixir, "elixir syntax")}
-
-      mix ->
+    case CheckerRunner.resolve("mix", checker_roots(root, opts), opts) do
+      {:ok, mix} ->
         case run_command(mix, ["compile", "--return-errors"], root, opts) do
           {output, 0} ->
             {:ok, clean_result(path, :elixir, "mix compile", output)}
@@ -285,17 +284,28 @@ defmodule CodingAgent.Tools.LspDiagnostics do
             result = diagnostic_result(path, :elixir, diagnostics)
             {:ok, Map.put(result, :command_exit_status, status)}
         end
+
+      _missing_or_repo_local ->
+        {:ok, clean_result(path, :elixir, "elixir syntax")}
     end
   end
 
   defp diagnose_external(language, path, cwd, opts) do
     case external_runner(language, path, cwd) do
-      {:ok, %{command: command, args: args, root: root, source: source}} ->
-        case System.find_executable(command) do
-          nil ->
+      {:ok, %{command: command, args: args, root: root, source: source} = runner} ->
+        case resolve_runner_command(command, Map.get(runner, :repo_local), root, opts) do
+          :missing ->
             {:ok, skipped_result(path, language, "missing executable: #{command}")}
 
-          executable ->
+          :repo_local ->
+            {:ok,
+             skipped_result(
+               path,
+               language,
+               "refused repo-local executable: #{command} (runtime.tools.edit.repo_local_tools)"
+             )}
+
+          {:ok, executable} ->
             case run_command(executable, args, root, opts) do
               {output, 0} ->
                 {:ok, clean_result(path, language, source, output)}
@@ -314,6 +324,17 @@ defmodule CodingAgent.Tools.LspDiagnostics do
     end
   end
 
+  # A project-provided binary (e.g. `node_modules/.bin/tsc`) is used only when
+  # the operator opted in; otherwise only the operator's PATH counts.
+  defp resolve_runner_command(command, repo_local, root, opts) do
+    if is_binary(repo_local) and CheckerRunner.repo_local_allowed?(opts) and
+         File.exists?(repo_local),
+       do: {:ok, repo_local},
+       else: CheckerRunner.resolve(command, checker_roots(root, opts), opts)
+  end
+
+  defp checker_roots(root, opts), do: [Keyword.get(opts, :workspace_cwd), root]
+
   defp external_runner(:javascript, path, _cwd) do
     {:ok,
      %{command: "node", args: ["--check", path], root: Path.dirname(path), source: "node --check"}}
@@ -324,11 +345,12 @@ defmodule CodingAgent.Tools.LspDiagnostics do
 
     cond do
       root && File.exists?(Path.join(root, "tsconfig.json")) ->
-        {command, args} = typescript_command(root)
+        {command, repo_local, args} = typescript_command(root)
 
         {:ok,
          %{
            command: command,
+           repo_local: repo_local,
            args: args,
            root: root,
            source: "tsc --noEmit"
@@ -389,18 +411,7 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   end
 
   defp typescript_command(root) do
-    local_tsc = Path.join([root, "node_modules", ".bin", "tsc"])
-
-    cond do
-      File.exists?(local_tsc) ->
-        {local_tsc, ["--noEmit", "--pretty", "false"]}
-
-      System.find_executable("tsc") ->
-        {"tsc", ["--noEmit", "--pretty", "false"]}
-
-      true ->
-        {"npx", ["--no-install", "tsc", "--noEmit", "--pretty", "false"]}
-    end
+    {"tsc", Path.join([root, "node_modules", ".bin", "tsc"]), ["--noEmit", "--pretty", "false"]}
   end
 
   defp c_cpp_command(path) do
@@ -422,21 +433,24 @@ defmodule CodingAgent.Tools.LspDiagnostics do
     end
   end
 
-  defp run_command(command, args, cwd, opts) do
+  defp run_command(executable, args, cwd, opts) do
     timeout_ms = Keyword.get(opts, :diagnostics_timeout_ms, @default_timeout_ms)
 
-    command =
-      Enum.map_join([command | args], " ", fn arg ->
-        "'" <> String.replace(arg, "'", "'\"'\"'") <> "'"
-      end)
+    case CheckerRunner.run(executable, args, cwd, timeout_ms, 64_000, opts) do
+      {:ok, %{timed_out: true}} ->
+        {"diagnostics timed out after #{timeout_ms}ms", 124}
 
-    case CodingAgent.BashExecutor.execute(command, cwd, timeout: timeout_ms, max_bytes: 64_000) do
-      {:ok, result} ->
-        if result.full_output_path, do: File.rm(result.full_output_path)
+      {:ok, %{cancelled: true}} ->
+        {"diagnostics cancelled", 130}
 
-        if result.timed_out,
-          do: {"diagnostics timed out after #{timeout_ms}ms", 124},
-          else: {result.output, result.exit_code}
+      {:ok, %{output: output, exit_code: status}} ->
+        {output, status || 1}
+
+      {:error, {:checker_survived, id}} ->
+        {"checker process group survived kill (proc://#{id})", 1}
+
+      {:error, {:outcome_unknown, id}} ->
+        {"checker launch outcome unknown (proc://#{id})", 1}
 
       {:error, _reason} ->
         {"diagnostics command failed to start", 1}

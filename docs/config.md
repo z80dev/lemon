@@ -2612,7 +2612,10 @@ per-tool and source-specific approval requirements. Reads/search/web fetches
 are `read`; built-in file/state mutations are `write`; shell/process control,
 eval/debug, browser evaluation, MCP/WASM/extension and unknown tools are `exec`.
 LSP navigation and edit previews are `read`; applying edits, raw requests and
-server reloads are `exec`.
+server reloads are `exec`. A `write`, `edit` or `patch` call whose effective
+`diagnostics` or `format` option is on (the argument, or the host default when
+the argument is omitted; an explicit `false` wins) runs project toolchains and
+is `exec`. `lsp_diagnostics` is `exec` and records a durable tool intent first.
 
 Config supplies only the default. A canonical tool policy can set
 `approval_mode = "ask"`, `"write"` or `"yolo"` in
@@ -2685,6 +2688,29 @@ writing. Plain `old_text`/`new_text` replacements are unaffected. The setting mu
 be boolean; tool hosts can explicitly override it with `:enforce_seen_lines`.
 See [file tools](tools/files-and-search.md#anchored-edit-recovery-and-formatting)
 for visibility and snapshot-retention details.
+
+## Post-Edit Checkers and Formatters
+
+`write`, `edit` and `patch` calls with `diagnostics` or `format` (and
+`lsp_diagnostics`) run checkers and formatters resolved from the operator's
+`PATH`. Each runs as one owner-bound `ProcessManager` launch whose root shell
+stays alive as the process-group anchor until cleanup. On completion, abort or
+timeout the group is killed through the birth-bound ownership check against
+that anchor (children that outlived the checker included), and the launch's
+capacity is released when termination is confirmed. A checker that removes
+its own anchor, or a group whose stop cannot be confirmed, is reported with its
+`proc://` id instead of being signalled by a possibly reused id. An executable
+whose path, canonical path or canonical parent directory lies inside the
+workspace or project root (compared lexically and canonically), or that cannot
+be canonicalized, is refused unless the global config opts in:
+
+```toml
+[runtime.tools.edit]
+repo_local_tools = true # default false; global config only
+```
+
+Project config cannot set it. Execution nodes read it from their own global
+config. The calls stay `exec` tier either way.
 
 ## Language Servers
 

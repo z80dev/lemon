@@ -66,6 +66,27 @@ defmodule LemonCore.ToolPolicyTest do
     assert ToolPolicy.tier("lsp", %{"action" => "rename", "apply" => "true"}) == :exec
   end
 
+  test "write/edit/patch running diagnostics or format are exec tier" do
+    write_mode = ToolPolicy.parse!(%{"approval_mode" => "write"})
+
+    for tool <- ~w(write edit patch) do
+      assert ToolPolicy.tier(tool, %{"diagnostics" => false, "format" => false}) == :write
+      refute ToolPolicy.requires_approval?(write_mode, tool, %{"diagnostics" => false})
+
+      for args <- [
+            %{"diagnostics" => true},
+            %{"format" => true},
+            %{"format" => "true"},
+            %{"diagnostics" => 1},
+            %{diagnostics: true},
+            %{"diagnostics" => false, "format" => true}
+          ] do
+        assert ToolPolicy.tier(tool, args) == :exec, "#{tool} #{inspect(args)}"
+        assert ToolPolicy.requires_approval?(write_mode, tool, args)
+      end
+    end
+  end
+
   test "browser_get_cookies with includeValues is write tier for every truthy spelling" do
     assert ToolPolicy.tier("browser_get_cookies") == :read
     assert ToolPolicy.tier("browser_get_cookies", %{"includeValues" => false}) == :read

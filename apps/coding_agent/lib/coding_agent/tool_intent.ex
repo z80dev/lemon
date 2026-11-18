@@ -20,7 +20,8 @@ defmodule CodingAgent.ToolIntent do
   alias LemonAi.Types.TextContent
 
   @receipt_key {__MODULE__, :controller_intent}
-  @read_only_builtins ~w(read read_skill recall lsp_diagnostics bash_output grep find semantic_find ls webfetch websearch extensions_status)
+  # `lsp_diagnostics` is absent: its checkers run project code (`mix.exs`, build hooks).
+  @read_only_builtins ~w(read read_skill recall bash_output grep find semantic_find ls webfetch websearch extensions_status)
 
   @scope_key {__MODULE__, :parent_scope}
   @unknown_call_limit 100

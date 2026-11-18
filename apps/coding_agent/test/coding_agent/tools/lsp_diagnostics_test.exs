@@ -23,8 +23,11 @@ defmodule CodingAgent.Tools.LspDiagnosticsTest do
     """)
 
     File.chmod!(executable, 0o755)
-    File.write!(Path.join(tmp_dir, "go.mod"), "module fixture\n")
-    path = Path.join(tmp_dir, "main.go")
+    # The project sits beside the operator bin: workspace binaries are refused.
+    project = Path.join(tmp_dir, "project")
+    File.mkdir_p!(project)
+    File.write!(Path.join(project, "go.mod"), "module fixture\n")
+    path = Path.join(project, "main.go")
     File.write!(path, "package main\n")
     System.put_env("PATH", bin <> ":" <> previous_path)
 
@@ -39,7 +42,7 @@ defmodule CodingAgent.Tools.LspDiagnosticsTest do
     end)
 
     assert {:ok, result} =
-             LspDiagnostics.diagnose_file(path, tmp_dir, diagnostics_timeout_ms: 1_000)
+             LspDiagnostics.diagnose_file(path, project, diagnostics_timeout_ms: 1_000)
 
     assert result.command_exit_status == 124
     assert result.raw_output =~ "diagnostics timed out"

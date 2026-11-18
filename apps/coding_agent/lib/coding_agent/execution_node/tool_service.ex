@@ -159,10 +159,23 @@ defmodule CodingAgent.ExecutionNode.ToolService do
       execution_context: context,
       available_tools: available,
       bash_config: %{},
-      enforce_seen_lines: true
+      enforce_seen_lines: true,
+      repo_local_tools:
+        Keyword.get_lazy(opts, :repo_local_tools, fn ->
+          configured_repo_local_tools(opts[:default_cwd])
+        end)
     ]
 
     Keyword.put(base, :tool_resolver, resolver(available, opts[:default_cwd], base, opts))
+  end
+
+  # The destination's own operator config decides; project config cannot set it.
+  @doc false
+  def configured_repo_local_tools(cwd) do
+    get_in(LemonCore.Config.cached(cwd), [Access.key(:agent), :tools, :edit, :repo_local_tools]) ==
+      true
+  rescue
+    _ -> false
   end
 
   # Cells reach only this node's tools. Their mutations are covered by the

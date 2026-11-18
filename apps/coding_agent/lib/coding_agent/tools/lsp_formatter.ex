@@ -7,6 +7,7 @@ defmodule CodingAgent.Tools.LspFormatter do
   """
 
   alias CodingAgent.Tools.Bash.CommandPolicy
+  alias CodingAgent.Tools.CheckerRunner
 
   @default_timeout_ms 15_000
 
@@ -90,7 +91,11 @@ defmodule CodingAgent.Tools.LspFormatter do
       formatter = Keyword.get(opts, :format_file_fun, &format_file/2)
       timeout_ms = Keyword.get(opts, :format_timeout_ms, 5_000)
 
-      case formatter.(path, cwd: cwd, timeout_ms: timeout_ms, tool_policy: tool_policy) do
+      format_opts =
+        [cwd: cwd, timeout_ms: timeout_ms, tool_policy: tool_policy] ++
+          Keyword.take(opts, [:signal, :session_id, :session_pid, :repo_local_tools])
+
+      case formatter.(path, format_opts) do
         {:ok, :formatted} -> {true, nil}
         {:ok, :unchanged} -> {false, nil}
         {:error, reason} -> {false, to_string(reason)}
@@ -108,32 +113,19 @@ defmodule CodingAgent.Tools.LspFormatter do
   def format_file(path, opts \\ [])
 
   def format_file(path, opts) when is_binary(path) do
+    cwd = opts[:cwd] || Path.dirname(path)
+
     with :ok <- check_policy(opts),
          {:ok, formatter} <- formatter_for_path(path),
          {:ok, _} <- ensure_file_exists(path),
-         {:ok, executable} <- ensure_executable(formatter.command),
+         {:ok, executable} <- resolve_executable(formatter.command, cwd, opts),
          {:ok, timeout_ms} <- resolve_timeout(opts) do
       before = File.read(path)
       args = formatter.args ++ [path]
 
-      command =
-        Enum.map_join([executable | args], " ", fn arg ->
-          "'" <> String.replace(arg, "'", "'\"'\"'") <> "'"
-        end)
-
-      result =
-        CodingAgent.BashExecutor.execute(command, opts[:cwd],
-          timeout: timeout_ms,
-          max_bytes: 8_192
-        )
-
-      case result do
-        {:ok, result} ->
-          if result.full_output_path, do: File.rm(result.full_output_path)
-          formatter_result(result, before, path)
-
-        {:error, reason} ->
-          {:error, inspect(reason)}
+      case CheckerRunner.run(executable, args, cwd, timeout_ms, 8_192, opts) do
+        {:ok, result} -> formatter_result(result, before, path)
+        {:error, reason} -> {:error, inspect(reason)}
       end
     else
       {:skip, :not_formatable} -> {:ok, :unchanged}
@@ -154,6 +146,9 @@ defmodule CodingAgent.Tools.LspFormatter do
 
   defp formatter_result(%{timed_out: true}, _before, _path),
     do: {:error, "formatter timed out"}
+
+  defp formatter_result(%{cancelled: true}, _before, _path),
+    do: {:error, "formatter cancelled"}
 
   defp formatter_result(%{exit_code: 0}, before, path) do
     after_read = File.read(path)
@@ -183,10 +178,17 @@ defmodule CodingAgent.Tools.LspFormatter do
     if File.exists?(path), do: {:ok, path}, else: {:error, "file not found: #{path}"}
   end
 
-  defp ensure_executable(command) do
-    case System.find_executable(command) do
-      nil -> {:skip, :missing_executable}
-      executable -> {:ok, executable}
+  defp resolve_executable(command, cwd, opts) do
+    case CheckerRunner.resolve(command, [cwd], opts) do
+      {:ok, executable} ->
+        {:ok, executable}
+
+      :missing ->
+        {:skip, :missing_executable}
+
+      :repo_local ->
+        {:error,
+         "refused repo-local executable: #{command} (runtime.tools.edit.repo_local_tools)"}
     end
   end
 
