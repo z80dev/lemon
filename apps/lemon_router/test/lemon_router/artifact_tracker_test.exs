@@ -289,6 +289,91 @@ defmodule LemonRouter.RunProcess.ArtifactTrackerTest do
     end
   end
 
+  describe "retained delivery copies" do
+    # Called through a variable: lemon_router does not depend on coding_agent,
+    # but the umbrella test run loads both.
+    @send_file CodingAgent.Tools.SendFile
+
+    defp channel_key do
+      LemonCore.SessionKey.channel_peer(%{
+        agent_id: "default",
+        channel_id: "discord",
+        account_id: "bot",
+        peer_kind: :dm,
+        peer_id: "#{System.unique_integer([:positive])}"
+      })
+    end
+
+    defp send_file_event(details) do
+      %{phase: :completed, ok: true, action: %{kind: "tool", detail: %{result_meta: details}}}
+    end
+
+    test "send_file delivers the validated bytes after a delayed source swap" do
+      cwd = tmp_dir!("artifact-tracker-swap")
+      outside = write_file!(tmp_dir!("artifact-tracker-swap-out"), "secret.txt", "SECRET")
+      source = write_file!(cwd, "report.txt", "VALIDATED")
+      session_key = channel_key()
+      send_file = @send_file
+
+      result =
+        send_file.tool(cwd, session_key: session_key).execute.(
+          "call",
+          %{"path" => "report.txt", "caption" => "Weekly"},
+          nil,
+          nil
+        )
+
+      assert %{auto_send_files: [%{path: copy}]} = result.details
+      refute String.starts_with?(canonical_path(copy), canonical_path(cwd) <> "/")
+
+      request = %{request(cwd) | session_key: session_key}
+
+      state =
+        ArtifactTracker.track_requested_send_files(
+          %{execution_request: request},
+          send_file_event(result.details)
+        )
+
+      # The source is swapped for a link to an outside secret before completion.
+      File.rm!(source)
+      File.ln_s!(outside, source)
+
+      assert %{auto_send_files: [file]} = ArtifactTracker.finalize_meta(state, nil)
+      assert %{path: ^copy, filename: "report.txt", caption: "Weekly"} = file
+      assert File.read!(file.path) == "VALIDATED"
+
+      # Provenance is one-shot.
+      assert ArtifactTracker.finalize_meta(state, nil) == %{}
+    end
+
+    test "registered copies are delivered for runs without a cwd" do
+      session_key = channel_key()
+      {:ok, copy} = LemonCore.FileAccess.retain_copy("chart.png", "png")
+      :ok = LemonCore.OutboundCopies.register(session_key, copy)
+
+      state = %{
+        execution_request: %{request(nil) | session_key: session_key},
+        requested_send_files: [%{path: copy, filename: "chart.png"}]
+      }
+
+      assert %{auto_send_files: [%{path: ^copy}]} = ArtifactTracker.finalize_meta(state, nil)
+    end
+
+    test "an unregistered or foreign-session path outside cwd is dropped" do
+      cwd = tmp_dir!("artifact-tracker-forged")
+      {:ok, forged} = LemonCore.FileAccess.retain_copy("forged.txt", "x")
+      {:ok, foreign} = LemonCore.FileAccess.retain_copy("foreign.txt", "y")
+      :ok = LemonCore.OutboundCopies.register(channel_key(), foreign)
+
+      state = %{
+        execution_request: %{request(cwd) | session_key: channel_key()},
+        requested_send_files: [%{path: forged}, %{path: foreign}]
+      }
+
+      assert ArtifactTracker.finalize_meta(state, nil) == %{}
+    end
+  end
+
   defp tmp_dir!(suffix) do
     path = Path.join(System.tmp_dir!(), "#{suffix}-#{System.unique_integer([:positive])}")
     File.mkdir_p!(path)

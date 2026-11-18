@@ -8,8 +8,11 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
   such as `:auto_send_files`.
 
   Only existing regular files whose real path lies under the run's cwd are
-  attachable. A run without a cwd (for example a remote-node run whose files
-  live on another host) attaches nothing; dropped paths are logged.
+  attachable, plus private delivery copies that a tool registered for this
+  run's session in `LemonCore.OutboundCopies` (one-shot provenance; a path
+  merely named in tool output or the answer is never trusted that way). A run
+  without a cwd (for example a remote-node run whose files live on another
+  host) attaches only such registered copies; dropped paths are logged.
   """
 
   require Logger
@@ -53,33 +56,33 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
 
   @spec finalize_meta(map(), binary() | nil) :: map()
   def finalize_meta(state, answer) do
-    case normalize_root(request_cwd(state)) do
-      nil -> drop_rootless_files(state, answer)
-      root -> finalize_files(state, answer, root)
-    end
-  end
+    {copies, requested} = take_retained_copies(state)
 
-  defp finalize_files(state, answer, root) do
     files =
-      merge_files(
-        merge_files(
-          resolve_explicit_send_files(requested_send_files(state), root),
-          resolve_explicit_send_files(media_directive_files(answer), root)
-        ),
-        resolve_generated_files(generated_image_paths(state), root)
-      )
+      case normalize_root(request_cwd(state)) do
+        nil -> drop_rootless_files(requested, generated_image_paths(state), answer)
+        root -> finalize_files(state, requested, answer, root)
+      end
 
-    if files == [] do
-      %{}
-    else
-      %{auto_send_files: files}
+    case merge_files(copies, files) do
+      [] -> %{}
+      files -> %{auto_send_files: files}
     end
   end
 
-  defp drop_rootless_files(state, answer) do
+  defp finalize_files(state, requested, answer, root) do
+    merge_files(
+      merge_files(
+        resolve_explicit_send_files(requested, root),
+        resolve_explicit_send_files(media_directive_files(answer), root)
+      ),
+      resolve_generated_files(generated_image_paths(state), root)
+    )
+  end
+
+  defp drop_rootless_files(requested, generated, answer) do
     dropped =
-      (Enum.map(requested_send_files(state) ++ media_directive_files(answer), &file_path/1) ++
-         generated_image_paths(state))
+      (Enum.map(requested ++ media_directive_files(answer), &file_path/1) ++ generated)
       |> Enum.filter(&is_binary/1)
       |> Enum.uniq()
 
@@ -90,8 +93,46 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
       )
     end
 
-    %{}
+    []
   end
+
+  # Requested files whose path is a copy registered for this session are
+  # delivered as is (the copy holds bytes validated when it was made); the
+  # rest go through the cwd containment checks.
+  defp take_retained_copies(state) do
+    session_key = request_session_key(state)
+
+    {copies, rest} =
+      Enum.reduce(requested_send_files(state), {[], []}, fn file, {copies, rest} ->
+        case retained_copy(file, session_key) do
+          nil -> {copies, [file | rest]}
+          copy -> {[copy | copies], rest}
+        end
+      end)
+
+    {Enum.reverse(copies), Enum.reverse(rest)}
+  end
+
+  defp retained_copy(file, session_key) when is_map(file) and is_binary(session_key) do
+    path = file_path(file)
+
+    with true <- is_binary(path) and Path.type(path) == :absolute,
+         true <- LemonCore.OutboundCopies.take(session_key, path),
+         {:ok, %File.Stat{type: :regular}} <- File.lstat(path),
+         {:ok, %File.Stat{type: :directory}} <- File.lstat(Path.dirname(path)) do
+      %{
+        path: path,
+        filename: normalize_filename(MapHelpers.get_key(file, :filename), path),
+        caption: normalize_caption(MapHelpers.get_key(file, :caption)),
+        source: normalize_source(MapHelpers.get_key(file, :source)) || :explicit
+      }
+      |> maybe_put(:mime_type, normalize_mime_type(MapHelpers.get_key(file, :mime_type)))
+    else
+      _ -> nil
+    end
+  end
+
+  defp retained_copy(_file, _session_key), do: nil
 
   defp file_path(file) when is_map(file), do: MapHelpers.get_key(file, :path)
   defp file_path(_file), do: nil
@@ -332,6 +373,12 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
   defp request_cwd(%{execution_request: %{cwd: cwd}}) when is_binary(cwd) and cwd != "", do: cwd
 
   defp request_cwd(_), do: nil
+
+  defp request_session_key(%{execution_request: %{session_key: key}})
+       when is_binary(key) and key != "",
+       do: key
+
+  defp request_session_key(_), do: nil
 
   defp existing_file(path, root) when is_binary(path) do
     with {:ok, %File.Stat{type: :regular}} <- File.stat(path),

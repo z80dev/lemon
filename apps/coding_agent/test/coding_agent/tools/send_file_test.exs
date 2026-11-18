@@ -1,5 +1,5 @@
 defmodule CodingAgent.Tools.SendFileTest do
-  # Not async: one test swaps the running gateway config's `:discord` section.
+  # Not async: some tests swap the running gateway config's channel sections.
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.SendFile
@@ -38,6 +38,11 @@ defmodule CodingAgent.Tools.SendFileTest do
     assert text(result) =~ "must stay within the active workspace/project roots"
   end
 
+  defp assert_symlink_refused(result) do
+    assert result.details == %{error: true}
+    assert text(result) =~ "Symlinks are not allowed"
+  end
+
   describe "containment" do
     for channel <- ["telegram", "discord"] do
       @channel channel
@@ -64,7 +69,7 @@ defmodule CodingAgent.Tools.SendFileTest do
         outside: outside
       } do
         File.ln_s!(Path.join(outside, "secret.png"), Path.join(root, "link.png"))
-        assert_policy_error(send(@channel, root, %{"path" => "link.png"}))
+        assert_symlink_refused(send(@channel, root, %{"path" => "link.png"}))
       end
 
       test "#{channel}: a symlinked directory escaping the root is refused", %{
@@ -72,7 +77,27 @@ defmodule CodingAgent.Tools.SendFileTest do
         outside: outside
       } do
         File.ln_s!(outside, Path.join(root, "escape"))
-        assert_policy_error(send(@channel, root, %{"path" => "escape/secret.png"}))
+        assert_symlink_refused(send(@channel, root, %{"path" => "escape/secret.png"}))
+      end
+
+      test "#{channel}: any `..` component is refused even when it stays inside", %{
+        root: root
+      } do
+        File.mkdir_p!(Path.join(root, "sub"))
+        File.write!(Path.join(root, "chart.png"), "PNG")
+        workspace = Path.join(root, "ws")
+        File.mkdir_p!(Path.join(workspace, "sub"))
+        File.write!(Path.join(workspace, "chart.png"), "PNG")
+
+        for path <- [
+              "sub/../chart.png",
+              "./sub/../chart.png",
+              Path.join(root, "sub/../chart.png"),
+              "workspace/sub/../chart.png",
+              "#{root}/sub/.."
+            ] do
+          assert_policy_error(send(@channel, root, %{"path" => path}, workspace_dir: workspace))
+        end
       end
 
       test "#{channel}: workspace-prefixed traversal is refused", %{root: root} do
@@ -125,12 +150,17 @@ defmodule CodingAgent.Tools.SendFileTest do
       assert %{auto_send_files: [%{filename: "data.csv"}]} = prefixed.details
     end
 
-    test "a symlink that stays inside the root is allowed", %{root: root} do
+    test "symlinks below the root are refused even when they stay inside", %{root: root} do
       File.write!(Path.join(root, "real.png"), "PNG")
       File.ln_s!(Path.join(root, "real.png"), Path.join(root, "alias.png"))
+      File.ln_s!("real.png", Path.join(root, "rel_alias.png"))
+      File.mkdir_p!(Path.join(root, "img"))
+      File.write!(Path.join(root, "img/pic.png"), "PNG")
+      File.ln_s!(Path.join(root, "img"), Path.join(root, "imgdir"))
 
-      result = send("telegram", root, %{"path" => "alias.png"})
-      assert %{auto_send_files: [%{filename: "real.png"}]} = result.details
+      for path <- ["alias.png", "rel_alias.png", Path.join(root, "alias.png"), "imgdir/pic.png"] do
+        assert_symlink_refused(send("telegram", root, %{"path" => path}))
+      end
     end
   end
 
@@ -157,45 +187,109 @@ defmodule CodingAgent.Tools.SendFileTest do
       assert File.read!(file.path) == "VALIDATED"
     end
 
-    test "built-in secret names are refused, including through an in-root alias", %{root: root} do
+    test "built-in secret names are refused, and aliases of them are symlinks", %{root: root} do
       File.write!(Path.join(root, ".env"), "API_KEY=1")
       File.mkdir_p!(Path.join(root, ".git"))
       File.write!(Path.join(root, ".git/config"), "[core]")
-      File.ln_s!(Path.join(root, ".env"), Path.join(root, "alias.txt"))
 
-      for path <- [".env", ".git/config", Path.join(root, ".env"), "alias.txt"] do
+      for path <- [".env", ".git/config", Path.join(root, ".env")] do
         result = send("discord", root, %{"path" => path})
         assert result.details == %{error: true}
         assert text(result) =~ "Access denied"
       end
+
+      # An innocuous name linking to a secret, and a secret name linking to an
+      # innocuous file: neither is followed.
+      File.ln_s!(Path.join(root, ".env"), Path.join(root, "alias.txt"))
+      File.mkdir_p!(Path.join(root, "config"))
+      File.write!(Path.join(root, "config/local.txt"), "ok")
+      File.mkdir_p!(Path.join(root, "app"))
+      File.ln_s!(Path.join(root, "config/local.txt"), Path.join(root, "app/.env"))
+
+      assert_symlink_refused(send("discord", root, %{"path" => "alias.txt"}))
+
+      result = send("discord", root, %{"path" => "app/.env"})
+      assert result.details == %{error: true}
+      assert text(result) =~ ~r/Access denied|Symlinks are not allowed/
+    end
+
+    test "the queued copy is registered for the session only", %{root: root} do
+      File.write!(Path.join(root, "report.txt"), "ok")
+
+      assert %{auto_send_files: [%{path: copy}]} =
+               send("discord", root, %{"path" => "report.txt"}).details
+
+      refute LemonCore.OutboundCopies.take(key("telegram"), copy)
+      assert LemonCore.OutboundCopies.take(key("discord"), copy)
+      refute LemonCore.OutboundCopies.take(key("discord"), copy)
     end
 
     test "configured files.deny_globs apply", %{root: root} do
       File.mkdir_p!(Path.join(root, "keys"))
       File.write!(Path.join(root, "keys/server.key"), "KEY")
       File.write!(Path.join(root, "notes.txt"), "notes")
-      put_discord_config(%{files: %{deny_globs: ["**/*.{pem,key}"]}})
+      put_config(:discord, %{files: %{deny_globs: ["**/*.{pem,key}"]}})
 
       assert send("discord", root, %{"path" => "keys/server.key"}).details == %{error: true}
       assert %{auto_send_files: [_]} = send("discord", root, %{"path" => "notes.txt"}).details
     end
   end
 
-  defp put_discord_config(discord) do
+  describe "size limits" do
+    setup %{root: root} do
+      File.write!(Path.join(root, "big.png"), String.duplicate("x", 10))
+      File.write!(Path.join(root, "small.png"), "xx")
+      :ok
+    end
+
+    defp assert_too_large(result, max) do
+      assert result.details == %{error: true}
+      assert text(result) =~ "File is too large. Max allowed is #{max} bytes."
+    end
+
+    test "discord honors channel-level max_upload_bytes", %{root: root} do
+      put_config(:discord, %{max_upload_bytes: 4})
+      assert_too_large(send("discord", root, %{"path" => "big.png"}), 4)
+      assert %{auto_send_files: [_]} = send("discord", root, %{"path" => "small.png"}).details
+    end
+
+    test "discord enforces the stricter of max_upload_bytes and files.max_download_bytes", %{
+      root: root
+    } do
+      put_config(:discord, %{max_upload_bytes: 100, files: %{max_download_bytes: "5"}})
+      assert_too_large(send("discord", root, %{"path" => "big.png"}), 5)
+
+      put_config(:discord, %{"max_upload_bytes" => "6", files: %{max_download_bytes: 100}})
+      assert_too_large(send("discord", root, %{"path" => "big.png"}), 6)
+    end
+
+    test "telegram honors string-valued files.max_download_bytes", %{root: root} do
+      put_config(:telegram, %{files: %{"max_download_bytes" => "4"}})
+      assert_too_large(send("telegram", root, %{"path" => "big.png"}), 4)
+      assert %{auto_send_files: [_]} = send("telegram", root, %{"path" => "small.png"}).details
+    end
+
+    test "invalid limits fall back to the channel default", %{root: root} do
+      put_config(:telegram, %{files: %{max_download_bytes: "zero"}, max_upload_bytes: -1})
+      assert %{auto_send_files: [_]} = send("telegram", root, %{"path" => "big.png"}).details
+    end
+  end
+
+  defp put_config(key, value) do
     case Process.whereis(LemonGateway.Config) do
       pid when is_pid(pid) ->
         previous = :sys.get_state(LemonGateway.Config)
-        :sys.replace_state(LemonGateway.Config, &Map.put(&1, :discord, discord))
+        :sys.replace_state(LemonGateway.Config, &Map.put(&1, key, value))
         on_exit(fn -> :sys.replace_state(LemonGateway.Config, fn _ -> previous end) end)
 
       nil ->
-        previous = Application.get_env(:lemon_gateway, :discord)
-        Application.put_env(:lemon_gateway, :discord, discord)
+        previous = Application.get_env(:lemon_gateway, key)
+        Application.put_env(:lemon_gateway, key, value)
 
         on_exit(fn ->
           if previous,
-            do: Application.put_env(:lemon_gateway, :discord, previous),
-            else: Application.delete_env(:lemon_gateway, :discord)
+            do: Application.put_env(:lemon_gateway, key, previous),
+            else: Application.delete_env(:lemon_gateway, key)
         end)
     end
   end
