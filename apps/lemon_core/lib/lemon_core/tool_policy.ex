@@ -18,6 +18,8 @@ defmodule LemonCore.ToolPolicy do
 
   require Logger
 
+  alias LemonCore.ToolCatalog
+
   @type approval_mode :: :always | :dangerous | :never
   @type tier :: :read | :write | :exec
   @type global_approval_mode :: :ask | :write | :yolo | nil
@@ -103,173 +105,18 @@ defmodule LemonCore.ToolPolicy do
   @execution_json_items 131_072
   @execution_json_bytes 16_777_216
 
-  @read_tools [
-    "read",
-    "read_skill",
-    "recall",
-    "grep",
-    "find",
-    "semantic_find",
-    "ls",
-    "checkpoint",
-    "rewind"
-  ]
-
-  @minimal_core_tools [
-    "read",
-    "read_skill",
-    "skill_manage",
-    "remember",
-    "recall",
-    "fs_checkpoint",
-    "checkpoint",
-    "rewind",
-    "write",
-    "edit",
-    "patch",
-    "ast_grep",
-    "bash",
-    "bash_output",
-    "kill_process",
-    "process_input",
-    "eval",
-    "grep",
-    "find",
-    "semantic_find",
-    "ls",
-    "report_issue",
-    "webfetch",
-    "websearch",
-    "browser_tabs",
-    "browser_tab_open",
-    "browser_tab_activate",
-    "browser_tab_close",
-    "browser_navigate",
-    "browser_snapshot",
-    "browser_get_content",
-    "browser_click",
-    "browser_type",
-    "browser_hover",
-    "browser_select_option",
-    "browser_upload_file",
-    "browser_download",
-    "browser_press",
-    "browser_scroll",
-    "browser_back",
-    "browser_wait_for_selector",
-    "browser_evaluate",
-    "browser_events",
-    "browser_get_cookies",
-    "browser_set_cookies",
-    "browser_clear_state",
-    "browser_screenshot",
-    "browser_analyze",
-    "media_status",
-    "media_generate_image",
-    "media_generate_speech",
-    "media_transcribe_audio",
-    "media_analyze_image",
-    "media_generate_video",
-    "todo",
-    "kanban",
-    "goal",
-    "cron",
-    "task",
-    "agent",
-    "nodes",
-    "extensions_status"
-  ]
-
-  @external_tools [
-    "webfetch",
-    "websearch",
-    "browser_tabs",
-    "browser_tab_open",
-    "browser_tab_activate",
-    "browser_tab_close",
-    "browser_navigate",
-    "browser_snapshot",
-    "browser_get_content",
-    "browser_click",
-    "browser_type",
-    "browser_hover",
-    "browser_select_option",
-    "browser_upload_file",
-    "browser_download",
-    "browser_press",
-    "browser_scroll",
-    "browser_back",
-    "browser_wait_for_selector",
-    "browser_evaluate",
-    "browser_events",
-    "browser_get_cookies",
-    "browser_set_cookies",
-    "browser_clear_state",
-    "browser_screenshot",
-    "browser_analyze",
-    "media_status",
-    "media_generate_image",
-    "media_generate_speech",
-    "media_transcribe_audio",
-    "media_analyze_image",
-    "media_generate_video",
-    # Sends session content to remote A2A agents.
-    "peer"
-  ]
-
-  @dangerous_tools [
-    "write",
-    "edit",
-    "patch",
-    "ast_grep",
-    "fs_checkpoint",
-    "skill_manage",
-    "remember",
-    "bash",
-    # Persistent kernels and debuggers execute arbitrary project code.
-    "eval",
-    "debug",
-    # Language servers can execute project code and apply file edits.
-    "lsp",
-    # Runs project compilers/checkers (`mix compile`, `cargo check`, `go test`),
-    # which execute project code.
-    "lsp_diagnostics",
-    "kill_process",
-    "process_input",
-    "agent",
-    # Routes tool calls to other machines.
-    "nodes",
-    "task",
-    "goal",
-    "kanban",
-    "cron",
-    "browser_click",
-    "browser_type",
-    "browser_select_option",
-    "browser_upload_file",
-    "browser_download",
-    "browser_press",
-    "browser_set_cookies",
-    "browser_clear_state",
-    "browser_evaluate",
-    "browser_screenshot",
-    "browser_analyze",
-    "media_generate_image",
-    "media_generate_speech",
-    "media_transcribe_audio",
-    "media_analyze_image",
-    "media_generate_video",
-    "peer"
-  ]
-
-  @write_tools ~w(write edit patch ast_grep fs_checkpoint skill_manage remember todo todowrite kanban goal cron)
-  @approval_read_tools @read_tools ++
-                         ~w(ast_search bash_output webfetch websearch wait ask ask_parent extensions_status media_status tool_search report_issue nodes)
-  @browser_read_tools ~w(browser_tabs browser_snapshot browser_get_content browser_wait_for_selector browser_events browser_get_cookies)
-  @browser_write_tools ~w(browser_tab_open browser_tab_activate browser_tab_close browser_navigate browser_click browser_type browser_hover browser_select_option browser_upload_file browser_download browser_press browser_scroll browser_back browser_set_cookies browser_clear_state browser_screenshot)
+  @read_only_tools ToolCatalog.read_only_names()
+  @minimal_core_tools ToolCatalog.minimal_core_names()
+  # Delegation hands work to agents whose own policy may be broader.
+  @safe_tools ToolCatalog.names_without([:dangerous, :delegation])
+  @internal_tools ToolCatalog.names_without([:external])
+  @leaf_worker_tools ToolCatalog.names_without([:delegation])
   @lsp_read_actions ~w(diagnostics definition type_definition implementation references hover symbols rename rename_file code_actions capabilities status)
 
-  @doc "Classifies built-ins; unclassified, external and executable surfaces fail closed to exec."
+  @doc """
+  Approval tier from `LemonCore.ToolCatalog`; unclassified, external and
+  executable surfaces fail closed to exec.
+  """
   @spec tier(String.t(), map()) :: tier()
   def tier(tool, args \\ %{})
 
@@ -279,12 +126,7 @@ defmodule LemonCore.ToolPolicy do
     if action in @lsp_read_actions and apply? in [false, nil], do: :read, else: :exec
   end
 
-  def tier(tool, _args) when tool in @write_tools or tool in @browser_write_tools, do: :write
-
-  def tier(tool, _args) when tool in @approval_read_tools or tool in @browser_read_tools,
-    do: :read
-
-  def tier(_tool, _args), do: :exec
+  def tier(tool, _args), do: ToolCatalog.tier(tool)
 
   @doc "Seeds only an unset mode from config. Explicit PolicyStore/session policy wins."
   def with_default_approval_mode(policy, mode) do
@@ -550,6 +392,17 @@ defmodule LemonCore.ToolPolicy do
   end
 
   def allowed?(_policy, _tool_name), do: false
+
+  @doc """
+  True when `agent_message` may reach only its own task family: the policy does
+  not grant every catalogued `:delegation` tool (see `LemonCore.ToolCatalog`),
+  or cannot be read. Named targets (`@handle`, `session://`, `bot://`) are then
+  refused.
+  """
+  @spec family_messaging_only?(term()) :: boolean()
+  def family_messaging_only?(policy) do
+    not Enum.all?(ToolCatalog.names_with(:delegation), &allowed?(policy, &1))
+  end
 
   defp authorized?(policy, tool_name) do
     tool_name not in policy.blocked_tools and tool_name not in policy.deny and
@@ -983,29 +836,31 @@ defmodule LemonCore.ToolPolicy do
   defp parse_optional_positive_integer(_value, field),
     do: {:error, {:invalid_policy_field, field}}
 
+  # Restricted profiles are allow lists over `LemonCore.ToolCatalog`: a tool
+  # the catalogue does not classify is denied, never granted by omission.
   defp profile_policy(:full_access), do: base_policy(:full_access)
   defp profile_policy(:orchestrator), do: base_policy(:orchestrator)
 
-  defp profile_policy(:leaf_worker) do
-    %{base_policy(:leaf_worker) | deny: ["task", "agent", "goal", "kanban", "cron", "peer"]}
-  end
+  defp profile_policy(:leaf_worker),
+    do: %{base_policy(:leaf_worker) | allow: @leaf_worker_tools}
 
-  defp profile_policy(:minimal_core) do
-    %{base_policy(:minimal_core) | allow: @minimal_core_tools}
-  end
+  defp profile_policy(:minimal_core),
+    do: %{base_policy(:minimal_core) | allow: @minimal_core_tools}
 
-  defp profile_policy(:read_only), do: %{base_policy(:read_only) | allow: @read_tools}
-  defp profile_policy(:safe_mode), do: %{base_policy(:safe_mode) | deny: @dangerous_tools}
+  defp profile_policy(:read_only), do: %{base_policy(:read_only) | allow: @read_only_tools}
+  defp profile_policy(:safe_mode), do: %{base_policy(:safe_mode) | allow: @safe_tools}
 
   defp profile_policy(:subagent_restricted) do
     %{
       base_policy(:subagent_restricted)
-      | deny: @dangerous_tools,
+      | allow: @safe_tools,
         require_approval: ["write", "edit"]
     }
   end
 
-  defp profile_policy(:no_external), do: %{base_policy(:no_external) | deny: @external_tools}
+  defp profile_policy(:no_external),
+    do: %{base_policy(:no_external) | allow: @internal_tools}
+
   defp profile_policy(:custom), do: base_policy(:custom)
 
   defp base_policy(profile) do

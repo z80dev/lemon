@@ -12,7 +12,7 @@ defmodule CodingAgent.Tools.EditFormatTest do
     File.write!(path, "old\n")
 
     formatter = fn ^path, opts ->
-      assert opts == [cwd: cwd, timeout_ms: 321]
+      assert opts == [cwd: cwd, timeout_ms: 321, tool_policy: nil]
       File.write!(path, "formatted\nnew\n")
       {:ok, :formatted}
     end

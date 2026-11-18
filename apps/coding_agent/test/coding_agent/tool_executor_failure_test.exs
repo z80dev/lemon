@@ -25,7 +25,7 @@ defmodule CodingAgent.ToolExecutorFailureTest do
       }
 
       wrapped =
-        ToolExecutor.wrap_with_approval(
+        gate(
           tool,
           ToolPolicy.custom(require_approval: ["write"]),
           %{
@@ -190,7 +190,7 @@ defmodule CodingAgent.ToolExecutorFailureTest do
     }
 
     wrapped =
-      ToolExecutor.wrap_with_approval(
+      gate(
         tool,
         ToolPolicy.custom(require_approval: ["write"]),
         %{approval_request_fun: fn _request -> raise @secret end}
@@ -233,5 +233,17 @@ defmodule CodingAgent.ToolExecutorFailureTest do
     assert %AgentToolResult{is_error: true} = result
     refute_received ^marker
     result
+  end
+
+  # The session finalize step: the one approval gate for caller-supplied tools.
+  defp gate(tool, policy, context) do
+    [wrapped] =
+      CodingAgent.ToolRegistry.finalize_tools([tool], File.cwd!(),
+        tool_policy: policy,
+        approval_context: context,
+        tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(File.cwd!())
+      )
+
+    wrapped
   end
 end

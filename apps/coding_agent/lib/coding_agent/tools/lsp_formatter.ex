@@ -6,6 +6,8 @@ defmodule CodingAgent.Tools.LspFormatter do
   based on file extension and runs it if the executable is available.
   """
 
+  alias CodingAgent.Tools.Bash.CommandPolicy
+
   @default_timeout_ms 15_000
 
   @formatters %{
@@ -54,10 +56,25 @@ defmodule CodingAgent.Tools.LspFormatter do
   def formatable?(_), do: false
 
   @doc false
+  # Project formatters run project code (plugins, config files), which no
+  # command list can inspect: under `allowed_commands`/`blocked_commands` an
+  # explicit `format: true` is refused and a configured default is skipped.
   def option(params, opts) do
+    explicit? = Map.has_key?(params, "format")
+
     case Map.get(params, "format", Keyword.get(opts, :format, false)) do
-      value when is_boolean(value) -> {:ok, value}
-      _ -> {:error, "format must be a boolean"}
+      true ->
+        cond do
+          not CommandPolicy.restricted?(Keyword.get(opts, :tool_policy)) -> {:ok, true}
+          explicit? -> {:error, CommandPolicy.unavailable("format")}
+          true -> {:ok, false}
+        end
+
+      false ->
+        {:ok, false}
+
+      _ ->
+        {:error, "format must be a boolean"}
     end
   end
 
@@ -65,13 +82,19 @@ defmodule CodingAgent.Tools.LspFormatter do
   def after_write(_path, false, _cwd, _opts), do: {false, nil}
 
   def after_write(path, true, cwd, opts) do
-    formatter = Keyword.get(opts, :format_file_fun, &format_file/2)
-    timeout_ms = Keyword.get(opts, :format_timeout_ms, 5_000)
+    tool_policy = Keyword.get(opts, :tool_policy)
 
-    case formatter.(path, cwd: cwd, timeout_ms: timeout_ms) do
-      {:ok, :formatted} -> {true, nil}
-      {:ok, :unchanged} -> {false, nil}
-      {:error, reason} -> {false, to_string(reason)}
+    if CommandPolicy.restricted?(tool_policy) do
+      {false, nil}
+    else
+      formatter = Keyword.get(opts, :format_file_fun, &format_file/2)
+      timeout_ms = Keyword.get(opts, :format_timeout_ms, 5_000)
+
+      case formatter.(path, cwd: cwd, timeout_ms: timeout_ms, tool_policy: tool_policy) do
+        {:ok, :formatted} -> {true, nil}
+        {:ok, :unchanged} -> {false, nil}
+        {:error, reason} -> {false, to_string(reason)}
+      end
     end
   end
 
@@ -85,7 +108,8 @@ defmodule CodingAgent.Tools.LspFormatter do
   def format_file(path, opts \\ [])
 
   def format_file(path, opts) when is_binary(path) do
-    with {:ok, formatter} <- formatter_for_path(path),
+    with :ok <- check_policy(opts),
+         {:ok, formatter} <- formatter_for_path(path),
          {:ok, _} <- ensure_file_exists(path),
          {:ok, executable} <- ensure_executable(formatter.command),
          {:ok, timeout_ms} <- resolve_timeout(opts) do
@@ -121,6 +145,12 @@ defmodule CodingAgent.Tools.LspFormatter do
   end
 
   def format_file(_path, _opts), do: {:error, "path must be a string"}
+
+  defp check_policy(opts) do
+    if CommandPolicy.restricted?(Keyword.get(opts, :tool_policy)),
+      do: {:error, CommandPolicy.unavailable("format")},
+      else: :ok
+  end
 
   defp formatter_result(%{timed_out: true}, _before, _path),
     do: {:error, "formatter timed out"}

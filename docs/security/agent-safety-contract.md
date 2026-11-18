@@ -11,22 +11,55 @@ tools are available, which are blocked, and which require approval.
 
 - `:full_access` is for trusted local coding work.
 - `:orchestrator` keeps delegation tools for parent sessions.
-- `:leaf_worker` keeps normal work tools but removes recursive delegation and
-  the A2A `peer` tool.
-- `:read_only` allows the read-tool list; `:safe_mode` denies the dangerous-tool list.
-- `:subagent_restricted` denies dangerous tools and requires approval for
-  `write` and `edit`; `:no_external` denies the external-tool list. `peer`
-  sends session content to remote A2A agents, so it is on both the dangerous
-  and external lists.
+- `:leaf_worker` keeps normal work tools but removes delegation (`task`,
+  `agent`, `goal`, `kanban`, `cron`, `peer`). It keeps `agent_message` for
+  its own task family only (see below).
+- `:read_only` allows the read-tool list; `:safe_mode` allows only tools that
+  are neither dangerous nor delegating.
+- `:subagent_restricted` is `:safe_mode` plus approval for `write` and `edit`;
+  `:no_external` allows only tools without external reach. `peer`
+  sends session content to remote A2A agents, so it is dangerous, external
+  and delegating.
 - `:minimal_core` is a curated tool allowlist, not a read-only or side-effect-free
   profile. It includes file writes, shell execution, and browser tools.
 
-New built-in tools must be classified in the relevant policy profiles before
-they are exposed through `CodingAgent.ToolRegistry`. Restricted tool lists and
-approval checks do not isolate arbitrary host code or automatically classify
-third-party extensions. Invalid custom-policy handling and unknown-profile
-fallbacks require their own validation; an approval gate is not a replacement
-for those checks.
+Every restricted profile is an allow list over `LemonCore.ToolCatalog`, which
+classifies each platform tool's approval tier and its `:dangerous`,
+`:external` and `:delegation` capabilities. Restricted profiles fail closed: a
+tool the catalogue does not classify is denied. That includes satellite tools
+registered through `LemonAgent.ToolRegistry` (`omp`, `cua_js`, `cua_js_reset`,
+`honcho_*`) and every MCP, extension and WASM tool; full-access, orchestrator
+and custom policies grant them by name. A new built-in tool must be added to
+the catalogue to appear in a restricted profile. Satellites cannot register a
+catalogued name, and a WASM, extension or MCP tool that uses one is dropped, so
+no contribution inherits a platform tool's classification. Tool policy is not
+operating-system isolation, and invalid custom policies and unknown profiles
+still need their own validation.
+
+`omp` runs its own tools under its own approval mode, so it is bounded by the
+caller's effective policy: `yolo` requires unreviewed `bash`, `write` and
+`edit`, `write` requires unreviewed `write` and `edit`, an omitted mode is
+pinned to that ceiling, and below `yolo` the cwd must resolve (symlinks
+included) inside the session cwd or workspace directory. A missing policy or one
+that does not grant `omp` refuses every action. omp cannot enforce
+`allowed_commands`/`blocked_commands`, so either list refuses delegation.
+`send` re-checks a live worker's recorded approval mode (an omitted one counts
+as `yolo`) and workspace against the caller's current policy and refuses a
+worker that now exceeds it.
+
+`agent_message` carries the `:family_messaging` class, not `:delegation`:
+bare names and `agent://` reach the caller's own task family, as
+`write agent://…` does. While a policy does not grant every `:delegation`
+tool (`LemonCore.ToolPolicy.family_messaging_only?/1`), the tool refuses named
+targets (`@handle`, `session://`, `bot://`), named listing, `rename` and
+`status`. Restricted profiles and read-only personas (scout, reviewer, seance)
+therefore keep family messaging without external reach.
+
+Tool disclosure hides long-tail tools behind `tool_search` and `tool_invoke`.
+The bridges pass the same approval gate as every other tool, and disclosure
+activates only when the policy admits both; otherwise every permitted tool is
+disclosed directly. `tool_invoke` is a `:read`-tier dispatcher because each
+hidden target keeps its own policy check and approval gate.
 
 ## Approvals
 

@@ -5,6 +5,7 @@ defmodule CodingAgent.Tools.ProcessInput do
   """
 
   alias CodingAgent.ProcessManager
+  alias CodingAgent.Tools.Bash.CommandPolicy
   alias CodingAgent.Tools.BashOutput
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -37,10 +38,14 @@ defmodule CodingAgent.Tools.ProcessInput do
     }
   end
 
+  # Input typed into a shell is a command too: `blocked_commands` applies to it
+  # (best-effort; see `CommandPolicy`). `allowed_commands` already decided which
+  # program may run, and its input need not be shell text.
   def execute(_id, params, _signal, _on_update, _cwd, opts) do
     with {:ok, process_id} <- BashOutput.fetch_process_id(params),
          :ok <- BashOutput.authorize(process_id, opts),
-         {:ok, input, eof} <- fetch_input(params) do
+         {:ok, input, eof} <- fetch_input(params),
+         :ok <- check_input(input, opts) do
       case ProcessManager.write(process_id, input, eof: eof) do
         :ok ->
           %AgentToolResult{
@@ -74,6 +79,16 @@ defmodule CodingAgent.Tools.ProcessInput do
       not is_binary(input) -> {:error, "input must be a string"}
       not is_boolean(eof) -> {:error, "eof must be a boolean"}
       true -> {:ok, input, eof}
+    end
+  end
+
+  defp check_input(input, opts) do
+    case CommandPolicy.check_blocked(input, Keyword.get(opts, :tool_policy)) do
+      :ok ->
+        :ok
+
+      {:blocked, message} ->
+        %AgentToolResult{content: [%TextContent{text: message}], is_error: true}
     end
   end
 end

@@ -711,11 +711,10 @@ defmodule LemonControlPlane.ACP do
           profile: :unavailable
         })
 
+      # Canonical mode: every non-read tier, including eval, debug, LSP
+      # execution and unclassified satellite tools, needs review.
       Map.get(session, :approval_mode, "ask") == "ask" ->
-        %{
-          require_approval:
-            ~w(bash exec write edit patch multiedit apply_patch task agent process process_kill)
-        }
+        %{approval_mode: :ask}
 
       true ->
         %{}

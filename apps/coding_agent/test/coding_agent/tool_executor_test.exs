@@ -20,78 +20,59 @@ defmodule CodingAgent.ToolExecutorTest do
     end
   end
 
-  describe "wrap_with_approval/3" do
-    test "returns tool unchanged when not in require_approval list" do
-      tool = %AgentTool{
-        name: "read",
-        description: "Read a file",
-        execute: fn _, _, _, _ -> %AgentToolResult{content: []} end
-      }
-
-      policy = ToolPolicy.from_profile(:full_access)
-      context = %{run_id: "test", session_key: "agent:test:main"}
-
-      wrapped = ToolExecutor.wrap_with_approval(tool, policy, context)
-
-      # Should be the same tool (unchanged)
-      assert wrapped.name == tool.name
-      assert wrapped.execute == tool.execute
-    end
-
-    test "wraps tool when in require_approval list" do
-      tool = %AgentTool{
-        name: "write",
-        description: "Write a file",
-        execute: fn _, _, _, _ -> %AgentToolResult{content: []} end
-      }
-
-      policy = ToolPolicy.from_profile(:subagent_restricted)
-      context = %{run_id: "test", session_key: "agent:test:main"}
-
-      wrapped = ToolExecutor.wrap_with_approval(tool, policy, context)
-
-      # The execute function should be different (wrapped)
-      assert wrapped.name == tool.name
-      assert wrapped.execute != tool.execute
-    end
+  defp extra(name, parent) do
+    %AgentTool{
+      name: name,
+      description: name,
+      parameters: %{},
+      execute: fn _, _, _, _ ->
+        send(parent, {:executed, name})
+        %AgentToolResult{content: []}
+      end
+    }
   end
 
-  describe "wrap_all_with_approval/3" do
-    test "wraps only tools that require approval" do
-      read_tool = %AgentTool{
-        name: "read",
-        description: "Read a file",
-        execute: fn _, _, _, _ -> :read_result end
+  defp finalize(tools, policy, parent) do
+    CodingAgent.ToolRegistry.finalize_tools(tools, File.cwd!(),
+      tool_policy: policy,
+      tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(File.cwd!()),
+      approval_context: %{
+        run_id: "test",
+        session_key: "agent:test:main",
+        approval_request_fun: fn request ->
+          send(parent, {:approval, request.tool})
+          {:ok, :denied}
+        end
       }
+    )
+  end
 
-      write_tool = %AgentTool{
-        name: "write",
-        description: "Write a file",
-        execute: fn _, _, _, _ -> :write_result end
-      }
+  describe "ToolRegistry.finalize_tools/3 (the single approval gate)" do
+    test "runs an allowed extra tool unreviewed under full access" do
+      [tool] =
+        finalize(
+          [extra("sms_list_messages", self())],
+          ToolPolicy.from_profile(:full_access),
+          self()
+        )
 
-      edit_tool = %AgentTool{
-        name: "edit",
-        description: "Edit a file",
-        execute: fn _, _, _, _ -> :edit_result end
-      }
+      tool.execute.("call", %{}, nil, nil)
+      assert_received {:executed, "sms_list_messages"}
+      refute_received {:approval, _}
+    end
 
-      tools = [read_tool, write_tool, edit_tool]
-      policy = ToolPolicy.from_profile(:subagent_restricted)
-      context = %{run_id: "test", session_key: "agent:test:main"}
+    test "reviews extra tools at the exec tier and drops denied ones" do
+      policy = ToolPolicy.custom(approval_mode: :write, deny: ["sms_claim_message"])
 
-      wrapped = ToolExecutor.wrap_all_with_approval(tools, policy, context)
+      tools =
+        finalize([extra("read", self()), extra("sms_claim_message", self())], policy, self())
 
-      # Read should be unchanged
-      read_wrapped = Enum.find(wrapped, &(&1.name == "read"))
-      assert read_wrapped.execute == read_tool.execute
-
-      # Write and edit should be wrapped (different execute function)
-      write_wrapped = Enum.find(wrapped, &(&1.name == "write"))
-      assert write_wrapped.execute != write_tool.execute
-
-      edit_wrapped = Enum.find(wrapped, &(&1.name == "edit"))
-      assert edit_wrapped.execute != edit_tool.execute
+      # A caller-supplied tool named `read` earns no read tier.
+      assert Enum.map(tools, & &1.name) == ["read"]
+      [read] = tools
+      assert read.execute.("call", %{}, nil, nil).is_error
+      assert_received {:approval, "read"}
+      refute_received {:executed, _}
     end
   end
 

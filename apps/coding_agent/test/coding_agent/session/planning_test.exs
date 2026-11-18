@@ -376,21 +376,22 @@ defmodule CodingAgent.Session.PlanningTest do
     }
 
     session =
-      start_supervised!(
-        {Session,
-         [
-           cwd: root,
-           workspace_dir: Path.join(root, "workspace"),
-           model: model(),
-           stream_fn: stream,
-           settings_manager: settings,
-           mcp_tools: [],
-           tool_policy:
-             CodingAgent.ToolPolicy.custom(allow: ["read", "write", "edit", "browser_tabs"]),
-           tool_disclosure: [profile: :coding],
-           system_prompt: "Update the private plan draft."
-         ]}
-      )
+      start_supervised!({Session,
+       [
+         cwd: root,
+         workspace_dir: Path.join(root, "workspace"),
+         model: model(),
+         stream_fn: stream,
+         settings_manager: settings,
+         mcp_tools: [],
+         # The disclosure bridges are tools like any other: the policy must grant them.
+         tool_policy:
+           CodingAgent.ToolPolicy.custom(
+             allow: ["read", "write", "edit", "browser_tabs", "tool_search", "tool_invoke"]
+           ),
+         tool_disclosure: [profile: :coding],
+         system_prompt: "Update the private plan draft."
+       ]})
 
     Session.subscribe(session)
     assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)

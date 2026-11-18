@@ -13,6 +13,7 @@ defmodule CodingAgent.Tools.Debug do
 
   alias CodingAgent.Artifacts
   alias CodingAgent.Debug.{Adapters, SessionServer}
+  alias CodingAgent.Tools.Bash.CommandPolicy
   alias CodingAgent.Tools.PathHelpers
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.AbortSignal
@@ -142,16 +143,24 @@ defmodule CodingAgent.Tools.Debug do
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
-    if AbortSignal.aborted?(signal) do
-      %AgentToolResult{
-        content: [%TextContent{text: "Debug operation cancelled."}],
-        is_error: true
-      }
-    else
-      params
-      |> do_execute(signal, cwd, opts)
-      |> Artifacts.attach(cwd, opts)
-      |> ToolResultTrust.untrusted(:shell)
+    cond do
+      AbortSignal.aborted?(signal) ->
+        %AgentToolResult{
+          content: [%TextContent{text: "Debug operation cancelled."}],
+          is_error: true
+        }
+
+      CommandPolicy.restricted?(Keyword.get(opts, :tool_policy)) ->
+        %AgentToolResult{
+          content: [%TextContent{text: CommandPolicy.unavailable("debug")}],
+          is_error: true
+        }
+
+      true ->
+        params
+        |> do_execute(signal, cwd, opts)
+        |> Artifacts.attach(cwd, opts)
+        |> ToolResultTrust.untrusted(:shell)
     end
   end
 

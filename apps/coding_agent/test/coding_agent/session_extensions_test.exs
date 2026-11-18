@@ -328,7 +328,7 @@ defmodule CodingAgent.SessionExtensionsTest do
       end
     end
 
-    test "custom tools option takes precedence for base tools", %{tmp_dir: tmp_dir} do
+    test "a custom toolset is closed to extension tools", %{tmp_dir: tmp_dir} do
       # Extension adds a tool
       tools_code = """
       [
@@ -361,8 +361,8 @@ defmodule CodingAgent.SessionExtensionsTest do
       # Custom tool should be present
       assert "custom_only" in tool_names
 
-      # Extension tool should still be added
-      assert "ext_tool" in tool_names
+      # A hand-assembled toolset is closed: extension tools do not join it
+      refute "ext_tool" in tool_names
 
       # Default tools should NOT be present (replaced by custom)
       refute "read" in tool_names

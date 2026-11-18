@@ -74,12 +74,20 @@ defmodule CodingAgent.Tools.Task.Messaging do
   def execute(params, signal, opts), do: execute(nil, params, signal, opts)
 
   def execute(id, params, signal, opts) do
+    action = Map.get(params, "action", "send")
+
     cond do
       AbortSignal.aborted?(signal) ->
         {:error, "Operation aborted"}
 
+      named_operation?(action, params) and family_only?(opts) ->
+        {:error,
+         "This agent's tool policy limits agent_message to its own task family; " <>
+           "named targets (@handle, session://, bot://), named listing, rename and " <>
+           "named message status are unavailable."}
+
       true ->
-        case Map.get(params, "action", "send") do
+        case action do
           "list" ->
             case Map.get(params, "scope", "family") do
               "family" -> roster(opts)
@@ -105,6 +113,16 @@ defmodule CodingAgent.Tools.Task.Messaging do
         end
     end
   end
+
+  # Operations that reach or register on the named (cross-family) surface.
+  defp named_operation?("send", params), do: named_target?(Map.get(params, "to"))
+  defp named_operation?("list", params), do: Map.get(params, "scope") == "named"
+  defp named_operation?(action, _params), do: action in ["rename", "status"]
+
+  # A policy marks family-only messaging when it lacks delegation authority
+  # (see `LemonCore.ToolCatalog`). A missing policy fails closed to family-only.
+  defp family_only?(opts),
+    do: LemonCore.ToolPolicy.family_messaging_only?(Keyword.get(opts, :tool_policy))
 
   def send(target, content, opts) do
     if named_target?(target) do

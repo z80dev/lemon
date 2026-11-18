@@ -39,7 +39,7 @@ defmodule CodingAgent.ToolApprovalTiersTest do
     assert request.tool == "lsp"
   end
 
-  test "direct wrappers re-resolve both directions after hooks revise arguments" do
+  test "the gate re-resolves both directions after hooks revise arguments" do
     parent = self()
 
     tool = %AgentTool{
@@ -52,8 +52,8 @@ defmodule CodingAgent.ToolApprovalTiersTest do
 
     policy = ToolPolicy.parse!(%{approval_mode: :write})
 
-    wrapped =
-      ToolExecutor.wrap_with_approval(tool, policy, %{
+    [{"lsp", wrapped, :builtin}] =
+      ToolRegistry.gate_tuples([{"lsp", tool, :builtin}], policy, %{
         approval_request_fun: fn _ ->
           send(parent, :approval)
           {:ok, :denied}

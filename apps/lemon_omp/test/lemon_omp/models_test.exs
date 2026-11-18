@@ -94,7 +94,7 @@ defmodule LemonOmp.ModelsTest do
         %{"action" => "models", "free_only" => true},
         nil,
         nil,
-        []
+        tool_policy: LemonCore.ToolPolicy.from_profile(:full_access)
       )
 
     [content] = result.content

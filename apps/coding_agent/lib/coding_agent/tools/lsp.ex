@@ -18,6 +18,7 @@ defmodule CodingAgent.Tools.Lsp do
 
   alias CodingAgent.Artifacts
   alias CodingAgent.Tools.{CheckpointGuard, PathHelpers}
+  alias CodingAgent.Tools.Bash.CommandPolicy
   alias CodingAgent.Tools.Lsp.{Client, Text, WorkspaceEdit}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Security.ToolResultTrust
@@ -118,7 +119,8 @@ defmodule CodingAgent.Tools.Lsp do
           AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
     with :ok <- check_abort(signal),
-         {:ok, req} <- validate(params) do
+         {:ok, req} <- validate(params),
+         :ok <- check_server_policy(req.action, opts) do
       cwd = Path.expand(cwd)
       timeout_ms = req.timeout * 1_000
 
@@ -151,6 +153,25 @@ defmodule CodingAgent.Tools.Lsp do
       end
     end
   end
+
+  # Starting or synchronizing a language server runs project code (build
+  # tools, plugins, compile-on-open) that no command list can inspect, so under
+  # `allowed_commands`/`blocked_commands` only `status`, which reads the
+  # registry without touching a server, is available. Checked before any
+  # server initializes.
+  defp check_server_policy("status", _opts), do: :ok
+
+  defp check_server_policy(_action, opts) do
+    if CommandPolicy.restricted?(Keyword.get(opts, :tool_policy)),
+      do: {:error, CommandPolicy.unavailable("lsp")},
+      else: :ok
+  end
+
+  defp check_action_command(ctx, %{"command" => %{"command" => name}})
+       when is_binary(name),
+       do: refuse_restricted_command(ctx, fn -> :ok end)
+
+  defp check_action_command(_ctx, _action), do: :ok
 
   # -- Parameters -------------------------------------------------------------
 
@@ -796,26 +817,45 @@ defmodule CodingAgent.Tools.Lsp do
   defp apply_code_action(ctx, conn, action) do
     action = maybe_resolve(ctx, conn, action)
 
-    with {:ok, ops} <- WorkspaceEdit.plan(action["edit"]) do
-      case maybe_apply(ctx, conn, ops) do
-        {:ok, edit_text, edit_details} ->
-          {:ok, command_text, command_details} = maybe_command(ctx, conn, action["command"])
+    # A command-bearing action is refused before any of its edits land.
+    with :ok <- check_action_command(ctx, action),
+         {:ok, ops} <- WorkspaceEdit.plan(action["edit"]) do
+      with {:ok, edit_text, edit_details} <- maybe_apply(ctx, conn, ops),
+           {:ok, command_text, command_details} <-
+             command_after_edits(ctx, conn, action["command"], edit_details) do
+        if ops == [] and is_nil(action["command"]) do
+          {:ok, "Action #{inspect(action["title"])} has no workspace edit or command to apply",
+           %{server: to_string(conn.server.id), applied: false, success: false}}
+        else
+          details = merge_apply_details(edit_details, command_details)
 
-          if ops == [] and is_nil(action["command"]) do
-            {:ok, "Action #{inspect(action["title"])} has no workspace edit or command to apply",
-             %{server: to_string(conn.server.id), applied: false, success: false}}
-          else
-            details = merge_apply_details(edit_details, command_details)
-
-            {:ok, action_heading(action, details) <> edit_text <> command_text,
-             Map.put(details, :server, to_string(conn.server.id))}
-          end
-
-        error ->
-          error
+          {:ok, action_heading(action, details) <> edit_text <> command_text,
+           Map.put(details, :server, to_string(conn.server.id))}
+        end
       end
     end
   end
+
+  # Edits already landed: a failed command reports them as a partial result.
+  defp command_after_edits(ctx, conn, command, edit_details) do
+    case maybe_command(ctx, conn, command) do
+      {:ok, _text, _details} = ok ->
+        ok
+
+      {:partial_error, _reason, _details} = partial ->
+        partial
+
+      {:error, reason} when edit_details == %{} ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:partial_error, "Edits applied, but the command failed: #{lsp_reason(reason)}",
+         edit_details}
+    end
+  end
+
+  defp lsp_reason(reason) when is_binary(reason), do: reason
+  defp lsp_reason(reason), do: inspect(reason)
 
   defp action_heading(action, details) do
     verb = if details[:success] == false, do: "Failed", else: "Applied"
@@ -851,7 +891,19 @@ defmodule CodingAgent.Tools.Lsp do
 
   # Commands may send `workspace/applyEdit` before answering. Apply each edit
   # before acknowledging it, so server commands can observe their actual writes.
+  # Server commands run arbitrary server/project code that no command list can
+  # inspect, so they are refused while `allowed_commands`/`blocked_commands` is set.
   defp execute_command(ctx, conn, command) do
+    refuse_restricted_command(ctx, fn -> run_server_command(ctx, conn, command) end)
+  end
+
+  defp refuse_restricted_command(ctx, fun) do
+    if CommandPolicy.restricted?(Keyword.get(ctx.opts, :tool_policy)),
+      do: {:error, CommandPolicy.unavailable("LSP command execution")},
+      else: fun.()
+  end
+
+  defp run_server_command(ctx, conn, command) do
     params = %{"command" => command["command"], "arguments" => command["arguments"] || []}
 
     {:ok, receipts} = Agent.start_link(fn -> [] end)
@@ -1338,6 +1390,12 @@ defmodule CodingAgent.Tools.Lsp do
   defp raw_request(ctx) do
     method = String.trim(ctx.req.query)
 
+    if method == "workspace/executeCommand",
+      do: refuse_restricted_command(ctx, fn -> do_raw_request(ctx, method) end),
+      else: do_raw_request(ctx, method)
+  end
+
+  defp do_raw_request(ctx, method) do
     run_request = fn conn, position ->
       params =
         cond do

@@ -1,7 +1,7 @@
 defmodule CodingAgent.RestrictedToolPolicyTest do
   use ExUnit.Case, async: true
 
-  alias CodingAgent.{ToolExecutor, ToolPolicy}
+  alias CodingAgent.ToolPolicy
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
   @restricted_profiles [:read_only, :safe_mode, :subagent_restricted]
@@ -62,7 +62,7 @@ defmodule CodingAgent.RestrictedToolPolicyTest do
     end
   end
 
-  test "filtering before approval wrapping cannot execute a denied tool" do
+  test "the session finalize step drops denied caller-supplied tools before any approval" do
     caller = self()
     marker = make_ref()
 
@@ -78,16 +78,15 @@ defmodule CodingAgent.RestrictedToolPolicyTest do
       end)
 
     for profile <- @restricted_profiles do
-      policy = ToolPolicy.from_profile(profile)
-
       remaining =
-        policy
-        |> ToolPolicy.apply_policy(tools)
-        |> ToolExecutor.wrap_all_with_approval(policy, %{
-          approval_request_fun: fn _request ->
-            flunk("denied tools must be filtered before requesting approval")
-          end
-        })
+        CodingAgent.ToolRegistry.finalize_tools(tools, File.cwd!(),
+          tool_policy: ToolPolicy.from_profile(profile),
+          approval_context: %{
+            approval_request_fun: fn _request ->
+              flunk("denied tools must be filtered before requesting approval")
+            end
+          }
+        )
 
       assert remaining == []
       refute_received ^marker

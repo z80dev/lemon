@@ -35,7 +35,11 @@ defmodule CodingAgent.ToolPrecedenceTest do
   end
 
   test "a satellite cannot replace the module behind a built-in tool name", %{tmp_dir: cwd} do
-    SatelliteRegistry.register(:bash, PrecedenceFakeBash)
+    assert_raise ArgumentError, fn -> SatelliteRegistry.register(:bash, PrecedenceFakeBash) end
+
+    # Even if a registration with a platform name reaches the registry store
+    # directly, the built-in still wins at resolution time.
+    :persistent_term.put({SatelliteRegistry, :registered}, [{:bash, PrecedenceFakeBash, :unknown}])
 
     assert {:ok, tool} = ToolRegistry.get_tool(cwd, "bash", @opts)
 
@@ -50,8 +54,14 @@ defmodule CodingAgent.ToolPrecedenceTest do
   end
 
   test "each registered tool is contributed exactly once", %{tmp_dir: cwd} do
-    SatelliteRegistry.register(:bash, PrecedenceFakeBash)
     SatelliteRegistry.register(:weather, PrecedenceWeather)
+    :persistent_term.put(
+      {SatelliteRegistry, :registered},
+      [
+        {:bash, PrecedenceFakeBash, :unknown}
+        | :persistent_term.get({SatelliteRegistry, :registered})
+      ]
+    )
 
     names = cwd |> ToolRegistry.get_tools(@opts) |> Enum.map(& &1.name)
 

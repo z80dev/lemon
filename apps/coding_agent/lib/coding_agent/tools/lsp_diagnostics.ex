@@ -7,6 +7,7 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   deltas without failing the edit when a checker is missing.
   """
 
+  alias CodingAgent.Tools.Bash.CommandPolicy
   alias CodingAgent.Tools.PathHelpers
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -63,7 +64,8 @@ defmodule CodingAgent.Tools.LspDiagnostics do
     resolved_path = PathHelpers.resolve_path(path, cwd, Keyword.put(opts, :expand, false))
     ext = resolved_path |> Path.extname() |> String.downcase()
 
-    with {:ok, _} <- ensure_regular_file(resolved_path) do
+    with :ok <- check_policy(opts),
+         {:ok, _} <- ensure_regular_file(resolved_path) do
       case language_for_extension(ext) do
         nil ->
           {:ok, skipped_result(resolved_path, nil, "unsupported file extension")}
@@ -86,6 +88,12 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   def baseline(_path, _cwd, false, _opts), do: nil
 
   def baseline(path, cwd, true, opts) do
+    if CommandPolicy.restricted?(Keyword.get(opts, :tool_policy)),
+      do: nil,
+      else: run_baseline(path, cwd, opts)
+  end
+
+  defp run_baseline(path, cwd, opts) do
     case diagnose_file(path, cwd, opts) do
       {:ok, result} -> result
       {:error, reason} -> %{status: :failed, diagnostics: [], error: reason}
@@ -100,6 +108,12 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   def post_edit(_path, _cwd, _baseline, false, _opts), do: {nil, ""}
 
   def post_edit(path, cwd, baseline, true, opts) do
+    if CommandPolicy.restricted?(Keyword.get(opts, :tool_policy)),
+      do: {nil, ""},
+      else: run_post_edit(path, cwd, baseline, opts)
+  end
+
+  defp run_post_edit(path, cwd, baseline, opts) do
     result =
       case diagnose_file(path, cwd, opts) do
         {:ok, result} -> result
@@ -115,14 +129,34 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   Extract a boolean diagnostics option from tool params and defaults.
   """
   @spec option(map(), keyword()) :: {:ok, boolean()} | {:error, String.t()}
+  # Project diagnostics (`mix compile`, checkers, compilers) run project code
+  # that no command list can inspect: under `allowed_commands`/
+  # `blocked_commands` an explicit `diagnostics: true` is refused and a
+  # configured default is skipped.
   def option(params, opts) do
+    explicit? = Map.has_key?(params, "diagnostics")
     value = Map.get(params, "diagnostics", Keyword.get(opts, :diagnostics, false))
 
     case value do
-      true -> {:ok, true}
-      false -> {:ok, false}
-      _ -> {:error, "diagnostics must be a boolean"}
+      true ->
+        cond do
+          not CommandPolicy.restricted?(Keyword.get(opts, :tool_policy)) -> {:ok, true}
+          explicit? -> {:error, CommandPolicy.unavailable("diagnostics")}
+          true -> {:ok, false}
+        end
+
+      false ->
+        {:ok, false}
+
+      _ ->
+        {:error, "diagnostics must be a boolean"}
     end
+  end
+
+  defp check_policy(opts) do
+    if CommandPolicy.restricted?(Keyword.get(opts, :tool_policy)),
+      do: {:error, CommandPolicy.unavailable("lsp_diagnostics")},
+      else: :ok
   end
 
   @doc """

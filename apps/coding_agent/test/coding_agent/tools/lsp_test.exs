@@ -292,6 +292,59 @@ defmodule CodingAgent.Tools.LspTest do
     assert text!(state) =~ ~s("#{Text.path_to_uri(path)}": 2)
   end
 
+  test "command lists refuse every LSP server operation before a server starts", ctx do
+    path = Path.join(ctx.tmp, "src/main.c")
+    before = File.read!(path)
+
+    for policy <- [
+          CodingAgent.ToolPolicy.custom(allowed_commands: []),
+          CodingAgent.ToolPolicy.custom(blocked_commands: ["rm -rf"])
+        ] do
+      ctx = %{ctx | opts: Keyword.put(ctx.opts, :tool_policy, policy)}
+
+      for params <- [
+            %{"action" => "definition", "file" => "src/main.c", "line" => 2, "symbol" => "value"},
+            %{"action" => "diagnostics", "file" => "src/main.c"},
+            %{"action" => "capabilities", "file" => "src/main.c"},
+            %{"action" => "reload"},
+            %{
+              "action" => "code_actions",
+              "file" => "src/main.c",
+              "line" => 2,
+              "apply" => true,
+              "query" => "run fixer"
+            },
+            # Compound edit-plus-command action: neither edit nor command lands.
+            %{
+              "action" => "code_actions",
+              "file" => "src/main.c",
+              "line" => 2,
+              "apply" => true,
+              "query" => "partial fixer"
+            },
+            %{
+              "action" => "request",
+              "file" => "src/main.c",
+              "query" => "workspace/executeCommand",
+              "payload" => %{"command" => "fake.fix", "arguments" => []}
+            }
+          ] do
+        assert refusal_text(run(ctx, params)) =~ "tool policy", inspect(params)
+      end
+
+      # `status` reads the registry without starting anything.
+      refute match?({:error, _}, run(ctx, %{"action" => "status"}))
+    end
+
+    # No language server process was ever launched for this session.
+    assert Client.list(ctx.session_id) == []
+    refute File.exists?(Path.join(ctx.tmp, "src/fixed.c"))
+    assert File.read!(path) == before
+  end
+
+  defp refusal_text({:error, reason}), do: to_string(reason)
+  defp refusal_text(%AgentToolResult{content: content}), do: Enum.map_join(content, "", & &1.text)
+
   test "code actions list, resolve and execute commands that send applyEdit", ctx do
     ctx = checkpoint_context(ctx)
     path = Path.join(ctx.tmp, "src/main.c")

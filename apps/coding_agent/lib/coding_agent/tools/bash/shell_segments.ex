@@ -12,7 +12,11 @@ defmodule CodingAgent.Tools.Bash.ShellSegments do
   @wrappers ~w(command builtin exec time nohup sudo env)
   @value_options ~w(-a -u -g -h -p -C -T --user --group --host --prompt --chdir --close-from --command-timeout)
 
-  @doc "Returns simple commands with literal argv, original word text and pipe context."
+  @doc """
+  Returns simple commands with literal argv, original word text and pipe context.
+  `words` keeps every word (`value` unquoted, `raw` as written) before
+  assignment and wrapper prefixes are stripped from `argv`.
+  """
   def extract(command) do
     {_rest, state} = scan(String.to_charlist(command), fresh(), nil)
     state |> finish() |> Enum.reverse() |> Enum.map(&unwrap/1)
@@ -120,7 +124,7 @@ defmodule CodingAgent.Tools.Bash.ShellSegments do
           Enum.join([Path.basename(program.value) | Enum.map(args, & &1.raw)], " ")
       end
 
-    %{argv: argv, text: text, piped_stdin: segment.piped_stdin}
+    %{argv: argv, text: text, piped_stdin: segment.piped_stdin, words: segment.words}
   end
 
   defp strip_prefixes([]), do: []

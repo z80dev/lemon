@@ -2,7 +2,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.Task.Params
-  alias CodingAgent.{Session, SessionManager, SettingsManager, ToolExecutor, WorkspaceReads}
+  alias CodingAgent.{Session, SessionManager, SettingsManager, ToolRegistry, WorkspaceReads}
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonCore.{ProfileStore, ToolPolicy}
@@ -69,6 +69,14 @@ defmodule CodingAgent.WorkspaceReadsTest do
   end
 
   defp text_result(text), do: %AgentToolResult{content: [%TextContent{text: text}]}
+
+  # The single approval gate as the registry applies it to the built-in tool.
+  defp gate(tool, policy, context) do
+    [{_name, wrapped, :builtin}] =
+      ToolRegistry.gate_tuples([{tool.name, tool, :builtin}], policy, context)
+
+    wrapped
+  end
 
   defp fence_session(session_id, reply \\ :ok) do
     {:ok, pid} = FenceSession.start(session_id, reply)
@@ -492,7 +500,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
             execute: fn _, _, _, _ -> flunk("unreviewed web egress") end
           }
 
-          {id, name, ToolExecutor.wrap_with_approval(tool, web_policy, context)}
+          {id, name, gate(tool, web_policy, context)}
         end
 
       context =
@@ -501,7 +509,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
         |> Map.put(:approval_request_fun, fn _ -> flunk("safe child read asked") end)
 
       tool = CodingAgent.Tools.Read.tool(root)
-      wrapped = ToolExecutor.wrap_with_approval(tool, policy, context)
+      wrapped = gate(tool, policy, context)
 
       for mode <- [:sync, :async] do
         result =
@@ -590,7 +598,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
 
     direct =
       CodingAgent.Tools.Read.tool(root, workspace_dir: workspace)
-      |> ToolExecutor.wrap_with_approval(policy, context)
+      |> gate(policy, context)
 
     [registry] =
       CodingAgent.ToolRegistry.get_tools(root,
@@ -621,7 +629,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
     end
   end
 
-  describe "ToolExecutor integration" do
+  describe "approval gate integration" do
     setup %{ctx: ctx} do
       parent = self()
 
@@ -653,7 +661,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
       File.write!(Path.join(root, "file.txt"), "hello")
       fence_session(context.session_id)
 
-      wrapped = ToolExecutor.wrap_with_approval(tool, policy, context)
+      wrapped = gate(tool, policy, context)
       wrapped.execute.("call-1", %{"path" => "file.txt"}, nil, nil)
 
       assert_received :tool_executed
@@ -670,7 +678,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
       File.write!(Path.join(root, "file.txt"), "hello")
       fence_session(context.session_id, {:error, :journal_write_failed})
 
-      wrapped = ToolExecutor.wrap_with_approval(tool, policy, context)
+      wrapped = gate(tool, policy, context)
       wrapped.execute.("call-2", %{"path" => "file.txt"}, nil, nil)
 
       assert_received :approval_requested
@@ -686,7 +694,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
     } do
       File.write!(Path.join(root, "file.txt"), "hello")
 
-      wrapped = ToolExecutor.wrap_with_approval(tool, policy, context)
+      wrapped = gate(tool, policy, context)
       wrapped.execute.("call-3", %{"path" => "file.txt"}, nil, nil)
 
       assert_received :approval_requested
@@ -703,7 +711,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
       File.write!(outside, "outside")
       fence_session(context.session_id)
 
-      wrapped = ToolExecutor.wrap_with_approval(tool, policy, context)
+      wrapped = gate(tool, policy, context)
       wrapped.execute.("call-4", %{"path" => outside}, nil, nil)
 
       assert_received :approval_requested
@@ -739,7 +747,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
           end
         }
 
-        wrapped = ToolExecutor.wrap_with_approval(tool, policy, context)
+        wrapped = gate(tool, policy, context)
 
         refute WorkspaceReads.fenced?(session_id)
         wrapped.execute.("call-web-1", %{"url" => "https://example.com"}, nil, nil)
@@ -780,7 +788,7 @@ defmodule CodingAgent.WorkspaceReadsTest do
 
       # The child/reloaded policy no longer carries the exemption, but the
       # fence the session already earned must still gate web egress.
-      wrapped = ToolExecutor.wrap_with_approval(tool, exempt_policy(nil), context)
+      wrapped = gate(tool, exempt_policy(nil), context)
       wrapped.execute.("call-web", %{"url" => "https://example.com"}, nil, nil)
 
       assert_received :approval_requested

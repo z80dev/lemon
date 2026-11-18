@@ -70,6 +70,17 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
 
   defp settings, do: %{extension_paths: [], extension_auto_load_default_paths: true}
 
+  # Tests that exercise disclosure rather than policy pass the explicit
+  # full-access root default (a missing policy is deny-all).
+  defp full, do: ToolPolicy.from_profile(:full_access)
+
+  # Restricted profiles deny unclassified (MCP) tools; these fixtures name the
+  # MCP tools explicitly so the bridge has a long tail to defer.
+  defp granting(profile, names) do
+    policy = ToolPolicy.from_profile(profile)
+    %{policy | allow: policy.allow ++ names, profile: :custom}
+  end
+
   defp active_cfg(overrides \\ %{}) do
     Map.merge(
       %{enabled: true, budget_tokens: 1, catalog_tokens: 2_000, max_results: 5},
@@ -266,7 +277,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings,
-          tool_opts: [mcp_tools: [mcp("mcp_fixture_alpha")]]
+          tool_opts: [mcp_tools: [mcp("mcp_fixture_alpha")], tool_policy: full()]
         )
 
       assert result.tool_disclosure.active == true
@@ -316,7 +327,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: base_opts
+          tool_opts: Keyword.put(base_opts, :tool_policy, full())
         )
 
       # Guard against a vacuous assertion below.
@@ -326,7 +337,12 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: Keyword.put(base_opts, :tool_policy, ToolPolicy.from_profile(:leaf_worker))
+          tool_opts:
+            Keyword.put(
+              base_opts,
+              :tool_policy,
+              granting(:leaf_worker, ["mcp_fixture_alpha", "mcp_fixture_beta"])
+            )
         )
 
       refute "task" in names(restricted.tools)
@@ -356,7 +372,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
           settings_manager: settings(),
           tool_opts: [
             mcp_tools: inventory,
-            tool_policy: ToolPolicy.from_profile(:safe_mode),
+            tool_policy: granting(:safe_mode, ["mcp_fixture_alpha"]),
             tool_disclosure: [budget_tokens: 1]
           ]
         )
@@ -512,7 +528,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [mcp_tools: before, tool_disclosure: [budget_tokens: 1]]
+          tool_opts: [mcp_tools: before, tool_policy: full(), tool_disclosure: [budget_tokens: 1]]
         )
 
       session_names = names(session.tools)
@@ -527,7 +543,11 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [mcp_tools: after_change, tool_disclosure: [budget_tokens: 1]]
+          tool_opts: [
+            mcp_tools: after_change,
+            tool_policy: full(),
+            tool_disclosure: [budget_tokens: 1]
+          ]
         )
 
       assert "mcp_fixture_gamma" in fresh.tool_disclosure.hidden_names
@@ -560,7 +580,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [mcp_tools: inventory, tool_disclosure: [budget_tokens: 1]]
+          tool_opts: [mcp_tools: inventory, tool_policy: full(), tool_disclosure: [budget_tokens: 1]]
         )
 
       search = find(session.tools, "tool_search")
@@ -582,7 +602,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [mcp_tools: inventory, tool_disclosure: [budget_tokens: 1]]
+          tool_opts: [mcp_tools: inventory, tool_policy: full(), tool_disclosure: [budget_tokens: 1]]
         )
       end
 
@@ -1037,6 +1057,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
           tool_opts: [
             mcp_tools: [],
             session_id: session_id,
+            tool_policy: full(),
             tool_disclosure: [profile: :coding],
             tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir)
           ]
@@ -1124,8 +1145,8 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         )
       end
 
-      first = build.(nil)
-      second = build.(nil)
+      first = build.(full())
+      second = build.(full())
       digest = first.tool_disclosure.catalog_digest
 
       assert digest =~ ~r/\A[0-9a-f]{64}\z/
@@ -1137,7 +1158,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.reload(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: tool_opts.(nil),
+          tool_opts: tool_opts.(full()),
           previous_status_report: first.extension_status_report
         )
 
@@ -1172,7 +1193,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [mcp_tools: [], tool_disclosure: [profile: :coding]]
+          tool_opts: [mcp_tools: [], tool_policy: full(), tool_disclosure: [profile: :coding]]
         )
 
       assert "browser_navigate" in first.tool_disclosure.hidden_names
@@ -1295,6 +1316,7 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
           tool_opts: [
             mcp_tools: [],
             session_id: "foreign-session",
+            tool_policy: full(),
             tool_disclosure: [profile: :coding]
           ]
         )
