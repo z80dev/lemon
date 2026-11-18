@@ -24,7 +24,10 @@ defmodule CodingAgent.RunGraphServerTest do
   end
 
   describe "start_link/1" do
-    test "starts the server with custom name" do
+    # DETS claims its directory with a cross-VM lock; a private directory keeps
+    # another BEAM using the shared system temp dir from owning it.
+    @tag :tmp_dir
+    test "starts the server with custom name", %{tmp_dir: tmp_dir} do
       # Start a new server with a custom name
       server_name = :test_run_graph_server
 
@@ -38,7 +41,7 @@ defmodule CodingAgent.RunGraphServerTest do
       # Start with custom name
       opts = [
         name: server_name,
-        dets_path: Path.join(System.tmp_dir!(), "test_run_graph_#{:rand.uniform(10_000)}.dets")
+        dets_path: Path.join(tmp_dir, "test_run_graph.dets")
       ]
 
       assert {:ok, pid} = RunGraphServer.start_link(opts)
@@ -220,12 +223,15 @@ defmodule CodingAgent.RunGraphServerTest do
   end
 
   describe "DETS persistence" do
-    test "startup does not accept live writes until the DETS snapshot is loaded" do
+    @tag :tmp_dir
+    test "startup does not accept live writes until the DETS snapshot is loaded", %{
+      tmp_dir: tmp_dir
+    } do
       unique = System.unique_integer([:positive])
       table = String.to_atom("run_graph_startup_ets_#{unique}")
       dets_table = String.to_atom("run_graph_startup_dets_#{unique}")
       server_name = String.to_atom("run_graph_startup_server_#{unique}")
-      dets_path = Path.join(System.tmp_dir!(), "run_graph_startup_#{unique}.dets")
+      dets_path = Path.join(tmp_dir, "run_graph_startup_#{unique}.dets")
       parent = self()
 
       {:ok, ^dets_table} =

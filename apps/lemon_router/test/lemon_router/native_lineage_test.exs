@@ -74,7 +74,12 @@ defmodule LemonRouter.NativeLineageTest do
 
   setup do
     suffix = Integer.to_string(System.unique_integer([:positive, :monotonic]))
-    prefix = "lineage-" <> suffix
+    # unique_integer restarts with every VM: a random part keeps the fixture's
+    # root (and the profiles persisted in its config) from colliding with a
+    # directory an interrupted earlier run left behind.
+    prefix =
+      "lineage-" <> suffix <> "-" <> Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
+
     root = Path.join(System.tmp_dir!(), prefix)
     File.mkdir_p!(root)
 

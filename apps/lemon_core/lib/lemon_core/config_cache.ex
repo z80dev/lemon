@@ -231,8 +231,11 @@ defmodule LemonCore.ConfigCache do
   end
 
   defp load_base(cwd, paths) do
-    base = LemonCore.Config.load_base_from_disk(cwd)
+    # Stat before parsing: a file written during the load then fails the next
+    # fingerprint check and is re-read, instead of its new fingerprint being
+    # cached beside content parsed from the previous (or a partial) file.
     fp = fingerprint(paths)
+    base = LemonCore.Config.load_base_from_disk(cwd)
     {base, fp}
   end
 
