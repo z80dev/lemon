@@ -66,8 +66,10 @@ defmodule LemonRouter.Policy do
 
   - `:agent_id` - Agent identifier
   - `:session_key` - Session key
-  - `:origin` - Request origin (:channel, :control_plane, :cron, :node)
-  - `:channel_context` - Optional channel-specific context
+  - `:channel_context` - Channel provenance (`meta.channel_context`). When it is
+    present its channel policy and group approval floor apply whatever the
+    submission origin; producers derive it from the authenticated ingress
+    (channel transport, webhook integration, A2A peer).
   """
   @spec resolve_for_run(map()) :: ToolPolicy.t()
   def resolve_for_run(params) do
@@ -88,11 +90,10 @@ defmodule LemonRouter.Policy do
   def resolve_validated_for_run(params) do
     agent_id = params[:agent_id]
     session_key = params[:session_key]
-    origin = params[:origin]
     channel_context = params[:channel_context]
 
     with {:ok, agent_policy} <- get_agent_policy(agent_id),
-         {:ok, channel_policy} <- get_channel_policy_for_run(origin, channel_context),
+         {:ok, channel_policy} <- get_channel_policy(channel_context),
          {:ok, session_policy} <- get_session_policy(session_key),
          {:ok, runtime_policy} <- get_runtime_policy(),
          {:ok, policy} <- merge_validated(nil, agent_policy),
@@ -139,13 +140,10 @@ defmodule LemonRouter.Policy do
   # an approval for each call because any member can prompt the agent.
   @group_approval_tools ~w(bash write edit patch hashline_edit)
 
-  defp get_channel_policy_for_run(:channel, context) when is_map(context),
-    do: get_channel_policy(context)
+  # Load channel-specific restrictions named by the run's channel provenance.
+  defp get_channel_policy(nil), do: {:ok, nil}
 
-  defp get_channel_policy_for_run(_origin, _context), do: {:ok, nil}
-
-  # Load channel-specific restrictions
-  defp get_channel_policy(channel_context) do
+  defp get_channel_policy(channel_context) when is_map(channel_context) do
     channel_id = channel_context[:channel_id]
     peer_kind = channel_context[:peer_kind]
 
@@ -161,6 +159,8 @@ defmodule LemonRouter.Policy do
       merge_validated(channel_policy || %{}, group_policy)
     end
   end
+
+  defp get_channel_policy(_invalid), do: {:error, :invalid_channel_context}
 
   # Session rows contain routing settings beside the nested policy. Legacy
   # top-level policy fields remain an additional floor, never an override.

@@ -82,6 +82,13 @@ another session store, scheduler or agent runtime. See [README](README.md).
 - Scope all task reads/mutations to authenticated peer identity. An inbound
   `messageId` durably replays the original task for the same peer, and conflicts
   across peers; never submit a second run for a replay.
+- Inbound runs carry `a2a` channel provenance (`meta.channel_context`) derived
+  from the authenticated peer and context, naming the same conversation as the
+  session key. The router applies the `a2a` channel policy from it whatever the
+  submission origin, intersected with the peer allow-list, and refuses an A2A
+  request without it. The provenance is `peer_kind: :automation` (group
+  approval floor) unless the operator's global config sets a literal
+  `trusted_automation = true` on the peer; the session key keeps its DM shape.
 - Terminal transitions are first-writer-wins. Accepted cancellation cannot be
   overwritten by delayed finalization or append a post-cancel context turn.
   Runner leases guard terminal writes against reclaimed workers.

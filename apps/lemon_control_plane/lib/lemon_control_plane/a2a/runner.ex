@@ -319,6 +319,7 @@ defmodule LemonControlPlane.A2A.Runner do
           a2a: true,
           a2a_peer_id: task.peer_id,
           a2a_context_id: task.context_id,
+          channel_context: channel_context(peer, task.peer_id, task.context_id),
           router_replay_identity: a2a_replay_identity(task)
         }
       })
@@ -558,21 +559,33 @@ defmodule LemonControlPlane.A2A.Runner do
   end
 
   defp ensure_context(peer_id, context_id, agent_id) do
-    peer_hash = digest(peer_id)
-    context_hash = digest(context_id)
-
     A2AStore.ensure_context(:inbound, peer_id, context_id, %{
       agent_id: agent_id,
       session_key:
-        SessionKey.channel_peer(%{
-          agent_id: agent_id,
-          channel_id: "a2a",
-          account_id: "lemon",
-          peer_kind: :dm,
-          peer_id: peer_hash,
-          thread_id: context_hash
-        })
+        conversation(peer_id, context_id)
+        |> Map.merge(%{agent_id: agent_id, peer_kind: :dm})
+        |> SessionKey.channel_peer()
     })
+  end
+
+  # The authenticated peer's conversation, as its session key names it.
+  defp conversation(peer_id, context_id) do
+    %{
+      channel_id: "a2a",
+      account_id: "lemon",
+      peer_id: digest(peer_id),
+      thread_id: digest(context_id)
+    }
+  end
+
+  # Provenance of that conversation. The router applies the `a2a` channel
+  # policy (intersected with the peer allow-list) from it whatever the
+  # submission origin. A peer token authenticates the peer, not the content it
+  # relays, so the run gets the group approval floor (any peer kind but `:dm`)
+  # unless the operator's global config marks the peer `trusted_automation`.
+  defp channel_context(peer, peer_id, context_id) do
+    peer_kind = if Map.get(peer, :trusted_automation) == true, do: :dm, else: :automation
+    Map.put(conversation(peer_id, context_id), :peer_kind, peer_kind)
   end
 
   defp enforce_turn_limit(%{turn_count: turns}, max) when turns < max, do: :ok

@@ -151,7 +151,21 @@ Inbound runs use a conservative read/coordination tool allowlist: `read`,
 peers, or `allow_tools` on one peer to replace it for that peer (a non-empty
 peer list takes precedence). Tools that start local work, such as `kanban`, are
 never in the default list: name them explicitly for a peer you trust with them.
-A peer allowed `kanban` dispatches workers limited to its own allowlist.
+A peer allowed `kanban` dispatches workers limited to its own allowlist. The
+allowlist is intersected with the operator's `a2a` channel policy row and
+every other policy layer; it can only narrow them, never widen them.
+
+A peer token proves which peer is calling, not that its content is yours, so
+inbound runs require approval for every `bash`, `write`, `edit`, `patch` and
+`hashline_edit` call the allowlist permits. For an automated peer you trust as
+yourself, opt it out in your global config (a project config cannot):
+
+```toml
+[gateway.a2a.peers.hermes]
+token_secret = "a2a/hermes"
+allow_tools = ["read", "bash"]
+trusted_automation = true
+```
 
 The inbound A2A `messageId` is also the durable replay key. Resending the same
 message for the same authenticated peer returns the original task, including

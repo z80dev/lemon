@@ -116,7 +116,9 @@ defmodule LemonControlPlane.A2A.Config do
          outbound_token_secret: value(peer, "outbound_token_secret", nil),
          allow_tools: string_list(value(peer, "allow_tools", [])),
          capabilities: string_list(value(peer, "capabilities", [])),
-         timeout_ms: value(peer, "timeout_ms", 300_000)
+         timeout_ms: value(peer, "timeout_ms", 300_000),
+         # Opt-out of the inbound group approval floor; only a literal `true`.
+         trusted_automation: value(peer, "trusted_automation", false) == true
        }}
     end)
   end

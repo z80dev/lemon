@@ -3223,8 +3223,16 @@ require token secret names (validated at load).
 
 Each `[gateway.a2a.peers.<name>]` sets `url`, `token_secret` (or separate
 `inbound_token_secret` / `outbound_token_secret`), `agent_id`, `capabilities`,
-`timeout_ms` and `allow_tools` (empty means `default_allow_tools`). Tokens are
-secret names, never literal values.
+`timeout_ms`, `allow_tools` (empty means `default_allow_tools`) and
+`trusted_automation`. Tokens are secret names, never literal values.
+
+A peer token authenticates the peer, not the content it relays, so every
+inbound peer run requires approval for each `bash`, `write`, `edit`, `patch`
+and `hashline_edit` call it is allowed (the group approval floor). Set
+`trusted_automation = true` (a literal boolean) on a peer only to exempt that
+peer from the floor. Webhook integrations take the same per-integration key,
+`[gateway.webhook.integrations.<id>] trusted_automation = true`. Gateway
+sections are operator-only: a project `.lemon/config.toml` cannot set either.
 
 ## Gateway Projects and Bindings
 
