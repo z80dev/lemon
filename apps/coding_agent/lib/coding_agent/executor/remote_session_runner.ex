@@ -6,6 +6,10 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   owns targeting, timeout, disconnect, and cancellation of the remote
   invocation. Live events traverse the normal gateway sink (and therefore the
   run/session Bus topics); terminal results remain a separate final outcome.
+
+  A session-bound run is dispatched with `session_lifecycle_admission: true`:
+  its invocation stays session presence after this runner reports a terminal
+  outcome (cancel, timeout, disconnect), until the node proves the run stopped.
   """
 
   use GenServer
@@ -173,13 +177,16 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   end
 
   defp invoke_destination(node, state, payload, max_payload) do
+    session_key = payload["sessionKey"]
+
     NodeRegistry.invoke_node(node.id, @method, payload,
       recipient: self(),
       timeout_ms: state.timeout_ms,
       max_payload_bytes: max_payload,
       expected_pid: node.pid,
       expected_generation: node.generation,
-      required_native_privacy_context: 1
+      required_native_privacy_context: 1,
+      session_lifecycle_admission: is_binary(session_key) and session_key != ""
     )
   end
 

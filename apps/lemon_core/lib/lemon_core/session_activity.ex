@@ -1,8 +1,10 @@
 defmodule LemonCore.SessionActivity do
   @moduledoc """
-  Presence for execution that starts outside router admission: an idle native
-  session's follow-up turn, a direct `node.invoke` of `coding_agent.run`, and a
-  direct gateway submission.
+  Presence for execution the router does not (or no longer) tracks: an idle
+  native session's follow-up turn, a direct gateway submission, and a remote
+  `coding_agent.run` whose node has not yet proven it stopped (which can
+  outlive the router run's terminal summary). Durable unresolved rows written
+  before the raw `node.invoke` RPC was removed are honoured the same way.
 
   `admit/2` registers the calling process for the session and then checks the
   durable lifecycle fence (`LemonCore.LifecycleFenceStore`). A destructive

@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.Methods.NodeShellTest do
   use ExUnit.Case, async: false
   alias LemonControlPlane.{NodeShells, NodeStore}
-  alias LemonControlPlane.Methods.{NodeShellEvent, NodeShellInput, NodeInvoke}
+  alias LemonControlPlane.Methods.{NodeShellEvent, NodeShellInput, Registry}
   alias LemonCore.NodeRegistry
 
   setup do
@@ -92,10 +92,12 @@ defmodule LemonControlPlane.Methods.NodeShellTest do
 
   test "generic invocation cannot bypass machine admin methods", %{node_id: id} do
     for method <- ["node.fs.read", "node.secrets.set", "node.shell.open"] do
-      assert {:error, {:forbidden, _}} =
-               NodeInvoke.handle(%{"nodeId" => id, "method" => method, "args" => %{}}, %{
-                 conn_pid: self()
-               })
+      assert {:error, {:method_not_found, _}} =
+               Registry.dispatch(
+                 "node.invoke",
+                 %{"nodeId" => id, "method" => method, "args" => %{}},
+                 %{conn_pid: self()}
+               )
     end
   end
 

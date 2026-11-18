@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.NodeProcessTest do
   use ExUnit.Case, async: false
 
   alias LemonControlPlane.{NodeIO, NodeStore}
-  alias LemonControlPlane.Methods.{NodeInvoke, NodeProcessSupport, Registry}
+  alias LemonControlPlane.Methods.{NodeProcessSupport, Registry}
   alias LemonControlPlane.Protocol.Schemas
   alias LemonCore.{NodeRegistry, Store}
 
@@ -189,8 +189,9 @@ defmodule LemonControlPlane.Methods.NodeProcessTest do
                  Registry.dispatch(method, Map.put(params, field, "tampering"), ctx.rpc)
       end
 
-      assert {:error, {:forbidden, _}} =
-               NodeInvoke.handle(
+      assert {:error, {:method_not_found, _}} =
+               Registry.dispatch(
+                 "node.invoke",
                  %{
                    "nodeId" => ctx.node_id,
                    "method" => method,

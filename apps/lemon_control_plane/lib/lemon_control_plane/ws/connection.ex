@@ -23,7 +23,7 @@ defmodule LemonControlPlane.WS.Connection do
   require Logger
 
   alias LemonControlPlane.Auth.Authorize
-  alias LemonControlPlane.Methods.{NodeInvokeResult, Registry}
+  alias LemonControlPlane.Methods.Registry
   alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.{Errors, Frames}
   alias LemonCore.Bus.Delivery
@@ -196,11 +196,6 @@ defmodule LemonControlPlane.WS.Connection do
 
   def handle_info({:node_event, event_name, payload}, state) do
     push_event(event_name, payload, increment_event_seq(state))
-  end
-
-  def handle_info({:lemon_node_result, invoke_id, result}, state) do
-    :ok = NodeInvokeResult.record_registry_result(invoke_id, result)
-    {:ok, state}
   end
 
   def handle_info({:event, event_name, payload}, state) do

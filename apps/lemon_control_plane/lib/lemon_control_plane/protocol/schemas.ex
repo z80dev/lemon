@@ -1085,16 +1085,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "confirmName" => :string
       }
     },
-    "node.invoke" => %{
-      required: %{
-        "nodeId" => :string,
-        "method" => :string
-      },
-      optional: %{
-        "args" => :map,
-        "timeoutMs" => :integer
-      }
-    },
     "node.profile.paths" => %{
       required: %{"nodeId" => :string, "profileId" => :string},
       optional: %{}

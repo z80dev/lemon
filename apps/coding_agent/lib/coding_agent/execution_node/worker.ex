@@ -38,12 +38,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
   invocations, and messages from replaced sockets are ignored.
 
   A cancelled invocation is acknowledged with a terminal `"cancelled"` result
-  only after its execution process has exited, within a bounded wait; one that
-  does not stop in time is never acknowledged. After every connect the worker
-  reports (`node.invoke.active`) each invocation still running, stopping or
-  stuck, so the server clears unresolved presence only for stopped work. The
-  credential
-  watch uses `state_timeout`, so unrelated traffic cannot postpone it and leaving
+  only after its execution process has exited. One that does not stop within
+  the quiescence bound stays monitored and reported active, and is
+  acknowledged when it eventually exits; the deadline alone never clears it.
+  After every connect the worker reports (`node.invoke.active`) each
+  invocation still running or stopping, so the server clears unresolved
+  presence only for stopped work. The credential watch uses `state_timeout`,
+  so unrelated traffic cannot postpone it and leaving
   the parked state cancels it. The independent reprobe uses a named generic
   timeout, explicitly cancelled when credentials resume the connection. Neither
   deadline is stored as a timer reference in the worker data.
@@ -191,10 +192,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
     capability_probe: nil,
     invocations: %{},
     run_refs: %{},
-    # Cancelled executions not yet proven stopped: monitor ref => %{invoke_id, timer}.
-    stopping: %{},
-    # Cancelled executions that did not stop within the quiescence bound.
-    stuck: MapSet.new()
+    # Cancelled executions not yet proven stopped, monitored until they exit:
+    # monitor ref => %{invoke_id, timer, reason, stuck}. `stuck` marks one past
+    # the quiescence bound; it stays here (and reported active) until its DOWN.
+    stopping: %{}
   ]
 
   @spec start_link(keyword()) :: :gen_statem.start_ret()
@@ -740,20 +741,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
     {%{invoke_id: invoke_id, timer: timer, reason: reason}, stopping} =
       Map.pop(state.stopping, monitor_ref)
 
-    Process.cancel_timer(timer)
+    if timer, do: Process.cancel_timer(timer)
     {:keep_state, ack_stopped(%{state | stopping: stopping}, invoke_id, reason)}
   end
 
-  # The cancelled execution did not stop in time: send no terminal result, so
-  # the server keeps the run's session busy, and keep reporting it as active.
+  # The cancelled execution did not stop in time. Termination is still
+  # unproven: keep monitoring it and reporting it active, send no terminal
+  # result now, and acknowledge it only on its eventual DOWN.
   def handle_event(:info, {:cancel_quiescence_timeout, monitor_ref}, _link_state, state) do
-    case Map.pop(state.stopping, monitor_ref) do
-      {nil, _stopping} ->
+    case Map.fetch(state.stopping, monitor_ref) do
+      :error ->
         {:keep_state, state}
 
-      {%{invoke_id: invoke_id}, stopping} ->
-        Process.demonitor(monitor_ref, [:flush])
-        {:keep_state, %{state | stopping: stopping, stuck: MapSet.put(state.stuck, invoke_id)}}
+      {:ok, entry} ->
+        entry = %{entry | timer: nil, stuck: true}
+        {:keep_state, %{state | stopping: Map.put(state.stopping, monitor_ref, entry)}}
     end
   end
 
@@ -2497,9 +2499,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @cancel_quiescence_ms 10_000
 
   # Abort an invocation and send its terminal result (`reason`) only once its
-  # execution process has exited (bounded by @cancel_quiescence_ms); until
-  # then it stays reported as active. The server keeps the run's session busy
-  # until that result, or until this worker's active-invocation report omits it.
+  # execution process has exited; until then it stays reported as active, also
+  # past @cancel_quiescence_ms. The server keeps the run's session busy until
+  # that result, or until this worker's active-invocation report omits it.
   defp stop_invocation(state, invoke_id, invocation, reason \\ :cancelled) do
     _ = cancel_invocation_execution(state, invocation)
     pid = execution_pid(invocation)
@@ -2508,7 +2510,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     if is_pid(pid) and Process.alive?(pid) do
       ref = Process.monitor(pid)
       timer = Process.send_after(self(), {:cancel_quiescence_timeout, ref}, @cancel_quiescence_ms)
-      stopping = %{invoke_id: invoke_id, timer: timer, reason: reason}
+      stopping = %{invoke_id: invoke_id, timer: timer, reason: reason, stuck: false}
       %{state | stopping: Map.put(state.stopping, ref, stopping)}
     else
       ack_stopped(state, invoke_id, reason)
@@ -2527,10 +2529,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp ack_stopped(state, _invoke_id, _reason), do: state
 
   # Sent on every connection after the disconnect cancellation barrier: every
-  # invocation still running, still stopping, or stuck.
+  # invocation still running or still stopping (including past the bound).
   defp report_active(state) do
     stopping = Enum.map(state.stopping, fn {_ref, %{invoke_id: id}} -> id end)
-    ids = Enum.uniq(Map.keys(state.invocations) ++ stopping ++ MapSet.to_list(state.stuck))
+    ids = Enum.uniq(Map.keys(state.invocations) ++ stopping)
     request(state, "node.invoke.active", %{"invokeIds" => ids}, :invoke_active)
     state
   end

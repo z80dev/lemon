@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.Methods.NodeSecretProofsTest do
   use ExUnit.Case, async: false
   alias LemonControlPlane.{NodeIO, NodeSecretProofs, NodeStore}
-  alias LemonControlPlane.Methods.{NodeInvoke, NodeSecretsSet}
+  alias LemonControlPlane.Methods.{NodeSecretsSet, Registry}
   alias LemonCore.{NodeRegistry, Store}
 
   setup do
@@ -133,8 +133,9 @@ defmodule LemonControlPlane.Methods.NodeSecretProofsTest do
       assert {:error, {:invalid_request, _}} = NodeSecretsSet.handle(params, %{})
     end
 
-    assert {:error, {:forbidden, _}} =
-             NodeInvoke.handle(
+    assert {:error, {:method_not_found, _}} =
+             Registry.dispatch(
+               "node.invoke",
                %{"nodeId" => ctx.node_id, "method" => "node.secrets.set", "args" => args},
                %{}
              )

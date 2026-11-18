@@ -3,7 +3,7 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
   import ExUnit.CaptureLog
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Auth.TokenStore
-  alias LemonControlPlane.Methods.{Registry, NodeInvoke, NodeProvidersManagementApiKeySet}
+  alias LemonControlPlane.Methods.{Registry, NodeProvidersManagementApiKeySet}
   alias LemonControlPlane.NodeStore
   alias LemonCore.NodeRegistry
 
@@ -89,8 +89,9 @@ defmodule LemonControlPlane.Methods.ProviderManagementTest do
 
   test "generic write-scoped node invocation cannot bypass provider admin scope" do
     for operation <- @operations do
-      assert {:error, {:forbidden, _}} =
-               NodeInvoke.handle(
+      assert {:error, {:method_not_found, _}} =
+               Registry.dispatch(
+                 "node.invoke",
                  %{
                    "nodeId" => "offline-node",
                    "method" => "node.providers.management." <> operation,

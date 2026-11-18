@@ -5,9 +5,9 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
 
   alias LemonControlPlane.Methods.{
     ConnectChallenge,
-    NodeInvoke,
     NodeInvokeResult,
-    NodePairApprove
+    NodePairApprove,
+    Registry
   }
 
   alias LemonControlPlane.NodeStore
@@ -30,7 +30,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     :ok
   end
 
-  test "node.invoke delivers only to the target and rejects a different node's result" do
+  test "a node invocation delivers only to the target and rejects a different node's result" do
     parent = self()
     target_pid = spawn_node(parent, :target)
     other_pid = spawn_node(parent, :other)
@@ -42,44 +42,35 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     :ok = LemonCore.NodeRegistry.register(target_id, "Target Node", target_pid)
     :ok = LemonCore.NodeRegistry.register(other_id, "Other Node", other_pid)
 
-    ctx = %{@operator_ctx | conn_pid: self()}
-
-    assert {:ok, invoke} =
-             NodeInvoke.handle(
-               %{
-                 "nodeId" => target_id,
-                 "method" => "work.run",
-                 "args" => %{"value" => 7}
-               },
-               ctx
+    assert {:ok, invoke_id} =
+             LemonCore.NodeRegistry.invoke_node(target_id, "work.run", %{"value" => 7},
+               recipient: self()
              )
 
     assert_receive {:target, {:node_event, "node.invoke.request", payload}}
-    assert payload["invokeId"] == invoke["invokeId"]
+    assert payload["invokeId"] == invoke_id
     assert payload["nodeId"] == target_id
     refute_receive {:other, {:node_event, "node.invoke.request", _payload}}, 100
 
     assert {:error, {:forbidden, _message}} =
              NodeInvokeResult.handle(
-               %{"invokeId" => invoke["invokeId"], "result" => %{"wrong" => true}},
+               %{"invokeId" => invoke_id, "result" => %{"wrong" => true}},
                %{auth: %{role: :node, client_id: other_id}, conn_pid: other_pid}
              )
 
     assert {:ok, %{"received" => true}} =
              NodeInvokeResult.handle(
-               %{"invokeId" => invoke["invokeId"], "result" => %{"ok" => true}},
+               %{"invokeId" => invoke_id, "result" => %{"ok" => true}},
                %{auth: %{role: :node, client_id: target_id}, conn_pid: target_pid}
              )
 
-    assert_receive {:lemon_node_result, invoke_id, {:ok, %{"ok" => true}}}
-    assert invoke_id == invoke["invokeId"]
-    assert NodeStore.get_invocation(invoke_id).status == :completed
+    assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true}}}
 
     Process.exit(target_pid, :kill)
     Process.exit(other_pid, :kill)
   end
 
-  test "live registry accepts a result before the durable invocation is visible" do
+  test "live registry accepts a result immediately after dispatch" do
     node_id = unique("fast-result")
     :ok = LemonCore.NodeRegistry.register(node_id, "Fast Result Node", self())
 
@@ -87,7 +78,6 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
              LemonCore.NodeRegistry.invoke(node_id, "work.run", %{}, recipient: self())
 
     assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
-    assert NodeStore.get_invocation(invoke_id) == nil
 
     assert {:ok, %{"received" => true}} =
              NodeInvokeResult.handle(
@@ -143,25 +133,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     assert :ok = LemonCore.NodeRegistry.cancel(invoke_id, :test_cleanup)
   end
 
-  test "node invocation rejects malformed JSON boundary values without crashing" do
-    assert {:error, {:invalid_request, "nodeId must be a non-empty string"}} =
-             NodeInvoke.handle(
-               %{"nodeId" => ["not", "an", "id"], "method" => "work.run"},
-               @operator_ctx
-             )
-
-    assert {:error, {:invalid_request, "method must be a non-empty string"}} =
-             NodeInvoke.handle(
-               %{"nodeId" => "node-id", "method" => %{"not" => "a string"}},
-               @operator_ctx
-             )
-
-    assert {:error, {:invalid_request, "args must be an object"}} =
-             NodeInvoke.handle(
-               %{"nodeId" => "node-id", "method" => "work.run", "args" => ["invalid"]},
-               @operator_ctx
-             )
-
+  test "node.invoke.result rejects malformed JSON boundary values without crashing" do
     assert {:error, {:invalid_request, "invokeId must be a non-empty string"}} =
              NodeInvokeResult.handle(
                %{"invokeId" => 123, "result" => %{}},
@@ -169,7 +141,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
              )
   end
 
-  test "public native invocation cannot attest memory authority with raw booleans or aliases" do
+  test "no public RPC routes a raw coding_agent.run carrying native authority to a node" do
     parent = self()
     node = unique("native-authority")
     connection = spawn_node(parent, :native_authority)
@@ -177,97 +149,22 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     :ok = LemonCore.NodeRegistry.register(node, "Native Authority", connection)
     ctx = %{@operator_ctx | conn_pid: self()}
 
-    aliases = [
-      :memory_context_verified,
-      "memory_context_verified",
-      :memoryContextVerified,
-      "memoryContextVerified",
-      :shared_memory_grant,
-      "shared_memory_grant",
-      :sharedMemoryGrant,
-      "sharedMemoryGrant",
-      :invocation_proof,
-      "invocation_proof",
-      :invocationProof,
-      "invocationProof",
-      :invocation_proof_verified,
-      "invocation_proof_verified",
-      :invocationProofVerified,
-      "invocationProofVerified",
-      :native_lineage_handle,
-      "native_lineage_handle",
-      :nativeLineageHandle,
-      "nativeLineageHandle",
-      :native_lineage_run_id,
-      "native_lineage_run_id",
-      :nativeLineageRunId,
-      "nativeLineageRunId",
-      :native_destination_pid,
-      "native_destination_pid",
-      :nativeDestinationPid,
-      "nativeDestinationPid",
-      :native_destination_generation,
-      "native_destination_generation",
-      :nativeDestinationGeneration,
-      "nativeDestinationGeneration",
-      :native_source_profile_id,
-      "native_source_profile_id",
-      :nativeSourceProfileId,
-      "nativeSourceProfileId",
-      :native_source_session_key,
-      "native_source_session_key",
-      :nativeSourceSessionKey,
-      "nativeSourceSessionKey",
-      :native_followup_submit,
-      "native_followup_submit",
-      :nativeFollowupSubmit,
-      "nativeFollowupSubmit",
-      :native_source_floor_fun,
-      "native_source_floor_fun",
-      :nativeSourceFloorFun,
-      "nativeSourceFloorFun",
-      :native_managed_context,
-      "native_managed_context",
-      :nativeManagedContext,
-      "nativeManagedContext",
-      :native_root_binding,
-      "native_root_binding",
-      :nativeRootBinding,
-      "nativeRootBinding"
-    ]
-
-    for field <- aliases, proof <- [false, true] do
-      assert {:error, {:forbidden, _}} =
-               NodeInvoke.handle(
+    for meta <- [
+          %{"memory_context_verified" => true},
+          %{"invocationProof" => "forged"},
+          %{"nativeLineageHandle" => "caller-handle"}
+        ] do
+      assert {:error, {:method_not_found, _}} =
+               Registry.dispatch(
+                 "node.invoke",
                  %{
                    "nodeId" => node,
                    "method" => "coding_agent.run",
-                   "args" => %{"meta" => %{field => proof}}
+                   "args" => %{"meta" => meta}
                  },
                  ctx
                )
     end
-
-    mixed = %{
-      "memory_context_verified" => true,
-      "sharedMemoryGrant" => true,
-      memory_context_verified: false,
-      shared_memory_grant: false
-    }
-
-    assert {:error, {:forbidden, _}} =
-             NodeInvoke.handle(
-               %{"nodeId" => node, "method" => "coding_agent.run", "args" => %{meta: mixed}},
-               ctx
-             )
-
-    shadowed_meta = %{"meta" => %{"nativeLineageHandle" => "caller-handle"}, meta: %{}}
-
-    assert {:error, {:forbidden, _}} =
-             NodeInvoke.handle(
-               %{"nodeId" => node, "method" => "coding_agent.run", "args" => shadowed_meta},
-               ctx
-             )
 
     refute_receive {:native_authority, {:node_event, "node.invoke.request", _}}, 50
     refute_receive {:node_event, "node.invoke.request", _}, 50
@@ -474,7 +371,6 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
         :nodes_registry,
         :nodes_by_name,
         :node_challenges,
-        :node_invocations,
         :session_tokens,
         :session_token_heads
       ],

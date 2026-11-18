@@ -75,8 +75,6 @@ defmodule LemonControlPlane.EventBridge do
   | :log                     | log                       |
   | :node_pair_requested     | node.pair.requested       |
   | :node_pair_resolved      | node.pair.resolved        |
-  | :node_invoke_request     | node.invoke.request       |
-  | :node_invoke_completed   | node.invoke.completed     |
   | :shutdown                | shutdown                  |
   | :health_changed          | health                    |
   | :task_started            | task.started              |
@@ -138,8 +136,6 @@ defmodule LemonControlPlane.EventBridge do
     # only the envelope.
     "metrics" => ~w(timestampMs runId sessionKey),
     "log" => ~w(level timestampMs runId sessionKey),
-    "node.invoke.request" => ~w(invokeId nodeId method timeoutMs cleanup),
-    "node.invoke.completed" => ~w(invokeId nodeId ok cleanup),
     "task.started" => @task_metadata,
     "task.completed" => @task_metadata,
     "task.error" => @task_metadata,
@@ -971,32 +967,6 @@ defmodule LemonControlPlane.EventBridge do
        "nodeId" => payload[:node_id],
        "approved" => payload[:approved] || false,
        "rejected" => payload[:rejected] || false
-     }}
-  end
-
-  defp map_event_type(:node_invoke_request, payload, _meta) do
-    {"node.invoke.request",
-     %{
-       "invokeId" => payload[:invoke_id],
-       "nodeId" => payload[:node_id],
-       "method" => payload[:method],
-       "timeoutMs" => payload[:timeout_ms],
-       "cleanup" => %{"includesArgs" => false}
-     }}
-  end
-
-  defp map_event_type(:node_invoke_completed, payload, _meta) do
-    {"node.invoke.completed",
-     %{
-       "invokeId" => payload[:invoke_id],
-       "nodeId" => payload[:node_id],
-       "ok" => payload[:ok],
-       "resultSummary" => stringify_keys(payload[:result_summary] || %{}),
-       "errorSummary" => stringify_keys(payload[:error_summary] || %{}),
-       "cleanup" => %{
-         "includesResult" => false,
-         "includesError" => false
-       }
      }}
   end
 

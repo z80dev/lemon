@@ -6,13 +6,16 @@ defmodule LemonCore.NodeInvocation do
   process. Neither streamed frames nor terminal/control replies visit a shared
   broker. Disconnects are terminal; work is never replayed on another socket.
 
-  A session-admitted `coding_agent.run` keeps its session busy until the node
-  proves the run stopped. Cancellation, timeout and recipient exit send a
-  remote cancel and wait for the node's terminal result; a lost connection
-  replaces this owner's live registration with durable unresolved presence
-  (`LemonCore.SessionActivity.retire_unresolved/3`, one serialized step). Only
-  evidence bound to that execution clears it: a terminal result for the
-  invocation, or the node's active-invocation report omitting it.
+  A session-bound `coding_agent.run` (a router run executed by
+  `CodingAgent.Executor.RemoteSessionRunner`) keeps its session busy until the
+  node proves the run stopped, independently of the client-visible completion.
+  Cancellation, timeout and recipient exit report the terminal result to the
+  recipient at once, send a remote cancel and wait for the node's terminal
+  result; a lost connection replaces this owner's live registration with
+  durable unresolved presence (`LemonCore.SessionActivity.retire_unresolved/3`,
+  one serialized step). Only evidence bound to that execution clears it: a
+  terminal result for the invocation, or the node's active-invocation report
+  from a later connection omitting it.
   """
 
   use GenServer, restart: :temporary
@@ -92,11 +95,11 @@ defmodule LemonCore.NodeInvocation do
     end
   end
 
-  # Unadmitted `coding_agent.run` (`node.invoke`) executes outside router
-  # admission: this process registers as the session's activity for the
-  # invocation's lifetime, or the run is refused while a lifecycle fence holds
-  # the session. The caller canonicalizes `sessionKey` and the worker executes
-  # under exactly that key, so it is never derived here.
+  # A session-bound `coding_agent.run` registers this process as the session's
+  # activity for the invocation's lifetime (beyond the router run's terminal
+  # summary), or is refused while a lifecycle fence holds the session. The
+  # worker executes under exactly the payload's `sessionKey`, so presence is
+  # bound to that key and never derived here.
   defp admit_session("coding_agent.run", args, _id, opts) do
     if Keyword.get(opts, :session_lifecycle_admission, false) do
       with session_key when is_binary(session_key) and session_key != "" <-

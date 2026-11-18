@@ -101,7 +101,6 @@ defmodule LemonControlPlane.Methods.NodeMcpDiscoverTest do
     assert Task.await(request) == {:ok, discovery(config)}
     refute inspect(discovery(config)) =~ "DOES_NOT_EXIST_LOCALLY"
     refute inspect(discovery(config)) =~ "Authorization"
-    assert NodeStore.get_invocation(payload["invokeId"]) == nil
   end
 
   test "durable discovery target cannot be hijacked by an online UUID-shaped name" do

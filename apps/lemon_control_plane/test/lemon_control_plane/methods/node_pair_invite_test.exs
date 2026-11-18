@@ -371,7 +371,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
           {"node.pair.invite.revoke", [:pairing]},
           {"node.pair.approve", [:pairing]},
           {"config.set", [:admin]},
-          {"node.invoke", [:write]},
+          {"chat.send", [:write]},
           {"health", []}
         ] do
       assert {:error, _} = Authorize.authorize(auth, method, scopes)

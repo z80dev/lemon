@@ -84,7 +84,7 @@ Cancelling a routed call aborts the tool on the node (killing a shell
 command's process tree) and stops it after a two-second grace.
 
 The controller, not the node, owns durable tool intent. It syncs a
-`lemon.tool_intent` before sending an effectful `node.invoke`, and sends only
+`lemon.tool_intent` before sending an effectful node invocation, and sends only
 an invocation-bound acknowledgement marker alongside the request. Results do
 not add a per-result sync. Read-only calls add no intent sync.
 Nested tools in a node eval cell are covered by that parent eval's intent only

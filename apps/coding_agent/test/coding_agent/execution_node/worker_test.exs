@@ -366,8 +366,65 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   @tag :tmp_dir
-  test "a cancelled run that never stops is never acknowledged and stays reported active",
+  test "a cancelled run past the quiescence bound stays active until it exits, then is acknowledged",
        %{tmp_dir: tmp_dir} do
+    {worker, socket, context, monitor_ref} = stuck_cancelled_run(tmp_dir)
+
+    # The deadline alone proves nothing: the run stays monitored and stopping.
+    {_link_state, state} = :sys.get_state(worker)
+
+    assert %{^monitor_ref => %{invoke_id: "invoke-stuck", stuck: true, timer: nil}} =
+             state.stopping
+
+    refute_received {:socket_request, ^socket, "node.invoke.result", _, _, _}
+
+    # Its eventual exit, while online, is acknowledged with the terminal result.
+    Process.exit(context.runner_pid, :kill)
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "invoke-stuck", "error" => "cancelled"},
+                    {:invoke_result, "invoke-stuck"}, _timeout}
+
+    {_link_state, state} = :sys.get_state(worker)
+    assert state.stopping == %{}
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "a run past the quiescence bound is reported active across reconnects until it exits",
+       %{tmp_dir: tmp_dir} do
+    {worker, socket, context, _monitor_ref} = stuck_cancelled_run(tmp_dir)
+    connected = {:connected, %{"auth" => %{"clientId" => "node-1"}}}
+
+    # A reconnect still reports it: termination is unproven.
+    send(worker, {:execution_node_socket, socket, {:disconnected, :closed}})
+    send(worker, {:execution_node_socket, socket, connected})
+
+    assert_receive {:socket_request, ^socket, "node.invoke.active",
+                    %{"invokeIds" => ["invoke-stuck"]}, _, _}
+
+    # It exits while offline: no result is sent, and the next report omits it.
+    send(worker, {:execution_node_socket, socket, {:disconnected, :closed}})
+    Process.exit(context.runner_pid, :kill)
+
+    assert Enum.any?(1..200, fn _ ->
+             {_link_state, state} = :sys.get_state(worker)
+             stopped? = state.stopping == %{}
+             unless stopped?, do: Process.sleep(10)
+             stopped?
+           end)
+
+    refute_received {:socket_request, ^socket, "node.invoke.result", _, _, _}
+
+    send(worker, {:execution_node_socket, socket, connected})
+    assert_receive {:socket_request, ^socket, "node.invoke.active", %{"invokeIds" => []}, _, _}
+    refute_received {:socket_request, ^socket, "node.invoke.result", _, _, _}
+    GenServer.stop(worker)
+  end
+
+  # Connects, starts a run, cancels it and lets the quiescence bound pass with
+  # its runner still alive.
+  defp stuck_cancelled_run(tmp_dir) do
     {:ok, worker} = start_worker(tmp_dir, token: "node-token")
     assert_receive {:socket_started, socket, _opts}
 
@@ -391,17 +448,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert_receive {:executor_cancelled, ^context}
     {_link_state, %{stopping: stopping}} = :sys.get_state(worker)
     [{monitor_ref, _}] = Map.to_list(stopping)
-
-    # The quiescence bound passes with the runner still alive.
     send(worker, {:cancel_quiescence_timeout, monitor_ref})
-    {_link_state, state} = :sys.get_state(worker)
-    assert state.stopping == %{}
-    assert MapSet.member?(state.stuck, "invoke-stuck")
-
-    # Even its later exit is not acknowledged, and no result was ever sent.
-    refute_received {:socket_request, ^socket, "node.invoke.result", _, _, _}
-    Process.exit(context.runner_pid, :kill)
-    GenServer.stop(worker)
+    {worker, socket, context, monitor_ref}
   end
 
   @tag :tmp_dir

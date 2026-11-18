@@ -62,9 +62,13 @@ another session store, scheduler or agent runtime. See [README](README.md).
   generation to the mutation (`fence_generation:`, required by the core): they
   are refused while the session has active, queued or unresolved work, durably
   fence all new execution for the session while they run, and report success
-  only after verified deletion. `node.invoke` of `coding_agent.run` fixes the
-  run id and session key once, is admitted against the same fence, and counts
-  as session activity until the node proves the run stopped.
+  only after verified deletion.
+- Node methods are reachable only through their own scoped RPCs. Do not add a
+  generic operator RPC that forwards an arbitrary method or arguments to a node.
+  `LemonCore.NodeRegistry` invocations are live-only; the only durable trace is
+  `LemonCore.SessionActivity` unresolved presence for a remote
+  `coding_agent.run` whose stop is unproven, cleared only by that invocation's
+  terminal result or the node's later `node.invoke.active` report omitting it.
 - Profiles derive paths from validated IDs in `ProfileStore`; chat uses the
   canonical profile session and router path.
 - Provider, memory and blueprint mutations keep their owning service's revision

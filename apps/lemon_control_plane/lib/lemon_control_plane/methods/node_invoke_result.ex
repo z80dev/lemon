@@ -1,15 +1,14 @@
 defmodule LemonControlPlane.Methods.NodeInvokeResult do
   @moduledoc """
-  Handler for `node.invoke.result` and registry-driven terminal outcomes.
+  Handler for `node.invoke.result`.
 
-  A node may complete only invocations owned by the node ID in its authenticated
-  connection context. The live registry remains the authority for pending
-  invocation ownership; the control-plane store is the durable status view.
+  A node may complete only invocations owned by the node ID and live session of
+  its authenticated connection. The live `LemonCore.NodeRegistry` invocation is
+  the sole authority: it validates the result and delivers it to the
+  invocation's recipient. Nothing is persisted here.
   """
 
   @behaviour LemonControlPlane.Method
-
-  alias LemonControlPlane.NodeStore
 
   import LemonControlPlane.Methods.NodeSession,
     only: [session_generation: 1, current_session?: 2, get_field: 2]
@@ -61,20 +60,6 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
     end
   end
 
-  @doc false
-  def record_registry_result(invoke_id, {:ok, result}) when is_binary(invoke_id) do
-    settle_pending(invoke_id, result, nil)
-  end
-
-  def record_registry_result(invoke_id, {:error, {:remote, error}})
-      when is_binary(invoke_id) do
-    settle_pending(invoke_id, nil, error)
-  end
-
-  def record_registry_result(invoke_id, {:error, reason}) when is_binary(invoke_id) do
-    settle_pending(invoke_id, nil, inspect(reason))
-  end
-
   defp complete_invocation(
          authenticated_node_id,
          connection_pid,
@@ -92,81 +77,18 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
            error
          ) do
       :ok ->
-        settle_live_result(authenticated_node_id, invoke_id, result, error)
+        accepted_reply(authenticated_node_id, invoke_id, result, error)
 
       {:error, :wrong_node} ->
         {:error, Errors.forbidden("Invocation belongs to a different node")}
 
       {:error, :not_found} ->
-        complete_legacy_invocation(authenticated_node_id, invoke_id, result, error)
+        {:error, Errors.not_found("Invocation not found")}
 
       {:error, :stale_session} ->
         {:error, Errors.forbidden("Invocation belongs to a superseded node session")}
 
       {:error, {:invalid_payload, reason}} ->
-        {:error,
-         Errors.error(
-           :invalid_request,
-           "result violates JSON payload policy",
-           payload_error_kind(reason)
-         )}
-    end
-  end
-
-  # The node can answer immediately after the registry dispatches the request,
-  # before NodeInvoke has persisted its durable status record. Registry
-  # ownership is therefore checked first; the source connection will settle
-  # the durable record from the registry notification once its dispatch call
-  # returns.
-  defp settle_live_result(authenticated_node_id, invoke_id, result, error) do
-    case NodeStore.get_invocation(invoke_id) do
-      invocation when is_map(invocation) ->
-        if get_field(invocation, :node_id) == authenticated_node_id and pending?(invocation) do
-          settle_and_reply(invocation, invoke_id, result, error)
-        else
-          accepted_reply(authenticated_node_id, invoke_id, result, error)
-        end
-
-      _ ->
-        accepted_reply(authenticated_node_id, invoke_id, result, error)
-    end
-  end
-
-  defp complete_legacy_invocation(authenticated_node_id, invoke_id, result, error) do
-    case NodeStore.get_invocation(invoke_id) do
-      nil ->
-        {:error, Errors.not_found("Invocation not found")}
-
-      invocation ->
-        expected_node_id = get_field(invocation, :node_id)
-
-        cond do
-          expected_node_id != authenticated_node_id ->
-            {:error, Errors.forbidden("Invocation belongs to a different node")}
-
-          not pending?(invocation) ->
-            {:error, Errors.conflict("Invocation is no longer pending")}
-
-          get_field(invocation, :registry_managed) ->
-            {:error, Errors.conflict("Invocation is no longer pending")}
-
-          true ->
-            # Compatibility for durable invocations created before NodeRegistry
-            # became the live delivery authority.
-            settle_and_reply(invocation, invoke_id, result, error)
-        end
-    end
-  end
-
-  defp settle_and_reply(invocation, invoke_id, result, error) do
-    case LemonCore.JSONPayload.validate(%{"result" => result, "error" => error},
-           max_bytes: LemonControlPlane.max_payload()
-         ) do
-      {:ok, _stats} ->
-        :ok = settle(invocation, invoke_id, result, error)
-        accepted_reply(get_field(invocation, :node_id), invoke_id, result, error)
-
-      {:error, reason} ->
         {:error,
          Errors.error(
            :invalid_request,
@@ -198,48 +120,6 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
        }
      }}
   end
-
-  defp settle_pending(invoke_id, result, error) do
-    case NodeStore.get_invocation(invoke_id) do
-      invocation when is_map(invocation) ->
-        if pending?(invocation), do: settle(invocation, invoke_id, result, error), else: :ok
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp settle(invocation, invoke_id, result, error) do
-    summary_opts = [max_bytes: LemonControlPlane.max_payload()]
-    result_summary = LemonCore.JSONPayload.summary(result, summary_opts)
-    error_summary = LemonCore.JSONPayload.summary(error, summary_opts)
-
-    updated =
-      invocation
-      |> Map.drop([:args, "args", :result, "result", :error, "error"])
-      |> Map.merge(%{
-        status: if(error, do: :error, else: :completed),
-        result_summary: result_summary,
-        error_summary: error_summary,
-        completed_at_ms: System.system_time(:millisecond)
-      })
-
-    with :ok <- NodeStore.put_invocation(invoke_id, updated) do
-      event =
-        LemonCore.Event.new(:node_invoke_completed, %{
-          invoke_id: invoke_id,
-          node_id: get_field(invocation, :node_id),
-          result_summary: result_summary,
-          error_summary: error_summary,
-          ok: is_nil(error)
-        })
-
-      LemonCore.Bus.broadcast("nodes", event)
-      :ok
-    end
-  end
-
-  defp pending?(invocation), do: get_field(invocation, :status) in [:pending, "pending"]
 
   defp payload_error_kind({kind, _detail})
        when kind in [:max_bytes, :max_depth, :max_items, :not_json_safe],

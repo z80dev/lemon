@@ -281,7 +281,7 @@ The current actual authenticated node must advertise version 1 for
 `node.process.run`, `.get` and `.cancel`. The control plane resolves the exact
 durable ID and pins its live connection PID/generation; registry admission
 checks the actual descriptors before delivery. Caller fields cannot override
-those internal options, and raw `node.invoke` rejects `node.process.*`.
+those internal options, and no generic operator RPC reaches `node.process.*`.
 The broker supplies `nodeGeneration` from its authenticated registry record,
 not from request arguments.
 
