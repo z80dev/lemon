@@ -2050,9 +2050,14 @@ defmodule LemonControlPlane.ACP do
     Application.get_env(:lemon_control_plane, :acp_submitter, &LemonRouter.submit/1)
   end
 
+  # The authenticated ACP caller (operator.content on the WebSocket upgrade, or
+  # the ACP API token) submitted this run and receives its answer.
   defp waiter do
     Application.get_env(:lemon_control_plane, :acp_waiter, fn run_id, timeout_ms ->
-      AgentWait.handle(%{"runId" => run_id, "timeoutMs" => timeout_ms}, %{})
+      AgentWait.handle(
+        %{"runId" => run_id, "timeoutMs" => timeout_ms},
+        %{auth: %{role: :operator, scopes: [:read, :content]}}
+      )
     end)
   end
 

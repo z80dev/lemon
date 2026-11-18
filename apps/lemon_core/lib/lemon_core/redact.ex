@@ -160,6 +160,116 @@ defmodule LemonCore.Redact do
   def map(value) when is_tuple(value), do: value |> Tuple.to_list() |> map() |> List.to_tuple()
   def map(value), do: text(value)
 
+  @project_limits %{max_depth: 6, max_items: 100, max_string_bytes: 4_096, drop_keys: []}
+  @operator_limits %{max_depth: 8, max_items: 1_000, max_string_bytes: 20_000, drop_keys: []}
+  @depth_marker "[max_depth]"
+
+  @doc """
+  Project an arbitrary term into a bounded, JSON-safe, credential-redacted value.
+
+  This is the one projector for management payloads (task, cron-run, session
+  and configuration projections). Maps (and structs, which lose their
+  `__struct__`) become string-keyed maps; values under sensitive keys, including
+  the value of a `{key, value}` pair wherever it occurs (top level, map value or
+  list element), become `[REDACTED]`; strings are scrubbed with `text/1` and
+  then clipped on a UTF-8 boundary; other tuples become lists; atoms become
+  strings; dates become ISO 8601;
+  pids, references, ports and functions become their `inspect/1` text; binaries
+  that are not UTF-8 become a byte count. Containers at `:max_depth` become
+  `[max_depth]`, and only the first `:max_items` list elements and map entries
+  (sorted by key) are kept.
+
+  Options (defaults): `:max_depth` (6), `:max_items` (100), `:max_string_bytes`
+  (4096) and `:drop_keys` (`[]`, string keys omitted entirely).
+  """
+  @spec project(term(), keyword()) :: term()
+  def project(value, opts \\ []), do: project_value(value, 0, limits(@project_limits, opts))
+
+  @doc """
+  `project/2` with larger caps (depth 8, 1000 items, 20000-byte strings) for
+  explicit full-text requests. Credentials are scrubbed exactly as in `project/2`.
+  """
+  @spec operator(term(), keyword()) :: term()
+  def operator(value, opts \\ []), do: project_value(value, 0, limits(@operator_limits, opts))
+
+  defp limits(defaults, opts) do
+    Enum.reduce(opts, defaults, fn {key, value}, acc when is_map_key(acc, key) ->
+      Map.put(acc, key, value)
+    end)
+  end
+
+  defp project_value(value, _depth, _limits) when is_boolean(value) or is_nil(value), do: value
+  defp project_value(value, _depth, _limits) when is_number(value), do: value
+  defp project_value(value, _depth, _limits) when is_atom(value), do: Atom.to_string(value)
+  defp project_value(value, _depth, limits) when is_binary(value), do: project_text(value, limits)
+
+  defp project_value(%module{} = value, _depth, _limits)
+       when module in [DateTime, NaiveDateTime, Date, Time],
+       do: module.to_iso8601(value)
+
+  defp project_value(value, depth, %{max_depth: max})
+       when depth >= max and (is_map(value) or is_list(value) or is_tuple(value)),
+       do: @depth_marker
+
+  defp project_value(%{__struct__: _} = value, depth, limits),
+    do: value |> Map.from_struct() |> project_value(depth, limits)
+
+  defp project_value(value, depth, limits) when is_map(value) do
+    value
+    |> Enum.map(fn {key, nested} -> {project_key(key, limits), key, nested} end)
+    |> Enum.reject(fn {name, _key, _nested} -> name in limits.drop_keys end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.take(limits.max_items)
+    |> Map.new(fn {name, key, nested} -> {name, project_field(key, nested, depth, limits)} end)
+  end
+
+  defp project_value(value, depth, limits) when is_list(value),
+    do:
+      value
+      |> take_items(limits.max_items, [])
+      |> Enum.map(&project_value(&1, depth + 1, limits))
+
+  # A keyword or tagged pair keeps its key but masks a credential value, whether
+  # it is projected directly, as a map value or as a list element. This clause
+  # must precede generic tuple conversion, which would lose the key's meaning.
+  defp project_value({key, nested}, depth, limits) when is_atom(key) or is_binary(key),
+    do: [project_key(key, limits), project_field(key, nested, depth, limits)]
+
+  defp project_value(value, depth, limits) when is_tuple(value),
+    do: value |> Tuple.to_list() |> project_value(depth, limits)
+
+  defp project_value(value, _depth, _limits), do: inspect(value)
+
+  defp project_field(key, nested, depth, limits) do
+    if sensitive_key?(key) and not is_nil(nested),
+      do: @marker,
+      else: project_value(nested, depth + 1, limits)
+  end
+
+  defp project_key(key, _limits) when is_atom(key), do: Atom.to_string(key)
+  defp project_key(key, limits) when is_binary(key), do: project_text(key, limits)
+  defp project_key(key, limits), do: key |> inspect() |> project_text(limits)
+
+  # Improper lists keep their proper prefix; nothing past the cap is walked.
+  defp take_items(_list, 0, acc), do: Enum.reverse(acc)
+  defp take_items([item | rest], count, acc), do: take_items(rest, count - 1, [item | acc])
+  defp take_items(_tail, _count, acc), do: Enum.reverse(acc)
+
+  defp project_text(value, %{max_string_bytes: max}) do
+    if String.valid?(value),
+      do: value |> text() |> clip_utf8(max),
+      else: "[binary #{byte_size(value)} bytes]"
+  end
+
+  defp clip_utf8(value, max) when byte_size(value) <= max, do: value
+
+  defp clip_utf8(value, max) do
+    case :unicode.characters_to_binary(binary_part(value, 0, max)) do
+      {:incomplete, valid, _rest} -> valid
+      valid when is_binary(valid) -> valid
+    end
+  end
+
   @doc "Whether a key's trailing identifier components name credentials."
   @spec sensitive_key?(term()) :: boolean()
   def sensitive_key?(key) when is_atom(key), do: sensitive_key?(Atom.to_string(key))

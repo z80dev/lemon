@@ -139,4 +139,46 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
     assert GoalClear.name() == "goal.clear"
     assert GoalClear.scopes() == [:write]
   end
+
+  test "goal.status reports only known verdict sources", %{session_key: session_key} do
+    secret = "PROMPT_SECRET_7Q2X9 merger closes Friday"
+    read = %{auth: %{role: :operator, scopes: [:read]}}
+    assert {:ok, _} = GoalStore.set(session_key, "Finish parity")
+
+    # A stored verdict whose source is not a known provenance value (e.g. one a
+    # judge model wrote before provenance was server-side) is omitted.
+    assert {:ok, _} =
+             GoalStore.record_loop_verdict(session_key, %{
+               action: "continue",
+               reason: "r",
+               source: secret
+             })
+
+    assert {:ok, %{"goal" => %{"goalLoop" => loop}} = result} =
+             LemonControlPlane.Methods.Registry.dispatch(
+               "goal.status",
+               %{"sessionKey" => session_key},
+               read
+             )
+
+    assert loop["lastAction"] == "continue"
+    assert loop["lastSource"] == nil
+    refute inspect(result) =~ "PROMPT_SECRET_7Q2X9"
+
+    for {stored, shown} <- [
+          {"judge:judge-model", "judge"},
+          {"judge_failure_policy", "judge_failure_policy"},
+          {"manual", "manual"}
+        ] do
+      assert {:ok, _} =
+               GoalStore.record_loop_verdict(session_key, %{
+                 action: "continue",
+                 reason: "r",
+                 source: stored
+               })
+
+      assert {:ok, %{"goal" => %{"goalLoop" => %{"lastSource" => ^shown}}}} =
+               GoalStatus.handle(%{"sessionKey" => session_key}, @ctx)
+    end
+  end
 end

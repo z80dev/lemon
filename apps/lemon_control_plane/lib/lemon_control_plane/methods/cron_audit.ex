@@ -2,10 +2,14 @@ defmodule LemonControlPlane.Methods.CronAudit do
   @moduledoc """
   Handler for the cron.audit method.
 
-  Returns durable cron lifecycle/audit history.
+  Returns durable cron lifecycle/audit history. Free-text `reason` values (run
+  error text) are content and need `operator.content`; read-only callers keep
+  enumerated (atom) reasons only.
   """
 
   @behaviour LemonControlPlane.Method
+
+  alias LemonControlPlane.Auth.Authorize
 
   @default_limit 100
   @max_limit 1_000
@@ -17,8 +21,9 @@ defmodule LemonControlPlane.Methods.CronAudit do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     params = params || %{}
+    content? = Authorize.content?(ctx)
     limit = normalize_limit(params["limit"])
 
     filters = [
@@ -32,7 +37,7 @@ defmodule LemonControlPlane.Methods.CronAudit do
       filters
       |> LemonAutomation.CronStore.list_audit_events()
       |> maybe_filter_since(normalize_optional_integer(params["sinceMs"] || params["since_ms"]))
-      |> Enum.map(&format_event/1)
+      |> Enum.map(&format_event(&1, content?))
 
     response_filters = %{
       "limit" => limit,
@@ -47,11 +52,12 @@ defmodule LemonControlPlane.Methods.CronAudit do
        "events" => events,
        "total" => length(events),
        "filters" => response_filters,
-       "summary" => summary(events, response_filters)
+       "summary" => summary(events, response_filters),
+       "contentWithheld" => not content?
      }}
   end
 
-  defp format_event(event) do
+  defp format_event(event, content?) do
     %{
       "id" => event.id,
       "action" => event.action,
@@ -62,10 +68,14 @@ defmodule LemonControlPlane.Methods.CronAudit do
       "source" => Map.get(event, :source),
       "status" => Map.get(event, :status),
       "triggeredBy" => Map.get(event, :triggered_by),
-      "reason" => Map.get(event, :reason),
+      "reason" => reason(Map.get(event, :reason), content?),
       "changedFields" => Map.get(event, :changed_fields, [])
     }
   end
+
+  defp reason(reason, true), do: reason
+  defp reason(reason, false) when is_atom(reason) and not is_nil(reason), do: to_string(reason)
+  defp reason(_reason, false), do: nil
 
   defp maybe_filter_since(events, nil), do: events
 

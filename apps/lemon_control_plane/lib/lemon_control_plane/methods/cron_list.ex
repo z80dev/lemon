@@ -2,12 +2,15 @@ defmodule LemonControlPlane.Methods.CronList do
   @moduledoc """
   Handler for the cron.list method.
 
-  Lists all cron jobs.
+  Lists all cron jobs. Prompt/command target text (`includeTargetText`) and job
+  meta are content and need `operator.content`; read-only callers get schedule,
+  status and size metadata and the include flag is ignored.
   """
 
   @behaviour LemonControlPlane.Method
 
   alias LemonAutomation.CronJob
+  alias LemonControlPlane.Auth.Authorize
 
   @impl true
   def name, do: "cron.list"
@@ -16,27 +19,31 @@ defmodule LemonControlPlane.Methods.CronList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     params = params || %{}
     agent_id = params["agentId"] || params["agent_id"]
-    include_target_text? = truthy?(params["includeTargetText"] || params["include_target_text"])
+    content? = Authorize.content?(ctx)
+
+    include_target_text? =
+      content? and truthy?(params["includeTargetText"] || params["include_target_text"])
 
     jobs =
       LemonAutomation.CronManager.list()
       |> maybe_filter_agent(agent_id)
       |> maybe_filter_failing(truthy?(params["failing"]))
 
-    formatted_jobs = Enum.map(jobs, &format_job(&1, include_target_text?))
+    formatted_jobs = Enum.map(jobs, &format_job(&1, content?, include_target_text?))
 
     {:ok,
      %{
        "jobs" => formatted_jobs,
        "total" => length(formatted_jobs),
+       "contentWithheld" => not content?,
        "summary" => summary(formatted_jobs, include_target_text?, agent_id)
      }}
   end
 
-  defp format_job(job, include_target_text?) do
+  defp format_job(job, content?, include_target_text?) do
     latest_run = LemonAutomation.CronStore.list_runs(job.id, limit: 1) |> List.first()
     active_runs = LemonAutomation.CronStore.active_runs(job.id)
     prompt = job.prompt || ""
@@ -72,10 +79,13 @@ defmodule LemonControlPlane.Methods.CronList do
       "nextRunAtMs" => job.next_run_at_ms,
       "lastRunStatus" => latest_run && to_string(latest_run.status),
       "activeRunCount" => length(active_runs),
-      "meta" => job.meta,
       "summary" => job_summary(job, prompt, command, include_target_text?)
     }
+    |> maybe_put_meta(job.meta, content?)
   end
+
+  defp maybe_put_meta(row, meta, true), do: Map.put(row, "meta", LemonCore.Redact.project(meta))
+  defp maybe_put_meta(row, _meta, false), do: row
 
   defp job_summary(job, prompt, command, include_target_text?) do
     %{

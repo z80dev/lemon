@@ -2,9 +2,12 @@ defmodule LemonControlPlane.Methods.LearningTimeline do
   @moduledoc "Read-only, profile-scoped learning timeline for operator clients."
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Protocol.Errors
 
   @kinds ~w(all memory user project skill)
+  # Titles and previews quote memory and skill text, which needs `operator.content`.
+  @metadata_item_keys ~w(at kind action id)
 
   @impl true
   def name, do: "learning.timeline"
@@ -13,16 +16,20 @@ defmodule LemonControlPlane.Methods.LearningTimeline do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) when is_map(params) or is_nil(params) do
+  def handle(params, ctx) when is_map(params) or is_nil(params) do
     params = params || %{}
     profile = Map.get(params, "profileId", "default")
     kind = Map.get(params, "kind", "all")
     limit = Map.get(params, "limit", 50)
+    content? = Authorize.content?(ctx)
 
     if valid_profile?(profile) and kind in @kinds and is_integer(limit) and limit in 1..100 do
       case timeline(profile, kind: kind, limit: limit) do
-        {:ok, payload} -> {:ok, payload}
-        _ -> unavailable()
+        {:ok, %{"items" => items} = payload} when is_list(items) ->
+          {:ok, payload |> withhold(content?) |> Map.put("contentWithheld", not content?)}
+
+        _ ->
+          unavailable()
       end
     else
       invalid_params()
@@ -34,6 +41,14 @@ defmodule LemonControlPlane.Methods.LearningTimeline do
   end
 
   def handle(_params, _ctx), do: invalid_params()
+
+  defp withhold(payload, true), do: payload
+
+  defp withhold(payload, false) do
+    Map.update!(payload, "items", fn items ->
+      Enum.map(items, &if(is_map(&1), do: Map.take(&1, @metadata_item_keys), else: %{}))
+    end)
+  end
 
   defp valid_profile?(value) when is_binary(value),
     do: byte_size(value) <= 64 and Regex.match?(~r/\A[a-z0-9][a-z0-9_-]{0,63}\z/, value)

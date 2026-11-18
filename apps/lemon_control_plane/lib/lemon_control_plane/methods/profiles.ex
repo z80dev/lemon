@@ -65,6 +65,15 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
     end)
   end
 
+  # Read-only (`:read` without `:content`) operators get this allowlist; the
+  # persona/system prompt and free-form description are content.
+  @metadata_keys ~w(version id name avatar model node workingDirectory mcpServers toolPolicy
+                    status createdAt updatedAt canonicalSessionKey paths managedKeys
+                    mcpConfigFingerprint availability workspace)
+
+  def visible(profile, true), do: profile
+  def visible(profile, false), do: Map.take(profile, @metadata_keys)
+
   def result(profile),
     do: %{"profile" => ProfileStore.projection(profile), "summary" => profile_summary(profile)}
 
@@ -154,15 +163,24 @@ defmodule LemonControlPlane.Methods.ProfilesList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(_params, _ctx) do
-    profiles = LemonCore.ProfileStore.list()
-    {:ok, %{"profiles" => profiles, "count" => length(profiles)}}
+  def handle(_params, ctx) do
+    content? = LemonControlPlane.Auth.Authorize.content?(ctx)
+
+    profiles =
+      Enum.map(
+        LemonCore.ProfileStore.list(),
+        &LemonControlPlane.Methods.ProfilesSupport.visible(&1, content?)
+      )
+
+    {:ok,
+     %{"profiles" => profiles, "count" => length(profiles), "contentWithheld" => not content?}}
   end
 end
 
 defmodule LemonControlPlane.Methods.ProfilesGet do
   @moduledoc false
   @behaviour LemonControlPlane.Method
+  alias LemonControlPlane.Methods.ProfilesSupport
 
   @impl true
   def name, do: "profiles.get"
@@ -171,10 +189,19 @@ defmodule LemonControlPlane.Methods.ProfilesGet do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
+    content? = LemonControlPlane.Auth.Authorize.content?(ctx)
+
     case LemonCore.ProfileStore.get(params["id"]) do
-      {:ok, profile} -> {:ok, LemonControlPlane.Methods.ProfilesSupport.result(profile)}
-      {:error, reason} -> LemonControlPlane.Methods.ProfilesSupport.error(reason)
+      {:ok, profile} ->
+        {:ok,
+         profile
+         |> ProfilesSupport.result()
+         |> Map.update!("profile", &ProfilesSupport.visible(&1, content?))
+         |> Map.put("contentWithheld", not content?)}
+
+      {:error, reason} ->
+        ProfilesSupport.error(reason)
     end
   end
 end
@@ -366,14 +393,21 @@ defmodule LemonControlPlane.Methods.ProfilesRoster do
   def scopes, do: [:read]
 
   @impl true
-  def handle(_params, _ctx) do
-    profiles = LemonControlPlane.Methods.ProfilesSupport.roster()
+  def handle(_params, ctx) do
+    content? = LemonControlPlane.Auth.Authorize.content?(ctx)
+
+    profiles =
+      Enum.map(
+        LemonControlPlane.Methods.ProfilesSupport.roster(),
+        &LemonControlPlane.Methods.ProfilesSupport.visible(&1, content?)
+      )
 
     {:ok,
      %{
        "profiles" => profiles,
        "count" => length(profiles),
-       "availabilityCounts" => Enum.frequencies_by(profiles, & &1["availability"])
+       "availabilityCounts" => Enum.frequencies_by(profiles, & &1["availability"]),
+       "contentWithheld" => not content?
      }}
   end
 end

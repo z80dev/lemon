@@ -12,6 +12,7 @@ defmodule LemonControlPlane.Methods.SubagentsTest do
   alias LemonControlPlane.Protocol.Schemas
 
   @key "agent:default:tui:local:dm:hub"
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
 
   defmodule Runtime do
     @key "agent:default:tui:local:dm:hub"
@@ -120,7 +121,7 @@ defmodule LemonControlPlane.Methods.SubagentsTest do
 
   test "projects a bounded roster without prompts, paths or malformed rows" do
     assert {:ok, %{"sessionKey" => @key, "agents" => [first, second], "total" => 2}} =
-             SubagentsList.handle(%{"sessionKey" => @key}, %{})
+             SubagentsList.handle(%{"sessionKey" => @key}, @operator_ctx)
 
     assert_received {:list, @key}
 
@@ -151,7 +152,7 @@ defmodule LemonControlPlane.Methods.SubagentsTest do
 
   test "transcripts are scoped: foreign or mismatched tasks are not found or refused" do
     assert {:ok, %{"taskId" => "t1", "status" => "running", "text" => text, "truncated" => false}} =
-             SubagentsTranscript.handle(%{"sessionKey" => @key, "taskId" => "t1"}, %{})
+             SubagentsTranscript.handle(%{"sessionKey" => @key, "taskId" => "t1"}, @operator_ctx)
 
     assert text =~ "Status: running"
 

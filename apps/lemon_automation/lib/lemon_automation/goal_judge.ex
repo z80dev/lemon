@@ -103,13 +103,9 @@ defmodule LemonAutomation.GoalJudge do
               normalized
           end
 
-        source = normalized.source || ""
-
-        if source == "" or source == "manual" do
-          {:ok, %{normalized | source: judge_source(opts)}}
-        else
-          {:ok, normalized}
-        end
+        # Provenance is server-side: a `source` in the model's JSON answer is
+        # untrusted text and never becomes the verdict's source.
+        {:ok, %{normalized | source: judge_source(opts)}}
 
       error ->
         error

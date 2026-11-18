@@ -13,6 +13,7 @@ defmodule LemonControlPlane.Methods.ConfigUsageMethodsTest do
   alias LemonCore.Store
 
   @ctx %{conn_id: "test-conn", auth: %{role: :operator}}
+  @admin_ctx %{conn_id: "test-conn", auth: %{role: :operator, scopes: [:read, :admin]}}
 
   describe "ConfigGet" do
     test "returns config for specific key" do
@@ -51,11 +52,20 @@ defmodule LemonControlPlane.Methods.ConfigUsageMethodsTest do
 
       :ok = ConfigStore.put(key, "sk-private-test-value")
 
-      {:ok, single} = ConfigGet.handle(%{"key" => key}, @ctx)
-      {:ok, all_config} = ConfigGet.handle(%{}, @ctx)
+      {:ok, single} = ConfigGet.handle(%{"key" => key}, @admin_ctx)
+      {:ok, all_config} = ConfigGet.handle(%{}, @admin_ctx)
 
-      assert single["value"] == %{"redacted" => true, "kind" => "secret"}
-      assert all_config[key] == %{"redacted" => true, "kind" => "secret"}
+      assert single["value"] == "[REDACTED]"
+      assert all_config[key] == "[REDACTED]"
+      refute inspect(single) =~ "sk-private-test-value"
+      refute inspect(all_config) =~ "sk-private-test-value"
+
+      # Read scope sees only public fields, so the key is absent altogether.
+      {:ok, read_single} = ConfigGet.handle(%{"key" => key}, @ctx)
+      {:ok, read_all} = ConfigGet.handle(%{}, @ctx)
+      assert read_single["value"] == nil
+      assert read_single["summary"]["adminRequired"] == true
+      refute Map.has_key?(read_all, key)
       assert single["summary"]["sensitive"] == true
       assert single["summary"]["valueReturned"] == false
       assert all_config["summary"]["sensitiveKeyCount"] >= 1

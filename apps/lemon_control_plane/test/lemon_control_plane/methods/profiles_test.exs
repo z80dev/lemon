@@ -52,6 +52,8 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     ProfilesUpdate
   }
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   setup do
     root = Path.join(System.tmp_dir!(), "lemon-profiles-cp-#{System.unique_integer([:positive])}")
     state = Path.join(root, "state")
@@ -165,7 +167,7 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     assert :ok = Schemas.validate("profiles.create", params)
     assert {:ok, created} = ProfilesCreate.handle(params, %{})
     assert created["profile"]["toolPolicy"] == policy
-    assert {:ok, fetched} = ProfilesGet.handle(%{"id" => "policy-cp"}, %{})
+    assert {:ok, fetched} = ProfilesGet.handle(%{"id" => "policy-cp"}, @operator_ctx)
     assert fetched["profile"]["toolPolicy"] == policy
 
     assert fetched["profile"]["mcpConfigFingerprint"] ==
@@ -224,8 +226,8 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     assert updated["profile"]["name"] == "Placed Bot"
     assert updated["profile"]["mcpServers"] == [Map.delete(server, "headers")]
 
-    assert {:ok, fetched} = ProfilesGet.handle(%{"id" => "placed"}, %{})
-    assert {:ok, listed} = ProfilesList.handle(%{}, %{})
+    assert {:ok, fetched} = ProfilesGet.handle(%{"id" => "placed"}, @operator_ctx)
+    assert {:ok, listed} = ProfilesList.handle(%{}, @operator_ctx)
     refute inspect(fetched) =~ "execution-secret"
     refute inspect(listed) =~ "execution-secret"
 
@@ -332,10 +334,12 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
              )
 
     assert created["canonicalSessionKey"] == "agent:operator:main"
-    assert {:ok, %{"profiles" => [%{"id" => "operator"}]}} = ProfilesList.handle(%{}, %{})
+
+    assert {:ok, %{"profiles" => [%{"id" => "operator"}]}} =
+             ProfilesList.handle(%{}, @operator_ctx)
 
     assert {:ok, %{"profile" => %{"id" => "operator"}}} =
-             ProfilesGet.handle(%{"id" => "operator"}, %{})
+             ProfilesGet.handle(%{"id" => "operator"}, @operator_ctx)
 
     assert {:ok, %{"profile" => %{"id" => "operator-copy"}}} =
              ProfilesClone.handle(
@@ -348,7 +352,7 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
 
     assert renamed["canonicalSessionKey"] == "agent:operator:main"
 
-    assert {:ok, %{"profiles" => roster}} = ProfilesRoster.handle(%{}, %{})
+    assert {:ok, %{"profiles" => roster}} = ProfilesRoster.handle(%{}, @operator_ctx)
     assert Enum.any?(roster, &match?(%{"id" => "operator", "availability" => "local"}, &1))
 
     assert {:ok, chat} =
@@ -551,7 +555,7 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     assert {:ok, created} = ProfilesCreate.handle(params, %{})
     assert created["profile"]["workingDirectory"] == "profile_files"
 
-    assert {:ok, fetched} = ProfilesGet.handle(%{"id" => "wd-bot"}, %{})
+    assert {:ok, fetched} = ProfilesGet.handle(%{"id" => "wd-bot"}, @operator_ctx)
     assert fetched["profile"]["workingDirectory"] == "profile_files"
 
     # Create without workingDirectory defaults to "node_default"
@@ -576,7 +580,7 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
 
     assert updated["profile"]["workingDirectory"] == "profile_files"
 
-    assert {:ok, fetched_up} = ProfilesGet.handle(%{"id" => "wd-default"}, %{})
+    assert {:ok, fetched_up} = ProfilesGet.handle(%{"id" => "wd-default"}, @operator_ctx)
     assert fetched_up["profile"]["workingDirectory"] == "profile_files"
 
     # Update with invalid workingDirectory

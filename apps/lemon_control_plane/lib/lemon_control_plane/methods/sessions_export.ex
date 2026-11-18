@@ -1,7 +1,14 @@
 defmodule LemonControlPlane.Methods.SessionsExport do
-  @moduledoc "Returns a bounded, redacted, integrity-digested session export."
+  @moduledoc """
+  Returns a bounded, redacted, integrity-digested session export.
+
+  The export body (and its digest) is content and needs `operator.content`;
+  read-only callers get the format, filename, size and run counts only.
+  """
 
   @behaviour LemonControlPlane.Method
+
+  alias LemonControlPlane.Auth.Authorize
 
   @impl true
   def name, do: "sessions.export"
@@ -10,7 +17,7 @@ defmodule LemonControlPlane.Methods.SessionsExport do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     params = params || %{}
     session_key = params["sessionKey"]
     format = params["format"] || "json"
@@ -22,7 +29,7 @@ defmodule LemonControlPlane.Methods.SessionsExport do
       true ->
         case LemonCore.SessionLifecycle.export(session_key, format: format) do
           {:ok, export} ->
-            {:ok, format_export(session_key, export)}
+            {:ok, format_export(session_key, export, Authorize.content?(ctx))}
 
           {:error, :not_found} ->
             {:error, {:not_found, "Session not found", nil}}
@@ -36,15 +43,14 @@ defmodule LemonControlPlane.Methods.SessionsExport do
     end
   end
 
-  defp format_export(session_key, export) do
-    %{
+  defp format_export(session_key, export, content?) do
+    payload = %{
       "sessionKey" => session_key,
       "format" => Atom.to_string(export.format),
       "filename" => export.filename,
-      "content" => export.content,
-      "sha256" => export.sha256,
       "bytes" => export.bytes,
       "redacted" => true,
+      "contentWithheld" => not content?,
       "summary" => %{
         "runCount" => export.run_count,
         "availableRunCount" => export.available_run_count,
@@ -53,5 +59,9 @@ defmodule LemonControlPlane.Methods.SessionsExport do
         "cleanup" => export.cleanup
       }
     }
+
+    if content?,
+      do: Map.merge(payload, %{"content" => export.content, "sha256" => export.sha256}),
+      else: payload
   end
 end

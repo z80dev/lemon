@@ -20,13 +20,14 @@ defmodule LemonControlPlane.Methods.LearningTimelineTest do
   test "registered read method delegates only bounded profile filters to the owner" do
     parent = self()
     payload = %{"items" => [], "limit" => 100, "history" => "current_state"}
+    expected = Map.put(payload, "contentWithheld", false)
 
     Application.put_env(:lemon_control_plane, :learning_timeline_fun, fn profile, opts ->
       send(parent, {:timeline, profile, opts})
       {:ok, payload}
     end)
 
-    assert {:ok, ^payload} =
+    assert {:ok, ^expected} =
              call(%{
                "profileId" => "alice",
                "kind" => "skill",
@@ -35,7 +36,7 @@ defmodule LemonControlPlane.Methods.LearningTimelineTest do
              })
 
     assert_receive {:timeline, "alice", [kind: "skill", limit: 100]}
-    assert {:ok, ^payload} = call(nil)
+    assert {:ok, ^expected} = call(nil)
     assert_receive {:timeline, "default", [kind: "all", limit: 50]}
   end
 
@@ -76,7 +77,10 @@ defmodule LemonControlPlane.Methods.LearningTimelineTest do
     end
   end
 
-  defp call(params, auth \\ %{role: :operator, scopes: [:read], client_id: "timeline-reader"}) do
+  defp call(
+         params,
+         auth \\ %{role: :operator, scopes: [:read, :content], client_id: "timeline-reader"}
+       ) do
     Registry.dispatch("learning.timeline", params, %{
       auth: auth,
       conn_id: "timeline-test",

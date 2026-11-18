@@ -20,6 +20,14 @@ defmodule LemonControlPlane.Auth.Authorize do
   - `operator.write` - Write operations (agent, chat, etc.)
   - `operator.approvals` - Approval management (exec.approvals.*, exec.approval.*)
   - `operator.pairing` - Node pairing (node.pair.*)
+  - `operator.content` - Transcript and content access: prompts, answers,
+    reasoning, tool arguments/results, run records, raw events, cron target
+    text, background answers, session exports, log messages and live
+    `chat`/`session.event` text. Without it a `read` caller receives
+    metadata-only projections (ids, status, counts, timings) and include flags
+    that would return content are ignored. The configured operator token and
+    tokenless operator contexts receive it by default; a connection that names
+    its scopes explicitly receives it only when it lists it.
 
   ## Node Scopes
 
@@ -49,6 +57,7 @@ defmodule LemonControlPlane.Auth.Authorize do
           | :write
           | :approvals
           | :pairing
+          | :content
           | :invoke
           | :event
           | :enroll
@@ -247,7 +256,7 @@ defmodule LemonControlPlane.Auth.Authorize do
   def default_operator do
     %{
       role: :operator,
-      scopes: [:admin, :read, :write, :approvals, :pairing],
+      scopes: [:admin, :read, :write, :approvals, :pairing, :content],
       token: nil,
       client_id: nil
     }
@@ -265,6 +274,16 @@ defmodule LemonControlPlane.Auth.Authorize do
       client_id: node_id
     }
   end
+
+  @doc """
+  Whether an operator method context (`%{auth: auth}`) or auth context may
+  receive transcript and content payloads. Fails closed: a missing context, a
+  non-operator role or a scope list without `:content` is metadata-only.
+  """
+  @spec content?(map() | nil) :: boolean()
+  def content?(%{auth: auth}), do: content?(auth)
+  def content?(%{role: :operator, scopes: scopes}) when is_list(scopes), do: :content in scopes
+  def content?(_ctx), do: false
 
   @doc """
   Checks if the auth context is authorized for the given method.
@@ -433,7 +452,7 @@ defmodule LemonControlPlane.Auth.Authorize do
   defp parse_role(nil), do: :operator
   defp parse_role(_), do: :unsupported
 
-  defp parse_scopes(nil, :operator), do: [:admin, :read, :write, :approvals, :pairing]
+  defp parse_scopes(nil, :operator), do: [:admin, :read, :write, :approvals, :pairing, :content]
   defp parse_scopes(nil, :node), do: [:invoke, :event]
 
   defp parse_scopes(scopes, _role) when is_list(scopes) do
@@ -449,10 +468,12 @@ defmodule LemonControlPlane.Auth.Authorize do
   defp parse_scope("operator.write"), do: :write
   defp parse_scope("operator.approvals"), do: :approvals
   defp parse_scope("operator.pairing"), do: :pairing
+  defp parse_scope("operator.content"), do: :content
   defp parse_scope("node.invoke"), do: :invoke
   defp parse_scope("node.event"), do: :event
   defp parse_scope("admin"), do: :admin
   defp parse_scope("read"), do: :read
   defp parse_scope("write"), do: :write
+  defp parse_scope("content"), do: :content
   defp parse_scope(_), do: nil
 end

@@ -2,10 +2,14 @@ defmodule LemonControlPlane.Methods.SessionsList do
   @moduledoc """
   Handler for the sessions.list method.
 
-  Lists all sessions with optional filtering and pagination.
+  Lists all sessions with optional filtering and pagination. `query` also
+  matches prompt and answer text, so it needs `operator.content`; read-only
+  callers that pass one are refused rather than given a content oracle.
   """
 
   import LemonControlPlane.Methods.Params, only: [get_param: 2, blank?: 1]
+
+  alias LemonControlPlane.Auth.Authorize
 
   @behaviour LemonControlPlane.Method
 
@@ -19,12 +23,30 @@ defmodule LemonControlPlane.Methods.SessionsList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     params = params || %{}
+    query = get_param(params, "query")
+    content? = Authorize.content?(ctx)
+
+    case content_query(query, content?) do
+      :ok -> list(params, query, content?)
+      error -> error
+    end
+  end
+
+  @doc false
+  # Session search reads transcript text; without `operator.content` it would
+  # leak whether a phrase occurs in a session.
+  def content_query(query, content?) do
+    if content? or blank?(query),
+      do: :ok,
+      else: {:error, {:forbidden, "query search requires operator.content", nil}}
+  end
+
+  defp list(params, query, content?) do
     limit = normalize_positive(get_param(params, "limit"), @default_limit)
     offset = normalize_non_negative(get_param(params, "offset"), @default_offset)
     agent_id = get_param(params, "agentId")
-    query = get_param(params, "query")
     pinned = boolean_filter(get_param(params, "pinned"))
     archived = boolean_filter(get_param(params, "archived"))
 
@@ -54,7 +76,8 @@ defmodule LemonControlPlane.Methods.SessionsList do
        "sessions" => paginated,
        "total" => result.matched,
        "filters" => filters,
-       "summary" => summary(paginated, result, filters)
+       "summary" => summary(paginated, result, filters),
+       "contentWithheld" => not content?
      }}
   end
 

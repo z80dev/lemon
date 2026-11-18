@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
   use ExUnit.Case, async: false
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   alias CodingAgent.Tools.FeatureRequirements
   alias CodingAgent.Tools.TodoStore
   alias CodingAgent.Tools.TodoWrite
@@ -91,21 +93,16 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
     with_introspection_failure(fn ->
       assert {:ok, %{"runs" => [%{"id" => id}]}} =
-               CronRuns.handle(%{"id" => job_id}, %{})
+               CronRuns.handle(%{"id" => job_id}, @operator_ctx)
 
       assert id == run.id
 
-      assert CronRuns.handle(
-               %{"id" => job_id, "includeIntrospection" => true},
-               %{}
-             ) == {:error, {:unavailable, "Introspection events are unavailable", nil}}
+      assert CronRuns.handle(%{"id" => job_id, "includeIntrospection" => true}, @operator_ctx) ==
+               {:error, {:unavailable, "Introspection events are unavailable", nil}}
     end)
 
     assert {:ok, %{"runs" => [%{"introspection" => events}]}} =
-             CronRuns.handle(
-               %{"id" => job_id, "includeIntrospection" => true},
-               %{}
-             )
+             CronRuns.handle(%{"id" => job_id, "includeIntrospection" => true}, @operator_ctx)
 
     assert Enum.any?(events, &(&1["eventType"] == "session_started"))
   end
@@ -455,7 +452,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
                SessionsActiveList.handle(%{}, %{})
 
       assert {:error, {:unavailable, "Session directory is unavailable", nil}} =
-               SessionDetail.handle(%{"sessionKey" => "agent:offline:main"}, %{})
+               SessionDetail.handle(%{"sessionKey" => "agent:offline:main"}, @operator_ctx)
     end
   end
 
@@ -526,7 +523,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert listed["summary"]["cleanup"]["includesMessages"] == false
       assert listed["summary"]["cleanup"]["includesSecretValues"] == false
 
-      {:ok, detail} = SessionDetail.handle(%{"sessionKey" => session_key}, %{})
+      {:ok, detail} = SessionDetail.handle(%{"sessionKey" => session_key}, @operator_ctx)
 
       assert detail["summary"]["count"] == 1
       assert detail["summary"]["okCount"] == 1
@@ -548,14 +545,19 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       refute inspect(detail) =~ answer_inline_secret
 
       {:ok, full_detail} =
-        SessionDetail.handle(%{"sessionKey" => session_key, "includeFullText" => true}, %{})
+        SessionDetail.handle(
+          %{"sessionKey" => session_key, "includeFullText" => true},
+          @operator_ctx
+        )
 
       assert full_detail["summary"]["cleanup"]["includesFullText"] == true
       [full_run] = full_detail["runs"]
       assert full_run["promptFull"] =~ prompt_secret
       assert full_run["answerFull"] =~ answer_secret
-      assert full_run["promptFull"] =~ prompt_inline_secret
-      assert full_run["answerFull"] =~ answer_inline_secret
+      # Full text is complete content, never credentials (read scope).
+      refute inspect(full_detail) =~ prompt_inline_secret
+      refute inspect(full_detail) =~ answer_inline_secret
+      assert full_detail["summary"]["cleanup"]["includesSecretValues"] == false
       refute inspect(full_run["toolCalls"]) =~ tool_secret
 
       {:ok, raw_detail} =
@@ -565,12 +567,13 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
             "includeRawEvents" => true,
             "includeRunRecord" => true
           },
-          %{}
+          @operator_ctx
         )
 
       refute inspect(raw_detail) =~ tool_secret
 
-      {:ok, preview} = SessionsPreview.handle(%{"sessionKey" => session_key, "limit" => "5"}, %{})
+      {:ok, preview} =
+        SessionsPreview.handle(%{"sessionKey" => session_key, "limit" => "5"}, @operator_ctx)
 
       assert preview["summary"]["count"] == 1
       assert preview["summary"]["truncatedCount"] == 1
@@ -584,7 +587,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       {:ok, chat} =
         ChatHistory.handle(
           %{"sessionKey" => session_key, "includeFullText" => false, "limit" => 10},
-          %{}
+          @operator_ctx
         )
 
       assert chat["summary"]["count"] == 2
@@ -606,7 +609,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
             "beforeId" => "#{run_id}_user",
             "includeFullText" => false
           },
-          %{}
+          @operator_ctx
         )
 
       assert [%{"id" => assistant_message_id}] = after_user["messages"]

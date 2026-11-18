@@ -2,10 +2,13 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
   @moduledoc """
   Handler for the sessions.preview method.
 
-  Returns a preview of session history.
+  Returns a preview of session history. Prompt and answer previews are content
+  and need `operator.content`; read-only callers get run metadata and sizes.
   """
 
   import LemonControlPlane.Methods.Params, only: [get_param: 2]
+
+  alias LemonControlPlane.Auth.Authorize
 
   @behaviour LemonControlPlane.Method
 
@@ -19,33 +22,48 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     params = params || %{}
     session_key = get_param(params, "sessionKey")
 
     if is_nil(session_key) or session_key == "" do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
+      content? = Authorize.content?(ctx)
       limit = normalize_limit(get_param(params, "limit"))
-      history = get_session_history(session_key, limit)
+      history = get_session_history(session_key, limit, content?)
 
       {:ok,
        %{
          "sessionKey" => session_key,
          "preview" => history,
-         "summary" => summary(history, limit)
+         "summary" => summary(history, limit, content?),
+         "contentWithheld" => not content?
        }}
     end
   end
 
-  defp get_session_history(session_key, limit) do
+  defp get_session_history(session_key, limit, content?) do
     LemonCore.RunStore.history(session_key, limit: limit)
-    |> Enum.map(fn {run_id, data} -> format_history_entry(run_id, data) end)
+    |> Enum.map(fn {run_id, data} -> format_history_entry(run_id, data, content?) end)
   rescue
     _ -> []
   end
 
-  defp format_history_entry(run_id, data) do
+  defp format_history_entry(run_id, data, false) do
+    summary = data[:summary] || %{}
+    completed = summary[:completed] || %{}
+
+    %{
+      "runId" => run_id,
+      "ok" => completed[:ok],
+      "timestampMs" => data[:started_at],
+      "promptBytes" => byte_size_or_zero(get_prompt_from_data(data)),
+      "answerBytes" => byte_size_or_zero(completed[:answer])
+    }
+  end
+
+  defp format_history_entry(run_id, data, true) do
     summary = data[:summary] || %{}
     completed = summary[:completed] || %{}
     prompt = get_prompt_from_data(data)
@@ -59,6 +77,9 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
       "truncated" => truncated?(prompt, 100) or truncated?(completed[:answer], 200)
     }
   end
+
+  defp byte_size_or_zero(text) when is_binary(text), do: byte_size(text)
+  defp byte_size_or_zero(_), do: 0
 
   defp get_prompt_from_data(data) do
     summary = data[:summary] || %{}
@@ -94,7 +115,7 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
   defp truncated?(text, max) when is_binary(text), do: byte_size(text) > max
   defp truncated?(_, _), do: false
 
-  defp summary(history, limit) do
+  defp summary(history, limit, content?) do
     %{
       "count" => length(history),
       "limit" => limit,
@@ -103,6 +124,7 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
       "truncatedCount" => Enum.count(history, &(&1["truncated"] == true)),
       "cleanup" => %{
         "includesFullText" => false,
+        "includesPreviews" => content?,
         "includesRawEvents" => false,
         "includesRunRecords" => false,
         "redactsSensitivePreviews" => true,

@@ -1,5 +1,8 @@
 defmodule LemonControlPlane.Methods.ChatHistoryToolsTest do
   use ExUnit.Case, async: false
+
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   alias LemonControlPlane.Methods.ChatHistory
   alias LemonCore.AgentRuntime
   alias LemonAi.Types.{AssistantMessage, ToolCall, ToolResultMessage, TextContent}
@@ -54,7 +57,7 @@ defmodule LemonControlPlane.Methods.ChatHistoryToolsTest do
     assert {:ok, %{"messages" => [call, result]}} =
              ChatHistory.handle(
                %{"sessionKey" => "agent:default:history-tools", "cwd" => File.cwd!()},
-               %{}
+               @operator_ctx
              )
 
     assert call["role"] == "tool_use"
@@ -107,7 +110,9 @@ defmodule LemonControlPlane.Methods.ChatHistoryToolsTest do
       ]
     })
 
-    assert {:ok, %{"messages" => rows}} = ChatHistory.handle(%{"sessionKey" => key}, %{})
+    assert {:ok, %{"messages" => rows}} =
+             ChatHistory.handle(%{"sessionKey" => key}, @operator_ctx)
+
     [read, bash] = Enum.filter(rows, &(&1["role"] == "tool_result"))
     assert read["toolCallId"] == "read-native"
     assert read["ok"] == true

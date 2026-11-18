@@ -89,6 +89,113 @@ An unknown or expired run returns `NOT_FOUND`, not a successful empty timeline.
 Introspection, task lookup or usage storage failures return `INTERNAL_ERROR`
 with “Run timeline is unavailable”, never an empty result. No provider is called.
 
+## Content scope (`operator.content`)
+
+`operator.read` is metadata-only. Transcript and content payloads need
+`operator.content`: prompts, answers, reasoning, task descriptions/results/
+errors, tool titles and arguments, event previews, raw events, run records,
+cron output/meta and prompt/command text, background answers, session exports
+and log messages. The configured operator token, the tokenless loopback
+operator and in-process operator clients (web UI, CLI, TUI, ACP) receive it by
+default; a connection that sends an explicit `scopes` list receives it only if
+the list names `operator.content` (or `content`). ACP upgrades require it.
+
+Without it the methods below return metadata only (ids, roles, status, counts,
+sizes, token usage and timings), ignore include flags that would add content
+(`includeFullText`, `includeRawEvents`, `includeRunRecord`, `includeEvents`,
+`includeRecord`, `includeOutput`, `includeMeta`, `includeIntrospection`,
+`includeTargetText`, `includeAnswer`) and report `contentWithheld: true`:
+
+| Method | Read-only response |
+|---|---|
+| `tasks.active.list`, `tasks.recent.list` | No `description`, `result`, `error`, `latestReasoning`, `events` or `record`. |
+| `session.detail` | Runs keep `ok`, `hasError`, counts, `tokens`; tool calls keep `kind`/`ok`/`phase`; event digests have no `preview`; no prompt, answer, error, raw maps, events or run record. |
+| `cron.runs` | No `output`, `outputPreview`, `error`, `meta`, `runRecord` or `introspection`; byte counts remain. |
+| `cron.list` | No `prompt`, `command` or `meta`; byte counts remain. |
+| `chat.history` | Rows keep `id`, `role`, `timestampMs`, `ok`, `toolCallId`, `toolName`, `phase`, `cancelled`, `durationMs`. |
+| `sessions.snapshot` | Same row fields for messages/actions; `answer.text`, child `answer`, todo `content` and plan `content` are null/absent. |
+| `sessions.history` | Runs keep `run_id`, `started_at_ms`, `engine`, `ok`, `duration_ms`, `event_count`, `tool_count`. |
+| `sessions.export` | No `content` or `sha256`; format, filename, bytes and run counts remain. |
+| `agent.wait` | No `answer` or `error`; `summary.hasError`/`errorKind` remain. |
+| `background.result` | No `answer`; `ready` and `answerBytes` remain. |
+| `logs.tail` | Entries keep `level`, timestamp and `module`; no `message`. |
+| `sessions.preview` | Rows keep `runId`, `ok`, `timestampMs`, `promptBytes`, `answerBytes`; no `prompt`, `answer` or `truncated`. |
+| `sessions.list`, `sessions.stats` | A non-blank `query` (it matches prompt/answer text) is refused with `FORBIDDEN`; unfiltered results are unchanged. |
+| `sessions.tree` | Entries keep ids, `type`, `role`, `timestamp`, flags and `textBytes`; no `text` or `label`. |
+| `sessions.steer.pending` | Items keep `messageId`, `acceptedAfterTurn`, `previewBytes`; no `preview`. |
+| `sessions.changes` | With `path`, `diff` has no `patch`; `patchBytes`, status and counts remain. |
+| `subagents.list` | No `description` or `activity`. |
+| `subagents.transcript` | No `text`; `status`, `truncated` and `textBytes` remain. |
+| `runs.recent.list` | Free-text `error` becomes `"error_text_withheld"`; atom reasons remain. |
+| `cron.audit` | Free-text `reason` is null; enumerated reasons remain. |
+| `process.jobs.list`, `process.jobs.inspect` | No `command` or `output`; `commandBytes`, `outputBytes`, status, timing, `cwd` and `pids` remain. |
+| `omp.sessions.list`, `omp.sessions.get` | Ids, `cwd`, `worktree`, model/thinking/approval mode, `status`, `lastTurn`, timestamps, counters, `usage`, `contextPercent`, tool ids/names/timings, todo `status` and subagent ids/status/usage remain; no `title`, `activity`, `lastText`, `result`, `error`, tool `intent`, todo text, subagent `description`/`activity`/`lastText`/`error`, approval `details` or `exit.reason`; `get` returns `summary: null`. |
+| `omp.sessions.subagent` | Transcript messages keep `role` and `toolName`; no `text`; byte cursors remain. |
+| `omp.sessions.discover` | No `title`; ids, `cwd`, timestamps, `model`, `lastStatus`, `interrupted`, `activeElsewhere` and `liveId` remain. |
+| `memory.list`, `memory.get` | Items keep `id`, `kind`, `source`, timestamps and `textBytes`; no `text`; `memory.list` ignores `query`. |
+| `memory.search` | Not run; returns empty `items`. |
+| `agent.identity.list` | No `label`; `query` matches only `id`/`name`. |
+| `agent.message.get` | No `response`; ids and `status` remain. |
+| `agent.directory.list`, `agents.list` | Agents have no `description`; session identity (`peerLabel`, `topicName`, keys, counts) remains. |
+| `learning.timeline` | Items keep `at`, `kind`, `action`, `id`; no `title` or `preview`. |
+| `profiles.list`, `profiles.get` | Profiles keep ids, name, avatar, model, node, working directory, MCP servers (never headers), tool policy, status, timestamps, paths and MCP fingerprint; no `systemPrompt` or `description`. |
+| `profiles.roster` | Entries have no `description`. |
+| `nodes.list` | Pending pairings omit the verification `code` unless the caller holds `operator.pairing`. |
+| `mcp.servers.list` | Without `operator.admin`, `projectTrust` servers keep `name`, `provider`, `transport` and `enabled` only: no command/URL `preview` (it carries every configured argument and URL paths); `previewsWithheld: true`. |
+| `doctor.run` | Without `operator.admin`, checks keep `name` and `status` with fixed per-status `message`/`remediation`; counts and `overall` remain; `detailsWithheld: true`. Check text can quote invalid configuration values and exception messages. |
+
+All other `operator.read` methods were audited and return metadata only:
+`sessions.active`, `sessions.active.list`, `sessions.context`, `sessions.get`,
+`runs.active.list`, `runs.receipt.get`, `runs.timeline.get`, `goal.status`,
+`cron.status`, `background.list`, `background.status`, `omp.status`,
+`omp.models`, `memory.transfer.status`, `usage.cost`, `usage.records`,
+`usage.status`, `blueprints.*`, `mcp.execution_names`, `models.list`,
+`profiles.sync.status`, `node.capabilities.get`, `node.host.info`,
+`node.profile.paths`, `node.runtime.features`, `setup.status`, `status`,
+`skills.hermes.catalog`, `skills.list` and `commands.catalog`.
+
+Two deliberate distinctions:
+
+- Published discovery descriptions stay readable: blueprint names and
+  descriptions (bundle-authored catalog text), MCP tool descriptions (published
+  by the server) and skill manifest descriptions are bounded discovery metadata,
+  not transcripts. The exception covers only those fields; MCP command and
+  configuration previews are gated as above.
+- Session identity labels stay readable: user-set session titles
+  (`sessions.patch`), chat peer labels and topic names come from route/channel
+  identity, not from prompts or answers. Prompt-derived titles (omp session and
+  discovery titles, session previews) are content and are withheld.
+
+Content callers receive every stored term through `LemonCore.Redact.project/2`
+(`operator/2`, with larger caps, for `includeFullText`): credential text and
+sensitive-key values, including the value of a `{key, value}` pair at any
+position, become `[REDACTED]`; depth, item counts and string bytes are bounded;
+output is JSON-safe. Scrubbing only removes recognisable credentials; it is not
+what keeps ordinary prose away from read-only callers. Task `cleanup` flags
+report the content actually returned, not the options requested.
+
+`config.get` returns, for read scope, only the public fields `logLevel`, `env`,
+`maxPayload`, `tickIntervalMs`, `heartbeatEnabled`, `heartbeatIntervalMs`,
+`cronEnabled`, `skillsPath`, `routerModel` and `routerThinkingLevel`, and only
+scalar values. Any other key (stored through `config.set`) needs
+`operator.admin` and is returned through `LemonCore.Redact.operator/2`; a
+read-scope request for it returns `value: null` with `summary.adminRequired`.
+
+WebSocket events are authorized per recipient (see `LemonControlPlane.EventBridge`):
+approval events need `operator.approvals`, pairing events `operator.pairing`,
+every other event `operator.read` or `operator.content`. A read-only recipient
+receives only allowlisted management events reduced to metadata fields; `chat`
+deltas and `omp.session` snapshots are not sent, `metrics` arrives without its
+free-form `payload`, `goal` events carry `loopVerdict` reduced to `action`,
+`source`, `atMs` and `runId` (never the judge's `reason`; `source`, here and as
+`goal.status` `lastSource`, is shown only as a known provenance value — `judge`,
+`manual`, `preview`, `judge_failure_policy`, `unknown`, with `judge:<model>`
+reduced to `judge` — and omitted otherwise; the goal judge sets it server-side
+and ignores any model-written `source`), and nested
+`session.event` batches keep their cursor with each inner event projected the
+same way. `sessions.events` replay applies the same rule using the connection's
+current scopes.
+
 ## `subagents.list`, `subagents.transcript`, `subagents.send`, `subagents.cancel`
 
 The TUI Agent Hub's session-scoped view of native `task` subagents. Every method
@@ -107,9 +214,12 @@ every per-agent method, exactly as an unknown ID does.
   `updatedAtMs`, `contextPercent` and `usage` (`tokens`, `costUsd`, `requests`,
   `input`, `output`). Live children report their session's cumulative usage;
   finished ones only what their result recorded. Labels are single-line and
-  bounded; prompts, workspace and transcript paths are never included.
+  bounded; prompts, workspace and transcript paths are never included. Without
+  `operator.content`, `description` and `activity` are omitted and the response
+  carries `contentWithheld: true`.
 - `subagents.transcript` (`operator.read`) returns
-  `{"taskId","status","text","truncated"}`: the bounded visible transcript that
+  `{"taskId","status","text","truncated","contentWithheld"}`; without
+  `operator.content`, `text` is replaced by `textBytes`. The text is the bounded visible transcript that
   `history://<task_id>` gives the parent agent (status, assignment, the last ten
   visible updates and the result; no hidden reasoning). The text is untrusted
   child output.

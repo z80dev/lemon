@@ -227,12 +227,14 @@ Authenticated operators can use these methods (parameters use camelCase):
 | `omp.sessions.resume` | write | `cwd`, `ompSessionId`; optional `prompt`, `model`, `thinking`, `approvalMode`, `continue`. `continue: true` cannot accompany a prompt. Returns `{session}`. |
 | `omp.sessions.startMany` | write | `tasks` (1–8 start maps), optional batch-default `isolate`. Returns ordered `{results: [{index, session} \| {index, error}]}`. Each task requires its own `cwd` and `prompt`; task isolation overrides the batch default. |
 | `omp.models` | read | Optional `query`, `provider`, `freeOnly`, `limit` (1–200). Returns `{models}` cheapest first. |
-| `omp.sessions.subagent` | read | `id`, `subagentId`, optional `limit` (1–50). Returns `{id, subagentId, transcript}` with sanitized messages and byte cursors. |
+| `omp.sessions.subagent` | read | `id`, `subagentId`, optional `limit` (1–50). Returns `{id, subagentId, transcript, contentWithheld}` with sanitized messages and byte cursors; without `operator.content` messages carry only `role`/`toolName`. |
 | `omp.sessions.configure` | write | `id`, at least one of `model`, `thinking`. Returns `{session}`. |
 | `omp.sessions.send` | write | `id`, `message`, optional `mode`: `steer` (default), `followUp`, or `redirect`. Returns `{accepted: true, delivery}`; idle delivery is `prompt`. |
 
 These methods dispatch asynchronously so approvals and `omp.session` events keep
-flowing. Existing list/get/discover methods remain read-only. Discovery includes
+flowing. Existing list/get/discover methods remain read-only; without
+`operator.content` they return metadata only (no titles, activity, output, todo
+text or summaries). Discovery includes
 `source`, `interrupted`, and worktree path/branch when present; snapshots and event
 payloads retain the driver's approval, worktree and subagent details unchanged.
 Prompts and messages are limited to 16 KiB, paths to 4096 bytes, and model selectors

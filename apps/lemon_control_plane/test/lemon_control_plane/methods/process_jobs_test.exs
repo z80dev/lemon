@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.ProcessJobsTest do
   use ExUnit.Case, async: false
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   alias LemonControlPlane.Methods.{
     ProcessJobsCancel,
     ProcessJobsInspect,
@@ -115,7 +117,9 @@ defmodule LemonControlPlane.Methods.ProcessJobsTest do
   end
 
   test "list projects bounded, redacted summaries scoped by the requested session key" do
-    assert {:ok, result} = ProcessJobsList.handle(%{"sessionKey" => "agent:t:main"}, %{})
+    assert {:ok, result} =
+             ProcessJobsList.handle(%{"sessionKey" => "agent:t:main"}, @operator_ctx)
+
     assert_received {:jobs, "agent:t:main"}
 
     assert %{"live" => true, "rootId" => "root-1", "total" => 2, "truncated" => false} = result
@@ -162,7 +166,7 @@ defmodule LemonControlPlane.Methods.ProcessJobsTest do
 
   test "inspect bounds the tail, redacts output and validates the job id" do
     params = %{"sessionKey" => "agent:t:main", "jobId" => "job-1", "tailBytes" => 65_536}
-    assert {:ok, %{"job" => job}} = ProcessJobsInspect.handle(params, %{})
+    assert {:ok, %{"job" => job}} = ProcessJobsInspect.handle(params, @operator_ctx)
     assert_received {:inspect, tail_bytes: 65_536}
 
     assert job["cwd"] == "/work"

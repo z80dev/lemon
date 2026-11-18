@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.BackgroundCommandsTest do
   use ExUnit.Case, async: false
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   alias LemonControlPlane.Methods.{
     BackgroundCancel,
     BackgroundList,
@@ -158,10 +160,10 @@ defmodule LemonControlPlane.Methods.BackgroundCommandsTest do
              BackgroundStatus.handle(%{"id" => "bg_123"}, %{})
 
     assert {:ok, %{"id" => "bg_123", "ready" => false}} =
-             BackgroundResult.handle(%{"id" => "bg_123"}, %{})
+             BackgroundResult.handle(%{"id" => "bg_123"}, @operator_ctx)
 
     assert {:ok, %{"id" => "bg_done", "ready" => true, "answer" => "checks passed"}} =
-             BackgroundResult.handle(%{"id" => "bg_done"}, %{})
+             BackgroundResult.handle(%{"id" => "bg_done"}, @operator_ctx)
 
     assert {:ok, %{"id" => "bg_123", "cancelled" => true}} =
              BackgroundCancel.handle(%{"id" => "bg_123"}, %{})

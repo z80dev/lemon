@@ -152,7 +152,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
        }}
     )
 
-    assert {:ok, tree} = Registry.dispatch("sessions.tree", target(), ctx([:read]))
+    assert {:ok, tree} = Registry.dispatch("sessions.tree", target(), ctx([:read, :content]))
     assert_receive {:tree, "agent:native_methods:main", "/workspace", [limit: 100, offset: 0]}
     assert tree["entries"] == [Map.delete(entry, "raw")]
     assert tree["sessionKey"] == target()["sessionKey"]
@@ -430,7 +430,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert {:ok, %{title: nil}} = SessionMetadataStore.fetch(child)
     assert RunStore.history(child) == []
 
-    assert {:ok, listed} = SessionsList.handle(%{"query" => child}, %{})
+    assert {:ok, listed} = SessionsList.handle(%{"query" => child}, ctx([:read, :content]))
     assert [%{"sessionKey" => ^child, "runCount" => 0}] = listed["sessions"]
 
     title = "Fork naming #{System.unique_integer([:positive, :monotonic])}"
@@ -438,11 +438,13 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert {:ok, _} =
              SessionsMetadataPatch.handle(%{"sessionKey" => child, "title" => title}, %{})
 
-    assert {:ok, named} = SessionsList.handle(%{"query" => String.upcase(title)}, %{})
+    assert {:ok, named} =
+             SessionsList.handle(%{"query" => String.upcase(title)}, ctx([:read, :content]))
+
     assert [%{"sessionKey" => ^child, "title" => ^title}] = named["sessions"]
 
     assert {:ok, _} = SessionsMetadataPatch.handle(%{"sessionKey" => child, "title" => nil}, %{})
-    assert {:ok, cleared} = SessionsList.handle(%{"query" => title}, %{})
+    assert {:ok, cleared} = SessionsList.handle(%{"query" => title}, ctx([:read, :content]))
     assert cleared["sessions"] == []
   end
 
@@ -644,7 +646,9 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     ]
 
     Process.put(:history_result, {:ok, entries})
-    assert {:ok, before_rewind} = Registry.dispatch("chat.history", params, ctx([:read]))
+
+    assert {:ok, before_rewind} =
+             Registry.dispatch("chat.history", params, ctx([:read, :content]))
 
     assert [
              %{"id" => "u1", "content" => "retained prompt"},
@@ -666,12 +670,20 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert_receive {:history, ^key, "/workspace"}
 
     assert {:ok, page} =
-             Registry.dispatch("chat.history", Map.put(params, "limit", 1), ctx([:read]))
+             Registry.dispatch(
+               "chat.history",
+               Map.put(params, "limit", 1),
+               ctx([:read, :content])
+             )
 
     assert [%{"id" => "tool", "timestampMs" => 4, "toolCallId" => "read-1"}] = page["messages"]
 
     assert {:ok, after_user} =
-             Registry.dispatch("chat.history", Map.put(params, "beforeId", "u1"), ctx([:read]))
+             Registry.dispatch(
+               "chat.history",
+               Map.put(params, "beforeId", "u1"),
+               ctx([:read, :content])
+             )
 
     assert Enum.map(after_user["messages"], & &1["role"]) ==
              ["assistant", "tool_use", "tool_result"]
@@ -698,16 +710,16 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
              )
 
     Process.put(:history_result, {:ok, []})
-    assert {:ok, rewound} = Registry.dispatch("chat.history", params, ctx([:read]))
+    assert {:ok, rewound} = Registry.dispatch("chat.history", params, ctx([:read, :content]))
     assert rewound["messages"] == []
 
     Process.put(:history_result, {:error, :session_store_unavailable})
 
     assert {:error, {:unavailable, _, _}} =
-             Registry.dispatch("chat.history", params, ctx([:read]))
+             Registry.dispatch("chat.history", params, ctx([:read, :content]))
 
     Process.put(:history_result, {:error, :session_not_found})
-    assert {:ok, legacy} = Registry.dispatch("chat.history", params, ctx([:read]))
+    assert {:ok, legacy} = Registry.dispatch("chat.history", params, ctx([:read, :content]))
     assert Enum.any?(legacy["messages"], &(&1["content"] == "abandoned prompt"))
   end
 
@@ -731,7 +743,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
              Registry.dispatch(
                "chat.history",
                Map.put(target(), "includeFullText", false),
-               ctx([:read])
+               ctx([:read, :content])
              )
 
     assert [%{"truncated" => true, "content" => preview}] = history["messages"]

@@ -9,6 +9,10 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
 
   @fake_omp Path.expand("../../support/fake_omp", __DIR__)
   @omp_env_keys [:executable, :agent_dir, :command_timeout_ms, :ready_timeout_ms]
+  @operator_auth %{
+    role: :operator,
+    scopes: [:admin, :read, :write, :approvals, :pairing, :content]
+  }
 
   @read_methods ~w(omp.status omp.sessions.list omp.sessions.get omp.sessions.discover omp.models omp.sessions.subagent)
   @write_methods ~w(omp.sessions.start omp.sessions.resume omp.sessions.send
@@ -372,7 +376,7 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
 
   describe "live sessions against a fake omp" do
     test "start, get, follow-up, close, then fail closed", %{workspace: workspace} do
-      all = ctx([:read, :write])
+      all = ctx([:read, :write, :content])
 
       assert {:ok, %{"version" => "omp 9.9.9-test", "available" => true}} =
                Registry.dispatch("omp.status", %{}, all)
@@ -522,7 +526,7 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
   describe "discovery" do
     test "lists omp's stored sessions for a workspace and validates cwd",
          %{workspace: workspace, agent_dir: agent_dir} do
-      all = ctx([:read])
+      all = ctx([:read, :content])
       omp_session_id = "01a137c9-4e60-73f4-a776-ece03008a9fe"
       write_session_file(agent_dir, workspace, omp_session_id)
 
@@ -561,7 +565,14 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
           end
         end)
 
-      :ok = Connections.register(conn_id, %{role: :operator, client_id: "omp-test", pid: self()})
+      :ok =
+        Connections.register(conn_id, %{
+          role: :operator,
+          auth: @operator_auth,
+          client_id: "omp-test",
+          pid: self()
+        })
+
       :ok = Connections.register(node_conn_id, %{role: :node, client_id: "node-1", pid: node_pid})
 
       on_exit(fn ->

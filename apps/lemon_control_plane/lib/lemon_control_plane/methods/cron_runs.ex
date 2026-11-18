@@ -3,11 +3,16 @@ defmodule LemonControlPlane.Methods.CronRuns do
   Handler for `cron.runs`.
 
   Returns run history for a cron job with optional full output, run-store
-  internals, and introspection timeline.
+  internals, and introspection timeline. Output and error text, run meta, run
+  records and introspection payloads are content and need `operator.content`;
+  read-only callers get ids, status, sizes and timings, and the include flags
+  are ignored.
   """
 
   import LemonControlPlane.Methods.Params,
     only: [truthy?: 2, normalize_limit: 3, get_map: 2, get_map: 3]
+
+  alias LemonControlPlane.Auth.Authorize
 
   @behaviour LemonControlPlane.Method
 
@@ -23,17 +28,18 @@ defmodule LemonControlPlane.Methods.CronRuns do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     with {:ok, job_id} <- LemonControlPlane.Method.require_param(params, "id") do
       params = params || %{}
+      content? = Authorize.content?(ctx)
 
       limit = normalize_limit(params["limit"], @default_limit, @max_limit)
       status = normalize_status(params["status"])
       since_ms = normalize_optional_integer(params["sinceMs"] || params["since_ms"])
-      include_output = truthy?(params["includeOutput"], false)
-      include_meta = truthy?(params["includeMeta"], true)
-      include_run_record = truthy?(params["includeRunRecord"], false)
-      include_introspection = truthy?(params["includeIntrospection"], false)
+      include_output = content? and truthy?(params["includeOutput"], false)
+      include_meta = content? and truthy?(params["includeMeta"], true)
+      include_run_record = content? and truthy?(params["includeRunRecord"], false)
+      include_introspection = content? and truthy?(params["includeIntrospection"], false)
 
       introspection_limit =
         normalize_limit(
@@ -54,6 +60,7 @@ defmodule LemonControlPlane.Methods.CronRuns do
         Enum.reduce_while(runs, [], fn run, acc ->
           case format_run(
                  run,
+                 content?,
                  include_output,
                  include_meta,
                  include_run_record,
@@ -75,6 +82,7 @@ defmodule LemonControlPlane.Methods.CronRuns do
              "jobId" => job_id,
              "runs" => Enum.reverse(formatted_runs),
              "total" => length(formatted_runs),
+             "contentWithheld" => not content?,
              "filters" => %{
                "limit" => limit,
                "status" => if(status, do: Atom.to_string(status), else: nil),
@@ -90,6 +98,7 @@ defmodule LemonControlPlane.Methods.CronRuns do
                  runs,
                  status,
                  since_ms,
+                 content?,
                  include_output,
                  include_meta,
                  include_run_record,
@@ -102,6 +111,7 @@ defmodule LemonControlPlane.Methods.CronRuns do
 
   defp format_run(
          run,
+         content?,
          include_output,
          include_meta,
          include_run_record,
@@ -109,8 +119,6 @@ defmodule LemonControlPlane.Methods.CronRuns do
          introspection_limit
        ) do
     router_run_id = run.run_id
-    output = LemonCore.Redact.text(run.output)
-    error = LemonCore.Redact.text(run.error)
 
     base =
       %{
@@ -122,22 +130,21 @@ defmodule LemonControlPlane.Methods.CronRuns do
         "startedAtMs" => run.started_at_ms,
         "completedAtMs" => run.completed_at_ms,
         "durationMs" => run.duration_ms,
-        "output" => if(include_output, do: output, else: truncate(output, 800)),
-        "outputPreview" => truncate(output, 300),
-        "error" => error,
         "suppressed" => run.suppressed || false,
         "sessionKey" => get_meta_value(run.meta, "session_key"),
         "agentId" => get_meta_value(run.meta, "agent_id"),
         "summary" =>
           run_summary(
             run,
+            content?,
             include_output,
             include_meta,
             include_run_record,
             include_introspection
           )
       }
-      |> maybe_put("meta", serialize_term(run.meta), include_meta)
+      |> maybe_put_text(run, content?, include_output)
+      |> maybe_put("meta", LemonCore.Redact.project(run.meta), include_meta)
       |> maybe_put(
         "runRecord",
         fetch_run_record(router_run_id),
@@ -154,7 +161,26 @@ defmodule LemonControlPlane.Methods.CronRuns do
     end
   end
 
-  defp run_summary(run, include_output, include_meta, include_run_record, include_introspection) do
+  defp maybe_put_text(map, _run, false, _include_output), do: map
+
+  defp maybe_put_text(map, run, true, include_output) do
+    output = LemonCore.Redact.text(run.output)
+
+    Map.merge(map, %{
+      "output" => if(include_output, do: output, else: truncate(output, 800)),
+      "outputPreview" => truncate(output, 300),
+      "error" => LemonCore.Redact.text(run.error)
+    })
+  end
+
+  defp run_summary(
+         run,
+         content?,
+         include_output,
+         include_meta,
+         include_run_record,
+         include_introspection
+       ) do
     output_bytes = byte_size(run.output || "")
     error_bytes = byte_size(run.error || "")
 
@@ -166,8 +192,8 @@ defmodule LemonControlPlane.Methods.CronRuns do
       "outputBytes" => output_bytes,
       "errorBytes" => error_bytes,
       "fullOutputReturned" => include_output,
-      "outputPreviewReturned" => output_bytes > 0,
-      "errorTextReturned" => error_bytes > 0,
+      "outputPreviewReturned" => content? and output_bytes > 0,
+      "errorTextReturned" => content? and error_bytes > 0,
       "metaReturned" => include_meta,
       "runRecordReturned" => include_run_record and is_binary(run.run_id),
       "introspectionReturned" => include_introspection and is_binary(run.run_id),
@@ -179,6 +205,7 @@ defmodule LemonControlPlane.Methods.CronRuns do
          runs,
          status,
          since_ms,
+         content?,
          include_output,
          include_meta,
          include_run_record,
@@ -186,6 +213,8 @@ defmodule LemonControlPlane.Methods.CronRuns do
        ) do
     output_run_count = Enum.count(runs, &present?(&1.output))
     error_run_count = Enum.count(runs, &present?(&1.error))
+    returned_output_runs = if content?, do: output_run_count, else: 0
+    returned_error_runs = if content?, do: error_run_count, else: 0
 
     %{
       "runCount" => length(runs),
@@ -195,16 +224,16 @@ defmodule LemonControlPlane.Methods.CronRuns do
       "outputRunCount" => output_run_count,
       "errorRunCount" => error_run_count,
       "fullOutputReturned" => include_output,
-      "outputPreviewReturned" => output_run_count > 0,
-      "errorTextReturned" => error_run_count > 0,
+      "outputPreviewReturned" => returned_output_runs > 0,
+      "errorTextReturned" => returned_error_runs > 0,
       "metaReturned" => include_meta,
       "runRecordReturned" => include_run_record,
       "introspectionReturned" => include_introspection,
       "rawIdsReturned" => true,
       "cleanup" =>
         cleanup_summary(
-          output_run_count,
-          error_run_count,
+          returned_output_runs,
+          returned_error_runs,
           include_output,
           include_run_record,
           include_introspection
@@ -241,7 +270,7 @@ defmodule LemonControlPlane.Methods.CronRuns do
   defp fetch_run_record(run_id) do
     case LemonCore.RunStore.get(run_id) do
       nil -> nil
-      record when is_map(record) -> serialize_term(record)
+      record when is_map(record) -> LemonCore.Redact.project(record)
       _ -> nil
     end
   rescue
@@ -258,7 +287,7 @@ defmodule LemonControlPlane.Methods.CronRuns do
             "eventId" => get_map(event, :event_id),
             "eventType" => normalize_string(get_map(event, :event_type)),
             "tsMs" => get_map(event, :ts_ms),
-            "payload" => serialize_term(get_map(event, :payload, %{})),
+            "payload" => LemonCore.Redact.project(get_map(event, :payload, %{})),
             "runId" => get_map(event, :run_id),
             "sessionKey" => get_map(event, :session_key),
             "agentId" => get_map(event, :agent_id),
@@ -326,47 +355,6 @@ defmodule LemonControlPlane.Methods.CronRuns do
   end
 
   defp normalize_optional_integer(_), do: nil
-
-  defp serialize_term(value, depth \\ 0)
-  defp serialize_term(_value, depth) when depth >= 7, do: "[max_depth]"
-
-  defp serialize_term(%{__struct__: mod} = struct, depth) do
-    struct
-    |> Map.from_struct()
-    |> Map.put("__struct__", inspect(mod))
-    |> serialize_term(depth + 1)
-  end
-
-  defp serialize_term(value, depth) when is_map(value) do
-    Enum.reduce(value, %{}, fn {k, v}, acc ->
-      key = key_to_string(k)
-
-      value =
-        if LemonCore.Redact.sensitive_key?(key),
-          do: %{"redacted" => true, "kind" => "secret"},
-          else: v
-
-      Map.put(acc, key, serialize_term(value, depth + 1))
-    end)
-  end
-
-  defp serialize_term(value, depth) when is_list(value),
-    do: Enum.map(value, &serialize_term(&1, depth + 1))
-
-  defp serialize_term(value, depth) when is_tuple(value),
-    do: value |> Tuple.to_list() |> Enum.map(&serialize_term(&1, depth + 1))
-
-  defp serialize_term(value, _depth) when is_boolean(value) or is_nil(value), do: value
-  defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
-
-  defp serialize_term(value, _depth) when is_binary(value),
-    do: inspect(LemonCore.Redact.text(value), limit: 200)
-
-  defp serialize_term(value, _depth), do: inspect(value, limit: 200)
-
-  defp key_to_string(key) when is_binary(key), do: key
-  defp key_to_string(key) when is_atom(key), do: Atom.to_string(key)
-  defp key_to_string(key), do: to_string(key)
 
   defp normalize_string(nil), do: nil
   defp normalize_string(value) when is_binary(value), do: value

@@ -511,7 +511,9 @@ defmodule LemonControlPlane.SessionEventReplayTest do
   end
 
   defp params(c), do: %{"sessionKey" => c.key, "cursor" => c.cursor}
-  defp ctx, do: %{auth: %{role: :operator, scopes: [:read]}}
+  # These tests pin exact transcript projections, which require `:content`;
+  # read-only views are covered by EventBridgeScopeTest.
+  defp ctx, do: %{auth: %{role: :operator, scopes: [:read, :content]}}
   defp connection_ctx(c), do: Map.merge(ctx(), %{conn_id: c.conn_id, conn_pid: self()})
   defp set_result(c, result), do: Agent.update(c.state, &%{&1 | result: result})
 

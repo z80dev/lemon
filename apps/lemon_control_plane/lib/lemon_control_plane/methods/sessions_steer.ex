@@ -104,9 +104,12 @@ defmodule LemonControlPlane.Methods.SessionsSteerPending do
   @moduledoc """
   Reads queued, unbound steering identities from the native session journal.
   This operator queue view returns bounded previews, not full prompt history.
+  Previews are steering text and need `operator.content`; read-only callers get
+  identities, turns and `previewBytes`.
   """
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.NativeSessions
   alias LemonCore.AgentRuntime
 
@@ -121,19 +124,22 @@ defmodule LemonControlPlane.Methods.SessionsSteerPending do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) when is_map(params) do
+  def handle(params, ctx) when is_map(params) do
+    content? = Authorize.content?(ctx)
+
     with {:ok, key} <- NativeSessions.string(params, "sessionKey", 1024),
          {:ok, limit} <- NativeSessions.integer(params, "limit", @max_items, 1, @max_items) do
       case AgentRuntime.call(:session_pending_steers, [key], {:error, :unavailable}) do
         {:ok, items} when is_list(items) ->
-          projected = items |> Enum.take(limit) |> Enum.map(&project/1)
+          projected = items |> Enum.take(limit) |> Enum.map(&project(&1, content?))
 
           if Enum.all?(projected, &is_map/1) do
             {:ok,
              %{
                "sessionKey" => key,
                "items" => projected,
-               "truncated" => length(items) > limit
+               "truncated" => length(items) > limit,
+               "contentWithheld" => not content?
              }}
           else
             NativeSessions.failure(:unavailable)
@@ -147,19 +153,19 @@ defmodule LemonControlPlane.Methods.SessionsSteerPending do
 
   def handle(_, _), do: NativeSessions.invalid("params must be an object")
 
-  defp project(%{id: id, text: text, accepted_after_turn: turn})
+  defp project(%{id: id, text: text, accepted_after_turn: turn}, content?)
        when is_binary(id) and is_binary(text) and is_integer(turn) and turn >= 0 do
     with {:ok, _} <- NativeSessions.string(%{"messageId" => id}, "messageId", 256),
          true <- String.valid?(text) do
-      %{
-        "messageId" => id,
-        "preview" => String.slice(text, 0, @preview_chars),
-        "acceptedAfterTurn" => turn
-      }
+      payload = %{"messageId" => id, "acceptedAfterTurn" => turn}
+
+      if content?,
+        do: Map.put(payload, "preview", String.slice(text, 0, @preview_chars)),
+        else: Map.put(payload, "previewBytes", byte_size(text))
     else
       _ -> :invalid
     end
   end
 
-  defp project(_), do: :invalid
+  defp project(_, _), do: :invalid
 end

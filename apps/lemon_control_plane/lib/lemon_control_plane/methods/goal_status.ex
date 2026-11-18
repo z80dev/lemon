@@ -118,7 +118,10 @@ defmodule LemonControlPlane.Methods.GoalStatus do
           "status" => loop["status"] || loop[:status],
           "verdictCount" => loop["verdictCount"] || loop[:verdictCount],
           "lastAction" => verdict["action"] || verdict[:action],
-          "lastSource" => verdict["source"] || verdict[:source],
+          "lastSource" =>
+            LemonControlPlane.EventProjection.goal_verdict_source(
+              verdict["source"] || verdict[:source]
+            ),
           "lastRunId" =>
             verdict["runId"] || verdict[:runId] || loop["lastRunId"] || loop[:lastRunId]
         }

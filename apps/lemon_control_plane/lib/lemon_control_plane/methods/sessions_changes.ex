@@ -17,9 +17,13 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
 
   A `cwd` outside a git work tree answers `repository: false` with state
   `not_git_repository` rather than an error.
+
+  The diff `patch` is file content and needs `operator.content`; read-only
+  callers get the changed file's status, counts and `patchBytes`.
   """
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.NativeSessions
 
   @max_files 300
@@ -55,16 +59,22 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
   def dispatch_mode, do: :async
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
+    content? = Authorize.content?(ctx)
+
     with {:ok, key, cwd} <- NativeSessions.target(params),
          {:ok, path} <- optional_path(params),
          :ok <- workspace(cwd),
          {:ok, git} <- git_executable() do
       case repository(git, cwd) do
         {:ok, repo} when is_nil(path) -> status_response(git, cwd, key, repo)
-        {:ok, repo} -> diff_response(git, cwd, key, repo, path)
+        {:ok, repo} -> diff_response(git, cwd, key, repo, path, content?)
         :not_repository -> {:ok, not_repository(key, path)}
         {:error, reason} -> failure(reason)
+      end
+      |> case do
+        {:ok, payload} -> {:ok, Map.put(payload, "contentWithheld", not content?)}
+        error -> error
       end
     end
   end
@@ -400,10 +410,17 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
 
   # ── Diff ───────────────────────────────────────────────────────────────
 
-  defp diff_response(git, cwd, key, repo, path) do
+  # The patch is file content and needs `operator.content`; read-only callers
+  # get the file's status, counts and `patchBytes`.
+  defp diff_response(git, cwd, key, repo, path, content?) do
     with {:ok, %{entries: entries}} <- status(git, cwd, repo),
          {:ok, entry} <- changed_entry(entries, path),
          {:ok, diff} <- diff(git, cwd, repo, entry) do
+      diff =
+        if content?,
+          do: diff,
+          else: diff |> Map.delete("patch") |> Map.put("patchBytes", byte_size(diff["patch"]))
+
       {:ok, %{"sessionKey" => key, "repository" => true, "state" => "ok", "diff" => diff}}
     else
       {:error, reason} -> failure(reason)

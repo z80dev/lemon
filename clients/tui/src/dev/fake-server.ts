@@ -404,7 +404,10 @@ export class FakeControlPlane {
 				maxBufferedBytes: 8_388_608,
 				tickIntervalMs: this.#options.tickIntervalMs,
 			},
-			auth: { role: "operator", scopes: ["read", "write", "admin"] },
+			auth: {
+				role: "operator",
+				scopes: ["admin", "read", "write", "approvals", "pairing", "content"],
+			},
 		});
 	}
 

@@ -135,7 +135,7 @@ defmodule LemonControlPlane.HTTP.Router do
 
     case LemonControlPlane.Auth.Authorize.from_params(params, local?: local?) do
       {:ok, %{role: :operator, scopes: scopes}} ->
-        if Enum.all?([:read, :write, :approvals], &(&1 in scopes)) do
+        if Enum.all?([:read, :write, :approvals, :content], &(&1 in scopes)) do
           conn
           |> WebSockAdapter.upgrade(LemonControlPlane.ACP.Connection, [], timeout: :infinity)
           |> halt()
@@ -144,7 +144,9 @@ defmodule LemonControlPlane.HTTP.Router do
             conn,
             403,
             Errors.forbidden(
-              operator_auth_message("ACP requires operator read, write and approval scopes.")
+              operator_auth_message(
+                "ACP requires operator read, write, approval and content scopes."
+              )
             )
           )
         end

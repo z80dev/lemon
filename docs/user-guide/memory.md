@@ -210,7 +210,10 @@ managed `profileId`, not a filesystem path. A profile placed on a named machine
 reads and changes memory on that destination; an offline machine never falls
 back to the controller's memory.
 
-Reads require `operator.read`, while add/delete require `operator.admin`.
+Reads require `operator.read`, while add/delete require `operator.admin`. Memory
+text needs `operator.content` as well: read-only callers get ids, kinds, sources,
+timestamps and `textBytes`, `memory.list` ignores `query`, and `memory.search`
+returns no items (`contentWithheld: true`).
 Product backends must always select `{memoryScope: "private", memoryContextKey}`
 using their verified stable Bot+actor key, or `{memoryScope: "shared"}` for proven
 shared facts. Every scoped success echoes the exact selector (shared key is null);

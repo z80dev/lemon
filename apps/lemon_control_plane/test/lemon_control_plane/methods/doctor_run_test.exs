@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.DoctorRunTest do
   use ExUnit.Case, async: false
 
+  @admin_ctx %{auth: %{role: :operator, scopes: [:read, :admin]}}
+
   alias LemonControlPlane.Methods.{DoctorRun, Registry}
   alias LemonCore.Doctor.{Check, Report}
 
@@ -75,7 +77,7 @@ defmodule LemonControlPlane.Methods.DoctorRunTest do
       Report.from_checks(checks)
     end)
 
-    assert {:ok, result} = DoctorRun.handle(%{}, %{})
+    assert {:ok, result} = DoctorRun.handle(%{}, @admin_ctx)
     assert_receive {:doctor_opts, [runtime: :local]}
 
     assert result["overall"] == "fail"
@@ -108,9 +110,50 @@ defmodule LemonControlPlane.Methods.DoctorRunTest do
       Report.from_checks([Check.warn("long", String.duplicate("é", 600))])
     end)
 
-    assert {:ok, %{"checks" => [check]}} = DoctorRun.handle(%{}, %{})
+    assert {:ok, %{"checks" => [check]}} = DoctorRun.handle(%{}, @admin_ctx)
     assert byte_size(check["message"]) <= 484
     assert String.valid?(check["message"])
     assert String.ends_with?(check["message"], "…")
+  end
+
+  @tag :tmp_dir
+  test "read scope gets fixed guidance, never invalid private config values", %{tmp_dir: root} do
+    Application.delete_env(:lemon_control_plane, :doctor_report_fun)
+    config = Path.join(root, "config.toml")
+
+    # The TOML parser echoes the offending line, which reaches doctor output both
+    # as `config.global_valid` text and as the channels check's exception remediation.
+    File.write!(config, "[agent]\nmodel = OPAQUE_TLS_7Q2X9 merger closes Friday\n")
+
+    previous_paths = Application.get_env(:lemon_core, :paths)
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      Keyword.put(previous_paths || [], :global_config, config)
+    )
+
+    on_exit(fn ->
+      if is_nil(previous_paths),
+        do: Application.delete_env(:lemon_core, :paths),
+        else: Application.put_env(:lemon_core, :paths, previous_paths)
+    end)
+
+    read_ctx = %{auth: %{role: :operator, scopes: [:read]}}
+    assert {:ok, read} = Registry.dispatch("doctor.run", %{}, read_ctx)
+    encoded = Jason.encode!(read)
+    refute encoded =~ "OPAQUE_TLS_7Q2X9"
+    refute encoded =~ "merger closes Friday"
+    assert read["detailsWithheld"] == true
+
+    assert %{"status" => "fail", "message" => "Check failed.", "remediation" => remediation} =
+             Enum.find(read["checks"], &(&1["name"] == "config.global_valid"))
+
+    assert remediation =~ "operator.admin"
+
+    assert {:ok, full} = Registry.dispatch("doctor.run", %{}, @admin_ctx)
+    assert full["detailsWithheld"] == false
+    global = Enum.find(full["checks"], &(&1["name"] == "config.global_valid"))
+    assert global["message"] =~ "OPAQUE_TLS_7Q2X9"
   end
 end

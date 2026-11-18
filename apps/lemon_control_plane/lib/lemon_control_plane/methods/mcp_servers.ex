@@ -8,9 +8,12 @@ defmodule LemonControlPlane.Methods.McpSupport do
   # untrusted remote metadata and are bounded.
   #
   # `projectTrust` reports, for each project directory a session has loaded,
-  # pending or changed project MCP trust, rejected host-secret references and
-  # bounded redacted command/URL previews from `LemonSkills.McpDiscovery`. It
-  # only reads files: viewing never connects, reconnects or grants trust.
+  # pending or changed project MCP trust and rejected host-secret references. Its
+  # bounded redacted command/URL `preview` from `LemonSkills.McpDiscovery` joins
+  # every configured argument and keeps URL paths, so it is configuration
+  # returned only when `previews?` (admin, as for `config.get`); read scope gets
+  # name, provider, transport and enablement. It only reads files: viewing never
+  # connects, reconnects or grants trust.
 
   alias LemonControlPlane.Methods.SkillsSupport
   alias LemonControlPlane.Protocol.Errors
@@ -26,12 +29,12 @@ defmodule LemonControlPlane.Methods.McpSupport do
   def available?(source),
     do: Code.ensure_loaded?(LemonSkills.McpSource) and is_pid(Process.whereis(source))
 
-  def inventory do
+  def inventory(previews? \\ true) do
     source = source()
 
     if available?(source) do
       try do
-        {:ok, project(LemonSkills.McpSource.inventory(source, []))}
+        {:ok, project(LemonSkills.McpSource.inventory(source, []), previews?)}
       catch
         :exit, _ -> {:error, Errors.unavailable("MCP source is unavailable")}
       end
@@ -40,17 +43,18 @@ defmodule LemonControlPlane.Methods.McpSupport do
     end
   end
 
-  defp project(%{disabled: true}) do
+  defp project(%{disabled: true}, previews?) do
     %{
       "available" => false,
       "loaded" => false,
       "servers" => [],
       "summary" => summary([], false),
-      "projectTrust" => []
+      "projectTrust" => [],
+      "previewsWithheld" => not previews?
     }
   end
 
-  defp project(%{servers: servers, loaded: loaded} = inventory) do
+  defp project(%{servers: servers, loaded: loaded} = inventory, previews?) do
     projected = servers |> Enum.take(@max_servers) |> Enum.map(&server/1)
 
     %{
@@ -58,28 +62,33 @@ defmodule LemonControlPlane.Methods.McpSupport do
       "loaded" => loaded,
       "servers" => projected,
       "summary" => summary(projected, length(servers) > length(projected)),
-      "projectTrust" => project_trust(Map.get(inventory, :project_scopes, []))
+      "projectTrust" => project_trust(Map.get(inventory, :project_scopes, []), previews?),
+      "previewsWithheld" => not previews?
     }
   end
 
-  defp project_trust(scopes) do
+  defp project_trust(scopes, previews?) do
+    server_keys =
+      if previews?,
+        do: ~w(name provider transport enabled preview),
+        else: ~w(name provider transport enabled)
+
     scopes
     |> Enum.take(@max_projects)
     |> Enum.flat_map(fn scope ->
       case LemonSkills.McpDiscovery.project_status(scope) do
         %{trust: :none} -> []
-        status -> [trust_entry(status)]
+        status -> [trust_entry(status, server_keys)]
       end
     end)
   end
 
-  defp trust_entry(status) do
+  defp trust_entry(status, server_keys) do
     %{
       "project" => status.label,
       "trust" => Atom.to_string(status.trust),
       "files" => status.files,
-      "servers" =>
-        Enum.map(status.servers, &Map.take(&1, ~w(name provider transport enabled preview))),
+      "servers" => Enum.map(status.servers, &Map.take(&1, server_keys)),
       "rejected" =>
         for(
           %{"reason" => "host_value_reference"} = finding <- status.findings,
@@ -145,11 +154,15 @@ defmodule LemonControlPlane.Methods.McpServersList do
   Handler for the read-only `mcp.servers.list` method: the runtime's globally
   configured MCP servers with connection status, transport, counts and their
   published tools, plus `projectTrust` for loaded project directories (pending
-  or changed trust, rejected host-secret references, redacted previews). Pure
-  read; it never connects, reloads configuration or grants trust.
+  or changed trust, rejected host-secret references). Project command/URL
+  previews carry configured arguments and URL paths, so they need
+  `operator.admin`; other callers get `previewsWithheld: true`. Pure read; it
+  never connects, reloads configuration or grants trust.
   """
 
   @behaviour LemonControlPlane.Method
+
+  alias LemonControlPlane.Auth.Authorize
 
   @impl true
   def name, do: "mcp.servers.list"
@@ -158,7 +171,13 @@ defmodule LemonControlPlane.Methods.McpServersList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(_params, _ctx), do: LemonControlPlane.Methods.McpSupport.inventory()
+  def handle(_params, ctx),
+    do: LemonControlPlane.Methods.McpSupport.inventory(admin?(ctx))
+
+  defp admin?(%{auth: %{role: :operator} = auth}),
+    do: Authorize.authorize(auth, name(), [:admin]) == :ok
+
+  defp admin?(_ctx), do: false
 end
 
 defmodule LemonControlPlane.Methods.McpServersRefresh do

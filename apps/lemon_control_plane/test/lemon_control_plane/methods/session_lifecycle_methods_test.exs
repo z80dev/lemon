@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
   use ExUnit.Case, async: false
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   alias LemonControlPlane.Auth.Authorize
 
   alias LemonControlPlane.Methods.{
@@ -43,7 +45,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     assert {:ok, listed} =
              SessionsList.handle(
                %{"query" => "launch manifest", "pinned" => true, "archived" => false},
-               %{}
+               @operator_ctx
              )
 
     assert listed["total"] == 1
@@ -82,7 +84,10 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     )
 
     assert {:ok, exported} =
-             SessionsExport.handle(%{"sessionKey" => session_key, "format" => "json"}, %{})
+             SessionsExport.handle(
+               %{"sessionKey" => session_key, "format" => "json"},
+               @operator_ctx
+             )
 
     assert exported["redacted"] == true
     assert exported["bytes"] == byte_size(exported["content"])
@@ -109,7 +114,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     assert {:ok, report} =
              SessionsStats.handle(
                %{"query" => "cp_stats_#{suffix}", "pinned" => true, "groupLimit" => 5},
-               %{}
+               @operator_ctx
              )
 
     assert report["redacted"] == true

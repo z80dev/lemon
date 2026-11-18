@@ -2,6 +2,8 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
   # Real routed runs share the runtime observed by presence/monitoring tests.
   use ExUnit.Case, async: false
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   @moduledoc """
   Tests for control-plane method implementations.
   """
@@ -106,7 +108,7 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
         session_key: session_key
       })
 
-      {:ok, result} = AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+      {:ok, result} = AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, @operator_ctx)
 
       assert result["runId"] == run_id
       assert result["ok"] == true
@@ -133,7 +135,7 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
         })
 
         assert {:ok, result} =
-                 AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+                 AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, @operator_ctx)
 
         assert result["cancelled"] == expected
       end
@@ -158,7 +160,7 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       assert {:ok, result} =
                AgentWait.handle(
                  %{"runId" => run_id, "timeoutMs" => 1, "includeAnswer" => false},
-                 %{}
+                 @operator_ctx
                )
 
       assert result["runId"] == run_id
@@ -173,7 +175,7 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       refute inspect(result) =~ private_answer
 
       assert {:ok, original_result} =
-               AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+               AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, @operator_ctx)
 
       json = original_result |> Jason.encode!() |> Jason.decode!()
       assert json["answer"] == private_answer
@@ -185,7 +187,7 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
         assert {:error, {:invalid_request, "includeAnswer must be a boolean", nil}} =
                  AgentWait.handle(
                    %{"runId" => "foreign-private-run", "includeAnswer" => value},
-                   %{}
+                   @operator_ctx
                  )
       end
     end
@@ -219,7 +221,9 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
 
       on_exit(fn -> LemonCore.RunStore.delete_session(session_key) end)
 
-      assert {:ok, result} = AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+      assert {:ok, result} =
+               AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, @operator_ctx)
+
       json = result |> Jason.encode!() |> Jason.decode!()
       assert json["ok"] == false
       assert json["error"] == details.message
@@ -262,7 +266,9 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
 
       on_exit(fn -> LemonCore.RunStore.delete_session(session_key) end)
 
-      assert {:ok, result} = AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+      assert {:ok, result} =
+               AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, @operator_ctx)
+
       json = result |> Jason.encode!() |> Jason.decode!()
       assert json["usage"]["total_tokens"] == 19
       assert json["usage"]["cache_write_long"] == 2
@@ -295,7 +301,7 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
         session_key: session_key
       })
 
-      {:ok, result} = AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+      {:ok, result} = AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, @operator_ctx)
 
       refute inspect(result) =~ answer_secret
       refute inspect(result) =~ error_secret

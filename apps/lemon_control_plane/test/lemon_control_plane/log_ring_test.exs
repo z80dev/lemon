@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.LogRingTest do
   use ExUnit.Case, async: false
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   import ExUnit.CaptureLog
 
   require Logger
@@ -24,7 +26,9 @@ defmodule LemonControlPlane.LogRingTest do
     errors = LogRing.get_logs(1_000, "error") |> Enum.filter(&(&1["message"] =~ marker))
     assert [%{"level" => "error"}] = errors
 
-    assert {:ok, result} = LogsTail.handle(%{"limit" => 1_000, "level" => "warning"}, %{})
+    assert {:ok, result} =
+             LogsTail.handle(%{"limit" => 1_000, "level" => "warning"}, @operator_ctx)
+
     tailed = Enum.filter(result["logs"], &(&1["message"] =~ marker))
     assert length(tailed) == 2
     refute inspect(tailed) =~ "sk-ring-secret"

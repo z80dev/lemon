@@ -5,6 +5,7 @@ defmodule LemonControlPlane.Methods.OmpSupport do
   # owns the delegate; these handlers only bound parameters, choose the
   # operator owner and map its error reasons onto control-plane codes.
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Protocol.Errors
 
   @max_id_bytes 128
@@ -203,6 +204,56 @@ defmodule LemonControlPlane.Methods.OmpSupport do
 
   defp invalid_params(message, field),
     do: {:error, Errors.invalid_params(message, %{"field" => field})}
+
+  @session_keys ~w(id ompSessionId cwd worktree model thinking approvalMode owner status
+                   lastTurn startedAt updatedAt endedAt turns toolCalls usage contextPercent
+                   declinedPrompts approvals)
+  @subagent_keys ~w(id agent status index parentToolCallId toolCalls usage model startedAt
+                    endedAt durationMs)
+  @discovered_keys ~w(ompSessionId cwd createdAt updatedAt model lastStatus interrupted
+                      activeElsewhere liveId)
+
+  def content?(ctx), do: Authorize.content?(ctx)
+
+  @doc """
+  Metadata-only session wire map for callers without `operator.content`: titles,
+  activity, tool intents, todo text, subagent descriptions/text, approval
+  details, last text, results and errors are omitted.
+  """
+  def session(wire, true), do: wire
+
+  def session(wire, false) when is_map(wire) do
+    wire
+    |> Map.take(@session_keys)
+    |> Map.merge(%{
+      "activeTools" => take_each(wire["activeTools"], ~w(id name startedAt)),
+      "recentTools" => take_each(wire["recentTools"], ~w(name isError durationMs)),
+      "todos" => take_each(wire["todos"], ~w(status)),
+      "subagents" => take_each(wire["subagents"], @subagent_keys),
+      "pendingApprovals" => take_each(wire["pendingApprovals"], ~w(id tool requestedAt)),
+      "exit" => if(is_map(wire["exit"]), do: Map.take(wire["exit"], ["code"]))
+    })
+  end
+
+  def session(wire, false), do: wire
+
+  @doc "Metadata-only stored-session entry (drops the prompt-derived title)."
+  def discovered(entry, true), do: entry
+  def discovered(entry, false) when is_map(entry), do: Map.take(entry, @discovered_keys)
+  def discovered(entry, false), do: entry
+
+  @doc "Metadata-only subagent transcript: roles and tool names, no text."
+  def transcript(transcript, true), do: transcript
+
+  def transcript(%{} = transcript, false),
+    do: Map.update(transcript, "messages", [], &take_each(&1, ~w(role toolName)))
+
+  def transcript(transcript, false), do: transcript
+
+  defp take_each(list, keys) when is_list(list),
+    do: Enum.map(list, &if(is_map(&1), do: Map.take(&1, keys), else: &1))
+
+  defp take_each(_value, _keys), do: []
 end
 
 defmodule LemonControlPlane.Methods.OmpStatus do
@@ -243,8 +294,9 @@ defmodule LemonControlPlane.Methods.OmpSessionsList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     params = params || %{}
+    content? = Support.content?(ctx)
 
     with {:ok, limit} <- Support.limit(params) do
       opts =
@@ -253,8 +305,15 @@ defmodule LemonControlPlane.Methods.OmpSessionsList do
         |> then(&if(limit, do: Keyword.put(&1, :limit, limit), else: &1))
 
       case Support.call(fn -> {:ok, LemonOmp.list(opts)} end) do
-        {:ok, sessions} -> {:ok, %{"sessions" => sessions}}
-        {:error, reason} -> Support.error(reason)
+        {:ok, sessions} ->
+          {:ok,
+           %{
+             "sessions" => Enum.map(sessions, &Support.session(&1, content?)),
+             "contentWithheld" => not content?
+           }}
+
+        {:error, reason} ->
+          Support.error(reason)
       end
     end
   end
@@ -273,13 +332,20 @@ defmodule LemonControlPlane.Methods.OmpSessionsGet do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
+    content? = Support.content?(ctx)
+
     with {:ok, id} <- Support.id(params || %{}) do
       result =
         Support.call(fn ->
           with {:ok, session} <- LemonOmp.get(id, Support.read_opts()),
-               {:ok, summary} <- LemonOmp.summary(id, Support.read_opts()) do
-            {:ok, %{"session" => session, "summary" => summary}}
+               {:ok, summary} <- summary(id, content?) do
+            {:ok,
+             %{
+               "session" => Support.session(session, content?),
+               "summary" => summary,
+               "contentWithheld" => not content?
+             }}
           end
         end)
 
@@ -289,6 +355,10 @@ defmodule LemonControlPlane.Methods.OmpSessionsGet do
       end
     end
   end
+
+  # The plain-text summary quotes titles, todo text and omp output.
+  defp summary(id, true), do: LemonOmp.summary(id, Support.read_opts())
+  defp summary(_id, false), do: {:ok, nil}
 end
 
 defmodule LemonControlPlane.Methods.OmpSessionsDiscover do
@@ -304,7 +374,8 @@ defmodule LemonControlPlane.Methods.OmpSessionsDiscover do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
+    content? = Support.content?(ctx)
     params = params || %{}
 
     with {:ok, cwd} <- Support.cwd(params),
@@ -312,8 +383,15 @@ defmodule LemonControlPlane.Methods.OmpSessionsDiscover do
       opts = if limit, do: [limit: limit], else: []
 
       case Support.call(fn -> LemonOmp.discover(cwd, opts) end) do
-        {:ok, sessions} -> {:ok, %{"sessions" => sessions}}
-        {:error, reason} -> Support.error(reason)
+        {:ok, sessions} ->
+          {:ok,
+           %{
+             "sessions" => Enum.map(sessions, &Support.discovered(&1, content?)),
+             "contentWithheld" => not content?
+           }}
+
+        {:error, reason} ->
+          Support.error(reason)
       end
     end
   end
@@ -619,7 +697,8 @@ defmodule LemonControlPlane.Methods.OmpSessionsSubagent do
   def scopes, do: [:read]
   def dispatch_mode, do: :async
 
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
+    content? = Support.content?(ctx)
     params = params || %{}
 
     with {:ok, id} <- Support.id(params),
@@ -630,7 +709,13 @@ defmodule LemonControlPlane.Methods.OmpSessionsSubagent do
 
       case Support.call(fn -> LemonOmp.subagent(id, child, opts) end) do
         {:ok, transcript} ->
-          {:ok, %{"id" => id, "subagentId" => child, "transcript" => transcript}}
+          {:ok,
+           %{
+             "id" => id,
+             "subagentId" => child,
+             "transcript" => Support.transcript(transcript, content?),
+             "contentWithheld" => not content?
+           }}
 
         {:error, reason} ->
           Support.error(reason, %{"id" => id})

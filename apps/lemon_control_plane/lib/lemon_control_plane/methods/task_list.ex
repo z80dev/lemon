@@ -3,22 +3,27 @@ defmodule LemonControlPlane.Methods.TaskList do
 
   import LemonControlPlane.Methods.Params
 
-  alias LemonCore.AgentRuntime
+  alias LemonControlPlane.Auth.Authorize
+  alias LemonCore.{AgentRuntime, Redact}
 
   @default_limit 100
   @max_limit 200
   @default_event_limit 100
   @max_event_limit 1_000
 
-  def handle(params, mode) when mode in [:active, :recent] do
+  # Descriptions, results, errors, reasoning, events and records are content:
+  # without `operator.content` the include flags are ignored and every task is
+  # reduced to ids, status, counts and timings.
+  def handle(params, mode, ctx) when mode in [:active, :recent] do
     params = params || %{}
+    content? = Authorize.content?(ctx)
 
     run_id = get_param(params, "runId")
     agent_id = get_param(params, "agentId")
     status_filter = if mode == :recent, do: get_param(params, "status")
     limit = normalize_limit(get_param(params, "limit"), @default_limit, @max_limit)
-    include_events = truthy?(get_param(params, "includeEvents"), false)
-    include_record = truthy?(get_param(params, "includeRecord"), false)
+    include_events = content? and truthy?(get_param(params, "includeEvents"), false)
+    include_record = content? and truthy?(get_param(params, "includeRecord"), false)
 
     event_limit =
       normalize_limit(get_param(params, "eventLimit"), @default_event_limit, @max_event_limit)
@@ -28,8 +33,7 @@ defmodule LemonControlPlane.Methods.TaskList do
         run_id,
         agent_id,
         limit,
-        include_events,
-        include_record,
+        {content?, include_events, include_record},
         event_limit,
         status_filter,
         mode
@@ -45,7 +49,7 @@ defmodule LemonControlPlane.Methods.TaskList do
     }
 
     filters = if mode == :recent, do: Map.put(filters, "status", status_filter), else: filters
-    {:ok, response(tasks, filters, mode)}
+    {:ok, response(tasks, filters, mode, content?)}
   rescue
     _ ->
       filters = %{
@@ -58,14 +62,15 @@ defmodule LemonControlPlane.Methods.TaskList do
       }
 
       filters = if mode == :recent, do: Map.put(filters, "status", nil), else: filters
-      {:ok, response([], filters, mode)}
+      {:ok, response([], filters, mode, Authorize.content?(ctx))}
   end
 
-  defp response(tasks, filters, mode) do
+  defp response(tasks, filters, mode, content?) do
     %{
       "tasks" => tasks,
       "total" => length(tasks),
       "filters" => filters,
+      "contentWithheld" => not content?,
       "summary" => summary(tasks, filters, mode)
     }
   end
@@ -82,9 +87,9 @@ defmodule LemonControlPlane.Methods.TaskList do
       "reasoningCount" => sum_integer(tasks, "reasoningCount"),
       "filtersApplied" => filters_applied(filters),
       "cleanup" => %{
-        "includesTaskEvents" => filters["includeEvents"] == true,
-        "includesTaskRecords" => filters["includeRecord"] == true,
-        "includesMessageBodies" => false,
+        "includesTaskEvents" => Enum.any?(tasks, &(Map.get(&1, "events", []) != [])),
+        "includesTaskRecords" => Enum.any?(tasks, &Map.has_key?(&1, "record")),
+        "includesMessageBodies" => Enum.any?(tasks, &message_body?/1),
         "includesCredentials" => false,
         "includesSecretValues" => false
       }
@@ -106,15 +111,14 @@ defmodule LemonControlPlane.Methods.TaskList do
          run_id,
          agent_id,
          limit,
-         include_events,
-         include_record,
+         includes,
          event_limit,
          status_filter,
          mode
        ) do
     AgentRuntime.call(:list_tasks, [], [])
     |> Enum.map(fn {task_id, _record} ->
-      task_from_store(task_id, include_events, include_record, event_limit, mode)
+      task_from_store(task_id, includes, event_limit, mode)
     end)
     |> Enum.reject(&is_nil/1)
     |> Enum.filter(&(active_status?(&1) == (mode == :active)))
@@ -127,7 +131,7 @@ defmodule LemonControlPlane.Methods.TaskList do
     |> Enum.take(limit)
   end
 
-  defp task_from_store(task_id, include_events, include_record, event_limit, mode) do
+  defp task_from_store(task_id, {content?, include_events, include_record}, event_limit, mode) do
     case AgentRuntime.call(:get_task, [task_id], :unavailable) do
       {:ok, record, events} ->
         status = derive_task_status(record, mode)
@@ -144,36 +148,30 @@ defmodule LemonControlPlane.Methods.TaskList do
             true -> nil
           end
 
-        task =
-          %{
-            "taskId" => task_id,
-            "parentRunId" => get_map(record, :parent_run_id),
-            "runId" => get_map(record, :run_id),
-            "sessionKey" => get_map(record, :session_key),
-            "agentId" => get_map(record, :agent_id),
-            "description" => get_map(record, :description),
-            "engine" => engine,
-            "role" => get_map(record, :role),
-            "status" => status,
-            "startedAtMs" => started_at,
-            "completedAtMs" => completed_at,
-            "durationMs" => duration_ms,
-            "createdAtMs" => inserted_at,
-            "updatedAtMs" => updated_at,
-            "error" => serialize_term(get_map(record, :error)),
-            "result" => serialize_term(get_map(record, :result)),
-            "eventCount" => length(events),
-            "latestReasoning" => latest_reasoning(events),
-            "reasoningCount" => reasoning_count(events)
-          }
-          |> maybe_put(
-            "events",
-            events |> Enum.take(event_limit) |> Enum.map(&serialize_term/1),
-            include_events
-          )
-          |> maybe_put("record", serialize_term(record), include_record)
-
-        task
+        %{
+          "taskId" => task_id,
+          "parentRunId" => get_map(record, :parent_run_id),
+          "runId" => get_map(record, :run_id),
+          "sessionKey" => get_map(record, :session_key),
+          "agentId" => get_map(record, :agent_id),
+          "engine" => engine,
+          "role" => get_map(record, :role),
+          "status" => status,
+          "startedAtMs" => started_at,
+          "completedAtMs" => completed_at,
+          "durationMs" => duration_ms,
+          "createdAtMs" => inserted_at,
+          "updatedAtMs" => updated_at,
+          "eventCount" => length(events),
+          "reasoningCount" => reasoning_count(events)
+        }
+        |> maybe_put_content(record, events, content?)
+        |> maybe_put(
+          "events",
+          events |> Enum.take(event_limit) |> Enum.map(&Redact.project/1),
+          include_events
+        )
+        |> maybe_put("record", Redact.project(record), include_record)
 
       {:error, :not_found} ->
         nil
@@ -335,9 +333,9 @@ defmodule LemonControlPlane.Methods.TaskList do
 
     if is_binary(text) and String.trim(text) != "" do
       %{
-        "text" => text,
-        "source" => get_map(reasoning, :source),
-        "phase" => get_map(reasoning, :phase)
+        "text" => Redact.project(text),
+        "source" => Redact.project(get_map(reasoning, :source)),
+        "phase" => Redact.project(get_map(reasoning, :phase))
       }
     end
   end
@@ -389,33 +387,19 @@ defmodule LemonControlPlane.Methods.TaskList do
   defp maybe_put(map, _key, _value, false), do: map
   defp maybe_put(map, key, value, true), do: Map.put(map, key, value)
 
-  defp serialize_term(value, depth \\ 0)
-  defp serialize_term(_value, depth) when depth >= 7, do: "[max_depth]"
+  defp maybe_put_content(task, _record, _events, false), do: task
 
-  defp serialize_term(%{__struct__: mod} = struct, depth) do
-    struct
-    |> Map.from_struct()
-    |> Map.put("__struct__", inspect(mod))
-    |> serialize_term(depth + 1)
+  defp maybe_put_content(task, record, events, true) do
+    Map.merge(task, %{
+      "description" => Redact.project(get_map(record, :description)),
+      "error" => Redact.project(get_map(record, :error)),
+      "result" => Redact.project(get_map(record, :result)),
+      "latestReasoning" => latest_reasoning(events)
+    })
   end
 
-  defp serialize_term(value, depth) when is_map(value) do
-    Enum.reduce(value, %{}, fn {k, v}, acc ->
-      Map.put(acc, key_to_string(k), serialize_term(v, depth + 1))
-    end)
+  defp message_body?(task) do
+    Map.get(task, "events", []) != [] or Map.has_key?(task, "record") or
+      Enum.any?(["description", "error", "result", "latestReasoning"], &(not is_nil(task[&1])))
   end
-
-  defp serialize_term(value, depth) when is_list(value),
-    do: Enum.map(value, &serialize_term(&1, depth + 1))
-
-  defp serialize_term(value, depth) when is_tuple(value),
-    do: value |> Tuple.to_list() |> Enum.map(&serialize_term(&1, depth + 1))
-
-  defp serialize_term(value, _depth) when is_boolean(value) or is_nil(value), do: value
-  defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
-  defp serialize_term(value, _depth), do: inspect(value, limit: 200)
-
-  defp key_to_string(key) when is_binary(key), do: key
-  defp key_to_string(key) when is_atom(key), do: Atom.to_string(key)
-  defp key_to_string(key), do: to_string(key)
 end

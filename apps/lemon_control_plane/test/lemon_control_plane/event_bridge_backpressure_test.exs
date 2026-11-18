@@ -6,6 +6,11 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
   alias LemonCore.{Bus, Event}
   alias LemonCore.Bus.Delivery
 
+  @operator_auth %{
+    role: :operator,
+    scopes: [:admin, :read, :write, :approvals, :pairing, :content]
+  }
+
   setup do
     for module <- [Connections, EventBridge] do
       unless Process.whereis(module), do: start_supervised!(module)
@@ -16,7 +21,7 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
 
   test "fanout works while the Registry supervisor is suspended without a presence call" do
     conn_id = "dispatch-only-#{System.unique_integer([:positive])}"
-    :ok = Connections.register(conn_id, %{role: :operator, pid: self()})
+    :ok = Connections.register(conn_id, %{role: :operator, auth: @operator_auth, pid: self()})
     state = :sys.get_state(EventBridge)
     registry = Process.whereis(Connections)
     :ok = :sys.suspend(registry)
@@ -48,6 +53,7 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     :ok =
       Connections.register(slow_id, %{
         role: :operator,
+        auth: @operator_auth,
         client_id: "slow",
         pid: slow,
         delivery: Delivery.new(slow, max_queue: 4)
@@ -56,6 +62,7 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     :ok =
       Connections.register(healthy_id, %{
         role: :operator,
+        auth: @operator_auth,
         client_id: "healthy",
         pid: healthy,
         delivery: Delivery.new(healthy, max_queue: 2048)
@@ -95,7 +102,13 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     sockets = for n <- 1..2, do: {"concurrent-bridge-#{suffix}-#{n}", frozen_consumer()}
 
     for {id, socket} <- sockets do
-      :ok = Connections.register(id, %{role: :operator, client_id: id, pid: socket})
+      :ok =
+        Connections.register(id, %{
+          role: :operator,
+          auth: @operator_auth,
+          client_id: id,
+          pid: socket
+        })
     end
 
     EventBridge.subscribe_run(run_id)
@@ -183,7 +196,15 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     suffix = System.unique_integer([:positive])
     conn_id = "bridge-pressure-#{suffix}"
     run_id = "bridge-pressure-run-#{suffix}"
-    :ok = Connections.register(conn_id, %{role: :operator, client_id: "pressure", pid: socket})
+
+    :ok =
+      Connections.register(conn_id, %{
+        role: :operator,
+        auth: @operator_auth,
+        client_id: "pressure",
+        pid: socket
+      })
+
     EventBridge.subscribe_run(run_id)
     bridge = Process.whereis(EventBridge)
     before = :sys.get_state(bridge)
@@ -213,7 +234,15 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
     # Old data and even its overflow marker cannot fence a fresh recipient.
     fresh = frozen_consumer()
     fresh_id = "bridge-reconnected-#{suffix}"
-    :ok = Connections.register(fresh_id, %{role: :operator, client_id: "reconnected", pid: fresh})
+
+    :ok =
+      Connections.register(fresh_id, %{
+        role: :operator,
+        auth: @operator_auth,
+        client_id: "reconnected",
+        pid: fresh
+      })
+
     on_exit(fn -> if Process.whereis(Connections), do: Connections.unregister(fresh_id) end)
     event = Event.new(:delta, %{run_id: run_id, seq: 1001, text: "obsolete"})
     send(bridge, {:lemon_bus_delivery, before.delivery.gate, event})
@@ -263,7 +292,15 @@ defmodule LemonControlPlane.EventBridgeBackpressureTest do
   test "disconnected socket death removes presence resources and permanently fences its delivery" do
     socket = frozen_consumer()
     conn_id = "dead-pressure-#{System.unique_integer([:positive])}"
-    :ok = Connections.register(conn_id, %{role: :operator, client_id: "dead", pid: socket})
+
+    :ok =
+      Connections.register(conn_id, %{
+        role: :operator,
+        auth: @operator_auth,
+        client_id: "dead",
+        pid: socket
+      })
+
     %{delivery: delivery} = Connections.get(conn_id)
     admitter_ref = Process.monitor(delivery.admitter)
     ref = Process.monitor(socket)

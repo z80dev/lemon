@@ -144,7 +144,7 @@ defmodule LemonControlPlane.Methods.SessionsSteerTest do
              Registry.dispatch(
                "sessions.steer.pending",
                Map.put(target(), "limit", 1),
-               ctx([:read])
+               ctx([:read, :content])
              )
 
     assert result == %{
@@ -156,7 +156,8 @@ defmodule LemonControlPlane.Methods.SessionsSteerTest do
                  "acceptedAfterTurn" => 3
                }
              ],
-             "truncated" => true
+             "truncated" => true,
+             "contentWithheld" => false
            }
 
     assert {:error, _} = Registry.dispatch("sessions.steer.pending", target(), ctx([:write]))

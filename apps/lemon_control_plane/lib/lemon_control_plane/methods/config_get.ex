@@ -2,18 +2,25 @@ defmodule LemonControlPlane.Methods.ConfigGet do
   @moduledoc """
   Handler for the config.get control plane method.
 
-  Retrieves configuration values.
+  Read-scope callers see only the explicitly public fields below, and only
+  scalar values, scrubbed through `LemonCore.Redact.project/2`. Every other
+  stored value (`config.set` accepts arbitrary JSON) needs `operator.admin`
+  and is returned through the shared projector, which masks values under
+  sensitive keys at any depth, including inside lists, and scrubs credential
+  assignments inside strings.
 
-  Note: Only allowed config keys can be retrieved via Application.get_env
-  to prevent atom table exhaustion from arbitrary key lookups.
+  Only allowed config keys are read from `Application.get_env`, which also
+  prevents atom table exhaustion from arbitrary key lookups.
   """
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.ConfigStore
+  alias LemonCore.Redact
 
-  # Allowed config keys that can be retrieved from Application.get_env.
-  # This prevents atom exhaustion from arbitrary key lookups.
+  # Allowed config keys that can be retrieved from Application.get_env. These
+  # are also the only fields a read-scope caller may see.
   @allowed_app_config_keys %{
     "logLevel" => {:logger, :level},
     "env" => {:lemon_control_plane, :env},
@@ -26,6 +33,7 @@ defmodule LemonControlPlane.Methods.ConfigGet do
     "routerModel" => {:lemon_router, :default_model},
     "routerThinkingLevel" => {:lemon_router, :default_thinking_level}
   }
+  @public_keys Map.keys(@allowed_app_config_keys)
 
   @impl true
   def name, do: "config.get"
@@ -37,55 +45,62 @@ defmodule LemonControlPlane.Methods.ConfigGet do
   Returns the list of allowed config key strings.
   """
   @spec allowed_config_keys() :: [String.t()]
-  def allowed_config_keys, do: Map.keys(@allowed_app_config_keys)
+  def allowed_config_keys, do: @public_keys
 
   @impl true
-  def handle(params, _ctx) do
-    key = params["key"]
+  def handle(params, ctx) do
+    admin? = admin?(ctx)
 
-    if key do
-      # Get specific key
-      value = get_config_value(key)
-      redacted = redact_config_value(key, value)
-      {:ok, %{"key" => key, "value" => redacted, "summary" => summary(key, redacted)}}
-    else
-      # Get all config
-      config = get_all_config()
-      {:ok, Map.put(config, "summary", summary(config))}
+    case params["key"] do
+      nil ->
+        config = get_all_config(admin?)
+        {:ok, Map.put(config, "summary", summary(config, admin?))}
+
+      key ->
+        value =
+          cond do
+            admin? -> key |> get_config_value() |> project_admin(key)
+            key in @public_keys -> key |> get_config_value() |> public_value()
+            true -> nil
+          end
+
+        {:ok, %{"key" => key, "value" => value, "summary" => summary(key, value, admin?)}}
     end
   end
 
-  defp summary(key, redacted_value) do
-    sensitive? = LemonCore.Redact.sensitive_key?(key)
+  defp admin?(%{auth: auth}) when is_map(auth),
+    do: Authorize.authorize(auth, name(), [:admin]) == :ok
+
+  defp admin?(_ctx), do: false
+
+  defp summary(key, value, admin?) do
+    sensitive? = Redact.sensitive_key?(key)
 
     %{
       "requestedKey" => key,
       "keyCount" => 1,
-      "found" => not is_nil(redacted_value),
+      "found" => not is_nil(value),
       "sensitive" => sensitive?,
-      "valueReturned" => not sensitive? and not is_nil(redacted_value),
-      "cleanup" => %{
-        "includesSensitiveValues" => false,
-        "includesCredentialValues" => false,
-        "includesSecretValues" => false
-      }
+      "valueReturned" => not sensitive? and not is_nil(value),
+      "adminRequired" => not admin? and key not in @public_keys,
+      "cleanup" => cleanup()
     }
   end
 
-  defp summary(config) when is_map(config) do
-    sensitive_key_count =
-      config
-      |> Map.keys()
-      |> Enum.count(&LemonCore.Redact.sensitive_key?/1)
-
+  defp summary(config, admin?) when is_map(config) do
     %{
       "keyCount" => map_size(config),
-      "sensitiveKeyCount" => sensitive_key_count,
-      "cleanup" => %{
-        "includesSensitiveValues" => false,
-        "includesCredentialValues" => false,
-        "includesSecretValues" => false
-      }
+      "sensitiveKeyCount" => config |> Map.keys() |> Enum.count(&Redact.sensitive_key?/1),
+      "publicFieldsOnly" => not admin?,
+      "cleanup" => cleanup()
+    }
+  end
+
+  defp cleanup do
+    %{
+      "includesSensitiveValues" => false,
+      "includesCredentialValues" => false,
+      "includesSecretValues" => false
     }
   end
 
@@ -113,8 +128,7 @@ defmodule LemonControlPlane.Methods.ConfigGet do
     end
   end
 
-  defp get_all_config do
-    # Gather config from multiple sources
+  defp get_all_config(admin?) do
     stored = ConfigStore.list()
 
     stored_map =
@@ -124,46 +138,37 @@ defmodule LemonControlPlane.Methods.ConfigGet do
         %{}
       end
 
-    # Merge with application config (only allowed keys)
     app_config =
       Enum.reduce(@allowed_app_config_keys, %{}, fn {key, {app, config_key}}, acc ->
-        value = Application.get_env(app, config_key)
-
-        if value != nil do
-          Map.put(acc, key, format_config_value(value))
-        else
-          acc
+        case Application.get_env(app, config_key) do
+          nil -> acc
+          value -> Map.put(acc, key, value)
         end
       end)
 
-    Map.merge(app_config, stored_map)
-    |> redact_config_map()
+    config = Map.merge(app_config, stored_map)
+
+    if admin? do
+      Redact.operator(config)
+    else
+      config
+      |> Map.take(@public_keys)
+      |> Map.new(fn {key, value} -> {key, public_value(value)} end)
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+    end
   rescue
     _ -> %{}
   end
 
-  defp format_config_value(value) when is_atom(value), do: to_string(value)
-  defp format_config_value(value), do: value
+  # Projecting the value under its own key masks it when the key is sensitive.
+  defp project_admin(nil, _key), do: nil
+  defp project_admin(value, key), do: Redact.operator(%{key => value}) |> Map.values() |> hd()
 
-  defp redact_config_map(config) when is_map(config) do
-    Enum.into(config, %{}, fn {key, value} ->
-      {key, redact_config_value(key, value)}
-    end)
-  end
+  # Public fields are scalars; any structured value under a public key is
+  # withheld rather than walked.
+  defp public_value(value)
+       when is_binary(value) or is_number(value) or is_boolean(value) or is_atom(value),
+       do: Redact.project(value)
 
-  defp redact_config_value(key, value) do
-    cond do
-      is_nil(value) ->
-        nil
-
-      LemonCore.Redact.sensitive_key?(key) ->
-        %{"redacted" => true, "kind" => "secret"}
-
-      is_map(value) ->
-        redact_config_map(value)
-
-      true ->
-        value
-    end
-  end
+  defp public_value(_value), do: nil
 end

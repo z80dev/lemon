@@ -14,6 +14,7 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.RunOutcome
   alias LemonControlPlane.Methods.RunUsage
 
@@ -27,15 +28,17 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     params = params || %{}
+    content? = Authorize.content?(ctx)
 
     agent_id = get_param(params, "agentId")
     session_key = get_param(params, "sessionKey")
     limit = normalize_limit(get_param(params, "limit"), @default_limit, @max_limit)
     status_filter = get_param(params, "status")
 
-    with {:ok, runs} <- fetch_recent_runs(agent_id, session_key, limit, status_filter),
+    with {:ok, runs} <-
+           fetch_recent_runs(agent_id, session_key, limit, status_filter, content?),
          {:ok, runs} <- RunUsage.attach(runs) do
       filters = %{
         "agentId" => agent_id,
@@ -44,7 +47,7 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
         "status" => status_filter
       }
 
-      {:ok, response(runs, filters)}
+      {:ok, runs |> response(filters) |> Map.put("contentWithheld", not content?)}
     else
       _ -> unavailable()
     end
@@ -92,7 +95,7 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
     }
   end
 
-  defp fetch_recent_runs(agent_id, session_key, limit, status_filter) do
+  defp fetch_recent_runs(agent_id, session_key, limit, status_filter, content?) do
     opts =
       [limit: 1_000]
       |> maybe_add_opt(:agent_id, agent_id)
@@ -105,7 +108,7 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
       runs =
         (completed ++ failed)
         |> Enum.uniq_by(&(&1[:run_id] || &1["run_id"]))
-        |> Enum.map(&format_run_event/1)
+        |> Enum.map(&format_run_event(&1, content?))
         |> Enum.filter(&filter_by_status(&1, status_filter))
         |> Enum.sort_by(& &1["completedAtMs"], :desc)
         |> Enum.take(limit)
@@ -130,7 +133,7 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
     end
   end
 
-  defp format_run_event(event) when is_map(event) do
+  defp format_run_event(event, content?) when is_map(event) do
     payload = event[:payload] || event["payload"] || %{}
     ok = Map.get(payload, :ok, Map.get(payload, "ok"))
     error = payload[:error] || payload["error"] || payload[:reason] || payload["reason"]
@@ -152,11 +155,17 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
       "startedAtMs" => started_at_ms(event, duration_ms),
       "completedAtMs" => event[:ts_ms] || event["ts_ms"],
       "status" => status,
-      "error" => error_label(error),
+      "error" => error_label(error, content?),
       "durationMs" => duration_ms,
       "ok" => ok == true
     }
   end
+
+  # Atom errors are enumerated reasons; free-text errors are content.
+  defp error_label(error, true), do: error_label(error)
+  defp error_label(error, false) when is_atom(error), do: error_label(error)
+  defp error_label(error, false) when is_binary(error), do: "error_text_withheld"
+  defp error_label(_error, false), do: "unknown_error"
 
   defp error_label(nil), do: nil
   defp error_label(error) when is_atom(error), do: error |> Atom.to_string() |> error_label()
