@@ -74,8 +74,8 @@ defmodule CodingAgent.Tools.Task.Execution do
     role_id = validated.role_id
     async? = validated.async
     effective_cwd = validated.cwd || cwd
-    parent_session_key = validated.session_key || Keyword.get(opts, :session_key)
-    parent_agent_id = validated.agent_id || Keyword.get(opts, :agent_id)
+    parent_session_key = Keyword.get(opts, :session_key)
+    parent_agent_id = Keyword.get(opts, :agent_id)
     parent_run_id = Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
     parent_session_id = Keyword.get(opts, :session_id) || Keyword.get(opts, :parent_session)
     root_action_id = Keyword.get(opts, :root_action_id) || tool_call_id

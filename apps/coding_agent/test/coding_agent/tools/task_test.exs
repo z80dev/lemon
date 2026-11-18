@@ -52,17 +52,19 @@ defmodule CodingAgent.Tools.TaskTest do
           {[parent_session: parent], "parent-client"},
           {[tool_policy: policy, invocation_mcp_servers: []], nil}
         ] do
+      # The child's agent identity is inherited from the trusted parent opts; a
+      # forged `agent_id` on the validated params is ignored.
       validated = %{
         tool_policy: ToolPolicy.custom(approvals: %{"write" => :never}),
         invocation_context_key: "forged-validated-client",
-        agent_id: "child-writer"
+        agent_id: "forged-agent"
       }
 
       opts =
         Params.build_session_opts(
           tmp_dir,
           Keyword.merge(
-            [model: Mocks.mock_model(), child_run_id: "child-run"],
+            [model: Mocks.mock_model(), child_run_id: "child-run", agent_id: "child-writer"],
             trusted_opts
           ),
           validated

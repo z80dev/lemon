@@ -48,7 +48,7 @@ when filesystem inspection or restoration is intended.
 Checkpoints are owned by the session id of the session that captured them
 (`CodingAgent.Checkpoint.owner/1`), and every action is scoped to that owner.
 The owner is never taken from model input (there is no `session_id`
-parameter) or from `session_key`/`run_id`, which task parameters can select.
+parameter) or from `session_key`/`run_id`.
 Without a session id, tools capture no checkpoint and `fs_checkpoint` refuses to
 run. Subagent/task children run in their own sessions and own their own
 checkpoints; they cannot reach the parent's. IDs must have the generated

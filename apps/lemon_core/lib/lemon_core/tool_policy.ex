@@ -212,7 +212,9 @@ defmodule LemonCore.ToolPolicy do
     "media_generate_speech",
     "media_transcribe_audio",
     "media_analyze_image",
-    "media_generate_video"
+    "media_generate_video",
+    # Sends session content to remote A2A agents.
+    "peer"
   ]
 
   @dangerous_tools [
@@ -256,7 +258,8 @@ defmodule LemonCore.ToolPolicy do
     "media_generate_speech",
     "media_transcribe_audio",
     "media_analyze_image",
-    "media_generate_video"
+    "media_generate_video",
+    "peer"
   ]
 
   @write_tools ~w(write edit patch ast_grep fs_checkpoint skill_manage remember todo todowrite kanban goal cron)
@@ -984,7 +987,7 @@ defmodule LemonCore.ToolPolicy do
   defp profile_policy(:orchestrator), do: base_policy(:orchestrator)
 
   defp profile_policy(:leaf_worker) do
-    %{base_policy(:leaf_worker) | deny: ["task", "agent", "goal", "kanban", "cron"]}
+    %{base_policy(:leaf_worker) | deny: ["task", "agent", "goal", "kanban", "cron", "peer"]}
   end
 
   defp profile_policy(:minimal_core) do

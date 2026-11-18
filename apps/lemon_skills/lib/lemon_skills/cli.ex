@@ -798,6 +798,10 @@ defmodule LemonSkills.CLI do
       {:error, :not_found} ->
         LemonCore.CLI.error("Draft '#{key}' not found.")
         LemonCore.CLI.fail!("Draft not found")
+
+      {:error, reason} ->
+        LemonCore.CLI.error("Cannot read draft '#{key}': #{inspect(reason)}")
+        LemonCore.CLI.fail!("Invalid draft")
     end
   end
 
@@ -819,23 +823,25 @@ defmodule LemonSkills.CLI do
     end
   end
 
+  # `--force` is the only way to skip the prompt; anything but `y` cancels.
   defp manage_drafts(["delete", key | opts]) do
     global = "--local" not in opts
     cwd = unless global, do: get_cwd(opts)
-    force = "--force" in opts
+    store_opts = [global: global, cwd: cwd]
 
-    unless force do
-      answer = LemonCore.CLI.prompt("Delete draft '#{key}'? [y/N] ")
+    with {:ok, _dir} <- DraftStore.draft_dir(key, store_opts),
+         true <- "--force" in opts or confirm_delete?(key) do
+      case DraftStore.delete(key, store_opts) do
+        :ok ->
+          LemonCore.CLI.info([:green, "✓", :reset, " Deleted draft '#{key}'"])
 
-      unless String.downcase(String.trim(answer)) == "y" do
-        LemonCore.CLI.info("Cancelled.")
-        :ok
+        {:error, reason} ->
+          LemonCore.CLI.error("Delete failed: #{inspect(reason)}")
+          LemonCore.CLI.fail!("Delete failed")
       end
-    end
-
-    case DraftStore.delete(key, global: global, cwd: cwd) do
-      :ok ->
-        LemonCore.CLI.info([:green, "✓", :reset, " Deleted draft '#{key}'"])
+    else
+      false ->
+        LemonCore.CLI.info("Cancelled.")
 
       {:error, reason} ->
         LemonCore.CLI.error("Delete failed: #{inspect(reason)}")
@@ -861,6 +867,11 @@ defmodule LemonSkills.CLI do
       --max-docs=<n>             Max memory docs to consider for generate (default: 50)
       --force                    Overwrite existing draft / installed skill
     """)
+  end
+
+  defp confirm_delete?(key) do
+    answer = LemonCore.CLI.prompt("Delete draft '#{key}'? [y/N] ")
+    String.downcase(String.trim(answer)) == "y"
   end
 
   # ============================================================================

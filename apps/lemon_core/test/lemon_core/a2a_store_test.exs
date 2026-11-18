@@ -12,16 +12,9 @@ defmodule LemonCore.A2AStoreTest do
   test "persists a default peer context and ordered history", %{store: store} do
     opts = [store: store]
 
-    assert {:ok, context} =
-             A2AStore.create_context(
-               :outbound,
-               "hermes",
-               %{context_id: "friendship"},
-               opts
-             )
-
-    assert :ok = A2AStore.set_default_context("hermes", context.id, opts)
-    assert A2AStore.default_context("hermes", opts).id == "friendship"
+    owner = {"default", "agent:default:main"}
+    assert {:ok, context} = A2AStore.new_owned_context("hermes", owner, opts)
+    assert A2AStore.default_context("hermes", owner, opts).id == context.id
 
     assert {:ok, _} =
              A2AStore.append_message(
@@ -104,5 +97,56 @@ defmodule LemonCore.A2AStoreTest do
       )
 
     assert Enum.map(A2AStore.list_tasks("hermes", opts), & &1.id) == ["a"]
+  end
+
+  test "outbound contexts, defaults and tasks are visible only to their owner", %{store: store} do
+    opts = [store: store]
+    alice = {"alice", "agent:alice:main"}
+    bob = {"bob", "agent:bob:main"}
+    alice_other_session = {"alice", "agent:alice:other"}
+
+    assert {:ok, context} = A2AStore.new_owned_context("hermes", alice, opts)
+    assert A2AStore.owned_context("hermes", alice, context.id, opts).id == context.id
+
+    for intruder <- [bob, alice_other_session] do
+      assert A2AStore.default_context("hermes", intruder, opts) == nil
+      assert A2AStore.owned_context("hermes", intruder, context.id, opts) == nil
+    end
+
+    assert A2AStore.owned_context("other-peer", alice, context.id, opts) == nil
+
+    task = %{id: "t1", peer_id: "hermes", context_id: context.id, state: "TASK_STATE_WORKING"}
+    assert :ok = A2AStore.put_owned_task(alice, task, opts)
+    assert {:error, :foreign_task} = A2AStore.put_owned_task(bob, task, opts)
+    assert %{state: "TASK_STATE_WORKING"} = A2AStore.owned_task("hermes", alice, "t1", opts)
+    assert A2AStore.owned_task("hermes", bob, "t1", opts) == nil
+    assert A2AStore.get_task("t1", opts) == nil
+
+    assert :ok = A2AStore.put_owned_task(alice, %{task | state: "TASK_STATE_COMPLETED"}, opts)
+    assert %{state: "TASK_STATE_COMPLETED"} = A2AStore.owned_task("hermes", alice, "t1", opts)
+
+    legacy = %{id: "legacy", direction: :outbound, peer_id: "hermes", agent_id: "default"}
+    :ok = Store.put(store, :a2a_contexts, {:outbound, "hermes", "legacy"}, legacy)
+
+    assert A2AStore.owned_context("hermes", {"default", "agent:default:main"}, "legacy", opts) ==
+             nil
+  end
+
+  test "the task table serves inbound records only", %{store: store} do
+    opts = [store: store]
+    legacy = %{id: "old", direction: :outbound, peer_id: "hermes", updated_at_ms: 1}
+    :ok = Store.put(store, :a2a_tasks, "old", legacy)
+
+    assert A2AStore.get_task("old", opts) == nil
+    assert {:error, :not_found} = A2AStore.update_task("old", & &1, opts)
+    assert A2AStore.list_tasks("hermes", opts) == []
+    assert {:error, :invalid_task} = A2AStore.put_task(%{id: "x", direction: :outbound}, opts)
+
+    :ok = A2AStore.put_task(%{id: "in", direction: :inbound, peer_id: "hermes"}, opts)
+
+    assert {:ok, %{direction: :inbound}} =
+             A2AStore.update_task("in", &Map.put(&1, :direction, :outbound), opts)
+
+    assert Enum.map(A2AStore.list_tasks("hermes", opts), & &1.id) == ["in"]
   end
 end

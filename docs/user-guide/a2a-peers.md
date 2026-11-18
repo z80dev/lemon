@@ -11,9 +11,16 @@ identity, memory, tools, and task lifecycle.
 
 ## What persists
 
-For every configured peer, Lemon stores a default outbound A2A context. Calling
-the `peer` tool with `action = "message"` reuses that context automatically.
-`action = "new"` is the explicit escape hatch for starting a separate chat.
+Outbound conversations belong to the calling session. For every configured
+peer, each `{agent_id, session_key}` has its own default outbound A2A context;
+calling the `peer` tool with `action = "message"` reuses that session's context
+automatically. `action = "new"` is the explicit escape hatch for starting a
+separate chat. `history`, `status` and `cancel` accept only contexts and task
+IDs created by the same session and refuse any other `context_id` or
+`task_id`. Defaults stored before this scoping (one per peer, shared by every
+session) are no longer read; the first `message` from a session starts a
+fresh owned context. The tool refuses to run without a session key and agent
+id.
 
 Inbound A2A `contextId` values are mapped to stable private Lemon sessions.
 The remote value is hashed before it enters the session key, so a peer cannot
@@ -107,11 +114,12 @@ well-known path on port 9900.
 
 The `peer` tool actions are:
 
-- `list`: configured peers and their current default context.
+- `list`: configured peers and this session's current default context.
 - `discover`: fetch the peer's Agent Card.
 - `message`: send a message in the persistent default conversation.
 - `new`: start and select a new conversation.
-- `history`: read Lemon's durable local transcript for a context.
+- `history`: read Lemon's durable outbound transcript for one of this
+  session's contexts.
 - `status`: refresh a remote task.
 - `cancel`: request remote task cancellation.
 
@@ -135,6 +143,8 @@ supervisor if the initiating HTTP or SSE connection closes.
 Every task lookup/list/cancel operation is scoped to the authenticated peer.
 Inbound peer text is wrapped as external untrusted content before model use.
 Outbound responses are returned to the Lemon model with `trust: :untrusted`.
+The `peer` tool is classified as external and dangerous in tool policy:
+`no_external`, `safe_mode`, `subagent_restricted` and `leaf_worker` withhold it.
 Inbound runs use a conservative read/coordination tool allowlist: `read`,
 `read_skill`, `recall`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `kanban`
 and `peer`. Set `default_allow_tools` under `[gateway.a2a]` to change it for all

@@ -32,6 +32,7 @@ defmodule LemonSkills.Synthesis.DraftStore do
 
   @skill_filename "SKILL.md"
   @meta_filename ".draft_meta.json"
+  @key_re ~r/^[a-z0-9][a-z0-9._-]*$/
 
   @type draft_info :: %{
           key: String.t(),
@@ -67,13 +68,14 @@ defmodule LemonSkills.Synthesis.DraftStore do
     if is_nil(key) or is_nil(content) do
       {:error, "draft must include :key and :content"}
     else
-      dir = draft_dir(key, opts)
-      force = Keyword.get(opts, :force, false)
+      with {:ok, dir} <- draft_dir(key, opts) do
+        force = Keyword.get(opts, :force, false)
 
-      if File.dir?(dir) and not force do
-        {:error, "draft '#{key}' already exists; pass force: true to overwrite"}
-      else
-        do_write_draft(dir, key, content, draft)
+        if File.dir?(dir) and not force do
+          {:error, "draft '#{key}' already exists; pass force: true to overwrite"}
+        else
+          do_write_draft(dir, key, content, draft)
+        end
       end
     end
   end
@@ -92,9 +94,8 @@ defmodule LemonSkills.Synthesis.DraftStore do
     if is_nil(key) or is_nil(content) do
       {:error, "draft must include :key and :content"}
     else
-      dir = draft_dir(key, opts)
-
-      with :ok <- File.mkdir_p(Path.dirname(dir)) do
+      with {:ok, dir} <- draft_dir(key, opts),
+           :ok <- File.mkdir_p(Path.dirname(dir)) do
         case claim_directory(dir) do
           :ok ->
             case do_write_draft(dir, key, content, draft) do
@@ -102,7 +103,7 @@ defmodule LemonSkills.Synthesis.DraftStore do
                 :ok
 
               {:error, _} = error ->
-                File.rm_rf(dir)
+                _ = remove_draft(key, opts)
                 error
             end
 
@@ -119,7 +120,9 @@ defmodule LemonSkills.Synthesis.DraftStore do
   @doc """
   List all drafts in the draft directory.
 
-  Returns `{:ok, [draft_info]}` — an empty list when no drafts exist.
+  Returns `{:ok, [draft_info]}` — an empty list when no drafts exist. Entries
+  that are not valid draft keys or are symlinks are skipped, and a symlinked
+  drafts root lists nothing.
   """
   @spec list(keyword()) :: {:ok, [draft_info()]}
   def list(opts \\ []) do
@@ -129,9 +132,12 @@ defmodule LemonSkills.Synthesis.DraftStore do
       case File.ls(dir) do
         {:ok, entries} ->
           entries
-          |> Enum.map(&Path.join(dir, &1))
-          |> Enum.filter(&File.dir?/1)
-          |> Enum.map(&read_draft_info/1)
+          |> Enum.flat_map(fn key ->
+            case existing_draft_dir(key, opts) do
+              {:ok, path} -> [read_draft_info(path)]
+              {:error, _} -> []
+            end
+          end)
           |> Enum.sort_by(& &1.created_at)
 
         {:error, _} ->
@@ -144,13 +150,12 @@ defmodule LemonSkills.Synthesis.DraftStore do
   @doc """
   Read a single draft by key.
 
-  Returns `{:ok, %{key, path, content, meta}}` or `{:error, :not_found}`.
+  Returns `{:ok, %{key, path, content, meta}}`, `{:error, :not_found}`, or the
+  `draft_dir/2` validation error.
   """
-  @spec get(String.t(), keyword()) :: {:ok, map()} | {:error, :not_found}
+  @spec get(String.t(), keyword()) :: {:ok, map()} | {:error, atom()}
   def get(key, opts \\ []) do
-    dir = draft_dir(key, opts)
-
-    if File.dir?(dir) do
+    with {:ok, dir} <- existing_draft_dir(key, opts) do
       skill_file = Path.join(dir, @skill_filename)
       meta = read_meta(dir)
 
@@ -161,27 +166,17 @@ defmodule LemonSkills.Synthesis.DraftStore do
         {:error, _} ->
           {:error, :not_found}
       end
-    else
-      {:error, :not_found}
     end
   end
 
   @doc """
   Delete a draft by key.
+
+  The key and the drafts-root boundary are validated, and the draft must be a
+  real directory (not a symlink) immediately before it is removed.
   """
   @spec delete(String.t(), keyword()) :: :ok | {:error, term()}
-  def delete(key, opts \\ []) do
-    dir = draft_dir(key, opts)
-
-    case File.rm_rf(dir) do
-      {:ok, _} ->
-        State.delete(scope(opts), :draft, key)
-        :ok
-
-      {:error, reason, _path} ->
-        {:error, reason}
-    end
-  end
+  def delete(key, opts \\ []), do: remove_draft(key, opts)
 
   @doc """
   Promote a draft to an installed skill.
@@ -199,38 +194,46 @@ defmodule LemonSkills.Synthesis.DraftStore do
   @spec promote(String.t(), keyword()) ::
           {:ok, LemonSkills.Entry.t()} | {:error, term()}
   def promote(key, opts \\ []) do
-    dir = draft_dir(key, opts)
+    case existing_draft_dir(key, opts) do
+      {:ok, dir} ->
+        meta = read_meta(dir)
+        approve_default = not truthy?(meta["approval_required"])
 
-    unless File.dir?(dir) do
-      {:error, "draft '#{key}' not found"}
-    else
-      meta = read_meta(dir)
-      approve_default = not truthy?(meta["approval_required"])
+        install_opts =
+          opts
+          |> Keyword.put(:approve, Keyword.get(opts, :approve, approve_default))
+          |> Keyword.put(:force, Keyword.get(opts, :force, false))
 
-      install_opts =
-        opts
-        |> Keyword.put(:approve, Keyword.get(opts, :approve, approve_default))
-        |> Keyword.put(:force, Keyword.get(opts, :force, false))
-
-      case Installer.install(dir, install_opts) do
-        {:ok, entry} ->
-          # Remove the draft after successful promotion
-          File.rm_rf(dir)
-          State.delete(scope(opts), :draft, key)
+        # Remove the draft after successful promotion, re-validating its path.
+        with {:ok, entry} <- Installer.install(dir, install_opts),
+             :ok <- remove_draft(key, opts) do
           {:ok, entry}
+        end
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+      {:error, :not_found} ->
+        {:error, "draft '#{key}' not found"}
+
+      {:error, _} = error ->
+        error
     end
   end
 
   @doc """
   Return the path to a draft directory.
+
+  This is the single choke point for draft paths: `key` must match
+  `^[a-z0-9][a-z0-9._-]*$`, and no path component between the trusted base
+  (the agent dir, or the project `cwd`) and the draft directory may be a
+  symlink or a non-directory. The draft directory itself may be absent.
   """
-  @spec draft_dir(String.t(), keyword()) :: String.t()
+  @spec draft_dir(term(), keyword()) ::
+          {:ok, String.t()} | {:error, :invalid_draft_key | :unsafe_draft_path}
   def draft_dir(key, opts \\ []) do
-    Path.join(drafts_root(opts), key)
+    with :ok <- validate_key(key),
+         {:ok, base, parts} <- root_parts(opts),
+         :ok <- real_directories(base, parts ++ [key]) do
+      {:ok, Path.join([base | parts] ++ [key])}
+    end
   end
 
   @doc """
@@ -253,9 +256,7 @@ defmodule LemonSkills.Synthesis.DraftStore do
   """
   @spec record_audit(String.t(), map(), keyword()) :: :ok | {:error, term()}
   def record_audit(key, audit_record, opts \\ []) when is_binary(key) and is_map(audit_record) do
-    dir = draft_dir(key, opts)
-
-    if File.dir?(dir) do
+    with {:ok, dir} <- existing_draft_dir(key, opts) do
       meta =
         dir
         |> read_meta()
@@ -269,8 +270,83 @@ defmodule LemonSkills.Synthesis.DraftStore do
         })
 
       write_meta(dir, meta)
+    end
+  end
+
+  # ── Path validation ─────────────────────────────────────────────────────────
+
+  defp validate_key(key) when is_binary(key) do
+    if Regex.match?(@key_re, key), do: :ok, else: {:error, :invalid_draft_key}
+  end
+
+  defp validate_key(_key), do: {:error, :invalid_draft_key}
+
+  # The trusted base is the agent dir (global) or the project cwd; only the
+  # components below it are owned by the draft store and checked for symlinks.
+  defp root_parts(opts) do
+    base =
+      case scope(opts) do
+        :global -> Config.agent_dir()
+        {:project, cwd} -> cwd
+      end
+
+    base = Path.expand(base)
+    relative = opts |> drafts_root() |> Path.expand() |> Path.relative_to(base)
+
+    if Path.type(relative) == :relative and relative != "." do
+      {:ok, base, Path.split(relative)}
     else
-      {:error, :not_found}
+      {:error, :unsafe_draft_path}
+    end
+  end
+
+  defp real_directories(_parent, []), do: :ok
+
+  defp real_directories(parent, [part | rest]) do
+    path = Path.join(parent, part)
+
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} -> real_directories(path, rest)
+      {:error, :enoent} -> :ok
+      _ -> {:error, :unsafe_draft_path}
+    end
+  end
+
+  defp existing_draft_dir(key, opts) do
+    with {:ok, dir} <- draft_dir(key, opts) do
+      case File.lstat(dir) do
+        {:ok, %File.Stat{type: :directory}} -> {:ok, dir}
+        {:error, :enoent} -> {:error, :not_found}
+        _ -> {:error, :unsafe_draft_path}
+      end
+    end
+  end
+
+  # Re-validates the key, the root chain and the leaf right before `rm_rf`;
+  # `File.rm_rf/1` itself unlinks nested symlinks without following them.
+  # An already-absent draft is not an error.
+  #
+  # Remaining window: validation and removal are separate pathname walks, so a
+  # concurrent writer that swaps an ancestor (`.lemon`, `skill_drafts`) for a
+  # symlink between the last `lstat` and `rm_rf` can still redirect removal.
+  # Closing it needs descriptor-relative (`openat`/`unlinkat`) deletion, which
+  # is tracked as a shared filesystem-boundary finding.
+  defp remove_draft(key, opts) do
+    result =
+      case existing_draft_dir(key, opts) do
+        {:ok, dir} -> rm_rf(dir)
+        {:error, :not_found} -> :ok
+        {:error, _} = error -> error
+      end
+
+    if result == :ok, do: State.delete(scope(opts), :draft, key)
+    result
+  end
+
+  defp rm_rf(dir) do
+    case File.rm_rf(dir) do
+      {:ok, _} -> :ok
+      {:error, reason, _path} -> {:error, reason}
     end
   end
 

@@ -11,10 +11,13 @@ tools are available, which are blocked, and which require approval.
 
 - `:full_access` is for trusted local coding work.
 - `:orchestrator` keeps delegation tools for parent sessions.
-- `:leaf_worker` keeps normal work tools but removes recursive delegation.
+- `:leaf_worker` keeps normal work tools but removes recursive delegation and
+  the A2A `peer` tool.
 - `:read_only` allows the read-tool list; `:safe_mode` denies the dangerous-tool list.
 - `:subagent_restricted` denies dangerous tools and requires approval for
-  `write` and `edit`; `:no_external` denies the external-tool list.
+  `write` and `edit`; `:no_external` denies the external-tool list. `peer`
+  sends session content to remote A2A agents, so it is on both the dangerous
+  and external lists.
 - `:minimal_core` is a curated tool allowlist, not a read-only or side-effect-free
   profile. It includes file writes, shell execution, and browser tools.
 

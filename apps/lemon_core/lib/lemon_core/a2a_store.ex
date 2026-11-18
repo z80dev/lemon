@@ -4,17 +4,27 @@ defmodule LemonCore.A2AStore do
 
   Remote context identifiers are never used as Lemon session keys. Callers
   store an independently-derived private session key in the context record.
+
+  Outbound contexts, their default pointers and outbound task records belong to
+  one `{agent_id, session_key}` owner. Owned reads return `nil` for any record
+  created for another owner, and for legacy records that predate ownership.
   """
 
   alias LemonCore.{Id, Store}
 
   @contexts :a2a_contexts
   @tasks :a2a_tasks
+  @outbound_tasks :a2a_outbound_tasks
   @messages :a2a_messages
-  @defaults :a2a_default_contexts
+  @defaults :a2a_session_default_contexts
   @max_list 1_000
 
   @type direction :: :inbound | :outbound
+  @type owner :: {agent_id :: binary(), session_key :: binary()}
+
+  defguardp owner?(agent_id, session_key)
+            when is_binary(agent_id) and agent_id != "" and is_binary(session_key) and
+                   session_key != ""
 
   @spec create_context(direction(), binary(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_context(direction, peer_id, attrs \\ %{}, opts \\ [])
@@ -59,17 +69,43 @@ defmodule LemonCore.A2AStore do
     end
   end
 
-  @spec default_context(binary(), keyword()) :: map() | nil
-  def default_context(peer_id, opts \\ []) do
-    case Store.get(store(opts), @defaults, peer_id) do
-      nil -> nil
-      context_id -> get_context(:outbound, peer_id, context_id, opts)
+  @doc """
+  Creates a fresh outbound context owned by `owner` and selects it as that
+  owner's default conversation with `peer_id`.
+  """
+  @spec new_owned_context(binary(), owner(), keyword()) :: {:ok, map()} | {:error, term()}
+  def new_owned_context(peer_id, {agent_id, session_key} = owner, opts \\ [])
+      when is_binary(peer_id) and owner?(agent_id, session_key) do
+    attrs = %{agent_id: agent_id, session_key: session_key}
+
+    with {:ok, %{agent_id: ^agent_id, session_key: ^session_key} = context} <-
+           create_context(:outbound, peer_id, attrs, opts),
+         :ok <- Store.put(store(opts), @defaults, default_key(peer_id, owner), context.id) do
+      {:ok, context}
+    else
+      {:ok, _foreign} -> {:error, :foreign_context}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  @spec set_default_context(binary(), binary(), keyword()) :: :ok | {:error, term()}
-  def set_default_context(peer_id, context_id, opts \\ []) do
-    Store.put(store(opts), @defaults, peer_id, context_id)
+  @doc "Returns an outbound context only when it was created for `owner`."
+  @spec owned_context(binary(), owner(), binary(), keyword()) :: map() | nil
+  def owned_context(peer_id, {agent_id, session_key}, context_id, opts \\ [])
+      when is_binary(peer_id) and owner?(agent_id, session_key) and is_binary(context_id) do
+    case get_context(:outbound, peer_id, context_id, opts) do
+      %{agent_id: ^agent_id, session_key: ^session_key} = context -> context
+      _ -> nil
+    end
+  end
+
+  @doc "Returns `owner`'s default outbound context with `peer_id`, if any."
+  @spec default_context(binary(), owner(), keyword()) :: map() | nil
+  def default_context(peer_id, {agent_id, session_key} = owner, opts \\ [])
+      when is_binary(peer_id) and owner?(agent_id, session_key) do
+    case Store.get(store(opts), @defaults, default_key(peer_id, owner)) do
+      context_id when is_binary(context_id) -> owned_context(peer_id, owner, context_id, opts)
+      _ -> nil
+    end
   end
 
   @spec increment_turn(direction(), binary(), binary(), keyword()) ::
@@ -93,25 +129,41 @@ defmodule LemonCore.A2AStore do
     end
   end
 
+  @doc """
+  Stores an inbound task. The task table is the inbound A2A surface; outbound
+  tasks live in the owner-scoped table (`put_owned_task/3`).
+  """
   @spec put_task(map(), keyword()) :: :ok | {:error, term()}
   def put_task(task, opts \\ []) when is_map(task) do
-    id = Map.get(task, :id) || Map.get(task, "id")
-    Store.put(store(opts), @tasks, id, normalize_task(task))
+    case normalize_task(task) do
+      %{direction: :inbound, id: id} = record when is_binary(id) ->
+        Store.put(store(opts), @tasks, id, record)
+
+      _ ->
+        {:error, :invalid_task}
+    end
   end
 
+  @doc """
+  Returns an inbound task. Legacy outbound records still in the task table are
+  never returned, so no inbound lookup, list, subscription or cancel sees them.
+  """
   @spec get_task(binary(), keyword()) :: map() | nil
-  def get_task(task_id, opts \\ []), do: Store.get(store(opts), @tasks, task_id)
+  def get_task(task_id, opts \\ []), do: inbound_task(store(opts), task_id)
 
   @spec update_task(binary(), (map() -> map()), keyword()) :: {:ok, map()} | {:error, term()}
   def update_task(task_id, fun, opts \\ []) when is_function(fun, 1) do
     server = store(opts)
 
-    case Store.get(server, @tasks, task_id) do
+    case inbound_task(server, task_id) do
       nil ->
         {:error, :not_found}
 
       current ->
-        replacement = current |> fun.() |> Map.put(:updated_at_ms, now_ms())
+        replacement =
+          current
+          |> fun.()
+          |> Map.merge(%{direction: :inbound, updated_at_ms: now_ms()})
 
         case Store.compare_and_swap(server, @tasks, task_id, current, replacement) do
           :ok -> {:ok, replacement}
@@ -128,9 +180,79 @@ defmodule LemonCore.A2AStore do
     store(opts)
     |> Store.list(@tasks)
     |> Enum.map(&elem(&1, 1))
-    |> Enum.filter(&(&1.peer_id == peer_id))
+    |> Enum.filter(&(&1.direction == :inbound and &1.peer_id == peer_id))
     |> Enum.sort_by(&{&1.updated_at_ms, &1.id}, :desc)
     |> Enum.take(limit)
+  end
+
+  defp inbound_task(server, task_id) do
+    case Store.get(server, @tasks, task_id) do
+      %{direction: :inbound} = task -> task
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Records an outbound remote task for `owner`, keyed by peer and remote task id.
+
+  A remote task id already recorded for another owner is never reassigned.
+  """
+  @spec put_owned_task(owner(), map(), keyword()) ::
+          :ok | {:error, :foreign_task | :invalid_task | term()}
+  def put_owned_task({agent_id, session_key}, task, opts \\ [])
+      when owner?(agent_id, session_key) and is_map(task) do
+    record =
+      task
+      |> normalize_task()
+      |> Map.merge(%{direction: :outbound, agent_id: agent_id, session_key: session_key})
+
+    if is_binary(record.peer_id) and is_binary(record.id) do
+      put_owned_task_record({record.peer_id, record.id}, record, store(opts))
+    else
+      {:error, :invalid_task}
+    end
+  end
+
+  @doc "Returns an outbound task only when it was recorded for `owner`."
+  @spec owned_task(binary(), owner(), binary(), keyword()) :: map() | nil
+  def owned_task(peer_id, {agent_id, session_key}, task_id, opts \\ [])
+      when is_binary(peer_id) and owner?(agent_id, session_key) and is_binary(task_id) do
+    case Store.get(store(opts), @outbound_tasks, {peer_id, task_id}) do
+      %{agent_id: ^agent_id, session_key: ^session_key} = task -> task
+      _ -> nil
+    end
+  end
+
+  defp put_owned_task_record(
+         key,
+         %{agent_id: agent_id, session_key: session_key} = record,
+         server
+       ) do
+    case Store.put_new(server, @outbound_tasks, key, record) do
+      :ok ->
+        :ok
+
+      {:error, :exists} ->
+        case Store.get(server, @outbound_tasks, key) do
+          %{agent_id: ^agent_id, session_key: ^session_key} = current ->
+            replacement = %{record | created_at_ms: current.created_at_ms}
+
+            case Store.compare_and_swap(server, @outbound_tasks, key, current, replacement) do
+              :ok -> :ok
+              {:error, :mismatch} -> put_owned_task_record(key, record, server)
+              {:error, reason} -> {:error, reason}
+            end
+
+          %{} ->
+            {:error, :foreign_task}
+
+          nil ->
+            put_owned_task_record(key, record, server)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @spec append_message(map(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -168,14 +290,20 @@ defmodule LemonCore.A2AStore do
     Store.get(store(opts), @messages, message_id)
   end
 
+  @doc """
+  Returns a context's messages in order. `direction: :inbound | :outbound`
+  restricts the transcript to one direction of the exchange.
+  """
   @spec history(binary(), binary(), keyword()) :: [map()]
   def history(peer_id, context_id, opts \\ []) do
     limit = opts |> Keyword.get(:limit, 100) |> min(@max_list) |> max(1)
+    direction = Keyword.get(opts, :direction)
 
     store(opts)
     |> Store.list(@messages)
     |> Enum.map(&elem(&1, 1))
     |> Enum.filter(&(&1.peer_id == peer_id and &1.context_id == context_id))
+    |> Enum.filter(&(is_nil(direction) or &1.direction == direction))
     |> Enum.sort_by(&{&1.created_at_ms, &1.id}, :asc)
     |> Enum.take(-limit)
   end
@@ -202,6 +330,7 @@ defmodule LemonCore.A2AStore do
   end
 
   defp context_key(direction, peer_id, context_id), do: {direction, peer_id, context_id}
+  defp default_key(peer_id, {agent_id, session_key}), do: {agent_id, session_key, peer_id}
   defp store(opts), do: Keyword.get(opts, :store, Store)
   defp now_ms, do: System.system_time(:millisecond)
 end

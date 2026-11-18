@@ -183,8 +183,13 @@ defmodule LemonControlPlane.A2A.RouterTest do
     Application.put_env(:lemon_skills, :a2a_peers, %{"hermes-wire" => peer})
     on_exit(fn -> Application.delete_env(:lemon_skills, :a2a_peers) end)
 
+    session_key = "agent:wire:main:#{System.unique_integer([:positive])}"
+
+    peer_tool =
+      LemonSkills.Tools.Peer.tool(File.cwd!(), agent_id: "wire", session_key: session_key)
+
     assert %LemonAgent.Types.AgentToolResult{trust: :untrusted, details: first} =
-             LemonSkills.Tools.Peer.execute(
+             peer_tool.execute.(
                "call-1",
                %{"action" => "message", "peer_id" => "hermes-wire", "text" => "hello"},
                nil,
@@ -192,7 +197,7 @@ defmodule LemonControlPlane.A2A.RouterTest do
              )
 
     assert %LemonAgent.Types.AgentToolResult{trust: :untrusted, details: second} =
-             LemonSkills.Tools.Peer.execute(
+             peer_tool.execute.(
                "call-2",
                %{
                  "action" => "message",

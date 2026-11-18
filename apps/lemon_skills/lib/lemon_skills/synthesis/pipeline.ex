@@ -179,8 +179,8 @@ defmodule LemonSkills.Synthesis.Pipeline do
 
     with {:ok, draft} <- DraftGenerator.generate(doc),
          :ok <- DraftStore.put(draft, opts),
-         {:ok, audit} <-
-           audit_mod.audit(DraftStore.draft_dir(draft.key, opts), scope, draft.key, kind: :draft),
+         {:ok, dir} <- DraftStore.draft_dir(draft.key, opts),
+         {:ok, audit} <- audit_mod.audit(dir, scope, draft.key, kind: :draft),
          :ok <- DraftStore.record_audit(draft.key, audit, opts),
          :ok <- check_audit(draft.key, audit, opts, audit_mod) do
       {:ok, draft.key}
