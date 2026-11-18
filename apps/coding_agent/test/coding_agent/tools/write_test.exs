@@ -262,7 +262,7 @@ defmodule CodingAgent.Tools.WriteTest do
       assert is_binary(details.checkpoint_id)
       assert details.checkpoint_kind == "filesystem"
 
-      {:ok, _restored} = Checkpoint.restore_filesystem(details.checkpoint_id)
+      {:ok, _restored} = Checkpoint.restore_filesystem(details.checkpoint_id, session_id)
       assert File.read!(path) == "before"
     end
   end

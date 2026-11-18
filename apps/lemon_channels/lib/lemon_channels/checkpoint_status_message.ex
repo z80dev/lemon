@@ -26,7 +26,7 @@ defmodule LemonChannels.CheckpointStatusMessage do
         events_text(rest, opts)
 
       ["diff", checkpoint_id | _] ->
-        diff_text(checkpoint_id)
+        diff_text(checkpoint_id, opts)
 
       ["diff"] ->
         "Usage: /checkpoint diff <checkpoint_id>"
@@ -64,7 +64,7 @@ defmodule LemonChannels.CheckpointStatusMessage do
         events_text(rest, opts)
 
       ["diff", checkpoint_id | _] ->
-        diff_text(checkpoint_id)
+        diff_text(checkpoint_id, opts)
 
       ["diff"] ->
         "Usage: /rollback diff <checkpoint_id>"
@@ -88,7 +88,7 @@ defmodule LemonChannels.CheckpointStatusMessage do
 
   @spec text(keyword()) :: String.t()
   def text(opts \\ []) do
-    summary = CheckpointDiagnostics.summary(opts)
+    summary = CheckpointDiagnostics.summary({:session, checkpoint_owner(opts)}, opts)
 
     lines = [
       "Checkpoint Status",
@@ -126,8 +126,12 @@ defmodule LemonChannels.CheckpointStatusMessage do
     end
   end
 
-  defp diff_text(checkpoint_id) do
-    case Checkpoint.diff_filesystem(checkpoint_id) do
+  # Checkpoint access is scoped to `:checkpoint_owner` (the owning session id).
+  # Callers that do not supply it see no checkpoints.
+  defp checkpoint_owner(opts), do: Keyword.get(opts, :checkpoint_owner)
+
+  defp diff_text(checkpoint_id, opts) do
+    case Checkpoint.diff_filesystem(checkpoint_id, checkpoint_owner(opts)) do
       {:ok, %{changed: [], checkpoint_id: id}} ->
         "Checkpoint Diff\n#{id}\nNo filesystem changes."
 
@@ -153,7 +157,7 @@ defmodule LemonChannels.CheckpointStatusMessage do
       opts
       |> Keyword.take([:run_id, :session_key, :agent_id, :parent_run_id])
 
-    case Checkpoint.restore_filesystem(checkpoint_id, event_opts) do
+    case Checkpoint.restore_filesystem(checkpoint_id, checkpoint_owner(opts), event_opts) do
       {:ok, %{checkpoint_id: id, restored: restored}} ->
         "Checkpoint Restored\n#{id}\nRestored paths: #{length(restored)}\nOutput is redacted in chat."
 

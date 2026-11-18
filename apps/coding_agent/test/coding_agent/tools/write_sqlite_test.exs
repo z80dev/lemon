@@ -118,7 +118,7 @@ defmodule CodingAgent.Tools.WriteSqliteTest do
              write(dir, "app.db:users:1", ~s({"name":"changed"}), session_id: session)
 
     assert [["changed"]] = rows(db, "SELECT name FROM users")
-    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id)
+    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id, session)
     assert [["old"]] = rows(db, "SELECT name FROM users")
 
     signal = LemonAgent.AbortSignal.new()

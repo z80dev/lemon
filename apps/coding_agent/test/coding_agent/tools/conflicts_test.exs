@@ -123,7 +123,7 @@ defmodule CodingAgent.Tools.ConflictsTest do
       )
 
     assert %AgentToolResult{details: %{checkpoint_id: checkpoint_id}} = result
-    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id)
+    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id, opts[:session_id])
     assert File.read!(Path.join(cwd, "file")) == @block
   end
 

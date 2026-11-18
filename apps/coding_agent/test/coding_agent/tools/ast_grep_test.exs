@@ -421,8 +421,8 @@ defmodule CodingAgent.Tools.AstGrepTest do
       assert File.read!(last) == "changedOutsideTool();\n"
       assert hd(result.content).text =~ "Already-written paths"
 
-      on_exit(fn -> CodingAgent.Checkpoint.delete(checkpoint_id) end)
-      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id)
+      on_exit(fn -> CodingAgent.Checkpoint.delete(checkpoint_id, session_id) end)
+      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id, session_id)
       assert Enum.all?(paths, &(File.read!(&1) == "oldApi(1);\n"))
     end
 
