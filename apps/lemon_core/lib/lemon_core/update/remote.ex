@@ -399,13 +399,12 @@ defmodule LemonCore.Update.Remote do
     Map.get(settings, key)
   end
 
+  # Update channel, pin and auto-update are operator authority: a project
+  # `.lemon/config.toml` cannot set them (see `LemonCore.Config.ProjectLayer`).
   defp raw_runtime_settings(opts) do
-    po = paths_opts(opts)
-    global = LemonCore.Config.load_file(Paths.global_config(po))
-    project = LemonCore.Config.load_file(Paths.project_config(File.cwd!(), po))
-    merged = LemonCore.MapHelpers.deep_merge(global, project)
+    global = LemonCore.Config.load_file(Paths.global_config(paths_opts(opts)))
 
-    case merged["runtime"] do
+    case global["runtime"] do
       section when is_map(section) -> section
       _ -> %{}
     end

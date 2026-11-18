@@ -38,7 +38,7 @@ defmodule LemonRouter.AgentProfilesTest do
     %{home: home, project: project}
   end
 
-  test "loads merged global+project agent profiles using configured cwd", %{
+  test "project customizes operator profiles but cannot create profiles using configured cwd", %{
     home: home,
     project: project
   } do
@@ -69,11 +69,10 @@ defmodule LemonRouter.AgentProfilesTest do
     :sys.get_state(AgentProfiles)
 
     assert AgentProfiles.exists?("global_only")
-    assert AgentProfiles.exists?("project_only")
+    refute AgentProfiles.exists?("project_only")
     assert AgentProfiles.exists?("shared")
 
     assert AgentProfiles.get("global_only").model == "global-model"
-    assert AgentProfiles.get("project_only").model == "project-model"
     assert AgentProfiles.get("shared").model == "shared-project-model"
     assert AgentProfiles.get("shared").name == "Shared Project"
   end

@@ -55,7 +55,8 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
     project_dir = project_dir(params)
 
     with {:ok, action} <- required_string(params, "action"),
-         {:ok, target} <- target(params, project_dir) do
+         {:ok, target} <- target(params, project_dir),
+         :ok <- project_scope_allowed(action, target) do
       :global.trans(
         {{__MODULE__, target.path}, self()},
         fn ->
@@ -392,19 +393,39 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
     end
   end
 
-  defp candidate_settings(decoded, %{scope: "project"}, _project_dir) do
-    with {:ok, global} <- read_decoded_config(Config.global_path()) do
-      {:ok, LemonCore.MapHelpers.deep_merge(global, decoded)}
+  # Candidates merge exactly as runtime loading does, so a project file is
+  # filtered through the project trust allowlist (see `Config.ProjectLayer`).
+  defp candidate_settings(decoded, target, project_dir) do
+    global_path = Path.expand(Config.global_path())
+    project_path = Path.expand(Config.project_path(project_dir))
+
+    cond do
+      target.scope not in ["global", "project"] or global_path == project_path ->
+        {:ok, decoded}
+
+      target.scope == "project" ->
+        with {:ok, global} <- read_decoded_config(global_path) do
+          {:ok, global |> Modular.merge_layers(decoded) |> elem(0)}
+        end
+
+      true ->
+        with {:ok, project} <- read_decoded_config(project_path) do
+          {:ok, decoded |> Modular.merge_layers(project) |> elem(0)}
+        end
     end
   end
 
-  defp candidate_settings(decoded, %{scope: "global"}, project_dir) do
-    with {:ok, project} <- read_decoded_config(Config.project_path(project_dir)) do
-      {:ok, LemonCore.MapHelpers.deep_merge(decoded, project)}
-    end
+  # Fallback providers and credential pools choose where operator credentials
+  # go; a project `.lemon/config.toml` cannot set them, so refuse to write them
+  # there rather than persist a value the runtime ignores.
+  defp project_scope_allowed("defaults." <> _action, _target), do: :ok
+
+  defp project_scope_allowed(_action, %{scope: "project"}) do
+    {:error, :operator_only,
+     "Provider routing is operator configuration; use the global scope. A project config may only set [defaults]."}
   end
 
-  defp candidate_settings(decoded, _target, _project_dir), do: {:ok, decoded}
+  defp project_scope_allowed(_action, _target), do: :ok
 
   defp read_decoded_config(path) do
     with {:ok, content} <- read_config(path),

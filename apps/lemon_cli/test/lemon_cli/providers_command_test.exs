@@ -72,7 +72,7 @@ defmodule LemonCli.ProvidersCommandTest do
     File.write!(omp, "#!/bin/sh\nprintf '%s' '#{token}'\n")
     File.chmod!(omp, 0o700)
 
-    File.write!(ctx.project_config, """
+    File.write!(ctx.global_config, """
     [providers.kimi_coding]
     auth_source = "omp"
     omp_path = #{Jason.encode!(omp)}

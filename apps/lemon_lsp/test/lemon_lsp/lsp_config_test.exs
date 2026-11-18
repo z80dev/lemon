@@ -22,7 +22,7 @@ defmodule LemonLsp.ConfigTest do
     %{global: Path.join(home, ".lemon/config.toml"), project: project}
   end
 
-  test "project overrides global fields and preserves unspecified fields", ctx do
+  test "project cannot override global server execution fields", ctx do
     File.write!(ctx.global, """
     [runtime.tools.lsp.servers.clangd]
     command = "/bin/cat"
@@ -40,8 +40,8 @@ defmodule LemonLsp.ConfigTest do
 
     assert {:ok, command} = Servers.resolve_command(:clangd, ctx.project)
     assert command.executable == "/bin/cat"
-    assert command.args == ["project", "--stdio"]
-    assert command.env == %{"LSP_TEST" => "project"}
+    assert command.args == ["global"]
+    assert command.env == %{"LSP_TEST" => "global"}
     assert command.initialization_options == %{"index" => true}
     assert command.server.root_markers == ["custom.root"]
   end
@@ -60,7 +60,7 @@ defmodule LemonLsp.ConfigTest do
 
   test "custom servers use string ids and normalized file types", ctx do
     for id <- ["my_language", "my-language"] do
-      write_project(ctx, """
+      write_global(ctx, """
       [runtime.tools.lsp.servers.#{id}]
       command = "/bin/cat"
       file_types = ["NEWLANG"]
@@ -88,7 +88,7 @@ defmodule LemonLsp.ConfigTest do
           {"env", "{ TOKEN = 42 }"},
           {"disabled", "\"true\""}
         ] do
-      write_project(ctx, "[runtime.tools.lsp.servers.clangd]\n#{field} = #{value}\n")
+      write_global(ctx, "[runtime.tools.lsp.servers.clangd]\n#{field} = #{value}\n")
 
       assert_raise ValidationError, ~r/runtime.tools.lsp.servers.clangd.#{field}/, fn ->
         Config.reload(ctx.project)
@@ -97,7 +97,7 @@ defmodule LemonLsp.ConfigTest do
   end
 
   test "custom servers require command and extensions", ctx do
-    write_project(ctx, "[runtime.tools.lsp.servers.incomplete]\nargs = []\n")
+    write_global(ctx, "[runtime.tools.lsp.servers.incomplete]\nargs = []\n")
 
     assert_raise ValidationError, ~r/custom servers require command and extensions/, fn ->
       Config.reload(ctx.project)
@@ -106,12 +106,17 @@ defmodule LemonLsp.ConfigTest do
 
   test "idle timeout requires a non-negative integer", ctx do
     for value <- ["-1", "\"short\""] do
-      write_project(ctx, "[runtime.tools.lsp]\nidle_timeout_ms = #{value}\n")
+      write_global(ctx, "[runtime.tools.lsp]\nidle_timeout_ms = #{value}\n")
 
       assert_raise ValidationError, ~r/runtime.tools.lsp.idle_timeout_ms/, fn ->
         Config.reload(ctx.project)
       end
     end
+  end
+
+  defp write_global(ctx, text) do
+    File.write!(ctx.global, text)
+    LemonCore.ConfigCache.clear()
   end
 
   defp write_project(ctx, text) do

@@ -9,12 +9,12 @@ defmodule CodingAgent.ExecutorFallbackTest do
 
   # Runs through the native executor path (SessionRunner -> Session -> Lifecycle)
   # with an explicit model in request metadata and provider routing configured via
-  # the project config. The stream must fall back to the routed provider when the
+  # the global config. The stream must fall back to the routed provider when the
   # primary errors before emitting content.
   test "native executor sessions with an explicit model fall back to routed providers", %{
     tmp_dir: tmp_dir
   } do
-    write_project_config(tmp_dir)
+    write_global_config(tmp_dir)
 
     primary = LemonAi.Models.get_model(:openai, "gpt-4")
     parent = self()
@@ -47,9 +47,17 @@ defmodule CodingAgent.ExecutorFallbackTest do
     assert completed.answer =~ "fallback response"
   end
 
-  defp write_project_config(tmp_dir) do
+  defp write_global_config(tmp_dir) do
     config_dir = Path.join(tmp_dir, ".lemon")
     File.mkdir_p!(config_dir)
+    previous = Application.get_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, global_config: Path.join(config_dir, "config.toml"))
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_core, :paths, previous),
+        else: Application.delete_env(:lemon_core, :paths)
+    end)
 
     File.write!(Path.join(config_dir, "config.toml"), """
     [runtime.provider_routing]

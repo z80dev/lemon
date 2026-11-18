@@ -187,11 +187,11 @@ defmodule LemonCli.Setup.ProviderManagementTest do
     assert File.read!(ctx.config_path) =~ "# retained comment"
   end
 
-  test "project consumers prevent global secret deletion and replacement before mutation", ctx do
+  test "ignored project consumers cannot block global secret replacement or deletion", ctx do
     assert {:ok, _} = Management.set_api_key("openai", "original-mock-key", ctx.opts)
     original = File.read!(ctx.config_path)
     name = Toml.decode!(original)["providers"]["openai"]["api_key_secret"]
-    original_secrets = MockSecrets.values()
+    assert MockSecrets.values()[name] == "original-mock-key"
 
     for project <- [
           """
@@ -210,14 +210,19 @@ defmodule LemonCli.Setup.ProviderManagementTest do
       project_path = Config.project_path(ctx.cwd)
       write(project_path, project)
 
-      assert {:error, :shared_credential} = Management.disconnect("openai", ctx.opts)
+      write(ctx.config_path, original)
+      MockSecrets.seed(name, "original-mock-key")
 
-      assert {:error, :shared_credential} =
+      assert {:ok, replaced} =
                Management.set_api_key("openai", "replacement-mock-key", ctx.opts)
 
-      assert File.read!(ctx.config_path) == original
+      assert row(replaced, "openai").status == "ready"
+      assert MockSecrets.values()[name] == "replacement-mock-key"
+      assert {:ok, disconnected} = Management.disconnect("openai", ctx.opts)
+      assert row(disconnected, "openai").status == "needs_login"
+      assert Toml.decode_file!(ctx.config_path)["providers"]["openai"] == %{}
       assert File.read!(project_path) == project
-      assert MockSecrets.values() == original_secrets
+      assert MockSecrets.values() == %{}
     end
   end
 
@@ -310,7 +315,7 @@ defmodule LemonCli.Setup.ProviderManagementTest do
     assert invalid_provider.default == %{providerId: nil, modelId: nil}
   end
 
-  test "environment/project/pool precedence is explicit and never falsely attests the saved key",
+  test "environment and pool overrides remain explicit while project credentials are ignored",
        ctx do
     assert {:ok, _} = Management.set_api_key("openai", "saved-private", ctx.opts)
     System.put_env("OPENAI_API_KEY", "environment-private")
@@ -322,8 +327,9 @@ defmodule LemonCli.Setup.ProviderManagementTest do
 
     write(Config.project_path(ctx.cwd), "[providers.openai]\napi_key_secret = \"project-key\"\n")
     assert {:ok, project} = Management.list(ctx.opts)
-    assert row(project, "openai").configurationOverrides == ["project_configuration"]
-    assert row(project, "openai").lastValidation == nil
+    assert row(project, "openai").configurationOverrides == []
+    assert row(project, "openai").status == "ready"
+    assert row(project, "openai").lastValidation.ready
     File.rm!(Config.project_path(ctx.cwd))
 
     File.write!(

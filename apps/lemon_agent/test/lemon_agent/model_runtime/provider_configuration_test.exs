@@ -40,7 +40,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
       File.rm_rf!(root)
     end)
 
-    %{project: project, config_path: Path.join(project, ".lemon/config.toml")}
+    %{project: project, config_path: Path.join(home, ".lemon/config.toml")}
   end
 
   test "contended configuration preserves its redacted error and original bytes", ctx do
@@ -53,7 +53,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
       "action" => "fallback.add",
       "provider" => "anthropic",
       "apply" => true,
-      "scope" => "project",
+      "scope" => "global",
       "projectDir" => ctx.project
     }
 
@@ -90,7 +90,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
                "action" => "fallback.add",
                "provider" => "anthropic",
                "apply" => true,
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -110,7 +110,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
              ProviderConfiguration.configure(%{
                "action" => "fallback.remove",
                "provider" => "zai",
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -123,7 +123,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
                "action" => "fallback.remove",
                "provider" => "zai",
                "apply" => true,
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -135,7 +135,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
                "provider" => "zai",
                "apply" => true,
                "confirm" => "zai",
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -158,7 +158,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
                "strategy" => "round_robin",
                "activate" => true,
                "apply" => true,
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -172,7 +172,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
                "provider" => "openai",
                "credentialRef" => "secret:llm_openai_secondary",
                "apply" => true,
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -192,7 +192,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
                "pool" => "burst",
                "provider" => "openai",
                "credentialRef" => "secret:llm_openai_secondary",
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -210,7 +210,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
                "provider" => "openai",
                "credentialRef" => "sk-raw-value",
                "apply" => true,
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -225,7 +225,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
              ProviderConfiguration.configure(%{
                "action" => "fallback.add",
                "provider" => "zai",
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -240,7 +240,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
                "provider" => "zai",
                "apply" => true,
                "expectedRevision" => preview["configRevision"],
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -262,7 +262,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
                "action" => "fallback.add",
                "provider" => "zai",
                "apply" => true,
-               "scope" => "project",
+               "scope" => "global",
                "projectDir" => ctx.project
              })
 
@@ -271,6 +271,8 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
   end
 
   test "previews then applies the default model and thinking level under [defaults]", ctx do
+    ctx = %{ctx | config_path: Path.join(ctx.project, ".lemon/config.toml")}
+
     File.write!(ctx.config_path, """
     # defaults note
     [defaults]
@@ -344,6 +346,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
   end
 
   test "rejects unknown providers, malformed models and unsupported thinking levels", ctx do
+    ctx = %{ctx | config_path: Path.join(ctx.project, ".lemon/config.toml")}
     File.write!(ctx.config_path, "# untouched\n")
     base = %{"scope" => "project", "projectDir" => ctx.project, "apply" => true}
 

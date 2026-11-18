@@ -23,6 +23,19 @@ defmodule CodingAgent.SettingsManagerTest do
     test_dir = Path.join(tmp_dir, "settings_manager_test_#{test_id}")
 
     File.mkdir_p!(test_dir)
+    previous_paths = Application.get_env(:lemon_core, :paths)
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      Keyword.put(previous_paths || [], :global_config, Path.join(test_dir, "global.toml"))
+    )
+
+    on_exit(fn ->
+      if is_nil(previous_paths),
+        do: Application.delete_env(:lemon_core, :paths),
+        else: Application.put_env(:lemon_core, :paths, previous_paths)
+    end)
 
     on_exit(fn -> File.rm_rf!(test_dir) end)
 
@@ -89,7 +102,7 @@ defmodule CodingAgent.SettingsManagerTest do
       File.mkdir_p!(Path.join(root, ".lemon"))
       setting = if is_nil(mode), do: "", else: "approval_mode = #{inspect(mode)}"
 
-      File.write!(Path.join(root, ".lemon/config.toml"), """
+      File.write!(Path.join(project, "global.toml"), """
       [runtime.tools]
       #{setting}
       [runtime.tools.checkpoint]
@@ -106,7 +119,7 @@ defmodule CodingAgent.SettingsManagerTest do
     end
   end
 
-  test "tool intent defaults on and respects project config", %{test_dir: project} do
+  test "tool intent defaults on and respects global config", %{test_dir: project} do
     assert Tools.resolve(%{}).intent_tracing
 
     assert SettingsManager.from_config(%LemonConfig{agent: %{tools: %{intent_tracing: false}}}).tools.intent_tracing ==
@@ -116,7 +129,7 @@ defmodule CodingAgent.SettingsManagerTest do
       root = Path.join(project, to_string(enabled))
       File.mkdir_p!(Path.join(root, ".lemon"))
 
-      File.write!(Path.join(root, ".lemon/config.toml"), """
+      File.write!(Path.join(project, "global.toml"), """
       [runtime.tools]
       intent_tracing = #{enabled}
       """)
@@ -698,7 +711,21 @@ defmodule CodingAgent.SettingsManagerTest do
 
   describe "load/1" do
     test "loads settings from a project directory", %{test_dir: test_dir} do
-      # Create a project config
+      # Operator settings come from the controlled global file.
+      File.write!(Path.join(test_dir, "global.toml"), """
+      [runtime]
+      extension_paths = ["/custom/extensions"]
+
+      [runtime.retry]
+      enabled = true
+      max_retries = 5
+      base_delay_ms = 500
+
+      [runtime.shell]
+      path = "/bin/bash"
+      command_prefix = "export PATH=/usr/local/bin:$PATH &&"
+      """)
+
       config_dir = Path.join(test_dir, ".lemon")
       File.mkdir_p!(config_dir)
 
@@ -711,22 +738,10 @@ defmodule CodingAgent.SettingsManagerTest do
       [tui]
       theme = "light"
 
-      [runtime]
-      extension_paths = ["/custom/extensions"]
-
       [runtime.compaction]
       enabled = false
       reserve_tokens = 4096
       keep_recent_tokens = 5000
-
-      [runtime.retry]
-      enabled = true
-      max_retries = 5
-      base_delay_ms = 500
-
-      [runtime.shell]
-      path = "/bin/bash"
-      command_prefix = "export PATH=/usr/local/bin:$PATH &&"
 
       [runtime.tools]
       auto_resize_images = false

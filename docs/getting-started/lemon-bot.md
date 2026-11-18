@@ -422,7 +422,8 @@ Apply these five steps to the backend and its actual controller. The examples us
 
    This file is loaded by the **installed-release launcher**, not source mode.
    For a source controller, put these variables in its existing
-   `$LEMON_DOTENV_DIR/.env` (default: the startup working directory's `.env`),
+   `$LEMON_DOTENV_DIR/.env` (default: `~/.lemon/.env`; never the startup
+   working directory),
    or explicitly export them in the environment that starts that controller.
    If the Bot uses a remote controller, configure and restart **that controller**,
    not a different local instance.

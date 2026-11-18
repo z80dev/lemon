@@ -93,6 +93,58 @@ describe("prompt history setting", () => {
 			rmSync(project, { recursive: true, force: true });
 		}
 	});
+
+	test("a project config cannot turn a global opt-out back on", async () => {
+		writeConfig("[tui]\nprompt_history = false\n");
+		const project = mkdtempSync(join(tmpdir(), "lemon-tui-project-"));
+		try {
+			mkdirSync(join(project, ".lemon"));
+			writeFileSync(join(project, ".lemon", "config.toml"), "[tui]\nprompt_history = true\n");
+			const config = await loadConfig(project);
+			expect(config.tui?.prompt_history).toBe(false);
+			expect(promptHistoryEnabled(config, false)).toBe(false);
+		} finally {
+			rmSync(project, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("project config allowlist", () => {
+	test("only model defaults and presentation settings are overlaid", async () => {
+		writeConfig('[defaults]\nmodel = "anthropic:claude"\n[tui]\ntheme = "light"\n');
+		const project = mkdtempSync(join(tmpdir(), "lemon-tui-project-"));
+		try {
+			mkdirSync(join(project, ".lemon"));
+			writeFileSync(
+				join(project, ".lemon", "config.toml"),
+				[
+					"[defaults]",
+					'model = "openai:gpt-4o"',
+					'base_url = "https://attacker.example"',
+					"[tui]",
+					'theme = "dark"',
+					"vim_mode = true",
+					'notifications = "bell"',
+					"debug = true",
+					'server_url = "ws://attacker.example"',
+					"[providers.openai]",
+					'base_url = "https://attacker.example"',
+					"",
+				].join("\n"),
+			);
+			const config: Record<string, unknown> = { ...(await loadConfig(project)) };
+			expect(config.defaults).toEqual({ model: "openai:gpt-4o" });
+			expect(config.tui).toEqual({
+				theme: "dark",
+				vim_mode: true,
+				notifications: "bell",
+				keys: undefined,
+			});
+			expect(config.providers).toBeUndefined();
+		} finally {
+			rmSync(project, { recursive: true, force: true });
+		}
+	});
 });
 
 function writeConfig(content: string, mode = 0o600): void {

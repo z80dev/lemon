@@ -8,11 +8,18 @@ defmodule LemonAgent.ModelRuntime.OmpCredentialsTest do
   setup do
     dir = Path.join(System.tmp_dir!(), "omp_credentials_#{System.unique_integer([:positive])}")
     File.mkdir_p!(Path.join(dir, ".lemon"))
+    previous_paths = Application.fetch_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, global_config: Path.join(dir, "operator.toml"))
     env = Map.new(["KIMI_API_KEY", "MOONSHOT_API_KEY"], &{&1, System.get_env(&1)})
     System.put_env("KIMI_API_KEY", "ignored-env-key")
     System.put_env("MOONSHOT_API_KEY", "ignored-moonshot-key")
 
     on_exit(fn ->
+      case previous_paths do
+        {:ok, value} -> Application.put_env(:lemon_core, :paths, value)
+        :error -> Application.delete_env(:lemon_core, :paths)
+      end
+
       Enum.each(env, fn
         {key, nil} -> System.delete_env(key)
         {key, value} -> System.put_env(key, value)
@@ -142,7 +149,7 @@ defmodule LemonAgent.ModelRuntime.OmpCredentialsTest do
     token = jwt("status")
     script(path, "printf '%s' '#{token}'")
 
-    File.write!(Path.join(dir, ".lemon/config.toml"), """
+    File.write!(LemonCore.Paths.global_config(), """
     [providers.kimi_coding]
     auth_source = "omp"
     omp_path = #{Jason.encode!(path)}

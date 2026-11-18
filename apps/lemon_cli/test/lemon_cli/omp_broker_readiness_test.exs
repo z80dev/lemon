@@ -14,6 +14,8 @@ defmodule LemonCli.OmpBrokerReadinessTest do
       Path.join(System.tmp_dir!(), "omp_broker_readiness_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(Path.join(dir, ".lemon"))
+    previous_paths = Application.fetch_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, global_config: Path.join(dir, "operator.toml"))
     original = LemonCore.ProviderManagement.service()
     :ok = LemonCore.ProviderManagement.register(LemonCli.Setup.ProviderManagement)
     env = Map.new(~w(OMP_AUTH_BROKER_URL OMP_AUTH_BROKER_TOKEN), &{&1, System.get_env(&1)})
@@ -25,6 +27,11 @@ defmodule LemonCli.OmpBrokerReadinessTest do
     OmpAuthBroker.invalidate_all()
 
     on_exit(fn ->
+      case previous_paths do
+        {:ok, value} -> Application.put_env(:lemon_core, :paths, value)
+        :error -> Application.delete_env(:lemon_core, :paths)
+      end
+
       if original,
         do: LemonCore.ProviderManagement.register(original),
         else: Application.delete_env(:lemon_core, :provider_management_service)
@@ -40,7 +47,7 @@ defmodule LemonCli.OmpBrokerReadinessTest do
       File.rm_rf!(dir)
     end)
 
-    config_path = Path.join(dir, ".lemon/config.toml")
+    config_path = LemonCore.Paths.global_config()
 
     File.write!(config_path, """
     [defaults]

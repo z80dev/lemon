@@ -236,8 +236,7 @@ defmodule LemonCore.ConfigReloader do
       else
         # 3. If env changed, reload .env
         if :env in changed_sources do
-          dotenv_dir = dotenv_dir(cwd)
-          LemonCore.Dotenv.load_and_log(dotenv_dir, override: true)
+          LemonCore.Dotenv.load_and_log(LemonCore.Dotenv.dir(), override: true)
         end
 
         # 4. Reload canonical config
@@ -365,8 +364,8 @@ defmodule LemonCore.ConfigReloader do
     Digest.files_digest(paths)
   end
 
-  defp compute_source_digest(:env, cwd) do
-    dotenv_path = LemonCore.Dotenv.path_for(dotenv_dir(cwd))
+  defp compute_source_digest(:env, _cwd) do
+    dotenv_path = LemonCore.Dotenv.path_for(LemonCore.Dotenv.dir())
     Digest.env_digest(dotenv_path)
   end
 
@@ -439,10 +438,6 @@ defmodule LemonCore.ConfigReloader do
       end
 
     [global | project]
-  end
-
-  defp dotenv_dir(cwd) do
-    System.get_env("LEMON_DOTENV_DIR") || cwd
   end
 
   defp config_to_comparable(%LemonCore.Config{} = config) do

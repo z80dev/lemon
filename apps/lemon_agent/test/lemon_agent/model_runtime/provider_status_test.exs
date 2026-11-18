@@ -34,9 +34,16 @@ defmodule LemonAgent.ModelRuntime.ProviderStatusTest do
       )
 
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+    previous_paths = Application.fetch_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, global_config: Path.join(tmp_dir, "operator.toml"))
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
 
     on_exit(fn ->
+      case previous_paths do
+        {:ok, value} -> Application.put_env(:lemon_core, :paths, value)
+        :error -> Application.delete_env(:lemon_core, :paths)
+      end
+
       clear_secrets_table()
 
       Enum.each(saved_env, fn
@@ -241,10 +248,8 @@ defmodule LemonAgent.ModelRuntime.ProviderStatusTest do
     refute inspect(status) =~ "llm_anthropic_bad_oauth"
   end
 
-  defp write_config!(cwd, body) do
-    cwd
-    |> Path.join(".lemon/config.toml")
-    |> File.write!(body)
+  defp write_config!(_cwd, body) do
+    File.write!(LemonCore.Paths.global_config(), body)
   end
 
   defp only_provider(status), do: status["providers"] |> Enum.find(& &1["configured"])

@@ -108,19 +108,45 @@ export function getProjectConfigPath(cwd: string): string {
 /**
  * Load the global config, overlaid with the project config when `cwd` is
  * given. A missing file is an empty config; an unreadable or invalid one throws.
+ *
+ * A project file comes with the repository, so only the keys
+ * `LemonCore.Config.ProjectLayer` allows are overlaid: model defaults and
+ * presentation settings. `prompt_history` may only be turned off.
  */
 export async function loadConfig(cwd?: string): Promise<LemonConfig> {
 	const global = await readConfigFile(getConfigPath());
 	if (!cwd) return global;
 	const project = await readConfigFile(getProjectConfigPath(cwd));
-	return {
-		defaults: { ...global.defaults, ...project.defaults },
-		tui: {
-			...global.tui,
-			...project.tui,
-			keys: mergeKeyTables(global.tui?.keys, project.tui?.keys),
-		},
+	const projectTui: NonNullable<LemonConfig["tui"]> = isTable(project.tui) ? project.tui : {};
+	const projectDefaults: NonNullable<LemonConfig["defaults"]> = isTable(project.defaults)
+		? project.defaults
+		: {};
+	const tui: NonNullable<LemonConfig["tui"]> = {
+		...global.tui,
+		...pick(projectTui, PROJECT_TUI_KEYS),
+		keys: mergeKeyTables(global.tui?.keys, projectTui.keys),
 	};
+	if (projectTui.prompt_history !== undefined && projectTui.prompt_history !== true) {
+		tui.prompt_history = false;
+	}
+	return {
+		defaults: {
+			...global.defaults,
+			...pick(projectDefaults, PROJECT_DEFAULT_KEYS),
+		},
+		tui,
+	};
+}
+
+const PROJECT_DEFAULT_KEYS = ["provider", "model", "thinking_level"] as const;
+const PROJECT_TUI_KEYS = ["theme", "notifications", "vim_mode"] as const;
+
+function pick<T extends object, K extends keyof T>(source: T, keys: readonly K[]): Partial<T> {
+	const picked: Partial<T> = {};
+	for (const key of keys) {
+		if (source[key] !== undefined) picked[key] = source[key];
+	}
+	return picked;
 }
 
 async function readConfigFile(configPath: string): Promise<LemonConfig> {

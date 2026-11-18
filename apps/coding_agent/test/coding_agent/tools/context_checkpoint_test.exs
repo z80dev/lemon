@@ -1,5 +1,5 @@
 defmodule CodingAgent.Tools.ContextCheckpointTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodingAgent.Session.ContextCheckpoint
   alias CodingAgent.SessionManager
@@ -104,13 +104,26 @@ defmodule CodingAgent.Tools.ContextCheckpointTest do
     assert Enum.count(projected, &match?(%CodingAgent.Messages.BranchSummaryMessage{}, &1)) == 2
   end
 
-  test "registry resolves the checkpoint flag for its requested project directory", %{
+  test "registry resolves the global checkpoint flag for its requested project directory", %{
     tmp_dir: cwd
   } do
     File.mkdir_p!(Path.join(cwd, ".lemon"))
+    previous_paths = Application.get_env(:lemon_core, :paths)
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      Keyword.put(previous_paths || [], :global_config, Path.join(cwd, "global.toml"))
+    )
+
+    on_exit(fn ->
+      if is_nil(previous_paths),
+        do: Application.delete_env(:lemon_core, :paths),
+        else: Application.put_env(:lemon_core, :paths, previous_paths)
+    end)
 
     File.write!(
-      Path.join(cwd, ".lemon/config.toml"),
+      Path.join(cwd, "global.toml"),
       "[runtime.tools.checkpoint]\nenabled = true\n"
     )
 
