@@ -337,6 +337,8 @@ Use a source checkout to develop Lemon, run on an unsupported platform, or build
 release artifacts. These requirements apply only to source installs:
 
 - Elixir 1.20.5+ and Erlang/OTP 29.1.2+
+- A C toolchain with `make` (`mix compile` builds native code, including
+  `lemon_core`'s file-confinement helper)
 - Bun 1.4.4+ for the terminal client
 - Node.js 24 LTS+ for the browser client and this documentation site
 

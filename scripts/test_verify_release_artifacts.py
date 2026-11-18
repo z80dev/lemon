@@ -15,6 +15,7 @@ PYTHON_FILES = (
     "python/licenses/CPYTHON-LICENSE.txt",
     "python/licenses/PYTHON-BUILD-STANDALONE-LICENSE.txt",
 )
+CONFINED_FS_HELPER = "lib/lemon_core-0.3.0/priv/lemon_confined_fs"
 
 
 class ReleaseArchiveTests(unittest.TestCase):
@@ -36,7 +37,7 @@ class ReleaseArchiveTests(unittest.TestCase):
                 elif profile == "lemon_tui":
                     files = ("tui/bin/lemon-tui",)
                 else:
-                    files = ("bin/lemon",) + PYTHON_FILES
+                    files = ("bin/lemon", CONFINED_FS_HELPER) + PYTHON_FILES
                 with tarfile.open(path, "w:gz") as archive:
                     for name in files:
                         changed = profile == profile_to_change
@@ -45,7 +46,7 @@ class ReleaseArchiveTests(unittest.TestCase):
                         entry = tarfile.TarInfo(name)
                         content = b"fixture\n"
                         entry.mode = 0o755
-                        if changed and name == "python/bin/python3" and not executable:
+                        if changed and name in ("python/bin/python3", CONFINED_FS_HELPER) and not executable:
                             entry.mode = 0o644
                         if changed and name == empty:
                             content = b""
@@ -85,6 +86,15 @@ class ReleaseArchiveTests(unittest.TestCase):
                     result = self.verify(profile, missing=missing)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(missing[0], result.stderr)
+
+    def test_runtime_profiles_require_the_confined_fs_helper(self):
+        for profile in ("lemon_runtime_min", "lemon_runtime_full"):
+            for options in ({"missing": (CONFINED_FS_HELPER,)}, {"link": CONFINED_FS_HELPER},
+                            {"executable": False}):
+                with self.subTest(profile=profile, options=options):
+                    result = self.verify(profile, **options)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("lemon_core priv/lemon_confined_fs", result.stderr)
 
     def test_python_must_be_regular_and_executable(self):
         for options in ({"link": PYTHON_FILES[0]}, {"executable": False}):

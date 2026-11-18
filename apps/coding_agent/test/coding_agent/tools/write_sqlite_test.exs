@@ -137,13 +137,55 @@ defmodule CodingAgent.Tools.WriteSqliteTest do
     assert [["old"]] = rows(db, "SELECT name FROM users")
   end
 
-  test "shared readwrite connection does not create a database", %{tmp_dir: dir} do
+  test "read connections never create a database and wait on locks", %{tmp_dir: dir, db: db} do
     path = Path.join(dir, "absent.db")
-    assert {:error, _} = Sqlite.with_connection(path, :readwrite, fn _ -> flunk("opened") end)
+    assert {:error, _} = Sqlite.with_connection(path, :readonly, fn _ -> flunk("opened") end)
     refute File.exists?(path)
+
+    assert {:ok, _, [[3000]], _} =
+             Sqlite.with_connection(db, :readonly, &Sqlite.query(&1, "PRAGMA busy_timeout"))
   end
 
-  test "database writes use the physical path lock and busy timeout", %{tmp_dir: dir, db: db} do
+  test "mutates a private copy and replaces the database atomically", %{tmp_dir: dir, db: db} do
+    File.chmod!(db, 0o640)
+    inode = File.stat!(db).inode
+
+    assert %AgentToolResult{} = write(dir, "app.db:users:1", ~s({"name":"new"}))
+    assert [["new"]] = rows(db, "SELECT name FROM users")
+    assert Bitwise.band(File.stat!(db).mode, 0o777) == 0o640
+    refute File.stat!(db).inode == inode
+    # SQLite never opened a path: no journal, WAL or temp file was created.
+    assert File.ls!(dir) == ["app.db"]
+  end
+
+  test "refuses databases with journal companions and keeps WAL format", %{tmp_dir: dir, db: db} do
+    before = File.read!(db)
+
+    for suffix <- ["-journal", "-wal", "-shm"] do
+      File.write!(db <> suffix, "")
+      assert {:error, message} = write(dir, "app.db:users:1", ~s({"name":"new"}))
+      assert message =~ suffix
+      assert File.read!(db) == before
+      File.rm!(db <> suffix)
+    end
+
+    wal = Path.join(dir, "wal.db")
+    {:ok, conn} = Sqlite3.open(wal)
+    :ok = Sqlite3.execute(conn, "PRAGMA journal_mode = WAL; CREATE TABLE t (v TEXT);")
+    :ok = Sqlite3.close(conn)
+    refute File.exists?(wal <> "-wal")
+
+    assert %AgentToolResult{details: %{rows_affected: 1}} = write(dir, "wal.db:t", ~s({"v":"x"}))
+    assert <<_::binary-size(18), 2, 2, _::binary>> = File.read!(wal)
+
+    {:ok, conn} = Sqlite3.open(wal)
+    {:ok, stmt} = Sqlite3.prepare(conn, "SELECT v FROM t")
+    assert {:row, ["x"]} = Sqlite3.step(conn, stmt)
+    :ok = Sqlite3.release(conn, stmt)
+    :ok = Sqlite3.close(conn)
+  end
+
+  test "database writes use the physical path lock", %{tmp_dir: dir, db: db} do
     parent = self()
 
     task =
@@ -162,9 +204,6 @@ defmodule CodingAgent.Tools.WriteSqliteTest do
 
     assert %AgentToolResult{} = Task.await(task)
     assert [["locked"]] = rows(db, "SELECT name FROM users")
-
-    assert {:ok, _, [[3000]], _} =
-             Sqlite.with_connection(db, :readwrite, &Sqlite.query(&1, "PRAGMA busy_timeout"))
   end
 
   test "literal selector-shaped files retain normal write behavior", %{tmp_dir: dir} do

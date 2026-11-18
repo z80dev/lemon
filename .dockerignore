@@ -32,6 +32,9 @@ node_modules
 **/node_modules
 erl_crash.dump
 *.log
+# The LemonCore.ConfinedFS helper is compiled per platform inside the image.
+apps/lemon_core/priv/lemon_confined_fs
+apps/lemon_core/priv/.lemon_confined_fs.platform
 
 # Local state and secrets — must never reach an image layer
 .lemon

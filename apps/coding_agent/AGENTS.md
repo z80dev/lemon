@@ -40,6 +40,15 @@ history, compaction and supervised delegation. The loop/model runtime comes from
   community-skill data, strip unsafe controls, and keep the entire envelope inside
   its budget. An opaque ephemeral marker provides idempotence; tool-returned
   metadata cannot claim wrapping already happened. Persisted output is unchanged.
+- Local mutation tools validate targets with `FileValidation.check_mutation_target/2`
+  and then read, write, create, replace and delete only through its
+  descriptor-bound helpers (`LemonCore.ConfinedFS`, rooted at the same trusted
+  boundary), never by reopening the validated path, so a directory swapped for a
+  symlink after the check is refused. Only explicit `allow_symlinks: true` keeps
+  path-based I/O. Swap regressions use `LemonCore.Testing.FileServerTap`.
+  After a write, record the committed bytes in `FileReadTracker` (never re-read
+  the path); formatters and checkers get Lemon's bytes through a private
+  `CheckerStaging` directory, never a workspace path they write.
 - Background process ownership is session-scoped. Keep terminal backends under
   `ProcessManager` so policy, logs, cancellation and restart lineage are shared.
 - Validate backend allow/deny policy and Docker/SSH settings before launch.

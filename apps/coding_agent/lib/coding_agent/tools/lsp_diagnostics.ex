@@ -5,16 +5,48 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   This is the first Lemon diagnostic layer: it gives agents a stable
   `lsp_diagnostics` tool and lets mutation tools report post-edit diagnostic
   deltas without failing the edit when a checker is missing.
+
+  Lemon reads the diagnosed file itself through the identity-bound
+  `CodingAgent.Tools.FileValidation` helpers below the same boundary mutation
+  tools use (`mutation_root:`, default `cwd`): a symlink anywhere below it is
+  refused, FIFOs and other special files are refused, and content reads are
+  bounded (8 MiB). Elixir syntax is parsed from those bytes, and Python syntax
+  is compiled from a private staged copy of them
+  (`CodingAgent.Tools.CheckerStaging`; nothing is written next to the source,
+  unlike `py_compile`).
+
+  The other checkers read the project themselves and are outside Lemon's
+  confined I/O: `node --check` and the C/C++ `-fsyntax-only` compilers read
+  the file by path; `mix compile`, `tsc --noEmit`, `cargo check` and
+  `go vet` build the project in its root and may write that project's own
+  build outputs (`_build`, `target`, `.tsbuildinfo`, the Go cache). Marker
+  probes that pick the project root (`mix.exs`, `tsconfig.json`, ...) are
+  path-based too. No checker is handed a path it writes.
   """
 
   alias CodingAgent.Tools.Bash.CommandPolicy
-  alias CodingAgent.Tools.CheckerRunner
-  alias CodingAgent.Tools.PathHelpers
+  alias CodingAgent.Tools.{CheckerRunner, CheckerStaging, FileValidation, PathHelpers}
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonCore.Doctor.LspDiagnostics, as: DoctorLspDiagnostics
 
   @default_timeout_ms 20_000
+
+  # Bound on the bytes Lemon reads from a diagnosed file.
+  @max_source_bytes 8 * 1024 * 1024
+
+  # Syntax-checks the staged copy (argv[1]) under the workspace name (argv[2])
+  # without writing bytecode; `-I` keeps the working directory off sys.path.
+  @python_compile """
+  import sys, traceback
+  with open(sys.argv[1], "rb") as source:
+      code = source.read()
+  try:
+      compile(code, sys.argv[2], "exec", dont_inherit=True)
+  except (SyntaxError, ValueError) as error:
+      sys.stderr.write("".join(traceback.format_exception_only(type(error), error)))
+      sys.exit(1)
+  """
 
   @doc """
   Returns the diagnostics tool definition.
@@ -64,19 +96,20 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   def diagnose_file(path, cwd, opts) when is_binary(path) and is_binary(cwd) do
     resolved_path = PathHelpers.resolve_path(path, cwd, Keyword.put(opts, :expand, false))
     ext = resolved_path |> Path.extname() |> String.downcase()
+    language = language_for_extension(ext)
     opts = Keyword.put(opts, :workspace_cwd, Path.expand(cwd))
 
     with :ok <- check_policy(opts),
-         {:ok, _} <- ensure_regular_file(resolved_path) do
-      case language_for_extension(ext) do
+         {:ok, source} <- read_source(resolved_path, language, cwd, opts) do
+      case language do
         nil ->
           {:ok, skipped_result(resolved_path, nil, "unsupported file extension")}
 
         :elixir ->
-          diagnose_elixir(resolved_path, cwd, opts)
+          diagnose_elixir(resolved_path, source, cwd, opts)
 
         language ->
-          diagnose_external(language, resolved_path, cwd, opts)
+          diagnose_external(language, resolved_path, source, cwd, opts)
       end
     end
   end
@@ -210,19 +243,21 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   defp get_path(%{"path" => _}), do: {:error, "path must be a non-empty string"}
   defp get_path(_), do: {:error, "missing required parameter: path"}
 
-  defp ensure_regular_file(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{type: :regular}} ->
-        {:ok, path}
+  # Elixir and Python are checked from these bytes; for the other languages
+  # only the file's identity (a regular file, no symlink) is checked.
+  defp read_source(path, language, cwd, opts) do
+    io_opts = Keyword.put_new(opts, :mutation_root, cwd)
 
-      {:ok, %File.Stat{type: type}} ->
-        {:error, "path is not a regular file (is #{type}): #{path}"}
-
-      {:error, :enoent} ->
-        {:error, "file not found: #{path}"}
-
-      {:error, reason} ->
-        {:error, "cannot access file #{path}: #{reason}"}
+    with {:ok, identity} <- FileValidation.regular_file_identity(path, io_opts) do
+      if language in [:elixir, :python],
+        do: FileValidation.read_regular_file(path, identity, max_bytes: @max_source_bytes),
+        else: {:ok, nil}
+    end
+    |> case do
+      {:ok, source} -> {:ok, source}
+      {:error, :enoent} -> {:error, "file not found: #{path}"}
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+      {:error, reason} -> {:error, "cannot access file #{path}: #{inspect(reason)}"}
     end
   end
 
@@ -239,21 +274,21 @@ defmodule CodingAgent.Tools.LspDiagnostics do
     end
   end
 
-  defp diagnose_elixir(path, cwd, opts) do
-    with {:ok, content} <- File.read(path),
-         {:ok, _ast} <- Code.string_to_quoted(content, file: path) do
-      case find_workspace_root(path, cwd, ["mix.exs"]) do
-        nil ->
-          {:ok, clean_result(path, :elixir, "elixir syntax")}
-
-        root ->
-          if Keyword.get(opts, :semantic, true) do
-            run_mix_compile(path, root, opts)
-          else
+  defp diagnose_elixir(path, content, cwd, opts) do
+    case Code.string_to_quoted(content, file: path) do
+      {:ok, _ast} ->
+        case find_workspace_root(path, cwd, ["mix.exs"]) do
+          nil ->
             {:ok, clean_result(path, :elixir, "elixir syntax")}
-          end
-      end
-    else
+
+          root ->
+            if Keyword.get(opts, :semantic, true) do
+              run_mix_compile(path, root, opts)
+            else
+              {:ok, clean_result(path, :elixir, "elixir syntax")}
+            end
+        end
+
       {:error, {meta, message, token}} ->
         {:ok,
          diagnostic_result(path, :elixir, [
@@ -266,9 +301,6 @@ defmodule CodingAgent.Tools.LspDiagnostics do
              source: "elixir syntax"
            }
          ])}
-
-      {:error, reason} ->
-        {:error, "cannot read #{path}: #{reason}"}
     end
   end
 
@@ -290,9 +322,9 @@ defmodule CodingAgent.Tools.LspDiagnostics do
     end
   end
 
-  defp diagnose_external(language, path, cwd, opts) do
+  defp diagnose_external(language, path, source, cwd, opts) do
     case external_runner(language, path, cwd) do
-      {:ok, %{command: command, args: args, root: root, source: source} = runner} ->
+      {:ok, %{command: command, args: args, root: root, source: source_label} = runner} ->
         case resolve_runner_command(command, Map.get(runner, :repo_local), root, opts) do
           :missing ->
             {:ok, skipped_result(path, language, "missing executable: #{command}")}
@@ -306,12 +338,12 @@ defmodule CodingAgent.Tools.LspDiagnostics do
              )}
 
           {:ok, executable} ->
-            case run_command(executable, args, root, opts) do
+            case run_runner(executable, args, source, root, opts) do
               {output, 0} ->
-                {:ok, clean_result(path, language, source, output)}
+                {:ok, clean_result(path, language, source_label, output)}
 
               {output, status} ->
-                diagnostics = parse_external_diagnostics(language, output, root, source)
+                diagnostics = parse_external_diagnostics(language, output, root, source_label)
                 result = diagnostic_result(path, language, diagnostics)
 
                 {:ok,
@@ -321,6 +353,29 @@ defmodule CodingAgent.Tools.LspDiagnostics do
 
       {:skip, reason} ->
         {:ok, skipped_result(path, language, reason)}
+    end
+  end
+
+  # `:staged_source` in `args` is a private copy of the bytes Lemon read.
+  defp run_runner(executable, args, source, root, opts) do
+    if :staged_source in args do
+      CheckerStaging.with_dir(fn stage ->
+        case CheckerStaging.write(stage, "source", source) do
+          :ok ->
+            staged = CheckerStaging.path(stage, "source")
+            args = Enum.map(args, &if(&1 == :staged_source, do: staged, else: &1))
+            run_command(executable, args, root, opts)
+
+          {:error, reason} ->
+            {"cannot stage diagnostics input (#{reason})", 1}
+        end
+      end)
+      |> case do
+        {:error, message} -> {message, 1}
+        result -> result
+      end
+    else
+      run_command(executable, args, root, opts)
     end
   end
 
@@ -365,9 +420,9 @@ defmodule CodingAgent.Tools.LspDiagnostics do
     {:ok,
      %{
        command: python_command(),
-       args: ["-m", "py_compile", path],
+       args: ["-I", "-B", "-c", @python_compile, :staged_source, path],
        root: Path.dirname(path),
-       source: "python py_compile"
+       source: "python compile"
      }}
   end
 

@@ -7,6 +7,10 @@ defmodule CodingAgent.Tools.Write do
 
   Content must be valid UTF-8 without NUL bytes; use a binary-aware tool for
   binary data. Local targets reject symlinks and special files by default.
+  After validation, local reads, in-place overwrites and exclusive creates
+  (including missing parent directories) run descriptor-bound below the
+  validated mutation boundary (`FileValidation`), so a directory swapped for
+  a symlink after the check is refused rather than followed.
 
   `agent://<task-id-or-name>`, `agent://parent`, and `agent://all` send scoped
   peer messages instead of writing files. Sender identity is session-bound.
@@ -230,29 +234,17 @@ defmodule CodingAgent.Tools.Write do
       {:error, :aborted}
     else
       if ACPFileBridge.write_enabled?(opts) do
-        write_file_with_acp(path, content, opts)
+        write_file_with_acp(path, content, cwd, opts)
       else
         write_file_local(path, content, signal, format?, diagnostics?, cwd, opts)
       end
     end
   end
 
-  defp write_file_with_acp(path, content, opts) do
-    old_text =
-      if ACPFileBridge.read_enabled?(opts) do
-        case ACPFileBridge.read_text_file(path, nil, nil, opts) do
-          {:ok, text} -> text
-          _ -> :unavailable
-        end
-      else
-        case File.read(path) do
-          {:ok, text} -> text
-          {:error, :enoent} -> nil
-          _ -> :unavailable
-        end
-      end
+  defp write_file_with_acp(path, content, cwd, opts) do
+    {sample, old_text} = acp_existing_text(path, cwd, opts)
 
-    with {:ok, content} <- prepare_content(content, old_text),
+    with {:ok, content} <- prepare_content(content, sample),
          result <- ACPFileBridge.write_text_file(path, content, opts) do
       case result do
         :ok ->
@@ -276,6 +268,23 @@ defmodule CodingAgent.Tools.Write do
     end
   end
 
+  # `{format sample, old text for the result snapshot}`; the local fallback
+  # reads the pinned file descriptor-bound and bounded, like a local write.
+  defp acp_existing_text(path, cwd, opts) do
+    if ACPFileBridge.read_enabled?(opts) do
+      case ACPFileBridge.read_text_file(path, nil, nil, opts) do
+        {:ok, text} -> {text, text}
+        _ -> {:unavailable, :unavailable}
+      end
+    else
+      case existing_file(Path.expand(path), Keyword.put(opts, :mutation_root, cwd)) do
+        {:ok, nil} -> {nil, nil}
+        {:ok, existing} -> {existing.sample, existing.old_text}
+        {:error, _} -> {:unavailable, :unavailable}
+      end
+    end
+  end
+
   defp write_file_local(path, content, signal, format?, diagnostics?, cwd, opts) do
     path = Path.expand(path)
 
@@ -285,10 +294,11 @@ defmodule CodingAgent.Tools.Write do
   end
 
   defp write_file_local_locked(path, content, signal, format?, diagnostics?, cwd, opts) do
-    with :ok <-
-           FileValidation.check_mutation_target(path, Keyword.put(opts, :mutation_root, cwd)),
-         {:ok, existing} <- existing_content(path),
-         {:ok, content} <- prepare_content(content, existing),
+    mutation_opts = Keyword.put(opts, :mutation_root, cwd)
+
+    with :ok <- FileValidation.check_mutation_target(path, mutation_opts),
+         {:ok, existing} <- existing_file(path, mutation_opts),
+         {:ok, content} <- prepare_content(content, existing && existing.sample),
          {:ok, checkpoint} <-
            CheckpointGuard.before_mutation([path], cwd, opts, %{
              tool: "write",
@@ -296,25 +306,21 @@ defmodule CodingAgent.Tools.Write do
              path: path
            }) do
       baseline = LspDiagnostics.baseline(path, cwd, diagnostics?, opts)
-      old_text = read_bounded_snapshot(path)
 
       do_write_file(
         path,
         content,
+        existing,
         signal,
         format?,
         diagnostics?,
         baseline,
         cwd,
         opts,
-        checkpoint,
-        old_text
+        checkpoint
       )
     end
   rescue
-    e in File.Error ->
-      {:error, "Failed to write file: #{Exception.message(e)}"}
-
     e ->
       {:error, "Unexpected error: #{Exception.message(e)}"}
   end
@@ -322,31 +328,25 @@ defmodule CodingAgent.Tools.Write do
   defp do_write_file(
          path,
          content,
+         existing,
          signal,
          format?,
          diagnostics?,
          baseline,
          cwd,
          opts,
-         checkpoint,
-         old_text
+         checkpoint
        ) do
-    if AbortSignal.aborted?(signal) do
-      {:error, :aborted}
-    else
-      # Create parent directories
-      dir = Path.dirname(path)
-      File.mkdir_p!(dir)
+    mutation_opts = Keyword.put(opts, :mutation_root, cwd)
 
-      # Write the file
-      File.write!(path, content)
-
+    with :ok <- if(AbortSignal.aborted?(signal), do: {:error, :aborted}, else: :ok),
+         :ok <- write_target(path, content, existing, mutation_opts) do
       byte_count = byte_size(content)
-      {formatted, format_error} = LspFormatter.after_write(path, format?, cwd, opts)
 
-      if formatted,
-        do: FileReadTracker.refresh(opts, [path]),
-        else: FileReadTracker.record(opts, path, content)
+      {final_content, formatted, format_error} =
+        LspFormatter.after_write(path, content, format?, cwd, opts)
+
+      FileReadTracker.record(opts, path, final_content)
 
       {diagnostics, diagnostics_text} =
         LspDiagnostics.post_edit(path, cwd, baseline, diagnostics?, opts)
@@ -369,8 +369,8 @@ defmodule CodingAgent.Tools.Write do
           |> CheckpointGuard.put_details(checkpoint)
           |> FileValidation.put_text_snapshots(
             path,
-            old_text,
-            if(formatted, do: read_bounded_snapshot(path), else: content)
+            existing && existing.old_text,
+            final_content
           )
           |> maybe_put_format_error(format_error)
           |> maybe_put_diagnostics(diagnostics)
@@ -378,26 +378,59 @@ defmodule CodingAgent.Tools.Write do
     end
   end
 
-  defp existing_content(path) do
-    result = File.open(path, [:read, :binary], &IO.binread(&1, 65_536))
+  # Overwrites keep the pinned file (same inode and mode); new files are created
+  # exclusively, with any missing parent directories.
+  defp write_target(path, content, nil, opts) do
+    case FileValidation.create_regular_file(path, content, opts) do
+      :ok -> :ok
+      {:error, reason} -> write_error(reason, path)
+    end
+  end
 
-    case result do
-      {:ok, text} when is_binary(text) ->
-        {:ok, text}
+  defp write_target(path, content, %{identity: identity}, _opts) do
+    case FileValidation.write_regular_file(path, identity, content) do
+      :ok -> :ok
+      {:error, reason} -> write_error(reason, path)
+    end
+  end
 
-      {:ok, :eof} ->
-        {:ok, ""}
+  defp write_error(:eexist, path),
+    do: {:error, "Failed to write file: #{path} appeared after validation; nothing was written"}
 
-      {:ok, {:error, reason}} ->
-        {:error, "Failed to read existing file: #{:file.format_error(reason)}"}
+  defp write_error(reason, _path) when is_binary(reason),
+    do: {:error, "Failed to write file: #{reason}"}
+
+  defp write_error(reason, path),
+    do:
+      {:error, "Failed to write file: #{FileValidation.format_file_error(reason, path, "file")}"}
+
+  # The pinned existing file: format detection samples only its first 64 KiB, and
+  # its complete text is kept for the result snapshot when it is at most 16 KiB.
+  defp existing_file(path, opts) do
+    case FileValidation.regular_file_identity(path, opts) do
+      {:ok, identity} ->
+        case FileValidation.read_regular_file(path, identity, max_bytes: 65_536, prefix: true) do
+          {:ok, sample} ->
+            old_text = if byte_size(sample) <= 16_384, do: sample, else: :unavailable
+            {:ok, %{identity: identity, sample: sample, old_text: old_text}}
+
+          {:error, reason} ->
+            existing_error(reason, path)
+        end
 
       {:error, :enoent} ->
         {:ok, nil}
 
       {:error, reason} ->
-        {:error, "Failed to read existing file: #{:file.format_error(reason)}"}
+        existing_error(reason, path)
     end
   end
+
+  defp existing_error(reason, _path) when is_binary(reason),
+    do: {:error, "Failed to read existing file: #{reason}"}
+
+  defp existing_error(reason, _path),
+    do: {:error, "Failed to read existing file: #{:file.format_error(reason)}"}
 
   defp prepare_content(content, old) when is_binary(old) do
     if Read.truncated_output?(content) do
@@ -414,22 +447,6 @@ defmodule CodingAgent.Tools.Write do
   end
 
   defp prepare_content(content, _old), do: {:ok, content}
-
-  defp read_bounded_snapshot(path) do
-    case File.stat(path) do
-      {:error, :enoent} ->
-        nil
-
-      {:ok, %File.Stat{type: :regular, size: size}} when size <= 16_384 ->
-        case File.read(path) do
-          {:ok, text} -> text
-          _ -> :unavailable
-        end
-
-      _ ->
-        :unavailable
-    end
-  end
 
   defp success_message(path, byte_count, true),
     do: "Successfully wrote #{byte_count} bytes to #{path} and formatted the file"

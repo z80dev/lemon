@@ -133,6 +133,28 @@ apps; optional consumers register at runtime. See [README](README.md),
   cap); only the operator's global `[skills] allowed_private_git_hosts` may
   admit private destinations.
 
+## Descriptor-bound file I/O
+
+- OTP has no `openat`/`O_NOFOLLOW`: an `lstat` check followed by a path-based
+  `File` open, write, rename, `rm`/`rm_rf` or `chmod` can be redirected by a
+  writer who swaps a checked directory for a symlink in between. File I/O
+  below a root that agents, tools, channel users or other local processes can
+  modify goes through `LemonCore.ConfinedFS` (port helper built from
+  `c_src/lemon_confined_fs.c` into `priv/` by `:elixir_make`): one session
+  per operation, directories walked no-follow from the trusted root, leaf
+  operations on the walked handles, fail closed (never fall back to `File`).
+  Never add a new check-then-use path sequence for such a root.
+- The helper is required in the umbrella and releases (`mix compile` fails
+  without it; release verification checks for it); for Hex consumers it is
+  optional and a missing helper is `{:error, :helper_unavailable}`. Identity
+  conditions on `replace`/`unlink` are best-effort conflict detection, not
+  compare-and-swap; only `expect: :absent` (atomic no-replace) and
+  opened-inode bindings (`read`/`overwrite`/`append`) are exact. Do not build
+  a guarantee on more.
+- Race regressions use `LemonCore.Testing.FileServerTap` (`async: false`),
+  which swaps a directory between a path-based check and its use, and the
+  helper's test-only `stage_hook:` (FIFO pause inside `replace/5`).
+
 ## Automatic Git
 
 - `LemonCore.SafeGit` is the only runner for Git commands Lemon starts on its

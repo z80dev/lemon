@@ -63,7 +63,7 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
            ]
   end
 
-  test "applies text, rename, create and delete operations and refreshes the read tracker", %{
+  test "applies text, rename, create and delete operations and updates the read tracker", %{
     tmp: tmp
   } do
     File.write!(Path.join(tmp, "a.c"), "aaa\n")
@@ -73,6 +73,8 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
     session_id = "wedit-#{System.unique_integer([:positive])}"
     opts = [session_id: session_id, filesystem_checkpoints: false]
     FileReadTracker.record(opts, Path.join(tmp, "b.c"), "bbb\n")
+    FileReadTracker.record(opts, Path.join(tmp, "a.c"), "aaa\n")
+    FileReadTracker.record(opts, Path.join(tmp, "gone.c"), "x")
 
     edit = %{
       "documentChanges" => [
@@ -99,10 +101,42 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
     assert Path.join(tmp, "dir/c.c") in changed
     assert "Renamed a.c → dir/c.c" in applied
     assert "Deleted gone.c" in applied
-    assert Path.wildcard(Path.join(tmp, "**/.*.tmp"), match_dot: true) == []
+    assert Path.wildcard(Path.join(tmp, "**/.*"), match_dot: true) == []
 
-    # The tracker now holds the post-edit bytes, so a later `edit` is not stale.
+    # The tracker holds the committed bytes, so a later `edit` is not stale,
+    # and forgets the renamed-away and deleted paths.
     assert :ok = FileReadTracker.check(opts, Path.join(tmp, "b.c"), "BBB\n")
+    assert :ok = FileReadTracker.check(opts, Path.join(tmp, "new.c"), "")
+    assert :ok = FileReadTracker.check(opts, Path.join(tmp, "a.c"), "recreated\n")
+    assert :ok = FileReadTracker.check(opts, Path.join(tmp, "gone.c"), "recreated\n")
+  end
+
+  test "a rename out of the workspace fails closed before moving anything", %{tmp: tmp} do
+    other =
+      Text.realpath(System.tmp_dir!())
+      |> Path.join("lsp_other_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(other)
+    on_exit(fn -> File.rm_rf!(other) end)
+    File.write!(Path.join(tmp, "a.c"), "aaa\n")
+
+    {:ok, ops} =
+      WorkspaceEdit.plan(%{
+        "documentChanges" => [
+          %{
+            "kind" => "rename",
+            "oldUri" => uri(tmp, "a.c"),
+            "newUri" => Text.path_to_uri(Path.join(other, "a.c"))
+          }
+        ]
+      })
+
+    assert {:error, message} =
+             WorkspaceEdit.apply(ops, tmp, [filesystem_checkpoints: false], nil, %{tool: "lsp"})
+
+    assert message =~ "same trusted directory"
+    assert File.read!(Path.join(tmp, "a.c")) == "aaa\n"
+    assert File.ls!(other) == []
   end
 
   test "file rename refuses an existing destination without overwriting it", %{tmp: tmp} do
@@ -298,12 +332,11 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
     assert reason =~ "2 path(s) were already changed: #{first}, #{nested}"
     assert File.dir?(Path.join(nested, "deep"))
 
-    # A recursive delete can remove descendants before failing on a locked parent.
+    # A recursive delete gives itself owner access to locked directories.
     tree = Path.join(tmp, "tree")
     locked = Path.join(tree, "locked")
-    removed = Path.join([locked, "sub", "x.c"])
-    File.mkdir_p!(Path.dirname(removed))
-    File.write!(removed, "x")
+    File.mkdir_p!(Path.join(locked, "sub"))
+    File.write!(Path.join(locked, "sub/x.c"), "x")
     File.chmod!(locked, 0o555)
     on_exit(fn -> File.chmod(locked, 0o755) end)
 
@@ -314,13 +347,39 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
         ]
       })
 
-    assert {:error, reason, receipt} = WorkspaceEdit.apply(ops, tmp, opts, nil, %{tool: "lsp"})
-    assert receipt.changed == [tree]
-    assert receipt.applied == []
-    assert reason =~ "1 path(s) were already changed: #{tree}"
-    refute File.exists?(removed)
-    assert File.dir?(Path.dirname(removed))
-    File.chmod!(locked, 0o755)
+    assert {:ok, %{changed: [^tree], applied: ["Deleted tree"]}} =
+             WorkspaceEdit.apply(ops, tmp, opts, nil, %{tool: "lsp"})
+
+    refute File.exists?(tree)
+  end
+
+  if match?({:unix, :darwin}, :os.type()) do
+    test "a recursive delete that fails midway reports the partially deleted tree", %{tmp: tmp} do
+      # The immutable `locked` keeps `sub` after its descendant was removed.
+      tree = Path.join(tmp, "tree")
+      locked = Path.join(tree, "locked")
+      removed = Path.join([locked, "sub", "x.c"])
+      File.mkdir_p!(Path.dirname(removed))
+      File.write!(removed, "x")
+      {_, 0} = System.cmd("chflags", ["uchg", locked])
+      on_exit(fn -> System.cmd("chflags", ["nouchg", locked]) end)
+
+      {:ok, ops} =
+        WorkspaceEdit.plan(%{
+          "documentChanges" => [
+            %{"kind" => "delete", "uri" => uri(tmp, "tree"), "options" => %{"recursive" => true}}
+          ]
+        })
+
+      assert {:error, reason, receipt} =
+               WorkspaceEdit.apply(ops, tmp, [filesystem_checkpoints: false], nil, %{tool: "lsp"})
+
+      assert receipt.changed == [tree]
+      assert receipt.applied == []
+      assert reason =~ "1 path(s) were already changed: #{tree}"
+      refute File.exists?(removed)
+      assert File.dir?(Path.dirname(removed))
+    end
   end
 
   test "abort after checkpoint publication retains the receipt without writing", %{tmp: tmp} do

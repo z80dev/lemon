@@ -223,9 +223,15 @@ This response updates the session's tracked view, so retry with its tag and
 current coordinates without another read. Context is capped at 40 lines / 8 KiB;
 read additional ranges when the displayed context is insufficient.
 
-Local edit/patch source reads and update writes pin the validated file's device,
-inode and type through checked file handles. A replaced path or swapped symlink
-is refused without returning the replacement's retry context.
+Local `write`, `edit`, `patch` and archive-member writes validate each target and
+then do every read, in-place update, exclusive create (including missing parent
+directories), replacement and delete through descriptor-bound file access below
+the same trusted directory: the working directory (or the session's confinement
+directory), otherwise the first component below `/`. Nothing below it is reached
+through a symlink, so a directory swapped for a symlink after validation is
+refused rather than followed. Edit/patch source reads and update writes are also
+pinned to the validated file's device and inode; a replaced path or swapped
+symlink is refused without returning the replacement's retry context.
 
 Local `write`, `edit`, and `patch` accept `"format": true` (default false, unless
 enabled in tool options) to run an available formatter after writing. An explicit
@@ -234,9 +240,28 @@ formatter failure does not undo the write. Edit headers and patch per-file
 `snapshot` tags describe the post-format file, so they can be used directly for
 the next anchored edit. ACP writes retain client-managed formatting behavior.
 
+Formatters never open the workspace file. Lemon stages the bytes it just wrote
+in a private `0700` directory under the system temp directory, runs the
+formatter as a filter (`mix format --stdin-filename`, `prettier
+--stdin-filepath`, `black --stdin-filename`, `rustfmt --emit stdout` in the
+file's directory, `gofmt`), and reads its output back from that directory
+(input and output are limited to 8 MiB). The workspace path is only a hint for
+the formatter's own configuration lookup, which reads the project outside
+Lemon's confined I/O. A changed result is written in place through the same
+descriptor-bound path as the write, below the same boundary, and only while the
+file still holds exactly the bytes Lemon wrote; a swapped directory, replaced
+file or concurrent change discards the formatter output and reports
+`format_error`. Per-file formatter config such as nested `rustfmt.toml` is
+still honoured; `rustfmt` no longer formats out-of-line `mod` files the edited
+file declares.
+
+The session's read tracker records the bytes each tool committed (after
+formatting); it never re-reads a path after a write.
+
 `write`, `edit` and `patch` also accept `"diagnostics": true` (default false,
 unless enabled in tool options) to report newly introduced language diagnostics
-after the write; see [LSP and diagnostics](lsp.md).
+after the write; Lemon's own reads of the file go through the same
+descriptor-bound helpers. See [LSP and diagnostics](lsp.md).
 
 ## Patch hunk matching
 
@@ -335,10 +360,18 @@ on a keyed selector deletes that row. `{}` inserts default values but is not a
 valid update. Composite primary keys and unavailable rowid fallbacks are refused.
 Values must be JSON scalars; column names are checked against `pragma_table_info`
 and SQL values are bound parameters. Database files must already exist; writes
-never create one. Query parameters are not accepted for writes. Connections use
-a 3-second busy timeout and physical database paths take the normal mutation lock,
-checkpoint, symlink and plan-mode guards. Existing literal selector-shaped files
-take precedence over SQLite interpretation.
+never create one. Query parameters are not accepted for writes. Physical
+database paths take the normal mutation lock, checkpoint, symlink and plan-mode
+guards. SQLite never opens the workspace file for a write: the database is read
+(at most 128 MiB) through the same descriptor-bound I/O as `write`, so a
+directory swapped for a symlink after validation is refused; the row change runs
+on a private in-memory copy, and the result atomically replaces the database
+with its mode kept (a WAL-format database stays in WAL format). A database with
+a `-journal`, `-wal` or `-shm` file (open, in WAL use or interrupted) is refused.
+Close other connections first: a process that keeps the database open keeps
+using the replaced file, and a change it commits between the read and the
+replace is overwritten. Existing literal selector-shaped files take precedence
+over SQLite interpretation.
 
 ## grep paging and ignore rules
 
@@ -423,7 +456,10 @@ ast-grep) and is unavailable without it; there is no regex fallback. Use
 to `["."]`; replace needs an explicit scope). Replacement defaults to
 `dry_run: true`; applying requires `dry_run: false` and `expected_matches` equal to
 the preview count. `max_results` (default 100, max 1000) limits visible matches
-only, never the replacement scope.
+only, never the replacement scope. Each planned file's identity is pinned at
+preview; the preview read, the commit-time content recheck and the in-place write
+go through a descriptor-bound walk below the workspace that never follows
+symlinks, so a directory swapped for a symlink after validation is refused.
 
 `ast_grep` refuses a scope with more than `max_files` files (default 1000) before
 starting the CLI or writing. Narrow `paths` or explicitly raise the cap. Directory
@@ -437,7 +473,9 @@ contains the first 20 failures and `parse_errors_total` counts all failures.
 If every file fails, the tool still returns an error. Match counts and replacement
 previews exclude failed files, which are never rewritten.
 
-Large JSONL match results retain their complete spill file. When session artifact
+Large JSONL match results retain their complete spill file, created exclusively
+(mode 0600, unpredictable name) in the session spill directory, never shared
+temp. When session artifact
 storage is available, the notice uses its `artifact://` handle and
 `details.artifact_uri` exposes it; `full_output_path` retains the backing path.
 

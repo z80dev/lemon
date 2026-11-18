@@ -22,7 +22,13 @@ defmodule LemonCore.Checkpoint do
   Callers using an aliased workspace (such as a macOS temporary directory) must
   resolve the trusted workspace before deriving capture paths, not resolve
   model-selected paths. The default `cwd` is the physical `File.cwd!()` path.
-  Restore rechecks all selected parent paths before deleting any root.
+  Restore rechecks all selected parent paths before deleting any root, then
+  performs every removal, write, symlink creation and chmod through
+  `LemonCore.ConfinedFS` directory descriptors walked from `/` without following
+  symlinks: a concurrent writer that swaps a checked parent directory (or a
+  directory inside a root being replaced) for a symlink makes the restore fail
+  with `{:restore_write_failed, path, :symlink}` or keeps it on the original
+  directory; it cannot redirect it outside the tree.
 
   Checkpoint ids must match `chk_` followed by 16 lowercase hex digits; any
   other id is reported as `:not_found` before the filesystem is touched.
@@ -53,15 +59,16 @@ defmodule LemonCore.Checkpoint do
   Filesystem checkpoints record their captured roots; diff and restore reject
   snapshots whose paths are not exactly those recorded roots, and checkpoints
   captured before roots were recorded are refused. Diff refuses to read through
-  a symlinked ancestor or leaf and re-verifies the parent walk and file identity
-  after reading.
+  a symlinked ancestor or leaf.
 
-  Remaining races (shared descriptor-bound finding NEW-6, not addressed here):
+  Capture, fingerprint and diff read through `LemonCore.ConfinedFS` handles
+  walked from `/`: every component is opened without following symlinks and
+  file content is read only from the stat'ed inode, so a parent swapped after
+  the checks cannot make them read content from outside the tree. Recorded
+  modes keep the `File.lstat/1` representation (file type bits included).
 
-    * Parent checks and the later pathname-based read, removal, write and chmod
-      are separate syscalls, so a concurrent writer that swaps a checked parent
-      directory for a symlink between the check and the operation can still
-      redirect it. Pre-existing substitutions are rejected.
+  Remaining race:
+
     * The confirmation fingerprint is compared before `restore_loaded/2`
       validates and mutates the roots, and nothing locks the tree in between.
       A concurrent agent or workspace writer that changes a root after that
@@ -71,6 +78,8 @@ defmodule LemonCore.Checkpoint do
   """
 
   require Logger
+
+  alias LemonCore.ConfinedFS
 
   @checkpoint_version "1.0"
   @checkpoint_id_pattern ~r/\Achk_[0-9a-f]{16}\z/
@@ -180,7 +189,7 @@ defmodule LemonCore.Checkpoint do
   def filesystem_fingerprint(path, opts \\ []) do
     with {:ok, budget} <- snapshot_budget(opts),
          :ok <- safe_parents(Path.expand(path)),
-         {:ok, node, _budget} <- snapshot_node(Path.expand(path), budget, 0, true) do
+         {:ok, node, _budget} <- snapshot_root(Path.expand(path), budget, true) do
       {:ok, :crypto.hash(:sha256, :erlang.term_to_binary(node))}
     end
   rescue
@@ -741,7 +750,7 @@ defmodule LemonCore.Checkpoint do
       |> Enum.uniq()
       |> Enum.reduce_while({:ok, [], budget}, fn path, {:ok, acc, remaining} ->
         with :ok <- safe_parents(path),
-             {:ok, node, remaining} <- snapshot_node(path, remaining, 0, false) do
+             {:ok, node, remaining} <- snapshot_root(path, remaining, false) do
           {:cont, {:ok, [Map.put(node, :path, path) | acc], remaining}}
         else
           {:error, _} = error -> {:halt, error}
@@ -754,54 +763,79 @@ defmodule LemonCore.Checkpoint do
     end
   end
 
-  defp snapshot_node(path, budget, depth, fingerprint?) do
+  # Capture and fingerprint read through `ConfinedFS` handles walked from `/`
+  # without following symlinks, so a parent swapped after `safe_parents/1`
+  # cannot make them read (and store) content from outside the root.
+  defp snapshot_root(path, budget, fingerprint?) do
+    case with_confined_entry(path, fn fs, parent, name ->
+           snapshot_node(fs, parent, name, path, budget, 0, fingerprint?)
+         end) do
+      {:ok, result} -> result
+      {:error, :enoent} -> snapshot_node(nil, nil, nil, path, budget, 0, fingerprint?)
+      {:error, reason} -> {:error, {:stat_failed, path, reason}}
+    end
+  end
+
+  # `{:ok, fun.(fs, parent_handle, name)}` for the absolute `path`, or the
+  # session/parent-walk error (`:enoent` for a missing parent).
+  defp with_confined_entry(path, fun) do
+    ConfinedFS.with_root("/", fn fs ->
+      {:ok, parts} = ConfinedFS.beneath("/", path)
+
+      with {:ok, parent, name} <- ConfinedFS.open_parent(fs, :root, parts) do
+        try do
+          {:ok, fun.(fs, parent, name)}
+        after
+          ConfinedFS.close_dir(fs, parent)
+        end
+      end
+    end)
+  end
+
+  @absent_node %{exists: false, type: nil, size: nil, mode: nil, content_b64: nil}
+
+  defp snapshot_node(fs, dir, name, path, budget, depth, fingerprint?) do
     with {:ok, budget} <- consume_budget(budget, 0, depth) do
-      case File.lstat(path) do
-        {:ok, %File.Stat{type: :regular, size: size, mode: mode} = stat} ->
+      case if(fs, do: ConfinedFS.stat(fs, dir, name), else: {:error, :enoent}) do
+        {:ok, %ConfinedFS.Stat{type: :regular, size: size} = stat} ->
           with :ok <- check_file_size(path, size, budget.max_bytes),
                {:ok, budget} <- reserve_bytes(budget, size),
-               {:ok, content} <- read_snapshot_content(path, fingerprint?, size),
-               {:ok, current} <- File.lstat(path),
-               true <-
-                 current.type == :regular and current.inode == stat.inode and
-                   current.size == size and current.mode == mode do
-            node = %{exists: true, type: "regular", size: size, mode: mode}
-            key = if fingerprint?, do: :content_hash, else: :content_b64
-            value = if fingerprint?, do: content, else: Base.encode64(content)
-            {:ok, Map.put(node, key, value), budget}
-          else
-            false -> {:error, {:file_changed_during_capture, path}}
-            {:error, _} = error -> error
+               {:ok, content, current} <- read_snapshot_content(fs, dir, name, path, stat) do
+            node = %{exists: true, type: "regular", size: size, mode: lstat_mode(current)}
+
+            if fingerprint?,
+              do: {:ok, Map.put(node, :content_hash, :crypto.hash(:sha256, content)), budget},
+              else: {:ok, Map.put(node, :content_b64, Base.encode64(content)), budget}
           end
 
-        {:ok, %File.Stat{type: :directory, mode: mode}} ->
-          with {:ok, names} <- File.ls(path),
-               true <- length(names) <= budget.entries,
-               {:ok, entries, budget} <-
-                 snapshot_children(path, Enum.sort(names), budget, depth, fingerprint?) do
-            {:ok, %{exists: true, type: "directory", mode: mode, entries: entries}, budget}
-          else
-            false -> {:error, :snapshot_entries_exceeded}
-            {:error, _} = error -> error
-          end
+        {:ok, %ConfinedFS.Stat{type: :directory} = stat} ->
+          snapshot_directory(fs, dir, name, path, stat, budget, depth, fingerprint?)
 
-        {:ok, %File.Stat{type: :symlink}} ->
-          with {:ok, target} <- File.read_link(path),
+        {:ok, %ConfinedFS.Stat{type: :symlink}} ->
+          with {:ok, target} <- ConfinedFS.readlink(fs, dir, name),
                {:ok, budget} <- reserve_bytes(budget, byte_size(target)) do
             {:ok, %{exists: true, type: "symlink", target: target}, budget}
+          else
+            {:error, reason} when is_atom(reason) -> {:error, {:stat_failed, path, reason}}
+            error -> error
           end
 
-        {:ok, %File.Stat{type: type}} ->
+        {:ok, %ConfinedFS.Stat{type: type}} ->
           {:error, {:unsupported_file_type, path, type}}
 
         {:error, :enoent} ->
-          {:ok, %{exists: false, type: nil, size: nil, mode: nil, content_b64: nil}, budget}
+          {:ok, @absent_node, budget}
 
         {:error, reason} ->
           {:error, {:stat_failed, path, reason}}
       end
     end
   end
+
+  # `File.Stat`-compatible mode (file type bits included), so checkpoints and
+  # fingerprints keep the representation captured with `File.lstat/1`.
+  defp lstat_mode(%ConfinedFS.Stat{type: :regular, mode: mode}), do: Bitwise.bor(0o100000, mode)
+  defp lstat_mode(%ConfinedFS.Stat{type: :directory, mode: mode}), do: Bitwise.bor(0o040000, mode)
 
   defp reserve_bytes(budget, size) when size <= budget.bytes,
     do: {:ok, %{budget | bytes: budget.bytes - size}}
@@ -811,47 +845,61 @@ defmodule LemonCore.Checkpoint do
   defp check_file_size(_path, size, max) when size <= max, do: :ok
   defp check_file_size(path, size, max), do: {:error, {:file_too_large, path, size, max}}
 
-  defp read_snapshot_content(path, fingerprint?, size) do
-    case File.open(path, [:read, :binary], fn io ->
-           if fingerprint? do
-             read_file_hash(io, size, :crypto.hash_init(:sha256))
-           else
-             case IO.binread(io, size + 1) do
-               :eof when size == 0 -> {:ok, ""}
-               content when is_binary(content) and byte_size(content) == size -> {:ok, content}
-               {:error, _} = error -> error
-               _ -> {:error, :file_changed_during_capture}
-             end
-           end
-         end) do
-      {:ok, result} -> result
-      {:error, _} = error -> error
-    end
-  end
+  # Reads exactly the stat'ed file; growth, replacement or a mode or size
+  # change in between is a capture failure.
+  defp read_snapshot_content(fs, dir, name, path, %ConfinedFS.Stat{size: size} = stat) do
+    case ConfinedFS.read(fs, dir, name, size, expect: stat) do
+      {:ok, content, %ConfinedFS.Stat{size: ^size, mode: mode} = current}
+      when byte_size(content) == size and mode == stat.mode ->
+        {:ok, content, current}
 
-  defp read_file_hash(io, 0, hash) do
-    case IO.binread(io, 1) do
-      :eof -> {:ok, :crypto.hash_final(hash)}
-      _ -> {:error, :file_changed_during_capture}
-    end
-  end
+      {:ok, _content, _current} ->
+        {:error, {:file_changed_during_capture, path}}
 
-  defp read_file_hash(io, remaining, hash) do
-    case IO.binread(io, min(remaining, 65_536)) do
-      content when is_binary(content) ->
-        read_file_hash(io, remaining - byte_size(content), :crypto.hash_update(hash, content))
+      {:error, reason} when reason in [:changed, :too_large, :not_regular, :symlink, :enoent] ->
+        {:error, {:file_changed_during_capture, path}}
 
       {:error, _} = error ->
         error
-
-      _ ->
-        {:error, :file_changed_during_capture}
     end
   end
 
-  defp snapshot_children(path, names, budget, depth, fingerprint?) do
+  defp snapshot_directory(fs, dir, name, path, stat, budget, depth, fingerprint?) do
+    with {:ok, handle} <- ConfinedFS.open_dir(fs, dir, [name]) do
+      try do
+        with {:ok, %ConfinedFS.Stat{} = opened} <- ConfinedFS.stat(fs, handle),
+             true <- ConfinedFS.Stat.same_object?(opened, stat),
+             {:ok, listed} <- ConfinedFS.list(fs, handle, max_entries: budget.entries),
+             names = listed |> Enum.map(&elem(&1, 0)) |> Enum.sort(),
+             {:ok, entries, budget} <-
+               snapshot_children(fs, handle, path, names, budget, depth, fingerprint?) do
+          {:ok, %{exists: true, type: "directory", mode: lstat_mode(opened), entries: entries},
+           budget}
+        else
+          false -> {:error, {:file_changed_during_capture, path}}
+          {:error, :too_many} -> {:error, :snapshot_entries_exceeded}
+          {:error, reason} when is_atom(reason) -> {:error, {:stat_failed, path, reason}}
+          error -> error
+        end
+      after
+        ConfinedFS.close_dir(fs, handle)
+      end
+    else
+      {:error, reason} -> {:error, {:stat_failed, path, reason}}
+    end
+  end
+
+  defp snapshot_children(fs, dir, path, names, budget, depth, fingerprint?) do
     Enum.reduce_while(names, {:ok, [], budget}, fn name, {:ok, acc, remaining} ->
-      case snapshot_node(Path.join(path, name), remaining, depth + 1, fingerprint?) do
+      case snapshot_node(
+             fs,
+             dir,
+             name,
+             Path.join(path, name),
+             remaining,
+             depth + 1,
+             fingerprint?
+           ) do
         {:ok, node, remaining} ->
           {:cont, {:ok, [%{name: name, snapshot: node} | acc], remaining}}
 
@@ -947,7 +995,7 @@ defmodule LemonCore.Checkpoint do
         %{
           path: snapshot.path,
           before_exists: snapshot.exists,
-          after_exists: match?({:ok, _}, File.lstat(snapshot.path)),
+          after_exists: current_exists?(snapshot.path),
           diff:
             "#{snapshot.path}: filesystem tree, mode or identity changed#{if match?({:error, _}, result), do: " (current tree unavailable)", else: ""}"
         }
@@ -983,23 +1031,14 @@ defmodule LemonCore.Checkpoint do
     }
   end
 
+  defp diff_confined_snapshot(%{type: type} = snapshot) when type in ["directory", "symlink"],
+    do: resource_diff(snapshot)
+
   defp diff_confined_snapshot(snapshot) do
-    case {snapshot.type, File.lstat(snapshot.path)} do
-      {type, _} when type in ["directory", "symlink"] ->
-        resource_diff(snapshot)
-
-      {_, {:ok, %{type: type}}} when type != :regular ->
-        resource_diff(snapshot)
-
-      _ ->
-        before_content = snapshot_content(snapshot)
-        after_content = current_content(snapshot.path)
-
-        if after_content == :unavailable do
-          unavailable_diff(snapshot)
-        else
-          content_diff(snapshot, before_content, after_content)
-        end
+    case current_content(snapshot.path) do
+      :unavailable -> unavailable_diff(snapshot)
+      :not_content -> resource_diff(snapshot)
+      content -> content_diff(snapshot, snapshot_content(snapshot), content)
     end
   end
 
@@ -1022,45 +1061,46 @@ defmodule LemonCore.Checkpoint do
     Base.decode64!(content_b64)
   end
 
-  # Reads only a regular file reached without symlinks. After opening, the
-  # handle's own file info must match the no-follow lstat identity of the
-  # walked leaf before any bytes are returned, so a leaf or parent swapped
-  # before the open is rejected; the parent walk is re-checked afterwards.
+  @diff_read_max 50 * 1024 * 1024
+
+  # Reads only a regular file reached through `ConfinedFS` handles walked from
+  # `/` without following symlinks, bound to the identity of the stat'ed leaf:
+  # file content (`nil` when absent), `:not_content` for another type or an
+  # oversized file (compared by fingerprint instead), or `:unavailable`.
   defp current_content(path) do
-    case File.lstat(path) do
-      {:error, :enoent} ->
-        nil
+    result =
+      with_confined_entry(path, fn fs, parent, name ->
+        case ConfinedFS.stat(fs, parent, name) do
+          {:ok, %ConfinedFS.Stat{type: :regular} = leaf} ->
+            case ConfinedFS.read(fs, parent, name, @diff_read_max, expect: leaf) do
+              {:ok, content, _stat} -> content
+              {:error, :too_large} -> :not_content
+              {:error, _} -> :unavailable
+            end
 
-      {:ok, %File.Stat{type: :regular} = leaf} ->
-        with {:ok, result} <- File.open(path, [:read, :binary], &read_bound(&1, leaf)),
-             {:ok, content} <- result,
-             :ok <- safe_parents(path) do
-          content
-        else
-          _ -> :unavailable
+          {:ok, _other} ->
+            :not_content
+
+          {:error, :enoent} ->
+            nil
+
+          {:error, _} ->
+            :unavailable
         end
+      end)
 
-      _ ->
-        :unavailable
+    case result do
+      {:ok, content} -> content
+      {:error, :enoent} -> nil
+      {:error, _} -> :unavailable
     end
   end
 
-  defp read_bound(io, %File.Stat{inode: inode, major_device: device}) do
-    with {:ok, info} <- :file.read_file_info(io),
-         %File.Stat{type: :regular, inode: ^inode, major_device: ^device} <-
-           File.Stat.from_record(info) do
-      read_all(io, [])
-    else
-      _ -> {:error, :identity_mismatch}
-    end
-  end
-
-  defp read_all(io, acc) do
-    case :file.read(io, 65_536) do
-      {:ok, chunk} -> read_all(io, [acc | chunk])
-      :eof -> {:ok, IO.iodata_to_binary(acc)}
-      {:error, _} = error -> error
-    end
+  defp current_exists?(path) do
+    match?(
+      {:ok, {:ok, _}},
+      with_confined_entry(path, fn fs, parent, name -> ConfinedFS.stat(fs, parent, name) end)
+    )
   end
 
   defp unified_diff(path, before_content, after_content) do
@@ -1197,70 +1237,85 @@ defmodule LemonCore.Checkpoint do
 
   defp valid_entry_name?(_), do: false
 
+  # Every restore operation runs on directory descriptors from a session rooted
+  # at `/`: the parent walk refuses symlinked components (the same rule capture
+  # and validation apply) and later swaps of a walked path cannot move the open
+  # handles, so removal, writes, symlink creation and chmods stay in the tree.
   defp restore_snapshot(%{path: path} = snapshot) do
-    with :ok <- safe_parents(path),
-         :ok <- remove_tree(path),
-         :ok <- restore_node(path, snapshot) do
-      :ok
-    else
+    result =
+      ConfinedFS.with_root("/", fn fs ->
+        case open_restore_parent(fs, path, snapshot) do
+          {:ok, parent, name} ->
+            try do
+              with :ok <- remove_entry(fs, parent, name),
+                   do: restore_node(fs, parent, name, snapshot)
+            after
+              ConfinedFS.close_dir(fs, parent)
+            end
+
+          :absent ->
+            :ok
+
+          {:error, _} = error ->
+            error
+        end
+      end)
+
+    case result do
+      :ok -> :ok
       {:error, reason} -> {:error, {:restore_write_failed, path, reason}}
     end
   end
 
-  defp remove_tree(path) do
-    case File.lstat(path) do
-      {:error, :enoent} ->
-        :ok
+  # Parents are created only when something is restored below them; a missing
+  # parent of an absent root means there is nothing to remove.
+  defp open_restore_parent(fs, path, %{exists: exists}) do
+    {:ok, parts} = ConfinedFS.beneath("/", path)
 
-      {:ok, %{type: :directory, mode: mode}} ->
-        # Owner access is temporary; the recorded modes are reapplied after rebuild.
-        with :ok <- File.chmod(path, Bitwise.bor(mode, 0o700)),
-             {:ok, names} <- File.ls(path),
-             :ok <-
-               Enum.reduce_while(names, :ok, fn name, :ok ->
-                 case remove_tree(Path.join(path, name)) do
-                   :ok -> {:cont, :ok}
-                   error -> {:halt, error}
-                 end
-               end),
-             :ok <- File.rmdir(path),
-             do: :ok
-
-      {:ok, _} ->
-        File.rm(path)
-
-      {:error, _} = error ->
-        error
+    case ConfinedFS.open_parent(fs, :root, parts, create: exists == true) do
+      {:error, :enoent} when exists != true -> :absent
+      other -> other
     end
   end
 
-  defp restore_node(_path, %{exists: false}), do: :ok
+  defp remove_entry(fs, parent, name) do
+    case ConfinedFS.remove_tree(fs, parent, name) do
+      {:error, :enoent} -> :ok
+      other -> other
+    end
+  end
 
-  defp restore_node(path, %{type: "regular", content_b64: encoded, mode: mode}) do
+  defp restore_node(_fs, _parent, _name, %{exists: false}), do: :ok
+
+  defp restore_node(fs, parent, name, %{type: "regular", content_b64: encoded, mode: mode}) do
     with {:ok, content} <- Base.decode64(encoded),
-         :ok <- File.mkdir_p(Path.dirname(path)),
-         :ok <- File.write(path, content),
-         :ok <- maybe_chmod(path, mode),
-         do: :ok
+         {:ok, _stat} <- ConfinedFS.create(fs, parent, name, content, mode: 0o600),
+         do: maybe_chmod(fs, parent, name, mode)
   end
 
-  defp restore_node(path, %{type: "symlink", target: target}) do
-    with :ok <- File.mkdir_p(Path.dirname(path)), do: File.ln_s(target, path)
+  defp restore_node(fs, parent, name, %{type: "symlink", target: target}),
+    do: ConfinedFS.symlink(fs, parent, name, target)
+
+  defp restore_node(fs, parent, name, %{type: "directory", entries: entries, mode: mode}) do
+    # Owner access is temporary; the recorded mode is reapplied after rebuild.
+    with :ok <- ConfinedFS.mkdir(fs, parent, name, 0o700),
+         {:ok, dir} <- ConfinedFS.open_dir(fs, parent, [name]) do
+      result =
+        try do
+          Enum.reduce_while(entries, :ok, fn entry, :ok ->
+            case restore_node(fs, dir, entry.name, entry.snapshot) do
+              :ok -> {:cont, :ok}
+              error -> {:halt, error}
+            end
+          end)
+        after
+          ConfinedFS.close_dir(fs, dir)
+        end
+
+      with :ok <- result, do: maybe_chmod(fs, parent, name, mode)
+    end
   end
 
-  defp restore_node(path, %{type: "directory", entries: entries, mode: mode}) do
-    with :ok <- File.mkdir_p(path),
-         :ok <-
-           Enum.reduce_while(entries, :ok, fn entry, :ok ->
-             case restore_node(Path.join(path, entry.name), entry.snapshot) do
-               :ok -> {:cont, :ok}
-               error -> {:halt, error}
-             end
-           end),
-         :ok <- maybe_chmod(path, mode),
-         do: :ok
-  end
-
-  defp maybe_chmod(_path, nil), do: :ok
-  defp maybe_chmod(path, mode), do: File.chmod(path, mode)
+  defp maybe_chmod(_fs, _parent, _name, nil), do: :ok
+  defp maybe_chmod(fs, parent, name, mode), do: ConfinedFS.chmod(fs, parent, name, mode)
 end

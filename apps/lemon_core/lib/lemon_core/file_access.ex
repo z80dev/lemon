@@ -5,7 +5,8 @@ defmodule LemonCore.FileAccess do
 
   The active root is the operator-configured project (or the channel default
   cwd). Its own symlinks are resolved once, because the operator chose it;
-  everything below it is walked component by component with `lstat`:
+  everything below it is walked and used through `LemonCore.ConfinedFS`
+  directory descriptors, one component at a time, never following a symlink:
 
     * a symlink anywhere below the root is refused for reads, writes and
       archives, so a link created inside the workspace never reaches outside it;
@@ -22,24 +23,30 @@ defmodule LemonCore.FileAccess do
       `[abc]`, `[a-z]`, `\\` escapes). A malformed or unsupported pattern
       (unbalanced or nested braces, unterminated or empty classes, `/` inside
       braces or classes) denies every path rather than matching nothing;
-    * reads open the file and compare the opened handle's identity with the
-      walked entry, then re-walk the parents; directory archives are built in
-      memory from regular files only;
-    * uploads are written to an exclusive temporary file in the checked
-      directory and renamed into place, never through an existing symlink;
-      upload names are reduced to a single basename;
+    * the walk, the deny decision's entry names and the I/O share one
+      descriptor session: reads open the walked entry relative to its
+      directory descriptor and require the same inode; directory archives are
+      built in memory from regular files only, listed and read through each
+      directory's descriptor;
+    * uploads are written to a private staged temporary file and renamed
+      into the walked directory (`renameat`), never through an existing
+      symlink. A new upload is published only if the target is still absent
+      (atomic no-replace); a forced overwrite checks that the target is still
+      the walked file immediately before the rename (best-effort conflict
+      detection). Upload names are reduced to a single basename;
     * tools that queue a file for later delivery send a private copy of the
-      validated bytes (`retain_copy/2`), never the source path.
+      validated bytes (`retain_copy/2`), never the source path. Expired copy
+      directories are pruned through their own descriptors, so a copy
+      directory swapped for a symlink is never followed.
 
-  Known gap (shared finding NEW-6): the walk checks each parent directory by
-  path, then a separate syscall opens, writes or renames. A writer who can
-  swap a checked parent directory for a symlink between the walk and the
-  open/write/rename can redirect that operation outside the root. The
-  re-walk after each operation reports such a swap but does not prevent it.
-  Closing this needs descriptor-relative, no-follow I/O (`openat` with
-  `O_NOFOLLOW`), which is not available here; do not rely on this module for
-  containment against a concurrent local writer inside the root.
+  A concurrent writer inside the root who swaps a walked directory for a
+  symlink cannot redirect an operation: it stays bound to the directory that
+  was walked. Hard links are not symlinks; a hard link inside the root is the
+  same file wherever else it is linked.
   """
+
+  alias LemonCore.ConfinedFS
+  alias LemonCore.ConfinedFS.Stat
 
   @builtin_denied_names ~w(.git .ssh .lemon .netrc .env .envrc)
   @max_archive_entries 10_000
@@ -50,6 +57,7 @@ defmodule LemonCore.FileAccess do
   @symlink_error "Symlinks are not allowed in file transfer paths."
   @denied_error "Access denied for that path."
   @escape_error "Path escapes the active working directory root."
+  @exists_error "File already exists. Use /file put --force <path> to overwrite."
 
   @type root :: String.t()
 
@@ -79,14 +87,19 @@ defmodule LemonCore.FileAccess do
 
   Returns the absolute path and its components, each existing one spelled as
   its actual directory entry. For `:put`, missing trailing components are
-  allowed (kept as given); for `:get` the entry must exist.
+  allowed (kept as given); for `:get` the entry must exist. The result is a
+  description only: `get/4`, `put/6` and `read_file/4` resolve again inside
+  the descriptor session that performs their I/O.
   """
   @spec resolve(root(), term(), :get | :put) ::
           {:ok, %{abs: String.t(), parts: [String.t()]}} | {:error, String.t()}
   def resolve(root, rel, mode) when is_binary(root) and is_binary(rel) do
-    with {:ok, parts} <- split_relative(rel),
-         {:ok, abs, resolved} <- walk(root, parts, mode) do
-      {:ok, %{abs: abs, parts: resolved}}
+    with {:ok, parts} <- split_relative(rel) do
+      in_root(root, fn fs ->
+        with {:ok, %{parts: resolved}} <- walk(fs, parts, mode) do
+          {:ok, %{abs: Path.join([root | resolved]), parts: resolved}}
+        end
+      end)
     end
   end
 
@@ -154,15 +167,23 @@ defmodule LemonCore.FileAccess do
           pos_integer()
         ) :: {:ok, String.t()} | {:error, String.t()}
   def put(root, rel, cfg, fetch, force, default_max) when is_function(fetch, 0) do
-    with {:ok, %{parts: [_ | _] = parts}} <- resolve(root, rel, :put),
-         :ok <- ensure_allowed(parts, cfg_value(cfg, :deny_globs)),
-         {:ok, bytes} when is_binary(bytes) <- fetch.(),
-         :ok <- within_size(byte_size(bytes), max_bytes(cfg, :max_upload_bytes, default_max)) do
-      write(root, parts, bytes, force)
+    with {:ok, [_ | _] = parts} <- split_relative(rel) do
+      in_root(root, fn fs ->
+        with {:ok, walked} <- walk(fs, parts, :put),
+             :ok <- ensure_allowed(walked.parts, cfg_value(cfg, :deny_globs)),
+             {:ok, bytes} when is_binary(bytes) <- fetch.(),
+             :ok <-
+               within_size(byte_size(bytes), max_bytes(cfg, :max_upload_bytes, default_max)),
+             :ok <- write(fs, walked, bytes, force) do
+          {:ok, Enum.join(walked.parts, "/")}
+        else
+          {:error, msg} when is_binary(msg) -> {:error, msg}
+          _ -> {:error, "Failed to write file."}
+        end
+      end)
     else
-      {:ok, %{parts: []}} -> {:error, "Invalid path."}
-      {:error, msg} when is_binary(msg) -> {:error, msg}
-      _ -> {:error, "Failed to write file."}
+      {:ok, []} -> {:error, "Invalid path."}
+      {:error, _} = error -> error
     end
   end
 
@@ -177,27 +198,29 @@ defmodule LemonCore.FileAccess do
     globs = cfg_value(cfg, :deny_globs)
     max = max_bytes(cfg, :max_download_bytes, default_max)
 
-    with {:ok, %{abs: abs, parts: parts}} <- resolve(root, rel, :get),
-         :ok <- ensure_allowed(parts, globs) do
-      case File.lstat(abs) do
-        {:ok, %File.Stat{type: :regular}} ->
-          with {:ok, bytes} <- read_regular(root, parts, max),
-               do: {:ok, filename(root, parts), bytes}
-
-        {:ok, %File.Stat{type: :directory}} ->
-          with {:ok, zip} <- archive(root, parts, globs, max),
-               do: {:ok, filename(root, parts) <> ".zip", zip}
-
-        {:ok, %File.Stat{type: :symlink}} ->
-          {:error, @symlink_error}
-
-        {:ok, _other} ->
-          {:error, "Unsupported file type."}
-
-        {:error, _} ->
-          {:error, "Not found."}
-      end
+    with {:ok, parts} <- split_relative(rel) do
+      in_root(root, fn fs ->
+        with {:ok, walked} <- walk(fs, parts, :get),
+             :ok <- ensure_allowed(walked.parts, globs) do
+          get_entry(fs, root, walked, globs, max)
+        end
+      end)
     end
+  end
+
+  defp get_entry(fs, root, %{parts: []}, globs, max) do
+    with {:ok, zip} <- archive(fs, :root, [], globs, max),
+         do: {:ok, Path.basename(root) <> ".zip", zip}
+  end
+
+  defp get_entry(fs, _root, %{stat: %Stat{type: :regular}} = walked, _globs, max) do
+    with {:ok, bytes} <- read_regular(fs, walked, max), do: {:ok, walked.name, bytes}
+  end
+
+  defp get_entry(fs, _root, %{stat: %Stat{type: :directory}} = walked, globs, max) do
+    with {:ok, dir} <- open_child(fs, walked.dir, walked.name),
+         {:ok, zip} <- archive(fs, dir, walked.parts, globs, max),
+         do: {:ok, walked.name <> ".zip", zip}
   end
 
   @doc """
@@ -208,17 +231,23 @@ defmodule LemonCore.FileAccess do
   @spec read_file(root(), term(), term(), pos_integer()) ::
           {:ok, String.t(), binary()} | {:error, String.t()}
   def read_file(root, rel, globs, max_bytes) do
-    with {:ok, %{abs: abs, parts: [_ | _] = parts}} <- resolve(root, rel, :get),
-         :ok <- ensure_allowed(parts, globs),
-         {:ok, %File.Stat{type: :regular}} <- File.lstat(abs),
-         {:ok, bytes} <- read_regular(root, parts, max_bytes) do
-      {:ok, List.last(parts), bytes}
+    with {:ok, [_ | _] = parts} <- split_relative(rel) do
+      in_root(root, fn fs ->
+        with {:ok, walked} <- walk(fs, parts, :get),
+             :ok <- ensure_allowed(walked.parts, globs) do
+          case walked.stat do
+            %Stat{type: :regular} ->
+              with {:ok, bytes} <- read_regular(fs, walked, max_bytes),
+                   do: {:ok, walked.name, bytes}
+
+            _directory ->
+              {:error, "Not a regular file."}
+          end
+        end
+      end)
     else
-      {:ok, %{parts: []}} -> {:error, "Invalid path."}
-      {:ok, %File.Stat{type: :symlink}} -> {:error, @symlink_error}
-      {:ok, %File.Stat{}} -> {:error, "Not a regular file."}
-      {:error, msg} when is_binary(msg) -> {:error, msg}
-      _ -> {:error, "Not found."}
+      {:ok, []} -> {:error, "Invalid path."}
+      {:error, _} = error -> error
     end
   end
 
@@ -228,21 +257,20 @@ defmodule LemonCore.FileAccess do
   """
   @spec with_temp_file(String.t(), binary(), (String.t() -> result)) :: result when result: term()
   def with_temp_file(name, bytes, fun) when is_function(fun, 1) do
-    dir =
-      Path.join(
-        System.tmp_dir!(),
-        "lemon-file-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
-      )
+    tmp = System.tmp_dir!()
+    dir = "lemon-file-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    file = upload_name(name, "file")
 
-    :ok = File.mkdir(dir)
+    case private_copy(tmp, dir, file, bytes) do
+      :ok ->
+        try do
+          fun.(Path.join([tmp, dir, file]))
+        after
+          remove_private_dir(tmp, dir)
+        end
 
-    try do
-      :ok = File.chmod(dir, 0o700)
-      path = Path.join(dir, upload_name(name, "file"))
-      :ok = File.write(path, bytes, [:exclusive])
-      fun.(path)
-    after
-      File.rm_rf(dir)
+      :error ->
+        raise File.Error, reason: :eio, action: "write temporary file", path: Path.join(tmp, dir)
     end
   end
 
@@ -256,68 +284,77 @@ defmodule LemonCore.FileAccess do
   def retain_copy(name, bytes) when is_binary(bytes) do
     tmp = System.tmp_dir!()
     prune_copies(tmp)
+    dir = @copy_prefix <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+    file = upload_name(name, "file")
 
-    dir =
-      Path.join(
-        tmp,
-        @copy_prefix <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
-      )
-
-    path = Path.join(dir, upload_name(name, "file"))
-
-    with :ok <- File.mkdir(dir),
-         :ok <- File.chmod(dir, 0o700),
-         :ok <- File.write(path, bytes, [:exclusive]) do
-      {:ok, path}
-    else
-      _ ->
-        remove_copy_dir(dir)
-        {:error, "Failed to prepare the file for delivery."}
+    case private_copy(tmp, dir, file, bytes) do
+      :ok -> {:ok, Path.join([tmp, dir, file])}
+      :error -> {:error, "Failed to prepare the file for delivery."}
     end
   end
 
-  # lstat only: a symlink named like a copy directory is never followed.
+  # A fresh 0700 directory `dir` in `tmp` holding `file`; removed again on
+  # failure.
+  defp private_copy(tmp, dir, file, bytes) do
+    result =
+      ConfinedFS.with_root(tmp, fn fs ->
+        with :ok <- ConfinedFS.mkdir(fs, :root, dir, 0o700),
+             :ok <- ConfinedFS.chmod(fs, :root, dir, 0o700),
+             {:ok, handle} <- ConfinedFS.open_dir(fs, :root, [dir]),
+             {:ok, _stat} <- ConfinedFS.create(fs, handle, file, bytes) do
+          :ok
+        else
+          _ ->
+            remove_copy_dir(fs, dir)
+            :error
+        end
+      end)
+
+    if result == :ok, do: :ok, else: :error
+  end
+
+  defp remove_private_dir(tmp, dir) do
+    ConfinedFS.with_root(tmp, &remove_copy_dir(&1, dir))
+    :ok
+  end
+
+  # Copy directories are opened without following symlinks and emptied
+  # through their own descriptor, so one swapped for a symlink is never
+  # followed.
   defp prune_copies(tmp) do
     cutoff = System.os_time(:second) - @copy_ttl_seconds
 
-    case File.ls(tmp) do
-      {:ok, names} ->
-        for name <- names, String.starts_with?(name, @copy_prefix) do
-          dir = Path.join(tmp, name)
+    ConfinedFS.with_root(tmp, fn fs ->
+      case ConfinedFS.list(fs, :root, prefix: @copy_prefix) do
+        {:ok, entries} ->
+          for {name, %Stat{type: :directory, mtime: mtime}} <- entries,
+              mtime < cutoff,
+              do: remove_copy_dir(fs, name)
 
-          case File.lstat(dir, time: :posix) do
-            {:ok, %File.Stat{type: :directory, mtime: mtime}} when mtime < cutoff ->
-              remove_copy_dir(dir)
+        {:error, _} ->
+          :ok
+      end
+    end)
 
-            _ ->
-              :ok
-          end
-        end
-
-        :ok
-
-      {:error, _} ->
-        :ok
-    end
+    :ok
   end
 
-  defp remove_copy_dir(dir) do
-    case File.ls(dir) do
-      {:ok, names} ->
-        for name <- names do
-          entry = Path.join(dir, name)
+  defp remove_copy_dir(fs, name) do
+    with {:ok, dir} <- ConfinedFS.open_dir(fs, :root, [name]) do
+      case ConfinedFS.list(fs, dir) do
+        {:ok, entries} ->
+          for {entry, %Stat{type: type}} <- entries,
+              type != :directory,
+              do: ConfinedFS.unlink(fs, dir, entry)
 
-          case File.lstat(entry) do
-            {:ok, %File.Stat{type: type}} when type != :directory -> File.rm(entry)
-            _ -> :ok
-          end
-        end
+        {:error, _} ->
+          :ok
+      end
 
-      {:error, _} ->
-        :ok
+      ConfinedFS.close_dir(fs, dir)
     end
 
-    _ = File.rmdir(dir)
+    _ = ConfinedFS.rmdir(fs, :root, name)
     :ok
   end
 
@@ -325,20 +362,44 @@ defmodule LemonCore.FileAccess do
   # Writes
   # ---------------------------------------------------------------------------
 
-  # Missing directories are created one component at a time and re-checked;
-  # an existing symlink is never followed or replaced.
-  defp write(root, parts, bytes, force) do
-    {dirs, [name]} = Enum.split(parts, -1)
+  # Missing directories are created below the deepest walked directory
+  # without following symlinks. A new file is published only while still
+  # absent (atomic); a forced overwrite checks the walked entry just before
+  # the rename (best-effort).
+  defp write(fs, %{missing: [_ | _] = missing, dir: dir}, bytes, _force) do
+    {dirs, [name]} = Enum.split(missing, -1)
 
-    with {:ok, dir} <- ensure_dirs(root, dirs),
-         abs = Path.join(dir, name),
-         :ok <- check_target(abs, force),
-         :ok <- atomic_write(dir, abs, bytes),
-         {:ok, ^abs, _parts} <- walk(root, parts, :recheck) do
-      {:ok, Enum.join(parts, "/")}
-    else
-      {:ok, _other, _parts} -> {:error, @symlink_error}
-      {:error, msg} when is_binary(msg) -> {:error, msg}
+    with {:ok, target} <- create_dirs(fs, dir, dirs) do
+      replace(fs, target, name, bytes, :absent)
+    end
+  end
+
+  defp write(fs, %{stat: %Stat{type: :regular} = stat} = walked, bytes, true),
+    do: replace(fs, walked.dir, walked.name, bytes, stat)
+
+  defp write(_fs, %{stat: %Stat{type: :regular}}, _bytes, _force),
+    do: {:error, @exists_error}
+
+  defp write(_fs, _walked, _bytes, _force), do: {:error, "Invalid path."}
+
+  defp create_dirs(_fs, dir, []), do: {:ok, dir}
+
+  defp create_dirs(fs, dir, dirs) do
+    case ConfinedFS.open_dir(fs, dir, dirs, create: true) do
+      {:ok, handle} -> {:ok, handle}
+      {:error, :symlink} -> {:error, @symlink_error}
+      {:error, reason} when reason in [:enotdir, :eexist] -> {:error, "Invalid path."}
+      {:error, _} -> {:error, "Failed to write file."}
+    end
+  end
+
+  defp replace(fs, dir, name, bytes, expect) do
+    case ConfinedFS.replace(fs, dir, name, bytes, expect: expect) do
+      {:ok, _stat} -> :ok
+      {:error, :symlink} -> {:error, @symlink_error}
+      {:error, :eexist} -> {:error, @exists_error}
+      {:error, reason} when reason in [:eisdir, :not_regular] -> {:error, "Invalid path."}
+      {:error, _} -> {:error, "Failed to write file."}
     end
   end
 
@@ -357,6 +418,15 @@ defmodule LemonCore.FileAccess do
   # ---------------------------------------------------------------------------
   # Internals
   # ---------------------------------------------------------------------------
+
+  # One descriptor session for the walk and the I/O. Session failures (a
+  # missing root or helper) are reported without detail.
+  defp in_root(root, fun) do
+    case ConfinedFS.with_root(root, fun) do
+      {:error, reason} when is_atom(reason) -> {:error, "Unable to access the working directory."}
+      result -> result
+    end
+  end
 
   defp split_relative(rel) do
     rel = String.trim(rel)
@@ -380,113 +450,103 @@ defmodule LemonCore.FileAccess do
     if Enum.any?(parts, &(&1 == "..")), do: {:error, @escape_error}, else: {:ok, parts}
   end
 
-  # Returns the absolute path and the components with every existing one
-  # replaced by its actual directory-entry name. `:recheck` re-walks already
-  # resolved components after an operation and skips the directory listing.
-  defp walk(root, parts, mode) do
-    Enum.reduce_while(parts, {:ok, root, [], false}, fn part, {:ok, current, acc, missing?} ->
-      if missing? do
-        {:cont, {:ok, Path.join(current, part), [part | acc], true}}
-      else
-        walk_step(current, part, acc, mode)
-      end
-    end)
-    |> case do
-      {:ok, abs, acc, _missing?} ->
-        resolved = Enum.reverse(acc)
+  # Walks `parts` through directory descriptors. Returns the deepest walked
+  # directory handle (`dir`), the final entry's actual name and stat when it
+  # exists, the missing trailing components (`:put` only) and every
+  # component spelled as its actual directory entry (missing ones as given).
+  defp walk(fs, parts, mode), do: walk(fs, :root, parts, [], mode)
 
-        with {:ok, ^abs} <- intermediate_dirs(root, resolved, abs),
-             do: {:ok, abs, resolved}
-
-      {:error, _} = error ->
-        error
+  defp walk(fs, :root, [], [], _mode) do
+    with {:ok, stat} <- ConfinedFS.stat(fs, :root) do
+      {:ok, %{dir: :root, name: nil, stat: stat, missing: [], parts: []}}
+    else
+      _ -> {:error, "Not found."}
     end
   end
 
-  defp walk_step(current, part, acc, mode) do
-    path = Path.join(current, part)
+  defp walk(fs, dir, [part | rest], acc, mode) do
+    case ConfinedFS.stat(fs, dir, part) do
+      {:ok, %Stat{type: :symlink}} ->
+        {:error, @symlink_error}
 
-    case File.lstat(path) do
-      {:ok, %File.Stat{type: :symlink}} ->
-        {:halt, {:error, @symlink_error}}
-
-      {:ok, %File.Stat{type: type}} when type in [:directory, :regular] and mode == :recheck ->
-        {:cont, {:ok, path, [part | acc], false}}
-
-      {:ok, %File.Stat{type: type} = stat} when type in [:directory, :regular] ->
-        case entry_name(current, part, stat) do
-          {:ok, name} -> {:cont, {:ok, Path.join(current, name), [name | acc], false}}
-          :error -> {:halt, {:error, "Not found."}}
+      {:ok, %Stat{type: type} = stat} when type in [:directory, :regular] ->
+        with {:ok, name} <- entry_name(fs, dir, part, stat) do
+          step(fs, dir, name, stat, rest, [name | acc], mode)
         end
 
-      {:ok, _} ->
-        {:halt, {:error, "Unsupported file type."}}
+      {:ok, _other} ->
+        {:error, "Unsupported file type."}
 
       {:error, :enoent} when mode == :put ->
-        {:cont, {:ok, path, [part | acc], true}}
+        {:ok,
+         %{
+           dir: dir,
+           name: nil,
+           stat: nil,
+           missing: [part | rest],
+           parts: Enum.reverse(acc, [part | rest])
+         }}
 
       {:error, _} ->
-        {:halt, {:error, "Not found."}}
+        {:error, "Not found."}
+    end
+  end
+
+  defp step(_fs, dir, name, stat, [], acc, _mode),
+    do: {:ok, %{dir: dir, name: name, stat: stat, missing: [], parts: Enum.reverse(acc)}}
+
+  defp step(fs, dir, name, %Stat{type: :directory}, rest, acc, mode) do
+    with {:ok, child} <- open_child(fs, dir, name), do: walk(fs, child, rest, acc, mode)
+  end
+
+  defp step(_fs, _dir, _name, _stat, _rest, _acc, _mode), do: {:error, "Invalid path."}
+
+  defp open_child(fs, dir, name) do
+    case ConfinedFS.open_dir(fs, dir, [name]) do
+      {:ok, handle} -> {:ok, handle}
+      {:error, :symlink} -> {:error, @symlink_error}
+      {:error, :enoent} -> {:error, "Not found."}
+      {:error, _} -> {:error, "Invalid path."}
     end
   end
 
   # The listed name of the entry `part` reached. Case-insensitive or
   # normalization-insensitive filesystems accept other spellings, so a
   # non-exact spelling is mapped to the listed entry with the same inode.
-  defp entry_name(dir, part, %File.Stat{inode: inode, major_device: device}) do
-    case File.ls(dir) do
-      {:ok, names} ->
-        if part in names do
+  defp entry_name(fs, dir, part, %Stat{} = stat) do
+    case ConfinedFS.list(fs, dir) do
+      {:ok, entries} ->
+        if List.keymember?(entries, part, 0) do
           {:ok, part}
         else
           folded = fold(part)
-          {likely, rest} = Enum.split_with(names, &(fold(&1) == folded))
+          {likely, rest} = Enum.split_with(entries, fn {name, _} -> fold(name) == folded end)
 
-          Enum.find(likely ++ rest, fn name ->
-            match?(
-              {:ok, %File.Stat{inode: ^inode, major_device: ^device}},
-              File.lstat(Path.join(dir, name))
-            )
-          end)
-          |> case do
-            nil -> :error
-            name -> {:ok, name}
+          case Enum.find(likely ++ rest, fn {_name, entry} -> Stat.same_object?(entry, stat) end) do
+            {name, _} -> {:ok, name}
+            nil -> {:error, "Not found."}
           end
         end
 
-      _ ->
-        :error
+      {:error, _} ->
+        {:error, "Not found."}
     end
   end
 
-  # Every existing component except the last must be a real directory.
-  defp intermediate_dirs(root, parts, abs) do
-    parts
-    |> Enum.drop(-1)
-    |> Enum.scan(root, &Path.join(&2, &1))
-    |> Enum.reduce_while({:ok, abs}, fn dir, ok ->
-      case File.lstat(dir) do
-        {:ok, %File.Stat{type: :directory}} -> {:cont, ok}
-        {:error, :enoent} -> {:cont, ok}
-        {:ok, %File.Stat{type: :symlink}} -> {:halt, {:error, @symlink_error}}
-        _ -> {:halt, {:error, "Invalid path."}}
-      end
-    end)
+  # The walked regular file, read relative to its directory descriptor and
+  # bound to the walked inode.
+  defp read_regular(fs, %{dir: dir, name: name, stat: stat}, max_bytes) do
+    with :ok <- within_size(stat.size, max_bytes) do
+      read_entry(fs, dir, name, stat, max_bytes)
+    end
   end
 
-  defp read_regular(root, parts, max_bytes) do
-    abs = Path.join([root | parts])
-
-    with {:ok, %File.Stat{type: :regular, size: size} = leaf} <- File.lstat(abs),
-         :ok <- within_size(size, max_bytes),
-         {:ok, result} <- File.open(abs, [:read, :binary], &read_bound(&1, leaf, size)),
-         {:ok, bytes} <- result,
-         {:ok, ^abs, _parts} <- walk(root, parts, :recheck) do
-      {:ok, bytes}
-    else
-      {:error, msg} when is_binary(msg) -> {:error, msg}
-      {:ok, %File.Stat{type: :symlink}} -> {:error, @symlink_error}
-      _ -> {:error, "Unable to read file."}
+  defp read_entry(fs, dir, name, stat, max_bytes) do
+    case ConfinedFS.read(fs, dir, name, max_bytes, expect: stat) do
+      {:ok, bytes, _stat} -> {:ok, bytes}
+      {:error, :too_large} -> {:error, "File is too large."}
+      {:error, :symlink} -> {:error, @symlink_error}
+      {:error, _} -> {:error, "Unable to read file."}
     end
   end
 
@@ -495,26 +555,12 @@ defmodule LemonCore.FileAccess do
 
   defp within_size(_size, _max), do: :ok
 
-  defp read_bound(io, %File.Stat{inode: inode, major_device: device}, size) do
-    with {:ok, info} <- :file.read_file_info(io),
-         %File.Stat{type: :regular, inode: ^inode, major_device: ^device} <-
-           File.Stat.from_record(info) do
-      case IO.binread(io, size + 1) do
-        :eof when size == 0 -> {:ok, ""}
-        bytes when is_binary(bytes) and byte_size(bytes) == size -> {:ok, bytes}
-        _ -> {:error, :changed}
-      end
-    else
-      _ -> {:error, :identity_mismatch}
-    end
-  end
-
-  defp archive(root, parts, globs, max_bytes) do
+  defp archive(fs, dir, parts, globs, max_bytes) do
     patterns = compile_globs(globs)
 
     budget = %{bytes: max_bytes, entries: @max_archive_entries, base: length(parts)}
 
-    with {:ok, entries, _budget} <- collect(root, parts, [], patterns, budget) do
+    with {:ok, entries, _budget} <- collect(fs, dir, parts, [], patterns, budget) do
       case :zip.create(~c"archive.zip", Enum.reverse(entries), [:memory]) do
         {:ok, {_name, zip}} -> {:ok, zip}
         _ -> {:error, "Failed to zip directory."}
@@ -522,22 +568,20 @@ defmodule LemonCore.FileAccess do
     end
   end
 
-  # `dir_parts` locates the directory from the root; `rel` is the entry path
-  # inside the archive.
-  defp collect(root, dir_parts, acc, patterns, budget) do
-    dir = Path.join([root | dir_parts])
-
-    case File.ls(dir) do
-      {:ok, names} ->
-        names
-        |> Enum.sort()
-        |> Enum.reduce_while({:ok, acc, budget}, fn name, {:ok, acc, budget} ->
+  # `dir` is the directory's handle and `dir_parts` its components from the
+  # root (deny rules); entry names in the archive drop the first `base`.
+  defp collect(fs, dir, dir_parts, acc, patterns, budget) do
+    case ConfinedFS.list(fs, dir) do
+      {:ok, entries} ->
+        entries
+        |> Enum.sort_by(&elem(&1, 0))
+        |> Enum.reduce_while({:ok, acc, budget}, fn {name, stat}, {:ok, acc, budget} ->
           entry_parts = dir_parts ++ [name]
 
           if denied_with?(entry_parts, patterns) do
             {:cont, {:ok, acc, budget}}
           else
-            case collect_entry(root, entry_parts, acc, patterns, budget) do
+            case collect_entry(fs, dir, name, stat, entry_parts, acc, patterns, budget) do
               {:ok, acc, budget} -> {:cont, {:ok, acc, budget}}
               {:error, _} = error -> {:halt, error}
             end
@@ -549,114 +593,40 @@ defmodule LemonCore.FileAccess do
     end
   end
 
-  defp collect_entry(root, parts, acc, patterns, budget) do
-    case File.lstat(Path.join([root | parts])) do
-      {:ok, %File.Stat{type: :directory}} ->
-        collect(root, parts, acc, patterns, budget)
+  defp collect_entry(fs, dir, name, %Stat{type: :directory}, parts, acc, patterns, budget) do
+    case ConfinedFS.open_dir(fs, dir, [name]) do
+      {:ok, child} ->
+        result = collect(fs, child, parts, acc, patterns, budget)
+        ConfinedFS.close_dir(fs, child)
+        result
 
-      {:ok, %File.Stat{type: :regular, size: size}} ->
-        cond do
-          budget.entries < 1 -> {:error, "Directory has too many files to send."}
-          size > budget.bytes -> {:error, "File is too large."}
-          true -> add_entry(root, parts, acc, budget)
-        end
-
-      # Symlinks and special files are skipped, never followed.
-      _ ->
-        {:ok, acc, budget}
+      {:error, _} ->
+        {:error, "Unable to read directory."}
     end
   end
 
-  defp add_entry(root, parts, acc, budget) do
-    case read_regular(root, parts, budget.bytes) do
-      {:ok, bytes} ->
-        name = parts |> Enum.drop(budget.base) |> Enum.join("/") |> String.to_charlist()
+  defp collect_entry(fs, dir, name, %Stat{type: :regular} = stat, parts, acc, _patterns, budget) do
+    cond do
+      budget.entries < 1 -> {:error, "Directory has too many files to send."}
+      stat.size > budget.bytes -> {:error, "File is too large."}
+      true -> add_entry(fs, dir, name, stat, parts, acc, budget)
+    end
+  end
 
-        {:ok, [{name, bytes} | acc],
+  # Symlinks and special files are skipped, never followed.
+  defp collect_entry(_fs, _dir, _name, _stat, _parts, acc, _patterns, budget),
+    do: {:ok, acc, budget}
+
+  defp add_entry(fs, dir, name, stat, parts, acc, budget) do
+    case read_entry(fs, dir, name, stat, budget.bytes) do
+      {:ok, bytes} ->
+        entry = parts |> Enum.drop(budget.base) |> Enum.join("/") |> String.to_charlist()
+
+        {:ok, [{entry, bytes} | acc],
          %{budget | bytes: budget.bytes - byte_size(bytes), entries: budget.entries - 1}}
 
       {:error, _} = error ->
         error
-    end
-  end
-
-  defp filename(root, []), do: Path.basename(root)
-  defp filename(_root, parts), do: List.last(parts)
-
-  defp ensure_dirs(root, dirs) do
-    Enum.reduce_while(dirs, {:ok, root}, fn part, {:ok, current} ->
-      path = Path.join(current, part)
-
-      case File.lstat(path) do
-        {:ok, %File.Stat{type: :directory}} ->
-          {:cont, {:ok, path}}
-
-        {:ok, %File.Stat{type: :symlink}} ->
-          {:halt, {:error, @symlink_error}}
-
-        {:ok, _} ->
-          {:halt, {:error, "Invalid path."}}
-
-        {:error, :enoent} ->
-          case File.mkdir(path) do
-            :ok -> {:cont, {:ok, path}}
-            {:error, :eexist} -> {:halt, {:error, "Invalid path."}}
-            {:error, _} -> {:halt, {:error, "Failed to write file."}}
-          end
-
-        {:error, _} ->
-          {:halt, {:error, "Failed to write file."}}
-      end
-    end)
-    |> case do
-      {:ok, dir} ->
-        case walk(root, dirs, :recheck) do
-          {:ok, ^dir, _parts} -> {:ok, dir}
-          {:ok, _other, _parts} -> {:error, @symlink_error}
-          {:error, _} = error -> error
-        end
-
-      error ->
-        error
-    end
-  end
-
-  defp check_target(abs, force) do
-    case File.lstat(abs) do
-      {:error, :enoent} ->
-        :ok
-
-      {:ok, %File.Stat{type: :symlink}} ->
-        {:error, @symlink_error}
-
-      {:ok, %File.Stat{type: :regular}} when force ->
-        :ok
-
-      {:ok, %File.Stat{type: :regular}} ->
-        {:error, "File already exists. Use /file put --force <path> to overwrite."}
-
-      {:ok, _} ->
-        {:error, "Invalid path."}
-
-      {:error, _} ->
-        {:error, "Failed to write file."}
-    end
-  end
-
-  defp atomic_write(dir, abs, bytes) do
-    tmp =
-      Path.join(
-        dir,
-        ".lemon-upload-" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
-      )
-
-    with :ok <- File.write(tmp, bytes, [:exclusive]),
-         :ok <- File.rename(tmp, abs) do
-      :ok
-    else
-      _ ->
-        _ = File.rm(tmp)
-        {:error, "Failed to write file."}
     end
   end
 

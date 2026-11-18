@@ -2,6 +2,10 @@
 /_build/
 /_build
 
+# LemonCore.ConfinedFS helper, compiled by `mix compile` into lemon_core's priv.
+apps/lemon_core/priv/lemon_confined_fs
+apps/lemon_core/priv/.lemon_confined_fs.platform
+
 # If you run "mix test --cover", coverage assets end up here.
 cover/
 

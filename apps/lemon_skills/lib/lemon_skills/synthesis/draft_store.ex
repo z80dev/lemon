@@ -29,6 +29,7 @@ defmodule LemonSkills.Synthesis.DraftStore do
   #     # Delete a draft
   #     :ok = DraftStore.delete("synth-deploy-k8s", global: true)
 
+  alias LemonCore.ConfinedFS
   alias LemonSkills.Config
   alias LemonSkills.Installer
   alias LemonSkills.Audit.State
@@ -75,14 +76,18 @@ defmodule LemonSkills.Synthesis.DraftStore do
     if is_nil(key) or is_nil(content) do
       {:error, "draft must include :key and :content"}
     else
-      with {:ok, dir} <- draft_dir(key, opts) do
+      with {:ok, _dir} <- draft_dir(key, opts) do
         force = Keyword.get(opts, :force, false)
 
-        if File.dir?(dir) and not force do
-          {:error, "draft '#{key}' already exists; pass force: true to overwrite"}
-        else
-          do_write_draft(dir, key, content, draft)
-        end
+        with_drafts_root(opts, [create: true], fn fs, root ->
+          case ConfinedFS.stat(fs, root, key) do
+            {:ok, %ConfinedFS.Stat{type: :directory}} when not force ->
+              {:error, "draft '#{key}' already exists; pass force: true to overwrite"}
+
+            _ ->
+              write_draft_in(fs, root, key, content, draft)
+          end
+        end)
       end
     end
   end
@@ -90,8 +95,9 @@ defmodule LemonSkills.Synthesis.DraftStore do
   @doc """
   Create a draft only when its exact destination directory is absent.
 
-  The directory claim uses `File.mkdir/1`, so concurrent reviewers cannot
-  overwrite one another between a fresh plan and confirmation.
+  The directory claim is an exclusive `mkdirat` in the drafts root handle, so
+  concurrent reviewers cannot overwrite one another between a fresh plan and
+  confirmation.
   """
   @spec put_new(map(), keyword()) :: :ok | {:error, :already_exists | term()}
   def put_new(draft, opts \\ []) when is_map(draft) do
@@ -101,25 +107,26 @@ defmodule LemonSkills.Synthesis.DraftStore do
     if is_nil(key) or is_nil(content) do
       {:error, "draft must include :key and :content"}
     else
-      with {:ok, dir} <- draft_dir(key, opts),
-           :ok <- File.mkdir_p(Path.dirname(dir)) do
-        case claim_directory(dir) do
-          :ok ->
-            case do_write_draft(dir, key, content, draft) do
-              :ok ->
-                :ok
+      with {:ok, _dir} <- draft_dir(key, opts) do
+        with_drafts_root(opts, [create: true], fn fs, root ->
+          case ConfinedFS.mkdir(fs, root, key) do
+            :ok ->
+              case write_draft_in(fs, root, key, content, draft) do
+                :ok ->
+                  :ok
 
-              {:error, _} = error ->
-                _ = remove_draft(key, opts)
-                error
-            end
+                {:error, _} = error ->
+                  _ = remove_in(fs, root, key)
+                  error
+              end
 
-          {:error, :already_exists} ->
-            {:error, :already_exists}
+            {:error, :eexist} ->
+              {:error, :already_exists}
 
-          {:error, _} = error ->
-            error
-        end
+            {:error, _} = error ->
+              error
+          end
+        end)
       end
     end
   end
@@ -179,8 +186,9 @@ defmodule LemonSkills.Synthesis.DraftStore do
   @doc """
   Delete a draft by key.
 
-  The key and the drafts-root boundary are validated, and the draft must be a
-  real directory (not a symlink) immediately before it is removed.
+  The key and the drafts-root boundary are validated, and the draft is removed
+  through a no-follow handle on the drafts root, so a directory swapped for a
+  symlink after validation cannot redirect removal.
   """
   @spec delete(String.t(), keyword()) :: :ok | {:error, term()}
   def delete(key, opts \\ []), do: remove_draft(key, opts)
@@ -208,7 +216,7 @@ defmodule LemonSkills.Synthesis.DraftStore do
         install_opts = Keyword.put(opts, :force, Keyword.get(opts, :force, false))
 
         # Remove the draft after successful promotion, re-validating its path.
-        with :ok <- migrate_legacy_meta(dir),
+        with :ok <- migrate_legacy_meta(dir, key, opts),
              {:ok, entry} <- Installer.promote_draft(dir, install_opts),
              :ok <- remove_draft(key, opts) do
           {:ok, entry}
@@ -282,7 +290,7 @@ defmodule LemonSkills.Synthesis.DraftStore do
           "audited_at" => audit_record["scanned_at"]
         })
 
-      write_meta(dir, meta)
+      write_meta(key, opts, meta)
     end
   end
 
@@ -335,19 +343,34 @@ defmodule LemonSkills.Synthesis.DraftStore do
     end
   end
 
-  # Re-validates the key, the root chain and the leaf right before `rm_rf`;
-  # `File.rm_rf/1` itself unlinks nested symlinks without following them.
-  # An already-absent draft is not an error.
-  #
-  # Remaining window: validation and removal are separate pathname walks, so a
-  # concurrent writer that swaps an ancestor (`.lemon`, `skill_drafts`) for a
-  # symlink between the last `lstat` and `rm_rf` can still redirect removal.
-  # Closing it needs descriptor-relative (`openat`/`unlinkat`) deletion, which
-  # is tracked as a shared filesystem-boundary finding.
+  # Runs `fun.(fs, root)` with `root` a no-follow `LemonCore.ConfinedFS`
+  # handle on the drafts root below the trusted base (the agent dir or the
+  # project cwd). A symlink or non-directory on the way is refused.
+  # `create: true` creates missing components (and the trusted base).
+  defp with_drafts_root(opts, dir_opts, fun) do
+    with {:ok, base, parts} <- root_parts(opts),
+         :ok <- ensure_base(base, dir_opts) do
+      ConfinedFS.with_root(base, fn fs ->
+        case ConfinedFS.open_dir(fs, :root, parts, dir_opts) do
+          {:ok, root} -> fun.(fs, root)
+          {:error, :enoent} -> {:error, :enoent}
+          {:error, _} -> {:error, :unsafe_draft_path}
+        end
+      end)
+    end
+  end
+
+  defp ensure_base(base, dir_opts) do
+    if Keyword.get(dir_opts, :create, false), do: File.mkdir_p(base), else: :ok
+  end
+
+  # Validates the key, the root chain and the leaf, then removes the draft and
+  # its metadata relative to the drafts root handle; nested symlinks are
+  # unlinked, never followed. An already-absent draft is not an error.
   defp remove_draft(key, opts) do
     result =
       case existing_draft_dir(key, opts) do
-        {:ok, dir} -> with :ok <- rm_rf(dir), do: rm_meta(dir)
+        {:ok, _dir} -> remove_confined(key, opts)
         {:error, :not_found} -> :ok
         {:error, _} = error -> error
       end
@@ -356,26 +379,34 @@ defmodule LemonSkills.Synthesis.DraftStore do
     result
   end
 
-  defp rm_rf(dir) do
-    case File.rm_rf(dir) do
-      {:ok, _} -> :ok
-      {:error, reason, _path} -> {:error, reason}
+  defp remove_confined(key, opts) do
+    case with_drafts_root(opts, [], &remove_in(&1, &2, key)) do
+      {:error, :enoent} -> :ok
+      result -> result
     end
   end
 
-  defp rm_meta(dir) do
-    case File.rm(meta_path(dir)) do
-      :ok -> :ok
-      {:error, :enoent} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+  defp remove_in(fs, root, key) do
+    removed =
+      case ConfinedFS.stat(fs, root, key) do
+        {:ok, %ConfinedFS.Stat{type: :directory}} -> ConfinedFS.remove_tree(fs, root, key)
+        {:error, :enoent} -> :ok
+        _ -> {:error, :unsafe_draft_path}
+      end
+
+    with :ok <- removed, do: ok_if_absent(ConfinedFS.unlink(fs, root, meta_name(key)))
   end
+
+  defp ok_if_absent({:error, :enoent}), do: :ok
+  defp ok_if_absent(result), do: result
+
+  defp meta_name(key), do: ".#{key}.draft_meta.json"
 
   # ── Private helpers ─────────────────────────────────────────────────────────
 
-  defp do_write_draft(dir, key, content, draft) do
-    with :ok <- File.mkdir_p(dir),
-         :ok <- File.write(Path.join(dir, @skill_filename), content) do
+  defp write_draft_in(fs, root, key, content, draft) do
+    with {:ok, dir} <- ConfinedFS.open_dir(fs, root, [key], create: true),
+         {:ok, _} <- ConfinedFS.replace(fs, dir, @skill_filename, content) do
       meta =
         %{
           "key" => key,
@@ -393,20 +424,12 @@ defmodule LemonSkills.Synthesis.DraftStore do
           draft[:source_text_redacted] || draft["source_text_redacted"]
         )
 
-      write_meta(dir, meta)
+      write_meta_in(fs, root, dir, key, meta)
     end
   end
 
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
-
-  defp claim_directory(dir) do
-    case File.mkdir(dir) do
-      :ok -> :ok
-      {:error, :eexist} -> {:error, :already_exists}
-      error -> error
-    end
-  end
 
   defp read_draft_info(dir) do
     key = Path.basename(dir)
@@ -453,23 +476,26 @@ defmodule LemonSkills.Synthesis.DraftStore do
   defp legacy_descriptive(:missing), do: %{}
   defp legacy_descriptive(meta), do: Map.take(meta, @descriptive_meta_keys)
 
-  defp migrate_legacy_meta(dir) do
-    if File.exists?(legacy_meta_path(dir)), do: write_meta(dir, read_meta(dir)), else: :ok
+  defp migrate_legacy_meta(dir, key, opts) do
+    if File.exists?(legacy_meta_path(dir)),
+      do: write_meta(key, opts, read_meta(dir)),
+      else: :ok
   end
 
-  defp write_meta(dir, meta) do
-    case Jason.encode(meta, pretty: true) do
-      {:ok, json} ->
-        with :ok <- File.write(meta_path(dir), json) do
-          case File.rm(Path.join(dir, @legacy_meta_filename)) do
-            :ok -> :ok
-            {:error, :enoent} -> :ok
-            {:error, reason} -> {:error, reason}
-          end
-        end
+  defp write_meta(key, opts, meta) do
+    with_drafts_root(opts, [], fn fs, root ->
+      with {:ok, dir} <- ConfinedFS.open_dir(fs, root, [key]) do
+        write_meta_in(fs, root, dir, key, meta)
+      end
+    end)
+  end
 
-      {:error, reason} ->
-        {:error, reason}
+  # The metadata sits beside the bundle (in `root`); a legacy in-bundle copy
+  # (in `dir`) is removed once it is written.
+  defp write_meta_in(fs, root, dir, key, meta) do
+    with {:ok, json} <- Jason.encode(meta, pretty: true),
+         {:ok, _} <- ConfinedFS.replace(fs, root, meta_name(key), json) do
+      ok_if_absent(ConfinedFS.unlink(fs, dir, @legacy_meta_filename))
     end
   end
 

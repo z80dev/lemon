@@ -1829,17 +1829,19 @@ defmodule CodingAgent.Tools.Lsp do
     %{result | is_error: details[:success] == false}
   end
 
+  # The spill file lives only in the session's trusted spill directory (never
+  # shared temp): an unpredictable name created exclusively (no-follow, 0600)
+  # through a descriptor rooted there. Without one the output is truncated.
   defp spill(text, details, ctx) do
-    dir =
-      case Artifacts.spill_dir(ctx.cwd, ctx.opts) do
-        {:ok, dir} -> dir
-        {:error, _} -> System.tmp_dir!()
-      end
+    name = "lemon-lsp-" <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower) <> ".txt"
 
-    path = Path.join(dir, "lemon-lsp-#{System.unique_integer([:positive, :monotonic])}.txt")
-
-    with :ok <- File.mkdir_p(dir),
-         :ok <- File.write(path, text, [:exclusive]) do
+    with {:ok, dir} <- Artifacts.spill_dir(ctx.cwd, ctx.opts),
+         path = Path.join(dir, name),
+         :ok <- File.mkdir_p(dir),
+         {:ok, _stat} <-
+           LemonCore.ConfinedFS.with_root(dir, fn fs ->
+             LemonCore.ConfinedFS.create(fs, :root, name, text, mode: 0o600, exact_mode: true)
+           end) do
       note = "\n\n[Full output saved to: #{path}. Use read with offset/limit to retrieve it.]"
       head = String.slice(text, 0, @max_output_bytes - byte_size(note))
 

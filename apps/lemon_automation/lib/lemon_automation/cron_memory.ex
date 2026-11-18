@@ -7,28 +7,23 @@ defmodule LemonAutomation.CronMemory do
   default). No caller chooses its path; a job id that is not a plain file name
   maps to a digest-named file in the same directory.
 
-  Memory I/O is bound to checked filesystem objects (`read_confined/2`,
-  `replace_confined/4`):
+  Memory I/O is descriptor-bound (`LemonCore.ConfinedFS`, rooted at the Lemon
+  state directory; `read_confined/2`, `replace_confined/4`):
 
-    * the directory must be a real directory (not a symlink) and the file a
-      regular file with exactly one link (a hard link to another file is
-      refused); both are re-checked with `lstat` before and after each
-      operation;
-    * a read compares the opened handle's inode with the checked entry, so a
-      file swapped for a symlink or another inode after the check is not read;
-    * a write goes to an exclusively created temporary file in the same
-      directory and is renamed over the entry, never truncating or writing
-      through an existing inode; the entry must still be the inode that was
-      read (or still absent) right before the rename.
-
-  Known gap (shared finding NEW-6): OTP has no `openat`/`O_NOFOLLOW`, so the
-  checks and the path-based open/rename are separate syscalls. A local writer
-  who swaps the memory directory for a symlink in the window between the last
-  check and the open, exclusive create or rename can redirect that one
-  operation (or block a read on a substituted FIFO); the following re-check
-  reports the swap but cannot undo it. Do not rely on this module for
-  containment against a concurrent local writer inside the Lemon state
-  directory.
+    * `cron_memory` is opened (created `0o700` on append) through a directory
+      handle that refuses a symlink; every later step works relative to that
+      handle, so swapping the directory for a symlink afterwards cannot
+      redirect a read or write outside it, and a swap observed after a write
+      is reported as an error;
+    * the file must be a regular file with exactly one link (a hard link to
+      another file is refused) and at most 1 MiB; a read opens it without
+      following symlinks (non-blocking, so a FIFO cannot stall it) and requires
+      the opened file to be the checked inode;
+    * a write goes to a private staged temporary file renamed over the
+      entry, never truncating or writing through an existing inode; a new
+      file is published only while still absent (atomic), and an existing
+      one must still be the inode that was read immediately before the rename
+      (best-effort conflict detection, not compare-and-swap).
 
   Each run appends a `## Run <id>` entry. When the file outgrows 24,000
   characters it is compacted deterministically (no model call):
@@ -39,6 +34,7 @@ defmodule LemonAutomation.CronMemory do
   """
 
   alias LemonAutomation.{CronJob, CronRun}
+  alias LemonCore.ConfinedFS
 
   @memory_dir "cron_memory"
   @job_file_name ~r/\A[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\z/
@@ -119,11 +115,14 @@ defmodule LemonAutomation.CronMemory do
   def append_run(%CronJob{} = job, %CronRun{} = run, session_key, result)
       when is_binary(session_key) do
     path = memory_file(job)
+    entry = render_entry(job, run, session_key, result)
 
-    with :ok <- File.mkdir_p(memory_dir()),
-         {:ok, existing, expected} <- existing_memory(path, job) do
-      entry = render_entry(job, run, session_key, result)
-      _ = replace_confined(path, compact_if_needed(existing <> "\n\n" <> entry), expected)
+    with :ok <- File.mkdir_p(state_root()) do
+      with_memory_dir(path, [create: true, mode: 0o700], fn fs, dir, name ->
+        with {:ok, existing, expected} <- existing_memory(fs, dir, name, job) do
+          replace_in(fs, dir, name, compact_if_needed(existing <> "\n\n" <> entry), expected)
+        end
+      end)
     end
 
     :ok
@@ -136,8 +135,8 @@ defmodule LemonAutomation.CronMemory do
   # The current memory and the entry state the replacement must still find.
   # An unsafe existing entry (symlink, hard link, special file) is never read
   # or replaced.
-  defp existing_memory(path, %CronJob{} = job) do
-    case read_confined(path) do
+  defp existing_memory(fs, dir, name, %CronJob{} = job) do
+    case read_in(fs, dir, name, []) do
       {:ok, content, stat} when content != "" -> {:ok, content, stat}
       {:ok, _empty, stat} -> {:ok, memory_header(job), stat}
       {:error, :enoent} -> {:ok, memory_header(job), :absent}
@@ -356,64 +355,79 @@ defmodule LemonAutomation.CronMemory do
 
   defp memory_dir, do: LemonCore.Paths.home_path([@memory_dir])
 
+  # The trusted root of every memory operation: the Lemon state directory.
+  defp state_root, do: LemonCore.Paths.home_state_dir()
+
+  # The memory file name of `path`, which must be `<state root>/cron_memory/<name>`.
+  defp memory_name(path) do
+    case ConfinedFS.beneath(state_root(), path) do
+      {:ok, [@memory_dir, name]} -> {:ok, name}
+      _ -> {:error, :unsafe_memory_dir}
+    end
+  end
+
+  # Runs `fun.(fs, dir, name)` with `dir` a handle on the memory directory.
+  defp with_memory_dir(path, dir_opts, fun) do
+    with {:ok, name} <- memory_name(path) do
+      ConfinedFS.with_root(state_root(), fn fs ->
+        with {:ok, dir} <- open_memory_dir(fs, dir_opts), do: fun.(fs, dir, name)
+      end)
+    end
+  end
+
+  defp open_memory_dir(fs, opts) do
+    case ConfinedFS.open_dir(fs, :root, [@memory_dir], opts) do
+      {:ok, dir} -> {:ok, dir}
+      {:error, :enoent} -> {:error, :enoent}
+      {:error, _} -> {:error, :unsafe_memory_dir}
+    end
+  end
+
   @doc false
   # Reads `path` bound to the checked entry (see the moduledoc).
-  # `opts[:before_open]` is a test seam run between the checks and the open.
-  @spec read_confined(binary(), keyword()) :: {:ok, binary(), File.Stat.t()} | {:error, term()}
+  # `opts[:before_open]` is a test seam run between the check and the read.
+  @spec read_confined(binary(), keyword()) ::
+          {:ok, binary(), ConfinedFS.Stat.t()} | {:error, term()}
   def read_confined(path, opts \\ []) do
-    dir = Path.dirname(path)
+    with_memory_dir(path, [], &read_in(&1, &2, &3, opts))
+  end
 
-    with {:ok, dir_stat} <- checked_dir(dir),
-         {:ok, file_stat} <- checked_file(path),
-         :ok <- run_hook(opts, :before_open),
-         {:ok, result} <- File.open(path, [:read, :binary], &read_bound(&1, file_stat)),
-         {:ok, bytes} <- result,
-         :ok <- unchanged(dir, dir_stat),
-         :ok <- unchanged(path, file_stat) do
-      {:ok, bytes, file_stat}
+  defp read_in(fs, dir, name, opts) do
+    with {:ok, stat} <- checked_file(fs, dir, name),
+         :ok <- run_hook(opts, :before_open) do
+      case ConfinedFS.read(fs, dir, name, @max_file_bytes, expect: stat) do
+        {:ok, bytes, %ConfinedFS.Stat{type: :regular, nlink: 1} = read} -> {:ok, bytes, read}
+        {:ok, _bytes, _stat} -> {:error, :memory_changed}
+        {:error, :too_large} -> {:error, :unsafe_memory_file}
+        {:error, _} -> {:error, :memory_changed}
+      end
     end
   end
 
   @doc false
   # Replaces `path` with `content` through an exclusive temporary file in the
-  # checked directory and a rename, only while the entry is still `expected`
+  # opened directory and a rename, only while the entry is still `expected`
   # (`:absent` or the stat returned by `read_confined/2`).
-  # `opts[:before_rename]` is a test seam run after the temporary file is
-  # written.
-  @spec replace_confined(binary(), binary(), :absent | File.Stat.t(), keyword()) ::
+  # `opts[:before_rename]` is a test seam run after the entry check.
+  @spec replace_confined(binary(), binary(), :absent | ConfinedFS.Stat.t(), keyword()) ::
           :ok | {:error, term()}
   def replace_confined(path, content, expected, opts \\ []) do
-    dir = Path.dirname(path)
-    tmp = Path.join(dir, ".#{Path.basename(path)}.#{temp_suffix()}.tmp")
+    with_memory_dir(path, [], &replace_in(&1, &2, &3, content, expected, opts))
+  end
 
-    with {:ok, dir_stat} <- checked_dir(dir),
-         :ok <- entry_is(path, expected),
-         {:ok, tmp_stat} <- write_exclusive(tmp, content) do
-      result =
-        with :ok <- run_hook(opts, :before_rename),
-             :ok <- unchanged(dir, dir_stat),
-             :ok <- entry_is(path, expected),
-             :ok <- unchanged(tmp, tmp_stat),
-             :ok <- File.rename(tmp, path),
-             :ok <- unchanged(dir, dir_stat) do
-          unchanged(path, tmp_stat)
-        end
-
-      if result != :ok, do: discard_temp(tmp, tmp_stat)
-      result
+  defp replace_in(fs, dir, name, content, expected, opts \\ []) do
+    with {:ok, dir_stat} <- ConfinedFS.stat(fs, dir, ""),
+         :ok <- entry_is(fs, dir, name, expected),
+         :ok <- run_hook(opts, :before_rename),
+         :ok <- entry_is(fs, dir, name, expected),
+         :ok <- replace_entry(fs, dir, name, content, expected) do
+      still_memory_dir(fs, dir_stat)
     end
   end
 
-  defp checked_dir(dir) do
-    case File.lstat(dir) do
-      {:ok, %File.Stat{type: :directory} = stat} -> {:ok, stat}
-      _ -> {:error, :unsafe_memory_dir}
-    end
-  end
-
-  defp checked_file(path) do
-    case File.lstat(path) do
-      {:ok, %File.Stat{type: :regular, links: 1, size: size} = stat}
+  defp checked_file(fs, dir, name) do
+    case ConfinedFS.stat(fs, dir, name) do
+      {:ok, %ConfinedFS.Stat{type: :regular, nlink: 1, size: size} = stat}
       when size <= @max_file_bytes ->
         {:ok, stat}
 
@@ -425,81 +439,44 @@ defmodule LemonAutomation.CronMemory do
     end
   end
 
-  defp entry_is(path, :absent) do
-    case File.lstat(path) do
+  # The entry is still absent, or still the single-link regular file read.
+  defp entry_is(fs, dir, name, :absent) do
+    case ConfinedFS.stat(fs, dir, name) do
       {:error, :enoent} -> :ok
       _ -> {:error, :memory_changed}
     end
   end
 
-  defp entry_is(path, %File.Stat{} = expected), do: unchanged(path, expected)
-
-  # Same object (device and inode), same type, and a regular file still has
-  # exactly one link.
-  defp unchanged(path, %File.Stat{} = expected) do
-    case File.lstat(path) do
-      {:ok, %File.Stat{} = stat} ->
-        if same_object?(stat, expected) and (stat.type != :regular or stat.links == 1),
-          do: :ok,
-          else: {:error, :memory_changed}
+  defp entry_is(fs, dir, name, %ConfinedFS.Stat{} = expected) do
+    case ConfinedFS.stat(fs, dir, name) do
+      {:ok, %ConfinedFS.Stat{type: :regular, nlink: 1} = stat} ->
+        if ConfinedFS.Stat.same_object?(stat, expected), do: :ok, else: {:error, :memory_changed}
 
       _ ->
         {:error, :memory_changed}
     end
   end
 
-  defp same_object?(a, b) do
-    a.type == b.type and a.inode == b.inode and a.major_device == b.major_device and
-      a.minor_device == b.minor_device
+  # The helper rechecks `expected` right before its rename.
+  defp replace_entry(fs, dir, name, content, expected) do
+    case ConfinedFS.replace(fs, dir, name, content, expect: expected) do
+      {:ok, _stat} -> :ok
+      {:error, _} -> {:error, :memory_changed}
+    end
   end
 
-  defp read_bound(io, %File.Stat{size: size} = expected) do
-    with {:ok, info} <- :file.read_file_info(io),
-         %File.Stat{type: :regular, links: 1} = opened <- File.Stat.from_record(info),
-         true <- same_object?(opened, expected) do
-      case IO.binread(io, size + 1) do
-        :eof when size == 0 -> {:ok, ""}
-        bytes when is_binary(bytes) and byte_size(bytes) == size -> {:ok, bytes}
-        _ -> {:error, :memory_changed}
-      end
+  # The written directory is still the one at `cron_memory`. A swap while the
+  # handle was open is reported; the write itself stayed in the opened
+  # directory.
+  defp still_memory_dir(fs, %ConfinedFS.Stat{} = dir_stat) do
+    with {:ok, dir} <- ConfinedFS.open_dir(fs, :root, [@memory_dir]),
+         {:ok, stat} <- ConfinedFS.stat(fs, dir, ""),
+         true <- ConfinedFS.Stat.same_object?(stat, dir_stat) do
+      :ok
     else
       _ -> {:error, :memory_changed}
     end
   end
-
-  defp write_exclusive(tmp, content) do
-    result =
-      File.open(tmp, [:write, :exclusive, :binary], fn io ->
-        with {:ok, info} <- :file.read_file_info(io),
-             %File.Stat{type: :regular, links: 1} = stat <- File.Stat.from_record(info),
-             :ok <- IO.binwrite(io, content) do
-          {:ok, stat}
-        else
-          _ -> {:error, :memory_changed}
-        end
-      end)
-
-    case result do
-      {:ok, {:ok, stat}} ->
-        {:ok, stat}
-
-      {:ok, error} ->
-        _ = discard_temp(tmp, nil)
-        error
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  # Removes only the temporary file this process created.
-  defp discard_temp(tmp, nil), do: File.rm(tmp)
-
-  defp discard_temp(tmp, %File.Stat{} = stat) do
-    if unchanged(tmp, stat) == :ok, do: File.rm(tmp), else: :ok
-  end
-
-  defp temp_suffix, do: Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
 
   defp run_hook(opts, key) do
     case Keyword.get(opts, key) do

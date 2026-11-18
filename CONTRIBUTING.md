@@ -23,9 +23,10 @@ If you only read one section, read [Your first contribution](#your-first-contrib
 - **Node.js 24 LTS+** for the browser client and documentation site.
 - **A version manager** (`asdf` or `mise`) can install the pinned BEAM toolchain.
 - **A C toolchain** (`cc`/`gcc` + `make`). The SQLite-backed store compiles
-  `exqlite`'s native NIF from C source, so `mix compile` needs
-  `build-essential` on Debian/Ubuntu, `base-devel` on Arch, or Xcode Command
-  Line Tools on macOS.
+  `exqlite`'s native NIF from C source, and `lemon_core` builds its
+  descriptor-bound file helper (`LemonCore.ConfinedFS`) during `mix compile`,
+  so it needs `build-essential` on Debian/Ubuntu, `base-devel` on Arch, or
+  Xcode Command Line Tools on macOS.
 
 ## Quick Start
 

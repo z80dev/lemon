@@ -23,11 +23,29 @@ defmodule LemonCore.MixProject do
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 69]],
       deps: deps(),
+      # LemonCore.ConfinedFS's descriptor-bound file helper (c_src/, Makefile)
+      # lands in priv/. Inside the umbrella it is required: a missing make or
+      # C compiler fails `mix compile`. As a Hex dependency it is built when
+      # make and a C compiler are present; otherwise ConfinedFS reports
+      # unavailable and its callers fail closed.
+      compilers: helper_compilers(),
+      make_env: %{"LEMON_CONFINED_FS_REQUIRED" => if(@umbrella, do: "1", else: "0")},
+      make_clean: ["clean"],
+      make_error_message:
+        "lemon_core builds its file-confinement helper (c_src/lemon_confined_fs.c) " <>
+          "with a C compiler and make; install them (Xcode Command Line Tools on " <>
+          "macOS, build-essential on Debian/Ubuntu) and recompile.",
       name: "lemon_core",
       description: description(),
       package: package(),
       docs: docs()
     ] ++ umbrella_paths()
+  end
+
+  defp helper_compilers do
+    if @umbrella or System.find_executable("make"),
+      do: [:elixir_make] ++ Mix.compilers(),
+      else: Mix.compilers()
   end
 
   defp umbrella_paths do
@@ -52,7 +70,7 @@ defmodule LemonCore.MixProject do
   defp package do
     [
       licenses: ["MIT"],
-      files: ~w(lib priv mix.exs README.md CHANGELOG.md LICENSE),
+      files: ~w(lib priv c_src Makefile mix.exs README.md CHANGELOG.md LICENSE),
       # Tooling for the lemon repository itself stays out of the tarball: the
       # architecture/docs lint (`mix lemon.quality`), the managed-install
       # self-updater (`mix lemon.update`), the repo's benchmark runner and task
@@ -60,6 +78,8 @@ defmodule LemonCore.MixProject do
       # scripts/verify_packages compiles the tarball without them.
       exclude_patterns: [
         ~r{^lib/lemon_core/(quality|update)/},
+        # The compiled helper is built per platform by the consumer.
+        ~r{^priv/(lemon_confined_fs|\.lemon_confined_fs\.platform)},
         ~r{^lib/mix/tasks/lemon\.(quality|architecture\.docs|check_duplicate_tests|update|bench|help)\.ex$}
       ],
       links: %{
@@ -89,15 +109,18 @@ defmodule LemonCore.MixProject do
     ]
   end
 
-  # Only :jason, :toml, :telemetry and :mint are hard requirements. Everything
-  # else is optional so that a host application can depend on lemon_core without
-  # inheriting a SQLite NIF, a pooled HTTP client and a pubsub server it may not
-  # use. Each optional dep degrades explicitly — see the module docs named below.
+  # Only :jason, :toml, :telemetry, :mint and the build-time :elixir_make are
+  # hard requirements. Everything else is optional so that a host application
+  # can depend on lemon_core without inheriting a SQLite NIF, a pooled HTTP
+  # client and a pubsub server it may not use. Each optional dep degrades
+  # explicitly — see the module docs named below.
   defp deps do
     [
       {:jason, "~> 1.4"},
       {:toml, "~> 0.7"},
       {:telemetry, "~> 1.0"},
+      # Builds the LemonCore.ConfinedFS helper (Makefile, c_src/).
+      {:elixir_make, "~> 0.10", runtime: false},
       # LemonCore.Net.HTTP: the single pinned, unpooled outbound fetcher.
       {:mint, "~> 1.8"},
       # LemonCore.Bus falls back to a local Registry when absent.

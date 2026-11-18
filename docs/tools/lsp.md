@@ -78,10 +78,20 @@ Behavior:
 - Applied edits support text edits and create/rename/delete file operations.
   Every affected path is locked, validated like `write`/`edit` targets and
   checkpointed before the first write; text edits are validated (overlaps,
-  ranges, snippets) before any file is written; files are replaced atomically
-  and the session's read tracker is refreshed, so a later `edit` is not
-  rejected as stale. Applying calls are serialized with other mutating tools in
-  the session; read-only calls run in parallel.
+  ranges, snippets) before any file is written. Lemon, not the language server,
+  then performs every read, write, create, rename and delete through the same
+  descriptor-bound I/O as `write`/`edit`, below the validated workspace
+  boundary: a directory swapped for a symlink after validation is refused, not
+  followed. Text files are replaced atomically with their mode kept; a
+  recursive delete never follows symlinks and gives itself owner access to
+  locked directories; a rename whose source and destination are not below the
+  same trusted directory (the workspace) is refused. Without an explicit
+  `overwrite` option a rename never replaces its destination, even one created
+  after the existence check (atomic no-replace); such a destination is skipped
+  under `ignoreIfExists` and is an error otherwise. The session's read
+  tracker records the written bytes and forgets deleted and renamed-away paths,
+  so a later `edit` is not rejected as stale. Applying calls are serialized
+  with other mutating tools in the session; read-only calls run in parallel.
   A code action retains chronological `checkpoint_ids` for its direct edit and
   every server-requested batch, including partial failure or cancellation.
   Rewinding restores these batches in reverse order, recovering the pre-action
@@ -92,8 +102,8 @@ Behavior:
   identifies captured paths that may have changed, with an uncertainty warning;
   the receipt does not claim those paths stayed untouched. `changed_files` still
   reports confirmed mutations from completed batches.
-  Failed filesystem steps also report created parent directories, leftover
-  temporary files, files created before a failed write, and partially deleted
+  Failed filesystem steps also report created parent directories, files
+  created before a failed write, and partially deleted
   trees. Created parents and partially deleted trees are identified by their
   root path, including when the failing operation was the first in the batch.
 - `status` lists every registered server as installed, missing (with its
@@ -188,6 +198,17 @@ instead of failing the edit.
 External checkers use the deadline-aware process executor. A timeout terminates
 the checker process group and descendants, rather than only the BEAM caller.
 
+Lemon reads the diagnosed file itself through descriptor-bound, identity-pinned
+helpers below the same boundary as the mutation tools (the working directory):
+a symlink below it, a FIFO or other special file is refused, and reads are
+limited to 8 MiB. Elixir syntax is parsed from those bytes and Python is
+compiled from a private staged copy of them. The other checkers read the
+project themselves and are outside Lemon's confined I/O: `node --check` and the
+C/C++ compilers read the file by path, while `mix compile`, `tsc`,
+`cargo check` and `go vet` build the project in its root and may write that
+project's own build outputs (`_build`, `target`, `.tsbuildinfo`, the Go cache).
+No checker is handed a path it writes.
+
 ## Local Checker Install Guide
 
 The preview runner uses local workspace tools when they are present:
@@ -197,7 +218,7 @@ The preview runner uses local workspace tools when they are present:
 | Elixir | `.ex`, `.exs`, `.heex` | syntax parser, then `mix compile --return-errors` when a `mix.exs` workspace exists | Install Elixir and Mix. |
 | JavaScript | `.js`, `.cjs`, `.mjs` | `node --check` | Install Node.js. |
 | TypeScript | `.ts`, `.tsx`, `.jsx` | `tsc --noEmit --pretty false` when `tsconfig.json` exists, preferring workspace `node_modules/.bin/tsc` when present | Install TypeScript in the workspace or on `PATH`. |
-| Python | `.py` | `python3 -m py_compile` or `python -m py_compile` | Install Python 3. |
+| Python | `.py` | `python3 -I -B` (or `python`) compiling a private staged copy of the file; no bytecode is written | Install Python 3. |
 | Rust | `.rs` | `cargo check --message-format=short` when `Cargo.toml` exists | Install Rust and Cargo. |
 | Go | `.go` | `go vet ./...` when `go.mod` exists (does not execute tests) | Install Go. |
 | C/C++ | `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.hh`, `.hpp`, `.hxx` | `clang`/`gcc`/`cc` or `clang++`/`g++`/`c++` with `-fsyntax-only` | Install a C/C++ compiler; install `clangd` separately for supervised LSP sessions. |
