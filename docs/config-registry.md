@@ -211,7 +211,6 @@ conversation population. See the [admission inventory](architecture/admission-ga
 | `TWILIO_AUTH_TOKEN` | string | _(none)_ | yes | `lemon_gateway` | Twilio auth token (ecosystem-standard name, grandfathered). |
 | `TWILIO_INBOX_NUMBER` | string | _(none)_ |  | `lemon_gateway` | Twilio inbox phone number used for inbound SMS routing. |
 | `TWILIO_PHONE_NUMBER` | string | _(none)_ |  | `lemon_gateway` | Twilio sending phone number (ecosystem-standard name, grandfathered). |
-| `TWILIO_VALIDATE_WEBHOOK` | boolean | `true` |  | `lemon_gateway` | Whether inbound Twilio webhook signatures are validated. |
 | `TWILIO_WEBHOOK_URL` | string | _(none)_ |  | `lemon_gateway` | Public URL Twilio uses to reach the SMS webhook. |
 
 ### Gateway voice

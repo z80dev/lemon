@@ -3,8 +3,6 @@ defmodule LemonChannels.Adapters.Telegram.FileBatcher do
 
   @telegram_media_group_max_items 10
 
-  @image_extensions MapSet.new(~w(.png .jpg .jpeg .gif .webp .bmp .svg .tif .tiff .heic .heif))
-
   @spec batch([map()]) :: [[map()]]
   def batch(files) when is_list(files) do
     {batches_rev, pending_images_rev} =
@@ -35,12 +33,5 @@ defmodule LemonChannels.Adapters.Telegram.FileBatcher do
   defp flush_image_batch(batches, []), do: batches
   defp flush_image_batch(batches, pending_images), do: [Enum.reverse(pending_images) | batches]
 
-  defp image_file?(path) when is_binary(path),
-    do:
-      path
-      |> Path.extname()
-      |> String.downcase()
-      |> then(&MapSet.member?(@image_extensions, &1))
-
-  defp image_file?(_), do: false
+  defp image_file?(path), do: LemonCore.MediaFiles.image_path?(path)
 end

@@ -125,8 +125,9 @@ defmodule LemonGateway.ConfigLoader do
       webhook_bind: fetch(sms, :webhook_bind),
       inbox_number: fetch(sms, :inbox_number),
       inbox_ttl_ms: fetch(sms, :inbox_ttl_ms),
-      validate_webhook: fetch(sms, :validate_webhook),
+      handoff_grace_ms: parse_handoff_grace_ms(fetch(sms, :handoff_grace_ms)),
       auth_token: fetch(sms, :auth_token),
+      auth_token_secret: fetch(sms, :auth_token_secret),
       webhook_url: fetch(sms, :webhook_url)
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
@@ -134,6 +135,21 @@ defmodule LemonGateway.ConfigLoader do
   end
 
   defp parse_sms(_), do: %{}
+
+  # The post-release handoff grace has a non-zero floor: zero would hand a
+  # releasing session's late codes straight to the next holder.
+  defp parse_handoff_grace_ms(nil), do: nil
+  defp parse_handoff_grace_ms(ms) when is_integer(ms) and ms > 0, do: ms
+
+  defp parse_handoff_grace_ms(_invalid) do
+    require Logger
+
+    Logger.error(
+      "[gateway.sms] handoff_grace_ms must be a positive integer; ignoring it and using the default"
+    )
+
+    nil
+  end
 
   defp parse_telegram(telegram) when is_map(telegram) do
     %{

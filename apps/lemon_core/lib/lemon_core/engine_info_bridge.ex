@@ -23,9 +23,9 @@ defmodule LemonCore.EngineInfoBridge do
   """
 
   @bridge_key :engine_info_bridge
-  @config_keys [:transport_registry, :gateway_config]
+  @config_keys [:transport_registry, :gateway_config, :sms_inbox]
 
-  @type capability :: :transport_registry | :gateway_config
+  @type capability :: :transport_registry | :gateway_config | :sms_inbox
   @type config :: %{optional(capability()) => module()}
 
   @doc """
@@ -92,6 +92,34 @@ defmodule LemonCore.EngineInfoBridge do
     :gateway_config
     |> call(:replacement_config, [], :none)
     |> normalize_config()
+  end
+
+  @doc """
+  Operator preview of a forced SMS inbox clear: the current holder and a
+  single-use confirm token bound to it (see `LemonGateway.Sms.Inbox.preview_clear/0`).
+  """
+  @spec sms_inbox_preview_clear() :: {:ok, map()} | {:error, term()}
+  def sms_inbox_preview_clear, do: sms_inbox_call(:preview_clear, [])
+
+  @doc """
+  Confirms a previewed SMS inbox clear for the exact holder. An exit after the
+  call was sent is `{:error, :outcome_unknown}`: the clear may have happened.
+  """
+  @spec sms_inbox_confirm_clear(binary(), binary()) :: :ok | {:error, term()}
+  def sms_inbox_confirm_clear(holder, token),
+    do: sms_inbox_call(:confirm_clear, [holder, token], exit: {:error, :outcome_unknown})
+
+  defp sms_inbox_call(function, args, opts \\ []) do
+    if running?(:sms_inbox) do
+      LemonCore.RuntimeSeam.invoke(
+        impl(:sms_inbox),
+        function,
+        args,
+        Keyword.merge([unavailable: {:error, :unavailable}], opts)
+      )
+    else
+      {:error, :unavailable}
+    end
   end
 
   defp registry_call(function, args) do

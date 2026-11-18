@@ -2,9 +2,11 @@ defmodule LemonGateway.Sms.WebhookRouter do
   @moduledoc """
   Plug router that handles inbound Twilio SMS webhooks.
 
-  Exposes a `POST /webhooks/twilio/sms` endpoint that validates the request
-  signature (when configured), ingests the message into the SMS inbox, and
-  responds with an empty TwiML `<Response>`.
+  Exposes a `POST /webhooks/twilio/sms` endpoint that validates the Twilio
+  request signature, ingests the message into the SMS inbox, and responds with
+  an empty TwiML `<Response>`. Every request is signature-checked; a missing
+  auth token, missing signature or bad signature is rejected with 403 before
+  anything is stored.
   """
 
   use Plug.Router
@@ -26,15 +28,24 @@ defmodule LemonGateway.Sms.WebhookRouter do
   plug(:dispatch)
 
   post "/webhooks/twilio/sms" do
-    params = conn.params || %{}
+    params = body_params(conn)
 
-    case maybe_validate_twilio(conn, params) do
+    case validate_twilio(conn, params) do
       :ok ->
-        _ = Inbox.ingest_twilio_sms(params)
-        send_twiml(conn, 200, "<Response></Response>")
+        case Inbox.ingest_twilio_sms(params) do
+          {:ok, _stored_or_duplicate} ->
+            send_twiml(conn, 200, "<Response></Response>")
 
-      {:error, :unauthorized} ->
-        send_resp(conn, 401, "unauthorized")
+          {:error, :missing_message_sid} ->
+            send_resp(conn, 400, "bad request")
+
+          # Not stored: ask Twilio to retry; a replay cannot overwrite (insert-if-absent).
+          {:error, _reason} ->
+            send_resp(conn, 503, "unavailable")
+        end
+
+      {:error, :forbidden} ->
+        send_resp(conn, 403, "forbidden")
     end
   end
 
@@ -42,19 +53,20 @@ defmodule LemonGateway.Sms.WebhookRouter do
     send_resp(conn, 404, "not found")
   end
 
-  defp maybe_validate_twilio(conn, params) do
-    if Config.validate_webhook?() do
-      auth_token = Config.auth_token()
-      provided = List.first(Plug.Conn.get_req_header(conn, "x-twilio-signature"))
-      url = Config.webhook_url_override() || TwilioSignature.request_url(conn)
+  defp body_params(%Plug.Conn{body_params: params}) when is_map(params) and not is_struct(params),
+    do: params
 
-      if TwilioSignature.valid?(auth_token, url, params, provided) do
-        :ok
-      else
-        {:error, :unauthorized}
-      end
-    else
+  defp body_params(_conn), do: %{}
+
+  defp validate_twilio(conn, params) do
+    auth_token = Config.auth_token()
+    provided = List.first(Plug.Conn.get_req_header(conn, "x-twilio-signature"))
+    url = Config.webhook_url_override() || TwilioSignature.request_url(conn)
+
+    if TwilioSignature.valid?(auth_token, url, params, provided) do
       :ok
+    else
+      {:error, :forbidden}
     end
   end
 

@@ -127,13 +127,75 @@ defmodule LemonGateway.Transports.Webhook.Request do
     |> max(1)
   end
 
-  @spec fetch(term(), atom() | binary()) :: term()
-  def fetch(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
+  @doc """
+  Returns the value stored under `key` (atom or its string form).
 
-  def fetch(list, key) when is_list(list),
-    do: Keyword.get(list, key) || Keyword.get(list, to_string(key))
+  An explicit `false` is a value, not an absence: only a missing or `nil` atom
+  key falls through to the string key.
+  """
+  @spec fetch(term(), atom() | binary()) :: term()
+  def fetch(map, key) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, value} when not is_nil(value) -> value
+      _ -> Map.get(map, to_string(key))
+    end
+  end
+
+  def fetch(list, key) when is_list(list) do
+    case Keyword.fetch(list, key) do
+      {:ok, value} when not is_nil(value) -> value
+      _ -> list |> List.keyfind(to_string(key), 0) |> keyfind_value()
+    end
+  end
 
   def fetch(_value, _key), do: nil
+
+  defp keyfind_value({_key, value}), do: value
+  defp keyfind_value(_), do: nil
+
+  @security_flags [
+    :allow_callback_override,
+    :allow_private_callback_hosts,
+    :allow_query_token,
+    :allow_payload_token,
+    :allow_payload_idempotency_key
+  ]
+
+  @doc "Per-integration webhook security flags resolved by `resolve_flag/3`."
+  @spec security_flags() :: [atom()]
+  def security_flags, do: @security_flags
+
+  @doc """
+  Resolves a webhook security flag: the integration value when set, otherwise
+  the global webhook value, otherwise `false`.
+
+  The first configured value decides, including an explicit `false`. A value
+  that is set but is not a recognised boolean resolves to `false` rather than
+  inheriting the global value.
+  """
+  @spec resolve_flag(term(), term(), atom()) :: boolean()
+  def resolve_flag(integration, webhook_config, key) when key in @security_flags do
+    case Enum.find([fetch(integration, key), fetch(webhook_config, key)], &(not is_nil(&1))) do
+      nil -> false
+      value -> flag_value(value) == true
+    end
+  end
+
+  @doc "Parses a configured flag value: `true`, `false`, or `:invalid`."
+  @spec flag_value(term()) :: boolean() | :invalid
+  def flag_value(value) when is_boolean(value), do: value
+  def flag_value(1), do: true
+  def flag_value(0), do: false
+
+  def flag_value(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      v when v in ["1", "true", "yes", "on"] -> true
+      v when v in ["0", "false", "no", "off"] -> false
+      _ -> :invalid
+    end
+  end
+
+  def flag_value(_value), do: :invalid
 
   @spec normalize_blank(term()) :: term()
   def normalize_blank(value) when is_binary(value) do
@@ -157,23 +219,13 @@ defmodule LemonGateway.Transports.Webhook.Request do
   def int_value(_value, default), do: default
 
   defp allow_callback_override?(integration, webhook_config),
-    do: resolve_flag(integration, webhook_config, :allow_callback_override, false)
+    do: resolve_flag(integration, webhook_config, :allow_callback_override)
 
   defp allow_query_token?(integration, webhook_config),
-    do: resolve_flag(integration, webhook_config, :allow_query_token, false)
+    do: resolve_flag(integration, webhook_config, :allow_query_token)
 
   defp allow_payload_token?(integration, webhook_config),
-    do: resolve_flag(integration, webhook_config, :allow_payload_token, false)
-
-  defp resolve_flag(integration, webhook_config, key, default) do
-    [fetch(integration, key), fetch(webhook_config, key)]
-    |> Enum.find_value(default, &bool_value/1)
-  end
-
-  defp bool_value(value) when is_boolean(value), do: value
-  defp bool_value(value) when value in [1, "1", "true", "TRUE", "yes", "YES"], do: true
-  defp bool_value(value) when value in [0, "0", "false", "FALSE", "no", "NO"], do: false
-  defp bool_value(_value), do: nil
+    do: resolve_flag(integration, webhook_config, :allow_payload_token)
 
   defp optional_values(true, values) when is_list(values), do: values
   defp optional_values(_, _), do: []

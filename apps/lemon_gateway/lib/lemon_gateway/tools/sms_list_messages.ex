@@ -2,10 +2,13 @@ defmodule LemonGateway.Tools.SmsListMessages do
   @moduledoc """
   LemonAgent tool for listing and filtering inbound SMS messages.
 
-  Queries the SMS inbox with optional filters (sender, recipient, body content,
-  timestamp, claimed status) and returns a formatted summary of matching messages.
+  Lists only messages bound to the calling session by its inbox reservation
+  (see `LemonGateway.Sms.Inbox`). Calling it takes or renews the reservation;
+  while another session holds it, no content is returned. Message bodies are
+  attacker-controlled, so results are marked untrusted.
   """
 
+  alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
@@ -16,8 +19,8 @@ defmodule LemonGateway.Tools.SmsListMessages do
     %AgentTool{
       name: "sms_list_messages",
       description:
-        "List recent inbound SMS messages received by the shared inbox number. " <>
-          "Useful for debugging or manual inspection (OTP flows generally use sms_wait_for_code).",
+        "List inbound SMS messages received for this session while it held the shared inbox " <>
+          "reservation. Reserves the inbox. OTP flows generally use sms_wait_for_code.",
       label: "List SMS Messages",
       parameters: %{
         "type" => "object",
@@ -42,10 +45,6 @@ defmodule LemonGateway.Tools.SmsListMessages do
             "type" => "string",
             "description" => "Optional: substring match on SMS body."
           },
-          "include_claimed" => %{
-            "type" => "boolean",
-            "description" => "If true, include claimed messages. Default: false."
-          },
           "only_mine" => %{
             "type" => "boolean",
             "description" =>
@@ -57,45 +56,59 @@ defmodule LemonGateway.Tools.SmsListMessages do
     }
   end
 
-  def execute(_tool_call_id, params, _signal, _on_update, session_key) when is_map(params) do
-    limit = parse_int(Map.get(params, "limit"), 20)
-    since_ms = parse_int(Map.get(params, "since_ms"), nil)
-    to = normalize_string(Map.get(params, "to"))
-    from_contains = normalize_string(Map.get(params, "from_contains"))
-    body_contains = normalize_string(Map.get(params, "body_contains"))
-    include_claimed = parse_bool(Map.get(params, "include_claimed"), false)
-    only_mine = parse_bool(Map.get(params, "only_mine"), false)
-
-    opts =
-      []
-      |> maybe_put(:limit, limit)
-      |> maybe_put(:since_ms, since_ms)
-      |> maybe_put(:to, to)
-      |> maybe_put(:from_contains, from_contains)
-      |> maybe_put(:body_contains, body_contains)
-      |> maybe_put(:include_claimed, include_claimed)
-
-    messages =
-      LemonGateway.Sms.Inbox.list_messages(opts)
-      |> maybe_filter_only_mine(only_mine, session_key)
-
-    %AgentToolResult{
-      content: [%TextContent{type: :text, text: format_messages(messages)}],
-      details: %{count: length(messages), messages: messages}
-    }
+  def execute(_tool_call_id, params, _signal, _on_update, session_key) do
+    params
+    |> list(session_key)
+    |> ToolResultTrust.untrusted(:webhook)
   end
 
-  def execute(_tool_call_id, _params, _signal, _on_update, _session_key) do
+  defp list(params, session_key)
+       when not is_binary(session_key) or session_key == "" or not is_map(params) do
+    if is_map(params),
+      do: error_result("sms_list_messages requires a session key (internal)."),
+      else: error_result("Invalid parameters (expected object).")
+  end
+
+  defp list(params, session_key) do
+    if parse_bool(Map.get(params, "include_claimed"), false) do
+      error_result("include_claimed is not available to agent sessions.")
+    else
+      opts =
+        []
+        |> maybe_put(:limit, parse_int(Map.get(params, "limit"), 20))
+        |> maybe_put(:since_ms, parse_int(Map.get(params, "since_ms"), nil))
+        |> maybe_put(:to, normalize_string(Map.get(params, "to")))
+        |> maybe_put(:from_contains, normalize_string(Map.get(params, "from_contains")))
+        |> maybe_put(:body_contains, normalize_string(Map.get(params, "body_contains")))
+
+      case LemonGateway.Sms.Inbox.list_session_messages(session_key, opts) do
+        {:ok, messages} ->
+          only_mine = parse_bool(Map.get(params, "only_mine"), false)
+          messages = maybe_filter_only_mine(messages, only_mine, session_key)
+
+          %AgentToolResult{
+            content: [%TextContent{type: :text, text: format_messages(messages)}],
+            details: %{
+              count: length(messages),
+              message_sids: Enum.map(messages, & &1["message_sid"])
+            }
+          }
+
+        {:error, reason} ->
+          error_result(LemonGateway.Sms.Inbox.error_text(reason))
+      end
+    end
+  end
+
+  defp error_result(text) do
     %AgentToolResult{
-      content: [%TextContent{type: :text, text: "Invalid parameters (expected object)."}],
+      content: [%TextContent{type: :text, text: text}],
       details: %{error: true}
     }
   end
 
-  defp maybe_filter_only_mine(messages, true, session_key)
-       when is_list(messages) and is_binary(session_key) and session_key != "" do
-    Enum.filter(messages, fn msg -> msg["claimed_by"] == session_key end)
-  end
+  defp maybe_filter_only_mine(messages, true, session_key),
+    do: Enum.filter(messages, fn msg -> msg["claimed_by"] == session_key end)
 
   defp maybe_filter_only_mine(messages, _only_mine, _session_key), do: messages
 

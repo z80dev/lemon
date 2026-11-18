@@ -130,18 +130,6 @@ defmodule LemonGateway.Env do
       apps: [:lemon_gateway]
     },
     %{
-      name: :twilio_validate_webhook,
-      env_var: "TWILIO_VALIDATE_WEBHOOK",
-      aliases: [],
-      type: :boolean,
-      default: true,
-      doc: "Whether inbound Twilio webhook signatures are validated.",
-      secret?: false,
-      required?: false,
-      area: :gateway_sms,
-      apps: [:lemon_gateway]
-    },
-    %{
       name: :twilio_webhook_url,
       env_var: "TWILIO_WEBHOOK_URL",
       aliases: [],
