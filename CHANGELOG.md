@@ -211,6 +211,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Restricted tool profiles (`safe_mode`, `subagent_restricted`, `leaf_worker`,
+  `no_external`) are allow lists over one tool catalog and deny unclassified,
+  MCP, extension and satellite tools. Every tool source passes one final policy
+  filter and approval gate, ACP "ask" covers every non-read tool, and
+  `allowed_commands`/`blocked_commands` are enforced (best-effort) in bash, with
+  `eval`, `debug`, `lsp` and `omp` refused while a list is set.
+- `sessions.reset`, `sessions.delete` and `sessions.prune` take a durable
+  per-session fence that blocks router admission, native follow-ups,
+  `node.invoke` and gateway direct runs; remote work keeps a session busy until
+  proven stopped, and history deletion is verified.
 - Kanban dispatch uses Lemon-owned controller repositories under
   `~/.lemon/kanban/repos/<board>.git`; publishing needs an operator grant pinned
   to exact URLs, worker mutations are confined, and Discord `/kanban` is read-only.
