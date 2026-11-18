@@ -1,7 +1,6 @@
 defmodule LemonControlPlane.Methods.OmpMethodsTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.EventBridge
   alias LemonControlPlane.Methods.Registry
   alias LemonControlPlane.Connections
@@ -54,7 +53,6 @@ defmodule LemonControlPlane.Methods.OmpMethodsTest do
         assert Schemas.get(method) != nil
         expected = if method in @write_methods, do: [:write], else: [:read]
         assert module.scopes() == expected
-        assert Authorize.required_scopes(method) == expected
         assert method in Registry.list_methods()
       end
 

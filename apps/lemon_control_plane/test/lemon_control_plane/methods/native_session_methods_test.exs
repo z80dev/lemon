@@ -1,8 +1,6 @@
 defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Auth.Authorize
-
   alias LemonControlPlane.Methods.{
     Registry,
     SessionsFork,
@@ -400,9 +398,9 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
   end
 
   test "read scope cannot mutate native sessions and errors never echo arbitrary reasons" do
-    assert Authorize.required_scopes("sessions.tree") == [:read]
-    assert Authorize.required_scopes("sessions.rewind") == [:write]
-    assert Authorize.required_scopes("sessions.fork") == [:write]
+    assert LemonControlPlane.Methods.SessionsTree.scopes() == [:read]
+    assert LemonControlPlane.Methods.SessionsRewind.scopes() == [:write]
+    assert LemonControlPlane.Methods.SessionsFork.scopes() == [:write]
 
     for {method, params} <- [{"sessions.rewind", rewind_target()}, {"sessions.fork", target()}] do
       assert {:error, {:forbidden, _}} = Registry.dispatch(method, params, ctx([:read]))

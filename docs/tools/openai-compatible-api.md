@@ -89,9 +89,10 @@ Other request fields. `agent_id`, `session_key`, `wait`, `timeout_ms` /
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `agent_id` | `default` | Agent that handles the run. |
-| `session_key` | `agent:<agent_id>:openai` (or the previous response's session key) | Lemon session to run in. |
-| `cwd`, `tool_policy` | unset | Passed through to the run request. |
+| `agent_id` | `default` | Agent that handles the run. API-token callers: letters, digits, `.`, `_`, `-` only. |
+| `session_key` | `agent:<agent_id>:openai` (or the previous response's session key) | Lemon session to run in. API-token callers get `agent:<agent_id>:openai:api`; a supplied key is a label inside that namespace (`notes` → `agent:<agent_id>:openai:api:notes`; the full namespaced key is accepted too). Other keys return `400`. |
+| `cwd` | unset | Working directory. API-token callers default to the API workspace (`gateway.default_cwd`, else the assistant home) and may only name a directory that resolves (symlinks included) inside it; anything else returns `400`. |
+| `tool_policy` | unset | Parsed with `LemonCore.ToolPolicy.parse/1`; invalid policies return `400`. The router intersects it with the run's effective policy (global, agent profile and session layers), so it can only narrow authority; a `full_access` request stays within those layers. API-token callers additionally cannot request relaxed approvals (`approval_mode` other than `ask`, or per-tool approvals other than `always`). |
 | `queue_mode` | `collect` | `followup`, `steer` or `interrupt` to change how the prompt joins a busy session. |
 | `wait`, `timeout_ms` / `timeoutMs` | `false`, 60000 | Wait synchronously for completion. |
 | `stream_timeout_ms` / `streamTimeoutMs` | 60000 | Bound for `stream: true` responses. |
@@ -126,7 +127,16 @@ run to the prior session key, so continuation stays on Lemon's supervised
 session/run-history path.
 `GET /v1/runs/:run_id` and `POST /v1/runs/:run_id/cancel` expose a minimal run
 status/cancellation boundary without returning raw run events or assistant
-answers from status calls.
+answers from status calls. A failed cancellation returns `503` instead of a
+`cancelling` status.
+
+Credentials map to principals. The dedicated API token is its own principal
+with read/write authority only (no admin or approvals): it can read, chain from
+(`previous_response_id`) and cancel only runs it submitted; other runs return
+`404`. The operator token (accepted when no API token is configured) keeps full
+operator authority over every run, session key and `cwd`. Run ownership rows
+expire after 7 days (`LemonCore.Store` sweeps `:expires_at`); after that only the
+operator can address the run.
 
 Image input is now a split boundary. Chat Completions accepts `image_url`
 parts, and Responses accepts `input_image` parts with HTTP(S) URLs, data URLs,

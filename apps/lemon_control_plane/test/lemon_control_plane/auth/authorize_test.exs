@@ -21,14 +21,24 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
     :ok
   end
 
-  describe "from_params/1 params-based parsing" do
+  describe "from_params/2 params-based parsing" do
     test "parses operator role and scopes from params" do
       {:ok, ctx} =
-        Authorize.from_params(%{
-          "role" => "operator",
-          "scopes" => ["operator.admin", "operator.read", "write", "unknown.scope"],
-          "client" => %{"id" => "operator-client-1"}
-        })
+        Authorize.from_params(
+          %{
+            "role" => "operator",
+            "scopes" => [
+              "operator.admin",
+              "operator.read",
+              "write",
+              "node.invoke",
+              "node.event",
+              "unknown.scope"
+            ],
+            "client" => %{"id" => "operator-client-1"}
+          },
+          local?: true
+        )
 
       assert ctx.role == :operator
       assert ctx.scopes == [:admin, :read, :write]
@@ -39,16 +49,18 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
 
     test "does not accept params-only node or unsupported roles" do
       assert {:error, {:unauthorized, "A valid node session token is required"}} =
-               Authorize.from_params(%{"role" => "node", "client" => %{"id" => "node-123"}})
+               Authorize.from_params(%{"role" => "node", "client" => %{"id" => "node-123"}},
+                 local?: false
+               )
 
       for role <- ["device", "service"] do
         assert {:error, {:unauthorized, "Unsupported role"}} =
-                 Authorize.from_params(%{"role" => role})
+                 Authorize.from_params(%{"role" => role}, local?: false)
       end
     end
   end
 
-  describe "from_params/1 token path" do
+  describe "from_params/2 token path" do
     test "unknown stored identity cannot escalate to operator" do
       token = "unknown-identity-token-#{System.unique_integer([:positive])}"
       identity = %{"type" => "service", "serviceId" => "svc-1"}
@@ -56,7 +68,7 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       {:ok, _} = TokenStore.store(token, identity)
 
       assert {:error, {:unauthorized, "Unsupported token identity"}} =
-               Authorize.from_params(%{"auth" => %{"token" => token}})
+               Authorize.from_params(%{"auth" => %{"token" => token}}, local?: false)
     end
 
     test "retired device tokens cannot establish a connection" do
@@ -64,7 +76,7 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       {:ok, _} = TokenStore.store(token, %{"type" => "device", "deviceId" => "legacy"})
 
       assert {:error, {:unauthorized, "Unsupported token identity"}} =
-               Authorize.from_params(%{"auth" => %{"token" => token}})
+               Authorize.from_params(%{"auth" => %{"token" => token}}, local?: false)
     end
 
     test "configured operator token rejects missing and wrong credentials and accepts the right one" do
@@ -72,20 +84,26 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       Application.put_env(:lemon_control_plane, :operator_token, operator_token)
 
       assert {:error, {:unauthorized, "Operator token is required"}} =
-               Authorize.from_params(%{"role" => "operator"})
+               Authorize.from_params(%{"role" => "operator"}, local?: false)
 
       assert {:error, {:unauthorized, "Operator token is invalid"}} =
-               Authorize.from_params(%{
-                 "role" => "operator",
-                 "auth" => %{"token" => "wrong-operator-secret"}
-               })
+               Authorize.from_params(
+                 %{
+                   "role" => "operator",
+                   "auth" => %{"token" => "wrong-operator-secret"}
+                 },
+                 local?: false
+               )
 
       assert {:ok, ctx} =
-               Authorize.from_params(%{
-                 "role" => "operator",
-                 "auth" => %{"token" => operator_token},
-                 "client" => %{"id" => "authenticated-operator"}
-               })
+               Authorize.from_params(
+                 %{
+                   "role" => "operator",
+                   "auth" => %{"token" => operator_token},
+                   "client" => %{"id" => "authenticated-operator"}
+                 },
+                 local?: false
+               )
 
       assert ctx.role == :operator
       assert ctx.scopes == [:admin, :read, :write, :approvals, :pairing]
@@ -164,15 +182,6 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
                client_id: nil
              }
     end
-
-    test "node_context/1 returns node context for id" do
-      assert Authorize.node_context("node-xyz") == %{
-               role: :node,
-               scopes: [:invoke, :event],
-               token: nil,
-               client_id: "node-xyz"
-             }
-    end
   end
 
   describe "authorize/3" do
@@ -217,18 +226,6 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
 
       assert {:error, {:forbidden, "Insufficient permissions for config.get"}} =
                Authorize.authorize(ctx, "config.get", [:admin])
-    end
-  end
-
-  describe "required_scopes/1" do
-    test "classifies representative methods by category" do
-      assert Authorize.required_scopes("health") == []
-      assert Authorize.required_scopes("config.get") == [:admin]
-      assert Authorize.required_scopes("exec.approvals.list") == [:approvals]
-      assert Authorize.required_scopes("node.pair.start") == [:pairing]
-      assert Authorize.required_scopes("node.invoke.result") == [:invoke, :event]
-      assert Authorize.required_scopes("chat.send") == [:write]
-      assert Authorize.required_scopes("sessions.list") == [:read]
     end
   end
 

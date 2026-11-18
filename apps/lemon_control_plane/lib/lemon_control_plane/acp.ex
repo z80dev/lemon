@@ -109,7 +109,7 @@ defmodule LemonControlPlane.ACP do
     id = Map.get(request, "id")
     params = Map.get(request, "params", %{})
 
-    case dispatch(method, params, opts) do
+    case authorized_dispatch(method, params, opts) do
       {:ok, _result} when is_nil(id) ->
         :noreply
 
@@ -177,9 +177,10 @@ defmodule LemonControlPlane.ACP do
     session_id = "acp_" <> LemonCore.Id.uuid()
 
     with {:ok, cwd} <- required_cwd(params),
+         {:ok, cwd} <- principal_cwd(cwd, opts),
+         {:ok, agent_id} <- principal_agent_id(params, opts),
          :ok <- validate_mcp_servers(params),
          :ok <- open_session_mcp(session_id, cwd, params, opts) do
-      agent_id = lemon_meta_string(params, "agentId", @default_agent_id)
       client_capabilities = client_capabilities(params, opts)
       session_key = "agent:#{agent_id}:acp-#{short_hash(session_id)}"
       now = DateTime.utc_now() |> DateTime.to_iso8601()
@@ -188,6 +189,7 @@ defmodule LemonControlPlane.ACP do
         cwd: cwd,
         session_key: session_key,
         agent_id: agent_id,
+        owner: Keyword.get(opts, :principal),
         title: nil,
         updated_at: now,
         last_run_id: nil,
@@ -212,6 +214,7 @@ defmodule LemonControlPlane.ACP do
     with {:ok, session_id} <- required_string(params, "sessionId"),
          {:ok, existing} <- existing_session(session_id),
          {:ok, cwd} <- required_cwd(params),
+         {:ok, cwd} <- principal_cwd(cwd, opts),
          :ok <- validate_mcp_servers(params),
          true <- cwd == existing.cwd,
          :ok <- open_session_mcp(session_id, cwd, params, opts) do
@@ -233,12 +236,18 @@ defmodule LemonControlPlane.ACP do
 
   def resume_session(_params, _opts), do: {:error, -32_602, "params must be an object"}
 
-  def list_sessions(params) when is_map(params) do
+  def list_sessions(params, opts \\ [])
+
+  def list_sessions(params, opts) when is_map(params) do
     with {:ok, offset} <- parse_cursor(Map.get(params, "cursor")) do
       cwd = Map.get(params, "cwd")
+      restricted = restricted_principal(opts)
 
       sessions =
         all_sessions()
+        |> Enum.filter(fn {_id, session} ->
+          is_nil(restricted) or Map.get(session, :owner) == restricted
+        end)
         |> Enum.map(fn {session_id, session} -> session_info(session_id, session) end)
         |> Enum.filter(fn session -> is_nil(cwd) or session["cwd"] == cwd end)
         |> Enum.sort_by(&{&1["updatedAt"], &1["sessionId"]}, :desc)
@@ -249,7 +258,7 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  def list_sessions(_params), do: {:error, -32_602, "params must be an object"}
+  def list_sessions(_params, _opts), do: {:error, -32_602, "params must be an object"}
 
   def close_session(params) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId"),
@@ -487,7 +496,7 @@ defmodule LemonControlPlane.ACP do
     do: resume_session(params, Keyword.put(opts, :replay, true))
 
   defp dispatch("session/resume", params, opts), do: resume_session(params, opts)
-  defp dispatch("session/list", params, _opts), do: list_sessions(params)
+  defp dispatch("session/list", params, opts), do: list_sessions(params, opts)
   defp dispatch("session/close", params, _opts), do: close_session(params)
   defp dispatch("session/cancel", params, _opts), do: cancel_session(params)
   defp dispatch("session/prompt", params, opts), do: prompt(params, opts)
@@ -512,6 +521,62 @@ defmodule LemonControlPlane.ACP do
         do: {:ok, Path.expand(cwd)},
         else: {:error, -32_602, "cwd must be an absolute path"}
     end
+  end
+
+  # The HTTP/WS boundaries pass `principal:` and `scopes:`. A principal without
+  # `:admin` (the `LEMON_ACP_API_TOKEN` principal) only reaches ACP sessions it
+  # created, runs in the API workspace and names plain agent ids. In-process
+  # callers pass no principal and are trusted.
+  defp restricted_principal(opts) do
+    with {:ok, principal} <- Keyword.fetch(opts, :principal),
+         false <- :admin in Keyword.get(opts, :scopes, []) do
+      principal
+    else
+      _ -> nil
+    end
+  end
+
+  defp authorized_dispatch(method, %{"sessionId" => session_id} = params, opts)
+       when is_binary(session_id) do
+    restricted = restricted_principal(opts)
+
+    case get_session(session_id) do
+      %{} = session when not is_nil(restricted) ->
+        if Map.get(session, :owner) == restricted,
+          do: dispatch(method, params, opts),
+          else: {:error, -32_602, "session not found"}
+
+      _ ->
+        dispatch(method, params, opts)
+    end
+  end
+
+  defp authorized_dispatch(method, params, opts), do: dispatch(method, params, opts)
+
+  defp principal_cwd(cwd, opts) do
+    if is_nil(restricted_principal(opts)) do
+      {:ok, cwd}
+    else
+      case LemonControlPlane.APIWorkspace.confine(cwd) do
+        {:ok, real} ->
+          {:ok, real}
+
+        {:error, :outside} ->
+          {:error, -32_602, "cwd must be a directory inside the API workspace"}
+
+        {:error, :unavailable} ->
+          {:error, -32_000, "API workspace is unavailable"}
+      end
+    end
+  end
+
+  defp principal_agent_id(params, opts) do
+    agent_id = lemon_meta_string(params, "agentId", @default_agent_id)
+
+    if is_nil(restricted_principal(opts)) or
+         Regex.match?(~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/, agent_id),
+       do: {:ok, agent_id},
+       else: {:error, -32_602, "agentId must contain only letters, digits, '.', '_' or '-'"}
   end
 
   defp validate_mcp_servers(params) do
@@ -654,7 +719,8 @@ defmodule LemonControlPlane.ACP do
   defp set_config(params, id, value, opts) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId"),
          {:ok, session} <- open_session(session_id),
-         {:ok, key, stored} <- config_value(id, value) do
+         {:ok, key, stored} <- config_value(id, value),
+         :ok <- authorize_config(key, stored, opts) do
       session = Map.put(session, key, stored)
       put_session(session_id, session)
       options = config_options(session)
@@ -668,6 +734,16 @@ defmodule LemonControlPlane.ACP do
       {:ok, %{"configOptions" => options}}
     end
   end
+
+  # Turning approvals off is approval authority: only a principal holding the
+  # operator `:approvals` scope (the `/acp/ws` operator) may select `auto`.
+  defp authorize_config(:approval_mode, "auto", opts) do
+    if :approvals in Keyword.get(opts, :scopes, []),
+      do: :ok,
+      else: {:error, -32_602, "approval=auto requires the operator approvals scope"}
+  end
+
+  defp authorize_config(_key, _value, _opts), do: :ok
 
   defp native_plan(session, action, opts \\ []) do
     case AgentRuntime.call(
@@ -1044,6 +1120,7 @@ defmodule LemonControlPlane.ACP do
     with {:ok, source_id} <- required_string(params, "sessionId"),
          {:ok, source} <- existing_session(source_id),
          {:ok, cwd} <- required_cwd(params),
+         {:ok, cwd} <- principal_cwd(cwd, opts),
          :ok <- validate_mcp_servers(params),
          true <- cwd == source.cwd do
       id = "acp_" <> LemonCore.Id.uuid()
@@ -1055,6 +1132,8 @@ defmodule LemonControlPlane.ACP do
           source
           |> Map.merge(%{
             session_key: key,
+            # The fork belongs to whoever forked it, never to the source's owner.
+            owner: Keyword.get(opts, :principal),
             last_run_id: nil,
             closed: false,
             updated_at: DateTime.utc_now() |> DateTime.to_iso8601()

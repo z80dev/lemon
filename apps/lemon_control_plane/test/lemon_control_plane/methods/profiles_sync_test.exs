@@ -343,7 +343,6 @@ defmodule LemonControlPlane.Methods.ProfilesSyncTest do
     create("local")
     assert ProfilesSyncStatus.scopes() == [:read]
     assert ProfilesSyncStatus.dispatch_mode() == :async
-    assert LemonControlPlane.Auth.Authorize.required_scopes("profiles.sync.status") == [:read]
 
     assert LemonControlPlane.Methods.Registry.lookup("profiles.sync.status") ==
              {:ok, ProfilesSyncStatus}

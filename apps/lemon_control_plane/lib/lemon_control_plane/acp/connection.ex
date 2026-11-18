@@ -10,8 +10,16 @@ defmodule LemonControlPlane.ACP.Connection do
   alias LemonControlPlane.ACP
 
   @impl true
-  def init(_opts) do
-    {:ok, %{workers: %{}, clients: %{}, terminals: %{}, capabilities: nil}}
+  def init(opts) do
+    {:ok,
+     %{
+       workers: %{},
+       clients: %{},
+       terminals: %{},
+       capabilities: nil,
+       scopes: Keyword.get(opts, :scopes, []),
+       principal: Keyword.get(opts, :principal)
+     }}
   end
 
   @impl true
@@ -115,6 +123,8 @@ defmodule LemonControlPlane.ACP.Connection do
   defp start_request(state, request) do
     owner = self()
     capabilities = state.capabilities
+    scopes = state.scopes
+    principal = state.principal
     method = if is_map(request), do: request["method"]
     params = if is_map(request), do: request["params"] || %{}, else: %{}
     session = if is_map(params), do: params["sessionId"]
@@ -127,6 +137,8 @@ defmodule LemonControlPlane.ACP.Connection do
 
         opts = [
           client_capabilities: capabilities,
+          scopes: scopes,
+          principal: principal,
           connection_pid: owner,
           session_update_callback: fn message ->
             if buffered? do

@@ -2,7 +2,6 @@ defmodule LemonControlPlane.Methods.SessionsPromptTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Session.UserPrompt
-  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.EventBridge
   alias LemonControlPlane.Methods.{Registry, SessionsPromptBind, SessionsPromptResolve}
   alias LemonControlPlane.Protocol.{Frames, Schemas}
@@ -35,8 +34,8 @@ defmodule LemonControlPlane.Methods.SessionsPromptTest do
     params = %{"sessionKey" => key, "promptId" => "pending", "action" => "decline"}
 
     for name <- ["sessions.prompt.bind", "sessions.prompt.resolve"] do
-      assert Authorize.required_scopes(name) == [:write]
-      assert {:ok, _} = Registry.lookup(name)
+      assert {:ok, module} = Registry.lookup(name)
+      assert module.scopes() == [:write]
 
       assert {:error, {:forbidden, _}} =
                Registry.dispatch(name, params, put_in(ctx.auth.scopes, [:read]))

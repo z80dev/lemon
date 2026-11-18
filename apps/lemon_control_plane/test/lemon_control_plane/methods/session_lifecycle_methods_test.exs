@@ -1,8 +1,6 @@
 defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Auth.Authorize
-
   alias LemonControlPlane.Methods.{
     SessionsDelete,
     SessionsExport,
@@ -195,10 +193,10 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
 
     assert :ok = Schemas.validate("sessions.stats", %{"groupLimit" => 10})
 
-    assert Authorize.required_scopes("sessions.metadata.patch") == [:admin]
-    assert Authorize.required_scopes("sessions.prune") == [:admin]
-    assert Authorize.required_scopes("sessions.export") == [:read]
-    assert Authorize.required_scopes("sessions.stats") == [:read]
+    assert LemonControlPlane.Methods.SessionsMetadataPatch.scopes() == [:admin]
+    assert LemonControlPlane.Methods.SessionsPrune.scopes() == [:admin]
+    assert LemonControlPlane.Methods.SessionsExport.scopes() == [:read]
+    assert LemonControlPlane.Methods.SessionsStats.scopes() == [:read]
   end
 
   defp seed_session(session_key, run_id, prompt, answer, events \\ [], updated_at_ms \\ nil) do

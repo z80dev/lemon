@@ -41,8 +41,12 @@ defmodule LemonControlPlane.Auth.Authorize do
   """
 
   alias LemonControlPlane.Auth.TokenStore
+  alias LemonControlPlane.ListenerPolicy
 
-  @type role :: :operator | :node | :enrollment
+  @operator_scopes [:admin, :read, :write, :approvals, :pairing]
+  @api_scopes [:read, :write]
+
+  @type role :: :operator | :node | :enrollment | :api
   @type scope ::
           :admin
           | :read
@@ -70,17 +74,15 @@ defmodule LemonControlPlane.Auth.Authorize do
   Creates a new auth context from connection parameters.
 
   If a token is provided, it will be validated and the identity extracted to
-  determine role and scopes. `:local?` defaults to true for direct in-process
-  callers; the WebSocket boundary always supplies the actual peer classification.
+  determine role and scopes. The credential fixes the granted scopes; a client's
+  `scopes` can only narrow them. Callers must pass the actual peer
+  classification as `local?:`; there is no implicit-local default.
   """
-  @spec from_params(map()) :: {:ok, auth_context()} | {:error, auth_error() | term()}
-  def from_params(params), do: from_params(params, local?: true)
-
   @spec from_params(map(), keyword()) :: {:ok, auth_context()} | {:error, auth_error() | term()}
   def from_params(params, opts) do
     token = get_in(params, ["auth", "token"])
     requested_role = parse_role(params["role"])
-    local? = Keyword.get(opts, :local?, true)
+    local? = Keyword.fetch!(opts, :local?)
     configured_operator_token = operator_token()
 
     cond do
@@ -162,11 +164,13 @@ defmodule LemonControlPlane.Auth.Authorize do
     end
   end
 
+  # The operator credential grants `@operator_scopes`; a client may request a
+  # narrower set but never one the credential does not grant.
   defp operator_context(params) do
     {:ok,
      %{
        role: :operator,
-       scopes: parse_scopes(params["scopes"], :operator),
+       scopes: requested_scopes(params["scopes"], @operator_scopes),
        token: nil,
        client_id: get_in(params, ["client", "id"]),
        identity: nil
@@ -196,6 +200,59 @@ defmodule LemonControlPlane.Auth.Authorize do
     (Application.get_env(:lemon_control_plane, :operator_token) ||
        System.get_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN"))
     |> normalize_token()
+  end
+
+  @doc """
+  Authenticates a remote HTTP API request (`:openai` for `/v1`, `:acp` for
+  `POST /acp`) and returns the principal the credential maps to.
+
+  - The API's own token (`LEMON_OPENAI_COMPAT_API_TOKEN` /
+    `LEMON_ACP_API_TOKEN`) is an `:api` principal holding only read and write
+    scopes: no admin, approvals or pairing authority.
+  - When that API token is unset, the operator token (or explicit tokenless
+    loopback with no operator token) authenticates as the full operator.
+  """
+  @spec authenticate_api(:openai | :acp, String.t() | nil, :inet.ip_address() | nil) ::
+          {:ok, auth_context()} | {:error, :missing | :invalid}
+  def authenticate_api(api, presented, peer) when api in [:openai, :acp] do
+    api_token = ListenerPolicy.api_token(api)
+    operator_token = if is_nil(api_token), do: configured_operator_token()
+
+    cond do
+      secure_token_match?(presented, api_token) ->
+        {:ok, api_context(api)}
+
+      secure_token_match?(presented, operator_token) ->
+        operator_context(%{})
+
+      is_nil(api_token) and is_nil(operator_token) and is_nil(presented) and
+          tokenless_loopback_allowed?(peer) ->
+        operator_context(%{})
+
+      is_nil(presented) or (is_nil(api_token) and is_nil(operator_token)) ->
+        {:error, :missing}
+
+      true ->
+        {:error, :invalid}
+    end
+  end
+
+  @doc """
+  Stable owner id for resources an API principal creates (runs, ACP sessions):
+  `api:openai` / `api:acp` for API tokens, else the context's client id or role.
+  """
+  @spec principal_id(auth_context()) :: String.t()
+  def principal_id(%{client_id: client_id}) when is_binary(client_id), do: client_id
+  def principal_id(%{role: role}), do: Atom.to_string(role)
+
+  defp api_context(api) do
+    %{
+      role: :api,
+      scopes: @api_scopes,
+      token: nil,
+      client_id: "api:#{api}",
+      identity: %{"type" => "api", "api" => Atom.to_string(api)}
+    }
   end
 
   @doc """
@@ -247,22 +304,9 @@ defmodule LemonControlPlane.Auth.Authorize do
   def default_operator do
     %{
       role: :operator,
-      scopes: [:admin, :read, :write, :approvals, :pairing],
+      scopes: @operator_scopes,
       token: nil,
       client_id: nil
-    }
-  end
-
-  @doc """
-  Creates a node auth context.
-  """
-  @spec node_context(String.t()) :: auth_context()
-  def node_context(node_id) do
-    %{
-      role: :node,
-      scopes: [:invoke, :event],
-      token: nil,
-      client_id: node_id
     }
   end
 
@@ -312,118 +356,8 @@ defmodule LemonControlPlane.Auth.Authorize do
       "node.invoke.event",
       "node.invoke.control.result",
       "node.native.followup",
-      "node.native.lineage.floor"
-    ]
-  end
-
-  @doc """
-  Returns the required scopes for a method.
-
-  Methods are categorized as:
-  - Public: No scopes required (health, status)
-  - Read: Requires :read scope (list, get operations)
-  - Write: Requires :write scope (send, agent, chat operations)
-  - Admin: Requires :admin scope (config, install, cron management)
-  - Approvals: Requires :approvals scope (exec.approvals.*, exec.approval.*)
-  - Pairing: Requires :pairing scope (node.pair.*)
-  """
-  @spec required_scopes(String.t()) :: [scope()]
-  def required_scopes(method) do
-    cond do
-      public_method?(method) ->
-        []
-
-      admin_method?(method) ->
-        [:admin]
-
-      approvals_method?(method) ->
-        [:approvals]
-
-      pairing_method?(method) ->
-        [:pairing]
-
-      node_method?(method) ->
-        [:invoke, :event]
-
-      write_method?(method) ->
-        [:write]
-
-      true ->
-        [:read]
-    end
-  end
-
-  # Public methods - no auth required
-  defp public_method?(method) do
-    method in ["health", "connect"]
-  end
-
-  # Admin methods - require operator.admin
-  defp admin_method?(method) do
-    String.starts_with?(method, "config.") or
-      method in [
-        "system.restart",
-        "system.stop",
-        "system.reload_code",
-        "skills.install",
-        "node.mcp.discover",
-        "profiles.sync",
-        "cron.add",
-        "cron.update",
-        "cron.pause",
-        "cron.resume",
-        "cron.abort",
-        "cron.remove",
-        "cron.run",
-        "sessions.patch",
-        "sessions.metadata.patch",
-        "sessions.prune",
-        "sessions.maintain",
-        "sms.inbox.clear",
-        "sessions.reset",
-        "sessions.delete",
-        "sessions.compact"
-      ]
-  end
-
-  # Approval methods - require operator.approvals
-  defp approvals_method?(method) do
-    String.starts_with?(method, "exec.approvals.") or
-      String.starts_with?(method, "exec.approval.")
-  end
-
-  # Pairing methods - require operator.pairing
-  defp pairing_method?(method) do
-    String.starts_with?(method, "node.pair.")
-  end
-
-  # Node-only methods
-  defp node_method?(method) do
-    node_only_method?(method)
-  end
-
-  # Write methods - require operator.write
-  defp write_method?(method) do
-    method in [
-      "agent",
-      "agent.wait",
-      "chat.send",
-      "chat.abort",
-      "sessions.rewind",
-      "sessions.prompt.bind",
-      "sessions.prompt.resolve",
-      "sessions.navigate",
-      "sessions.label",
-      "sessions.plan",
-      "sessions.fork",
-      "node.invoke",
-      "omp.sessions.start",
-      "omp.sessions.startMany",
-      "omp.sessions.configure",
-      "omp.sessions.resume",
-      "omp.sessions.send",
-      "omp.sessions.cancel",
-      "omp.sessions.close"
+      "node.native.lineage.floor",
+      "node.shell.event"
     ]
   end
 
@@ -433,16 +367,14 @@ defmodule LemonControlPlane.Auth.Authorize do
   defp parse_role(nil), do: :operator
   defp parse_role(_), do: :unsupported
 
-  defp parse_scopes(nil, :operator), do: [:admin, :read, :write, :approvals, :pairing]
-  defp parse_scopes(nil, :node), do: [:invoke, :event]
+  defp requested_scopes(nil, granted), do: granted
 
-  defp parse_scopes(scopes, _role) when is_list(scopes) do
-    scopes
-    |> Enum.map(&parse_scope/1)
-    |> Enum.reject(&is_nil/1)
+  defp requested_scopes(scopes, granted) when is_list(scopes) do
+    requested = scopes |> Enum.map(&parse_scope/1) |> Enum.reject(&is_nil/1)
+    Enum.filter(granted, &(&1 in requested))
   end
 
-  defp parse_scopes(_, role), do: parse_scopes(nil, role)
+  defp requested_scopes(_scopes, granted), do: granted
 
   defp parse_scope("operator.admin"), do: :admin
   defp parse_scope("operator.read"), do: :read

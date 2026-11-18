@@ -1,11 +1,20 @@
 defmodule LemonControlPlane.OpenAICompat do
   @moduledoc false
 
+  # Every run/session entry point takes the caller's auth context (see
+  # `LemonControlPlane.Auth.Authorize.authenticate_api/3`). A principal without
+  # `:admin` (the `LEMON_OPENAI_COMPAT_API_TOKEN` principal) only sees runs it
+  # submitted, runs inside `agent:<agent>:openai:api[:<label>]` session keys and
+  # the API workspace, and cannot relax approvals through `tool_policy`.
+
+  alias LemonControlPlane.APIWorkspace
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.AgentWait
   alias LemonControlPlane.Methods.ModelsList
   alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonCore.Httpc
   alias LemonCore.RunRequest
+  alias LemonCore.ToolPolicy
 
   @default_agent_id "default"
   @default_queue_mode :collect
@@ -13,6 +22,12 @@ defmodule LemonControlPlane.OpenAICompat do
   @default_stream_timeout_ms 60_000
   @max_image_inputs 10
   @max_image_bytes 20_000_000
+  # Owner rows expire (LemonCore.Store sweeps `:expires_at`) after the same
+  # window the store keeps introspection history; afterwards only admin can
+  # address the run.
+  @run_owner_table :openai_compat_run_owners
+  @run_owner_ttl_ms 7 * 24 * 60 * 60 * 1000
+  @api_label ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/
 
   def health do
     %{
@@ -73,93 +88,125 @@ defmodule LemonControlPlane.OpenAICompat do
 
   def model(_model_id), do: {:error, {400, "model id is required"}}
 
-  def chat_completion(params) when is_map(params) do
+  def chat_completion(params, auth) when is_map(params) do
     with {:ok, model} <- required_string(params, "model"),
          {:ok, messages} <- required_messages(params),
          {:ok, input} <- prompt_from_messages(messages),
          :ok <- validate_image_model_support(model, input),
-         {:ok, result} <- submit(input, params, model, "chat.completions"),
+         {:ok, result} <- submit(input, params, model, "chat.completions", auth),
          {:ok, result} <- maybe_wait(result, params) do
       {:ok, chat_completion_response(result, model)}
     end
   end
 
-  def chat_completion(_params), do: {:error, {400, "request body must be a JSON object"}}
+  def chat_completion(_params, _auth),
+    do: {:error, {400, "request body must be a JSON object"}}
 
-  def chat_completion_stream(params) when is_map(params) do
+  def chat_completion_stream(params, auth) when is_map(params) do
     with {:ok, model} <- required_string(params, "model"),
          {:ok, messages} <- required_messages(params),
          {:ok, input} <- prompt_from_messages(messages),
          :ok <- validate_image_model_support(model, input),
-         {:ok, result} <- submit(input, params, model, "chat.completions") do
+         {:ok, result} <- submit(input, params, model, "chat.completions", auth) do
       {:ok, stream_result(result, model, params)}
     end
   end
 
-  def chat_completion_stream(_params), do: {:error, {400, "request body must be a JSON object"}}
+  def chat_completion_stream(_params, _auth),
+    do: {:error, {400, "request body must be a JSON object"}}
 
-  def response(params) when is_map(params) do
+  def response(params, auth) when is_map(params) do
     with {:ok, model} <- required_string(params, "model"),
          {:ok, input} <- prompt_from_input(Map.get(params, "input")),
          :ok <- validate_image_model_support(model, input),
-         {:ok, previous_response} <- previous_response(params),
-         {:ok, result} <- submit(input, params, model, "responses", previous_response),
+         {:ok, previous_response} <- previous_response(params, auth),
+         {:ok, result} <- submit(input, params, model, "responses", auth, previous_response),
          {:ok, result} <- maybe_wait(result, params) do
       {:ok, response_object(result, model)}
     end
   end
 
-  def response(_params), do: {:error, {400, "request body must be a JSON object"}}
+  def response(_params, _auth), do: {:error, {400, "request body must be a JSON object"}}
 
-  def response_stream(params) when is_map(params) do
+  def response_stream(params, auth) when is_map(params) do
     with {:ok, model} <- required_string(params, "model"),
          {:ok, input} <- prompt_from_input(Map.get(params, "input")),
          :ok <- validate_image_model_support(model, input),
-         {:ok, previous_response} <- previous_response(params),
-         {:ok, result} <- submit(input, params, model, "responses", previous_response) do
+         {:ok, previous_response} <- previous_response(params, auth),
+         {:ok, result} <- submit(input, params, model, "responses", auth, previous_response) do
       {:ok, stream_result(result, model, params)}
     end
   end
 
-  def response_stream(_params), do: {:error, {400, "request body must be a JSON object"}}
+  def response_stream(_params, _auth), do: {:error, {400, "request body must be a JSON object"}}
 
   def stream_requested?(params) when is_map(params), do: Map.get(params, "stream") == true
   def stream_requested?(_params), do: false
 
-  def stored_response(response_id) when is_binary(response_id) and response_id != "" do
-    with {:ok, run_id} <- run_id_from_response_id(response_id) do
-      case run_getter().(run_id) do
-        nil -> {:error, {404, "response not found"}}
-        record when is_map(record) -> {:ok, stored_response_object(response_id, run_id, record)}
-        _other -> {:error, {503, "failed to read Lemon response"}}
-      end
+  def stored_response(response_id, auth) when is_binary(response_id) and response_id != "" do
+    with {:ok, run_id} <- run_id_from_response_id(response_id),
+         {:ok, record} <-
+           fetch_run(run_id, auth, "response not found", "failed to read Lemon response") do
+      {:ok, stored_response_object(response_id, run_id, record)}
     end
   end
 
-  def stored_response(_response_id), do: {:error, {400, "response id is required"}}
+  def stored_response(_response_id, _auth), do: {:error, {400, "response id is required"}}
 
-  def run_status(run_id) when is_binary(run_id) and run_id != "" do
-    case run_getter().(run_id) do
-      nil -> {:error, {404, "run not found"}}
-      record when is_map(record) -> {:ok, run_object(run_id, record)}
-      _other -> {:error, {503, "failed to read Lemon run"}}
+  def run_status(run_id, auth) when is_binary(run_id) and run_id != "" do
+    with {:ok, record} <- fetch_run(run_id, auth, "run not found", "failed to read Lemon run") do
+      {:ok, run_object(run_id, record)}
     end
   end
 
-  def run_status(_run_id), do: {:error, {400, "run id is required"}}
+  def run_status(_run_id, _auth), do: {:error, {400, "run id is required"}}
 
-  def cancel_run(run_id) when is_binary(run_id) and run_id != "" do
-    with {:ok, run} <- run_status(run_id) do
+  def cancel_run(run_id, auth) when is_binary(run_id) and run_id != "" do
+    with {:ok, run} <- run_status(run_id, auth) do
       if terminal_run_status?(run["status"]) do
         {:ok, run}
       else
-        canceller().(run_id, :openai_compat_cancel)
-        {:ok, %{run | "status" => "cancelling"}}
+        case canceller().(run_id, :openai_compat_cancel) do
+          :ok -> {:ok, %{run | "status" => "cancelling"}}
+          {:ok, _} -> {:ok, %{run | "status" => "cancelling"}}
+          other -> {:error, {503, "failed to cancel Lemon run: #{inspect(other)}"}}
+        end
       end
     end
   end
 
-  def cancel_run(_run_id), do: {:error, {400, "run id is required"}}
+  def cancel_run(_run_id, _auth), do: {:error, {400, "run id is required"}}
+
+  # Admin principals (the operator) may address any run; every other principal
+  # only the runs recorded as its own at submit time. Unowned runs read as
+  # missing so run ids cannot be probed.
+  defp fetch_run(run_id, auth, missing, unreadable) do
+    if admin?(auth) or run_owner?(run_id, auth) do
+      case run_getter().(run_id) do
+        nil -> {:error, {404, missing}}
+        record when is_map(record) -> {:ok, record}
+        _other -> {:error, {503, unreadable}}
+      end
+    else
+      {:error, {404, missing}}
+    end
+  end
+
+  # The store sweeps expired rows periodically; an expired row is refused here
+  # too so ownership never outlives its TTL between sweeps.
+  defp run_owner?(run_id, auth) do
+    principal = Authorize.principal_id(auth)
+
+    case LemonCore.Store.get(@run_owner_table, run_id) do
+      %{principal: ^principal, expires_at: expires_at} when is_integer(expires_at) ->
+        expires_at > System.system_time(:millisecond)
+
+      _ ->
+        false
+    end
+  end
+
+  defp admin?(%{scopes: scopes}), do: :admin in scopes
 
   defp model_object(model) do
     id = model["id"]
@@ -636,37 +683,37 @@ defmodule LemonControlPlane.OpenAICompat do
     |> binary_part(0, 16)
   end
 
-  defp submit(input, params, model, endpoint, previous_response \\ nil) do
-    agent_id = string_param(params, "agent_id", @default_agent_id)
-    default_session_key = previous_session_key(previous_response) || "agent:#{agent_id}:openai"
-    session_key = string_param(params, "session_key", default_session_key)
-    prompt = input.prompt
-    image_inputs = input.image_inputs
-    images = Map.get(input, :images, [])
+  defp submit(input, params, model, endpoint, auth, previous_response \\ nil) do
+    with {:ok, agent_id} <- request_agent_id(params, auth),
+         {:ok, session_key} <- request_session_key(params, agent_id, previous_response, auth),
+         {:ok, cwd} <- request_cwd(params, auth),
+         {:ok, tool_policy} <- request_tool_policy(params, auth) do
+      prompt = input.prompt
+      image_inputs = input.image_inputs
+      images = Map.get(input, :images, [])
 
-    request =
-      RunRequest.new(%{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: agent_id,
-        prompt: prompt,
-        images: images,
-        queue_mode: queue_mode(params),
-        model: model,
-        cwd: Map.get(params, "cwd"),
-        tool_policy: Map.get(params, "tool_policy"),
-        meta: %{
-          origin: :openai_compat,
-          openai_endpoint: endpoint,
-          streaming_requested: Map.get(params, "stream") == true,
-          previous_response_id: previous_response_id(previous_response),
-          openai_image_inputs: image_inputs,
-          image_input_count: length(image_inputs)
-        }
-      })
+      request =
+        RunRequest.new(%{
+          origin: :control_plane,
+          session_key: session_key,
+          agent_id: agent_id,
+          prompt: prompt,
+          images: images,
+          queue_mode: queue_mode(params),
+          model: model,
+          cwd: cwd,
+          tool_policy: tool_policy,
+          meta: %{
+            origin: :openai_compat,
+            openai_endpoint: endpoint,
+            streaming_requested: Map.get(params, "stream") == true,
+            previous_response_id: previous_response_id(previous_response),
+            openai_image_inputs: image_inputs,
+            image_input_count: length(image_inputs)
+          }
+        })
 
-    case submitter().(request) do
-      {:ok, run_id} ->
+      with {:ok, run_id} <- submit_owned(request, auth) do
         {:ok,
          %{
            run_id: run_id,
@@ -677,10 +724,115 @@ defmodule LemonControlPlane.OpenAICompat do
            previous_response_id: previous_response_id(previous_response),
            image_input_count: length(image_inputs)
          }}
+      end
+    end
+  end
+
+  # The owner record is what lets a non-admin principal read or cancel the run
+  # later; a run whose owner cannot be recorded is cancelled, not orphaned.
+  defp submit_owned(request, auth) do
+    case submitter().(request) do
+      {:ok, run_id} ->
+        owner = %{
+          principal: Authorize.principal_id(auth),
+          expires_at: System.system_time(:millisecond) + @run_owner_ttl_ms
+        }
+
+        case LemonCore.Store.put(LemonCore.Store, @run_owner_table, run_id, owner, durable: true) do
+          :ok ->
+            {:ok, run_id}
+
+          {:error, reason} ->
+            canceller().(run_id, :openai_compat_owner_unrecorded)
+            {:error, {503, "failed to record Lemon run owner: #{inspect(reason)}"}}
+        end
 
       {:error, reason} ->
         {:error, {503, "failed to submit Lemon run: #{inspect(reason)}"}}
     end
+  end
+
+  defp request_agent_id(params, auth) do
+    agent_id = string_param(params, "agent_id", @default_agent_id)
+
+    if admin?(auth) or Regex.match?(@api_label, agent_id),
+      do: {:ok, agent_id},
+      else: {:error, {400, "agent_id must contain only letters, digits, '.', '_' or '-'"}}
+  end
+
+  # Admin keeps free choice of session key. Other principals are confined to
+  # `agent:<agent>:openai:api`; a caller key is a label inside that namespace
+  # (the full namespaced key returned in `lemon.sessionKey` is accepted too).
+  defp request_session_key(params, agent_id, previous_response, auth) do
+    requested =
+      string_param(params, "session_key", nil) || previous_session_key(previous_response)
+
+    if admin?(auth) do
+      {:ok, requested || "agent:#{agent_id}:openai"}
+    else
+      namespace = "agent:#{agent_id}:openai:api"
+
+      case requested do
+        nil ->
+          {:ok, namespace}
+
+        ^namespace ->
+          {:ok, namespace}
+
+        key ->
+          label = String.replace_prefix(key, namespace <> ":", "")
+
+          if Regex.match?(@api_label, label),
+            do: {:ok, namespace <> ":" <> label},
+            else:
+              {:error,
+               {400,
+                "session_key must be a label of letters, digits, '.', '_' or '-' inside #{namespace}"}}
+      end
+    end
+  end
+
+  # Non-admin principals run in the API workspace; a caller cwd must resolve,
+  # symlinks included, inside it (`LemonControlPlane.APIWorkspace`).
+  defp request_cwd(params, auth) do
+    cwd = Map.get(params, "cwd")
+
+    result =
+      cond do
+        admin?(auth) -> {:ok, cwd}
+        is_nil(cwd) -> APIWorkspace.root()
+        true -> APIWorkspace.confine(cwd)
+      end
+
+    case result do
+      {:ok, cwd} -> {:ok, cwd}
+      {:error, :outside} -> {:error, {400, "cwd must be a directory inside the API workspace"}}
+      {:error, :unavailable} -> {:error, {503, "API workspace is unavailable"}}
+    end
+  end
+
+  defp request_tool_policy(params, auth) do
+    case Map.get(params, "tool_policy") do
+      nil ->
+        {:ok, nil}
+
+      policy ->
+        case ToolPolicy.parse(policy) do
+          {:ok, parsed} ->
+            if :approvals in auth.scopes or not relaxes_approvals?(parsed),
+              do: {:ok, parsed},
+              else:
+                {:error,
+                 {400, "tool_policy cannot relax approvals without the operator approvals scope"}}
+
+          {:error, reason} ->
+            {:error, {400, "tool_policy is invalid: #{inspect(reason)}"}}
+        end
+    end
+  end
+
+  defp relaxes_approvals?(%ToolPolicy{approval_mode: mode, approvals: approvals}) do
+    mode not in [nil, :ask] or Enum.any?(approvals, fn {_tool, gate} -> gate != :always end)
   end
 
   defp maybe_wait(result, params) do
@@ -771,29 +923,27 @@ defmodule LemonControlPlane.OpenAICompat do
   defp queue_mode(%{"queue_mode" => "interrupt"}), do: :interrupt
   defp queue_mode(_params), do: @default_queue_mode
 
-  defp previous_response(params) do
+  defp previous_response(params, auth) do
     case Map.get(params, "previous_response_id") ||
            get_in(params, ["metadata", "previous_response_id"]) do
       nil ->
         {:ok, nil}
 
       response_id when is_binary(response_id) and response_id != "" ->
-        with {:ok, run_id} <- run_id_from_response_id(response_id) do
-          case run_getter().(run_id) do
-            nil ->
-              {:error, {404, "previous response not found"}}
-
-            record when is_map(record) ->
-              {:ok,
-               %{
-                 response_id: response_id,
-                 run_id: run_id,
-                 session_key: response_session_key(record)
-               }}
-
-            _other ->
-              {:error, {503, "failed to read previous response"}}
-          end
+        with {:ok, run_id} <- run_id_from_response_id(response_id),
+             {:ok, record} <-
+               fetch_run(
+                 run_id,
+                 auth,
+                 "previous response not found",
+                 "failed to read previous response"
+               ) do
+          {:ok,
+           %{
+             response_id: response_id,
+             run_id: run_id,
+             session_key: response_session_key(record)
+           }}
         end
 
       _other ->

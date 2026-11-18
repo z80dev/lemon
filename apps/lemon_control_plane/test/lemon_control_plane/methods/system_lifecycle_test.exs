@@ -53,7 +53,8 @@ defmodule LemonControlPlane.Methods.SystemLifecycleTest do
   test "registered methods require admin; read, write and node callers are forbidden" do
     for method <- ["system.restart", "system.stop"] do
       assert method in Registry.list_methods()
-      assert LemonControlPlane.Auth.Authorize.required_scopes(method) == [:admin]
+      assert {:ok, module} = Registry.lookup(method)
+      assert module.scopes() == [:admin]
 
       for auth <- [
             %{role: :operator, scopes: [:read]},

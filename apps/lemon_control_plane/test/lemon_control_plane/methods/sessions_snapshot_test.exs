@@ -3,7 +3,6 @@ Code.require_file(Path.expand("../../../../lemon_agent/test/support/mocks.ex", _
 defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.{Registry, SessionsSnapshot}
   alias LemonCore.{AgentRuntime, ExecApprovalStore, RunStore, Store}
 
@@ -302,7 +301,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
   test "only read-authorized operators can collect native owner recovery", c do
     assert {:error, _} =
              Registry.dispatch("sessions.snapshot", params(c), %{
-               auth: Authorize.node_context("foreign")
+               auth: %{role: :node, scopes: [:invoke, :event], token: nil, client_id: "foreign"}
              })
 
     assert {:error, _} =
