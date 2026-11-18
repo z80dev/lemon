@@ -24,11 +24,11 @@ import { Text } from "@oh-my-pi/pi-tui/components/text";
 import { col, node, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { iconButton } from "@oh-my-pi/pi-tui/native/overlay";
-import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { formatTurnUsage } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { Container } from "@oh-my-pi/pi-tui/tui";
 import { formatDuration } from "@oh-my-pi/pi-utils";
+import { displayMarkdown, displayText } from "../../formatters/base.ts";
 import type { TurnSummary } from "../../store/transcript-model.ts";
 import { TranscriptMarks, type TranscriptPhase } from "../../terminal/marks.ts";
 import { getTheme } from "../theme/theme.ts";
@@ -93,7 +93,10 @@ export class AssistantMessageComponent extends Container {
 		super();
 		this.#onFigureChange = options.onFigureChange;
 		const theme = getTheme();
-		this.#markdown = new Markdown(text, 1, 0, getMarkdownTheme(), {
+		// Rendered through displayMarkdown: the renderer decodes character
+		// references after ingestion sanitized the text. `#text`/`#answer` stay
+		// as received, which is what Copy and `/copy` hand out.
+		this.#markdown = new Markdown(displayMarkdown(text), 1, 0, getMarkdownTheme(), {
 			color: (value) => theme.fg("assistantText", value),
 		});
 		this.#prefixMarkdown = new Markdown("", 1, 0, getMarkdownTheme(), {
@@ -120,7 +123,7 @@ export class AssistantMessageComponent extends Container {
 		if (this.#figures || TERMINAL.imageProtocol === null) return;
 		if (!((svgFigureRendering() && hasSvgFence(text)) || hasChartTable(text))) return;
 		const theme = getTheme();
-		const figures = new FigureMarkdown(text, {
+		const figures = new FigureMarkdown(displayMarkdown(text), {
 			markdown: (value) =>
 				new Markdown(value, 1, 0, getMarkdownTheme(), {
 					color: (styled) => theme.fg("assistantText", styled),
@@ -156,7 +159,7 @@ export class AssistantMessageComponent extends Container {
 			this.#body.transientRenderCache = transient;
 		}
 		this.#liftFigures(fullText);
-		this.#body.setText(fullText);
+		this.#body.setText(displayMarkdown(fullText));
 	}
 
 	/**
@@ -184,7 +187,9 @@ export class AssistantMessageComponent extends Container {
 		};
 		this.#footer.clear();
 		if (options.ok === false && options.error) {
-			this.#footer.addChild(new Text(theme.fg("error", `Error: ${options.error}`), 1, 0));
+			this.#footer.addChild(
+				new Text(theme.fg("error", `Error: ${displayText(options.error)}`), 1, 0),
+			);
 			this.#version++;
 		}
 	}
@@ -215,7 +220,7 @@ export class AssistantMessageComponent extends Container {
 		if (outcome?.error !== undefined) {
 			// Lemon has no retry command, so omp's Retry control is not offered.
 			children.push(
-				describeErrorFrame("Run failed", outcome.error, [
+				describeErrorFrame("Run failed", displayText(outcome.error), [
 					{ act: "copy-error", label: "Copy error", title: "Copy the error message" },
 					{
 						act: "switch-model",
@@ -251,8 +256,8 @@ export class AssistantMessageComponent extends Container {
 		const stream = !this.#finalized && this.#transient;
 		const cached = this.#nativeBody;
 		if (cached?.text === answer && cached.stream === stream) return cached.node;
-		// Model text; escape bytes are the terminal's to style, not ours.
-		const source = answer.includes("\x1b") ? plainText(answer) : answer;
+		// Model text: the terminal (Tern) renders this Markdown, entities included.
+		const source = displayMarkdown(answer);
 		const body = node(
 			"md",
 			stream ? { text: source, stream: true } : { text: source },

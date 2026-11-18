@@ -23,6 +23,7 @@
  */
 
 import type { CommandHost, CommandRegistry } from "../../commands/index.ts";
+import { previewSessionDelete } from "../../commands/session.ts";
 import type { SubmissionDisposition } from "../../composer/drafts.ts";
 import type { ControlPlaneClient } from "../../protocol/client.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
@@ -99,6 +100,17 @@ export class CommandController {
 		for (const interpolation of this.#interpolations) interpolation.abort();
 		this.#interpolations.clear();
 		return true;
+	}
+
+	/**
+	 * The session switcher's close: `/session delete`'s preview for exactly
+	 * `key`. Deleting stays the typed `--confirm <exact-key>` command.
+	 */
+	async previewSessionDelete(key: string): Promise<void> {
+		await previewSessionDelete(
+			{ ...this.#context(), registry: this.#options.registry, name: "session", rest: "" },
+			key,
+		);
 	}
 
 	/** The editor's `onSubmit`. Never throws: failures become notices. */

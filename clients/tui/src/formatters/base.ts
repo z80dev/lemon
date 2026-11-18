@@ -7,27 +7,117 @@
 
 import { homedir } from "node:os";
 import { relative, sep } from "node:path";
-import { stripVTControlCharacters } from "node:util";
+import { sanitizeText } from "@oh-my-pi/pi-utils/sanitize-text";
 
 /**
- * Untrusted output (tool receipts, delegate text) made safe to print: escape
- * sequences and C0/DEL control bytes are removed; tabs and newlines stay.
+ * Untrusted text (answers, tool receipts, notices, delegate text) made safe to
+ * print: escape sequences, C0/C1 control bytes, DEL and lone surrogates are
+ * removed and line endings normalized; tabs and newlines stay.
  */
 export function safeText(text: string): string {
-	return (
-		stripVTControlCharacters(text)
-			.replace(/\r\n/g, "\n")
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: Tool receipts must not inject terminal controls.
-			.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+	return sanitizeText(text);
+}
+
+/** {@link displayText} as one line: every whitespace run becomes one space, bounded. */
+export function safeLine(text: string, maxLength = 200): string {
+	const line = displayText(text).replace(/\s+/g, " ").trim();
+	return line.length > maxLength ? `${line.slice(0, maxLength - 1)}…` : line;
+}
+
+/**
+ * Invisible characters that can reorder or hide what a reader sees: bidi
+ * embeddings, overrides, isolates and marks; zero-width spaces and joiners;
+ * word joiners and invisible operators; soft hyphens; BOMs; interlinear
+ * annotation; Unicode tag characters (hidden "ASCII smuggling"). A joiner
+ * inside an emoji sequence and the tags of a subdivision flag stay, since
+ * those render as one visible glyph.
+ */
+const INVISIBLE_FORMAT =
+	/[\u00AD\u061C\u180E\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]|(?<!\p{Extended_Pictographic}\uFE0F?)\u200D|\u200D(?!\p{Extended_Pictographic})|(?<!\u{1F3F4}[\u{E0020}-\u{E007E}]*)[\u{E0000}-\u{E007F}]/gu;
+
+function codePointMarker(char: string): string {
+	const code = char.codePointAt(0)!;
+	if (code < 0x20) return String.fromCodePoint(0x2400 + code);
+	if (code === 0x7f) return "␡";
+	return `⟨U+${code.toString(16).toUpperCase().padStart(4, "0")}⟩`;
+}
+
+/**
+ * Untrusted text for the transcript, status line and pickers: {@link safeText}
+ * plus every {@link INVISIBLE_FORMAT} character shown as `⟨U+XXXX⟩`, so bidi or
+ * zero-width tricks cannot disguise a filename, command or code. Stored
+ * blocks keep the text as received; `/copy` copies that, not this rendering.
+ */
+export function displayText(text: string): string {
+	return safeText(text).replace(INVISIBLE_FORMAT, codePointMarker);
+}
+
+/** A character Markdown must not be allowed to produce from an entity. */
+const UNSAFE_DECODED = /^[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]$/u;
+
+/**
+ * {@link displayText} for Markdown source. The renderer decodes numeric
+ * character references (`&#27;`, `&#x1b`, with or without the semicolon) after
+ * any text-level sanitizing, so a reference that would decode to a control,
+ * format or surrogate character (or to nothing valid) is replaced by its
+ * visible marker before the renderer sees it — in text, link labels, image
+ * alt text, inline HTML and code alike.
+ */
+export function displayMarkdown(text: string): string {
+	return displayText(text).replace(
+		/&#(?:[xX]([0-9a-fA-F]+)|(\d+));?/g,
+		(reference, hex: string | undefined, decimal: string | undefined) => {
+			const code = hex !== undefined ? Number.parseInt(hex, 16) : Number.parseInt(decimal!, 10);
+			if (!Number.isSafeInteger(code) || code > 0x10ffff) return "⟨invalid⟩";
+			const char = String.fromCodePoint(code);
+			if (UNSAFE_DECODED.test(char) || char.replace(INVISIBLE_FORMAT, "") === "") {
+				return codePointMarker(char);
+			}
+			return reference;
+		},
 	);
 }
 
-/** {@link safeText} as one line: every control or whitespace run becomes one space, bounded. */
-export function safeLine(text: string, maxLength = 200): string {
-	const line = stripVTControlCharacters(text)
-		.replace(/[\p{Cc}\s]+/gu, " ")
-		.trim();
-	return line.length > maxLength ? `${line.slice(0, maxLength - 1)}…` : line;
+/**
+ * {@link displayMarkdown} over every string and object key of a JSON-shaped
+ * value, for views that build their own nodes from raw tool details. Plain
+ * objects and arrays are copied; anything else passes through. Nesting past
+ * {@link DISPLAY_DEPTH} is elided rather than walked, so hostile details cannot
+ * exhaust the stack.
+ */
+export function displayDeep(value: unknown, depth = 0): unknown {
+	if (typeof value === "string") return displayMarkdown(value);
+	if (value === null || typeof value !== "object") return value;
+	if (depth >= DISPLAY_DEPTH) return "…";
+	if (Array.isArray(value)) return value.map((entry) => displayDeep(entry, depth + 1));
+	if (Object.getPrototypeOf(value) !== Object.prototype) return value;
+	const out: Record<string, unknown> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		out[displayMarkdown(key)] = displayDeep(entry, depth + 1);
+	}
+	return out;
+}
+
+const DISPLAY_DEPTH = 64;
+
+/** True when `text` holds any C0/C1 control or DEL byte (tab and newline included). */
+export function hasControlChars(text: string): boolean {
+	return /\p{Cc}/u.test(text);
+}
+
+/**
+ * Untrusted text for an authority surface (the approval panel): instead of
+ * dropping control bytes, which would hide that the text was tampered with,
+ * each one is shown as a visible marker — `␛` for ESC, `␍` for CR, `␉` for a
+ * tab, `␡` for DEL, `⟨U+009B⟩` for a C1 control. Format characters that can
+ * reorder or hide text (bidi overrides, zero-width joiners, soft hyphens),
+ * lone surrogates and line/paragraph separators are shown the same way.
+ * Newlines stay.
+ */
+export function visibleControls(text: string): string {
+	return text.replace(/[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/gu, (char: string) =>
+		char === "\n" ? char : codePointMarker(char),
+	);
 }
 
 /**

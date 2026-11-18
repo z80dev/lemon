@@ -10,7 +10,10 @@
  * The command is **wrapped, never truncated**. Truncating the one string the
  * decision is about ("run `rm -rf …`") is how a user approves something they
  * did not read; a long command costs rows instead, capped at
- * {@link ACTION_PREVIEW_ROWS} with the remainder counted.
+ * {@link ACTION_PREVIEW_ROWS} with the remainder counted. It is also never
+ * printed raw: every control byte in the action, rationale and plan path is
+ * shown as a visible marker ({@link visibleControls}), so a concealed or
+ * overwritten command reads as tampered rather than as something harmless.
  *
  * Like the queue panel this lives below the transcript, inside the repaintable
  * region, so its countdown can tick without touching committed scrollback.
@@ -22,6 +25,7 @@ import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { actionBar, actionButton } from "@oh-my-pi/pi-tui/native/overlay";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
+import { displayText, safeLine, visibleControls } from "../../formatters/base.ts";
 import { type ApprovalRequestedEvent, PROPOSE_PLAN_TOOL } from "../../protocol/types.ts";
 import { getTheme } from "../theme/theme.ts";
 import { WidthClamp } from "./width-safe.ts";
@@ -203,7 +207,8 @@ export class ApprovalPanelComponent implements Component {
 		if (cached?.event === event && cached.selected === this.#selected) return cached.node;
 		const plan = event.tool === PROPOSE_PLAN_TOOL;
 		const securityOverride = !plan && event.action?.security_override === true;
-		const path = plan && typeof event.action?.path === "string" ? event.action.path : "";
+		const path =
+			plan && typeof event.action?.path === "string" ? visibleControls(event.action.path) : "";
 		const details = plan
 			? [
 					...(path ? [`plan file: ${path}`] : []),
@@ -216,7 +221,7 @@ export class ApprovalPanelComponent implements Component {
 				{
 					text: plan
 						? planTitle(event.action)
-						: `${securityOverride ? "Security override" : "Approval required"} · ${event.tool ?? "tool"}`,
+						: `${securityOverride ? "Security override" : "Approval required"} · ${safeLine(event.tool ?? "tool", 80)}`,
 					role: "omp.approval.title",
 					tone: plan ? "accent" : securityOverride ? "error" : "warning",
 				},
@@ -240,10 +245,14 @@ export class ApprovalPanelComponent implements Component {
 			),
 		];
 		if (event.rationale) {
-			children.push(text([span(event.rationale, "muted")], { wrap: "word", key: "rationale" }));
+			children.push(
+				text([span(visibleControls(event.rationale), "muted")], { wrap: "word", key: "rationale" }),
+			);
 		}
 		if (event.sessionKey) {
-			children.push(text([span(event.sessionKey, "dim")], { truncate: "end", key: "session" }));
+			children.push(
+				text([span(safeLine(event.sessionKey), "dim")], { truncate: "end", key: "session" }),
+			);
 		}
 		const buttons = approvalOptions(event).map((option, index) =>
 			actionButton(
@@ -337,13 +346,13 @@ export class ApprovalPanelComponent implements Component {
 		const title = truncateToWidth(
 			plan
 				? planTitle(event.action)
-				: `${securityOverride ? "SECURITY OVERRIDE" : "approval required"} · ${event.tool ?? "tool"}`,
+				: `${securityOverride ? "SECURITY OVERRIDE" : "approval required"} · ${safeLine(event.tool ?? "tool", 80)}`,
 			inner,
 		);
 		line(title, theme.fg(plan ? "accent" : "warning", title));
 
 		if (plan) {
-			const path = typeof event.action?.path === "string" ? event.action.path : "";
+			const path = typeof event.action?.path === "string" ? visibleControls(event.action.path) : "";
 			if (path) {
 				for (const row of wrapTextWithAnsi(`plan file: ${path}`, inner)) {
 					line(row, theme.fg("muted", row));
@@ -358,12 +367,15 @@ export class ApprovalPanelComponent implements Component {
 		}
 
 		if (event.rationale) {
-			for (const row of wrapTextWithAnsi(event.rationale, inner).slice(0, 3)) {
+			for (const row of wrapTextWithAnsi(visibleControls(event.rationale), inner).slice(0, 3)) {
 				line(row, theme.fg("muted", row));
 			}
 		}
 
-		const meta = [event.sessionKey, countdown(event.expiresAtMs, this.#now())]
+		const meta = [
+			event.sessionKey && safeLine(event.sessionKey),
+			countdown(event.expiresAtMs, this.#now()),
+		]
 			.filter(Boolean)
 			.join(" · ");
 		if (meta) {
@@ -524,11 +536,13 @@ type RecordTone = "success" | "error" | "warning" | "muted";
 
 /** The record's sentence (no leading bullet) and its tone for the current decision. */
 function recordLine(
-	approvalId: string,
+	rawApprovalId: string,
 	tool: string,
 	plan: boolean,
-	decision: string | undefined,
+	rawDecision: string | undefined,
 ): { text: string; tone: RecordTone } {
+	const approvalId = safeLine(rawApprovalId, 80);
+	const decision = rawDecision === undefined ? undefined : safeLine(rawDecision, 40);
 	if (plan) {
 		const text = planRecordText(approvalId, decision).replace(/^· /, "");
 		if (decision === undefined) return { text, tone: "warning" };
@@ -565,7 +579,7 @@ function planRecordText(approvalId: string, decision: string | undefined): strin
 
 /** `Plan proposal · <title>`, the title flattened to one line. */
 export function planTitle(action: Record<string, unknown> | undefined | null): string {
-	const title = typeof action?.title === "string" ? action.title.replace(/\s+/g, " ").trim() : "";
+	const title = typeof action?.title === "string" ? safeLine(action.title) : "";
 	return `Plan proposal · ${title || "untitled plan"}`;
 }
 
@@ -573,12 +587,11 @@ export function planTitle(action: Record<string, unknown> | undefined | null): s
  * The head of a proposed plan's Markdown, capped at {@link PLAN_PREVIEW_ROWS}
  * rows: wrapped to `width`, or source lines when the terminal wraps (the
  * native surface). What does not fit is counted in source lines, the unit the
- * plan file itself is read in. Control bytes are dropped: the text is agent
- * output, and it is printed into the terminal verbatim otherwise.
+ * plan file itself is read in. The text is agent output, so it is sanitized
+ * ({@link displayText}) before it is printed.
  */
 export function planPreviewRows(markdown: string, width?: number): string[] {
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point.
-	const clean = markdown.replace(/\t/g, "  ").replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "");
+	const clean = displayText(markdown.replace(/\t/g, "  "));
 	const lines = clean.replace(/\s+$/, "").split("\n");
 	if (lines.length === 1 && lines[0] === "") return ["(empty plan)"];
 	const rows: string[] = [];
@@ -611,11 +624,16 @@ export function previewRows(text: string, width: number): string[] {
 }
 
 /**
- * The human-readable thing being approved. Mirrors the daemon's own formatter
+ * The human-readable thing being approved, with every control byte made
+ * visible. Mirrors the daemon's own formatter
  * (`LemonChannels.Adapters.Telegram.Transport.ApprovalRequest.format_action/1`):
  * a command if there is one, otherwise the map, so no request is unreadable.
  */
 export function describeAction(action: Record<string, unknown> | undefined | null): string {
+	return visibleControls(rawActionText(action));
+}
+
+function rawActionText(action: Record<string, unknown> | undefined | null): string {
 	if (!action) return "(no action detail)";
 	if (action.security_override === true) {
 		const description =

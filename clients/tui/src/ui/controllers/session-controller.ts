@@ -74,8 +74,6 @@ export interface SessionControllerOptions {
 	/** Sends a prompt as the user (used by "new session with a first prompt"). */
 	sendPrompt?: (text: string) => Promise<SubmissionDisposition>;
 	refreshStatus?: () => void;
-	/** Presents a yes/no overlay. Without one, closing needs `confirmed: true`. */
-	confirm?: (spec: ConfirmSpec) => void;
 	/** Called synchronously after a session/request-fenced owner projection is installed. */
 	onSnapshot?: (
 		result: Extract<SessionsSnapshotResult, { status: "ok" }>,
@@ -83,14 +81,6 @@ export interface SessionControllerOptions {
 	) => void;
 	/** Queue authority is emitted only after snapshot/replay and the buffered tail settle. */
 	onTerminalRecovered?: (sessionKey: string) => void;
-}
-
-export interface ConfirmSpec {
-	title: string;
-	/** The affirmative option's label. */
-	confirmLabel: string;
-	onConfirm: () => void | Promise<void>;
-	onCancel?: () => void;
 }
 
 export class SessionController {
@@ -102,7 +92,6 @@ export class SessionController {
 	readonly #cwd: string | undefined;
 	readonly #sendPrompt: ((text: string) => Promise<SubmissionDisposition>) | undefined;
 	readonly #refreshStatus: (() => void) | undefined;
-	readonly #confirm: ((spec: ConfirmSpec) => void) | undefined;
 	readonly #onSnapshot: SessionControllerOptions["onSnapshot"];
 	readonly #onTerminalRecovered: SessionControllerOptions["onTerminalRecovered"];
 	#selectionGeneration = 0;
@@ -132,7 +121,6 @@ export class SessionController {
 		this.#cwd = options.cwd;
 		this.#sendPrompt = options.sendPrompt;
 		this.#refreshStatus = options.refreshStatus;
-		this.#confirm = options.confirm;
 		this.#onSnapshot = options.onSnapshot;
 		this.#onTerminalRecovered = options.onTerminalRecovered;
 	}
@@ -232,48 +220,6 @@ export class SessionController {
 		const first = prompt?.trim();
 		if (first) await this.#sendPrompt?.(first);
 		return target;
-	}
-
-	/** Ask before closing, when a confirm host is mounted. */
-	requestClose(key: string): void {
-		if (!this.#confirm) {
-			void this.close(key, { confirmed: true });
-			return;
-		}
-		this.#confirm({
-			title: `close ${key}? its stored history is deleted`,
-			confirmLabel: `delete ${key}`,
-			onConfirm: () => this.close(key, { confirmed: true }),
-		});
-	}
-
-	/**
-	 * Drop a session locally and, when the daemon supports it, server-side.
-	 * Closing the focused session moves focus first: the store recreates any
-	 * session that is focused while absent, so deleting it in place would leave
-	 * an empty ghost behind under the same key.
-	 */
-	async close(key: string, options: { confirmed?: boolean } = {}): Promise<void> {
-		if (!options.confirmed) {
-			this.requestClose(key);
-			return;
-		}
-		if (key === this.#store.focusedKey) {
-			await this.switch(this.#nextFocusAfter(key));
-		}
-		this.#store.forgetSession(key);
-		this.#hydrated.delete(key);
-		if (this.#methods.supports(METHOD.sessionsDelete)) {
-			try {
-				await this.#methods.sessionsDelete({ sessionKey: key });
-				this.#notice(`closed ${key}`, "warning");
-			} catch (error) {
-				this.#notice(`closed ${key} locally; daemon: ${describeError(error)}`, "warning");
-			}
-		} else {
-			this.#notice(`closed ${key} locally (daemon does not support ${METHOD.sessionsDelete})`);
-		}
-		this.#refreshStatus?.();
 	}
 
 	/**

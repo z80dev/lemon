@@ -12,8 +12,9 @@
  *           there becomes the new session's first message. A session with no
  *           first prompt exists only in this client until something is sent, so
  *           asking for the prompt up front is asking for the session.
- *   Ctrl+W  close the selected one, after a confirm step, because closing takes
- *           the daemon's stored history with it.
+ *   Ctrl+W  preview deleting the selected one (`/session delete`'s preview);
+ *           the daemon's stored history goes only after the typed
+ *           `/session delete <key> --confirm <key>` and a verified deletion.
  *
  * The overlay itself is a {@link PickerOverlay}: same box, same fuzzy filter,
  * same draft-preserving contract (it never touches the editor). Prompt mode is
@@ -28,6 +29,7 @@ import type { SgrMouseEvent } from "@oh-my-pi/pi-tui/mouse";
 import { span, text } from "@oh-my-pi/pi-tui/native/describe";
 import { CLOSE_ACTION, pickerAction, pickerAge, pickerDate } from "@oh-my-pi/pi-tui/native/picker";
 import { collectSessions, type SessionRow } from "../../commands/session.ts";
+import { safeLine } from "../../formatters/base.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import type { AppStore } from "../../store/app-store.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
@@ -59,6 +61,7 @@ export interface SessionSwitcherHost {
 	repaint(): void;
 	switchSession(sessionKey: string): void | Promise<void>;
 	createSession(sessionKey: string | undefined, prompt: string | undefined): void | Promise<void>;
+	/** Show `/session delete`'s preview for the key; never deletes. */
 	closeSession(sessionKey: string): void | Promise<void>;
 	notice(text: string, level?: NoticeLevel): void;
 	/** Clock seam so row ages are assertable. */
@@ -166,7 +169,7 @@ export class SessionSwitcher {
 						: [
 								confirmAction("Switch"),
 								pickerAction("new", "New session", "ctrl+n"),
-								pickerAction("close-session", "Close session", "ctrl+w", { danger: true }),
+								pickerAction("close-session", "Delete session…", "ctrl+w", { danger: true }),
 								CLOSE_ACTION,
 							],
 				// Prompt mode takes the pointer with the keyboard, as for the mouse.
@@ -204,7 +207,7 @@ export class SessionSwitcher {
 		if (this.#promptMode) return "enter creates the session with this prompt · esc goes back";
 		return this.#searching
 			? "searching stored sessions… · esc cancels"
-			: "type to search stored sessions · enter switches · ctrl+n new · ctrl+w close";
+			: "type to search stored sessions · enter switches · ctrl+n new · ctrl+w delete…";
 	}
 
 	/** The inline prompt row, or nothing while the list is in charge. */
@@ -238,8 +241,7 @@ export class SessionSwitcher {
 	#closeSelected(): void {
 		const selected = this.#overlay?.selected;
 		if (!selected) return;
-		// The confirm overlay replaces this one; reopening afterwards would
-		// fight the user's own next keystroke.
+		// The preview lands in the transcript, which this overlay would cover.
 		this.close();
 		void this.#host.closeSession(selected.value);
 	}
@@ -407,15 +409,17 @@ export function describeSessionRow(row: SessionRow, focusedKey: string, now: num
 	const updated =
 		row.updatedAtMs !== undefined && row.updatedAtMs > 0 ? row.updatedAtMs : undefined;
 	if (updated !== undefined) facts.when = pickerAge(updated, now);
+	const key = safeLine(row.key);
+	const title = row.title ? safeLine(row.title, 60) : "";
 	return {
 		value: row.key,
-		label: row.title ? `${shortTitle(row.title)} (${row.key})` : row.key,
+		label: title ? `${title} (${key})` : key,
 		description: marks.join(" · "),
 		// The sheet's cards put the title on top and the key, a machine string, under it.
 		native: {
-			label: row.title ? shortTitle(row.title) : row.key,
-			detail: row.title ? row.key : undefined,
-			mono: !row.title,
+			label: title || key,
+			detail: title ? key : undefined,
+			mono: !title,
 			...(row.active ? { dot: "pending" as const } : {}),
 			...(row.pinned ? { icon: "pin" } : {}),
 			...(badges.length > 0 ? { badges } : {}),
@@ -423,9 +427,4 @@ export function describeSessionRow(row: SessionRow, focusedKey: string, now: num
 			...(updated !== undefined ? { title: pickerDate(updated) } : {}),
 		},
 	};
-}
-
-function shortTitle(title: string): string {
-	const flat = title.replace(/\s+/g, " ").trim();
-	return flat.length > 60 ? `${flat.slice(0, 59)}…` : flat;
 }

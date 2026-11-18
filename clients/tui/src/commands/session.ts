@@ -20,7 +20,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { ControlPlaneError, NotConnectedError } from "../protocol/errors.ts";
+import { ControlPlaneError, NotConnectedError, RequestTimeoutError } from "../protocol/errors.ts";
 import type { ControlPlaneMethods } from "../protocol/methods.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type {
@@ -31,6 +31,7 @@ import type {
 	SessionsExportResult,
 	SessionsListParams,
 	SessionsPruneParams,
+	SessionsResetResult,
 } from "../protocol/types.ts";
 import type { AppStore } from "../store/app-store.ts";
 import {
@@ -294,16 +295,7 @@ export const sessionCommand: SlashCommand = {
 					return;
 				}
 				case "reset": {
-					if (!ctx.methods.supports(METHOD.sessionsReset)) {
-						ctx.ui.notice(`daemon does not support ${METHOD.sessionsReset}`, "warning");
-						return;
-					}
-					await ctx.methods.sessionsReset({ sessionKey: ctx.session.key });
-					// Both sides forget together: a cleared server history under a
-					// transcript still on screen is a session the user cannot reason
-					// about, and the next switch would rebuild the stale half.
-					ctx.ui.resetSession?.(ctx.session.key);
-					ctx.ui.notice(`reset ${ctx.session.key} (history cleared here and on the daemon)`);
+					await resetSession(ctx, argv.slice(1));
 					return;
 				}
 				case "delete":
@@ -901,15 +893,7 @@ async function deleteSession(ctx: CommandContext, argv: string[]): Promise<void>
 		return;
 	}
 	if (parsed.confirm !== parsed.key) {
-		ctx.ui.noticeBlock(
-			[
-				`delete preview · ${parsed.key}`,
-				`title present: ${Boolean(pickString(candidate, "title"))} · runs: ${pickNumber(candidate, "runCount") ?? 0} · pinned: ${candidate.pinned === true} · archived: ${candidate.archived === true}`,
-				`confirm this exact session: /session delete ${parsed.key} --confirm ${parsed.key}`,
-				`add --export json|jsonl|markdown|html [--output <path>] to save and verify a redacted export before deletion`,
-			],
-			"warning",
-		);
+		showDeletePreview(ctx, parsed.key, candidate);
 		return;
 	}
 	let exported: SessionsExportResult | undefined;
@@ -924,11 +908,123 @@ async function deleteSession(ctx: CommandContext, argv: string[]): Promise<void>
 	}
 	const result = await ctx.methods.sessionsDelete({ sessionKey: parsed.key });
 	if (!result.deleted || result.summary?.verified !== true) {
-		throw new Error("session deletion was not verified");
+		ctx.ui.notice(
+			`deletion of ${parsed.key} was not verified by the daemon; outcome unknown — the session was kept here; check /session show ${parsed.key} before retrying`,
+			"error",
+		);
+		return;
 	}
 	await ctx.ui.forgetDeletedSession?.(parsed.key);
 	ctx.ui.notice(
 		`verified deletion of ${parsed.key}${exported ? ` after redacted ${exported.format} export ${exported.sha256}` : ""}`,
+		"warning",
+	);
+}
+
+function showDeletePreview(ctx: CommandContext, key: string, candidate: SessionSummary): void {
+	ctx.ui.noticeBlock(
+		[
+			`delete preview · ${key}`,
+			`title present: ${Boolean(pickString(candidate, "title"))} · runs: ${pickNumber(candidate, "runCount") ?? 0} · pinned: ${candidate.pinned === true} · archived: ${candidate.archived === true}`,
+			`confirm this exact session: /session delete ${key} --confirm ${key}`,
+			`add --export json|jsonl|markdown|html [--output <path>] to save and verify a redacted export before deletion`,
+		],
+		"warning",
+	);
+}
+
+/**
+ * The session switcher's close: `/session delete`'s preview for exactly `key`
+ * (no argument parsing, so any key is taken literally). It never deletes; the
+ * user confirms by typing the exact-key command the preview names.
+ */
+export async function previewSessionDelete(ctx: CommandContext, key: string): Promise<void> {
+	try {
+		if (!requireSessionMethod(ctx, METHOD.sessionsDelete)) return;
+		const candidate = await loadExactSession(ctx, key);
+		if (!candidate) {
+			ctx.ui.notice("session was not found; nothing was deleted", "warning");
+			return;
+		}
+		showDeletePreview(ctx, key, candidate);
+	} catch (error) {
+		safeSessionFailure(ctx, "delete", error);
+	}
+}
+
+/**
+ * `/reset` and `/session reset`. `sessions.reset` irreversibly deletes the
+ * session's run history, chat state and session policy on the daemon, so like
+ * `/session delete` it previews first and acts only on `--confirm <exact-key>`
+ * for the focused session, never while a run is live there. The local
+ * transcript is dropped only after the daemon verified the reset of that key;
+ * anything else is reported as an unknown outcome and changes nothing here.
+ */
+async function resetSession(ctx: CommandContext, argv: string[]): Promise<void> {
+	if (!requireSessionMethod(ctx, METHOD.sessionsReset)) return;
+	const key = ctx.session.key;
+	if (argv.length !== 0 && (argv.length !== 2 || argv[0] !== "--confirm")) {
+		ctx.ui.notice("usage: /reset [--confirm <exact-session-key>]", "error");
+		return;
+	}
+	const confirm = argv[1];
+	if (confirm !== key) {
+		ctx.ui.noticeBlock(
+			[
+				`reset preview · ${key}${confirm === undefined ? "" : ` (confirmation "${confirm}" does not match; nothing was reset)`}`,
+				"deletes on the daemon, irreversibly: this session's run history, chat state and session policy (its session-scoped approvals)",
+				`confirm this exact session: /reset --confirm ${key} · /new starts a fresh session without deleting anything`,
+			],
+			"warning",
+		);
+		return;
+	}
+	const session = ctx.session;
+	const blocker = session.resetPending
+		? "a reset is"
+		: session.pendingSubmissions > 0
+			? "a prompt submission is"
+			: session.busy || session.activeRunId
+				? "a run is"
+				: undefined;
+	if (blocker) {
+		ctx.ui.notice(
+			`reset refused: ${blocker} still running in ${key}; wait for it — nothing was reset`,
+			"warning",
+		);
+		return;
+	}
+	// The local half applies only to the transcript generation the user
+	// confirmed. Submissions are refused while the RPC is in flight; a run or
+	// any transcript change arriving meanwhile (another client, a late event)
+	// makes the outcome unknown rather than wiping what arrived.
+	const revision = session.revision;
+	session.resetPending = true;
+	let result: SessionsResetResult;
+	try {
+		result = await ctx.methods.sessionsReset({ sessionKey: key });
+	} finally {
+		session.resetPending = false;
+	}
+	if (result?.success !== true || result.sessionKey !== key || result.summary?.reset !== true) {
+		ctx.ui.notice(
+			`reset of ${key} was not verified by the daemon; outcome unknown — the transcript here was kept; check /session show ${key} before retrying`,
+			"error",
+		);
+		return;
+	}
+	if (session.revision !== revision || session.busy || session.activeRunId) {
+		ctx.ui.notice(
+			`reset of ${key} was verified by the daemon, but the session changed while it ran; outcome unknown — the transcript here was kept; check /session show ${key}`,
+			"error",
+		);
+		return;
+	}
+	// Both sides forget together: a cleared server history under a transcript
+	// still on screen is a session the user cannot reason about.
+	ctx.ui.resetSession?.(key);
+	ctx.ui.notice(
+		`verified reset of ${key} (run history, chat state and session policy deleted on the daemon; transcript cleared here)`,
 		"warning",
 	);
 }
@@ -976,13 +1072,15 @@ function requireSessionMethod(ctx: CommandContext, method: string): boolean {
 
 function safeSessionFailure(ctx: CommandContext, action: string, error: unknown): void {
 	const code =
-		error instanceof ControlPlaneError
+		error instanceof ControlPlaneError ||
+		error instanceof NotConnectedError ||
+		error instanceof RequestTimeoutError
 			? error.code
-			: error instanceof NotConnectedError
-				? error.code
-				: "LOCAL_VALIDATION";
+			: "LOCAL_VALIDATION";
 	ctx.ui.notice(
-		`session ${action} did not complete (${code}); refresh and retry — no success was recorded`,
+		error instanceof RequestTimeoutError
+			? `session ${action} outcome unknown (${code}); nothing was changed here — refresh and check before retrying`
+			: `session ${action} did not complete (${code}); refresh and retry — no success was recorded`,
 		"error",
 	);
 }
@@ -998,16 +1096,19 @@ export const newCommand: SlashCommand = {
 	},
 };
 
-/** Hermes-compatible shorthand for `/session reset`. */
+/** Hermes-compatible shorthand for `/session reset`: the same preview and exact-key confirmation. */
 export const resetCommand: SlashCommand = {
 	name: "reset",
-	summary: "reset the current session and clear its visible transcript",
+	summary: "preview, then irreversibly reset the current session's daemon history and policy",
+	usage: "[--confirm <exact-session-key>]",
 	group: "sessions",
 	methods: [METHOD.sessionsReset],
-	async run(ctx) {
-		await ctx.methods.sessionsReset({ sessionKey: ctx.session.key });
-		ctx.ui.resetSession?.(ctx.session.key);
-		ctx.ui.notice(`reset ${ctx.session.key} (history cleared here and on the daemon)`);
+	async run(ctx, argv) {
+		try {
+			await resetSession(ctx, argv);
+		} catch (error) {
+			safeSessionFailure(ctx, "reset", error);
+		}
 	},
 };
 

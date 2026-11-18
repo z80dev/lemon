@@ -1,4 +1,84 @@
+diff --git a/dist/types/overlays/copy-selector.d.ts b/dist/types/overlays/copy-selector.d.ts
+index 7132c4b7448525e60aa6759acf230c2d1429e044..f5c4a399f656a1747a35e020cf253b46be0bea88 100644
+--- a/dist/types/overlays/copy-selector.d.ts
++++ b/dist/types/overlays/copy-selector.d.ts
+@@ -67,6 +67,8 @@ export interface CopyBlock {
+     language?: string;
+     /** Set for link blocks: the URL `o` opens. `content` is the same URL. */
+     href?: string;
++    /** Position among the blocks `collectBlocks` yields for `entry` alone. */
++    ordinal?: number;
+ }
+ /** Mount options for the picker: a fullscreen sheet on the alternate screen (classic) or native layer (Tern). */
+ export declare const COPY_SELECTOR_OVERLAY_OPTIONS: Readonly<OverlayOptions>;
+diff --git a/src/components/markdown.ts b/src/components/markdown.ts
+index 1b25e50cf46ed0267696e2f9547b102950742566..b9a1ce97bb506e254f44b9b9dec18fdba36e95db 100644
+--- a/src/components/markdown.ts
++++ b/src/components/markdown.ts
+@@ -610,11 +610,30 @@ function repairOrphanClosingFence(text: string): string {
+ // and hoisting SGR out of the OSC payload), and padding would append trailing
+ // cells past the doubled glyph.
+ 
++/**
++ * A decoded character reference must never produce a terminal control or an
++ * invisible format character: the text it lands in was sanitized before
++ * decoding (and comment removal / token concatenation can assemble a
++ * reference no source-level filter saw), so the decoded character is shown as
++ * a visible marker instead — `␛` for ESC (C0 control pictures), `␡` for DEL,
++ * `⟨U+XXXX⟩` for C1 controls, format characters (bidi, zero-width, tags),
++ * surrogates and line/paragraph separators.
++ */
++const UNSAFE_DECODED_CHAR = /^[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]$/u;
++
++function decodedCharMarker(char: string): string {
++	const code = char.codePointAt(0)!;
++	if (code < 0x20) return String.fromCodePoint(0x2400 + code);
++	if (code === 0x7f) return "␡";
++	return `⟨U+${code.toString(16).toUpperCase().padStart(4, "0")}⟩`;
++}
++
+ function normalizeHtmlEntitiesForTerminal(raw: string): string {
+ 	const parseCodePoint = (value: number): string => {
+ 		if (Number.isFinite(value) && value >= 0 && value <= 0x10ffff) {
+ 			try {
+-				return String.fromCodePoint(value);
++				const char = String.fromCodePoint(value);
++				return UNSAFE_DECODED_CHAR.test(char) ? decodedCharMarker(char) : char;
+ 			} catch {
+ 				// Fallback to empty string or original if invalid codepoint
+ 			}
+diff --git a/src/overlays/copy-selector.ts b/src/overlays/copy-selector.ts
+index 8bde98dec0cea7a0becd5014f2cceb6aa886f39e..f99dbc9aa4de50888a6317e82a05597fb452a248 100644
+--- a/src/overlays/copy-selector.ts
++++ b/src/overlays/copy-selector.ts
+@@ -320,6 +320,12 @@ export interface CopyBlock {
+ 	language?: string;
+ 	/** Set for link blocks: the URL `o` opens. `content` is the same URL. */
+ 	href?: string;
++	/**
++	 * Position among the blocks `collectBlocks` yields for `entry` alone: a
++	 * stable identity a host can use to map a pick back to its own copy of the
++	 * entry (e.g. raw text behind an escaped preview) without comparing content.
++	 */
++	ordinal?: number;
+ }
+ 
+ /** Preview rows shown per block in the descended view; copy always takes the full text. */
+@@ -1136,6 +1142,12 @@ export function collectBlocks(entries: readonly TranscriptEntry[]): CopyBlock[]
+ 				break;
+ 		}
+ 	}
++	const counts = new Map<TranscriptEntry, number>();
++	for (const block of blocks) {
++		const ordinal = counts.get(block.entry) ?? 0;
++		block.ordinal = ordinal;
++		counts.set(block.entry, ordinal + 1);
++	}
+ 	return blocks;
+ }
+ 
 diff --git a/src/render/render-utils.ts b/src/render/render-utils.ts
+index 81761c1b5dbeffd932547f8da3d85b3d47818f61..c4273380aad190c33735a46f18872c77c0afa9f9 100644
 --- a/src/render/render-utils.ts
 +++ b/src/render/render-utils.ts
 @@ -7,7 +7,7 @@
@@ -11,6 +91,7 @@ diff --git a/src/render/render-utils.ts b/src/render/render-utils.ts
  import { expandWindowsLongPath, getWindowsShortPath } from "@oh-my-pi/pi-natives/path";
  import { pluralize, sanitizeText } from "@oh-my-pi/pi-utils";
 diff --git a/src/terminal.ts b/src/terminal.ts
+index 7120e50b52fb378e53d732718154165c1be29744..932658da9af3a15d5dd30017053560c256bcf0df 100644
 --- a/src/terminal.ts
 +++ b/src/terminal.ts
 @@ -364,8 +364,8 @@ export class StdoutStallWatchdog {
@@ -75,7 +156,7 @@ diff --git a/src/terminal.ts b/src/terminal.ts
  			// Blind restore only if we know a terminal was started but lost track of it
  			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
  			process.stdout.write(
-@@ -874,6 +906,7 @@ export interface ProcessTerminalOptions {
+@@ -875,6 +907,7 @@ export interface ProcessTerminalOptions {
   */
  export class ProcessTerminal implements Terminal {
  	#wasRaw = false;

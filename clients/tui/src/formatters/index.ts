@@ -9,7 +9,7 @@
  * to generic JSON/text formatting.
  */
 
-import { extractText, safeStringify, truncateLines, truncateText } from "./base.js";
+import { extractText, safeLine, safeStringify, truncateLines, truncateText } from "./base.js";
 // Import all formatters
 import { bashFormatter, bashOutputFormatter, killProcessFormatter } from "./bash.js";
 import { browserFormatter } from "./browser.js";
@@ -202,7 +202,8 @@ export class FormatterRegistry {
 		for (const [key, value] of Object.entries(args)) {
 			const valueStr = safeStringify(value);
 			const truncatedValue = truncateText(valueStr, DEFAULT_DETAIL_LINE_MAX_LENGTH);
-			details.push(`${key}: ${truncatedValue}`);
+			// The key is model-chosen too: values are sanitized on ingestion, keys are not.
+			details.push(`${safeLine(key, 80)}: ${truncatedValue}`);
 		}
 
 		return {

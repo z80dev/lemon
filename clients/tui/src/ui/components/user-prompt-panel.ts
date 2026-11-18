@@ -7,7 +7,7 @@ import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tu
 import { ensureThemeSync } from "@oh-my-pi/pi-tui/theme/theme";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
-import { safeText } from "../../formatters/base.ts";
+import { displayText } from "../../formatters/base.ts";
 import type { UserPromptAnswer, UserPromptRequested } from "../../protocol/user-prompt.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 import { formSubmission } from "./html-form-answer.ts";
@@ -172,7 +172,7 @@ export class UserPromptPanel implements Component {
 		if (!this.#event) return [];
 		if (this.#dialog) return this.#dialog.render(width);
 		const rows = this.#lines().flatMap((line) =>
-			wrapTextWithAnsi(safeText(line), Math.max(1, width)),
+			wrapTextWithAnsi(displayText(line), Math.max(1, width)),
 		);
 		if (this.#custom) {
 			this.#input.focused = this.focused;
@@ -187,7 +187,7 @@ export class UserPromptPanel implements Component {
 		this.#input.focused = this.focused && this.#custom;
 		return col(
 			[
-				...this.#lines().map((line) => text(safeText(line))),
+				...this.#lines().map((line) => text(displayText(line))),
 				...(this.#custom ? [this.#input.describe(cx)] : []),
 			],
 			{ role: "lemon.session.prompt" },

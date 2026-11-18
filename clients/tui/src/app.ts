@@ -124,11 +124,7 @@ import { EventController } from "./ui/controllers/event-controller.ts";
 import { InputController } from "./ui/controllers/input-controller.ts";
 import { OmpController } from "./ui/controllers/omp-controller.ts";
 import { SelectorController } from "./ui/controllers/selector-controller.ts";
-import {
-	type ConfirmSpec,
-	SessionController,
-	synthesizeHistory,
-} from "./ui/controllers/session-controller.ts";
+import { SessionController, synthesizeHistory } from "./ui/controllers/session-controller.ts";
 import { TaskTreeController } from "./ui/controllers/task-tree-controller.ts";
 import { ToolInspector } from "./ui/controllers/tool-inspector.ts";
 import { UserPromptController } from "./ui/controllers/user-prompt-controller.ts";
@@ -459,7 +455,6 @@ export class AppShell {
 			cwd: this.#cwd,
 			sendPrompt: (text) => this.sendPrompt(text),
 			refreshStatus: () => this.#renderStatus(),
-			confirm: (spec) => this.#confirm(spec),
 			onSnapshot: (result, branchChanged) => {
 				if (branchChanged) this.#taskTree.store.clear(result.sessionKey);
 				this.#taskTree.reconcile(result.sessionKey, result.snapshot.children);
@@ -481,7 +476,7 @@ export class AppShell {
 			createSession: async (key, prompt) => {
 				await this.sessions.create(key, prompt);
 			},
-			closeSession: (key) => this.sessions.requestClose(key),
+			closeSession: (key) => this.commandController.previewSessionDelete(key),
 			notice: (text, level) => this.events.notice(text, level),
 		});
 		this.appearance = new AppearanceController({
@@ -1254,7 +1249,8 @@ export class AppShell {
 	 */
 	async drainQueue(sessionKey: string): Promise<void> {
 		const session = this.store.sessions.get(sessionKey);
-		if (!session || session.busy || this.#drainingSessions.has(sessionKey)) return;
+		if (!session || session.busy || session.resetPending || this.#drainingSessions.has(sessionKey))
+			return;
 		if (this.store.queue.items(sessionKey)[0]?.state !== "queued-local") return;
 		const item = this.store.queue.shift(sessionKey);
 		if (!item) return;
@@ -1280,7 +1276,12 @@ export class AppShell {
 					);
 				}
 			} else {
-				await this.#send(item.text, session);
+				session.pendingSubmissions += 1;
+				try {
+					await this.#send(item.text, session);
+				} finally {
+					session.pendingSubmissions -= 1;
+				}
 			}
 		} finally {
 			this.#drainingSessions.delete(sessionKey);
@@ -1423,6 +1424,20 @@ export class AppShell {
 	): Promise<SubmissionDisposition> {
 		const session = this.store.sessions.get(submission.sessionKey);
 		if (!session) return "rejected";
+		if (this.#refuseDuringReset(session)) return "rejected";
+		session.pendingSubmissions += 1;
+		try {
+			return await this.#submitAttachmentsTo(session, submission, allowQueue);
+		} finally {
+			session.pendingSubmissions -= 1;
+		}
+	}
+
+	async #submitAttachmentsTo(
+		session: SessionStore,
+		submission: ComposerSubmission,
+		allowQueue: boolean,
+	): Promise<SubmissionDisposition> {
 		if (this.#hasUncertainSubmission(session)) return "uncertain";
 		try {
 			assertSessionDirectory(session.key, this.#cwd);
@@ -1504,6 +1519,17 @@ export class AppShell {
 		}
 	}
 
+	/** A `sessions.reset` is in flight for `session`: nothing may be sent into the generation it deletes. */
+	#refuseDuringReset(session: SessionStore): boolean {
+		if (!session.resetPending) return false;
+		this.events.notice(
+			"a reset of this session is in flight; draft kept, nothing sent",
+			"warning",
+			session,
+		);
+		return true;
+	}
+
 	/**
 	 * The prompt sink, and the whole submission state machine.
 	 *
@@ -1521,10 +1547,26 @@ export class AppShell {
 	 * already observed before submission, the prompt starts a new turn explicitly.
 	 */
 	async sendPrompt(text: string, options: DeliverOptions = {}): Promise<SubmissionDisposition> {
+		const session = this.store.focused;
+		// Counted before the first await, so `/reset` refuses while any
+		// submission is still being prepared or dispatched.
+		session.pendingSubmissions += 1;
+		try {
+			return await this.#sendPrompt(session, text, options);
+		} finally {
+			session.pendingSubmissions -= 1;
+		}
+	}
+
+	async #sendPrompt(
+		session: SessionStore,
+		text: string,
+		options: DeliverOptions,
+	): Promise<SubmissionDisposition> {
 		const prompt = text.trim();
 		if (prompt.length === 0) return "rejected";
-		const session = this.store.focused;
 		if (this.#hasUncertainSubmission(session)) return "uncertain";
+		if (this.#refuseDuringReset(session)) return "rejected";
 		try {
 			assertSessionDirectory(session.key, this.#cwd);
 		} catch (error) {
@@ -1738,6 +1780,7 @@ export class AppShell {
 		options: RequestOptions = {},
 	) {
 		assertSessionDirectory(sessionKey, this.#cwd);
+		this.#assertResetFence(sessionKey);
 		if (this.client.online && this.methods.supports(METHOD.userPromptBind)) {
 			await this.methods.userPromptBind(sessionKey);
 		}
@@ -1753,6 +1796,7 @@ export class AppShell {
 		const requestOptions = { ...options, ...(media ? { queueIfOffline: false } : {}) };
 		const remembered = this.#profileSessions.get(sessionKey);
 		if (remembered) {
+			this.#assertResetFence(sessionKey);
 			return await this.methods.profileChat(
 				{
 					id: remembered,
@@ -1770,6 +1814,7 @@ export class AppShell {
 			!this.methods.supports(METHOD.profilesGet) ||
 			!this.methods.supports(METHOD.profileChat)
 		) {
+			this.#assertResetFence(sessionKey);
 			return await this.methods.chatSend(
 				{
 					sessionKey,
@@ -1796,6 +1841,7 @@ export class AppShell {
 				) {
 					throw error;
 				}
+				this.#assertResetFence(sessionKey);
 				return await this.methods.chatSend(
 					{
 						sessionKey,
@@ -1810,6 +1856,7 @@ export class AppShell {
 			}
 		}
 
+		this.#assertResetFence(sessionKey);
 		const result = await this.methods.profileChat(
 			{
 				id: candidate,
@@ -1824,6 +1871,18 @@ export class AppShell {
 		}
 		this.#profileSessions.set(sessionKey, candidate);
 		return result;
+	}
+
+	/**
+	 * Checked synchronously right before every prompt RPC, after each await of
+	 * the preparation (`user_prompt.bind`, `profiles.get`): a reset that started
+	 * meanwhile owns the session, and nothing may be sent into the generation it
+	 * deletes.
+	 */
+	#assertResetFence(sessionKey: string): void {
+		if (this.store.sessions.get(sessionKey)?.resetPending) {
+			throw new Error("a reset of this session is in flight; nothing was sent");
+		}
 	}
 
 	/** Read and clear the one-shot Alt+Enter override. */
@@ -1946,7 +2005,6 @@ export class AppShell {
 			createSession: async (sessionKey?: string, prompt?: string) => {
 				await this.sessions.create(sessionKey, prompt);
 			},
-			closeSession: (sessionKey: string) => this.sessions.requestClose(sessionKey),
 			forgetDeletedSession: (sessionKey: string) => {
 				this.composerDrafts.clear(sessionKey);
 				this.#taskTree.store.clear(sessionKey);
@@ -2043,28 +2101,6 @@ export class AppShell {
 			this.tui.invalidate();
 			this.tui.requestRender(true);
 		});
-	}
-
-	/** A two-option overlay for a decision that cannot be undone. */
-	#confirm(spec: ConfirmSpec): void {
-		const overlay = new PickerOverlay({
-			title: spec.title,
-			items: [
-				{ value: "confirm", label: spec.confirmLabel },
-				{ value: "cancel", label: "cancel" },
-			],
-			footer: "enter chooses · esc cancels",
-			onSelect: (item) => {
-				this.selectors.close();
-				if (item.value === "confirm") void spec.onConfirm();
-				else spec.onCancel?.();
-			},
-			onCancel: () => {
-				this.selectors.close();
-				spec.onCancel?.();
-			},
-		});
-		this.selectors.open(overlay);
 	}
 
 	/**

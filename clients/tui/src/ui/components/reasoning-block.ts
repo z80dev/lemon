@@ -15,9 +15,9 @@
 
 import { elapsed, node, span } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
-import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
+import { displayMarkdown, displayText } from "../../formatters/base.ts";
 import type { ReasoningBlock } from "../../store/transcript-model.ts";
 import { getTheme } from "../theme/theme.ts";
 import { AccordionComponent, type AccordionState, resolveAccordionState } from "./accordion.ts";
@@ -151,7 +151,8 @@ export class ReasoningComponent implements Component {
 		const stream = this.#live;
 		const cached = this.#nativeBody;
 		if (cached?.text === source && cached.stream === stream) return cached.node;
-		const plain = source.includes("\x1b") ? plainText(source) : source;
+		// Tern renders this as Markdown, entities included.
+		const plain = displayMarkdown(source);
 		const body = node(
 			"md",
 			stream ? { text: plain, stream: true } : { text: plain },
@@ -191,7 +192,7 @@ export class ReasoningComponent implements Component {
 	#applyText(): void {
 		const theme = getTheme();
 		const style = (line: string) => theme.fg("dim", theme.italic(line));
-		const text = this.#text.trim();
+		const text = displayText(this.#text.trim());
 		this.#accordion.setLines(text.length > 0 ? text.split(/\r?\n/).map(style) : []);
 		const summary = text.split(/\r?\n/, 1)[0] ?? "";
 		this.#accordion.setSummary(summary.length > 0 ? style(summary) : "");

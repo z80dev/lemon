@@ -309,47 +309,6 @@ describe("SessionController.create", () => {
 	});
 });
 
-describe("SessionController.close", () => {
-	test("asks first, and deletes only after the confirmation", async () => {
-		const { app, server } = await bootApp("tui-a");
-		await app.sessions.create("scratch");
-
-		app.sessions.requestClose("scratch");
-		expect(app.selectors.isOpen).toBe(true);
-		expect(server.requestsFor("sessions.delete")).toHaveLength(0);
-
-		// Enter on the default row is the affirmative option.
-		app.selectors.current?.handleInput?.("\r");
-		await waitFor(() => server.requestsFor("sessions.delete").length > 0, {
-			what: "the delete request",
-		});
-		expect(server.requestsFor("sessions.delete")[0]?.params).toEqual({ sessionKey: "scratch" });
-		expect(app.store.sessions.has("scratch")).toBe(false);
-	});
-
-	test("moves focus off a session before forgetting it", async () => {
-		const { app } = await bootApp("tui-a");
-		await app.sessions.create("scratch");
-		expect(app.sessionKey).toBe("scratch");
-
-		await app.sessions.close("scratch", { confirmed: true });
-
-		expect(app.sessionKey).toBe("tui-a");
-		expect(app.store.sessions.has("scratch")).toBe(false);
-	});
-
-	test("forgets the closed session's draft", async () => {
-		const { app } = await bootApp("tui-a");
-		await app.sessions.create("scratch");
-		app.editor.setText("draft in scratch");
-		await app.sessions.switch("tui-a");
-		expect(app.store.drafts.get("scratch")).toBe("draft in scratch");
-
-		await app.sessions.close("scratch", { confirmed: true });
-		expect(app.store.drafts.has("scratch")).toBe(false);
-	});
-});
-
 describe("SessionController.forgetDeleted", () => {
 	test("moves focus, clears the deleted draft, and does not issue a duplicate delete", async () => {
 		const { app, server } = await bootApp("tui-a");

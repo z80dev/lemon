@@ -833,22 +833,24 @@ describe("sessions and history", () => {
 		);
 	});
 
-	test("/session reset clears the daemon's copy", async () => {
-		harness.server.respondWith("sessions.reset", { ok: true });
-		await harness.run("/session reset");
-		expect(harness.server.requestsFor("sessions.reset")[0].params).toEqual({
-			sessionKey: "tui-session",
-		});
-	});
-
-	test("/reset is the top-level Hermes alias", async () => {
-		harness.server.respondWith("sessions.reset", { ok: true });
-		await harness.run("/reset");
-		expect(harness.server.requestsFor("sessions.reset")[0].params).toEqual({
-			sessionKey: "tui-session",
-		});
-		expect(harness.host.text).toContain("reset tui-session");
-	});
+	test.each(["/session reset", "/reset"])(
+		"%s previews, then resets the daemon's copy only for the exact key",
+		async (command) => {
+			harness.server.respondWith("sessions.reset", {
+				success: true,
+				sessionKey: "tui-session",
+				summary: { sessionKey: "tui-session", reset: true },
+			});
+			await harness.run(command);
+			expect(harness.server.requestsFor("sessions.reset")).toHaveLength(0);
+			expect(harness.host.text).toContain("reset preview · tui-session");
+			await harness.run(`${command} --confirm tui-session`);
+			expect(harness.server.requestsFor("sessions.reset")[0].params).toEqual({
+				sessionKey: "tui-session",
+			});
+			expect(harness.host.text).toContain("verified reset of tui-session");
+		},
+	);
 
 	test("/compress compacts the current session", async () => {
 		harness.server.respondWith("sessions.compact", {

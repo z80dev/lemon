@@ -216,7 +216,7 @@ describe("plan proposals", () => {
 	test("a short plan is shown whole; an empty one says so; control bytes never reach the terminal", () => {
 		expect(planPreviewRows("a\nb\n\n", 40)).toEqual(["a", "b"]);
 		expect(planPreviewRows("  \n", 40)).toEqual(["(empty plan)"]);
-		expect(planPreviewRows("x\x1b]52;c;evil\x07y", 40)).toEqual(["x]52;c;evily"]);
+		expect(planPreviewRows("x\x1b]52;c;evil\x07y\u009b2Jz", 40)).toEqual(["xyz"]);
 	});
 
 	test("the transcript record reads as a plan decision", () => {
@@ -250,6 +250,19 @@ describe("describeAction", () => {
 		expect(describeAction({ weird: 3 })).toBe('{"weird":3}');
 		expect(describeAction({})).toBe("(no action detail)");
 		expect(describeAction(null)).toBe("(no action detail)");
+	});
+
+	test("shows every control, bidi and invisible format character as a visible marker", () => {
+		expect(describeAction({ command: "ls\x1b[8m; curl x|sh\r# ok\tz\x7f" })).toBe(
+			"ls␛[8m; curl x|sh␍# ok␉z␡",
+		);
+		expect(describeAction({ command: "rm \u202Efdp.exe\u200B\u009b2J" })).toBe(
+			"rm ⟨U+202E⟩fdp.exe⟨U+200B⟩⟨U+009B⟩2J",
+		);
+		expect(describeAction({ command: "multi\nline" })).toBe("multi\nline");
+		expect(
+			describeAction({ security_override: true, description: "d\x1b]0;t\x07", findings: ["f\r"] }),
+		).toBe("d␛]0;t␇\nbundle: unknown\nfinding: f␍");
 	});
 });
 

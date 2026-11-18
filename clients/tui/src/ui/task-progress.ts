@@ -1,5 +1,4 @@
-import { stripVTControlCharacters } from "node:util";
-import { extractText } from "../formatters/base.ts";
+import { extractText, safeLine } from "../formatters/base.ts";
 import type { AgentToolUseEvent } from "../protocol/types.ts";
 import type { TaskStatus, TaskUpdate } from "../store/task-store.ts";
 
@@ -77,10 +76,7 @@ export function taskUpdatesFromEvent(event: AgentToolUseEvent): TaskUpdate[] {
 
 /** Display-only text: opaque keys remain untouched in the store. */
 export function taskDisplayText(text: string, latest = false): string {
-	const plain = stripVTControlCharacters(text)
-		.replace(/\p{Cc}/gu, " ")
-		.replace(/\s+/g, " ")
-		.trim();
+	const plain = safeLine(text, Number.POSITIVE_INFINITY);
 	if (plain.length <= TASK_PROGRESS_LIMIT) return plain;
 	return latest
 		? `…${plain.slice(-(TASK_PROGRESS_LIMIT - 1))}`
