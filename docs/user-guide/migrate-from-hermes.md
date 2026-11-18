@@ -30,7 +30,8 @@ Common options:
 | `--overwrite` | Replace conflicting target files. Existing files are copied into the migration backup area first. |
 | `--skill-conflict skip` | Treat an existing skill folder as a conflict. This is the default. |
 | `--skill-conflict rename` | Import conflicting skills as `<name>-hermes-import`. |
-| `--no-backup` | Skip the pre-migration zip backup. |
+| `--include-skill-assets` | Also copy skill files that are not recognised skill content, after you have reviewed the `gated` list. |
+| `--no-backup` | Skip the pre-migration `lemon backup` bundle. |
 | `--dry-run` | Print the preview and exit without writing. |
 | `--yes` | Apply without the confirmation prompt (conflicts still require `--overwrite`). |
 
@@ -50,12 +51,13 @@ before writing. If conflicts are present, it refuses to apply unless
 | `SOUL.md` | `<target>/agent/workspace/SOUL.md` |
 | `memories/MEMORY.md` | Compact `<target>/agent/workspace/MEMORY.md`; overflow goes to `memory/topics/hermes-imported-memory.md` |
 | `memories/USER.md` | Compact `<target>/agent/workspace/USER.md`; overflow goes to `memory/topics/hermes-imported-user_profile.md` |
-| `skills/*/SKILL.md` | `<target>/agent/skill/<skill-name>/SKILL.md` |
+| `skills/*/` | `<target>/agent/skill/<skill-name>/`: `SKILL.md` and recognised text files only (see [Credential handling](#credential-handling)) |
 | `config.yaml` model/provider base URLs | Compatible `[defaults]` and `[providers.*]` entries in `<target>/config.toml` |
 | `$HERMES_HOME/honcho.json` or `~/.honcho/config.json` | Supported settings in `[honcho]`; API key in Lemon encrypted secrets with `--preset full --migrate-secrets` |
-| `.env` allowlisted secrets | Lemon encrypted secrets, only with `--preset full --migrate-secrets` |
+| `.env` allowlisted secrets | Lemon encrypted secrets, only with `--preset full --migrate-secrets`. An existing Lemon secret with the same name is always a conflict; a different existing credential reference in `config.toml` is a conflict unless `--overwrite` is set. |
 | `state.db` sessions/messages | Searchable Lemon memory documents in `<target>/store/memory.sqlite3` |
-| Known unmapped files (`config.yaml`, `auth.json`, `cron/`) | Archived under `<target>/migration/hermes/<timestamp>/archive/` for manual review |
+| `config.yaml` `model` and provider `base_url` values, and `cron/` job schedules | Archived under `<target>/migration/hermes/<timestamp>/archive/` (`config.yaml`, `cron.json`) for manual review; see [Credential handling](#credential-handling) |
+| `auth.json` | Never copied; reported as `gated`. Import supported credentials with `--preset full --migrate-secrets` |
 
 Imported Hermes sessions become durable recall records. They are searchable via
 Lemon memory tools, but they are not exact replay/resume records for the old
@@ -128,24 +130,119 @@ Each apply writes a report directory:
 <target>/migration/hermes/<timestamp>/
   report.json
   summary.md
+  journal.jsonl
   backups/
   archive/
 ```
 
-Before applying, the command also creates a zip backup at:
+`lemon backup` never includes `<target>/migration/`, even with
+`--include-credentials`.
 
-```text
-<target>/backups/pre-hermes-migration-<timestamp>.zip
+### Offline operation
+
+Apply and rollback run offline. They refuse while a launcher-managed Lemon
+runtime uses the target and hold the same lifecycle locks as
+`lemon backup restore` for the whole operation, so no runtime can start and no
+restore or other migration can run meanwhile. Stop Lemon (`lemon stop`) first.
+Other tools that edit `config.toml` or the secret store directly while a
+migration runs are not coordinated with; do not run them concurrently.
+
+Before applying to an existing Lemon home, the command creates a standard
+`lemon backup` bundle under `<target>/backups/` inside that lock. It follows the
+backup contract (credential material such as `secrets_master_key`, `env` and
+`cookie` is excluded; SQLite databases are consistent snapshots) and can be
+checked with `lemon backup verify <path>`. The bundle does not contain the
+secrets master key, so keep the existing key (Keychain,
+`LEMON_SECRETS_MASTER_KEY` or key file) in place.
+
+### Rollback
+
+`journal.jsonl` records each plain-file destination before its first change.
+Undo an applied migration with:
+
+```bash
+lemon migrate hermes rollback <target>/migration/hermes/<timestamp>
 ```
+
+Rollback removes files and directories the migration created, restores plain
+files it modified from `backups/`, and deletes secrets it created. Limits:
+
+- SQLite databases are never copied. If the migration created
+  `store/memory.sqlite3`, rollback removes it (and its sidecars) while holding
+  the offline lock. If session memory was added to an existing database, the
+  item is reported as `manual`: restore the pre-migration bundle with
+  `lemon backup restore` to revert it.
+- A created secret is deleted only from the same store (its physical database
+  path is recorded) and only while it is still the exact value the migration
+  stored. A secret changed afterwards is left untouched and reported as
+  `manual`; a different active store is reported as `error`.
+- Empty parent directories and the report directory are left in place.
+- Changes made after the migration to the same files are discarded when those
+  files are restored or removed. Roll back before further edits.
+- While any `error` or `manual` item remains, rollback reports
+  `"complete": false` and the command exits nonzero.
+
+Config files are rewritten through a temp file inside a freshly created `0700`
+sibling directory, set to mode `0600` (or the stricter existing mode), synced
+and renamed into place; the directory is then removed. A rewritten
+`config.toml` therefore ends up `0600`, and its new content is never readable
+by other users while it is being written.
+
+### Secrets
 
 Secret values are never written to reports. The secret importer reads an
 allowlist of Hermes `.env` names (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
 `OPENAI_CODEX_API_KEY`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`,
 `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `ELEVENLABS_API_KEY`,
 `DEEPGRAM_API_KEY`) and the selected Honcho `apiKey`, and writes
-them through `LemonCore.Secrets`. If the local Lemon secrets master key is not
+them through `LemonCore.Secrets`. Provider keys are referenced from
+`[providers.<name>] api_key_secret`. If the local Lemon secrets master key is not
 available, those items are reported as errors, no plaintext fallback or new
 credential reference is written, and the rest of the migration continues.
+
+- Migration only creates secrets that do not exist yet. An existing secret of
+  the same name is a conflict and is never replaced, even with `--overwrite`;
+  delete it with `lemon secrets delete NAME` first to import the Hermes value.
+- A config reference is only written if it is unset or already names that
+  secret, unless `--overwrite` is set.
+- If the config update fails, the created secret is deleted again, but only if
+  it is still the exact value just created. If that compensation fails, the
+  item is reported as `error` saying the secret remains stored.
+- Secret migration is refused (`gated`) unless the running secret store's
+  physical database lies inside `--target`, is not reached through a symlink,
+  and is present in the pre-migration backup bundle (so excluded directories
+  such as `logs/` and `--no-backup` are refused too).
+
+### Credential handling
+
+- Skills: only `SKILL.md` and UTF-8 text files with a known source or document
+  extension (`.md`, `.txt`, `.py`, `.sh`, `.js`, `.ts` and similar) under
+  `references/`, `scripts/`, `templates/`, `examples/` or `docs/` are copied.
+  Every other file, including dotfiles and any JSON, YAML or extensionless
+  file, is reported as `gated` and not copied. After reviewing the listed
+  files, `--include-skill-assets` copies them too (each is listed as
+  `migrated`); symlinks and special files are never copied. Copied text is not
+  scanned for secrets.
+- `config.yaml` is archived reduced to `model` and provider `base_url` values;
+  every other top-level section is reported by name as `gated`, never copied.
+- URLs with userinfo, a query string or a fragment are never imported into
+  `config.toml` or the archive, since they may embed credentials.
+- `cron/` is archived as `cron.json` holding job ids, names, schedules,
+  timezones and enabled flags only; commands, prompts and environment are not
+  copied.
+- Persona, memory, skill and session text is imported as written and is not
+  scanned for embedded secrets; the report carries a `warning` reminding you to
+  review it.
+
+### Earlier migrations
+
+Earlier Lemon versions copied `auth.json`, the full `config.yaml` and `cron/`
+into `migration/hermes/<timestamp>/archive/`, and wrote
+`backups/pre-hermes-migration-<timestamp>.zip` containing the whole Lemon home,
+including the secrets master key. Audit, preview and apply list any such files
+as `legacy_archive` warnings (paths only). Lemon does not delete them: review
+them, delete them once you no longer need them, and rotate any credentials they
+contained.
 
 ## Current Gaps
 

@@ -4,10 +4,14 @@ defmodule LemonCli.MigrateCommand do
 
       lemon migrate hermes audit [--source DIR] [--target DIR] [--json]
       lemon migrate hermes [--dry-run] [--yes] [--preset user-data|full] ...
+      lemon migrate hermes rollback REPORT_DIR
 
   Audit is read-only. Migration always builds a preview first, refuses
-  conflicts unless `--overwrite` is set, asks before writing unless `--yes`
-  is set, and backs up the Lemon home first unless `--no-backup` is set.
+  conflicts unless `--overwrite` is set, and asks before writing unless `--yes`
+  is set. Apply and rollback run offline: they refuse while a Lemon runtime
+  uses the target and hold the restore lifecycle locks throughout. Apply first
+  takes a `LemonCore.Backup` bundle of the Lemon home (credential material
+  excluded) unless `--no-backup` is set.
   Omitted `--overwrite` and `--yes` flags are false: conflicts still fail
   closed, and declining confirmation leaves the destination untouched.
   """
@@ -27,6 +31,7 @@ defmodule LemonCli.MigrateCommand do
     overwrite: :boolean,
     migrate_secrets: :boolean,
     no_backup: :boolean,
+    include_skill_assets: :boolean,
     skill_conflict: :string
   ]
 
@@ -39,8 +44,10 @@ defmodule LemonCli.MigrateCommand do
 
     case args do
       ["hermes", "audit" | rest] -> with_options(rest, @audit_switches, &audit/1)
+      ["hermes", "rollback", report_dir] -> rollback(report_dir)
+      ["hermes", "rollback" | _] -> usage_error("Expected `lemon migrate hermes rollback DIR`.")
       ["hermes" | rest] -> with_options(rest, @migrate_switches, &migrate(&1, confirm))
-      _other -> usage_error("Expected `lemon migrate hermes [audit]`.")
+      _other -> usage_error("Expected `lemon migrate hermes [audit|rollback DIR]`.")
     end
   end
 
@@ -105,6 +112,7 @@ defmodule LemonCli.MigrateCommand do
       preset: parsed[:preset] || "user-data",
       overwrite: parsed[:overwrite] || false,
       migrate_secrets: parsed[:migrate_secrets] || false,
+      include_skill_assets: parsed[:include_skill_assets] || false,
       skill_conflict: parsed[:skill_conflict] || "skip"
     ]
 
@@ -128,31 +136,30 @@ defmodule LemonCli.MigrateCommand do
         0
 
       true ->
-        with :ok <- maybe_backup(preview["target"], parsed[:no_backup]) do
-          report = HermesMigration.apply(migration_opts)
-          print_report(report, "Migration Complete")
-          IO.puts("Report: #{report["output_dir"]}")
-          0
-        end
+        report =
+          HermesMigration.apply(
+            migration_opts ++ [backup: not Keyword.get(parsed, :no_backup, false)]
+          )
+
+        print_apply(report, parsed[:no_backup])
     end
   end
 
-  defp maybe_backup(_target, true), do: :ok
+  defp print_apply(%{"error" => error}, _no_backup) do
+    IO.puts(:stderr, error)
+    1
+  end
 
-  defp maybe_backup(target, _no_backup) do
-    case HermesMigration.create_backup(target) do
-      {:ok, path} ->
-        IO.puts("Pre-migration backup: #{path}")
-        :ok
-
-      :none ->
-        IO.puts("Pre-migration backup skipped: Lemon target does not exist yet")
-        :ok
-
-      {:error, reason} ->
-        IO.puts(:stderr, "Could not create pre-migration backup: #{inspect(reason)}")
-        1
+  defp print_apply(report, no_backup) do
+    cond do
+      report["backup"] -> IO.puts("Pre-migration backup: #{report["backup"]}")
+      no_backup -> :ok
+      true -> IO.puts("Pre-migration backup skipped: Lemon target does not exist yet")
     end
+
+    print_report(report, "Migration Complete")
+    IO.puts("Report: #{report["output_dir"]}")
+    0
   end
 
   defp print_audit(report) do
@@ -195,15 +202,39 @@ defmodule LemonCli.MigrateCommand do
       conflicts : #{summary["conflict"]}
       unsupported : #{summary["unsupported"]}
       gated       : #{summary["gated"]}
-      errors    : #{summary["error"]}\
+      errors    : #{summary["error"]}
+      warnings  : #{summary["warning"]}\
     """)
 
     report["items"]
-    |> Enum.filter(&(&1["status"] in ["conflict", "error", "unsupported", "gated"]))
+    |> Enum.filter(&(&1["status"] in ["conflict", "error", "unsupported", "gated", "warning"]))
     |> Enum.each(fn item ->
       key = if item["details"]["key"], do: " (#{item["details"]["key"]})", else: ""
       IO.puts("  #{item["status"]}: #{item["kind"]}#{key} #{item["source"]} -> #{item["reason"]}")
     end)
+  end
+
+  defp rollback(report_dir) do
+    with :ok <- start_apps() do
+      report = HermesMigration.rollback(report_dir)
+
+      IO.puts("""
+
+      Migration Rollback
+      ==================
+      Report: #{report["report_dir"]}\
+      """)
+
+      report["items"]
+      |> Enum.each(&IO.puts("  #{&1["status"]}: #{&1["source"]} -> #{&1["reason"]}"))
+
+      if report["complete"] do
+        0
+      else
+        IO.puts(:stderr, "Rollback incomplete: resolve the error and manual items above.")
+        1
+      end
+    end
   end
 
   defp confirm?(question) do

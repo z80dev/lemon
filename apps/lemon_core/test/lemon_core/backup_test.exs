@@ -110,6 +110,25 @@ defmodule LemonCore.BackupTest do
              "node-token"
   end
 
+  test "migration archives never enter a bundle, even with credentials included", %{
+    tmp_dir: tmp_dir
+  } do
+    for include_credentials <- [false, true] do
+      fixture = fixture(Path.join(tmp_dir, "include-#{include_credentials}"))
+      archive = Path.join(fixture.source, "migration/hermes/20260101-000000/archive")
+      File.mkdir_p!(archive)
+      File.write!(Path.join(archive, "auth.json"), ~s({"token":"hermes-oauth-token-42"}))
+
+      summary = create!(fixture, include_credentials: include_credentials)
+      assert summary.file_count == 3
+
+      refute File.exists?(Path.join(fixture.bundle, "data/migration"))
+      manifest = File.read!(Path.join(fixture.bundle, "manifest.json"))
+      refute manifest =~ "migration/"
+      refute manifest =~ "auth.json"
+    end
+  end
+
   test "create refuses an output inside an included source path and unsupported owner modes", %{
     tmp_dir: tmp_dir
   } do

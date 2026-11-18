@@ -30,7 +30,8 @@ defmodule LemonCore.Backup do
   The default contract includes durable configuration, stores, sessions,
   skills, and workspace files. It excludes installed versions and launchers,
   runtime pid/socket state, caches, logs, previous backups, restore rollback
-  directories, support bundles, and symlinks. Local credential material
+  directories, support bundles, migration reports and archives (`migration/`,
+  even with `include_credentials: true`), and symlinks. Local credential material
   (`cookie`, `env`, `secrets_master_key`, and execution-node credentials) is
   excluded unless `include_credentials: true` is explicit. Platform keychain
   contents and project-local `.lemon` directories are outside this contract.
@@ -89,6 +90,8 @@ defmodule LemonCore.Backup do
                            "bin",
                            "cache",
                            "logs",
+                           # Migration reports and archives may hold copied third-party credentials.
+                           "migration",
                            "restore-rollbacks",
                            "run",
                            "tmp",
@@ -202,6 +205,38 @@ defmodule LemonCore.Backup do
        |> Map.put(:overwrite_confirmation, overwrite_confirmation(manifest_digest, target))}
     end
   end
+
+  @doc """
+  Runs `fun` with `target` offline, under the same exclusion restore uses.
+
+  Refuses with `{:error, :daemon_running}` while a launcher-managed runtime
+  uses `target`, then holds the restore lifecycle locks (which block launcher
+  startup and restores) for the whole call and rechecks before running `fun`.
+  A concurrent holder returns `{:error, :backup_restore_locked}`. Accepts the
+  `:paths_opts`, `:runtime_probe` and `:after_runtime_check` options of
+  `restore/2`. `fun` may call `create/1`, which uses a separate lock.
+  """
+  @spec with_offline_target(Path.t(), keyword(), (-> term())) :: term()
+  def with_offline_target(target, opts \\ [], fun) when is_function(fun, 0) do
+    target = Path.expand(target)
+
+    with :ok <- ensure_no_daemon(target, opts) do
+      with_runtime_lock(target, opts, fn ->
+        with :ok <- ensure_no_daemon(target, opts) do
+          after_runtime_check(opts)
+          fun.()
+        end
+      end)
+    end
+  end
+
+  @doc """
+  The physical location of `path`: every symlink in it resolved, following the
+  same resolution restore uses for runtime ownership. Missing trailing
+  components are kept as written.
+  """
+  @spec physical_path(Path.t()) :: String.t()
+  def physical_path(path), do: canonical_path(path)
 
   @doc "Restores a fully verified bundle with fail-closed conflict handling."
   @spec restore(Path.t(), keyword()) :: result()
@@ -1409,7 +1444,7 @@ defmodule LemonCore.Backup do
     base = [
       "installed versions and launcher symlinks",
       "runtime pid/socket/lock state",
-      "temporary files, caches, logs, support bundles, and prior backups",
+      "temporary files, caches, logs, support bundles, prior backups, and migration reports",
       "restore rollback directories",
       "SQLite -wal/-shm/-journal sidecars (their committed content is in the database snapshot)",
       "symlinks and special files",

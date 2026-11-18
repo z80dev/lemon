@@ -735,10 +735,14 @@ defmodule LemonCli.CommandRegistry do
     %{
       name: "migrate",
       summary: "Import user data from a Hermes home",
-      usage: "lemon migrate hermes [audit] [options]",
+      usage: "lemon migrate hermes [audit|rollback DIR] [options]",
       subcommands: [
         %{name: "hermes", summary: "Preview, then import a Hermes home into Lemon"},
-        %{name: "audit", summary: "Read-only compatibility audit (`migrate hermes audit`)"}
+        %{name: "audit", summary: "Read-only compatibility audit (`migrate hermes audit`)"},
+        %{
+          name: "rollback",
+          summary: "Undo an applied migration from its report directory journal"
+        }
       ],
       options: [
         option("--source PATH", ["--source"], "Hermes home (default: ~/.hermes)"),
@@ -747,10 +751,15 @@ defmodule LemonCli.CommandRegistry do
         option("--preset user-data|full", ["--preset"], "Import scope (default: user-data)"),
         option("--migrate-secrets", ["--migrate-secrets"], "Import allowlisted secrets"),
         option("--skill-conflict skip|rename", ["--skill-conflict"], "Existing skill policy"),
+        option(
+          "--include-skill-assets",
+          ["--include-skill-assets"],
+          "Also copy unrecognised skill files"
+        ),
         option("--dry-run", ["--dry-run"], "Preview without writing"),
         option("--yes", ["--yes"], "Apply without prompting"),
         option("--overwrite", ["--overwrite"], "Replace conflicting target files"),
-        option("--no-backup", ["--no-backup"], "Skip the pre-migration zip backup"),
+        option("--no-backup", ["--no-backup"], "Skip the pre-migration lemon backup bundle"),
         option("--json", ["--json"], "Emit the audit as JSON")
       ],
       details: [

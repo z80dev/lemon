@@ -26,7 +26,7 @@ command.
 | --- | --- |
 | `config.toml` | Installed `bin/` launchers and `versions/` |
 | Durable `agent/` sessions, workspace, and skills | `run/`, `tmp/`, caches, logs, pid/socket files, and operation locks |
-| Durable stores such as `store/` | Existing `backups/`, support bundles, and restore rollback material |
+| Durable stores such as `store/` | Existing `backups/`, support bundles, restore rollback material, and `migration/` reports and archives (always, even with `--include-credentials`) |
 | Other regular files not covered by an exclusion | Symlinks and special files |
 |  | Project-local `.lemon` directories and platform keychain contents |
 |  | `cookie`, `env`, `secrets_master_key`, and `nodes/execution/` credentials |
