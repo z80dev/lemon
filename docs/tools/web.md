@@ -275,7 +275,7 @@ Key resolution behavior:
 
 - Brave search uses `runtime.tools.web.search.api_key`, then `BRAVE_API_KEY`.
 - Exa uses `runtime.tools.web.search.providers.exa.api_key`, then `EXA_API_KEY`.
-- Perplexity search uses `runtime.tools.web.search.perplexity.api_key`, then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`.
+- Perplexity search uses `runtime.tools.web.search.perplexity.api_key` (or `api_key_secret`), then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`. The host is derived from the credential actually sent: `PERPLEXITY_API_KEY` goes to `api.perplexity.ai`, `OPENROUTER_API_KEY` to `openrouter.ai`, and a configured key or secret by its prefix (`pplx-` or `sk-or-`). Without an explicit `base_url`, a configured key of any other shape, or an env key carrying the other provider's prefix, fails with `ambiguous_perplexity_endpoint` before any request.
 - Firecrawl uses `runtime.tools.web.fetch.firecrawl.api_key`, then `FIRECRAWL_API_KEY`.
 
 ## Config Example
@@ -294,7 +294,7 @@ provider = "perplexity"
 
 [runtime.tools.web.search.perplexity]
 api_key = "<perplexity-api-key>"
-# base_url can be omitted; Lemon auto-selects Perplexity vs OpenRouter by key source/prefix.
+# base_url can be omitted for pplx-/sk-or- keys; Lemon pairs the host with the credential's source/prefix.
 model = "perplexity/sonar-pro"
 
 [runtime.tools.web.search.providers.searxng]
@@ -355,6 +355,7 @@ Config knobs:
 
 - `missing_brave_api_key`: set `BRAVE_API_KEY` or `runtime.tools.web.search.api_key`.
 - `missing_perplexity_api_key`: set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` (or config key).
+- `ambiguous_perplexity_endpoint`: set `runtime.tools.web.search.perplexity.base_url`, or use a `pplx-`/`sk-or-` key.
 - `No provider in the search chain supports the requested freshness filter`: select a capable provider (Brave, Exa, Tavily, Kagi, DuckDuckGo or SearXNG). DuckDuckGo/SearXNG accept relative filters only.
 - `Invalid URL: must be http or https`: use a valid HTTP(S) URL.
 - `Blocked hostname` / `resolves to private/internal IP`: target is blocked by SSRF guards; use safer public host, or explicitly allow only what you trust.

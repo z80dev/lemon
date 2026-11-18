@@ -1,9 +1,66 @@
 defmodule LemonSkills.Tools.MediaCommon do
   @moduledoc false
 
-  alias LemonAgent.ModelRuntime.Credentials
+  require Logger
+
+  alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
   alias LemonAgent.Tools.AbortHelpers
   alias LemonMedia.MediaJobs
+
+  @default_openai_base_url "https://api.openai.com/v1"
+
+  @doc """
+  Pairs an OpenAI-compatible media request's host with its credential.
+
+  This is the only place media tools choose a host for a provider credential:
+
+    * `openai` may use the explicit `override_key`/`override_base_url` tool
+      options, then the `[providers.openai]` `base_url`, then the public
+      OpenAI host.
+    * Any other provider must have an explicit `base_url` in its own provider
+      config and only ever resolves its own credential; the OpenAI overrides
+      and the OpenAI default host are never used for it.
+
+  Returns a runtime fragment (`provider`, `base_url`, `api_key`,
+  `provider_cfg`) for `provider_api_key/3`, or a typed error string.
+  """
+  def openai_compatible_endpoint(provider, provider_cfg, override_key, override_base_url) do
+    provider_cfg = provider_cfg || %{}
+    configured_base_url = optional_string(provider_config_value(provider_cfg, :base_url))
+
+    endpoint =
+      if ProviderNames.canonical_name(provider) == "openai" do
+        {:ok,
+         %{
+           provider: :openai,
+           base_url: override_base_url || configured_base_url || @default_openai_base_url,
+           api_key: override_key,
+           provider_cfg: provider_cfg
+         }}
+      else
+        case configured_base_url do
+          nil ->
+            {:error,
+             "media provider #{provider} requires an explicit OpenAI-compatible base_url in [providers.#{provider}]"}
+
+          base_url ->
+            {:ok,
+             %{provider: provider, base_url: base_url, api_key: nil, provider_cfg: provider_cfg}}
+        end
+      end
+
+    case endpoint do
+      {:ok, %{provider: provider, base_url: base_url}} ->
+        Logger.info(
+          "media provider endpoint resolved provider=#{provider} host=#{URI.parse(base_url).host}"
+        )
+
+      {:error, _} ->
+        Logger.warning("media provider endpoint rejected provider=#{provider} reason=no_base_url")
+    end
+
+    endpoint
+  end
 
   def timeout_ms(params, default, max_timeout) do
     value = Map.get(params, "timeoutMs", default)

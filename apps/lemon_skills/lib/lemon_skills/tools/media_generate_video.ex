@@ -20,7 +20,6 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
     only: [
       bounded_integer: 3,
       optional_string: 1,
-      provider_config_value: 2,
       provider_error_kind: 1,
       reject_blank_values: 1,
       transient_status?: 1,
@@ -36,7 +35,6 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   @local_model "local_mp4_preview"
   @default_openai_model "sora-2"
   @default_vertex_model "veo-3.1-fast-generate-001"
-  @default_openai_base_url "https://api.openai.com/v1"
   @default_vertex_location "us-central1"
   @formats %{"mp4" => "video/mp4"}
   @local_mp4_preview <<0, 0, 0, 24, "ftypmp42", 0, 0, 0, 0, "mp42isom", 0, 0, 0, 8, "free">>
@@ -317,16 +315,18 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
     config = Keyword.get_lazy(opts, :media_video_config, fn -> Config.load(cwd) end)
     provider_cfg = ProviderNames.provider_config(config.providers, :openai) || %{}
 
-    %{
-      api_key: Keyword.get(opts, :openai_video_api_key),
-      base_url:
-        Keyword.get(opts, :openai_video_base_url) ||
-          optional_string(provider_config_value(provider_cfg, :base_url)) ||
-          @default_openai_base_url,
-      provider_cfg: provider_cfg,
+    {:ok, endpoint} =
+      MediaCommon.openai_compatible_endpoint(
+        :openai,
+        provider_cfg,
+        Keyword.get(opts, :openai_video_api_key),
+        Keyword.get(opts, :openai_video_base_url)
+      )
+
+    Map.merge(endpoint, %{
       http_post: Keyword.get(opts, :media_video_http_post, &Req.post/2),
       http_get: Keyword.get(opts, :media_video_http_get, &Req.get/2)
-    }
+    })
   end
 
   defp vertex_runtime(cwd, opts) do

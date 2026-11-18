@@ -432,26 +432,13 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp resolve_api_config("perplexity", runtime) do
-    api_key = resolve_perplexity_api_key(runtime.perplexity)
-
-    if is_nil(api_key) do
-      {:error,
-       %{
-         "error" => "missing_perplexity_api_key",
-         "message" =>
-           "websearch (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY, or configure agent.tools.web.search.perplexity.api_key.",
-         "docs" => "docs/tools/web.md"
-       }}
-    else
-      source = perplexity_api_key_source(runtime.perplexity)
-      base_url = resolve_perplexity_base_url(runtime.perplexity, source, api_key)
-      model = runtime.perplexity.model || @default_perplexity_model
-
+    with {:ok, api_key, source} <- resolve_perplexity_credential(runtime.perplexity),
+         {:ok, base_url} <- resolve_perplexity_base_url(runtime.perplexity, source, api_key) do
       {:ok,
        %{
          api_key: api_key,
          base_url: base_url,
-         model: model
+         model: runtime.perplexity.model || @default_perplexity_model
        }}
     end
   end
@@ -560,41 +547,64 @@ defmodule CodingAgent.Tools.WebSearch do
       end)
   end
 
-  defp resolve_perplexity_api_key(perplexity_cfg) do
-    normalize_optional_string(perplexity_cfg.api_key) ||
-      resolve_secret_ref(Map.get(perplexity_cfg, :api_key_secret)) ||
-      env_optional("PERPLEXITY_API_KEY") ||
-      env_optional("OPENROUTER_API_KEY")
-  end
+  # Resolves the credential together with its provenance so the destination
+  # host is always derived from the credential actually sent. Configured keys
+  # (inline or `api_key_secret`) carry no provider identity of their own, so
+  # their host comes from an explicit `base_url` or an unambiguous key prefix.
+  defp resolve_perplexity_credential(perplexity_cfg) do
+    configured =
+      normalize_optional_string(perplexity_cfg.api_key) ||
+        resolve_secret_ref(Map.get(perplexity_cfg, :api_key_secret))
 
-  defp perplexity_api_key_source(perplexity_cfg) do
     cond do
-      present?(perplexity_cfg.api_key) -> :config
-      present?(Secrets.fetch_value("PERPLEXITY_API_KEY")) -> :perplexity_env
-      present?(Secrets.fetch_value("OPENROUTER_API_KEY")) -> :openrouter_env
-      true -> :none
+      configured ->
+        {:ok, configured, :configured}
+
+      key = env_optional("PERPLEXITY_API_KEY") ->
+        {:ok, key, :perplexity_env}
+
+      key = env_optional("OPENROUTER_API_KEY") ->
+        {:ok, key, :openrouter_env}
+
+      true ->
+        {:error,
+         %{
+           "error" => "missing_perplexity_api_key",
+           "message" =>
+             "websearch (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY, or configure agent.tools.web.search.perplexity.api_key.",
+           "docs" => "docs/tools/web.md"
+         }}
     end
   end
 
   defp resolve_perplexity_base_url(perplexity_cfg, source, api_key) do
+    perplexity_key? = key_has_prefix?(api_key, @perplexity_key_prefixes)
+    openrouter_key? = key_has_prefix?(api_key, @openrouter_key_prefixes)
+
     cond do
       present?(perplexity_cfg.base_url) ->
-        perplexity_cfg.base_url
+        {:ok, perplexity_cfg.base_url}
 
-      source == :perplexity_env ->
-        @perplexity_direct_base_url
+      source == :perplexity_env and not openrouter_key? ->
+        {:ok, @perplexity_direct_base_url}
 
-      source == :openrouter_env ->
-        @default_perplexity_base_url
+      source == :openrouter_env and not perplexity_key? ->
+        {:ok, @default_perplexity_base_url}
 
-      source == :config and key_has_prefix?(api_key, @perplexity_key_prefixes) ->
-        @perplexity_direct_base_url
+      source == :configured and perplexity_key? ->
+        {:ok, @perplexity_direct_base_url}
 
-      source == :config and key_has_prefix?(api_key, @openrouter_key_prefixes) ->
-        @default_perplexity_base_url
+      source == :configured and openrouter_key? ->
+        {:ok, @default_perplexity_base_url}
 
       true ->
-        @default_perplexity_base_url
+        {:error,
+         %{
+           "error" => "ambiguous_perplexity_endpoint",
+           "message" =>
+             "websearch (perplexity) cannot tell whether the configured API key belongs to Perplexity or OpenRouter. Set agent.tools.web.search.perplexity.base_url explicitly.",
+           "docs" => "docs/tools/web.md"
+         }}
     end
   end
 

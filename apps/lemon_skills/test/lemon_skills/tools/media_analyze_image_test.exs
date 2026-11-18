@@ -250,6 +250,172 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
     assert job.model == "openrouter:openai/gpt-4o-mini"
   end
 
+  describe "provider credential/host pairing" do
+    setup do
+      saved =
+        for var <- ~w(OPENROUTER_API_KEY ANTHROPIC_API_KEY KIMI_API_KEY MOONSHOT_API_KEY),
+            do: {var, System.get_env(var)}
+
+      Enum.each(saved, fn {var, _} -> System.delete_env(var) end)
+
+      on_exit(fn ->
+        Enum.each(saved, fn
+          {var, nil} -> System.delete_env(var)
+          {var, value} -> System.put_env(var, value)
+        end)
+      end)
+
+      {:ok, requests} = Agent.start_link(fn -> [] end)
+
+      http_post = fn url, request_opts ->
+        Agent.update(requests, &[{url, request_opts} | &1])
+
+        {:ok,
+         %Req.Response{
+           status: 200,
+           body: %{"choices" => [%{"message" => %{"content" => "ok analysis"}}]}
+         }}
+      end
+
+      %{requests: requests, http_post: http_post}
+    end
+
+    test "anthropic model with only an Anthropic key errors without any HTTP request", %{
+      tmp_dir: tmp_dir,
+      requests: requests,
+      http_post: http_post
+    } do
+      File.write!(Path.join(tmp_dir, "a.png"), png_bytes())
+
+      tool =
+        MediaAnalyzeImage.tool(tmp_dir,
+          media_vision_config: %{
+            providers: %{"anthropic" => %{"api_key" => "sk-ant-secret"}}
+          },
+          media_vision_http_post: http_post
+        )
+
+      assert {:error, message} =
+               tool.execute.(
+                 "call-1",
+                 %{
+                   "imagePath" => "a.png",
+                   "provider" => "openai_vision",
+                   "model" => "anthropic:claude-x"
+                 },
+                 nil,
+                 nil
+               )
+
+      assert message =~ "base_url"
+      refute message =~ "sk-ant-secret"
+      assert Agent.get(requests, & &1) == []
+      assert MediaJobs.recent(project_dir: tmp_dir, limit: 1) == []
+    end
+
+    test "explicit OpenAI override key/host never apply to another provider", %{
+      tmp_dir: tmp_dir,
+      requests: requests,
+      http_post: http_post
+    } do
+      File.write!(Path.join(tmp_dir, "b.png"), png_bytes())
+
+      tool =
+        MediaAnalyzeImage.tool(tmp_dir,
+          openai_vision_api_key: "sk-openai-secret",
+          openai_vision_base_url: "https://api.openai.test/v1",
+          media_vision_config: %{
+            providers: %{"anthropic" => %{"api_key" => "sk-ant-secret"}}
+          },
+          media_vision_http_post: http_post
+        )
+
+      assert {:error, _} =
+               tool.execute.(
+                 "call-1",
+                 %{
+                   "imagePath" => "b.png",
+                   "provider" => "openai_vision",
+                   "model" => "anthropic:claude-x"
+                 },
+                 nil,
+                 nil
+               )
+
+      assert Agent.get(requests, & &1) == []
+    end
+
+    test "custom base_url for a provider only accepts that provider's credential", %{
+      tmp_dir: tmp_dir,
+      requests: requests,
+      http_post: http_post
+    } do
+      File.write!(Path.join(tmp_dir, "c.png"), png_bytes())
+
+      tool =
+        MediaAnalyzeImage.tool(tmp_dir,
+          openai_vision_api_key: "sk-openai-secret",
+          media_vision_config: %{
+            providers: %{
+              "openai" => %{"api_key" => "sk-openai-config-secret"},
+              "openrouter" => %{"base_url" => "https://openrouter.test/api/v1"}
+            }
+          },
+          media_vision_http_post: http_post
+        )
+
+      params = %{
+        "imagePath" => "c.png",
+        "provider" => "openai_vision",
+        "model" => "openrouter:openai/gpt-4o-mini"
+      }
+
+      assert {:error, _} = tool.execute.("call-1", params, nil, nil)
+      assert Agent.get(requests, & &1) == []
+
+      System.put_env("OPENROUTER_API_KEY", "sk-or-env-key")
+
+      assert %AgentToolResult{} = tool.execute.("call-2", params, nil, nil)
+
+      assert [{"https://openrouter.test/api/v1/chat/completions", request_opts}] =
+               Agent.get(requests, & &1)
+
+      assert request_opts[:headers] == [{"authorization", "Bearer sk-or-env-key"}]
+      refute inspect(request_opts) =~ "sk-openai"
+    end
+
+    test "openai models still use the OpenAI key and default OpenAI host", %{
+      tmp_dir: tmp_dir,
+      requests: requests,
+      http_post: http_post
+    } do
+      File.write!(Path.join(tmp_dir, "d.png"), png_bytes())
+
+      tool =
+        MediaAnalyzeImage.tool(tmp_dir,
+          media_vision_config: %{providers: %{"openai" => %{"api_key" => "sk-openai-key"}}},
+          media_vision_http_post: http_post
+        )
+
+      for model <- ["gpt-4o-mini", "openai:gpt-4o-mini"] do
+        assert %AgentToolResult{} =
+                 tool.execute.(
+                   "call-1",
+                   %{"imagePath" => "d.png", "provider" => "openai_vision", "model" => model},
+                   nil,
+                   nil
+                 )
+      end
+
+      assert [{url1, opts1}, {url2, opts2}] = Agent.get(requests, &Enum.reverse/1)
+      assert url1 == "https://api.openai.com/v1/chat/completions"
+      assert url2 == url1
+      assert {"authorization", "Bearer sk-openai-key"} in opts1[:headers]
+      assert {"authorization", "Bearer sk-openai-key"} in opts2[:headers]
+      assert opts2[:json]["model"] == "gpt-4o-mini"
+    end
+  end
+
   test "redacts OpenAI vision provider errors from failed jobs", %{tmp_dir: tmp_dir} do
     image_path = Path.join(tmp_dir, "rejected.png")
     File.write!(image_path, png_bytes())

@@ -36,7 +36,6 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   @google_provider "google_tts"
   @local_model "local_wav_preview"
   @default_openai_model "gpt-4o-mini-tts"
-  @default_openai_base_url "https://api.openai.com/v1"
   @default_elevenlabs_model "eleven_turbo_v2_5"
   @default_elevenlabs_voice_id "21m00Tcm4TlvDq8ikWAM"
   @default_elevenlabs_base_url "https://api.elevenlabs.io/v1"
@@ -332,15 +331,15 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
     config = Keyword.get_lazy(opts, :media_speech_config, fn -> Config.load(cwd) end)
     provider_cfg = ProviderNames.provider_config(config.providers, :openai) || %{}
 
-    %{
-      api_key: Keyword.get(opts, :openai_tts_api_key),
-      base_url:
-        Keyword.get(opts, :openai_tts_base_url) ||
-          optional_string(provider_config_value(provider_cfg, :base_url)) ||
-          @default_openai_base_url,
-      provider_cfg: provider_cfg,
-      http_post: Keyword.get(opts, :media_speech_http_post, &Req.post/2)
-    }
+    {:ok, endpoint} =
+      MediaCommon.openai_compatible_endpoint(
+        :openai,
+        provider_cfg,
+        Keyword.get(opts, :openai_tts_api_key),
+        Keyword.get(opts, :openai_tts_base_url)
+      )
+
+    Map.put(endpoint, :http_post, Keyword.get(opts, :media_speech_http_post, &Req.post/2))
   end
 
   defp elevenlabs_runtime(cwd, opts, generation) do
