@@ -231,12 +231,20 @@ defmodule LemonBrowser.CamofoxSession do
     interact(state, "press", %{"key" => key}, timeout, "pressed")
   end
 
-  defp dispatch("browser.screenshot", _args, timeout, state) do
+  # The capture reports the tab's current document URL, freshly read from
+  # Camofox, and refuses file:, data: and blob: documents without the
+  # approval-gated flag, whatever `allow_private_network` says.
+  defp dispatch("browser.screenshot", args, timeout, state) do
     with :ok <- require_tab(state),
-         :ok <- guard_current_page(state),
+         {:ok, url} <- fresh_url(state, timeout),
+         :ok <- guard_url(url, state),
+         :ok <- local_document_allowed(url, args),
          {:ok, response} <- get_raw(state, "/tabs/#{state.tab_id}/screenshot", timeout) do
       content_type = header(response, "content-type") || "image/png"
-      {:ok, %{"contentType" => content_type, "base64" => Base.encode64(response.body)}, state}
+
+      {:ok,
+       %{"contentType" => content_type, "base64" => Base.encode64(response.body), "url" => url},
+       %{state | current_url: url}}
     else
       {:error, reason} -> {:error, reason, state}
     end
@@ -420,6 +428,26 @@ defmodule LemonBrowser.CamofoxSession do
 
   defp ok_only({:ok, _policy}), do: :ok
   defp ok_only({:error, reason}), do: {:error, reason}
+
+  defp fresh_url(state, timeout) do
+    case get(state, "/tabs/#{state.tab_id}/snapshot", [userId: state.user_id], timeout) do
+      {:ok, %{"url" => url}} when is_binary(url) and url != "" -> {:ok, url}
+      {:ok, _body} -> {:error, "Camofox did not report the tab's current URL"}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp local_document_allowed(url, args) do
+    scheme = url |> URI.parse() |> Map.get(:scheme)
+
+    if is_binary(scheme) and String.downcase(scheme) in ["file", "data", "blob"] and
+         args["allowLocalDocument"] != true do
+      {:error,
+       "browser capture refused: the current page is a file:, data: or blob: document; pass allowLocalDocument: true (approval-gated)"}
+    else
+      :ok
+    end
+  end
 
   defp require_tab(%{tab_id: tab_id}) when is_binary(tab_id), do: :ok
   defp require_tab(_state), do: {:error, "No Camofox browser tab. Navigate first."}

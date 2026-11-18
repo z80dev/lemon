@@ -199,7 +199,7 @@ defmodule LemonBrowser.TernBackendTest do
 
   test "capture follows the existing artifact byte contract; events have bounded clear semantics",
        %{opts: opts} do
-    assert {:ok, %{"base64" => "aW1hZ2U=", "contentType" => "image/jpeg"}} =
+    assert {:ok, %{"base64" => "aW1hZ2U=", "contentType" => "image/jpeg", "url" => "about:blank"}} =
              request("screenshot", %{"type" => "jpeg", "fullPage" => true}, opts)
 
     assert_received {:tern, %{"op" => "capture", "format" => "jpeg", "full" => true}}
@@ -222,6 +222,24 @@ defmodule LemonBrowser.TernBackendTest do
 
     assert_received {:tern, %{"op" => "release", "block" => 90}}
     refute_received {:tern, %{"op" => "close", "block" => 90}}
+  end
+
+  test "capture of an adopted block showing a file: page needs allowLocalDocument", %{
+    opts: opts,
+    daemon: daemon
+  } do
+    Agent.update(daemon, &put_in(&1, [:blocks, 90, :url], "file:///etc/passwd"))
+
+    assert {:error, {:invalid, message}} =
+             request("screenshot", %{"targetId" => "90"}, opts)
+
+    assert message =~ "allowLocalDocument"
+    refute_received {:tern, %{"op" => "capture"}}
+
+    assert {:ok, %{"url" => "file:///etc/passwd", "base64" => _}} =
+             request("screenshot", %{"targetId" => "90", "allowLocalDocument" => true}, opts)
+
+    assert_received {:tern, %{"op" => "capture"}}
   end
 
   test "adopted blocks release on session cleanup and driven targets fail closed", %{
@@ -517,9 +535,12 @@ defmodule LemonBrowser.TernBackendTest do
   defp answer(%{"op" => "capture"}, state),
     do: {%{"ok" => %{"data" => Base.encode64("image")}}, state}
 
-  defp answer(%{"op" => "eval", "function" => source, "args" => args}, state) do
+  defp answer(%{"op" => "eval", "function" => source, "args" => args} = payload, state) do
     value =
       cond do
+        String.contains?(source, "return location.href") ->
+          get_in(state.blocks, [payload["block"], :url])
+
         String.contains?(source, "return (document.title") ->
           "Title"
 

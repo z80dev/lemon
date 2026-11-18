@@ -87,6 +87,28 @@ defmodule LemonBrowser.LocalServerArgvTest do
     end
   end
 
+  test "attaching requires an explicit unenforced-egress opt-in for the driver", %{
+    driver: driver
+  } do
+    for {opts, expected} <- [
+          {[], "false"},
+          {[allow_unenforced_egress: true], "true"}
+        ] do
+      {:ok, pid} =
+        LocalServer.start_link(
+          [name: nil, driver_path: driver, cdp_endpoint: "ws://127.0.0.1:1/x", attach_only: true] ++
+            opts
+        )
+
+      try do
+        assert {:ok, result} = LocalServer.request(pid, "browser.tabs", %{}, 5_000)
+        assert result["env"]["LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS"] == expected
+      after
+        LocalServer.stop(pid)
+      end
+    end
+  end
+
   test "a hosted driver that exits stops its server instead of keeping the endpoint", %{
     driver: driver
   } do

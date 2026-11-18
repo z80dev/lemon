@@ -134,6 +134,20 @@ describe('CDP endpoints', () => {
   });
 });
 
+describe('attaching to a browser Lemon did not launch', () => {
+  const endpoint = 'ws://127.0.0.1:1/devtools/browser/unenforced';
+
+  it('refuses without the operator opt-in, since its egress is not enforced', async () => {
+    const session = new ChromeSession({ ...TEST_CONFIG, cdpEndpoint: endpoint });
+    await expect(session.start()).rejects.toThrow(/Refusing to attach .*egress is not enforced/);
+  });
+
+  it('attempts the attach when the operator opts into unenforced egress', async () => {
+    const session = new ChromeSession({ ...TEST_CONFIG, cdpEndpoint: endpoint, allowUnenforcedEgress: true });
+    await expect(session.start()).rejects.toThrow(/CDP attach failed/);
+  });
+});
+
 describe('defaultChromeExecutable', () => {
   it('uses the first executable browser candidate found on PATH', () => {
     if (process.platform === 'darwin') {

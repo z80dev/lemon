@@ -9,6 +9,7 @@ defmodule CodingAgent.Tools.Browser do
   alias LemonAi.Types.{ImageContent, TextContent}
   alias LemonBrowser.Artifacts
   alias LemonBrowser.RoutePolicy
+  alias LemonCore.TrustedRoot
   alias LemonSkills.Tools.MediaAnalyzeImage
 
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -104,7 +105,8 @@ defmodule CodingAgent.Tools.Browser do
       {:ok, request} ->
         case runtime.browser_request.(request.method, request.args, request.timeout_ms) do
           {:ok, result} ->
-            with :ok <- check_abort(signal) do
+            with :ok <- check_abort(signal),
+                 :ok <- check_local_document_read(result, request) do
               final_result =
                 result
                 |> maybe_redact_browser_result(request)
@@ -187,10 +189,20 @@ defmodule CodingAgent.Tools.Browser do
     end
   end
 
+  defp prepare_browser_request(%{method: "browser.screenshot"} = request, cwd, runtime) do
+    case resolve_screenshot_path(request, cwd, runtime) do
+      {:ok, resolved} ->
+        {:ok, %{request | path: resolved}}
+
+      :error ->
+        {:error, "browser_screenshot output path must be under the current project"}
+    end
+  end
+
   defp prepare_browser_request(request, _cwd, _runtime), do: {:ok, request}
 
   defp execute_browser_analyze(request, signal, on_update, cwd, runtime, tool_name) do
-    with :ok <- validate_project_relative_artifact(request.path, cwd),
+    with {:ok, request} <- resolve_analyze_path(request, cwd, runtime),
          {:ok, screenshot} <- capture_analysis_screenshot(request, signal, cwd, runtime),
          {:ok, analysis} <- analyze_screenshot(screenshot, request, signal, cwd, runtime),
          :ok <- check_abort(signal) do
@@ -236,6 +248,7 @@ defmodule CodingAgent.Tools.Browser do
         "type" => "object",
         "properties" => %{
           "url" => %{"type" => "string", "description" => "HTTP, HTTPS, or local URL."},
+          "allowLocalDocument" => local_document_schema(),
           "route" => %{
             "type" => "string",
             "description" =>
@@ -249,7 +262,8 @@ defmodule CodingAgent.Tools.Browser do
       normalize: fn params ->
         with {:ok, url} <- required_string(params, ["url"]),
              {:ok, network_policy} <-
-               RoutePolicy.validate_navigation(url, optional_string(params, ["route"])) do
+               RoutePolicy.validate_navigation(url, optional_string(params, ["route"])),
+             :ok <- check_local_navigation(network_policy, params) do
           {:ok,
            %{
              method: "browser.navigate",
@@ -292,6 +306,7 @@ defmodule CodingAgent.Tools.Browser do
             "type" => "string",
             "description" => "Optional HTTP, HTTPS, or local URL. Defaults to about:blank."
           },
+          "allowLocalDocument" => local_document_schema(),
           "route" => %{
             "type" => "string",
             "description" => "Optional navigation route guard: auto, public, or local.",
@@ -306,7 +321,8 @@ defmodule CodingAgent.Tools.Browser do
         url = optional_string(params, ["url"]) || "about:blank"
 
         with {:ok, network_policy} <-
-               RoutePolicy.validate_navigation(url, optional_string(params, ["route"])) do
+               RoutePolicy.validate_navigation(url, optional_string(params, ["route"])),
+             :ok <- check_local_navigation(network_policy, params) do
           {:ok,
            %{
              method: "browser.tabOpen",
@@ -376,6 +392,7 @@ defmodule CodingAgent.Tools.Browser do
             "description" => "Only include interactive elements."
           },
           "includeText" => %{"type" => "boolean", "description" => "Include visible text."},
+          "allowLocalDocument" => local_document_schema(),
           "timeoutMs" => timeout_schema()
         },
         "required" => []
@@ -392,7 +409,9 @@ defmodule CodingAgent.Tools.Browser do
                "maxNodes",
                "interactiveOnly",
                "includeText"
-             ]),
+             ])
+             |> put_local_document_approval(params),
+           local_document_approved: local_document_approved?(params),
            timeout_ms: timeout_ms(params)
          }}
       end
@@ -411,6 +430,7 @@ defmodule CodingAgent.Tools.Browser do
           "includeText" => %{"type" => "boolean", "description" => "Include page text."},
           "maxChars" => %{"type" => "integer", "description" => "Maximum HTML characters."},
           "textMaxChars" => %{"type" => "integer", "description" => "Maximum text characters."},
+          "allowLocalDocument" => local_document_schema(),
           "timeoutMs" => timeout_schema()
         },
         "required" => []
@@ -421,7 +441,9 @@ defmodule CodingAgent.Tools.Browser do
            method: "browser.getContent",
            args:
              params
-             |> copy_optional(["includeHtml", "includeText", "maxChars", "textMaxChars"]),
+             |> copy_optional(["includeHtml", "includeText", "maxChars", "textMaxChars"])
+             |> put_local_document_approval(params),
+           local_document_approved: local_document_approved?(params),
            timeout_ms: timeout_ms(params)
          }}
       end
@@ -922,6 +944,7 @@ defmodule CodingAgent.Tools.Browser do
         "type" => "object",
         "properties" => %{
           "path" => %{"type" => "string", "description" => "Optional artifact path."},
+          "allowLocalDocument" => local_document_schema(),
           "fullPage" => %{"type" => "boolean", "description" => "Capture the full page."},
           "includeImage" => %{
             "type" => "boolean",
@@ -949,7 +972,9 @@ defmodule CodingAgent.Tools.Browser do
            args:
              params
              |> copy_optional(["fullPage"])
-             |> Map.put("type", type),
+             |> Map.put("type", type)
+             |> put_local_document_approval(params),
+           local_document_approved: local_document_approved?(params),
            path: optional_string(params, ["path"]),
            extension: if(type == "jpeg", do: ".jpg", else: ".png"),
            include_image: boolean_value(params, ["includeImage", "include_image"]),
@@ -973,6 +998,7 @@ defmodule CodingAgent.Tools.Browser do
             "type" => "string",
             "description" => "Optional project-local screenshot artifact path."
           },
+          "allowLocalDocument" => local_document_schema(),
           "fullPage" => %{"type" => "boolean", "description" => "Capture the full page."},
           "includeImage" => %{
             "type" => "boolean",
@@ -1036,7 +1062,9 @@ defmodule CodingAgent.Tools.Browser do
              args:
                params
                |> copy_optional(["fullPage"])
-               |> Map.put("type", type),
+               |> Map.put("type", type)
+               |> put_local_document_approval(params),
+             local_document_approved: local_document_approved?(params),
              path: optional_string(params, ["path"]),
              extension: if(type == "jpeg", do: ".jpg", else: ".png"),
              include_image: boolean_value(params, ["includeImage", "include_image"]),
@@ -1070,18 +1098,27 @@ defmodule CodingAgent.Tools.Browser do
     }
   end
 
-  defp validate_project_relative_artifact(nil, _cwd), do: :ok
+  defp resolve_analyze_path(request, cwd, runtime) do
+    case resolve_screenshot_path(request, cwd, runtime) do
+      {:ok, resolved} -> {:ok, %{request | path: resolved}}
+      :error -> {:error, "path must be under the current project for browser_analyze"}
+    end
+  end
 
-  defp validate_project_relative_artifact(path, cwd) do
-    cwd = Path.expand(cwd)
+  # Explicit paths and the default `<cwd>/.lemon/browser-artifacts` both go
+  # through the physical project check; only an operator-configured
+  # `:browser_artifacts_dir` is trusted as given.
+  defp resolve_screenshot_path(%{path: path}, cwd, _runtime) when is_binary(path),
+    do: project_output_path(path, cwd)
 
-    resolved =
-      if Path.type(path) == :absolute, do: Path.expand(path), else: Path.expand(path, cwd)
+  defp resolve_screenshot_path(%{extension: ext}, cwd, runtime) do
+    timestamp =
+      DateTime.utc_now()
+      |> DateTime.to_iso8601(:basic)
+      |> String.replace(~r/[^0-9A-Za-z]/, "")
 
-    if resolved == cwd or String.starts_with?(resolved, cwd <> "/") do
-      :ok
-    else
-      {:error, "path must be under the current project for browser_analyze"}
+    with {:ok, dir} <- default_artifact_dir(cwd, runtime) do
+      {:ok, Path.join(dir, "#{timestamp}-screenshot#{ext}")}
     end
   end
 
@@ -1102,18 +1139,26 @@ defmodule CodingAgent.Tools.Browser do
   end
 
   defp validate_upload_file_path(path, cwd) do
-    cwd = Path.expand(cwd)
-    resolved = PathHelpers.resolve_path(path, cwd)
+    expanded = PathHelpers.resolve_path(path, cwd)
 
-    cond do
-      not project_relative_path?(resolved, cwd) ->
-        {:error, "browser_upload_file path must be under the current project"}
+    with {:ok, root} <- TrustedRoot.realpath(cwd),
+         {:ok, real} <- TrustedRoot.realpath(expanded) do
+      cond do
+        not TrustedRoot.inside?(real, root) ->
+          {:error, "browser_upload_file path must be under the current project"}
 
-      not File.regular?(resolved) ->
-        {:error, "browser_upload_file path must be an existing file"}
+        match?({:ok, %File.Stat{type: :regular, links: 1}}, File.lstat(real)) ->
+          {:ok, real}
 
-      true ->
-        {:ok, resolved}
+        match?({:ok, %File.Stat{type: :regular}}, File.lstat(real)) ->
+          # A hard link can alias a file outside the project.
+          {:error, "browser_upload_file path must be under the current project"}
+
+        true ->
+          {:error, "browser_upload_file path must be an existing file"}
+      end
+    else
+      _ -> {:error, "browser_upload_file path must be an existing file"}
     end
   end
 
@@ -1134,35 +1179,70 @@ defmodule CodingAgent.Tools.Browser do
   end
 
   defp validate_default_download_dir(args, cwd, runtime) do
-    dir = default_artifact_dir(cwd, runtime)
-
-    if project_relative_path?(dir, cwd) do
-      {:ok, Map.put(args, "dir", dir)}
-    else
-      {:error, "browser_download output path must be under the current project"}
+    case default_artifact_dir(cwd, runtime) do
+      {:ok, dir} -> {:ok, Map.put(args, "dir", dir)}
+      :error -> {:error, "browser_download output path must be under the current project"}
     end
   end
 
   defp validate_download_output_path(path, cwd) do
-    cwd = Path.expand(cwd)
-    resolved = PathHelpers.resolve_path(path, cwd)
+    case project_output_path(path, cwd) do
+      {:ok, resolved} ->
+        if File.dir?(resolved),
+          do: {:error, "browser_download output path must be a file path"},
+          else: {:ok, resolved}
 
-    cond do
-      not project_relative_path?(resolved, cwd) ->
+      :error ->
         {:error, "browser_download output path must be under the current project"}
-
-      File.dir?(resolved) ->
-        {:error, "browser_download output path must be a file path"}
-
-      true ->
-        {:ok, resolved}
     end
   end
 
-  defp project_relative_path?(path, cwd) do
-    resolved = Path.expand(path)
-    cwd = Path.expand(cwd)
-    resolved == cwd or String.starts_with?(resolved, cwd <> "/")
+  # The one project check for browser file outputs (screenshot, analyze,
+  # download). Returns the physical path to write: the realpath of the nearest
+  # existing ancestor plus the missing components, which must lie inside the
+  # realpath of `cwd`. Symlinks anywhere on the path are followed before the
+  # check, a dangling symlink is refused, and an existing file must be a
+  # single-linked regular file (or a directory, for download dirs).
+  defp project_output_path(path, cwd) do
+    with {:ok, root} <- TrustedRoot.realpath(cwd),
+         {:ok, real} <- physical_output_path(PathHelpers.resolve_path(path, cwd)),
+         true <- TrustedRoot.inside?(real, root),
+         true <- writable_entry?(real) do
+      {:ok, real}
+    else
+      _ -> :error
+    end
+  end
+
+  defp physical_output_path(path) do
+    case TrustedRoot.realpath(path) do
+      {:ok, real} ->
+        {:ok, real}
+
+      {:error, :enoent} ->
+        parent = Path.dirname(path)
+
+        # `realpath` also reports :enoent for a dangling link; refuse those.
+        with {:error, :enoent} <- File.lstat(path),
+             false <- parent == path,
+             {:ok, real_parent} <- physical_output_path(parent) do
+          {:ok, Path.join(real_parent, Path.basename(path))}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp writable_entry?(path) do
+    case File.lstat(path) do
+      {:error, :enoent} -> true
+      {:ok, %File.Stat{type: :directory}} -> true
+      {:ok, %File.Stat{type: :regular, links: 1}} -> true
+      _ -> false
+    end
   end
 
   defp capture_analysis_screenshot(request, signal, cwd, runtime) do
@@ -1178,7 +1258,8 @@ defmodule CodingAgent.Tools.Browser do
              screenshot_request.args,
              screenshot_request.timeout_ms
            ),
-         :ok <- check_abort(signal) do
+         :ok <- check_abort(signal),
+         :ok <- check_local_document_read(result, screenshot_request) do
       screenshot =
         result
         |> maybe_write_screenshot(screenshot_request, cwd, runtime)
@@ -1270,17 +1351,14 @@ defmodule CodingAgent.Tools.Browser do
   defp maybe_write_screenshot(
          %{"base64" => encoded} = result,
          %{
-           path: path,
-           extension: ext,
+           path: artifact_path,
            include_image: include_image,
            send_to_channel: send_to_channel
          },
          cwd,
          runtime
        )
-       when is_binary(encoded) do
-    artifact_path = resolve_artifact_path(path, ext, cwd, runtime)
-
+       when is_binary(encoded) and is_binary(artifact_path) do
     with {:ok, bytes} <- Base.decode64(encoded),
          :ok <- File.mkdir_p(Path.dirname(artifact_path)),
          :ok <- File.write(artifact_path, bytes) do
@@ -1681,6 +1759,89 @@ defmodule CodingAgent.Tools.Browser do
     end
   end
 
+  # file:, data: and blob: documents can expose local files. Opening one, or
+  # reading the content of one already open (navigated, restored or attached),
+  # needs `allowLocalDocument: true`, which ToolPolicy classifies as :exec so it
+  # goes through approval.
+  @local_document_schemes ["file", "data", "blob"]
+
+  defp local_document_schema do
+    %{
+      "type" => "boolean",
+      "description" =>
+        "Allow a file:, data: or blob: document (navigation or content read). Requires approval."
+    }
+  end
+
+  defp local_document_approved?(params),
+    do: boolean_value(params, ["allowLocalDocument", "allow_local_document"])
+
+  defp put_local_document_approval(args, params) do
+    if local_document_approved?(params), do: Map.put(args, "allowLocalDocument", true), else: args
+  end
+
+  defp check_local_navigation(%{scheme: scheme}, params) when scheme in @local_document_schemes do
+    if local_document_approved?(params),
+      do: :ok,
+      else:
+        {:error,
+         "browser navigation to a #{scheme}: document requires allowLocalDocument: true (approval-gated)"}
+  end
+
+  defp check_local_navigation(_policy, _params), do: :ok
+
+  defp check_local_document_read(_result, %{local_document_approved: true}), do: :ok
+
+  # A capture must say which document it shows; every backend reports `url`.
+  defp check_local_document_read(result, %{method: "browser.screenshot"}) when is_map(result) do
+    case result_page_url(result) do
+      nil ->
+        {:error,
+         "browser capture refused: the backend did not report the page URL, so a file:, data: or blob: document cannot be ruled out"}
+
+      url ->
+        refuse_local_document(url)
+    end
+  end
+
+  defp check_local_document_read(result, %{method: method})
+       when method in ["browser.snapshot", "browser.getContent"] and is_map(result),
+       do: refuse_local_document(result_page_url(result))
+
+  defp check_local_document_read(_result, _request), do: :ok
+
+  defp refuse_local_document(url) do
+    if local_document_url?(url) do
+      {:error,
+       "browser content read refused: the current page is a file:, data: or blob: document; pass allowLocalDocument: true (approval-gated)"}
+    else
+      :ok
+    end
+  end
+
+  defp result_page_url(%{"url" => url}) when is_binary(url), do: url
+
+  defp result_page_url(%{"snapshot" => snapshot}) when is_binary(snapshot) do
+    case Regex.run(~r/\AURL: ([^\n]*)/, snapshot) do
+      [_, url] -> url
+      _ -> nil
+    end
+  end
+
+  defp result_page_url(_result), do: nil
+
+  defp local_document_url?(url) when is_binary(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{scheme: scheme} when is_binary(scheme) ->
+        String.downcase(scheme) in @local_document_schemes
+
+      _ ->
+        false
+    end
+  end
+
+  defp local_document_url?(_url), do: false
+
   defp value_for(params, keys) do
     Enum.find_value(keys, fn key ->
       if Map.has_key?(params, key), do: Map.get(params, key)
@@ -1713,32 +1874,11 @@ defmodule CodingAgent.Tools.Browser do
 
   defp normalize_int(_value, fallback), do: fallback
 
-  defp resolve_artifact_path(nil, ext, cwd, runtime) do
-    dir = default_artifact_dir(cwd, runtime)
+  defp default_artifact_dir(_cwd, %{artifacts_dir: dir}) when is_binary(dir),
+    do: {:ok, Path.expand(dir)}
 
-    timestamp =
-      DateTime.utc_now()
-      |> DateTime.to_iso8601(:basic)
-      |> String.replace(~r/[^0-9A-Za-z]/, "")
-
-    Path.join(dir, "#{timestamp}-screenshot#{ext}")
-  end
-
-  defp resolve_artifact_path(path, _ext, cwd, _runtime) do
-    expanded =
-      if Path.type(path) == :absolute do
-        path
-      else
-        Path.expand(path, cwd)
-      end
-
-    expanded
-  end
-
-  defp default_artifact_dir(cwd, runtime) do
-    runtime.artifacts_dir ||
-      Path.join([cwd, ".lemon", "browser-artifacts"])
-  end
+  defp default_artifact_dir(cwd, _runtime),
+    do: project_output_path(Path.join([cwd, ".lemon", "browser-artifacts"]), cwd)
 
   defp maybe_add_screenshot_image(result, _encoded, false) do
     Map.put(result, "imageIncluded", false)

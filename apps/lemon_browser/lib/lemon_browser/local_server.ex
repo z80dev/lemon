@@ -120,7 +120,14 @@ defmodule LemonBrowser.LocalServer do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
-    base = Keyword.take(opts, [:attach_only, :driver_path, :user_data_dir, :profile_directory])
+    base =
+      Keyword.take(opts, [
+        :attach_only,
+        :allow_unenforced_egress,
+        :driver_path,
+        :user_data_dir,
+        :profile_directory
+      ])
 
     state = %{
       port: nil,
@@ -364,14 +371,27 @@ defmodule LemonBrowser.LocalServer do
     endpoint = configured_endpoint(opts)
     summary = driver_config_summary(opts)
 
+    # A browser Lemon did not launch is not bound to the driver's egress proxy,
+    # so the driver refuses to attach unless this is set: by the operator
+    # (LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS) or by a hosted provider session,
+    # whose browser egresses from the provider's network, not this host.
+    allow_unenforced? =
+      Keyword.get(opts, :allow_unenforced_egress, Env.get(:lemon_browser_allow_unenforced_egress)) ==
+        true
+
     explicit = [
       {"LEMON_BROWSER_CDP_ENDPOINT", if(endpoint == "", do: false, else: endpoint)},
-      {"LEMON_BROWSER_ATTACH_ONLY", if(summary.attach_only, do: "true", else: "false")}
+      {"LEMON_BROWSER_ATTACH_ONLY", if(summary.attach_only, do: "true", else: "false")},
+      {"LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS", if(allow_unenforced?, do: "true", else: "false")}
     ]
 
     unset =
       for {name, _value} <- System.get_env(),
-          name not in ["LEMON_BROWSER_CDP_ENDPOINT", "LEMON_BROWSER_ATTACH_ONLY"],
+          name not in [
+            "LEMON_BROWSER_CDP_ENDPOINT",
+            "LEMON_BROWSER_ATTACH_ONLY",
+            "LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS"
+          ],
           withheld_env?(name),
           do: {name, false}
 

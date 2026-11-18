@@ -66,6 +66,39 @@ defmodule LemonCore.ToolPolicyTest do
     assert ToolPolicy.tier("lsp", %{"action" => "rename", "apply" => "true"}) == :exec
   end
 
+  test "browser_get_cookies with includeValues is write tier for every truthy spelling" do
+    assert ToolPolicy.tier("browser_get_cookies") == :read
+    assert ToolPolicy.tier("browser_get_cookies", %{"includeValues" => false}) == :read
+    assert ToolPolicy.tier("browser_get_cookies", %{"include_values" => "false"}) == :read
+
+    for args <- [
+          %{"includeValues" => true},
+          %{"includeValues" => "true"},
+          %{"includeValues" => "YES"},
+          %{"includeValues" => 1},
+          %{"include_values" => "1"},
+          %{includeValues: true},
+          %{"includeValues" => false, "include_values" => true}
+        ] do
+      assert ToolPolicy.tier("browser_get_cookies", args) == :write, inspect(args)
+
+      assert ToolPolicy.requires_approval?(
+               ToolPolicy.parse!(%{"approval_mode" => "ask"}),
+               "browser_get_cookies",
+               args
+             )
+    end
+  end
+
+  test "local-document browser access is exec tier" do
+    for tool <-
+          ~w(browser_navigate browser_tab_open browser_snapshot browser_get_content browser_screenshot browser_analyze) do
+      assert ToolPolicy.tier(tool, %{"allowLocalDocument" => true}) == :exec
+      assert ToolPolicy.tier(tool, %{"allow_local_document" => "true"}) == :exec
+      assert ToolPolicy.tier(tool, %{"allowLocalDocument" => false}) == ToolPolicy.tier(tool)
+    end
+  end
+
   test "mode survives JSON transport, sparse persistence and restrictive delegation" do
     parent = ToolPolicy.parse!(%{"approval_mode" => "ask"})
     assert ToolPolicy.to_map(parent)["approval_mode"] == "ask"

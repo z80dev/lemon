@@ -146,6 +146,19 @@ defmodule LemonBrowser.Env do
       apps: [:lemon_browser]
     },
     %{
+      name: :lemon_browser_allow_unenforced_egress,
+      env_var: "LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc:
+        "Allow the browser driver to attach to a browser Lemon did not launch (CDP endpoint, relay, attach-only). Such a browser bypasses the driver's egress proxy, so metadata/link-local egress is not enforced at connection time.",
+      secret?: false,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
       name: :lemon_browser_cdp_endpoint,
       env_var: "LEMON_BROWSER_CDP_ENDPOINT",
       aliases: [],

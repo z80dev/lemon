@@ -30,6 +30,11 @@ export type ChromeConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
+  /**
+   * Operator opt-in to drive a browser Lemon did not launch. Such a browser is
+   * not bound to the egress proxy, so metadata/link-local egress is unenforced.
+   */
+  allowUnenforcedEgress?: boolean;
   /** Test seam for the managed-Chrome egress proxy; production uses the defaults. */
   egressPolicy?: EgressPolicy;
 };
@@ -64,6 +69,13 @@ export class ChromeSession {
       await this.launchChrome();
       await waitForCdp(endpoint, 15_000);
       this.ownedBrowser = true;
+    }
+
+    if (!this.ownedBrowser && !this.cfg.allowUnenforcedEgress) {
+      throw new Error(
+        `Refusing to attach to a browser Lemon did not launch at ${describeEndpoint(endpoint)}: its egress is not enforced. ` +
+          'Set LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS=1 (or --allow-unenforced-egress) to accept that risk.',
+      );
     }
 
     try {

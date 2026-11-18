@@ -19,6 +19,7 @@ export type LocalDriverConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
+  allowUnenforcedEgress: boolean;
   executablePath: string | null;
   openclawProfile: string;
   userDataDir: string;
@@ -47,6 +48,8 @@ export function resolveLocalDriverConfig(params: {
   const noSandbox = asBool(params.args['no-sandbox']) || asBool(env.LEMON_BROWSER_NO_SANDBOX);
   const attachOnly =
     asBool(params.args['attach-only']) || asBool(env.LEMON_BROWSER_ATTACH_ONLY) || !!cdpEndpoint;
+  const allowUnenforcedEgress =
+    asBool(params.args['allow-unenforced-egress']) || asBool(env.LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS);
   const executablePath =
     asString(params.args['executable-path']) ?? asString(env.LEMON_BROWSER_EXECUTABLE);
 
@@ -62,6 +65,7 @@ export function resolveLocalDriverConfig(params: {
     headless,
     noSandbox,
     attachOnly,
+    allowUnenforcedEgress,
     executablePath,
     openclawProfile,
     userDataDir,
@@ -141,6 +145,7 @@ async function main() {
     headless: config.headless,
     noSandbox: config.noSandbox,
     attachOnly: config.attachOnly,
+    allowUnenforcedEgress: config.allowUnenforcedEgress,
   });
   let started: Promise<void> | undefined;
 

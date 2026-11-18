@@ -112,6 +112,7 @@ defmodule LemonCore.ToolPolicy do
   @internal_tools ToolCatalog.names_without([:external])
   @leaf_worker_tools ToolCatalog.names_without([:delegation])
   @lsp_read_actions ~w(diagnostics definition type_definition implementation references hover symbols rename rename_file code_actions capabilities status)
+  @browser_local_document_tools ~w(browser_navigate browser_tab_open browser_snapshot browser_get_content browser_screenshot browser_analyze)
 
   @doc """
   Approval tier from `LemonCore.ToolCatalog`; unclassified, external and
@@ -126,7 +127,38 @@ defmodule LemonCore.ToolPolicy do
     if action in @lsp_read_actions and apply? in [false, nil], do: :read, else: :exec
   end
 
+  # Opening or reading a file:/data:/blob: document can expose local files.
+  def tier(tool, args) when tool in @browser_local_document_tools and is_map(args) do
+    if flag_set?(args, ["allowLocalDocument", "allow_local_document"]),
+      do: :exec,
+      else: ToolCatalog.tier(tool)
+  end
+
+  # Raw cookie values are session credentials.
+  def tier("browser_get_cookies", args) when is_map(args) do
+    if flag_set?(args, ["includeValues", "include_values"]), do: :write, else: :read
+  end
+
   def tier(tool, _args), do: ToolCatalog.tier(tool)
+
+  # Fails closed: any value other than an explicit false spelling counts as set.
+  defp flag_set?(args, keys) do
+    Enum.any?(keys, fn key ->
+      Enum.any?([key, String.to_atom(key)], fn k ->
+        case Map.fetch(args, k) do
+          {:ok, value} -> not falsy_flag?(value)
+          :error -> false
+        end
+      end)
+    end)
+  end
+
+  defp falsy_flag?(value) when value in [nil, false, 0], do: true
+
+  defp falsy_flag?(value) when is_binary(value),
+    do: String.downcase(String.trim(value)) in ["", "false", "0", "no", "off"]
+
+  defp falsy_flag?(_value), do: false
 
   @doc "Seeds only an unset mode from config. Explicit PolicyStore/session policy wins."
   def with_default_approval_mode(policy, mode) do
