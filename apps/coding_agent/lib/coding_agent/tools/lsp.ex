@@ -19,6 +19,7 @@ defmodule CodingAgent.Tools.Lsp do
   alias CodingAgent.Artifacts
   alias CodingAgent.Tools.{CheckpointGuard, PathHelpers}
   alias CodingAgent.Tools.Lsp.{Client, Text, WorkspaceEdit}
+  alias LemonAgent.AbortSignal
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Tools.AbortHelpers
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -1175,15 +1176,35 @@ defmodule CodingAgent.Tools.Lsp do
     end
   end
 
-  # Push diagnostics: accept a publish for this document that arrived after we
-  # synced it. A publish for our exact document version is final; otherwise
-  # wait until the stream for the document has been quiet for a moment.
+  # Push diagnostics wake on publication, cancellation or session death. A
+  # publish for our exact document version is final; otherwise the only timer
+  # waits for the document's quiet window or the absolute operation deadline.
   defp await_published(ctx, conn, wait_ms) do
-    deadline = System.monotonic_time(:millisecond) + wait_ms
-    poll_published(ctx, conn, deadline, nil)
+    deadline = min(ctx.deadline, System.monotonic_time(:millisecond) + wait_ms)
+    topic = ServerManager.diagnostics_topic(conn.session_id)
+    AbortSignal.subscribe(ctx.signal)
+    LemonCore.Bus.subscribe(topic)
+    owner_ref = ServerManager.monitor_session(conn.session_id)
+
+    try do
+      read_published(ctx, conn, deadline, nil, owner_ref)
+    after
+      AbortSignal.unsubscribe(ctx.signal)
+      LemonCore.Bus.unsubscribe(topic)
+      Process.demonitor(owner_ref, [:flush])
+      flush_diagnostics_messages(conn.session_id, ctx.signal)
+    end
   end
 
-  defp poll_published(ctx, conn, deadline, settled) do
+  defp read_published(ctx, conn, deadline, settled, owner_ref) do
+    if AbortHelpers.aborted?(ctx.signal) do
+      {:error, "Operation aborted"}
+    else
+      published_snapshot(ctx, conn, deadline, settled, owner_ref)
+    end
+  end
+
+  defp published_snapshot(ctx, conn, deadline, settled, owner_ref) do
     now = System.monotonic_time(:millisecond)
 
     case ServerManager.document_diagnostics(conn.session_id, conn.uri) do
@@ -1206,11 +1227,13 @@ defmodule CodingAgent.Tools.Lsp do
 
           true ->
             settled = if match?({^seq, _}, settled), do: settled, else: {seq, now}
-            sleep_poll(ctx, conn, deadline, settled)
+            receive_published(ctx, conn, deadline, settled, owner_ref)
         end
 
       {:ok, _no_fresh_entry} ->
-        if now >= deadline, do: {:timeout, []}, else: sleep_poll(ctx, conn, deadline, settled)
+        if now >= deadline,
+          do: {:timeout, []},
+          else: receive_published(ctx, conn, deadline, nil, owner_ref)
 
       {:error, _reason} ->
         {:error, :session_lost}
@@ -1219,12 +1242,42 @@ defmodule CodingAgent.Tools.Lsp do
     :exit, _reason -> {:error, :session_lost}
   end
 
-  defp sleep_poll(ctx, conn, deadline, settled) do
-    if AbortHelpers.aborted?(ctx.signal) do
-      {:error, "Operation aborted"}
-    else
-      Process.sleep(50)
-      poll_published(ctx, conn, deadline, settled)
+  defp receive_published(ctx, conn, deadline, settled, owner_ref) do
+    session_id = conn.session_id
+    uri = conn.uri
+    signal = ctx.signal
+
+    wake_at =
+      case settled do
+        {_seq, since} -> min(deadline, since + @diagnostics_settle_ms)
+        nil -> deadline
+      end
+
+    receive do
+      {:lsp_diagnostics, ^session_id, ^uri} ->
+        read_published(ctx, conn, deadline, settled, owner_ref)
+
+      {:lemon_abort, ^signal, _kind} ->
+        read_published(ctx, conn, deadline, settled, owner_ref)
+
+      {:lsp_server_stopped, ^session_id} ->
+        {:error, :session_lost}
+
+      {:DOWN, ^owner_ref, :process, _pid, _reason} ->
+        {:error, :session_lost}
+    after
+      max(0, wake_at - System.monotonic_time(:millisecond)) ->
+        read_published(ctx, conn, deadline, settled, owner_ref)
+    end
+  end
+
+  defp flush_diagnostics_messages(session_id, signal) do
+    receive do
+      {:lsp_diagnostics, ^session_id, _uri} -> flush_diagnostics_messages(session_id, signal)
+      {:lsp_server_stopped, ^session_id} -> flush_diagnostics_messages(session_id, signal)
+      {:lemon_abort, ^signal, _kind} -> flush_diagnostics_messages(session_id, signal)
+    after
+      0 -> :ok
     end
   end
 

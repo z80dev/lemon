@@ -355,13 +355,17 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert tool_result_message.tool_name == "startup_failure_tool"
     assert tool_result_message.is_error == true
     assert tool_result_message.details.error_type == :tool_task_start_failed
-    assert tool_result_message.details.reason == ":task_supervisor_unavailable"
+    assert tool_result_message.details.reason == :interrupted
+    assert tool_result_message.details.start_error == ":task_supervisor_unavailable"
     assert tool_result_message.details.started == false
     assert tool_result_message.details.outcome == :not_started
 
     assert Enum.any?(tool_result_message.content, fn
-             %TextContent{text: text} -> String.contains?(text, "Tool task failed to start")
-             _ -> false
+             %TextContent{text: text} ->
+               String.contains?(text, "Tool task failed to start: :task_supervisor_unavailable")
+
+             _ ->
+               false
            end)
 
     assert List.last(updated_context.messages).tool_call_id == "call_start_failure"
@@ -402,12 +406,11 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
     assert Enum.all?(results, fn result ->
              result.is_error and
-               result.details == %{
-                 error_type: :tool_task_start_failed,
-                 reason: ":task_capacity_reached",
-                 started: false,
-                 outcome: :not_started
-               }
+               result.details.error_type == :tool_task_start_failed and
+               result.details.reason == :interrupted and
+               result.details.start_error == ":task_capacity_reached" and
+               result.details.started == false and
+               result.details.outcome == :not_started
            end)
 
     assert context.messages == results

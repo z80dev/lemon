@@ -22,7 +22,10 @@ defmodule CodingAgent.NodeTools do
   call ID; the destination does not create a second journal.
 
   The same module owns the JSON result codec shared with the destination
-  (`CodingAgent.ExecutionNode.ToolService`).
+  (`CodingAgent.ExecutionNode.ToolService`). Interrupted outcome and reason
+  values are normalized to the shared atom vocabulary when decoded here;
+  refusals are `:not_started` / `:skipped`, and lost results are
+  `:unknown` / `:interrupted`.
   """
 
   alias LemonAgent.AbortSignal
@@ -110,7 +113,7 @@ defmodule CodingAgent.NodeTools do
               run_remote(name, node, Map.delete(params, "node"), tool_call_id, signal, opts)
 
             {:error, message} ->
-              error_result(message, %{outcome: "not_run"})
+              error_result(message, %{outcome: :not_started, reason: :skipped})
           end
         end
     }
@@ -130,7 +133,7 @@ defmodule CodingAgent.NodeTools do
               error_result(
                 "Not run: this session cannot route calls to other machines (the nodes tool " <>
                   "is not allowed). Omit node to run here.",
-                %{outcome: "not_run"}
+                %{outcome: :not_started, reason: :skipped}
               )
           end
         end
@@ -176,7 +179,7 @@ defmodule CodingAgent.NodeTools do
         put_details(result, %{duration_ms: System.monotonic_time(:millisecond) - started})
 
       {:error, message} ->
-        error_result(message, %{node: selector, outcome: "not_run"})
+        error_result(message, %{node: selector, outcome: :not_started, reason: :skipped})
     end
   end
 
@@ -359,7 +362,11 @@ defmodule CodingAgent.NodeTools do
       {:ok, %AgentToolResult{} = decoded} ->
         decoded
         |> note_node_paths(node.name)
-        |> put_details(%{node: node.name, node_id: node.id, outcome: "completed"})
+        |> put_details(%{
+          node: node.name,
+          node_id: node.id,
+          outcome: decoded.details[:outcome] || "completed"
+        })
         |> ToolResultTrust.untrusted(source(tool))
 
       {:error, _} ->
@@ -438,7 +445,8 @@ defmodule CodingAgent.NodeTools do
   defp not_run(node, why) do
     error_result("Not run on node \"#{node}\": #{why}. Nothing ran and nothing was retried.", %{
       node: node,
-      outcome: "not_run"
+      outcome: :not_started,
+      reason: :skipped
     })
   end
 
@@ -446,7 +454,7 @@ defmodule CodingAgent.NodeTools do
     error_result(
       "Outcome unknown on node \"#{node}\": #{why}. The call may have taken effect; it was " <>
         "not retried. Check the node's state before repeating it.",
-      %{node: node, outcome: "unknown"}
+      %{node: node, outcome: :unknown, reason: :interrupted}
     )
   end
 
@@ -545,8 +553,13 @@ defmodule CodingAgent.NodeTools do
     with {:ok, blocks} <- decode_content(content, []) do
       details =
         case result["details"] do
-          details when is_map(details) -> Map.drop(details, ["trust_boundary"])
-          _ -> nil
+          details when is_map(details) ->
+            details
+            |> Map.drop(["trust_boundary"])
+            |> decode_interruption_details()
+
+          _ ->
+            nil
         end
 
       {:ok, %AgentToolResult{content: blocks, details: details, is_error: is_error}}
@@ -554,6 +567,33 @@ defmodule CodingAgent.NodeTools do
   end
 
   def decode_result(_result), do: {:error, :invalid_result}
+
+  # Normalize only the closed interruption vocabulary at the JSON boundary.
+  # Other tool-specific details retain their wire representation.
+  defp decode_interruption_details(details) do
+    Enum.reduce(
+      [
+        {:outcome, %{"unknown" => :unknown, "not_started" => :not_started}},
+        {:reason,
+         %{
+           "aborted" => :aborted,
+           "timeout" => :timeout,
+           "crashed" => :crashed,
+           "interrupted" => :interrupted,
+           "skipped" => :skipped
+         }}
+      ],
+      details,
+      fn {key, values}, acc ->
+        wire_key = Atom.to_string(key)
+
+        case Map.fetch(values, acc[wire_key]) do
+          {:ok, value} -> acc |> Map.delete(wire_key) |> Map.put(key, value)
+          :error -> acc
+        end
+      end
+    )
+  end
 
   defp decode_content([], acc), do: {:ok, Enum.reverse(acc)}
 

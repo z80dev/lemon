@@ -720,6 +720,11 @@ defmodule LemonLsp.Session do
       Map.keys(session.owners),
       &send(&1, {LemonLsp.ServerManager, :server_stopped, session.session_id})
     )
+
+    LemonCore.Bus.broadcast(
+      LemonLsp.ServerManager.diagnostics_topic(session.session_id),
+      {:lsp_server_stopped, session.session_id}
+    )
   end
 
   defp stopped_session_info(session, status) do
@@ -1011,6 +1016,11 @@ defmodule LemonLsp.Session do
     Enum.each(Map.keys(session.owners), fn owner ->
       send(owner, {LemonLsp.ServerManager, :diagnostics, session.session_id, uri, entry})
     end)
+
+    LemonCore.Bus.broadcast(
+      LemonLsp.ServerManager.diagnostics_topic(session.session_id),
+      {:lsp_diagnostics, session.session_id, uri}
+    )
 
     by_uri =
       session

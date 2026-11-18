@@ -1096,16 +1096,21 @@ defmodule LemonAgent.Loop.ToolCalls do
   end
 
   defp tool_start_failure_result(reason) do
-    %AgentToolResult{
-      content: [
-        %TextContent{type: :text, text: "Tool task failed to start: #{inspect(reason)}"}
-      ],
-      details: %{
-        error_type: :tool_task_start_failed,
-        reason: inspect(reason),
+    result =
+      LemonAgent.InterruptedToolResult.build(:interrupted,
         started: false,
-        outcome: :not_started
-      }
+        details: %{
+          error_type: :tool_task_start_failed,
+          start_error: inspect(reason)
+        }
+      )
+
+    %{
+      result
+      | content: [
+          %TextContent{type: :text, text: "Tool task failed to start: #{inspect(reason)}"}
+          | result.content
+        ]
     }
   end
 

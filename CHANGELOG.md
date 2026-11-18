@@ -94,9 +94,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Receipt and admission writes commit with `synchronous=FULL` (plus
   `F_FULLFSYNC` on macOS) instead of a full WAL checkpoint; reads no longer
   checkpoint. Receipt barrier p50 drops from 18.3 ms to 6.5 ms (#550).
+- Channels outbox admissions and delivery receipts use durable commits instead
+  of per-event WAL checkpoints, preserving acknowledgement-after-durability
+  (#543, #550, #557).
 - Cancellation is delivered as a message: abort and redirect wake waiters
   immediately instead of on a 20–250 ms polling tick, and the global task
   cancellation sweep is gone (#549).
+- Delegated-agent joins, LSP diagnostics waits and bash stop confirmation wake
+  on bus, abort and monitor messages instead of 20–250 ms polling loops (#543).
+- Named-node tool refusals and unknown outcomes, and tool-start failures, now
+  report the shared `details.outcome` vocabulary (`:not_started`/`:unknown`
+  with a reason atom) instead of `"not_run"`/`"unknown"` strings or an
+  inspected error in `details.reason`; the start error moves to
+  `details.start_error` (#552).
 - Compaction reserves at least 15% of the context window and only counts a pass
   as successful at or below 80% of the trigger, so it no longer re-compacts every
   turn near the limit (#568).

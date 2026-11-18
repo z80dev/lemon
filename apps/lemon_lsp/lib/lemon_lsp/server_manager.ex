@@ -221,12 +221,22 @@ defmodule LemonLsp.ServerManager do
   `seq` increases with every diagnostics batch the session receives, so a
   caller can capture it before syncing a document and wait for a newer entry.
   Raw diagnostics stay in-process; status projections keep only counts.
+  Subscribe to `diagnostics_topic/1` before reading to receive
+  `{:lsp_diagnostics, session_id, uri}` whenever a batch is published.
   """
   @spec document_diagnostics(String.t(), String.t()) ::
           {:ok, %{seq: non_neg_integer(), entry: map() | nil}} | {:error, atom()}
   def document_diagnostics(session_id, uri) when is_binary(session_id) and is_binary(uri) do
     call_session(session_id, {:document_diagnostics, session_id, uri}, 5_000)
   end
+
+  @doc "Bus topic for diagnostics and server-stop notifications for a session."
+  def diagnostics_topic(session_id) when is_binary(session_id),
+    do: "lsp_diagnostics:#{session_id}"
+
+  @doc "Monitor the process owning a session before reading its diagnostics."
+  def monitor_session(session_id) when is_binary(session_id),
+    do: Process.monitor(session_target(session_id))
 
   @doc "Return a bounded snapshot of published diagnostics, including unopened files."
   def workspace_diagnostics(session_id) when is_binary(session_id) do

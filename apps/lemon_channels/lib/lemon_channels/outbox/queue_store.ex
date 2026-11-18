@@ -65,7 +65,7 @@ defmodule LemonChannels.Outbox.QueueStore do
   def commit(store, puts, deletes) do
     with :ok <- write_all(store, puts),
          :ok <- delete_all(store, deletes),
-         :ok <- Store.sync(store) do
+         :ok <- Store.confirm_durable(store) do
       :ok
     else
       _ -> {:error, :outbox_persistence_failed}
@@ -96,7 +96,7 @@ defmodule LemonChannels.Outbox.QueueStore do
 
   defp write_all(store, puts) do
     Enum.reduce_while(puts, :ok, fn {table, key, value}, :ok ->
-      case Store.put(store, table, key, value) do
+      case Store.put(store, table, key, value, durable: true) do
         :ok -> {:cont, :ok}
         _ -> {:halt, {:error, :outbox_persistence_failed}}
       end
@@ -105,7 +105,7 @@ defmodule LemonChannels.Outbox.QueueStore do
 
   defp delete_all(store, deletes) do
     Enum.reduce_while(deletes, :ok, fn {table, key}, :ok ->
-      case Store.delete(store, table, key) do
+      case Store.delete(store, table, key, durable: true) do
         :ok -> {:cont, :ok}
         _ -> {:halt, {:error, :outbox_persistence_failed}}
       end

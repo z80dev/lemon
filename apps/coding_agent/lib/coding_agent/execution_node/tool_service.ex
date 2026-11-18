@@ -215,7 +215,7 @@ defmodule CodingAgent.ExecutionNode.ToolService do
   defp refused(why) do
     %AgentToolResult{
       content: [%TextContent{text: "Not run: " <> why}],
-      details: %{outcome: "not_run"},
+      details: %{outcome: :not_started, reason: :skipped},
       is_error: true
     }
   end

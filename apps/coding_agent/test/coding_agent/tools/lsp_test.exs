@@ -104,6 +104,104 @@ defmodule CodingAgent.Tools.LspTest do
     assert text!(result) =~ "fake problem v2"
   end
 
+  test "a diagnostics publication wakes the waiter without a refresh timer", ctx do
+    hold_diagnostics(ctx)
+    worker = diagnostics_waiter(ctx)
+    assert_diagnostics_waiting(worker)
+
+    raw_result(ctx, "fake/publish")
+
+    assert text!(Task.await(worker, 2_000)) =~ "fake problem v2"
+  end
+
+  test "abort wakes a diagnostics waiter without a publication", ctx do
+    hold_diagnostics(ctx)
+    signal = LemonAgent.AbortSignal.new()
+    worker = diagnostics_waiter(ctx, signal)
+    assert_diagnostics_waiting(worker)
+
+    LemonAgent.AbortSignal.abort(signal)
+
+    assert Task.await(worker, 2_000) == {:error, "Operation aborted"}
+  end
+
+  test "unversioned diagnostics finish after their quiet window without another publish", ctx do
+    hold_diagnostics(ctx)
+    worker = diagnostics_waiter(ctx)
+    assert_diagnostics_waiting(worker)
+    :erlang.trace(worker.pid, true, [:running])
+    started = System.monotonic_time(:millisecond)
+
+    raw_result(ctx, "fake/publish_unversioned")
+    assert_diagnostics_waiting(worker)
+
+    assert text!(Task.await(worker, 2_000)) =~ "fake problem v"
+    assert System.monotonic_time(:millisecond) - started >= 250
+  end
+
+  test "diagnostics with no fresh publication wait only until the operation deadline", ctx do
+    hold_diagnostics(ctx)
+    started = System.monotonic_time(:millisecond)
+    worker = diagnostics_waiter(ctx, nil, 5)
+    assert_diagnostics_waiting(worker)
+
+    result = Task.await(worker, 6_000)
+    elapsed = System.monotonic_time(:millisecond) - started
+    assert elapsed >= 5_000
+    assert elapsed < 6_000
+    assert result.details.timed_out
+    assert result.details.count == 0
+  end
+
+  test "a diagnostics waiter wakes when its managed session stops", ctx do
+    hold_diagnostics(ctx)
+    [%{pid: client}] = Client.list(ctx.session_id)
+    assert {:ok, %{session_id: session_id}} = Client.sync(client, nil, 5_000)
+    worker = diagnostics_waiter(ctx)
+    assert_diagnostics_waiting(worker)
+
+    # Preserve the normal retry on session loss, but make it fail fast so a
+    # successful reconnect cannot hide whether the diagnostics receive woke.
+    System.put_env(@env, Path.join(ctx.tmp, "missing-clangd"))
+    assert {:ok, _} = LemonLsp.ServerManager.stop_session(session_id)
+
+    assert {:error, message} = Task.await(worker, 2_000)
+    assert message =~ "is not installed. Install clangd and put it on PATH."
+  end
+
+  defp hold_diagnostics(ctx) do
+    run(ctx, %{"action" => "diagnostics", "file" => "src/main.c"})
+    raw_result(ctx, "fake/hold_diagnostics")
+    File.write!(Path.join(ctx.tmp, "src/main.c"), "int changed = 0;\n")
+  end
+
+  defp diagnostics_waiter(ctx, signal \\ nil, timeout \\ 20) do
+    worker =
+      Task.async(fn ->
+        receive do
+          :start ->
+            Lsp.execute(
+              "diagnostics-wait",
+              %{"action" => "diagnostics", "file" => "src/main.c", "timeout" => timeout},
+              signal,
+              nil,
+              ctx.tmp,
+              ctx.opts
+            )
+        end
+      end)
+
+    :erlang.trace(worker.pid, true, [:running])
+    send(worker.pid, :start)
+    worker
+  end
+
+  defp assert_diagnostics_waiting(worker) do
+    assert_receive {:trace, pid, :out, {Lsp, :receive_published, 5}}, 5_000
+    assert pid == worker.pid
+    :erlang.trace(worker.pid, false, [:running])
+  end
+
   test "catalog language IDs, capabilities and reload", ctx do
     for path <- ["sample.rb", "sample.cs", "sample.swift", "sample.tsx", "unknown.xyz"] do
       assert Client.language_id(path) == LemonLsp.Servers.language_id(path)
@@ -606,6 +704,20 @@ defmodule CodingAgent.Tools.LspTest do
         state
       end
 
+      def handle(%{"method" => "fake/hold_diagnostics", "id" => id}, state) do
+        reply(id, true)
+        Map.put(state, :hold_diagnostics, true)
+      end
+
+      def handle(%{"method" => method, "id" => id}, state)
+          when method in ["fake/publish", "fake/publish_unversioned"] do
+        uri = state.last_uri
+        version = if method == "fake/publish", do: state.versions[uri], else: nil
+        publish(uri, version)
+        reply(id, true)
+        state
+      end
+
       def handle(%{"method" => "fake/hold"}, state), do: state
       def handle(%{"method" => "fake/crash"}, _state), do: System.halt(7)
 
@@ -628,12 +740,12 @@ defmodule CodingAgent.Tools.LspTest do
       end
 
       def handle(%{"method" => "textDocument/didOpen", "params" => %{"textDocument" => doc}}, state) do
-        publish(doc["uri"], doc["version"])
+        unless state[:hold_diagnostics], do: publish(doc["uri"], doc["version"])
         %{state | last_uri: doc["uri"], versions: Map.put(state.versions, doc["uri"], doc["version"])}
       end
 
       def handle(%{"method" => "textDocument/didChange", "params" => %{"textDocument" => doc}}, state) do
-        publish(doc["uri"], doc["version"])
+        unless state[:hold_diagnostics], do: publish(doc["uri"], doc["version"])
         %{state | versions: Map.put(state.versions, doc["uri"], doc["version"])}
       end
 

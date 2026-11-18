@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.BashServiceTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.InternalUrls.ProcessProtocol
-  alias CodingAgent.ProcessManager
+  alias CodingAgent.{ProcessManager, ProcessStore}
   alias CodingAgent.Tools.{Bash, KillProcess}
   alias CodingAgent.Tools.Bash.Service
   alias LemonAgent.Types.AgentToolResult
@@ -115,6 +115,52 @@ defmodule CodingAgent.Tools.BashServiceTest do
                cwd,
                opts
              )
+  end
+
+  test "restart wakes on termination confirmation without polling", %{cwd: cwd, opts: opts} do
+    id =
+      ProcessStore.new_process(%{
+        owner: opts[:session_id],
+        status: :running,
+        termination_confirmed: false,
+        service: %{name: "notified", project: cwd, generation: 1}
+      })
+
+    {:ok, _} = Registry.register(CodingAgent.ProcessRegistry, id, nil)
+    on_exit(fn -> ProcessStore.delete(id) end)
+
+    worker =
+      Task.async(fn ->
+        receive do
+          :start ->
+            Bash.execute(
+              "restart",
+              %{"command" => "read value", "name" => "notified"},
+              nil,
+              nil,
+              cwd,
+              opts
+            )
+        end
+      end)
+
+    :erlang.trace(worker.pid, true, [:running])
+    send(worker.pid, :start)
+    assert_receive {:"$gen_call", from, {:kill, :sigkill}}, 2_000
+    GenServer.reply(from, :ok)
+
+    assert_receive {:trace, pid, :out, {Service, :do_await_stopped, 2}}, 2_000
+    assert pid == worker.pid
+    refute_receive {:trace, ^pid, :in, {Service, :do_await_stopped, 2}}, 80
+    :erlang.trace(pid, false, [:running])
+
+    assert :ok = ProcessStore.confirm_termination(id, :external_confirmed)
+
+    assert %AgentToolResult{is_error: false, details: %{process_id: new_id}} =
+             Task.await(worker, 2_000)
+
+    refute new_id == id
+    assert Registry.unregister(CodingAgent.ProcessRegistry, id) == :ok
   end
 
   test "session and project names are isolated", %{cwd: cwd, opts: opts} do

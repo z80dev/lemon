@@ -86,12 +86,7 @@ defmodule CodingAgent.ToolIntent do
   def unknown_calls(_session_file), do: {:error, :invalid_session_file}
 
   defp unknown_outcome?(details) when is_map(details) do
-    (details["outcome"] || details[:outcome]) in [
-      :unknown,
-      "unknown",
-      :outcome_unknown,
-      "outcome_unknown"
-    ]
+    (details["outcome"] || details[:outcome]) in [:unknown, "unknown"]
   end
 
   defp unknown_outcome?(_details), do: false

@@ -95,7 +95,8 @@ defmodule CodingAgent.NodeToolsTest do
     assert result.is_error
     assert text(result) =~ ~s(No connected node named "nope")
     assert text(result) =~ "Connected nodes: box"
-    assert result.details.outcome == "not_run"
+    assert result.details.outcome == :not_started
+    assert result.details.reason == :skipped
     refute File.exists?(Path.join(ctx.local, "ran"))
   end
 
@@ -106,6 +107,7 @@ defmodule CodingAgent.NodeToolsTest do
     result = run(tool(ctx.local, "read"), %{"path" => "x", "node" => "old"})
     assert result.is_error
     assert text(result) =~ "cannot run single tool calls"
+    assert %{outcome: :not_started, reason: :skipped} = result.details
   end
 
   test "a dropped connection reports an unknown outcome and is not retried", ctx do
@@ -123,7 +125,8 @@ defmodule CodingAgent.NodeToolsTest do
     result = Task.await(task, 10_000)
     assert result.is_error
     assert text(result) =~ "Outcome unknown"
-    assert result.details.outcome == "unknown"
+    assert result.details.outcome == :unknown
+    assert result.details.reason == :interrupted
     refute_receive {:hand_invoked, _}, 200
   end
 
@@ -141,7 +144,8 @@ defmodule CodingAgent.NodeToolsTest do
     AbortSignal.abort(signal)
 
     result = Task.await(task, 5_000)
-    assert result.details.outcome == "unknown"
+    assert result.details.outcome == :unknown
+    assert result.details.reason == :interrupted
     assert_receive {:hand_cancelled, ^invoke_id}, 2_000
   end
 
@@ -157,7 +161,7 @@ defmodule CodingAgent.NodeToolsTest do
     assert_receive {:hand_invoked, invoke_id}, 5_000
     send(task.pid, {:lemon_abort, signal, :abort})
 
-    assert Task.await(task, 5_000).details.outcome == "unknown"
+    assert %{outcome: :unknown, reason: :interrupted} = Task.await(task, 5_000).details
     assert_receive {:hand_cancelled, ^invoke_id}, 2_000
     refute AbortSignal.aborted?(signal)
   end
@@ -177,6 +181,7 @@ defmodule CodingAgent.NodeToolsTest do
     result = run(bash, %{"command" => "touch ran", "node" => "box"})
     assert result.is_error
     assert text(result) =~ "cannot route calls"
+    assert %{outcome: :not_started, reason: :skipped} = result.details
     refute File.exists?(Path.join(ctx.remote, "ran"))
     refute File.exists?(Path.join(ctx.local, "ran"))
   end
@@ -249,6 +254,32 @@ defmodule CodingAgent.NodeToolsTest do
     assert {:ok, decoded} = json |> Jason.decode!() |> NodeTools.decode_result()
     assert decoded.details == %{"exit_code" => 0}
     assert [%{text: "hi"}] = decoded.content
+  end
+
+  test "interrupted outcomes normalize at the transport boundary" do
+    for {outcome, reason} <- [
+          {:not_started, :skipped},
+          {:unknown, :interrupted},
+          {:unknown, :aborted},
+          {:unknown, :timeout},
+          {:unknown, :crashed}
+        ] do
+      result = %AgentToolResult{
+        content: [%LemonAi.Types.TextContent{text: "node-specific notice"}],
+        details: %{outcome: outcome, reason: reason, node: "box"},
+        is_error: true
+      }
+
+      assert {:ok, decoded} =
+               result
+               |> NodeTools.encode_result()
+               |> Jason.encode!()
+               |> Jason.decode!()
+               |> NodeTools.decode_result()
+
+      assert decoded.details == %{"node" => "box", outcome: outcome, reason: reason}
+      assert [%{text: "node-specific notice"}] = decoded.content
+    end
   end
 
   # ── helpers ──────────────────────────────────────────────────────────────

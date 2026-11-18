@@ -9,8 +9,9 @@ defmodule LemonChannels.Outbox do
   - Automatic chunking for long messages
   - Telemetry emission
 
-  Enqueue acknowledges only after pending records cross the Store durability
-  barrier. Restart reloads their FIFO sequence and original idempotency keys.
+  Enqueue acknowledges only after pending records cross the Store durable-commit
+  barrier, without a WAL checkpoint. Restart reloads their FIFO sequence and
+  original idempotency keys.
   Pending content expires after the caller policy `retention_ms` (24 hours by
   default); confirmed keys retain the existing one-hour TTL, bounded by
   `max_dedupe_entries` (5,000). Production crash recovery requires a persistent

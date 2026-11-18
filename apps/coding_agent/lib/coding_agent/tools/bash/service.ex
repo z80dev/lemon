@@ -104,17 +104,28 @@ defmodule CodingAgent.Tools.Bash.Service do
   end
 
   defp await_stopped(id, deadline) do
+    topic = "process_state:#{id}"
+    LemonCore.Bus.subscribe(topic)
+
+    try do
+      do_await_stopped(id, deadline)
+    after
+      LemonCore.Bus.unsubscribe(topic)
+    end
+  end
+
+  defp do_await_stopped(id, deadline) do
     case ProcessStore.get(id) do
       {:ok, %{termination_confirmed: true}, _} ->
         :ok
 
       _ ->
-        if System.monotonic_time(:millisecond) >= deadline do
-          {:error,
-           "Previous service #{id} termination is unconfirmed; do not automatically rerun"}
-        else
-          Process.sleep(20)
-          await_stopped(id, deadline)
+        receive do
+          {:process_state, :changed, ^id} -> do_await_stopped(id, deadline)
+        after
+          max(0, deadline - System.monotonic_time(:millisecond)) ->
+            {:error,
+             "Previous service #{id} termination is unconfirmed; do not automatically rerun"}
         end
     end
   end

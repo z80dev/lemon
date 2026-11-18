@@ -26,7 +26,6 @@ defmodule CodingAgent.Tools.Agent do
   @default_watcher_timeout_ms 30 * 60 * 1000
   @default_reconciliation_timeout_ms 30 * 60 * 1000
   @default_run_orchestrator RouterBridge
-  @completion_poll_interval_ms 250
 
   @doc """
   Returns the agent delegation tool definition.
@@ -991,13 +990,13 @@ defmodule CodingAgent.Tools.Agent do
         _ ->
           await_completion_loop(run_id, deadline_ms, acc_answer)
       after
-        min(remaining_ms, @completion_poll_interval_ms) ->
+        remaining_ms ->
           case completion_from_store(run_id, acc_answer) do
             {:ok, completion} ->
               {:ok, completion}
 
             :pending ->
-              await_completion_loop(run_id, deadline_ms, acc_answer)
+              {:error, :timeout}
           end
       end
     end

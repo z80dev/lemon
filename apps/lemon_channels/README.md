@@ -104,7 +104,8 @@ sends are never re-sent. Platform rejections remain explicit terminal errors,
 and rate limits honor `retry_after`.
 
 An enqueue acknowledgement means **durably queued**, not delivered: every physical
-chunk is recorded in the channels-owned Store table and crosses `Store.sync/1`
+chunk is recorded in the channels-owned Store table and crosses the durable-commit
+barrier (`durable: true`, then `Store.confirm_durable/1`) without a WAL checkpoint
 before the caller receives `{:ok, ref}`. On restart, pending records recover
 their original FIFO sequence, retry window/budget and idempotency keys, including
 `nil`. A record's durable ID supplies a private dedupe identity when its payload

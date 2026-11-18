@@ -105,6 +105,27 @@ defmodule LemonChannels.OutboxDurabilityTest do
     end
 
     @impl true
+    def confirm_durable(state) do
+      with {:ok, backend} <- SqliteBackend.confirm_durable(state.backend) do
+        {:ok, %{state | backend: backend}}
+      end
+    end
+
+    @impl true
+    def with_durability(state, operation) do
+      case gate(state, :durable_write) do
+        :ok ->
+          SqliteBackend.with_durability(state.backend, operation)
+
+        {:error, reason} ->
+          SqliteBackend.with_durability(state.backend, fn ->
+            {:reply, _result, next_state} = operation.()
+            {:reply, {:error, reason}, next_state}
+          end)
+      end
+    end
+
+    @impl true
     def close(state), do: SqliteBackend.close(state.backend)
 
     defp gate(state, operation) do
@@ -204,14 +225,14 @@ defmodule LemonChannels.OutboxDurabilityTest do
   @tag :tmp_dir
   test "enqueue cannot acknowledge or start delivery before the durability barrier", ctx do
     outbox = start_outbox()
-    :ets.insert(ctx.faults, {:sync, :block})
+    :ets.insert(ctx.faults, {:durable_write, :block})
     parent = self()
     item = payload(ctx, "barrier", "peer")
     caller = Task.async(fn -> send(parent, {:enqueue_reply, Outbox.enqueue(outbox, item)}) end)
-    assert_receive {:storage_blocked, :sync, store, token}
+    assert_receive {:storage_blocked, :durable_write, store, token}
     refute_receive {:enqueue_reply, _}, 0
     refute_receive {:attempt, _, _, _}, 0
-    :ets.delete(ctx.faults, :sync)
+    :ets.delete(ctx.faults, :durable_write)
     send(store, {:continue_storage, token})
     assert_receive {:enqueue_reply, {:ok, _}}
     Task.await(caller)
@@ -256,17 +277,50 @@ defmodule LemonChannels.OutboxDurabilityTest do
   @tag :tmp_dir
   test "a failed barrier itself returns unknown rather than an acknowledged enqueue", ctx do
     outbox = start_outbox()
-    :ets.insert(ctx.faults, {:sync, :fail})
-    item = payload(ctx, "sync-failure", "peer")
+    :ets.insert(ctx.faults, {:durable_write, :fail})
+    item = payload(ctx, "durable-write-failure", "peer")
     assert {:error, {:outcome_unknown, :outbox_persistence_failed}} = Outbox.enqueue(outbox, item)
     refute_receive {:attempt, _, _, _}, 0
-    :ets.delete(ctx.faults, :sync)
+    :ets.delete(ctx.faults, :durable_write)
     send(outbox, :retry_storage)
     key = item.idempotency_key
-    assert_receive {:attempt, "sync-failure", ^key, worker}
+    assert_receive {:attempt, "durable-write-failure", ^key, worker}
     send(worker, {:finish, {:ok, :accepted}})
     ref = item.notify_ref
     assert_receive {:durable_result, ^ref, {:ok, :accepted}}
+  end
+
+  @tag :tmp_dir
+  test "enqueue and delivery completion use durable commits without checkpoints", ctx do
+    owner = self()
+    store_pid = Process.whereis(@store)
+    handler = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach_many(
+        handler,
+        [[:lemon, :store, :sqlite, :durable_write], [:lemon, :store, :sqlite, :checkpoint]],
+        fn event, _, _, _ ->
+          if self() == store_pid, do: send(owner, {:sqlite_event, List.last(event)})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    outbox = start_outbox()
+    item = payload(ctx, "durable-commit", "peer")
+
+    assert {:ok, _} = Outbox.enqueue(outbox, item)
+    assert_received {:sqlite_event, :durable_write}
+    refute_received {:sqlite_event, :checkpoint}
+    assert_receive {:attempt, "durable-commit", _, worker}
+    send(worker, {:finish, {:ok, :accepted}})
+    ref = item.notify_ref
+    assert_receive {:durable_result, ^ref, {:ok, :accepted}}
+    assert_received {:sqlite_event, :durable_write}
+    assert {:ok, []} = Store.fetch_all(@store, QueueStore.pending_table())
+    assert {:ok, [_receipt]} = Store.fetch_all(@store, QueueStore.receipts_table())
+    refute_received {:sqlite_event, :checkpoint}
   end
 
   @tag :tmp_dir
@@ -522,13 +576,16 @@ defmodule LemonChannels.OutboxDurabilityTest do
 
     for index <- 0..2 do
       assert_receive {:chunk_attempt, ^index, nil, replay}, 1_000
-      if index == 2, do: :ets.insert(ctx.faults, {:sync, :block})
+      if index == 2, do: :ets.insert(ctx.faults, {:durable_write, :block})
       send(replay, {:finish, {:ok, :chunk}})
     end
 
-    assert_receive {:storage_blocked, :sync, store, token}, 1_000
-    :ets.delete(ctx.faults, :sync)
+    assert_receive {:storage_blocked, :durable_write, store, token}, 1_000
     send(store, {:continue_storage, token})
+    assert_receive {:storage_blocked, :durable_write, ^store, delete_token}, 1_000
+    :ets.delete(ctx.faults, :durable_write)
+    send(store, {:continue_storage, delete_token})
+
     assert {:ok, []} = Store.fetch_all(@store, QueueStore.pending_table())
   end
 
