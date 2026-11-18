@@ -894,14 +894,16 @@ defmodule LemonCore.Secrets do
   # Stores written before verifiers existed fall back to "the key opens no
   # stored record".
   defp decrypt_failure(server, opts) do
-    with {:ok, master_key, _source} <- MasterKey.resolve_cached(opts) do
-      case KeyCheck.matches?(server, master_key) do
-        false -> {:error, :master_key_mismatch}
-        true -> {:error, :decrypt_failed}
-        :unknown -> legacy_decrypt_failure(server, master_key)
-      end
-    else
-      _ -> {:error, :decrypt_failed}
+    case MasterKey.resolve_cached(opts) do
+      {:ok, master_key, _source} ->
+        case KeyCheck.matches?(server, master_key) do
+          false -> {:error, :master_key_mismatch}
+          true -> {:error, :decrypt_failed}
+          :unknown -> legacy_decrypt_failure(server, master_key)
+        end
+
+      _ ->
+        {:error, :decrypt_failed}
     end
   end
 
