@@ -34,23 +34,49 @@ defmodule LemonCore.Checkpoint do
   `trusted_restore_filesystem/2` skips the owner check and is reserved for
   rewind, which has already proven provenance from its own session journal.
 
+  Interactive restores preview first. `restore_preview/3` issues a random,
+  single-use `confirm_token` and keeps only its SHA-256 server-side
+  (`:checkpoint_restore_confirmations` Store table) together with
+  the authorized `:caller`, the checkpoint id, owner and revision (a digest of
+  the stored checkpoint record), the selected roots and their filesystem
+  fingerprints, expiring after five minutes. `confirmed_restore_filesystem/4`
+  atomically and durably consumes the record (`Store.take/4` with
+  `durable: true`) before checking anything else, so a token is spent by its
+  first use, successful or not, and the spend survives a crash before any file
+  changes. An uncertain consumption is `{:error, :confirmation_unavailable}`
+  and restores nothing. A token that was never issued, is spent or expired, or
+  was issued to another caller is `{:error, :invalid_confirmation}`; a changed
+  checkpoint, root selection or tree is `{:error, :stale_confirmation}`. None
+  of these touches the filesystem, and recreating an earlier tree never
+  revives a spent token.
+
   Filesystem checkpoints record their captured roots; diff and restore reject
   snapshots whose paths are not exactly those recorded roots, and checkpoints
   captured before roots were recorded are refused. Diff refuses to read through
   a symlinked ancestor or leaf and re-verifies the parent walk and file identity
   after reading.
 
-  Remaining race (tracked with the descriptor-bound mutation work): parent
-  checks and the later pathname-based read, removal, write and chmod are
-  separate syscalls, so a concurrent writer that swaps a checked parent
-  directory for a symlink between the check and the operation can still
-  redirect it. Pre-existing substitutions are rejected.
+  Remaining races (shared descriptor-bound finding NEW-6, not addressed here):
+
+    * Parent checks and the later pathname-based read, removal, write and chmod
+      are separate syscalls, so a concurrent writer that swaps a checked parent
+      directory for a symlink between the check and the operation can still
+      redirect it. Pre-existing substitutions are rejected.
+    * The confirmation fingerprint is compared before `restore_loaded/2`
+      validates and mutates the roots, and nothing locks the tree in between.
+      A concurrent agent or workspace writer that changes a root after that
+      comparison has its change overwritten by the restore, even though the
+      confirmed preview never showed it. There is no defined concurrent-writer
+      boundary yet.
   """
 
   require Logger
 
   @checkpoint_version "1.0"
   @checkpoint_id_pattern ~r/\Achk_[0-9a-f]{16}\z/
+  @confirmation_table :checkpoint_restore_confirmations
+  @confirmation_ttl_ms 5 * 60 * 1000
+  @confirmation_bytes 24
 
   @type checkpoint :: %{
           id: String.t(),
@@ -190,6 +216,161 @@ defmodule LemonCore.Checkpoint do
     with {:ok, checkpoint} <- load_owned(checkpoint_id, owner) do
       restore_loaded(checkpoint, opts)
     end
+  end
+
+  @doc """
+  Owner-scoped restore preview for interactive confirmation.
+
+  Returns the paths that differ from the checkpoint and a freshly issued,
+  random `confirm_token`. Only the token's digest is stored, bound to
+  `opts[:caller]` (required; any term identifying the authorized caller), the
+  checkpoint id, owner and revision, the selected roots and their current
+  filesystem fingerprints. It expires after five minutes and is consumed by
+  the first `confirmed_restore_filesystem/4` call that presents it.
+  """
+  @spec restore_preview(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def restore_preview(checkpoint_id, owner, opts \\ []) when is_binary(checkpoint_id) do
+    with {:ok, checkpoint} <- load_owned(checkpoint_id, owner),
+         {:ok, caller} <- confirmation_caller(opts),
+         {:ok, files} <- filesystem_files(checkpoint),
+         {:ok, paths} <- selected_snapshot_paths(files, opts[:paths]),
+         {:ok, binding} <- confirmation_binding(checkpoint, caller, paths, opts),
+         {:ok, token} <- issue_confirmation(binding) do
+      changed =
+        files
+        |> Enum.filter(&(&1.path in paths))
+        |> Enum.map(&diff_snapshot/1)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map(& &1.path)
+
+      {:ok,
+       %{
+         checkpoint_id: checkpoint.id,
+         changed: changed,
+         confirm_token: token,
+         expires_in_ms: @confirmation_ttl_ms
+       }}
+    end
+  end
+
+  @doc """
+  Owner-scoped restore that consumes a token issued by `restore_preview/3`.
+
+  The stored confirmation is taken atomically before any other check, so each
+  token authorizes at most one attempt. A missing token is
+  `{:error, :confirmation_required}`; a token that was never issued, is spent
+  or expired, or was issued to another caller, owner or checkpoint is
+  `{:error, :invalid_confirmation}`; a changed checkpoint revision, root
+  selection or tree fingerprint is `{:error, :stale_confirmation}`. None of
+  them touches the filesystem.
+  """
+  @spec confirmed_restore_filesystem(String.t(), String.t(), term(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def confirmed_restore_filesystem(checkpoint_id, owner, confirm_token, opts \\ [])
+      when is_binary(checkpoint_id) do
+    with {:ok, checkpoint} <- load_owned(checkpoint_id, owner),
+         :ok <- confirmation_present(confirm_token),
+         {:ok, issued} <- take_confirmation(confirm_token),
+         {:ok, caller} <- confirmation_caller(opts),
+         :ok <- issued_to(issued, caller, checkpoint),
+         {:ok, files} <- filesystem_files(checkpoint),
+         {:ok, paths} <- selected_snapshot_paths(files, opts[:paths]),
+         {:ok, current} <- confirmation_binding(checkpoint, caller, paths, opts),
+         :ok <- unchanged_since_preview(issued, current) do
+      restore_loaded(checkpoint, opts)
+    end
+  end
+
+  defp confirmation_present(token) when is_binary(token) and token != "", do: :ok
+  defp confirmation_present(_token), do: {:error, :confirmation_required}
+
+  defp confirmation_caller(opts) do
+    case Keyword.get(opts, :caller) do
+      nil -> {:error, :confirmation_caller_required}
+      caller -> {:ok, caller}
+    end
+  end
+
+  defp confirmation_binding(checkpoint, caller, paths, opts) do
+    with {:ok, limits} <- restore_limits(checkpoint, opts),
+         {:ok, current} <- current_fingerprints(paths, limits) do
+      {:ok,
+       %{
+         caller: caller,
+         checkpoint_id: checkpoint.id,
+         owner: checkpoint.session_id,
+         revision: digest(checkpoint),
+         roots: Enum.sort(paths),
+         fingerprint: current |> Enum.sort() |> digest()
+       }}
+    end
+  end
+
+  defp digest(term),
+    do: :crypto.hash(:sha256, :erlang.term_to_binary(term, [:deterministic]))
+
+  defp confirmation_key(token), do: :crypto.hash(:sha256, token)
+
+  defp issue_confirmation(binding) do
+    now = System.system_time(:millisecond)
+    prune_confirmations(now)
+    token = Base.url_encode64(:crypto.strong_rand_bytes(@confirmation_bytes), padding: false)
+    record = Map.put(binding, :expires_at_ms, now + @confirmation_ttl_ms)
+
+    case LemonCore.Store.put_new(@confirmation_table, confirmation_key(token), record) do
+      :ok -> {:ok, token}
+      {:error, _reason} -> {:error, :confirmation_unavailable}
+    end
+  end
+
+  # Expired records are removed only if unchanged since they were listed.
+  defp prune_confirmations(now) do
+    for {key, %{expires_at_ms: expires_at} = record} <-
+          LemonCore.Store.list(@confirmation_table),
+        expires_at <= now do
+      LemonCore.Store.compare_and_delete(@confirmation_table, key, record)
+    end
+
+    :ok
+  end
+
+  # Consumption must be durable before anything else happens: an uncertain
+  # removal could leave the token valid after a crash, so it fails closed.
+  defp take_confirmation(token) do
+    now = System.system_time(:millisecond)
+
+    case LemonCore.Store.take(LemonCore.Store, @confirmation_table, confirmation_key(token),
+           durable: true
+         ) do
+      %{expires_at_ms: expires_at} = issued when expires_at > now -> {:ok, issued}
+      {:error, _reason} -> {:error, :confirmation_unavailable}
+      _missing_or_expired -> {:error, :invalid_confirmation}
+    end
+  end
+
+  defp issued_to(issued, caller, checkpoint) do
+    if issued.caller === caller and issued.checkpoint_id == checkpoint.id and
+         issued.owner == checkpoint.session_id,
+       do: :ok,
+       else: {:error, :invalid_confirmation}
+  end
+
+  defp unchanged_since_preview(issued, current) do
+    if Map.take(issued, [:revision, :roots, :fingerprint]) ==
+         Map.take(current, [:revision, :roots, :fingerprint]),
+       do: :ok,
+       else: {:error, :stale_confirmation}
+  end
+
+  # Each root's current tree identity; an unreadable or over-budget tree has
+  # no fingerprint, so no token can be issued for it.
+  defp current_fingerprints(paths, limits) do
+    Enum.reduce_while(paths, {:ok, []}, fn path, {:ok, acc} ->
+      case filesystem_fingerprint(path, limits) do
+        {:ok, fingerprint} -> {:cont, {:ok, [{path, fingerprint} | acc]}}
+        {:error, _} -> {:halt, {:error, :restore_preview_unavailable}}
+      end
+    end)
   end
 
   @doc """

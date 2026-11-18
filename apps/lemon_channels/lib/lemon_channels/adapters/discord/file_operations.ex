@@ -3,15 +3,19 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   File upload/download operations for the Discord transport.
 
   Handles `/file put`, `/file get`, and auto-put for bare attachment uploads.
-  Reuses shared path-validation and write helpers from the Telegram FileOperations
-  module where possible, adapting the download/upload paths for Discord's API.
+  Path containment, deny rules, archives and writes are the shared
+  `LemonCore.FileAccess` rules used by Telegram. A non-empty
+  `allowed_user_ids` decides who may transfer files; without one, slash
+  commands need a guild member with Administrator or Manage Server and
+  auto-put is off.
   """
 
   require Logger
 
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations, as: TelegramFileOps
   alias LemonChannels.BindingResolver
-  alias LemonCore.ChatScope
+  alias LemonChannels.CommandAuthority
+  alias LemonCore.{ChatScope, FileAccess}
 
   @default_max_upload_bytes 25 * 1024 * 1024
   @default_max_download_bytes 25 * 1024 * 1024
@@ -23,30 +27,26 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   @doc """
   Handle the `/file put` slash command interaction.
 
-  Downloads the resolved attachment from its URL, validates the destination
-  path, and writes the file to disk.
-
-  Returns a reply string for the interaction response.
+  Validates the destination, then downloads the resolved attachment from its
+  URL and writes it. Returns `{:ok, msg}` or `{:error, msg}`.
   """
   def handle_file_put(state, interaction, attachment, dest_path, force) do
     cfg = files_cfg(state)
 
     with :ok <- ensure_files_enabled(cfg),
+         :ok <- ensure_sender_allowed(cfg, interaction, "File uploads are restricted."),
          {:ok, root} <- resolve_project_root(state, interaction),
          {:ok, url, filename} <- extract_attachment_url(attachment),
-         dest_rel <- resolve_put_dest(cfg, dest_path, filename),
-         {:ok, dest_abs} <- TelegramFileOps.resolve_dest_abs(root, dest_rel),
-         :ok <- TelegramFileOps.ensure_not_denied(root, dest_rel, cfg),
-         {:ok, bytes} <- download_attachment_bytes(url),
-         :ok <-
-           TelegramFileOps.enforce_bytes_limit(
-             bytes,
+         dest_rel = resolve_put_dest(cfg, dest_path, filename),
+         {:ok, final_rel} <-
+           FileAccess.put(
+             root,
+             dest_rel,
              cfg,
-             :max_upload_bytes,
+             fn -> download_attachment_bytes(url) end,
+             force,
              @default_max_upload_bytes
-           ),
-         {:ok, final_rel, _final_abs} <-
-           TelegramFileOps.write_document(dest_rel, dest_abs, bytes, force: force) do
+           ) do
       {:ok, "Saved: #{final_rel}"}
     else
       {:error, msg} when is_binary(msg) -> {:error, msg}
@@ -60,9 +60,8 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   @doc """
   Handle the `/file get` slash command interaction.
 
-  Reads a file from disk and sends it to the Discord channel as an attachment.
-
-  Returns `{:ok, msg}` or `{:error, msg}`.
+  Sends a private copy of the file (or a zip of a directory's allowed files)
+  to the Discord channel. Returns `{:ok, msg}` or `{:error, msg}`.
   """
   def handle_file_get(state, interaction, file_path) do
     cfg = files_cfg(state)
@@ -70,20 +69,14 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
     channel_id = interaction_channel_id(interaction)
 
     with :ok <- ensure_files_enabled(cfg),
+         :ok <- ensure_sender_allowed(cfg, interaction, "File downloads are restricted."),
          {:ok, root} <- resolve_project_root(state, interaction),
          {:ok, rel} <- validate_get_path(file_path),
-         {:ok, abs} <- TelegramFileOps.resolve_dest_abs(root, rel),
-         :ok <- TelegramFileOps.ensure_not_denied(root, rel, cfg),
-         {:ok, kind, send_path, filename} <- TelegramFileOps.prepare_file_get(abs),
+         {:ok, filename, bytes} <- FileAccess.get(root, rel, cfg, @default_max_download_bytes),
          :ok <-
-           TelegramFileOps.enforce_path_size(
-             send_path,
-             cfg,
-             :max_download_bytes,
-             @default_max_download_bytes
-           ),
-         :ok <- send_file_to_channel(channel_id, send_path, filename) do
-      if kind == :zip, do: File.rm(send_path)
+           FileAccess.with_temp_file(filename, bytes, fn path ->
+             send_file_to_channel(channel_id, path, filename)
+           end) do
       {:ok, "Sent: #{filename}"}
     else
       {:error, msg} when is_binary(msg) -> {:error, msg}
@@ -98,7 +91,8 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   Process auto-put for attachments on a regular (non-slash-command) message.
 
   Returns a list of `{:ok, rel_path}` or `{:error, reason}` tuples, one per
-  attachment processed.
+  attachment processed. Messages carry no permission data, so auto-put needs
+  the sender in a non-empty `allowed_user_ids`.
   """
   def handle_attachment_auto_put(state, inbound) do
     cfg = files_cfg(state)
@@ -108,31 +102,29 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
 
     with true <- should_auto_put?(cfg),
          true <- attachments != [],
+         true <-
+           FileAccess.sender_allowed?(
+             cfg_get(cfg, :allowed_user_ids),
+             inbound.meta[:user_id],
+             fn -> false end
+           ),
          {:ok, root} <- resolve_project_root_from_inbound(inbound) do
       uploads_dir = cfg_get(cfg, :uploads_dir, "incoming")
 
       results =
         Enum.map(attachments, fn att ->
           url = att_field(att, :url)
-          filename = att_field(att, :filename) || auto_put_filename(att)
+          filename = FileAccess.upload_name(att_field(att, :filename), auto_put_filename())
           rel = Path.join(uploads_dir, filename)
 
-          with {:ok, dest_abs} <- TelegramFileOps.resolve_dest_abs(root, rel),
-               :ok <- TelegramFileOps.ensure_not_denied(root, rel, cfg),
-               {:ok, bytes} <- download_attachment_bytes(url),
-               :ok <-
-                 TelegramFileOps.enforce_bytes_limit(
-                   bytes,
-                   cfg,
-                   :max_upload_bytes,
-                   @default_max_upload_bytes
-                 ),
-               {:ok, final_rel, _} <-
-                 TelegramFileOps.write_document(rel, dest_abs, bytes, force: false) do
-            {:ok, final_rel}
-          else
-            {:error, msg} -> {:error, msg}
-          end
+          FileAccess.put(
+            root,
+            rel,
+            cfg,
+            fn -> download_attachment_bytes(url) end,
+            false,
+            @default_max_upload_bytes
+          )
         end)
 
       # Send summary to channel
@@ -206,7 +198,14 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
 
   @doc false
   def send_file_to_channel(channel_id, path, filename) when is_integer(channel_id) do
-    case Nostrum.Api.Message.create(channel_id, %{content: filename, files: [path]}) do
+    api =
+      cfg_get(
+        LemonChannels.GatewayConfig.get(:discord, %{}) || %{},
+        :api_mod,
+        Nostrum.Api.Message
+      )
+
+    case api.create(channel_id, %{content: filename, files: [path]}) do
       {:ok, _} ->
         :ok
 
@@ -325,7 +324,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
 
   defp extract_attachment_url(attachment) when is_map(attachment) do
     url = att_field(attachment, :url) || att_field(attachment, :proxy_url)
-    filename = att_field(attachment, :filename) || "upload_#{System.system_time(:second)}.bin"
+    filename = FileAccess.upload_name(att_field(attachment, :filename), auto_put_filename())
 
     if is_binary(url) and url != "" do
       {:ok, url, filename}
@@ -336,14 +335,20 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
 
   defp extract_attachment_url(_), do: {:error, "No attachment provided."}
 
-  defp auto_put_filename(att) do
-    name = att_field(att, :filename)
+  defp auto_put_filename do
+    "upload_#{System.system_time(:second)}_#{:rand.uniform(9999)}.bin"
+  end
 
-    if is_binary(name) and name != "" do
-      name
-    else
-      "upload_#{System.system_time(:second)}_#{:rand.uniform(9999)}.bin"
-    end
+  defp ensure_sender_allowed(cfg, interaction, refusal) do
+    sender_id =
+      interaction |> map_get(:member) |> map_get(:user) |> map_get(:id) ||
+        interaction |> map_get(:user) |> map_get(:id)
+
+    if FileAccess.sender_allowed?(cfg_get(cfg, :allowed_user_ids), sender_id, fn ->
+         CommandAuthority.discord_admin?(interaction)
+       end),
+       do: :ok,
+       else: {:error, refusal}
   end
 
   defp att_field(att, key) when is_map(att) do

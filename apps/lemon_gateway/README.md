@@ -252,8 +252,9 @@ in-process subagents.
 | `LemonGateway.Tools.SmsWaitForCode` | `tools/sms_wait_for_code.ex` | Block until a matching SMS verification code arrives |
 | `LemonGateway.Tools.SmsListMessages` | `tools/sms_list_messages.ex` | List recent SMS messages |
 | `LemonGateway.Tools.SmsClaimMessage` | `tools/sms_claim_message.ex` | Mark an SMS as claimed by the current session |
-| `LemonGateway.Tools.TelegramSendImage` | `tools/telegram_send_image.ex` | Queue an image for Telegram delivery (Telegram sessions only) |
-| `LemonGateway.Tools.DiscordSendFile` | `tools/discord_send_file.ex` | Queue a file for Discord delivery (Discord sessions only) |
+| `LemonGateway.Tools.TelegramSendImage` | `tools/telegram_send_image.ex` | Queue a private copy of a contained image for Telegram delivery (Telegram sessions only) |
+| `LemonGateway.Tools.DiscordSendFile` | `tools/discord_send_file.ex` | Queue a private copy of a contained file for Discord delivery (Discord sessions only) |
+| `LemonGateway.Tools.OutboundFile` | `tools/outbound_file.ex` | Shared path resolution for the send tools through `LemonCore.FileAccess` (roots, workspace prefixes, `files.deny_globs`) |
 
 ### Health
 

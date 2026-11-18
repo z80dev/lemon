@@ -2,13 +2,17 @@ defmodule LemonGateway.Tools.DiscordSendFile do
   @moduledoc """
   LemonAgent tool definition for sending files to Discord.
 
-  Resolves the file path relative to the project or workspace root, validates
-  the file size, and queues it for delivery to the active Discord channel or
-  thread as an attachment with an optional caption.
+  Resolves the file beneath the project or workspace root through
+  `LemonGateway.Tools.OutboundFile` (no symlinks below the root, no `..`,
+  built-in secret denies plus `[gateway.discord.files].deny_globs`), checks the
+  size, and queues a private copy of the validated bytes for delivery to the
+  active Discord channel or thread with an optional caption.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias LemonCore.FileAccess
+  alias LemonGateway.Tools.OutboundFile
 
   @default_max_bytes 25 * 1024 * 1024
 
@@ -56,13 +60,22 @@ defmodule LemonGateway.Tools.DiscordSendFile do
           String.t() | nil
         ) :: AgentToolResult.t()
   def execute(_tool_call_id, params, _signal, _on_update, root, workspace_dir, session_key) do
+    discord_cfg = OutboundFile.channel_config(:discord)
+
     with :ok <- require_discord_session(session_key),
          {:ok, path} <- fetch_path(params),
-         {:ok, resolved_path} <- resolve_path(path, root, workspace_dir),
-         :ok <- ensure_file_size_within_limit(resolved_path),
-         {:ok, filename} <- normalize_filename(params, resolved_path),
-         {:ok, caption} <- normalize_caption(params) do
-      send_file_result(resolved_path, filename, caption)
+         {:ok, name, bytes} <-
+           OutboundFile.read(
+             path,
+             root,
+             workspace_dir,
+             OutboundFile.deny_globs(discord_cfg),
+             max_upload_bytes_limit(discord_cfg)
+           ),
+         {:ok, filename} <- normalize_filename(params, name),
+         {:ok, caption} <- normalize_caption(params),
+         {:ok, copy} <- FileAccess.retain_copy(name, bytes) do
+      send_file_result(copy, filename, caption)
     else
       {:error, message} ->
         error_result(message)
@@ -96,16 +109,16 @@ defmodule LemonGateway.Tools.DiscordSendFile do
 
   defp fetch_path(_), do: {:error, "Missing required parameter: path"}
 
-  defp normalize_filename(params, resolved_path) when is_map(params) do
+  defp normalize_filename(params, name) when is_map(params) do
     filename = Map.get(params, "filename") || Map.get(params, :filename)
 
     cond do
       is_nil(filename) ->
-        {:ok, Path.basename(resolved_path)}
+        {:ok, name}
 
       is_binary(filename) ->
         value = String.trim(filename)
-        {:ok, if(value == "", do: Path.basename(resolved_path), else: value)}
+        {:ok, if(value == "", do: name, else: value)}
 
       true ->
         {:error, "filename must be a string"}
@@ -125,75 +138,6 @@ defmodule LemonGateway.Tools.DiscordSendFile do
 
       true ->
         {:error, "caption must be a string"}
-    end
-  end
-
-  defp resolve_path(path, root, workspace_dir) do
-    roots =
-      [root, workspace_dir]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-
-    path = expand_user_home(path)
-
-    cond do
-      Path.type(path) == :absolute ->
-        absolute = Path.expand(path)
-
-        if path_within_any_root?(absolute, roots) do
-          if File.regular?(absolute) do
-            {:ok, absolute}
-          else
-            {:error, "File not found: #{path}"}
-          end
-        else
-          {:error, "Path must stay within the active workspace/project roots."}
-        end
-
-      true ->
-        candidates =
-          (workspace_prefixed_candidates(path, workspace_dir) ++
-             Enum.map(roots, &Path.expand(path, &1)))
-          |> Enum.uniq()
-
-        case Enum.find(candidates, &File.regular?/1) do
-          nil ->
-            {:error, "File not found: #{path}"}
-
-          resolved ->
-            {:ok, resolved}
-        end
-    end
-  end
-
-  defp workspace_prefixed_candidates(path, workspace_dir)
-       when is_binary(path) and is_binary(workspace_dir) do
-    prefixes = ["workspace/", "./workspace/", ".lemon/agent/workspace/"]
-
-    prefixes
-    |> Enum.map(fn prefix ->
-      if String.starts_with?(path, prefix) do
-        suffix = String.replace_prefix(path, prefix, "")
-        Path.expand(suffix, workspace_dir)
-      end
-    end)
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp workspace_prefixed_candidates(_path, _workspace_dir), do: []
-
-  defp ensure_file_size_within_limit(path) do
-    max_bytes = max_upload_bytes_limit()
-
-    with {:ok, %File.Stat{type: :regular, size: size}} <- File.stat(path),
-         true <- size <= max_bytes do
-      :ok
-    else
-      {:ok, %File.Stat{size: size}} ->
-        {:error, "File is too large (#{size} bytes). Max allowed is #{max_bytes} bytes."}
-
-      _ ->
-        {:error, "Failed to stat file: #{path}"}
     end
   end
 
@@ -223,19 +167,6 @@ defmodule LemonGateway.Tools.DiscordSendFile do
     }
   end
 
-  defp path_within_any_root?(_path, []), do: false
-
-  defp path_within_any_root?(path, roots) do
-    Enum.any?(roots, fn root -> path_within_root?(path, root) end)
-  end
-
-  defp path_within_root?(path, root) when is_binary(path) and is_binary(root) do
-    rel = Path.relative_to(path, root)
-    rel == "." or not String.starts_with?(rel, "..")
-  end
-
-  defp path_within_root?(_, _), do: false
-
   defp normalize_dir(value) when is_binary(value) do
     trimmed = String.trim(value)
     if trimmed == "", do: nil, else: Path.expand(trimmed)
@@ -243,31 +174,7 @@ defmodule LemonGateway.Tools.DiscordSendFile do
 
   defp normalize_dir(_), do: nil
 
-  defp expand_user_home(path) when is_binary(path) do
-    home = System.user_home()
-
-    cond do
-      is_binary(home) and String.starts_with?(path, "~/") ->
-        Path.join(home, String.replace_prefix(path, "~/", ""))
-
-      is_binary(home) and path == "~" ->
-        home
-
-      true ->
-        path
-    end
-  end
-
-  defp expand_user_home(path), do: path
-
-  defp max_upload_bytes_limit do
-    discord_cfg =
-      if Process.whereis(LemonGateway.Config) do
-        LemonGateway.Config.get(:discord) || %{}
-      else
-        []
-      end
-
+  defp max_upload_bytes_limit(discord_cfg) do
     case discord_cfg[:max_upload_bytes] || discord_cfg["max_upload_bytes"] do
       size when is_integer(size) and size > 0 -> size
       _ -> @default_max_bytes

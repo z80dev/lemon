@@ -28,6 +28,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
   alias LemonChannels.BindingResolver
+  alias LemonChannels.CommandAuthority
   alias LemonCore.Cwd
   alias LemonChannels.Discord.KnownTargetStore
   alias LemonChannels.ImageDownload
@@ -650,15 +651,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         _ -> Map.delete(meta, :resume)
       end
 
-    # Apply a native resume selected by /resume. Stale vendor selections remain
-    # stored for rollback, but never affect a native channel run.
+    # Apply a native resume selected by /resume. Selections are keyed by the
+    # sender's full session key, so one user's choice never resumes another
+    # user's prompt in the same channel or thread.
     meta =
       if is_nil(meta[:resume]) do
-        stored_resume_key = {state.account_id, channel_id, thread_id}
-
-        case LemonCore.Store.get(:discord_selected_resume, stored_resume_key) do
+        case LemonCore.Store.get(:discord_selected_resume, session_key) do
           %ResumeToken{engine: "lemon"} = resume ->
-            _ = LemonCore.Store.delete(:discord_selected_resume, stored_resume_key)
+            _ = LemonCore.Store.delete(:discord_selected_resume, session_key)
             Map.put(meta, :resume, resume)
 
           _ ->
@@ -835,11 +835,17 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     name = interaction |> map_get(:data) |> map_get(:name)
     inbound = interaction_to_inbound(interaction, "/#{name || "unknown"}", state)
 
-    if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
-      dispatch_slash_command(name, interaction, state)
-    else
-      respond_ephemeral(interaction, "This command is not available in this Discord location.")
-      state
+    cond do
+      not (allowed_inbound?(inbound, state) and binding_allowed?(inbound, state)) ->
+        respond_ephemeral(interaction, "This command is not available in this Discord location.")
+        state
+
+      CommandAuthority.authorize(name, CommandAuthority.discord_admin?(interaction)) != :ok ->
+        respond_ephemeral(interaction, CommandAuthority.refusal_message())
+        state
+
+      true ->
+        dispatch_slash_command(name, interaction, state)
     end
   end
 
@@ -909,9 +915,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       "cwd" ->
         handle_cwd_interaction(interaction, state)
 
-      "reload" ->
-        handle_reload_interaction(interaction, state)
-
       "topic" ->
         handle_topic_interaction(interaction, state)
 
@@ -949,17 +952,35 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         respond_ephemeral(interaction, notice)
         state
 
-      String.starts_with?(custom_id, @cancel_callback_prefix <> ":") ->
-        handle_cancel_component(interaction, custom_id)
+      component_command(custom_id) != nil and
+          not component_allowed?(interaction, custom_id, state) ->
+        respond_ephemeral(
+          interaction,
+          "This control is not available in this Discord location; nothing changed."
+        )
+
         state
+
+      String.starts_with?(custom_id, @cancel_callback_prefix <> ":") ->
+        run_id = String.trim_leading(custom_id, @cancel_callback_prefix <> ":")
+
+        with_owned_run(interaction, run_id, state, fn ->
+          handle_cancel_component(interaction, run_id)
+        end)
 
       String.starts_with?(custom_id, @idle_keepalive_continue_prefix) ->
-        handle_keepalive_component(interaction, custom_id, :continue)
-        state
+        run_id = String.trim_leading(custom_id, @idle_keepalive_continue_prefix)
+
+        with_owned_run(interaction, run_id, state, fn ->
+          handle_keepalive_component(interaction, run_id, :continue)
+        end)
 
       String.starts_with?(custom_id, @idle_keepalive_stop_prefix) ->
-        handle_keepalive_component(interaction, custom_id, :cancel)
-        state
+        run_id = String.trim_leading(custom_id, @idle_keepalive_stop_prefix)
+
+        with_owned_run(interaction, run_id, state, fn ->
+          handle_keepalive_component(interaction, run_id, :cancel)
+        end)
 
       String.starts_with?(custom_id, @model_callback_prefix) ->
         handle_model_component(interaction, state, custom_id, values)
@@ -1232,6 +1253,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
         # Clear state
         _ = safe_delete_chat_state(session_key)
+        _ = LemonCore.Store.delete(:discord_selected_resume, session_key)
         _ = ModelPolicyAdapter.delete_session_model_override(session_key)
 
         project = extract_project_info(project_result)
@@ -1504,8 +1526,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # ============================================================================
 
   defp handle_resume_interaction(interaction, state) do
-    channel_id = interaction |> map_get(:channel_id) |> parse_id()
-    thread_id = interaction_thread_id(interaction)
     selector = option_value(interaction, "selector")
     session_key = interaction_session_key(interaction, state)
 
@@ -1533,28 +1553,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         {n, _} when n >= 1 and n <= length(sessions) ->
           case Enum.at(sessions, n - 1).resume do
             %ResumeToken{engine: "lemon"} = resume ->
-              scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
-              agent_id = BindingResolver.resolve_agent_id(scope)
-              user_id = interaction_user_id(interaction)
-              guild_id = interaction |> map_get(:guild_id) |> parse_id()
-              peer_kind = if is_integer(guild_id), do: :group, else: :dm
-
-              _sk =
-                session_key_for(
-                  agent_id,
-                  state.account_id,
-                  peer_kind,
-                  channel_id,
-                  user_id,
-                  thread_id,
-                  guild_id
-                )
-
-              LemonCore.Store.put(
-                :discord_selected_resume,
-                {state.account_id, channel_id, thread_id},
-                resume
-              )
+              LemonCore.Store.put(:discord_selected_resume, session_key, resume)
 
               respond_ephemeral(
                 interaction,
@@ -1579,11 +1578,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
             _ ->
               case ResumeSelection.resolve_resume_selector(selector, sessions) do
                 %ResumeToken{engine: "lemon"} = resume ->
-                  LemonCore.Store.put(
-                    :discord_selected_resume,
-                    {state.account_id, channel_id, thread_id},
-                    resume
-                  )
+                  LemonCore.Store.put(:discord_selected_resume, session_key, resume)
 
                   respond_ephemeral(
                     interaction,
@@ -1637,19 +1632,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp handle_checkpoint_interaction(interaction, state) do
-    args = checkpoint_interaction_args(interaction)
-
-    scope = %ChatScope{
-      transport: :discord,
-      chat_id: interaction |> map_get(:channel_id) |> parse_id(),
-      topic_id: interaction_thread_id(interaction)
-    }
-
     respond_ephemeral(
       interaction,
-      LemonChannels.CheckpointStatusMessage.handle(args,
-        agent_id: BindingResolver.resolve_agent_id(scope),
-        session_key: interaction_session_key(interaction, state)
+      LemonChannels.CheckpointStatusMessage.handle(
+        checkpoint_interaction_args(interaction),
+        checkpoint_opts(interaction, state)
       )
     )
 
@@ -1657,23 +1644,32 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp handle_rollback_interaction(interaction, state) do
-    args = checkpoint_interaction_args(interaction)
+    respond_ephemeral(
+      interaction,
+      LemonChannels.CheckpointStatusMessage.handle_rollback(
+        checkpoint_interaction_args(interaction),
+        checkpoint_opts(interaction, state)
+      )
+    )
 
+    state
+  end
+
+  defp checkpoint_opts(interaction, state) do
     scope = %ChatScope{
       transport: :discord,
       chat_id: interaction |> map_get(:channel_id) |> parse_id(),
       topic_id: interaction_thread_id(interaction)
     }
 
-    respond_ephemeral(
-      interaction,
-      LemonChannels.CheckpointStatusMessage.handle_rollback(args,
-        agent_id: BindingResolver.resolve_agent_id(scope),
-        session_key: interaction_session_key(interaction, state)
-      )
-    )
+    session_key = interaction_session_key(interaction, state)
 
-    state
+    [
+      agent_id: BindingResolver.resolve_agent_id(scope),
+      session_key: session_key,
+      sender_id: interaction_user_id(interaction),
+      checkpoint_owner: LemonChannels.CheckpointStatusMessage.owner_for_session_key(session_key)
+    ]
   end
 
   defp handle_goal_interaction(interaction, state) do
@@ -1786,9 +1782,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
       "restore" ->
         checkpoint_id = nested_option_value(interaction, "restore", "checkpoint_id")
-        confirm? = nested_option_value(interaction, "restore", "confirm") == true
-        confirm_arg = if confirm?, do: " confirm", else: ""
-        "restore" <> value_arg(checkpoint_id) <> confirm_arg
+        token = nested_option_value(interaction, "restore", "token")
+        "restore" <> value_arg(checkpoint_id) <> value_arg(token)
 
       _ ->
         "status"
@@ -1922,9 +1917,50 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp auto_arg(true), do: "--auto"
   defp auto_arg(_), do: nil
 
-  defp handle_cancel_component(interaction, custom_id) do
-    run_id = String.trim_leading(custom_id, @cancel_callback_prefix <> ":")
+  # Components map to the catalog command they act for, so they pass the same
+  # location gate (and any adminOnly rule) as that slash command.
+  defp component_command(custom_id) do
+    cond do
+      String.starts_with?(custom_id, @cancel_callback_prefix <> ":") -> "stop"
+      String.starts_with?(custom_id, @idle_keepalive_continue_prefix) -> "stop"
+      String.starts_with?(custom_id, @idle_keepalive_stop_prefix) -> "stop"
+      String.starts_with?(custom_id, @model_callback_prefix) -> "model"
+      true -> nil
+    end
+  end
 
+  defp component_allowed?(interaction, custom_id, state) do
+    inbound = interaction_to_inbound(interaction, "", state)
+
+    allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) and
+      CommandAuthority.authorize(
+        component_command(custom_id),
+        CommandAuthority.discord_admin?(interaction)
+      ) == :ok
+  end
+
+  # Run controls act only on the clicker's own session's active run.
+  defp with_owned_run(interaction, run_id, state, fun) do
+    session_key = interaction_to_inbound(interaction, "", state).meta[:session_key]
+
+    case RouterBridge.active_run(session_key) do
+      {:ok, ^run_id} ->
+        fun.()
+
+      {:error, _} ->
+        respond_ephemeral(interaction, "Run controls are unavailable right now; nothing changed.")
+
+      _ ->
+        respond_ephemeral(
+          interaction,
+          "Only the user who started this run can control it; nothing changed."
+        )
+    end
+
+    state
+  end
+
+  defp handle_cancel_component(interaction, run_id) do
     case LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested) do
       :ok ->
         update_interaction(interaction, "Cancelling...", [])
@@ -1940,13 +1976,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
   end
 
-  defp handle_keepalive_component(interaction, custom_id, decision) do
-    run_id =
-      case decision do
-        :continue -> String.trim_leading(custom_id, @idle_keepalive_continue_prefix)
-        :cancel -> String.trim_leading(custom_id, @idle_keepalive_stop_prefix)
-      end
-
+  defp handle_keepalive_component(interaction, run_id, decision) do
     case LemonChannels.Runtime.keep_run_alive(run_id, decision) do
       :ok when decision == :continue ->
         update_interaction(interaction, "Continuing run.", [])
@@ -2109,27 +2139,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     |> List.wrap()
     |> List.first()
     |> map_get(:name)
-  end
-
-  # ============================================================================
-  # /reload Command
-  # ============================================================================
-
-  defp handle_reload_interaction(interaction, state) do
-    respond_ephemeral(interaction, "Recompiling...")
-
-    case IEx.Helpers.recompile() do
-      :ok ->
-        send_followup(interaction, "Recompile complete.")
-
-      :noop ->
-        send_followup(interaction, "Nothing to recompile — code is up to date.")
-
-      {:error, _} ->
-        send_followup(interaction, "Recompile failed — check the build output.")
-    end
-
-    state
   end
 
   # ============================================================================
@@ -2468,57 +2477,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # CWD / Project Helpers
   # ============================================================================
 
-  defp maybe_select_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector) do
-    sel = String.trim(selector)
-
-    cond do
-      sel == "" ->
-        :noop
-
-      looks_like_path?(sel) ->
-        base =
-          case BindingResolver.resolve_cwd(scope) do
-            cwd when is_binary(cwd) and byte_size(cwd) > 0 -> cwd
-            _ -> Cwd.channel_default_cwd()
-          end
-
-        expanded =
-          case Path.type(sel) do
-            :absolute -> Path.expand(sel)
-            _ -> Path.expand(sel, base)
-          end
-
-        if File.dir?(expanded) do
-          id = Path.basename(expanded)
-          ProjectBindingStore.put_dynamic(id, %{root: expanded})
-          ProjectBindingStore.put_override(scope, id)
-          {:ok, %{id: id, root: expanded}}
-        else
-          {:error, "Project path does not exist: #{expanded}"}
-        end
-
-      true ->
-        case BindingResolver.lookup_project(sel) do
-          %{root: root} when is_binary(root) and byte_size(root) > 0 ->
-            root = Path.expand(root)
-
-            if File.dir?(root) do
-              ProjectBindingStore.put_override(scope, sel)
-              {:ok, %{id: sel, root: root}}
-            else
-              {:error, "Project root does not exist: #{root}"}
-            end
-
-          _ ->
-            {:error, "Unknown project: #{sel}"}
-        end
-    end
-  end
-
-  defp looks_like_path?(s) when is_binary(s) do
-    String.starts_with?(s, "/") or String.starts_with?(s, "~") or
-      String.starts_with?(s, ".") or String.contains?(s, "/")
-  end
+  defp maybe_select_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector),
+    do: LemonChannels.ProjectSelection.select(scope, selector)
 
   defp scope_has_cwd_override?(%ChatScope{} = scope) do
     case BindingResolver.get_project_override(scope) do

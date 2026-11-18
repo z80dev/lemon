@@ -186,6 +186,14 @@ registers `CommandCatalog.telegram_menu()` with Bot API `setMyCommands` in the
 default scope, excluding admin-only controls. Registration failures are logged
 without preventing polling or typed commands.
 
+`adminOnly` catalog entries (currently `/trigger`) are also enforced, not just
+hidden: `LemonChannels.CommandAuthority` refuses them before dispatch unless the
+sender has owner authority. On Telegram that is `sender.owner?` (a positive
+human user id in `allowed_chat_ids`); on Discord it is the invoking member's
+Administrator or Manage Server permission from the interaction. Group-admin
+status alone is not enough. Chat `/reload` was removed; use `./bin/lemon reload`
+on the host.
+
 Telegram and Discord execute the portable information/session commands through
 `LemonChannels.PortableCommand`. Queue and steer remain router-owned submission
 modes; reset/reasoning/stop reuse the native new/thinking/cancel handlers;
@@ -660,12 +668,12 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | Command | Description |
 |---------|-------------|
 | `/new` | Start a new session (acknowledges immediately, cleans up async) |
-| `/resume` | Resume a previous native session; legacy vendor entries remain visible for history but cannot be resumed |
+| `/resume` | Resume a previous native session of this chat; the router admits only native sessions bound to the chat's own session key, so another chat's session id (and any legacy session created before owner binding) starts a fresh session instead. Legacy vendor entries remain visible for history but cannot be resumed |
 | `/model` | Interactive provider/model picker via reply keyboard |
 | `/goal` | Preview durable goal status/set with optional max-continuation budget/pause/resume/continue/loop controls, opt-in auto loop scheduling, and clear for the current session |
 | `/kanban` | Preview durable kanban board/task/archive/dispatcher controls with redacted board/task output |
-| `/checkpoint` | Preview checkpoint status with redacted lifecycle event counts, redacted event history, redacted diff count, and restore via `/checkpoint restore <id> confirm`; lifecycle events are not pushed into ordinary chat |
-| `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>` and `/rollback <id> confirm` |
+| `/checkpoint` | Preview checkpoint status with redacted lifecycle event counts, redacted event history and redacted diff count. `/checkpoint restore <id>` previews and prints a random single-use token; `/checkpoint restore <id> <token>` restores. Only checkpoints of the chat's current native session are reachable, and only when the router bound that native session to this chat. The token is held server-side, bound to the sender, the chat, the checkpoint revision, the selected roots and the current files, expires after five minutes and is spent by its first use. Lifecycle events are not pushed into ordinary chat |
+| `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>`, `/rollback <id>` (preview) and `/rollback <id> <token>` |
 | `/media` | Preview generated-media job status with redacted type/status/artifact counts and cleanup policy |
 | `/remind <when> <what>` | Schedule a reminder in server-local time, e.g. `/remind in 20m check oven`, `/remind 9am stand-up`, `/remind every weekday 8:30 daily brief`; the cron job's result is delivered back to this chat/topic |
 | `/reminders` | List this chat's enabled reminders (id, schedule, next run) |
@@ -676,10 +684,10 @@ current transport UX. Known-bad variants may remain in provider registries for
 manual use, but the picker should filter them out and prefer task-capable
 Google preview variants over dead or weaker direct IDs.
 | `/thinking` | Toggle extended thinking |
-| `/trigger` | Switch between `:all` and `:mentions` mode (groups default to `:mentions`) |
+| `/trigger` | Switch between `:all` and `:mentions` mode (groups default to `:mentions`); owner only, and in groups the owner must also be a group admin |
 | `/whoami` | Show the chat and user ids (works before pairing) |
 | `/cwd` | Set working directory |
-| `/file` | File put/get operations |
+| `/file` | File put/get operations, contained by `LemonCore.FileAccess` (no symlinks below the root, case-insensitive secret and `deny_globs` denies) |
 | `/topic` | Topic management |
 | `/cancel` | Cancel the current run |
 
@@ -797,8 +805,8 @@ See [pairing security and limits](../../docs/config.md#telegram-and-discord-dm-p
 - `/session info` -- session information
 - `/goal status`, `/goal set` with optional `max_continuations`, `/goal pause`, `/goal resume`, `/goal continue`, `/goal loop_once`/`loop_start` with optional `auto`/`loop_status`/`loop_stop`, `/goal clear` -- preview durable goal state
 - `/kanban boards`, `/kanban create`, `/kanban show`, `/kanban archive`, `/kanban task_create`, `/kanban task_update`, `/kanban comment`, `/kanban dispatch_start`/`dispatch_status`/`dispatch_stop` -- preview durable kanban state
-- `/checkpoint status`, `/checkpoint events limit:<n>`, `/checkpoint diff checkpoint_id:<id>`, `/checkpoint restore checkpoint_id:<id> confirm:true` -- preview checkpoint rollback controls with redacted lifecycle event counts/history, pushed active-run event notices, and redacted chat output
-- `/rollback status`, `/rollback events limit:<n>`, `/rollback diff checkpoint_id:<id>`, `/rollback restore checkpoint_id:<id> confirm:true` -- Hermes-style alias for the same preview checkpoint rollback controls
+- `/checkpoint status`, `/checkpoint events limit:<n>`, `/checkpoint diff checkpoint_id:<id>`, `/checkpoint restore checkpoint_id:<id> [token:<preview token>]` -- preview checkpoint rollback controls with redacted lifecycle event counts/history and redacted chat output; restore without a token previews and issues a single-use token for the invoking user, and only that token (within five minutes, with unchanged files) restores the invoking user's own session checkpoints
+- `/rollback status`, `/rollback events limit:<n>`, `/rollback diff checkpoint_id:<id>`, `/rollback restore checkpoint_id:<id> [token:<preview token>]` -- Hermes-style alias for the same preview checkpoint rollback controls
 - `/media status` -- preview generated-media job status with redacted type/status/artifact counts and cleanup policy
 
 Channel diagnostics expose the expected slash-command inventory plus boolean
@@ -810,7 +818,7 @@ generated command-schema regression without inspecting Discord credentials.
 
 - Shared-channel debounce buffering is keyed by channel, thread, and session/user identity so rapid messages from different Discord users do not get merged into one run.
 - Discord inbound message dedupe uses the fast ETS table plus a persisted idempotency mark so duplicate `MESSAGE_CREATE` events still suppress a second run after transport ETS state is lost.
-- Discord `/trigger all` enables free-response routing for unmentioned group messages in the channel or thread scope; `/trigger mentions` restores the default mention-gated behavior. Thread messages that arrive from Discord without parent-channel context also honor the stored thread trigger key. Live free-response promotion requires Discord's privileged Message Content Intent and now has a passing external-sender proof.
+- Discord `/trigger all` enables free-response routing for unmentioned group messages in the channel or thread scope; `/trigger mentions` restores the default mention-gated behavior. `/trigger` requires the Administrator or Manage Server permission. Thread messages that arrive from Discord without parent-channel context also honor the stored thread trigger key. Live free-response promotion requires Discord's privileged Message Content Intent and now has a passing external-sender proof.
 - Discord ignores its own bot messages and webhooks. External bot-authored messages are normalized with sender bot metadata and can route when normal trigger policy allows them, but broad external-bot support still needs live proof before promotion.
 - Routed status messages use Discord buttons for cancel and keep-waiting controls.
 - Finalized Discord runs can auto-send files generated by the agent as real Discord attachments instead of path notices.

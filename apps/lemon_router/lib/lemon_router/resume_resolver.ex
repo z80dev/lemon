@@ -17,11 +17,26 @@ defmodule LemonRouter.ResumeResolver do
   Context comparisons use `LemonCore.InvocationProof` to project only a valid,
   factory-attested, fixed-run proof header. All other MCP configuration remains
   exact, and the transport configuration is never rewritten.
+
+  Every bound native session also has an owner, the session key of the run
+  that first bound it (`LemonCore.NativeSessionOwner`). Explicit and automatic
+  resumes are admitted only for that same session key, so one chat cannot
+  resume another chat's native session even when policy, workspace and
+  context match. Requests carrying channel provenance (`:channel_identity`,
+  required for every `:channel`-origin submission) additionally refuse unbound
+  (legacy) native sessions; they start a new native session instead.
   """
 
   require Logger
 
-  alias LemonCore.{ExecutionCommand, InvocationProof, MapHelpers, ResumeToken, Store}
+  alias LemonCore.{
+    ExecutionCommand,
+    InvocationProof,
+    MapHelpers,
+    NativeSessionOwner,
+    ResumeToken,
+    Store
+  }
 
   @native_engine "lemon"
   @context_table :native_resume_contexts
@@ -51,7 +66,7 @@ defmodule LemonRouter.ResumeResolver do
 
     case normalize_explicit_resume(explicit_resume) do
       {:ok, resume} ->
-        authorize_resume(resume, :explicit, context, meta, store)
+        authorize_resume(resume, :explicit, session_key, context, meta, store)
 
       {:error, engine} ->
         {:error,
@@ -71,7 +86,7 @@ defmodule LemonRouter.ResumeResolver do
   defp resolve_auto_resume(session_key, context, meta, store) when is_binary(session_key) do
     case persisted_resume(LemonCore.ChatStateStore.get(store, session_key)) do
       {:native, resume} ->
-        authorize_resume(resume, :auto, context, meta, store)
+        authorize_resume(resume, :auto, session_key, context, meta, store)
 
       {:non_native, engine} ->
         Logger.warning(
@@ -117,8 +132,17 @@ defmodule LemonRouter.ResumeResolver do
     key = {resume.engine, resume.value}
     digest = context_digest(execution_context(request))
 
-    put_binding(store, key, digest)
+    with :ok <- put_binding(store, key, digest) do
+      bind_owner(store, resume, request.session_key)
+    end
   end
+
+  # Only native sessions are resumable, so only they carry an owner.
+  defp bind_owner(store, %ResumeToken{engine: @native_engine} = resume, session_key)
+       when is_binary(session_key) and session_key != "",
+       do: NativeSessionOwner.bind(store, resume, session_key)
+
+  defp bind_owner(_store, _resume, _session_key), do: :ok
 
   @doc false
   @spec bind_run(ExecutionCommand.t(), Store.server()) :: :ok | {:error, term()}
@@ -161,18 +185,35 @@ defmodule LemonRouter.ResumeResolver do
     end
   end
 
-  defp authorize_resume(resume, source, context, meta, store) do
+  defp authorize_resume(resume, source, session_key, context, meta, store) do
     digest = context_digest(context)
 
     allowed =
-      case Store.fetch(store, @context_table, {resume.engine, resume.value}) do
-        {:ok, ^digest} -> Store.confirm_durable(store) == :ok
-        {:ok, nil} -> legacy_unbound_context?(context, meta)
-        _ -> false
-      end
+      owner_admits?(store, resume, session_key, meta) and
+        case Store.fetch(store, @context_table, {resume.engine, resume.value}) do
+          {:ok, ^digest} -> Store.confirm_durable(store) == :ok
+          {:ok, nil} -> legacy_unbound_context?(context, meta)
+          _ -> false
+        end
 
     if allowed, do: {:ok, resume, source}, else: {:ok, nil, nil}
   end
+
+  # The owning session key always resumes its own session; any other key is
+  # refused. Unbound sessions stay resumable only for requests without channel
+  # provenance (operator, TUI and agent-messaging surfaces).
+  defp owner_admits?(store, resume, session_key, meta) do
+    case NativeSessionOwner.fetch(store, resume) do
+      {:ok, nil} -> not channel_principal?(meta)
+      {:ok, owner} -> owner == session_key and Store.confirm_durable(store) == :ok
+      {:error, _reason} -> false
+    end
+  end
+
+  defp channel_principal?(meta) when is_map(meta),
+    do: is_map(MapHelpers.get_key(meta, :channel_identity))
+
+  defp channel_principal?(_meta), do: false
 
   defp legacy_unbound_context?({nil, _tool_policy, nil, nil, false, false}, meta) do
     Map.get(meta, :resume_policy_override) != true

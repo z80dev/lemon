@@ -12,14 +12,10 @@ defmodule LemonGateway.BindingResolverTest do
     Application.delete_env(:lemon_gateway, LemonGateway.Config)
     Application.delete_env(:lemon_gateway, :config_path)
 
-    # LemonCore.Store is shared across apps; ensure per-test isolation for any dynamic
-    # project state that may have been persisted by other tests (or prior runs).
+    # LemonCore.Store is shared across apps; ensure per-test isolation for any
+    # project override state persisted by other tests (or prior runs).
     try do
       _ = Application.ensure_all_started(:lemon_core)
-
-      for {key, _} <- LemonCore.Store.list(:projects_dynamic) do
-        :ok = LemonCore.Store.delete(:projects_dynamic, key)
-      end
 
       for {key, _} <- LemonCore.Store.list(:project_overrides) do
         :ok = LemonCore.Store.delete(:project_overrides, key)

@@ -37,9 +37,20 @@ and script notifications.
   transport) so running transports update live; never require a restart or widen
   beyond the named chat. A configured empty Discord `allowed_channel_ids` is
   deny-all; only an absent key is unrestricted.
-- Discord slash commands must pass the same guild/channel allowlists and
-  `deny_unbound_channels` checks as ordinary messages before any read, mutation,
-  cancellation, reflection or runtime call.
+- Discord slash commands and message components (cancel, keep-alive, model)
+  must pass the same guild/channel allowlists and `deny_unbound_channels`
+  checks as ordinary messages before any read, mutation, cancellation,
+  reflection or runtime call. Run-control components act only on the active
+  run of the clicker's own session. `adminOnly` catalog entries are enforced by
+  `LemonChannels.CommandAuthority`, not just hidden.
+- Discord `/resume` selections are keyed by the selecting user's full session
+  key and cleared by `/new`/`/reset`.
+- Chat `/file` and `/cwd` go through `LemonCore.FileAccess` and
+  `LemonChannels.ProjectSelection`: physical-root containment with no symlinks
+  below the root, case-insensitive built-in secret denies and `deny_globs`
+  judged on actual entry names (malformed globs deny everything), configured
+  project ids only. The gateway send-file tools use the same module and queue
+  a private copy, never the source path.
 - XMTP authorizes the MLS-authenticated sender inbox id against
   `gateway.xmtp.allowed_inboxes`, re-read from current config per message,
   before dedupe, placeholder replies or submission; empty is deny-all unless

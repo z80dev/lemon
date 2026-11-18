@@ -195,9 +195,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     on_exit(fn -> File.rm_rf(cwd) end)
 
     trigger_on_all(chat_id)
+    set_projects(%{"topiccwd" => %{root: cwd}})
 
     MockAPI.set_updates([
-      topic_message_update(chat_id, topic_id, "/cwd #{cwd}", msg_id + 1),
+      topic_message_update(chat_id, topic_id, "/cwd topiccwd", msg_id + 1),
       topic_message_update(chat_id, topic_id, "/new", msg_id + 2),
       topic_message_update(chat_id, topic_id, "hello", msg_id + 3)
     ])
@@ -240,13 +241,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
 
-    _ = ProjectBindingStore.put_dynamic(project_id, %{root: cwd})
+    set_projects(%{project_id => %{root: cwd}})
 
     _ = ProjectBindingStore.put_override(scope, project_id)
     _ = ProjectBindingStore.put_override(scope, project_id)
 
     on_exit(fn ->
-      _ = ProjectBindingStore.delete_dynamic(project_id)
       _ = ProjectBindingStore.delete_override(scope)
       _ = ProjectBindingStore.delete_override(scope)
     end)
@@ -340,7 +340,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     assert {:ok, _pid} =
              start_transport(%{
-               allowed_chat_ids: [chat_id],
+               # Sender 99 is the owner: /trigger is adminOnly.
+               allowed_chat_ids: [chat_id, 99],
                bot_username: "lemonbot",
                deny_unbound_chats: false
              })
@@ -369,7 +370,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     assert {:ok, _pid} =
              start_transport(%{
-               allowed_chat_ids: [chat_id],
+               allowed_chat_ids: [chat_id, 99],
                bot_username: "lemonbot",
                deny_unbound_chats: false
              })
@@ -401,7 +402,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     assert {:ok, _pid} =
              start_transport(%{
-               allowed_chat_ids: [chat_id],
+               allowed_chat_ids: [chat_id, 99],
                bot_username: "lemonbot",
                deny_unbound_chats: false
              })
@@ -470,6 +471,16 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   defp trigger_on_all(chat_id) do
     scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
     :ok = TriggerMode.set(scope, "default", :all)
+  end
+
+  defp set_projects(projects) do
+    existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
+
+    Application.put_env(
+      :lemon_gateway,
+      @gateway_config_key,
+      Map.put(existing, :projects, projects)
+    )
   end
 
   defp set_bindings(bindings) do

@@ -445,13 +445,26 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
     File.mkdir_p!(project_root)
+    gateway_key = :"Elixir.LemonGateway.Config"
+    previous = Application.get_env(:lemon_gateway, gateway_key)
+
+    Application.put_env(
+      :lemon_gateway,
+      gateway_key,
+      Map.put(previous || %{}, :projects, %{project_id => %{root: project_root}})
+    )
+
     :ok = ProjectBindingStore.put_override(scope, "existing-project")
     :persistent_term.put({CancelTestRouter, :abort_result}, {:error, :unavailable})
-    CancelMockAPI.set_updates([message_update(chat_id, msg_id, "/new #{project_root}")])
+    CancelMockAPI.set_updates([message_update(chat_id, msg_id, "/new #{project_id}")])
 
     on_exit(fn ->
       ProjectBindingStore.delete_override(scope)
-      ProjectBindingStore.delete_dynamic(project_id)
+
+      if previous,
+        do: Application.put_env(:lemon_gateway, gateway_key, previous),
+        else: Application.delete_env(:lemon_gateway, gateway_key)
+
       File.rm_rf(project_root)
     end)
 
@@ -465,7 +478,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     assert_receive {:send_message, ^chat_id, text, _opts, _parse_mode}
     assert text =~ "existing session was left unchanged"
     assert ProjectBindingStore.get_override(scope) == "existing-project"
-    assert ProjectBindingStore.get_dynamic(project_id) == nil
   end
 
   test "failed keepalive leaves inline retry controls in place" do

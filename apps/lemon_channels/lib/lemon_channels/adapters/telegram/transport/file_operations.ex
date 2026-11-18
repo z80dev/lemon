@@ -12,8 +12,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   alias LemonChannels.BindingResolver
   alias LemonCore.Cwd
   alias LemonCore.ChatScope
+  alias LemonCore.FileAccess
   alias LemonChannels.Adapters.Telegram.Transport.Commands
 
+  @max_upload_bytes 20 * 1024 * 1024
+  @max_download_bytes 50 * 1024 * 1024
   @media_types [:document, :photo, :video, :animation, :video_note]
 
   @mime_to_ext %{
@@ -74,20 +77,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   end
 
   @doc """
-  Generate a filename for the media. Uses the Telegram-provided filename when
-  available, otherwise generates `{type}_{YYYYMMDD_HHMMSS}{ext}`.
+  Generate a filename for the media. Uses the basename of the Telegram-provided
+  filename when available, otherwise generates
+  `{type}_{YYYYMMDD_HHMMSS}{ext}`.
   """
   def media_filename(media_type, media) when is_atom(media_type) and is_map(media) do
-    telegram_name = media[:file_name] || media["file_name"]
-
-    if is_binary(telegram_name) and telegram_name != "" do
-      telegram_name
-    else
-      ext = ext_from_mime(media_type, media[:mime_type] || media["mime_type"])
-      type_prefix = type_to_prefix(media_type)
-      timestamp = format_timestamp()
-      "#{type_prefix}_#{timestamp}#{ext}"
-    end
+    ext = ext_from_mime(media_type, media[:mime_type] || media["mime_type"])
+    generated = "#{type_to_prefix(media_type)}_#{format_timestamp()}#{ext}"
+    FileAccess.upload_name(media[:file_name] || media["file_name"], generated)
   end
 
   def media_filename(_media_type, _media), do: "upload_#{System.system_time(:second)}.bin"
@@ -138,15 +135,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
           filename = media_filename(media_type, media)
           rel = Path.join(uploads_dir, filename)
 
-          with {:ok, abs} <- resolve_dest_abs(root, rel),
-               :ok <- ensure_not_denied(root, rel, cfg),
-               {:ok, bytes} <- download_media_bytes(state, inbound),
-               :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
-               {:ok, final_rel, _} <- write_document(rel, abs, bytes, force: false) do
-            {:ok, final_rel}
-          else
-            {:error, msg} -> {:error, msg}
-          end
+          FileAccess.put(
+            root,
+            rel,
+            cfg,
+            fn -> download_media_bytes(state, inbound) end,
+            false,
+            @max_upload_bytes
+          )
         end)
 
       ok_paths = for {:ok, p} <- results, do: p
@@ -199,8 +195,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
       ) do
     cfg = files_cfg(state)
 
-    scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
-    root = BindingResolver.resolve_cwd(scope)
+    root_result = files_project_root(file_put_inbound, chat_id, thread_id)
 
     args = Commands.telegram_command_args(file_put_inbound.message.text || "", "file") || ""
     parts = String.split(String.trim(args), ~r/\s+/, trim: true)
@@ -213,7 +208,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
 
     with :ok <- ensure_files_enabled(cfg),
          true <- files_sender_allowed?(state, file_put_inbound, chat_id),
-         {:ok, root} <- ensure_project_root(root),
+         {:ok, root} <- root_result,
          {:ok, force, dest_rel} <- parse_file_put_args(cfg, file_put_inbound, rest),
          :ok <- validate_multi_file_dest(items, dest_rel) do
       results = upload_media_group_items(state, items, root, dest_rel, cfg, force)
@@ -265,15 +260,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
           dest_rel
         end
 
-      with {:ok, abs} <- resolve_dest_abs(root, rel),
-           :ok <- ensure_not_denied(root, rel, cfg),
-           {:ok, bytes} <- download_media_bytes(state, inbound),
-           :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
-           {:ok, final_rel, _} <- write_document(rel, abs, bytes, force: force) do
-        {:ok, final_rel}
-      else
-        {:error, msg} -> {:error, msg}
-      end
+      FileAccess.put(
+        root,
+        rel,
+        cfg,
+        fn -> download_media_bytes(state, inbound) end,
+        force,
+        @max_upload_bytes
+      )
     end)
   end
 
@@ -326,11 +320,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
          true <- files_sender_allowed?(state, inbound, chat_id),
          {:ok, root} <- files_project_root(inbound, chat_id, thread_id),
          {:ok, dest_rel} <- auto_put_destination(cfg, inbound),
-         {:ok, dest_abs} <- resolve_dest_abs(root, dest_rel),
-         :ok <- ensure_not_denied(root, dest_rel, cfg),
-         {:ok, bytes} <- download_media_bytes(state, inbound),
-         :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
-         {:ok, final_rel, _final_abs} <- write_document(dest_rel, dest_abs, bytes, force: false) do
+         {:ok, final_rel} <-
+           FileAccess.put(
+             root,
+             dest_rel,
+             cfg,
+             fn -> download_media_bytes(state, inbound) end,
+             false,
+             @max_upload_bytes
+           ) do
       _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Uploaded: #{final_rel}")
 
       {:ok, final_rel}
@@ -373,9 +371,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     if not is_integer(chat_id) do
       state
     else
-      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
-      root = BindingResolver.resolve_cwd(scope)
-
       parts = String.split(String.trim(args), ~r/\s+/, trim: true)
 
       case parts do
@@ -384,10 +379,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
           state
 
         ["put" | rest] ->
-          handle_file_put(state, inbound, cfg, chat_id, thread_id, user_msg_id, root, rest)
+          handle_file_put(state, inbound, cfg, {chat_id, thread_id, user_msg_id}, rest)
 
         ["get" | rest] ->
-          handle_file_get(state, inbound, cfg, chat_id, thread_id, user_msg_id, root, rest)
+          handle_file_get(state, inbound, cfg, {chat_id, thread_id, user_msg_id}, rest)
 
         _ ->
           _ = send_system_message(state, chat_id, thread_id, user_msg_id, file_usage())
@@ -396,16 +391,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     end
   end
 
-  def handle_file_put(state, inbound, cfg, chat_id, thread_id, user_msg_id, root, rest) do
+  defp handle_file_put(state, inbound, cfg, {chat_id, thread_id, user_msg_id}, rest) do
     with :ok <- ensure_files_enabled(cfg),
          true <- files_sender_allowed?(state, inbound, chat_id),
-         {:ok, root} <- ensure_project_root(root),
+         {:ok, root} <- files_project_root(inbound, chat_id, thread_id),
          {:ok, force, dest_rel} <- parse_file_put_args(cfg, inbound, rest),
-         {:ok, dest_abs} <- resolve_dest_abs(root, dest_rel),
-         :ok <- ensure_not_denied(root, dest_rel, cfg),
-         {:ok, bytes} <- download_media_bytes(state, inbound),
-         :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
-         {:ok, final_rel, _final_abs} <- write_document(dest_rel, dest_abs, bytes, force: force) do
+         {:ok, final_rel} <-
+           FileAccess.put(
+             root,
+             dest_rel,
+             cfg,
+             fn -> download_media_bytes(state, inbound) end,
+             force,
+             @max_upload_bytes
+           ) do
       _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Saved: #{final_rel}")
       state
     else
@@ -427,20 +426,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     end
   end
 
-  def handle_file_get(state, inbound, cfg, chat_id, thread_id, user_msg_id, root, rest) do
+  defp handle_file_get(state, inbound, cfg, {chat_id, thread_id, user_msg_id}, rest) do
     with :ok <- ensure_files_enabled(cfg),
          true <- files_sender_allowed?(state, inbound, chat_id),
-         {:ok, root} <- ensure_project_root(root),
+         {:ok, root} <- files_project_root(inbound, chat_id, thread_id),
          {:ok, rel} <- parse_file_get_args(rest),
-         {:ok, abs} <- resolve_dest_abs(root, rel),
-         :ok <- ensure_not_denied(root, rel, cfg),
-         {:ok, kind, send_path, filename} <- prepare_file_get(abs),
-         :ok <- enforce_path_size(send_path, cfg, :max_download_bytes, 50 * 1024 * 1024),
-         :ok <- send_document_reply(state, chat_id, thread_id, user_msg_id, send_path, filename) do
-      if kind == :zip do
-        _ = File.rm(send_path)
-      end
-
+         {:ok, filename, bytes} <- FileAccess.get(root, rel, cfg, @max_download_bytes),
+         :ok <-
+           FileAccess.with_temp_file(filename, bytes, fn path ->
+             send_document_reply(state, chat_id, thread_id, user_msg_id, path, filename)
+           end) do
       state
     else
       {:error, msg} when is_binary(msg) ->
@@ -478,27 +473,18 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     end
   end
 
+  # A non-empty `allowed_user_ids` is authoritative for every chat kind. Without
+  # one, groups need a Telegram group admin and direct messages need the owner
+  # (an allowlisted human user id), so `allow_all_chats` never opens files.
   def files_sender_allowed?(state, inbound, chat_id) do
-    cfg = files_cfg(state)
-    allowed = cfg_get(cfg, :allowed_user_ids, [])
-    allowed = if is_list(allowed), do: allowed, else: []
+    sender = Map.get(inbound, :sender) || %{}
+    sender_id = parse_int(Map.get(sender, :id))
 
-    sender_id = parse_int(inbound.sender && inbound.sender.id)
-
-    cond do
-      is_integer(sender_id) and Enum.any?(allowed, fn x -> parse_int(x) == sender_id end) ->
-        true
-
-      inbound.peer.kind in [:group, :channel] ->
-        if allowed == [] do
-          sender_admin?(state, chat_id, sender_id)
-        else
-          false
-        end
-
-      true ->
-        true
-    end
+    FileAccess.sender_allowed?(cfg_get(files_cfg(state), :allowed_user_ids), sender_id, fn ->
+      if inbound.peer.kind in [:group, :channel],
+        do: is_integer(sender_id) and sender_admin?(state, chat_id, sender_id),
+        else: Map.get(sender, :owner?) == true
+    end)
   rescue
     _ -> false
   end
@@ -510,15 +496,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     ensure_project_root(root)
   end
 
+  @doc "The physical active root: the bound project root or the channel default cwd."
   def ensure_project_root(root) when is_binary(root) and byte_size(root) > 0,
-    do: {:ok, Path.expand(root)}
+    do: FileAccess.real_root(root)
 
-  def ensure_project_root(_) do
-    case Cwd.channel_default_cwd() do
-      cwd when is_binary(cwd) and byte_size(cwd) > 0 -> {:ok, Path.expand(cwd)}
-      _ -> {:error, "No accessible working directory configured."}
-    end
-  end
+  def ensure_project_root(_), do: FileAccess.real_root(Cwd.channel_default_cwd())
 
   def auto_put_destination(cfg, inbound) do
     uploads_dir = cfg_get(cfg, :uploads_dir, "incoming")
@@ -574,53 +556,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     end
   end
 
-  def resolve_dest_abs(root, rel)
-      when is_binary(root) and (is_binary(rel) or is_nil(rel)) do
-    rel = String.trim(rel || "")
-
-    cond do
-      rel == "" ->
-        {:error, file_usage()}
-
-      Path.type(rel) == :absolute ->
-        {:error, "Path must be relative to the active working directory root."}
-
-      String.contains?(rel, "\\0") ->
-        {:error, "Invalid path."}
-
-      true ->
-        root = Path.expand(root)
-        abs = Path.expand(rel, root)
-
-        if within_root?(root, abs) do
-          {:ok, abs}
-        else
-          {:error, "Path escapes the active working directory root."}
-        end
-    end
-  rescue
-    ArgumentError -> {:error, "Invalid path."}
-  end
-
-  def resolve_dest_abs(_root, _rel), do: {:error, "Invalid path."}
-
-  def within_root?(root, abs) when is_binary(root) and is_binary(abs) do
-    root = Path.expand(root)
-    abs = Path.expand(abs)
-    abs == root or Path.relative_to(abs, root) != abs
-  end
-
-  def ensure_not_denied(root, rel, cfg) do
-    globs = cfg_get(cfg, :deny_globs, [])
-    globs = if is_list(globs), do: globs, else: []
-
-    if denied_by_globs?(root, rel, globs) do
-      {:error, "Access denied for that path."}
-    else
-      :ok
-    end
-  end
-
   def download_media_bytes(state, inbound) do
     file_id = extract_file_id(inbound)
 
@@ -647,82 +582,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
 
       {:error,
        "Failed to download the file from Telegram. Check the connection, then send the attachment again."}
-  end
-
-  def enforce_bytes_limit(bytes, cfg, key, default_max) when is_binary(bytes) do
-    max = parse_int(cfg[key] || cfg[to_string(key)]) || default_max
-
-    if is_integer(max) and max > 0 and byte_size(bytes) > max do
-      {:error, "File is too large."}
-    else
-      :ok
-    end
-  end
-
-  def write_document(rel, abs, bytes, opts) do
-    force = Keyword.get(opts, :force, false)
-    abs = Path.expand(abs)
-    rel = String.trim(rel || "")
-
-    dir = Path.dirname(abs)
-    File.mkdir_p!(dir)
-
-    cond do
-      not force and File.exists?(abs) ->
-        {:error, "File already exists. Use /file put --force <path> to overwrite."}
-
-      true ->
-        tmp = abs <> ".tmp-" <> Base.url_encode64(:crypto.strong_rand_bytes(6), padding: false)
-        File.write!(tmp, bytes)
-        File.rename!(tmp, abs)
-        {:ok, rel, abs}
-    end
-  rescue
-    File.Error -> {:error, "Failed to write file."}
-  end
-
-  def prepare_file_get(abs) do
-    cond do
-      File.regular?(abs) ->
-        {:ok, :file, abs, Path.basename(abs)}
-
-      File.dir?(abs) ->
-        tmp =
-          Path.join(
-            System.tmp_dir!(),
-            "lemon-telegram-#{Base.url_encode64(:crypto.strong_rand_bytes(6), padding: false)}.zip"
-          )
-
-        case zip_dir(abs, tmp) do
-          :ok ->
-            {:ok, :zip, tmp, Path.basename(abs) <> ".zip"}
-
-          {:error, reason} ->
-            Logger.warning("Telegram directory archive failed: #{inspect(reason)}")
-
-            {:error,
-             "Failed to zip directory. Check read permissions and available disk space, then try again."}
-        end
-
-      true ->
-        {:error, "Not found."}
-    end
-  end
-
-  def enforce_path_size(path, cfg, key, default_max) do
-    max = parse_int(cfg[key] || cfg[to_string(key)]) || default_max
-
-    if is_integer(max) and max > 0 do
-      case File.stat(path) do
-        {:ok, %File.Stat{size: size}} ->
-          if size > max, do: {:error, "File is too large."}, else: :ok
-
-        {:error, _} ->
-          {:error, "Unable to read file size."}
-      end
-    else
-      :ok
-    end
   end
 
   def send_document_reply(state, chat_id, thread_id, reply_to_id, path, filename) do
@@ -762,34 +621,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   # ---------------------------------------------------------------------------
 
   defp truthy(v), do: v in [true, "true", 1, "1"]
-
-  defp denied_by_globs?(_root, _rel, []), do: false
-
-  defp denied_by_globs?(root, rel, globs) do
-    root = Path.expand(root)
-    abs = Path.expand(rel, root)
-
-    Enum.any?(globs, fn glob ->
-      matches = Path.wildcard(Path.join(root, glob), match_dot: true)
-      Enum.any?(matches, fn m -> Path.expand(m) == abs end)
-    end)
-  end
-
-  defp zip_dir(dir, zip_path) do
-    files =
-      Path.wildcard(Path.join(dir, "**/*"), match_dot: true)
-      |> Enum.filter(&File.regular?/1)
-      |> Enum.map(&Path.relative_to(&1, dir))
-
-    case :zip.create(
-           to_charlist(zip_path),
-           Enum.map(files, &to_charlist/1),
-           cwd: to_charlist(dir)
-         ) do
-      {:ok, _} -> :ok
-      {:error, _} -> {:error, :zip_failed}
-    end
-  end
 
   defp sender_admin?(state, chat_id, sender_id) do
     if function_exported?(state.api_mod, :get_chat_member, 3) do

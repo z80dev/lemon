@@ -256,6 +256,16 @@ defmodule LemonCore.Store do
   def compare_and_delete_many(server, entries, durable: true),
     do: durable_call(server, {:generic_compare_and_delete_many, entries})
 
+  @doc """
+  Durable `take/3`: returns the removed value (or `nil`) only after the
+  removal passed the durability barrier. A failed removal or barrier is
+  `{:error, :outcome_unknown}`; callers consuming a single-use authority must
+  treat it as not consumed and refuse to act.
+  """
+  @spec take(server(), atom(), term(), keyword()) :: term() | nil | {:error, term()}
+  def take(server, table, key, durable: true),
+    do: durable_call(server, {:generic_take, table, key})
+
   defp durable_call(server, request) do
     safe_store_call(server, {:durable_write, request}, {:error, :outcome_unknown},
       op: :durable_write,
@@ -984,8 +994,21 @@ defmodule LemonCore.Store do
         end)
       else
         case handle_call(request, from, state) do
-          {:reply, :ok, next_state} -> handle_call(:sync, from, next_state)
-          other -> other
+          {:reply, :ok, next_state} ->
+            handle_call(:sync, from, next_state)
+
+          # A take replies with the removed value; it is durable only once
+          # the barrier after the removal succeeds.
+          {:reply, value, next_state}
+          when elem(request, 0) == :generic_take and
+                 not (is_tuple(value) and elem(value, 0) == :error) ->
+            case handle_call(:sync, from, next_state) do
+              {:reply, :ok, synced} -> {:reply, value, synced}
+              other -> other
+            end
+
+          other ->
+            other
         end
       end
 

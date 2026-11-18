@@ -190,7 +190,6 @@ defmodule LemonChannels.CommandCatalog do
     {"trigger", "Control the chat message trigger mode.", "[mode]", ~w(telegram discord), true},
     {"cwd", "Show or change the working directory.", "[path]", ~w(telegram discord), false},
     {"topic", "Create a topic or thread.", "<name>", ~w(telegram discord), false},
-    {"reload", "Recompile development code.", "", ~w(telegram discord), true},
     {"whoami", "Show your Telegram chat identity.", "", ~w(telegram), false},
     {"remind", "Schedule a reminder.", "<schedule> <message>", ~w(telegram), false},
     {"reminders", "List reminders.", "", ~w(telegram), false},

@@ -428,7 +428,8 @@ lemon gateway setup telegram --non-interactive --token "$TELEGRAM_BOT_TOKEN" --c
 A Telegram bot without `allowed_chat_ids` is unpaired: it ignores every chat and
 only replies with a pairing hint. Send `/whoami` to the bot to see a chat's id
 (for example, to add a group with another `--chat-id`). Group chats respond only
-to mentions, replies, and commands unless an admin sends `/trigger all`, and every
+to mentions, replies, and commands unless the owner (your own user id in
+`allowed_chat_ids`, and a group admin) sends `/trigger all`, and every
 file edit or shell command in a group needs an approval. Remote chats run in the
 assistant home (`~/.lemon/agent/workspace`), not your home directory, unless
 `gateway.default_cwd` is set.

@@ -116,6 +116,7 @@ attachment policy.
   router still boots and runtime operations retain their existing
   unavailable-runtime handling.
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.
+- `ResumeResolver.bind/3` also binds each native session to the session key of the run that first binds it (`LemonCore.NativeSessionOwner`, first write wins). Explicit and automatic resumes are admitted only for that session key; requests carrying channel provenance also refuse unbound (pre-binding) native sessions and start a fresh one instead.
 - `RouterBridge.submit_run/1` returns the exact `RunOrchestrator.submit/1` error
   when submission is rejected. Inbound transports must not acknowledge a
   message as accepted after that error, and pending-compaction markers remain

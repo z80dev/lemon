@@ -1943,7 +1943,14 @@ defmodule LemonRouter.RunOrchestratorTest do
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
       end)
 
-      resume = %ResumeToken{engine: "lemon", value: "session_abc123"}
+      # Channel chats only resume native sessions bound to their own key.
+      resume = %ResumeToken{
+        engine: "lemon",
+        value: "session_abc#{System.unique_integer([:positive])}"
+      }
+
+      assert :ok = LemonCore.NativeSessionOwner.bind(resume, session_key)
+      on_exit(fn -> LemonCore.Store.delete(:native_session_owners, {"lemon", resume.value}) end)
 
       assert {:ok, _run_id} =
                RunOrchestrator.submit(

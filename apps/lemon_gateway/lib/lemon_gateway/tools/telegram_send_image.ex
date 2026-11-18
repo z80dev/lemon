@@ -2,16 +2,21 @@ defmodule LemonGateway.Tools.TelegramSendImage do
   @moduledoc """
   LemonAgent tool definition for sending images to Telegram.
 
-  Resolves the image path relative to the project or workspace root, validates
-  the file type and size, and queues it for delivery to the active Telegram chat
+  Resolves the image beneath the project or workspace root through
+  `LemonGateway.Tools.OutboundFile` (no symlinks below the root, no `..`,
+  built-in secret denies plus `[gateway.telegram.files].deny_globs`), requires
+  an image extension on the actual file name, checks the size, and queues a
+  private copy of the validated bytes for delivery to the active Telegram chat
   with an optional caption.
 
-  Oversized images report their measured size and the configured limit;
-  filesystem lookup failures remain a separate validation error.
+  Oversized images report the configured limit; lookup and containment
+  failures are separate validation errors.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias LemonCore.FileAccess
+  alias LemonGateway.Tools.OutboundFile
 
   @default_max_bytes 50 * 1024 * 1024
 
@@ -69,13 +74,22 @@ defmodule LemonGateway.Tools.TelegramSendImage do
           String.t() | nil
         ) :: AgentToolResult.t()
   def execute(_tool_call_id, params, _signal, _on_update, root, workspace_dir, session_key) do
+    telegram_cfg = OutboundFile.channel_config(:telegram)
+
     with :ok <- require_telegram_session(session_key),
          {:ok, path} <- fetch_path(params),
-         {:ok, resolved_path} <- resolve_path(path, root, workspace_dir),
-         :ok <- ensure_supported_image(resolved_path),
-         :ok <- ensure_file_size_within_limit(resolved_path),
-         {:ok, caption} <- normalize_caption(params) do
-      send_file_result(resolved_path, caption)
+         {:ok, name, bytes} <-
+           OutboundFile.read(
+             path,
+             root,
+             workspace_dir,
+             OutboundFile.deny_globs(telegram_cfg),
+             max_download_bytes_limit(telegram_cfg)
+           ),
+         :ok <- ensure_supported_image(name),
+         {:ok, caption} <- normalize_caption(params),
+         {:ok, copy} <- FileAccess.retain_copy(name, bytes) do
+      send_file_result(copy, name, caption)
     else
       {:error, message} ->
         error_result(message)
@@ -125,106 +139,26 @@ defmodule LemonGateway.Tools.TelegramSendImage do
     end
   end
 
-  defp resolve_path(path, root, workspace_dir) do
-    roots =
-      [root, workspace_dir]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
+  defp ensure_supported_image(name) do
+    ext = name |> Path.extname() |> String.downcase()
 
-    path = expand_user_home(path)
-
-    cond do
-      Path.type(path) == :absolute ->
-        absolute = Path.expand(path)
-
-        if path_within_any_root?(absolute, roots) do
-          if File.regular?(absolute) do
-            {:ok, absolute}
-          else
-            {:error, "Image not found: #{path}"}
-          end
-        else
-          {:error, "Path must stay within the active workspace/project roots."}
-        end
-
-      true ->
-        candidates =
-          (workspace_prefixed_candidates(path, workspace_dir) ++
-             Enum.map(roots, &Path.expand(path, &1)))
-          |> Enum.uniq()
-
-        case Enum.find(candidates, &File.regular?/1) do
-          nil ->
-            {:error, "Image not found: #{path}"}
-
-          resolved ->
-            {:ok, resolved}
-        end
-    end
+    if MapSet.member?(@image_extensions, ext),
+      do: :ok,
+      else: {:error, "Unsupported image type for telegram_send_image: #{ext}"}
   end
 
-  defp workspace_prefixed_candidates(path, workspace_dir)
-       when is_binary(path) and is_binary(workspace_dir) do
-    prefixes = ["workspace/", "./workspace/", ".lemon/agent/workspace/"]
-
-    prefixes
-    |> Enum.map(fn prefix ->
-      if String.starts_with?(path, prefix) do
-        suffix = String.replace_prefix(path, prefix, "")
-        Path.expand(suffix, workspace_dir)
-      else
-        nil
-      end
-    end)
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp workspace_prefixed_candidates(_path, _workspace_dir), do: []
-
-  defp ensure_supported_image(path) do
-    ext = path |> Path.extname() |> String.downcase()
-
-    cond do
-      not File.regular?(path) ->
-        {:error, "Image not found: #{path}"}
-
-      MapSet.member?(@image_extensions, ext) ->
-        :ok
-
-      true ->
-        {:error, "Unsupported image type for telegram_send_image: #{ext}"}
-    end
-  end
-
-  defp ensure_file_size_within_limit(path) do
-    max_bytes = max_download_bytes_limit()
-
-    case File.stat(path) do
-      {:ok, %File.Stat{size: size}} when size <= max_bytes ->
-        :ok
-
-      {:ok, %File.Stat{size: size}} ->
-        {:error, "Image is too large (#{size} bytes). Max allowed is #{max_bytes} bytes."}
-
-      _ ->
-        {:error, "Failed to stat image file: #{path}"}
-    end
-  end
-
-  defp send_file_result(path, caption) do
-    basename = Path.basename(path)
-
+  defp send_file_result(path, filename, caption) do
     %AgentToolResult{
       content: [
         %TextContent{
-          text: "Queued image for Telegram delivery: #{basename}"
+          text: "Queued image for Telegram delivery: #{filename}"
         }
       ],
       details: %{
         auto_send_files: [
           %{
             path: path,
-            filename: basename,
+            filename: filename,
             caption: caption
           }
         ]
@@ -239,19 +173,6 @@ defmodule LemonGateway.Tools.TelegramSendImage do
     }
   end
 
-  defp path_within_any_root?(_path, []), do: false
-
-  defp path_within_any_root?(path, roots) do
-    Enum.any?(roots, fn root -> path_within_root?(path, root) end)
-  end
-
-  defp path_within_root?(path, root) when is_binary(path) and is_binary(root) do
-    rel = Path.relative_to(path, root)
-    rel == "." or not String.starts_with?(rel, "..")
-  end
-
-  defp path_within_root?(_, _), do: false
-
   defp normalize_dir(value) when is_binary(value) do
     trimmed = String.trim(value)
     if trimmed == "", do: nil, else: Path.expand(trimmed)
@@ -259,31 +180,7 @@ defmodule LemonGateway.Tools.TelegramSendImage do
 
   defp normalize_dir(_), do: nil
 
-  defp expand_user_home(path) when is_binary(path) do
-    home = System.user_home()
-
-    cond do
-      is_binary(home) and String.starts_with?(path, "~/") ->
-        Path.join(home, String.replace_prefix(path, "~/", ""))
-
-      is_binary(home) and path == "~" ->
-        home
-
-      true ->
-        path
-    end
-  end
-
-  defp expand_user_home(path), do: path
-
-  defp max_download_bytes_limit do
-    telegram_cfg =
-      if Process.whereis(LemonGateway.Config) do
-        LemonGateway.Config.get(:telegram) || %{}
-      else
-        Application.get_env(:lemon_gateway, :telegram, %{}) || %{}
-      end
-
+  defp max_download_bytes_limit(telegram_cfg) do
     files_cfg = telegram_cfg[:files] || telegram_cfg["files"] || %{}
     raw = files_cfg[:max_download_bytes] || files_cfg["max_download_bytes"]
 

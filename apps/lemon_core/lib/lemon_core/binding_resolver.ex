@@ -119,7 +119,7 @@ defmodule LemonCore.BindingResolver do
   end
 
   @doc """
-  Looks up a project by id from dynamic store, then static config.
+  Looks up a configured project by id. Projects come only from configuration.
 
   The optional `config_provider` is a 0-arity function that returns
   a `%{projects: %{...}}` map (used by gateway/channels to inject
@@ -128,28 +128,15 @@ defmodule LemonCore.BindingResolver do
   @spec lookup_project(String.t(), (-> map()) | nil) :: map() | nil
   def lookup_project(project_id, config_provider \\ nil)
 
+  # Projects come only from operator configuration; chat or runtime state can
+  # select a configured id but never define or shadow one.
   def lookup_project(project_id, config_provider) when is_binary(project_id) do
-    dynamic = ProjectBindingStore.get_dynamic(project_id)
+    projects =
+      if is_function(config_provider, 0), do: config_provider.() || %{}, else: %{}
 
-    cond do
-      is_map(dynamic) and is_binary(dynamic[:root] || dynamic["root"]) ->
-        %{root: dynamic[:root] || dynamic["root"]}
-
-      true ->
-        projects =
-          if is_function(config_provider, 0) do
-            config_provider.() || %{}
-          else
-            %{}
-          end
-
-        case Map.get(projects, project_id) do
-          %{root: root} when is_binary(root) ->
-            %{root: root}
-
-          _ ->
-            nil
-        end
+    case Map.get(projects, project_id) do
+      %{root: root} when is_binary(root) -> %{root: root}
+      _ -> nil
     end
   rescue
     _ -> nil
