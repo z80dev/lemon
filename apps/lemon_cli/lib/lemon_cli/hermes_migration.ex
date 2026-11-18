@@ -1838,28 +1838,31 @@ defmodule LemonCli.HermesMigration do
   # compensation is reported. Success is journaled with the store identity and
   # the value's incarnation so rollback can delete only that value.
   defp write_secret_then_config(ctx, store, name, value, update_config) do
-    with {:ok, %{incarnation: incarnation}} when is_binary(incarnation) <-
-           Secrets.create(name, value, provider: "hermes_migration") do
-      case update_config.() do
-        :ok ->
-          append_journal!(ctx, %{
-            "op" => "secret_created",
-            "name" => name,
-            "store" => store,
-            "incarnation" => incarnation
-          })
+    case Secrets.create(name, value, provider: "hermes_migration") do
+      {:ok, %{incarnation: incarnation}} when is_binary(incarnation) ->
+        case update_config.() do
+          :ok ->
+            append_journal!(ctx, %{
+              "op" => "secret_created",
+              "name" => name,
+              "store" => store,
+              "incarnation" => incarnation
+            })
 
-          :ok
+            :ok
 
-        {:error, reason} ->
-          case Secrets.delete_if_incarnation(name, incarnation) do
-            :ok -> {:error, reason}
-            {:error, undo} -> {:error, {:compensation_failed, reason, undo}}
-          end
-      end
-    else
-      {:ok, _metadata} -> {:error, :missing_incarnation}
-      {:error, _reason} = error -> error
+          {:error, reason} ->
+            case Secrets.delete_if_incarnation(name, incarnation) do
+              :ok -> {:error, reason}
+              {:error, undo} -> {:error, {:compensation_failed, reason, undo}}
+            end
+        end
+
+      {:ok, _metadata} ->
+        {:error, :missing_incarnation}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 

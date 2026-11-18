@@ -970,22 +970,24 @@ defmodule CodingAgent.Tools.Debug do
   end
 
   defp excerpt(path, line, cwd) when is_binary(path) and is_integer(line) and line > 0 do
-    with {:ok, content} <- read_workspace_file(path, cwd) do
-      lines = String.split(content, ~r/\r?\n/)
-      first = max(line - @excerpt_radius, 1)
-      last = min(line + @excerpt_radius, length(lines))
-      width = last |> Integer.to_string() |> String.length()
+    case read_workspace_file(path, cwd) do
+      {:ok, content} ->
+        lines = String.split(content, ~r/\r?\n/)
+        first = max(line - @excerpt_radius, 1)
+        last = min(line + @excerpt_radius, length(lines))
+        width = last |> Integer.to_string() |> String.length()
 
-      body =
-        for number <- first..last//1 do
-          marker = if number == line, do: ">", else: " "
-          text = lines |> Enum.at(number - 1, "") |> clip(200)
-          "#{marker} #{String.pad_leading(Integer.to_string(number), width)} | #{text}"
-        end
+        body =
+          for number <- first..last//1 do
+            marker = if number == line, do: ">", else: " "
+            text = lines |> Enum.at(number - 1, "") |> clip(200)
+            "#{marker} #{String.pad_leading(Integer.to_string(number), width)} | #{text}"
+          end
 
-      if body == [], do: nil, else: Enum.join(["#{display_path(path, cwd)}:" | body], "\n")
-    else
-      _ -> nil
+        if body == [], do: nil, else: Enum.join(["#{display_path(path, cwd)}:" | body], "\n")
+
+      _ ->
+        nil
     end
   end
 
