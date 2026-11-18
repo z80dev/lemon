@@ -70,7 +70,9 @@ defmodule LemonCore.ConfigTest do
     assert_raise ArgumentError, fn -> String.to_existing_atom(key) end
   end
 
-  test "merges global and project config with overrides", %{home: home} do
+  test "project preferences override globals but provider credentials remain global", %{
+    home: home
+  } do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
@@ -98,7 +100,7 @@ defmodule LemonCore.ConfigTest do
 
     assert config.agent.default_provider == "anthropic"
     assert config.agent.default_model == "claude-opus-4-20250514"
-    assert config.providers["anthropic"].api_key == "project-key"
+    assert config.providers["anthropic"].api_key == "global-key"
   end
 
   test "env overrides provider keys and defaults", %{home: home} do

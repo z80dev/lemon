@@ -333,12 +333,12 @@ defmodule LemonCore.DotenvTest do
   end
 
   describe "path_for/1" do
-    test "returns .env in current directory for nil" do
-      assert Dotenv.path_for(nil) == Path.join(File.cwd!(), ".env")
+    test "returns the operator .env (never the working directory) for nil" do
+      assert Dotenv.path_for(nil) == Path.join(Dotenv.dir(), ".env")
     end
 
-    test "returns .env in current directory for empty string" do
-      assert Dotenv.path_for("") == Path.join(File.cwd!(), ".env")
+    test "returns the operator .env (never the working directory) for empty string" do
+      assert Dotenv.path_for("") == Path.join(Dotenv.dir(), ".env")
     end
 
     test "returns .env in specified directory" do

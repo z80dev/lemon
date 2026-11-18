@@ -12,8 +12,13 @@ defmodule LemonLsp.ServerManagerProtocolTest do
     File.mkdir_p!(tmp_dir)
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
 
+    previous_paths = Application.get_env(:lemon_core, :paths)
+    global_config = Path.join(tmp_dir, "global.toml")
+    Application.put_env(:lemon_core, :paths, global_config: global_config)
+    LemonCore.ConfigCache.clear()
+
     File.write!(
-      Path.join(tmp_dir, ".lemon/config.toml"),
+      global_config,
       "[runtime.tools.lsp]\nidle_timeout_ms = 0\n"
     )
 
@@ -28,11 +33,17 @@ defmodule LemonLsp.ServerManagerProtocolTest do
     on_exit(fn ->
       _ = ServerManager.stop_session(session_id)
       if previous, do: System.put_env(@env, previous), else: System.delete_env(@env)
+
+      if previous_paths,
+        do: Application.put_env(:lemon_core, :paths, previous_paths),
+        else: Application.delete_env(:lemon_core, :paths)
+
+      LemonCore.ConfigCache.clear()
       File.rm_rf!(tmp_dir)
     end)
 
     if System.find_executable("elixir") do
-      {:ok, tmp_dir: tmp_dir, session_id: session_id}
+      {:ok, tmp_dir: tmp_dir, session_id: session_id, global_config: global_config}
     else
       {:skip, "elixir executable is not on PATH"}
     end
@@ -394,7 +405,7 @@ defmodule LemonLsp.ServerManagerProtocolTest do
   end
 
   test "idle shutdown starts only after the last release and reacquisition cancels it", ctx do
-    config = Path.join(ctx.tmp_dir, ".lemon/config.toml")
+    config = ctx.global_config
     File.write!(config, "[runtime.tools.lsp]\nidle_timeout_ms = 300\n")
     LemonCore.Config.reload(ctx.tmp_dir)
     owner = start_owner()

@@ -17,9 +17,16 @@ defmodule CodingAgent.Tools.LspTest do
       File.mkdir_p!(Path.join(tmp, "src"))
       tmp = Text.realpath(tmp)
       File.mkdir_p!(Path.join(tmp, ".lemon"))
+      previous_paths = Application.get_env(:lemon_core, :paths)
+
+      Application.put_env(
+        :lemon_core,
+        :paths,
+        Keyword.put(previous_paths || [], :global_config, Path.join(tmp, "global.toml"))
+      )
 
       File.write!(
-        Path.join(tmp, ".lemon/config.toml"),
+        Path.join(tmp, "global.toml"),
         "[runtime.tools.lsp]\nidle_timeout_ms = 0\n"
       )
 
@@ -38,6 +45,11 @@ defmodule CodingAgent.Tools.LspTest do
         Enum.each(Client.list(session_id), &Client.stop(&1.pid))
         send(owner, :stop)
         if previous, do: System.put_env(@env, previous), else: System.delete_env(@env)
+
+        if is_nil(previous_paths),
+          do: Application.delete_env(:lemon_core, :paths),
+          else: Application.put_env(:lemon_core, :paths, previous_paths)
+
         File.rm_rf!(tmp)
       end)
 
@@ -514,7 +526,7 @@ defmodule CodingAgent.Tools.LspTest do
   test "configuration changes select a new shared process without reusing stale clients", ctx do
     before = raw_result(ctx, "fake/pid")
 
-    File.write!(Path.join(ctx.tmp, ".lemon/config.toml"), """
+    File.write!(Path.join(ctx.tmp, "global.toml"), """
     [runtime.tools.lsp]
     idle_timeout_ms = 0
     [runtime.tools.lsp.servers.clangd]
@@ -526,8 +538,7 @@ defmodule CodingAgent.Tools.LspTest do
     assert raw_result(ctx, "fake/config")["args"] == ["changed-config"]
 
     File.write!(Path.join(ctx.tmp, ".lemon/config.toml"), """
-    [runtime.tools.lsp]
-    idle_timeout_ms = 0
+    # Projects may disable an operator-configured server.
     [runtime.tools.lsp.servers.clangd]
     disabled = true
     """)
@@ -605,10 +616,10 @@ defmodule CodingAgent.Tools.LspTest do
     end
   end
 
-  test "custom project catalog reaches the spawned process and initialization", ctx do
+  test "custom global catalog reaches the spawned process and initialization", ctx do
     File.mkdir_p!(Path.join(ctx.tmp, ".lemon"))
 
-    File.write!(Path.join(ctx.tmp, ".lemon/config.toml"), """
+    File.write!(Path.join(ctx.tmp, "global.toml"), """
     [runtime.tools.lsp]
     idle_timeout_ms = 0
 

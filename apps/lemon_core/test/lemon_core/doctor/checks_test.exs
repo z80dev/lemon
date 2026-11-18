@@ -24,18 +24,41 @@ defmodule LemonCore.Doctor.ChecksTest do
   end
 
   describe "Providers.run/1" do
+    setup do
+      previous_paths = Application.get_env(:lemon_core, :paths)
+
+      global_config =
+        Path.join(System.tmp_dir!(), "doctor_global_#{System.unique_integer([:positive])}.toml")
+
+      Application.put_env(:lemon_core, :paths, global_config: global_config)
+      LemonCore.ConfigCache.clear()
+
+      on_exit(fn ->
+        if previous_paths,
+          do: Application.put_env(:lemon_core, :paths, previous_paths),
+          else: Application.delete_env(:lemon_core, :paths)
+
+        LemonCore.ConfigCache.clear()
+        File.rm(global_config)
+      end)
+
+      %{global_config: global_config}
+    end
+
     for {provider, auth, expected} <- [
           {"ollama", "", :pass},
           {"custom", "auth = \"none\"", :pass},
           {"ollama_cloud", "", :fail}
         ] do
-      test "#{provider} credentials report #{expected} without an API key" do
+      test "#{provider} credentials report #{expected} without an API key", %{
+        global_config: global_config
+      } do
         tmp_dir =
           Path.join(System.tmp_dir!(), "doctor_keyless_#{System.unique_integer([:positive])}")
 
         File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
 
-        File.write!(Path.join(tmp_dir, ".lemon/config.toml"), """
+        File.write!(global_config, """
         [defaults]
         provider = "#{unquote(provider)}"
         model = "test-model"
@@ -52,13 +75,15 @@ defmodule LemonCore.Doctor.ChecksTest do
       end
     end
 
-    test "a named missing secret is not a usable default credential" do
+    test "a named missing secret is not a usable default credential", %{
+      global_config: global_config
+    } do
       tmp_dir =
         Path.join(System.tmp_dir!(), "doctor_missing_#{System.unique_integer([:positive])}")
 
       File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
 
-      File.write!(Path.join(tmp_dir, ".lemon/config.toml"), """
+      File.write!(global_config, """
       [defaults]
       provider = "doctor_test_provider"
       model = "doctor_test_provider:model"
@@ -75,7 +100,9 @@ defmodule LemonCore.Doctor.ChecksTest do
       refute check.message =~ "doctor_missing_secret_"
     end
 
-    test "provider routing check reports a ready fallback without leaking credentials" do
+    test "provider routing check reports a ready fallback without leaking credentials", %{
+      global_config: global_config
+    } do
       tmp_dir =
         Path.join(
           System.tmp_dir!(),
@@ -85,7 +112,7 @@ defmodule LemonCore.Doctor.ChecksTest do
       File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
 
       File.write!(
-        Path.join([tmp_dir, ".lemon", "config.toml"]),
+        global_config,
         """
         [providers.zai]
         api_key = "private-zai-key"

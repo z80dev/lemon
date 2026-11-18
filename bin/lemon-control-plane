@@ -34,7 +34,8 @@ Options:
                           when loading agent profiles (default: launch cwd)
   --home <path>           Override HOME for this process (isolates ~/.lemon)
   --store-path <path>     Override LEMON_STORE_PATH for this process
-  --dotenv-dir <path>     Directory for .env autoload (default: launch cwd)
+  --dotenv-dir <path>     Directory for .env autoload (default: ~/.lemon; never
+                          the launch cwd)
   --debug                 Enable debug logging
   --name <name@host>      Start as a distributed long-name node
   --sname <name>          Start as a distributed short-name node (default: lemon_control_plane)
@@ -56,7 +57,7 @@ EOF
 DEBUG=""
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 CONFIG_CWD="${LEMON_AGENT_PROFILES_CWD:-$LAUNCH_CWD}"
-DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}"
+DOTENV_DIR="${LEMON_DOTENV_DIR:-}"
 HOME_OVERRIDE=""
 STORE_PATH_OVERRIDE=""
 
@@ -161,7 +162,7 @@ fi
 
 export LEMON_CONTROL_PLANE_PORT="$PORT"
 export LEMON_AGENT_PROFILES_CWD="$CONFIG_CWD"
-export LEMON_DOTENV_DIR="$DOTENV_DIR"
+export LEMON_DOTENV_DIR="${DOTENV_DIR:-$HOME/.lemon}"
 
 if [[ -n "$DEBUG" ]]; then
   export LEMON_DEBUG=1

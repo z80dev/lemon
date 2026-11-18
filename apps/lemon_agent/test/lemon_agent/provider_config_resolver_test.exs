@@ -361,7 +361,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       assert result.base_url == "https://override.zai.test/v4"
     end
 
-    test "project-local google vertex config overrides global config", %{home: home} do
+    test "project-local google vertex config cannot override global config", %{home: home} do
       global_dir = Path.join(home, ".lemon")
       project_dir = Path.join(home, "project")
       project_config_dir = Path.join(project_dir, ".lemon")
@@ -393,11 +393,11 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       end)
 
       result = ProviderConfigResolver.resolve_for_provider(:google_vertex, %{cwd: project_dir})
-      assert result.project == "project-project"
-      assert result.location == "project-location"
+      assert result.project == "global-project"
+      assert result.location == "global-location"
     end
 
-    test "project-local azure config overrides global config", %{home: home} do
+    test "project-local azure config cannot override global config", %{home: home} do
       global_dir = Path.join(home, ".lemon")
       project_dir = Path.join(home, "project-azure")
       project_config_dir = Path.join(project_dir, ".lemon")
@@ -422,12 +422,12 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       result =
         ProviderConfigResolver.resolve_for_provider(:azure_openai_responses, %{cwd: project_dir})
 
-      assert result.resource_name == "project-resource"
-      assert result.api_version == "2025-02-01-preview"
-      assert result.deployment_name_map["gpt-4o"] == "project-deployment"
+      assert result.resource_name == "global-resource"
+      assert result.api_version == "2024-01-01"
+      refute Map.has_key?(Map.get(result, :deployment_name_map, %{}), "gpt-4o")
     end
 
-    test "project-local gemini config overrides global config", %{home: home} do
+    test "project-local gemini config cannot override global config", %{home: home} do
       global_dir = Path.join(home, ".lemon")
       project_dir = Path.join(home, "project-gemini")
       project_config_dir = Path.join(project_dir, ".lemon")
@@ -447,10 +447,10 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       result =
         ProviderConfigResolver.resolve_for_provider(:google_gemini_cli, %{cwd: project_dir})
 
-      assert result.project == "project-project"
+      assert result.project == "global-project"
     end
 
-    test "project-local bedrock config overrides global config", %{home: home} do
+    test "project-local bedrock config cannot override global config", %{home: home} do
       global_dir = Path.join(home, ".lemon")
       project_dir = Path.join(home, "project-bedrock")
       project_config_dir = Path.join(project_dir, ".lemon")
@@ -470,7 +470,7 @@ defmodule LemonAgent.ProviderConfigResolverTest do
       result =
         ProviderConfigResolver.resolve_for_provider(:bedrock_converse_stream, %{cwd: project_dir})
 
-      assert result.headers["aws_region"] == "eu-west-1"
+      assert result.headers["aws_region"] == "us-east-1"
     end
   end
 end

@@ -4,6 +4,12 @@ defmodule LemonCore.Dotenv do
 
   The loader reads `<dir>/.env` and exports variables into `System` environment.
   Existing environment variables are preserved by default.
+
+  Environment variables override every config file, so the `.env` file is
+  operator authority. It is read from `dir/0`: an explicitly set
+  `LEMON_DOTENV_DIR`, otherwise the Lemon home (`~/.lemon`). It is never read
+  from the process or launch working directory, which may be a cloned
+  repository.
   """
 
   require Logger
@@ -11,9 +17,21 @@ defmodule LemonCore.Dotenv do
   @key_pattern ~r/^[A-Za-z_][A-Za-z0-9_]*$/
 
   @doc """
+  Directory whose `.env` the runtime loads: `LEMON_DOTENV_DIR` when set and
+  non-empty, otherwise the Lemon home state directory.
+  """
+  @spec dir() :: String.t()
+  def dir do
+    case System.get_env("LEMON_DOTENV_DIR") do
+      dir when is_binary(dir) and dir != "" -> Path.expand(dir)
+      _ -> LemonCore.Paths.home_state_dir()
+    end
+  end
+
+  @doc """
   Load `<dir>/.env` into process environment.
 
-  If `dir` is nil or empty, the current process directory is used.
+  If `dir` is nil or empty, `dir/0` is used.
   Returns `:ok` when the file is absent or loaded successfully.
   """
   @spec load(String.t() | nil, keyword()) :: :ok | {:error, term()}
@@ -63,11 +81,11 @@ defmodule LemonCore.Dotenv do
   end
 
   @doc """
-  Resolve the `.env` path for a directory.
+  Resolve the `.env` path for a directory; nil or empty means `dir/0`.
   """
   @spec path_for(String.t() | nil) :: String.t()
-  def path_for(nil), do: Path.join(File.cwd!(), ".env")
-  def path_for(""), do: Path.join(File.cwd!(), ".env")
+  def path_for(nil), do: Path.join(dir(), ".env")
+  def path_for(""), do: Path.join(dir(), ".env")
   def path_for(dir), do: Path.join(Path.expand(dir), ".env")
 
   defp parse_line(line) when is_binary(line) do

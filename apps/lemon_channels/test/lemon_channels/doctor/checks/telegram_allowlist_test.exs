@@ -1,5 +1,5 @@
 defmodule LemonChannels.Doctor.Checks.TelegramAllowlistTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonChannels.Doctor.Checks.Channels
 
@@ -27,7 +27,7 @@ defmodule LemonChannels.Doctor.Checks.TelegramAllowlistTest do
   end
 
   test "a disabled Telegram adapter skips the allowlist check" do
-    tmp_dir = write_project_config!("[gateway]\nenable_telegram = false\n")
+    tmp_dir = write_global_config!("[gateway]\nenable_telegram = false\n")
 
     assert find_check(Channels.run(project_dir: tmp_dir), "channels.telegram.allowlist").status ==
              :skip
@@ -35,7 +35,7 @@ defmodule LemonChannels.Doctor.Checks.TelegramAllowlistTest do
 
   defp run_with_telegram_config(telegram_lines) do
     tmp_dir =
-      write_project_config!("""
+      write_global_config!("""
       [gateway]
       enable_telegram = true
 
@@ -47,13 +47,24 @@ defmodule LemonChannels.Doctor.Checks.TelegramAllowlistTest do
     Channels.run(project_dir: tmp_dir)
   end
 
-  defp write_project_config!(content) do
+  defp write_global_config!(content) do
     tmp_dir =
       Path.join(System.tmp_dir!(), "telegram_allowlist_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
-    File.write!(Path.join([tmp_dir, ".lemon", "config.toml"]), content)
-    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+    config_path = Path.join(tmp_dir, "global-config.toml")
+    File.write!(config_path, content)
+    previous_paths = Application.get_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, global_config: config_path)
+
+    on_exit(fn ->
+      if previous_paths == nil,
+        do: Application.delete_env(:lemon_core, :paths),
+        else: Application.put_env(:lemon_core, :paths, previous_paths)
+
+      File.rm_rf!(tmp_dir)
+    end)
+
     tmp_dir
   end
 

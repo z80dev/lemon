@@ -1,5 +1,5 @@
 defmodule LemonChannels.Doctor.Checks.ChannelsTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonCore.Doctor.Check
 
@@ -126,8 +126,19 @@ defmodule LemonChannels.Doctor.Checks.ChannelsTest do
   defp project_with_config(prefix, toml) do
     tmp_dir = Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}")
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
-    File.write!(Path.join([tmp_dir, ".lemon", "config.toml"]), toml)
-    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+    config_path = Path.join(tmp_dir, "global-config.toml")
+    File.write!(config_path, toml)
+    previous_paths = Application.get_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, global_config: config_path)
+
+    on_exit(fn ->
+      if previous_paths == nil,
+        do: Application.delete_env(:lemon_core, :paths),
+        else: Application.put_env(:lemon_core, :paths, previous_paths)
+
+      File.rm_rf!(tmp_dir)
+    end)
+
     tmp_dir
   end
 

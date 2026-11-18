@@ -10,6 +10,13 @@ apps; optional consumers register at runtime. See [README](README.md),
 - `Config.Modular` is the canonical implementation; `Config` is its facade.
   Precedence is environment > project `.lemon/config.toml` > user
   `~/.lemon/config.toml`. Cached reads and explicit reload are distinct.
+- A project `.lemon/config.toml` is untrusted repository content. It merges
+  only through `Config.ProjectLayer`'s allowlist (preferences and narrow-only
+  policy); credential destinations, secret sources, executables, extension
+  paths, SSRF switches and policy widening are operator-only. Never merge a
+  project file with a raw `deep_merge`; use `Modular.merged_settings/1` or
+  `Modular.merge_layers/2`. `.env` is operator authority too: load it only
+  from `Dotenv.dir/0`, never the working directory.
 - Config defines defaults, not current session/chat policy. Use `PolicyStore`
   for runtime overrides; do not add a second app-env policy plane.
 - Platform channel modules resolve/validate their own `[gateway.<id>]` sections

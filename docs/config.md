@@ -3,14 +3,65 @@
 Lemon uses a single canonical configuration file in TOML format. Configuration is layered:
 
 1. Global: `~/.lemon/config.toml`
-2. Project: `<project>/.lemon/config.toml` (overrides global)
-3. Environment variables (override file values; `.env` may auto-populate missing env vars at startup)
+2. Project: `<project>/.lemon/config.toml` (preferences and policy narrowing only; see
+   [Project config trust](#project-config-trust))
+3. Environment variables (override file values; the operator's `~/.lemon/.env` may
+   auto-populate missing env vars at startup; see [Dotenv Autoload](#dotenv-autoload))
 4. Credential references resolved through Lemon's encrypted store, explicitly
    enabled external sources, and the ordinary same-name environment fallback
 
 Runtime state and policy are separate from config. Per-session or per-route "current"
 model/thinking values override config defaults at runtime, but they are not persisted in
 `config.toml`.
+
+## Project config trust
+
+A project `.lemon/config.toml` arrives with the repository, so anyone who can
+commit to a repository you open can write it. Lemon therefore lets a project
+file set only these keys; every other project key keeps the global value.
+
+Preferences (the project value wins):
+
+- `defaults.provider`, `defaults.model`, `defaults.thinking_level`
+- `[model_roles]`; `[model_routing]` (`max_cost_usd` may only be lowered, and
+  routing the global file enables cannot be disabled); `[tui]` (`prompt_history`
+  may only be turned off; the terminal client applies the same rule)
+- `[runtime.compaction]`, `[runtime.task.agent_models]`
+- `runtime.tools.auto_resize_images`, `runtime.tools.edit.enforce_seen_lines`,
+  `[runtime.tools.bash.interceptor]`
+- `[runtime.tools.disclosure]` (`profile` limited to `auto`, `coding`, `legacy`)
+- `name`, `description`, `avatar`, `model` of a profile the global file already
+  defines (`profiles.default` always exists)
+
+Policy that may only be narrowed:
+
+- `runtime.tools.approval_mode`: only stricter (`yolo` < unset < `write` < `ask`)
+- `runtime.task.per_call_model` (lower) and `per_call_model_allow` (intersect)
+- `runtime.task.disabled_agents` (added to the global list)
+- `runtime.max_tool_turns`, `[budgets]` caps: no higher than the global cap
+- `runtime.tools.bash.git_guard`, `runtime.secret_obfuscation.enabled`,
+  `memory.write_approval`, `skills.write_approval`: only `true`
+- `memory.auto_recall`: only `false`; `[features]` flags: only `"off"`
+- `runtime.tools.lsp.servers.<id>.disabled`: only `true`
+- `profiles.<id>.tool_policy`: intersected with the effective global profile
+  policy, including the inherited `runtime.tools.approval_mode`; a project
+  policy with a weaker `approval_mode`, a per-tool approval other than
+  `always`, or `workspace_read_exempt = true` that the global policy does not
+  already grant is ignored
+
+Everything else is **operator-only** and must live in `~/.lemon/config.toml`:
+`[providers.*]` (including `base_url`, `location`, credentials and secret
+references), `[secrets]` and external secret sources, `[gateway]` (including
+voice reply hosts and keys), web search/fetch hosts, keys and SSRF switches
+(`allow_private_network`, `allowed_hostnames`), `runtime.extension_paths` and
+`[runtime.extensions]`, `[runtime.shell]`, LSP server commands/args/env, WASM
+settings, `[runtime.provider_routing]` and credential pools, `[logging]`,
+`[automation]`, update settings, and any key not listed above.
+
+An ignored project key is never silently dropped: runtime loading logs a
+warning, and `lemon config validate` and `lemon doctor` report one error per
+key naming the file and key. `lemon providers` refuses to write provider
+routing to `--scope project`.
 
 Operational backup policy is also intentionally separate from TOML. Use
 `lemon backup contract|create|list|verify|restore`; there are no implicit
@@ -1600,10 +1651,19 @@ values. `lemon secrets check` reports a resolved credential only as `present`.
 
 ## Dotenv Autoload
 
-Lemon can auto-load a `.env` file at startup:
+Source launchers (`./bin/lemon`, `./bin/lemon-gateway`, `./bin/lemon-control-plane`)
+load one `.env` file at startup, and the config reloader re-reads it when it
+changes:
 
-- `./bin/lemon-tui`: loads `<cwd>/.env` where `<cwd>` is the agent working directory (`--cwd`, or current directory).
-- `./bin/lemon-gateway`: loads `.env` from the directory where you launch the script.
+- `$LEMON_DOTENV_DIR/.env` when `LEMON_DOTENV_DIR` is set in the launching
+  environment (or `--dotenv-dir` for `lemon-control-plane`);
+- otherwise `~/.lemon/.env`.
+
+Environment variables override every config file, so this file is operator
+authority. Lemon never reads `.env` from the launch or working directory: a
+cloned repository's `.env` could otherwise redirect credentials or enable
+executables. **Upgrade note:** if you relied on `<launch dir>/.env`, move it to
+`~/.lemon/.env` or start Lemon with `LEMON_DOTENV_DIR=<dir>`.
 
 By default, existing environment variables are preserved. `.env` values only fill missing variables.
 
@@ -1652,8 +1712,8 @@ To force a token explicitly, set:
 ## OpenAI Responses WebSocket (opt-in)
 
 Native live coding sessions can reuse an OpenAI Responses WebSocket across turns.
-Enable it separately for each provider in `~/.lemon/config.toml` or the project's
-`.lemon/config.toml`:
+Enable it separately for each provider in `~/.lemon/config.toml` (provider
+settings are operator-only; a project file cannot set them):
 
 ```toml
 [providers.openai.provider_options]
@@ -2618,8 +2678,9 @@ for visibility and snapshot-retention details.
 
 ## Language Servers
 
-Configure `[runtime.tools.lsp.servers.<id>]` in user or project config. The
-effective catalog merges built-ins, user values, then project values. Known ids
+Configure `[runtime.tools.lsp.servers.<id>]` in the global config. The
+effective catalog merges built-ins, then global values; a project file may only
+set `disabled = true` (see [Project config trust](#project-config-trust)). Known ids
 override fields; custom ids require `command` and a non-empty `extensions` list
 (`file_types` is an alias).
 
@@ -3159,8 +3220,8 @@ queue defaults.
 
 Why it matters:
 - The native executor runs with `cwd` set to the project root (so file edits/commands happen in the right repo).
-- The gateway loads per-project config from `<project_root>/.lemon/config.toml` (which can override agent profiles,
-  models, tool policy, etc. compared to your global `~/.lemon/config.toml`).
+- The gateway loads per-project config from `<project_root>/.lemon/config.toml`, limited to the
+  [project allowlist](#project-config-trust) (model preferences and narrowed profile tool policy).
 - If a chat has no bound project, runs use `gateway.default_cwd` when configured, otherwise the
   assistant home (`~/.lemon/agent/workspace`, or `$LEMON_AGENT_DIR/workspace`). Channel runs never
   default to your `$HOME`.

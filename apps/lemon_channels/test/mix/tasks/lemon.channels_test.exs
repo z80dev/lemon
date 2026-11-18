@@ -18,7 +18,7 @@ defmodule Mix.Tasks.Lemon.ChannelsTest do
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
 
     File.write!(
-      Path.join([tmp_dir, ".lemon", "config.toml"]),
+      Path.join(tmp_dir, "global-config.toml"),
       """
       [gateway]
       enable_telegram = true
@@ -36,7 +36,17 @@ defmodule Mix.Tasks.Lemon.ChannelsTest do
       """
     )
 
+    previous_paths = Application.get_env(:lemon_core, :paths)
+
+    Application.put_env(:lemon_core, :paths,
+      global_config: Path.join(tmp_dir, "global-config.toml")
+    )
+
     on_exit(fn ->
+      if previous_paths == nil,
+        do: Application.delete_env(:lemon_core, :paths),
+        else: Application.put_env(:lemon_core, :paths, previous_paths)
+
       File.rm_rf!(tmp_dir)
     end)
 

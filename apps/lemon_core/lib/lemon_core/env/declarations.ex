@@ -589,7 +589,8 @@ defmodule LemonCore.Env.Declarations do
       aliases: [],
       type: :string,
       default: nil,
-      doc: "Directory to load a `.env` file from at boot.",
+      doc:
+        "Directory whose `.env` is loaded at boot and on config reload; unset means `~/.lemon`, never the working directory.",
       secret?: false,
       required?: false,
       area: :runtime,

@@ -124,8 +124,9 @@ defmodule LemonCore.Config do
     # and applies environment variable overrides during resolution).
     modular = Modular.load(project_dir: project_dir)
 
-    # Also load raw settings for profiles/agents (not in Modular struct)
-    raw = load_raw_settings(project_dir)
+    # Profiles/agents are not in the Modular struct; read them from the same
+    # trust-filtered merge so a project file cannot widen an operator profile.
+    raw = Modular.merged_settings(project_dir)
     profiles = raw["profiles"] || %{}
     defaults = raw["defaults"] || %{}
 
@@ -393,23 +394,6 @@ defmodule LemonCore.Config do
       {:ok, validated} -> validated
       {:error, _reason} -> LemonCore.ToolPolicy.deny_all()
     end
-  end
-
-  # ============================================================================
-  # Raw settings loader (for profiles that Modular doesn't expose)
-  # ============================================================================
-
-  defp load_raw_settings(project_dir) do
-    global = load_file(global_path())
-
-    project =
-      if is_binary(project_dir) and project_dir != "" do
-        load_file(project_path(project_dir))
-      else
-        %{}
-      end
-
-    LemonCore.MapHelpers.deep_merge(global, project)
   end
 
   # ============================================================================

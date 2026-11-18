@@ -342,7 +342,7 @@ conversation population. See the [admission inventory](architecture/admission-ga
 | `LEMON_AGENT_DIR` | string | _(none)_ |  | `coding_agent`, `lemon_skills` | Override for the `.lemon` agent state directory. |
 | `LEMON_ALLOW_RESTART_TOOL` | boolean | `false` |  | `coding_agent` | Whether the agent's self-restart tool is permitted to run. |
 | `LEMON_DEBUG` | boolean | `false` |  | `lemon_core` | Global debug flag checked at a few call sites in addition to LEMON_LOG_LEVEL. |
-| `LEMON_DOTENV_DIR` | string | _(none)_ |  | `lemon_core` | Directory to load a `.env` file from at boot. |
+| `LEMON_DOTENV_DIR` | string | _(none)_ |  | `lemon_core` | Directory whose `.env` is loaded at boot and on config reload; unset means `~/.lemon`, never the working directory. |
 | `LEMON_ENV` | string | _(none)_ |  | `lemon_core` | Deployment environment label (used for Sentry environment tagging). |
 | `LEMON_FEATURE_CRASH_RESUME` | string | `off` |  | `lemon_core` | Rollout state for `features.crash_resume` (hard-crash continuation): `off`, `opt-in`, `on` or `default-on`. Overrides `[features]` TOML. |
 | `LEMON_GATEWAY_NODE_COOKIE`<br>_(alias: `LEMON_GATEWAY_COOKIE`)_ | string | _(none)_ | yes | `lemon_core` | Distributed Erlang cookie for the gateway node. |

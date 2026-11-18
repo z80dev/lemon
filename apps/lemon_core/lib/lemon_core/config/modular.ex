@@ -11,15 +11,18 @@ defmodule LemonCore.Config.Modular do
   Configuration values are resolved in the following priority:
 
   1. Environment variables (highest priority)
-  2. Project config (`.lemon/config.toml`)
+  2. Project config (`.lemon/config.toml`), limited to the allowlist below
   3. Global config (`~/.lemon/config.toml`)
   4. Default values (lowest priority)
 
   Both config locations are configurable; see `LemonCore.Paths`.
 
-  Exception: `[runtime.task].per_call_model` and `per_call_model_allow` are
-  operator authority. A project file can only lower the mode and intersect the
-  allowlist, never widen them.
+  A project file comes with the repository and is not trusted with operator
+  authority. It may set only the preferences and policy narrowings listed in
+  `LemonCore.Config.ProjectLayer`; every other project key keeps the global
+  value, is logged as a warning by `load/1` and is reported as an error naming
+  the file and key by `load_with_validation/1` (`lemon config validate`,
+  `lemon doctor`).
 
   ## Example Usage
 
@@ -53,6 +56,7 @@ defmodule LemonCore.Config.Modular do
     LegacyAgentMigration,
     Logging,
     Memory,
+    ProjectLayer,
     Providers,
     Secrets,
     Tools,
@@ -116,9 +120,9 @@ defmodule LemonCore.Config.Modular do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     validate? = Keyword.get(opts, :validate, true)
 
-    {settings, sources} = load_merged_settings(project_dir)
+    {settings, sources, rejected} = load_merged_settings(project_dir)
     warn_deprecated(sources)
-    settings = LegacyAgentMigration.migrate_settings(settings)
+    warn_rejected(rejected)
     check_removed_sources!(sources)
     config = resolve_settings(settings)
     check_model_roles!(config.model_roles, sources)
@@ -183,11 +187,12 @@ defmodule LemonCore.Config.Modular do
   @spec load_with_validation(keyword()) :: {:ok, t()} | {:error, [String.t()]}
   def load_with_validation(opts \\ []) do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
-    {settings, sources} = load_merged_settings(project_dir)
+    {settings, sources, rejected} = load_merged_settings(project_dir)
 
-    case validate_settings(settings) do
-      {:ok, config} -> {:ok, config}
-      {:error, errors} -> {:error, qualify_errors(errors, sources)}
+    case {validate_settings(settings), rejected} do
+      {{:ok, config}, []} -> {:ok, config}
+      {{:ok, _config}, rejected} -> {:error, rejected}
+      {{:error, errors}, rejected} -> {:error, qualify_errors(errors, sources) ++ rejected}
     end
   rescue
     error in ValidationError -> {:error, [Exception.message(error)]}
@@ -236,7 +241,7 @@ defmodule LemonCore.Config.Modular do
   """
   @spec deprecation_warnings(keyword()) :: [String.t()]
   def deprecation_warnings(opts \\ []) do
-    {_settings, sources} =
+    {_settings, sources, _rejected} =
       opts
       |> Keyword.get(:project_dir, File.cwd!())
       |> load_merged_settings()
@@ -244,6 +249,38 @@ defmodule LemonCore.Config.Modular do
     Enum.flat_map(sources, fn {path, settings} ->
       Enum.map(Validator.deprecation_warnings(settings), &"#{path}: #{&1}")
     end)
+  end
+
+  @doc """
+  Merged global and project settings as decoded TOML maps, after the project
+  trust filter (`LemonCore.Config.ProjectLayer`) and legacy `[agent]` mapping.
+
+  For readers of tables the modular struct does not expose, such as
+  `[profiles]`. Ignored project keys are not reported here; `load/1` logs them.
+  """
+  @spec merged_settings(String.t()) :: map()
+  def merged_settings(project_dir) do
+    {settings, _sources, _rejected} = load_merged_settings(project_dir)
+    settings
+  end
+
+  @doc """
+  Merge already-decoded global and project settings exactly as `load/1` does,
+  including the project trust filter. Returns the merged map and the
+  project keys that were ignored (dotted paths).
+
+  Comment-preserving editors use this to validate a candidate file before
+  writing it.
+  """
+  @spec merge_layers(map(), map()) :: {map(), [String.t()]}
+  def merge_layers(global, project) when is_map(global) and is_map(project) do
+    {settings, rejected} =
+      ProjectLayer.merge(
+        LegacyAgentMigration.migrate_settings(global),
+        LegacyAgentMigration.migrate_settings(project)
+      )
+
+    {settings, Enum.map(rejected, &elem(&1, 0))}
   end
 
   @doc """
@@ -381,16 +418,32 @@ defmodule LemonCore.Config.Modular do
 
   # Private functions
 
+  # The first source is the operator's global file; a distinct project file is
+  # filtered through `ProjectLayer` before it is merged. Each layer's legacy
+  # `[agent]` table is mapped first so a legacy key cannot bypass the filter.
+  # `sources` keep the raw decoded files for removed-setting and deprecation
+  # checks.
   defp load_merged_settings(project_dir) do
-    sources =
+    [global | projects] =
       [global_path(), project_path(project_dir)]
+      |> Enum.map(&Path.expand/1)
       |> Enum.uniq()
-      |> Enum.map(fn path -> {Path.expand(path), load_toml_file(path)} end)
+
+    sources = Enum.map([global | projects], &{&1, load_toml_file(&1)})
+    [{_global, operator} | project_sources] = sources
+    operator = LegacyAgentMigration.migrate_settings(operator)
+
+    {settings, rejected} =
+      Enum.reduce(project_sources, {operator, []}, fn {path, raw}, {merged, rejected} ->
+        {merged, ignored} =
+          ProjectLayer.merge(merged, LegacyAgentMigration.migrate_settings(raw))
+
+        {merged, rejected ++ Enum.map(ignored, &ProjectLayer.format(path, &1))}
+      end)
 
     settings =
-      Enum.reduce(sources, %{}, fn {_path, settings}, merged ->
-        merged = LemonCore.MapHelpers.deep_merge(merged, settings)
-        defaults = LegacyAgentMigration.migrate_settings(settings)["defaults"] || %{}
+      Enum.reduce(sources, settings, fn {_path, raw}, merged ->
+        defaults = ensure_table(LegacyAgentMigration.migrate_settings(raw)["defaults"])
 
         cond do
           defaults["provider"] not in [nil, ""] ->
@@ -404,87 +457,15 @@ defmodule LemonCore.Config.Modular do
         end
       end)
 
-    {narrow_per_call_model(settings, sources), sources}
+    {settings, sources, rejected}
   end
 
-  # `[runtime.task].per_call_model` lets the model choose a child's model, so it
-  # is operator authority: the global file sets it and a project file can only
-  # narrow it. The mode takes the lower of the layers (`on` > `off`, unset is
-  # `off`) and allowlists intersect; a project list never replaces the
-  # operator's. Invalid project values pass through so the validator reports them.
-  @per_call_mode_rank %{"off" => 0, "on" => 1}
+  defp warn_rejected([]), do: :ok
 
-  defp narrow_per_call_model(
-         %{} = settings,
-         [{_path, operator} | [_ | _] = projects]
-       ) do
-    {operator_mode, operator_allow} = per_call_model_layer(operator)
-
-    {mode, allow} =
-      Enum.reduce(projects, {operator_mode || "off", operator_allow}, fn {_path, project},
-                                                                         {mode, allow} ->
-        {project_mode, project_allow} = per_call_model_layer(project)
-        {lower_per_call_mode(mode, project_mode), narrow_allowlist(allow, project_allow)}
-      end)
-
-    runtime = settings["runtime"] || %{}
-    task = if is_map(runtime), do: runtime["task"] || %{}
-
-    # A malformed section is left for the validator to report.
-    if is_map(task) do
-      task =
-        if is_nil(allow),
-          do: Map.delete(task, "per_call_model_allow"),
-          else: Map.put(task, "per_call_model_allow", allow)
-
-      settings
-      |> Map.put("runtime", Map.put(runtime, "task", Map.put(task, "per_call_model", mode)))
-      |> strip_legacy_per_call_model()
-    else
-      settings
-    end
+  defp warn_rejected(rejected) do
+    require Logger
+    Enum.each(rejected, &Logger.warning("Lemon config: #{&1}"))
   end
-
-  defp narrow_per_call_model(settings, _sources), do: settings
-
-  defp per_call_model_layer(raw) do
-    task =
-      ensure_table(ensure_table(LegacyAgentMigration.migrate_settings(raw)["runtime"])["task"])
-
-    {task["per_call_model"], task["per_call_model_allow"]}
-  end
-
-  defp lower_per_call_mode(mode, nil), do: mode
-
-  defp lower_per_call_mode(mode, project) do
-    case {@per_call_mode_rank[mode], @per_call_mode_rank[project]} do
-      {nil, _} -> mode
-      {_, nil} -> project
-      {left, right} when right < left -> project
-      _ -> mode
-    end
-  end
-
-  defp narrow_allowlist(allow, nil), do: allow
-  defp narrow_allowlist(nil, project), do: project
-
-  defp narrow_allowlist(allow, project) when is_list(allow) and is_list(project) do
-    trimmed = MapSet.new(project, &trim_selector/1)
-    Enum.filter(allow, &MapSet.member?(trimmed, trim_selector(&1)))
-  end
-
-  defp narrow_allowlist(allow, project), do: if(is_list(allow), do: project, else: allow)
-
-  defp trim_selector(value) when is_binary(value), do: String.trim(value)
-  defp trim_selector(value), do: value
-
-  # Legacy `[agent.task]` would otherwise be migrated over the narrowed values.
-  defp strip_legacy_per_call_model(%{"agent" => %{"task" => %{} = task} = agent} = settings) do
-    task = Map.drop(task, ["per_call_model", "per_call_model_allow"])
-    Map.put(settings, "agent", Map.put(agent, "task", task))
-  end
-
-  defp strip_legacy_per_call_model(settings), do: settings
 
   defp ensure_table(value) when is_map(value), do: value
   defp ensure_table(_value), do: %{}

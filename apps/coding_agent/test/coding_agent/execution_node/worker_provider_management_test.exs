@@ -65,7 +65,7 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
   end
 
   @tag :tmp_dir
-  test "worker resolves project credentials and defaults from its local cwd, not RPC paths",
+  test "worker resolves global credentials and project defaults from its local cwd, not RPC paths",
        %{tmp_dir: root} do
     process_cwd = File.cwd!()
     worker_cwd = Path.join(root, "worker-project")
@@ -98,6 +98,8 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
     [defaults]
     provider = "anthropic"
     model = "global-model"
+    [providers.openai]
+    api_key = "GLOBAL_FIXTURE_PRIVATE_DO_NOT_EXPOSE"
     """)
 
     project_path = Path.join(worker_cwd, ".lemon/config.toml")
@@ -142,12 +144,14 @@ defmodule CodingAgent.ExecutionNode.WorkerProviderManagementTest do
     assert listing.target.nodeId == "cwd-provider-node"
     assert listing.default == %{providerId: "openai", modelId: "worker-project-model"}
     openai = Enum.find(listing.providers, &(&1.id == "openai"))
-    assert "project_configuration" in openai.configurationOverrides
-    assert openai.status == "configured"
-    assert openai.lastValidation == nil
+    refute "project_configuration" in openai.configurationOverrides
+    assert openai.status == "ready"
+    assert %{kind: "resolver", ready: true, atMs: at_ms} = openai.lastValidation
+    assert is_integer(at_ms)
     encoded = Jason.encode!(listing)
     refute encoded =~ "PROJECT_FIXTURE_PRIVATE_DO_NOT_EXPOSE"
     refute encoded =~ worker_cwd
+    refute encoded =~ "GLOBAL_FIXTURE_PRIVATE_DO_NOT_EXPOSE"
     refute encoded =~ process_cwd
 
     for operation <- LemonCore.ProviderManagement.operations(),

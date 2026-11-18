@@ -1205,14 +1205,10 @@ defmodule CodingAgent.Session.PlanningTest do
   defp write_role_config(root, plan_selector \\ "@project-planner") do
     global = Path.join(System.get_env("HOME"), ".lemon/config.toml")
     File.mkdir_p!(Path.dirname(global))
-    File.write!(global, "[model_roles]\nplan = \"openai:gpt-4o\"\n")
 
-    File.write!(Path.join(root, ".lemon/config.toml"), """
-    [defaults]
-    model = "plan-fixture:execution"
+    File.write!(global, """
     [model_roles]
-    plan = "#{plan_selector}"
-    project-planner = "plan-fixture:planning"
+    plan = "openai:gpt-4o"
     [providers.plan-fixture]
     api = "openai_completions"
     base_url = "http://127.0.0.1:1/v1"
@@ -1221,15 +1217,23 @@ defmodule CodingAgent.Session.PlanningTest do
     id = "execution"
     [[providers.plan-fixture.models]]
     id = "planning"
+    [runtime.retry]
+    enabled = false
+    [runtime.provider_routing]
+    enabled = false
+    """)
+
+    File.write!(Path.join(root, ".lemon/config.toml"), """
+    [defaults]
+    model = "plan-fixture:execution"
+    [model_roles]
+    plan = "#{plan_selector}"
+    project-planner = "plan-fixture:planning"
     [features]
     session_search = "off"
     [memory]
     auto_recall = false
     [runtime.compaction]
-    enabled = false
-    [runtime.retry]
-    enabled = false
-    [runtime.provider_routing]
     enabled = false
     """)
 

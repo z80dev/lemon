@@ -52,9 +52,18 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     cwd = Path.join(dir, "repo")
     File.mkdir_p!(Path.join(cwd, ".git"))
     File.mkdir_p!(Path.join(cwd, ".lemon"))
+    previous = Application.get_env(:lemon_core, :paths)
+    global = Path.join(dir, "global.toml")
+    Application.put_env(:lemon_core, :paths, global_config: global)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_core, :paths, previous),
+        else: Application.delete_env(:lemon_core, :paths)
+    end)
 
     File.write!(
-      Path.join(cwd, ".lemon/config.toml"),
+      global,
       "[features]\nsession_search = \"default-on\"\n"
     )
 
@@ -419,7 +428,7 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
   test "disabling auto recall does not disable fact capture", %{state: state, store: store} do
     File.write!(
       Path.join(state.cwd, ".lemon/config.toml"),
-      "[memory]\nauto_recall = false\n[features]\nsession_search = \"default-on\"\n"
+      "[memory]\nauto_recall = false\n"
     )
 
     fact = "Run mix test from the umbrella root."

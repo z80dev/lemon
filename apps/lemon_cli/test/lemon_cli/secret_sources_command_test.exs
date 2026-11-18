@@ -17,6 +17,8 @@ defmodule LemonCli.SecretSourcesCommandTest do
 
     project_dir = Path.join(tmp_dir, "project")
     File.mkdir_p!(Path.join(project_dir, ".lemon"))
+    previous_paths = Application.fetch_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, global_config: Path.join(tmp_dir, "operator.toml"))
 
     stub = Path.join(tmp_dir, "source-stub")
     File.write!(stub, stub_source())
@@ -24,6 +26,11 @@ defmodule LemonCli.SecretSourcesCommandTest do
     SourceCache.clear()
 
     on_exit(fn ->
+      case previous_paths do
+        {:ok, value} -> Application.put_env(:lemon_core, :paths, value)
+        :error -> Application.delete_env(:lemon_core, :paths)
+      end
+
       SourceCache.clear()
       File.rm_rf!(tmp_dir)
     end)
@@ -148,7 +155,7 @@ defmodule LemonCli.SecretSourcesCommandTest do
   end
 
   defp write_config(context, mode, opts) do
-    path = Path.join([context.project_dir, ".lemon", "config.toml"])
+    path = LemonCore.Paths.global_config()
 
     File.write!(path, """
     [secrets.sources.stub]

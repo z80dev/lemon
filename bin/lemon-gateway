@@ -7,13 +7,12 @@
 #
 # Reads configuration from:
 #   ~/.lemon/config.toml
-#   <project>/.lemon/config.toml (if you run from a project directory)
+#   <project>/.lemon/config.toml (project preferences only; see docs/config.md)
 # Also loads:
-#   <launch_dir>/.env (can be overridden by setting LEMON_DOTENV_DIR)
+#   ~/.lemon/.env, or $LEMON_DOTENV_DIR/.env when set. Never the launch
+#   directory: a cloned repository's .env must not override operator config.
 #
 set -e
-
-LAUNCH_CWD="$(pwd)"
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
@@ -43,7 +42,7 @@ Environment overrides:
   LEMON_GATEWAY_NODE_COOKIE    Override the per-install ~/.lemon/cookie
   LEMON_GATEWAY_COOKIE         Legacy fallback cookie env var
   RELEASE_COOKIE              Fallback distribution cookie (never use argv)
-  LEMON_DOTENV_DIR             Directory whose .env file should be loaded
+  LEMON_DOTENV_DIR             Directory whose .env file should be loaded (default: ~/.lemon)
 EOF
 }
 
@@ -132,7 +131,7 @@ if [[ -n "$DEBUG" ]]; then
   export LEMON_DEBUG=1
 fi
 
-export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}"
+export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$HOME/.lemon}"
 
 # Some macOS environments deny keychain reads from long-lived BEAM processes
 # (security error code 36: user interaction not allowed). The item read here is

@@ -7,10 +7,17 @@ defmodule LemonCli.OmpReadinessTest do
   setup do
     dir = Path.join(System.tmp_dir!(), "omp_readiness_#{System.unique_integer([:positive])}")
     File.mkdir_p!(Path.join(dir, ".lemon"))
+    previous_paths = Application.fetch_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, global_config: Path.join(dir, "operator.toml"))
     original = LemonCore.ProviderManagement.service()
     :ok = LemonCore.ProviderManagement.register(LemonCli.Setup.ProviderManagement)
 
     on_exit(fn ->
+      case previous_paths do
+        {:ok, value} -> Application.put_env(:lemon_core, :paths, value)
+        :error -> Application.delete_env(:lemon_core, :paths)
+      end
+
       if original,
         do: LemonCore.ProviderManagement.register(original),
         else: Application.delete_env(:lemon_core, :provider_management_service)
@@ -18,7 +25,7 @@ defmodule LemonCli.OmpReadinessTest do
       File.rm_rf!(dir)
     end)
 
-    %{dir: dir, path: Path.join(dir, "omp"), config_path: Path.join(dir, ".lemon/config.toml")}
+    %{dir: dir, path: Path.join(dir, "omp"), config_path: LemonCore.Paths.global_config()}
   end
 
   test "mixed-case omp setup and doctor use external token readiness without a local encrypted login",

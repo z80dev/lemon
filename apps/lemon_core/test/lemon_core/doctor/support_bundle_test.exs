@@ -212,6 +212,18 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     tmp_dir = tmp_dir()
     on_exit(fn -> File.rm_rf!(tmp_dir) end)
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+    previous_paths = Application.get_env(:lemon_core, :paths)
+    global_config = Path.join(tmp_dir, "global.toml")
+    Application.put_env(:lemon_core, :paths, global_config: global_config)
+    LemonCore.ConfigCache.clear()
+
+    on_exit(fn ->
+      if previous_paths,
+        do: Application.put_env(:lemon_core, :paths, previous_paths),
+        else: Application.delete_env(:lemon_core, :paths)
+
+      LemonCore.ConfigCache.clear()
+    end)
 
     endpoint = "ws://user:secret@example.invalid:9222/devtools/browser/private"
     previous_endpoint = System.get_env("LEMON_BROWSER_CDP_ENDPOINT")
@@ -226,7 +238,7 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     end)
 
     File.write!(
-      Path.join([tmp_dir, ".lemon", "config.toml"]),
+      global_config,
       """
       [providers.openai]
       api_key = "sk-test-inline-secret"

@@ -125,7 +125,10 @@ defmodule LemonCore.Config.ModularIntegrationTest do
 
     File.mkdir_p!(Path.join(project, ".lemon"))
     File.write!(Path.join(project, ".lemon/config.toml"), "[budgets]\nmax_run_tokens = -1\n")
-    assert_raise ValidationError, fn -> Modular.load(project_dir: project) end
+    # A project cap is narrow-only; an invalid one is ignored and reported.
+    assert Modular.load(project_dir: project).budgets.max_run_tokens == nil
+    assert {:error, errors} = Modular.load_with_validation(project_dir: project)
+    assert Enum.any?(errors, &String.contains?(&1, "budgets.max_run_tokens"))
   end
 
   describe "load/1 with validation" do

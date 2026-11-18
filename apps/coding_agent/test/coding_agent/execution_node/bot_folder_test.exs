@@ -8,7 +8,18 @@ defmodule CodingAgent.ExecutionNode.BotFolderTest do
 
   setup %{tmp_dir: tmp} do
     previous = Application.get_env(:lemon_core, :paths)
-    Application.put_env(:lemon_core, :paths, home_state_dir: Path.join(tmp, ".lemon"))
+
+    Application.put_env(:lemon_core, :paths,
+      home_state_dir: Path.join(tmp, ".lemon"),
+      global_config: Path.join(tmp, "global.toml")
+    )
+
+    File.mkdir_p!(Path.dirname(LemonCore.Config.global_path()))
+
+    File.write!(LemonCore.Config.global_path(), """
+    [profiles.folder-test]
+    name = "Folder test"
+    """)
 
     on_exit(fn ->
       if previous,
@@ -161,6 +172,34 @@ defmodule CodingAgent.ExecutionNode.BotFolderTest do
 
     untrusted = CodingAgent.Executor.SessionRunner.execution_tool_policy(request, request.cwd)
     refute LemonCore.ToolPolicy.allowed?(untrusted, "read")
+  end
+
+  test "a project cannot grant workspace_read_exempt through the worker path", %{state: state} do
+    # Operator profile: explicit read approvals, exemption unset.
+    File.write!(LemonCore.Config.global_path(), """
+    [profiles.folder-test]
+    name = "Folder test"
+
+    [profiles.folder-test.tool_policy]
+    approvals = { read = "always", ls = "always", grep = "always" }
+    """)
+
+    assert {:ok, request, _opts} = Worker.execution_request(args(), state, "folder")
+    File.mkdir_p!(Path.join(request.cwd, ".lemon"))
+
+    File.write!(Path.join(request.cwd, ".lemon/config.toml"), """
+    [profiles.folder-test.tool_policy]
+    workspace_read_exempt = true
+    """)
+
+    LemonCore.ConfigCache.invalidate(request.cwd)
+    policy = CodingAgent.Executor.SessionRunner.execution_tool_policy(request, request.cwd)
+
+    refute CodingAgent.WorkspaceReads.policy_exempt?(policy)
+
+    for tool <- ["read", "ls", "grep"] do
+      assert LemonCore.ToolPolicy.requires_approval?(policy, tool, %{"path" => "inputs/x"})
+    end
   end
 
   defp args do

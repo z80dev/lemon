@@ -10,9 +10,24 @@ defmodule CodingAgent.ToolRegistryTest do
   setup %{tmp_dir: tmp_dir} do
     config_dir = Path.join(tmp_dir, ".lemon")
     File.mkdir_p!(config_dir)
+    previous_paths = Application.get_env(:lemon_core, :paths)
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      Keyword.put(previous_paths || [], :global_config, Path.join(tmp_dir, "global.toml"))
+    )
+
+    on_exit(fn ->
+      if is_nil(previous_paths),
+        do: Application.delete_env(:lemon_core, :paths),
+        else: Application.put_env(:lemon_core, :paths, previous_paths)
+
+      ToolRegistry.invalidate_extension_cache()
+    end)
 
     File.write!(
-      Path.join(config_dir, "config.toml"),
+      Path.join(tmp_dir, "global.toml"),
       """
       [runtime.extensions]
       auto_load_default_paths = true
@@ -798,7 +813,7 @@ defmodule CodingAgent.ToolRegistryTest do
       on_exit(fn -> System.delete_env("LEMON_EXTENSIONS_ENABLED") end)
 
       File.write!(
-        Path.join([tmp_dir, ".lemon", "config.toml"]),
+        Path.join(tmp_dir, "global.toml"),
         """
         [runtime]
         extension_paths = ["./.lemon/extensions"]

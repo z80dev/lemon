@@ -89,12 +89,12 @@ defmodule CodingAgent.Tools.BashConfigTest do
     end
   end
 
-  test "git guard defaults on and project config disables registered tools", %{tmp_dir: cwd} do
+  test "git guard defaults on and global config disables registered tools", %{tmp_dir: cwd} do
     assert SettingsManager.load(cwd).tools.bash.git_guard
 
     for {setting, blocked} <- [{"true", true}, {"false", false}] do
       File.write!(
-        Path.join(cwd, ".lemon/config.toml"),
+        Path.join(cwd, "global.toml"),
         "[runtime.tools.bash]\ngit_guard = #{setting}\n"
       )
 
@@ -117,9 +117,9 @@ defmodule CodingAgent.Tools.BashConfigTest do
     end
   end
 
-  test "git guard rejects non-boolean project config", %{tmp_dir: cwd} do
+  test "git guard rejects non-boolean global config", %{tmp_dir: cwd} do
     File.write!(
-      Path.join(cwd, ".lemon/config.toml"),
+      Path.join(cwd, "global.toml"),
       "[runtime.tools.bash]\ngit_guard = 'false'\n"
     )
 

@@ -637,7 +637,9 @@ start_runtime() {
       -e 'LemonCli.Distribution.boot()' -S "${cmd[@]}")
   fi
   ensure_managed_token || exit 1
-  export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}" LEMON_CONTROL_PLANE_PORT="$PORT"
+  # The .env file overrides config, so it is operator authority: read it from the
+  # Lemon home (or an explicit LEMON_DOTENV_DIR), never a cloned repo's launch cwd.
+  export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LEMON_HOME_DIR}" LEMON_CONTROL_PLANE_PORT="$PORT"
   export LEMON_WEB_PORT="$WEB_PORT"
   export LEMON_RUNTIME_PROFILE=runtime_full
   [ -z "$DEBUG" ] || export LEMON_DEBUG=1 LEMON_LOG_LEVEL=debug

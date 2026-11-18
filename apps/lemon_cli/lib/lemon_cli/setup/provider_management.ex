@@ -50,7 +50,7 @@ defmodule LemonCli.Setup.ProviderManagement do
   alias LemonCli.Onboarding.{Provider, Providers, Runner}
   alias LemonCli.Setup.{DeviceLogin, ModelReadiness, ProviderAuth}
   alias LemonCore.{Config, Secrets}
-  alias LemonCore.Config.TomlPatch
+  alias LemonCore.Config.{Modular, TomlPatch}
 
   @max_config_bytes 1_048_576
   @max_key_bytes 16_384
@@ -662,6 +662,9 @@ defmodule LemonCli.Setup.ProviderManagement do
     end
   end
 
+  # Only the keys a project file may set (see `LemonCore.Config.ProjectLayer`):
+  # ignored provider, routing and secret-source tables are not reported as
+  # overrides because the runtime never applies them.
   defp project_config(opts) do
     project_path = Config.project_path(Keyword.get(opts, :cwd, File.cwd!()))
 
@@ -669,7 +672,7 @@ defmodule LemonCli.Setup.ProviderManagement do
       {:ok, %{}}
     else
       case read_config(project_path) do
-        {:ok, _content, config} -> {:ok, config}
+        {:ok, _content, config} -> {:ok, %{} |> Modular.merge_layers(config) |> elem(0)}
         {:error, _} = error -> error
       end
     end
