@@ -216,11 +216,9 @@ defmodule CodingAgent.WorkspaceReads do
 
   def exempt?(_policy, _tool, _params, _ctx), do: false
 
-  @doc "Resolve every path component, failing closed on missing paths or symlink exhaustion."
+  @doc "Resolve every path component; see `LemonCore.TrustedRoot.realpath/1`."
   @spec realpath(String.t()) :: {:ok, String.t()} | {:error, term()}
-  def realpath(path) when is_binary(path) do
-    resolve_links(Path.split(Path.absname(path)), "/", 0)
-  end
+  defdelegate realpath(path), to: LemonCore.TrustedRoot
 
   # Server
   # ============================================================================
@@ -436,38 +434,4 @@ defmodule CodingAgent.WorkspaceReads do
   end
 
   defp internal_url?(_), do: true
-
-  defp resolve_links([], current, _hops), do: {:ok, current}
-  defp resolve_links(["/" | rest], current, hops), do: resolve_links(rest, current, hops)
-  defp resolve_links(["." | rest], current, hops), do: resolve_links(rest, current, hops)
-
-  defp resolve_links([".." | rest], current, hops),
-    do: resolve_links(rest, Path.dirname(current), hops)
-
-  defp resolve_links([part | rest], current, hops) do
-    candidate = Path.join(current, part)
-
-    case File.lstat(candidate) do
-      {:ok, %File.Stat{type: :symlink}} when hops >= 32 ->
-        {:error, :eloop}
-
-      {:ok, %File.Stat{type: :symlink}} ->
-        with {:ok, target} <- File.read_link(candidate) do
-          target = Path.absname(target, Path.dirname(candidate))
-          resolve_links(Path.split(target) ++ rest, "/", hops + 1)
-        end
-
-      {:ok, %File.Stat{type: :directory}} ->
-        resolve_links(rest, candidate, hops)
-
-      {:ok, _stat} when rest == [] ->
-        {:ok, candidate}
-
-      {:ok, _stat} ->
-        {:error, :enotdir}
-
-      {:error, _} = error ->
-        error
-    end
-  end
 end

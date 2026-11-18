@@ -3,27 +3,33 @@ defmodule LemonSkills.AncestorSkillsTest do
   Tests for ancestor `.agents/skills` discovery feature.
 
   These tests verify that skills in `.agents/skills` directories are discovered
-  from the current working directory up to the git repository root (or filesystem
-  root if not in a git repo), following Pi's package-manager pattern.
+  from the current working directory up to the trusted root: the validated git
+  repository root, or the working directory itself outside a repository.
   """
 
   use ExUnit.Case, async: false
 
   alias LemonSkills.Config
+  alias LemonSkills.TestGitRepo
 
   @moduletag :tmp_dir
 
   describe "project_skills_dirs/1" do
-    test "returns primary project dir and ancestor .agents/skills in git repo", %{tmp_dir: tmp_dir} do
+    test "returns primary project dir and ancestor .agents/skills in git repo", %{
+      tmp_dir: tmp_dir
+    } do
       # Setup: Create a git repo with nested structure
       repo_root = Path.join(tmp_dir, "repo")
       nested_cwd = Path.join(repo_root, "packages") |> Path.join("feature")
       File.mkdir_p!(nested_cwd)
-      File.mkdir_p!(Path.join(repo_root, ".git"))
+      TestGitRepo.init!(repo_root)
 
       # Create .agents/skills directories at different levels
       repo_agents = Path.join(repo_root, ".agents") |> Path.join("skills")
-      nested_agents = Path.join(repo_root, "packages") |> Path.join(".agents") |> Path.join("skills")
+
+      nested_agents =
+        Path.join(repo_root, "packages") |> Path.join(".agents") |> Path.join("skills")
+
       cwd_agents = Path.join(nested_cwd, ".agents") |> Path.join("skills")
 
       # Also create the primary .lemon/skill directory
@@ -52,39 +58,42 @@ defmodule LemonSkills.AncestorSkillsTest do
       assert Enum.at(dirs, 0) == primary_dir
     end
 
-    test "stops at filesystem root when not in git repo", %{tmp_dir: tmp_dir} do
-      # Setup: Create a non-git directory structure
-      non_repo_root = Path.join(tmp_dir, "non-repo")
-      nested_cwd = Path.join(non_repo_root, "a") |> Path.join("b") |> Path.join("c")
-      File.mkdir_p!(nested_cwd)
+    test "outside a git repo only the working directory is searched" do
+      # Outside the checkout, so no enclosing repository widens the root.
+      base =
+        Path.join(System.tmp_dir!(), "lemon-skills-no-repo-#{System.unique_integer([:positive])}")
 
-      # Create .agents/skills at various levels
-      root_agents = Path.join(non_repo_root, ".agents") |> Path.join("skills")
-      a_agents = Path.join(non_repo_root, "a") |> Path.join(".agents") |> Path.join("skills")
-      b_agents = Path.join(non_repo_root, "a") |> Path.join("b") |> Path.join(".agents") |> Path.join("skills")
-      c_agents = Path.join(nested_cwd, ".agents") |> Path.join("skills")
+      on_exit(fn -> File.rm_rf!(base) end)
+      File.mkdir_p!(base)
+      {:ok, base} = LemonCore.TrustedRoot.realpath(base)
+      nested_cwd = Path.join(base, "a/b/c")
 
-      # Also create the primary .lemon/skill directory
-      primary_dir = Path.join(nested_cwd, ".lemon") |> Path.join("skill")
-      File.mkdir_p!(primary_dir)
-      File.mkdir_p!(root_agents)
-      File.mkdir_p!(a_agents)
-      File.mkdir_p!(b_agents)
-      File.mkdir_p!(c_agents)
+      root_agents = Path.join(base, ".agents/skills")
+      a_agents = Path.join(base, "a/.agents/skills")
+      c_agents = Path.join(nested_cwd, ".agents/skills")
+      primary_dir = Path.join(nested_cwd, ".lemon/skill")
+      Enum.each([primary_dir, root_agents, a_agents, c_agents], &File.mkdir_p!/1)
+      # An empty `.git` in a parent is not a repository and must not widen.
+      File.mkdir_p!(Path.join(base, ".git"))
 
-      dirs = Config.project_skills_dirs(nested_cwd)
+      assert Config.project_skills_dirs(nested_cwd) == [primary_dir, c_agents]
+    end
 
-      assert primary_dir in dirs
-      assert c_agents in dirs
-      assert b_agents in dirs
-      assert a_agents in dirs
-      assert root_agents in dirs
+    test "skill directories linked out of the trusted root are ignored", %{tmp_dir: tmp_dir} do
+      repo_root = TestGitRepo.init!(Path.join(tmp_dir, "repo"))
+      outside = Path.join(tmp_dir, "outside-skills")
+      File.mkdir_p!(outside)
+      File.mkdir_p!(Path.join(repo_root, ".claude"))
+      File.ln_s!(outside, Path.join(repo_root, ".claude/skills"))
+      File.mkdir_p!(Path.join(repo_root, ".agents/skills"))
+
+      assert Config.project_skills_dirs(repo_root) == [Path.join(repo_root, ".agents/skills")]
     end
 
     test "filters out non-existent directories", %{tmp_dir: tmp_dir} do
       cwd = Path.join(tmp_dir, "project")
       File.mkdir_p!(cwd)
-      File.mkdir_p!(Path.join(cwd, ".git"))
+      TestGitRepo.init!(cwd)
 
       # Only create the primary .lemon/skill dir, not .agents/skills
       primary_dir = Path.join(cwd, ".lemon") |> Path.join("skill")
@@ -99,7 +108,7 @@ defmodule LemonSkills.AncestorSkillsTest do
     test "handles empty directories gracefully", %{tmp_dir: tmp_dir} do
       cwd = Path.join(tmp_dir, "empty-project")
       File.mkdir_p!(cwd)
-      File.mkdir_p!(Path.join(cwd, ".git"))
+      TestGitRepo.init!(cwd)
 
       # Don't create any skills directories
 
@@ -114,7 +123,7 @@ defmodule LemonSkills.AncestorSkillsTest do
       # (shouldn't happen in practice, but test safety)
       cwd = Path.join(tmp_dir, "weird-project")
       File.mkdir_p!(cwd)
-      File.mkdir_p!(Path.join(cwd, ".git"))
+      TestGitRepo.init!(cwd)
 
       # Create both directories
       File.mkdir_p!(Path.join(cwd, ".lemon") |> Path.join("skill"))
@@ -133,7 +142,7 @@ defmodule LemonSkills.AncestorSkillsTest do
       repo_root = Path.join(tmp_dir, "repo")
       nested_cwd = Path.join(repo_root, "packages") |> Path.join("feature")
       File.mkdir_p!(nested_cwd)
-      File.mkdir_p!(Path.join(repo_root, ".git"))
+      TestGitRepo.init!(repo_root)
 
       # Create skills at different levels
       create_skill(repo_root, ".agents/skills", "repo-skill", "Repo Skill")
@@ -163,7 +172,7 @@ defmodule LemonSkills.AncestorSkillsTest do
     test "project .lemon/skill takes precedence over .agents/skills", %{tmp_dir: tmp_dir} do
       repo_root = Path.join(tmp_dir, "repo")
       File.mkdir_p!(repo_root)
-      File.mkdir_p!(Path.join(repo_root, ".git"))
+      TestGitRepo.init!(repo_root)
 
       # Create a skill with same key in both locations
       create_skill(repo_root, ".lemon/skill", "my-skill", "Project Version")
@@ -183,7 +192,7 @@ defmodule LemonSkills.AncestorSkillsTest do
       repo_root = Path.join(tmp_dir, "repo")
       nested_cwd = Path.join(repo_root, "nested")
       File.mkdir_p!(nested_cwd)
-      File.mkdir_p!(Path.join(repo_root, ".git"))
+      TestGitRepo.init!(repo_root)
 
       # Create skills with same key at different levels
       create_skill(repo_root, ".agents/skills", "shared-skill", "Root Version")

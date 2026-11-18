@@ -35,7 +35,15 @@ defmodule CodingAgent.ExecutorFileCommandTest do
     assert last_user_text(tmp_dir, "/git:review lib/app.ex", :node) == "/git:review lib/app.ex"
   end
 
-  defp last_user_text(cwd, prompt, origin) do
+  test "commands come from config_cwd, never a Bot folder execution cwd", %{tmp_dir: tmp_dir} do
+    trusted = Path.join(tmp_dir, "trusted")
+    File.mkdir_p!(trusted)
+
+    assert last_user_text(tmp_dir, "/git:review lib/app.ex", :channel, config_cwd: trusted) ==
+             "/git:review lib/app.ex"
+  end
+
+  defp last_user_text(cwd, prompt, origin, run_opts \\ []) do
     parent = self()
     stream = Mocks.mock_stream_fn([Mocks.assistant_message("done")])
 
@@ -53,7 +61,8 @@ defmodule CodingAgent.ExecutorFileCommandTest do
       meta: %{model: Mocks.mock_model(), origin: origin}
     }
 
-    {:ok, run_ref, _ctx} = Executor.start_run(request, %{stream_fn: stream_fn}, self())
+    run_opts = run_opts |> Map.new() |> Map.put(:stream_fn, stream_fn)
+    {:ok, run_ref, _ctx} = Executor.start_run(request, run_opts, self())
     assert_receive {:context_messages, messages}, 5_000
     assert_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 5_000
 

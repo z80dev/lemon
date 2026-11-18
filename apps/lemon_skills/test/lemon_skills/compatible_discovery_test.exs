@@ -43,6 +43,11 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
     cwd = Path.join(repo, "packages/app")
     File.mkdir_p!(cwd)
     File.write!(Path.join(repo, ".git"), "gitdir: ../worktree-metadata\n")
+    # A linked-worktree gitdir: HEAD plus a commondir naming a real store.
+    store = LemonSkills.TestGitRepo.init!(Path.join(tmp_dir, "store"))
+    File.mkdir_p!(Path.join(tmp_dir, "worktree-metadata"))
+    File.write!(Path.join(tmp_dir, "worktree-metadata/HEAD"), "ref: refs/heads/wt\n")
+    File.write!(Path.join(tmp_dir, "worktree-metadata/commondir"), Path.join(store, ".git"))
     Registry.refresh()
 
     on_exit(fn ->

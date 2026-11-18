@@ -13,8 +13,20 @@ picked up without restarting the session.
 
 ## Instruction files
 
-Every directory from the filesystem root down to the working directory can
-contribute:
+Every directory from the trusted root down to the working directory can
+contribute. The trusted root is the Git repository root containing the
+session's trusted directory, or that directory itself when it is not inside a
+repository; directories above it (for example a shared `/tmp`) are never read.
+Only a real repository counts: a `.git` directory holding `HEAD`, `objects/`
+and `refs/` (or a `commondir` naming a store that does, as linked worktrees
+use), or a `.git` file whose `gitdir:` target validates the same way. An empty
+`.git` file or directory never widens the root. The repository and its `.git`
+must also have the same owner as the directory. The same root bounds subagent
+personas (`.lemon/agents`, `.omp/agents`, `.claude/agents`) and project skill
+directories. The trusted directory is the working directory, except for a Bot
+whose working directory is its Bot folder: instruction files, rules, stream
+rules and commands then come from the node's configured directory, never the
+Bot folder.
 
 | Location | Files |
 | --- | --- |
@@ -43,15 +55,17 @@ Global files are loaded before any directory file:
 `~` is the `HOME` environment variable; `~/.lemon/agent` follows
 `LEMON_AGENT_DIR`.
 
-Other tools' user-global files (`~/.gemini`, `~/.codex`, `~/.config/opencode`,
-`~/.agents`, `~/.agent`, `~/.copilot`) are read by default whenever they exist,
-the same way Lemon already reads `~/.claude/CLAUDE.md` and `~/.claude/skills`.
-They are passive text added to the prompt; nothing in them is executed. To keep
-one out of Lemon sessions, remove or rename the file.
+Other tools' user-global files (`~/.claude`, `~/.gemini`, `~/.codex`,
+`~/.config/opencode`, `~/.agents`, `~/.agent`, `~/.copilot`) are read only in
+coding sessions (`session_mode: coding`, the default for TUI, ACP and CLI
+sessions). Chat and Bot sessions read only Lemon's own `~/.lemon` files, so the
+operator's personal coding instructions do not leak into them. They are passive
+text added to the prompt; nothing in them is executed. To keep one out of coding
+sessions, remove or rename the file.
 
 ### Order and scope
 
-Files are rendered global first, then from the filesystem root down to the
+Files are rendered global first, then from the trusted root down to the
 working directory. Within one directory, its own files come before its config
 directories in the table order above. Each file carries a header with its path
 and scope: a global file applies everywhere, and a directory file applies to
@@ -59,8 +73,10 @@ that directory and its descendants. A file inside a config directory such as
 `.github/` or `.gemini/` is scoped to the directory that contains the config
 directory. More specific instructions override broader ones.
 
-A physical file is loaded once, even when it is reachable through a symlink, a
-hard link or as both a global and an ancestor file.
+A physical file is loaded once, even when it is reachable through a symlink or
+as both a global and an ancestor file. A directory file must resolve, after
+symlinks, to a regular, single-linked file inside the trusted root; links that
+leave the root and hard links are ignored.
 
 Instruction files in directories below the working directory are not loaded.
 The session's environment block lists their paths (including `GEMINI.md`,
@@ -74,7 +90,6 @@ file's content:
 
 ```markdown
 Read @docs/architecture.md before changing storage code.
-Personal aliases live in @~/.notes/aliases.md.
 ```
 
 - The `@` must start a line or follow a space or tab, so `user@example.com` and
@@ -82,6 +97,16 @@ Personal aliases live in @~/.notes/aliases.md.
 - Relative paths resolve from the importing file's directory, not the working
   directory. `~` and `~/...` resolve from the home directory; absolute paths are
   used as-is.
+- What a file may import depends on who owns it. A home-owned global
+  instruction file (the table above, for example `~/.lemon/AGENTS.md`) may
+  import any readable file, so `Personal aliases live in @~/.notes/aliases.md`
+  works there. A project or ancestor instruction file may import only regular,
+  single-linked files inside its trusted root (the Git repository root, or the
+  working directory when there is none), after resolving symlinks. Imports of
+  `~/...`, absolute paths or `../` traversal that leave the root, symlinks
+  pointing outside it and hard links are refused: the `@path` text stays
+  literal and a warning is logged. Nested imports keep the root of the file
+  that started the expansion.
 - Tokens inside fenced code blocks and inline code spans stay literal. Inline
   spans close only on the opening backtick-run length, including across lines.
 - Trailing `. , ; : ! ? ) ] } " '` is not part of the path, so
@@ -89,6 +114,8 @@ Personal aliases live in @~/.notes/aliases.md.
 - Imports recurse up to five hops. A file already imported into the same
   expansion is not imported again, so cycles stop silently.
 - A missing, unreadable or non-text target leaves the original `@path` text.
+- Imported text is wrapped as `<!-- @import /real/path -->…<!-- /@import -->`,
+  so the prompt records where each span came from.
 - Each imported file contributes at most 64 KiB, and one instruction file at
   most 256 KiB of imported content.
 
@@ -111,10 +138,13 @@ Project rules, highest precedence first:
 | GitHub Copilot | `.github/instructions/**/*.instructions.md` |
 
 `.lemon/rules`, `.agent(s)/rules` and `.clinerules` are searched from the
-working directory up to the Git repository root (or the home directory when no
-repository is closer; the home directory itself is not a project directory).
-Nearer directories win, and only the nearest `.clinerules` is used. The other
-sources are read from the working directory only.
+working directory up to the trusted root (the home directory itself is never a
+project directory). Nearer directories win, and only the nearest `.clinerules`
+is used. The other sources are read from the working directory only. Every
+project rule file and rules directory must resolve, after symlinks, inside the
+trusted root, and rule files must be single-linked; a link such as
+`.cursorrules -> ~/.ssh/id_ed25519` is ignored. Stream rules come from the same
+trusted directory as the prompt.
 
 Global rules: `~/.lemon/agent/rules/*.{md,mdc}`, `~/.agent/rules`,
 `~/.agents/rules` and Windsurf's `~/.codeium/windsurf/memories/global_rules.md`.
@@ -197,6 +227,21 @@ in a `<system-interrupt reason="rule_violation">` correction. Rule names and
 injection counts are journaled: resume and compaction do not reset the limit.
 The default of one injection is a caller policy to prevent repeated corrections,
 not a guarantee that the next response complies.
+
+Because the correction is delivered with operator authority, project stream
+rules are off by default. Global rules (`~/.lemon/agent/rules`,
+`~/.agent(s)/rules`) may always declare `streamPattern`. A project rule's
+`streamPattern` is honoured only when the operator lists the project's trusted
+root in the global config file; a project `.lemon/config.toml` cannot grant
+it:
+
+```toml
+# ~/.lemon/config.toml
+[rules]
+allow_project_stream_rules = ["/path/to/project"]
+```
+
+Otherwise the project stream rules are dropped and a warning names them.
 
 Patterns use byte-oriented Erlang `:re` syntax; inline modifiers such as `(?i)`
 are supported, but UTF mode is forbidden. Match subjects are rolling windows,

@@ -12,7 +12,15 @@ defmodule CodingAgent.RulesTest do
     agent_dir = Path.join(tmp_dir, "agent")
     repo = Path.join(tmp_dir, "repo")
     File.mkdir_p!(home)
-    File.mkdir_p!(Path.join(repo, ".git"))
+    CodingAgent.TestGitRepo.init!(repo)
+    # The stream-rule tests below use project rules; the operator allows them.
+    File.mkdir_p!(Path.join(home, ".lemon"))
+
+    File.write!(
+      Path.join(home, ".lemon/config.toml"),
+      "[rules]\nallow_project_stream_rules = [#{inspect(repo)}]\n"
+    )
+
     System.put_env("HOME", home)
     System.put_env("LEMON_AGENT_DIR", agent_dir)
 

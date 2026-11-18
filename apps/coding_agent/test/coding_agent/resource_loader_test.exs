@@ -149,7 +149,7 @@ defmodule CodingAgent.ResourceLoaderTest do
 
       globals |> Enum.with_index() |> Enum.each(fn {path, i} -> write!(path, "global-#{i}") end)
 
-      sections = ResourceLoader.instruction_sections(cwd)
+      sections = ResourceLoader.instruction_sections(cwd, foreign_globals: true)
 
       for i <- 0..(length(globals) - 1) do
         section = Enum.find(sections, &(&1.text =~ "global-#{i}"))
@@ -157,7 +157,13 @@ defmodule CodingAgent.ResourceLoaderTest do
         assert section.text =~ "Scope: global"
       end
 
-      rendered = Enum.map_join(ResourceLoader.instruction_sections(cwd), "\n\n", & &1.text)
+      rendered =
+        Enum.map_join(
+          ResourceLoader.instruction_sections(cwd, foreign_globals: true),
+          "\n\n",
+          & &1.text
+        )
+
       assert offset(rendered, "global-7") < offset(rendered, "project-directive")
     end
 
@@ -169,23 +175,37 @@ defmodule CodingAgent.ResourceLoaderTest do
       write!(Path.join(home, ".copilot/copilot-instructions.md"), "default-copilot")
       System.put_env("COPILOT_HOME", copilot_home)
 
-      rendered = Enum.map_join(ResourceLoader.instruction_sections(cwd), "\n\n", & &1.text)
+      rendered =
+        Enum.map_join(
+          ResourceLoader.instruction_sections(cwd, foreign_globals: true),
+          "\n\n",
+          & &1.text
+        )
+
       assert rendered =~ "relocated-copilot"
       refute rendered =~ "default-copilot"
     end
 
-    test "expands @imports relative to each instruction file", %{tmp_dir: tmp_dir, home: home} do
+    test "expands @imports relative to each instruction file, inside the repository", %{
+      tmp_dir: tmp_dir,
+      home: home
+    } do
       cwd = Path.join(tmp_dir, "project")
+      CodingAgent.TestGitRepo.init!(cwd)
       write!(Path.join(cwd, ".github/copilot-instructions.md"), "Style: @style.md")
       write!(Path.join(cwd, ".github/style.md"), "imported-style")
       write!(Path.join(cwd, "AGENTS.md"), "Personal: @~/notes.md\n`@style.md` stays")
       write!(Path.join(home, "notes.md"), "imported-home-note")
       write!(Path.join(cwd, "style.md"), "inline-code-must-not-expand")
+      write!(Path.join(home, ".lemon/AGENTS.md"), "Global: @~/notes.md")
 
       rendered = Enum.map_join(ResourceLoader.instruction_sections(cwd), "\n\n", & &1.text)
-      assert rendered =~ "Style: imported-style"
+      style = Path.join(cwd, ".github/style.md")
+      assert rendered =~ "Style: <!-- @import #{style} -->imported-style<!-- /@import -->"
       refute rendered =~ "inline-code-must-not-expand"
-      assert rendered =~ "Personal: imported-home-note"
+      # Project files never import outside the repository; home-owned globals do.
+      assert rendered =~ "Personal: @~/notes.md"
+      assert rendered =~ "Global: <!-- @import #{Path.join(home, "notes.md")} -->"
       assert rendered =~ "`@style.md` stays"
     end
   end

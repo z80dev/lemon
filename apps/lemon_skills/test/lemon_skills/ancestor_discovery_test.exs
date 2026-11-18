@@ -2,30 +2,14 @@ defmodule LemonSkills.AncestorDiscoveryTest do
   use ExUnit.Case, async: false
 
   alias LemonSkills.Config
+  alias LemonSkills.TestGitRepo
 
   @moduletag :tmp_dir
 
-  test "find_git_repo_root/1 finds nearest git root", %{tmp_dir: tmp_dir} do
-    repo_root = Path.join(tmp_dir, "repo")
-    nested = Path.join([repo_root, "a", "b", "c"])
-
-    File.mkdir_p!(nested)
-    File.mkdir_p!(Path.join(repo_root, ".git"))
-
-    assert Config.find_git_repo_root(nested) == repo_root
-  end
-
-  test "find_git_repo_root/1 returns nil when not in git repo" do
-    cwd = "/lemon-skills-no-git-#{System.unique_integer([:positive])}"
-    assert Config.find_git_repo_root(cwd) == nil
-  end
-
   test "collect_ancestor_agents_skill_dirs/1 walks up to git root", %{tmp_dir: tmp_dir} do
-    repo_root = Path.join(tmp_dir, "repo")
+    repo_root = TestGitRepo.init!(Path.join(tmp_dir, "repo"))
     nested = Path.join([repo_root, "packages", "feature"])
-
     File.mkdir_p!(nested)
-    File.mkdir_p!(Path.join(repo_root, ".git"))
 
     dirs = Config.collect_ancestor_agents_skill_dirs(nested)
 
@@ -37,11 +21,9 @@ defmodule LemonSkills.AncestorDiscoveryTest do
   end
 
   test "project_skills_dirs/1 precedence is project then ancestors", %{tmp_dir: tmp_dir} do
-    repo_root = Path.join(tmp_dir, "repo")
+    repo_root = TestGitRepo.init!(Path.join(tmp_dir, "repo"))
     nested = Path.join([repo_root, "packages", "feature"])
-
     File.mkdir_p!(nested)
-    File.mkdir_p!(Path.join(repo_root, ".git"))
 
     project_dir = Path.join([nested, ".lemon", "skill"])
     cwd_agents = Path.join([nested, ".agents", "skills"])
