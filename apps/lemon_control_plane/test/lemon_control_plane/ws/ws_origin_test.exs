@@ -8,7 +8,13 @@ defmodule LemonControlPlane.WS.OriginTest do
 
   alias LemonControlPlane.HTTP.Router
 
-  @keys [:operator_token, :allow_unauthenticated_loopback_operator, :allowed_origins, :ip]
+  @keys [
+    :operator_token,
+    :allow_unauthenticated_loopback_operator,
+    :allowed_origins,
+    :web_origins,
+    :ip
+  ]
 
   setup do
     old = Map.new(@keys, &{&1, Application.fetch_env(:lemon_control_plane, &1)})
@@ -16,6 +22,11 @@ defmodule LemonControlPlane.WS.OriginTest do
     Application.delete_env(:lemon_control_plane, :allowed_origins)
     Application.put_env(:lemon_control_plane, :ip, {127, 0, 0, 1})
     Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)
+
+    Application.put_env(:lemon_control_plane, :web_origins, [
+      "http://localhost:4082",
+      "http://127.0.0.1:4082"
+    ])
 
     on_exit(fn ->
       for {key, previous} <- old do
