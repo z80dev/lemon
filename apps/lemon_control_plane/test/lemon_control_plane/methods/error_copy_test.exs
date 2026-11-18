@@ -32,14 +32,18 @@ defmodule LemonControlPlane.Methods.ErrorCopyTest do
 
   test "goal persistence tuple failures are internal errors with next steps" do
     key = "error-copy-goal-#{System.unique_integer([:positive])}"
-    {:ok, _} = LemonAgent.Workspace.GoalStore.set(key, "test goal")
+
+    {:ok, _} =
+      LemonAgent.Workspace.GoalStore.set(key, "test goal",
+        authority: LemonAgent.Workspace.GoalAuthority.operator()
+      )
 
     try do
       with_failing_server(
         LemonCore.Store,
         fn
-          {:generic_put, :goals, ^key, _} -> true
-          {:generic_delete, :goals, ^key} -> true
+          {:generic_compare_and_swap, :goals, ^key, _, _} -> true
+          {:generic_compare_and_delete, :goals, ^key, _} -> true
           _ -> false
         end,
         fn ->

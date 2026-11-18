@@ -53,6 +53,53 @@ defmodule LemonCore.ExecutionContextTest do
   end
 
   @tag :tmp_dir
+  test "child workspace containment is canonical: symlinked descendants cannot escape", %{
+    tmp_dir: tmp_dir
+  } do
+    root = Path.join(tmp_dir, "project")
+    outside = Path.join(tmp_dir, "outside")
+    File.mkdir_p!(Path.join(root, "sub"))
+    File.mkdir_p!(outside)
+    File.ln_s!(outside, Path.join(root, "link"))
+    File.ln_s!(Path.join(root, "sub"), Path.join(root, "inner-link"))
+    assert {:ok, parent} = ExecutionContext.new(run_id: "parent", cwd: root)
+
+    # A lexical descendant that resolves outside the root is an escalation,
+    # directly or below the link, and also for an explicit workspace scope.
+    for cwd <- [Path.join(root, "link"), Path.join(root, "link/deeper")] do
+      assert {:error, :workspace_scope_escalation} =
+               ExecutionContext.child(parent, run_id: "child", cwd: cwd)
+
+      assert {:error, :workspace_scope_escalation} =
+               ExecutionContext.child(parent,
+                 run_id: "child",
+                 workspace_scope: %{root: cwd, mode: :read_write}
+               )
+
+      assert {:error, _} = ExecutionContext.canonical_cwd(parent, cwd)
+    end
+
+    # A dangling link inside the root fails closed.
+    File.ln_s!(Path.join(tmp_dir, "missing"), Path.join(root, "dangling"))
+
+    assert {:error, _} =
+             ExecutionContext.child(parent, run_id: "child", cwd: Path.join(root, "dangling"))
+
+    # Links that stay inside, and directories not yet created, are allowed;
+    # execution uses the resolved path.
+    {:ok, real_root} = LemonCore.TrustedRoot.realpath(root)
+
+    assert {:ok, child} =
+             ExecutionContext.child(parent, run_id: "child", cwd: Path.join(root, "inner-link"))
+
+    assert {:ok, Path.join(real_root, "sub")} ==
+             ExecutionContext.canonical_cwd(child, Path.join(root, "inner-link"))
+
+    assert {:ok, _} =
+             ExecutionContext.child(parent, run_id: "child", cwd: Path.join(root, "new/dir"))
+  end
+
+  @tag :tmp_dir
   test "read-only workspace mode rejects every classified direct mutation tool", %{
     tmp_dir: tmp_dir
   } do

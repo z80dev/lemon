@@ -24,7 +24,8 @@ defmodule LemonAutomation.GoalJudgeRouterLiveTest do
                  GoalStore.set(
                    session_key,
                    "This verification goal is already complete. The judge should return done.",
-                   agent_id: "default"
+                   agent_id: "default",
+                   authority: LemonAgent.Workspace.GoalAuthority.operator()
                  )
 
         assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =

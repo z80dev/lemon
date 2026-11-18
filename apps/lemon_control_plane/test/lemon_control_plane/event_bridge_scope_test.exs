@@ -258,7 +258,11 @@ defmodule LemonControlPlane.EventBridgeScopeTest do
       read = connect(:read_only, [:read])
       full = connect(:full, @full)
 
-      assert {:ok, _} = GoalStore.set(c.session_key, "Close the deal: #{@prose}")
+      assert {:ok, _} =
+               GoalStore.set(c.session_key, "Close the deal: #{@prose}",
+                 authority: LemonAgent.Workspace.GoalAuthority.operator()
+               )
+
       on_exit(fn -> GoalStore.clear(c.session_key) end)
 
       assert {:ok, _} =

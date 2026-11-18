@@ -1306,6 +1306,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           user_msg_id,
           LemonChannels.GoalStatusMessage.handle(session_key, args,
             agent_id: agent_id,
+            workspace: BindingResolver.resolve_cwd(scope),
+            # Goal work runs later under this chat's channel-run authority.
+            channel_context: %{
+              channel_id: inbound.channel_id,
+              account_id: inbound.account_id,
+              peer_kind: inbound.peer.kind,
+              peer_id: inbound.peer.id,
+              thread_id: inbound.peer.thread_id
+            },
             meta: %{transport: "telegram"}
           )
         )

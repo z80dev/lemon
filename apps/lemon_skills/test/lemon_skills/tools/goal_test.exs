@@ -22,12 +22,13 @@ defmodule LemonSkills.Tools.GoalTest do
   end
 
   test "set requires an objective and existing target directory before calling runtime" do
-    tool = Goal.tool(System.tmp_dir!(), session_key: "agent:default:goal-test")
+    tool =
+      Goal.tool(System.tmp_dir!(), session_key: "agent:default:goal-test", agent_id: "default")
 
     assert {:error, "missing objective"} =
              tool.execute.("call", %{"action" => "set"}, nil, nil)
 
-    assert {:error, "cwd must name an existing directory"} =
+    assert {:error, "cwd must name an existing directory within the session working directory"} =
              tool.execute.(
                "call",
                %{
@@ -44,9 +45,27 @@ defmodule LemonSkills.Tools.GoalTest do
              )
   end
 
+  test "set requires the trusted session identity and a target inside the session cwd" do
+    tool = Goal.tool(System.tmp_dir!(), session_key: "agent:default:goal-test")
+
+    assert {:error, "goal requires a trusted session identity"} =
+             tool.execute.("call", %{"action" => "set", "objective" => "Work"}, nil, nil)
+
+    tool =
+      Goal.tool(System.tmp_dir!(), session_key: "agent:default:goal-test", agent_id: "default")
+
+    assert {:error, "cwd must name an existing directory within the session working directory"} =
+             tool.execute.(
+               "call",
+               %{"action" => "set", "objective" => "Work", "cwd" => "/"},
+               nil,
+               nil
+             )
+  end
+
   test "goal supervision destination is normalized and invalid targets never create a goal" do
     session = "agent:default:main:sub:goal_supervision_#{System.unique_integer([:positive])}"
-    tool = Goal.tool(System.tmp_dir!(), session_key: session)
+    tool = Goal.tool(System.tmp_dir!(), session_key: session, agent_id: "default")
 
     assert {:error, _} =
              tool.execute.(
@@ -67,6 +86,8 @@ defmodule LemonSkills.Tools.GoalTest do
              )
 
     assert goal.meta["deliverTo"] == "none"
+    assert goal.authority["grantedBy"] == "session"
+    assert goal.authority["principal"] == %{"agentId" => "default", "sessionKey" => session}
     on_exit(fn -> LemonAgent.Workspace.GoalStore.clear(session) end)
   end
 

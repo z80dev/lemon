@@ -59,7 +59,10 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     params = %{run_id: "run_goal_remote_#{token}", session_key: session <> ":goal_judge"}
 
     {:ok, goal} =
-      GoalStore.set(session, "Check result", meta: %{"deliverTo" => "telegram:-100777:12"})
+      GoalStore.set(session, "Check result",
+        meta: %{"deliverTo" => "telegram:-100777:12"},
+        authority: LemonAgent.Workspace.GoalAuthority.operator()
+      )
 
     on_exit(fn -> GoalStore.clear(session) end)
     assert :ok = LemonAutomation.RunNotifications.bind_goal(goal, params)

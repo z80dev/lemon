@@ -38,7 +38,12 @@ defmodule LemonAutomation.TaskAdmissionTest do
              end)
 
     session_key = "task-admission-#{System.unique_integer([:positive])}"
-    assert {:ok, _goal} = GoalStore.set(session_key, "Do not start rejected work")
+
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Do not start rejected work",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
+
     on_exit(fn -> GoalStore.clear(session_key) end)
 
     manager = start_supervised!({GoalLoopManager, name: nil, scheduler_interval_ms: 0})

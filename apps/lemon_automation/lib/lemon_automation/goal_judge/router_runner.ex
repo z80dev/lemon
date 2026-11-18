@@ -1,7 +1,11 @@
 defmodule LemonAutomation.GoalJudge.RouterRunner do
   @moduledoc false
 
+  alias LemonAgent.Workspace.GoalAuthority
   alias LemonAutomation.RunCompletionWaiter
+
+  # The judge inspects only; the goal's recorded authority confines it further.
+  @judge_policy %{allow: ["read", "ls", "grep", "find"]}
 
   def judge(goal, context) when is_map(goal) and is_map(context) do
     run_id = Map.get(context, :run_id) || LemonCore.Id.run_id()
@@ -10,26 +14,9 @@ defmodule LemonAutomation.GoalJudge.RouterRunner do
     timeout_ms = Map.get(context, :wait_timeout_ms, 60_000)
     wait_opts = Map.get(context, :wait_opts, [])
 
-    params =
-      %{
-        origin: :goal_judge,
-        session_key: judge_session_key(goal.session_key),
-        agent_id: goal.agent_id || "default",
-        queue_mode: :followup,
-        cwd: Map.get(goal, :cwd),
-        tool_policy: %{allow: ["read", "ls", "grep", "find"]},
-        prompt: prompt(goal, context),
-        run_id: run_id,
-        model_explicit: Map.get(context, :model_explicit),
-        meta: %{
-          goal_id: goal.id,
-          goal_judge: true,
-          goal_objective_bytes: byte_size(goal.objective || "")
-        }
-      }
-      |> maybe_put(:model, Map.get(context, :model))
-
-    with :ok <- LemonAutomation.RunNotifications.bind_goal(goal, params),
+    with {:ok, scope} <- GoalAuthority.run_scope(goal, @judge_policy),
+         params = judge_params(goal, context, scope, run_id),
+         :ok <- LemonAutomation.RunNotifications.bind_goal(goal, params),
          {:ok, submitted_run_id, output} <-
            RunCompletionWaiter.submit_and_wait(params,
              router_mod: router_mod,
@@ -59,6 +46,27 @@ defmodule LemonAutomation.GoalJudge.RouterRunner do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp judge_params(goal, context, scope, run_id) do
+    %{
+      origin: :goal_judge,
+      session_key: judge_session_key(goal.session_key),
+      agent_id: goal.agent_id || "default",
+      queue_mode: :followup,
+      cwd: scope.cwd,
+      tool_policy: scope.tool_policy,
+      prompt: prompt(goal, context),
+      run_id: run_id,
+      model_explicit: Map.get(context, :model_explicit),
+      meta: %{
+        goal_id: goal.id,
+        goal_judge: true,
+        goal_objective_bytes: byte_size(goal.objective || ""),
+        cwd_identity: scope.cwd_identity
+      }
+    }
+    |> maybe_put(:model, Map.get(context, :model))
   end
 
   defp parse_verdict(output) when is_binary(output) do

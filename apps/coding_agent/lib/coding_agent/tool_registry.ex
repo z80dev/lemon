@@ -240,14 +240,19 @@ defmodule CodingAgent.ToolRegistry do
     |> Enum.map(fn {name, tool, source} ->
       {name, ToolIntent.wrap(tool, opts), source}
     end)
+    # The identity guard wraps the tool inside the approval gate, so it runs
+    # after approval returns and immediately before the tool itself; the outer
+    # guard refuses early without asking for approval in a replaced directory.
+    |> bind_cwd_identity(cwd, Keyword.get(opts, :cwd_identity))
     |> gate_tuples(tool_policy, approval_context(cwd, opts))
     |> bind_cwd_identity(cwd, Keyword.get(opts, :cwd_identity))
   end
 
   # A session bound to a checked directory object (`cwd_identity`, see
-  # `CodingAgent.CwdIdentity`) re-verifies it before every tool call, so a
-  # working directory replaced after session start refuses the call instead of
-  # acting on the replacement.
+  # `CodingAgent.CwdIdentity`) re-verifies it before every tool call and again
+  # after any approval wait, so a working directory replaced after session
+  # start, or while an approval is pending, refuses the call instead of acting
+  # on the replacement.
   defp bind_cwd_identity(tools, _cwd, nil), do: tools
 
   defp bind_cwd_identity(tools, cwd, identity) do

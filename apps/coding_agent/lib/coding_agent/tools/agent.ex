@@ -524,7 +524,8 @@ defmodule CodingAgent.Tools.Agent do
       run_id = LemonCore.Id.run_id()
 
       with {:ok, execution_context} <-
-             delegated_execution_context(validated, child_policy, run_id, cwd, opts) do
+             delegated_execution_context(validated, child_policy, run_id, cwd, opts),
+           {:ok, request_cwd} <- delegated_cwd(validated, execution_context, cwd) do
         base_meta =
           %{
             parent_run_id: parent_run_id,
@@ -600,7 +601,7 @@ defmodule CodingAgent.Tools.Agent do
             queue_mode: validated.queue_mode,
             model: validated.model || persona_model(persona),
             model_explicit: not is_nil(validated.model) or Params.inherited_model_explicit(opts),
-            cwd: validated.cwd || cwd,
+            cwd: request_cwd,
             tool_policy: execution_context.tool_policy,
             execution_context: execution_context,
             meta: meta
@@ -610,6 +611,15 @@ defmodule CodingAgent.Tools.Agent do
       end
     end
   end
+
+  # A local child runs in the resolved directory checked against the parent's
+  # canonical workspace (symlink escapes refused); a remote node keeps its own
+  # separately bounded path.
+  defp delegated_cwd(%{node: node} = validated, _context, cwd) when not is_nil(node),
+    do: {:ok, validated.cwd || cwd}
+
+  defp delegated_cwd(validated, context, cwd),
+    do: LemonCore.ExecutionContext.canonical_cwd(context, validated.cwd || cwd)
 
   defp delegated_execution_context(validated, policy, run_id, cwd, opts) do
     alias LemonCore.ExecutionContext

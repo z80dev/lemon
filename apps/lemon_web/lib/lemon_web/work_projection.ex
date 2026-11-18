@@ -12,7 +12,7 @@ defmodule LemonWeb.WorkProjection do
   bound to the opaque revision the operator previewed and is refused when stale.
   """
 
-  alias LemonAgent.Workspace.{GoalStore, KanbanAuthority, KanbanStore}
+  alias LemonAgent.Workspace.{GoalAuthority, GoalStore, KanbanAuthority, KanbanStore}
   alias LemonAutomation.{CronManager, CronSchedule, GoalLoopManager, KanbanDispatcher}
   alias LemonMemory.Safety
   alias LemonWeb.CronText
@@ -331,7 +331,7 @@ defmodule LemonWeb.WorkProjection do
     end
   end
 
-  @doc "Sets a durable goal for a session (write-only objective)."
+  @doc "Sets a durable goal for a session (write-only objective) under operator authority."
   def set_goal(params) when is_map(params) do
     session = session(String.trim(to_string(params["session"] || "")))
     objective = params |> Map.get("objective", "") |> to_string() |> String.trim()
@@ -356,7 +356,8 @@ defmodule LemonWeb.WorkProjection do
       |> check(:max_continuations, budget == :invalid, "Use a number from 1 to 1000.")
 
     if errors == [] do
-      opts = if budget, do: [budget: %{"max_continuations" => budget}], else: []
+      opts = [authority: GoalAuthority.operator()]
+      opts = if budget, do: [{:budget, %{"max_continuations" => budget}} | opts], else: opts
 
       case safe_call(fn -> call(GoalLoopManager, :set_goal, [session, objective, opts]) end) do
         {:ok, _} -> {:ok, session}

@@ -196,6 +196,48 @@ defmodule CodingAgent.Tools.TaskTest do
       assert message =~ "workspace_scope_escalation"
     end
 
+    @tag :tmp_dir
+    test "rejects a symlinked child cwd that resolves outside and runs in the resolved path", %{
+      tmp_dir: tmp_dir
+    } do
+      root = Path.join(tmp_dir, "project")
+      outside = Path.join(tmp_dir, "outside")
+      File.mkdir_p!(Path.join(root, "sub"))
+      File.mkdir_p!(outside)
+      File.ln_s!(outside, Path.join(root, "link"))
+      File.ln_s!(Path.join(root, "sub"), Path.join(root, "inner-link"))
+      assert {:ok, parent} = ExecutionContext.new(run_id: "parent-task", cwd: root)
+
+      escape = Path.join(root, "link")
+
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{"description" => "escape", "prompt" => "Go.", "cwd" => escape},
+                 root
+               )
+
+      assert {:error, message} =
+               Params.restrict_to_parent(validated, root, execution_context: parent)
+
+      assert message =~ "workspace_scope_escalation"
+
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{
+                   "description" => "inside",
+                   "prompt" => "Go.",
+                   "cwd" => Path.join(root, "inner-link")
+                 },
+                 root
+               )
+
+      assert {:ok, restricted} =
+               Params.restrict_to_parent(validated, root, execution_context: parent)
+
+      {:ok, real_root} = LemonCore.TrustedRoot.realpath(root)
+      assert restricted.cwd == Path.join(real_root, "sub")
+    end
+
     test "still permits an explicitly null historical engine field" do
       assert {:ok, validated} =
                Params.validate_run_params(

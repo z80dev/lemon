@@ -26,12 +26,21 @@ defmodule LemonAutomation.GoalLoopManager do
   checks it before mutation against the goal and exact active invocation.
   `transition_goal/3` uses the same guard to pause/resume only an idle goal.
   Drift returns `{:error, :stale}`; an old confirmation cannot stop a new loop.
+
+  Work starts only under the goal's recorded `LemonAgent.Workspace.GoalAuthority`.
+  A session or chat start passes its trusted `starter:` authority (a
+  `GoalAuthority.new/4` record: session, agent, policy, canonical root). It
+  must be the goal's own session and agent and contain the goal target; the
+  recorded authority is durably narrowed to it before any work or auto restart
+  is configured, and such a starter never joins a running loop.
+  Every admission (explicit, auto restart after a manager restart) re-checks the
+  authority and target; a goal without valid authority is quarantined.
   """
 
   use GenServer
 
   alias LemonAutomation.GoalLoop
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAgent.Workspace.{GoalAuthority, GoalStore}
   alias LemonCore.RunStore
 
   def start_link(opts \\ []) do
@@ -129,10 +138,13 @@ defmodule LemonAutomation.GoalLoopManager do
     if Map.has_key?(state.loops, session_key) do
       {:reply, {:error, :already_running}, state}
     else
+      {starter, opts} = Keyword.pop(opts, :starter)
       opts = opts |> Keyword.put(:await_completion, true) |> Keyword.put(:max_ticks, 1)
 
-      case start_loop_task(session_key, opts, state, :run_once) do
-        {:ok, loop, state} -> {:noreply, put_in(state.calls[loop.ref], from)}
+      with {:ok, _goal} <- narrow_authority(session_key, starter),
+           {:ok, loop, state} <- start_loop_task(session_key, opts, state, :run_once) do
+        {:noreply, put_in(state.calls[loop.ref], from)}
+      else
         {:error, reason} -> {:reply, {:error, reason}, state}
       end
     end
@@ -169,13 +181,21 @@ defmodule LemonAutomation.GoalLoopManager do
 
   def handle_call({:start_loop, session_key, opts}, _from, state) do
     auto? = Keyword.get(opts, :auto, false) == true
+    starter? = Keyword.has_key?(opts, :starter)
+    {starter, opts} = Keyword.pop(opts, :starter)
+    state = restore_persisted_reconciliation(state, session_key)
+    state = reconcile_ambiguous_loop(session_key, state)
 
-    case maybe_configure_auto(session_key, auto?, opts) do
-      {:ok, _goal} ->
-        start_loop_reply(session_key, opts, auto?, state)
-
-      error ->
-        {:reply, error, state}
+    # A session- or chat-bound starter never joins, or enables auto restart for, work
+    # already running under the goal's broader authority. Narrowing precedes
+    # auto configuration so an auto restart always sees the narrowed record.
+    with false <- starter? and Map.has_key?(state.loops, session_key),
+         {:ok, _goal} <- narrow_authority(session_key, starter),
+         {:ok, _goal} <- maybe_configure_auto(session_key, auto?, opts) do
+      start_loop_reply(session_key, opts, auto?, state)
+    else
+      true -> {:reply, {:error, :already_running}, state}
+      error -> {:reply, error, state}
     end
   rescue
     error -> {:reply, {:error, error}, state}
@@ -676,7 +696,8 @@ defmodule LemonAutomation.GoalLoopManager do
   defp loop_result_status(_), do: :error
 
   defp start_loop_task(session_key, opts, state, operation \\ :run_autonomous) do
-    with {:ok, _goal} <- ensure_active_goal(session_key),
+    with {:ok, goal} <- ensure_active_goal(session_key),
+         :ok <- admit_authority(goal, state),
          {:ok, _goal} <-
            GoalStore.record_loop_status(
              session_key,
@@ -762,6 +783,40 @@ defmodule LemonAutomation.GoalLoopManager do
     )
 
     {:error, :goal_loop_unavailable}
+  end
+
+  # Work starts only under the goal's recorded authority and target. A goal
+  # without valid authority (for example one persisted before authority was
+  # recorded) is quarantined: auto restart is disabled until it is set again.
+  defp admit_authority(goal, state) do
+    case GoalAuthority.run_scope(goal, %{}) do
+      {:ok, _scope} ->
+        :ok
+
+      {:error, :goal_authority_missing} ->
+        safe_configure_loop_auto(state.goal_store, goal.session_key, false)
+
+        safe_record_loop_status(state.goal_store, goal.session_key, :error,
+          error: "goal authority missing; set the goal again"
+        )
+
+        {:error, :goal_authority_missing}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # A starter's authority durably narrows the recorded authority before any
+  # work or auto restart is configured; operator surfaces pass none.
+  defp narrow_authority(_session_key, nil), do: {:ok, nil}
+
+  defp narrow_authority(session_key, starter) do
+    case GoalStore.restrict_authority(session_key, starter) do
+      {:ok, goal} -> {:ok, goal}
+      {:error, reason} when is_atom(reason) -> {:error, reason}
+      {:error, _reason} -> {:error, :goal_store_unavailable}
+    end
   end
 
   defp maybe_configure_auto(_session_key, false, _opts), do: {:ok, nil}

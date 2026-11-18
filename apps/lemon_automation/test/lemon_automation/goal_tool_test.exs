@@ -89,7 +89,11 @@ defmodule LemonAutomation.GoalToolTest do
                nil
              )
 
-    assert goal.cwd == Path.expand(System.tmp_dir!())
+    # The target is the canonical session cwd (symlinks resolved).
+    assert {:ok, goal.cwd} ==
+             LemonAgent.Workspace.KanbanAuthority.canonical_directory(System.tmp_dir!())
+
+    assert goal.authority["grantedBy"] == "session"
 
     assert %AgentToolResult{details: %{loop: %{max_ticks: 1}}} =
              tool.execute.("start", %{"action" => "run_once"}, nil, nil)

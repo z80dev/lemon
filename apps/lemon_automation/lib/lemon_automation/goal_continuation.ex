@@ -7,10 +7,15 @@ defmodule LemonAutomation.GoalContinuation do
   `LemonAutomation.RunCompletionWaiter.submit_and_wait/2`, so the completion
   subscription exists before router submission and even synchronous terminal
   events are observed.
+
+  The continuation runs only under the goal's recorded
+  `LemonAgent.Workspace.GoalAuthority`: its tool policy is confined to the
+  recorded policy and its target is re-resolved inside the recorded root.
+  A goal without valid authority, or whose target changed, is not submitted.
   """
 
   alias LemonAutomation.RunCompletionWaiter
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAgent.Workspace.{GoalAuthority, GoalStore}
 
   @spec continue_once(binary(), keyword()) ::
           {:ok, map()} | {:error, :not_found | :paused | :completed | :budget_exhausted | term()}
@@ -18,7 +23,7 @@ defmodule LemonAutomation.GoalContinuation do
     with {:ok, goal} <- active_goal(session_key),
          :ok <- budget_available?(goal, opts),
          run_id = Keyword.get(opts, :run_id, LemonCore.Id.run_id()),
-         params = build_params(goal, run_id, opts),
+         {:ok, params} <- build_params(goal, run_id, opts),
          :ok <- LemonAutomation.RunNotifications.bind_goal(goal, params),
          {:ok, submitted_run_id, completion} <- submit(params, opts),
          {:ok, updated} <-
@@ -32,29 +37,35 @@ defmodule LemonAutomation.GoalContinuation do
     continuation_count = (goal.continuation_count || 0) + 1
     meta = Keyword.get(opts, :meta, %{})
 
-    params = %{
-      origin: :goal,
-      session_key: goal.session_key,
-      prompt: build_prompt(goal),
-      agent_id: goal.agent_id || "default",
-      queue_mode: Keyword.get(opts, :queue_mode, :followup),
-      cwd: Map.get(goal, :cwd),
-      tool_policy: %{blocked_tools: ["goal"]},
-      meta:
-        %{
-          goal_id: goal.id,
-          goal_continuation: true,
-          goal_continuation_count: continuation_count,
-          goal_objective_bytes: byte_size(goal.objective || "")
-        }
-        |> Map.merge(meta),
-      run_id: run_id
-    }
+    with {:ok, scope} <- GoalAuthority.run_scope(goal, %{blocked_tools: ["goal"]}) do
+      params = %{
+        origin: :goal,
+        session_key: goal.session_key,
+        prompt: build_prompt(goal),
+        agent_id: goal.agent_id || "default",
+        queue_mode: Keyword.get(opts, :queue_mode, :followup),
+        cwd: scope.cwd,
+        tool_policy: scope.tool_policy,
+        # The checked directory identity is applied last: caller meta never
+        # replaces it. The session runner re-verifies it at start and before
+        # every tool call.
+        meta:
+          %{
+            goal_id: goal.id,
+            goal_continuation: true,
+            goal_continuation_count: continuation_count,
+            goal_objective_bytes: byte_size(goal.objective || "")
+          }
+          |> Map.merge(meta)
+          |> Map.put(:cwd_identity, scope.cwd_identity),
+        run_id: run_id
+      }
 
-    if Keyword.has_key?(opts, :model) do
-      Map.put(params, :model, Keyword.get(opts, :model))
-    else
-      params
+      if Keyword.has_key?(opts, :model) do
+        {:ok, Map.put(params, :model, Keyword.get(opts, :model))}
+      else
+        {:ok, params}
+      end
     end
   end
 

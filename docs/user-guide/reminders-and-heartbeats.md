@@ -375,7 +375,8 @@ and verification command, for example:
 The `goal` tool manages the current session's durable objective:
 
 - `set` stores `objective` and `cwd`; cwd defaults to the current coding
-  session's directory. `deliver_to` (`auto`, `none`, `telegram:<chat>[:<thread>]`,
+  session's directory and must be that directory or one inside it.
+  `deliver_to` (`auto`, `none`, `telegram:<chat>[:<thread>]`,
   or `discord:<channel>[:<thread>]`) picks where supervision updates go.
 - `start` launches a bounded loop; `max_ticks` (1–20, default 3) limits
   judge/continuation cycles. `run_once` starts one cycle. An optional `model`
@@ -390,6 +391,20 @@ Continuation runs use that same directory. A failed or ambiguous run does not
 silently start another editor: unknown completion remains under reconciliation
 until the original run is terminal. Loops do not enable automatic restart by
 default.
+
+Goal work never runs with more authority than the session or chat that set
+it. `set` records that caller's tool policy and working directory; a chat's
+`/goal set` records the chat's channel policy (including the group-chat
+approval requirement for shell and file edits) and its bound project
+directory. Every later judge and continuation run, including automatic
+restarts, is limited to that recorded policy and directory. Starting a goal is
+limited to its own session and agent: a session can only start a goal whose
+directory lies inside its own working directory, and starting from a more
+restricted session narrows the goal further. Goal runs cannot use `cron`,
+`kanban`, `task`, `agent` or other tools that start work elsewhere. A goal
+whose directory was moved or replaced, before or after its run was queued, is
+not run. Goals set before this was recorded do not start until they are set
+again.
 
 ### A scheduled coding task
 

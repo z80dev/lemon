@@ -577,6 +577,7 @@ defmodule LemonWeb.WorkManagementLiveTest do
              Agent.get(state, &List.last(&1.calls))
 
     assert opts[:budget] == %{"max_continuations" => 12}
+    assert opts[:authority]["grantedBy"] == "operator"
     assert render(view) =~ "Goal set"
     refute_private(inspect(:sys.get_state(view.pid), limit: :infinity))
   end

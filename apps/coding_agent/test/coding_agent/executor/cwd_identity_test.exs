@@ -51,6 +51,112 @@ defmodule CodingAgent.Executor.CwdIdentityTest do
     assert_refused(request(Path.join(tmp_dir, "original"), %{cwd_identity: %{"inode" => 1}}))
   end
 
+  test "goal judge and continuation runs without a bound identity never start", %{
+    tmp_dir: tmp_dir
+  } do
+    cwd = Path.join(tmp_dir, "goal")
+    File.mkdir_p!(cwd)
+
+    for origin <- [:goal, :goal_judge] do
+      assert_refused(request(cwd, %{origin: origin}))
+    end
+  end
+
+  test "a goal run whose directory is swapped after submission is refused at start", %{
+    tmp_dir: tmp_dir
+  } do
+    cwd = Path.join(tmp_dir, "goal")
+    File.mkdir_p!(cwd)
+    File.mkdir_p!(Path.join(tmp_dir, "outside"))
+    # Submitted (bound to the checked directory), then swapped while queued.
+    submitted = request(cwd, %{origin: :goal, cwd_identity: identity(cwd)})
+    File.rename!(cwd, Path.join(tmp_dir, "checked"))
+    File.ln_s!(Path.join(tmp_dir, "outside"), cwd)
+    assert_refused(submitted)
+  end
+
+  test "a goal run whose directory is swapped after start refuses its tool calls", %{
+    tmp_dir: tmp_dir
+  } do
+    cwd = Path.join(tmp_dir, "goal")
+    outside = Path.join(tmp_dir, "outside")
+    File.mkdir_p!(cwd)
+    File.mkdir_p!(outside)
+    run_ref = make_ref()
+
+    swap = fn ->
+      File.rename!(cwd, Path.join(tmp_dir, "checked"))
+      File.ln_s!(outside, cwd)
+    end
+
+    {:ok, _runner} =
+      SessionRunner.start_link(
+        request: request(cwd, %{origin: :goal, cwd_identity: identity(cwd)}),
+        opts: %{stream_fn: write_then_finish(swap)},
+        sink_pid: self(),
+        run_ref: run_ref
+      )
+
+    assert_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 10_000
+    refute File.exists?(Path.join(outside, "marker.txt"))
+  end
+
+  test "a directory swapped while approval is pending is refused after approval", %{
+    tmp_dir: tmp_dir
+  } do
+    cwd = Path.join(tmp_dir, "goal")
+    outside = Path.join(tmp_dir, "outside")
+    File.mkdir_p!(cwd)
+    File.mkdir_p!(outside)
+    owner = self()
+
+    # The approval is granted only after the directory was swapped for a link
+    # to another tree: the call passed the pre-approval check, so only a
+    # check after approval returns can catch it.
+    swap_then_approve = fn _request ->
+      send(owner, :approval_requested)
+      File.rename!(cwd, Path.join(tmp_dir, "checked"))
+      File.ln_s!(outside, cwd)
+      {:ok, :approved, :once}
+    end
+
+    write = approval_gated_write(cwd, identity(cwd), swap_then_approve)
+
+    assert {:error, message} =
+             write.execute.("call", %{"path" => "marker.txt", "content" => "x"}, nil, nil)
+
+    assert_received :approval_requested
+    assert message =~ "Working directory changed"
+    refute File.exists?(Path.join(outside, "marker.txt"))
+    refute File.exists?(Path.join(tmp_dir, "checked/marker.txt"))
+  end
+
+  test "an approved call in the unchanged bound directory still runs", %{tmp_dir: tmp_dir} do
+    cwd = Path.join(tmp_dir, "goal")
+    File.mkdir_p!(cwd)
+    write = approval_gated_write(cwd, identity(cwd), fn _ -> {:ok, :approved, :once} end)
+
+    result = write.execute.("call", %{"path" => "marker.txt", "content" => "x"}, nil, nil)
+    assert %LemonAgent.Types.AgentToolResult{is_error: false} = result
+
+    assert File.read!(Path.join(cwd, "marker.txt")) == "x"
+  end
+
+  defp approval_gated_write(cwd, identity, approve) do
+    [write] =
+      CodingAgent.ToolRegistry.get_tools(cwd,
+        include_extensions: false,
+        include_mcp: false,
+        enabled_only: ["write"],
+        tool_policy: LemonCore.ToolPolicy.custom(require_approval: ["write"]),
+        cwd_identity: identity,
+        approval_context: %{session_id: "cwd-identity-approval", approval_request_fun: approve},
+        tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(Path.dirname(cwd))
+      )
+
+    write
+  end
+
   test "tools run in the bound directory while it is unchanged", %{tmp_dir: tmp_dir} do
     cwd = Path.join(tmp_dir, "work")
     File.mkdir_p!(cwd)

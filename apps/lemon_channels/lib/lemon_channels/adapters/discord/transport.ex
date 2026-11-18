@@ -1781,10 +1781,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       topic_id: interaction_thread_id(interaction)
     }
 
+    # Goal work runs later under this channel's channel-run authority; with no
+    # peer kind the router applies the group approval floor.
     respond_ephemeral(
       interaction,
       LemonChannels.GoalStatusMessage.handle(session_key, args,
         agent_id: BindingResolver.resolve_agent_id(scope),
+        workspace: BindingResolver.resolve_cwd(scope),
+        channel_context: %{channel_id: "discord", peer_id: map_get(interaction, :channel_id)},
         meta: %{transport: "discord"}
       )
     )

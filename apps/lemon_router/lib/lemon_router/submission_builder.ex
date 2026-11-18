@@ -48,6 +48,7 @@ defmodule LemonRouter.SubmissionBuilder do
     run_id = params.run_id
 
     with :ok <- require_channel_provenance(origin, meta),
+         :ok <- require_goal_binding(origin, meta, cwd_override),
          {:ok, session_config} <- get_session_config(session_key),
          {:ok, agent_profile} <- get_execution_profile(agent_id, meta),
          {:ok, tool_policy} <-
@@ -224,6 +225,19 @@ defmodule LemonRouter.SubmissionBuilder do
         {:error, :missing_channel_provenance}
     end
   end
+
+  # Goal judge and continuation runs execute later, without a live caller, in
+  # the directory the automation checked against the goal's recorded root.
+  # They must name that directory and carry its identity (`meta.cwd_identity`),
+  # which the session runner re-verifies at start and before every tool call.
+  defp require_goal_binding(origin, meta, cwd) when origin in [:goal, :goal_judge] do
+    case MapHelpers.get_key(meta, :cwd_identity) do
+      %{"major" => _, "minor" => _, "inode" => _} when is_binary(cwd) and cwd != "" -> :ok
+      _ -> {:error, :goal_cwd_identity_required}
+    end
+  end
+
+  defp require_goal_binding(_origin, _meta, _cwd), do: :ok
 
   @doc false
   def current_native_target_policy(profile_id, session_key, meta) do

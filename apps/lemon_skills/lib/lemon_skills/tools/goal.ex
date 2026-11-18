@@ -1,13 +1,24 @@
 defmodule LemonSkills.Tools.Goal do
   @moduledoc """
   Session-scoped durable coding goals. `tool/2` requires the canonical router
-  `:session_key` and accepts `:agent_id`; `cwd` is the default repository target.
+  `:session_key` and `:agent_id`; `cwd` is the session working directory.
   Dispatch uses the running automation manager, never a tool-owned scheduler.
+
+  Goal work acts for the calling session, never with more authority: `set`
+  records the session as the goal principal, its effective tool policy
+  (`:tool_policy` intersected with `:execution_context`) and the canonical
+  session cwd as the root (`LemonAgent.Workspace.GoalAuthority`). The goal
+  target must be an existing directory inside that root. `start` and
+  `run_once` pass the same trusted starter authority (session, agent, policy,
+  canonical session cwd): the goal must belong to this session and agent and
+  its target must lie inside this session's cwd, and the recorded authority is
+  durably narrowed to it.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAgent.Workspace.GoalStore
+  alias LemonAgent.Workspace.{GoalAuthority, GoalStore}
   alias LemonAi.Types.TextContent
+  alias LemonCore.ToolPolicy
 
   @manager :"Elixir.LemonAutomation.GoalLoopManager"
   @actions ~w(set status start stop pause resume run_once)
@@ -34,7 +45,8 @@ defmodule LemonSkills.Tools.Goal do
           },
           "cwd" => %{
             "type" => "string",
-            "description" => "Repository for set; defaults to this tool's working directory."
+            "description" =>
+              "Repository for set: this tool's working directory (default) or a directory inside it."
           },
           "deliver_to" => %{
             "type" => "string",
@@ -78,7 +90,8 @@ defmodule LemonSkills.Tools.Goal do
 
   defp dispatch("set", session_key, params, cwd, opts) do
     with {:ok, objective} <- required_string(params["objective"], "objective"),
-         {:ok, target} <- target_directory(params["cwd"], cwd),
+         {:ok, authority} <- caller_authority(session_key, cwd, opts),
+         {:ok, target} <- target_directory(authority, params["cwd"]),
          {:ok, delivery} <- validate_delivery(params["deliver_to"]),
          {:ok, goal} <-
            manager(:set_goal, [
@@ -87,6 +100,7 @@ defmodule LemonSkills.Tools.Goal do
              [
                cwd: target,
                agent_id: opts[:agent_id],
+               authority: authority,
                meta: if(delivery, do: %{"deliverTo" => delivery}, else: %{})
              ]
            ]) do
@@ -97,15 +111,18 @@ defmodule LemonSkills.Tools.Goal do
   defp dispatch("status", session_key, _params, _cwd, _opts),
     do: manager(:status, [session_key])
 
-  defp dispatch(action, session_key, params, _cwd, _opts) when action in ["start", "run_once"] do
+  defp dispatch(action, session_key, params, cwd, opts) when action in ["start", "run_once"] do
     max_ticks = if action == "run_once", do: 1, else: Map.get(params, "max_ticks", 3)
 
     with true <- is_integer(max_ticks) and max_ticks in 1..20,
-         {:ok, goal} <- fetch_goal(session_key),
-         {:ok, _target} <- target_directory(goal.cwd, nil),
+         {:ok, _goal} <- fetch_goal(session_key),
+         {:ok, starter} <- caller_authority(session_key, cwd, opts),
          {:ok, model_opts} <- model_options(params["model"]),
          {:ok, loop} <-
-           manager(:start_loop, [session_key, [max_ticks: max_ticks, auto: false] ++ model_opts]) do
+           manager(:start_loop, [
+             session_key,
+             [max_ticks: max_ticks, auto: false, starter: starter] ++ model_opts
+           ]) do
       {:ok, %{loop: loop, goal: GoalStore.get(session_key)}}
     else
       false -> {:error, "max_ticks must be 1..20"}
@@ -186,13 +203,46 @@ defmodule LemonSkills.Tools.Goal do
 
   defp session_key(opts), do: required_string(opts[:session_key], "session_key in tool context")
 
-  defp target_directory(value, cwd) do
-    with {:ok, path} <- required_string(value || cwd, "cwd") do
-      target = if is_binary(cwd), do: Path.expand(path, cwd), else: Path.expand(path)
+  defp caller_authority(session_key, cwd, opts) do
+    principal = %{session_key: session_key, agent_id: opts[:agent_id]}
 
-      if File.dir?(target),
-        do: {:ok, target},
-        else: {:error, "cwd must name an existing directory"}
+    case GoalAuthority.new(principal, caller_policy(opts), Path.expand(cwd || "")) do
+      {:ok, authority} -> {:ok, authority}
+      {:error, :session_identity_required} -> {:error, "goal requires a trusted session identity"}
+      {:error, _reason} -> {:error, "session working directory is unavailable"}
+    end
+  end
+
+  defp target_directory(authority, value) do
+    case GoalAuthority.target(authority, value) do
+      {:ok, target} ->
+        {:ok, target}
+
+      {:error, _} ->
+        {:error, "cwd must name an existing directory within the session working directory"}
+    end
+  end
+
+  # The invoking session's effective tool policy; nil only for an unrestricted caller.
+  defp caller_policy(opts) do
+    context_policy =
+      case Keyword.get(opts, :execution_context) do
+        %{tool_policy: policy} -> policy
+        _ -> nil
+      end
+
+    case Enum.reject([Keyword.get(opts, :tool_policy), context_policy], &is_nil/1) do
+      [] ->
+        nil
+
+      [policy] ->
+        policy
+
+      [policy, context_policy] ->
+        case ToolPolicy.restrict(policy, context_policy) do
+          {:ok, restricted} -> restricted
+          {:error, _} -> ToolPolicy.deny_all()
+        end
     end
   end
 
@@ -219,5 +269,18 @@ defmodule LemonSkills.Tools.Goal do
     do: "goal operation outcome unknown; inspect status, do not retry automatically"
 
   defp error_message(:goal_runtime_unavailable), do: "goal automation runtime unavailable"
+
+  defp error_message(:goal_authority_missing),
+    do: "goal has no recorded authority for this session; set it again before starting"
+
+  defp error_message(:workspace_changed),
+    do: "goal directory changed or left the session working directory; set the goal again"
+
+  defp error_message(:starter_not_permitted),
+    do: "goal belongs to another agent; this session cannot start it"
+
+  defp error_message(:workspace_outside_root),
+    do: "goal directory is outside this session's working directory; this session cannot start it"
+
   defp error_message(_reason), do: "goal operation failed"
 end

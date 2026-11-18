@@ -91,13 +91,21 @@ defmodule LemonWeb.WorkStoreReadsTest do
   test "goal manager refuses an old goal revision before start, stop or pause" do
     key = "agent:workguard#{System.unique_integer([:positive])}:main"
     on_exit(fn -> GoalStore.clear(key) end)
-    {:ok, _} = GoalStore.set(key, "Original private objective")
+
+    {:ok, _} =
+      GoalStore.set(key, "Original private objective",
+        authority: LemonAgent.Workspace.GoalAuthority.operator()
+      )
+
     state = %{loops: %{}}
 
     {:reply, {:ok, %{control_revision: revision}}, ^state} =
       GoalLoopManager.handle_call({:status, key}, nil, state)
 
-    {:ok, _} = GoalStore.set(key, "Changed private objective")
+    {:ok, _} =
+      GoalStore.set(key, "Changed private objective",
+        authority: LemonAgent.Workspace.GoalAuthority.operator()
+      )
 
     assert {:reply, {:error, :stale}, ^state} =
              GoalLoopManager.handle_call({:start_loop, key, [max_ticks: 3], revision}, nil, state)
