@@ -2,6 +2,8 @@ defmodule LemonChannels.Telegram.API do
   @moduledoc false
 
   @default_timeout 10_000
+  @file_download_max_bytes 20 * 1024 * 1024
+  @file_download_timeout_ms 60_000
 
   def get_updates(token, offset, timeout_ms) do
     # `timeout_ms` is passed in from polling transports. Historically it has been wired to the
@@ -204,21 +206,34 @@ defmodule LemonChannels.Telegram.API do
     request(token, "getFile", params, @default_timeout)
   end
 
-  def download_file(token, file_path, max_bytes) when is_binary(file_path) do
-    LemonChannels.ImageDownload.download(
-      "https://api.telegram.org/file/bot#{token}/#{file_path}",
-      max_bytes
-    )
-  end
+  @doc """
+  Downloads a file returned by `get_file/2`, at most `max_bytes` (default
+  20 MiB, the Bot API's `getFile` limit).
 
-  def download_file(token, file_path) when is_binary(file_path) do
+  Goes through `LemonCore.Net.HTTP`: the Bot API address is authorized and
+  pinned, a redirect is returned as `{:error, {:http_error, status}}` and never
+  followed, the body is cut off above `max_bytes` while it streams
+  (`{:error, {:body_too_large, max_bytes}}`), and the whole download has a
+  60 s deadline. `net_opts` are extra fetcher options for tests (`:resolver`,
+  `:send`).
+  """
+  def download_file(token, file_path),
+    do: download_file(token, file_path, @file_download_max_bytes)
+
+  def download_file(token, file_path, max_bytes, net_opts \\ [])
+      when is_binary(file_path) and is_integer(max_bytes) and max_bytes > 0 do
     url = "https://api.telegram.org/file/bot#{token}/#{file_path}"
-    headers = []
-    opts = [timeout: 30_000, connect_timeout: 30_000]
 
-    case LemonCore.Httpc.request(:get, {to_charlist(url), headers}, opts, body_format: :binary) do
-      {:ok, {{_, 200, _}, _headers, body}} -> {:ok, body}
-      {:ok, {{_, status, _}, _headers, body}} -> {:error, {:http_error, status, body}}
+    opts =
+      Keyword.merge(net_opts,
+        timeout_ms: @file_download_timeout_ms,
+        max_body_bytes: max_bytes,
+        max_redirects: 0
+      )
+
+    case LemonCore.Net.HTTP.request(:get, url, opts) do
+      {:ok, %{status: 200, body: body}} -> {:ok, body}
+      {:ok, %{status: status}} -> {:error, {:http_error, status}}
       {:error, reason} -> {:error, reason}
     end
   end

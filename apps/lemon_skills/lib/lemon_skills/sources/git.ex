@@ -2,9 +2,12 @@ defmodule LemonSkills.Sources.Git do
   @moduledoc """
   Source for skills hosted in git repositories.
 
-  Accepts any git-cloneable URL including HTTPS and SSH forms.
-  Skills installed via git carry `:community` trust by default because they
-  come from third-party repositories.
+  Accepts HTTPS, HTTP and SSH clone URLs. Every git command runs through
+  `LemonSkills.GitRemote`: public destinations only, pinned, no redirects, a
+  sanitized environment, a deadline and a size cap. Local paths, `file://`
+  and helper transports are refused. Skills installed via git carry
+  `:community` trust by default because they come from third-party
+  repositories.
 
   ## Identifier forms
 
@@ -17,7 +20,7 @@ defmodule LemonSkills.Sources.Git do
 
   @behaviour LemonSkills.Source
 
-  alias LemonSkills.{Entry, Manifest}
+  alias LemonSkills.{Entry, GitRemote, Manifest}
 
   # ---------------------------------------------------------------------------
   # Behaviour callbacks
@@ -37,53 +40,41 @@ defmodule LemonSkills.Sources.Git do
 
   @impl true
   def fetch(url, dest_dir, opts) when is_binary(url) do
-    branch = Keyword.get(opts, :branch, "main")
-    depth = Keyword.get(opts, :depth, 1)
-
     File.rm_rf(dest_dir)
+    opts = Keyword.put_new(opts, :branch, "main")
 
     # `core.symlinks=false` checks symlinks out as plain files; the installer's
     # bundle scan then audits or rejects every entry of the fetched tree.
-    clone_args = clone_args(depth, ["--branch", branch], url, dest_dir)
+    case GitRemote.clone(url, dest_dir, opts) do
+      :ok ->
+        stripped(dest_dir)
 
-    case System.cmd("git", clone_args, stderr_to_stdout: true) do
-      {_out, 0} ->
-        # Remove .git to save space (provenance is tracked via lockfile).
-        File.rm_rf(Path.join(dest_dir, ".git"))
-        {:ok, dest_dir}
-
-      {output, _code} ->
+      {:error, {:git_failed, output}} ->
         # Retry without --branch in case the default branch differs.
-        retry_args = clone_args(depth, [], url, dest_dir)
-
-        case System.cmd("git", retry_args, stderr_to_stdout: true) do
-          {_out2, 0} ->
-            File.rm_rf(Path.join(dest_dir, ".git"))
-            {:ok, dest_dir}
-
-          {_, _} ->
-            {:error, {:clone_failed, String.trim(output)}}
+        case GitRemote.clone(url, dest_dir, Keyword.put(opts, :branch, nil)) do
+          :ok -> stripped(dest_dir)
+          {:error, {:git_failed, _}} -> {:error, {:clone_failed, output}}
+          {:error, reason} -> {:error, reason}
         end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp clone_args(depth, branch_args, url, dest_dir) do
-    ["-c", "core.symlinks=false", "clone", "--no-recurse-submodules", "--depth", to_string(depth)] ++
-      branch_args ++ ["--", url, dest_dir]
+  # Remove .git to save space (provenance is tracked via lockfile).
+  defp stripped(dest_dir) do
+    File.rm_rf(Path.join(dest_dir, ".git"))
+    {:ok, dest_dir}
   end
 
   @impl true
-  def upstream_hash(url, _opts) when is_binary(url) do
+  def upstream_hash(url, opts) when is_binary(url) do
     # Fetch the latest commit hash of the default remote HEAD.
-    case System.cmd("git", ["ls-remote", "--", url, "HEAD"], stderr_to_stdout: true) do
-      {output, 0} ->
-        case String.split(output, "\t", parts: 2) do
-          [hash | _] -> {:ok, String.trim(hash)}
-          _ -> {:error, :no_head}
-        end
-
-      {reason, _} ->
-        {:error, {:ls_remote_failed, String.trim(reason)}}
+    case GitRemote.head(url, opts) do
+      {:ok, hash} -> {:ok, hash}
+      {:error, {:git_failed, output}} -> {:error, {:ls_remote_failed, output}}
+      {:error, reason} -> {:error, reason}
     end
   end
 

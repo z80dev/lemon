@@ -4,6 +4,21 @@ defmodule LemonCore.Update.RemoteTest do
   alias LemonCore.Update.FixtureServer
   alias LemonCore.Update.Remote
 
+  setup do
+    path = LemonCore.Paths.global_config()
+    previous = File.read(path)
+    grant_private_mirror!([])
+
+    on_exit(fn ->
+      case previous do
+        {:ok, contents} -> File.write!(path, contents)
+        _ -> File.rm(path)
+      end
+    end)
+
+    :ok
+  end
+
   @moduletag :tmp_dir
 
   defp manifest(version, artifacts, schema \\ 2) do
@@ -143,7 +158,16 @@ defmodule LemonCore.Update.RemoteTest do
     )
 
     File.ln_s!(release_version, Path.join([state, "versions", "current"]))
+    grant_private_mirror!(home_dir: home)
     {home, state, release_root}
+  end
+
+  # The fixture servers listen on loopback, which only an explicit operator
+  # `[update] private_mirror = true` admits.
+  defp grant_private_mirror!(paths_opts, contents \\ "[update]\nprivate_mirror = true\n") do
+    path = LemonCore.Paths.global_config(paths_opts)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, contents)
   end
 
   defp remote_opts(base_url, home, release_root) do
@@ -1659,5 +1683,206 @@ defmodule LemonCore.Update.RemoteTest do
       System.cmd("tar", ["-czf", tarball, "-C", src, "."], env: [{"COPYFILE_DISABLE", "1"}])
 
     digest(tarball)
+  end
+
+  describe "outbound guard" do
+    test "a manifest redirect to a host other than the configured one is refused" do
+      body = manifest("2099.01.0", [])
+
+      other =
+        start_server(fn
+          "/m.json" -> {200, "application/json", body}
+          _ -> {404, "text/plain", "not found"}
+        end)
+
+      other_port = URI.parse(other).port
+
+      base_url =
+        start_server(fn
+          "/releases/latest/download/manifest.json" ->
+            {:redirect, "http://localhost:#{other_port}/m.json"}
+
+          _ ->
+            {404, "text/plain", "not found"}
+        end)
+
+      assert {:error, {:manifest_request_failed, :destination_not_public}} =
+               Remote.check(base_url: base_url, channel: "stable")
+    end
+
+    test "an artifact larger than its declared size is cut off while streaming",
+         %{tmp_dir: tmp_dir} do
+      {_bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      total = 64 * 1024 * 1024
+
+      base_url =
+        start_streaming_server(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          total
+        )
+
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      assert {:error, {:download_failed, {:body_too_large, 65_536}}} =
+               apply_confirmed(remote_opts(base_url, home, release_root))
+
+      assert_receive {:streamed, sent}, 30_000
+      assert sent < div(total, 4)
+      refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+    end
+
+    test "an https to http hop is refused before it is connected, even mid-chain" do
+      test = self()
+      body = manifest("2099.01.0", [])
+
+      send_fun = fn request ->
+        send(test, {:hop, request.scheme, request.host, request.path})
+
+        case {request.host, request.path} do
+          {"updates.example", "/releases/latest/download/manifest.json"} ->
+            {:ok, %{status: 302, headers: [{"location", "http://mid.example/b"}], body: ""}}
+
+          {"mid.example", "/b"} ->
+            {:ok, %{status: 302, headers: [{"location", "https://cdn.example/m.json"}], body: ""}}
+
+          {"cdn.example", "/m.json"} ->
+            {:ok, %{status: 200, headers: [], body: body}}
+        end
+      end
+
+      assert {:error, {:manifest_request_failed, {:redirect_refused, :insecure_redirect}}} =
+               Remote.check(
+                 base_url: "https://updates.example",
+                 channel: "stable",
+                 net_opts: [resolver: fn _ -> {:ok, [{93, 184, 216, 34}]} end, send: send_fun]
+               )
+
+      assert_receive {:hop, "https", "updates.example", _}
+      refute_receive {:hop, "http", _, _}, 100
+      refute_received {:hop, _, "cdn.example", _}
+    end
+
+    test "private destinations need the operator's explicit private_mirror grant" do
+      base_url = start_server(manifest_router(manifest("2099.01.0", [])))
+
+      grant_private_mirror!([], "[update]\nprivate_mirror = false\n")
+
+      assert {:error, {:manifest_request_failed, :destination_not_public}} =
+               Remote.check(base_url: base_url, channel: "stable")
+
+      grant_private_mirror!([])
+      assert {:ok, %{latest: "2099.01.0"}} = Remote.check(base_url: base_url, channel: "stable")
+
+      # The grant never covers the default upstream, whatever its DNS says.
+      for upstream <- ["https://github.com/z80dev/lemon", "https://GitHub.com:443/z80dev/lemon/"] do
+        assert {:error, {:manifest_request_failed, :destination_not_public}} =
+                 Remote.check(
+                   base_url: upstream,
+                   channel: "stable",
+                   net_opts: [
+                     resolver: fn _ -> {:ok, [{127, 0, 0, 1}]} end,
+                     send: fn _ -> flunk("connected to a private default upstream") end
+                   ]
+                 )
+      end
+    end
+
+    test "the private mirror grant is bound to its exact origin" do
+      test = self()
+
+      other =
+        start_server(fn path ->
+          send(test, {:other_port, path})
+          {200, "application/json", manifest("2099.01.0", [])}
+        end)
+
+      other_port = URI.parse(other).port
+
+      base_url =
+        start_server(fn
+          "/releases/latest/download/manifest.json" ->
+            {:redirect, "http://127.0.0.1:#{other_port}/m.json"}
+
+          _ ->
+            {404, "text/plain", "not found"}
+        end)
+
+      assert {:error, {:manifest_request_failed, :destination_not_public}} =
+               Remote.check(base_url: base_url, channel: "stable")
+
+      refute_receive {:other_port, _}, 200
+    end
+  end
+
+  # Serves the manifest normally and streams `total` bytes for the artifact,
+  # reporting how many bytes the client accepted before closing.
+  defp start_streaming_server(manifest_body, artifact_path, total) do
+    {:ok, listen} =
+      :gen_tcp.listen(0, [
+        :binary,
+        ip: {127, 0, 0, 1},
+        packet: :line,
+        active: false,
+        reuseaddr: true
+      ])
+
+    {:ok, port} = :inet.port(listen)
+    test = self()
+    pid = spawn_link(fn -> streaming_loop(listen, test, manifest_body, artifact_path, total) end)
+
+    on_exit(fn ->
+      Process.exit(pid, :kill)
+      :gen_tcp.close(listen)
+    end)
+
+    "http://127.0.0.1:#{port}"
+  end
+
+  defp streaming_loop(listen, test, manifest_body, artifact_path, total) do
+    {:ok, socket} = :gen_tcp.accept(listen)
+    {:ok, line} = :gen_tcp.recv(socket, 0, 5_000)
+    [_method, path | _] = String.split(line, " ")
+    :ok = drain_request_headers(socket)
+    :ok = :inet.setopts(socket, packet: :raw)
+
+    cond do
+      path == artifact_path ->
+        head = "HTTP/1.1 200 OK\r\ncontent-length: #{total}\r\nconnection: close\r\n\r\n"
+        :ok = :gen_tcp.send(socket, head)
+        send(test, {:streamed, stream_zeros(socket, total, 0)})
+
+      String.ends_with?(path, "manifest.json") ->
+        :gen_tcp.send(socket, [
+          "HTTP/1.1 200 OK\r\ncontent-length: #{byte_size(manifest_body)}\r\n",
+          "connection: close\r\n\r\n",
+          manifest_body
+        ])
+
+      true ->
+        :gen_tcp.send(socket, "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+    end
+
+    :gen_tcp.close(socket)
+    streaming_loop(listen, test, manifest_body, artifact_path, total)
+  end
+
+  defp drain_request_headers(socket) do
+    case :gen_tcp.recv(socket, 0, 5_000) do
+      {:ok, "\r\n"} -> :ok
+      {:ok, _header} -> drain_request_headers(socket)
+      {:error, _} -> :ok
+    end
+  end
+
+  defp stream_zeros(_socket, total, sent) when sent >= total, do: sent
+
+  defp stream_zeros(socket, total, sent) do
+    case :gen_tcp.send(socket, :binary.copy(<<0>>, 65_536)) do
+      :ok -> stream_zeros(socket, total, sent + 65_536)
+      {:error, _} -> sent
+    end
   end
 end

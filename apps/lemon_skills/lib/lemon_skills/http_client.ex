@@ -15,10 +15,11 @@ defmodule LemonSkills.HttpClient do
   @doc """
   Returns the configured HTTP client module.
 
-  Defaults to `LemonSkills.HttpClient.Httpc` when no override is set.
+  Defaults to `LemonSkills.HttpClient.Guarded` (`LemonCore.Net.HTTP`) when no
+  override is set.
   """
   @spec impl() :: module()
   def impl do
-    Application.get_env(:lemon_skills, :http_client, LemonSkills.HttpClient.Httpc)
+    Application.get_env(:lemon_skills, :http_client, LemonSkills.HttpClient.Guarded)
   end
 end

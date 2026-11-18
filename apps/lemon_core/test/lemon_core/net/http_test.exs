@@ -161,6 +161,88 @@ defmodule LemonCore.Net.HTTPTest do
              )
   end
 
+  @tag :tmp_dir
+  test "into streams the final body to a file under the cap", %{tmp_dir: tmp_dir} do
+    body = String.duplicate("y", 200_000)
+    target = start_server(%{"/file" => ok(body)})
+    port = start_server(%{"/r" => redirect("http://127.0.0.1:#{target}/file")})
+    dest = Path.join(tmp_dir, "download")
+
+    assert {:ok, %{status: 200, body: "", redirects: 1}} =
+             HTTP.request(:get, "http://127.0.0.1:#{port}/r",
+               allow_private: true,
+               max_redirects: 1,
+               into: dest
+             )
+
+    assert File.read!(dest) == body
+
+    assert {:error, {:body_too_large, 1_000}} =
+             HTTP.request(:get, "http://127.0.0.1:#{target}/file",
+               allow_private: true,
+               max_body_bytes: 1_000,
+               into: dest
+             )
+
+    assert File.stat!(dest).size <= 1_000
+  end
+
+  test "authorize_redirect refuses a hop before it is resolved or connected" do
+    test = self()
+
+    send_fun = fn request ->
+      send(test, {:sent, request.scheme, request.host})
+
+      case request.host do
+        "a.example" ->
+          {:ok, %{status: 302, headers: [{"location", "https://b.example/"}], body: ""}}
+
+        "b.example" ->
+          {:ok, %{status: 302, headers: [{"location", "http://c.example/"}], body: ""}}
+      end
+    end
+
+    check = fn
+      %URI{scheme: "https"}, %URI{scheme: "http"} -> {:error, :insecure_redirect}
+      _from, _to -> :ok
+    end
+
+    assert {:error, {:redirect_refused, :insecure_redirect}} =
+             HTTP.request(:get, "https://a.example/",
+               max_redirects: 5,
+               authorize_redirect: check,
+               resolver: fn
+                 "c.example" -> flunk("resolved the refused hop")
+                 _ -> {:ok, [{93, 184, 216, 34}]}
+               end,
+               send: send_fun
+             )
+
+    assert_receive {:sent, "https", "a.example"}
+    assert_receive {:sent, "https", "b.example"}
+    refute_received {:sent, _, "c.example"}
+  end
+
+  test "allow_private_origins admits only the exact origin" do
+    target = start_server(%{"/t" => ok("internal")})
+    port = start_server(%{"/r" => redirect("http://127.0.0.1:#{target}/t"), "/ok" => ok("ok")})
+    origin = ["http://127.0.0.1:#{port}"]
+
+    assert {:ok, %{status: 200, body: "ok"}} =
+             HTTP.request(:get, "http://127.0.0.1:#{port}/ok", allow_private_origins: origin)
+
+    assert {:error, :destination_not_public} =
+             HTTP.request(:get, "http://127.0.0.1:#{port}/r",
+               allow_private_origins: origin,
+               max_redirects: 1
+             )
+
+    assert {:error, :destination_not_public} =
+             HTTP.request(:get, "https://127.0.0.1:#{port}/ok", allow_private_origins: origin)
+
+    refute_receive {:hit, ^target, _, _}, 200
+  end
+
   test "DNS failure never reaches the transport" do
     assert {:error, :dns_resolution_failed} =
              HTTP.request(:get, "https://down.example/",

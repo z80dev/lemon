@@ -10,26 +10,33 @@ defmodule LemonGateway.Voice.RecordingDownloader do
 
   Uses Twilio basic auth (AccountSid:AuthToken) to fetch the recording. The
   credentials are only ever sent to `https://api.twilio.com`; any other
-  `RecordingUrl` is refused without a request. Redirects are not followed
-  automatically: a redirect is followed (without credentials) only when it stays
-  on `https://api.twilio.com`.
+  `RecordingUrl` is refused without a request. Every request goes through
+  `LemonCore.Net.HTTP` (address re-authorized and pinned per hop). Redirects
+  are not followed automatically: a redirect is followed (without credentials)
+  only when it stays on `https://api.twilio.com`. Each hop has a 120 s
+  deadline and the body is streamed to a temporary file beside the recording,
+  cut off above 512 MiB, and renamed into place only when complete.
   """
 
   require Logger
 
-  alias LemonCore.Httpc
+  alias LemonCore.Net.HTTP
   alias LemonGateway.Voice.Config
 
   @twilio_api_host "api.twilio.com"
   @max_redirects 3
+  @timeout_ms 120_000
+  @max_recording_bytes 512 * 1024 * 1024
 
   @doc """
   Downloads a recording from Twilio and saves it locally.
 
-  Returns `{:ok, local_path}` or `{:error, reason}`.
+  Returns `{:ok, local_path}` or `{:error, reason}`. `net_opts` are extra
+  `LemonCore.Net.HTTP` options for tests (`:resolver`, `:send`); the
+  destination, deadline and size cap cannot be overridden.
   """
-  @spec download(map()) :: {:ok, String.t()} | {:error, term()}
-  def download(params) do
+  @spec download(map(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def download(params, net_opts \\ []) do
     recording_url = params["RecordingUrl"]
     recording_sid = params["RecordingSid"]
     call_sid = params["CallSid"]
@@ -37,6 +44,7 @@ defmodule LemonGateway.Voice.RecordingDownloader do
     with {:ok, url} <- validate_recording_url(recording_url) do
       local_path = recording_path(params)
       File.mkdir_p!(Path.dirname(local_path))
+      partial = "#{local_path}.part-#{System.unique_integer([:positive])}"
 
       # Twilio recording URL without extension returns WAV by default
       # Add .wav explicitly to be safe
@@ -46,15 +54,23 @@ defmodule LemonGateway.Voice.RecordingDownloader do
         "Downloading recording #{inspect(recording_sid)} for call #{inspect(call_sid)} -> #{local_path}"
       )
 
-      case download_with_auth(full_url, Config.twilio_account_sid(), Config.twilio_auth_token()) do
-        {:ok, audio_data} ->
-          File.write!(local_path, audio_data)
+      credentials = Base.encode64("#{Config.twilio_account_sid()}:#{Config.twilio_auth_token()}")
+      headers = [{"authorization", "Basic #{credentials}"}]
 
-          Logger.info("Recording saved: #{local_path} (#{byte_size(audio_data)} bytes)")
-
+      result =
+        with :ok <- fetch(full_url, headers, @max_redirects, partial, net_opts),
+             :ok <- File.rename(partial, local_path) do
           {:ok, local_path}
+        end
+
+      case result do
+        {:ok, _path} ->
+          Logger.info("Recording saved: #{local_path} (#{File.stat!(local_path).size} bytes)")
+          result
 
         {:error, reason} = err ->
+          File.rm(partial)
+
           Logger.error(
             "Failed to download recording #{inspect(recording_sid)}: #{inspect(reason)}"
           )
@@ -131,38 +147,37 @@ defmodule LemonGateway.Voice.RecordingDownloader do
 
   defp wav_url(%URI{path: path} = uri), do: %URI{uri | path: (path || "") <> ".wav"}
 
-  defp download_with_auth(%URI{} = url, account_sid, auth_token) do
-    credentials = Base.encode64("#{account_sid}:#{auth_token}")
-    headers = [{~c"authorization", String.to_charlist("Basic #{credentials}")}]
-    fetch(url, headers, @max_redirects)
-  end
-
   # Redirects are handled manually: credentials go only on the first request,
   # and a redirect is only followed while it stays on https://api.twilio.com.
-  defp fetch(%URI{} = url, headers, redirects_left) do
-    case Httpc.request(
-           :get,
-           {String.to_charlist(URI.to_string(url)), headers},
-           [timeout: 30_000, autoredirect: false],
-           body_format: :binary
-         ) do
-      {:ok, {{_, 200, _}, _headers, body}} ->
-        {:ok, IO.iodata_to_binary(body)}
+  defp fetch(%URI{} = url, headers, redirects_left, into, net_opts) do
+    opts =
+      Keyword.merge(net_opts,
+        headers: headers,
+        timeout_ms: @timeout_ms,
+        max_body_bytes: @max_recording_bytes,
+        max_redirects: 0,
+        into: into
+      )
 
-      {:ok, {{_, status, _}, resp_headers, _body}} when status in [301, 302, 303, 307, 308] ->
-        follow_redirect(url, resp_headers, redirects_left)
+    case HTTP.request(:get, URI.to_string(url), opts) do
+      {:ok, %{status: 200}} ->
+        :ok
 
-      {:ok, {{_, status, _}, _headers, body}} ->
-        {:error, {:http_error, status, IO.iodata_to_binary(body)}}
+      {:ok, %{status: status, headers: resp_headers}}
+      when status in [301, 302, 303, 307, 308] ->
+        follow_redirect(url, resp_headers, redirects_left, into, net_opts)
+
+      {:ok, %{status: status}} ->
+        {:error, {:http_error, status}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp follow_redirect(_url, _headers, 0), do: {:error, :too_many_redirects}
+  defp follow_redirect(_url, _headers, 0, _into, _net_opts), do: {:error, :too_many_redirects}
 
-  defp follow_redirect(url, resp_headers, redirects_left) do
+  defp follow_redirect(url, resp_headers, redirects_left, into, net_opts) do
     location =
       Enum.find_value(resp_headers, fn {k, v} ->
         if String.downcase(to_string(k)) == "location", do: to_string(v)
@@ -171,7 +186,7 @@ defmodule LemonGateway.Voice.RecordingDownloader do
     with true <- is_binary(location) || {:error, :redirect_without_location},
          target = URI.merge(url, location),
          true <- twilio_api_uri?(target) || {:error, {:redirect_not_allowed, location}} do
-      fetch(target, [], redirects_left - 1)
+      fetch(target, [], redirects_left - 1, into, net_opts)
     end
   end
 end

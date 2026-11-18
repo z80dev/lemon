@@ -1,7 +1,8 @@
 defmodule LemonChannels.Adapters.Discord.FileAccessTest do
   @moduledoc """
   Discord `/file` and `/cwd` share the Telegram containment rules, driven
-  through `Transport.process_event/2` with a local attachment server.
+  through `Transport.process_event/2` with a stand-in transport for the
+  guarded Discord CDN fetch.
   """
   use ExUnit.Case, async: false
 
@@ -27,12 +28,6 @@ defmodule LemonChannels.Adapters.Discord.FileAccessTest do
     end
 
     def create(_channel_id, _params), do: {:ok, %{id: 1}}
-  end
-
-  defmodule AttachmentPlug do
-    @behaviour Plug
-    def init(opts), do: opts
-    def call(conn, _opts), do: Plug.Conn.send_resp(conn, 200, "ATTACHMENT_BYTES")
   end
 
   setup do
@@ -61,11 +56,6 @@ defmodule LemonChannels.Adapters.Discord.FileAccessTest do
     scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: nil}
     :ok = ProjectBindingStore.put_override(scope, "fileproj")
 
-    {:ok, server} =
-      start_supervised({Bandit, plug: AttachmentPlug, scheme: :http, port: 0, ip: :loopback})
-
-    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
-
     on_exit(fn ->
       Application.delete_env(:lemon_channels, :discord_interaction_responder)
       :persistent_term.erase({FakeApi, :pid})
@@ -83,7 +73,7 @@ defmodule LemonChannels.Adapters.Discord.FileAccessTest do
       root: root,
       outside: outside,
       channel_id: channel_id,
-      url: "http://127.0.0.1:#{port}/attachment"
+      url: "https://cdn.discordapp.com/attachments/1/2/attachment"
     }
   end
 
@@ -177,6 +167,10 @@ defmodule LemonChannels.Adapters.Discord.FileAccessTest do
       pending_new: %{},
       debounce_ms: 10_000,
       dedupe_ttl_ms: 600_000,
+      attachment_net_opts: [
+        resolver: fn "cdn.discordapp.com" -> {:ok, [{162, 159, 128, 233}]} end,
+        send: fn _request -> {:ok, %{status: 200, headers: [], body: "ATTACHMENT_BYTES"}} end
+      ],
       files:
         Map.merge(%{enabled: true, uploads_dir: "incoming", allowed_user_ids: [@user_id]}, files)
     }

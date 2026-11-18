@@ -2,6 +2,7 @@ defmodule LemonChannels.ImageDownload do
   @moduledoc false
 
   @max_bytes 5 * 1024 * 1024
+  @timeout_ms 30_000
   @max_images 4
 
   def max_bytes, do: @max_bytes
@@ -34,38 +35,24 @@ defmodule LemonChannels.ImageDownload do
     end
   end
 
-  def download(url, max_bytes \\ @max_bytes, opts \\ []) do
-    into = fn {:data, chunk}, {req, resp} ->
-      {size, chunks} = if is_tuple(resp.body), do: resp.body, else: {0, []}
-
-      if size + byte_size(chunk) > max_bytes do
-        {:halt, {req, %{resp | body: :too_large}}}
-      else
-        {:cont, {req, %{resp | body: {size + byte_size(chunk), [chunk | chunks]}}}}
-      end
-    end
-
+  # Discord CDN media (images, voice notes) through `LemonCore.Net.HTTP`: the
+  # address is authorized and pinned, redirects are refused, the body is cut
+  # off above `max_bytes` while it streams, and the whole download has a 30 s
+  # deadline. `net_opts` are fetcher stand-ins for tests (`:resolver`, `:send`).
+  def download(url, max_bytes \\ @max_bytes, net_opts \\ []) do
     opts =
-      Keyword.merge(opts,
-        into: into,
-        redirect: false,
-        retry: false,
-        decode_body: false,
-        receive_timeout: 15_000
-      )
+      net_opts
+      |> Keyword.take([:resolver, :send])
+      |> Keyword.merge(timeout_ms: @timeout_ms, max_body_bytes: max_bytes, max_redirects: 0)
 
-    case Req.get(url, opts) do
-      {:ok, %{body: :too_large}} ->
-        {:error, :too_large}
-
-      {:ok, %{status: 200, body: {size, chunks}}} when size > 0 ->
-        {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary()}
-
-      _ ->
-        {:error, :download_failed}
+    with true <- discord_url?(url),
+         {:ok, %{status: 200, body: body}} when body != "" <-
+           LemonCore.Net.HTTP.request(:get, url, opts) do
+      {:ok, body}
+    else
+      {:error, {:body_too_large, _}} -> {:error, :too_large}
+      _ -> {:error, :download_failed}
     end
-  rescue
-    _ -> {:error, :download_failed}
   end
 
   def attach(inbound, candidates, fetch) do

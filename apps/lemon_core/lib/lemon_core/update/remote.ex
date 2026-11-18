@@ -16,6 +16,17 @@ defmodule LemonCore.Update.Remote do
   `LEMON_UPDATE_BASE_URL`, `LEMON_INSTALL_BASE_URL`, or
   `config :lemon_core, :update_base_url` (in that order).
 
+  Manifests and artifacts are fetched with `LemonCore.Net.HTTP`: at most five
+  redirects, each re-authorized and pinned, and an `https` → `http` hop is
+  refused before it is resolved or connected
+  (`{:redirect_refused, :insecure_redirect}`). Destinations must be public
+  unless the operator's global config sets `[update] private_mirror = true`;
+  that admits only the configured base URL's exact origin (scheme, host and
+  port, never the default upstream), not other ports or hosts it redirects to.
+  The manifest is capped at 1 MiB within 10 s; each artifact is streamed to disk
+  within 300 s and cut off as soon as it exceeds its declared `size` (or 64 KiB,
+  whichever is larger: `{:download_failed, {:body_too_large, cap}}`).
+
   ## Install layout
 
       ~/.lemon/versions/<version>/          # extracted release
@@ -67,8 +78,11 @@ defmodule LemonCore.Update.Remote do
     * `:paths_opts` — forwarded to `LemonCore.Paths` so callers/tests can scope
       the state directory away from the real `~/.lemon`.
     * `:release_root` — defaults to `RELEASE_ROOT`, then `:code.root_dir/0`.
+    * `:net_opts` — `LemonCore.Net.HTTP` test stand-ins (`:resolver`, `:send`
+      only).
   """
 
+  alias LemonCore.Net.HTTP
   alias LemonCore.Paths
   alias LemonCore.Update.{Archive, Daemon, ManagedInstall, Plan, ReceiptStore, Version}
 
@@ -79,6 +93,10 @@ defmodule LemonCore.Update.Remote do
   @bot_profile "lemon_bot"
   @manifest_max_bytes 1_048_576
   @artifact_max_bytes 2_147_483_648
+  @manifest_timeout_ms 10_000
+  @artifact_timeout_ms 300_000
+  @max_redirects 5
+  @artifact_min_cap_bytes 65_536
 
   @type opts :: keyword()
   @type artifact :: %{optional(String.t()) => term()}
@@ -107,7 +125,7 @@ defmodule LemonCore.Update.Remote do
 
     with :ok <- validate_channel(channel, pin),
          url <- manifest_url(base_url(opts), pin),
-         {:ok, manifest, manifest_sha256} <- fetch_manifest(url) do
+         {:ok, manifest, manifest_sha256} <- fetch_manifest(url, opts) do
       current = running_version(opts)
       latest = manifest["version"]
 
@@ -169,7 +187,8 @@ defmodule LemonCore.Update.Remote do
 
   Refuses to run unless the current release is installed under
   `<state_home>/versions/<version>/` (the layout guard). Streams each download
-  to `<state_home>/tmp/` — the response body is never buffered in memory —
+  to `<state_home>/tmp/` — the response body is never buffered in memory and
+  is cut off just past the manifest's declared size —
   and verifies its SHA-256 against the manifest (mandatory; a missing or
   mismatched checksum is a hard error and the partial downloads are deleted).
   Only once the runtime and, when published, the TUI and the managed Lemon Bot
@@ -219,7 +238,7 @@ defmodule LemonCore.Update.Remote do
   def install_bot(opts \\ []) do
     with {:ok, version} <- ManagedInstall.current(opts),
          {:ok, manifest, _sha256} <-
-           fetch_manifest(manifest_url(base_url(opts), version)),
+           fetch_manifest(manifest_url(base_url(opts), version), opts),
          true <- manifest["version"] == version || {:error, :manifest_version_mismatch},
          artifact when not is_nil(artifact) <-
            find_artifact(manifest, platform(opts), @bot_profile),
@@ -280,22 +299,21 @@ defmodule LemonCore.Update.Remote do
 
   defp manifest_url(base_url, _pin), do: "#{base_url}/releases/latest/download/manifest.json"
 
-  defp fetch_manifest(url) do
-    request = {String.to_charlist(url), []}
+  defp fetch_manifest(url, opts) do
+    request_opts =
+      guarded_opts(opts, timeout_ms: @manifest_timeout_ms, max_body_bytes: @manifest_max_bytes)
 
-    case LemonCore.Httpc.request(:get, request, [timeout: 10_000, autoredirect: true],
-           body_format: :binary
-         ) do
-      {:ok, {{_, 200, _}, _headers, body}} when byte_size(body) <= @manifest_max_bytes ->
+    case HTTP.request(:get, url, request_opts) do
+      {:ok, %{status: 200, body: body}} ->
         with {:ok, manifest} <- decode_manifest(body) do
           {:ok, manifest, sha256_bytes(body)}
         end
 
-      {:ok, {{_, 200, _}, _headers, _body}} ->
-        {:error, :manifest_too_large}
-
-      {:ok, {{_, status, _}, _headers, _body}} ->
+      {:ok, %{status: status}} ->
         {:error, {:manifest_http_status, status}}
+
+      {:error, {:body_too_large, _}} ->
+        {:error, :manifest_too_large}
 
       {:error, reason} ->
         {:error, {:manifest_request_failed, reason}}
@@ -394,17 +412,15 @@ defmodule LemonCore.Update.Remote do
     end
   end
 
-  defp runtime_setting(opts, key) do
-    settings = raw_runtime_settings(opts)
-    Map.get(settings, key)
-  end
+  defp runtime_setting(opts, key), do: opts |> global_section("runtime") |> Map.get(key)
 
-  # Update channel, pin and auto-update are operator authority: a project
-  # `.lemon/config.toml` cannot set them (see `LemonCore.Config.ProjectLayer`).
-  defp raw_runtime_settings(opts) do
+  # Update channel, pin, auto-update and the private mirror grant are operator
+  # authority: they are read only from the global config file, so a project
+  # `.lemon/config.toml` cannot set them.
+  defp global_section(opts, name) do
     global = LemonCore.Config.load_file(Paths.global_config(paths_opts(opts)))
 
-    case global["runtime"] do
+    case global[name] do
       section when is_map(section) -> section
       _ -> %{}
     end
@@ -919,30 +935,81 @@ defmodule LemonCore.Update.Remote do
   defp download_artifact(artifact, version, opts) do
     case artifact_path(artifact, opts) do
       nil -> {:error, {:invalid_artifact_file, Map.get(artifact, "file")}}
-      dest -> download_to(dest, Map.get(artifact, "file"), version, opts)
+      dest -> download_to(dest, artifact, version, opts)
     end
   end
 
-  defp download_to(dest, file, version, opts) do
-    url = "#{base_url(opts)}/releases/download/v#{version}/#{file}"
+  # Streams to disk, cut off as soon as the body exceeds the declared size.
+  defp download_to(dest, artifact, version, opts) do
+    url = "#{base_url(opts)}/releases/download/v#{version}/#{artifact["file"]}"
     File.mkdir_p!(tmp_dir(opts))
     File.rm(dest)
 
-    request = {String.to_charlist(url), []}
-    http_opts = [timeout: 300_000, connect_timeout: 10_000, autoredirect: true]
-    stream_opts = [stream: String.to_charlist(dest), sync: true]
+    request_opts =
+      guarded_opts(opts,
+        timeout_ms: @artifact_timeout_ms,
+        max_body_bytes: artifact_cap(artifact, opts),
+        into: dest
+      )
 
-    case LemonCore.Httpc.request(:get, request, http_opts, stream_opts) do
-      {:ok, :saved_to_file} ->
+    case HTTP.request(:get, url, request_opts) do
+      {:ok, %{status: 200}} ->
         {:ok, dest}
 
-      {:ok, {{_, status, _}, _headers, _body}} ->
+      {:ok, %{status: status}} ->
         File.rm(dest)
         {:error, {:download_http_status, status}}
 
       {:error, reason} ->
         File.rm(dest)
         {:error, {:download_failed, reason}}
+    end
+  end
+
+  # The declared size, with a small floor so an error page still reports its
+  # HTTP status; `verify_download_size/3` then requires the exact size.
+  defp artifact_cap(artifact, opts) do
+    max_bytes = Keyword.get(opts, :max_artifact_bytes, @artifact_max_bytes)
+
+    case artifact["size"] do
+      size when is_integer(size) and size > 0 and size <= max_bytes ->
+        max(size, @artifact_min_cap_bytes)
+
+      _ ->
+        max_bytes
+    end
+  end
+
+  # Downloads go through the guarded fetcher: every hop (GitHub's release
+  # redirects included) is re-authorized and pinned, an `https` → `http` hop is
+  # refused before it is resolved or connected, and a private address is
+  # reachable only at the exact base origin the operator declared a private
+  # mirror. `:net_opts` carries the fetcher's test stand-ins.
+  defp guarded_opts(opts, extra) do
+    [
+      max_redirects: @max_redirects,
+      authorize_redirect: &refuse_downgrade/2,
+      allow_private_origins: private_mirror_origins(opts)
+    ] ++ Keyword.take(Keyword.get(opts, :net_opts, []), [:resolver, :send]) ++ extra
+  end
+
+  defp refuse_downgrade(%URI{scheme: "https"}, %URI{scheme: "http"}),
+    do: {:error, :insecure_redirect}
+
+  defp refuse_downgrade(_from, _to), do: :ok
+
+  # `[update] private_mirror = true` in the operator's global config admits the
+  # configured base URL's exact origin (scheme, host and port) as a private
+  # destination. The default upstream never is.
+  defp private_mirror_origins(opts) do
+    with true <- global_section(opts, "update")["private_mirror"] == true,
+         {:ok, %URI{scheme: scheme, host: host, port: port}} <- HTTP.parse_url(base_url(opts)),
+         {:ok, default} <- HTTP.parse_url(@default_base_url),
+         false <- {scheme, host, port} == {default.scheme, default.host, default.port} do
+      host = if String.contains?(host, ":"), do: "[#{host}]", else: host
+      ["#{scheme}://#{host}:#{port}"]
+    else
+      _ -> []
     end
   end
 

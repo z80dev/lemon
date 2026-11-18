@@ -229,7 +229,8 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.BuiltinSeeder` | `lib/lemon_skills/builtin_seeder.ex` | Copies bundled skills from priv/ to user config dir on startup |
 | `LemonSkills.Discovery` | `lib/lemon_skills/discovery.ex` | Online skill discovery from GitHub (topic search) and registry URL probing |
 | `LemonSkills.HttpClient` | `lib/lemon_skills/http_client.ex` | HTTP client behaviour for dependency injection |
-| `LemonSkills.HttpClient.Httpc` | `lib/lemon_skills/http_client/httpc.ex` | Default HTTP client using Erlang `:httpc` |
+| `LemonSkills.HttpClient.Guarded` | `lib/lemon_skills/http_client/guarded.ex` | Default HTTP client: `LemonCore.Net.HTTP`, public destinations (plus the configured registry host), 3 re-authorized redirects, 8 MiB / 30 s caps |
+| `LemonSkills.GitRemote` | `lib/lemon_skills/git_remote.ex` | Env-safe `git` for remote skill sources: authorized and pinned destination, no redirects, deadline and size cap |
 | `LemonSkills.Tools.ReadSkill` | `lib/lemon_skills/tools/read_skill.ex` | Agent tool for fetching skill content and metadata |
 | `LemonSkills.Tools.SkillManage` | `lib/lemon_skills/tools/skill_manage.ex` | Agent tool for creating, editing, patching, deleting, and auditing local skills |
 | `LemonSkills.Tools.Remember` | `lib/lemon_skills/tools/remember.ex` | Agent tool for compact assistant-home USER.md/MEMORY.md notes |
@@ -662,7 +663,7 @@ mix lemon.skill info <key>                    # Show skill details
 | `:seed_builtin_skills` | boolean | `true` | Whether to seed built-in skills on startup |
 | `:require_approval` | boolean | `true` | Whether install/update/uninstall requires user approval |
 | `:approval_timeout_ms` | integer | `300_000` | Timeout for approval requests (5 minutes) |
-| `:http_client` | module | `LemonSkills.HttpClient.Httpc` | HTTP client module for discovery |
+| `:http_client` | module | `LemonSkills.HttpClient.Guarded` | HTTP client module for discovery |
 | `:mcp_servers` | list | `[]` | MCP servers to expose as tools (see `LemonSkills.McpSource`) |
 | `:mcp_disabled` | boolean | `false` | Turn the MCP tool source off entirely |
 | `:mcp_external_discovery` | boolean | `true` | Import MCP servers from other tools' config files (project files still need `lemon mcp trust`) |

@@ -3,6 +3,7 @@ defmodule LemonSkills.Sources.GithubRegistryTest do
 
   alias LemonSkills.HttpClient.Mock, as: HttpMock
   alias LemonSkills.Sources.{Github, Registry}
+  alias LemonSkills.TestSupport.FakeSsh
 
   @moduletag :tmp_dir
 
@@ -160,16 +161,20 @@ defmodule LemonSkills.Sources.GithubRegistryTest do
                {:error, :forbidden}
     end
 
-    test "fetch and upstream_hash resolve a local clone URL through the registry", %{
+    test "fetch and upstream_hash resolve a clone URL through the registry", %{
       tmp_dir: tmp_dir
     } do
+      :ok = FakeSsh.install!(tmp_dir)
       base = "https://registry.example.test"
       ref = "official/devops/deploy"
       repo = create_repo!(tmp_dir)
       dest = Path.join(tmp_dir, "installed")
       expected_head = git!(repo, ["rev-parse", "HEAD"])
 
-      HttpMock.stub("#{base}/skills/#{ref}", {:ok, Jason.encode!(%{"clone_url" => repo})})
+      HttpMock.stub(
+        "#{base}/skills/#{ref}",
+        {:ok, Jason.encode!(%{"clone_url" => FakeSsh.url(repo)})}
+      )
 
       assert {:ok, ^dest} = Registry.fetch(ref, dest, registry_url: base)
       assert File.exists?(Path.join(dest, "SKILL.md"))
@@ -179,12 +184,17 @@ defmodule LemonSkills.Sources.GithubRegistryTest do
     test "accepts legacy URL metadata and rejects entries without clone metadata", %{
       tmp_dir: tmp_dir
     } do
+      :ok = FakeSsh.install!(tmp_dir)
       base = "https://registry.example.test"
       ref = "official/devops/deploy"
       url = "#{base}/skills/#{ref}"
       missing_repo = Path.join(tmp_dir, "missing-repository")
 
+      # A registry cannot point the clone at a local path.
       HttpMock.stub(url, {:ok, Jason.encode!(%{"url" => missing_repo})})
+      assert {:error, :invalid_git_url} = Registry.upstream_hash(ref, registry_url: base)
+
+      HttpMock.stub(url, {:ok, Jason.encode!(%{"url" => FakeSsh.url(missing_repo)})})
       assert {:error, {:ls_remote_failed, _}} = Registry.upstream_hash(ref, registry_url: base)
 
       HttpMock.stub(url, {:ok, Jason.encode!(%{"name" => "Deploy"})})

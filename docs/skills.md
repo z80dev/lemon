@@ -142,6 +142,20 @@ Sources accepted by `install/2`: local paths (`/abs`, `./rel`, `../rel`), git UR
 `hermes:<collection>/<category>/<skill>`, and registry refs
 (`<namespace>/<category>/<name>`).
 
+Remote git sources run through `LemonSkills.GitRemote`: the host must resolve to
+a public address (or be listed in the operator's global
+`[skills] allowed_private_git_hosts`; see [config](config.md)) and git is pinned to
+it (HTTP(S) via `http.curloptResolve`, SSH via `HostName` with `HostKeyAlias`,
+with agent, X11 and port forwarding, proxies and connection sharing disabled);
+HTTP redirects, `file://` and local paths behind `git+`, helper transports and
+submodules are refused; inherited `GIT_*` variables and system/global Git
+configuration are ignored; proxies are never used, so a repository reachable only
+through a proxy cannot be installed; and each command has a 120 s deadline and a
+64 MiB clone cap. Registry, GitHub and Hermes metadata is fetched with
+`LemonSkills.HttpClient.Guarded` (`LemonCore.Net.HTTP`, which also never uses a
+proxy: public destinations plus the configured `:registry_url` host, three
+re-checked redirects, 8 MiB and 30 s per request).
+
 Install, update and uninstall request approval through the execution-approval flow unless the skill is built-in or `:approve` is set. All non-built-in skills are audited before they are activated; an audit `:warn` needs an extra approval and a `:block` is refused unless a separate exact-bundle security override is approved. Provenance is recorded in `skills.lock.json`.
 
 ### Official Hermes catalog
