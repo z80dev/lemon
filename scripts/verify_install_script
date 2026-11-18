@@ -272,7 +272,7 @@ CONFIG
     # Mirror of the packaged launcher: the complete doctor argv crosses to
     # the runtime CLI entrypoint as arguments, never as source text.
     shift
-    exec "$release_bin" eval 'LemonCli.CLI.main(System.argv())' doctor "$@"
+    exec "$release_bin" eval 'LemonCore.NodeCredentials.consume_handoff(); LemonCli.CLI.main(System.argv())' doctor "$@"
     ;;
   *)
     echo "stub launcher: unsupported subcommand ${1:-}" >&2
@@ -1361,7 +1361,7 @@ else
   doctor_out="$(HOME="$doctor_home" "$launcher" doctor --json --bundle "$bundle_path" --verbose 2>&1)"
   expected_doctor_out="stub release binary 9999.1.0
 arg:eval
-arg:LemonCli.CLI.main(System.argv())
+arg:LemonCore.NodeCredentials.consume_handoff(); LemonCli.CLI.main(System.argv())
 arg:doctor
 arg:--json
 arg:--bundle

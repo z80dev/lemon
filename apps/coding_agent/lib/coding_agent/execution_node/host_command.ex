@@ -30,7 +30,7 @@ defmodule CodingAgent.ExecutionNode.HostCommand do
         :exit_status,
         :stderr_to_stdout,
         {:args, args},
-        {:env, [{~c"LC_ALL", ~c"C"}]}
+        {:env, LemonCore.ChildEnv.port_env([{"LC_ALL", "C"}])}
       ])
 
     deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :timeout_ms, 2_000)

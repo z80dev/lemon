@@ -127,6 +127,11 @@ defmodule CodingAgent.ExecutionNode.CLI do
 
   def run(argv, deps) do
     Process.flag(:trap_exit, true)
+    # The launchers hand these over outside the VM environment
+    # (LemonCore.NodeCredentials); a direct VM invocation still has them
+    # removed from the environment before the runtime starts.
+    env_operator_token = LemonCore.NodeCredentials.take("LEMON_NODE_OPERATOR_TOKEN")
+    env_token = LemonCore.NodeCredentials.take("LEMON_NODE_TOKEN")
 
     with {:ok, opts} <- parse(argv),
          false <- opts[:help] == true,
@@ -150,9 +155,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
              node_name: opts[:name],
              controller: opts[:controller],
              pair: opts[:pair] == true,
-             operator_token: opts[:operator_token] || System.get_env("LEMON_NODE_OPERATOR_TOKEN"),
+             operator_token: opts[:operator_token] || env_operator_token,
              invite_code: opts[:invite_code],
-             token: opts[:token] || System.get_env("LEMON_NODE_TOKEN"),
+             token: opts[:token] || env_token,
              node_id: opts[:node_id],
              repair: opts[:repair] == true,
              allowed_roots: allowed_roots(opts),

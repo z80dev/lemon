@@ -511,7 +511,7 @@ defmodule CodingAgent.Debug.Client do
     port_opts =
       [:binary, :exit_status, :stderr_to_stdout, :use_stdio, :hide, {:args, args}]
       |> maybe_cd(cwd)
-      |> maybe_env(env)
+      |> then(&[{:env, LemonCore.ChildEnv.port_env(env)} | &1])
 
     {:ok, LemonCore.NativeProcess.open({:spawn_executable, command}, port_opts)}
   rescue
@@ -523,12 +523,6 @@ defmodule CodingAgent.Debug.Client do
   end
 
   defp maybe_cd(opts, _cwd), do: opts
-
-  defp maybe_env(opts, []), do: opts
-
-  defp maybe_env(opts, env) do
-    [{:env, Enum.map(env, fn {k, v} -> {to_charlist(k), to_charlist(v)} end)} | opts]
-  end
 
   defp write(%{socket: socket}, iodata) when not is_nil(socket) do
     case :gen_tcp.send(socket, iodata) do

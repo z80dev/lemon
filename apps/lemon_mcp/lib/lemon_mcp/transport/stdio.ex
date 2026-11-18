@@ -240,7 +240,9 @@ defmodule LemonMCP.Transport.Stdio do
       :exit_status,
       :stderr_to_stdout,
       args: state.args,
-      env: state.env
+      # Configured variables overlay the inherited env; Lemon's own
+      # credentials are explicitly unset and cannot be re-supplied.
+      env: LemonCore.ChildEnv.port_env(state.env)
     ]
 
     port_options =
