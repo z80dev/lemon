@@ -12,6 +12,28 @@ defmodule LemonCore.UsageLedger do
   twice. `UsageStore.records/1` is the canonical, unbounded-by-session ledger;
   daily projections are known-cost subtotals, not spend enforcement authority.
 
+  Projection is replay-safe and fail-closed. A `:usage_projections` marker is
+  inserted (`:pending`) before the occurrence and set `:done` after the daily
+  record includes it. The daily record is read strictly and replaced by
+  compare-and-swap; while an occurrence is applied but not yet marked done its
+  ID sits in the record's `:pending_occurrences` list, so a replay
+  after a crash or failed write repairs a missing projection without counting
+  it twice. A failed read never resets a day: the record call returns an error
+  and the replay repairs it. The `:current` summary is derived from today's
+  daily record rather than incremented separately.
+
+  An occurrence recorded before markers existed may or may not be counted in
+  its day (the old ledger could commit the occurrence and fail the aggregate).
+  Its first replay marks the marker `intent: :legacy_rebuild`, then rebuilds
+  that day from the canonical occurrences attributed to it (by marker date,
+  else by the occurrence's own timestamp), so it is neither lost nor counted
+  twice. Any replay that finds a pending marker over a stored occurrence whose
+  ID is not in the day's `:pending_occurrences` cannot tell whether the day
+  counts it (for example a legacy migration interrupted before or during its
+  rebuild), so it rebuilds the day canonically instead of adding to it. A
+  pre-marker occurrence without a timestamp cannot be attributed to a day and
+  is left out of rebuilt days.
+
   Each UTC day's record (key `"YYYY-MM-DD"`) keeps the historical shape read by
   `usage.cost` and `LemonCore.UsageDiagnostics` (`total_cost`, provider-keyed
   `breakdown`/`requests`/`tokens`) plus:
@@ -32,6 +54,7 @@ defmodule LemonCore.UsageLedger do
 
   @max_sessions_per_day 100
   @max_label_bytes 128
+  @max_projection_attempts 8
 
   @input_keys [:input_tokens, :input, :prompt_tokens]
   @output_keys [:output_tokens, :output, :completion_tokens]
@@ -196,42 +219,28 @@ defmodule LemonCore.UsageLedger do
 
   defp do_record(%{run_id: run_id} = entry, store) when is_binary(run_id) and run_id != "" do
     record = occurrence_record(entry)
+    at_ms = Map.get(entry, :at_ms) || System.system_time(:millisecond)
+    date = DateTime.from_unix!(at_ms, :millisecond) |> DateTime.to_date() |> Date.to_iso8601()
+    marker = %{state: :pending, date: date, at_ms: at_ms}
 
-    case UsageStore.put_occurrence(store, record) do
+    case UsageStore.put_projection_new(store, record.id, marker) do
       :ok ->
-        # Aggregates remain known-cost subtotals; canonical records retain nil.
-        projection = %{
-          entry
-          | cost: entry.cost || 0.0,
-            input: entry.input || 0,
-            output: entry.output || 0
-        }
-
-        now_ms = System.system_time(:millisecond)
-        at_ms = Map.get(entry, :at_ms) || now_ms
-
-        today =
-          DateTime.from_unix!(at_ms, :millisecond) |> DateTime.to_date() |> Date.to_iso8601()
-
-        daily = UsageStore.get_record(store, today) || %{date: today}
-
-        with :ok <-
-               UsageStore.put_record(store, today, add_to_record(daily, projection, today, at_ms)) do
-          if today == Date.to_iso8601(Date.utc_today()) do
-            summary =
-              case UsageStore.get_summary(store, :current) do
-                %{date: ^today} = summary -> summary
-                _ -> %{date: today}
-              end
-
-            UsageStore.put_summary(store, :current, add_to_summary(summary, projection))
-          else
-            :ok
-          end
-        end
+        insert_occurrence(store, entry, record, marker, :new)
 
       {:error, :exists} ->
-        :ok
+        case UsageStore.fetch_projection(store, record.id) do
+          {:ok, %{state: :done, date: date}} ->
+            clear_pending(store, record.id, date)
+
+          {:ok, %{state: :pending} = marker} ->
+            insert_occurrence(store, entry, record, marker, :replay)
+
+          {:ok, _missing_or_invalid} ->
+            {:error, :usage_projection_unavailable}
+
+          {:error, _} = error ->
+            error
+        end
 
       {:error, _} = error ->
         error
@@ -239,6 +248,222 @@ defmodule LemonCore.UsageLedger do
   end
 
   defp do_record(_, _store), do: {:error, :invalid_usage_identity}
+
+  defp insert_occurrence(store, entry, record, marker, mode) do
+    case UsageStore.put_occurrence(store, record) do
+      :ok ->
+        project(store, entry, record.id, marker)
+
+      # Every occurrence written since markers exist has one, so an occurrence
+      # found under a brand-new marker predates them. The old ledger wrote the
+      # occurrence before its aggregate and could fail in between, so whether
+      # the day counts it is unknown. The marker records that intent first, so
+      # a replay after an interrupted rebuild rebuilds again instead of adding.
+      {:error, :exists} when mode == :new ->
+        legacy = Map.put(marker, :intent, :legacy_rebuild)
+
+        case UsageStore.compare_and_swap_projection(store, record.id, marker, legacy) do
+          :ok -> rebuild_and_finish(store, record.id, legacy)
+          {:error, _} = error -> error
+        end
+
+      {:error, :exists} ->
+        reconcile_existing(store, record.id, marker)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  # A pending marker over a stored occurrence. The day counts the occurrence
+  # exactly when its ID is in `:pending_occurrences` (added atomically with
+  # its counts, removed only after the marker is done). Otherwise it is
+  # ambiguous: a legacy migration interrupted before or during its rebuild may
+  # already be counted by the pre-marker aggregate, so the day is rebuilt from
+  # the canonical occurrences rather than projected on top.
+  defp reconcile_existing(store, id, %{intent: :legacy_rebuild} = marker),
+    do: rebuild_and_finish(store, id, marker)
+
+  defp reconcile_existing(store, id, marker) do
+    with {:ok, day} <- UsageStore.fetch_record(store, marker.date) do
+      if id in pending_occurrences(day || %{}) do
+        with :ok <- mark_done(store, id, marker), do: clear_pending(store, id, marker.date)
+      else
+        rebuild_and_finish(store, id, marker)
+      end
+    end
+  end
+
+  defp rebuild_and_finish(store, id, marker) do
+    with :ok <- rebuild_day(store, marker.date, @max_projection_attempts),
+         :ok <- mark_done(store, id, marker) do
+      clear_pending(store, id, marker.date)
+    end
+  end
+
+  # Replaces one day's projection with the sum of the canonical occurrences
+  # attributed to it. Occurrences whose marker is still pending are listed in
+  # `:pending_occurrences`, so their in-flight projection skips them instead of
+  # adding them twice; one projected after the occurrence read changes the
+  # record and fails the compare-and-swap, so the rebuild retries.
+  defp rebuild_day(_store, _date, 0), do: {:error, :usage_record_busy}
+
+  defp rebuild_day(store, date, attempts) do
+    with {:ok, current} <- UsageStore.fetch_record(store, date),
+         {:ok, occurrences} <- UsageStore.fetch_occurrences(store),
+         {:ok, markers} <- UsageStore.fetch_projections(store) do
+      markers = Map.new(markers)
+
+      counted =
+        occurrences
+        |> Enum.flat_map(fn {id, occurrence} ->
+          marker = Map.get(markers, id)
+
+          if is_map(occurrence) and occurrence_date(occurrence, marker) == date,
+            do: [{id, occurrence, marker}],
+            else: []
+        end)
+        |> Enum.sort_by(fn {id, occurrence, _marker} ->
+          {Map.get(occurrence, :at_ms) || 0, id}
+        end)
+
+      rebuilt =
+        counted
+        |> Enum.reduce(%{date: date}, fn {_id, occurrence, marker}, day ->
+          at_ms = Map.get(occurrence, :at_ms) || marker_at_ms(marker)
+          add_to_record(day, occurrence_projection(occurrence), date, at_ms)
+        end)
+        |> Map.put(:pending_occurrences, for({id, _, %{state: :pending}} <- counted, do: id))
+
+      case UsageStore.compare_and_swap_record(store, date, current, rebuilt) do
+        :ok -> :ok
+        {:error, :mismatch} -> rebuild_day(store, date, attempts - 1)
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  # A marker carries the date its projection used. A pre-marker occurrence is
+  # attributed by its own timestamp; one without a timestamp cannot be placed.
+  defp occurrence_date(_occurrence, %{date: date}) when is_binary(date), do: date
+
+  defp occurrence_date(%{at_ms: at_ms}, _marker) when is_integer(at_ms),
+    do: at_ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_date() |> Date.to_iso8601()
+
+  defp occurrence_date(_occurrence, _marker), do: nil
+
+  defp marker_at_ms(%{at_ms: at_ms}), do: at_ms
+  defp marker_at_ms(_marker), do: nil
+
+  defp occurrence_projection(occurrence) do
+    %{
+      provider: Map.get(occurrence, :provider),
+      model: Map.get(occurrence, :model),
+      session_key: Map.get(occurrence, :session_key),
+      cost: Map.get(occurrence, :cost_usd) || 0.0,
+      input: Map.get(occurrence, :input_tokens) || 0,
+      output: Map.get(occurrence, :output_tokens) || 0,
+      price_known: Map.get(occurrence, :price_known)
+    }
+  end
+
+  defp project(store, entry, id, marker) do
+    # Aggregates remain known-cost subtotals; canonical records retain nil.
+    projection = %{
+      entry
+      | cost: entry.cost || 0.0,
+        input: entry.input || 0,
+        output: entry.output || 0
+    }
+
+    with :ok <- apply_projection(store, projection, id, marker, @max_projection_attempts),
+         :ok <- mark_done(store, id, marker) do
+      clear_pending(store, id, marker.date)
+    end
+  end
+
+  defp apply_projection(_store, _projection, _id, _marker, 0), do: {:error, :usage_record_busy}
+
+  defp apply_projection(store, projection, id, %{date: date, at_ms: at_ms} = marker, attempts) do
+    with {:ok, current} <- UsageStore.fetch_record(store, date) do
+      day = current || %{date: date}
+      pending = pending_occurrences(day)
+
+      if id in pending do
+        :ok
+      else
+        updated =
+          day
+          |> add_to_record(projection, date, at_ms)
+          |> Map.put(:pending_occurrences, [id | pending])
+
+        case UsageStore.compare_and_swap_record(store, date, current, updated) do
+          :ok -> :ok
+          {:error, :mismatch} -> apply_projection(store, projection, id, marker, attempts - 1)
+          {:error, _} = error -> error
+        end
+      end
+    end
+  end
+
+  defp mark_done(store, id, marker) do
+    done = %{marker | state: :done}
+
+    case UsageStore.compare_and_swap_projection(store, id, marker, done) do
+      :ok ->
+        :ok
+
+      {:error, :mismatch} ->
+        case UsageStore.fetch_projection(store, id) do
+          {:ok, ^done} -> :ok
+          {:ok, _other} -> {:error, :usage_projection_conflict}
+          {:error, _} = error -> error
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  # Drops a completed occurrence from the day's pending list and refreshes the
+  # derived `:current` summary from the record that was read or written.
+  defp clear_pending(store, id, date),
+    do: clear_pending(store, id, date, @max_projection_attempts)
+
+  defp clear_pending(_store, _id, _date, 0), do: {:error, :usage_record_busy}
+
+  defp clear_pending(store, id, date, attempts) do
+    with {:ok, current} <- UsageStore.fetch_record(store, date) do
+      pending = pending_occurrences(current || %{})
+
+      if id in pending do
+        updated = Map.put(current, :pending_occurrences, List.delete(pending, id))
+
+        case UsageStore.compare_and_swap_record(store, date, current, updated) do
+          :ok -> refresh_summary(store, date, updated)
+          {:error, :mismatch} -> clear_pending(store, id, date, attempts - 1)
+          {:error, _} = error -> error
+        end
+      else
+        refresh_summary(store, date, current)
+      end
+    end
+  end
+
+  defp pending_occurrences(day) do
+    case Map.get(day, :pending_occurrences) do
+      ids when is_list(ids) -> ids
+      _ -> []
+    end
+  end
+
+  defp refresh_summary(store, date, day) when is_map(day) do
+    if date == Date.to_iso8601(Date.utc_today()),
+      do: UsageStore.put_summary(store, :current, summary_from_record(date, day)),
+      else: :ok
+  end
+
+  defp refresh_summary(_store, _date, nil), do: :ok
 
   @doc false
   def occurrence_record(entry) do
@@ -287,20 +512,28 @@ defmodule LemonCore.UsageLedger do
     |> add_session(entry, now_ms)
   end
 
-  defp add_to_summary(summary, entry) do
-    totals = summary[:total_tokens] || %{}
+  defp summary_from_record(date, day) do
+    tokens = day[:tokens] || %{}
+    requests = day[:requests] || %{}
 
-    summary
-    |> Map.put(:total_cost, number(summary[:total_cost]) + entry.cost)
-    |> Map.put(:total_requests, integer(summary[:total_requests]) + 1)
-    |> Map.put(:total_tokens, %{
-      input: integer(totals[:input]) + entry.input,
-      output: integer(totals[:output]) + entry.output
-    })
-    |> Map.put(:breakdown, bump(summary[:breakdown], entry.provider, entry.cost))
-    |> Map.put(:requests, bump(summary[:requests], entry.provider, 1))
-    |> Map.put(:tokens, bump_tokens(summary[:tokens], entry.provider, entry))
+    %{
+      date: date,
+      total_cost: number(day[:total_cost]),
+      total_requests: requests |> Map.values() |> Enum.map(&integer/1) |> Enum.sum(),
+      total_tokens: %{
+        input: tokens |> Map.values() |> Enum.map(&token_count(&1, :input)) |> Enum.sum(),
+        output: tokens |> Map.values() |> Enum.map(&token_count(&1, :output)) |> Enum.sum()
+      },
+      breakdown: day[:breakdown] || %{},
+      requests: requests,
+      tokens: tokens
+    }
   end
+
+  defp token_count(tokens, key) when is_map(tokens),
+    do: integer(Map.get(tokens, key) || Map.get(tokens, Atom.to_string(key)))
+
+  defp token_count(_tokens, _key), do: 0
 
   defp add_session(record, %{session_key: nil}, _now_ms), do: record
 

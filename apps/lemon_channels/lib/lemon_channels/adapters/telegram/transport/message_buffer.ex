@@ -131,8 +131,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MessageBuffer do
          List.wrap(previous_meta[:transport_dedupe_refs]))
       |> Enum.uniq()
 
+    # A buffered message whose /resume selection was unreadable keeps the
+    # whole batch from submitting without it.
+    meta =
+      if previous_meta[:selected_resume_unavailable],
+        do: Map.put(meta, :selected_resume_unavailable, true),
+        else: meta
+
     case refs do
-      [] -> inbound
+      [] -> %{inbound | meta: meta}
       _ -> %{inbound | meta: Map.put(meta, :transport_dedupe_refs, refs)}
     end
   end

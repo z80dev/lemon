@@ -10,37 +10,37 @@ defmodule LemonChannels.Adapters.Discord.TriggerMode do
 
   @spec resolve(String.t(), integer(), integer() | nil) :: %{
           mode: :all | :mentions,
-          chat_mode: :all | :mentions | nil,
-          topic_mode: :all | :mentions | nil,
-          source: :default | :chat | :topic
+          chat_mode: :all | :mentions | :unavailable | nil,
+          topic_mode: :all | :mentions | :unavailable | nil,
+          source: :default | :chat | :topic | :unavailable
         }
   def resolve(account_id, chat_id, topic_id \\ nil)
 
+  # Layers are read strictly. A layer that cannot be read never falls through
+  # to a broader one: the result is `:mentions` with `source: :unavailable`.
+  # Every configurable mode admits addressed messages, so `:mentions` is the
+  # narrowest admission any configuration could produce.
   def resolve(account_id, chat_id, topic_id)
       when is_binary(account_id) and is_integer(chat_id) do
-    topic_mode =
-      if is_integer(topic_id), do: get_topic_mode(account_id, chat_id, topic_id), else: nil
+    topic =
+      if is_integer(topic_id),
+        do: fetch_mode(@topic_table, {account_id, chat_id, topic_id}),
+        else: {:ok, nil}
 
-    chat_mode = get_chat_mode(account_id, chat_id)
+    chat = fetch_mode(@chat_table, {account_id, chat_id})
 
-    mode =
-      cond do
-        topic_mode in [:all, :mentions] -> topic_mode
-        chat_mode in [:all, :mentions] -> chat_mode
-        true -> @default_mode
-      end
-
-    source =
-      cond do
-        topic_mode in [:all, :mentions] -> :topic
-        chat_mode in [:all, :mentions] -> :chat
-        true -> :default
+    {mode, source} =
+      case {topic, chat} do
+        {{:ok, topic_mode}, _chat} when not is_nil(topic_mode) -> {topic_mode, :topic}
+        {{:ok, nil}, {:ok, chat_mode}} when not is_nil(chat_mode) -> {chat_mode, :chat}
+        {{:ok, nil}, {:ok, nil}} -> {@default_mode, :default}
+        _unavailable -> {@default_mode, :unavailable}
       end
 
     %{
       mode: mode,
-      chat_mode: chat_mode,
-      topic_mode: topic_mode,
+      chat_mode: layer(chat),
+      topic_mode: layer(topic),
       source: source
     }
   rescue
@@ -66,21 +66,17 @@ defmodule LemonChannels.Adapters.Discord.TriggerMode do
     Store.delete(@topic_table, {account_id, chat_id, topic_id})
   end
 
-  defp get_chat_mode(account_id, chat_id) do
-    case Store.get(@chat_table, {account_id, chat_id}) do
-      %{mode: mode} when mode in [:all, :mentions] -> mode
-      mode when mode in [:all, :mentions] -> mode
-      _ -> nil
+  defp fetch_mode(table, key) do
+    case Store.fetch(table, key) do
+      {:ok, %{mode: mode}} when mode in [:all, :mentions] -> {:ok, mode}
+      {:ok, mode} when mode in [:all, :mentions] -> {:ok, mode}
+      {:ok, _none} -> {:ok, nil}
+      {:error, _reason} = error -> error
     end
   end
 
-  defp get_topic_mode(account_id, chat_id, topic_id) do
-    case Store.get(@topic_table, {account_id, chat_id, topic_id}) do
-      %{mode: mode} when mode in [:all, :mentions] -> mode
-      mode when mode in [:all, :mentions] -> mode
-      _ -> nil
-    end
-  end
+  defp layer({:ok, mode}), do: mode
+  defp layer({:error, _reason}), do: :unavailable
 
   defp set_chat_mode(account_id, chat_id, mode) do
     Store.put(@chat_table, {account_id, chat_id}, %{mode: mode, updated_at: now_ms()})

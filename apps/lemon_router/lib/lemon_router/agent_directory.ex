@@ -67,8 +67,9 @@ defmodule LemonRouter.AgentDirectory do
     route_filter = normalize_route_filter(opts[:route])
     limit = normalize_limit(opts[:limit])
 
-    with {:ok, active} <- active_sessions() do
-      indexed_sessions()
+    with {:ok, active} <- active_sessions(),
+         {:ok, indexed} <- indexed_sessions() do
+      indexed
       |> merge_sessions(active)
       |> Enum.filter(&(matches_agent?(&1, agent_id_filter) and matches_route?(&1, route_filter)))
       |> sort_sessions()
@@ -274,10 +275,15 @@ defmodule LemonRouter.AgentDirectory do
     end
   end
 
+  # An unreadable session index is unavailable, never an empty directory.
   defp indexed_sessions do
-    LemonCore.RunStore.list_sessions()
-    |> Enum.map(&indexed_session_entry/1)
-    |> Enum.reject(&is_nil/1)
+    case LemonCore.RunStore.fetch_sessions() do
+      {:ok, sessions} ->
+        {:ok, sessions |> Enum.map(&indexed_session_entry/1) |> Enum.reject(&is_nil/1)}
+
+      {:error, _reason} ->
+        {:error, :unavailable}
+    end
   end
 
   defp indexed_session_entry({session_key, entry})

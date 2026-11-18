@@ -65,6 +65,16 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
                  }
                }}
 
+            {:error, :outcome_unknown} ->
+              {:error,
+               {:unavailable,
+                "The session policy write outcome is unknown; read the session before retrying",
+                %{
+                  "code" => "SESSION_PATCH_OUTCOME_UNKNOWN",
+                  "sessionKey" => session_key,
+                  "retrySafe" => false
+                }}}
+
             {:error, reason} ->
               {:error, {:internal_error, "Failed to patch session", reason}}
           end
@@ -73,14 +83,16 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
     end
   end
 
+  # Merge against the strictly read row by compare-and-swap: an unreadable or
+  # concurrently changed policy is never replaced by the patch alone. Only a
+  # confirmed write is success; a write that may have landed is reported as an
+  # unknown outcome and never retried.
   defp apply_session_patch(session_key, patch) do
-    # Store session policies (router reads from :session_policies, not :session_overrides)
-    existing = LemonCore.PolicyStore.get_session(session_key) || %{}
-    updated = Map.merge(existing, patch)
-    LemonCore.PolicyStore.put_session(session_key, updated)
-    :ok
-  rescue
-    e -> {:error, Exception.message(e)}
+    case LemonCore.PolicyStore.update_session(session_key, &Map.merge(&1 || %{}, patch)) do
+      {:ok, _stored} -> :ok
+      {:error, reason} -> {:error, reason}
+      _unexpected -> {:error, :outcome_unknown}
+    end
   end
 
   defp patch_keys(patch) do

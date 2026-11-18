@@ -1881,6 +1881,16 @@ defmodule LemonWeb.Chat.PaneLive do
     end
   end
 
+  # The toggles derive a whole policy from the displayed one; never derive it
+  # from a projection of a row that could not be read.
+  defp set_tool_policy(%{assigns: %{tool_policy: %{readable: false}}} = socket, _profile, _ask?) do
+    toast(
+      socket,
+      :danger,
+      "The session's tool policy could not be read. Reopen the chat before changing it."
+    )
+  end
+
   defp set_tool_policy(socket, profile, ask?) do
     policy =
       %{"profile" => profile}
@@ -1893,7 +1903,7 @@ defmodule LemonWeb.Chat.PaneLive do
     case Backend.patch(socket.assigns.session_key, %{"toolPolicy" => policy}) do
       :ok ->
         socket
-        |> assign(:tool_policy, %{profile: profile, ask: ask?})
+        |> assign(:tool_policy, %{profile: profile, ask: ask?, readable: true})
         |> toast(
           :info,
           "Tool policy: #{profile_label(profile)}#{if ask?, do: " · ask before commands and edits"}"

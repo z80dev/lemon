@@ -14,6 +14,11 @@ defmodule LemonRouter.ResumeResolver do
   binding may already be visible; it is not permission to retry automatically.
   Unconfirmed bindings still cannot authorize resume or history access.
 
+  A resume decision never treats an unreadable Store as "nothing to resume":
+  when the persisted chat state or a resume binding cannot be read or its
+  durability confirmed, resolution returns `{:error, :resume_unavailable}` so
+  admission fails instead of silently starting a new conversation.
+
   Context comparisons use `LemonCore.InvocationProof` to project only a valid,
   factory-attested, fixed-run proof header. All other MCP configuration remains
   exact, and the transport configuration is never rewritten.
@@ -25,11 +30,11 @@ defmodule LemonRouter.ResumeResolver do
 
   @native_engine "lemon"
   @context_table :native_resume_contexts
-
   @type source :: :explicit | :auto | nil
   @type resolved ::
           {:ok, ResumeToken.t() | nil, source()}
           | {:error, {:unsupported_resume_engine, binary(), String.t()}}
+          | {:error, :resume_unavailable}
 
   @spec resolve(
           ResumeToken.t() | map() | nil,
@@ -69,24 +74,33 @@ defmodule LemonRouter.ResumeResolver do
   end
 
   defp resolve_auto_resume(session_key, context, meta, store) when is_binary(session_key) do
-    case persisted_resume(LemonCore.ChatStateStore.get(store, session_key)) do
-      {:native, resume} ->
-        authorize_resume(resume, :auto, context, meta, store)
+    with {:ok, state} <- fetch_chat_state(store, session_key) do
+      case persisted_resume(state) do
+        {:native, resume} ->
+          authorize_resume(resume, :auto, context, meta, store)
 
-      {:non_native, engine} ->
-        Logger.warning(
-          "Router ignored persisted non-native resume state session=#{inspect(session_key)} " <>
-            "engine=#{inspect(engine)}"
-        )
+        {:non_native, engine} ->
+          Logger.warning(
+            "Router ignored persisted non-native resume state session=#{inspect(session_key)} " <>
+              "engine=#{inspect(engine)}"
+          )
 
-        {:ok, nil, nil}
+          {:ok, nil, nil}
 
-      :none ->
-        {:ok, nil, nil}
+        :none ->
+          {:ok, nil, nil}
+      end
     end
   end
 
   defp resolve_auto_resume(_session_key, _context, _meta, _store), do: {:ok, nil, nil}
+
+  defp fetch_chat_state(store, session_key) do
+    case LemonCore.ChatStateStore.fetch(store, session_key) do
+      {:ok, state} -> {:ok, state}
+      {:error, _reason} -> {:error, :resume_unavailable}
+    end
+  end
 
   @doc false
   def execution_context(%ExecutionCommand{} = request) do
@@ -164,14 +178,24 @@ defmodule LemonRouter.ResumeResolver do
   defp authorize_resume(resume, source, context, meta, store) do
     digest = context_digest(context)
 
-    allowed =
-      case Store.fetch(store, @context_table, {resume.engine, resume.value}) do
-        {:ok, ^digest} -> Store.confirm_durable(store) == :ok
-        {:ok, nil} -> legacy_unbound_context?(context, meta)
-        _ -> false
-      end
+    case Store.fetch(store, @context_table, {resume.engine, resume.value}) do
+      {:ok, ^digest} ->
+        if Store.confirm_durable(store) == :ok,
+          do: {:ok, resume, source},
+          else: {:error, :resume_unavailable}
 
-    if allowed, do: {:ok, resume, source}, else: {:ok, nil, nil}
+      {:ok, nil} ->
+        if legacy_unbound_context?(context, meta),
+          do: {:ok, resume, source},
+          else: {:ok, nil, nil}
+
+      # A different context starts a new journal without deleting the old one.
+      {:ok, _other_digest} ->
+        {:ok, nil, nil}
+
+      {:error, _reason} ->
+        {:error, :resume_unavailable}
+    end
   end
 
   defp legacy_unbound_context?({nil, _tool_policy, nil, nil, false, false}, meta) do

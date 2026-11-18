@@ -172,26 +172,37 @@ defmodule LemonCore.RunHistoryStore do
   def get(session_key, opts \\ []), do: get(__MODULE__, session_key, opts)
 
   @doc """
-  Fetch history for a session from a specific store instance.
+  Fetch history for a session from a specific store instance, for display.
 
   Calls this owner directly, without routing through `LemonCore.Store`.
-  Returns `[]` if the owner is unavailable or the call times out. Use `fetch/2`
-  for default-instance reads that must distinguish unavailability from absence.
+  Returns `[]` if the owner is unavailable, the call times out, or a row cannot
+  be read or decoded. Use `fetch/3` for reads that must distinguish those
+  failures from an empty session.
   """
   @spec get(server(), String.t(), keyword()) :: [{term(), map()}]
   def get(server, session_key, opts) do
-    limit = Keyword.get(opts, :limit, 10)
-
-    GenServer.call(server, {:get, session_key, limit}, 5_000)
-  catch
-    :exit, _ -> []
+    case fetch(server, session_key, Keyword.put_new(opts, :limit, 10)) do
+      {:ok, rows} -> rows
+      {:error, _reason} -> []
+    end
   end
 
-  @doc "Read retained history without confusing an unavailable owner with an empty session."
-  def fetch(session_key, opts \\ []) do
-    case GenServer.call(__MODULE__, {:get, session_key, Keyword.get(opts, :limit, 50)}, 5_000) do
-      rows when is_list(rows) -> {:ok, rows}
-      _ -> {:error, :unavailable}
+  @doc """
+  Read retained history without confusing an unavailable owner, a failed
+  SQLite read, or an undecodable row with an empty session.
+
+  Returns `{:ok, rows}` (newest first, default limit 50) or `{:error, reason}`
+  where reason is `:unavailable`, `:corrupt_history` or `:history_read_failed`.
+  """
+  @spec fetch(String.t(), keyword()) :: {:ok, [{term(), map()}]} | {:error, atom()}
+  def fetch(session_key, opts \\ []), do: fetch(__MODULE__, session_key, opts)
+
+  @spec fetch(server(), String.t(), keyword()) :: {:ok, [{term(), map()}]} | {:error, atom()}
+  def fetch(server, session_key, opts) do
+    case GenServer.call(server, {:get, session_key, Keyword.get(opts, :limit, 50)}, 5_000) do
+      {:ok, rows} when is_list(rows) -> {:ok, rows}
+      {:error, reason} when reason in [:corrupt_history, :history_read_failed] -> {:error, reason}
+      _unexpected -> {:error, :unavailable}
     end
   catch
     :exit, _ -> {:error, :unavailable}
@@ -295,17 +306,11 @@ defmodule LemonCore.RunHistoryStore do
     result =
       with :ok <- reset_and_bind(state.stmts.get_by_session, [session_key, limit]),
            {:ok, rows} <- Sqlite3.fetch_all(state.conn, state.stmts.get_by_session) do
-        Enum.reduce(rows, [], fn [run_id, value_blob], acc ->
-          case decode(value_blob) do
-            {:ok, data} -> [{run_id, data} | acc]
-            {:error, _} -> acc
-          end
-        end)
-        |> Enum.reverse()
+        decode_rows(rows, [])
       else
         err ->
-          Logger.warning("[RunHistoryStore] get failed: #{inspect(err)}")
-          []
+          Logger.warning("[RunHistoryStore] get failed: #{inspect(error_tag(err))}")
+          {:error, :history_read_failed}
       end
 
     {:reply, result, state}
@@ -463,6 +468,25 @@ defmodule LemonCore.RunHistoryStore do
   rescue
     _ -> {:error, :corrupt_data}
   end
+
+  # One undecodable row fails the whole read: a silently shorter history is
+  # indistinguishable from a session that never ran.
+  defp decode_rows([], acc), do: {:ok, Enum.reverse(acc)}
+
+  defp decode_rows([[run_id, value_blob] | rest], acc) do
+    case decode(value_blob) do
+      {:ok, data} ->
+        decode_rows(rest, [{run_id, data} | acc])
+
+      {:error, _} ->
+        Logger.warning("[RunHistoryStore] undecodable history row")
+        {:error, :corrupt_history}
+    end
+  end
+
+  defp error_tag({:error, {:bind_failed, _message}}), do: :bind_failed
+  defp error_tag({:error, _reason}), do: :sqlite_error
+  defp error_tag(_other), do: :unexpected_result
 
   defp normalize_run_id(ref) when is_reference(ref), do: inspect(ref)
   defp normalize_run_id(id) when is_binary(id), do: id

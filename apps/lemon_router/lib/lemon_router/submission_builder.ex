@@ -229,10 +229,11 @@ defmodule LemonRouter.SubmissionBuilder do
   defp get_session_config(nil), do: {:ok, %{}}
 
   defp get_session_config(session_key) do
-    case LemonCore.PolicyStore.get_session(session_key) do
-      nil -> {:ok, %{}}
-      config when is_map(config) -> {:ok, config}
-      _ -> {:error, :invalid_session_policy}
+    case LemonCore.PolicyStore.fetch_session(session_key) do
+      {:ok, nil} -> {:ok, %{}}
+      {:ok, config} when is_map(config) -> {:ok, config}
+      {:ok, _invalid} -> {:error, :invalid_session_policy}
+      {:error, _reason} -> {:error, :policy_unavailable}
     end
   end
 
@@ -270,10 +271,9 @@ defmodule LemonRouter.SubmissionBuilder do
         {:error, reason}
     end
   catch
-    :exit, _ ->
-      if fallback_agent_profile_exists?(agent_id),
-        do: {:ok, %{}},
-        else: {:error, {:unknown_agent_id, agent_id}}
+    # The managed profile or registry could not answer: its tool policy, model
+    # and node are unknown, so admission must not proceed without them.
+    :exit, _ -> {:error, :profile_unavailable}
   end
 
   defp get_agent_profile(_), do: {:error, {:unknown_agent_id, nil}}

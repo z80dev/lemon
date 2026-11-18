@@ -375,7 +375,7 @@ defmodule CodingAgent.BackgroundRunTest do
                history_fn: history_fn,
                active_run_fn: fn ^session_key -> :none end,
                policy_fn: fn ^session_key ->
-                 %{model: Mocks.mock_model(), thinking_level: "low"}
+                 {:ok, %{model: Mocks.mock_model(), thinking_level: "low"}}
                end,
                runner: runner,
                timeout_ms: 1_234

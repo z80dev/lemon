@@ -171,9 +171,11 @@ defmodule LemonControlPlane.SessionModel do
     end
   end
 
+  # Display only: an unreadable policy reads as "no override" here, while the
+  # router's admission read of the same row fails closed.
   defp session_policy(session_key) when is_binary(session_key) and session_key != "" do
-    case LemonCore.PolicyStore.get_session(session_key) do
-      policy when is_map(policy) -> policy
+    case LemonCore.PolicyStore.fetch_session(session_key) do
+      {:ok, policy} when is_map(policy) -> policy
       _ -> %{}
     end
   rescue

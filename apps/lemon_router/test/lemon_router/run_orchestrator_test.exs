@@ -2031,7 +2031,7 @@ defmodule LemonRouter.RunOrchestratorTest do
                )
 
       assert_receive {:captured_job, _job}
-      assert LemonCore.PolicyStore.get_session(session_key) == session_policy
+      assert LemonCore.PolicyStore.fetch_session(session_key) == {:ok, session_policy}
     end
   end
 

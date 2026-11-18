@@ -236,7 +236,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 
 | Module | Purpose |
 |--------|---------|
-| `LemonCore.Idempotency` | At-most-once deduplication backed by Store with 24h TTL |
+| `LemonCore.Idempotency` | At-most-once execution backed by Store; done results expire after 24h, unresolved claims never expire |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events |
 | `LemonCore.Introspection` | Canonical introspection event builder and persistence |
@@ -520,7 +520,7 @@ widget = MyApp.WidgetStore.get(id)
 
 `put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value. `take/2` atomically consumes a key, `compare_and_swap/4` replaces a value only when its exact expected value is still current, and `compare_and_delete/3` conditionally removes an exact snapshot so a sweeper cannot erase a renewed lease or receipt. `compare_and_delete_many/1` first validates a set of exact snapshots in one serialized Store call. SQLite commits the set transactionally, ETS applies it under the Store owner, and ordered backends report the first failure so callers can place a safety-critical durable fence last.
 
-Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
+Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. `get/3` and `list/2` are for genuinely optional or display data only and are never an admission, policy, idempotency or verification check. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
 
 For power-loss-sensitive writes, pass `durable: true` to the explicit-server
 mutation arity, for example
@@ -555,13 +555,18 @@ Use the generic table API only inside wrapper modules, backend internals, or exp
 
 Shared-domain callers should prefer typed wrappers:
 
-- **Chat state**: `LemonCore.ChatStateStore.put/2`, `get/1`, `delete/1` (each
-  also takes a store name first); stamps a 24h `:expires_at` on write, treats
-  expired entries as absent on read, and the store's periodic sweep removes
-  expired `:chat` entries
-- **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`
-- **Policies**: `LemonCore.PolicyStore.put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
-- **Idempotency**: `LemonCore.IdempotencyStore.put/3`, `get/2`, `delete/2`
+- **Chat state**: `LemonCore.ChatStateStore.put/2`, `get/1`, `fetch/1`, `delete/1`
+  (each also takes a store name first); stamps a 24h `:expires_at` on write,
+  treats expired entries as absent on read, and the store's periodic sweep
+  removes expired `:chat` entries. `fetch` reports an unreadable store as
+  `{:error, :store_unavailable}` instead of "no state"
+- **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `fetch_history/2`, `fetch_sessions/1`, `get/1`
+- **Policies**: `LemonCore.PolicyStore.fetch_agent/1`, `fetch_channel/1`, `fetch_session/1`,
+  `fetch_runtime/0` (strict: `{:ok, nil}` only for a confirmed absent row,
+  `{:error, :store_unavailable}` otherwise; the router rejects admission with
+  `:policy_unavailable`), `update_session/2` (compare-and-swap merge),
+  `put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
+- **Idempotency**: `LemonCore.IdempotencyStore.fetch/2`, `put_new/3`, `compare_and_swap/4`, `compare_and_delete/3`, `put/3`, `delete/2`
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`
 - **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
@@ -800,13 +805,23 @@ restores session monitors; it does not start a new daemon incarnation.
 
 ## Idempotency
 
-At-most-once deduplication backed by the Store with 24h TTL.
+At-most-once execution backed by the Store. A key is claimed atomically
+(`pending`), then completed by compare-and-swap (`done`); concurrent callers
+never both execute. An unreadable Store is `{:error, :store_unavailable}`,
+never a miss. Completed results expire after 24h. A pending claim never
+expires and is never swept (it has no `"inserted_at_ms"`): its outcome may be
+unknown, so it keeps its key and metadata (for example a fixed run ID) until a
+caller reconciles it authoritatively with `complete/2` or `release/1` on the
+claim `begin/3` returns as `{:pending, claim}` (`meta/1` reads its metadata).
 
 ```elixir
-result = LemonCore.Idempotency.execute("messages", msg_id, fn ->
+{:ok, result} = LemonCore.Idempotency.execute("messages", msg_id, fn ->
   perform_operation()
 end)
 ```
+
+Callers that must release a claim after a definite failure, or reconcile an
+earlier unresolved claim, use `begin/3`, `complete/2` and `release/1`.
 
 ## Introspection
 
@@ -909,9 +924,11 @@ Durable memory has the same requirement in `lemon_memory`.
 
 Read retained history directly with `LemonCore.RunHistoryStore.get(session_key,
 limit: 10)` (or `get(history_server, session_key, opts)` for a named instance).
-Results are newest-first `{run_id, data}` pairs; unavailable owners return `[]`.
-Use `RunHistoryStore.fetch/2` when unavailability must remain distinct from an
-empty session. History reads do not go through the main `Store` process and
+Results are newest-first `{run_id, data}` pairs; `get` returns `[]` for display
+when the owner is unavailable or a row cannot be read. Use
+`RunHistoryStore.fetch/2,3` when that must remain distinct from an empty
+session: an unavailable owner, a failed SQLite read and an undecodable row are
+`{:error, reason}`. History reads do not go through the main `Store` process and
 require no history-provider configuration.
 
 ### What the Hex package leaves out

@@ -147,7 +147,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
         message: Map.put(inbound.message || %{}, :text, stripped_prompt)
     }
 
-    case route_to_router(state, inbound, chat_id, thread_id, session_key) do
+    # An unreadable /resume selection rejects the submission (retry-safe:
+    # nothing was sent) instead of running without the operator's selection.
+    result =
+      if meta[:selected_resume_unavailable],
+        do: {:error, :resume_unavailable},
+        else: route_to_router(state, inbound, chat_id, thread_id, session_key)
+
+    case result do
       :ok ->
         track_accepted_submission(
           state,

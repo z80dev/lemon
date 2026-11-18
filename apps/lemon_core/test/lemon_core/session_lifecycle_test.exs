@@ -21,6 +21,32 @@ defmodule LemonCore.SessionLifecycleTest do
     def history(_session_key, _opts), do: []
   end
 
+  # Fails exactly one backend read of one row, then behaves like EtsBackend.
+  defmodule OneShotReadFault do
+    @behaviour LemonCore.Store.Backend
+    alias LemonCore.Store.EtsBackend
+
+    def fail_next_get(table, key), do: :persistent_term.put({__MODULE__, table, key}, true)
+
+    def get(state, table, key) do
+      if :persistent_term.get({__MODULE__, table, key}, false) do
+        :persistent_term.erase({__MODULE__, table, key})
+        {:error, :transient_read_failure}
+      else
+        EtsBackend.get(state, table, key)
+      end
+    end
+
+    defdelegate init(opts), to: EtsBackend
+    defdelegate put(state, table, key, value), to: EtsBackend
+    defdelegate put_new(state, table, key, value), to: EtsBackend
+    defdelegate delete(state, table, key), to: EtsBackend
+    defdelegate list(state, table), to: EtsBackend
+    defdelegate sync(state), to: EtsBackend
+    defdelegate sweep(state, table, predicate), to: EtsBackend
+    defdelegate compare_and_delete_many(state, entries), to: EtsBackend
+  end
+
   test "history preserves action identity across newest-first tool phases" do
     suffix = unique_suffix()
     key = "agent:lifecycle_action_#{suffix}:main"
@@ -441,10 +467,47 @@ defmodule LemonCore.SessionLifecycleTest do
     assert SessionLifecycle.get(stale) == nil
     assert RunStore.history(stale, limit: 1) == []
     assert ChatStateStore.get(stale) == nil
-    assert PolicyStore.get_session(stale) == nil
+    assert PolicyStore.fetch_session(stale) == {:ok, nil}
     assert SessionMetadataStore.get(stale).archived == false
     assert SessionLifecycle.get(pinned)
     assert SessionLifecycle.get(fresh)
+  end
+
+  test "prune never deletes a session pinned after preview when a candidate read fails" do
+    suffix = unique_suffix()
+    key = "agent:prune_pin_race_#{suffix}:main"
+    on_exit(fn -> cleanup_sessions([key]) end)
+
+    # Older than every other session in the shared Store, so it is the only candidate.
+    seed_session(key, "run-prune-pin-race-#{suffix}", "old", "done", [], 1_000)
+    threshold = 2_000
+
+    assert {:ok, preview} = SessionLifecycle.prune(older_than_ms: threshold, archived_only: false)
+    assert preview.candidate_session_keys == [key]
+
+    assert {:ok, _} = SessionLifecycle.patch(key, %{pinned: true})
+
+    %{backend: LemonCore.Store.EtsBackend} = :sys.get_state(Store)
+    :sys.replace_state(Store, &%{&1 | backend: OneShotReadFault})
+    OneShotReadFault.fail_next_get(:session_metadata_v1, key)
+
+    result =
+      try do
+        SessionLifecycle.prune(
+          older_than_ms: threshold,
+          archived_only: false,
+          dry_run: false,
+          confirm_token: preview.confirmation_token
+        )
+      after
+        :persistent_term.erase({OneShotReadFault, :session_metadata_v1, key})
+        :sys.replace_state(Store, &%{&1 | backend: LemonCore.Store.EtsBackend})
+      end
+
+    assert {:error, _reason} = result
+    assert SessionLifecycle.get(key)
+    assert SessionMetadataStore.get(key).pinned
+    assert RunStore.history(key, limit: 1) != []
   end
 
   test "restores ancillary state and preserves runs when the final canonical delete fails" do
@@ -472,7 +535,7 @@ defmodule LemonCore.SessionLifecycleTest do
     assert SessionLifecycle.get(session_key)
     assert RunStore.history(session_key, limit: 1) != []
     assert ChatStateStore.get(session_key).messages == ["keep"]
-    assert PolicyStore.get_session(session_key) == %{model: "keep-model"}
+    assert PolicyStore.fetch_session(session_key) == {:ok, %{model: "keep-model"}}
     assert SessionMetadataStore.get(session_key).title == "Keep"
     assert SessionMetadataStore.get(session_key).pinned == true
 

@@ -449,6 +449,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
       case chat_mode do
         :mentions -> "Chat default: mentions-only."
         :all -> "Chat default: all."
+        :unavailable -> "Chat default: unavailable (treated as mentions-only)."
         _ -> "Chat default: mentions-only."
       end
 
@@ -456,6 +457,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
       case topic_mode do
         :mentions -> "Topic override: mentions-only."
         :all -> "Topic override: all."
+        :unavailable -> "Topic override: unavailable (treated as mentions-only)."
         _ -> "Topic override: none."
       end
 

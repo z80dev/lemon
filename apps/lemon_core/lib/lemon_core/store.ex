@@ -357,7 +357,10 @@ defmodule LemonCore.Store do
   @doc """
   Get a value from a named table.
 
-  Returns `nil` if the key doesn't exist.
+  Returns `nil` if the key doesn't exist **or** the Store cannot answer
+  (backend error, call timeout, missing process). Use it only for genuinely
+  optional or display data; it is never an admission, policy, idempotency or
+  verification check. Those use `fetch/3`.
   """
   @spec get(server(), table :: atom(), key :: term()) :: term() | nil
   def get(server \\ __MODULE__, table, key) do
@@ -434,6 +437,10 @@ defmodule LemonCore.Store do
 
   @doc """
   List all key-value pairs in a named table.
+
+  Returns `[]` when the Store cannot answer, so it is for display and
+  diagnostics only; use `fetch_all/2` wherever an unreadable table must not
+  look empty.
   """
   @spec list(server(), table :: atom()) :: [{term(), term()}]
   def list(server \\ __MODULE__, table) do

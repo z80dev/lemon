@@ -237,8 +237,14 @@ defmodule LemonRouter.ResumeResolverTest do
                last_resume_token: token.value
              })
 
-    assert {:ok, nil, nil} = ResumeResolver.resolve(nil, session_key, meta, policy, store)
-    assert {:ok, nil, nil} = ResumeResolver.resolve(token, session_key, meta, policy, store)
+    # An unconfirmed binding never authorizes resume, and the resolver does not
+    # silently start a new journal either: the submission fails closed.
+    assert {:error, :resume_unavailable} =
+             ResumeResolver.resolve(nil, session_key, meta, policy, store)
+
+    assert {:error, :resume_unavailable} =
+             ResumeResolver.resolve(token, session_key, meta, policy, store)
+
     history = [{request.run_id, %{summary: %{prompt: request.prompt, meta: meta}}}]
     assert ResumeResolver.filter_history(history, meta, policy, store) == []
   end
