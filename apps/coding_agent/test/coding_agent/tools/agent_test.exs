@@ -82,6 +82,13 @@ defmodule CodingAgent.Tools.AgentTest do
     def submit(%RunRequest{}), do: {:error, {:unknown_agent_id, "missing-agent"}}
   end
 
+  defmodule OutcomeUnknownRunOrchestrator do
+    def submit(%RunRequest{} = request) do
+      send(self(), {:outcome_unknown_submit, request})
+      {:error, :outcome_unknown}
+    end
+  end
+
   setup do
     previous_async_followups = Application.get_env(:coding_agent, :async_followups)
 
@@ -357,7 +364,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         nil,
         "/tmp",
-        []
+        owner_opts(result.details.task_id)
       )
 
     assert poll.details.node == "newphy"
@@ -1219,7 +1226,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         nil,
         "/tmp",
-        []
+        owner_opts(result.details.task_id)
       )
 
     assert poll.details.status == "completed"
@@ -1311,7 +1318,7 @@ defmodule CodingAgent.Tools.AgentTest do
           nil,
           nil,
           "/tmp",
-          []
+          owner_opts(task_a.details.task_id)
         )
       end)
 
@@ -1360,7 +1367,7 @@ defmodule CodingAgent.Tools.AgentTest do
           nil,
           nil,
           "/tmp",
-          []
+          owner_opts(task.details.task_id)
         )
       end)
 
@@ -1387,7 +1394,7 @@ defmodule CodingAgent.Tools.AgentTest do
           nil,
           nil,
           "/tmp",
-          []
+          owner_opts(task_a.details.task_id)
         )
       end)
 
@@ -1414,7 +1421,7 @@ defmodule CodingAgent.Tools.AgentTest do
           signal,
           nil,
           "/tmp",
-          []
+          owner_opts(task.details.task_id)
         )
       end)
 
@@ -1436,6 +1443,88 @@ defmodule CodingAgent.Tools.AgentTest do
              )
   end
 
+  describe "delegated task ownership and delivery" do
+    test "poll and join reject a task_id owned by another session" do
+      task = queue_delegated_run("owned-by-main")
+      task_id = task.details.task_id
+      foreign = [session_key: "agent:intruder:main", agent_id: "intruder"]
+
+      assert {:error, "Unknown task_id: " <> ^task_id} =
+               AgentTool.execute(
+                 "c",
+                 %{"action" => "poll", "task_id" => task_id},
+                 nil,
+                 nil,
+                 "/tmp",
+                 foreign
+               )
+
+      assert {:error, "Unknown task_id: " <> ^task_id} =
+               AgentTool.execute(
+                 "c",
+                 %{"action" => "join", "task_ids" => [task_id]},
+                 nil,
+                 nil,
+                 "/tmp",
+                 foreign
+               )
+
+      refute TaskStore.auto_followup_suppressed?(task_id)
+    end
+
+    test "join content carries the child answer" do
+      task = queue_delegated_run("answer-in-content")
+
+      joiner =
+        Task.async(fn ->
+          AgentTool.execute(
+            "c",
+            %{"action" => "join", "task_id" => task.details.task_id},
+            nil,
+            nil,
+            "/tmp",
+            session_key: "agent:main:main"
+          )
+        end)
+
+      wait_for_followup_suppression(task.details.task_id)
+      complete_delegated_run(task.details.run_id, "the-child-answer-42")
+
+      result = Task.await(joiner, 1_000)
+      assert %LemonAgent.Types.AgentToolResult{content: content} = result
+      assert Enum.map_join(content, & &1.text) =~ "the-child-answer-42"
+    end
+
+    test "outcome_unknown submission keeps the run id and never resubmits" do
+      result =
+        AgentTool.execute(
+          "c",
+          %{"agent_id" => "oracle", "prompt" => "x", "async" => true, "auto_followup" => false},
+          nil,
+          nil,
+          "/tmp",
+          run_orchestrator: OutcomeUnknownRunOrchestrator,
+          session_key: "agent:main:main"
+        )
+
+      assert_receive {:outcome_unknown_submit, %RunRequest{run_id: run_id}}
+      refute_receive {:outcome_unknown_submit, _}, 100
+
+      assert %LemonAgent.Types.AgentToolResult{details: details} = result
+      assert details.run_id == run_id
+      assert details.status == "tracking_lost"
+      assert {:ok, record} = TaskStore.get_record(details.task_id)
+      assert record.run_id == run_id
+      assert record.status == :tracking_lost
+    end
+  end
+
+  # Poll and join are scoped to the submitting session/agent.
+  defp owner_opts(task_id) do
+    {:ok, %{owner: {session, agent_id}}} = TaskStore.get_record(task_id)
+    [session_key: session, agent_id: agent_id]
+  end
+
   defp wait_for_completed(task_id, attempts \\ 400)
 
   defp wait_for_completed(task_id, attempts) when attempts <= 0 do
@@ -1450,7 +1539,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         nil,
         "/tmp",
-        []
+        owner_opts(task_id)
       )
 
     case result do

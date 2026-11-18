@@ -6,15 +6,19 @@ defmodule CodingAgent.Tools.Agent do
   - return immediately with a `task_id` (`async=true`, default), or
   - wait for completion and return the delegated answer (`async=false`).
 
-  Async runs can use `action=poll` to check status, and can optionally
-  auto-follow up into the current session when the delegated run completes.
+  Async runs can use `action=poll` to check status and `action=join` to wait
+  for results; both are limited to tasks submitted by the calling session and
+  agent (other task ids read as unknown). Join returns child answers in its
+  content. Async runs can optionally auto-follow up into the current session
+  when the delegated run completes. A submission whose outcome is unknown is
+  tracked as `tracking_lost` under its fixed run id and never resubmitted.
   """
 
   require Logger
 
   alias CodingAgent.AsyncFollowups
-  alias CodingAgent.{JoinAwait, RunGraph, Subagents, TaskStore}
-  alias CodingAgent.Tools.Task.Params
+  alias CodingAgent.{RunGraph, Subagents, TaskStore}
+  alias CodingAgent.Tools.Task.{Control, Params, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -150,10 +154,17 @@ defmodule CodingAgent.Tools.Agent do
       {:error, "Operation aborted"}
     else
       case normalize_action(Map.get(params, "action")) do
-        "poll" -> do_poll(params)
-        "join" -> do_join(params, signal)
-        "run" -> do_run(params, cwd, opts)
-        other -> {:error, "Unsupported action: #{inspect(other)}"}
+        "poll" ->
+          with :ok <- authorize_task_ids([Map.get(params, "task_id")], opts), do: do_poll(params)
+
+        "join" ->
+          do_join(params, signal, opts)
+
+        "run" ->
+          do_run(params, cwd, opts)
+
+        other ->
+          {:error, "Unsupported action: #{inspect(other)}"}
       end
     end
   end
@@ -168,15 +179,44 @@ defmodule CodingAgent.Tools.Agent do
     with :ok <- Params.check_per_call_model(Map.take(params, ["model"]), cwd, opts),
          {:ok, validated} <- validate_run_params(params, cwd, opts),
          {:ok, delegated_session_key} <- resolve_delegated_session_key(validated, opts),
-         {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts),
-         {:ok, run_id} <- submit_run(request, opts) do
-      if validated.async do
-        followup_opts = Keyword.put_new(opts, :cwd, cwd)
-        handle_async_submission(run_id, validated, delegated_session_key, request, followup_opts)
-      else
-        wait_sync_completion(run_id, validated, delegated_session_key)
+         {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts) do
+      followup_opts = Keyword.put_new(opts, :cwd, cwd)
+
+      case submit_run(request, opts) do
+        {:ok, run_id} when validated.async ->
+          handle_async_submission(
+            run_id,
+            validated,
+            delegated_session_key,
+            request,
+            followup_opts
+          )
+
+        {:ok, run_id} ->
+          wait_sync_completion(run_id, validated, delegated_session_key)
+
+        {:error, :outcome_unknown} ->
+          handle_unknown_submission(request, validated, delegated_session_key, followup_opts)
+
+        {:error, _reason} = error ->
+          error
       end
     end
+  end
+
+  # Task ids are scoped to the submitting session and agent, exactly like the
+  # `task` tool; foreign ids are indistinguishable from missing ones.
+  defp authorize_task_ids(ids, opts) do
+    Enum.reduce_while(ids, :ok, fn
+      id, :ok when is_binary(id) ->
+        case Control.authorize(id, opts) do
+          :ok -> {:cont, :ok}
+          error -> {:halt, error}
+        end
+
+      _id, :ok ->
+        {:cont, :ok}
+    end)
   end
 
   defp do_poll(params) do
@@ -184,8 +224,20 @@ defmodule CodingAgent.Tools.Agent do
 
     if is_binary(task_id) do
       case ensure_latest_task_state(task_id) do
-        {:ok, record, events} ->
-          build_poll_result(task_id, record, events)
+        {:ok, record, _events} ->
+          with %AgentToolResult{details: details} = result <-
+                 Result.do_get(%{"task_id" => task_id}) do
+            agent_details =
+              %{
+                node: Map.get(record, :node, "local"),
+                agent_id: Map.get(record, :agent_id),
+                session_key: Map.get(record, :delegated_session_key),
+                role: Map.get(record, :role)
+              }
+              |> compact_map()
+
+            %{result | details: Map.merge(details, agent_details)}
+          end
 
         {:error, :not_found} ->
           {:error, "Unknown task_id: #{task_id}"}
@@ -195,174 +247,17 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp do_join(params, signal) do
-    with {:ok, task_ids} <- validate_join_task_ids(params),
-         {:ok, mode} <- validate_join_mode(params),
-         {:ok, run_ids} <- resolve_run_ids(task_ids) do
-      join_token = make_ref()
-
-      try do
-        TaskStore.begin_auto_followup_join(task_ids, join_token)
-
-        case JoinAwait.await(run_ids, task_ids, mode, signal) do
-          {:ok, join_result} ->
-            suppressed = joined_completion_task_ids(task_ids, join_result)
-            TaskStore.finish_auto_followup_join(task_ids, suppressed, join_token)
-            build_join_result(task_ids, join_result)
-
-          {:parent_question, request} ->
-            build_parent_question_join_result(task_ids, mode, request)
-
-          {:error, :aborted} ->
-            {:error, "Operation aborted"}
-
-          {:error, {:unknown_run, run_id}} ->
-            {:error, "Unknown run_id: #{run_id}"}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-      after
-        release_join_reservation(task_ids, join_token)
-      end
-    else
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp release_join_reservation(task_ids, join_token) do
-    TaskStore.finish_auto_followup_join(task_ids, [], join_token)
-  catch
-    :exit, _reason -> :ok
-  end
-
-  defp validate_join_task_ids(params) do
-    task_ids = Map.get(params, "task_ids") || Map.get(params, "task_id")
-
-    task_ids =
-      cond do
-        is_binary(task_ids) -> [task_ids]
-        is_list(task_ids) -> task_ids
-        true -> []
+  defp do_join(params, signal, opts) do
+    ids =
+      case Map.get(params, "task_ids") || Map.get(params, "task_id") do
+        id when is_binary(id) -> [id]
+        ids when is_list(ids) -> ids
+        _ -> []
       end
 
-    cond do
-      task_ids == [] ->
-        {:error, "task_ids is required for action=join"}
-
-      not Enum.all?(task_ids, &is_binary/1) ->
-        {:error, "task_ids must be a list of strings"}
-
-      true ->
-        {:ok, task_ids}
+    with :ok <- authorize_task_ids(ids, opts) do
+      Result.do_join(params, signal)
     end
-  end
-
-  defp validate_join_mode(params) do
-    mode = Map.get(params, "mode") |> normalize_join_mode()
-    {:ok, mode}
-  end
-
-  defp resolve_run_ids(task_ids) do
-    run_ids =
-      Enum.reduce_while(task_ids, [], fn task_id, acc ->
-        case TaskStore.get(task_id) do
-          {:ok, record, _events} ->
-            run_id = Map.get(record, :run_id)
-
-            if is_binary(run_id) do
-              {:cont, [run_id | acc]}
-            else
-              {:halt, {:error, "Task #{task_id} is missing a run_id"}}
-            end
-
-          {:error, :not_found} ->
-            {:halt, {:error, "Unknown task_id: #{task_id}"}}
-        end
-      end)
-
-    case run_ids do
-      {:error, _} = err -> err
-      ids -> {:ok, Enum.reverse(ids)}
-    end
-  end
-
-  defp joined_completion_task_ids(task_ids, %{mode: :wait_any, run: run}) do
-    if RunGraph.normalize_status(run[:status]) == :completed do
-      task_ids
-      |> Enum.find(fn task_id ->
-        case TaskStore.get(task_id) do
-          {:ok, record, _events} -> Map.get(record, :run_id) == run[:id]
-          _ -> false
-        end
-      end)
-      |> List.wrap()
-    else
-      []
-    end
-  end
-
-  defp joined_completion_task_ids(task_ids, %{mode: :wait_all, runs: runs}) do
-    completed_run_ids =
-      runs
-      |> Enum.filter(&(RunGraph.normalize_status(&1[:status]) == :completed))
-      |> MapSet.new(& &1[:id])
-
-    Enum.filter(task_ids, fn task_id ->
-      case TaskStore.get(task_id) do
-        {:ok, record, _events} ->
-          MapSet.member?(completed_run_ids, Map.get(record, :run_id))
-
-        _ ->
-          false
-      end
-    end)
-  end
-
-  defp build_parent_question_join_result(task_ids, mode, request) do
-    %AgentToolResult{
-      content: [
-        %TextContent{
-          text:
-            "A joined child needs a parent decision before it can continue. " <>
-              "Question: #{request.question}\nBlocked because: #{request.why_blocked}"
-        }
-      ],
-      details: %{
-        status: "needs_parent_answer",
-        mode: Atom.to_string(mode),
-        task_ids: task_ids,
-        request_id: request.id,
-        question: request.question,
-        why_blocked: request.why_blocked,
-        options: request.options,
-        recommended_option: request.recommended_option
-      }
-    }
-  end
-
-  defp build_join_result(task_ids, %{mode: :wait_all, runs: runs}) do
-    %AgentToolResult{
-      content: [%TextContent{text: "Joined #{length(task_ids)} delegated task(s)."}],
-      details: %{
-        status: "completed",
-        mode: "wait_all",
-        task_ids: task_ids,
-        runs: runs
-      }
-    }
-  end
-
-  defp build_join_result(task_ids, %{mode: :wait_any, run: run}) do
-    %AgentToolResult{
-      content: [%TextContent{text: "One delegated task completed."}],
-      details: %{
-        status: "completed",
-        mode: "wait_any",
-        task_ids: task_ids,
-        run: run
-      }
-    }
   end
 
   defp ensure_latest_task_state(task_id) do
@@ -412,10 +307,64 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp handle_async_submission(run_id, validated, delegated_session_key, request, opts) do
+    {task_id, watcher_result} =
+      track_submission(run_id, validated, delegated_session_key, request, opts)
+
+    build_async_submission_result(
+      watcher_result,
+      task_id,
+      run_id,
+      validated,
+      delegated_session_key
+    )
+  end
+
+  # The router may have accepted the request before the reply was lost. Track the
+  # fixed run id so a late completion still lands, and never resubmit.
+  defp handle_unknown_submission(request, validated, delegated_session_key, opts) do
+    run_id = request.run_id
+
+    case track_submission(run_id, validated, delegated_session_key, request, opts) do
+      {task_id, :ok} ->
+        TaskStore.mark_tracking_lost(task_id, :submission_outcome_unknown)
+
+        %AgentToolResult{
+          content: [
+            %TextContent{
+              text:
+                "Submission outcome for delegated run #{run_id} is unknown (task #{task_id}). " <>
+                  "It may still run; poll or join the task. Do not resubmit."
+            }
+          ],
+          details: %{
+            status: "tracking_lost",
+            task_id: task_id,
+            run_id: run_id,
+            agent_id: validated.agent_id,
+            session_key: delegated_session_key,
+            role: validated.role_id,
+            node: result_node(validated),
+            error: "outcome_unknown"
+          }
+        }
+
+      {task_id, watcher_error} ->
+        build_async_submission_result(
+          watcher_error,
+          task_id,
+          run_id,
+          validated,
+          delegated_session_key
+        )
+    end
+  end
+
+  defp track_submission(run_id, validated, delegated_session_key, request, opts) do
     task_id =
       TaskStore.new_task(%{
         description: validated.description,
         kind: :agent,
+        owner: Control.owner(opts),
         run_id: run_id,
         parent_run_id: Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id),
         session_key: Keyword.get(opts, :session_key),
@@ -429,23 +378,8 @@ defmodule CodingAgent.Tools.Agent do
 
     :ok = register_delegated_run(run_id, task_id, validated, delegated_session_key, opts)
 
-    watcher_result =
-      start_completion_watcher(
-        task_id,
-        run_id,
-        validated,
-        delegated_session_key,
-        request,
-        opts
-      )
-
-    build_async_submission_result(
-      watcher_result,
-      task_id,
-      run_id,
-      validated,
-      delegated_session_key
-    )
+    {task_id,
+     start_completion_watcher(task_id, run_id, validated, delegated_session_key, request, opts)}
   end
 
   defp build_async_submission_result(:ok, task_id, run_id, validated, delegated_session_key) do
@@ -736,6 +670,7 @@ defmodule CodingAgent.Tools.Agent do
       {:ok, run_id} when is_binary(run_id) -> {:ok, run_id}
       {:ok, other} -> {:error, "Unexpected run id: #{inspect(other)}"}
       {:error, {:unknown_agent_id, agent_id}} -> {:error, "Unknown agent_id: #{agent_id}"}
+      {:error, :outcome_unknown} -> {:error, :outcome_unknown}
       {:error, reason} -> {:error, "Delegated run submission failed: #{inspect(reason)}"}
     end
   end
@@ -1303,13 +1238,6 @@ defmodule CodingAgent.Tools.Agent do
   defp persona_model(%{role: role}) when is_binary(role), do: "@" <> role
   defp persona_model(_), do: nil
 
-  defp normalize_join_mode(nil), do: :wait_all
-  defp normalize_join_mode("wait_all"), do: :wait_all
-  defp normalize_join_mode("wait_any"), do: :wait_any
-  defp normalize_join_mode(:wait_all), do: :wait_all
-  defp normalize_join_mode(:wait_any), do: :wait_any
-  defp normalize_join_mode(_), do: :wait_all
-
   defp resolve_delegated_session_key(%{agent_id: agent_id, continue_session: true}, opts) do
     parent = parent_scope(opts)
 
@@ -1347,64 +1275,6 @@ defmodule CodingAgent.Tools.Agent do
     Keyword.get(opts, :session_key) ||
       Keyword.get(opts, :session_id) ||
       "unknown"
-  end
-
-  defp build_poll_result(task_id, record, events) do
-    status = Map.get(record, :status, :unknown)
-
-    case status do
-      :completed ->
-        result = Map.get(record, :result)
-
-        if match?(%AgentToolResult{}, result) do
-          %AgentToolResult{
-            content: result.content,
-            details:
-              result.details
-              |> Map.put(:task_id, task_id)
-              |> Map.put(:events, Enum.take(events, -5))
-          }
-        else
-          %AgentToolResult{
-            content: [%TextContent{text: "Delegated run completed."}],
-            details: %{
-              task_id: task_id,
-              status: "completed",
-              result: result,
-              node: Map.get(record, :node, "local"),
-              events: Enum.take(events, -5)
-            }
-          }
-        end
-
-      :error ->
-        error = Map.get(record, :error)
-
-        %AgentToolResult{
-          content: [%TextContent{text: "Delegated run failed: #{format_error(error)}"}],
-          details: %{
-            task_id: task_id,
-            status: "error",
-            error: error,
-            node: Map.get(record, :node, "local"),
-            events: Enum.take(events, -5)
-          }
-        }
-
-      other ->
-        %AgentToolResult{
-          content: [%TextContent{text: "Delegated run status: #{other}"}],
-          details: %{
-            task_id: task_id,
-            status: to_string(other),
-            run_id: Map.get(record, :run_id),
-            agent_id: Map.get(record, :agent_id),
-            session_key: Map.get(record, :delegated_session_key),
-            node: Map.get(record, :node, "local"),
-            events: Enum.take(events, -5)
-          }
-        }
-    end
   end
 
   defp normalize_action(nil), do: "run"
