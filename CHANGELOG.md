@@ -211,6 +211,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Secret resolution fails closed: only a definite store miss continues to
+  external sources or the environment. Undecryptable, malformed or expired
+  records and store, master-key or lock failures return their error, and every
+  credential consumer (model providers including Vertex and Bedrock, web tools,
+  gateway SMS/voice/AI, Discord, XMTP, media tools, evals) stops instead of
+  using another credential, so an ambient token can no longer verify Twilio
+  webhooks.
 - Cron jobs created by an agent record the creating session's effective
   policy; runs intersect it with the live chat policy, group floor and
   triggering policy. The cron tool reaches only jobs its session owns,
