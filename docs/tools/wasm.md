@@ -47,6 +47,50 @@ Each module is discovered as:
 - `<name>.wasm`
 - Optional `<name>.capabilities.json`
 
+## Host Calls and Reserved Targets
+
+The runtime sends host calls to Lemon as `host_call` events with a `channel`:
+
+- `tool`: a guest `tool-invoke` call. The target comes from the tool's
+  author-declared `tool_invoke.aliases`. Lemon runs it only as a regular host
+  tool from the session's policy-authorized catalog.
+- `internal`: a secret lookup made by the runtime itself (credential injection,
+  `{{SECRET:name}}` placeholders, `secret-exists`). The event names the calling
+  tool in `caller`.
+
+Reserved targets are served only on the `internal` channel:
+
+- `__lemon.secret.exists`
+- `__lemon.secret.resolve`
+
+Any `__lemon*` target (case-insensitive, surrounding whitespace ignored) cannot
+be aliased. The runtime fails such a `tool-invoke` with
+`reserved host target cannot be aliased`, and Lemon refuses a reserved target on
+the `tool` channel with `reserved_target`. For `internal` calls, Lemon looks up
+`caller` among the discovered tools (`unknown_caller` otherwise) and checks the
+secret name against that tool's `secrets.allowed_names` (exact name or trailing
+`*` prefix) before touching the secret store, returning `secret_not_allowed`
+for any other name. A tool without a `secrets` capability can resolve nothing.
+
+Secret names and `secrets.allowed_names` patterns are never trimmed. An empty
+value, or one with leading or trailing whitespace, is non-canonical:
+
+- The runtime fails discovery of a tool whose capabilities declare such a pattern,
+  and Lemon drops such a tool from discovery with a
+  `non-canonical secrets.allowed_names` error.
+- At request time, the runtime refuses a non-canonical name or pattern, and Lemon
+  answers `invalid_secret_name` (padded name) or `secret_not_allowed` (padded
+  pattern).
+
+### Environment isolation
+
+The runtime process starts with every environment variable unset except
+`PATH`, `HOME`, `LANG`, `LC_*` and `TMPDIR`, so provider keys and bot tokens in
+Lemon's environment never reach it. Commands run through the `exec` capability
+start from an empty environment. They get only `PATH`, `LANG`/`LC_*`, `TMPDIR`
+and a sandbox `HOME` (a per-runtime temp directory), plus the env the tool
+passes, whose `{{SECRET:name}}` placeholders must pass `secrets.allowed_names`.
+
 ## Runtime Build
 
 The runtime and bundled tools require Rust 1.93 or newer. The runtime uses the

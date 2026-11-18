@@ -274,7 +274,9 @@ defmodule CodingAgent.Session.WasmBridge do
         signal = AbortSignal.new()
         request = Map.put(request, :signal, signal)
 
-        case start_host_worker(tool_name, params_json, tool, signal) do
+        channel = Map.get(context, :host_channel, :tool)
+
+        case start_host_worker(channel, tool_name, params_json, tool, signal) do
           {:ok, task} ->
             caller_ref = Process.monitor(elem(from, 0))
             owner_ref = Process.monitor(request.owner)
@@ -400,12 +402,12 @@ defmodule CodingAgent.Session.WasmBridge do
     Process.send_after(self(), {:wasm_host_check, ref}, delay)
   end
 
-  defp start_host_worker(tool_name, params_json, tool, signal) do
+  defp start_host_worker(channel, tool_name, params_json, tool, signal) do
     # Linked as well as supervised: abnormal Session death kills the worker;
     # normal shutdown explicitly cancels all requests in Session.terminate/2.
     LemonCore.TaskSupervisor.async(CodingAgent.TaskSupervisor, fn ->
       try do
-        case maybe_handle_reserved_host_target(tool_name, params_json) do
+        case handle_reserved_host_target(channel, tool_name, params_json) do
           :not_reserved -> execute_host_tool(tool, params_json, signal)
           result -> result
         end
@@ -461,40 +463,64 @@ defmodule CodingAgent.Session.WasmBridge do
     Process.cancel_timer(request.timer)
   end
 
-  @spec maybe_handle_reserved_host_target(String.t(), String.t()) ::
-          {:ok, String.t()} | {:error, term()} | :not_reserved
-  def maybe_handle_reserved_host_target(@secret_exists_target, params_json) do
-    params = decode_wasm_params(params_json)
+  # Reserved `__lemon.*` targets are served only on the runtime's internal
+  # channel, which names the calling WASM tool and carries its declared
+  # `secrets.allowed_names`; guest `tool-invoke` aliases arrive on `:tool`.
+  defp handle_reserved_host_target({:internal, _caller, allowed}, target, params_json)
+       when target in [@secret_exists_target, @secret_resolve_target] and is_list(allowed) do
+    with {:ok, secret_name} <- extract_secret_name(decode_wasm_params(params_json)),
+         :ok <- authorize_secret(secret_name, allowed) do
+      reserved_secret_call(target, secret_name)
+    end
+  end
 
-    case extract_secret_name(params) do
-      {:ok, secret_name} ->
-        exists? = LemonCore.Secrets.exists?(secret_name, prefer_env: false, env_fallback: true)
-        {:ok, Jason.encode!(%{"exists" => exists?})}
+  defp handle_reserved_host_target({:internal, _caller, _allowed}, _target, _params_json),
+    do: {:error, :invalid_internal_target}
+
+  defp handle_reserved_host_target(:tool, target, _params_json) do
+    if CodingAgent.Wasm.Protocol.reserved_host_target?(target),
+      do: {:error, :reserved_target},
+      else: :not_reserved
+  end
+
+  defp handle_reserved_host_target(_channel, _target, _params_json),
+    do: {:error, :invalid_host_channel}
+
+  defp reserved_secret_call(@secret_exists_target, secret_name) do
+    exists? = LemonCore.Secrets.exists?(secret_name, prefer_env: false, env_fallback: true)
+    {:ok, Jason.encode!(%{"exists" => exists?})}
+  end
+
+  defp reserved_secret_call(@secret_resolve_target, secret_name) do
+    case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: true) do
+      {:ok, value, source} ->
+        {:ok, Jason.encode!(%{"value" => value, "source" => to_string(source)})}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  def maybe_handle_reserved_host_target(@secret_resolve_target, params_json) do
-    params = decode_wasm_params(params_json)
-
-    case extract_secret_name(params) do
-      {:ok, secret_name} ->
-        case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: true) do
-          {:ok, value, source} ->
-            {:ok, Jason.encode!(%{"value" => value, "source" => to_string(source)})}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+  # Same matching as the runtime's `secrets.allowed_names`: exact name, or a
+  # trailing `*` prefix pattern.
+  defp authorize_secret(secret_name, allowed) do
+    if Enum.any?(allowed, &secret_pattern_match?(&1, secret_name)),
+      do: :ok,
+      else: {:error, :secret_not_allowed}
   end
 
-  def maybe_handle_reserved_host_target(_tool_name, _params_json), do: :not_reserved
+  # Non-canonical patterns (empty, padded) never match; they are also rejected
+  # at discovery.
+  defp secret_pattern_match?(pattern, name) do
+    if CodingAgent.Wasm.Protocol.canonical_secret_name?(pattern) do
+      case String.split_at(pattern, -1) do
+        {prefix, "*"} -> String.starts_with?(name, prefix)
+        _ -> pattern == name
+      end
+    else
+      false
+    end
+  end
 
   @doc """
   Resolve only from the session's frozen, policy-authorized runtime catalog.
@@ -550,14 +576,14 @@ defmodule CodingAgent.Session.WasmBridge do
 
   # ---- Private helpers ----
 
+  # Names are matched and resolved exactly as sent: never trimmed, and
+  # non-canonical (empty or padded) names are refused.
   defp extract_secret_name(params) when is_map(params) do
     value = params["name"] || params[:name]
 
-    if is_binary(value) and String.trim(value) != "" do
-      {:ok, String.trim(value)}
-    else
-      {:error, :invalid_secret_name}
-    end
+    if CodingAgent.Wasm.Protocol.canonical_secret_name?(value),
+      do: {:ok, value},
+      else: {:error, :invalid_secret_name}
   end
 
   defp extract_text_from_tool_result(content) when is_list(content) do

@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use protocol::{OutboundMessage, Request};
-use runtime::{Runtime, RuntimeDefaults};
+use runtime::{HostCallChannel, Runtime, RuntimeDefaults};
 
 const PROTOCOL_VERSION: u32 = 1;
 const HOST_CALL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -176,21 +176,29 @@ fn run() -> Result<()> {
                 let call_seq_for_host = call_seq.clone();
                 let request_id_for_host = id.clone();
 
-                let host_invoke = Arc::new(move |target: String, params: String| {
-                    let seq = call_seq_for_host.fetch_add(1, Ordering::Relaxed) + 1;
-                    let call_id = format!("host_call_{seq}");
+                let host_invoke = Arc::new(
+                    move |channel: HostCallChannel, target: String, params: String| {
+                        let seq = call_seq_for_host.fetch_add(1, Ordering::Relaxed) + 1;
+                        let call_id = format!("host_call_{seq}");
+                        let (channel, caller) = match channel {
+                            HostCallChannel::Tool => ("tool", None),
+                            HostCallChannel::Internal { caller } => ("internal", Some(caller)),
+                        };
 
-                    emit_message(&OutboundMessage::Event {
-                        event: "host_call".to_string(),
-                        request_id: request_id_for_host.clone(),
-                        call_id: call_id.clone(),
-                        tool: target,
-                        params_json: params,
-                    })
-                    .map_err(|err| format!("failed to emit host_call event: {err}"))?;
+                        emit_message(&OutboundMessage::Event {
+                            event: "host_call".to_string(),
+                            request_id: request_id_for_host.clone(),
+                            call_id: call_id.clone(),
+                            tool: target,
+                            params_json: params,
+                            channel: channel.to_string(),
+                            caller,
+                        })
+                        .map_err(|err| format!("failed to emit host_call event: {err}"))?;
 
-                    wait_for_host_call_result(&queue_for_host, &call_id)
-                });
+                        wait_for_host_call_result(&queue_for_host, &call_id)
+                    },
+                );
 
                 match runtime.invoke(&tool, &params_json, context_json, host_invoke) {
                     Ok(result) => emit_message(&OutboundMessage::response_ok(

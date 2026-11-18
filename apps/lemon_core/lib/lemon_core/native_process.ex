@@ -129,7 +129,7 @@ defmodule LemonCore.NativeProcess do
         {:env, env}, acc ->
           converted =
             Enum.map(env, fn {key, value} ->
-              {to_charlist(key), if(is_nil(value), do: false, else: to_charlist(value))}
+              {to_charlist(key), if(value in [nil, false], do: false, else: to_charlist(value))}
             end)
 
           [{:env, converted} | acc]

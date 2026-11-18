@@ -17,6 +17,28 @@ defmodule CodingAgent.Wasm.Protocol do
     |> then(&[&1, "\n"])
   end
 
+  @doc """
+  Whether `target` names a reserved `__lemon.*` host target. These are served
+  only on the runtime's internal channel, never through `tool-invoke` aliases.
+  Matching ignores case and surrounding whitespace so look-alikes fail closed.
+  """
+  @spec reserved_host_target?(String.t()) :: boolean()
+  def reserved_host_target?(target) when is_binary(target) do
+    target |> String.trim() |> String.downcase() |> String.starts_with?("__lemon")
+  end
+
+  @doc """
+  Whether `value` is a canonical secret name or `secrets.allowed_names`
+  pattern: a non-empty string without leading or trailing whitespace. Names
+  and patterns are never trimmed; non-canonical ones are rejected (the
+  runtime applies the same rule).
+  """
+  @spec canonical_secret_name?(term()) :: boolean()
+  def canonical_secret_name?(value) when is_binary(value),
+    do: value != "" and String.trim(value) == value
+
+  def canonical_secret_name?(_value), do: false
+
   @spec decode_line(String.t()) :: {:ok, map()} | {:error, term()}
   def decode_line(line) when is_binary(line) do
     case Jason.decode(line) do
