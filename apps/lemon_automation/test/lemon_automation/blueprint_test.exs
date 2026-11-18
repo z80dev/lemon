@@ -3,6 +3,85 @@ defmodule LemonAutomation.BlueprintTest do
 
   alias LemonAutomation.{Blueprint, CronManager, CronStore}
   alias LemonCore.ProfileStore
+  alias LemonSkills.Audit.State, as: SkillAuditState
+
+  # Activation persists load grants under the agent dir; keep them out of the
+  # real one.
+  setup do
+    agent_dir =
+      Path.join(System.tmp_dir!(), "blueprint-agent-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(agent_dir)
+    previous = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", agent_dir)
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("LEMON_AGENT_DIR", previous),
+        else: System.delete_env("LEMON_AGENT_DIR")
+
+      File.rm_rf(agent_dir)
+    end)
+
+    :ok
+  end
+
+  @tag :tmp_dir
+  test "confirmed activation grants the exact imported bundle so read_skill loads it", %{
+    tmp_dir: root
+  } do
+    profile_id = unique_id("load-profile")
+    profile_opts = profile_opts(root)
+    assert {:ok, profile} = ProfileStore.create(%{id: profile_id}, profile_opts)
+    bundle = write_bundle(root, unique_id("load-bundle"), unique_id("load-job"))
+    opts = [profile_opts: profile_opts]
+    workspace = profile["paths"]["workspace"]
+
+    assert {:ok, preview} = Blueprint.preview(bundle, profile_id, opts)
+
+    assert {:ok, activated} =
+             Blueprint.activate(bundle, profile_id, preview["confirmationDigest"], opts)
+
+    on_exit(fn -> _ = CronManager.remove(activated["automation"]["id"]) end)
+    [%{"bundleHash" => hash}] = activated["skills"]
+
+    assert %LemonAgent.Types.AgentToolResult{content: [%{text: text} | _]} =
+             LemonSkills.Tools.ReadSkill.execute(
+               "call-1",
+               %{"key" => "daily-note"},
+               nil,
+               nil,
+               workspace
+             )
+
+    assert text =~ "Summarize completed work from the current conversation"
+    assert {:ok, records} = SkillAuditState.read({:project, workspace})
+    assert SkillAuditState.grant_status(records, "daily-note", hash) == :pass
+  end
+
+  @tag :tmp_dir
+  test "an authorization failure rolls the skill activation back", %{tmp_dir: root} do
+    profile_id = unique_id("authz-profile")
+    profile_opts = profile_opts(root)
+    assert {:ok, profile} = ProfileStore.create(%{id: profile_id}, profile_opts)
+    bundle = write_bundle(root, unique_id("authz-bundle"), unique_id("authz-job"))
+    opts = [profile_opts: profile_opts, refresh_fun: fn _ -> :ok end]
+    workspace = profile["paths"]["workspace"]
+    config_path = LemonSkills.Config.project_config_file(workspace)
+    config_before = File.read(config_path)
+
+    assert {:ok, preview} = Blueprint.preview(bundle, profile_id, opts)
+
+    # A directory at the project audit-state path makes every grant write fail.
+    File.mkdir_p!(SkillAuditState.path({:project, workspace}))
+
+    assert {:error, {:skill_authorization_failed, _}} =
+             Blueprint.activate(bundle, profile_id, preview["confirmationDigest"], opts)
+
+    refute File.exists?(Path.join(profile["paths"]["skills"], "daily-note"))
+    assert File.read(config_path) == config_before
+    assert CronStore.get_job(preview["automation"]["id"]) == nil
+  end
 
   @tag :tmp_dir
   test "previews, confirms, enables, and replays one bundle without duplicates", %{tmp_dir: root} do

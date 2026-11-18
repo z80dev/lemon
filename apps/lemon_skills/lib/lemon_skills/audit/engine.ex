@@ -46,7 +46,8 @@ defmodule LemonSkills.Audit.Engine do
   alias LemonSkills.Entry
 
   @type verdict :: :pass | :warn | :block
-  @version 5
+  # 7: entry names are validated during scanning (`:invalid_name` blocks).
+  @version 7
 
   @doc "Version tag for cache invalidation when deterministic audit rules change."
   @spec version() :: pos_integer()
@@ -73,10 +74,10 @@ defmodule LemonSkills.Audit.Engine do
   end
 
   @doc """
-  Audit a skill `Entry` by reading its SKILL.md content.
+  Audit a skill `Entry` by scanning its whole bundle.
 
-  Returns `{verdict, findings}`.  When the SKILL.md cannot be read, returns
-  `{:warn, [finding]}` indicating the content could not be verified.
+  Returns `{verdict, findings}`. A bundle that cannot be enumerated blocks:
+  incomplete screening never counts as a pass.
   """
   @spec audit_entry(Entry.t()) :: {verdict(), [Finding.t()]}
   def audit_entry(%Entry{} = entry) do
@@ -84,39 +85,83 @@ defmodule LemonSkills.Audit.Engine do
   end
 
   @doc """
-  Audit all auditable text files in a skill bundle.
+  Audit every file of a skill bundle, as enumerated by `LemonSkills.Bundle.scan/1`.
+
+  Layout violations (hidden, out-of-layout, symlinked, special or oversized
+  entries) are blocking findings. A non-text `SKILL.md` blocks and a non-text
+  file under `scripts/` warns; both are still scanned byte-for-byte.
   """
   @spec audit_bundle(String.t()) :: {verdict(), [Finding.t()]}
   def audit_bundle(skill_dir) when is_binary(skill_dir) do
-    case Bundle.files(skill_dir) do
-      {:ok, files} ->
-        content =
-          files
-          |> Enum.filter(& &1.text?)
-          |> Enum.map_join("\n\n", fn file ->
-            case File.read(file.full_path) do
-              {:ok, body} -> "### #{file.path}\n\n#{body}"
-              {:error, _} -> ""
-            end
-          end)
-
-        if String.trim(content) == "" do
-          {:pass, []}
-        else
-          audit_content(content)
-        end
+    case Bundle.scan(skill_dir) do
+      {:ok, scan} ->
+        audit_scan(scan)
 
       {:error, reason} ->
         finding =
-          Finding.warn(
+          Finding.block(
             "unreadable_content",
-            "Could not read bundle for audit: #{inspect(reason)}. " <>
-              "Skill may be missing or permissions are incorrect."
+            "Could not read bundle for audit: #{inspect(reason)}"
           )
 
-        {:warn, [finding]}
+        {:block, [finding]}
     end
   end
+
+  @doc """
+  Audit an existing `LemonSkills.Bundle.scan/1` result. File bytes are re-read
+  and must still match the scanned digest; a changed file blocks.
+  """
+  @spec audit_scan(Bundle.scan()) :: {verdict(), [Finding.t()]}
+  def audit_scan(%{files: files, violations: violations}) do
+    layout_findings =
+      Enum.map(violations, fn violation ->
+        Finding.block("bundle_layout", Bundle.describe_violation(violation), violation.path)
+      end)
+
+    {sections, file_findings} =
+      Enum.reduce(files, {[], []}, fn file, {sections, findings} ->
+        case Bundle.read_verified(file) do
+          {:ok, body} ->
+            {[scan_section(file, body) | sections], findings ++ binary_findings(file)}
+
+          {:error, _reason} ->
+            finding =
+              Finding.block(
+                "bundle_changed",
+                "#{file.path}: file changed during audit",
+                file.path
+              )
+
+            {sections, findings ++ [finding]}
+        end
+      end)
+
+    content = sections |> Enum.reverse() |> Enum.reject(&(&1 == "")) |> Enum.join("\n\n")
+    {_verdict, content_findings} = audit_content(content)
+    findings = layout_findings ++ file_findings ++ content_findings
+
+    {overall_verdict(findings), findings}
+  end
+
+  # Text files and the instruction/executable groups are always scanned; binary
+  # assets are inventory only.
+  defp scan_section(%{text?: true} = file, body), do: "### #{file.path}\n\n#{body}"
+
+  defp scan_section(%{group: group} = file, body) when group in [:skill, :scripts],
+    do: "### #{file.path}\n\n#{body}"
+
+  defp scan_section(_file, _body), do: ""
+
+  defp binary_findings(%{text?: true}), do: []
+
+  defp binary_findings(%{group: :skill, path: path}),
+    do: [Finding.block("binary_content", "#{path} is not valid UTF-8 text", path)]
+
+  defp binary_findings(%{group: :scripts, path: path}),
+    do: [Finding.warn("binary_content", "#{path} is a non-text script", path)]
+
+  defp binary_findings(_file), do: []
 
   @doc """
   Apply audit results to an `Entry`, updating `audit_status` and `audit_findings`.

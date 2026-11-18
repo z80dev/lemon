@@ -34,7 +34,7 @@ defmodule LemonSkills.Audit.SkillLint do
   #     results = LemonSkills.Audit.SkillLint.lint_dir("/path/to/skills")
   #     Enum.filter(results, &(!&1.valid?))  # failures only
 
-  alias LemonSkills.{Manifest, PathBoundary}
+  alias LemonSkills.{Bundle, Manifest}
   alias LemonSkills.Audit.Engine, as: AuditEngine
 
   @type severity :: :error | :warn
@@ -45,7 +45,7 @@ defmodule LemonSkills.Audit.SkillLint do
           issues: [issue()],
           valid?: boolean()
         }
-  @version 2
+  @version 3
 
   @doc "Version tag for cache invalidation when lint rules change."
   @spec version() :: pos_integer()
@@ -103,14 +103,15 @@ defmodule LemonSkills.Audit.SkillLint do
   @spec lint_skill(String.t(), keyword()) :: lint_result()
   def lint_skill(skill_path, opts) when is_binary(skill_path) and is_list(opts) do
     key = Path.basename(skill_path)
-    skill_file = Path.join(skill_path, "SKILL.md")
     include_audit = Keyword.get(opts, :include_audit, true)
 
     issues =
-      if File.exists?(skill_file) do
-        lint_skill_file(skill_path, skill_file, include_audit)
-      else
-        [error(:missing_skill_file, "SKILL.md not found in skill directory")]
+      case File.lstat(Path.join(skill_path, "SKILL.md")) do
+        {:error, :enoent} ->
+          [error(:missing_skill_file, "SKILL.md not found in skill directory")]
+
+        _ ->
+          lint_skill_file(skill_path, include_audit)
       end
 
     %{
@@ -125,8 +126,8 @@ defmodule LemonSkills.Audit.SkillLint do
   # Internal lint steps
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp lint_skill_file(skill_path, skill_file, include_audit) do
-    case File.read(skill_file) do
+  defp lint_skill_file(skill_path, include_audit) do
+    case Bundle.read_file(skill_path, "SKILL.md") do
       {:error, reason} ->
         [error(:skill_file_unreadable, "Could not read SKILL.md: #{reason}")]
 
@@ -167,24 +168,28 @@ defmodule LemonSkills.Audit.SkillLint do
             []
 
           rel_path ->
-            full_path = Path.join(skill_path, rel_path)
-            expanded = Path.expand(full_path)
-            expanded_skill = Path.expand(skill_path)
+            case Bundle.resolve_file(skill_path, rel_path) do
+              {:ok, _path, _stat} ->
+                []
 
-            cond do
-              not PathBoundary.within?(expanded_skill, expanded) ->
+              {:error, :enoent} ->
+                [error(:reference_missing, "Referenced file does not exist: #{rel_path}")]
+
+              {:error, reason} when reason in [:invalid_path, :hidden, :outside_layout] ->
                 [
                   error(
                     :reference_path_traversal,
-                    "Reference path escapes skill directory: #{rel_path}"
+                    "Reference path escapes the skill bundle layout: #{rel_path}"
                   )
                 ]
 
-              not File.exists?(expanded) ->
-                [error(:reference_missing, "Referenced file does not exist: #{rel_path}")]
-
-              true ->
-                []
+              {:error, reason} ->
+                [
+                  error(
+                    :reference_unsafe,
+                    "Referenced file is not a readable bundle file (#{reason}): #{rel_path}"
+                  )
+                ]
             end
         end
       end)

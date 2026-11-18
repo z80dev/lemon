@@ -267,12 +267,9 @@ defmodule LemonSkills.InstallerTest do
     } do
       lemon_dir = Path.join([tmp_dir, ".lemon"])
       File.mkdir_p!(Path.join(lemon_dir, "skill"))
-      lockfile_path = Path.join(lemon_dir, "skills.lock.json")
-      # Pre-create read-only lockfile so writes fail
-      File.write!(lockfile_path, ~s({"version": 1, "skills": {}}))
-      File.chmod!(lockfile_path, 0o444)
-
-      on_exit(fn -> File.chmod(lockfile_path, 0o644) end)
+      # A directory at the lockfile path makes every lockfile write fail.
+      lockfile_path = LemonSkills.Lockfile.path({:project, tmp_dir})
+      File.mkdir_p!(lockfile_path)
 
       result = Installer.install(skill_dir, global: false, cwd: tmp_dir, approve: true)
 
@@ -317,9 +314,10 @@ defmodule LemonSkills.InstallerTest do
       :ok = LemonSkills.Lockfile.put(scope, LemonSkills.Entry.to_lockfile_record(entry))
       :ok = LemonSkills.Registry.register(entry)
 
-      lockfile_path = Path.join(lemon_dir, "skills.lock.json")
-      File.chmod!(lockfile_path, 0o444)
-      on_exit(fn -> File.chmod(lockfile_path, 0o644) end)
+      # A directory at the lockfile path makes every lockfile write fail.
+      lockfile_path = LemonSkills.Lockfile.path(scope)
+      File.rm!(lockfile_path)
+      File.mkdir!(lockfile_path)
 
       assert {:error, _} = Installer.update(skill_name, cwd: tmp_dir, approve: true)
 

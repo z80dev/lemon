@@ -428,6 +428,9 @@ defmodule LemonControlPlane.Methods.KnowledgeMethodsTest do
     dir = Path.join([agent_dir, "skill", key])
     File.mkdir_p!(dir)
     File.write!(Path.join(dir, "SKILL.md"), content)
+    # Readiness requires an operator-side grant for these exact bytes.
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(dir)
+    :ok = LemonSkills.Audit.State.authorize(:global, key, hash, :pass)
   end
 
   defp fixture_script do

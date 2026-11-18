@@ -114,6 +114,12 @@ A skill is a directory containing:
 - Optional supporting files under `references/`, `templates/`, `scripts/` and
   `assets/`, which `read_skill` or `read` can load on demand
 
+Nothing else belongs in a bundle. Hidden entries (names starting with `.`),
+files or directories outside that layout, symlinks, FIFOs, devices, files over
+1 MiB, more than 256 files or more than 8 MiB in total are layout violations:
+installs and `skill_manage` writes are blocked with a `bundle_layout` finding,
+and `read_skill`/`skill://` refuse to read such entries.
+
 ### Skill frontmatter (manifest v2)
 
 ```yaml
@@ -289,9 +295,29 @@ Accepted `<source>` forms:
 | `hermes:optional/<category>/<skill>`, `hermes:bundled/<category>/<skill>` | Official Hermes catalog (`lemon skill hermes [query]` lists IDs; supports `--category=`, `--collection=`, `--details`) |
 | `<namespace>/<category>/<name>` (for example `official/devops/k8s-rollout`) | Skill registry (`https://skills.lemon.agent` by default; `config :lemon_skills, :registry_url`) |
 
-Installs are staged, audited, then activated, and provenance is recorded in
-`~/.lemon/agent/skills.lock.json` (global) or `<cwd>/.lemon/skills.lock.json`
-(project).
+Installs are fetched into a private staging directory
+(`~/.lemon/agent/skill_staging/`), outside every skill root, so a fetched bundle
+is never discoverable while it waits for its audit or approval. The staged
+bundle is scanned once; that scan is the audited file set, and activation copies
+exactly those files (each re-checked against its audited digest) into place,
+then re-scans the live directory and rolls back if it differs. Layout violations
+block the install and cannot be overridden. Git sources are cloned with
+`core.symlinks=false`. Interrupted-install leftovers are removed at startup.
+Provenance is recorded in `~/.lemon/agent/skills.lock.json` (global) or
+`<cwd>/.lemon/skills.lock.json` (project). Lockfiles are descriptive: a project
+lockfile is repository content and never authorizes loading or skips an audit.
+Lockfile and audit-state writes refuse symlinked directories between the
+project or agent directory and the file, refuse a lockfile that is a symlink,
+special file or hard link, and replace the file atomically (mode `0600`)
+without following the destination.
+
+Installs, updates, removals, builtin seeding and `skill_manage` writes never
+follow a symlinked skill root. Global roots are anchored at the agent directory,
+which must be a real directory (not a symlink) owned by you; `<agent_dir>/skill`
+must be a real directory too, and other global roots (`~/.claude/skills`, ...)
+are read but never mutated. In a project, `.lemon`, `.lemon/skill` (and the
+dot-folders of ancestor skill roots) must be real directories. A skill directory
+that is itself a link is unlinked, not followed, on removal.
 
 ### Trust and approval
 
@@ -303,6 +329,53 @@ one requires approval through the normal execution-approval flow. An audit `:war
 verdict needs an additional explicit approval; a `:block` verdict is refused
 unless you approve a separate, clearly labelled security override for that exact
 bundle.
+
+### Load authorization
+
+`read_skill` and `skill://` load a skill only while an operator-side
+authorization matches its exact current bytes (the bundle hash over `SKILL.md`
+and every supported file):
+
+- a trusted audit `:pass` of those bytes (installs, updates, `skill_manage` and
+  `lemon skill audit` record it),
+- an approved `:warn` or an approved block override for exactly that bundle, or
+- a builtin skill byte-identical to the bundle shipped with this release.
+
+Skills dropped into a skill root by hand, cloned with a repository, recorded as
+`pending` (Hermes imports, migrated directories) or changed in any file since
+their authorization show as `unaudited` in `lemon skill browse --all` and are
+refused. Authorize the current bytes with:
+
+```bash
+lemon skill audit <skill-key>             # authorizes a :pass verdict
+lemon skill audit <skill-key> --approve   # also accepts :warn findings for these exact bytes
+```
+
+A `:block` verdict is never authorized by `lemon skill audit`; blocked content
+can only be activated through an install or update with the exact-bundle
+security override. Authorizations are stored operator-side (see
+[Quality Checks](#quality-checks)), never in the repository.
+
+**Upgrading.** This release changes the bundle hash format, so earlier audits
+and approvals no longer match any bundle. When the registry loads, it checks
+skills installed into the agent directory's own skill root
+(`~/.lemon/agent/skill/`) whose global lockfile records a completed install
+(`pass`, `warn` or `overridden`) with a pre-upgrade bundle hash that still
+matches the skill's current bytes. Each such skill gets a one-time background
+audit, the same static audit an install runs (manifest lint and the
+deterministic engine, never the LLM reviewer). A `:pass` authorizes those
+exact bytes, just as an install would, and the skill becomes loadable without
+any action. A `:warn` or `:block` verdict authorizes nothing: run
+`lemon skill audit <key> --approve` to accept the warnings, or reinstall with
+the security override. Nothing else is audited automatically, and needs
+`lemon skill audit <key>`:
+
+- skills edited after install, before or after the upgrade
+- skills installed after the upgrade
+- pending records (Hermes imports, migrated directories)
+- records without a bundle hash
+- other global roots such as `~/.claude/skills`
+- every project or repository skill
 
 ---
 
@@ -341,15 +414,23 @@ can be loaded on demand without injecting every full `SKILL.md` body up front.
 
 The coding `read` tool also accepts `skill://<skill-key>` for the raw `SKILL.md`
 and `skill://<skill-key>/references/example.md` for a supporting file. These use
-the same scoped registry and remain untrusted, read-only references. Use normal
+the same scoped registry and remain untrusted, read-only references. `read_skill`
+and `skill://` share one resolver: only layout paths, no hidden segments, every
+path segment checked without following symlinks, regular files of at most
+1 MiB, and disabled or audit-blocked skills are refused (a skill that only lacks
+requirements stays readable). Use normal
 `offset` and `limit` parameters for a long file; use `read_skill` when you want
 the skill's status, manifest, or a selected heading.
 
 Agents can also maintain procedural memory with `skill_manage`. Use project
 scope for repository-specific workflows and global scope for reusable workflows.
 The tool can create, edit, patch, delete, and maintain supporting files under
-`references/`, `templates/`, `scripts/`, and `assets/`; each write is audited
-before the registry is refreshed. Use `action="report"` to inspect usage and
+`references/`, `templates/`, `scripts/`, and `assets/`. Each content change is
+built in a private staging copy outside every skill root and audited there;
+only the audited file set is activated, so a blocked change is never visible
+to readers, and a skill holding a symlink, hard link or other layout violation
+cannot be edited. A `warn` verdict is activated without a load grant. Use
+`action="report"` to inspect usage and
 stale/archive candidates before pinning, archiving, restoring, or deleting
 agent-authored skills.
 
@@ -395,9 +476,15 @@ The audit engine (`LemonSkills.Audit.Engine`) runs deterministic security checks
 - symlink / escape patterns
 
 Audits are bundle-aware. Lemon hashes `SKILL.md` plus supported files under `references/`,
-`templates/`, `scripts/`, and `assets/`, rejects symlinked bundle entries, stores detailed
-results in `skills.audit.json`, and automatically rescans when the bundle or audit fingerprint
-changes.
+`templates/`, `scripts/`, and `assets/`; every layout violation (hidden,
+out-of-layout, symlinked or special entry) is a blocking `bundle_layout` finding,
+a non-text `SKILL.md` blocks, and a non-text script warns. Entry names with
+control or format characters (including tabs and newlines), `\`, `:` or invalid
+UTF-8 are blocking violations too, and the bundle hash is a length-delimited,
+versioned encoding, so no file name can make two different bundles hash alike.
+Detailed results, including the exact audited file list, are stored in
+`skills.audit.json`, and Lemon automatically rescans when the bundle or audit
+fingerprint changes.
 
 If configured, Lemon also runs `LemonSkills.Audit.LlmReviewer` to classify higher-level suspicious or malicious intent across the bundle payload.
 
@@ -420,10 +507,14 @@ config :lemon_skills, :audit_llm,
 If the LLM review is enabled but cannot complete (unknown model, invalid reply),
 the audit records a `:warn` finding instead of silently passing.
 
-Audit state files:
+Audit state files (verdicts and load authorizations) are operator-side, under
+the agent directory, for project skills too:
 
 - global: `~/.lemon/agent/skills.audit.json`
-- project: `<cwd>/.lemon/skills.audit.json`
+- project: `~/.lemon/agent/skill_audits/project-<sha256 of the project real path>.json`
+
+A repository's own `.lemon/skills.audit.json` is ignored: repository content can
+never supply a cached verdict or an authorization.
 
 To lint skill bundles for manifest compliance and audit cleanliness (for example
 before publishing), run `mix lemon.skill.lint [PATH ...] [--strict] [--json]` in a
@@ -509,6 +600,12 @@ prompt text. If the plan is correct, send its exact `confirmationDigest`:
 lemon blueprints activate daily-note --profile operator \
   --confirm <digest-from-preview>
 ```
+
+Confirmed activation records a project-scope load authorization for each
+imported skill's exact, statically audited bundle hash, so the skill loads
+through `read_skill` right away. If that authorization cannot be recorded, the
+activation is rolled back (copied skills, enablement and any grants it added).
+Editing an imported skill changes its hash and needs a new audit or approval.
 
 Or through JSON-RPC:
 
@@ -606,8 +703,11 @@ skips the confirmation on `delete`.
 
 > **Note:** Synthesized drafts require human review before promotion. The audit
 > engine runs automatically during generation. Drafts with `:block` findings are
-> deleted immediately, and drafts with `:warn` findings are kept but require
-> approval on promotion.
+> deleted immediately. `publish` stages and freshly audits the draft, then
+> always asks for a `skills.promote` approval naming the exact audited bundle
+> hash and verdict (a blocked verdict needs the exact-bundle security override).
+> Draft metadata, including legacy in-bundle `.draft_meta.json` files, never
+> pre-approves a promotion; only its descriptive fields are kept.
 
 You can also turn bounded local or remote sources into one memory note and one
 skill draft with [`lemon learn`](learn-from-sources.md).
@@ -688,13 +788,13 @@ the curator summary and persisted report explain why.
 Project skills take precedence over global skills with the same key.
 
 State files sit beside `skills.json` in `~/.lemon/agent/` (global) or
-`<cwd>/.lemon/` (project):
+`<cwd>/.lemon/` (project); audit state is always under `~/.lemon/agent/`:
 
 | File | Contents |
 |---|---|
 | `skills.json` | Per-scope skill settings: `disabled` list, per-skill config, `learning_nudge` |
-| `skills.lock.json` | Install provenance: source, trust level, content/bundle hashes, audit status |
-| `skills.audit.json` | Detailed audit results |
+| `skills.lock.json` | Install provenance (descriptive): source, trust level, content/bundle hashes, audit status |
+| `skills.audit.json` | Detailed audit results and load authorizations (global; project state lives in `~/.lemon/agent/skill_audits/`) |
 | `skills.usage.json` | Load/write counters and lifecycle state |
 | `skills.curator.json` | Curator pause state and last run |
 

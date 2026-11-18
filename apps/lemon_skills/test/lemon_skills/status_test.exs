@@ -100,7 +100,7 @@ defmodule LemonSkills.StatusTest do
     end
 
     test "returns active status when entry is ready", %{tmp_dir: tmp_dir} do
-      entry = %Entry{key: "simple-skill", path: tmp_dir, enabled: true}
+      entry = %Entry{key: "simple-skill", path: tmp_dir, enabled: true, authorized_hash: "h"}
 
       result = Status.check_entry(entry, cwd: tmp_dir)
       assert result.activation_state == :active
@@ -109,12 +109,22 @@ defmodule LemonSkills.StatusTest do
       assert result.disabled == false
     end
 
+    test "an entry without an authorization for its bundle is unaudited", %{tmp_dir: tmp_dir} do
+      entry = %Entry{key: "unrecorded-skill", path: tmp_dir, enabled: true}
+
+      result = Status.check_entry(entry, cwd: tmp_dir)
+      assert result.activation_state == :unaudited
+      assert result.ready == false
+      refute Status.loadable?(entry, cwd: tmp_dir)
+    end
+
     test "keeps an explicitly overridden blocked bundle active", %{tmp_dir: tmp_dir} do
       entry = %Entry{
         key: "overridden-skill",
         path: tmp_dir,
         enabled: true,
         audit_status: :overridden,
+        authorized_hash: "h",
         audit_findings: ["[block] remote_exec: remote execution"]
       }
 
@@ -143,6 +153,7 @@ defmodule LemonSkills.StatusTest do
         key: "needs-bin",
         path: tmp_dir,
         enabled: true,
+        authorized_hash: "h",
         manifest: %{"requires" => %{"bins" => [missing_bin]}}
       }
 

@@ -8,9 +8,12 @@ defmodule LemonSkills.Synthesis.DraftStore do
   # directory with:
   #
   #     skill_drafts/
-  #     └── synth-deploy-to-k8s/
-  #         ├── SKILL.md            # generated skill content
-  #         └── .draft_meta.json    # synthesis provenance (source_doc_id, timestamps)
+  #     ├── synth-deploy-to-k8s/
+  #     │   └── SKILL.md                      # generated skill content
+  #     └── .synth-deploy-to-k8s.draft_meta.json  # synthesis provenance
+  #
+  # The metadata file sits beside the draft bundle, never inside it: a bundle
+  # holds only auditable skill layout entries (see `LemonSkills.Bundle`).
   #
   # Usage
   #
@@ -31,7 +34,11 @@ defmodule LemonSkills.Synthesis.DraftStore do
   alias LemonSkills.Audit.State
 
   @skill_filename "SKILL.md"
-  @meta_filename ".draft_meta.json"
+  @legacy_meta_filename ".draft_meta.json"
+
+  # Metadata fields a legacy in-bundle file may carry over; audit verdicts and
+  # approval flags are never taken from bundle content.
+  @descriptive_meta_keys ~w(key name created_at status source_doc_id source_digest source_provenance source_text_redacted)
 
   @type draft_info :: %{
           key: String.t(),
@@ -175,6 +182,7 @@ defmodule LemonSkills.Synthesis.DraftStore do
 
     case File.rm_rf(dir) do
       {:ok, _} ->
+        _ = File.rm(meta_path(dir))
         State.delete(scope(opts), :draft, key)
         :ok
 
@@ -186,15 +194,17 @@ defmodule LemonSkills.Synthesis.DraftStore do
   @doc """
   Promote a draft to an installed skill.
 
-  Calls `LemonSkills.Installer.install/2` with the draft directory path.
-  On success, deletes the draft.
+  Calls `LemonSkills.Installer.promote_draft/2` with the draft directory: the
+  draft is staged, freshly audited, and activated only after an explicit
+  approval bound to that audited bundle hash. Draft metadata never approves a
+  promotion. On success, deletes the draft.
 
   ## Options
 
   - `:global` — install globally (default: `true`)
   - `:cwd` — project directory for project-scoped install
   - `:force` — overwrite existing installed skill (default: `false`)
-  - `:approve` — pre-approve the install (default: `true` since we reviewed)
+  - `:session_key`, `:agent_id`, `:run_id` — approval routing context
   """
   @spec promote(String.t(), keyword()) ::
           {:ok, LemonSkills.Entry.t()} | {:error, term()}
@@ -204,25 +214,31 @@ defmodule LemonSkills.Synthesis.DraftStore do
     unless File.dir?(dir) do
       {:error, "draft '#{key}' not found"}
     else
-      meta = read_meta(dir)
-      approve_default = not truthy?(meta["approval_required"])
+      install_opts = Keyword.put(opts, :force, Keyword.get(opts, :force, false))
 
-      install_opts =
-        opts
-        |> Keyword.put(:approve, Keyword.get(opts, :approve, approve_default))
-        |> Keyword.put(:force, Keyword.get(opts, :force, false))
+      with :ok <- migrate_legacy_meta(dir) do
+        case Installer.promote_draft(dir, install_opts) do
+          {:ok, entry} ->
+            # Remove the draft after successful promotion
+            File.rm_rf(dir)
+            _ = File.rm(meta_path(dir))
+            State.delete(scope(opts), :draft, key)
+            {:ok, entry}
 
-      case Installer.install(dir, install_opts) do
-        {:ok, entry} ->
-          # Remove the draft after successful promotion
-          File.rm_rf(dir)
-          State.delete(scope(opts), :draft, key)
-          {:ok, entry}
-
-        {:error, reason} ->
-          {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
+        end
       end
     end
+  end
+
+  @doc """
+  Return the metadata file path for a draft directory. It sits beside the
+  draft bundle so the bundle holds only auditable skill files.
+  """
+  @spec meta_path(String.t()) :: String.t()
+  def meta_path(dir) do
+    Path.join(Path.dirname(dir), ".#{Path.basename(dir)}.draft_meta.json")
   end
 
   @doc """
@@ -328,25 +344,48 @@ defmodule LemonSkills.Synthesis.DraftStore do
     }
   end
 
+  # Drafts written before the metadata moved beside the bundle keep a legacy
+  # in-bundle file. It lives inside bundle content, so only its descriptive
+  # fields are read, and they are moved out on the next write or promotion.
   defp read_meta(dir) do
-    meta_file = Path.join(dir, @meta_filename)
+    case read_meta_file(meta_path(dir)) do
+      :missing -> dir |> legacy_meta_path() |> read_meta_file() |> legacy_descriptive()
+      meta -> meta
+    end
+  end
 
-    case File.read(meta_file) do
+  defp read_meta_file(path) do
+    case File.read(path) do
       {:ok, json} ->
         case Jason.decode(json) do
-          {:ok, map} -> map
+          {:ok, map} when is_map(map) -> map
           _ -> %{}
         end
 
       _ ->
-        %{}
+        :missing
     end
+  end
+
+  defp legacy_meta_path(dir), do: Path.join(dir, @legacy_meta_filename)
+
+  defp legacy_descriptive(:missing), do: %{}
+  defp legacy_descriptive(meta), do: Map.take(meta, @descriptive_meta_keys)
+
+  defp migrate_legacy_meta(dir) do
+    if File.exists?(legacy_meta_path(dir)), do: write_meta(dir, read_meta(dir)), else: :ok
   end
 
   defp write_meta(dir, meta) do
     case Jason.encode(meta, pretty: true) do
       {:ok, json} ->
-        File.write(Path.join(dir, @meta_filename), json)
+        with :ok <- File.write(meta_path(dir), json) do
+          case File.rm(Path.join(dir, @legacy_meta_filename)) do
+            :ok -> :ok
+            {:error, :enoent} -> :ok
+            {:error, reason} -> {:error, reason}
+          end
+        end
 
       {:error, reason} ->
         {:error, reason}

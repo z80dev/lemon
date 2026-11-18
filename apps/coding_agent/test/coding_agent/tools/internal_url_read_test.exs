@@ -18,6 +18,8 @@ defmodule CodingAgent.Tools.InternalUrlReadTest do
     )
 
     File.write!(Path.join([root, "references", "check.txt"]), "first\nreceipt\nlast\n")
+    isolate_agent_dir!(cwd)
+    authorize_skill!(root, {:project, cwd})
     LemonSkills.refresh(cwd: cwd)
 
     opts = [acp_client_fs_read_text_file: true]
@@ -98,11 +100,14 @@ defmodule CodingAgent.Tools.InternalUrlReadTest do
     root = Path.join([cwd, ".claude", "skills", key])
     File.mkdir_p!(root)
     File.write!(Path.join(root, "SKILL.md"), "---\nname: Bash URI\ndescription: d\n---\nbody\n")
-    File.write!(Path.join(root, "data.txt"), "skill data\n")
+    File.mkdir_p!(Path.join(root, "references"))
+    File.write!(Path.join([root, "references", "data.txt"]), "skill data\n")
+    isolate_agent_dir!(cwd)
+    authorize_skill!(root, {:project, cwd})
     LemonSkills.refresh(cwd: cwd)
 
     command =
-      "wc -l < #{artifact}; cat \"skill://#{key}/data.txt\"; " <>
+      "wc -l < #{artifact}; cat \"skill://#{key}/references/data.txt\"; " <>
         "echo https://example.com/artifact://x 'see #{artifact} later'"
 
     assert %AgentToolResult{is_error: false, content: content} =
@@ -130,5 +135,21 @@ defmodule CodingAgent.Tools.InternalUrlReadTest do
       assert message =~ reference
       refute File.exists?(marker)
     end
+  end
+
+  defp isolate_agent_dir!(dir) do
+    previous = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", Path.join(dir, "agent"))
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("LEMON_AGENT_DIR", previous),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+  end
+
+  defp authorize_skill!(dir, scope) do
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(dir)
+    :ok = LemonSkills.Audit.State.authorize(scope, Path.basename(dir), hash, :pass)
   end
 end

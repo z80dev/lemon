@@ -25,7 +25,7 @@ defmodule LemonSkills.Tools.ReadSkill do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
-  alias LemonSkills.{Bundle, Registry, Entry, Manifest, PathBoundary, SkillView}
+  alias LemonSkills.{Bundle, Registry, Entry, Manifest, SkillView, Status}
 
   @doc """
   Returns the ReadSkill tool definition.
@@ -121,8 +121,9 @@ defmodule LemonSkills.Tools.ReadSkill do
   - `"view"` (default `"full"`) - `"full"`, `"summary"`, `"section"`, or `"file"`;
     unknown values fall back to `"full"`
   - `"section"` (optional) - heading name for `view: "section"`
-  - `"path"` (optional) - relative file path for `view: "file"`; must resolve
-    within the skill directory
+  - `"path"` (optional) - bundle-relative file path for `view: "file"`; read
+    through `LemonSkills.Bundle.read_file/2` (layout-only, no hidden segments,
+    no symlinks or special files, byte-capped)
   - `"include_status"` (default `false`) - append a requirements-check section
   - `"include_manifest"` (default `false`) - append parsed manifest fields
   - `"max_chars"` (optional) - truncate body content to at most this many chars
@@ -166,9 +167,12 @@ defmodule LemonSkills.Tools.ReadSkill do
     case Registry.get(key, opts) do
       {:ok, entry} ->
         result =
-          entry
-          |> build_result(view_opts, opts)
-          |> ToolResultTrust.skill(entry, verified_builtin?(entry))
+          if Status.loadable?(entry, opts) do
+            build_result(entry, view_opts, opts)
+          else
+            build_unavailable_result(entry)
+          end
+          |> ToolResultTrust.skill(entry, LemonSkills.Sources.Builtin.verified_install?(entry))
 
         emit_skill_load(entry, view_opts, tool_call_id, cwd, telemetry_context, :ok)
         result
@@ -201,17 +205,22 @@ defmodule LemonSkills.Tools.ReadSkill do
         parts
       end
 
-    parts = parts ++ build_content_section(entry, view_opts)
+    {content_parts, error} = build_content_section(entry, view_opts)
+    text = Enum.join(parts ++ content_parts, "\n")
+    details = %{key: entry.key, name: entry.name, path: entry.path}
+    details = if error, do: Map.put(details, :error, error), else: details
 
-    text = Enum.join(parts, "\n")
+    %AgentToolResult{content: [%TextContent{text: text}], details: details}
+  end
+
+  defp build_unavailable_result(%Entry{} = entry) do
+    text =
+      "Skill '#{entry.key}' is disabled, blocked by its security audit, or not yet " <>
+        "audited or approved for its current content; its content is not available."
 
     %AgentToolResult{
       content: [%TextContent{text: text}],
-      details: %{
-        key: entry.key,
-        name: entry.name,
-        path: entry.path
-      }
+      details: %{key: entry.key, name: entry.name, path: entry.path, error: "unavailable"}
     }
   end
 
@@ -288,7 +297,7 @@ defmodule LemonSkills.Tools.ReadSkill do
     end
   end
 
-  defp build_content_section(_entry, %{view: "summary"}), do: []
+  defp build_content_section(_entry, %{view: "summary"}), do: {[], nil}
 
   defp build_content_section(entry, %{view: "full", max_chars: max_chars}) do
     content_text =
@@ -297,7 +306,7 @@ defmodule LemonSkills.Tools.ReadSkill do
         {:error, _} -> "(Content not available)"
       end
 
-    ["## Content", "", content_text]
+    {["## Content", "", content_text], nil}
   end
 
   defp build_content_section(entry, %{
@@ -315,12 +324,18 @@ defmodule LemonSkills.Tools.ReadSkill do
           "(Content not available)"
       end
 
-    ["## Section: #{section_name || "(none)"}", "", content_text]
+    {["## Section: #{section_name || "(none)"}", "", content_text], nil}
   end
 
   defp build_content_section(entry, %{view: "file", path: file_path, max_chars: max_chars}) do
-    content_text = load_referenced_file(entry, file_path) |> maybe_truncate(max_chars)
-    ["## File: #{file_path || "(none)"}", "", content_text]
+    case load_referenced_file(entry, file_path) do
+      {:ok, content} ->
+        {["## File: #{file_path}", "", maybe_truncate(content, max_chars)], nil}
+
+      {:error, message} ->
+        {["## File: #{if is_binary(file_path), do: file_path, else: "(none)"}", "", message],
+         message}
+    end
   end
 
   defp build_content_section(entry, view_opts) do
@@ -361,25 +376,29 @@ defmodule LemonSkills.Tools.ReadSkill do
   end
 
   defp load_referenced_file(_entry, nil) do
-    "No path specified. Use the 'path' parameter to specify a file path relative to the skill directory."
+    {:error,
+     "No path specified. Use the 'path' parameter to specify a file path relative to the skill directory."}
   end
 
-  defp load_referenced_file(%Entry{path: skill_path}, rel_path) do
-    full_path = Path.join(skill_path, rel_path)
-
-    # Safety: ensure the resolved path is still under the skill directory
-    expanded = Path.expand(full_path)
-    expanded_skill = Path.expand(skill_path)
-
-    if PathBoundary.within?(expanded_skill, expanded) do
-      case File.read(expanded) do
-        {:ok, content} -> content
-        {:error, reason} -> "Could not read '#{rel_path}': #{:file.format_error(reason)}"
-      end
-    else
-      "Path '#{rel_path}' is outside the skill directory."
+  defp load_referenced_file(%Entry{path: skill_path}, rel_path) when is_binary(rel_path) do
+    case Bundle.read_file(skill_path, rel_path) do
+      {:ok, content} -> {:ok, content}
+      {:error, reason} -> {:error, "Could not read '#{rel_path}': #{read_error(reason)}"}
     end
   end
+
+  defp load_referenced_file(_entry, _rel_path),
+    do: {:error, "The 'path' parameter must be a string."}
+
+  defp read_error(:symlink), do: "symlinks beneath a skill bundle are not allowed"
+  defp read_error(:not_regular), do: "not a regular file"
+  defp read_error(:enoent), do: "file not found"
+  defp read_error(:too_large), do: "file exceeds #{Bundle.max_file_bytes()} bytes"
+  defp read_error(:hidden), do: "hidden paths are not part of a skill bundle"
+  defp read_error(:outside_layout), do: "path is outside the skill bundle layout"
+  defp read_error(:invalid_path), do: "path must be a relative bundle path without traversal"
+  defp read_error(:changed), do: "file changed while it was read"
+  defp read_error(_reason), do: "file unavailable"
 
   defp maybe_truncate(content, nil), do: content
 
@@ -432,31 +451,6 @@ defmodule LemonSkills.Tools.ReadSkill do
   defp format_source(:project), do: "Project"
   defp format_source(url) when is_binary(url), do: url
   defp format_source(other), do: inspect(other)
-
-  # Provenance is user-editable lockfile data, so builtin fields alone are not
-  # an instruction-trust attestation. The installed bundle must still be byte-
-  # identical to the corresponding bundle shipped in this Lemon release.
-  defp verified_builtin?(%Entry{
-         source: :global,
-         source_kind: :builtin,
-         trust_level: :builtin,
-         audit_status: audit_status,
-         key: key,
-         path: installed_path
-       })
-       when audit_status not in [:warn, :block, :overridden] do
-    with priv_dir when is_list(priv_dir) <- :code.priv_dir(:lemon_skills),
-         canonical_path <- Path.join([List.to_string(priv_dir), "builtin_skills", key]),
-         true <- File.dir?(canonical_path),
-         {:ok, canonical_hash} <- Bundle.compute_hash(canonical_path),
-         {:ok, ^canonical_hash} <- Bundle.compute_hash(installed_path) do
-      true
-    else
-      _ -> false
-    end
-  end
-
-  defp verified_builtin?(_entry), do: false
 
   defp source_key(source) when is_atom(source), do: source
   defp source_key(source) when is_binary(source), do: source

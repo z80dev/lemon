@@ -9,6 +9,9 @@ defmodule LemonSkills.Application do
     LemonSkills.Config.ensure_dirs!()
     # Copy repo-bundled skills into the user's global config dir if missing.
     LemonSkills.BuiltinSeeder.seed!()
+    # Remove staging/activation leftovers of interrupted installs before the
+    # Migrator or Registry can see them.
+    LemonSkills.Installer.sweep_staging()
     # Back-fill lockfile provenance for any pre-existing installs.
     LemonSkills.Migrator.migrate()
     LemonSkills.Telemetry.attach_introspection_bridge()
@@ -18,15 +21,16 @@ defmodule LemonSkills.Application do
     LemonAgent.ContextRegistry.register(:learning_nudge, LemonSkills.LearningNudge)
 
     children = [
-      LemonSkills.Registry,
-      LemonCore.TaskSupervisor.child_spec(name: LemonSkills.ReviewSupervisor),
-      LemonSkills.LearningNudge,
-      # MCP source for external tool discovery
+      # Started before the Registry, whose upgrade audits run under it.
       # MCP caller admission policy caps concurrent I/O workers at 128 per runtime.
       Supervisor.child_spec(
         {Task.Supervisor, name: LemonSkills.TaskSupervisor, max_children: 128},
         id: LemonSkills.TaskSupervisor
       ),
+      LemonSkills.Registry,
+      LemonCore.TaskSupervisor.child_spec(name: LemonSkills.ReviewSupervisor),
+      LemonSkills.LearningNudge,
+      # MCP source for external tool discovery
       {LemonSkills.McpSource, []},
       {DynamicSupervisor, strategy: :one_for_one, name: LemonSkills.McpSession.Supervisor},
       LemonSkills.McpSession

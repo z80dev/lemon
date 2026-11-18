@@ -85,6 +85,7 @@ defmodule CodingAgent.SystemPromptTest do
 
     skill_dir = Path.join([tmp_dir, ".lemon", "skill", "github-pr-workflow"])
     File.mkdir_p!(skill_dir)
+    isolate_agent_dir!(tmp_dir)
 
     skill_body = "Follow the complete GitHub PR lifecycle details."
 
@@ -104,6 +105,8 @@ defmodule CodingAgent.SystemPromptTest do
       #{skill_body}
       """
     )
+
+    authorize_skill!(skill_dir, {:project, tmp_dir})
 
     github_prompt =
       SystemPrompt.build(tmp_dir, %{
@@ -134,6 +137,7 @@ defmodule CodingAgent.SystemPromptTest do
 
     skill_dir = Path.join([tmp_dir, ".lemon", "skill", "github-pr-workflow"])
     File.mkdir_p!(skill_dir)
+    isolate_agent_dir!(tmp_dir)
 
     File.write!(
       Path.join(skill_dir, "SKILL.md"),
@@ -146,6 +150,8 @@ defmodule CodingAgent.SystemPromptTest do
       Follow the full workflow.
       """
     )
+
+    authorize_skill!(skill_dir, {:project, tmp_dir})
 
     prompt =
       SystemPrompt.build(tmp_dir, %{
@@ -394,5 +400,21 @@ defmodule CodingAgent.SystemPromptTest do
     end
 
     refute SystemPrompt.build(tmp_dir, opts) =~ "Terminal visuals"
+  end
+
+  defp isolate_agent_dir!(dir) do
+    previous = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", Path.join(dir, "agent"))
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("LEMON_AGENT_DIR", previous),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+  end
+
+  defp authorize_skill!(dir, scope) do
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(dir)
+    :ok = LemonSkills.Audit.State.authorize(scope, Path.basename(dir), hash, :pass)
   end
 end

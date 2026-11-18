@@ -27,13 +27,15 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
   end
 
   describe "put/2" do
-    test "writes SKILL.md and .draft_meta.json", ctx do
+    test "writes SKILL.md and keeps metadata beside the auditable bundle", ctx do
       draft = sample_draft()
       assert :ok = DraftStore.put(draft, opts(ctx))
 
       dir = DraftStore.draft_dir(draft.key, opts(ctx))
       assert File.regular?(Path.join(dir, "SKILL.md"))
-      assert File.regular?(Path.join(dir, ".draft_meta.json"))
+      assert File.regular?(DraftStore.meta_path(dir))
+      assert File.ls!(dir) == ["SKILL.md"]
+      assert {:ok, %{violations: []}} = LemonSkills.Bundle.scan(dir)
     end
 
     test "SKILL.md contains the draft content", ctx do
@@ -48,7 +50,7 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
       draft = sample_draft()
       DraftStore.put(draft, opts(ctx))
       dir = DraftStore.draft_dir(draft.key, opts(ctx))
-      meta = Jason.decode!(File.read!(Path.join(dir, ".draft_meta.json")))
+      meta = Jason.decode!(File.read!(DraftStore.meta_path(dir)))
       assert meta["source_doc_id"] == "doc-abc123"
       assert meta["source_digest"] == String.duplicate("a", 64)
 
@@ -173,6 +175,7 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
 
       assert :ok = DraftStore.delete(draft.key, opts(ctx))
       refute File.dir?(dir)
+      refute File.exists?(DraftStore.meta_path(dir))
     end
 
     test "returns ok even if draft does not exist", ctx do

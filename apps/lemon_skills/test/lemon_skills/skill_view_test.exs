@@ -10,6 +10,7 @@ defmodule LemonSkills.SkillViewTest do
       name: "Test Skill",
       description: "A test skill",
       enabled: true,
+      authorized_hash: "test-hash",
       manifest: %{}
     ]
 

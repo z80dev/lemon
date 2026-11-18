@@ -5,11 +5,16 @@ defmodule CodingAgent.InternalUrls do
   Skill keys and bundle-relative paths preserve case. A bare skill reference
   selects `SKILL.md`; path segments may percent-encode spaces and Unicode.
   Traversal, URL authority syntax, query/fragment suffixes, controls and nested
-  percent encoding are rejected. Symlinks below a skill bundle are rejected,
-  while the registered bundle root itself may be a symlink.
+  percent encoding are rejected. Bundle files resolve through
+  `LemonSkills.Bundle.resolve_file/2`, the resolver `read_skill` also uses:
+  only `SKILL.md` and files under the bundle layout directories, no hidden
+  segments, every segment lstat-checked (symlinks, FIFOs and devices refused)
+  and a byte cap. The registered bundle root itself may be a symlink.
 
-  Notes retain their session-scoped protocol semantics. Skill lookup and
-  activation use the existing LemonSkills registry and status checks. Artifact
+  Notes retain their session-scoped protocol semantics. Skill lookup uses the
+  LemonSkills registry and the shared `LemonSkills.Status.loadable?/2` gate, so
+  disabled, audit-blocked and unauthorized skills (no operator-side audit pass
+  or approval for the exact live bundle) are refused. Artifact
   references retain the session scope supplied in `opts`. Unknown protocols
   return `{:error, :unknown_protocol}`.
   """
@@ -103,10 +108,10 @@ defmodule CodingAgent.InternalUrls do
   defp available_skill(key, cwd) do
     case LemonSkills.get(key, cwd: cwd) do
       {:ok, entry} ->
-        if LemonSkills.Status.check_entry(entry, cwd: cwd).ready do
+        if LemonSkills.Status.loadable?(entry, cwd: cwd) do
           {:ok, entry}
         else
-          {:error, "Skill is disabled or not ready"}
+          {:error, "Skill is disabled, blocked or not authorized for its current content"}
         end
 
       :error ->
@@ -118,24 +123,25 @@ defmodule CodingAgent.InternalUrls do
     :exit, _ -> {:error, "Skill registry unavailable"}
   end
 
-  defp resolve_segments(root, [segment | rest]) do
-    path = Path.join(root, segment)
-
-    case File.lstat(path) do
-      {:ok, %File.Stat{type: :symlink}} ->
-        {:error, "Symlinks beneath a skill bundle are not allowed"}
-
-      {:ok, %File.Stat{type: :regular}} when rest == [] ->
+  defp resolve_segments(root, segments) do
+    case LemonSkills.Bundle.resolve_file(root, segments) do
+      {:ok, path, _stat} ->
         {:ok, path}
 
-      {:ok, %File.Stat{type: :directory}} when rest != [] ->
-        resolve_segments(path, rest)
+      {:error, :symlink} ->
+        {:error, "Symlinks beneath a skill bundle are not allowed"}
 
-      {:ok, _} ->
+      {:error, :not_regular} ->
         {:error, "Skill URL must reference a regular file"}
 
       {:error, :enoent} ->
         {:error, "Skill file not found"}
+
+      {:error, :too_large} ->
+        {:error, "Skill file exceeds the size limit"}
+
+      {:error, reason} when reason in [:hidden, :outside_layout, :invalid_path] ->
+        {:error, "Skill URL path is outside the skill bundle layout"}
 
       {:error, _} ->
         {:error, "Skill file unavailable"}

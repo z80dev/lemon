@@ -577,9 +577,21 @@ defmodule LemonCli.HermesMigration do
     if File.dir?(source) do
       source
       |> File.ls!()
+      |> Enum.sort()
+      |> Enum.reject(&String.starts_with?(&1, "."))
       |> Enum.map(&Path.join(source, &1))
-      |> Enum.filter(&(File.dir?(&1) and File.exists?(Path.join(&1, "SKILL.md"))))
-      |> Enum.map(&copy_skill(ctx, &1))
+      |> Enum.filter(
+        &match?({:ok, %File.Stat{type: :regular}}, File.lstat(Path.join(&1, "SKILL.md")))
+      )
+      |> Enum.map(fn dir ->
+        case File.lstat(dir) do
+          {:ok, %File.Stat{type: :directory}} ->
+            copy_skill(ctx, dir)
+
+          _ ->
+            item("skill", dir, nil, "gated", "Symlinked skill directory not imported")
+        end
+      end)
     else
       [item("skills", source, nil, "skipped", "Hermes skills directory not found")]
     end
@@ -1508,117 +1520,286 @@ defmodule LemonCli.HermesMigration do
 
       File.exists?(target) and ctx.skill_conflict == "rename" ->
         renamed = unique_path(Path.join(ctx.skill_dir, "#{base}-hermes-import"))
-        _ = if ctx.execute?, do: journal!(ctx, renamed)
-        skipped = copy_skill_tree(ctx, source, renamed)
 
-        [
-          item(
-            "skill",
-            source,
-            renamed,
-            if(ctx.execute?, do: "migrated", else: "planned"),
-            "Imported under renamed folder",
-            %{"renamed_from" => target}
-          )
-          | skipped
-        ]
+        import_skill(ctx, source, renamed, false, "Imported under renamed folder", %{
+          "renamed_from" => target
+        })
 
       true ->
-        _ =
-          if ctx.execute? do
-            journal!(ctx, target)
-            File.rm_rf!(target)
-          end
-
-        skipped = copy_skill_tree(ctx, source, target)
-
-        [
-          item(
-            "skill",
-            source,
-            target,
-            if(ctx.execute?, do: "migrated", else: "planned"),
-            "Copied skill directory"
-          )
-          | skipped
-        ]
+        import_skill(ctx, source, target, true, "Imported skill", %{})
     end
   end
 
-  @skill_text_dirs ~w(references scripts templates examples docs)
+  @skill_layout_dirs ~w(references templates scripts assets)
+  @skill_text_dirs ~w(references scripts templates)
   @skill_text_exts ~w(.md .markdown .txt .rst .py .sh .bash .js .mjs .ts .rb .lua .sql .html .css .csv)
 
-  # Copies recognised skill content only: SKILL.md plus UTF-8 text files with a
-  # known extension under the conventional skill directories. Every other file
-  # is gated unless --include-skill-assets approves it; symlinks and special
-  # files are never copied. Copies only when executing.
-  defp copy_skill_tree(ctx, source, dest), do: copy_skill_tree(ctx, source, source, dest)
+  # Stages the selected files in a private temp dir outside every skill root,
+  # then hands the staged bundle to `LemonSkills.Installer.import_bundle/2`:
+  # it audits that exact file set, refuses a blocked bundle, activates only the
+  # audited files and records the skill as `community` / `pending`, so the
+  # runtime audit and approval pipeline still judges it before it is trusted.
+  defp import_skill(ctx, source, target, force, reason, details) do
+    {files, asset_items, gated} = select_skill_files(ctx, source, target)
 
-  defp copy_skill_tree(ctx, root, source, dest) do
-    _ = if ctx.execute?, do: File.mkdir_p!(dest)
+    if ctx.execute? do
+      journal!(ctx, target)
+      journal!(ctx, Path.join(Path.dirname(ctx.skill_dir), "skills.lock.json"))
 
-    source
+      case stage_and_import(ctx, files, target, force) do
+        {:ok, {verdict, findings}} ->
+          [
+            item(
+              "skill",
+              source,
+              target,
+              "migrated",
+              reason <> "; audited and recorded as pending",
+              audit_details(details, "pending", verdict, findings)
+            )
+            | asset_items ++ gated
+          ]
+
+        {:error, {:blocked, findings}} ->
+          [
+            item(
+              "skill",
+              source,
+              nil,
+              "blocked",
+              "Skill blocked by the security audit; not imported",
+              audit_details(details, "block", :block, findings)
+            )
+            | gated
+          ]
+
+        {:error, error} ->
+          [
+            item(
+              "skill",
+              source,
+              nil,
+              "error",
+              "Skill import failed: #{inspect(error)}",
+              Map.put(details, "audit_status", nil)
+            )
+            | gated
+          ]
+      end
+    else
+      [
+        item(
+          "skill",
+          source,
+          target,
+          "planned",
+          reason <> "; will be audited on import and recorded as pending",
+          Map.put(details, "audit_status", "pending")
+        )
+        | asset_items ++ gated
+      ]
+    end
+  end
+
+  defp audit_details(details, status, verdict, findings) do
+    Map.merge(details, %{
+      "audit_status" => status,
+      "audit_verdict" => Atom.to_string(verdict),
+      "audit_findings" => findings
+    })
+  end
+
+  defp stage_and_import(ctx, files, target, force) do
+    staging =
+      Path.join(System.tmp_dir!(), "lemon-hermes-skill-#{System.unique_integer([:positive])}")
+
+    try do
+      bundle = Path.join(staging, "bundle")
+
+      with :ok <- File.mkdir(staging),
+           :ok <- File.chmod(staging, 0o700),
+           :ok <- write_staged_files(bundle, files) do
+        case LemonSkills.Installer.import_bundle(bundle,
+               agent_dir: Path.dirname(ctx.skill_dir),
+               key: Path.basename(target),
+               source_kind: :hermes,
+               force: force
+             ) do
+          {:ok, _entry, audit} -> {:ok, audit}
+          {:error, _} = error -> error
+        end
+      end
+    after
+      File.rm_rf(staging)
+    end
+  end
+
+  defp write_staged_files(bundle, files) do
+    Enum.reduce_while(files, :ok, fn {rel, bytes, mode}, :ok ->
+      dest = Path.join(bundle, rel)
+
+      with :ok <- File.mkdir_p(Path.dirname(dest)),
+           :ok <- File.write(dest, bytes, [:exclusive]),
+           :ok <- File.chmod(dest, Bitwise.band(mode, 0o755)) do
+        {:cont, :ok}
+      else
+        {:error, reason} -> {:halt, {:error, {:stage_failed, rel, reason}}}
+      end
+    end)
+  end
+
+  # Selects recognised skill content: SKILL.md plus UTF-8 text files with a
+  # known extension under references/, scripts/ or templates/. With
+  # --include-skill-assets any other regular file inside the skill bundle
+  # layout is selected too. Everything else is gated: files outside the
+  # layout, hidden names, symlinks and special files are never staged, and a
+  # file is read only while lstat shows the same regular file.
+  defp select_skill_files(ctx, root, target) do
+    {files, assets, gated} = select_skill_files(ctx, root, root, target, {[], [], []})
+    {Enum.reverse(files), Enum.reverse(assets), Enum.reverse(gated)}
+  end
+
+  defp select_skill_files(ctx, root, dir, target, acc) do
+    dir
     |> File.ls!()
     |> Enum.sort()
-    |> Enum.flat_map(fn name ->
-      from = Path.join(source, name)
-      to = Path.join(dest, name)
+    |> Enum.reduce(acc, fn name, {files, assets, gated} = acc ->
+      from = Path.join(dir, name)
 
       case File.lstat!(from) do
         %File.Stat{type: :directory} ->
-          copy_skill_tree(ctx, root, from, to)
+          select_skill_files(ctx, root, from, target, acc)
 
-        %File.Stat{type: :regular, mode: mode} ->
-          cond do
-            recognised_skill_file?(Path.relative_to(from, root), from) ->
-              copy_skill_file(ctx, from, to, mode)
-              []
+        %File.Stat{type: :regular} ->
+          rel = Path.relative_to(from, root)
 
-            ctx.include_skill_assets? ->
-              copy_skill_file(ctx, from, to, mode)
+          case read_regular(from) do
+            {:ok, bytes, mode} ->
+              case classify_skill_file(ctx, rel, bytes) do
+                :recognised ->
+                  {[{rel, bytes, mode} | files], assets, gated}
 
-              [
-                item(
-                  "skill_file",
-                  from,
-                  to,
-                  if(ctx.execute?, do: "migrated", else: "planned"),
-                  "Unrecognised skill asset copied because --include-skill-assets was given; review it for credentials"
-                )
-              ]
+                :asset ->
+                  asset =
+                    item(
+                      "skill_file",
+                      from,
+                      Path.join(target, rel),
+                      if(ctx.execute?, do: "migrated", else: "planned"),
+                      "Unrecognised skill asset imported because --include-skill-assets was given; review it for credentials"
+                    )
 
-            true ->
-              [
-                gated_skill_file(
-                  from,
-                  "Unrecognised skill asset not imported; review it, then rerun with --include-skill-assets to copy all assets"
-                )
-              ]
+                  {[{rel, bytes, mode} | files], [asset | assets], gated}
+
+                {:gated, reason} ->
+                  {files, assets, [gated_skill_file(from, reason) | gated]}
+              end
+
+            {:error, reason} ->
+              {files, assets, [gated_skill_file(from, reason) | gated]}
           end
 
         _other ->
-          [gated_skill_file(from, "Symlink or special file not imported")]
+          {files, assets,
+           [gated_skill_file(from, "Symlink or special file not imported") | gated]}
       end
-    end)
-    |> tap(fn _ ->
-      if ctx.execute?, do: File.chmod!(dest, Bitwise.band(File.stat!(source).mode, 0o7777))
     end)
   end
 
-  defp copy_skill_file(ctx, from, to, mode) do
-    if ctx.execute? do
-      File.cp!(from, to)
-      File.chmod!(to, Bitwise.band(mode, 0o7777))
+  defp classify_skill_file(ctx, rel, bytes) do
+    cond do
+      recognised_skill_file?(rel, bytes) ->
+        :recognised
+
+      ctx.include_skill_assets? and in_skill_layout?(rel) ->
+        :asset
+
+      ctx.include_skill_assets? ->
+        {:gated,
+         "Outside the skill bundle layout (SKILL.md plus references/, templates/, scripts/, assets/); not imported"}
+
+      true ->
+        {:gated,
+         "Unrecognised skill asset not imported; review it, then rerun with --include-skill-assets to import assets inside the skill layout"}
     end
   end
 
-  defp recognised_skill_file?("SKILL.md", _path), do: true
+  # Reads a file only while lstat shows the same single-link regular file: a
+  # hard link (nlink > 1) is refused before any byte is read, since staging its
+  # bytes as an ordinary copy would launder a host file into the bundle. The
+  # opened handle must be that same inode with one link, and at most the
+  # bundle byte cap plus one byte is read.
+  defp read_regular(path) do
+    max = LemonSkills.Bundle.max_file_bytes()
 
-  defp recognised_skill_file?(relative, path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :regular, links: links}} when links > 1 ->
+        {:error, "Hard-linked file not imported"}
+
+      {:ok, %File.Stat{type: :regular, size: size}} when size > max ->
+        {:error, "Larger than #{max} bytes; not imported"}
+
+      {:ok, %File.Stat{type: :regular} = stat} ->
+        case bounded_read(path, stat, max) do
+          {:ok, bytes} -> {:ok, bytes, stat.mode}
+          {:error, reason} when is_binary(reason) -> {:error, reason}
+          _ -> {:error, "File changed while reading; not imported"}
+        end
+
+      _ ->
+        {:error, "File changed while reading; not imported"}
+    end
+  end
+
+  # file_info record: {:file_info, size, type, access, atime, mtime, ctime,
+  #                    mode, links, major_device, minor_device, inode, uid, gid}
+  defp bounded_read(path, %File.Stat{} = stat, max) do
+    with {:ok, fd} <- :file.open(path, [:read, :binary, :raw]) do
+      try do
+        with {:ok, info} <- :file.read_file_info(fd),
+             true <- elem(info, 2) == :regular,
+             true <- {elem(info, 9), elem(info, 11)} == {stat.major_device, stat.inode},
+             true <- elem(info, 8) == 1 || {:error, "Hard-linked file not imported"} do
+          case :file.read(fd, max + 1) do
+            {:ok, bytes} when byte_size(bytes) > max ->
+              {:error, "Larger than #{max} bytes; not imported"}
+
+            {:ok, bytes} ->
+              {:ok, bytes}
+
+            :eof ->
+              {:ok, ""}
+
+            error ->
+              error
+          end
+        else
+          {:error, _} = error -> error
+          _ -> {:error, :changed}
+        end
+      after
+        :file.close(fd)
+      end
+    end
+  end
+
+  defp recognised_skill_file?("SKILL.md", _bytes), do: true
+
+  defp recognised_skill_file?(relative, bytes) do
     case Path.split(relative) do
       [dir | [_ | _] = rest] ->
         dir in @skill_text_dirs and not Enum.any?(rest, &String.starts_with?(&1, ".")) and
-          Path.extname(relative) in @skill_text_exts and String.valid?(File.read!(path))
+          Path.extname(relative) in @skill_text_exts and String.valid?(bytes)
+
+      _ ->
+        false
+    end
+  end
+
+  defp in_skill_layout?(relative) do
+    case Path.split(relative) do
+      [dir | [_ | _] = rest] ->
+        dir in @skill_layout_dirs and not Enum.any?(rest, &String.starts_with?(&1, "."))
 
       _ ->
         false
@@ -2202,6 +2383,7 @@ defmodule LemonCli.HermesMigration do
       "error" => Map.get(statuses, "error", 0),
       "unsupported" => Map.get(statuses, "unsupported", 0),
       "gated" => Map.get(statuses, "gated", 0),
+      "blocked" => Map.get(statuses, "blocked", 0),
       "warning" => Map.get(statuses, "warning", 0)
     }
   end
@@ -2246,10 +2428,24 @@ defmodule LemonCli.HermesMigration do
     - errors: #{summary["error"]}
     - unsupported: #{summary["unsupported"]}
     - gated: #{summary["gated"]}
+    - blocked: #{summary["blocked"]}
     - warnings: #{summary["warning"]}
-
+    #{skill_audit_markdown(report["items"])}
     Undo this migration with `lemon migrate hermes rollback #{report["output_dir"]}`.
     """
+  end
+
+  defp skill_audit_markdown(items) do
+    rows =
+      for %{"kind" => "skill", "details" => %{"audit_status" => status} = details} = item <-
+            items do
+        verdict =
+          if details["audit_verdict"], do: " (audit verdict: #{details["audit_verdict"]})"
+
+        "- #{Path.basename(item["source"])}: #{item["status"]}, audit status #{status || "none"}#{verdict}"
+      end
+
+    if rows == [], do: "", else: "\n## Skills\n\n" <> Enum.join(rows, "\n") <> "\n"
   end
 
   defp parse_env(path) do

@@ -465,20 +465,27 @@ defmodule LemonSkills.Tools.ReadSkillTest do
           """
         )
 
-      File.write!(Path.join(skill_dir, "extra.md"), "# Extra\n\nExtra content here.")
+      File.mkdir_p!(Path.join(skill_dir, "references"))
+
+      File.write!(
+        Path.join([skill_dir, "references", "extra.md"]),
+        "# Extra\n\nExtra content here."
+      )
+
+      authorize!(skill_dir, tmp_dir)
 
       LemonSkills.refresh(cwd: tmp_dir)
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} =
                ReadSkill.execute(
                  "call-f1",
-                 %{"key" => "file-skill", "view" => "file", "path" => "extra.md"},
+                 %{"key" => "file-skill", "view" => "file", "path" => "references/extra.md"},
                  nil,
                  nil,
                  tmp_dir
                )
 
-      assert text =~ "## File: extra.md"
+      assert text =~ "## File: references/extra.md"
       assert text =~ "Extra content here."
     end
 
@@ -512,7 +519,7 @@ defmodule LemonSkills.Tools.ReadSkillTest do
                  tmp_dir
                )
 
-      assert text =~ "outside the skill directory"
+      assert text =~ "without traversal"
       refute text =~ "TOP SECRET"
     end
 
@@ -644,6 +651,16 @@ defmodule LemonSkills.Tools.ReadSkillTest do
     skill_dir = Path.join([tmp_dir, ".lemon", "skill", key])
     File.mkdir_p!(skill_dir)
     File.write!(Path.join(skill_dir, "SKILL.md"), skill_md)
+    authorize!(skill_dir, tmp_dir)
+  end
+
+  # Loading requires an operator-side grant for the exact bundle bytes.
+  defp authorize!(skill_dir, cwd) do
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(skill_dir)
+
+    :ok =
+      LemonSkills.Audit.State.authorize({:project, cwd}, Path.basename(skill_dir), hash, :pass)
+
     skill_dir
   end
 

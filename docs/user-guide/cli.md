@@ -2053,7 +2053,7 @@ lemon migrate hermes [audit|rollback DIR] [options]
 | `--preset user-data\|full` | Import scope (default: user-data) |
 | `--migrate-secrets` | Import allowlisted secrets |
 | `--skill-conflict skip\|rename` | Existing skill policy |
-| `--include-skill-assets` | Also copy unrecognised skill files |
+| `--include-skill-assets` | Also import unrecognised skill files inside the skill bundle layout |
 | `--dry-run` | Preview without writing |
 | `--yes` | Apply without prompting |
 | `--overwrite` | Replace conflicting target files |
@@ -2275,6 +2275,7 @@ lemon skill <command> [args]
 | `install` | Install |
 | `update` | Update |
 | `remove` | Remove |
+| `audit` | Audit |
 | `inspect` | Inspect |
 | `check` | Check |
 | `info` | Info |
@@ -2291,6 +2292,13 @@ lemon skill <command> [args]
 | `--active` | Browse only active skills |
 | `--not-ready` | Browse skills missing dependencies |
 | `--all` | Include hidden skills when browsing |
+| `--approve` | With audit: accept warnings for the exact bundle |
+
+`lemon skill audit <key>` re-audits the skill's current bytes and authorizes
+them for loading on a `pass` verdict (or a `warn` verdict with `--approve`).
+Skills without such an authorization (hand-placed, repository-shipped, pending
+or changed since authorization) are not loadable; see
+[Load authorization](skills.md#load-authorization).
 
 ### `lemon usage`
 

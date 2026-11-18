@@ -26,9 +26,29 @@ Coding-session/file tools belong in `coding_agent`. Usage lives in the
 
 ## Install and learning safety
 
-- Every non-builtin install/update audits the complete supported bundle file set.
-  Reject symlink escapes. Cache audit results only for identical bundle hash and
-  audit fingerprint; detailed audit/usage state stays outside `SKILL.md`.
+- `LemonSkills.Bundle` is the one bundle layout policy (installs, audits,
+  blueprints, `read_skill`, `skill://`). Hidden, out-of-layout, symlinked,
+  special and oversized entries are violations, never silently skipped; the
+  audited set is the activated set and the readable set. Stage outside every
+  skill root (`Config.skill_staging_dir/0`); registry and migrator ignore dot-dirs.
+- Mutations of installed skill dirs go through `LemonSkills.SkillRoot`: no
+  symlinked component between the trusted anchor and the skill root. The global
+  anchor is the agent dir (`SkillRoot.trusted_dir/1`: not a symlink, real path
+  owned by the user); project anchors are the project dir. Seeding included.
+- `skill_manage` content changes and draft promotion stage, audit and activate
+  through `Installer` (`with_private_staging/1`, `activate_audited/4`,
+  `promote_draft/2`); never write a live bundle and roll back. Promotion always
+  needs a `skills.promote` approval bound to the audited bundle hash; draft
+  metadata is descriptive only.
+- Every non-builtin install/update audits the complete bundle scan. Cache audit
+  results only for identical bundle hash and audit fingerprint, in operator-side
+  `Audit.State` under the agent dir (never repository `.lemon/` files); detailed
+  audit/usage state stays outside `SKILL.md`.
+- Loading (`Status.loadable?/2`: `read_skill`, `skill://`) requires an
+  `Audit.State` grant (audit pass, approved warn or block override) or a verified
+  builtin for the exact live bundle hash, re-checked at load. Lockfile
+  `audit_status` is descriptive. Lockfile/audit-state I/O goes through
+  `MetadataFile` (contained, no links, atomic 0600 replace).
 - Ordinary approval does not bypass a block. Warn requires explicit approval;
   block requires the distinct operation security override bound to exact hash and
   findings. Non-interactive `approve: true` is not that override. Re-audit changed

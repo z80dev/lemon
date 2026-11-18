@@ -134,7 +134,22 @@ defmodule LemonSkills.TimelineTest do
     })
 
     sidecar(ctx, "skills.lock.json", "skills", %{"installed" => %{"installed_at" => stamp}})
-    sidecar(ctx, "skills.audit.json", "records", %{"skill:installed" => %{"scanned_at" => stamp}})
+    # Audit state is operator-side (agent dir); a project skills.audit.json is ignored.
+    sidecar(ctx, "skills.audit.json", "records", %{"skill:ignored" => %{"scanned_at" => stamp}})
+    previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", Path.join(Path.dirname(ctx.home), "agent"))
+
+    on_exit(fn ->
+      if previous_agent_dir,
+        do: System.put_env("LEMON_AGENT_DIR", previous_agent_dir),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+
+    :ok =
+      LemonSkills.Audit.State.put({:project, ctx.home}, :skill, "installed", %{
+        "scanned_at" => stamp
+      })
+
     dir = Path.join([ctx.home, ".lemon", "skill_drafts", "draft-one"])
     File.mkdir_p!(dir)
     File.write!(Path.join(dir, ".draft_meta.json"), Jason.encode!(%{"created_at" => stamp}))

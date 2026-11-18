@@ -17,8 +17,12 @@ defmodule LemonSkills.Status do
   - `:not_ready` — enabled and platform-compatible but one or more deps missing
   - `:hidden` — disabled via `enabled: false` or per-skill config
   - `:platform_incompatible` — the `platforms` field excludes the current OS
-  - `:blocked` — an unapproved audit block prevents use; an explicit exact-bundle
-    security override is recorded as `audit_status: :overridden` and remains active
+  - `:blocked` — an unapproved audit block prevents use
+  - `:unaudited` — no operator-side authorization (trusted audit pass,
+    exact-bundle warning approval or block override, or a byte-identical
+    builtin) matches the bundle the registry hydrated: pending, unrecorded and
+    changed skills stay unusable until re-audited (`lemon skill audit`) or
+    re-approved
 
   ## Status result
 
@@ -37,7 +41,8 @@ defmodule LemonSkills.Status do
 
   alias LemonSkills.{Config, Entry, Manifest, Registry}
 
-  @type activation_state :: :active | :not_ready | :hidden | :platform_incompatible | :blocked
+  @type activation_state ::
+          :active | :not_ready | :hidden | :platform_incompatible | :blocked | :unaudited
 
   @type status_result :: %{
           activation_state: activation_state(),
@@ -132,6 +137,25 @@ defmodule LemonSkills.Status do
     else
       check_requirements(entry)
     end
+  end
+
+  @doc """
+  Return `true` when the entry's bundle may be read by the model.
+
+  This is the single gate shared by `read_skill` and `skill://`: disabled
+  (hidden), audit-blocked, unaudited and platform-incompatible skills are
+  refused; a skill that is only missing requirements stays readable so its
+  instructions can explain them.
+
+  The authorization found at registry hydration is re-checked against the
+  live bundle hash here, so a change to any bundle file (not only `SKILL.md`)
+  revokes loading at once.
+  """
+  @spec loadable?(Entry.t(), keyword()) :: boolean()
+  def loadable?(%Entry{authorized_hash: authorized} = entry, opts \\ []) do
+    is_binary(authorized) and
+      check_entry(entry, opts).activation_state in [:active, :not_ready] and
+      Entry.compute_bundle_hash(entry) == authorized
   end
 
   @doc """
@@ -275,6 +299,7 @@ defmodule LemonSkills.Status do
       cond do
         not platform_ok -> :platform_incompatible
         entry.audit_status == :block -> :blocked
+        not is_binary(entry.authorized_hash) -> :unaudited
         any_missing -> :not_ready
         true -> :active
       end

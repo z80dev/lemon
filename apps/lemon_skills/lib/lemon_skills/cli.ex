@@ -16,6 +16,7 @@ defmodule LemonSkills.CLI do
       lemon skill install <source>  # Install a skill from URL or path
       lemon skill update <key>      # Update an installed skill
       lemon skill remove <key>      # Remove an installed skill
+      lemon skill audit <key>       # Re-audit a skill and authorize its exact bytes for loading
       lemon skill inspect <key>     # Deep-inspect a skill (provenance, deps, hashes)
       lemon skill check <key>       # Check skill readiness and detect drift
       lemon skill info <key>        # Show skill details (alias for inspect)
@@ -60,6 +61,7 @@ defmodule LemonSkills.CLI do
   """
 
   alias LemonSkills.{Registry, Installer, Entry, Manifest, SkillView, Curator}
+  alias LemonSkills.Audit.{BundleAudit, State}
   alias LemonSkills.Sources.Hermes
   alias LemonSkills.Synthesis.{DraftStore, Pipeline}
 
@@ -93,6 +95,9 @@ defmodule LemonSkills.CLI do
 
       ["inspect", key | opts] ->
         inspect_skill(key, opts)
+
+      ["audit", key | opts] ->
+        audit_skill(key, opts)
 
       ["check", key | opts] ->
         check_skill(key, opts)
@@ -383,6 +388,78 @@ defmodule LemonSkills.CLI do
     if not locally_modified and not update_available and stored_install_hash(entry) do
       LemonCore.CLI.info("  '#{entry.key}' appears up-to-date; forcing re-fetch.")
     end
+  end
+
+  # ============================================================================
+  # Audit Command
+  # ============================================================================
+
+  # Re-audits the live bundle and records an operator-side load authorization
+  # for exactly those bytes: a pass authorizes on its own, a warning only with
+  # `--approve`. A block is never authorized here; activating blocked content
+  # needs the installer's exact-bundle security override.
+  defp audit_skill(key, opts) do
+    cwd = get_cwd(opts)
+
+    case Registry.get(key, cwd: cwd) do
+      {:ok, entry} ->
+        scope = if entry.source == :project, do: {:project, cwd}, else: :global
+        LemonCore.CLI.info("Auditing skill '#{key}'...")
+
+        result =
+          with {:ok, record} <- BundleAudit.audit(entry.path, scope, key, force: true) do
+            authorize_audited(scope, key, record, "--approve" in opts)
+          end
+
+        LemonSkills.refresh(cwd: cwd)
+        report_audit(key, result)
+
+      :error ->
+        LemonCore.CLI.fail!("Skill not found: #{key}")
+    end
+
+    :ok
+  end
+
+  defp authorize_audited(_scope, _key, %{"final_verdict" => "pass"} = record, _approve),
+    do: {:ok, :pass, record}
+
+  defp authorize_audited(scope, key, %{"final_verdict" => "warn"} = record, true) do
+    with :ok <- State.authorize(scope, key, record["bundle_hash"], :warn),
+         do: {:ok, :warn, record}
+  end
+
+  defp authorize_audited(_scope, _key, record, _approve),
+    do: {:refused, BundleAudit.audit_status(record), record}
+
+  defp report_audit(key, {:ok, status, record}) do
+    LemonCore.CLI.info([
+      :green,
+      "✓",
+      :reset,
+      " '#{key}' authorized (#{status}) for bundle #{abbrev_hash(record["bundle_hash"])}"
+    ])
+
+    print_audit_findings(record)
+  end
+
+  defp report_audit(key, {:refused, status, record}) do
+    LemonCore.CLI.error([:red, "✗", :reset, " '#{key}' not authorized: audit verdict #{status}"])
+    print_audit_findings(record)
+
+    if status == :warn do
+      LemonCore.CLI.info("Re-run with --approve to accept these warnings for this exact bundle.")
+    end
+
+    LemonCore.CLI.fail!("Skill audit did not authorize '#{key}'")
+  end
+
+  defp report_audit(key, {:error, reason}) do
+    LemonCore.CLI.fail!("Audit of '#{key}' failed: #{inspect(reason)}")
+  end
+
+  defp print_audit_findings(record) do
+    Enum.each(BundleAudit.audit_findings(record), &LemonCore.CLI.info("  - " <> &1))
   end
 
   # ============================================================================
@@ -960,6 +1037,7 @@ defmodule LemonSkills.CLI do
   defp format_activation(:hidden), do: "hidden"
   defp format_activation(:platform_incompatible), do: "platform_incompatible"
   defp format_activation(:blocked), do: "blocked"
+  defp format_activation(:unaudited), do: "unaudited"
   defp format_activation(other), do: inspect(other)
 
   defp format_activation_short(:active), do: "✓ active"
@@ -967,6 +1045,7 @@ defmodule LemonSkills.CLI do
   defp format_activation_short(:hidden), do: "~ hidden"
   defp format_activation_short(:platform_incompatible), do: "~ incompatible"
   defp format_activation_short(:blocked), do: "✗ blocked"
+  defp format_activation_short(:unaudited), do: "✗ unaudited"
   defp format_activation_short(other), do: inspect(other)
 
   defp format_source(:global), do: "Global"

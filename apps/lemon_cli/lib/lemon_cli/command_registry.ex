@@ -773,7 +773,7 @@ defmodule LemonCli.CommandRegistry do
         option(
           "--include-skill-assets",
           ["--include-skill-assets"],
-          "Also copy unrecognised skill files"
+          "Also import unrecognised skill files inside the skill bundle layout"
         ),
         option("--dry-run", ["--dry-run"], "Preview without writing"),
         option("--yes", ["--yes"], "Apply without prompting"),
@@ -984,10 +984,11 @@ defmodule LemonCli.CommandRegistry do
         option("--no-online", ["--no-online"], "Search only installed skills"),
         option("--active", ["--active"], "Browse only active skills"),
         option("--not-ready", ["--not-ready"], "Browse skills missing dependencies"),
-        option("--all", ["--all"], "Include hidden skills when browsing")
+        option("--all", ["--all"], "Include hidden skills when browsing"),
+        option("--approve", ["--approve"], "With audit: accept warnings for the exact bundle")
       ],
       subcommands(
-        ~w(list browse search discover hermes install update remove inspect check info draft curator)
+        ~w(list browse search discover hermes install update remove audit inspect check info draft curator)
       )
     ),
     runtime(

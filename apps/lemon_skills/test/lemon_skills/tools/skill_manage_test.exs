@@ -485,7 +485,7 @@ defmodule LemonSkills.Tools.SkillManageTest do
                  "file_content" => "bad"
                })
 
-      assert message =~ "refusing to write through symlink"
+      assert message =~ "symlinks are not allowed in a skill bundle"
       refute File.exists?(Path.join(outside_dir, "guide.md"))
     end
 
@@ -512,7 +512,7 @@ defmodule LemonSkills.Tools.SkillManageTest do
                  "new_string" => "changed"
                })
 
-      assert message =~ "refusing to write through symlink"
+      assert message =~ "symlinks are not allowed in a skill bundle"
       assert File.read!(Path.join(outside_dir, "guide.md")) == "outside"
     end
 
@@ -538,7 +538,7 @@ defmodule LemonSkills.Tools.SkillManageTest do
                  "file_path" => "references/guide.md"
                })
 
-      assert message =~ "refusing to write through symlink"
+      assert message =~ "symlinks are not allowed in a skill bundle"
       assert File.exists?(outside_file)
     end
   end

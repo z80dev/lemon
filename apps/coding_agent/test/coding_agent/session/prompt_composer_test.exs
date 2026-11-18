@@ -1,5 +1,5 @@
 defmodule CodingAgent.Session.PromptComposerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodingAgent.Session.PromptComposer
 
@@ -10,6 +10,7 @@ defmodule CodingAgent.Session.PromptComposerTest do
   } do
     workspace_dir = Path.join(tmp_dir, "workspace")
     File.mkdir_p!(workspace_dir)
+    isolate_agent_dir!(tmp_dir)
     File.write!(Path.join(workspace_dir, "AGENTS.md"), "workspace agents")
 
     skill_dir = Path.join([tmp_dir, ".lemon", "skill", "github-pr-workflow"])
@@ -30,6 +31,8 @@ defmodule CodingAgent.Session.PromptComposerTest do
       Full body should stay behind read_skill.
       """
     )
+
+    authorize_skill!(skill_dir, {:project, tmp_dir})
 
     github_prompt =
       PromptComposer.compose_system_prompt(
@@ -158,5 +161,21 @@ defmodule CodingAgent.Session.PromptComposerTest do
 
     {_, "new session"} =
       SessionManager.capture_environment(SessionManager.new(cwd), cwd, fn _ -> "new session" end)
+  end
+
+  defp isolate_agent_dir!(dir) do
+    previous = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", Path.join(dir, "agent"))
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("LEMON_AGENT_DIR", previous),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+  end
+
+  defp authorize_skill!(dir, scope) do
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(dir)
+    :ok = LemonSkills.Audit.State.authorize(scope, Path.basename(dir), hash, :pass)
   end
 end

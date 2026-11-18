@@ -119,6 +119,18 @@ defmodule LemonSkills.Config do
   end
 
   @doc """
+  Get the private staging root for skill installs and imports.
+
+  Returns `~/.lemon/agent/skill_staging`. Fetched bundles are staged and
+  audited here, outside every global and project skill root, so a bundle is
+  never discoverable before it passes its audit.
+  """
+  @spec skill_staging_dir() :: String.t()
+  def skill_staging_dir do
+    Path.join(agent_dir(), "skill_staging")
+  end
+
+  @doc """
   Get the project skill drafts directory.
 
   Returns `<cwd>/.lemon/skill_drafts`.
