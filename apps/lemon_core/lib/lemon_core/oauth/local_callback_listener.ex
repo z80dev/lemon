@@ -1,5 +1,14 @@
 defmodule LemonCore.OAuth.LocalCallbackListener do
-  @moduledoc false
+  @moduledoc """
+  One-shot loopback listener for OAuth authorization-code redirects.
+
+  Only a `GET` for the configured path whose `Host` (and absolute-form
+  authority, if any) names the configured host and port completes the wait.
+  With `expected_state:`, the callback's `state` must also equal it exactly.
+  Any other request is answered with an error and the listener keeps waiting
+  until the caller's `wait/2` deadline, so stray or forged requests cannot end
+  the sign-in.
+  """
   @unsupported_bind_reasons [:eafnosupport, :eaddrnotavail, :enotsup, :eprotonosupport]
 
   defstruct [
@@ -24,11 +33,14 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
           redirect_uri: String.t()
         }
 
-  @spec start(String.t()) :: {:ok, t()} | {:error, term()}
-  def start(redirect_uri) when is_binary(redirect_uri) do
+  @spec start(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def start(redirect_uri, opts \\ [])
+
+  def start(redirect_uri, opts) when is_binary(redirect_uri) and is_list(opts) do
     owner = self()
 
     with {:ok, info} <- parse_local_redirect_uri(redirect_uri),
+         info = Map.put(info, :expected_state, Keyword.get(opts, :expected_state)),
          {:ok, listen_sockets} <- listen(info.host, info.port) do
       ref = make_ref()
 
@@ -51,7 +63,7 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
     end
   end
 
-  def start(_), do: {:error, :invalid_redirect_uri}
+  def start(_, _), do: {:error, :invalid_redirect_uri}
 
   @spec wait(t(), timeout()) :: {:ok, String.t()} | {:error, term()}
   def wait(
@@ -214,7 +226,7 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
 
     Enum.each(listen_sockets, fn listen_socket ->
       spawn_link(fn ->
-        send(manager, {:accept_result, accept_once(listen_socket, info)})
+        send(manager, {:accept_result, accept_loop(listen_socket, info)})
       end)
     end)
 
@@ -236,13 +248,21 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
     end
   end
 
-  defp accept_once(listen_socket, info) do
+  # Rejected or broken requests never complete the wait; only an accept
+  # failure on the listening socket ends this loop without a callback.
+  defp accept_loop(listen_socket, info) do
     case :gen_tcp.accept(listen_socket) do
       {:ok, socket} ->
-        try do
-          handle_request(socket, info)
-        after
-          close_socket(socket)
+        result =
+          try do
+            handle_request(socket, info)
+          after
+            close_socket(socket)
+          end
+
+        case result do
+          {:ok, _callback_url} = done -> done
+          {:error, _reason} -> accept_loop(listen_socket, info)
         end
 
       {:error, reason} ->
@@ -252,13 +272,25 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
 
   defp handle_request(socket, info) do
     with {:ok, request} <- recv_request(socket, ""),
-         {:ok, request_target} <- parse_request_target(request),
-         {:ok, callback_url} <- build_callback_url(info, request_target),
+         {:ok, method, request_target, headers} <- parse_request(request),
+         :ok <- check_method(method),
+         :ok <- check_host_header(headers, info),
+         {:ok, path, query} <- parse_request_target(request_target, info),
+         :ok <- check_path(path, info),
+         :ok <- check_state(query, info.expected_state),
+         callback_url = build_callback_url(info, path, query),
          :ok <- send_response(socket, 200, success_page()) do
       {:ok, callback_url}
     else
       {:error, :unexpected_path} = error ->
         _ = send_response(socket, 404, error_page("Unexpected callback path."))
+        error
+
+      {:error, :method_not_allowed} = error ->
+        _ = send_response(socket, 405, error_page("Unexpected request method."))
+        error
+
+      {:error, reason} = error when reason in [:closed, :timeout, :request_too_large] ->
         error
 
       {:error, _reason} = error ->
@@ -291,39 +323,91 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
     end
   end
 
-  defp parse_request_target(request) when is_binary(request) do
-    case String.split(request, "\r\n", parts: 2) do
-      [request_line | _] ->
-        case String.split(request_line, " ", parts: 3) do
-          [_method, request_target, _version]
-          when is_binary(request_target) and request_target != "" ->
-            {:ok, request_target}
+  defp parse_request(request) when is_binary(request) do
+    [head | _] = String.split(request, "\r\n\r\n", parts: 2)
+    [request_line | header_lines] = String.split(head, "\r\n")
 
-          _ ->
-            {:error, :invalid_request_line}
-        end
+    case String.split(request_line, " ") do
+      [method, request_target, "HTTP/" <> _] when request_target != "" ->
+        headers =
+          Enum.flat_map(header_lines, fn line ->
+            case String.split(line, ":", parts: 2) do
+              [name, value] -> [{String.downcase(String.trim(name)), String.trim(value)}]
+              _ -> []
+            end
+          end)
+
+        {:ok, method, request_target, headers}
 
       _ ->
-        {:error, :invalid_request}
+        {:error, :invalid_request_line}
     end
   end
 
-  defp build_callback_url(info, request_target) when is_binary(request_target) do
-    %URI{path: path, query: query} = URI.parse(request_target)
+  defp check_method("GET"), do: :ok
+  defp check_method(_method), do: {:error, :method_not_allowed}
 
-    if normalize_path(path) == info.path do
-      {:ok,
-       %URI{
-         scheme: info.scheme,
-         host: info.host,
-         port: info.port,
-         path: normalize_path(path),
-         query: query
-       }
-       |> URI.to_string()}
-    else
-      {:error, :unexpected_path}
+  # Exactly one Host header naming this listener's host and port.
+  defp check_host_header(headers, info) do
+    case for({"host", value} <- headers, do: value) do
+      [value] -> if own_authority?(value, info), do: :ok, else: {:error, :unexpected_host}
+      _ -> {:error, :unexpected_host}
     end
+  end
+
+  defp own_authority?(authority, info) do
+    String.downcase(authority) == "#{info.host}:#{info.port}"
+  end
+
+  defp parse_request_target("/" <> _ = target, _info) do
+    %URI{path: path, query: query} = URI.parse(target)
+    {:ok, path, query}
+  end
+
+  defp parse_request_target(target, info) do
+    case URI.parse(target) do
+      %URI{scheme: "http", authority: authority, userinfo: nil, path: path, query: query}
+      when is_binary(authority) ->
+        if own_authority?(authority, info),
+          do: {:ok, path, query},
+          else: {:error, :unexpected_host}
+
+      _ ->
+        {:error, :invalid_request_target}
+    end
+  end
+
+  defp check_path(path, info) do
+    if normalize_path(path) == info.path, do: :ok, else: {:error, :unexpected_path}
+  end
+
+  defp check_state(_query, nil), do: :ok
+
+  defp check_state(query, expected) when is_binary(expected) do
+    state =
+      try do
+        URI.decode_query(query || "")["state"]
+      rescue
+        _ -> nil
+      end
+
+    if is_binary(state) and state != "" and byte_size(state) == byte_size(expected) and
+         :crypto.hash_equals(state, expected) do
+      :ok
+    else
+      {:error, :state_mismatch}
+    end
+  end
+
+  defp build_callback_url(info, path, query) do
+    %URI{
+      scheme: info.scheme,
+      host: info.host,
+      port: info.port,
+      path: normalize_path(path),
+      query: query
+    }
+    |> URI.to_string()
   end
 
   defp send_response(socket, status, body) when is_integer(status) and is_binary(body) do

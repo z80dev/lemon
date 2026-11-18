@@ -30,31 +30,60 @@ defmodule LemonAi.Auth.OAuthFlowTest do
     end
   end
 
-  for provider <- [
-        LemonAi.Auth.AnthropicOAuth,
-        LemonAi.Auth.GoogleAntigravityOAuth,
-        LemonAi.Auth.GoogleGeminiCliOAuth,
-        LemonAi.Auth.OpenAICodexOAuth
-      ] do
-    test "#{inspect(provider)} rejects malformed callback authorities" do
+  describe "authorization input" do
+    test "rejects malformed callback authorities" do
       for port <- ["", "secret", "443junk", "65536", "999999", "065536"] do
         assert {:error, :missing_authorization_code} =
-                 unquote(provider).parse_authorization_input(
+                 OAuthFlow.parse_authorization_input(
                    "http://localhost:#{port}/callback?code=secret&state=state"
                  )
       end
     end
 
-    test "#{inspect(provider)} accepts valid callback authorities and plain codes" do
+    test "parses callback URLs, code= queries and code#state" do
       for authority <- ["localhost", "localhost:0", "localhost:065535", "[::1]:443"] do
         assert {:ok, %{code: "code", state: "state"}} =
-                 unquote(provider).parse_authorization_input(
+                 OAuthFlow.parse_authorization_input(
                    "http://#{authority}/callback?code=code&state=state"
                  )
       end
 
-      assert {:ok, %{code: "code", state: nil}} =
-               unquote(provider).parse_authorization_input("code")
+      assert {:ok, %{code: "abc", state: "xyz"}} =
+               OAuthFlow.parse_authorization_input(" abc#xyz ")
+
+      assert {:ok, %{code: "abc", state: "xyz"}} =
+               OAuthFlow.parse_authorization_input("code=abc&state=xyz")
+
+      assert {:error, :missing_authorization_code} = OAuthFlow.parse_authorization_input("  ")
+      assert {:error, :invalid_authorization_input} = OAuthFlow.parse_authorization_input(nil)
+    end
+
+    test "a bare code or stateless URL carries no state and fails the state check" do
+      for input <- ["code", "code=code", "http://localhost/callback?code=code", "code#"] do
+        assert {:ok, %{code: "code", state: state}} = OAuthFlow.parse_authorization_input(input)
+        assert state == nil
+        assert {:error, :missing_oauth_state} = OAuthFlow.ensure_state_matches("expected", state)
+      end
+    end
+
+    test "ensure_state_matches requires an exact match and logs no values" do
+      assert :ok = OAuthFlow.ensure_state_matches("expected", "expected")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          for provided <- ["Expected", "expected ", "expecte", "secret-forged", ""] do
+            assert {:error, :oauth_state_mismatch} =
+                     OAuthFlow.ensure_state_matches("expected", provided)
+          end
+
+          for expected <- [nil, ""] do
+            assert {:error, :missing_oauth_state} =
+                     OAuthFlow.ensure_state_matches(expected, expected)
+          end
+        end)
+
+      refute log =~ "secret-forged"
+      refute log =~ "expected"
     end
   end
 

@@ -70,7 +70,7 @@ defmodule LemonAi.Auth.ZaiOAuth do
          {:ok, input} <- prompt(opts),
          :ok <- OAuthFlow.validate_redirect_input(input, auth.redirect_uri),
          {:ok, %{code: code, state: state}} <- parse_authorization_input(input),
-         :ok <- ensure_state(auth.state, state),
+         :ok <- OAuthFlow.ensure_state_matches(auth.state, state),
          :ok <- OAuthFlow.notify_progress(opts, "Exchanging the authorization code..."),
          {:ok, access_token} <- exchange_code(code, auth.state, auth.redirect_uri, opts),
          :ok <-
@@ -111,7 +111,8 @@ defmodule LemonAi.Auth.ZaiOAuth do
     with {:ok, {code, state}} <- result do
       case OAuthFlow.non_empty_binary(code) do
         nil -> {:error, :missing_authorization_code}
-        code -> {:ok, %{code: code, state: OAuthFlow.non_empty_binary(state)}}
+        # State is compared byte for byte: never trimmed.
+        code -> {:ok, %{code: code, state: if(is_binary(state) and state != "", do: state)}}
       end
     end
   rescue
@@ -306,10 +307,6 @@ defmodule LemonAi.Auth.ZaiOAuth do
         {:error, :prompt_callback_required}
     end
   end
-
-  defp ensure_state(_expected, nil), do: {:error, :oauth_state_mismatch}
-  defp ensure_state(expected, expected), do: :ok
-  defp ensure_state(_expected, _provided), do: {:error, :oauth_state_mismatch}
 
   defp setting(opts, key, env_var, default) do
     Keyword.get(opts, key) || OAuthFlow.non_empty_binary(System.get_env(env_var)) || default

@@ -42,13 +42,6 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuthTest do
     :ok
   end
 
-  test "parse_authorization_input handles callback URL" do
-    input = "http://localhost:51121/oauth-callback?code=abc123&state=state456"
-
-    assert {:ok, %{code: "abc123", state: "state456"}} =
-             GoogleAntigravityOAuth.parse_authorization_input(input)
-  end
-
   test "resolve_api_key_from_secret returns antigravity JSON credentials" do
     payload =
       Jason.encode!(%{

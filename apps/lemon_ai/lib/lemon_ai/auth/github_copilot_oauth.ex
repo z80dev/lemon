@@ -8,7 +8,9 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
   - Secret payload encoding/decoding
   """
 
-  alias LemonAi.Auth.OAuthSecret
+  import LemonAi.Auth.OAuthFlow, only: [non_empty_binary: 1]
+
+  alias LemonAi.Auth.{OAuthFlow, OAuthSecret}
 
   @default_client_id_b64 "SXYxLmI1MDdhMDhjODdlY2ZlOTg="
   @default_domain "github.com"
@@ -32,6 +34,7 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
           | {:on_auth, (String.t(), String.t() | nil -> any())}
           | {:on_progress, (String.t() -> any())}
           | {:enable_models, boolean()}
+          | {:sleep, (non_neg_integer() -> any())}
           | {:persist_secret,
              (String.t(), String.t(), term() -> :ok | {:ok, term()} | {:error, term()})}
 
@@ -155,53 +158,39 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
     end
   end
 
+  # RFC 8628 polling via OAuthFlow: honors interval and slow_down, stops at
+  # expiry; `opts[:sleep]` makes it deterministic under test.
   defp poll_for_github_access_token(domain, device_code, interval_s, expires_in_s, opts) do
     notify_progress(opts, "Waiting for browser authentication...")
 
-    urls = github_urls(domain)
-    deadline_ms = System.system_time(:millisecond) + expires_in_s * 1000
-    interval_ms = max(1000, trunc(interval_s * 1000))
-    do_poll_access_token(urls.access_token_url, device_code, interval_ms, deadline_ms)
-  end
+    url = github_urls(domain).access_token_url
 
-  defp do_poll_access_token(url, device_code, interval_ms, deadline_ms) do
-    if System.system_time(:millisecond) >= deadline_ms do
-      {:error, :device_flow_timed_out}
-    else
-      body = %{
-        "client_id" => oauth_client_id(),
-        "device_code" => device_code,
-        "grant_type" => "urn:ietf:params:oauth:grant-type:device_code"
-      }
+    body = %{
+      "client_id" => oauth_client_id(),
+      "device_code" => device_code,
+      "grant_type" => "urn:ietf:params:oauth:grant-type:device_code"
+    }
 
-      headers = %{
-        "accept" => "application/json",
-        "content-type" => "application/json",
-        "user-agent" => @copilot_headers["User-Agent"]
-      }
+    headers = %{
+      "accept" => "application/json",
+      "content-type" => "application/json",
+      "user-agent" => @copilot_headers["User-Agent"]
+    }
 
-      case post_json(url, body, headers) do
-        {:ok, %{"access_token" => access_token}}
-        when is_binary(access_token) and access_token != "" ->
-          {:ok, access_token}
+    poll = fn ->
+      case OAuthFlow.request(url, json: body, headers: headers) do
+        {:ok, response} -> OAuthFlow.classify_device_token_response(response)
+        {:error, _} = error -> error
+      end
+    end
 
-        {:ok, %{"error" => "authorization_pending"}} ->
-          Process.sleep(interval_ms)
-          do_poll_access_token(url, device_code, interval_ms, deadline_ms)
+    poll_opts =
+      [interval_s: interval_s, expires_in_s: expires_in_s] ++ Keyword.take(opts, [:sleep])
 
-        {:ok, %{"error" => "slow_down"}} ->
-          next_interval = interval_ms + 5_000
-          Process.sleep(next_interval)
-          do_poll_access_token(url, device_code, next_interval, deadline_ms)
-
-        {:ok, %{"error" => error}} when is_binary(error) ->
-          {:error, {:device_flow_error, error}}
-
-        {:ok, other} ->
-          {:error, {:device_flow_invalid_response, other}}
-
-        {:error, reason} ->
-          {:error, reason}
+    with {:ok, token_body} <- OAuthFlow.poll_device_token(poll, poll_opts) do
+      case non_empty_binary(token_body["access_token"]) do
+        nil -> {:error, :device_flow_invalid_response}
+        access_token -> {:ok, access_token}
       end
     end
   end
@@ -497,11 +486,4 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
   end
 
   defp parse_integer(_), do: nil
-
-  defp non_empty_binary(value) when is_binary(value) do
-    trimmed = String.trim(value)
-    if trimmed == "", do: nil, else: trimmed
-  end
-
-  defp non_empty_binary(_), do: nil
 end

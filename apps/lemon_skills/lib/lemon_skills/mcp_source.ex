@@ -1741,12 +1741,22 @@ defmodule LemonSkills.McpSource do
       Keyword.get(oauth, :authorization_approval_context) ||
         Keyword.get(oauth, :approval_context, [])
 
+    channel? = authorization_approval_enabled?(oauth) or authorization_observer?(observer)
+
     fn authorization_request ->
-      with {:ok, listener} <- LocalCallbackListener.start(redirect_uri) do
+      with :ok <- require_authorization_channel(channel?, authorization_request),
+           {:ok, listener} <-
+             LocalCallbackListener.start(redirect_uri,
+               expected_state: authorization_request.state
+             ) do
         notify_authorization_request(observer, authorization_request)
 
+        # The URL carries state and the PKCE challenge: it reaches the operator
+        # only through the approval request or observer, never the log.
         Logger.info(
-          "MCP OAuth authorization required for #{authorization_request.resource || "server"}: #{authorization_request.authorization_url}"
+          "MCP OAuth authorization required for #{authorization_request.resource || "server"} " <>
+            "(request #{short_hash(authorization_request.state || "")}); " <>
+            "open the authorization URL from the approval request"
         )
 
         try do
@@ -1766,6 +1776,23 @@ defmodule LemonSkills.McpSource do
         end
       end
     end
+  end
+
+  defp authorization_observer?(observer), do: is_function(observer, 1) or is_pid(observer)
+
+  # The authorization URL is never logged, so without an approval request or an
+  # observer nobody could open it: fail now instead of waiting out the timeout.
+  defp require_authorization_channel(true, _authorization_request), do: :ok
+
+  defp require_authorization_channel(false, authorization_request) do
+    Logger.warning(
+      "MCP OAuth authorization for #{authorization_request.resource || "server"} cannot be " <>
+        "delivered: authorization_approval is disabled and no authorization_request_observer " <>
+        "is configured. Enable authorization_approval, set an observer, or supply an " <>
+        "authorization_code_provider."
+    )
+
+    {:error, :mcp_oauth_authorization_channel_required}
   end
 
   defp authorization_timeout_ms(oauth) do

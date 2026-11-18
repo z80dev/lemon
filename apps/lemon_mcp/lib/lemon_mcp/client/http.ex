@@ -1041,25 +1041,25 @@ defmodule LemonMCP.Client.HTTP do
     normalize_authorization_code_result(result, authorization_request.state)
   end
 
-  defp normalize_authorization_code_result({:ok, code}, _state)
-       when is_binary(code) and code != "",
-       do: {:ok, code}
-
-  defp normalize_authorization_code_result({:ok, %{code: code, state: state}}, expected_state)
-       when is_binary(code) and code != "" and state == expected_state,
-       do: {:ok, code}
+  # The provider must echo the request state: a bare code is never accepted.
+  defp normalize_authorization_code_result({:ok, %{code: code, state: state}}, expected_state),
+    do: matched_authorization_code(code, state, expected_state)
 
   defp normalize_authorization_code_result(
          {:ok, %{"code" => code, "state" => state}},
          expected_state
-       )
-       when is_binary(code) and code != "" and state == expected_state,
-       do: {:ok, code}
-
-  defp normalize_authorization_code_result(code, _state) when is_binary(code) and code != "",
-    do: {:ok, code}
+       ),
+       do: matched_authorization_code(code, state, expected_state)
 
   defp normalize_authorization_code_result(_result, _state), do: :error
+
+  defp matched_authorization_code(code, state, expected_state)
+       when is_binary(code) and code != "" and is_binary(state) and is_binary(expected_state) and
+              byte_size(state) == byte_size(expected_state) do
+    if :crypto.hash_equals(state, expected_state), do: {:ok, code}, else: :error
+  end
+
+  defp matched_authorization_code(_code, _state, _expected_state), do: :error
 
   defp pkce_pair do
     verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)

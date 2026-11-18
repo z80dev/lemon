@@ -671,6 +671,13 @@ timeout and paste the full redirect URL from the address bar. A token printed
 by `claude setup-token` may be pasted at the same prompt; it is stored as a
 static credential without refresh.
 
+The redirect or pasted value must carry the `state` Lemon sent, whether it
+reaches the loopback listener or the prompt. A bare code, or a URL or
+`code=` query without `state`, is rejected (`missing_oauth_state`) and a
+different state fails with `oauth_state_mismatch`; neither is exchanged. The
+same rule applies to the OpenAI Codex, Gemini CLI and Antigravity browser
+sign-ins, whose manual fallback is the full callback URL from the address bar.
+
 The login is encrypted in Lemon's secret store under `llm_anthropic_api_key`
 (`--secret-name` overrides it) and referenced by `auth_source = "oauth"` and
 `oauth_secret`. Access tokens last about eight hours; Lemon refreshes them five
