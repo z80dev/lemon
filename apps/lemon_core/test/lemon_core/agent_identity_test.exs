@@ -1,7 +1,7 @@
 defmodule LemonCore.AgentIdentityTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{AgentIdentity, AgentMessaging, RunStore, SessionLifecycle, Store}
+  alias LemonCore.{AgentIdentity, AgentMessaging, RunStore, Store}
   alias LemonCore.Store.SqliteBackend
 
   defmodule FailingBackend do
@@ -274,7 +274,7 @@ defmodule LemonCore.AgentIdentityTest do
       key = "agent:identity_absent_#{suffix}:main"
       assert :ok = RunStore.create_session_index(key, "identity_absent_#{suffix}", :control_plane)
       assert {:ok, nil = snapshot} = Store.fetch(:agent_identities_v1, "operator")
-      assert {:ok, %{verified: true}} = SessionLifecycle.delete(key)
+      assert {:ok, %{verified: true}} = LemonCore.TestSupport.SessionCleanup.delete(key)
 
       assert {:error, :mismatch} =
                Store.compare_and_swap(:agent_identities_v1, "operator", snapshot, snapshot)

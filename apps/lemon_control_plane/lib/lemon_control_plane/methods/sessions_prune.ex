@@ -1,5 +1,14 @@
 defmodule LemonControlPlane.Methods.SessionsPrune do
-  @moduledoc "Dry-run-first, confirmation-bound stale-session pruning."
+  @moduledoc """
+  Dry-run-first, confirmation-bound stale-session pruning.
+
+  Each confirmed deletion runs under the session's lifecycle fence with the
+  session proven idle (`LemonControlPlane.Methods.SessionLifecycleFence`); a
+  busy or fenced session is reported as a failure and left unchanged.
+  """
+
+  alias LemonControlPlane.Methods.SessionLifecycleFence
+  alias LemonCore.SessionLifecycle
 
   @behaviour LemonControlPlane.Method
 
@@ -18,10 +27,11 @@ defmodule LemonControlPlane.Methods.SessionsPrune do
       archived_only: Map.get(params, "archivedOnly", true),
       include_pinned: Map.get(params, "includePinned", false),
       dry_run: Map.get(params, "dryRun", true),
-      confirm_token: params["confirmToken"]
+      confirm_token: params["confirmToken"],
+      fenced_delete: &fenced_delete/2
     ]
 
-    case LemonCore.SessionLifecycle.prune(opts) do
+    case SessionLifecycle.prune(opts) do
       {:ok, result} ->
         {:ok, format_result(result)}
 
@@ -39,6 +49,12 @@ defmodule LemonControlPlane.Methods.SessionsPrune do
          {:internal_error, "Some session deletions could not be verified",
           safe_failure_summary(result)}}
     end
+  end
+
+  defp fenced_delete(session_key, delete_opts) do
+    SessionLifecycleFence.run(session_key, :delete, fn generation ->
+      SessionLifecycle.delete(session_key, [fence_generation: generation] ++ delete_opts)
+    end)
   end
 
   defp format_result(result) do

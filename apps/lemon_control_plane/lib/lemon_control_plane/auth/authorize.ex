@@ -309,6 +309,7 @@ defmodule LemonControlPlane.Auth.Authorize do
   def node_only_method?(method) do
     method in [
       "node.invoke.result",
+      "node.invoke.active",
       "node.invoke.event",
       "node.invoke.control.result",
       "node.native.followup",

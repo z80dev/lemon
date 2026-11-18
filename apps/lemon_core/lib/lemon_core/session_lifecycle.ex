@@ -20,7 +20,14 @@ defmodule LemonCore.SessionLifecycle do
   a preview of the exact current candidate set.
   """
 
-  alias LemonCore.{AgentIdentity, ChatStateStore, PolicyStore, RunStore, SessionMetadataStore}
+  alias LemonCore.{
+    AgentIdentity,
+    ChatStateStore,
+    LifecycleFenceStore,
+    PolicyStore,
+    RunStore,
+    SessionMetadataStore
+  }
 
   @default_limit 100
   @max_limit 500
@@ -302,6 +309,12 @@ defmodule LemonCore.SessionLifecycle do
   `{:error, :session_store_unavailable}` before any confirmation is checked or
   any session deleted. Each deletion re-checks the pin (and, for
   `archived_only`, the archive flag) on its strict pre-delete snapshot.
+
+  Every deletion must hold the session's lifecycle fence and prove it idle, so
+  execution deletes through `:fenced_delete`, a `(session_key, delete_opts ->
+  result)` function that runs `delete/2` under the router's fence (see
+  `LemonRouter.with_session_lifecycle_fence/3`). Without it every deletion is
+  refused with `{:error, :fence_generation_required}`.
   """
   @spec prune(keyword()) :: {:ok, map()} | {:error, term()}
   def prune(opts) when is_list(opts) do
@@ -341,6 +354,7 @@ defmodule LemonCore.SessionLifecycle do
         candidates,
         token,
         Keyword.get(opts, :confirm_token),
+        Keyword.get(opts, :fenced_delete, &delete/2),
         older_than_ms,
         archived_only,
         include_pinned
@@ -360,14 +374,119 @@ defmodule LemonCore.SessionLifecycle do
   @spec maintenance(keyword()) :: {:ok, map()} | {:error, term()}
   def maintenance(opts) when is_list(opts), do: LemonCore.SessionMaintenance.maintenance(opts)
 
-  @doc "Delete core-owned state and release only the deleted session incarnation's identity."
-  @spec delete(String.t()) :: {:ok, map()} | {:error, term()}
-  def delete(session_key) when is_binary(session_key), do: delete(session_key, [])
+  @doc """
+  Reset a session's conversation: delete its run history, chat state and
+  session policy, keeping its index and lifecycle metadata.
 
-  @doc false
+  Callers must hold the router's admission fence for the session (see
+  `LemonRouter.with_session_lifecycle_fence/3`) and pass the fence's
+  `:fence_generation`; without it nothing is changed and
+  `{:error, :fence_generation_required}` is returned. This function does not
+  check for running work. The generation is checked before the first mutation
+  (`{:error, :fence_lost}`, nothing changed) and again before run history is
+  deleted. Chat state and
+  policy are deleted and verified first and are restored on failure, returning
+  a definite `{:error, reason}`. Run history cannot be restored, so it is
+  deleted last and verified by its owner. `{:error, :outcome_unknown}` means
+  the reset may have partially applied: reconcile, never retry automatically.
+  """
+  @spec reset(String.t(), keyword()) ::
+          {:ok, %{session_key: String.t(), verified: true}} | {:error, term()}
+  def reset(session_key, opts \\ []) when is_binary(session_key) and is_list(opts) do
+    # Rollback restores these snapshots, so an unreadable row stops the reset
+    # before any mutation rather than being recorded as absent and lost.
+    with :ok <- fence_held(session_key, opts),
+         {:ok, chat} <- strict_fetch(ChatStateStore.fetch(session_key)),
+         {:ok, policy} <- strict_fetch(PolicyStore.fetch_session(session_key)),
+         snapshots = %{chat: chat, policy: policy, metadata: nil},
+         :ok <- reset_ancillary(session_key, snapshots),
+         :ok <- fence_still_held(session_key, opts),
+         :ok <- reset_history(session_key) do
+      {:ok, %{session_key: session_key, verified: true}}
+    else
+      {:error, :fence_lost_mid_operation} -> {:error, :outcome_unknown}
+      error -> error
+    end
+  end
+
+  defp strict_fetch({:ok, _} = ok), do: ok
+  defp strict_fetch(_unreadable), do: {:error, :session_store_unavailable}
+
+  # A mutation runs only while the fence generation it was granted is held. A
+  # router that released the fence (its owner presumed dead) may already admit
+  # new work for the session, so a lost fence stops the mutation outright. A
+  # mutation without a generation never runs.
+  defp fence_held(session_key, opts) do
+    case Keyword.fetch(opts, :fence_generation) do
+      {:ok, generation} when is_binary(generation) ->
+        fence_result(LifecycleFenceStore.check_generation(session_key, generation))
+
+      _missing ->
+        {:error, :fence_generation_required}
+    end
+  end
+
+  defp fence_result(:ok), do: :ok
+  defp fence_result({:error, :fence_lost}), do: {:error, :fence_lost}
+  defp fence_result({:error, _unreadable}), do: {:error, :session_store_unavailable}
+
+  # After the first mutation a lost or unreadable fence leaves the operation
+  # partly applied; nothing more, not even a restore, may be written.
+  defp fence_still_held(session_key, opts) do
+    case fence_held(session_key, opts) do
+      :ok -> :ok
+      {:error, _} -> {:error, :fence_lost_mid_operation}
+    end
+  end
+
+  defp reset_ancillary(session_key, snapshots) do
+    result =
+      with :ok <- normalize_delete_result(ChatStateStore.delete(session_key)),
+           :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)) do
+        with {:ok, nil} <- ChatStateStore.fetch(session_key),
+             {:ok, nil} <- PolicyStore.fetch_session(session_key) do
+          :ok
+        else
+          _remaining_or_unreadable -> {:error, :ancillary_deletion_not_verified}
+        end
+      end
+
+    with {:error, reason} <- result do
+      case restore_ancillary_state(session_key, snapshots) do
+        :ok -> {:error, reason}
+        {:error, _} -> {:error, :outcome_unknown}
+      end
+    end
+  end
+
+  # The history owner confirms the delete (SQL failures propagate) and a strict
+  # read then verifies it; anything else may have partly applied.
+  defp reset_history(session_key) do
+    with :ok <- normalize_delete_result(RunStore.delete_history(session_key)),
+         {:ok, []} <- RunStore.fetch_history(session_key, limit: 1) do
+      :ok
+    else
+      _ -> {:error, :outcome_unknown}
+    end
+  end
+
+  @doc """
+  Delete core-owned state and release only the deleted session incarnation's identity.
+
+  Callers must hold the router's admission fence for the session (see
+  `LemonRouter.with_session_lifecycle_fence/3`) and pass the fence's
+  `:fence_generation`, which is checked before the first mutation and again
+  before the canonical commit; without it nothing is changed and
+  `{:error, :fence_generation_required}` is returned. A failure before the
+  canonical commit restores chat state, policy and metadata and returns a
+  definite `{:error, reason}`. A failure after it, a lost fence mid-operation,
+  or a failed restore, returns `{:error, :outcome_unknown}`: reconcile, never
+  retry automatically.
+  """
   @spec delete(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def delete(session_key, opts) when is_binary(session_key) and is_list(opts) do
-    with {:ok, incarnation} <- deletion_incarnation(session_key) do
+    with :ok <- fence_held(session_key, opts),
+         {:ok, incarnation} <- deletion_incarnation(session_key) do
       delete_incarnation(session_key, opts, incarnation)
     end
   end
@@ -379,29 +498,40 @@ defmodule LemonCore.SessionLifecycle do
 
     # Rollback restores these snapshots, so an unreadable row must stop the
     # delete before any mutation rather than be recorded as absent and lost.
-    with {:ok, snapshots} <- ancillary_snapshots(session_key),
+    with :ok <- fence_held(session_key, opts),
+         {:ok, snapshots} <- ancillary_snapshots(session_key),
          :ok <- delete_guard(snapshots.metadata, opts) do
       result =
         with :ok <- normalize_delete_result(ChatStateStore.delete(session_key)),
              :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)),
              :ok <- normalize_delete_result(SessionMetadataStore.delete(session_key)),
              :ok <- verify_ancillary_deleted(session_key),
-             :ok <- normalize_delete_result(run_delete_fun.(session_key)),
-             :ok <- canonical_verify_fun.(session_key),
-             :ok <- release_agent_identity(session_key, incarnation) do
-          {:ok, %{session_key: session_key, existed: existed, verified: true}}
+             :ok <- fence_still_held(session_key, opts),
+             :ok <- normalize_delete_result(run_delete_fun.(session_key)) do
+          # The canonical commit was accepted: any later failure leaves it applied.
+          with :ok <- canonical_verify_fun.(session_key),
+               :ok <- release_agent_identity(session_key, incarnation) do
+            {:ok, %{session_key: session_key, existed: existed, verified: true}}
+          else
+            _ -> {:error, :outcome_unknown}
+          end
         end
 
       case result do
         {:ok, _} = ok ->
           ok
 
+        {:error, :fence_lost_mid_operation} ->
+          {:error, :outcome_unknown}
+
         {:error, reason} ->
           # Identity release happens only after canonical deletion verifies, so a
           # failed canonical commit cannot erase or restore over a renamed handle.
           # Ancillary snapshots remain recoverable; run history is not.
-          restore_ancillary_state(session_key, snapshots)
-          {:error, reason}
+          case restore_ancillary_state(session_key, snapshots) do
+            :ok -> {:error, reason}
+            {:error, _} -> {:error, :outcome_unknown}
+          end
       end
     end
   end
@@ -922,15 +1052,23 @@ defmodule LemonCore.SessionLifecycle do
     payload |> :erlang.term_to_binary() |> sha256()
   end
 
-  defp execute_prune(_candidates, _token, confirm, _older, _archived, _pinned)
+  defp execute_prune(_candidates, _token, confirm, _delete, _older, _archived, _pinned)
        when not is_binary(confirm) or confirm == "",
        do: {:error, :confirmation_required}
 
-  defp execute_prune(candidates, token, confirm, older_than_ms, archived_only, include_pinned) do
+  defp execute_prune(
+         candidates,
+         token,
+         confirm,
+         fenced_delete,
+         older_than_ms,
+         archived_only,
+         include_pinned
+       ) do
     if secure_equal?(token, confirm) do
       {deleted, failures} =
         Enum.reduce(candidates, {[], []}, fn row, {deleted, failures} ->
-          case delete(row.session_key,
+          case fenced_delete.(row.session_key,
                  refuse_pinned: not include_pinned,
                  require_archived: archived_only
                ) do
@@ -1022,6 +1160,7 @@ defmodule LemonCore.SessionLifecycle do
     end
   end
 
+  # An unavailable history owner must not read as an empty, deleted history.
   defp verify_canonical_deleted(session_key) do
     with {:ok, sessions} <- RunStore.fetch_sessions(),
          false <- Enum.any?(sessions, &indexes_session?(&1, session_key)),
@@ -1037,22 +1176,13 @@ defmodule LemonCore.SessionLifecycle do
   defp indexes_session?(_entry, _session_key), do: false
 
   defp restore_ancillary_state(session_key, snapshots) do
-    case snapshots.chat do
-      nil -> :ok
-      state -> ChatStateStore.put(session_key, state)
-    end
+    results = [
+      if(snapshots.chat, do: ChatStateStore.put(session_key, snapshots.chat), else: :ok),
+      if(snapshots.policy, do: PolicyStore.put_session(session_key, snapshots.policy), else: :ok),
+      if(snapshots.metadata, do: SessionMetadataStore.restore(snapshots.metadata), else: :ok)
+    ]
 
-    case snapshots.policy do
-      nil -> :ok
-      policy -> PolicyStore.put_session(session_key, policy)
-    end
-
-    case snapshots.metadata do
-      nil -> :ok
-      metadata -> SessionMetadataStore.restore(metadata)
-    end
-
-    :ok
+    if Enum.all?(results, &(&1 == :ok)), do: :ok, else: {:error, :restore_failed}
   end
 
   defp normalize_delete_result(:ok), do: :ok

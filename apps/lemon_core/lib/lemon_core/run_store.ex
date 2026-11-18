@@ -128,10 +128,11 @@ defmodule LemonCore.RunStore do
     })
   end
 
-  @spec delete_session_index(term()) :: :ok
+  @spec delete_session_index(term()) :: :ok | {:error, term()}
   def delete_session_index(session_key), do: Store.delete(:sessions_index, session_key)
 
-  @spec delete_history(term()) :: :ok
+  @doc "Delete a session's run history; see `LemonCore.RunHistoryStore.delete_session/2`."
+  @spec delete_history(term()) :: :ok | {:error, atom()}
   def delete_history(session_key) do
     cutoff = System.monotonic_time()
     result = RunHistoryStore.delete_session(session_key)
@@ -146,10 +147,18 @@ defmodule LemonCore.RunStore do
     result
   end
 
-  @spec delete_session(term()) :: :ok
+  @doc """
+  Delete a session's index row, then its history. A history failure after the
+  index was deleted is `{:error, :outcome_unknown}`: the deletion partly applied.
+  """
+  @spec delete_session(term()) :: :ok | {:error, term()}
   def delete_session(session_key) do
-    delete_session_index(session_key)
-    delete_history(session_key)
+    with :ok <- delete_session_index(session_key) do
+      case delete_history(session_key) do
+        :ok -> :ok
+        {:error, _reason} -> {:error, :outcome_unknown}
+      end
+    end
   end
 
   defp new_session_incarnation,

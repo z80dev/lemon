@@ -580,7 +580,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       end
     end
 
-    test "definite pre-enqueue rejection rolls the receipt back for retry" do
+    test "definite pre-enqueue rejection is terminal, never unresolved, and retryable" do
       run_id = "run_definite_rejection_#{System.unique_integer([:positive])}"
       previous = Application.get_env(:lemon_router, :session_coordinator)
       Application.put_env(:lemon_router, :session_coordinator, AdmissionOutcomeCoordinator)
@@ -603,9 +603,15 @@ defmodule LemonRouter.RunOrchestratorTest do
         })
 
       assert {:error, :rejected} = RunOrchestrator.submit(orchestrator, replay)
-      assert %{state: "claimed"} = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+      rejected = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+      assert %{state: "rejected", terminal: true, rejection: "rejected"} = rejected
+      assert rejected.scope.session_key == "agent:definite-rejection:test"
+
+      # The same request may be submitted again: the rejection reopens to a claim.
       assert {:error, :rejected} = RunOrchestrator.submit(orchestrator, replay)
-      assert %{state: "claimed"} = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+
+      assert %{state: "rejected", terminal: true} =
+               LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
     end
 
     @tag capture_log: true
@@ -1154,7 +1160,9 @@ defmodule LemonRouter.RunOrchestratorTest do
         RunOrchestrator.submit(request)
 
       assert {:error, {:unknown_agent_id, "missing-agent"}} = result
-      assert %{state: "claimed"} = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+
+      assert %{state: "rejected", terminal: true, rejection: "unknown_agent_id"} =
+               LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
 
       assert {:error, {:unknown_agent_id, "missing-agent"}} =
                RunOrchestrator.submit(request)

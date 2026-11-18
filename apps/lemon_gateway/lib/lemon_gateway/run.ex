@@ -84,6 +84,24 @@ defmodule LemonGateway.Run do
     session_key = request.session_key || "default"
     request = %{request | run_id: run_id, session_key: session_key}
 
+    case admit_session(args, session_key, run_id) do
+      :ok -> init_state(submitted_request, request, run_id, session_key)
+      {:error, reason} -> {:stop, reason}
+    end
+  end
+
+  # A run no router admission covered registers as its session's activity for
+  # this process's lifetime, or is refused while a reset or delete holds the session.
+  defp admit_session(%{session_lifecycle_admission: true}, session_key, run_id) do
+    case LemonCore.SessionActivity.admit(session_key, %{kind: :gateway_direct, run_id: run_id}) do
+      {:ok, _registration} -> :ok
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp admit_session(_args, _session_key, _run_id), do: :ok
+
+  defp init_state(submitted_request, request, run_id, session_key) do
     state = %{
       submitted_execution_request: submitted_request,
       execution_request: request,

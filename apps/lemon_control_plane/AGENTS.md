@@ -57,6 +57,14 @@ another session store, scheduler or agent runtime. See [README](README.md).
 - Sessions use `LemonCore.SessionLifecycle`: bounded/redacted reads, exact-key
   delete confirmation, and prune previews bound to the exact candidate set and
   millisecond cutoff. Do not manipulate raw run/index tables in handlers.
+  `sessions.reset`, `sessions.delete` and each confirmed `sessions.prune`
+  deletion run inside `LemonRouter.with_session_lifecycle_fence/3` and pass its
+  generation to the mutation (`fence_generation:`, required by the core): they
+  are refused while the session has active, queued or unresolved work, durably
+  fence all new execution for the session while they run, and report success
+  only after verified deletion. `node.invoke` of `coding_agent.run` fixes the
+  run id and session key once, is admitted against the same fence, and counts
+  as session activity until the node proves the run stopped.
 - Profiles derive paths from validated IDs in `ProfileStore`; chat uses the
   canonical profile session and router path.
 - Provider, memory and blueprint mutations keep their owning service's revision

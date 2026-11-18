@@ -233,7 +233,10 @@ defmodule CodingAgent.Session do
     root_idle_token: nil,
     root_idle_timer: nil,
     root_retention_ttl: nil,
-    root_idle_waiter: nil
+    root_idle_waiter: nil,
+    # Set while an idle async follow-up's turn holds this session's
+    # `LemonCore.SessionActivity` registration: `%{registration: ref, waiter: ref | nil}`.
+    lifecycle_activity: nil
   ]
 
   @type session_signature ::
@@ -1298,8 +1301,15 @@ defmodule CodingAgent.Session do
   # and queued, while `outgoing` is the same message with this turn's recalled
   # context attached and is only ever handed to the agent.
   def handle_call({:handle_async_followup, message_or_attrs}, _from, state) do
-    message = State.build_async_followup_message(message_or_attrs)
-    accept_input(state, :steer, message, [preempt: false], true)
+    case admit_idle_followup(state) do
+      {:ok, state} ->
+        message = State.build_async_followup_message(message_or_attrs)
+        {:reply, reply, state} = accept_input(state, :steer, message, [preempt: false], true)
+        {:reply, reply, settle_lifecycle_activity(state)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call({:steer, text, opts}, _from, state) when is_list(opts) do
@@ -1757,9 +1767,9 @@ defmodule CodingAgent.Session do
       Notifier.broadcast_event(state, {:canceled, :assistant_aborted})
       Notifier.complete_event_streams(state, {:canceled, :assistant_aborted})
 
-      {:noreply, %{state | event_streams: %{}}}
+      {:noreply, settle_lifecycle_activity(%{state | event_streams: %{}})}
     else
-      {:noreply, state}
+      {:noreply, settle_lifecycle_activity(state)}
     end
   end
 
@@ -1922,6 +1932,10 @@ defmodule CodingAgent.Session do
     {:noreply, state}
   end
 
+  def handle_info({:wait_for_idle, ref, :ok}, %{lifecycle_activity: %{waiter: ref}} = state) do
+    {:noreply, settle_lifecycle_activity(put_in(state.lifecycle_activity.waiter, nil))}
+  end
+
   def handle_info({:wait_for_idle, ref, :ok}, %{root_idle_waiter: ref} = state) do
     state = %{state | root_idle_waiter: nil}
 
@@ -2038,7 +2052,8 @@ defmodule CodingAgent.Session do
     # Process the event and update state
     new_state = handle_agent_event(event, state)
 
-    {:noreply, CompactionManager.clear_overflow_recovery_state_on_terminal(event, new_state)}
+    new_state = CompactionManager.clear_overflow_recovery_state_on_terminal(event, new_state)
+    {:noreply, settle_lifecycle_activity(new_state)}
   end
 
   def handle_info({ref, result}, state) when is_map_key(state.wasm_host_calls, ref) do
@@ -2221,10 +2236,13 @@ defmodule CodingAgent.Session do
 
       state = %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}
 
-      case LemonAgent.Agent.prompt(state.agent, message) do
-        :ok -> {:noreply, state}
-        {:error, :already_streaming} -> {:noreply, queue_reserved_prompt(state, message)}
-      end
+      state =
+        case LemonAgent.Agent.prompt(state.agent, message) do
+          :ok -> state
+          {:error, :already_streaming} -> queue_reserved_prompt(state, message)
+        end
+
+      {:noreply, settle_lifecycle_activity(state)}
     else
       {:noreply, state}
     end
@@ -2760,6 +2778,47 @@ defmodule CodingAgent.Session do
         |> Planning.refresh()
     end
   end
+
+  # An idle session's async follow-up starts a turn outside router admission.
+  # It registers this session as active work for the session key, or is
+  # refused while a reset or delete holds the session's lifecycle fence. A
+  # streaming session joins its current turn, which is already admitted.
+  defp admit_idle_followup(%{session_key: session_key} = state)
+       when is_binary(session_key) and is_nil(state.lifecycle_activity) do
+    if state.is_streaming do
+      {:ok, state}
+    else
+      case LemonCore.SessionActivity.admit(session_key, %{kind: :native_followup}) do
+        {:ok, registration} ->
+          {:ok, %{state | lifecycle_activity: %{registration: registration, waiter: nil}}}
+
+        {:error, _reason} = error ->
+          error
+      end
+    end
+  end
+
+  defp admit_idle_followup(state), do: {:ok, state}
+
+  # The registration lasts until the Agent itself is idle with no prompt
+  # pending here: the Session's streaming flag can lag the Agent, and queued
+  # input that the turn started keeps the session present.
+  defp settle_lifecycle_activity(
+         %{lifecycle_activity: %{waiter: nil} = activity, pending_prompt_timer_ref: nil} = state
+       ) do
+    ref = make_ref()
+
+    case GenServer.call(state.agent, {:wait_for_idle, self(), ref}) do
+      :ok ->
+        LemonCore.SessionActivity.release(activity.registration)
+        %{state | lifecycle_activity: nil}
+
+      :registered ->
+        %{state | lifecycle_activity: %{activity | waiter: ref}}
+    end
+  end
+
+  defp settle_lifecycle_activity(state), do: state
 
   defp maybe_watch_root_idle(%{root_retention_ttl: nil} = state), do: state
 

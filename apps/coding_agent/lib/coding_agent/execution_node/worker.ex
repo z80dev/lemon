@@ -35,7 +35,14 @@ defmodule CodingAgent.ExecutionNode.Worker do
   | Any state | Current socket exits / worker stops | Stop and cancel all destination work |
 
   Only `:online` admits node events. Reconnecting never resumes disconnected
-  invocations, and messages from replaced sockets are ignored. The credential
+  invocations, and messages from replaced sockets are ignored.
+
+  A cancelled invocation is acknowledged with a terminal `"cancelled"` result
+  only after its execution process has exited, within a bounded wait; one that
+  does not stop in time is never acknowledged. After every connect the worker
+  reports (`node.invoke.active`) each invocation still running, stopping or
+  stuck, so the server clears unresolved presence only for stopped work. The
+  credential
   watch uses `state_timeout`, so unrelated traffic cannot postpone it and leaving
   the parked state cancels it. The independent reprobe uses a named generic
   timeout, explicitly cancelled when credentials resume the connection. Neither
@@ -183,7 +190,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
     process_tasks: %{},
     capability_probe: nil,
     invocations: %{},
-    run_refs: %{}
+    run_refs: %{},
+    # Cancelled executions not yet proven stopped: monitor ref => %{invoke_id, timer}.
+    stopping: %{},
+    # Cancelled executions that did not stop within the quiescence bound.
+    stuck: MapSet.new()
   ]
 
   @spec start_link(keyword()) :: :gen_statem.start_ret()
@@ -386,7 +397,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
             state = %{state | node_id: node_id, rejected_fingerprint: nil}
             write_status(state, "online", nil, node_id)
             notify(state, {:status, :online, node_id})
-            {:next_state, :online, state}
+            {:next_state, :online, report_active(state)}
         end
     end
   end
@@ -602,14 +613,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         if next_bytes > result_content_limit(state) or
              next_count > LemonCore.JSONPayload.default_max_items() do
-          _ = cancel_invocation_execution(state, invocation)
-
-          state =
-            state
-            |> send_invoke_error(invoke_id, :result_payload_limit_exceeded)
-            |> remove_invocation(invoke_id)
-
-          {:keep_state, state}
+          {:keep_state,
+           stop_invocation(state, invoke_id, invocation, :result_payload_limit_exceeded)}
         else
           invocations =
             Map.update!(state.invocations, invoke_id, fn current ->
@@ -729,6 +734,28 @@ defmodule CodingAgent.ExecutionNode.Worker do
         %{capability_probe: %{task: %{ref: monitor_ref}}} = state
       ),
       do: {:keep_state, finish_capability_probe(state, :down)}
+
+  def handle_event(:info, {:DOWN, monitor_ref, :process, _pid, _reason}, _link_state, state)
+      when is_map_key(state.stopping, monitor_ref) do
+    {%{invoke_id: invoke_id, timer: timer, reason: reason}, stopping} =
+      Map.pop(state.stopping, monitor_ref)
+
+    Process.cancel_timer(timer)
+    {:keep_state, ack_stopped(%{state | stopping: stopping}, invoke_id, reason)}
+  end
+
+  # The cancelled execution did not stop in time: send no terminal result, so
+  # the server keeps the run's session busy, and keep reporting it as active.
+  def handle_event(:info, {:cancel_quiescence_timeout, monitor_ref}, _link_state, state) do
+    case Map.pop(state.stopping, monitor_ref) do
+      {nil, _stopping} ->
+        {:keep_state, state}
+
+      {%{invoke_id: invoke_id}, stopping} ->
+        Process.demonitor(monitor_ref, [:flush])
+        {:keep_state, %{state | stopping: stopping, stuck: MapSet.put(state.stuck, invoke_id)}}
+    end
+  end
 
   def handle_event(:info, {:DOWN, monitor_ref, :process, _pid, reason}, _link_state, state) do
     case Enum.find(state.process_tasks, fn {_, task} -> task.monitor_ref == monitor_ref end) do
@@ -1100,8 +1127,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
               {:keep_state, state}
 
             invocation ->
-              _ = cancel_invocation_execution(state, invocation)
-              {:keep_state, remove_invocation(state, invoke_id)}
+              {:keep_state, stop_invocation(state, invoke_id, invocation)}
           end
       end
     else
@@ -1732,7 +1758,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
     prompt = value(args, "prompt")
     requested_cwd = value(args, "cwd")
     run_id = optional_string(value(args, "runId")) || "node:#{invoke_id}"
-    session_key = optional_string(value(args, "sessionKey")) || "node:#{state.name}:#{run_id}"
+    # The server admitted the run under exactly this key; never rebuild it.
+    session_key =
+      case value(args, "sessionKey") do
+        key when is_binary(key) and key != "" -> key
+        _ -> "node:#{state.name}:#{run_id}"
+      end
 
     with :ok <- validate_version(version),
          {:ok, images} <-
@@ -2448,10 +2479,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
       Process.demonitor(task.monitor_ref, [:flush])
     end)
 
-    Enum.reduce(state.invocations, state, fn {invoke_id, invocation}, current ->
-      _ = cancel_invocation_execution(state, invocation)
-      remove_invocation(current, invoke_id)
+    # The connection is gone: acknowledgements wait for the next connection's
+    # active-invocation report instead.
+    Enum.reduce(state.invocations, %{state | node_id: nil}, fn {invoke_id, invocation}, current ->
+      stop_invocation(current, invoke_id, invocation)
     end)
+    |> Map.put(:node_id, state.node_id)
     |> then(fn current ->
       Enum.each(current.shells, fn {_, shell} ->
         if Process.alive?(shell.pid), do: GenServer.stop(shell.pid, :normal)
@@ -2459,6 +2492,47 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
       %{current | shells: %{}, process_tasks: %{}}
     end)
+  end
+
+  @cancel_quiescence_ms 10_000
+
+  # Abort an invocation and send its terminal result (`reason`) only once its
+  # execution process has exited (bounded by @cancel_quiescence_ms); until
+  # then it stays reported as active. The server keeps the run's session busy
+  # until that result, or until this worker's active-invocation report omits it.
+  defp stop_invocation(state, invoke_id, invocation, reason \\ :cancelled) do
+    _ = cancel_invocation_execution(state, invocation)
+    pid = execution_pid(invocation)
+    state = remove_invocation(state, invoke_id)
+
+    if is_pid(pid) and Process.alive?(pid) do
+      ref = Process.monitor(pid)
+      timer = Process.send_after(self(), {:cancel_quiescence_timeout, ref}, @cancel_quiescence_ms)
+      stopping = %{invoke_id: invoke_id, timer: timer, reason: reason}
+      %{state | stopping: Map.put(state.stopping, ref, stopping)}
+    else
+      ack_stopped(state, invoke_id, reason)
+    end
+  end
+
+  defp execution_pid(%{completed: completed}) when not is_nil(completed), do: nil
+  defp execution_pid(%{service_task: %{pid: pid}}), do: pid
+  defp execution_pid(%{context: context}) when is_map(context), do: Map.get(context, :runner_pid)
+  defp execution_pid(_invocation), do: nil
+
+  # Offline, the next connection's active-invocation report omits it instead.
+  defp ack_stopped(%{node_id: node_id} = state, invoke_id, reason) when is_binary(node_id),
+    do: send_invoke_error(state, invoke_id, reason)
+
+  defp ack_stopped(state, _invoke_id, _reason), do: state
+
+  # Sent on every connection after the disconnect cancellation barrier: every
+  # invocation still running, still stopping, or stuck.
+  defp report_active(state) do
+    stopping = Enum.map(state.stopping, fn {_ref, %{invoke_id: id}} -> id end)
+    ids = Enum.uniq(Map.keys(state.invocations) ++ stopping ++ MapSet.to_list(state.stuck))
+    request(state, "node.invoke.active", %{"invokeIds" => ids}, :invoke_active)
+    state
   end
 
   defp invocation_for_run(state, run_id) when is_binary(run_id) do
@@ -2532,9 +2606,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp fail_stream(state, invoke_id, reason) do
-    invocation = Map.fetch!(state.invocations, invoke_id)
-    _ = cancel_invocation_execution(state, invocation)
-    state |> send_invoke_error(invoke_id, reason) |> remove_invocation(invoke_id)
+    stop_invocation(state, invoke_id, Map.fetch!(state.invocations, invoke_id), reason)
   end
 
   defp cancel_invocation_execution(_state, %{service_task: _task} = invocation),

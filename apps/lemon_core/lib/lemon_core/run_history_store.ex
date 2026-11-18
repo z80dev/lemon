@@ -209,11 +209,29 @@ defmodule LemonCore.RunHistoryStore do
   end
 
   @doc """
-  Delete all history for a session.
+  Delete all history for a session and confirm, at the owner, that none remains.
+
+  Returns `:ok` only when the SQLite delete completed and a count of the
+  session's rows is zero. `{:error, :history_delete_failed}` is a failed SQL
+  statement or count, `{:error, :history_retained}` a nonzero count, and
+  `{:error, :unavailable}` an owner that did not answer (the delete may still
+  apply later).
   """
-  @spec delete_session(server(), String.t()) :: :ok
+  @spec delete_session(server(), String.t()) ::
+          :ok | {:error, :history_delete_failed | :history_retained | :unavailable}
   def delete_session(server \\ __MODULE__, session_key) do
-    GenServer.cast(server, {:delete_session, session_key})
+    case GenServer.call(server, {:delete_session, session_key}, 5_000) do
+      :ok ->
+        :ok
+
+      {:error, reason} when reason in [:history_delete_failed, :history_retained] ->
+        {:error, reason}
+
+      _unexpected ->
+        {:error, :unavailable}
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
   end
 
   @doc """
@@ -290,18 +308,31 @@ defmodule LemonCore.RunHistoryStore do
     {:noreply, state}
   end
 
-  def handle_cast({:delete_session, session_key}, state) do
-    with :ok <- reset_and_bind(state.stmts.delete_by_session, [session_key]),
-         :done <- Sqlite3.step(state.conn, state.stmts.delete_by_session) do
-      :ok
-    else
-      err -> Logger.warning("[RunHistoryStore] delete_session failed: #{inspect(err)}")
-    end
+  @impl true
+  def handle_call({:delete_session, session_key}, _from, state) do
+    result =
+      with :ok <- reset_and_bind(state.stmts.delete_by_session, [session_key]),
+           :done <- Sqlite3.step(state.conn, state.stmts.delete_by_session),
+           :ok <- reset_and_bind(state.stmts.count, [session_key]),
+           {:row, [0]} <- Sqlite3.step(state.conn, state.stmts.count) do
+        :ok
+      else
+        {:row, [_retained]} ->
+          Logger.warning("[RunHistoryStore] delete_session left rows behind")
+          {:error, :history_retained}
 
-    {:noreply, state}
+        err ->
+          Logger.warning("[RunHistoryStore] delete_session failed: #{inspect(error_tag(err))}")
+          {:error, :history_delete_failed}
+      end
+
+    # A failed step or an unfinished count keeps its transaction (and lock)
+    # open until the statement is reset.
+    _ = Sqlite3.reset(state.stmts.delete_by_session)
+    _ = Sqlite3.reset(state.stmts.count)
+    {:reply, result, state}
   end
 
-  @impl true
   def handle_call({:get, session_key, limit}, _from, state) do
     result =
       with :ok <- reset_and_bind(state.stmts.get_by_session, [session_key, limit]),

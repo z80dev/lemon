@@ -455,11 +455,23 @@ defmodule LemonCore.SessionLifecycleTest do
 
     assert {:ok, refreshed} = SessionLifecycle.prune(older_than_ms: threshold)
 
-    assert {:ok, executed} =
+    # Without a fenced delete, no deletion can hold the session's fence.
+    assert {:error, {:partial_failure, %{deleted_count: 0, failures: [failure]}}} =
              SessionLifecycle.prune(
                older_than_ms: threshold,
                dry_run: false,
                confirm_token: refreshed.confirmation_token
+             )
+
+    assert failure.reason == :fence_generation_required
+    assert SessionLifecycle.get(stale)
+
+    assert {:ok, executed} =
+             SessionLifecycle.prune(
+               older_than_ms: threshold,
+               dry_run: false,
+               confirm_token: refreshed.confirmation_token,
+               fenced_delete: &LemonCore.TestSupport.SessionCleanup.delete/2
              )
 
     assert executed.verified == true
@@ -497,7 +509,8 @@ defmodule LemonCore.SessionLifecycleTest do
           older_than_ms: threshold,
           archived_only: false,
           dry_run: false,
-          confirm_token: preview.confirmation_token
+          confirm_token: preview.confirmation_token,
+          fenced_delete: &LemonCore.TestSupport.SessionCleanup.delete/2
         )
       after
         :persistent_term.erase({OneShotReadFault, :session_metadata_v1, key})
@@ -525,7 +538,7 @@ defmodule LemonCore.SessionLifecycleTest do
     assert {:ok, _} = AgentIdentity.register("operator", identity_id, %{name: old_name})
 
     assert {:error, :injected_commit_failure} =
-             SessionLifecycle.delete(session_key,
+             LemonCore.TestSupport.SessionCleanup.delete(session_key,
                run_delete_fun: fn ^session_key ->
                  assert {:ok, _} = AgentIdentity.rename("operator", identity_id, new_name)
                  {:error, :injected_commit_failure}
@@ -561,7 +574,7 @@ defmodule LemonCore.SessionLifecycleTest do
     assert {:ok, _} = AgentIdentity.rename("operator", first_id, new_name)
     assert {:ok, _} = AgentIdentity.register("operator", second_id, %{name: old_name})
 
-    assert {:ok, %{verified: true}} = SessionLifecycle.delete(first)
+    assert {:ok, %{verified: true}} = LemonCore.TestSupport.SessionCleanup.delete(first)
     assert {:error, :not_found} = AgentIdentity.resolve("operator", first_id)
     assert {:error, :not_found} = AgentIdentity.resolve("operator", new_name)
     assert {:ok, %{id: ^second_id}} = AgentIdentity.resolve("operator", old_name)
@@ -584,7 +597,12 @@ defmodule LemonCore.SessionLifecycleTest do
     assert {:ok, original} = RunStore.ensure_session_incarnation(key)
     assert {:ok, _} = AgentIdentity.register("operator", id, %{name: old_name})
     test = self()
-    deleter = Task.async(fn -> receive do: (:delete -> SessionLifecycle.delete(key)) end)
+
+    deleter =
+      Task.async(fn ->
+        receive do: (:delete -> LemonCore.TestSupport.SessionCleanup.delete(key))
+      end)
+
     barrier = make_ref()
 
     # Suspend only the deleter after its strict missing-index verification,
@@ -682,7 +700,7 @@ defmodule LemonCore.SessionLifecycleTest do
 
   defp cleanup_sessions(session_keys) do
     Enum.each(session_keys, fn session_key ->
-      SessionLifecycle.delete(session_key)
+      LemonCore.TestSupport.SessionCleanup.delete(session_key)
     end)
   end
 

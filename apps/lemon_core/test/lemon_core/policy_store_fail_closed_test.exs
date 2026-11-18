@@ -98,7 +98,7 @@ defmodule LemonCore.PolicyStoreFailClosedTest do
     FaultBackend.set(%{session_policies: :error})
 
     assert {:error, _reason} =
-             LemonCore.SessionLifecycle.delete(id,
+             LemonCore.TestSupport.SessionCleanup.delete(id,
                canonical_verify_fun: fn _key -> {:error, :forced_verification_failure} end
              )
 

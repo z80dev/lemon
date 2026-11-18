@@ -1131,6 +1131,11 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "reason" => :string
       }
     },
+    "node.invoke.active" => %{
+      required: %{
+        "invokeIds" => :list
+      }
+    },
 
     # Config methods
     "config.get" => %{

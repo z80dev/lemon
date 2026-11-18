@@ -2,10 +2,16 @@ defmodule LemonControlPlane.Methods.SessionsReset do
   @moduledoc """
   Handler for the sessions.reset method.
 
-  Resets a session's conversation history.
+  Resets a session's conversation history through
+  `LemonCore.SessionLifecycle.reset/1` under the session's run-admission fence
+  (`LemonControlPlane.Methods.SessionLifecycleFence`). Success is reported only
+  after every deletion is verified.
   """
 
   @behaviour LemonControlPlane.Method
+
+  alias LemonControlPlane.Methods.SessionLifecycleFence
+  alias LemonCore.SessionLifecycle
 
   @impl true
   def name, do: "sessions.reset"
@@ -15,44 +21,38 @@ defmodule LemonControlPlane.Methods.SessionsReset do
 
   @impl true
   def handle(params, _ctx) do
-    session_key = params["sessionKey"]
+    case params["sessionKey"] do
+      session_key when is_binary(session_key) and session_key != "" ->
+        reset = &SessionLifecycle.reset(session_key, fence_generation: &1)
 
-    if is_nil(session_key) do
-      {:error, {:invalid_request, "sessionKey is required", nil}}
-    else
-      case reset_session(session_key) do
-        :ok ->
-          {:ok,
-           %{
-             "success" => true,
-             "sessionKey" => session_key,
-             "summary" => %{
-               "sessionKey" => session_key,
-               "reset" => true,
-               "cleanup" => %{
-                 "deletedRunHistory" => true,
-                 "deletedChatState" => true,
-                 "deletedSessionPolicy" => true,
-                 "includesMessages" => false,
-                 "includesPolicy" => false,
-                 "includesSecretValues" => false
-               }
-             }
-           }}
+        case SessionLifecycleFence.run(session_key, :reset, reset) do
+          {:ok, %{verified: true}} -> {:ok, summary(session_key)}
+          {:error, reason} -> SessionLifecycleFence.failure(reason, "reset")
+          _unexpected -> SessionLifecycleFence.failure(:outcome_unknown, "reset")
+        end
 
-        {:error, reason} ->
-          {:error, {:internal_error, "Failed to reset session", reason}}
-      end
+      _ ->
+        {:error, {:invalid_request, "sessionKey is required", nil}}
     end
   end
 
-  defp reset_session(session_key) do
-    LemonCore.RunStore.delete_history(session_key)
-    LemonCore.ChatStateStore.delete(session_key)
-    LemonCore.PolicyStore.delete_session(session_key)
-
-    :ok
-  rescue
-    e -> {:error, Exception.message(e)}
+  defp summary(session_key) do
+    %{
+      "success" => true,
+      "sessionKey" => session_key,
+      "summary" => %{
+        "sessionKey" => session_key,
+        "reset" => true,
+        "verified" => true,
+        "cleanup" => %{
+          "deletedRunHistory" => true,
+          "deletedChatState" => true,
+          "deletedSessionPolicy" => true,
+          "includesMessages" => false,
+          "includesPolicy" => false,
+          "includesSecretValues" => false
+        }
+      }
+    }
   end
 end

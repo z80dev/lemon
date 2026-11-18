@@ -31,6 +31,8 @@ defmodule LemonRouter.Application do
         ]),
         # Router-owned adaptive routing feedback store; opens SQLite lazily.
         LemonRouter.RoutingFeedbackStore,
+        # Owners of session lifecycle operations and their fence reconcile checks.
+        LemonCore.TaskSupervisor.child_spec(name: LemonRouter.LifecycleTaskSupervisor),
         LemonCore.Supervision.subtree(LemonRouter.ConversationSupervisor, [
           {Registry, keys: :unique, name: LemonRouter.RunRegistry},
           {Registry, keys: :unique, name: LemonRouter.SessionRegistry},

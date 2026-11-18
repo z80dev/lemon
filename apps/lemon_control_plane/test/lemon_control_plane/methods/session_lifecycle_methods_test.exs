@@ -25,7 +25,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     session_key = "agent:cp_lifecycle_#{suffix}:web:browser:unknown:test"
     title = "Private planning room #{suffix}"
 
-    on_exit(fn -> SessionLifecycle.delete(session_key) end)
+    on_exit(fn -> LemonControlPlane.TestSupport.SessionCleanup.delete(session_key) end)
     seed_session(session_key, "run-cp-list-#{suffix}", "Review launch manifest", "Manifest ready")
 
     assert {:ok, patched} =
@@ -64,7 +64,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     session_key = "agent:cp_export_#{suffix}:main"
     secret = "cp-export-secret-#{suffix}"
 
-    on_exit(fn -> SessionLifecycle.delete(session_key) end)
+    on_exit(fn -> LemonControlPlane.TestSupport.SessionCleanup.delete(session_key) end)
 
     seed_session(
       session_key,
@@ -102,7 +102,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     session_key = "agent:cp_stats_#{suffix}:main"
     secret = "cp-stats-secret-#{suffix}"
 
-    on_exit(fn -> SessionLifecycle.delete(session_key) end)
+    on_exit(fn -> LemonControlPlane.TestSupport.SessionCleanup.delete(session_key) end)
     seed_session(session_key, "run-cp-stats-#{suffix}", "token=#{secret}", "done")
     assert {:ok, _} = SessionLifecycle.patch(session_key, %{pinned: true})
 
@@ -130,7 +130,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     old = System.system_time(:millisecond) - 50_000
     threshold = old + 10_000
 
-    on_exit(fn -> SessionLifecycle.delete(session_key) end)
+    on_exit(fn -> LemonControlPlane.TestSupport.SessionCleanup.delete(session_key) end)
     seed_session(session_key, "run-cp-prune-#{suffix}", "old", "done", [], old)
 
     assert {:ok, _} =
@@ -162,7 +162,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     assert SessionLifecycle.get(session_key) == nil
 
     second = "agent:cp_delete_#{suffix}:main"
-    on_exit(fn -> SessionLifecycle.delete(second) end)
+    on_exit(fn -> LemonControlPlane.TestSupport.SessionCleanup.delete(second) end)
     seed_session(second, "run-cp-delete-#{suffix}", "delete", "done")
     assert {:ok, _} = SessionLifecycle.patch(second, %{title: "Delete me", pinned: true})
 

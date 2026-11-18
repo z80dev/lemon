@@ -11,17 +11,29 @@ defmodule LemonGateway.Runtime do
   alias LemonCore.ExecutionCommand
   alias LemonGateway.ExecutionRequest
 
-  @doc "Starts a gateway Run; admission continues asynchronously in the child."
+  @doc "Starts a router-admitted gateway Run; admission continues asynchronously in the child."
   @impl true
   @spec submit_execution(ExecutionCommand.t()) :: :ok | {:error, term()}
-  def submit_execution(%ExecutionCommand{run_id: run_id} = command)
-      when is_binary(run_id) and run_id != "" do
+  def submit_execution(command), do: start(command, %{})
+
+  @doc """
+  Starts a gateway Run that no router admission covered (`LemonGateway.submit/1`).
+
+  The Run registers as its session's activity (`LemonCore.SessionActivity`) for
+  its lifetime, so a session reset or delete sees it as busy, and it is refused
+  with `{:error, :session_lifecycle_in_progress}` while one holds the session.
+  """
+  @spec submit_unadmitted(ExecutionCommand.t()) :: :ok | {:error, term()}
+  def submit_unadmitted(command), do: start(command, %{session_lifecycle_admission: true})
+
+  defp start(%ExecutionCommand{run_id: run_id} = command, extra)
+       when is_binary(run_id) and run_id != "" do
     request =
       command
       |> ExecutionCommand.ensure_conversation_key()
       |> ExecutionRequest.from_command()
 
-    case LemonGateway.RunSupervisor.start_run(%{execution_request: request}) do
+    case LemonGateway.RunSupervisor.start_run(Map.put(extra, :execution_request, request)) do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> :ok
       {:error, reason} -> {:error, reason}
@@ -31,7 +43,7 @@ defmodule LemonGateway.Runtime do
     :exit, _ -> {:error, :outcome_unknown}
   end
 
-  def submit_execution(%ExecutionCommand{}), do: {:error, :invalid_run_id}
+  defp start(%ExecutionCommand{}, _extra), do: {:error, :invalid_run_id}
 
   @doc "Cancels a run identified by its progress message ID within a scope."
   @spec cancel_by_progress_msg(term(), integer()) :: :ok

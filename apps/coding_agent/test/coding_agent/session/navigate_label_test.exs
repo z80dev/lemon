@@ -48,7 +48,7 @@ defmodule CodingAgent.Session.NavigateLabelTest do
     fork_key = "agent:navigate-fork-#{System.unique_integer([:positive])}:main"
 
     on_exit(fn ->
-      LemonCore.SessionLifecycle.delete(key)
+      CodingAgent.TestSupport.SessionCleanup.delete(key)
       LemonCore.ChatStateStore.delete(key)
       LemonCore.ChatStateStore.delete(fork_key)
       File.rm_rf!(root)

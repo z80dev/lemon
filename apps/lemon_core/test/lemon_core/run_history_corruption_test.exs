@@ -77,7 +77,7 @@ defmodule LemonCore.RunHistoryCorruptionTest do
 
     result =
       try do
-        SessionLifecycle.delete(session_key)
+        LemonCore.TestSupport.SessionCleanup.delete(session_key)
       after
         :sys.resume(RunHistoryStore)
       end
@@ -85,5 +85,60 @@ defmodule LemonCore.RunHistoryCorruptionTest do
     on_exit(fn -> RunHistoryStore.delete_session(session_key) end)
 
     assert {:error, _reason} = result
+  end
+
+  @tag :tmp_dir
+  test "a failed SQL deletion is returned by the owner, not acknowledged as deleted", %{
+    tmp_dir: tmp_dir
+  } do
+    name = :run_history_delete_failure
+    start_history(name, tmp_dir)
+    :ok = RunHistoryStore.put(name, @session, 1_000, "run_1", %{summary: %{}})
+    assert {:ok, [{"run_1", _}]} = RunHistoryStore.fetch(name, @session, [])
+    block_deletes(:sys.get_state(name).path, @session)
+
+    assert {:error, :history_delete_failed} = RunHistoryStore.delete_session(name, @session)
+    assert {:ok, [{"run_1", _}]} = RunHistoryStore.fetch(name, @session, [])
+  end
+
+  test "reset and delete never verify a session whose history deletion failed" do
+    session_key = "agent:history:main:sqlfail-#{System.unique_integer([:positive])}"
+    :ok = RunHistoryStore.put(session_key, 1_000, "run_1", %{summary: %{}})
+    assert {:ok, [_]} = RunHistoryStore.fetch(session_key, limit: 1)
+    path = :sys.get_state(RunHistoryStore).path
+    block_deletes(path, session_key)
+
+    on_exit(fn ->
+      unblock_deletes(path, session_key)
+      RunHistoryStore.delete_session(session_key)
+    end)
+
+    assert {:error, :history_delete_failed} = RunHistoryStore.delete_session(session_key)
+    assert {:error, :outcome_unknown} = LemonCore.TestSupport.SessionCleanup.reset(session_key)
+    assert {:error, :outcome_unknown} = LemonCore.TestSupport.SessionCleanup.delete(session_key)
+    assert {:ok, [_]} = RunHistoryStore.fetch(session_key, limit: 1)
+  end
+
+  # A trigger makes the owner's DELETE of one session's rows fail with an SQL
+  # error while reads, and other sessions' deletes, still work.
+  defp block_deletes(path, session_key) do
+    exec(path, """
+    CREATE TRIGGER IF NOT EXISTS #{trigger(session_key)} BEFORE DELETE ON run_history
+    WHEN OLD.session_key = '#{session_key}'
+    BEGIN SELECT RAISE(ABORT, 'blocked by test'); END
+    """)
+  end
+
+  defp unblock_deletes(path, session_key),
+    do: exec(path, "DROP TRIGGER IF EXISTS #{trigger(session_key)}")
+
+  defp trigger(session_key),
+    do: "block_delete_" <> Base.encode16(:crypto.hash(:md5, session_key), case: :lower)
+
+  defp exec(path, sql) do
+    {:ok, conn} = Sqlite3.open(path)
+    :ok = Sqlite3.execute(conn, "PRAGMA busy_timeout=5000")
+    :ok = Sqlite3.execute(conn, sql)
+    :ok = Sqlite3.close(conn)
   end
 end

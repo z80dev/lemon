@@ -94,7 +94,7 @@ defmodule LemonWeb.ManagementLiveTest do
         end)
 
       Application.put_env(:lemon_web, :active_runs_fun, fn -> Agent.get(state, & &1) end)
-      on_exit(fn -> SessionLifecycle.delete(session_key) end)
+      on_exit(fn -> LemonWeb.TestSupport.SessionCleanup.delete(session_key) end)
 
       {:ok, view, html} = live(conn, "/sessions")
 
@@ -186,7 +186,9 @@ defmodule LemonWeb.ManagementLiveTest do
       beta = "agent:#{agent}:beta"
       gamma = "agent:#{agent}:gamma"
 
-      on_exit(fn -> Enum.each([alpha, beta, gamma], &SessionLifecycle.delete/1) end)
+      on_exit(fn ->
+        Enum.each([alpha, beta, gamma], &LemonWeb.TestSupport.SessionCleanup.delete/1)
+      end)
 
       seed_session(alpha, "run-alpha-#{suffix}", "deploy the zeppelin-#{suffix}", "ok")
       seed_session(beta, "run-beta-#{suffix}", "triage", "answer mentions zeppelin-#{suffix}")
@@ -227,7 +229,7 @@ defmodule LemonWeb.ManagementLiveTest do
       agent = "web_meta_#{suffix}"
       key = "agent:#{agent}:main"
       other = "agent:#{agent}:other"
-      on_exit(fn -> Enum.each([key, other], &SessionLifecycle.delete/1) end)
+      on_exit(fn -> Enum.each([key, other], &LemonWeb.TestSupport.SessionCleanup.delete/1) end)
 
       seed_session(key, "run-meta-#{suffix}", "hello", "world")
       seed_session(other, "run-meta-other-#{suffix}", "hello", "world")
@@ -289,7 +291,7 @@ defmodule LemonWeb.ManagementLiveTest do
       secret = "browser-secret-#{suffix}"
       private_path = "/private/session-repo-#{suffix}"
 
-      on_exit(fn -> SessionLifecycle.delete(session_key) end)
+      on_exit(fn -> LemonWeb.TestSupport.SessionCleanup.delete(session_key) end)
 
       seed_session(
         session_key,
@@ -353,7 +355,7 @@ defmodule LemonWeb.ManagementLiveTest do
     } do
       suffix = unique_suffix()
       source = "agent:web_fork_#{suffix}:main"
-      on_exit(fn -> SessionLifecycle.delete(source) end)
+      on_exit(fn -> LemonWeb.TestSupport.SessionCleanup.delete(source) end)
       seed_session(source, "run-fork-#{suffix}", "fork me", "ok")
 
       Application.put_env(:lemon_core, :agent_runtime_provider, ForkProvider)
@@ -364,7 +366,7 @@ defmodule LemonWeb.ManagementLiveTest do
 
       assert_receive {:fork, ^source, cwd, child}, 2_000
       assert is_binary(cwd) and cwd != ""
-      on_exit(fn -> SessionLifecycle.delete(child) end)
+      on_exit(fn -> LemonWeb.TestSupport.SessionCleanup.delete(child) end)
 
       {path, flash} = assert_redirect(view, 2_000)
       assert path == chat_path(child)
@@ -376,7 +378,7 @@ defmodule LemonWeb.ManagementLiveTest do
     test "an uncertain fork outcome is reported and never retried", %{conn: conn} do
       suffix = unique_suffix()
       source = "agent:web_fork_unknown_#{suffix}:main"
-      on_exit(fn -> SessionLifecycle.delete(source) end)
+      on_exit(fn -> LemonWeb.TestSupport.SessionCleanup.delete(source) end)
       seed_session(source, "run-fork-unknown-#{suffix}", "fork me", "ok")
 
       Application.put_env(:lemon_core, :agent_runtime_provider, ForkProvider)
@@ -398,7 +400,7 @@ defmodule LemonWeb.ManagementLiveTest do
       session_key = "agent:web_export_#{suffix}:main"
       secret = "export-secret-#{suffix}"
 
-      on_exit(fn -> SessionLifecycle.delete(session_key) end)
+      on_exit(fn -> LemonWeb.TestSupport.SessionCleanup.delete(session_key) end)
       seed_session(session_key, "run-web-export-#{suffix}", "token=#{secret}", "Bearer #{secret}")
 
       json = get(conn, "/sessions/#{session_key}/export/json")
@@ -428,7 +430,7 @@ defmodule LemonWeb.ManagementLiveTest do
       suffix = unique_suffix()
       agent = "web_delete_#{suffix}"
       key = "agent:#{agent}:main"
-      on_exit(fn -> SessionLifecycle.delete(key) end)
+      on_exit(fn -> LemonWeb.TestSupport.SessionCleanup.delete(key) end)
       seed_session(key, "run-delete-#{suffix}", "delete me", "ok")
 
       {:ok, view, _html} = live(conn, "/sessions?agent=#{agent}")
@@ -471,7 +473,7 @@ defmodule LemonWeb.ManagementLiveTest do
     test "deleting from the detail view returns to the list", %{conn: conn} do
       suffix = unique_suffix()
       key = "agent:web_delete_detail_#{suffix}:main"
-      on_exit(fn -> SessionLifecycle.delete(key) end)
+      on_exit(fn -> LemonWeb.TestSupport.SessionCleanup.delete(key) end)
       seed_session(key, "run-delete-detail-#{suffix}", "delete me", "ok")
 
       {:ok, view, _html} = live(conn, "/sessions/#{key}")
@@ -493,7 +495,9 @@ defmodule LemonWeb.ManagementLiveTest do
       pinned = "agent:web_prune_pinned_#{suffix}:main"
       ancient = System.system_time(:millisecond) - 3_700 * @day_ms
 
-      on_exit(fn -> Enum.each([stale, late, fresh, pinned], &SessionLifecycle.delete/1) end)
+      on_exit(fn ->
+        Enum.each([stale, late, fresh, pinned], &LemonWeb.TestSupport.SessionCleanup.delete/1)
+      end)
 
       seed_session(stale, "run-prune-#{suffix}", "old", "done", [], ancient)
       seed_session(late, "run-prune-late-#{suffix}", "old", "done", [], ancient)

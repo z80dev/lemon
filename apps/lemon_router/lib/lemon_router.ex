@@ -133,6 +133,127 @@ defmodule LemonRouter do
   defdelegate run_presence(filters \\ %{}), to: LemonRouter.RunPresence, as: :query
 
   @doc """
+  Run a destructive session lifecycle operation (`:reset` or `:delete`) with
+  execution for `session_key` fenced, only when the router proves the session
+  has no active, queued or unresolved work.
+
+  The fence is a durable `LemonCore.LifecycleFenceStore` row taken through the
+  serialized orchestrator admission boundary, so every admission that preceded
+  it is visible to the idle proof. Until the operation ends, router admission
+  (any client or mode), idle native follow-ups, direct `node.invoke` runs and
+  direct gateway submissions for the session are refused with
+  `:session_lifecycle_in_progress`. The fence survives orchestrator restarts.
+
+  The fence owner is a process scoped to this one operation, never the
+  caller: it acquires, runs `fun`, marks the row finished and releases. An
+  acquire that times out is cancelled by its acquisition id. A fence left
+  behind by a failed release or a dead owner is released only after the
+  owner exits and the orchestrator's reconcile check passes; if `fun` had not
+  returned, the operation's outcome is recorded as unknown. Fences never
+  expire by time.
+
+  `fun` receives the fence generation; pass it to the mutation as
+  `fence_generation:` so the mutation stops if the fence is no longer held.
+  Returns `fun`'s result, or, without calling it:
+
+    * `{:error, :session_busy}` — the session has active, queued or unresolved work;
+    * `{:error, :lifecycle_in_progress}` — another reset/delete holds the fence;
+    * `{:error, :unavailable}` — the fence or idle proof could not be established.
+
+  An exception or exit in `fun` exits the caller.
+  """
+  @spec with_session_lifecycle_fence(binary(), :reset | :delete, (String.t() -> result)) ::
+          result | {:error, :session_busy | :lifecycle_in_progress | :unavailable}
+        when result: term()
+  def with_session_lifecycle_fence(session_key, operation, fun)
+      when is_binary(session_key) and session_key != "" and operation in [:reset, :delete] and
+             is_function(fun, 1) do
+    caller = self()
+    tag = make_ref()
+
+    case LemonCore.TaskSupervisor.start_child(LemonRouter.LifecycleTaskSupervisor, fn ->
+           send(caller, {tag, fenced_operation(session_key, operation, fun)})
+         end) do
+      {:ok, owner} ->
+        monitor = Process.monitor(owner)
+
+        receive do
+          {^tag, result} ->
+            Process.demonitor(monitor, [:flush])
+            result
+
+          {:DOWN, ^monitor, :process, ^owner, reason} ->
+            receive do
+              {^tag, result} -> result
+            after
+              0 -> exit(reason)
+            end
+        end
+
+      {:error, _not_started} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp fenced_operation(session_key, operation, fun) do
+    case fence_session_lifecycle(session_key, operation) do
+      {:ok, generation} ->
+        with :ok <- prove_session_idle(session_key) do
+          result = fun.(generation)
+          # A release that fails leaves the row held; this owner's exit then
+          # reconciles it, and the marker records that `fun` returned.
+          _ = LemonCore.LifecycleFenceStore.mark_finished(session_key, generation)
+          release_session_lifecycle(session_key, generation)
+          result
+        else
+          error ->
+            _ = LemonCore.LifecycleFenceStore.mark_finished(session_key, generation)
+            release_session_lifecycle(session_key, generation)
+            error
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp fence_session_lifecycle(session_key, operation) do
+    acquisition_id = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+
+    try do
+      case LemonRouter.RunOrchestrator.fence_session_lifecycle(
+             session_key,
+             operation,
+             acquisition_id
+           ) do
+        {:ok, generation} -> {:ok, generation}
+        {:error, :fenced} -> {:error, :lifecycle_in_progress}
+        {:error, _reason} -> {:error, :unavailable}
+      end
+    catch
+      # A timed-out acquire may still apply: cancel it by its id. If it applied
+      # first, the orchestrator also watches this owner, whose exit reconciles it.
+      :exit, _ ->
+        LemonRouter.RunOrchestrator.cancel_session_lifecycle(session_key, acquisition_id)
+        {:error, :unavailable}
+    end
+  end
+
+  defp prove_session_idle(session_key) do
+    case run_presence(%{session_key: session_key}) do
+      {:ok, %{presence: %{idle: true, complete: true}}} -> :ok
+      {:ok, %{presence: %{}}} -> {:error, :session_busy}
+      {:error, _reason} -> {:error, :unavailable}
+    end
+  end
+
+  defp release_session_lifecycle(session_key, generation) do
+    LemonRouter.RunOrchestrator.release_session_lifecycle(session_key, generation)
+  catch
+    :exit, _ -> :ok
+  end
+
+  @doc """
   Whether `run_id` is currently active.
   """
   @spec run_active?(binary()) :: boolean()

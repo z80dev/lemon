@@ -420,7 +420,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert {:ok, %{"sessionKey" => child, "sourceSessionKey" => source}} =
              Registry.dispatch("sessions.fork", target(), ctx([:write]))
 
-    on_exit(fn -> SessionLifecycle.delete(child) end)
+    on_exit(fn -> LemonControlPlane.TestSupport.SessionCleanup.delete(child) end)
 
     assert source == target()["sessionKey"]
     assert_receive {:fork, ^source, "/workspace", ^child}
@@ -449,12 +449,12 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
   test "plain TUI session keys fork with their durable source agent identity" do
     source = "tui-#{System.unique_integer([:positive])}"
     assert :ok = RunStore.create_session_index(source, "native_methods", :tui)
-    on_exit(fn -> SessionLifecycle.delete(source) end)
+    on_exit(fn -> LemonControlPlane.TestSupport.SessionCleanup.delete(source) end)
 
     assert {:ok, %{"sessionKey" => child, "sourceSessionKey" => ^source}} =
              SessionsFork.handle(Map.put(target(), "sessionKey", source), %{})
 
-    on_exit(fn -> SessionLifecycle.delete(child) end)
+    on_exit(fn -> LemonControlPlane.TestSupport.SessionCleanup.delete(child) end)
     assert_receive {:fork, ^source, "/workspace", ^child}
     assert SessionKey.agent_id(child) == "native_methods"
     assert SessionLifecycle.get(child).agent_id == "native_methods"
@@ -590,7 +590,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
   test "native history is authoritative after rewind, including an empty active branch" do
     key = "agent:history_rewind_#{System.unique_integer([:positive])}:main"
     params = Map.put(target(), "sessionKey", key)
-    on_exit(fn -> SessionLifecycle.delete(key) end)
+    on_exit(fn -> LemonControlPlane.TestSupport.SessionCleanup.delete(key) end)
 
     assert :ok =
              RunStore.finalize("history-run-#{key}", %{

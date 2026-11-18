@@ -5,11 +5,21 @@ defmodule LemonCore.NodeInvocation do
   Timers, recipient/socket monitors and sequence validation are local to this
   process. Neither streamed frames nor terminal/control replies visit a shared
   broker. Disconnects are terminal; work is never replayed on another socket.
+
+  A session-admitted `coding_agent.run` keeps its session busy until the node
+  proves the run stopped. Cancellation, timeout and recipient exit send a
+  remote cancel and wait for the node's terminal result; a lost connection
+  replaces this owner's live registration with durable unresolved presence
+  (`LemonCore.SessionActivity.retire_unresolved/3`, one serialized step). Only
+  evidence bound to that execution clears it: a terminal result for the
+  invocation, or the node's active-invocation report omitting it.
   """
 
   use GenServer, restart: :temporary
 
-  alias LemonCore.{JSONPayload, NodeRegistry}
+  alias LemonCore.{JSONPayload, NodeRegistry, SessionActivity}
+
+  @unresolved_retry_ms 1_000
 
   @max_control_text_bytes 16 * 1_024
   @max_event_bytes 64 * 1_024
@@ -53,32 +63,60 @@ defmodule LemonCore.NodeInvocation do
       "timeoutMs" => timeout_ms
     }
 
-    case JSONPayload.validate(payload, json_opts(method, max_bytes)) do
-      {:ok, _} ->
-        {:ok, _} = Registry.register(NodeRegistry.Invocations, id, {:invocation, node.id})
-        recipient = Keyword.fetch!(opts, :recipient)
+    with {:ok, _} <- JSONPayload.validate(payload, json_opts(method, max_bytes)),
+         {:ok, activity} <- admit_session(method, args, id, opts) do
+      {:ok, _} = Registry.register(NodeRegistry.Invocations, id, {:invocation, node.id})
+      recipient = Keyword.fetch!(opts, :recipient)
 
-        state = %{
-          id: id,
-          node: node,
-          method: method,
-          run_id: run_id(method, args, id),
-          recipient: recipient,
-          recipient_ref: Process.monitor(recipient),
-          node_ref: Process.monitor(node.pid),
-          timer_ref: Process.send_after(self(), :timeout, timeout_ms),
-          latest_event_seq: 0,
-          max_payload_bytes: max_bytes,
-          controls: %{}
-        }
+      state = %{
+        id: id,
+        node: node,
+        method: method,
+        run_id: run_id(method, args, id),
+        activity: activity,
+        cancelling: false,
+        recipient: recipient,
+        recipient_ref: Process.monitor(recipient),
+        node_ref: Process.monitor(node.pid),
+        timer_ref: Process.send_after(self(), :timeout, timeout_ms),
+        latest_event_seq: 0,
+        max_payload_bytes: max_bytes,
+        controls: %{}
+      }
 
-        send(node.pid, {:node_event, "node.invoke.request", payload})
-        {:ok, state}
-
-      {:error, reason} ->
-        {:stop, {:invalid_payload, reason}}
+      send(node.pid, {:node_event, "node.invoke.request", payload})
+      {:ok, state}
+    else
+      {:error, {:session_lifecycle, reason}} -> {:stop, {:session_lifecycle, reason}}
+      {:error, reason} -> {:stop, {:invalid_payload, reason}}
     end
   end
+
+  # Unadmitted `coding_agent.run` (`node.invoke`) executes outside router
+  # admission: this process registers as the session's activity for the
+  # invocation's lifetime, or the run is refused while a lifecycle fence holds
+  # the session. The caller canonicalizes `sessionKey` and the worker executes
+  # under exactly that key, so it is never derived here.
+  defp admit_session("coding_agent.run", args, _id, opts) do
+    if Keyword.get(opts, :session_lifecycle_admission, false) do
+      with session_key when is_binary(session_key) and session_key != "" <-
+             Map.get(args, "sessionKey"),
+           {:ok, registration} <-
+             SessionActivity.admit(session_key, %{
+               kind: :node_invocation,
+               run_id: Map.get(args, "runId")
+             }) do
+        {:ok, registration}
+      else
+        {:error, reason} -> {:error, {:session_lifecycle, reason}}
+        _missing -> {:error, {:session_lifecycle, :session_key_required}}
+      end
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp admit_session(_method, _args, _id, _opts), do: {:ok, nil}
 
   @impl true
   def format_status(status) do
@@ -150,16 +188,19 @@ defmodule LemonCore.NodeInvocation do
   end
 
   def handle_call({:cancel, reason}, _from, state) do
-    cancel_remote(state, reason)
-    finish(state, {:error, reason}, :terminal)
-    {:stop, :normal, :ok, state}
+    case cancel(state, {:error, reason}, reason) do
+      {:stop, state} -> {:stop, :normal, :ok, state}
+      {:wait, state} -> {:reply, :ok, state}
+    end
   end
 
   def handle_call({:disconnect, reason}, _from, state) do
-    result = {:error, {:node_disconnected, reason}}
     cancel_remote(state, {:node_disconnected, reason})
-    finish(state, result, {:node_disconnected, reason})
-    {:stop, :normal, :ok, state}
+
+    case disconnected(state, {:node_disconnected, reason}) do
+      {:stop, state} -> {:stop, :normal, :ok, state}
+      {:wait, state} -> {:reply, :ok, state}
+    end
   end
 
   def handle_call({:control, operation, text, recipient, timeout_ms}, _from, state) do
@@ -265,9 +306,10 @@ defmodule LemonCore.NodeInvocation do
 
   @impl true
   def handle_info(:timeout, state) do
-    cancel_remote(state, :timeout)
-    finish(state, {:error, :timeout}, :terminal)
-    {:stop, :normal, state}
+    case cancel(state, {:error, :timeout}, :timeout) do
+      {:stop, state} -> {:stop, :normal, state}
+      {:wait, state} -> {:noreply, state}
+    end
   end
 
   def handle_info({:control_timeout, id}, state) do
@@ -278,19 +320,24 @@ defmodule LemonCore.NodeInvocation do
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{node_ref: ref} = state) do
-    finish(
-      state,
-      {:error, {:node_disconnected, :disconnected}},
-      {:node_disconnected, :disconnected}
-    )
-
-    {:stop, :normal, state}
+    case disconnected(state, {:node_disconnected, :disconnected}) do
+      {:stop, state} -> {:stop, :normal, state}
+      {:wait, state} -> {:noreply, state}
+    end
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{recipient_ref: ref} = state) do
-    cancel_remote(state, :recipient_down)
-    finish_controls(state, :recipient_down)
-    {:stop, :normal, state}
+    case cancel(state, nil, :recipient_down) do
+      {:stop, state} -> {:stop, :normal, state}
+      {:wait, state} -> {:noreply, state}
+    end
+  end
+
+  def handle_info(:retain_unresolved, state) do
+    case disconnected(state, nil) do
+      {:stop, state} -> {:stop, :normal, state}
+      {:wait, state} -> {:noreply, state}
+    end
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
@@ -314,6 +361,10 @@ defmodule LemonCore.NodeInvocation do
     Process.demonitor(state.node_ref, [:flush])
     Enum.each(state.controls, fn {_, control} -> cleanup_control(control) end)
   end
+
+  # A session-admitted run is already reported terminal to its recipient while
+  # cancelling; the node's terminal result only proves that it stopped.
+  defp complete(%{cancelling: true} = state, _result, _error), do: {:stop, :normal, :ok, state}
 
   defp complete(state, result, error) do
     opts =
@@ -343,11 +394,56 @@ defmodule LemonCore.NodeInvocation do
     finish_controls(state, control_reason)
   end
 
-  defp finish_controls(state, reason) do
-    Registry.unregister(NodeRegistry.Invocations, state.id)
+  # Cancellation, timeout or recipient exit. A session-admitted run reports its
+  # terminal result now but keeps its registration (and the session busy) until
+  # the node's terminal result proves the run stopped. `result` is nil when
+  # nobody is left to notify.
+  defp cancel(%{cancelling: true} = state, _result, _reason), do: {:wait, state}
 
+  defp cancel(state, result, reason) do
+    cancel_remote(state, reason)
+    if result, do: send(state.recipient, {:lemon_node_result, state.id, result})
+    finish_controls(state, if(result, do: :terminal, else: reason))
+    Process.cancel_timer(state.timer_ref)
+    state = %{state | controls: %{}}
+
+    if is_nil(state.activity) do
+      Registry.unregister(NodeRegistry.Invocations, state.id)
+      {:stop, state}
+    else
+      {:wait, %{state | cancelling: true}}
+    end
+  end
+
+  # The node connection is gone, so its run can no longer be observed. A
+  # session-admitted run leaves durable unresolved presence before this owner
+  # (and its live registration) ends; if that write fails, the owner stays.
+  defp disconnected(state, reason) do
+    if reason && not state.cancelling do
+      finish(state, {:error, reason}, reason)
+    end
+
+    state = %{state | cancelling: true, controls: %{}}
+
+    cond do
+      is_nil(state.activity) ->
+        {:stop, state}
+
+      SessionActivity.retire_unresolved(state.activity, state.id, %{
+        node_id: state.node.id,
+        node_pid: state.node.pid
+      }) == :ok ->
+        {:stop, state}
+
+      true ->
+        Process.send_after(self(), :retain_unresolved, @unresolved_retry_ms)
+        {:wait, state}
+    end
+  end
+
+  defp finish_controls(state, reason) do
     Enum.each(state.controls, fn {_, control} ->
-      Registry.unregister(NodeRegistry.Invocations, {:control, control.id})
+      cleanup_control(control)
       notify_control(state, control, {:error, reason})
     end)
   end
@@ -416,6 +512,8 @@ defmodule LemonCore.NodeInvocation do
         :ok
     end
   end
+
+  defp native(%{cancelling: true}), do: {:error, :terminal}
 
   defp native(%{method: "coding_agent.run", run_id: run_id})
        when is_binary(run_id) and run_id != "", do: :ok

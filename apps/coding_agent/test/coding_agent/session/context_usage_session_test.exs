@@ -12,7 +12,7 @@ defmodule CodingAgent.Session.ContextUsageSessionTest do
     key = "agent:context-test-#{System.unique_integer([:positive])}:main"
 
     on_exit(fn ->
-      LemonCore.SessionLifecycle.delete(key)
+      CodingAgent.TestSupport.SessionCleanup.delete(key)
       File.rm_rf!(root)
       File.rm_rf!(SessionManager.get_session_dir(root))
     end)

@@ -350,8 +350,77 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     })
 
     assert_receive {:executor_cancelled, ^context}
+
+    # A cancelled run still executing is not acknowledged: the server keeps
+    # its session busy until the execution process has actually stopped.
+    refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 200
+    assert Process.alive?(context.runner_pid)
+
+    Process.exit(context.runner_pid, :kill)
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "invoke-cancel", "error" => "cancelled"},
+                    {:invoke_result, "invoke-cancel"}, _timeout}
+
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "a cancelled run that never stops is never acknowledged and stays reported active",
+       %{tmp_dir: tmp_dir} do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+
+    send(
+      worker,
+      {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}}
+    )
+
+    assert_receive {:socket_request, ^socket, "node.invoke.active", %{"invokeIds" => []}, _, _}
+
+    args = %{"version" => 1, "prompt" => "long run", "cwd" => nil, "meta" => %{}}
+    invoke(worker, socket, "invoke-stuck", "node-1", args)
+    assert_receive {:executor_started, _request, _opts, ^worker, _run_ref, context}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:event, "node.invoke.cancel", %{"invokeId" => "invoke-stuck", "nodeId" => "node-1"}}
+    })
+
+    assert_receive {:executor_cancelled, ^context}
+    {_link_state, %{stopping: stopping}} = :sys.get_state(worker)
+    [{monitor_ref, _}] = Map.to_list(stopping)
+
+    # The quiescence bound passes with the runner still alive.
+    send(worker, {:cancel_quiescence_timeout, monitor_ref})
+    {_link_state, state} = :sys.get_state(worker)
+    assert state.stopping == %{}
+    assert MapSet.member?(state.stuck, "invoke-stuck")
+
+    # Even its later exit is not acknowledged, and no result was ever sent.
+    refute_received {:socket_request, ^socket, "node.invoke.result", _, _, _}
     Process.exit(context.runner_pid, :kill)
     GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "uses the admitted session key exactly as sent", %{tmp_dir: tmp_dir} do
+    state = %Worker{name: "worker-name", default_cwd: tmp_dir}
+
+    for session_key <- ["node:server-name:run-1", "agent:default:padded "] do
+      args =
+        remote_args("invoke", %{
+          "version" => 2,
+          "runId" => "run-1",
+          "sessionKey" => session_key,
+          "prompt" => "work",
+          "meta" => %{}
+        })
+
+      assert {:ok, %{session_key: ^session_key}, _} =
+               Worker.execution_request(args, state, "invoke")
+    end
   end
 
   @tag :tmp_dir
@@ -832,11 +901,15 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
     assert_receive {:executor_cancelled, ^context}
 
+    # No terminal response, and still active, until the runner has exited.
+    refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 100
+    assert_still_stopping(worker, "invoke-bounded")
+    Process.exit(context.runner_pid, :kill)
+
     assert_receive {:socket_request, ^socket, "node.invoke.result",
                     %{"invokeId" => "invoke-bounded", "error" => "result_payload_limit_exceeded"},
                     {:invoke_result, "invoke-bounded"}, 30_000}
 
-    Process.exit(context.runner_pid, :kill)
     GenServer.stop(worker)
   end
 
@@ -1098,11 +1171,13 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert_receive {:socket_request, ^socket, "node.invoke.event", _params, tag, 30_000}
     send(worker, {:execution_node_socket, socket, {:response, tag, {:error, :timeout}}})
     assert_receive {:executor_cancelled, ^context}
+    refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 100
+    assert_still_stopping(worker, "invoke-stream-fail")
+    Process.exit(context.runner_pid, :kill)
 
     assert_receive {:socket_request, ^socket, "node.invoke.result",
                     %{"error" => "event_delivery_failed"}, _, 30_000}
 
-    Process.exit(context.runner_pid, :kill)
     GenServer.stop(worker)
   end
 
@@ -1125,11 +1200,18 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
     for _ <- 1..66, do: send(worker, {:engine_delta, run_ref, "x"})
     assert_receive {:executor_cancelled, ^context}
+    refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 100
+    assert_still_stopping(worker, "invoke-stream-bound")
+    Process.exit(context.runner_pid, :kill)
 
     assert_receive {:socket_request, ^socket, "node.invoke.result",
                     %{"error" => "event_backpressure_limit_exceeded"}, _, 30_000}
+  end
 
-    Process.exit(context.runner_pid, :kill)
+  # An aborted invocation stays reported as active until its execution stops.
+  defp assert_still_stopping(worker, invoke_id) do
+    {_link_state, state} = :sys.get_state(worker)
+    assert Enum.any?(state.stopping, fn {_ref, stopping} -> stopping.invoke_id == invoke_id end)
   end
 
   @tag :tmp_dir
@@ -1402,8 +1484,18 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
       assert_receive {:DOWN, ^monitor, :process, ^task_pid, :killed}
 
-      if action != :removal,
-        do: refute_receive({:socket_request, ^socket, "node.invoke.result", _, _, _}, 50)
+      case action do
+        # Cancellation is acknowledged once the work is stopped.
+        :cancel ->
+          assert_receive {:socket_request, ^socket, "node.invoke.result",
+                          %{"invokeId" => "discovery", "error" => "cancelled"}, _, _}
+
+        action when action in [:disconnect, :stop] ->
+          refute_receive({:socket_request, ^socket, "node.invoke.result", _, _, _}, 50)
+
+        :removal ->
+          :ok
+      end
 
       if action != :stop do
         assert {_link_state, %{invocations: invocations}} = :sys.get_state(worker)

@@ -17,7 +17,15 @@ defmodule LemonRouter.RunOrchestrator do
 
   require Logger
 
-  alias LemonCore.{Introspection, MapHelpers, RunRequest, RunStore, SessionKey, Store}
+  alias LemonCore.{
+    Introspection,
+    LifecycleFenceStore,
+    MapHelpers,
+    RunRequest,
+    RunStore,
+    SessionKey,
+    Store
+  }
 
   alias LemonRouter.{
     PendingCompaction,
@@ -39,6 +47,7 @@ defmodule LemonRouter.RunOrchestrator do
   @replay_content_identity_meta_key :router_replay_content_identity
   @run_admission_retention_ms 86_400_000
   @receipt_cleanup_interval_ms 60_000
+  @lifecycle_retry_ms 1_000
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -222,7 +231,7 @@ defmodule LemonRouter.RunOrchestrator do
   def aborted_before_dispatch?(admission, tombstone) do
     is_map(tombstone) and
       (is_nil(admission) or
-         (is_map(admission) and MapHelpers.get_key(admission, :state) == "claimed"))
+         (is_map(admission) and MapHelpers.get_key(admission, :state) in ["claimed", "rejected"]))
   end
 
   defp unresolved_receipt(run_id, session_key, state) do
@@ -265,6 +274,43 @@ defmodule LemonRouter.RunOrchestrator do
   def register_abort(server, run_id, reason, timeout_ms)
       when is_binary(run_id) and is_integer(timeout_ms) and timeout_ms > 0 do
     GenServer.call(server, {:register_abort, run_id, reason}, timeout_ms)
+  end
+
+  @doc false
+  # Take the durable lifecycle fence for `session_key` for the calling process
+  # (see `LemonRouter.with_session_lifecycle_fence/3`), tagged with
+  # `acquisition_id`. The call is serialized with submissions, so every
+  # admission that preceded it has already reached its coordinator. Waits past
+  # the serialized admission window for the same reason as `register_abort/2`.
+  @spec fence_session_lifecycle(GenServer.server(), binary(), :reset | :delete, String.t()) ::
+          {:ok, String.t()} | {:error, :fenced | :unavailable}
+  def fence_session_lifecycle(server \\ __MODULE__, session_key, operation, acquisition_id)
+      when is_binary(session_key) and is_binary(acquisition_id) do
+    GenServer.call(
+      server,
+      {:fence_session_lifecycle, session_key, self(), operation, acquisition_id},
+      @serialized_mutation_timeout_ms
+    )
+  end
+
+  @doc false
+  # The caller gave up on `acquisition_id` (its acquire timed out). A fence that
+  # acquisition took is released at once: no operation ran under it.
+  @spec cancel_session_lifecycle(GenServer.server(), binary(), String.t()) :: :ok
+  def cancel_session_lifecycle(server \\ __MODULE__, session_key, acquisition_id) do
+    GenServer.cast(server, {:cancel_session_lifecycle, session_key, acquisition_id})
+  end
+
+  @doc false
+  @spec release_session_lifecycle(GenServer.server(), binary(), String.t()) ::
+          :ok | {:error, :unavailable}
+  def release_session_lifecycle(server \\ __MODULE__, session_key, generation)
+      when is_binary(session_key) and is_binary(generation) do
+    GenServer.call(
+      server,
+      {:release_session_lifecycle, session_key, generation},
+      @serialized_mutation_timeout_ms
+    )
   end
 
   @doc """
@@ -336,11 +382,20 @@ defmodule LemonRouter.RunOrchestrator do
         Keyword.get(opts, :receipt_cleanup_interval_ms, @receipt_cleanup_interval_ms),
       last_receipt_cleanup_ms: 0,
       abort_tombstones: %{},
+      lifecycle_watches: %{},
       restart_boot_id: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
       accepted_run_ids: %{}
     }
 
-    {:ok, state}
+    {:ok, state, {:continue, :watch_lifecycle_fences}}
+  end
+
+  # Fences are durable rows, so admission refuses fenced sessions from the first
+  # call after a restart. Reloading here only re-monitors their owners, so a
+  # fence whose owner died (including in a previous VM) gets reconciled.
+  @impl true
+  def handle_continue(:watch_lifecycle_fences, state) do
+    {:noreply, watch_lifecycle_fences(state)}
   end
 
   @impl true
@@ -448,8 +503,178 @@ defmodule LemonRouter.RunOrchestrator do
     {:reply, result, state}
   end
 
+  def handle_call(
+        {:fence_session_lifecycle, session_key, owner, operation, acquisition_id},
+        _from,
+        state
+      ) do
+    case LifecycleFenceStore.acquire(session_key, owner, operation, acquisition_id) do
+      {:ok, fence} ->
+        {:reply, {:ok, fence.generation}, watch_fence(state, session_key, fence)}
+
+      {:error, :held} ->
+        {:reply, {:error, :fenced}, state}
+
+      {:error, _unavailable_or_unknown} ->
+        # An unknown write may have stored a held row for this owner: watch every
+        # held row, so the owner's exit reconciles it.
+        {:reply, {:error, :unavailable}, watch_lifecycle_fences(state)}
+    end
+  end
+
+  def handle_call({:release_session_lifecycle, session_key, generation}, _from, state) do
+    case LifecycleFenceStore.release(session_key, generation) do
+      :ok -> {:reply, :ok, unwatch_fence(state, session_key, generation)}
+      {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
   def handle_call({:submit, _invalid}, _from, state) do
     {:reply, {:error, :invalid_run_request}, state}
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _owner, reason}, state)
+      when is_map_key(state.lifecycle_watches, ref) do
+    {watch, watches} = Map.pop(state.lifecycle_watches, ref)
+
+    # An unreachable node does not prove its owner dead: keep the fence.
+    if reason == :noconnection,
+      do: Process.send_after(self(), :watch_lifecycle_fences, @lifecycle_retry_ms),
+      else: reconcile_lifecycle_fence(watch.session_key, watch.generation)
+
+    {:noreply, %{state | lifecycle_watches: watches}}
+  end
+
+  def handle_info(:watch_lifecycle_fences, state) do
+    {:noreply, watch_lifecycle_fences(state)}
+  end
+
+  def handle_info({:reconcile_lifecycle_fence, session_key, generation}, state) do
+    reconcile_lifecycle_fence(session_key, generation)
+    {:noreply, state}
+  end
+
+  def handle_info({:lifecycle_fence_reconciled, session_key, generation, :ok}, state) do
+    case LifecycleFenceStore.release_reconciled(session_key, generation) do
+      {:ok, :finished} ->
+        :ok
+
+      {:ok, :outcome_unknown} ->
+        Logger.warning(
+          "Session lifecycle owner exited holding the fence; the operation's outcome is " <>
+            "unknown and the fence is released session_key=#{inspect(session_key)}"
+        )
+
+      {:error, _} ->
+        retry_reconcile(session_key, generation)
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info({:lifecycle_fence_reconciled, session_key, generation, :error}, state) do
+    retry_reconcile(session_key, generation)
+    {:noreply, state}
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
+
+  @impl true
+  def handle_cast({:cancel_session_lifecycle, session_key, acquisition_id}, state) do
+    case LifecycleFenceStore.fetch(session_key) do
+      {:ok, %{state: "held", acquisition_id: ^acquisition_id, generation: generation}} ->
+        case LifecycleFenceStore.release(session_key, generation) do
+          :ok -> {:noreply, unwatch_fence(state, session_key, generation)}
+          # Still watched: the owner's exit reconciles it.
+          {:error, _} -> {:noreply, state}
+        end
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  defp watch_lifecycle_fences(state) do
+    case LifecycleFenceStore.held() do
+      {:ok, rows} ->
+        Enum.reduce(rows, state, fn {session_key, fence}, acc ->
+          watch_fence(acc, session_key, fence)
+        end)
+
+      {:error, _} ->
+        Process.send_after(self(), :watch_lifecycle_fences, @lifecycle_retry_ms)
+        state
+    end
+  end
+
+  # Monitoring a pid from a previous VM, or one already dead, delivers DOWN at once.
+  defp watch_fence(state, session_key, %{generation: generation} = fence) do
+    watched? =
+      Enum.any?(state.lifecycle_watches, fn {_ref, watch} ->
+        watch.session_key == session_key and watch.generation == generation
+      end)
+
+    cond do
+      watched? ->
+        state
+
+      is_pid(Map.get(fence, :owner_pid)) ->
+        ref = Process.monitor(fence.owner_pid)
+        watch = %{session_key: session_key, generation: generation}
+        %{state | lifecycle_watches: Map.put(state.lifecycle_watches, ref, watch)}
+
+      true ->
+        reconcile_lifecycle_fence(session_key, generation)
+        state
+    end
+  end
+
+  defp unwatch_fence(state, session_key, generation) do
+    {released, kept} =
+      Map.split_with(state.lifecycle_watches, fn {_ref, watch} ->
+        watch.session_key == session_key and watch.generation == generation
+      end)
+
+    Enum.each(released, fn {ref, _watch} -> Process.demonitor(ref, [:flush]) end)
+    %{state | lifecycle_watches: kept}
+  end
+
+  # A dead owner's fence is released only once nothing it started can still
+  # write. Every lifecycle write is a call to the Store or the run-history owner,
+  # and the dead owner's last call was enqueued before its DOWN reached this
+  # node; a later call answered by each owner is therefore ordered after it.
+  # The barrier runs off the orchestrator so a stalled owner cannot block admission.
+  defp reconcile_lifecycle_fence(session_key, generation) do
+    orchestrator = self()
+
+    started =
+      LemonCore.TaskSupervisor.start_child(LemonRouter.LifecycleTaskSupervisor, fn ->
+        result =
+          with :ok <- Store.ping(),
+               true <-
+                 LemonCore.RunHistoryStore.fetch(session_key, limit: 1) !=
+                   {:error, :unavailable} do
+            :ok
+          else
+            _ -> :error
+          end
+
+        send(orchestrator, {:lifecycle_fence_reconciled, session_key, generation, result})
+      end)
+
+    case started do
+      {:ok, _pid} -> :ok
+      {:error, _not_started} -> retry_reconcile(session_key, generation)
+    end
+  end
+
+  defp retry_reconcile(session_key, generation) do
+    Process.send_after(
+      self(),
+      {:reconcile_lifecycle_fence, session_key, generation},
+      @lifecycle_retry_ms
+    )
   end
 
   defp do_submit(%RunRequest{} = params, orchestrator_state, mode \\ :new) do
@@ -477,7 +702,7 @@ defmodule LemonRouter.RunOrchestrator do
       provenance: :direct
     )
 
-    case build_native_submission(request, orchestrator_state) do
+    case build_unfenced_submission(request, orchestrator_state) do
       {:ok, %Submission{} = submission} ->
         LemonCore.EventBridge.subscribe_run(run_id)
 
@@ -709,6 +934,18 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
+  # Every admission mode passes here before reading session state, so a reset or
+  # delete in flight can neither race nor feed stale history, chat state or policy.
+  # The fence is a durable row: an orchestrator restart cannot reopen admission.
+  defp build_unfenced_submission(%{session_key: session_key} = request, state)
+       when is_binary(session_key) do
+    with :ok <- LifecycleFenceStore.check_admission(session_key) do
+      build_native_submission(request, state)
+    end
+  end
+
+  defp build_unfenced_submission(request, state), do: build_native_submission(request, state)
+
   defp build_native_submission(request, state) do
     with {:ok, submission} <- SubmissionBuilder.build(request, state),
          {:ok, submission} <- LemonRouter.NativeLineage.capture_submission(submission),
@@ -726,7 +963,7 @@ defmodule LemonRouter.RunOrchestrator do
         {:ok, request.run_id}
 
       {:ok, %{identity: ^identity, native_followup: %{status: status}}}
-      when status in [:denied, :admission_unavailable, :aborted] ->
+      when status in [:denied, :admission_unavailable, :aborted, :rejected] ->
         {:error, status}
 
       {:ok, %{identity: ^identity, native_failure: status}} ->
@@ -790,7 +1027,7 @@ defmodule LemonRouter.RunOrchestrator do
              :ok <- LemonRouter.NativeLineage.current_source(source),
              :ok <- LemonRouter.NativeLineage.current_target(admitted, destination),
              :ok <- LemonRouter.NativeLineage.record_outcome(request.run_id, :dispatch_pending),
-             {:ok, run_id} <- do_submit(attach_request_identity(admitted, identity), state),
+             {:ok, run_id} <- submit_native_followup_request(admitted, identity, state),
              {:ok, current} <- Store.fetch(@run_admission_table, run_id),
              {:ok, _} <-
                persist_accepted_admission(
@@ -813,12 +1050,27 @@ defmodule LemonRouter.RunOrchestrator do
         {:error, :denied} -> :denied
         {:error, :admission_unavailable} -> :admission_unavailable
         {:error, :aborted} -> :aborted
+        {:error, {:rejected, _reason}} -> :rejected
         _ -> :outcome_unknown
       end
 
     case LemonRouter.NativeLineage.record_outcome(request.run_id, status) do
-      :ok -> result
-      _ -> {:error, :outcome_unknown}
+      :ok ->
+        with {:error, {:rejected, reason}} <- result, do: {:error, reason}
+
+      _ ->
+        {:error, :outcome_unknown}
+    end
+  end
+
+  # do_submit refuses definitively (lifecycle fence, invalid request,
+  # coordinator rejection) before anything is enqueued: that follow-up never
+  # executed, so its record is a terminal rejection rather than unknown.
+  defp submit_native_followup_request(request, identity, state) do
+    case do_submit(attach_request_identity(request, identity), state) do
+      {:ok, run_id} -> {:ok, run_id}
+      {:error, :outcome_unknown} -> {:error, :outcome_unknown}
+      {:error, reason} -> {:error, {:rejected, reason}}
     end
   end
 
@@ -939,7 +1191,7 @@ defmodule LemonRouter.RunOrchestrator do
 
       :not_terminal
       when ownership == :new or
-             (ownership == :existing and admission_state == "claimed") ->
+             (ownership == :existing and admission_state in ["claimed", "rejected"]) ->
         submit_new_admission(params, identity, admission, state)
 
       :not_terminal ->
@@ -1001,7 +1253,7 @@ defmodule LemonRouter.RunOrchestrator do
   defp dispatch_new_admission(params, identity, admission, state) do
     # Preserve only content-free attribution alongside the permanent replay
     # fence, including when dispatch's outcome cannot be established.
-    submitting = compact_admission("submitting", identity, admission)
+    submitting = compact_admission("submitting", identity, reopen_rejected(admission))
 
     case Store.compare_and_swap(
            Store,
@@ -1030,16 +1282,18 @@ defmodule LemonRouter.RunOrchestrator do
           {:error, :outcome_unknown} ->
             {{:error, :outcome_unknown}, state}
 
-          {:error, _reason} = error ->
+          {:error, reason} = error ->
             # A synchronous start rejection may already have persisted terminal
             # evidence. Never erase that evidence or reopen its fixed-ID fence.
-            # Otherwise, only an unchanged pre-enqueue claim can roll back.
+            # Otherwise, only an unchanged pre-enqueue claim records the definite
+            # rejection: terminal, never executed, so it proves nothing is running
+            # while still allowing the same request to be resubmitted.
             case Store.compare_and_swap(
                    Store,
                    @run_admission_table,
                    params.run_id,
                    submitting,
-                   admission,
+                   rejected_admission(admission, reason),
                    durable: true
                  ) do
               :ok ->
@@ -1227,6 +1481,22 @@ defmodule LemonRouter.RunOrchestrator do
         :native_failure
       ])
     )
+  end
+
+  # A definite pre-dispatch rejection (lifecycle fence, unknown agent, invalid
+  # request, coordinator refusal) keeps the claim's identity and expiry but is
+  # terminal: presence never counts it as unresolved work.
+  defp rejected_admission(admission, reason) do
+    admission
+    |> reopen_rejected()
+    |> Map.merge(%{state: "rejected", terminal: true, rejection: safe_error_label(reason)})
+  end
+
+  # Resubmitting the same request reopens its rejected claim.
+  defp reopen_rejected(admission) do
+    if MapHelpers.get_key(admission, :state) == "rejected",
+      do: admission |> Map.drop([:terminal, :rejection]) |> Map.put(:state, "claimed"),
+      else: admission
   end
 
   defp admission_scope(%RunRequest{} = params) do
@@ -1447,7 +1717,7 @@ defmodule LemonRouter.RunOrchestrator do
     |> Enum.each(fn
       {run_id, entry} when is_map(entry) ->
         case MapHelpers.get_key(entry, :state) do
-          "claimed" ->
+          claim when claim in ["claimed", "rejected"] ->
             if expired_at?(
                  admission_expires_at_ms(entry, @run_admission_retention_ms),
                  now_ms
