@@ -270,11 +270,14 @@ defmodule LemonCli.Setup.ModelReadiness do
   end
 
   defp run_verifier(input, opts) do
-    case Keyword.get(opts, :verifier) do
-      verifier when is_function(verifier, 2) -> verifier.(input, opts)
-      verifier when is_function(verifier, 1) -> verifier.(input)
-      nil -> ProviderLiveCheck.check(input, check_options(opts))
-    end
+    check =
+      case Keyword.get(opts, :verifier) do
+        verifier when is_function(verifier, 2) -> &verifier.(&1, opts)
+        verifier when is_function(verifier, 1) -> verifier
+        nil -> &ProviderLiveCheck.check(&1, check_options(opts))
+      end
+
+    input |> check.() |> Verification.retry_broker_accounts(check, input, opts)
   end
 
   defp check_options(opts), do: Keyword.take(opts, [:codex_discover, :http_get])

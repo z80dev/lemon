@@ -665,6 +665,66 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
       assert LemonAgent.ModelRuntime.CredentialHealth.in_cooldown?(:openai, "omp_broker:1")
       refute LemonAgent.ModelRuntime.CredentialHealth.in_cooldown?(:openai, "omp_broker:2")
     end
+
+    test "a 401 on a broker API key retries the same turn on the next broker account" do
+      owner = self()
+      now = System.system_time(:millisecond)
+
+      credentials =
+        for {id, key} <- [{1, "dead-broker-key"}, {2, "live-broker-key"}] do
+          %{
+            "id" => id,
+            "provider" => "openai",
+            "identityKey" => nil,
+            "rotatesInMs" => nil,
+            "credential" => %{"type" => "api_key", "key" => key}
+          }
+        end
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "generation" => 1,
+          "generatedAt" => now,
+          "serverNowMs" => now,
+          "refresher" => %{
+            "enabled" => true,
+            "intervalMs" => 60_000,
+            "skewMs" => 300_000,
+            "nextSweepInMs" => 1_000
+          },
+          "credentials" => credentials
+        })
+      end)
+
+      primary = LemonAi.Models.get_model(:openai, "gpt-4")
+
+      settings = %SettingsManager{
+        default_model: %{provider: :openai, model_id: "gpt-4", base_url: nil},
+        providers: %{"openai" => %{auth_source: "omp_broker"}},
+        provider_routing: %{enabled: true, fallback_providers: [], require_credentials: true}
+      }
+
+      stream_fn = fn model, _context, options ->
+        send(owner, {:attempt, options.api_key})
+
+        case options.api_key do
+          "dead-broker-key" ->
+            {:ok, error_stream(model, "Unauthorized (HTTP 401): invalid api key")}
+
+          "live-broker-key" ->
+            {:ok, success_stream(model, "live account response")}
+        end
+      end
+
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, settings, File.cwd!())
+      {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+      assert {:ok, message} = LemonAi.EventStream.result(stream, 2_000)
+      assert [%TextContent{text: "live account response"}] = message.content
+      assert_receive {:attempt, "dead-broker-key"}
+      assert_receive {:attempt, "live-broker-key"}
+      assert LemonAgent.ModelRuntime.CredentialHealth.in_cooldown?(:openai, "omp_broker:1")
+    end
   end
 
   describe "cancellation, hangs, and model switches" do

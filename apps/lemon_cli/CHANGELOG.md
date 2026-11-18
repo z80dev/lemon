@@ -10,6 +10,9 @@ All notable changes to `lemon_cli` are documented here.
   broker (`auth_source = "omp_broker"`), installing the `omp-broker` service
   when the local broker is not running; the full setup wizard offers it when
   omp is detected. `lemon service` accepts the `omp-broker` role and `--omp-bin`.
+- Setup and `lemon setup model` live checks retry a provider's other omp broker
+  accounts after a 401/403, as model requests already do, so one dead key no
+  longer fails a provider with a working account.
 - Source-only `lemon reload [--no-sessions] [--json]` loads compiled code changes
   into an existing development runtime and reports idle-session refreshes,
   busy sessions, failures, and modules requiring a restart without starting a daemon.

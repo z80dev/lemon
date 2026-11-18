@@ -251,6 +251,51 @@ defmodule LemonCli.Setup.OmpSetupTest do
     refute Map.has_key?(providers, "anthropic")
   end
 
+  test "a rejected first broker account does not fail verification when another works", ctx do
+    {io, output} = recording_io()
+    model = LemonAi.Models.get_models(:openrouter) |> hd() |> Map.fetch!(:id)
+    parent = self()
+
+    verifier = fn %{api_key: key} ->
+      send(parent, {:checked, key})
+
+      case key do
+        "dead-openrouter-key" -> {:error, {:unauthorized, :openrouter}}
+        "live-openrouter-key" -> {:ok, %{http_status: 200}}
+      end
+    end
+
+    assert :ok =
+             Omp.run(
+               [
+                 "-n",
+                 "--provider",
+                 "openrouter",
+                 "--model",
+                 "openrouter:#{model}",
+                 "--config-path",
+                 ctx.config_path
+               ],
+               io,
+               verifier: verifier
+             )
+
+    assert_received {:checked, "dead-openrouter-key"}
+    assert_received {:checked, "live-openrouter-key"}
+    assert output.() =~ "Provider configuration verified"
+    refute output.() =~ "live-openrouter-key"
+  end
+
+  defp api_key(id, provider, key) do
+    %{
+      "id" => id,
+      "provider" => provider,
+      "identityKey" => nil,
+      "rotatesInMs" => nil,
+      "credential" => %{"type" => "api_key", "key" => key}
+    }
+  end
+
   defp snapshot do
     now = System.system_time(:millisecond)
 
@@ -283,7 +328,9 @@ defmodule LemonCli.Setup.OmpSetupTest do
         oauth.(1, "anthropic", @anthropic_access),
         oauth.(2, "openai-codex", @codex_access),
         oauth.(3, "github-copilot", "copilot-access"),
-        oauth.(4, "cursor", "cursor-access")
+        oauth.(4, "cursor", "cursor-access"),
+        api_key(5, "openrouter", "dead-openrouter-key"),
+        api_key(6, "openrouter", "live-openrouter-key")
       ]
     }
   end

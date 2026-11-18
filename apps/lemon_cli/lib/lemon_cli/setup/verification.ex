@@ -195,7 +195,7 @@ defmodule LemonCli.Setup.Verification do
 
       case build_live_input(opts, provider, model) do
         {:ok, live_input} ->
-          case verifier.(live_input) do
+          case verifier.(live_input) |> retry_broker_accounts(verifier, live_input, opts) do
             {:ok, info} ->
               {:ok, %{provider: provider, model: model, live: :ok, live_note: live_note(info)}}
 
@@ -231,6 +231,40 @@ defmodule LemonCli.Setup.Verification do
       end
     end
   end
+
+  @doc """
+  Retries a live check rejected with 401/403 on the provider's other auth
+  broker accounts (a broker can list a dead key first; the runtime moves past a
+  rejected account, so checks do too). Other results, and providers not backed
+  by the broker, pass through. `check` takes a live input.
+  """
+  @spec retry_broker_accounts(term(), (map() -> term()), map(), keyword()) :: term()
+  def retry_broker_accounts({:error, reason} = rejected, check, input, opts)
+      when reason == :unauthorized or
+             (is_tuple(reason) and elem(reason, 0) == :unauthorized) do
+    config = Keyword.get(opts, :config) || effective_config(opts)
+    cfg = provider_config(config, input.provider)
+    source = Map.get(cfg, :auth_source) || Map.get(cfg, "auth_source")
+
+    if LemonCore.Config.Providers.normalize_auth_source(source) == "omp_broker" do
+      config
+      |> Credentials.list_provider_api_keys(input.provider)
+      |> Enum.map(& &1.api_key)
+      |> Enum.filter(&(is_binary(&1) and &1 != input.api_key))
+      |> Enum.uniq()
+      |> Enum.reduce_while(rejected, fn key, acc ->
+        case check.(%{input | api_key: key}) do
+          {:error, :unauthorized} -> {:cont, acc}
+          {:error, {:unauthorized, _}} -> {:cont, acc}
+          result -> {:halt, result}
+        end
+      end)
+    else
+      rejected
+    end
+  end
+
+  def retry_broker_accounts(result, _check, _input, _opts), do: result
 
   defp live_note(info) when is_map(info) do
     case Map.get(info, :http_status) do
