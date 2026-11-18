@@ -119,9 +119,15 @@ for daemon discovery and platform limitations.
 ```
 
 Routes are `"auto"` (the default), `"public"` (public http(s) only) and
-`"local"` (local documents and private-network addresses only). Cloud metadata
-endpoints are refused on every route. `safe/1` reduces a policy to a
-camelCased map with nil/false entries dropped, suitable for returning to a
+`"local"` (local documents and private-network addresses only). Hosts are
+classified on canonical addresses: IP literals in every alias form (decimal,
+hex, octal, IPv4-mapped/compatible and NAT64 IPv6, trailing dot) are
+normalized, and other hostnames are resolved with every answer checked.
+Cloud metadata and link-local destinations (`169.254.0.0/16`, `fe80::/10`,
+`fd00:ec2::254`, `100.100.100.200`, `metadata.google.internal`) are refused on
+every route, and so is a hostname that fails to resolve. This is a pre-check;
+see "Egress enforcement" in `docs/tools/browser.md` for which browsers are also
+bound at connection time. `safe/1` reduces a policy to a camelCased map with nil/false entries dropped, suitable for returning to a
 caller or writing to a log.
 
 This module is pure and does not touch the driver, so it can be used on its own
@@ -186,8 +192,13 @@ the user's browser.
 `LemonBrowser.request/4` accepts a raw `browser.cdp` method only when the caller
 passes `developer_mode: true`; browser lifecycle and download-policy commands
 (`Browser.close`, `Target.closeTarget`, `Browser.setDownloadBehavior`,
-`Page.setDownloadBehavior`) remain blocked even then. No model-facing tool
-issues raw CDP.
+`Page.setDownloadBehavior`) remain blocked even then. The Node driver further
+limits raw CDP to read-only methods that cannot start network traffic
+(`DOM.*` reads, `Accessibility.get*AXTree`, `DOMSnapshot.captureSnapshot`,
+`Page.getFrameTree`/`getLayoutMetrics`/`getNavigationHistory`,
+`Performance.getMetrics`, `Browser.getVersion`, `Target.getTargets`); anything
+else, including `Page.navigate` and `Runtime.evaluate`, is refused. No
+model-facing tool issues raw CDP.
 
 ## Artifacts
 

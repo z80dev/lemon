@@ -240,8 +240,12 @@ Notes:
 
 - `browser_navigate` route guard: `auto` (default) keeps local-first behavior;
   `public` rejects local, private, `data:`, and `file:` targets; `local` rejects
-  public web targets. Cloud metadata endpoints are blocked on every route. The
-  `route` argument is stripped before dispatch to the driver.
+  public web targets. Hosts are classified after normalizing IP aliases
+  (decimal/hex/octal, IPv4-mapped IPv6, trailing dot) and resolving DNS, with
+  every answer checked; cloud metadata and link-local addresses are blocked on
+  every route, and unresolvable hosts are refused. The driver repeats the
+  metadata check before `navigate` and `tabOpen`. See "Egress enforcement"
+  below for what is enforced per connection. The `route` argument is stripped before dispatch to the driver.
 - `browser_screenshot` returns redacted metadata and the artifact path by
   default. `includeImage: true` adds a model-visible image block; `sendToChannel:
   true` marks the artifact for delivery through the Telegram/Discord final-answer
@@ -253,9 +257,49 @@ Notes:
 - `browser_get_cookies` redacts values (`[redacted]`) unless `includeValues: true`.
 - `browser_events` dialogs are dismissed by the helper after they are recorded.
 - Raw CDP (`browser.cdp`) is not exposed to the model. At the driver layer it
-  requires developer mode, and browser lifecycle and download-policy commands
-  (`Browser.close`, `Target.closeTarget`, `Browser.setDownloadBehavior`,
-  `Page.setDownloadBehavior`) are always blocked.
+  requires developer mode, and the Node driver accepts only read-only methods
+  that cannot start network traffic (`DOM.getDocument`, `DOM.querySelector`,
+  `DOM.querySelectorAll`, `DOM.describeNode`, `DOM.getOuterHTML`,
+  `DOM.getBoxModel`, `DOMSnapshot.captureSnapshot`,
+  `Accessibility.getFullAXTree`, `Accessibility.getPartialAXTree`,
+  `Page.getFrameTree`, `Page.getLayoutMetrics`, `Page.getNavigationHistory`,
+  `Performance.getMetrics`, `Browser.getVersion`, `Target.getTargets`). Every
+  other method, including `Page.navigate`, `Runtime.evaluate`,
+  `Target.createTarget` and `Fetch.*`, is refused.
+
+## Egress enforcement
+
+- **Chrome launched by the Lemon driver** (the driver started the Chrome
+  process itself in this session): the driver starts a loopback egress proxy
+  first and launches Chrome with `--proxy-server` pointing at it and
+  `--proxy-bypass-list=<-loopback>`, so loopback destinations are not silently
+  exempted. The proxy resolves each destination itself, refuses it if any
+  answer is a cloud metadata or link-local address, and connects to the IP it
+  checked. HTTPS and `wss:` are tunnelled with CONNECT and never decrypted.
+  Regression tests with real Chrome cover these transports, with zero
+  connections reaching the forbidden destination: plain HTTP navigation,
+  redirect hops, iframes, `window.open` popups, `tabOpen`, `fetch` from the
+  page, `fetch` from a service worker, HTTPS via CONNECT, `ws:` and `wss:`
+  WebSockets, and DNS rebinding between two requests. Other channels
+  (WebRTC/UDP, QUIC, extension or browser-internal traffic) are not verified
+  and must not be relied on. The driver also passes
+  `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`, but that is not
+  verified either. Private-network destinations stay reachable through the
+  proxy; the `public`/`local` route choice is enforced only by the
+  `RoutePolicy` pre-check of the requested URL.
+- Enterprise policies that override the command line (`ProxySettings`,
+  `ProxyMode`, `WebRtcIPHandlingPolicy` and similar) are an unsupported
+  configuration: they can remove the proxy, and Lemon does not detect this.
+- **Every other browser is unprotected at egress.** This includes an explicit
+  `cdp` endpoint, `LEMON_BROWSER_ATTACH_ONLY`, the extension `relay`, and the
+  driver automatically attaching to a Chrome that was already listening on the
+  configured CDP port (even one a previous driver run launched). It also
+  includes the hosted providers (Browserbase, Browser Use, Firecrawl,
+  Camofox). For these, only the `RoutePolicy` and driver pre-checks of the
+  requested `navigate`/`tabOpen` URL apply. Redirects, page scripts,
+  subresources, workers and DNS changes are **not** filtered. Do not rely on
+  Lemon to keep such a browser away from cloud metadata; isolate it at the
+  network level.
 
 ## Artifacts and file paths
 
@@ -317,8 +361,11 @@ Notes:
 - `node executable not found on PATH`: install Node.js 24 LTS or later.
 - `Could not find Chrome/Chromium executable`: install Chrome/Chromium or set
   `LEMON_BROWSER_EXECUTABLE`.
-- `browser navigation blocked metadata endpoint`: the target is a cloud metadata
-  address; it is blocked on all routes.
+- `browser navigation blocked metadata endpoint`: the target (or one of its DNS
+  answers or redirect hops) is a cloud metadata or link-local address; it is
+  blocked on all routes.
+- `browser navigation could not resolve host: <host>`: DNS returned no address;
+  navigation fails closed.
 - `browser_upload_file path must be under the current project` /
   `must be an existing file`: move the file into the project and pass a path to
   an existing file.
