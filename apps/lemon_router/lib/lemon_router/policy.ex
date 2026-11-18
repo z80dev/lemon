@@ -76,7 +76,13 @@ defmodule LemonRouter.Policy do
     end
   end
 
-  @doc "Resolves all configured policy layers without permissive fallback."
+  @doc """
+  Resolves all configured policy layers without permissive fallback.
+
+  Every layer is read strictly: when the Store cannot confirm a layer's row
+  (backend error, timeout or missing process) the result is
+  `{:error, :policy_unavailable}`, never a policy without that layer.
+  """
   @spec resolve_validated_for_run(map()) :: {:ok, ToolPolicy.t()} | {:error, term()}
   def resolve_validated_for_run(params) do
     agent_id = params[:agent_id]
@@ -84,13 +90,14 @@ defmodule LemonRouter.Policy do
     origin = params[:origin]
     channel_context = params[:channel_context]
 
-    with {:ok, channel_policy} <- get_channel_policy_for_run(origin, channel_context),
+    with {:ok, agent_policy} <- get_agent_policy(agent_id),
+         {:ok, channel_policy} <- get_channel_policy_for_run(origin, channel_context),
          {:ok, session_policy} <- get_session_policy(session_key),
-         {:ok, policy} <- merge_validated(nil, get_agent_policy(agent_id)),
+         {:ok, runtime_policy} <- get_runtime_policy(),
+         {:ok, policy} <- merge_validated(nil, agent_policy),
          {:ok, policy} <- merge_validated(policy, channel_policy),
-         {:ok, policy} <- merge_validated(policy, session_policy),
-         {:ok, policy} <- merge_validated(policy, get_runtime_policy()) do
-      {:ok, policy}
+         {:ok, policy} <- merge_validated(policy, session_policy) do
+      merge_validated(policy, runtime_policy)
     end
   end
 
@@ -146,9 +153,12 @@ defmodule LemonRouter.Policy do
   end
 
   # Load agent policy from store
-  defp get_agent_policy(nil), do: nil
+  defp get_agent_policy(nil), do: {:ok, nil}
 
-  defp get_agent_policy(agent_id), do: LemonCore.PolicyStore.get_agent(agent_id)
+  defp get_agent_policy(agent_id), do: strict(LemonCore.PolicyStore.fetch_agent(agent_id))
+
+  defp strict({:ok, _policy} = fetched), do: fetched
+  defp strict({:error, _reason}), do: {:error, :policy_unavailable}
 
   # Tools that mutate files or execute code on the host. Group chats require
   # an approval for each call because any member can prompt the agent.
@@ -164,13 +174,6 @@ defmodule LemonRouter.Policy do
     channel_id = channel_context[:channel_id]
     peer_kind = channel_context[:peer_kind]
 
-    # Load channel base policy
-    channel_policy =
-      case LemonCore.PolicyStore.get_channel(channel_id) do
-        nil -> %{}
-        policy -> policy
-      end
-
     # Fail closed: only an explicit DM escapes the group floor.
     group_policy =
       if peer_kind != :dm do
@@ -179,7 +182,9 @@ defmodule LemonRouter.Policy do
         %{}
       end
 
-    merge_validated(channel_policy, group_policy)
+    with {:ok, channel_policy} <- strict(LemonCore.PolicyStore.fetch_channel(channel_id)) do
+      merge_validated(channel_policy || %{}, group_policy)
+    end
   end
 
   # Session rows contain routing settings beside the nested policy. Legacy
@@ -189,15 +194,16 @@ defmodule LemonRouter.Policy do
   defp get_session_policy(nil), do: {:ok, nil}
 
   defp get_session_policy(session_key) do
-    case LemonCore.PolicyStore.get_session(session_key) do
-      nil -> {:ok, nil}
-      policy when is_map(policy) -> session_tool_policy(policy)
-      _ -> {:error, :invalid_session_policy}
+    case strict(LemonCore.PolicyStore.fetch_session(session_key)) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, policy} when is_map(policy) -> session_tool_policy(policy)
+      {:ok, _invalid} -> {:error, :invalid_session_policy}
+      {:error, _reason} = error -> error
     end
   end
 
   # Load operator runtime overrides from store
-  defp get_runtime_policy, do: LemonCore.PolicyStore.get_runtime()
+  defp get_runtime_policy, do: strict(LemonCore.PolicyStore.fetch_runtime())
 
   defp session_tool_policy(policy) do
     # Forward the removed key only so ToolPolicy can warn and discard it.

@@ -169,7 +169,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     assert {:ok, deleted} = SessionsDelete.handle(%{"sessionKey" => second}, %{})
     assert deleted["summary"]["verified"] == true
     assert deleted["summary"]["cleanup"]["deletedLifecycleMetadata"] == true
-    assert SessionMetadataStore.fetch(second) == nil
+    assert SessionMetadataStore.fetch(second) == {:ok, nil}
   end
 
   test "schemas and authorization advertise the lifecycle contract" do

@@ -28,6 +28,18 @@ defmodule LemonControlPlane.Methods.Agent do
         "session_key" => "agent:default:main"
       }
 
+  ## Unknown outcomes
+
+  The run ID is fixed before the router is called. When the submission's
+  outcome is unknown (the router call timed out or exited after the request
+  reached it, or the router reported `:outcome_unknown`), the method fails with
+  code `UNAVAILABLE` and details
+  `%{"code" => "SUBMISSION_OUTCOME_UNKNOWN", "runId" => run_id, "retrySafe" => false}`:
+  the run may still execute, so reconcile it with `runs.receipt.get` instead of
+  resubmitting. With an `idempotency_key`, the key stays claimed by that run ID
+  (it never expires); later requests with the key return the same receipt, or
+  the run once its router receipt shows it was accepted.
+
   ## Events
 
   After submitting, the connection will receive events for the run:
@@ -186,42 +198,100 @@ defmodule LemonControlPlane.Methods.Agent do
     # Generate session key if not provided
     session_key = params.session_key || generate_session_key(params.agent_id)
 
-    # Check for idempotency
-    case check_idempotency(params.idempotency_key) do
-      {:ok, :new} ->
-        do_submit_run(params, session_key, ctx)
+    case params.idempotency_key do
+      nil ->
+        case submit_via_router(params, session_key, LemonCore.Id.run_id(), ctx) do
+          {:ok, _result} = ok -> ok
+          {:error, _outcome, error} -> {:error, error}
+        end
 
-      {:ok, {:existing, result}} ->
-        {:ok, result}
+      key ->
+        submit_once(key, params, session_key, ctx)
     end
   end
 
-  defp do_submit_run(params, session_key, ctx) do
-    # Try to submit through LemonRouter if available
-    case Code.ensure_loaded(LemonRouter) do
-      {:module, _} ->
-        submit_via_router(params, session_key, ctx)
+  # The key is claimed atomically before the router is called, so concurrent
+  # requests submit once. The claim carries the fixed run ID and never expires:
+  # an unknown router outcome keeps it, and every later request with the key
+  # gets that run ID back instead of a second submission until the router's
+  # receipt proves the run was admitted or aborted before dispatch.
+  defp submit_once(key, params, session_key, ctx) do
+    run_id = LemonCore.Id.run_id()
+    pending = %{"run_id" => run_id, "session_key" => session_key}
 
-      _ ->
-        # Fallback: return a stub run_id for testing
-        run_id = generate_run_id()
+    case LemonCore.Idempotency.begin(:agent, key, pending) do
+      {:new, claim} ->
+        case submit_via_router(params, session_key, run_id, ctx) do
+          {:ok, result} ->
+            _ = LemonCore.Idempotency.complete(claim, result)
+            {:ok, result}
 
-        result = %{
-          "run_id" => run_id,
-          "session_key" => session_key
-        }
+          {:error, :outcome_unknown, error} ->
+            {:error, error}
 
-        # Store for idempotency
-        store_idempotency(params.idempotency_key, result)
+          {:error, :rejected, error} ->
+            _ = LemonCore.Idempotency.release(claim)
+            {:error, error}
+        end
 
+      {:done, result} ->
         {:ok, result}
+
+      {:pending, claim} ->
+        reconcile(claim)
+
+      {:error, :store_unavailable} ->
+        {:error,
+         Errors.unavailable("Idempotency state is unavailable; the run was not submitted")}
     end
   end
 
-  defp submit_via_router(params, session_key, ctx) do
+  # Resolves an earlier request's claim from the router's durable receipt for
+  # its fixed run ID. Anything short of proof leaves the claim pending.
+  defp reconcile(claim) do
+    {run_id, session_key} =
+      case LemonCore.Idempotency.meta(claim) do
+        %{"run_id" => run_id, "session_key" => session_key} when is_binary(run_id) ->
+          {run_id, session_key}
+
+        _ ->
+          {nil, nil}
+      end
+
+    receipt = if run_id, do: LemonCore.RouterBridge.run_receipt(run_id), else: :unknown
+
+    case receipt do
+      {:ok, %{state: :accepted}} ->
+        result = %{"run_id" => run_id, "session_key" => session_key}
+        _ = LemonCore.Idempotency.complete(claim, result)
+        {:ok, result}
+
+      {:ok, %{state: :aborted}} ->
+        retry_safe = LemonCore.Idempotency.release(claim) == :ok
+
+        {:error,
+         Errors.error(:conflict, "The earlier request was aborted before it ran", %{
+           "code" => "SUBMISSION_ABORTED",
+           "runId" => run_id,
+           "sessionKey" => session_key,
+           "retrySafe" => retry_safe
+         })}
+
+      _unproven ->
+        {:error,
+         outcome_unknown(
+           "A request with this idempotency_key is in progress or its outcome is unknown",
+           run_id,
+           session_key
+         )}
+    end
+  end
+
+  defp submit_via_router(params, session_key, run_id, ctx) do
     submit_params =
       RunRequest.new(%{
         origin: :control_plane,
+        run_id: run_id,
         session_key: session_key,
         agent_id: params.agent_id,
         prompt: params.prompt,
@@ -239,55 +309,39 @@ defmodule LemonControlPlane.Methods.Agent do
         }
       })
 
-    case LemonRouter.submit(submit_params) do
+    case router_submit(submit_params) do
       {:ok, run_id} ->
-        result = %{
-          "run_id" => run_id,
-          "session_key" => session_key
-        }
+        {:ok, %{"run_id" => run_id, "session_key" => session_key}}
 
-        # Store for idempotency
-        store_idempotency(params.idempotency_key, result)
-
-        {:ok, result}
+      {:error, :outcome_unknown} ->
+        {:error, :outcome_unknown,
+         outcome_unknown("Run submission outcome is unknown", run_id, session_key)}
 
       {:error, reason} ->
-        {:error, Errors.internal_error("Failed to submit run", inspect(reason))}
+        {:error, :rejected, Errors.internal_error("Failed to submit run", inspect(reason))}
     end
+  end
+
+  # A call that exits after reaching the orchestrator (timeout, crash, lost
+  # reply) may still have queued the run, so only a missing orchestrator is a
+  # definite rejection.
+  defp router_submit(request) do
+    LemonRouter.submit(request)
+  catch
+    :exit, {:noproc, _} -> {:error, :router_unavailable}
+    :exit, _uncertain -> {:error, :outcome_unknown}
+  end
+
+  defp outcome_unknown(message, run_id, session_key) do
+    Errors.error(:unavailable, message, %{
+      "code" => "SUBMISSION_OUTCOME_UNKNOWN",
+      "runId" => run_id,
+      "sessionKey" => session_key,
+      "retrySafe" => false
+    })
   end
 
   defp generate_session_key(agent_id) do
     "agent:#{agent_id}:main"
-  end
-
-  defp generate_run_id do
-    LemonCore.Id.uuid()
-  end
-
-  defp check_idempotency(nil), do: {:ok, :new}
-
-  defp check_idempotency(key) do
-    case Code.ensure_loaded(LemonCore.Idempotency) do
-      {:module, _} ->
-        case LemonCore.Idempotency.get(:agent, key) do
-          {:ok, result} -> {:ok, {:existing, result}}
-          :miss -> {:ok, :new}
-        end
-
-      _ ->
-        {:ok, :new}
-    end
-  end
-
-  defp store_idempotency(nil, _result), do: :ok
-
-  defp store_idempotency(key, result) do
-    case Code.ensure_loaded(LemonCore.Idempotency) do
-      {:module, _} ->
-        LemonCore.Idempotency.put(:agent, key, result)
-
-      _ ->
-        :ok
-    end
   end
 end

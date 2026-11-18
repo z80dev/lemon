@@ -37,7 +37,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       refute inspect(result) =~ "dangerous"
 
       # Verify policy is stored in the session policy store (where router reads from)
-      stored = LemonCore.PolicyStore.get_session(session_key)
+      stored = stored_policy(session_key)
       assert {:ok, policy} = ToolPolicy.parse(stored[:tool_policy])
       assert policy.approvals == %{"bash" => :always, "write" => :dangerous}
 
@@ -59,7 +59,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
                )
 
       assert reason =~ "conflicting_policy_key"
-      refute LemonCore.PolicyStore.get_session(session_key)
+      refute stored_policy(session_key)
     end
 
     test "malformed policy does not replace existing session routing or authority" do
@@ -78,7 +78,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
                  %{auth: %{role: :operator}}
                )
 
-      assert LemonCore.PolicyStore.get_session(session_key) == existing
+      assert stored_policy(session_key) == existing
     end
 
     test "stores model override" do
@@ -93,7 +93,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
 
       {:ok, _result} = SessionsPatch.handle(params, ctx)
 
-      stored = LemonCore.PolicyStore.get_session(session_key)
+      stored = stored_policy(session_key)
       assert stored[:model] == "claude-3-opus-20240229"
 
       # Cleanup
@@ -114,7 +114,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
                SessionsPatch.handle(params, ctx)
 
       assert message =~ "thinkingLevel must be one of"
-      refute LemonCore.PolicyStore.get_session(session_key)
+      refute stored_policy(session_key)
     end
 
     test "stores thinking_level override" do
@@ -129,7 +129,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
 
       {:ok, _result} = SessionsPatch.handle(params, ctx)
 
-      stored = LemonCore.PolicyStore.get_session(session_key)
+      stored = stored_policy(session_key)
       assert stored[:thinking_level] == "high"
 
       # Cleanup
@@ -152,7 +152,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
 
       {:ok, _result} = SessionsPatch.handle(params, ctx)
 
-      stored = LemonCore.PolicyStore.get_session(session_key)
+      stored = stored_policy(session_key)
       # Should have both existing and new keys
       assert stored[:existing_key] == "existing_value"
       assert {:ok, policy} = ToolPolicy.parse(stored[:tool_policy])
@@ -176,7 +176,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
 
       {:ok, _result} = SessionsPatch.handle(params, ctx)
 
-      stored = LemonCore.PolicyStore.get_session(session_key)
+      stored = stored_policy(session_key)
       assert {:ok, policy} = ToolPolicy.parse(stored[:tool_policy])
       assert policy.approvals["bash"] == :always
       # nil values should not be stored
@@ -288,7 +288,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
       refute inspect(result) =~ "private-model"
 
-      assert LemonCore.PolicyStore.get_session(session_key) == nil
+      assert stored_policy(session_key) == nil
     end
 
     test "sessions.delete returns cleanup summary without policy contents" do
@@ -309,7 +309,12 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
       refute inspect(result) =~ "private-model"
 
-      assert LemonCore.PolicyStore.get_session(session_key) == nil
+      assert stored_policy(session_key) == nil
     end
+  end
+
+  defp stored_policy(session_key) do
+    {:ok, policy} = LemonCore.PolicyStore.fetch_session(session_key)
+    policy
   end
 end

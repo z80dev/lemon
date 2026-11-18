@@ -300,28 +300,43 @@ defmodule LemonWeb.Chat.Backend do
   The session's stored tool-policy override. `sessions.patch` writes it and the
   router reads it per run; no read method returns it, so this reads the same
   policy row in-process and projects only the profile and approval modes.
+
+  `readable: false` means the row could not be read: the projection is not the
+  stored policy, and the pane must not write a policy derived from it.
   """
-  @spec tool_policy(String.t()) :: %{profile: String.t() | nil, ask: boolean()}
+  @spec tool_policy(String.t()) :: %{
+          profile: String.t() | nil,
+          ask: boolean(),
+          readable: boolean()
+        }
   def tool_policy(session_key) do
-    policy =
-      case LemonCore.PolicyStore.get_session(session_key) do
-        %{} = stored -> Map.get(stored, :tool_policy) || Map.get(stored, "tool_policy") || %{}
-        _ -> %{}
-      end
+    case LemonCore.PolicyStore.fetch_session(session_key) do
+      {:ok, stored} ->
+        policy =
+          if is_map(stored),
+            do: Map.get(stored, :tool_policy) || Map.get(stored, "tool_policy") || %{},
+            else: %{}
 
-    approvals = field(policy, :approvals) || %{}
+        approvals = field(policy, :approvals) || %{}
 
-    %{
-      profile: string(field(policy, :profile)),
-      ask:
-        is_map(approvals) and
-          Enum.any?(approvals, fn {_tool, mode} -> to_string(mode) == "always" end)
-    }
+        %{
+          profile: string(field(policy, :profile)),
+          ask:
+            is_map(approvals) and
+              Enum.any?(approvals, fn {_tool, mode} -> to_string(mode) == "always" end),
+          readable: true
+        }
+
+      {:error, _reason} ->
+        unreadable_tool_policy()
+    end
   rescue
-    _ -> %{profile: nil, ask: false}
+    _ -> unreadable_tool_policy()
   catch
-    :exit, _ -> %{profile: nil, ask: false}
+    :exit, _ -> unreadable_tool_policy()
   end
+
+  defp unreadable_tool_policy, do: %{profile: nil, ask: false, readable: false}
 
   @spec models() :: {:ok, [map()]} | {:error, error()}
   def models do

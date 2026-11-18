@@ -427,7 +427,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert child != source
     assert SessionKey.valid?(child)
     assert SessionKey.agent_id(child) == "native_methods"
-    assert SessionMetadataStore.fetch(child).title == nil
+    assert {:ok, %{title: nil}} = SessionMetadataStore.fetch(child)
     assert RunStore.history(child) == []
 
     assert {:ok, listed} = SessionsList.handle(%{"query" => child}, %{})

@@ -36,6 +36,9 @@ defmodule LemonCore.SessionLifecycle do
   @stats_version 1
   @export_version 1
   @prune_version 1
+  # Metadata of a session without stored annotations, as `merge_metadata/1`
+  # reports it (equal timestamps mean "never updated").
+  @unannotated %{title: nil, pinned: false, archived: false, created_at_ms: 0, updated_at_ms: 0}
 
   @type session_row :: %{
           session_key: String.t(),
@@ -291,7 +294,15 @@ defmodule LemonCore.SessionLifecycle do
     end
   end
 
-  @doc "Preview or execute a confirmation-bound stale-session prune."
+  @doc """
+  Preview or execute a confirmation-bound stale-session prune.
+
+  Candidates are built from strict reads of the session index and every
+  session's metadata: when either cannot be read, preview and execution return
+  `{:error, :session_store_unavailable}` before any confirmation is checked or
+  any session deleted. Each deletion re-checks the pin (and, for
+  `archived_only`, the archive flag) on its strict pre-delete snapshot.
+  """
   @spec prune(keyword()) :: {:ok, map()} | {:error, term()}
   def prune(opts) when is_list(opts) do
     with {:ok, older_than_ms} <- require_timestamp(Keyword.get(opts, :older_than_ms)) do
@@ -299,22 +310,41 @@ defmodule LemonCore.SessionLifecycle do
       include_pinned = Keyword.get(opts, :include_pinned, false) == true
       dry_run = Keyword.get(opts, :dry_run, true) != false
 
-      candidates = prune_candidates(older_than_ms, archived_only, include_pinned)
-      token = prune_token(older_than_ms, archived_only, include_pinned, candidates)
-
-      if dry_run do
-        {:ok,
-         prune_result(candidates, token, older_than_ms, archived_only, include_pinned, true, [])}
-      else
-        execute_prune(
+      with {:ok, candidates} <- prune_candidates(older_than_ms, archived_only, include_pinned) do
+        prune_candidates_checked(
           candidates,
-          token,
-          Keyword.get(opts, :confirm_token),
+          opts,
           older_than_ms,
           archived_only,
-          include_pinned
+          include_pinned,
+          dry_run
         )
       end
+    end
+  end
+
+  defp prune_candidates_checked(
+         candidates,
+         opts,
+         older_than_ms,
+         archived_only,
+         include_pinned,
+         dry_run
+       ) do
+    token = prune_token(older_than_ms, archived_only, include_pinned, candidates)
+
+    if dry_run do
+      {:ok,
+       prune_result(candidates, token, older_than_ms, archived_only, include_pinned, true, [])}
+    else
+      execute_prune(
+        candidates,
+        token,
+        Keyword.get(opts, :confirm_token),
+        older_than_ms,
+        archived_only,
+        include_pinned
+      )
     end
   end
 
@@ -347,35 +377,62 @@ defmodule LemonCore.SessionLifecycle do
     run_delete_fun = Keyword.get(opts, :run_delete_fun, &RunStore.delete_session/1)
     canonical_verify_fun = Keyword.get(opts, :canonical_verify_fun, &verify_canonical_deleted/1)
 
-    snapshots = %{
-      chat: ChatStateStore.get(session_key),
-      policy: PolicyStore.get_session(session_key),
-      metadata: SessionMetadataStore.fetch(session_key)
-    }
+    # Rollback restores these snapshots, so an unreadable row must stop the
+    # delete before any mutation rather than be recorded as absent and lost.
+    with {:ok, snapshots} <- ancillary_snapshots(session_key),
+         :ok <- delete_guard(snapshots.metadata, opts) do
+      result =
+        with :ok <- normalize_delete_result(ChatStateStore.delete(session_key)),
+             :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)),
+             :ok <- normalize_delete_result(SessionMetadataStore.delete(session_key)),
+             :ok <- verify_ancillary_deleted(session_key),
+             :ok <- normalize_delete_result(run_delete_fun.(session_key)),
+             :ok <- canonical_verify_fun.(session_key),
+             :ok <- release_agent_identity(session_key, incarnation) do
+          {:ok, %{session_key: session_key, existed: existed, verified: true}}
+        end
 
-    result =
-      with :ok <- normalize_delete_result(ChatStateStore.delete(session_key)),
-           :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)),
-           :ok <- normalize_delete_result(SessionMetadataStore.delete(session_key)),
-           :ok <- verify_ancillary_deleted(session_key),
-           :ok <- normalize_delete_result(run_delete_fun.(session_key)),
-           :ok <- canonical_verify_fun.(session_key),
-           :ok <- release_agent_identity(session_key, incarnation) do
-        {:ok, %{session_key: session_key, existed: existed, verified: true}}
+      case result do
+        {:ok, _} = ok ->
+          ok
+
+        {:error, reason} ->
+          # Identity release happens only after canonical deletion verifies, so a
+          # failed canonical commit cannot erase or restore over a renamed handle.
+          # Ancillary snapshots remain recoverable; run history is not.
+          restore_ancillary_state(session_key, snapshots)
+          {:error, reason}
       end
-
-    case result do
-      {:ok, _} = ok ->
-        ok
-
-      {:error, reason} ->
-        # Identity release happens only after canonical deletion verifies, so a
-        # failed canonical commit cannot erase or restore over a renamed handle.
-        # Ancillary snapshots remain recoverable; run history is not.
-        restore_ancillary_state(session_key, snapshots)
-        {:error, reason}
     end
   end
+
+  defp ancillary_snapshots(session_key) do
+    with {:ok, chat} <- ChatStateStore.fetch(session_key),
+         {:ok, policy} <- PolicyStore.fetch_session(session_key),
+         {:ok, metadata} <- SessionMetadataStore.fetch(session_key) do
+      {:ok, %{chat: chat, policy: policy, metadata: metadata}}
+    else
+      {:error, _reason} -> {:error, :session_store_unavailable}
+    end
+  end
+
+  # Prune deletes only what its confirmed candidate set allowed; a pin or
+  # unarchive that landed after the candidates were read stops the delete.
+  defp delete_guard(metadata, opts) do
+    cond do
+      Keyword.get(opts, :refuse_pinned, false) and metadata_flag?(metadata, :pinned) ->
+        {:error, :session_pinned}
+
+      Keyword.get(opts, :require_archived, false) and not metadata_flag?(metadata, :archived) ->
+        {:error, :session_not_archived}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp metadata_flag?(%{} = metadata, flag), do: Map.get(metadata, flag) == true
+  defp metadata_flag?(_metadata, _flag), do: false
 
   defp all_sessions, do: all_sessions(RunStore)
 
@@ -396,9 +453,39 @@ defmodule LemonCore.SessionLifecycle do
     end)
   end
 
-  defp merge_metadata(session) do
+  # Destructive callers read the index and every row's metadata strictly: an
+  # unreadable pin is never an unpinned session.
+  defp strict_sessions do
+    with {:ok, entries} <- RunStore.fetch_sessions() do
+      Enum.reduce_while(entries, {:ok, []}, fn
+        {_key, session}, {:ok, rows} when is_map(session) ->
+          case read(session, :session_key) do
+            session_key when is_binary(session_key) and session_key != "" ->
+              case SessionMetadataStore.fetch(session_key) do
+                {:ok, metadata} ->
+                  {:cont, {:ok, [session_row(session, metadata || @unannotated) | rows]}}
+
+                {:error, _reason} ->
+                  {:halt, {:error, :session_store_unavailable}}
+              end
+
+            _invalid_or_legacy_row ->
+              {:cont, {:ok, rows}}
+          end
+
+        _other, acc ->
+          {:cont, acc}
+      end)
+    else
+      {:error, _reason} -> {:error, :session_store_unavailable}
+    end
+  end
+
+  defp merge_metadata(session),
+    do: session_row(session, SessionMetadataStore.get(read(session, :session_key)))
+
+  defp session_row(session, metadata) do
     session_key = read(session, :session_key)
-    metadata = SessionMetadataStore.get(session_key)
 
     %{
       session_key: session_key,
@@ -810,13 +897,16 @@ defmodule LemonCore.SessionLifecycle do
   end
 
   defp prune_candidates(older_than_ms, archived_only, include_pinned) do
-    all_sessions()
-    |> filter_boolean(:archived, if(archived_only, do: true, else: :all))
-    |> Enum.filter(fn row ->
-      is_integer(row.updated_at_ms) and row.updated_at_ms < older_than_ms
-    end)
-    |> Enum.filter(fn row -> include_pinned or not row.pinned end)
-    |> Enum.sort_by(& &1.session_key)
+    with {:ok, sessions} <- strict_sessions() do
+      {:ok,
+       sessions
+       |> filter_boolean(:archived, if(archived_only, do: true, else: :all))
+       |> Enum.filter(fn row ->
+         is_integer(row.updated_at_ms) and row.updated_at_ms < older_than_ms
+       end)
+       |> Enum.filter(fn row -> include_pinned or not row.pinned end)
+       |> Enum.sort_by(& &1.session_key)}
+    end
   end
 
   defp prune_token(older_than_ms, archived_only, include_pinned, candidates) do
@@ -838,7 +928,10 @@ defmodule LemonCore.SessionLifecycle do
     if secure_equal?(token, confirm) do
       {deleted, failures} =
         Enum.reduce(candidates, {[], []}, fn row, {deleted, failures} ->
-          case delete(row.session_key) do
+          case delete(row.session_key,
+                 refuse_pinned: not include_pinned,
+                 require_archived: archived_only
+               ) do
             {:ok, _} ->
               {[row.session_key | deleted], failures}
 
@@ -915,28 +1008,31 @@ defmodule LemonCore.SessionLifecycle do
     end
   end
 
+  # Verification reads are strict: an unreadable owner is never evidence that
+  # the row it holds is gone.
   defp verify_ancillary_deleted(session_key) do
-    chat_gone? = is_nil(ChatStateStore.get(session_key))
-    policy_gone? = is_nil(PolicyStore.get_session(session_key))
-    metadata_gone? = default_metadata?(SessionMetadataStore.get(session_key))
-
-    if chat_gone? and policy_gone? and metadata_gone? do
+    with {:ok, nil} <- ChatStateStore.fetch(session_key),
+         {:ok, nil} <- PolicyStore.fetch_session(session_key),
+         {:ok, nil} <- SessionMetadataStore.fetch(session_key) do
       :ok
     else
-      {:error, :ancillary_deletion_not_verified}
+      _remaining_or_unreadable -> {:error, :ancillary_deletion_not_verified}
     end
   end
 
   defp verify_canonical_deleted(session_key) do
-    if get(session_key) == nil and RunStore.history(session_key, limit: 1) == [] do
+    with {:ok, sessions} <- RunStore.fetch_sessions(),
+         false <- Enum.any?(sessions, &indexes_session?(&1, session_key)),
+         {:ok, []} <- RunStore.fetch_history(session_key, limit: 1) do
       :ok
     else
-      {:error, :canonical_deletion_not_verified}
+      _remaining_or_unreadable -> {:error, :canonical_deletion_not_verified}
     end
   end
 
-  defp default_metadata?(metadata),
-    do: metadata.title == nil and not metadata.pinned and not metadata.archived
+  defp indexes_session?({session_key, session}, session_key) when is_map(session), do: true
+  defp indexes_session?({_key, %{session_key: session_key}}, session_key), do: true
+  defp indexes_session?(_entry, _session_key), do: false
 
   defp restore_ancillary_state(session_key, snapshots) do
     case snapshots.chat do

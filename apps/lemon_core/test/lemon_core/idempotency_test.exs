@@ -134,7 +134,7 @@ defmodule LemonCore.IdempotencyTest do
           "computed_result"
         end)
 
-      assert result == "computed_result"
+      assert result == {:ok, "computed_result"}
       assert :counters.get(counter, 1) == 1
     end
 
@@ -156,16 +156,16 @@ defmodule LemonCore.IdempotencyTest do
           "new_result"
         end)
 
-      assert result == "result"
+      assert result == {:ok, "result"}
       assert :counters.get(counter, 1) == 1
     end
 
-    test "execute/3 caches exceptions and re-raises them" do
+    test "execute/3 keeps a raising call's claim, so the key is never re-executed" do
       scope = "test_#{System.unique_integer()}"
       key = "key_#{System.unique_integer()}"
       counter = :counters.new(1, [])
 
-      # First call raises
+      # First call raises after it may already have had side effects.
       assert_raise RuntimeError, "test error", fn ->
         Idempotency.execute(scope, key, fn ->
           :counters.add(counter, 1, 1)
@@ -175,18 +175,12 @@ defmodule LemonCore.IdempotencyTest do
 
       assert :counters.get(counter, 1) == 1
 
-      # Second call should re-execute since exception wasn't cached
-      # (The function result is cached, so if it raises, it won't be stored)
-      # Actually, looking at the implementation, if the function raises,
-      # the put never happens, so it should execute again
-      assert_raise RuntimeError, "test error", fn ->
-        Idempotency.execute(scope, key, fn ->
-          :counters.add(counter, 1, 1)
-          raise "test error"
-        end)
-      end
+      # Its outcome is unknown: the claim stays pending until it expires.
+      assert Idempotency.execute(scope, key, fn -> :counters.add(counter, 1, 1) end) ==
+               {:error, :in_progress}
 
-      assert :counters.get(counter, 1) == 2
+      assert Idempotency.get(scope, key) == {:error, :in_progress}
+      assert :counters.get(counter, 1) == 1
     end
 
     test "execute/3 with different keys in same scope are independent" do
@@ -197,8 +191,8 @@ defmodule LemonCore.IdempotencyTest do
       result1 = Idempotency.execute(scope, key1, fn -> "result1" end)
       result2 = Idempotency.execute(scope, key2, fn -> "result2" end)
 
-      assert result1 == "result1"
-      assert result2 == "result2"
+      assert result1 == {:ok, "result1"}
+      assert result2 == {:ok, "result2"}
 
       # Verify both are cached independently
       assert {:ok, "result1"} = Idempotency.get(scope, key1)
@@ -251,15 +245,15 @@ defmodule LemonCore.IdempotencyTest do
           "scope2_result"
         end)
 
-      assert result1 == "scope1_result"
-      assert result2 == "scope2_result"
+      assert result1 == {:ok, "scope1_result"}
+      assert result2 == {:ok, "scope2_result"}
       # Function was executed twice (once per scope)
       assert :counters.get(counter, 1) == 2
     end
   end
 
   describe "TTL expiration" do
-    test "expired entries return :miss and are cleaned up" do
+    test "expired entries return :miss and are taken over by compare-and-swap" do
       scope = "test_#{System.unique_integer()}"
       key = "key_#{System.unique_integer()}"
 
@@ -273,11 +267,11 @@ defmodule LemonCore.IdempotencyTest do
 
       IdempotencyStore.put(scope, key, expired_value)
 
-      # Should return :miss and clean up the expired entry
       assert :miss = Idempotency.get(scope, key)
 
-      # Verify the entry was deleted
-      assert IdempotencyStore.get(scope, key) == nil
+      # The expired entry no longer holds the key.
+      assert :ok = Idempotency.put_new(scope, key, "new_value")
+      assert {:ok, "new_value"} = Idempotency.get(scope, key)
     end
 
     test "non-expired entries are returned" do

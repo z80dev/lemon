@@ -83,14 +83,32 @@ defmodule LemonCore.RunStore do
   def finalize(server \\ Store, run_id, summary),
     do: Store.finalize_run(server, run_id, execution_projection(summary))
 
+  @doc """
+  Recent run history for display. Returns `[]` when the history owner cannot
+  answer; use `fetch_history/2` where unavailability must not look empty.
+  """
   @spec history(term(), keyword()) :: list()
   def history(session_key, opts \\ []), do: RunHistoryStore.get(session_key, opts)
 
+  @doc "Recent run history, or an error when the owner cannot read or decode it."
+  @spec fetch_history(term(), keyword()) :: {:ok, list()} | {:error, term()}
+  def fetch_history(session_key, opts \\ []), do: RunHistoryStore.fetch(session_key, opts)
+
+  @doc "Session index rows for display; `[]` when the Store cannot answer."
   @spec list_sessions(Store.server()) :: [{term(), map()}]
   def list_sessions(server \\ Store) do
     server
     |> Store.list(:sessions_index)
     |> Enum.map(fn {session_key, entry} -> {session_key, public_session_entry(entry)} end)
+  end
+
+  @doc "Every session index row, or `{:error, :store_unavailable}` when unreadable."
+  @spec fetch_sessions(Store.server()) ::
+          {:ok, [{term(), map()}]} | {:error, :store_unavailable}
+  def fetch_sessions(server \\ Store) do
+    with {:ok, entries} <- Store.fetch_all(server, :sessions_index) do
+      {:ok, Enum.map(entries, fn {key, entry} -> {key, public_session_entry(entry)} end)}
+    end
   end
 
   @doc "Create an empty durable session index without manufacturing a completed run."

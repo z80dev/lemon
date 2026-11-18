@@ -12,32 +12,37 @@ defmodule LemonChannels.Telegram.TriggerMode do
 
   @spec resolve(String.t(), integer(), integer() | nil) :: %{
           mode: :all | :mentions,
-          chat_mode: :all | :mentions | nil,
-          topic_mode: :all | :mentions | nil,
-          source: :default | :chat | :topic
+          chat_mode: :all | :mentions | :unavailable | nil,
+          topic_mode: :all | :mentions | :unavailable | nil,
+          source: :default | :chat | :topic | :unavailable
         }
   def resolve(account_id, chat_id, topic_id \\ nil)
 
+  # Layers are read strictly. A layer that cannot be read never falls through
+  # to a broader one: the result is `:mentions` with `source: :unavailable`.
+  # Every configurable mode admits addressed messages, so `:mentions` is the
+  # narrowest admission any configuration could produce.
   def resolve(account_id, chat_id, topic_id)
       when is_binary(account_id) and is_integer(chat_id) do
-    topic_mode =
+    topic =
       if is_integer(topic_id),
-        do: get_mode(@topic_table, {account_id, chat_id, topic_id}),
-        else: nil
+        do: fetch_mode(@topic_table, {account_id, chat_id, topic_id}),
+        else: {:ok, nil}
 
-    chat_mode = get_mode(@chat_table, {account_id, chat_id})
+    chat = fetch_mode(@chat_table, {account_id, chat_id})
 
     {mode, source} =
-      cond do
-        topic_mode in [:all, :mentions] -> {topic_mode, :topic}
-        chat_mode in [:all, :mentions] -> {chat_mode, :chat}
-        true -> {@default_mode, :default}
+      case {topic, chat} do
+        {{:ok, topic_mode}, _chat} when not is_nil(topic_mode) -> {topic_mode, :topic}
+        {{:ok, nil}, {:ok, chat_mode}} when not is_nil(chat_mode) -> {chat_mode, :chat}
+        {{:ok, nil}, {:ok, nil}} -> {@default_mode, :default}
+        _unavailable -> {@default_mode, :unavailable}
       end
 
     %{
       mode: mode,
-      chat_mode: chat_mode,
-      topic_mode: topic_mode,
+      chat_mode: layer(chat),
+      topic_mode: layer(topic),
       source: source
     }
   rescue
@@ -63,13 +68,17 @@ defmodule LemonChannels.Telegram.TriggerMode do
     Store.delete(@topic_table, {account_id, chat_id, topic_id})
   end
 
-  defp get_mode(table, key) do
-    case Store.get(table, key) do
-      %{mode: mode} when mode in [:all, :mentions] -> mode
-      mode when mode in [:all, :mentions] -> mode
-      _ -> nil
+  defp fetch_mode(table, key) do
+    case Store.fetch(table, key) do
+      {:ok, %{mode: mode}} when mode in [:all, :mentions] -> {:ok, mode}
+      {:ok, mode} when mode in [:all, :mentions] -> {:ok, mode}
+      {:ok, _none} -> {:ok, nil}
+      {:error, _reason} = error -> error
     end
   end
+
+  defp layer({:ok, mode}), do: mode
+  defp layer({:error, _reason}), do: :unavailable
 
   defp set_chat_mode(account_id, chat_id, mode) do
     Store.put(@chat_table, {account_id, chat_id}, %{mode: mode, updated_at: now_ms()})

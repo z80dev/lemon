@@ -15,26 +15,38 @@ defmodule LemonCore.ChatStateStore do
   @ttl_ms 24 * 60 * 60 * 1000
 
   @doc """
-  Fetch the chat state for `scope`, or `nil` when absent or expired.
+  Fetch the chat state for `scope`, or `nil` when absent, expired, or when the
+  Store cannot answer. Use `fetch/2` where an unavailable read must not look
+  like a scope without state.
 
   An expired entry is deleted only if it is still the value that was read, so
   a concurrent `put/3` that refreshed the scope is never lost.
   """
   @spec get(Store.server(), term()) :: ChatState.t() | map() | nil
-  def get(server \\ Store, scope) do
-    case Store.get(server, @table, scope) do
-      %{expires_at: expires_at} = value when is_integer(expires_at) ->
-        if System.system_time(:millisecond) > expires_at do
-          _ = Store.compare_and_delete(server, @table, scope, value)
-          nil
-        else
-          value
-        end
+  def get(server \\ Store, scope), do: unexpired(server, scope, Store.get(server, @table, scope))
 
-      value ->
-        value
+  @doc """
+  Fetch the chat state for `scope` without collapsing a Store failure into
+  absence: `{:ok, nil}` means no unexpired state exists.
+  """
+  @spec fetch(Store.server(), term()) ::
+          {:ok, ChatState.t() | map() | nil} | {:error, :store_unavailable}
+  def fetch(server \\ Store, scope) do
+    with {:ok, value} <- Store.fetch(server, @table, scope) do
+      {:ok, unexpired(server, scope, value)}
     end
   end
+
+  defp unexpired(server, scope, %{expires_at: expires_at} = value) when is_integer(expires_at) do
+    if System.system_time(:millisecond) > expires_at do
+      _ = Store.compare_and_delete(server, @table, scope, value)
+      nil
+    else
+      value
+    end
+  end
+
+  defp unexpired(_server, _scope, value), do: value
 
   @doc """
   Store `state` for `scope`, stamped with a fresh `:expires_at`.

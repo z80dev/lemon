@@ -41,6 +41,10 @@ defmodule LemonChannels.Telegram.StateStore do
   @spec get_selected_resume(term()) :: term()
   def get_selected_resume(key), do: Store.get(@selected_resume_table, key)
 
+  @doc "Strict read for admission: an unreadable selection is an error, never none."
+  @spec fetch_selected_resume(term()) :: {:ok, term()} | {:error, :store_unavailable}
+  def fetch_selected_resume(key), do: Store.fetch(@selected_resume_table, key)
+
   @spec put_selected_resume(term(), term()) :: :ok
   def put_selected_resume(key, value), do: Store.put(@selected_resume_table, key, value)
 

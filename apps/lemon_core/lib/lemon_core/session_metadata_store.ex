@@ -30,12 +30,16 @@ defmodule LemonCore.SessionMetadataStore do
     |> normalize(session_key)
   end
 
-  @doc "Fetch stored lifecycle metadata, returning `nil` when no annotation exists."
-  @spec fetch(String.t()) :: metadata() | nil
+  @doc """
+  Fetch stored lifecycle metadata: `{:ok, nil}` only when the Store confirms no
+  annotation exists, `{:error, :store_unavailable}` when it cannot answer.
+  """
+  @spec fetch(String.t()) :: {:ok, metadata() | nil} | {:error, :store_unavailable}
   def fetch(session_key) when is_binary(session_key) do
-    case stored(session_key) do
-      nil -> nil
-      value -> normalize(value, session_key)
+    case Store.fetch(@table, session_key) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, value} -> {:ok, normalize(value, session_key)}
+      {:error, _reason} = error -> error
     end
   end
 

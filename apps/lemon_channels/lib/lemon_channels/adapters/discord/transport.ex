@@ -437,27 +437,69 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     key = TransportShared.inbound_message_dedupe_key(inbound)
 
     case Ets.check_and_mark(@dedupe_table, key, state.dedupe_ttl_ms) do
-      :seen -> :seen
-      :new -> check_and_mark_persistent_dedupe(inbound, key, state)
+      :seen ->
+        :seen
+
+      :new ->
+        case check_and_mark_persistent_dedupe(inbound, key, state) do
+          :unavailable ->
+            # Not admitted and not claimed: a later redelivery is checked again.
+            Logger.warning("discord: dropping message; ingress dedupe receipt unavailable")
+            _ = Ets.forget(@dedupe_table, key)
+            :unavailable
+
+          seen_or_new ->
+            seen_or_new
+        end
     end
   end
 
+  # The receipt is claimed with an atomic insert and read strictly. An
+  # unreadable receipt, or a claim whose write outcome is unknown, never
+  # admits the message: replaying a delivered message would submit it twice.
   defp check_and_mark_persistent_dedupe(inbound, key, state) do
     store_key = persistent_dedupe_key(inbound, key)
-    now = Event.now_ms()
+    receipt = %{"inserted_at_ms" => Event.now_ms()}
+    ref = %{memory_key: key, persistent_key: store_key, receipt: receipt}
 
-    case Store.get(:idempotency, store_key) do
-      %{"inserted_at_ms" => inserted_at_ms} when is_integer(inserted_at_ms) ->
-        if now - inserted_at_ms <= state.dedupe_ttl_ms do
-          :seen
-        else
-          :ok = Store.put(:idempotency, store_key, %{"inserted_at_ms" => now})
-          {:new, %{memory_key: key, persistent_key: store_key}}
+    case Store.put_new(:idempotency, store_key, receipt) do
+      :ok ->
+        {:new, ref}
+
+      {:error, :exists} ->
+        renew_expired_dedupe(store_key, ref, state)
+
+      {:error, _reason} ->
+        # The insert may have landed; nothing was submitted, so drop only our
+        # own exact receipt.
+        _ = Store.compare_and_delete(:idempotency, store_key, receipt)
+        :unavailable
+    end
+  end
+
+  defp renew_expired_dedupe(store_key, %{receipt: receipt} = ref, state) do
+    case Store.fetch(:idempotency, store_key) do
+      {:ok, %{"inserted_at_ms" => inserted_at_ms} = existing} when is_integer(inserted_at_ms) ->
+        cond do
+          receipt["inserted_at_ms"] - inserted_at_ms <= state.dedupe_ttl_ms ->
+            :seen
+
+          Store.compare_and_swap(:idempotency, store_key, existing, receipt) == :ok ->
+            {:new, ref}
+
+          true ->
+            :seen
         end
 
-      _ ->
-        :ok = Store.put(:idempotency, store_key, %{"inserted_at_ms" => now})
-        {:new, %{memory_key: key, persistent_key: store_key}}
+      {:ok, nil} ->
+        # Released after a retry-safe failure; claim again on redelivery.
+        :unavailable
+
+      {:ok, _unknown_receipt} ->
+        :seen
+
+      {:error, _reason} ->
+        :unavailable
     end
   end
 
@@ -490,9 +532,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp forget_submission_dedupe(refs) do
     Enum.each(refs, fn
-      %{memory_key: memory_key, persistent_key: persistent_key} ->
+      %{memory_key: memory_key, persistent_key: persistent_key, receipt: receipt} ->
         _ = Ets.forget(@dedupe_table, memory_key)
-        _ = Store.delete(:idempotency, persistent_key)
+        _ = Store.compare_and_delete(:idempotency, persistent_key, receipt)
 
       _ ->
         :ok
@@ -651,18 +693,22 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       end
 
     # Apply a native resume selected by /resume. Stale vendor selections remain
-    # stored for rollback, but never affect a native channel run.
+    # stored for rollback, but never affect a native channel run. An unreadable
+    # selection is kept and the submission rejected, never silently dropped.
     meta =
       if is_nil(meta[:resume]) do
         stored_resume_key = {state.account_id, channel_id, thread_id}
 
-        case LemonCore.Store.get(:discord_selected_resume, stored_resume_key) do
-          %ResumeToken{engine: "lemon"} = resume ->
+        case LemonCore.Store.fetch(:discord_selected_resume, stored_resume_key) do
+          {:ok, %ResumeToken{engine: "lemon"} = resume} ->
             _ = LemonCore.Store.delete(:discord_selected_resume, stored_resume_key)
             Map.put(meta, :resume, resume)
 
-          _ ->
+          {:ok, _none_or_vendor} ->
             meta
+
+          {:error, _reason} ->
+            Map.put(meta, :selected_resume_unavailable, true)
         end
       else
         meta
@@ -700,7 +746,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp finish_submission(state, inbound, dedupe_refs) do
-    case route_to_router(state, inbound) do
+    result =
+      if inbound.meta[:selected_resume_unavailable],
+        do: {:error, :resume_unavailable},
+        else: route_to_router(state, inbound)
+
+    case result do
       :ok ->
         {:ok, track_accepted_submission(state, inbound)}
 

@@ -313,6 +313,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
   def extract_explicit_resume_and_strip(text), do: {nil, text}
 
+  @doc """
+  Applies the chat's /resume selection to an inbound message.
+
+  The selection is read strictly. When it cannot be read, the inbound is
+  marked `:selected_resume_unavailable`; submission rejects it rather than
+  silently starting without the operator's selection, which stays stored.
+  """
   @spec maybe_apply_selected_resume(binary() | nil, map(), binary()) :: map()
   def maybe_apply_selected_resume(account_id, inbound, original_text) do
     meta = inbound.meta || %{}
@@ -335,10 +342,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
         thread_id = inbound.meta[:thread_id] || inbound.meta[:topic_id]
 
         if is_integer(chat_id) do
-          case LemonChannels.Telegram.StateStore.get_selected_resume(
+          case LemonChannels.Telegram.StateStore.fetch_selected_resume(
                  {account_id || "default", chat_id, thread_id}
                ) do
-            %ResumeToken{engine: "lemon"} = token ->
+            {:ok, %ResumeToken{engine: "lemon"} = token} ->
               Logger.debug(
                 "Telegram applying selected resume chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
                   "resume=#{inspect(token)}"
@@ -346,8 +353,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
               maybe_prefix_resume_to_prompt(inbound, token)
 
-            _ ->
+            {:ok, _none_or_vendor} ->
               inbound
+
+            {:error, _reason} ->
+              %{inbound | meta: Map.put(meta, :selected_resume_unavailable, true)}
           end
         else
           inbound
