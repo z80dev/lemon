@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hasControlChars } from "../formatters/base.ts";
 
 export const IMAGE_PATH = /\.(?:png|jpe?g|gif|webp)$/i;
 
@@ -75,8 +76,7 @@ export function parsePastedPaths(text: string): string[] | undefined {
 			) {
 				return undefined;
 			}
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: Decoded paths must not contain terminal controls.
-			if (/[\r\n\x00-\x1f\x7f]/.test(path)) return undefined;
+			if (hasControlChars(path)) return undefined;
 			paths.push(path);
 		}
 	} catch {

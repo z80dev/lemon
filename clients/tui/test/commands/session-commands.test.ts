@@ -14,7 +14,6 @@ let harness: Harness;
 interface HostSpy {
 	switched: string[];
 	created: Array<{ key?: string; prompt?: string }>;
-	closed: string[];
 	reset: string[];
 	switcherOpens: number;
 	preferences: ThemePreference[];
@@ -31,9 +30,6 @@ function withHooks(spy: HostSpy): Partial<CommandHost> {
 		},
 		createSession: (key?: string, prompt?: string) => {
 			spy.created.push({ key, prompt });
-		},
-		closeSession: (key: string) => {
-			spy.closed.push(key);
 		},
 		resetSession: (key: string) => {
 			spy.reset.push(key);
@@ -67,7 +63,6 @@ beforeEach(async () => {
 	spy = {
 		switched: [],
 		created: [],
-		closed: [],
 		reset: [],
 		switcherOpens: 0,
 		preferences: [],
@@ -122,13 +117,29 @@ describe("session commands with the switcher mounted", () => {
 		expect(harness.host.text).toContain("this build cannot create sessions");
 	});
 
-	test("/session reset clears both copies", async () => {
-		harness.server.respondWith("sessions.reset", { ok: true });
+	test("/session reset previews, then clears both copies only after a verified reset", async () => {
+		harness.server.respondWith("sessions.reset", {
+			success: true,
+			sessionKey: "tui-session",
+			summary: { sessionKey: "tui-session", reset: true },
+		});
 		await runWired("/session reset");
+		expect(harness.server.requestsFor("sessions.reset")).toHaveLength(0);
+		expect(spy.reset).toEqual([]);
+		expect(harness.host.text).toContain("/reset --confirm tui-session");
+		await runWired("/session reset --confirm tui-session");
 		expect(harness.server.requestsFor("sessions.reset")[0].params).toEqual({
 			sessionKey: "tui-session",
 		});
 		expect(spy.reset).toEqual(["tui-session"]);
+	});
+
+	test("/session reset keeps the local copy when the daemon does not verify it", async () => {
+		harness.server.respondWith("sessions.reset", { ok: true });
+		await runWired("/session reset --confirm tui-session");
+		expect(harness.server.requestsFor("sessions.reset")).toHaveLength(1);
+		expect(spy.reset).toEqual([]);
+		expect(harness.host.text).toContain("outcome unknown");
 	});
 
 	test("/session delete shows a safe exact-key preview without deleting", async () => {
@@ -136,7 +147,6 @@ describe("session commands with the switcher mounted", () => {
 			session: { sessionKey: "tui-other", runCount: 2, pinned: false, archived: true },
 		});
 		await runWired("/session delete tui-other");
-		expect(spy.closed).toEqual([]);
 		expect(harness.server.requestsFor("sessions.delete")).toHaveLength(0);
 		expect(harness.host.text).toContain("--confirm tui-other");
 	});
@@ -146,7 +156,6 @@ describe("session commands with the switcher mounted", () => {
 			session: { sessionKey: "tui-session", runCount: 1, pinned: false, archived: false },
 		});
 		await runWired("/session delete");
-		expect(spy.closed).toEqual([]);
 		expect(harness.host.text).toContain("delete preview · tui-session");
 	});
 

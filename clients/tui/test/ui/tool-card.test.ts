@@ -22,7 +22,7 @@ import {
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import type { ToolCardState } from "../../src/ui/tool-view.ts";
-import { renderPlain } from "../helpers/memory-terminal.ts";
+import { injectedControl, renderPlain } from "../helpers/memory-terminal.ts";
 
 const STATES: ToolCardState[] = ["streaming", "running", "success", "error"];
 const NOW = 1_755_400_000_000;
@@ -440,5 +440,28 @@ describe("AccordionComponent", () => {
 		expect(accordionSettings.cycleOverride()).toBe("collapsed");
 		expect(accordionSettings.cycleOverride()).toBe("expanded");
 		expect(accordionSettings.cycleOverride()).toBeUndefined();
+	});
+});
+
+describe("hostile receipts", () => {
+	test("a bash receipt cannot emit OSC 8/52, retitle the window or clear the screen", () => {
+		const hostile =
+			"\x1b]0;INJECTED_TITLE\x07\x1b]52;c;SU5KRUNURUQ=\x07\x1b]8;;https://evil.example/\x07click\x1b]8;;\x07\x1b[2J\x1b[Hdone";
+		const session = new SessionStore("hostile");
+		const block = session.upsertTool(
+			{
+				id: "bash-hostile",
+				kind: "tool",
+				title: `cat evil.txt${hostile}`,
+				detail: { name: "bash", args: { command: `cat evil.txt${hostile}` }, result: hostile },
+			},
+			"completed",
+			{ ok: false, message: hostile },
+		);
+		accordionSettings.setOverride("expanded");
+		const component = new ToolCardComponent(block, { now: () => NOW });
+		expect(renderPlain(component.render(120))).toContain("done");
+		expect(injectedControl(component.render(120).join("\n"))).toBeUndefined();
+		expect(JSON.stringify(component.describe())).not.toContain("\\u001b");
 	});
 });

@@ -11,6 +11,8 @@
  * that produced no deltas at all.
  */
 
+import { sanitizeTextDeep } from "@oh-my-pi/pi-utils/sanitize-text";
+import { safeText } from "../formatters/base.ts";
 import type {
 	AgentAction,
 	AgentCompletedEvent,
@@ -86,6 +88,20 @@ export class SessionStore {
 	busy = false;
 	/** Whether this session is the one on screen. Owned by {@link AppStore}. */
 	focused = false;
+	/**
+	 * Bumped by every transcript change (a block, a delta, a tool/reasoning
+	 * phase, a run ending). A destructive operation captures it before its RPC
+	 * and refuses to apply its local half if anything happened meanwhile.
+	 */
+	revision = 0;
+	/** A `sessions.reset` is in flight: local submissions for this session are refused. */
+	resetPending = false;
+	/**
+	 * Prompt submissions between their synchronous start and their dispatch
+	 * outcome (binding, profile lookup, the send itself). `/reset` refuses
+	 * while any is pending.
+	 */
+	pendingSubmissions = 0;
 	/** Blocks appended while this session was not focused. */
 	unread = 0;
 	/**
@@ -395,7 +411,13 @@ export class SessionStore {
 
 	/** `details.sentAt` defaults to `at`: a live prompt is sent as it is echoed. */
 	addUser(text: string, at = Date.now(), details: UserDetails = { sentAt: at }): Block {
-		return this.#push({ id: nextBlockId("user"), kind: "user", at, text, ...details });
+		return this.#push({
+			id: nextBlockId("user"),
+			kind: "user",
+			at,
+			text: safeText(text),
+			...details,
+		});
 	}
 
 	addNotice(
@@ -409,7 +431,7 @@ export class SessionStore {
 			kind: "notice",
 			at,
 			level,
-			text,
+			text: safeText(text),
 			...(compaction ? { compaction } : {}),
 		}) as NoticeBlock;
 	}
@@ -420,7 +442,7 @@ export class SessionStore {
 			kind: "approval",
 			at,
 			approvalId,
-			tool,
+			tool: tool === undefined ? undefined : safeText(tool),
 			status: "pending",
 		}) as ApprovalBlock;
 	}
@@ -479,9 +501,13 @@ export class SessionStore {
 			this.#buffers.set(runId, "");
 			block.text = "";
 		}
-		const buffer = (this.#buffers.get(runId) ?? "") + (text ?? "");
+		// Each delta is sanitized on its own: with every ESC/C1 introducer gone, a
+		// sequence split across deltas cannot be reassembled into a live one.
+		const clean = safeText(text ?? "");
+		const buffer = (this.#buffers.get(runId) ?? "") + clean;
 		this.#buffers.set(runId, buffer);
-		block.text += text ?? "";
+		block.text += clean;
+		this.revision += 1;
 		return { accepted: true, amended, block };
 	}
 
@@ -505,7 +531,10 @@ export class SessionStore {
 	): ToolBlock {
 		const actionId = action?.id?.trim() || `${options.runId ?? "run"}:${toolTitle(action)}`;
 		const existing = this.byActionId.get(actionId);
-		const detail = (action?.detail ?? undefined) as Record<string, unknown> | undefined;
+		const detail = sanitizeTextDeep(action?.detail ?? undefined) as
+			| Record<string, unknown>
+			| undefined;
+		const title = safeText(toolTitle(action));
 		if (existing) {
 			// A tool action's phase only ever advances. The transport can redeliver a
 			// `started`/`updated` frame after the result landed (a reconnect replay,
@@ -516,6 +545,7 @@ export class SessionStore {
 			// not just the phase — a `started` frame carries the pre-result detail,
 			// so merging it would erase the result from an already-sealed card.
 			if (existing.phase === "completed" && phase !== "completed") return existing;
+			this.revision += 1;
 			// Only a genuinely observed live transition supplies local timing.
 			if (
 				!existing.historical &&
@@ -531,12 +561,12 @@ export class SessionStore {
 				existing.durationMs = options.durationMs;
 			}
 			existing.phase = phase;
-			existing.title = toolTitle(action) || existing.title;
+			existing.title = title || existing.title;
 			if (detail !== undefined) existing.detail = detail;
 			if (action?.kind) existing.toolKind = action.kind;
 			if (options.ok !== undefined && options.ok !== null) existing.ok = options.ok;
 			if (options.message !== undefined && options.message !== null) {
-				existing.message = options.message;
+				existing.message = safeText(options.message);
 			}
 			return existing;
 		}
@@ -547,11 +577,11 @@ export class SessionStore {
 			runId: options.runId ?? undefined,
 			actionId,
 			toolKind: action?.kind ?? "tool",
-			title: toolTitle(action),
+			title,
 			detail,
 			phase,
 			ok: options.ok ?? undefined,
-			message: options.message ?? undefined,
+			message: options.message == null ? undefined : safeText(options.message),
 			historical: options.historical,
 			cancelled: options.cancelled,
 			durationMs: options.durationMs ?? undefined,
@@ -575,10 +605,13 @@ export class SessionStore {
 		const actionId = action?.id?.trim() || `${options.runId ?? "run"}:reasoning`;
 		const reasoning = action?.detail?.reasoning as { text?: unknown } | undefined;
 		const text =
-			typeof reasoning?.text === "string" && reasoning.text.length > 0 ? reasoning.text : undefined;
+			typeof reasoning?.text === "string" && reasoning.text.length > 0
+				? safeText(reasoning.text)
+				: undefined;
 		const existing = this.reasoningByActionId.get(actionId);
 		if (existing) {
 			if (existing.phase === "completed" && phase !== "completed") return existing;
+			this.revision += 1;
 			existing.phase = phase;
 			if (text !== undefined) existing.text = text;
 			return existing;
@@ -606,11 +639,13 @@ export class SessionStore {
 	 * reports the failure its own way.
 	 */
 	finalizeRun(runId: string, options: FinalizeOptions = {}): AssistantBlock | undefined {
-		const answer = options.answer ?? "";
+		const answer = safeText(options.answer ?? "");
+		const error = options.error ? safeText(options.error) : undefined;
 		const alreadyFinished = this.#finishedRuns.has(runId);
+		this.revision += 1;
 		const block =
 			this.#assistantByRun.get(runId) ??
-			(answer || options.interrupted || options.error ? this.ensureAssistant(runId) : undefined);
+			(answer || options.interrupted || error ? this.ensureAssistant(runId) : undefined);
 		if (!alreadyFinished) {
 			this.#finishedRuns.set(
 				runId,
@@ -652,11 +687,7 @@ export class SessionStore {
 			block.status = "error";
 			// Surface the server's message only when it is not already the body.
 			block.error =
-				options.error && options.error !== text
-					? options.error
-					: answer && answer !== text
-						? answer
-						: undefined;
+				error && error !== text ? error : answer && answer !== text ? answer : undefined;
 		} else {
 			block.status = "done";
 		}
@@ -685,6 +716,7 @@ export class SessionStore {
 			this.#assistantNeedsSegment.add(previous.runId);
 		}
 		this.blocks.push(block);
+		this.revision += 1;
 		// The user's own message is never "unread" — they just typed it.
 		if (!this.focused && block.kind !== "user") this.unread += 1;
 		return block;

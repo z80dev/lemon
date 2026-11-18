@@ -99,8 +99,6 @@ export interface CommandHost {
 	forgetProfile?(profileId: string, sessionKey: string): void;
 	/** Mint a session (optionally keyed, optionally with a first prompt). */
 	createSession?(sessionKey?: string, prompt?: string): void | Promise<void>;
-	/** Drop a session locally and server-side, after confirming. */
-	closeSession?(sessionKey: string): void | Promise<void>;
 	/** Forget a session locally after the daemon has verified lifecycle deletion. */
 	forgetDeletedSession?(sessionKey: string): void | Promise<void>;
 	/** Forget a session's transcript locally without touching the daemon. */

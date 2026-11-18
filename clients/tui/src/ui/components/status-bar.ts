@@ -22,6 +22,7 @@ import type { NativeNode, NativeUiEvent, TspSpan } from "@oh-my-pi/pi-tui/native
 import { styledSpans } from "@oh-my-pi/pi-tui/native/spans";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { safeLine } from "../../formatters/base.ts";
 import type { ConnectionState } from "../../protocol/types.ts";
 import type { SubmissionMode } from "../../store/app-store.ts";
 import { type ColorSlot, getTheme } from "../theme/theme.ts";
@@ -410,7 +411,12 @@ export function buildSegments(data: StatusBarData): Segment[] {
 	}
 	segments.push({ id: "session", text: data.sessionKey, slot: "muted", priority: 10 });
 
-	return segments;
+	// Branch names, titles, models and keys come from repositories and daemons:
+	// one display line each, with controls and bidi/zero-width tricks visible.
+	return segments.map((segment) => ({
+		...segment,
+		text: safeLine(segment.text, Number.POSITIVE_INFINITY),
+	}));
 }
 
 /** `session $1.20`, `session ≥$1.20` when a run reported no cost, or `session cost unknown`. */
@@ -472,15 +478,16 @@ export function buildComposerFacts(data: StatusBarData): ComposerFacts {
 			),
 		);
 	}
-	if (data.engine) {
+	const engine = data.engine && safeLine(data.engine, 80);
+	if (engine) {
 		facts.push(
 			node(
 				"seg",
 				{
 					role: "omp.composer.fact",
-					spans: styledSpans(theme.fg(data.busy ? "toolRunning" : "muted", data.engine)),
+					spans: styledSpans(theme.fg(data.busy ? "toolRunning" : "muted", engine)),
 					priority: 45,
-					title: `Engine: ${data.engine}`,
+					title: `Engine: ${engine}`,
 				},
 				undefined,
 				"engine",
@@ -491,7 +498,7 @@ export function buildComposerFacts(data: StatusBarData): ComposerFacts {
 	return {
 		context:
 			source === "context" ? contextMeter(data.contextTokens, data.contextWindow) : undefined,
-		model: [span(shortModel(data.model), data.model ? undefined : "dim")],
+		model: [span(safeLine(shortModel(data.model), 200), data.model ? undefined : "dim")],
 		extras: node(
 			"status",
 			{ role: "omp.composer.extras", transparent: true, grow: 1 },

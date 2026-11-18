@@ -134,11 +134,17 @@ test("structured paths with fragment-like names stay literal, with controls reje
 	);
 	expectTarget(block("read", { path: "src/name:42" }), "src/name:42");
 	for (const path of ["bad\x1b]9;inject\x07", "bad\nfile", "bad\u009b31m"]) {
-		const tool = block("edit", { path }, { first_changed_line: 42 });
-		expect(toolLocation(tool)).toBeUndefined();
+		// A block that skipped ingestion still refuses the raw path.
+		const ingested = block("edit", { path: "placeholder" }, { first_changed_line: 42 });
+		const raw = { ...ingested, detail: { ...ingested.detail, args: { path } } };
+		expect(toolLocation(raw)).toBeUndefined();
 		expect(fileTarget(path, 42)).toBeUndefined();
-		const native = new ToolCardComponent(tool).describe();
-		expect(native.p?.href).toBeUndefined();
+		expect(new ToolCardComponent(raw).describe().p?.href).toBeUndefined();
+		// Ingestion strips the controls, so no link can carry one.
+		const href = new ToolCardComponent(
+			block("edit", { path }, { first_changed_line: 42 }),
+		).describe().p?.href;
+		expect(String(href ?? "")).not.toMatch(/\p{Cc}/u);
 	}
 });
 

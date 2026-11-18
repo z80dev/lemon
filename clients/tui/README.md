@@ -136,7 +136,38 @@ on reconnect and when opening or changing models. Older daemons without
   pi-tui's form dialog (pages, dropdowns, text areas, option notes, Review
   tabs in Tern): Submit sends the form data, Esc/Cancel declines.
 - Exec approval panel (allow once / session / always / deny, number
-  quick-pick, wrapped command preview, expiry countdown). Recovery preserves
+  quick-pick, wrapped command preview, expiry countdown). The command,
+  rationale and plan path are never printed raw: every control byte, bidi
+  override and invisible format character is shown as a visible marker (`␛`,
+  `␍`, `⟨U+202E⟩`), so a concealed or overwritten command reads as tampered;
+  the decision still refers to the daemon's unchanged request. Every other
+  untrusted text (answers, reasoning, tool titles/output/messages, notices,
+  prompts including `{!cmd}` output, stored history) is sanitized once as the
+  session store ingests it, so its raw bytes cannot retitle the window, write
+  the clipboard, forge links or Lemon's status channels, or move the cursor.
+  What is drawn in the row renderer is escaped once more at display time.
+  pi-tui's Markdown decoder is patched
+  (`patches/@oh-my-pi%2Fpi-tui@18.20.2.patch`) so a character reference that
+  decodes to a control or format character — even one assembled by comment
+  removal or `<code>` token joining — becomes a visible marker. Bidi
+  embeddings/overrides/isolates, zero-width and other invisible format
+  characters are shown as `⟨U+XXXX⟩` in the transcript, tool cards (rows and
+  native views), status line and composer facts (branch, model, engine),
+  pickers, prompts and `/copy` previews (emoji joiners stay). Copy and `/copy`
+  put the stored text as received on the clipboard, without markers; a `/copy`
+  block pick is mapped back to its stored text by position, never by
+  comparing escaped previews.
+
+  **Limitation (native Tern rendering):** Tern decodes the Markdown Lemon
+  hands it itself. Lemon marks contiguous numeric references
+  (`&#27;`, `&#x1b`) in that source, but references Tern reconstructs while
+  rendering — numeric references split by an HTML comment
+  (`&<!--x-->#27;`) or named entities for format characters (`&rlm;`,
+  `&zwj;`, …) — are not covered until pi-tui/Tern apply the decoded-text
+  sanitiser upstream. The row renderer (non-Tern terminals) is covered by the
+  patch above.
+
+  Recovery preserves
   each pending request's server ID, so multiple approvals remain independently
   actionable. Malformed or unavailable approval snapshots never confirm an empty
   pending set; bounded partial reads retain omitted requests, while authorization
@@ -230,7 +261,9 @@ on reconnect and when opening or changing models. Older daemons without
   the command's own completion wins. `[tui] vim_mode = true` starts the
   composer in Vim-style modal editing (default `false`; global or project config).
 - Multi-session: Ctrl+X switcher (live + recent, debounced server-side search
-  across stored sessions, new-with-prompt, close), per-session drafts, unread
+  across stored sessions, new-with-prompt, Ctrl+W delete preview — deleting
+  still takes `/session delete <key> --confirm <key>` and a verified daemon
+  deletion), per-session drafts, unread
   badges, history hydration. Search results are not restricted to the initially
   loaded recent sessions; failed searches never leave stale rows selectable.
   Reconnect and overflow first page `sessions.events` from the last applied cursor.
@@ -522,7 +555,7 @@ and control plane authoritative:
 | `/queue [prompt]`, `/q [prompt]` | With a prompt, use queue mode for that submission; without one, inspect and edit the pending queue. `/q` is intentionally queue, not quit. |
 | `/steer <prompt>` | Send one steering submission without changing the default submission mode. |
 | `/redirect <prompt>` | Replace the active run's pending model direction without changing the default submission mode. |
-| `/reset` | Reset the current session through `sessions.reset` and clear its local transcript. |
+| `/reset [--confirm <exact-key>]` | Preview what `sessions.reset` irreversibly deletes on the daemon (run history, chat state, session policy); only `/reset --confirm <focused-key>` resets, never while a run is live, and the local transcript is cleared only after the daemon verifies the reset for that key (otherwise the outcome is reported as unknown and nothing changes here). `/session reset` is the same command. Use `/new` for a fresh session without deleting anything. |
 | `/reasoning [level]` | Alias for Lemon's `/think` reasoning-effort control. |
 | `/stop` | Alias for `/abort`; partial output remains visible and is marked interrupted. |
 | `/status` | Show control-plane health/runtime summaries. |

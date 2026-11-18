@@ -1,6 +1,14 @@
+import type { TranscriptEntryLike } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import type { OutlineTarget } from "@oh-my-pi/pi-tui/chat/transcript-outline";
 import { lexDocument } from "@oh-my-pi/pi-tui/components/markdown";
-import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
+import {
+	type CopyPickSource,
+	CopySelectorComponent,
+	collectBlocks,
+	targetCopy,
+} from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import type { Token } from "@oh-my-pi/pi-utils/marked";
+import { displayDeep } from "../formatters/base.ts";
 import { describeError } from "../protocol/errors.ts";
 import type { Block } from "../store/transcript-model.ts";
 import { replayDeps } from "../ui/replay-overlays.ts";
@@ -62,14 +70,25 @@ export function selectCopyText(blocks: readonly Block[], argv: string[]): string
  * Fullscreen `/copy` picker over the replayed transcript: Up/Down move the
  * outline over turns, Right descends into a turn's code, quotes, commands and
  * links, Enter copies, Esc closes.
+ *
+ * The picker renders previews (rows and Tern Markdown) from entries passed
+ * through the display policy ({@link displayDeep}); what reaches the
+ * clipboard is recomputed from the stored, unescaped entry the pick came from.
  */
 function openCopySelector(ctx: CommandContext, copyText: (text: string) => Promise<void>): void {
-	const entries = blocksToTranscriptEntries(ctx.session.blocks);
+	const raw = blocksToTranscriptEntries(ctx.session.blocks);
+	const shown = raw.map((entry) => displayDeep(entry) as TranscriptEntryLike);
+	const rawOf = new Map(shown.map((entry, index) => [entry, raw[index]!]));
 	ctx.ui.presentOverlay!((host) => {
-		const selector: CopySelectorComponent = new CopySelectorComponent(entries, {
+		const selector: CopySelectorComponent = new CopySelectorComponent(shown, {
 			...replayDeps(host, ctx.cwd ?? process.cwd()),
-			onPick: (content, label) => {
+			onPick: (_shownContent, label, source) => {
 				host.close();
+				const content = rawPick(source, rawOf.get(source.entry));
+				if (content === undefined) {
+					ctx.ui.notice("copy failed: the picked text no longer matches the transcript", "error");
+					return;
+				}
 				copyText(content).then(
 					() => ctx.ui.notice(`copied ${label}`),
 					(error) => ctx.ui.notice(`copy failed: ${describeError(error)}`, "error"),
@@ -79,6 +98,23 @@ function openCopySelector(ctx: CommandContext, copyText: (text: string) => Promi
 		});
 		return selector;
 	});
+}
+
+/**
+ * The unescaped text of a pick: the stored entry's block with the same ordinal
+ * (carried by the picker, never recovered by comparing escaped content), or
+ * the stored entry's turn. A block whose kind no longer lines up fails closed.
+ */
+function rawPick(source: CopyPickSource, raw: TranscriptEntryLike | undefined): string | undefined {
+	if (!raw) return undefined;
+	const rawBlocks = collectBlocks([raw]);
+	if (source.block) {
+		const { ordinal, kind } = source.block;
+		if (ordinal === undefined) return undefined;
+		const match = rawBlocks[ordinal];
+		return match && match.kind === kind ? match.content : undefined;
+	}
+	return targetCopy({ entries: [raw] } as unknown as OutlineTarget, rawBlocks).content;
 }
 
 export const copyCommand: SlashCommand = {

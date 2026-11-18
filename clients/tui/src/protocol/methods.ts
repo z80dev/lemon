@@ -125,6 +125,7 @@ import type {
 	SessionsPreviewResult,
 	SessionsPruneParams,
 	SessionsPruneResult,
+	SessionsResetResult,
 	SessionsSnapshotParams,
 	SessionsSnapshotResult,
 	UsageStatusResult,
@@ -640,8 +641,15 @@ export class ControlPlaneMethods {
 		});
 	}
 
-	sessionsReset(params: { sessionKey: string }, options?: RequestOptions): Promise<unknown> {
-		return this.#call(METHOD.sessionsReset, params, options);
+	/** Destructive: never queued while offline, so it cannot run after the user stopped watching. */
+	sessionsReset(
+		params: { sessionKey: string },
+		options?: RequestOptions,
+	): Promise<SessionsResetResult> {
+		return this.#call<SessionsResetResult>(METHOD.sessionsReset, params, {
+			...options,
+			queueIfOffline: false,
+		});
 	}
 
 	sessionsDelete(

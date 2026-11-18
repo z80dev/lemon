@@ -29,6 +29,7 @@
  */
 
 import { diffLines } from "@oh-my-pi/pi-natives";
+import { displayText } from "../formatters/base.ts";
 import { defaultRegistry, type FormatterRegistry } from "../formatters/index.ts";
 import type { FormattedOutput } from "../formatters/types.ts";
 import type { ToolBlock } from "../store/transcript-model.ts";
@@ -293,7 +294,7 @@ export function buildToolView(
 	let formatted: FormattedOutput;
 	if (kind === "note") {
 		const retry = asRecord(block.detail?.retry);
-		return {
+		return displayView({
 			state,
 			kind,
 			toolName,
@@ -303,7 +304,7 @@ export function buildToolView(
 			body: retry && asString(retry.reason) ? [asString(retry.reason)!] : [],
 			isError: state === "error",
 			diff: undefined,
-		};
+		});
 	}
 	if (state === "streaming") {
 		// Nothing is known yet. Running the formatters on an empty argument map
@@ -332,7 +333,7 @@ export function buildToolView(
 		formatted = registry.formatArgs(toolName ?? "", args);
 	}
 
-	return {
+	return displayView({
 		state,
 		kind,
 		toolName,
@@ -346,6 +347,21 @@ export function buildToolView(
 			state === "error" || state === "cancelled" || state === "unknown"
 				? undefined
 				: extractToolDiff(block, args, toolName),
+	});
+}
+
+/**
+ * Every string a card prints, made safe for the terminal: formatter output
+ * interpolates argument keys, values and results verbatim, so the view is
+ * escaped here once ({@link displayText}) rather than in each formatter.
+ */
+function displayView(view: ToolView): ToolView {
+	return {
+		...view,
+		title: displayText(view.title),
+		summary: displayText(view.summary),
+		body: view.body.map(displayText),
+		diff: view.diff && { ...view.diff, text: displayText(view.diff.text) },
 	};
 }
 

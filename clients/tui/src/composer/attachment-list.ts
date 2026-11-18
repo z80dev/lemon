@@ -1,4 +1,5 @@
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
+import { safeLine } from "../formatters/base.ts";
 import type { PendingImage } from "./images.ts";
 
 /** Stable rows; filenames cannot inject terminal controls or extra screen lines. */
@@ -18,8 +19,7 @@ export class AttachmentList {
 			return this.#rows;
 		}
 		const rows = images.map((image, index) => {
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: Filenames must not inject terminal controls.
-			const name = image.name.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+			const name = safeLine(image.name, Number.POSITIVE_INFINITY);
 			const size = Math.max(1, Math.ceil(image.byteLength / 1024));
 			return truncateToWidth(
 				`[${index + 1}] ${name} · ${image.content.mime_type} · ${size} KiB`,

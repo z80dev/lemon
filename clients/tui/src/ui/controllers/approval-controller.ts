@@ -21,6 +21,7 @@
 
 import type { Component, Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import type { OverlayHost } from "../../commands/registry.ts";
+import { displayMarkdown } from "../../formatters/base.ts";
 import { isExpiredApprovalError, isOutcomeUnknownApprovalError } from "../../protocol/errors.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import { type ApprovalRequestedEvent, PROPOSE_PLAN_TOOL } from "../../protocol/types.ts";
@@ -123,7 +124,8 @@ export class ApprovalController {
 		if (!presentOverlay || event.tool !== PROPOSE_PLAN_TOOL) return;
 		this.#closeReview();
 		const flow = new PlanReviewFlow(
-			typeof event.action?.plan === "string" ? event.action.plan : "",
+			// Agent output, rendered as Markdown into the terminal.
+			displayMarkdown(typeof event.action?.plan === "string" ? event.action.plan : ""),
 			planTitle(event.action),
 			{
 				present: (build) => {

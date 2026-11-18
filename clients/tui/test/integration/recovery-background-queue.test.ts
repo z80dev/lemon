@@ -418,7 +418,7 @@ describe("background recovered session queues", () => {
 		});
 	}
 
-	test("closing background A fences its pending response without restoring the removed session", async () => {
+	test("a verified deletion of background A fences its pending response without restoring the removed session", async () => {
 		const { app, server, snapshots } = await boot();
 		await app.sessions.switch(B);
 		await app.sessions.resync(A);
@@ -433,7 +433,7 @@ describe("background recovered session queues", () => {
 		});
 		const pending = app.sessions.resync(A);
 		await entered.promise;
-		await app.sessions.close(A, { confirmed: true });
+		await app.sessions.forgetDeleted(A);
 		release.resolve(terminalA());
 		await pending;
 		expect(sends(server)).toEqual([]);

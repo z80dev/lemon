@@ -60,7 +60,13 @@ import {
 	type SearchProviderId,
 } from "@oh-my-pi/pi-tui/tools/web-search-types";
 import { formatCount } from "@oh-my-pi/pi-utils";
-import { safeLine, safeText } from "../formatters/base.ts";
+import {
+	displayDeep,
+	displayMarkdown,
+	displayText,
+	safeLine,
+	safeText,
+} from "../formatters/base.ts";
 import {
 	ompFormatter,
 	ompSessionLabel,
@@ -147,14 +153,17 @@ function facts(block: ToolBlock, view: ToolView, options: NativeToolViewOptions)
 		? (str(detail.result) ?? "")
 		: (contentText(partial) ??
 			(typeof detail.partial_result === "string" ? detail.partial_result : ""));
+	// Every native view (web fetch, task, todo, grep, …) builds Tern nodes from
+	// these facts, often as Markdown Tern decodes itself; they get the same
+	// display policy as the row card, keys included.
 	return {
 		block,
 		view,
 		options,
-		args: toolArgs(block),
-		details,
-		meta: record(detail.result_meta) ?? {},
-		output,
+		args: displayDeep(toolArgs(block)) as Record<string, unknown>,
+		details: displayDeep(details) as Record<string, unknown>,
+		meta: displayDeep(record(detail.result_meta) ?? {}) as Record<string, unknown>,
+		output: displayMarkdown(output),
 		settled,
 		failed: view.state === "error",
 	};
@@ -166,7 +175,7 @@ function failureMessage(f: ToolFacts): string {
 		str(f.output.trim()) ??
 		str(f.meta.message) ??
 		str(f.meta.reason) ??
-		str(f.block.message) ??
+		str(displayText(f.block.message ?? "")) ??
 		str(f.view.summary) ??
 		"failed"
 	).replace(/^Error:\s*/, "");

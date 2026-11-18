@@ -983,6 +983,17 @@ export interface SessionsDeleteResult {
 	};
 }
 
+/** `sessions.reset` deletes the session's run history, chat state and session policy. */
+export interface SessionsResetResult {
+	success: boolean;
+	sessionKey: string;
+	summary?: {
+		sessionKey?: string;
+		reset?: boolean;
+		cleanup?: Record<string, unknown>;
+	};
+}
+
 export interface SessionsPatchParams {
 	sessionKey: string;
 	[key: string]: unknown;

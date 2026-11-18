@@ -22,6 +22,7 @@ import type {
 import { iconButton } from "@oh-my-pi/pi-tui/native/overlay";
 import { Container } from "@oh-my-pi/pi-tui/tui";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { displayMarkdown } from "../../formatters/base.ts";
 import type { UserDelivery, UserDetails } from "../../store/transcript-model.ts";
 import { TranscriptMarks } from "../../terminal/marks.ts";
 import { getTheme } from "../theme/theme.ts";
@@ -57,7 +58,7 @@ export class UserMessageComponent extends Container {
 		this.#text = text;
 		this.#details = details;
 		this.addChild(
-			new Markdown(text, GUTTER, 0, getMarkdownTheme(), {
+			new Markdown(displayMarkdown(text), GUTTER, 0, getMarkdownTheme(), {
 				color: (value) => theme.fg("userText", value),
 			}),
 		);

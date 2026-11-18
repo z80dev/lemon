@@ -415,7 +415,8 @@ test("row text is sanitized, flat order ranks by attention and usage omits unkno
 		],
 		0,
 	);
-	expect(hubIdentity(store.find("chat", "t1")!)).toBe("do it now @a b · t1");
+	// The BEL is dropped like every other control byte; it is not a word break.
+	expect(hubIdentity(store.find("chat", "t1")!)).toBe("do it now @ab · t1");
 	expect(hubIdentity(store.find("chat", "t2")!)).toBe("t2");
 	const rows = store.tree("chat");
 	expect(shownHubRows(rows, "", "flat").map((row) => row.task.taskId)).toEqual(["t2", "t3", "t1"]);
