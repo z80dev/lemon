@@ -18,7 +18,7 @@ defmodule LemonSkills.Sources.Hermes do
   require Logger
 
   alias LemonCore.Secrets
-  alias LemonSkills.{Entry, HttpClient, Manifest}
+  alias LemonSkills.{Entry, GitRemote, HttpClient, Manifest}
 
   @repo "NousResearch/hermes-agent"
   @branch "main"
@@ -323,31 +323,12 @@ defmodule LemonSkills.Sources.Hermes do
     branch = Keyword.get(opts, :branch, @branch)
 
     try do
-      with {_out, 0} <-
-             System.cmd(
-               "git",
-               [
-                 "-c",
-                 "core.symlinks=false",
-                 "clone",
-                 "--depth",
-                 "1",
-                 "--filter=blob:none",
-                 "--sparse",
-                 "--branch",
-                 branch,
-                 @clone_url,
-                 temp
-               ],
-               stderr_to_stdout: true
-             ),
-           {_out, 0} <-
-             System.cmd("git", ["-C", temp, "sparse-checkout", "set", "--no-cone", skill_path],
-               stderr_to_stdout: true
-             ) do
+      with :ok <- GitRemote.clone(@clone_url, temp, branch: branch, sparse: true),
+           :ok <- GitRemote.sparse_checkout(@clone_url, temp, [skill_path]) do
         copy_skill(Path.join(temp, skill_path), dest_dir)
       else
-        {output, _code} -> {:error, {:clone_failed, String.trim(output)}}
+        {:error, {:git_failed, output}} -> {:error, {:clone_failed, output}}
+        {:error, reason} -> {:error, reason}
       end
     after
       File.rm_rf(temp)

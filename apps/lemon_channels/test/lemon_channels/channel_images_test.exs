@@ -113,23 +113,61 @@ defmodule LemonChannels.ChannelImagesTest do
     refute ImageDownload.discord_url?("https://user@cdn.discordapp.com/image.png")
   end
 
-  test "streaming downloader stops oversized bodies and does not follow redirects" do
-    plug = fn conn -> Plug.Conn.send_resp(conn, 200, "123456") end
+  test "media downloads only reach the Discord CDN" do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listen)
+    test = self()
 
-    assert {:error, :too_large} =
-             ImageDownload.download("https://cdn.discordapp.com/test", 5, plug: plug)
+    server =
+      spawn_link(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen)
+        send(test, :hit)
+        :gen_tcp.send(socket, "HTTP/1.1 200 OK\r\ncontent-length: 6\r\n\r\nsecret")
+        :gen_tcp.close(socket)
+      end)
 
-    assert {:ok, "123456"} =
-             ImageDownload.download("https://cdn.discordapp.com/test", 6, plug: plug)
+    on_exit(fn -> Process.exit(server, :kill) end)
 
-    redirect = fn conn ->
-      conn
-      |> Plug.Conn.put_resp_header("location", "https://example.com")
-      |> Plug.Conn.send_resp(302, "")
+    for url <- [
+          "http://127.0.0.1:#{port}/image.png",
+          "https://169.254.169.254/latest/meta-data/",
+          "https://cdn.discordapp.com.evil.test/image.png"
+        ] do
+      assert {:error, :download_failed} = ImageDownload.download(url, 100)
     end
 
-    assert {:error, :download_failed} =
-             ImageDownload.download("https://cdn.discordapp.com/test", 6, plug: redirect)
+    refute_receive :hit, 300
+  end
+
+  test "streaming downloader is pinned, capped and never follows redirects" do
+    test = self()
+    url = "https://cdn.discordapp.com/test"
+    resolver = fn "cdn.discordapp.com" -> {:ok, [{162, 159, 128, 233}]} end
+
+    ok = [
+      resolver: resolver,
+      send: fn request ->
+        send(test, {:request, request})
+        {:ok, %{status: 200, headers: [], body: "123456"}}
+      end
+    ]
+
+    assert {:error, :too_large} = ImageDownload.download(url, 5, ok)
+    assert {:ok, "123456"} = ImageDownload.download(url, 6, ok)
+    assert_receive {:request, %{address: {162, 159, 128, 233}, host: "cdn.discordapp.com"} = req}
+    assert req.timeout_ms <= 30_000
+
+    redirect = [
+      resolver: resolver,
+      send: fn request ->
+        send(test, {:redirected, request.path})
+        {:ok, %{status: 302, headers: [{"location", "https://example.com"}], body: ""}}
+      end
+    ]
+
+    assert {:error, :download_failed} = ImageDownload.download(url, 6, redirect)
+    assert_receive {:redirected, "/test"}
+    refute_receive {:redirected, _}, 100
   end
 
   defp photo(id, width, size),

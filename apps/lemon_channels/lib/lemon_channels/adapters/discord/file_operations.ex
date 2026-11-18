@@ -15,10 +15,12 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations, as: TelegramFileOps
   alias LemonChannels.BindingResolver
   alias LemonChannels.CommandAuthority
+  alias LemonChannels.ImageDownload
   alias LemonCore.{ChatScope, FileAccess}
 
   @default_max_upload_bytes 25 * 1024 * 1024
   @default_max_download_bytes 25 * 1024 * 1024
+  @download_timeout_ms 60_000
 
   # ---------------------------------------------------------------------------
   # /file put  (slash command interaction)
@@ -43,7 +45,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
              root,
              dest_rel,
              cfg,
-             fn -> download_attachment_bytes(url) end,
+             fn -> download_attachment_bytes(url, upload_cap(cfg), net_opts(state)) end,
              force,
              @default_max_upload_bytes
            ) do
@@ -121,7 +123,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
             root,
             rel,
             cfg,
-            fn -> download_attachment_bytes(url) end,
+            fn -> download_attachment_bytes(url, upload_cap(cfg), net_opts(state)) end,
             false,
             @default_max_upload_bytes
           )
@@ -170,27 +172,72 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
 
   @doc """
   Download attachment bytes from a Discord CDN URL.
+
+  Only `https://cdn.discordapp.com` and `https://media.discordapp.net` URLs
+  are fetched, through `LemonCore.Net.HTTP`: the address is authorized and
+  pinned, redirects are not followed, the body is cut off above `max_bytes`
+  (the channel's upload limit) while it streams, and the download has a 60 s
+  deadline. `net_opts` are extra fetcher options for tests (`:resolver`,
+  `:send`).
   """
-  def download_attachment_bytes(url) when is_binary(url) and url != "" do
-    case Req.get(url) do
-      {:ok, %{status: 200, body: body}} when is_binary(body) ->
+  def download_attachment_bytes(url, max_bytes \\ @default_max_upload_bytes, net_opts \\ [])
+
+  def download_attachment_bytes(url, max_bytes, net_opts)
+      when is_binary(url) and url != "" and is_integer(max_bytes) and max_bytes > 0 do
+    opts =
+      Keyword.merge(net_opts,
+        timeout_ms: @download_timeout_ms,
+        max_body_bytes: max_bytes,
+        max_redirects: 0
+      )
+
+    result =
+      if ImageDownload.discord_url?(url),
+        do: LemonCore.Net.HTTP.request(:get, url, opts),
+        else: {:error, :not_discord_cdn}
+
+    case result do
+      {:ok, %{status: 200, body: body}} ->
         {:ok, body}
 
+      {:error, {:body_too_large, _}} ->
+        {:error, "Attachment is too large for the upload limit."}
+
       result ->
-        Logger.warning("Discord attachment download failed: #{inspect(result)}")
+        Logger.warning("Discord attachment download failed: #{inspect(download_failure(result))}")
 
         {:error,
          "Failed to download attachment. Check that the attachment is still available, then try again."}
     end
-  rescue
-    error in ArgumentError ->
-      Logger.warning("Discord attachment download failed: #{inspect(error)}")
-
-      {:error,
-       "Failed to download attachment. Check that the attachment is still available, then try again."}
   end
 
-  def download_attachment_bytes(_), do: {:error, "No attachment URL provided."}
+  def download_attachment_bytes(_, _, _), do: {:error, "No attachment URL provided."}
+
+  defp download_failure({:ok, %{status: status}}), do: {:http_status, status}
+  defp download_failure({:error, reason}), do: reason
+
+  # Transport state may carry `:attachment_net_opts` in tests only; nothing
+  # but the resolver and transport stand-ins is taken from it.
+  defp net_opts(state),
+    do: state |> Map.get(:attachment_net_opts, []) |> Keyword.take([:resolver, :send])
+
+  # The upload limit `FileAccess.put/6` enforces, so the download stops where
+  # the write would be refused.
+  defp upload_cap(cfg) do
+    case cfg_get(cfg, :max_upload_bytes) do
+      max when is_integer(max) and max > 0 ->
+        max
+
+      max when is_binary(max) ->
+        case Integer.parse(String.trim(max)) do
+          {value, ""} when value > 0 -> value
+          _ -> @default_max_upload_bytes
+        end
+
+      _ ->
+        @default_max_upload_bytes
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # File sending

@@ -73,6 +73,13 @@ defmodule LemonCore.Config.Validator do
     errors =
       validate_write_approval(errors, config.skills.write_approval, "skills.write_approval")
 
+    errors =
+      validate_private_git_hosts(
+        errors,
+        Map.get(config.skills, :allowed_private_git_hosts, []),
+        "skills.allowed_private_git_hosts"
+      )
+
     errors = validate_automation(config.automation, errors)
 
     case errors do
@@ -995,6 +1002,18 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_write_approval(errors, value, _path) when is_boolean(value), do: errors
   defp validate_write_approval(errors, _value, path), do: ["#{path}: must be a boolean" | errors]
+
+  defp validate_private_git_hosts(errors, hosts, path) when is_list(hosts) do
+    if Enum.all?(hosts, &git_host?/1),
+      do: errors,
+      else: ["#{path}: must be a list of host names" | errors]
+  end
+
+  defp validate_private_git_hosts(errors, _hosts, path),
+    do: ["#{path}: must be a list of host names" | errors]
+
+  defp git_host?(host),
+    do: is_binary(host) and Regex.match?(~r/\A[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}\z/, host)
 
   @doc """
   Validates the `[automation]` section.

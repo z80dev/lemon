@@ -103,6 +103,7 @@ defmodule LemonSkills.SkillTrustBindingTest do
 
   describe "trust is derived from the source, not the lockfile" do
     setup %{cwd: cwd, tmp_dir: tmp_dir} do
+      :ok = LemonSkills.TestSupport.FakeSsh.install!(tmp_dir)
       repo = Path.join(tmp_dir, "remote-repo")
       File.mkdir_p!(repo)
       File.write!(Path.join(repo, "SKILL.md"), skill_md("forged", "safe upstream"))
@@ -118,7 +119,7 @@ defmodule LemonSkills.SkillTrustBindingTest do
         Lockfile.put({:project, cwd}, %{
           "key" => "forged",
           "source_kind" => "builtin",
-          "source_id" => "git+file://" <> repo,
+          "source_id" => "git+" <> LemonSkills.TestSupport.FakeSsh.url(repo),
           "trust_level" => "builtin",
           "audit_status" => "pass",
           "bundle_hash" => "stale"

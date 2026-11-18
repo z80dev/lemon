@@ -119,10 +119,19 @@ apps; optional consumers register at runtime. See [README](README.md),
 
 - `LemonCore.Net.Address` is the only address classifier (public, private,
   metadata) and `LemonCore.Net.HTTP` the only guarded fetcher. Webhook
-  callbacks, `webfetch`, context `@url:` references, MCP origin pins and
-  browser route checks all use them; never add a local `private_ip?`, resolver
-  or redirect-following client to a guard. DNS failure is never public,
-  metadata is never reachable, and redirects are re-authorized per hop.
+  callbacks, `webfetch`, context `@url:` references, MCP origin pins, browser
+  route checks, the skill marketplace client, Discord/Telegram file and media
+  downloads (`LemonChannels.ImageDownload`), Twilio recordings and the updater
+  all use them; never add a local `private_ip?`, resolver or
+  redirect-following client to a guard. DNS failure is never public, metadata
+  is never reachable, and redirects are re-authorized per hop. Every fetch has
+  a deadline and a body cap enforced while streaming; large downloads use
+  `into:` to stream to disk. The fetcher connects directly and never uses an
+  HTTP proxy, so these clients do not work behind a proxy-only egress.
+- Remote skill `git` runs only through `LemonSkills.GitRemote` (authorized,
+  pinned, sanitized environment, no redirects or proxies, deadline and size
+  cap); only the operator's global `[skills] allowed_private_git_hosts` may
+  admit private destinations.
 
 ## Verification and packaging
 

@@ -31,7 +31,7 @@ defmodule LemonSkills.Discovery do
   ## HTTP Client
 
   The HTTP layer is abstracted behind `LemonSkills.HttpClient`. The default
-  implementation (`LemonSkills.HttpClient.Httpc`) uses Erlang's `:httpc`.
+  implementation (`LemonSkills.HttpClient.Guarded`) uses `LemonCore.Net.HTTP`.
   Override via application config to inject a mock for testing:
 
       config :lemon_skills, :http_client, LemonSkills.HttpClient.Mock

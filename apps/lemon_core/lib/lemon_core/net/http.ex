@@ -28,12 +28,22 @@ defmodule LemonCore.Net.HTTP do
     * `:body` — request body (iodata) or `nil`.
     * `:timeout_ms` — deadline per hop covering DNS, connect, send and receive
       (default 30 000).
-    * `:max_body_bytes` — response body cap (default 5 MiB); larger bodies
-      return `{:error, {:body_too_large, max}}`.
+    * `:max_body_bytes` — response body cap (default 5 MiB), enforced as data
+      arrives; larger bodies return `{:error, {:body_too_large, max}}`.
+    * `:into` — a file path. Each hop's response body is streamed into it
+      (created or truncated per hop) instead of being returned, and `body` is
+      `""`. On an error the file may hold a partial body; the caller removes
+      it. A write failure returns `{:error, :write_failed}`.
     * `:max_redirects` — manual redirect limit (default 0).
+    * `:authorize_redirect` — `(from :: URI.t(), to :: URI.t() -> :ok |
+      {:error, reason})`, run for every redirect before the next hop is
+      resolved or connected; an error stops the request with
+      `{:error, {:redirect_refused, reason}}`.
     * `:allow_private` — permit private (never metadata) destinations.
     * `:allow_private_hosts` — canonical host names or IP literals permitted to
       be private, for explicitly configured local services.
+    * `:allow_private_origins` — exact origins (`"scheme://host:port"`)
+      permitted to be private; another scheme or port on the same host is not.
     * `:resolver` — see `LemonCore.Net.Address.resolve/2`.
     * `:address` — a destination the caller already authorized (for example an
       `LemonMCP.HTTP.OriginPolicy` pin). The URL's host is not resolved and
@@ -81,6 +91,8 @@ defmodule LemonCore.Net.HTTP do
           | :too_many_informational_responses
           | {:headers_too_large, pos_integer()}
           | {:body_too_large, pos_integer()}
+          | :write_failed
+          | {:redirect_refused, term()}
 
   @spec request(atom() | String.t(), String.t(), keyword()) ::
           {:ok, response()} | {:error, error()}
@@ -143,6 +155,7 @@ defmodule LemonCore.Net.HTTP do
   defp follow(method, uri, response, opts, body, redirects_left, visited) do
     with {:ok, location} <- location(response.headers),
          {:ok, next} <- merge_location(uri, location),
+         :ok <- authorize_redirect(Keyword.get(opts, :authorize_redirect), uri, next),
          next_url = URI.to_string(next),
          :ok <- if(MapSet.member?(visited, next_url), do: {:error, :redirect_loop}, else: :ok) do
       {method, body} =
@@ -177,6 +190,16 @@ defmodule LemonCore.Net.HTTP do
     _ -> {:error, :invalid_redirect}
   end
 
+  defp authorize_redirect(nil, _from, _to), do: :ok
+
+  defp authorize_redirect(check, from, to) when is_function(check, 2) do
+    case check.(from, to) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:redirect_refused, reason}}
+      _ -> {:error, {:redirect_refused, :invalid_authorization}}
+    end
+  end
+
   defp origin(%URI{scheme: scheme, host: host, port: port}),
     do: {scheme, String.downcase(host), port}
 
@@ -192,7 +215,8 @@ defmodule LemonCore.Net.HTTP do
       :error ->
         allow? =
           Keyword.get(opts, :allow_private, false) == true or
-            private_host_allowed?(uri.host, Keyword.get(opts, :allow_private_hosts, []))
+            private_host_allowed?(uri.host, Keyword.get(opts, :allow_private_hosts, [])) or
+            private_origin_allowed?(uri, Keyword.get(opts, :allow_private_origins, []))
 
         authorize_opts =
           Keyword.merge(opts, allow_private: allow?, timeout_ms: remaining(deadline))
@@ -226,6 +250,17 @@ defmodule LemonCore.Net.HTTP do
 
   defp private_host_allowed?(_host, _allowed), do: false
 
+  defp private_origin_allowed?(uri, allowed) when is_list(allowed) do
+    Enum.any?(allowed, fn entry ->
+      case parse_url(entry) do
+        {:ok, allowed_uri} -> origin(allowed_uri) == origin(uri)
+        _ -> false
+      end
+    end)
+  end
+
+  defp private_origin_allowed?(_uri, _allowed), do: false
+
   defp send_pinned(method, uri, address, body, opts, deadline) do
     request = pinned_request(method, uri, address, body, opts, deadline)
 
@@ -237,7 +272,12 @@ defmodule LemonCore.Net.HTTP do
           else: {:ok, %{status: status, headers: normalize_headers(headers), body: body}}
 
       {:error, reason}
-      when reason in [:timeout, :private_origin_not_owned, :too_many_informational_responses] ->
+      when reason in [
+             :timeout,
+             :private_origin_not_owned,
+             :too_many_informational_responses,
+             :write_failed
+           ] ->
         {:error, reason}
 
       {:error, {:body_too_large, _}} = error ->
@@ -264,10 +304,14 @@ defmodule LemonCore.Net.HTTP do
       deadline: deadline,
       timeout_ms: remaining(deadline),
       max_body_bytes: positive(Keyword.get(opts, :max_body_bytes), @default_max_body_bytes),
+      into: into(Keyword.get(opts, :into)),
       ssl: Keyword.get(opts, :ssl, []),
       peer_check: Keyword.get(opts, :peer_check)
     }
   end
+
+  defp into(path) when is_binary(path) and path != "", do: path
+  defp into(_path), do: nil
 
   defp request_target(uri) do
     path = if uri.path in [nil, ""], do: "/", else: uri.path
@@ -295,13 +339,39 @@ defmodule LemonCore.Net.HTTP do
     within_deadline(request.deadline, fn ->
       with {:ok, conn, ref} <- open_pinned(request) do
         try do
-          receive_response(conn, ref, request.deadline, request.max_body_bytes, new_acc())
+          with {:ok, sink} <- open_sink(request.into) do
+            try do
+              receive_response(
+                conn,
+                ref,
+                request.deadline,
+                request.max_body_bytes,
+                new_acc(sink)
+              )
+            after
+              close_sink(sink)
+            end
+          end
         after
           Mint.HTTP.close(conn)
         end
       end
     end)
   end
+
+  # A raw file owned by the worker, so killing the worker at the deadline
+  # also closes it.
+  defp open_sink(nil), do: {:ok, nil}
+
+  defp open_sink(path) do
+    case :file.open(path, [:write, :raw, :binary]) do
+      {:ok, fd} -> {:ok, fd}
+      {:error, _} -> {:error, :write_failed}
+    end
+  end
+
+  defp close_sink(nil), do: :ok
+  defp close_sink(fd), do: :file.close(fd)
 
   # Runs `fun` in a worker that owns any socket it opens, killing it (and so
   # closing the socket) if the deadline passes first. A stream result is handed
@@ -511,7 +581,7 @@ defmodule LemonCore.Net.HTTP do
   # Response state. Informational (1xx) responses are counted and their header
   # bytes charged against the cumulative header budget, but never stored: only
   # the final response's status and headers are kept.
-  defp new_acc,
+  defp new_acc(sink \\ nil),
     do: %{
       status: nil,
       final?: false,
@@ -520,7 +590,8 @@ defmodule LemonCore.Net.HTTP do
       header_bytes: 0,
       headers: [],
       chunks: [],
-      size: 0
+      size: 0,
+      sink: sink
     }
 
   defp collect([], _ref, _limit, acc), do: {:more, acc}
@@ -562,9 +633,19 @@ defmodule LemonCore.Net.HTTP do
   defp collect([{:data, ref, data} | rest], ref, limit, acc) do
     size = acc.size + byte_size(data)
 
-    if size > limit,
-      do: {:error, {:body_too_large, limit}},
-      else: collect(rest, ref, limit, %{acc | size: size, chunks: [data | acc.chunks]})
+    cond do
+      size > limit ->
+        {:error, {:body_too_large, limit}}
+
+      is_nil(acc.sink) ->
+        collect(rest, ref, limit, %{acc | size: size, chunks: [data | acc.chunks]})
+
+      :file.write(acc.sink, data) == :ok ->
+        collect(rest, ref, limit, %{acc | size: size})
+
+      true ->
+        {:error, :write_failed}
+    end
   end
 
   defp collect([{:done, ref} | _], ref, _limit, %{final?: true} = acc), do: {:done, acc}
@@ -593,7 +674,8 @@ defmodule LemonCore.Net.HTTP do
   `timeout_ms` bounds DNS, connect, send and the wait for the final status and
   headers. Body data is then pulled with `stream_next/2` in the calling
   process, which owns the connection and must `close_stream/1` it. Accepts the
-  `request/3` options except `:max_redirects`, `:send` and `:max_body_bytes`.
+  `request/3` options except `:max_redirects`, `:send`, `:max_body_bytes` and
+  `:into`.
   """
   @spec open_stream(atom() | String.t(), String.t(), keyword()) ::
           {:ok, stream()} | {:error, error()}

@@ -296,13 +296,33 @@ the installer. Update host precedence is the programmatic `:base_url` option,
 Use plain HTTP only for an isolated local test server; checksums do not
 authenticate a manifest fetched from an untrusted host.
 
+Downloads use the pinned `LemonCore.Net.HTTP` fetcher. Up to five redirects
+(GitHub's release-asset redirects) are followed, each re-checked before it is
+resolved or connected: an `https` hop never leads to an `http` one anywhere in
+the chain. Every destination must be a public address unless the operator's
+global `~/.lemon/config.toml` grants a private mirror:
+
+```toml
+[update]
+private_mirror = true # the configured base URL's exact origin may be private
+```
+
+The grant covers only the base URL's exact scheme, host and port (never the
+default GitHub upstream); a redirect to another port or host must still be
+public. Project config cannot set it. The manifest is limited to 1 MiB and
+10 s; each artifact streams to disk within 300 s and is cut off as soon as it
+exceeds its declared size. Update downloads connect directly and never use an
+HTTP proxy (`HTTPS_PROXY` is ignored); behind proxy-only egress, serve the
+release layout from a reachable mirror and set `LEMON_UPDATE_BASE_URL`.
+
 The server must retain the existing release layout:
 
 - `/releases/latest/download/manifest.json` for the stable latest manifest;
 - `/releases/download/v<VERSION>/manifest.json` for an explicit `--version`;
 - `/releases/download/v<VERSION>/<artifact-file>` for every selected artifact.
 
-For example, with a local server already listening on port `4226`:
+For example, with a local server already listening on port `4226` and
+`[update] private_mirror = true` set:
 
 ```bash
 export LEMON_UPDATE_BASE_URL=http://127.0.0.1:4226

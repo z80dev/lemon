@@ -1385,6 +1385,24 @@ without approval controls fail closed without consuming saved grants.
 Interactive native sessions and Telegram/Discord use their existing approval flow.
 These switches gate agent tool writes, not explicit operator memory/skill services.
 
+### Private git hosts for skill installs
+
+Remote skill repositories must resolve to public addresses. An operator can name
+internal git servers that may resolve to private addresses:
+
+```toml
+[skills]
+allowed_private_git_hosts = ["gitea.internal"] # exact host names, case-insensitive
+```
+
+This is operator-only: it is read from the global `~/.lemon/config.toml`, and a
+project `.lemon/config.toml` that sets it is ignored with an operator-only warning.
+Listed hosts are still pinned to the address Lemon resolved, cloud metadata
+addresses stay refused, and every other host keeps the public-only rule. Skill git
+commands never use a proxy (`http_proxy`, `https_proxy`, `all_proxy` and
+`http.proxy` are cleared so the pinned connection cannot be redirected), so a
+repository reachable only through a proxy cannot be installed; mirror it on a
+directly reachable host instead.
 
 ## Feature Flags
 
@@ -3413,7 +3431,9 @@ bound to the authenticated CallSid travel as `<Parameter>` elements and are veri
 the stream's `start` message before any call session, Deepgram socket or recording is
 created. Deepgram sockets are owned by the call and closed whenever it ends.
 Recording downloads only contact `https://api.twilio.com` (Basic auth is never sent
-elsewhere or on redirects), and recording filenames are sanitized.
+elsewhere or on redirects) through the pinned `LemonCore.Net.HTTP` fetcher: each hop has
+a 120 s deadline, the WAV streams to a temporary file cut off above 512 MiB and is renamed
+into place only when complete, and recording filenames are sanitized.
 
 ## Channel Voice Replies
 
@@ -3544,6 +3564,12 @@ auto_send_generated_max_files = 3      # optional: max generated files auto-sent
 max_upload_bytes = 26214400            # optional (default: 25MB)
 max_download_bytes = 26214400          # optional (default: 25MB)
 ```
+
+Uploaded attachments (`/file put`, `auto_put`) are fetched only from
+`https://cdn.discordapp.com` or `https://media.discordapp.net` through the pinned
+`LemonCore.Net.HTTP` fetcher: no redirects, a 60 s deadline, and the download is cut
+off as soon as it exceeds `max_upload_bytes`. Telegram file downloads likewise use the
+pinned fetcher (no redirects, 60 s, at most 20 MiB, the Bot API `getFile` limit).
 
 When `auto_send_generated_files = true`, Lemon tracks generated files requested
 by browser/media tools and sends up to `auto_send_generated_max_files` files

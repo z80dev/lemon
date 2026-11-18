@@ -55,6 +55,10 @@ Coding-session/file tools belong in `coding_agent`. Usage lives in the
   bytes and the staged copy before activation.
 - Official Hermes IDs go through `Installer` and source routing, not direct copies
   into the registry. Official source is provenance, not permission to skip audit.
+- Remote git runs only through `LemonSkills.GitRemote` (never `System.cmd("git")`
+  against a remote) and remote HTTP only through `LemonSkills.HttpClient`, whose
+  default is the `LemonCore.Net.HTTP`-backed `HttpClient.Guarded`. Tests drive
+  SSH clones with a PATH-injected `ssh` serving a local `git upload-pack`.
 - Portable skill/automation blueprints are owned by `LemonAutomation.Blueprint`.
   Reuse bundle, manifest, lint/audit and profile services; no second scheduler.
 - `LemonSkills.Learn` composes bounded `LemonCore.Context`, memory and synthesis
