@@ -35,4 +35,39 @@ defmodule LemonSkills.AncestorDiscoveryTest do
 
     assert Config.project_skills_dirs(nested) == [project_dir, cwd_agents, parent_agents]
   end
+
+  test "a profile workspace inside a git repo anchors skills at the workspace", %{
+    tmp_dir: tmp_dir
+  } do
+    repo_root = TestGitRepo.init!(Path.join(tmp_dir, "repo"))
+    state = Path.join(repo_root, "state")
+    previous = Application.get_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, home_state_dir: state)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:lemon_core, :paths, previous),
+        else: Application.delete_env(:lemon_core, :paths)
+    end)
+
+    workspace = LemonCore.Paths.home_path(["profiles", "p", "workspace"])
+    File.mkdir_p!(Path.join([workspace, ".lemon", "skill"]))
+    File.mkdir_p!(Path.join([repo_root, ".agents", "skills"]))
+    src = Path.join(repo_root, "src")
+    File.mkdir_p!(src)
+    {:ok, real_workspace} = LemonCore.TrustedRoot.realpath(workspace)
+
+    assert LemonCore.TrustedRoot.skill_root(workspace) == real_workspace
+    # The workspace's own skills load; nothing above the home is searched.
+    assert Config.project_skills_dirs(workspace) == [
+             Path.join([real_workspace, ".lemon", "skill"])
+           ]
+
+    assert Config.collect_ancestor_agents_skill_dirs(workspace) == [
+             Path.join([real_workspace, ".agents", "skills"])
+           ]
+
+    # Outside any assistant home the git root still anchors discovery.
+    assert LemonCore.TrustedRoot.skill_root(src) == LemonCore.TrustedRoot.resolve(repo_root)
+  end
 end

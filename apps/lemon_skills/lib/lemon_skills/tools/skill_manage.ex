@@ -447,7 +447,7 @@ defmodule LemonSkills.Tools.SkillManage do
   defp configured_root(:project, _cwd), do: {:error, "project scope requires cwd"}
 
   defp root_anchor(:global, _cwd), do: Path.expand(Config.agent_dir())
-  defp root_anchor(:project, cwd), do: LemonCore.TrustedRoot.resolve(cwd)
+  defp root_anchor(:project, cwd), do: LemonCore.TrustedRoot.skill_root(cwd)
 
   defp validate_name(name) do
     cond do

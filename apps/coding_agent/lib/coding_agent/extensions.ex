@@ -1271,20 +1271,28 @@ defmodule CodingAgent.Extensions do
     if Process.get(@compile_lock_held) do
       fun.()
     else
-      :global.trans(
-        {@compile_lock, self()},
-        fn ->
-          Process.put(@compile_lock_held, true)
+      result =
+        :global.trans(
+          {@compile_lock, self()},
+          fn ->
+            Process.put(@compile_lock_held, true)
 
-          try do
-            fun.()
-          after
-            Process.delete(@compile_lock_held)
-          end
-        end,
-        [node()],
-        :infinity
-      )
+            try do
+              {:ok, fun.()}
+            after
+              Process.delete(@compile_lock_held)
+            end
+          end,
+          [node()],
+          # Finite but wide: compiles hold this lock for seconds.
+          10
+        )
+
+      case result do
+        {:ok, value} -> value
+        # Never compile or consult the cache unlocked.
+        :aborted -> raise "Extension compile lock unavailable"
+      end
     end
   end
 

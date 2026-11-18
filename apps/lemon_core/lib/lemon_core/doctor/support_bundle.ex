@@ -419,7 +419,7 @@ defmodule LemonCore.Doctor.SupportBundle do
     do: if(Regex.match?(@config_key, key), do: key, else: "key:" <> Redaction.hash(key))
 
   defp presence(value) when is_map(value) or is_list(value),
-    do: %{set: Enum.count(value) > 0, count: Enum.count(value)}
+    do: %{set: not Enum.empty?(value), count: Enum.count(value)}
 
   defp presence(value), do: %{set: value not in [nil, "", false]}
 

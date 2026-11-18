@@ -140,8 +140,8 @@ defmodule LemonCore.PathsTest do
 
       assert LemonCore.Checkpoint.checkpoint_dir() == "/var/lib/lemon/checkpoints"
 
-      assert LemonCore.Doctor.CheckpointDiagnostics.summary(:operator, limit: 1).store_dir ==
-               "/var/lib/lemon/checkpoints"
+      assert LemonCore.Doctor.CheckpointDiagnostics.summary(:operator, limit: 1).store ==
+               LemonCore.Doctor.Redaction.path_ref("/var/lib/lemon/checkpoints")
     end
 
     test "an explicit :checkpoint_dir option still wins in diagnostics" do
@@ -152,7 +152,7 @@ defmodule LemonCore.PathsTest do
           checkpoint_dir: "/tmp/elsewhere"
         )
 
-      assert summary.store_dir == "/tmp/elsewhere"
+      assert summary.store == LemonCore.Doctor.Redaction.path_ref("/tmp/elsewhere")
     end
   end
 

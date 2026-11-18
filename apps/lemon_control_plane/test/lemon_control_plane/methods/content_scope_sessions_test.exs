@@ -10,7 +10,8 @@ defmodule LemonControlPlane.Methods.ContentScopeSessionsTest do
 
   alias LemonAutomation.CronStore
   alias LemonControlPlane.Methods.Registry
-  alias LemonCore.{IntrospectionStore, RunStore, SessionLifecycle, Store}
+  alias LemonControlPlane.TestSupport.SessionCleanup
+  alias LemonCore.{IntrospectionStore, RunStore, Store}
 
   @prose "The merger closes Friday at 41 dollars per share"
   @unlabelled "PROMPT_SECRET_7Q2X9"
@@ -157,7 +158,7 @@ defmodule LemonControlPlane.Methods.ContentScopeSessionsTest do
       })
 
     on_exit(fn ->
-      SessionLifecycle.delete(key)
+      SessionCleanup.delete(key)
       Store.delete(:runs, run_id)
     end)
 

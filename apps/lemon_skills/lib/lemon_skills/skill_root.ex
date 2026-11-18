@@ -57,7 +57,7 @@ defmodule LemonSkills.SkillRoot do
   end
 
   def resolve_root(root, {:project, cwd} = scope) do
-    anchor = TrustedRoot.resolve(cwd)
+    anchor = TrustedRoot.skill_root(cwd)
     root = root |> Path.expand() |> physical(scope)
 
     if root != anchor and TrustedRoot.inside?(root, anchor),
@@ -234,7 +234,7 @@ defmodule LemonSkills.SkillRoot do
   defp roots({:project, cwd}) when is_binary(cwd) do
     [
       Config.project_skills_dir(cwd)
-      | Config.project_skills_candidates(cwd, TrustedRoot.resolve(cwd))
+      | Config.project_skills_candidates(cwd, TrustedRoot.skill_root(cwd))
     ]
   end
 

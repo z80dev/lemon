@@ -49,23 +49,30 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
 
     test "operator.content is granted only when an explicit scope list names it" do
       {:ok, read_only} =
-        Authorize.from_params(%{"role" => "operator", "scopes" => ["operator.read"]})
+        Authorize.from_params(%{"role" => "operator", "scopes" => ["operator.read"]},
+          local?: true
+        )
 
       assert read_only.scopes == [:read]
       refute Authorize.content?(read_only)
       refute Authorize.content?(%{auth: read_only})
 
       {:ok, content} =
-        Authorize.from_params(%{
-          "role" => "operator",
-          "scopes" => ["operator.read", "operator.content"]
-        })
+        Authorize.from_params(
+          %{
+            "role" => "operator",
+            "scopes" => ["operator.read", "operator.content"]
+          },
+          local?: true
+        )
 
       assert content.scopes == [:read, :content]
       assert Authorize.content?(content)
       assert Authorize.content?(%{auth: content})
 
-      {:ok, short} = Authorize.from_params(%{"role" => "operator", "scopes" => ["content"]})
+      {:ok, short} =
+        Authorize.from_params(%{"role" => "operator", "scopes" => ["content"]}, local?: true)
+
       assert short.scopes == [:content]
     end
 

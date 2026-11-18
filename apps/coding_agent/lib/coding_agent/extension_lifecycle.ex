@@ -19,6 +19,7 @@ defmodule CodingAgent.ExtensionLifecycle do
   alias CodingAgent.Extensions.ToolHooks
   alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.ToolDisclosure
+  alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolPolicy
   alias CodingAgent.ToolRegistry
   alias LemonAgent.Types.AgentTool

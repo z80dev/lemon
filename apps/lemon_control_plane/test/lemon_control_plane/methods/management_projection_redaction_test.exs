@@ -8,7 +8,8 @@ defmodule LemonControlPlane.Methods.ManagementProjectionRedactionTest do
 
   alias LemonAutomation.{CronManager, CronRun, CronStore}
   alias LemonControlPlane.Methods.Registry
-  alias LemonCore.{RunStore, SessionLifecycle}
+  alias LemonControlPlane.TestSupport.SessionCleanup
+  alias LemonCore.RunStore
 
   @secret "sk-" <> String.duplicate("q", 48)
   @bearer "Bearer abcdefghijklmnop.qrstuvwx"
@@ -160,7 +161,7 @@ defmodule LemonControlPlane.Methods.ManagementProjectionRedactionTest do
     key = "agent:t16e_detail_#{token}:main"
     agent = LemonCore.SessionKey.agent_id(key)
     :ok = RunStore.create_session_index(key, agent, :tui)
-    on_exit(fn -> SessionLifecycle.delete(key) end)
+    on_exit(fn -> SessionCleanup.delete(key) end)
 
     :ok =
       RunStore.finalize("t16e-run-#{token}", %{
@@ -184,7 +185,7 @@ defmodule LemonControlPlane.Methods.ManagementProjectionRedactionTest do
     key = "agent:t16e_full_#{token}:main"
     agent = LemonCore.SessionKey.agent_id(key)
     :ok = RunStore.create_session_index(key, agent, :tui)
-    on_exit(fn -> SessionLifecycle.delete(key) end)
+    on_exit(fn -> SessionCleanup.delete(key) end)
 
     :ok =
       RunStore.finalize("t16e-full-#{token}", %{

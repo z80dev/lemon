@@ -231,9 +231,10 @@ defmodule LemonSkills.Config do
   Get all project skills directories.
 
   Discovers `.agents/skills`, `.omp/skills`, `.claude/skills`, `.codex/skills`
-  and `.github/skills` from cwd up to its `LemonCore.TrustedRoot`: the
-  validated Git repository root, or cwd itself outside a repository. Nothing
-  above the root is searched. Each directory must resolve, after symlinks,
+  and `.github/skills` from cwd up to `LemonCore.TrustedRoot.skill_root/1`:
+  the assistant home containing cwd, else the validated Git repository root,
+  or cwd itself outside a repository. Nothing above the root is searched.
+  Each directory must resolve, after symlinks,
   inside the root; links leaving it are ignored. Paths are realpaths.
 
   Directories are returned in precedence order (first wins on key collisions):
@@ -243,7 +244,7 @@ defmodule LemonSkills.Config do
   """
   @spec project_skills_dirs(String.t()) :: [String.t()]
   def project_skills_dirs(cwd) do
-    root = TrustedRoot.resolve(cwd)
+    root = TrustedRoot.skill_root(cwd)
 
     cwd
     |> project_skills_candidates(root)
@@ -280,7 +281,7 @@ defmodule LemonSkills.Config do
   """
   @spec collect_ancestor_agents_skill_dirs(String.t()) :: [String.t()]
   def collect_ancestor_agents_skill_dirs(start_dir) when is_binary(start_dir) do
-    root = TrustedRoot.resolve(start_dir)
+    root = TrustedRoot.skill_root(start_dir)
 
     start_dir
     |> TrustedRoot.ancestors(root)

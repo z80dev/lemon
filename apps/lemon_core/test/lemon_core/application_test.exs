@@ -75,7 +75,8 @@ defmodule LemonCore.ApplicationTest do
         LemonCore.Secrets.SourceTaskSupervisor,
         LemonCore.Secrets.SourceCache,
         LemonCore.ConfigReloader,
-        LemonCore.ConfigReloader.Watcher
+        LemonCore.ConfigReloader.Watcher,
+        LemonCore.RuntimeLatch
       ]
 
       expected =

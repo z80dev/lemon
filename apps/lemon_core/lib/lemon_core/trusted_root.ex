@@ -92,6 +92,24 @@ defmodule LemonCore.TrustedRoot do
   end
 
   @doc """
+  The root LemonSkills discovers and mutates project skills under: the
+  assistant home containing `cwd` when it lies in one (nothing above that home
+  is searched, even inside an enclosing repository), else `resolve/1`.
+  """
+  @spec skill_root(String.t()) :: String.t()
+  def skill_root(cwd) when is_binary(cwd) do
+    real = real_or_expanded(cwd)
+
+    # Innermost home, should one contain another.
+    case assistant_homes()
+         |> Enum.filter(&inside?(real, &1))
+         |> Enum.max_by(&byte_size/1, fn -> nil end) do
+      nil -> resolve(cwd)
+      home -> home
+    end
+  end
+
+  @doc """
   The trusted project root for `cwd` (`resolve/1`), or `:none` when `cwd` or
   that root lies inside an assistant home (see the module doc). Every project
   resource loader except LemonSkills starts here.

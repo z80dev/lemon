@@ -39,6 +39,9 @@ defmodule LemonCore.RawProcessArchitectureTest do
       {1, "Voice WebSocket operation ownership belongs to #588."},
     "apps/lemon_gateway/lib/lemon_gateway/voice/webhook_router.ex" =>
       {1, "Voice webhook operation ownership belongs to #588."},
+    "apps/lemon_mcp/lib/lemon_mcp/client/sse.ex" =>
+      {1,
+       "SSE reader owns the pinned Mint socket, monitors its client and closes the stream when the client exits."},
     "apps/lemon_omp/lib/lemon_omp/approval.ex" =>
       {1,
        "Approval guardian must survive forced Session/waiter death to cancel pending authority."}

@@ -40,7 +40,10 @@ defmodule LemonCore.RuntimeLatch do
   """
   @spec trip(term()) :: :ok
   def trip(reason) do
-    :global.trans({@key, self()}, fn -> record_trip(reason) end, [node()], :infinity)
+    # An aborted lock still trips: losing first-reason ordering beats failing open.
+    with :aborted <- :global.trans({@key, self()}, fn -> record_trip(reason) end, [node()], 5),
+         do: record_trip(reason)
+
     GenServer.cast(__MODULE__, :notify)
   end
 
