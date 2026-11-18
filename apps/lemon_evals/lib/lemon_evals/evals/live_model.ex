@@ -14,7 +14,6 @@ defmodule LemonEvals.Evals.LiveModel do
   alias LemonAgent.{EventStream, Loop}
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
   alias CodingAgent.ToolPolicy
-  alias CodingAgent.Security.UntrustedToolBoundary
 
   alias CodingAgent.Tools.{
     Bash,
@@ -782,7 +781,6 @@ defmodule LemonEvals.Evals.LiveModel do
           config = %AgentLoopConfig{
             model: model,
             convert_to_llm: &trace_convert_to_llm/1,
-            transform_context: &UntrustedToolBoundary.transform/2,
             stream_options: stream_options,
             max_tool_turns: 2
           }

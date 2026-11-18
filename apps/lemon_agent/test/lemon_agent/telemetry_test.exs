@@ -349,7 +349,7 @@ defmodule LemonAgent.TelemetryTest do
   # ============================================================================
 
   describe "tool result telemetry" do
-    test "emits :emit event with trust=:trusted for successful tool results", %{
+    test "emits :emit event with trust=:untrusted by default for successful tool results", %{
       handler_id: handler_id,
       collector: collector
     } do
@@ -383,7 +383,7 @@ defmodule LemonAgent.TelemetryTest do
       assert metadata.tool_name == "echo"
       assert metadata.tool_call_id == "tool_result_trusted_test"
       assert metadata.is_error == false
-      assert metadata.trust == :trusted
+      assert metadata.trust == :untrusted
     end
 
     test "emits :emit event with trust=:untrusted when tool marks result untrusted", %{
@@ -473,7 +473,7 @@ defmodule LemonAgent.TelemetryTest do
       assert metadata.tool_name == "error_tool"
       assert metadata.tool_call_id == "tool_result_error_test"
       assert metadata.is_error == true
-      assert metadata.trust == :trusted
+      assert metadata.trust == :untrusted
     end
   end
 

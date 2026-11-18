@@ -102,6 +102,8 @@ defmodule LemonSkills.Tools.RecallTest do
     assert text(scroll) =~ "wooden gifts"
     assert text(scroll) =~ "Untrusted"
     refute text(scroll) =~ "private unrelated"
+    assert_fenced_once(browse)
+    assert_fenced_once(scroll)
 
     assert text(tool.execute.("foreign", %{"session" => "agent:other:telegram:1"}, nil, nil)) =~
              "No matching"
@@ -117,6 +119,7 @@ defmodule LemonSkills.Tools.RecallTest do
     assert text(result) =~ "March 14th."
     assert text(result) =~ "wooden gifts."
     refute text(result) =~ "private unrelated"
+    assert_fenced_once(result)
   end
 
   test "project scope excludes facts from other projects", %{
@@ -302,6 +305,25 @@ defmodule LemonSkills.Tools.RecallTest do
 
     assert result.details.notes == 0
     refute text(result) =~ "Private birthday plans"
+  end
+
+  # Recall returns stored conversation and memory text: it must be untrusted on
+  # the struct field (not just in details) and fenced exactly once at the boundary.
+  defp assert_fenced_once(%LemonAgent.Types.AgentToolResult{} = result) do
+    assert result.trust == :untrusted
+
+    assert {:ok, [fenced]} =
+             LemonAgent.Security.UntrustedToolBoundary.transform([
+               %LemonAi.Types.ToolResultMessage{
+                 tool_name: "recall",
+                 trust: result.trust,
+                 content: result.content
+               }
+             ])
+
+    text = Enum.map_join(fenced.content, "\n", & &1.text)
+    assert LemonAgent.Security.ExternalContent.envelope_count(text) == 1
+    assert text =~ "Source: Memory"
   end
 
   defp recall_tool(cwd, opts) do

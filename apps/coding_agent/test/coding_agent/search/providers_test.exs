@@ -49,7 +49,7 @@ defmodule CodingAgent.Search.ProvidersTest do
              Brave.search(@request, %{api_key: "secret", timeout_ms: 100, http_get: http_get})
 
     assert payload["count"] == 1
-    assert hd(payload["results"])["title"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    refute hd(payload["results"])["title"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
     refute inspect(payload) =~ "secret"
     assert_received {:brave_request, url, _opts}
     assert url =~ "country=US"
@@ -80,7 +80,7 @@ defmodule CodingAgent.Search.ProvidersTest do
                http_post: http_post
              })
 
-    assert payload["content"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    refute payload["content"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
     assert payload["citations"] == ["https://one.example", "https://two.example"]
     refute inspect(payload) =~ "pplx-secret"
 
@@ -186,7 +186,7 @@ defmodule CodingAgent.Search.ProvidersTest do
     assert {"x-api-key", "exa-secret"} in opts[:headers]
   end
 
-  test "Exa extracts bounded, wrapped content from known URLs" do
+  test "Exa extracts bounded, unwrapped content from known URLs" do
     http_post = fn url, opts ->
       assert url == "https://api.exa.ai/contents"
       assert opts[:json]["urls"] == ["https://example.com/article"]
@@ -221,7 +221,8 @@ defmodule CodingAgent.Search.ProvidersTest do
              })
 
     assert payload["extractor"] == "exa"
-    assert payload["text"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    refute payload["text"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    assert payload["trustMetadata"]["wrappingApplied"] == false
     assert payload["trustMetadata"]["untrusted"] == true
     refute inspect(payload) =~ "exa-secret"
   end

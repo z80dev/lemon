@@ -530,6 +530,7 @@ defmodule CodingAgent.Session.Lifecycle do
         end,
         stream_options: stream_options,
         transform_context: transform_context,
+        tool_result_max_bytes: Map.get(context_guardrail_opts, :max_tool_result_bytes),
         get_api_key: get_api_key,
         resolve_stream_options: resolve_stream_options,
         model_routing: model_routing,

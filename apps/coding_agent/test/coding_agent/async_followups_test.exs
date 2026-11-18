@@ -115,9 +115,17 @@ defmodule CodingAgent.AsyncFollowupsTest do
     assert Agent.get(counter, & &1) == 1
     refute_receive {:parent_model_call, _, _}, 0
 
+    rendered = inspect(model_context.messages, limit: :infinity, printable_limit: :infinity)
+
     for n <- 1..8 do
-      assert inspect(model_context.messages) =~ "answer model_task_#{n}"
+      assert rendered =~ "answer model_task_#{n}"
     end
+
+    # Every child completion reaches the model inside its own untrusted envelope.
+    assert length(
+             Regex.scan(~r/<<<EXTERNAL_UNTRUSTED_CONTENT id=\\"[0-9a-f]{16}\\">>>/, rendered)
+           ) ==
+             8
   end
 
   test "N native completions in the fixed window deliver one parent followup", ctx do

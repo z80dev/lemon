@@ -55,12 +55,14 @@ defmodule LemonChannels.Adapters.EmailTest do
       assert msg.account_id == "agent@lemon.test"
       assert msg.peer.kind == :dm
       assert msg.peer.id == "alice@example.com"
-      assert msg.message.text =~ "<<<EXTERNAL_UNTRUSTED_CONTENT>>>\nSource: Email\n"
+
+      assert msg.message.text =~
+               ~r/<<<EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]{16}">>>\nSource: Email\n/
 
       assert msg.message.text =~
                "From: alice@example.com\nSubject: Status?\n---\nhow is it going\n"
 
-      assert String.ends_with?(msg.message.text, "\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>")
+      assert msg.message.text =~ ~r/\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]{16}">>>\z/
       assert msg.message.id == "msg-1@example.com"
       assert msg.meta.subject == "Status?"
     end
@@ -100,7 +102,9 @@ defmodule LemonChannels.Adapters.EmailTest do
       raw = payload(%{"text" => nil, "html" => "<p>hello <b>there</b></p>"})
 
       {:ok, msg} = Email.normalize_inbound(raw)
-      assert msg.message.text =~ "---\nhello there\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
+
+      assert msg.message.text =~
+               ~r/---\nhello there\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]{16}">>>/
     end
 
     test "accepts atom keys as well as string keys" do
@@ -108,7 +112,9 @@ defmodule LemonChannels.Adapters.EmailTest do
                Email.normalize_inbound(%{from: "bob@example.com", text: "hi", to: "a@b.c"})
 
       assert msg.sender.id == "bob@example.com"
-      assert msg.message.text =~ "---\nhi\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
+
+      assert msg.message.text =~
+               ~r/---\nhi\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]{16}">>>/
     end
 
     test "carries reply_to_id and references through" do

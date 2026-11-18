@@ -122,24 +122,61 @@ defmodule LemonAgent.ToolRegistry do
   after durable uncertainty has been recorded. Constructor or execution errors
   never clear that record. Managed tools keep their existing launch accounting.
   The constructor callback supports consumers with different `tool/*` arities.
+
+  Whatever the ownership, every result and partial update a contributed tool
+  returns is forced to `trust: :untrusted`: satellite tools carry remote or
+  agent-authored data and cannot opt themselves into the trusted prompt path.
   """
   @spec build_tool(native_process_ownership(), (-> LemonAgent.Types.AgentTool.t())) ::
           LemonAgent.Types.AgentTool.t()
-  def build_tool(:managed, constructor) when is_function(constructor, 0), do: constructor.()
+  def build_tool(:managed, constructor) when is_function(constructor, 0) do
+    %LemonAgent.Types.AgentTool{} = tool = constructor.()
+    force_untrusted(tool)
+  end
 
   def build_tool(:unknown, constructor) when is_function(constructor, 0) do
     LemonCore.NativeProcess.unsupported!()
     %LemonAgent.Types.AgentTool{} = tool = constructor.()
     execute = tool.execute
 
-    %{
+    force_untrusted(%{
       tool
       | execute: fn tool_call_id, params, signal, on_update ->
           LemonCore.NativeProcess.unsupported!()
           execute.(tool_call_id, params, signal, on_update)
         end
+    })
+  end
+
+  @doc """
+  Wrap `tool` so every result and partial update it returns is `:untrusted`.
+
+  Consumers that construct contributed or extension tools themselves must
+  apply this; `build_tool/2` already does.
+  """
+  @spec force_untrusted(LemonAgent.Types.AgentTool.t()) :: LemonAgent.Types.AgentTool.t()
+  def force_untrusted(%LemonAgent.Types.AgentTool{execute: execute} = tool)
+      when is_function(execute, 4) do
+    %{
+      tool
+      | execute: fn tool_call_id, params, signal, on_update ->
+          on_update =
+            if is_function(on_update, 1),
+              do: fn partial -> on_update.(untrusted(partial)) end,
+              else: on_update
+
+          tool_call_id |> execute.(params, signal, on_update) |> untrusted()
+        end
     }
   end
+
+  def force_untrusted(tool), do: tool
+
+  # Every shape the loop accepts is downgraded: structs and plain maps (bare or
+  # in `{:ok, _}`); `{:error, _}` and other values become untrusted loop results.
+  defp untrusted(%{} = result), do: Map.put(result, :trust, :untrusted)
+  defp untrusted({:ok, result}), do: {:ok, untrusted(result)}
+  defp untrusted(other), do: other
 
   defp loadable?(module, ownership) do
     if ownership == :unknown and :code.is_loaded(module) == false and

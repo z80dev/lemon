@@ -179,7 +179,6 @@ defmodule CodingAgent.Advisor do
     {:ok, agent} =
       LemonAgent.Agent.start_link(
         Keyword.merge(opts,
-          transform_context: &CodingAgent.Security.UntrustedToolBoundary.transform/2,
           initial_state: %{
             model: model,
             tools: tools,

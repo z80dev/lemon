@@ -598,10 +598,13 @@ defmodule CodingAgent.ToolRegistry do
       %AgentTool{} = tool = if ownership == :unknown, do: wrap_unmanaged_tool(tool), else: tool
       name = Atom.to_string(name)
 
+      # Registry-contributed satellite tools never reach the model as trusted.
       tool =
-        if name in @builtin_tool_name_strings,
-          do: %{tool | effect: ToolIntent.builtin_effect(name)},
-          else: tool
+        cond do
+          name in @builtin_tool_name_strings -> %{tool | effect: ToolIntent.builtin_effect(name)}
+          module == Tools.CodeMode.Wait -> tool
+          true -> LemonAgent.ToolRegistry.force_untrusted(tool)
+        end
 
       {name, maybe_serialize_mutation(tool, name, cwd, tool_opts), :builtin}
     end)
@@ -620,14 +623,14 @@ defmodule CodingAgent.ToolRegistry do
     execute = tool.execute
     trusted_terminal = trusted_terminal?(tool)
 
-    %{
+    LemonAgent.ToolRegistry.force_untrusted(%{
       tool
       | trusted_terminal: trusted_terminal,
         execute: fn tool_call_id, params, signal, on_update ->
           LemonCore.NativeProcess.unsupported!()
           execute.(tool_call_id, params, signal, on_update)
         end
-    }
+    })
   end
 
   # Mutating builtins run one at a time per session: the agent loop executes a

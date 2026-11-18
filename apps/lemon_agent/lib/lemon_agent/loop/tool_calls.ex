@@ -12,6 +12,7 @@ defmodule LemonAgent.Loop.ToolCalls do
   }
 
   @tool_abort_grace_ms 250
+  @max_error_bytes 16_384
   @pending_tools_key {__MODULE__, :pending_tools}
 
   @unicode_whitespace for codepoint <- [
@@ -821,42 +822,62 @@ defmodule LemonAgent.Loop.ToolCalls do
     |> String.trim()
   end
 
+  # Loop-synthesised results embed tool-authored text (error reasons, exception
+  # messages, unexpected return values), so they are untrusted and bounded: an
+  # MCP server can return `isError: true` with arbitrary instructions.
   defp tool_error_result(reason) do
     %AgentToolResult{
-      content: [%TextContent{type: :text, text: error_text(reason)}],
-      details: %{error_type: :tool_error, reason: inspect(reason)}
+      content: [%TextContent{type: :text, text: bounded(error_text(reason))}],
+      details: %{error_type: :tool_error, reason: bounded(bounded_inspect(reason))},
+      trust: :untrusted
     }
   end
 
   defp unexpected_tool_result(result) do
+    text = bounded(bounded_inspect(result))
+
     %AgentToolResult{
-      content: [
-        %TextContent{type: :text, text: "Unexpected tool result: #{inspect(result)}"}
-      ],
-      details: %{error_type: :unexpected_tool_result, result: inspect(result)}
+      content: [%TextContent{type: :text, text: "Unexpected tool result: " <> text}],
+      details: %{error_type: :unexpected_tool_result, result: text},
+      trust: :untrusted
     }
   end
 
   defp tool_exception_result(exception) do
+    message = bounded(Exception.message(exception))
+
     %AgentToolResult{
-      content: [%TextContent{type: :text, text: Exception.message(exception)}],
+      content: [%TextContent{type: :text, text: message}],
       details: %{
         error_type: :tool_exception,
         exception: exception.__struct__,
-        message: Exception.message(exception)
-      }
+        message: message
+      },
+      trust: :untrusted
     }
   end
 
   defp tool_caught_result(kind, value) do
+    value = bounded(bounded_inspect(value))
+
     %AgentToolResult{
-      content: [%TextContent{type: :text, text: "#{kind}: #{inspect(value)}"}],
-      details: %{error_type: :tool_caught, kind: kind, value: inspect(value)}
+      content: [%TextContent{type: :text, text: "#{kind}: #{value}"}],
+      details: %{error_type: :tool_caught, kind: kind, value: value},
+      trust: :untrusted
     }
   end
 
   defp error_text(reason) when is_binary(reason), do: reason
-  defp error_text(reason), do: inspect(reason)
+  defp error_text(reason), do: bounded_inspect(reason)
+
+  defp bounded_inspect(term), do: inspect(term, limit: 200, printable_limit: @max_error_bytes)
+
+  defp bounded(text) when byte_size(text) <= @max_error_bytes, do: text
+
+  defp bounded(text) do
+    (text |> binary_part(0, @max_error_bytes) |> String.replace_invalid("")) <>
+      "\n...[error truncated]"
+  end
 
   @doc false
   def argument_errors(tool_calls, tools) do
@@ -1255,6 +1276,7 @@ defmodule LemonAgent.Loop.ToolCalls do
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
 
-  defp normalize_trust(:untrusted), do: :untrusted
-  defp normalize_trust(_), do: :trusted
+  # Fail closed: only the explicit atom is trusted; strings, maps and nil are not.
+  defp normalize_trust(:trusted), do: :trusted
+  defp normalize_trust(_), do: :untrusted
 end

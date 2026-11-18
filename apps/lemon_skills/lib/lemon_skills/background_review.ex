@@ -221,13 +221,13 @@ defmodule LemonSkills.BackgroundReview do
                   _ -> ""
                 end)
 
-              text =
-                ExternalContent.wrap_external_content(text,
-                  source: :unknown,
-                  max_bytes: 4_096
-                )
-
-              %{result | content: [%TextContent{text: text}], details: %{}, trust: :untrusted}
+              # Bounded here; the agent loop's untrusted boundary fences it once.
+              %{
+                result
+                | content: [%TextContent{text: bound(text, 4_096)}],
+                  details: %{},
+                  trust: :untrusted
+              }
 
             other ->
               other
@@ -235,4 +235,9 @@ defmodule LemonSkills.BackgroundReview do
         end
     }
   end
+
+  defp bound(text, max) when byte_size(text) <= max, do: text
+
+  defp bound(text, max),
+    do: text |> binary_part(0, max) |> String.replace_invalid("")
 end

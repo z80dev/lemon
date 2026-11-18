@@ -7,6 +7,7 @@ defmodule LemonAgent.Loop.Streaming do
   alias LemonAgent.Loop.ToolCalls
   alias LemonAgent.Loop.ToolStream
   alias LemonAgent.Loop.TranscriptValidator
+  alias LemonAgent.Security.UntrustedToolBoundary
   alias LemonAgent.Types.{AgentLoopConfig, AgentTool}
 
   alias LemonAi.Retry
@@ -388,9 +389,16 @@ defmodule LemonAgent.Loop.Streaming do
       # Surface very large contexts early (telemetry warning only; no truncation here).
       _ = LemonAgent.Context.check_size(context.messages, context.system_prompt)
 
+      # The untrusted fence runs last, on the provider-bound messages that
+      # `convert_to_llm` produced, so no caller transform or conversion can
+      # reintroduce an unfenced tool result.
       with {:ok, messages} <- transform_messages(context, config, signal),
            :ok <- TranscriptValidator.validate(messages),
-           {:ok, llm_messages} <- convert_messages(config, messages) do
+           {:ok, converted} <- convert_messages(config, messages),
+           {:ok, llm_messages} <-
+             UntrustedToolBoundary.transform(converted, signal,
+               max_tool_result_bytes: config.tool_result_max_bytes
+             ) do
         # Build LLM context
         llm_context = %Context{
           system_prompt: context.system_prompt,

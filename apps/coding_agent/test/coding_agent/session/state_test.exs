@@ -24,7 +24,7 @@ defmodule CodingAgent.Session.StateTest do
     assert is_binary(opts.spill_dir)
   end
 
-  test "pre-LLM transform bounds untrusted output while preserving one complete fence" do
+  test "session transform bounds output and the loop's final boundary fences it once" do
     transform =
       State.build_transform_context(nil, %{
         enabled: true,
@@ -43,13 +43,26 @@ defmodule CodingAgent.Session.StateTest do
       content: [%TextContent{text: String.duplicate("x", 10_000)}]
     }
 
+    assert {:ok, [%ToolResultMessage{} = guarded]} = transform.([message], nil)
+
+    # The session transform no longer fences; the loop does, last, with the
+    # session's guardrail bound passed as `:tool_result_max_bytes`.
+    refute hd(guarded.content).text =~ "EXTERNAL_UNTRUSTED_CONTENT"
+
     assert {:ok, [%ToolResultMessage{content: [%TextContent{text: text}]}]} =
-             transform.([message], nil)
+             LemonAgent.Security.UntrustedToolBoundary.transform(
+               CodingAgent.Messages.to_llm([guarded]),
+               nil,
+               max_tool_result_bytes: 1_024
+             )
 
     assert byte_size(text) <= 1_024
     assert text =~ "...[content truncated]"
-    assert marker_count(text, "<<<EXTERNAL_UNTRUSTED_CONTENT>>>") == 1
-    assert marker_count(text, "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>") == 1
+    assert marker_count(text, ~r/<<<EXTERNAL_UNTRUSTED_CONTENT/) == 1
+    assert marker_count(text, ~r/<<<END_EXTERNAL_UNTRUSTED_CONTENT/) == 1
+
+    assert text =~
+             ~r/<<<EXTERNAL_UNTRUSTED_CONTENT id="([0-9a-f]{16})">>>.*<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\1">>>/s
   end
 
   test "build_prompt_message preserves plain text without images" do
@@ -135,6 +148,6 @@ defmodule CodingAgent.Session.StateTest do
   end
 
   defp marker_count(text, marker) do
-    text |> String.split(marker) |> length() |> Kernel.-(1)
+    marker |> Regex.scan(text) |> length()
   end
 end

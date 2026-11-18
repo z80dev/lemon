@@ -179,11 +179,8 @@ defmodule CodingAgent.Session.MessageSerialization do
   # ============================================================================
 
   @spec serialize_trust(atom() | String.t()) :: String.t()
-  def serialize_trust(:untrusted), do: "untrusted"
   def serialize_trust(:trusted), do: "trusted"
-  def serialize_trust("untrusted"), do: "untrusted"
-  def serialize_trust("trusted"), do: "trusted"
-  def serialize_trust(_), do: "trusted"
+  def serialize_trust(_), do: "untrusted"
 
   # ============================================================================
   # Deserialization
@@ -338,12 +335,11 @@ defmodule CodingAgent.Session.MessageSerialization do
   def deserialize_stop_reason("redirected"), do: :redirected
   def deserialize_stop_reason(_), do: nil
 
-  @spec deserialize_trust(atom() | String.t()) :: atom()
-  def deserialize_trust(:untrusted), do: :untrusted
-  def deserialize_trust("untrusted"), do: :untrusted
-  def deserialize_trust(:trusted), do: :trusted
-  def deserialize_trust("trusted"), do: :trusted
-  def deserialize_trust(_), do: :trusted
+  # A session file is parsed, not authenticated: whatever it claims, a restored
+  # tool result is untrusted. Trusted exemptions exist only for results the
+  # platform produced in this process.
+  @spec deserialize_trust(term()) :: :untrusted
+  def deserialize_trust(_), do: :untrusted
 
   # Unsigned blocks keep their historical shape: the key is written only when
   # there is a signature to replay.

@@ -382,26 +382,25 @@ defmodule CodingAgent.Tools.WebFetch do
   end
 
   defp success_payload(source, text, extract_mode, max_chars, started_ms) do
-    wrapped = wrap_web_fetch_content(text, max_chars)
-    wrapped_title = wrap_web_fetch_field(source.title)
+    content = bounded_content(text, max_chars)
+    title = optional_field(source.title)
 
     %{
       "url" => source.url,
       "finalUrl" => source.final_url,
       "status" => source.status,
       "contentType" => source.content_type,
-      "title" => wrapped_title,
+      "title" => title,
       "extractMode" => Atom.to_string(extract_mode),
       "extractor" => source.extractor,
-      "truncated" => wrapped.truncated,
-      "length" => wrapped.wrapped_length,
-      "rawLength" => wrapped.raw_length,
-      "wrappedLength" => wrapped.wrapped_length,
+      "truncated" => content.truncated,
+      "length" => content.length,
+      "rawLength" => content.raw_length,
       "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
       "tookMs" => elapsed_ms(started_ms),
-      "text" => wrapped.text,
-      "__full_text" => if(wrapped.truncated, do: text),
-      "trustMetadata" => web_fetch_trust_metadata(wrapped, wrapped_title)
+      "text" => content.text,
+      "__full_text" => if(content.truncated, do: text),
+      "trustMetadata" => web_fetch_trust_metadata()
     }
   end
 
@@ -411,10 +410,9 @@ defmodule CodingAgent.Tools.WebFetch do
     if firecrawl_enabled?(runtime.firecrawl) do
       case fetch_firecrawl_content(url, extract_mode, runtime) do
         {:ok, firecrawl} ->
-          wrapped = wrap_web_fetch_content(firecrawl.text, max_chars)
-          wrapped_title = wrap_web_fetch_field(firecrawl.title)
-          wrapped_warning = wrap_web_fetch_field(firecrawl.warning)
-          trust_metadata = web_fetch_trust_metadata(wrapped, wrapped_title, wrapped_warning)
+          content = bounded_content(firecrawl.text, max_chars)
+          title = optional_field(firecrawl.title)
+          warning = optional_field(firecrawl.warning)
 
           {:ok,
            %{
@@ -422,19 +420,18 @@ defmodule CodingAgent.Tools.WebFetch do
              "finalUrl" => firecrawl.final_url || url,
              "status" => firecrawl.status || 200,
              "contentType" => "text/markdown",
-             "title" => wrapped_title,
+             "title" => title,
              "extractMode" => Atom.to_string(extract_mode),
              "extractor" => "firecrawl",
-             "truncated" => wrapped.truncated,
-             "length" => wrapped.wrapped_length,
-             "rawLength" => wrapped.raw_length,
-             "wrappedLength" => wrapped.wrapped_length,
+             "truncated" => content.truncated,
+             "length" => content.length,
+             "rawLength" => content.raw_length,
              "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
              "tookMs" => elapsed_ms(started_ms),
-             "text" => wrapped.text,
-             "__full_text" => if(wrapped.truncated, do: firecrawl.text),
-             "warning" => wrapped_warning,
-             "trustMetadata" => trust_metadata
+             "text" => content.text,
+             "__full_text" => if(content.truncated, do: firecrawl.text),
+             "warning" => warning,
+             "trustMetadata" => web_fetch_trust_metadata()
            }}
 
         {:error, firecrawl_reason} ->
@@ -908,71 +905,25 @@ defmodule CodingAgent.Tools.WebFetch do
     |> String.trim()
   end
 
-  defp wrap_web_fetch_content(value, max_chars) do
-    wrapper_with_warning = ExternalContent.wrap_web_content("", :web_fetch)
-
-    wrapper_without_warning =
-      ExternalContent.wrap_external_content("", source: :web_fetch, include_warning: false)
-
-    include_warning = String.length(wrapper_with_warning) <= max_chars
-
-    wrapper_overhead =
-      if include_warning,
-        do: String.length(wrapper_with_warning),
-        else: String.length(wrapper_without_warning)
-
-    max_inner = max(max_chars - wrapper_overhead, 0)
-
-    {truncated, truncated?} = truncate_text(value, max_inner)
-    wrapped = wrap_text(truncated, include_warning)
-
-    {final_wrapped, final_truncated, final_raw} =
-      if String.length(wrapped) > max_chars do
-        excess = String.length(wrapped) - max_chars
-        adjusted_max_inner = max(max_inner - excess, 0)
-        {adjusted, adjusted_truncated?} = truncate_text(value, adjusted_max_inner)
-        {wrap_text(adjusted, include_warning), adjusted_truncated?, adjusted}
-      else
-        {wrapped, truncated?, truncated}
-      end
-
-    %{
-      text: final_wrapped,
-      truncated: final_truncated,
-      raw_length: String.length(final_raw),
-      wrapped_length: String.length(final_wrapped),
-      warning_included: include_warning
-    }
+  # The agent loop's untrusted-tool boundary fences the whole result once, so
+  # fields carry plain text bounded to max_chars.
+  defp bounded_content(value, max_chars) do
+    {text, truncated?} = truncate_text(value, max_chars)
+    length = String.length(text)
+    %{text: text, truncated: truncated?, length: length, raw_length: length}
   end
 
-  defp wrap_text(content, true), do: ExternalContent.wrap_web_content(content, :web_fetch)
+  defp optional_field(nil), do: nil
+  defp optional_field(""), do: nil
+  defp optional_field(value), do: value
 
-  defp wrap_text(content, false) do
-    ExternalContent.wrap_external_content(content, source: :web_fetch, include_warning: false)
-  end
-
-  defp wrap_web_fetch_field(nil), do: nil
-  defp wrap_web_fetch_field(""), do: nil
-
-  defp wrap_web_fetch_field(value) do
-    ExternalContent.wrap_external_content(value, source: :web_fetch, include_warning: false)
-  end
-
-  defp web_fetch_trust_metadata(wrapped, wrapped_title, wrapped_warning \\ nil) do
-    wrapped_fields =
-      ["text"]
-      |> maybe_add_wrapped_field(wrapped_title, "title")
-      |> maybe_add_wrapped_field(wrapped_warning, "warning")
-
-    ExternalContent.web_trust_metadata(:web_fetch, wrapped_fields,
+  defp web_fetch_trust_metadata do
+    ExternalContent.trust_metadata(:web_fetch,
       key_style: :camel_case,
-      warning_included: wrapped.warning_included
+      wrapped_fields: [],
+      wrapping_applied: false
     )
   end
-
-  defp maybe_add_wrapped_field(fields, nil, _field), do: fields
-  defp maybe_add_wrapped_field(fields, "", _field), do: fields
-  defp maybe_add_wrapped_field(fields, _value, field), do: fields ++ [field]
 
   defp truncate_text(_value, max_chars) when max_chars <= 0, do: {"", true}
 

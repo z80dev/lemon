@@ -770,7 +770,7 @@ defmodule LemonAgent.TypesPropertyTest do
       result = %AgentToolResult{}
       assert result.content == []
       assert is_nil(result.details)
-      assert result.trust == :trusted
+      assert result.trust == :untrusted
     end
   end
 

@@ -4,7 +4,7 @@ defmodule CodingAgent.Session.State do
   alias CodingAgent.Config
   alias CodingAgent.ContextGuardrails
   alias CodingAgent.Messages.CustomMessage
-  alias CodingAgent.Security.{SecretObfuscator, UntrustedToolBoundary}
+  alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.Session.{CompactionLifecycle, ContextCheckpoint, OverflowRecovery}
   alias LemonAgent.Types.AgentTool
   alias LemonAi.Types.{ImageContent, TextContent, UserMessage}
@@ -34,15 +34,14 @@ defmodule CodingAgent.Session.State do
     fn messages, signal ->
       messages = ContextCheckpoint.project(messages, checkpoint_resolver)
 
+      # The untrusted-content fence is applied once by `LemonAgent.Loop` after
+      # `convert_to_llm`, with the guardrail byte bound passed as
+      # `:tool_result_max_bytes` when the agent is started.
       with {:ok, guarded} <-
              normalize_transform_result(
                ContextGuardrails.transform(messages, signal, context_guardrail_opts)
-             ),
-           {:ok, wrapped} <-
-             normalize_transform_result(
-               UntrustedToolBoundary.transform(guarded, signal, context_guardrail_opts)
              ) do
-        SecretObfuscator.transform(wrapped, secret_obfuscator)
+        SecretObfuscator.transform(guarded, secret_obfuscator)
       end
     end
   end
@@ -61,11 +60,7 @@ defmodule CodingAgent.Session.State do
              normalize_transform_result(
                ContextGuardrails.transform(messages, signal, context_guardrail_opts)
              ),
-           {:ok, wrapped} <-
-             normalize_transform_result(
-               UntrustedToolBoundary.transform(guarded, signal, context_guardrail_opts)
-             ),
-           {:ok, obfuscated} <- SecretObfuscator.transform(wrapped, secret_obfuscator),
+           {:ok, obfuscated} <- SecretObfuscator.transform(guarded, secret_obfuscator),
            {:ok, transformed} <-
              normalize_transform_result(transform_fn.(obfuscated, signal)) do
         {:ok, transformed}

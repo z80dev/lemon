@@ -830,7 +830,7 @@ The eval harness is intentionally lightweight and deterministic. It should catch
 | Module | Description |
 |--------|-------------|
 | `LemonAgent.Security.ExternalContent` | External content sanitization, imported directly by coding-agent tools |
-| `CodingAgent.Security.UntrustedToolBoundary` | Pre-LLM boundary for untrusted tool output; composed with `ContextGuardrails` |
+| `LemonAgent.Security.UntrustedToolBoundary` | Final pre-provider boundary for tool output, applied by `LemonAgent.Loop` after `convert_to_llm`; sessions pass their guardrail byte bound as `:tool_result_max_bytes` |
 
 Named-node execution does not serialize source-side provider credentials,
 executor options, callbacks, or BEAM process state. The worker accepts only the

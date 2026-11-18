@@ -334,20 +334,27 @@ defmodule LemonAgent.ContextRegistry do
   @type placement :: :system | :user_message
 
   @typedoc """
-  What a contributor returns: a heading, its body, and optionally where it goes.
+  What a contributor returns: a heading, its body, and optionally where it goes
+  and whether the platform may treat it as authority.
 
   `:placement` defaults to `:system`, so a contributor written before that field
   existed keeps behaving exactly as it did.
+
+  `:trust` defaults to `:untrusted`: the body is rendered inside the
+  untrusted-data envelope, as data rather than instructions. Only the exact atom
+  `:trusted` opts out, and only for text the contributor itself authored —
+  never for remote, user-derived or model-written material.
   """
   @type section_spec :: %{
           required(:title) => String.t(),
           required(:body) => String.t(),
-          optional(:placement) => placement()
+          optional(:placement) => placement(),
+          optional(:trust) => :trusted | :untrusted
         }
 
   @typedoc """
   One contributed prompt section, tagged with the name it registered under and
-  resolved to a placement.
+  resolved to a placement and a trust level.
 
   A contributor that returns several specs gets several sections, all carrying
   its single registered `:name`; `:name` identifies the contributor, not the
@@ -357,7 +364,8 @@ defmodule LemonAgent.ContextRegistry do
           name: atom(),
           title: String.t(),
           body: String.t(),
-          placement: placement()
+          placement: placement(),
+          trust: :trusted | :untrusted
         }
 
   @type contributor_name :: atom()
@@ -816,8 +824,9 @@ defmodule LemonAgent.ContextRegistry do
   defp section_from_spec(name, %{title: title, body: body} = spec)
        when is_binary(title) and is_binary(body) do
     placement = Map.get(spec, :placement, @default_placement)
+    trust = if Map.get(spec, :trust) == :trusted, do: :trusted, else: :untrusted
 
-    build_section(name, placement, String.trim(title), String.trim(body))
+    build_section(name, placement, trust, String.trim(title), String.trim(body))
   end
 
   defp section_from_spec(name, other) do
@@ -830,16 +839,16 @@ defmodule LemonAgent.ContextRegistry do
   # meant to send volatile text to the user message and silently give it the
   # placement that costs money on every turn — the exact failure the field
   # exists to make impossible. See the moduledoc.
-  defp build_section(name, placement, _title, _body) when placement not in @placements do
+  defp build_section(name, placement, _trust, _title, _body) when placement not in @placements do
     log_dropped(name, {:invalid_placement, placement})
     []
   end
 
-  defp build_section(_name, _placement, "", _body), do: []
-  defp build_section(_name, _placement, _title, ""), do: []
+  defp build_section(_name, _placement, _trust, "", _body), do: []
+  defp build_section(_name, _placement, _trust, _title, ""), do: []
 
-  defp build_section(name, placement, title, body) do
-    [%{name: name, title: title, body: body, placement: placement}]
+  defp build_section(name, placement, trust, title, body) do
+    [%{name: name, title: title, body: body, placement: placement, trust: trust}]
   end
 
   # A contributor that was merely late is a routine state rather than a fault: a

@@ -19,6 +19,7 @@ defmodule CodingAgent.AsyncFollowups do
 
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task.Params
+  alias LemonAgent.Security.ExternalContent
   alias LemonCore.{Bus, RunRequest, SessionKey}
 
   @completion_batch_window_ms 50
@@ -213,7 +214,12 @@ defmodule CodingAgent.AsyncFollowups do
         do: {:router, :collect},
         else: dispatch_target(context.queue_mode, context.session_module, context.session_pid)
 
-    text = Enum.map_join(completions, "\n\n", &elem(&1, 0))
+    # Child completions carry agent-authored text into the parent as a
+    # user-role message; each is fenced exactly once as untrusted agent output.
+    text =
+      Enum.map_join(completions, "\n\n", fn {text, _entry} ->
+        ExternalContent.wrap_external_content(text, source: :agent, include_warning: true)
+      end)
 
     entries =
       Enum.map(completions, fn {_text, entry} ->

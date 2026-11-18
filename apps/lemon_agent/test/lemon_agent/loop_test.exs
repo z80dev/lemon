@@ -583,7 +583,11 @@ defmodule LemonAgent.LoopTest do
 
       assert Enum.map(second_turn_tool_results, & &1.tool_call_id) == ["call_add", "call_echo"]
       assert Enum.all?(second_turn_tool_results, &(&1.is_error == false))
-      assert Enum.map(second_turn_tool_results, & &1.details) == [%{sum: 3}, nil]
+      # The model-bound copy carries the boundary's private marker in details.
+      assert Enum.map(
+               second_turn_tool_results,
+               &Map.delete(&1.details, :__lemon_untrusted_boundary__)
+             ) == [%{sum: 3}, %{}]
 
       final_tool_results = Enum.filter(messages, &match?(%ToolResultMessage{}, &1))
       assert Enum.map(final_tool_results, & &1.tool_call_id) == ["call_add", "call_echo"]
@@ -1065,7 +1069,7 @@ defmodule LemonAgent.LoopTest do
       # Should include tool result message
       tool_results = Enum.filter(messages, fn m -> Map.get(m, :role) == :tool_result end)
       assert tool_results != []
-      assert Enum.all?(tool_results, &(&1.trust == :trusted))
+      assert Enum.all?(tool_results, &(&1.trust == :untrusted))
     end
 
     test "propagates untrusted trust from tool results" do
