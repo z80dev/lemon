@@ -3,6 +3,11 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
 
   alias LemonAutomation.{CronJob, CronManager, CronRun, CronSchedule, CronStore}
 
+  defmodule Clock do
+    @now_ms DateTime.to_unix(~U[2026-11-18 09:30:00Z], :millisecond)
+    def now_ms, do: @now_ms
+  end
+
   setup do
     id = "downtime_#{System.unique_integer([:positive, :monotonic])}"
 
@@ -15,11 +20,13 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
   end
 
   test "boot preserves a missed daily slot and tick claims it exactly once", %{id: id} do
-    job = store_job(id, next_run_at_ms: LemonCore.Clock.now_ms() - 1_800_000)
-    {:ok, state} = initialized_manager()
+    # Use an actual 09:00 UTC slot, not an arbitrary wall-clock time 30 minutes ago.
+    job = store_job(id, next_run_at_ms: Clock.now_ms() - 1_800_000)
+    {:ok, state} = initialized_manager(clock: Clock)
     assert state.jobs[id].next_run_at_ms == job.next_run_at_ms
     state = %{state | jobs: Map.take(state.jobs, [id])}
     assert {:noreply, state} = CronManager.handle_cast(:tick, state)
+    assert state.jobs[id].next_run_at_ms == job.next_run_at_ms + 86_400_000
     assert {:noreply, _state} = CronManager.handle_cast(:tick, state)
     assert [run] = CronStore.list_runs(id)
     assert run.meta.catch_up
@@ -157,8 +164,8 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
     assert CronStore.get_run(retry.id)
   end
 
-  defp initialized_manager do
-    {:ok, state, {:continue, :restore_startup}} = CronManager.init([])
+  defp initialized_manager(opts \\ []) do
+    {:ok, state, {:continue, :restore_startup}} = CronManager.init(opts)
     {:noreply, state} = CronManager.handle_continue(:restore_startup, state)
     ref = state.restoration_task.ref
 
