@@ -287,7 +287,11 @@ defmodule CodingAgent.Executor.SessionRunner do
         cwd_identity: Map.get(meta, :cwd_identity),
         # A trusted submitter (kanban) may confine file-mutation tools to one
         # directory; see `CodingAgent.Tools.FileValidation.confined/2`.
-        confine_mutations_to: confinement(Map.get(meta, :mutation_root))
+        confine_mutations_to: confinement(Map.get(meta, :mutation_root)),
+        # A cron run (LemonAutomation.RunSubmitter) may update its own memory
+        # file; `CodingAgent.Tools.OperatorState` admits only a
+        # `cron_memory/<job>.md` path here and refuses other operator state.
+        operator_state_grant: cron_memory_grant(Map.get(meta, :cron_memory_file))
       ]
       |> Presentation.build_session_opts(cwd, run_id, session_key, agent_id)
 
@@ -480,6 +484,9 @@ defmodule CodingAgent.Executor.SessionRunner do
   defp confinement(nil), do: nil
   defp confinement(root) when is_binary(root) and root != "", do: Path.expand(root)
   defp confinement(_root), do: :invalid
+
+  defp cron_memory_grant(path) when is_binary(path) and path != "", do: path
+  defp cron_memory_grant(_path), do: nil
 
   # A request may bind its working directory to the `{dev, inode}` identity a
   # trusted submitter checked (`meta.cwd_identity`, e.g. kanban workers and goal

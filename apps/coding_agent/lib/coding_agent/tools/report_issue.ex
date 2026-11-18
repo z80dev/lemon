@@ -68,7 +68,11 @@ defmodule CodingAgent.Tools.ReportIssue do
 
       MutationLock.with_lock(MutationLock.path_key(path), fn ->
         with :ok <- check_abort(signal),
-             :ok <- FileValidation.check_mutation_target(path, mutation_root: directory),
+             :ok <-
+               FileValidation.check_mutation_target(path,
+                 mutation_root: directory,
+                 lemon_owned_target: true
+               ),
              :ok <- File.mkdir_p(directory),
              :ok <- append(directory, path, line, limit) do
           %AgentToolResult{

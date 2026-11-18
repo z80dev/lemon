@@ -77,6 +77,9 @@ stores, not a second agent engine. See [README](README.md) and
   file, opened-inode check, exclusive temporary file plus `renameat` (never in
   place), so a directory swapped for a symlink cannot redirect the I/O. Do not
   create a separate general-purpose memory service here.
+  Model file tools refuse `cron_memory` (Lemon operator state); only the run
+  whose `meta.cron_memory_file` names a job's file may write that one file
+  (`CodingAgent.Tools.OperatorState`'s `:operator_state_grant`).
 
 ## Heartbeats
 

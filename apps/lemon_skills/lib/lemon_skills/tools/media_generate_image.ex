@@ -255,8 +255,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
     prompt_hash = prompt_hash(Map.get(attrs, :prompt) || Map.get(attrs, "prompt"))
     content = svg(prompt_hash)
 
-    with :ok <- File.mkdir_p(Path.dirname(artifact_path)),
-         :ok <- File.write(artifact_path, content),
+    with :ok <- MediaCommon.write_artifact(artifact_path, content),
          {:ok, stat} <- File.stat(artifact_path) do
       {:ok,
        %{
@@ -549,8 +548,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
     do: {:error, :missing_vertex_imagen_prediction}
 
   defp write_artifact(artifact_path, bytes, mime_type) when is_binary(bytes) do
-    with :ok <- File.mkdir_p(Path.dirname(artifact_path)),
-         :ok <- File.write(artifact_path, bytes),
+    with :ok <- MediaCommon.write_artifact(artifact_path, bytes),
          {:ok, stat} <- File.stat(artifact_path) do
       {:ok,
        %{

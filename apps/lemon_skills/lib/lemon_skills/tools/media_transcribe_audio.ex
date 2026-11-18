@@ -586,8 +586,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   end
 
   defp write_transcript_artifact(artifact_path, content, transcript) when is_binary(content) do
-    with :ok <- File.mkdir_p(Path.dirname(artifact_path)),
-         :ok <- File.write(artifact_path, content),
+    with :ok <- MediaCommon.write_artifact(artifact_path, content),
          {:ok, stat} <- File.stat(artifact_path) do
       {:ok,
        %{

@@ -104,7 +104,9 @@ defmodule LemonSkills.Tools.MediaCommonTest do
     tmp_dir: tmp_dir
   } do
     for prefix <- ~w(media-preview media-speech media-video media-analysis media-transcript) do
-      assert {:ok, path} = MediaCommon.artifact_path(%{}, tmp_dir, [], "json", prefix)
+      assert {:ok, path} =
+               MediaCommon.artifact_path(%{}, tmp_dir, [output_guard: :none], "json", prefix)
+
       assert Path.basename(path) =~ ~r/^#{prefix}-\d+\.json$/
       assert Path.dirname(path) == Path.join(tmp_dir, ".lemon/media-artifacts")
     end
@@ -113,12 +115,22 @@ defmodule LemonSkills.Tools.MediaCommonTest do
              MediaCommon.artifact_path(
                %{"filename" => "../unsafe file.PNG"},
                tmp_dir,
-               [media_artifacts_dir: tmp_dir],
+               [media_artifacts_dir: tmp_dir, output_guard: :none],
                "png",
                "media-preview"
              )
 
     assert path == Path.join(tmp_dir, "unsafe_file.PNG")
+  end
+
+  test "artifact paths fail closed without an output guard", %{tmp_dir: tmp_dir} do
+    assert {:error, message} = MediaCommon.artifact_path(%{}, tmp_dir, [], "png", "media")
+    assert message =~ "output guard is not configured"
+
+    refuse = fn _path -> {:error, "refused"} end
+
+    assert {:error, "refused"} =
+             MediaCommon.artifact_path(%{}, tmp_dir, [output_guard: refuse], "png", "media")
   end
 
   test "waits through progress and unrelated messages and returns completed jobs" do

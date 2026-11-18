@@ -394,9 +394,11 @@ defmodule LemonSkills.WorkspacePreferences do
     end)
   end
 
+  # Preferences are rewritten in place, so a hard-linked file (another name for
+  # the same inode, possibly Lemon operator state) is refused.
   defp safe_file(path) do
     case File.lstat(path) do
-      {:ok, %File.Stat{type: :regular, size: size}} when size <= 65_536 -> :ok
+      {:ok, %File.Stat{type: :regular, size: size, links: 1}} when size <= 65_536 -> :ok
       {:error, :enoent} -> :ok
       _ -> {:error, :memory_unavailable}
     end

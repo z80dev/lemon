@@ -1,6 +1,10 @@
 defmodule CodingAgent.Tools.ACPFileBridge do
   @moduledoc false
 
+  # The ACP client writes on this host, so its mutations get the same Lemon
+  # operator-state refusal as local writes, before the client is asked.
+  alias CodingAgent.Tools.OperatorState
+
   @timeout_ms 60_000
 
   def read_enabled?(opts), do: Keyword.get(opts, :acp_client_fs_read_text_file) == true
@@ -26,7 +30,8 @@ defmodule CodingAgent.Tools.ACPFileBridge do
   end
 
   def write_text_file(path, content, opts) when is_binary(path) and is_binary(content) do
-    with {:ok, response} <-
+    with :ok <- OperatorState.check_mutation(path, opts),
+         {:ok, response} <-
            request("fs/write_text_file", %{"path" => path, "content" => content}, opts),
          {:ok, _result} <- response_result(response) do
       :ok
@@ -34,7 +39,8 @@ defmodule CodingAgent.Tools.ACPFileBridge do
   end
 
   def delete_file(path, opts) when is_binary(path) do
-    with {:ok, response} <- request("fs/delete_file", %{"path" => path}, opts),
+    with :ok <- OperatorState.check_mutation(path, opts),
+         {:ok, response} <- request("fs/delete_file", %{"path" => path}, opts),
          {:ok, _result} <- response_result(response) do
       :ok
     end
@@ -42,7 +48,9 @@ defmodule CodingAgent.Tools.ACPFileBridge do
 
   def rename_file(source_path, target_path, opts)
       when is_binary(source_path) and is_binary(target_path) do
-    with {:ok, response} <-
+    with :ok <- OperatorState.check_mutation(source_path, opts),
+         :ok <- OperatorState.check_mutation(target_path, opts),
+         {:ok, response} <-
            request("fs/rename_file", %{"path" => source_path, "targetPath" => target_path}, opts),
          {:ok, _result} <- response_result(response) do
       :ok

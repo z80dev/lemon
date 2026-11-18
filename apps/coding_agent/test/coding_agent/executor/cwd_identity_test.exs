@@ -359,6 +359,53 @@ defmodule CodingAgent.Executor.CwdIdentityTest do
     assert File.exists?(Path.join(cwd, "a/ok.txt"))
   end
 
+  test "a cron run's file tools write its own memory file and no other operator state", %{
+    tmp_dir: tmp_dir
+  } do
+    home = Path.join(tmp_dir, "home")
+    memory_dir = Path.join([home, ".lemon", "cron_memory"])
+    File.mkdir_p!(memory_dir)
+    own = Path.join(memory_dir, "job-a.md")
+    other = Path.join(memory_dir, "job-b.md")
+    config = Path.join([home, ".lemon", "config.toml"])
+    File.write!(own, "# a\n")
+    File.write!(other, "# b\n")
+    File.write!(config, "[runtime]\n")
+    cwd = Path.join(tmp_dir, "work")
+    File.mkdir_p!(cwd)
+
+    previous_paths = Application.get_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, Keyword.put(previous_paths || [], :home_dir, home))
+
+    on_exit(fn ->
+      if previous_paths,
+        do: Application.put_env(:lemon_core, :paths, previous_paths),
+        else: Application.delete_env(:lemon_core, :paths)
+    end)
+
+    calls = [
+      {"write", %{"path" => own, "content" => "# a\nfinding\n"}},
+      {"write", %{"path" => other, "content" => "# tampered\n"}},
+      {"write", %{"path" => config, "content" => "[evil]\n"}}
+    ]
+
+    run_ref = make_ref()
+
+    {:ok, _runner} =
+      SessionRunner.start_link(
+        request:
+          request(cwd, %{cron_memory_file: own}, LemonCore.ToolPolicy.custom(deny: ["bash"])),
+        opts: %{stream_fn: calls_then_finish(calls)},
+        sink_pid: self(),
+        run_ref: run_ref
+      )
+
+    assert_receive {:engine_event, ^run_ref, %{__event__: :completed}}, 10_000
+    assert File.read!(own) == "# a\nfinding\n"
+    assert File.read!(other) == "# b\n"
+    assert File.read!(config) == "[runtime]\n"
+  end
+
   defp assert_refused(request) do
     previous = Process.flag(:trap_exit, true)
 

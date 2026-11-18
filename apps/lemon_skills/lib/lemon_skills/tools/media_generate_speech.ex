@@ -610,8 +610,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   end
 
   defp write_artifact(artifact_path, audio, mime_type) when is_binary(audio) do
-    with :ok <- File.mkdir_p(Path.dirname(artifact_path)),
-         :ok <- File.write(artifact_path, audio),
+    with :ok <- MediaCommon.write_artifact(artifact_path, audio),
          {:ok, stat} <- File.stat(artifact_path) do
       {:ok,
        %{

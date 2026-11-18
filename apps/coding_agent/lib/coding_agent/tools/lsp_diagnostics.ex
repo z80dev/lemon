@@ -31,6 +31,16 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   alias LemonCore.Doctor.LspDiagnostics, as: DoctorLspDiagnostics
 
   @default_timeout_ms 20_000
+  @c_compilers ~w(clang gcc cc)
+  @cxx_compilers ~w(clang++ g++ c++)
+
+  @doc """
+  Every executable name diagnostics look up on `PATH`. Their directories are
+  operator toolchain (`CodingAgent.Tools.OperatorState`); keep this list in step
+  with the runners below.
+  """
+  @spec commands() :: [String.t()]
+  def commands, do: ~w(mix node tsc python3 python cargo go) ++ @c_compilers ++ @cxx_compilers
 
   # Bound on the bytes Lemon reads from a diagnosed file.
   @max_source_bytes 8 * 1024 * 1024
@@ -472,8 +482,8 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   defp c_cpp_command(path) do
     candidates =
       case path |> Path.extname() |> String.downcase() do
-        ext when ext in [".c", ".h"] -> ["clang", "gcc", "cc"]
-        _ -> ["clang++", "g++", "c++"]
+        ext when ext in [".c", ".h"] -> @c_compilers
+        _ -> @cxx_compilers
       end
 
     Enum.find_value(candidates, fn command ->

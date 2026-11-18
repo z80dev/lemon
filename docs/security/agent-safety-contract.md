@@ -158,6 +158,55 @@ and revoke it in System Settings → Privacy & Security. Product access and huma
 approvals still apply independently. Desktop-control tools may also need their
 own installed dependencies, such as Peekaboo.
 
+## Operator State
+
+Model-driven file mutations never write Lemon operator state
+(`CodingAgent.Tools.OperatorState`). `write` (including archive and SQLite
+members), `edit` (text and anchored), `patch`, `ast_grep` rewrites, LSP
+workspace edits, ACP-client writes/deletes/renames, `fs_checkpoint` restore,
+browser downloads/screenshots/analysis captures (default directories included)
+and media artifacts (image, speech, video, transcription, analysis) refuse a
+target whose lexical or canonical path (symlinks resolved, compared
+case-insensitively) is an ancestor of a protected root, lies in an explicit
+root, or lies in a broad root outside a work area. An existing file with more
+than one hard link is refused too.
+
+- Broad roots: the Lemon home state directory (`~/.lemon`: `config.toml`, the
+  secrets master key and store, trust and skill-audit records, extensions,
+  skills, `cron_memory`, kanban controller repos, execution-node credentials,
+  managed installs) and the agent directory (`LEMON_AGENT_DIR`).
+- Explicit roots, which work areas never reopen: the global config, secrets key
+  file, store, dotenv file, checkpoint directory and `LEMON_BOT_DATA_DIR`
+  wherever they are configured; every operator-configured extension source
+  root (`[runtime] extension_paths`) and the global extensions directory; and
+  toolchain locations Lemon executes from: `~/.local/bin`, `~/bin`, and for
+  `[runtime] git_path` (or the trusted system `git`) and every post-edit checker
+  or formatter found on `PATH`, the executable as found, its directory, its
+  resolved symlink target and that target's directory.
+
+The model's work areas stay writable: the assistant workspace, profile
+workspaces and bot folders, and kanban worker worktrees (inside an assistant
+workspace, `.lemon/skill(s)`, `.lemon/extensions` and `.lemon/config.toml` stay
+protected). Lemon's own writers get narrow grants that keep the hard-link
+refusal: a cron run may update only its exact `cron_memory/<job>.md`, the plan
+writer only direct children of its session plan directory, and
+`write local://…`/`report_issue` only the session's own scratch files. Media
+artifacts are written to a temporary file renamed into place, so an existing
+symlink or hard link at the name is replaced rather than written through.
+`remember` refuses hard-linked preference files. `skill_manage` with
+`scope: "global"` (skills in the agent directory) always needs a human approval,
+whatever `[skills] write_approval` says, and is refused without an interactive
+approver. There is no other override: the operator edits these files directly.
+
+`bash`, `eval` and `process_input` are not confined. As a best-effort check, a
+call whose text (command, code, input, `cwd`, `env` values, with `~`, `$HOME`
+and `${HOME}` expanded) names a protected root (a toolchain directory only when
+it is writable) or a `.lemon` path component, or that runs in the state or agent
+directory outside a work area (inside one, when its text contains `..`), needs
+a one-time human approval (`once_only`: no stored or wildcard grant applies)
+under every approval mode, `yolo` included. Commands that build paths at run
+time are not detected; approve shell access only where that risk is acceptable.
+
 ## Durable Memory
 
 The run-history search index stores summaries rather than complete transcripts.

@@ -60,7 +60,11 @@ recorded roots, are refused; rewind preview lists their tools as unrestorable.
 No roots were recorded before this check existed (some of those checkpoints
 were also owned by a session key), so all such legacy checkpoints are
 unavailable to diff, restore and rewind rather than migrated. Diff does not
-read through a symlinked parent directory or leaf.
+read through a symlinked parent directory or leaf. `fs_checkpoint` restore
+refuses a recorded root that is Lemon operator state or an operator toolchain
+directory ([agent safety contract](../security/agent-safety-contract.md#operator-state)):
+checkpoint files live in the system temp directory, so their contents are not
+trusted to name only the session's own edits.
 
 Normal write/edit/patch operations still create filesystem checkpoints
 independently of the conversation checkpoint feature flag. Filesystem restoration

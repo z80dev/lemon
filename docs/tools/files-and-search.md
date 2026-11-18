@@ -6,6 +6,14 @@ selectors, SQLite views and search paging; snapshot-anchored edits and rich
 reads (archives, PDFs, notebooks, images) are described in the
 [coding_agent README](../../apps/coding_agent/README.md#built-in-tools).
 
+`write`, `edit`, `patch` and `ast_grep` rewrites (including archive, SQLite and
+ACP-client writes) refuse Lemon operator state and operator toolchain
+directories: `~/.lemon` and the agent directory outside the assistant/profile
+workspaces, bot folders and kanban worktrees, the configured config, key file,
+store and `.env`, `~/.local/bin`, `~/bin`, and the `git_path` and checker
+directories. Paths are compared lexically and after symlink resolution. See the
+[agent safety contract](../security/agent-safety-contract.md#operator-state).
+
 ## Session internal URLs
 
 `local://name` stores a scratch file beneath the session artifact directory.

@@ -97,6 +97,23 @@ defmodule LemonSkills.Tools.SkillManageTest do
     assert LemonSkills.Usage.get("protected", scope: :project, cwd: cwd)["write_count"] >= 3
   end
 
+  test "global-scope mutations need a human approval even with write_approval off", %{
+    tmp_dir: cwd
+  } do
+    name = "global-#{System.unique_integer([:positive])}"
+
+    assert {:error, message} =
+             execute(cwd, %{
+               "action" => "create",
+               "scope" => "global",
+               "name" => name,
+               "content" => valid_skill()
+             })
+
+    assert message =~ "Human approval is required"
+    refute File.exists?(Path.join(LemonSkills.Config.global_skills_dir(), name))
+  end
+
   describe "create" do
     test "emits skill write telemetry for successful writes", %{tmp_dir: tmp_dir} do
       enable_introspection()

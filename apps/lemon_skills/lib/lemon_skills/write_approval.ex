@@ -23,8 +23,12 @@ defmodule LemonSkills.WriteApproval do
     Map.get(Map.fetch!(config, domain), :write_approval, false) != false
   end
 
-  def check(domain, tool, params, context, tool_call_id) do
-    if required?(domain, context[:cwd]) do
+  @doc """
+  `:ok` when no approval is configured, else asks a human. `force: true`
+  requires the approval regardless of config (global skill mutations).
+  """
+  def check(domain, tool, params, context, tool_call_id, opts \\ []) do
+    if Keyword.get(opts, :force, false) or required?(domain, context[:cwd]) do
       if interactive?(context) do
         request(tool, params, context, tool_call_id)
       else

@@ -188,7 +188,8 @@ defmodule LemonSkills.Tools.SkillManage do
              {:ok, name} <- name_for_action(action, params),
              :ok <- validate_name_for_action(action, name) do
           with :ok <- reject_pinned_content_edit(action, name, scope, cwd),
-               :ok <- approve_mutation(action, params, cwd, telemetry_context, tool_call_id) do
+               :ok <-
+                 approve_mutation(action, scope, params, cwd, telemetry_context, tool_call_id) do
             dispatch(action, name, params, scope, root, cwd)
           end
         end
@@ -198,9 +199,13 @@ defmodule LemonSkills.Tools.SkillManage do
     result
   end
 
-  defp approve_mutation("report", _params, _cwd, _context, _id), do: :ok
+  defp approve_mutation("report", _scope, _params, _cwd, _context, _id), do: :ok
 
-  defp approve_mutation(_action, params, cwd, context, id) do
+  # Global skills live in the agent directory, which is Lemon operator state:
+  # a global mutation always needs a human approval, whatever
+  # `[skills] write_approval` says, and is refused without an interactive
+  # approver (cron, automation, background runs).
+  defp approve_mutation(_action, scope, params, cwd, context, id) do
     context = Map.get(context, :write_approval_context, context)
 
     LemonSkills.WriteApproval.check(
@@ -208,7 +213,8 @@ defmodule LemonSkills.Tools.SkillManage do
       "skill_manage",
       params,
       Map.put(context, :cwd, cwd),
-      id
+      id,
+      force: scope == :global
     )
   end
 

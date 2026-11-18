@@ -9,7 +9,7 @@ defmodule LemonSkills.Tools.MediaGenerateImageTest do
 
   test "generates a supervised local SVG image without leaking the prompt", %{tmp_dir: tmp_dir} do
     prompt = "private launch prompt 123"
-    tool = LemonSkills.Tools.MediaGenerateImage.tool(tmp_dir)
+    tool = LemonSkills.Tools.MediaGenerateImage.tool(tmp_dir, output_guard: :none)
 
     assert %AgentToolResult{} =
              result =
@@ -57,7 +57,7 @@ defmodule LemonSkills.Tools.MediaGenerateImageTest do
   end
 
   test "rejects unsupported providers", %{tmp_dir: tmp_dir} do
-    tool = LemonSkills.Tools.MediaGenerateImage.tool(tmp_dir)
+    tool = LemonSkills.Tools.MediaGenerateImage.tool(tmp_dir, output_guard: :none)
 
     assert {:error, "unsupported media provider: remote"} =
              tool.execute.("call-1", %{"prompt" => "draw this", "provider" => "remote"}, nil, nil)
@@ -81,6 +81,7 @@ defmodule LemonSkills.Tools.MediaGenerateImageTest do
 
     tool =
       MediaGenerateImage.tool(tmp_dir,
+        output_guard: :none,
         openai_image_api_key: "sk-test-image-key",
         openai_image_base_url: "https://api.openai.test/v1/",
         media_image_http_post: http_post
@@ -159,6 +160,7 @@ defmodule LemonSkills.Tools.MediaGenerateImageTest do
 
     tool =
       MediaGenerateImage.tool(tmp_dir,
+        output_guard: :none,
         openai_image_api_key: "sk-test-image-key",
         media_image_http_post: http_post
       )
@@ -199,6 +201,7 @@ defmodule LemonSkills.Tools.MediaGenerateImageTest do
 
     tool =
       MediaGenerateImage.tool(tmp_dir,
+        output_guard: :none,
         vertex_imagen_access_token: "vertex-access-token",
         vertex_imagen_project: "lemon-test-project",
         vertex_imagen_location: "us-central1",
@@ -272,6 +275,7 @@ defmodule LemonSkills.Tools.MediaGenerateImageTest do
 
     tool =
       MediaGenerateImage.tool(tmp_dir,
+        output_guard: :none,
         vertex_imagen_access_token: "vertex-access-token",
         vertex_imagen_project: "lemon-test-project",
         vertex_imagen_location: "us-central1",
@@ -312,6 +316,7 @@ defmodule LemonSkills.Tools.MediaGenerateImageTest do
 
     tool =
       MediaGenerateImage.tool(tmp_dir,
+        output_guard: :none,
         openai_image_api_key: "sk-test-image-key",
         media_image_http_post: http_post
       )

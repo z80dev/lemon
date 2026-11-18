@@ -15,7 +15,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
     prompt = "private vision prompt 123"
     File.write!(image_path, image_bytes)
 
-    tool = LemonSkills.Tools.MediaAnalyzeImage.tool(tmp_dir)
+    tool = LemonSkills.Tools.MediaAnalyzeImage.tool(tmp_dir, output_guard: :none)
 
     assert %AgentToolResult{} =
              result =
@@ -92,6 +92,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
 
     tool =
       MediaAnalyzeImage.tool(tmp_dir,
+        output_guard: :none,
         openai_vision_api_key: "sk-test-vision-key",
         openai_vision_base_url: "https://api.openai.test/v1/",
         media_vision_http_post: http_post
@@ -171,6 +172,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
 
     tool =
       MediaAnalyzeImage.tool(tmp_dir,
+        output_guard: :none,
         openai_vision_api_key: "sk-test-vision-key",
         media_vision_http_post: http_post
       )
@@ -212,6 +214,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
 
     tool =
       MediaAnalyzeImage.tool(tmp_dir,
+        output_guard: :none,
         media_vision_config: %{
           providers: %{
             "openrouter" => %{
@@ -289,6 +292,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
 
       tool =
         MediaAnalyzeImage.tool(tmp_dir,
+          output_guard: :none,
           media_vision_config: %{
             providers: %{"anthropic" => %{"api_key" => "sk-ant-secret"}}
           },
@@ -322,6 +326,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
 
       tool =
         MediaAnalyzeImage.tool(tmp_dir,
+          output_guard: :none,
           openai_vision_api_key: "sk-openai-secret",
           openai_vision_base_url: "https://api.openai.test/v1",
           media_vision_config: %{
@@ -354,6 +359,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
 
       tool =
         MediaAnalyzeImage.tool(tmp_dir,
+          output_guard: :none,
           openai_vision_api_key: "sk-openai-secret",
           media_vision_config: %{
             providers: %{
@@ -393,6 +399,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
 
       tool =
         MediaAnalyzeImage.tool(tmp_dir,
+          output_guard: :none,
           media_vision_config: %{providers: %{"openai" => %{"api_key" => "sk-openai-key"}}},
           media_vision_http_post: http_post
         )
@@ -431,6 +438,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
 
     tool =
       MediaAnalyzeImage.tool(tmp_dir,
+        output_guard: :none,
         openai_vision_api_key: "sk-test-vision-key",
         media_vision_http_post: http_post
       )
@@ -450,7 +458,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
   end
 
   test "rejects image paths outside the project", %{tmp_dir: tmp_dir} do
-    tool = LemonSkills.Tools.MediaAnalyzeImage.tool(tmp_dir)
+    tool = LemonSkills.Tools.MediaAnalyzeImage.tool(tmp_dir, output_guard: :none)
 
     assert {:error, "imagePath must be under the current project"} =
              tool.execute.("call-1", %{"imagePath" => "/etc/passwd"}, nil, nil)
@@ -459,7 +467,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImageTest do
   test "rejects OpenAI vision for local-only SVG input", %{tmp_dir: tmp_dir} do
     image_path = Path.join(tmp_dir, "preview.svg")
     File.write!(image_path, svg_bytes("label"))
-    tool = LemonSkills.Tools.MediaAnalyzeImage.tool(tmp_dir)
+    tool = LemonSkills.Tools.MediaAnalyzeImage.tool(tmp_dir, output_guard: :none)
 
     assert {:error, "openai_vision supports png, jpeg, webp, or gif images"} =
              tool.execute.(

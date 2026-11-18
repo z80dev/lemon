@@ -593,9 +593,13 @@ defmodule CodingAgent.Session.Planning do
 
     with :ok <- File.mkdir_p(Path.dirname(path)),
          :ok <- File.chmod(Path.dirname(path), 0o700) do
+      # Plans live in Lemon state (the session directory); the writer is
+      # granted exactly its plan directory, alias checks included.
+      grant = [operator_state_dir_grant: context.plan_dir]
+
       case name do
-        "write" -> Write.execute(id, params, signal, nil, context.plan_dir, [])
-        "edit" -> Edit.execute(id, params, signal, nil, context.plan_dir, [])
+        "write" -> Write.execute(id, params, signal, nil, context.plan_dir, grant)
+        "edit" -> Edit.execute(id, params, signal, nil, context.plan_dir, grant)
       end
     else
       {:error, reason} -> {:error, "Could not prepare the plan directory: #{reason}"}

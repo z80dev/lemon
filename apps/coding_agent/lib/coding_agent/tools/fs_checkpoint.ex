@@ -129,6 +129,8 @@ defmodule CodingAgent.Tools.FsCheckpoint do
   defp format_error({:error, {:path_not_in_checkpoint, path}}),
     do: {:error, "path is not in checkpoint: #{path}"}
 
+  defp format_error({:error, {:operator_state, reason}}), do: {:error, reason}
+
   defp format_error(error), do: error
 
   defp owner(opts) do

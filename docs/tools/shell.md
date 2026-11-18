@@ -111,6 +111,19 @@ ambiguous shell cwd changes (including env/sudo wrappers) fail closed (no exempt
 No Git process is started to discover an exemption. These literal-command checks
 are not a shell sandbox.
 
+## Operator state approval
+
+A `bash` call that names Lemon operator state or an operator toolchain directory
+(`~/.lemon`, the agent directory, the global config, key file, store, `.env`,
+`~/.local/bin`, `~/bin`, the `git_path` and checker directories, or any `.lemon`
+path component, after expanding `~`, `$HOME` and `${HOME}` in the command, `cwd`
+and `env` values), or that runs in the state or agent directory outside a work
+area, needs a one-time human approval in every approval mode, including `yolo`.
+Stored or wildcard approvals never cover it. `eval` and `process_input` get the
+same check. This is best effort, not a sandbox: paths built at run time are not
+seen. File tools refuse those targets outright; see the
+[agent safety contract](../security/agent-safety-contract.md#operator-state).
+
 ## Named services
 
 Use `name` to start a long-lived service without a command deadline. Names are
