@@ -223,13 +223,14 @@ defmodule CodingAgent.Executor.CwdIdentityTest do
     File.write!(Path.join(outside, "deep/victim"), "victim\n")
     File.mkdir_p!(Path.join(cwd, "a/b"))
     File.ln_s!(outside, Path.join(cwd, "a/b/link"))
+    File.write!(Path.join(cwd, "inside.txt"), "x\n")
     patch = CodingAgent.Tools.Patch.tool(cwd, confine_mutations_to: cwd)
 
     for text <- [
           "*** Begin Patch\n*** Update File: a/b/link/deep/commondir\n@@\n-../..\n+/tmp/evil\n*** End Patch\n",
           "*** Begin Patch\n*** Delete File: a/b/link/deep/victim\n*** End Patch\n",
           "*** Begin Patch\n*** Add File: a/b/link/deep/config.worktree\n+[core]\n*** End Patch\n",
-          "*** Begin Patch\n*** Add File: inside.txt\n+x\n*** End Patch\n*** Begin Patch\n*** Update File: inside.txt\n*** Move to: a/b/link/deep/moved\n@@\n-x\n+x\n*** End Patch\n"
+          "*** Begin Patch\n*** Update File: inside.txt\n*** Move to: a/b/link/deep/moved\n@@\n-x\n+x\n*** End Patch\n"
         ] do
       assert {:error, _} = patch.execute.("call", %{"patch_text" => text}, nil, nil), text
     end
@@ -237,6 +238,7 @@ defmodule CodingAgent.Executor.CwdIdentityTest do
     assert File.read!(Path.join(outside, "deep/commondir")) == "../..\n"
     assert File.read!(Path.join(outside, "deep/victim")) == "victim\n"
     refute File.exists?(Path.join(outside, "deep/config.worktree"))
+    assert File.read!(Path.join(cwd, "inside.txt")) == "x\n"
     refute File.exists?(Path.join(outside, "deep/moved"))
 
     # Ordinary targets inside the worktree still work.
