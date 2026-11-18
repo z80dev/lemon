@@ -194,12 +194,16 @@ defmodule LemonEvals.Support do
     end
   end
 
+  # Writes a project skill and records an operator `:pass` grant for its exact
+  # bundle hash; unaudited repository skills never load.
   def write_project_skill(cwd, key, content) do
     skill_dir = Path.join([cwd, ".lemon", "skill", key])
     skill_path = Path.join(skill_dir, "SKILL.md")
 
     with :ok <- File.mkdir_p(skill_dir),
-         :ok <- File.write(skill_path, content) do
+         :ok <- File.write(skill_path, content),
+         {:ok, hash} <- LemonSkills.Bundle.compute_hash(skill_dir),
+         :ok <- LemonSkills.Audit.State.authorize({:project, cwd}, key, hash, :pass) do
       LemonSkills.refresh(cwd: cwd)
       :ok
     end

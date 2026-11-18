@@ -126,8 +126,10 @@ The `omp` command/protocol/panel/formatter files are native client adapters to
 | `clients/tui/src/config.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/dev/fixtures/tool-fixtures.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/dev/gallery.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
+| `clients/tui/src/formatters/base.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/formatters/omp.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/protocol/omp.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
+| `clients/tui/src/store/session-store.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/terminal/capabilities.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/terminal/integration.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/terminal/links.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |

@@ -425,9 +425,9 @@ defmodule LemonSkills.Tools.SkillManage do
   defp validate_name_for_action("report", ""), do: :ok
   defp validate_name_for_action(_action, name), do: validate_name(name)
 
-  # The scope's mutable root, resolved against its trusted anchor: the project
-  # directory, or the validated agent dir for the global root. Every component
-  # below the anchor must be a real directory.
+  # The scope's mutable root, resolved against its trusted anchor: the
+  # project's `LemonCore.TrustedRoot`, or the validated agent dir for the
+  # global root. Every component below the anchor must be a real directory.
   defp skills_root(scope, cwd) do
     with {:ok, configured} <- configured_root(scope, cwd),
          {:ok, root, anchor} <- SkillRoot.resolve_root(configured, audit_scope(scope, cwd)),
@@ -447,7 +447,7 @@ defmodule LemonSkills.Tools.SkillManage do
   defp configured_root(:project, _cwd), do: {:error, "project scope requires cwd"}
 
   defp root_anchor(:global, _cwd), do: Path.expand(Config.agent_dir())
-  defp root_anchor(:project, cwd), do: Path.expand(cwd)
+  defp root_anchor(:project, cwd), do: LemonCore.TrustedRoot.resolve(cwd)
 
   defp validate_name(name) do
     cond do

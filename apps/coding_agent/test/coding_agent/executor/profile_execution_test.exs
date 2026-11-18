@@ -447,13 +447,18 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
       assert literal_header == "${#{literal_name}}"
 
       # Native task children use the same unresolved invocation definitions and
-      # trusted local connection, not machine-global MCP configuration.
+      # trusted local connection, not machine-global MCP configuration. The
+      # child's agent identity comes from the launching session's opts, never
+      # from task arguments.
       child_opts =
         CodingAgent.Tools.Task.Params.build_session_opts(
           root,
-          [parent_session: runner_state.session, model: session_state.model],
+          [
+            parent_session: runner_state.session,
+            model: session_state.model,
+            agent_id: "mcp-child-writer"
+          ],
           %{
-            agent_id: "mcp-child-writer",
             tool_policy:
               CodingAgent.ToolPolicy.custom(allow: [tool.name], require_approval: [tool.name])
           }

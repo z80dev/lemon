@@ -143,7 +143,18 @@ defmodule LemonChannels.ChannelAdmissionFailClosedTest do
 
   describe "Discord selected resume" do
     test "an unreadable selection rejects the submission and stays stored" do
-      key = {"default", @channel_id, nil}
+      # Selections are keyed by the sender's full session key.
+      key =
+        LemonCore.SessionKey.channel_peer(%{
+          agent_id: "default",
+          channel_id: "discord",
+          account_id: "default",
+          peer_kind: :group,
+          peer_id: Integer.to_string(@channel_id),
+          thread_id: nil,
+          sub_id: "1476753643834183691"
+        })
+
       selection = %ResumeToken{engine: "lemon", value: "selected-#{unique_id()}"}
       :ok = Store.put(:discord_selected_resume, key, selection)
       on_exit(fn -> Store.delete(:discord_selected_resume, key) end)

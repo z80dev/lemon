@@ -122,26 +122,23 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
   @spec auto_skill_prompt_contract_eval(String.t()) :: Types.eval_result()
   def auto_skill_prompt_contract_eval(_cwd) do
     run_contract("auto_skill_prompt_contract", fn tmp_dir ->
-      skill_dir = Path.join([tmp_dir, ".lemon", "skill", "hermes-memory"])
-      skill_path = Path.join(skill_dir, "SKILL.md")
       sentinel = "FULL BODY SENTINEL MUST NOT BE IN PROMPT"
 
-      File.mkdir_p!(skill_dir)
+      :ok =
+        write_project_skill(tmp_dir, "hermes-memory", """
+        ---
+        name: hermes-memory
+        description: Hermes memory recall and durable profile discipline
+        keywords:
+          - hermes
+          - memory
+          - recall
+        ---
 
-      File.write!(skill_path, """
-      ---
-      name: hermes-memory
-      description: Hermes memory recall and durable profile discipline
-      keywords:
-        - hermes
-        - memory
-        - recall
-      ---
+        # Hermes Memory
 
-      # Hermes Memory
-
-      #{sentinel}
-      """)
+        #{sentinel}
+        """)
 
       prompt =
         SystemPrompt.build(tmp_dir, %{

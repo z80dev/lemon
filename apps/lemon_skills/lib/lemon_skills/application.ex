@@ -5,6 +5,7 @@ defmodule LemonSkills.Application do
 
   @impl true
   def start(_type, _args) do
+    :ok = LemonSkills.SkillRoot.init_uid()
     # Ensure ~/.lemon/agent/skill exists before the registry loads from disk.
     LemonSkills.Config.ensure_dirs!()
     # Copy repo-bundled skills into the user's global config dir if missing.

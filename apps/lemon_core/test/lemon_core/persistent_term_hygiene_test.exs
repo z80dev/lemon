@@ -13,6 +13,8 @@ defmodule LemonCore.PersistentTermHygieneTest do
     ],
     "apps/lemon_ai/lib/lemon_ai/provider_registry.ex" => [:init, :mutate_providers],
     "apps/lemon_agent/lib/lemon_agent/context_registry.ex" => [:put],
+    "apps/lemon_agent/lib/lemon_agent/security/external_content.ex" => [:init_key],
+    "apps/lemon_agent/lib/lemon_agent/security/untrusted_tool_boundary.ex" => [:init_key],
     "apps/lemon_agent/lib/lemon_agent/tool_registry.ex" => [:put],
     "apps/lemon_browser/lib/lemon_browser/registry.ex" => [:put_runtime],
     "apps/lemon_channels/lib/lemon_channels/registry.ex" => [:init, :publish_plugins],
@@ -22,7 +24,8 @@ defmodule LemonCore.PersistentTermHygieneTest do
     "apps/lemon_core/lib/lemon_core/browser_provider.ex" => [:put_computer_use_enabled],
     "apps/lemon_core/lib/lemon_core/bus.ex" => [:child_spec_for_backend],
     "apps/lemon_core/lib/lemon_core/exec_approval_expiry.ex" => [:init_runtime_id],
-    "apps/lemon_skills/lib/lemon_skills/curator_references.ex" => [:register]
+    "apps/lemon_skills/lib/lemon_skills/curator_references.ex" => [:register],
+    "apps/lemon_skills/lib/lemon_skills/skill_root.ex" => [:init_uid]
   }
 
   test "persistent_term writes are confined to boot and configuration publication" do

@@ -193,12 +193,39 @@ defmodule LemonSkills.SkillRoot do
   end
 
   defp below(anchor, path) do
-    if String.starts_with?(path, anchor <> "/") do
-      {:ok, path |> String.replace_prefix(anchor <> "/", "") |> Path.split()}
-    else
-      if path == anchor, do: {:ok, []}, else: {:error, :outside_anchor}
+    cond do
+      path == anchor -> {:ok, []}
+      String.starts_with?(path, anchor <> "/") -> {:ok, relative_parts(path, anchor)}
+      true -> respelled_below(anchor, path)
     end
   end
+
+  # A project anchor is a realpath (`LemonCore.TrustedRoot`), while callers may
+  # spell a path through links above it (`/var` vs `/private/var`). Find the
+  # ancestor of `path` that is a real directory (not a link) with the anchor's
+  # name and resolves exactly to the anchor; everything below it stays
+  # unresolved, so `check_dir/3` still refuses links inside the anchor.
+  defp respelled_below(anchor, path) do
+    path
+    |> Path.split()
+    |> prefixes()
+    |> Enum.find(fn prefix ->
+      Path.basename(prefix) == Path.basename(anchor) and
+        match?({:ok, %File.Stat{type: :directory}}, File.lstat(prefix)) and
+        realpath(prefix) == {:ok, anchor}
+    end)
+    |> case do
+      nil -> {:error, :outside_anchor}
+      prefix when prefix == path -> {:ok, []}
+      prefix -> {:ok, relative_parts(path, prefix)}
+    end
+  end
+
+  defp prefixes(parts),
+    do: for(n <- length(parts)..1//-1, do: parts |> Enum.take(n) |> Path.join())
+
+  defp relative_parts(path, base),
+    do: path |> String.replace_prefix(base <> "/", "") |> Path.split()
 
   defp roots(:global), do: Config.global_skills_dirs()
 
@@ -239,20 +266,31 @@ defmodule LemonSkills.SkillRoot do
     end
   end
 
+  @doc """
+  Publish the current user's uid once at boot (`LemonSkills.Application`).
+  It never changes for the life of the node; idempotent.
+  """
+  @spec init_uid() :: :ok
+  def init_uid do
+    if :persistent_term.get({__MODULE__, :uid}, nil) == nil,
+      do: :persistent_term.put({__MODULE__, :uid}, lookup_uid())
+
+    :ok
+  end
+
+  # Outside a started application (scripts, isolated tests) the uid is looked
+  # up on each call rather than cached.
   defp current_uid do
     case :persistent_term.get({__MODULE__, :uid}, nil) do
-      nil ->
-        uid =
-          case System.cmd("id", ["-u"], stderr_to_stdout: true) do
-            {out, 0} -> String.to_integer(String.trim(out))
-            _ -> :unknown
-          end
+      nil -> lookup_uid()
+      uid -> uid
+    end
+  end
 
-        :persistent_term.put({__MODULE__, :uid}, uid)
-        uid
-
-      uid ->
-        uid
+  defp lookup_uid do
+    case System.cmd("id", ["-u"], stderr_to_stdout: true) do
+      {out, 0} -> String.to_integer(String.trim(out))
+      _ -> :unknown
     end
   end
 end
