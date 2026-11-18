@@ -7,6 +7,7 @@ import type {
 	SessionRewindTarget,
 	SessionTreeEntry,
 } from "../protocol/session-tree.ts";
+import { inertComposerText } from "../shell.ts";
 import type { Block } from "../store/transcript-model.ts";
 import { replayDeps } from "../ui/replay-overlays.ts";
 import { blocksToTranscriptEntries, entryBlockId } from "../ui/transcript-entries.ts";
@@ -403,8 +404,10 @@ async function previewRewind(
 						return;
 					}
 					ctx.ui.resetSession?.(target.sessionKey);
-					ctx.store.setDraft(target.sessionKey, result.prompt);
-					if (ctx.store.focusedKey === target.sessionKey) ctx.ui.setDraft(result.prompt);
+					// A stored prompt is not typing: its shell syntax stays literal.
+					const draft = inertComposerText(result.prompt);
+					ctx.store.setDraft(target.sessionKey, draft);
+					if (ctx.store.focusedKey === target.sessionKey) ctx.ui.setDraft(draft);
 					try {
 						await ctx.ui.reloadSession!(target.sessionKey);
 						ctx.ui.notice(
@@ -628,8 +631,9 @@ async function switchBranch(
 		const recalled = typeof result.prompt === "string" && result.prompt.length > 0;
 		const draftFree = ctx.store.focusedKey !== sessionKey || ctx.ui.getDraft().trim() === "";
 		if (recalled && draftFree) {
-			ctx.store.setDraft(sessionKey, result.prompt!);
-			if (ctx.store.focusedKey === sessionKey) ctx.ui.setDraft(result.prompt!);
+			const draft = inertComposerText(result.prompt!);
+			ctx.store.setDraft(sessionKey, draft);
+			if (ctx.store.focusedKey === sessionKey) ctx.ui.setDraft(draft);
 		}
 		try {
 			await ctx.ui.reloadSession(sessionKey);

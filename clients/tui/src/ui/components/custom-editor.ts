@@ -25,7 +25,10 @@
  * effort chips, the status facts, usage, and Send (Stop while a run is live).
  */
 
-import { BracketedPasteHandler } from "@oh-my-pi/pi-tui/bracketed-paste";
+import {
+	BracketedPasteHandler,
+	decodeReencodedPasteControls,
+} from "@oh-my-pi/pi-tui/bracketed-paste";
 import {
 	Editor,
 	type EditorTheme,
@@ -53,6 +56,7 @@ import { type ComposerIO, ComposerMedia } from "../../composer/media.ts";
 import type { ModelMentionSource } from "../../composer/model-mentions.ts";
 import { IMAGE_PATH, parsePastedPaths } from "../../composer/paths.ts";
 import type { PromptHistoryStore } from "../../composer/prompt-history.ts";
+import { escapeShellSyntax, inertComposerText } from "../../shell.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 import type { ComposerFacts, ComposerFactsSource } from "./status-bar.ts";
 
@@ -249,7 +253,8 @@ export class CustomEditor extends Editor {
 					}
 					const cursor = this.getCursor();
 					const before = this.getLines()[cursor.line]?.slice(0, cursor.col) ?? "";
-					super.pasteText(before && !/\s$/.test(before) ? ` ${text}` : text);
+					const inert = this.#inertPaste(text);
+					super.pasteText(before && !/\s$/.test(before) ? ` ${inert}` : inert);
 				},
 				notice: (message) => options.notice?.(message, "warning"),
 				changed: () => options.requestRender?.(),
@@ -604,7 +609,8 @@ export class CustomEditor extends Editor {
 		this.setText("");
 		this.#nativeSubmitting = true;
 		this.#options.requestRender?.();
-		void this.#submit(text)
+		// Delegated text was not typed here: its shell syntax stays literal.
+		void this.#submit(escapeShellSyntax(text))
 			.catch((error: unknown) => {
 				this.#options.notice?.(`Prompt failed: ${String(error)}`, "error");
 			})
@@ -615,23 +621,23 @@ export class CustomEditor extends Editor {
 	}
 
 	override handleInput(data: string): void {
-		if (this.#media) {
-			let next = data;
-			while (next.length > 0) {
-				const paste = this.#pasteHandler.process(next);
-				if (!paste.handled) break;
-				if (paste.pasteContent !== undefined) void this.pasteContent(paste.pasteContent);
-				next = paste.remaining;
-			}
-			if (!next) return;
-			data = next;
-			// Non-bracketed terminal drag/drop arrives as one path-sized burst.
-			if (data.length > 1) {
-				const paths = parsePastedPaths(data);
-				if (paths?.some((path) => IMAGE_PATH.test(path))) {
-					void this.#media.pastePaths(this.#options.composer!.sessionKey(), paths);
-					return;
-				}
+		// Every bracketed paste goes through pasteContent, which makes its shell
+		// syntax inert; the base editor would otherwise insert it verbatim.
+		let next = data;
+		while (next.length > 0) {
+			const paste = this.#pasteHandler.process(next);
+			if (!paste.handled) break;
+			if (paste.pasteContent !== undefined) void this.pasteContent(paste.pasteContent);
+			next = paste.remaining;
+		}
+		if (!next) return;
+		data = next;
+		// Non-bracketed terminal drag/drop arrives as one path-sized burst.
+		if (this.#media && data.length > 1) {
+			const paths = parsePastedPaths(data);
+			if (paths?.some((path) => IMAGE_PATH.test(path))) {
+				void this.#media.pastePaths(this.#options.composer!.sessionKey(), paths);
+				return;
 			}
 		}
 		if (this.#intercept(data)) {
@@ -673,9 +679,23 @@ export class CustomEditor extends Editor {
 		const paths = this.#media ? parsePastedPaths(text) : undefined;
 		if (paths) return this.#media!.pastePaths(this.#options.composer!.sessionKey(), paths);
 		// Preserve pi's large-paste markers, sanitization, undo, and prompt history.
-		super.pasteText(text);
+		super.pasteText(this.#inertPaste(text));
 		this.#options.requestRender?.();
 		return true;
+	}
+
+	/**
+	 * Pasted text in composer form: tmux-encoded controls decoded as the base
+	 * editor does, then {@link inertComposerText} (sanitize, then escape). A
+	 * leading `!` is escaped only where the paste would open the prompt.
+	 */
+	#inertPaste(text: string): string {
+		const cursor = this.getCursor();
+		const lines = this.getLines();
+		const opensPrompt =
+			lines.slice(0, cursor.line).every((line) => line.trim() === "") &&
+			(lines[cursor.line] ?? "").slice(0, cursor.col).trim() === "";
+		return inertComposerText(decodeReencodedPasteControls(text), opensPrompt);
 	}
 
 	override pasteText(text: string): void {

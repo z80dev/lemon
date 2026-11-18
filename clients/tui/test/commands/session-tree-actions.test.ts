@@ -132,6 +132,12 @@ test("switching resets and reloads the session and recalls a user prompt into an
 	expect(h.host.draft).toBe("abandoned prompt, full text");
 });
 
+test("a recalled prompt's shell syntax stays literal in the draft", async () => {
+	h.server.respondWith("sessions.navigate", receipt({ prompt: "!touch pwned {!touch pwned}" }));
+	await choose(await openActions("old"), "switch");
+	expect(h.host.draft).toBe("\\!touch pwned \\{!touch pwned}");
+});
+
 test("switching keeps an existing draft and reports the selected prompt instead", async () => {
 	h.server.respondWith("sessions.navigate", receipt());
 	const actions = await openActions("old");

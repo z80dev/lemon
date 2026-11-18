@@ -99,6 +99,13 @@ export interface PickerSheet {
 	onAction?: (act: string, value: string | undefined) => void;
 }
 
+/**
+ * Columns a picker row's frame takes (`│ ` and ` │`); content gets the rest of
+ * the render width. Below 8 columns the frame's minimum inner width no longer
+ * fits and rows overflow the terminal.
+ */
+export const PICKER_FRAME_COLUMNS = 4;
+
 /** The default action bar: the primary button is Enter, Close is Esc. */
 export const SELECT_ACTIONS: readonly PickerSheetAction[] = [
 	pickerAction("confirm", "Select", "enter", { primary: true }),
@@ -490,7 +497,7 @@ export class PickerOverlay implements Component, MouseRoutable {
 		}
 		const theme = getTheme();
 		const box = theme.boxRound;
-		const inner = Math.max(4, width - 4);
+		const inner = Math.max(4, width - PICKER_FRAME_COLUMNS);
 		const rows: string[] = [];
 
 		const line = (content: string, styled?: string) => {

@@ -1,13 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
+	escapeShellSyntax,
 	findShellSpans,
 	formatShellResult,
 	hasShellSpans,
+	inertComposerText,
 	interpolateShellSpans,
 	isShellLine,
+	MAX_CAPTURED_OUTPUT_BYTES,
+	MAX_INTERPOLATED_LINES,
 	runShellCommand,
 	type ShellResult,
 	shellLineCommand,
+	unescapeShellSyntax,
 } from "../src/shell.ts";
 
 function fakeRun(outputs: Record<string, string>): (command: string) => Promise<ShellResult> {
@@ -116,6 +121,99 @@ describe("interpolation", () => {
 	test("the escape is removed once interpolation is done", async () => {
 		expect(await interpolateShellSpans("\\{!literal}", fakeRun({}))).toBe("{!literal}");
 	});
+
+	test("command output is spliced verbatim, never unescaped", async () => {
+		const text = await interpolateShellSpans("{!a}", fakeRun({ a: "\\{!b} and \\!c" }));
+		expect(text).toBe("\\{!b} and \\!c");
+	});
+
+	test("a long output is capped to MAX_INTERPOLATED_LINES with a note", async () => {
+		const many = Array.from({ length: 500 }, (_, index) => `row ${index}`).join("\n");
+		const text = (await interpolateShellSpans("{!many}", fakeRun({ many })))!;
+		const lines = text.split("\n");
+		expect(lines).toHaveLength(MAX_INTERPOLATED_LINES + 1);
+		expect(lines.at(-1)).toBe("[output of `many` truncated: 300 more line(s)]");
+	});
+
+	test("an aborted interpolation sends nothing and runs no further span", async () => {
+		const controller = new AbortController();
+		const ran: string[] = [];
+		const text = await interpolateShellSpans(
+			"{!first} {!second}",
+			async (command) => {
+				ran.push(command);
+				controller.abort();
+				return { command, code: 0, stdout: "x", stderr: "" };
+			},
+			undefined,
+			controller.signal,
+		);
+		expect(text).toBeUndefined();
+		expect(ran).toEqual(["first"]);
+	});
+});
+
+describe("text that was not typed", () => {
+	const samples = [
+		"{!touch /tmp/pwned}",
+		"return <div>{!loading && <Spinner/>}</div>;",
+		"\\{!already escaped}",
+		"!rm -rf ~",
+		"  !indented",
+		"\\!escaped bang",
+		"!!",
+		"a {!b} \\{!c} \\\\{!d}",
+	];
+
+	test.each(samples)("%j is inert once escaped and round-trips exactly", async (sample) => {
+		const escaped = escapeShellSyntax(sample);
+		expect(findShellSpans(escaped)).toEqual([]);
+		expect(isShellLine(escaped)).toBe(false);
+		expect(unescapeShellSyntax(escaped)).toBe(sample);
+		const run = async (command: string): Promise<ShellResult> => {
+			throw new Error(`ran ${command}`);
+		};
+		expect(await interpolateShellSpans(escaped, run)).toBe(sample);
+	});
+
+	test("a fragment that does not open the prompt keeps its bang", () => {
+		expect(escapeShellSyntax("!x {!y}", false)).toBe("!x \\{!y}");
+		expect(unescapeShellSyntax("!x \\{!y}", false)).toBe("!x {!y}");
+	});
+
+	test("control bytes are stripped before escaping, so they cannot join `{` and `!`", () => {
+		expect(inertComposerText("a {\x01!touch x}")).toBe("a \\{!touch x}");
+		expect(inertComposerText("\x01!touch x")).toBe("\\!touch x");
+		expect(inertComposerText("{\r\n!x}")).toBe("{\n!x}");
+		expect(findShellSpans(inertComposerText("{\x1f!a} {\x00!b}"))).toEqual([]);
+	});
+});
+
+describe("captured output limits", () => {
+	test.skipIf(process.platform === "win32")(
+		"an endless producer is stopped at the byte cap",
+		async () => {
+			const started = Date.now();
+			const result = await runShellCommand("yes");
+			expect(Date.now() - started).toBeLessThan(5_000);
+			expect(result.truncated).toBe(true);
+			expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(MAX_CAPTURED_OUTPUT_BYTES);
+			expect(result.failure).toContain("output exceeded");
+		},
+	);
+
+	test.skipIf(process.platform === "win32")(
+		"an aborted command is stopped and reported as cancelled",
+		async () => {
+			const controller = new AbortController();
+			const started = Date.now();
+			const pending = runShellCommand("sleep 30", { signal: controller.signal });
+			controller.abort();
+			const result = await pending;
+			expect(Date.now() - started).toBeLessThan(5_000);
+			expect(result.failure).toBe("cancelled");
+		},
+	);
 });
 
 describe("runShellCommand", () => {

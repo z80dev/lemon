@@ -83,6 +83,7 @@ import {
 	type QueueMode,
 } from "./protocol/types.ts";
 import { assertSessionDirectory, newSessionKey } from "./session-key.ts";
+import { escapeShellSyntax, inertComposerText, unescapeShellSyntax } from "./shell.ts";
 import { resolveStartup, type StartupRequest, type StartupResolution } from "./startup-session.ts";
 import { AppStore, type SubmissionMode } from "./store/app-store.ts";
 import type { QueueItem } from "./store/queue-store.ts";
@@ -113,7 +114,11 @@ import { TranscriptContainer } from "./ui/components/transcript-container.ts";
 import { ClampedText } from "./ui/components/width-safe.ts";
 import { WorkingIndicatorComponent } from "./ui/components/working-indicator.ts";
 import { ApprovalController } from "./ui/controllers/approval-controller.ts";
-import { CommandController, type DeliverOptions } from "./ui/controllers/command-controller.ts";
+import {
+	CommandController,
+	type DeliverOptions,
+	type ShellConfirmRequest,
+} from "./ui/controllers/command-controller.ts";
 import { CommandPalette } from "./ui/controllers/command-palette.ts";
 import { EventController } from "./ui/controllers/event-controller.ts";
 import { InputController } from "./ui/controllers/input-controller.ts";
@@ -130,6 +135,7 @@ import { UserPromptController } from "./ui/controllers/user-prompt-controller.ts
 import { createHistorySearch, createHistorySource } from "./ui/history-search.ts";
 import { createLinkBrowser } from "./ui/link-browser.ts";
 import { RowFrameProvider } from "./ui/row-frame-provider.ts";
+import { createShellConfirmation, MAX_CONFIRM_CHARS } from "./ui/shell-confirm.ts";
 import { AppearanceController, type ThemePreference } from "./ui/theme/appearance.ts";
 import { getTheme } from "./ui/theme/theme.ts";
 import { getEditorTheme } from "./ui/theme/tui-adapters.ts";
@@ -315,7 +321,8 @@ export class AppShell {
 				cwd: () => this.#cwd,
 				submit: (submission) => this.#submitAttachments(submission),
 			},
-			onAbort: () => this.#abortActiveRun(),
+			// Escape first stops an in-flight `{!cmd}` before it interrupts a run.
+			onAbort: () => this.commandController.cancelInterpolation() || this.#abortActiveRun(),
 			onQuit: (code) => this.requestExit(code),
 			// Esc Esc on an empty composer opens the rewind picker, as /rewind does.
 			onRewind: () => {
@@ -373,8 +380,13 @@ export class AppShell {
 			isOverlayOpen: () => this.selectors.isOpen,
 			copyText: (text) => void this.#copyText(text),
 			stageDraft: (text) => {
+				// Feedback can quote model-written plan text: never live shell syntax.
 				const draft = this.#editor.getExpandedText();
-				this.#editor.setText(draft.trim() === "" ? text : `${draft}\n\n${text}`);
+				this.#editor.setText(
+					draft.trim() === ""
+						? inertComposerText(text)
+						: `${draft}\n\n${inertComposerText(text, false)}`,
+				);
 				this.tui.requestRender();
 			},
 		});
@@ -516,6 +528,7 @@ export class AppShell {
 			sink: { deliver: (text, options) => this.sendPrompt(text, options) },
 			tui: this.tui,
 			cwd: this.#cwd,
+			confirmShell: (request) => this.#confirmShell(request),
 		});
 		this.input = new InputController({
 			tui: this.tui,
@@ -973,6 +986,33 @@ export class AppShell {
 		this.events.notice(copyNotice(result), result.osc52 || result.native ? "info" : "warning");
 	}
 
+	/**
+	 * The modal every shell escape waits on. Resolves true only after the user
+	 * picked Run; Esc, Cancel, or another overlay replacing it resolve false.
+	 */
+	#confirmShell(request: ShellConfirmRequest): Promise<boolean> {
+		const size = request.commands.reduce((total, command) => total + command.length, 0);
+		if (size > MAX_CONFIRM_CHARS) {
+			this.events.notice(
+				`shell command text is ${size} characters, too long to confirm (limit ${MAX_CONFIRM_CHARS}); nothing ran`,
+				"warning",
+			);
+			return Promise.resolve(false);
+		}
+		const decision = Promise.withResolvers<boolean>();
+		let run = false;
+		const overlay = createShellConfirmation({
+			request,
+			rows: () => this.tui.terminal.rows,
+			decide: (value) => {
+				run = value;
+				this.selectors.close();
+			},
+		});
+		this.selectors.open(overlay, {}, () => decision.resolve(run));
+		return decision.promise;
+	}
+
 	/** Ctrl+C's first job. Returns true when there was a run to stop. */
 	#abortActiveRun(): boolean {
 		const session = this.store.focused;
@@ -1114,7 +1154,8 @@ export class AppShell {
 			return;
 		}
 		this.store.queue.remove(this.store.focusedKey, item.id);
-		this.#editor.setText(item.text);
+		// Queued text is what the model would have received: make it a draft again.
+		this.#editor.setText(inertComposerText(item.text));
 		this.blurQueue();
 	}
 
@@ -1223,7 +1264,8 @@ export class AppShell {
 				const disposition = await this.#submitAttachments(
 					{
 						sessionKey,
-						text: item.text,
+						// Back to composer form; the image path unescapes it once.
+						text: escapeShellSyntax(item.text),
 						attachments: item.attachments,
 						images: item.attachments.map((image) => image.content),
 					},
@@ -1400,6 +1442,8 @@ export class AppShell {
 			);
 			return "rejected";
 		}
+		// The composer's escapes come off here; images skip `{!cmd}` interpolation.
+		const text = unescapeShellSyntax(submission.text);
 		// Never transfer images to an unacknowledged offline RPC: the editable
 		// draft remains their owner until a concrete run or local queue accepts it.
 		if (!this.client.online) {
@@ -1413,7 +1457,7 @@ export class AppShell {
 		const mode = allowQueue ? this.#takeModeOverride() : "queue";
 		if (session.busy && mode === "queue") {
 			if (!allowQueue) return "rejected";
-			this.store.queue.push(session.key, submission.text, "queued-local", submission.attachments);
+			this.store.queue.push(session.key, text, "queued-local", submission.attachments);
 			this.events.notice(
 				`queued with ${submission.images.length} image(s) — ctrl+q to edit`,
 				"info",
@@ -1425,20 +1469,17 @@ export class AppShell {
 		const queueMode = session.busy && mode !== "queue" ? mode : undefined;
 		const requestId = crypto.randomUUID();
 		try {
-			const result = await this.#dispatchPrompt(
-				session.key,
-				submission.text,
-				queueMode,
-				submission.images,
-				{ requestId, queueIfOffline: false },
-			);
+			const result = await this.#dispatchPrompt(session.key, text, queueMode, submission.images, {
+				requestId,
+				queueIfOffline: false,
+			});
 			if (typeof result?.runId !== "string" || !result.runId.trim()) {
 				throw new Error("unverified send receipt; inspect the session before retrying");
 			}
 			if (queueMode === "interrupt" && priorRun) this.events.markInterrupted(priorRun, session);
 			this.events.addUserBlock(
 				[
-					submission.text,
+					text,
 					...submission.attachments.map(
 						(image) => `[image: ${image.name.replace(/\p{Cc}/gu, "")}]`,
 					),
@@ -1459,13 +1500,7 @@ export class AppShell {
 				"error",
 				session,
 			);
-			return this.#submissionFailure(
-				session,
-				submission.text,
-				requestId,
-				error,
-				submission.attachments,
-			);
+			return this.#submissionFailure(session, text, requestId, error, submission.attachments);
 		}
 	}
 

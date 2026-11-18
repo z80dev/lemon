@@ -294,9 +294,27 @@ on reconnect and when opening or changing models. Older daemons without
   Shift+Tab thinking picker (`/think` or `/reasoning` also opens it),
   capability-aware slash commands with
   autocomplete, `!cmd` shell escape, `{!cmd}` inline interpolation,
-  Ctrl+G `$EDITOR` handoff. Captured shell escapes have a bounded deadline and
-  terminate their complete POSIX process group on timeout so descendants cannot
-  outlive the command or hold the TUI's capture pipes open.
+  Ctrl+G `$EDITOR` handoff. Shell commands run only after explicit
+  confirmation of the exact command text: at submit, after composer markup such
+  as `^model` mentions is removed, a leading `!` or any `{!…}` span opens a
+  modal listing every command in full (wrapped to the modal's real content
+  width; control, format and separator characters shown as `⟨U+XXXX⟩`; if any
+  command row would be cut horizontally or vertically, Run is disabled). Only
+  moving to **Run** and pressing Enter runs them; Enter on the default Cancel
+  row, Esc, typing or pasting runs nothing and returns the prompt to the
+  composer. This holds
+  wherever the text came from — typing, completions, history, native terminal
+  edits, pastes or `$EDITOR`. As a convenience, pasted text, palette templates
+  and skills, restored queue items, rewound or retried prompts, plan feedback
+  and delegated native sends enter the composer sanitized and then escaped
+  (`\{!`, and `\!` where they open the prompt), so they reach the model
+  literally without asking. Interactive `!cmd` has no deadline: it owns the
+  terminal until it exits. Captured `{!cmd}` escapes have a 120 s deadline,
+  stop after 64 KiB of output on either stream (at most 200 lines reach the
+  prompt, with a truncation note), Escape cancels one in flight and returns the
+  prompt to the composer, and a stopped command's complete POSIX process group
+  is terminated so descendants cannot outlive it or hold the TUI's capture
+  pipes open. Command text over 4096 characters is refused, not confirmed.
   Ctrl+P, `/palette`, or `/` in an empty editor opens one fuzzy command palette
   for command names, aliases, descriptions, local skills, and prompt templates.
   Ctrl+P and `/palette` keep destructive selections and argument-taking actions
