@@ -1544,6 +1544,7 @@ Manage and test named MCP servers.
 ```text
 lemon mcp add NAME (--stdio COMMAND [-- ARG...] | --http URL) [options]
 lemon mcp list [--all]|remove NAME|test NAME|enable NAME|disable NAME [options]
+lemon mcp trust [--digest DIGEST]|untrust [--cwd PATH] [--json]
 ```
 
 | Subcommand | Purpose |
@@ -1554,12 +1555,15 @@ lemon mcp list [--all]|remove NAME|test NAME|enable NAME|disable NAME [options]
 | `test` | Test |
 | `enable` | Enable |
 | `disable` | Disable |
+| `trust` | Trust |
+| `untrust` | Untrust |
 
 | Option | Purpose |
 | --- | --- |
 | `--global` | Use the global agent MCP file instead of project config |
 | `--cwd PATH` | Project root (default: current directory) |
-| `--all` | list: effective servers incl. other tools' configs, with source and state |
+| `--all` | list: effective servers incl. other tools' configs, with source, state and project trust |
+| `--digest DIGEST` | trust: trust other tools' project MCP files with exactly this previewed digest |
 | `--stdio COMMAND` | Executable; pass its arguments after -- |
 | `--http URL` | Streamable HTTP MCP endpoint |
 | `--env KEY=VALUE` | Stdio environment entry (repeatable) |

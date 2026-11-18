@@ -63,6 +63,11 @@ Coding-session/file tools belong in `coding_agent`. Usage lives in the
   clients. Model-facing names are namespaced; raw remote names stay inside the
   client boundary. Preserve exact filters, capability gating, redacted sampling
   review and credential isolation. Do not add a server surface here.
+- Project MCP files, `.lemon/mcp.json` included, contribute only while the
+  operator's agent-dir trust record matches the digest of those exact files
+  (`McpDiscovery`); project content never grants trust, never expands host
+  env/file values and never names host secrets. `McpSource` re-checks project
+  provenance before every spawn or reconnect and evicts what no longer passes.
 - Independent A2A peers use core client/store contracts; configured credentials
   are secret references and remote content is untrusted.
 

@@ -255,6 +255,72 @@ defmodule LemonControlPlane.Methods.KnowledgeMethodsTest do
       end
     end
 
+    test "list projects loaded project trust without connecting or granting it", %{root: root} do
+      project = Path.join(root, "project")
+      marker = Path.join(root, "spawned")
+      saved = Map.new(["LEMON_AGENT_DIR", "LEMON_MCP_SERVERS"], &{&1, System.get_env(&1)})
+
+      on_exit(fn ->
+        Enum.each(saved, fn
+          {key, nil} -> System.delete_env(key)
+          {key, value} -> System.put_env(key, value)
+        end)
+      end)
+
+      System.put_env("LEMON_AGENT_DIR", Path.join(root, "agent"))
+      System.put_env("LEMON_MCP_SERVERS", "[]")
+      File.mkdir_p!(Path.join(project, ".lemon"))
+
+      File.write!(
+        Path.join(project, ".lemon/mcp.json"),
+        Jason.encode!(%{
+          "servers" => [
+            %{
+              "name" => "native",
+              "type" => "stdio",
+              "command" => System.find_executable("sh"),
+              "args" => ["-c", "printf x > \"$0\"", marker, "--api-key=sk-abcdefghijklmnop"]
+            },
+            %{
+              "name" => "oauth",
+              "type" => "http",
+              "url" => "https://o.example/mcp",
+              "oauth" => %{"client_id" => "c", "client_secret_secret" => "HOST_SECRET"}
+            }
+          ]
+        })
+      )
+
+      name = :"knowledge_project_#{System.unique_integer([:positive])}"
+
+      start_supervised!(
+        Supervisor.child_spec(
+          {LemonSkills.McpSource, name: name, refresh_interval_ms: 3_600_000},
+          id: name
+        )
+      )
+
+      assert [] = LemonSkills.McpSource.discover_tools(name, cwd: project)
+      Application.put_env(:lemon_control_plane, :mcp_source, name)
+
+      assert {:ok, %{"projectTrust" => [entry]}} = call("mcp.servers.list", %{})
+      assert entry["trust"] == "untrusted"
+      assert entry["files"] == [".lemon/mcp.json"]
+
+      assert [%{"name" => "native", "provider" => "lemon", "transport" => "stdio"} = native] =
+               entry["servers"]
+
+      refute native["preview"] =~ "sk-abcdefghijklmnop"
+
+      assert [%{"server" => "oauth", "keys" => ["oauth.client_secret_secret"]}] =
+               entry["rejected"]
+
+      # Viewing never spawns, connects or grants trust.
+      Process.sleep(200)
+      refute File.exists?(marker)
+      assert LemonSkills.McpConfig.project_trust(project) == nil
+    end
+
     test "unavailable source is an explicit error, not an empty list" do
       Application.put_env(:lemon_control_plane, :mcp_source, :knowledge_missing_source)
       assert {:error, {:unavailable, "MCP source is unavailable"}} = call("mcp.servers.list", %{})

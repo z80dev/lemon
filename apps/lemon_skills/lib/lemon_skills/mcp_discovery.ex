@@ -50,14 +50,35 @@ defmodule LemonSkills.McpDiscovery do
 
   The first name wins; a disabled entry still claims its name.
 
+  ## Project trust
+
+  Project files come from the requested directory, which may be an untrusted
+  clone, so nothing from them is imported until the operator trusts that
+  project (`lemon mcp trust`): neither other tools' servers nor the project's
+  own `.lemon/mcp.json` (`project_config/2`). The trust record lives in the
+  operator's agent directory (`LemonSkills.McpConfig.trust_project/2`), never in
+  the project, and binds the project path to a digest of `.lemon/mcp.json` and
+  every project file in the table above, including absent ones. Editing, adding
+  or removing any of them revokes trust until it is granted again for the new
+  digest. Until then nothing is spawned or connected; `project_status/2` reports
+  the pending files, a bounded redacted preview of each server's command or URL,
+  and its findings. Trusted servers carry `%{project:, digest:}` provenance that
+  `LemonSkills.McpSource` re-checks with `project_trusted?/1` before every spawn
+  or reconnect.
+
+  Project files are read once per call (regular files up to 1 MiB) and the same
+  bytes are both digested and parsed. A project `.lemon/mcp.json` entry naming
+  OAuth `client_secret_secret` or `token_secret` is rejected, trusted or not.
+
   ## Switches
 
   Discovery is on unless `config :lemon_skills, :mcp_external_discovery, false`
-  or `LEMON_MCP_EXTERNAL_DISCOVERY` is `0`/`false`/`no`. User-level files of
-  other tools (`claude`, `codex`, `gemini`, `opencode`, `cursor`, `windsurf`)
-  additionally require `config :lemon_skills, :mcp_external_user_discovery, true`
-  or `LEMON_MCP_EXTERNAL_USER_DISCOVERY=1`; a set `CLAUDE_CONFIG_DIR` opts in
-  the Claude Code user files. The omp user file is read by default.
+  or `LEMON_MCP_EXTERNAL_DISCOVERY` is `0`/`false`/`no`; either switch disables
+  trusted project servers too. User-level files of other tools (`claude`,
+  `codex`, `gemini`, `opencode`, `cursor`, `windsurf`) additionally require
+  `config :lemon_skills, :mcp_external_user_discovery, true` or
+  `LEMON_MCP_EXTERNAL_USER_DISCOVERY=1`; a set `CLAUDE_CONFIG_DIR` opts in the
+  Claude Code user files. The omp user file is read by default.
 
   User-level files are read from `config :lemon_skills, :mcp_discovery_home`
   when set, otherwise from the user's home directory unless an agent-directory
@@ -65,19 +86,27 @@ defmodule LemonSkills.McpDiscovery do
 
   ## Values
 
-  `${VAR}` and `${VAR:-default}` are expanded in the JSON-based provider files
-  (not Codex or OpenCode); unresolved placeholders stay literal. OpenCode files
-  use OpenCode's own `{env:VAR}` / `{file:path}` substitution and accept JSONC.
-  Substitution runs once on decoded string values: environment bytes stay exact,
-  file contents are trimmed, and inserted text is never expanded again.
-  Codex `env_vars`, `env_http_headers` and `bearer_token_env_var` read the
-  current environment. Imported entries carry command, arguments, environment,
-  working directory, URL, headers, timeouts and tool filters; tool-specific
-  OAuth/auth blocks are not imported.
+  Only user-level files read host values. There, `${VAR}` and `${VAR:-default}`
+  are expanded in the JSON-based provider files (not Codex or OpenCode);
+  unresolved placeholders stay literal. OpenCode files use OpenCode's own
+  `{env:VAR}` / `{file:path}` substitution and accept JSONC. Substitution runs
+  once on decoded string values: environment bytes stay exact, file contents are
+  trimmed, and inserted text is never expanded again. Codex `env_vars`,
+  `env_http_headers` and `bearer_token_env_var` read the current environment.
+
+  Project files never read host environment variables or files, trusted or
+  not: a project server whose values contain `${...}`, `{env:...}` or
+  `{file:...}`, or a Codex project server with `env_vars`, `env_http_headers` or
+  `bearer_token_env_var`, is rejected with a `host_value_reference` finding.
+  VS Code's `${workspaceFolder}` is the project directory and is still replaced.
+
+  Imported entries carry command, arguments, environment, working directory,
+  URL, headers, timeouts and tool filters; tool-specific OAuth/auth blocks are
+  not imported.
   """
 
   alias LemonCore.{JSONPayload, ProfileStore, Redact}
-  alias LemonSkills.{Config, McpSession, McpSource}
+  alias LemonSkills.{Config, McpConfig, McpSession, McpSource}
 
   @max_tools 256
   @max_schema 32_768
@@ -102,6 +131,44 @@ defmodule LemonSkills.McpDiscovery do
     ".config/opencode/opencode.json",
     ".config/opencode/opencode.jsonc",
     ".codeium/windsurf/mcp_config.json"
+  ]
+
+  # Every project-relative file read for a project, Lemon's own included; the
+  # trust digest covers all of them, present or absent, in this order.
+  @project_configs [
+    ".lemon/mcp.json",
+    ".omp/mcp.json",
+    ".omp/.mcp.json",
+    ".claude/.mcp.json",
+    ".claude/mcp.json",
+    ".codex/config.toml",
+    ".gemini/settings.json",
+    "opencode.json",
+    "opencode.jsonc",
+    ".opencode/opencode.json",
+    ".opencode/opencode.jsonc",
+    ".cursor/mcp.json",
+    ".windsurf/mcp_config.json",
+    ".vscode/mcp.json",
+    "mcp.json",
+    ".mcp.json"
+  ]
+  @max_config_bytes 1_048_576
+  @host_placeholder ~r/\$\{[^}]*\}/
+  @opencode_directive ~r/\{(env|file):([^}]+)\}/
+  @codex_host_keys ["env_vars", "env_http_headers", "bearer_token_env_var"]
+  @max_preview_servers 64
+  @max_finding_keys 8
+  @preview_bytes 200
+  @label_bytes 512
+  @unsafe_text ~r/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+  # Lemon OAuth keys that resolve host secrets (encrypted store/env fallback, or
+  # a persisted token cache); a project file may never name them.
+  @lemon_oauth_host_keys [
+    "client_secret_secret",
+    "client-secret-secret",
+    "token_secret",
+    "token-secret"
   ]
 
   @doc """
@@ -167,7 +234,9 @@ defmodule LemonSkills.McpDiscovery do
   `:user_sources` (defaults to `user_sources_enabled?/0`) and
   `:claude_config_dir` (defaults to `CLAUDE_CONFIG_DIR`). Imported servers are
   returned in precedence order; duplicate names are retained for the caller's
-  first-name-wins merge. Configuration import never opens MCP sessions.
+  first-name-wins merge. Project servers are returned only while the operator's
+  trust record matches the current project digest (see `project_status/2`).
+  Configuration import never opens MCP sessions.
   """
   @spec discover(String.t() | nil, keyword()) :: [server()]
   @spec discover(map(), String.t()) :: {:ok, map()} | {:error, atom()}
@@ -198,6 +267,166 @@ defmodule LemonSkills.McpDiscovery do
   end
 
   def discover(cwd, opts) when (is_binary(cwd) or is_nil(cwd)) and is_list(opts) do
+    ctx = context(cwd, opts)
+    trusted? = project_trust(ctx) == :trusted
+
+    for %{source: %{scope: scope}} = server <- imports(ctx),
+        scope != :project or trusted?,
+        do: server
+  end
+
+  @doc """
+  Everything the project in `cwd` may contribute to `LemonSkills.Config`, read
+  from one snapshot of the project files.
+
+  `lemon` is the project `.lemon/mcp.json` document (servers, overrides and the
+  `enabled` flag), or `%{}` unless the project is trusted; entries carrying
+  host-secret references are removed. `servers` are the imported servers of
+  `discover/2`, empty while external discovery is disabled. `provenance` is
+  `%{project:, digest:}` for a trusted project and `nil` otherwise; consumers
+  attach it to project-origin servers so connection setup can re-check trust
+  with `project_trusted?/1`. `trust` is the state from `project_status/2`.
+  """
+  @spec project_config(String.t() | nil, keyword()) :: %{
+          lemon: map(),
+          servers: [server()],
+          provenance: %{project: String.t(), digest: String.t()} | nil,
+          trust: :none | :untrusted | :changed | :trusted
+        }
+  def project_config(cwd, opts \\ []) when is_binary(cwd) or is_nil(cwd) do
+    ctx = context(cwd, opts)
+    trust = project_trust(ctx)
+    trusted? = trust == :trusted
+
+    servers =
+      if enabled?(),
+        do:
+          for(
+            %{source: %{scope: s}} = server <- imports(ctx),
+            s != :project or trusted?,
+            do: server
+          ),
+        else: []
+
+    %{
+      lemon: if(trusted?, do: elem(lemon_document(ctx), 0), else: %{}),
+      servers: servers,
+      provenance: if(trusted?, do: %{project: ctx.cwd, digest: ctx.digest}),
+      trust: trust
+    }
+  end
+
+  @doc """
+  Whether a project-origin server's provenance is still valid: the project's
+  files still hash to `digest`, the operator's record still trusts exactly that
+  digest and, for other tools' files (`external: true`), external discovery is
+  still enabled. Connection setup calls this before every spawn or reconnect.
+  """
+  @spec project_trusted?(%{project: String.t(), digest: String.t(), external: boolean()}) ::
+          boolean()
+  def project_trusted?(%{project: project, digest: digest, external: external})
+      when is_binary(project) and is_binary(digest) do
+    ctx = context(project, [])
+    (external != true or enabled?()) and ctx.digest == digest and project_trust(ctx) == :trusted
+  end
+
+  def project_trusted?(_provenance), do: false
+
+  @doc false
+  # Before an operator writes the project `.lemon/mcp.json` (lemon mcp add,
+  # remove, enable, disable): when the project is trusted, or has no project
+  # files yet, return `fn original, written -> digest | nil end` giving the
+  # digest after replacing `original` (the bytes the writer loaded under its
+  # lock, `nil` when absent) with `written`. It returns `nil` when `original` is
+  # not what this snapshot saw. Otherwise `nil`: an operator edit never trusts
+  # repository content it did not review.
+  @spec operator_lemon_write(String.t()) :: (binary() | nil, binary() -> String.t() | nil) | nil
+  def operator_lemon_write(cwd) when is_binary(cwd) do
+    ctx = context(cwd, [])
+
+    if project_trust(ctx) in [:trusted, :none] do
+      target = lemon_path(ctx)
+      seen = Map.get(ctx.files_read, target)
+
+      fn original, written ->
+        if seen == if(original, do: {:ok, original}, else: :absent) do
+          ctx.entries
+          |> Enum.map(fn
+            {relative, ^target, _state} -> {relative, target, {:ok, written}}
+            entry -> entry
+          end)
+          |> digest()
+        end
+      end
+    end
+  end
+
+  @doc """
+  Trust state of the project MCP files in `cwd` (`.lemon/mcp.json` and other
+  tools' project files), without importing them.
+
+  Returns the expanded `project` path, its terminal-safe bounded `label`, a
+  shell-quoted `cwd_arg` for command suggestions (`nil` when the path cannot be
+  shown safely, e.g. it contains control characters), the project-relative
+  `files` present, the `digest` that `LemonSkills.McpConfig.trust_project/2`
+  must be given (`nil` when no project file exists) and `trust`: `:none` (no
+  project files), `:untrusted`, `:changed` (a record exists for a different
+  digest) or `:trusted`.
+
+  `servers` previews at most #{@max_preview_servers} project servers with a
+  bounded, redacted, single-line command or URL (URLs without credentials,
+  query or fragment). `findings` contains `untrusted_project_config` while trust
+  is pending and one `host_value_reference` per rejected server. Accepts the
+  same options as `discover/2`. Never spawns, connects or reads host values.
+  """
+  @spec project_status(String.t(), keyword()) :: %{
+          project: String.t(),
+          label: String.t(),
+          cwd_arg: String.t() | nil,
+          digest: String.t() | nil,
+          files: [String.t()],
+          trust: :none | :untrusted | :changed | :trusted,
+          servers: [map()],
+          findings: [map()]
+        }
+  def project_status(cwd, opts \\ []) when is_binary(cwd) and is_list(opts) do
+    ctx = context(cwd, opts)
+    trust = project_trust(ctx)
+    imports = if ctx.digest, do: imports(ctx), else: []
+    {lemon, lemon_rejected} = lemon_document(ctx)
+
+    pending =
+      if trust in [:untrusted, :changed],
+        do: [%{"reason" => "untrusted_project_config", "files" => ctx.files}],
+        else: []
+
+    lemon_servers =
+      for %{"type" => type} = entry <- List.wrap(lemon["servers"]),
+          type in ["stdio", "http", "sse"],
+          do:
+            preview(%{
+              name: entry["name"],
+              entry: entry,
+              enabled: true,
+              source: %{provider: "lemon"}
+            })
+
+    %{
+      project: ctx.cwd,
+      label: display(ctx.cwd, @label_bytes),
+      cwd_arg: shell_arg(ctx.cwd),
+      digest: ctx.digest,
+      files: ctx.files,
+      trust: trust,
+      servers:
+        (lemon_servers ++
+           for(%{source: %{scope: :project}} = server <- imports, do: preview(server)))
+        |> Enum.take(@max_preview_servers),
+      findings: pending ++ lemon_rejected ++ for({:rejected, finding} <- imports, do: finding)
+    }
+  end
+
+  defp context(cwd, opts) do
     home = Keyword.get_lazy(opts, :home, &Config.mcp_discovery_home/0)
     user_sources = Keyword.get_lazy(opts, :user_sources, &user_sources_enabled?/0)
     boundary_home = home || System.user_home()
@@ -216,7 +445,156 @@ defmodule LemonSkills.McpDiscovery do
         Keyword.get_lazy(opts, :claude_config_dir, fn -> System.get_env("CLAUDE_CONFIG_DIR") end)
     }
 
-    Enum.flat_map(@providers, &provider(&1, ctx))
+    Map.merge(ctx, snapshot(ctx))
+  end
+
+  defp imports(ctx), do: Enum.flat_map(@providers, &provider(&1, ctx))
+
+  # Read each project file once; the digested bytes are the parsed bytes.
+  defp snapshot(%{cwd: nil}), do: %{entries: [], files_read: %{}, files: [], digest: nil}
+
+  defp snapshot(ctx) do
+    entries =
+      for relative <- @project_configs,
+          path <- project_path(ctx, Path.split(relative)),
+          do: {relative, path, read_project_file(path)}
+
+    %{
+      entries: entries,
+      files_read: Map.new(entries, fn {_relative, path, state} -> {path, state} end),
+      files: for({relative, _path, state} <- entries, state != :absent, do: relative),
+      digest: digest(entries)
+    }
+  end
+
+  defp digest(entries) do
+    if Enum.all?(entries, &match?({_, _, :absent}, &1)) do
+      nil
+    else
+      entries
+      |> Enum.map(fn {relative, _path, state} -> [relative, 0, digest_part(state), 0] end)
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+    end
+  end
+
+  defp read_project_file(path) do
+    case File.stat(path) do
+      {:ok, %File.Stat{type: :regular, size: size}} when size <= @max_config_bytes ->
+        case File.read(path) do
+          {:ok, bytes} when byte_size(bytes) <= @max_config_bytes -> {:ok, bytes}
+          {:error, reason} when reason in [:enoent, :enotdir] -> :absent
+          _ -> :invalid
+        end
+
+      {:error, reason} when reason in [:enoent, :enotdir] ->
+        :absent
+
+      _ ->
+        :invalid
+    end
+  end
+
+  defp digest_part({:ok, bytes}), do: ["file:", :crypto.hash(:sha256, bytes)]
+  defp digest_part(state), do: Atom.to_string(state)
+
+  defp project_trust(%{digest: nil}), do: :none
+
+  defp project_trust(%{cwd: cwd, digest: digest}) do
+    case McpConfig.project_trust(cwd) do
+      ^digest -> :trusted
+      nil -> :untrusted
+      _other -> :changed
+    end
+  end
+
+  defp lemon_path(%{cwd: nil}), do: nil
+  defp lemon_path(%{cwd: cwd}), do: Config.project_mcp_config_file(cwd)
+
+  # The project `.lemon/mcp.json` from the snapshot, minus servers that would
+  # resolve host secrets (encrypted-store/env OAuth client secrets, token caches).
+  defp lemon_document(%{cwd: nil}), do: {%{}, []}
+
+  defp lemon_document(ctx) do
+    case read_json(ctx, lemon_path(ctx)) do
+      %{"servers" => servers} = document when is_list(servers) ->
+        {kept, rejected} =
+          Enum.reduce(servers, {[], []}, fn entry, {kept, rejected} ->
+            case lemon_host_keys(entry) do
+              [] -> {[entry | kept], rejected}
+              keys -> {kept, rejected ++ rejected(entry["name"], "lemon", keys)}
+            end
+          end)
+
+        {Map.put(document, "servers", Enum.reverse(kept)),
+         for({:rejected, finding} <- rejected, do: finding)}
+
+      %{} = document ->
+        {document, []}
+
+      nil ->
+        {%{}, []}
+    end
+  end
+
+  defp lemon_host_keys(%{"oauth" => %{} = oauth}) do
+    for key <- @lemon_oauth_host_keys, Map.has_key?(oauth, key), do: "oauth." <> key
+  end
+
+  defp lemon_host_keys(_entry), do: []
+
+  defp preview(%{name: name, entry: entry, enabled: enabled, source: source}) do
+    target =
+      case entry do
+        %{"command" => command} when is_binary(command) ->
+          Enum.join([command | Enum.filter(List.wrap(entry["args"]), &is_binary/1)], " ")
+
+        %{"url" => url} when is_binary(url) ->
+          public_url(url)
+
+        _ ->
+          "(invalid)"
+      end
+
+    %{
+      "name" => if(is_binary(name), do: display(name), else: "(unnamed)"),
+      "provider" => source.provider,
+      "transport" => entry["type"],
+      "enabled" => enabled,
+      "preview" => display(Redact.text(target)),
+      "env_count" => count(entry["env"]),
+      "header_count" => count(entry["headers"])
+    }
+  end
+
+  defp count(value) when is_map(value), do: map_size(value)
+  defp count(_value), do: 0
+
+  defp public_url(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host} = uri when is_binary(scheme) and is_binary(host) ->
+        URI.to_string(%{uri | userinfo: nil, query: nil, fragment: nil})
+
+      _ ->
+        "(invalid URL)"
+    end
+  rescue
+    _ -> "(invalid URL)"
+  end
+
+  # Project text is untrusted terminal output: one bounded line, no controls.
+  defp display(text, max \\ @preview_bytes) do
+    text
+    |> String.replace_invalid("?")
+    |> String.replace(@unsafe_text, "?")
+    |> bounded_text(max)
+  end
+
+  # A POSIX single-quoted argument, only for paths shown exactly as they are.
+  defp shell_arg(path) do
+    if String.valid?(path) and byte_size(path) <= @label_bytes and
+         not Regex.match?(@unsafe_text, path),
+       do: "'" <> String.replace(path, "'", ~S('\'')) <> "'"
   end
 
   @doc "Whether external MCP config discovery is enabled (default: true)."
@@ -457,13 +835,13 @@ defmodule LemonSkills.McpDiscovery do
       end
 
     Enum.flat_map(project ++ user, fn {path, scope} ->
-      path |> read_json() |> mcp_servers_map() |> json_servers("omp", scope)
+      ctx |> read_json(path) |> mcp_servers_map() |> json_servers("omp", scope)
     end)
   end
 
   defp provider(:claude, ctx) do
     {user_dir, user_file} = claude_user_paths(ctx)
-    user_document = if user_file, do: read_json(user_file)
+    user_document = if user_file, do: read_json(ctx, user_file)
 
     local =
       case {ctx.cwd, user_document} do
@@ -477,13 +855,13 @@ defmodule LemonSkills.McpDiscovery do
     project =
       [[".claude", ".mcp.json"], [".claude", "mcp.json"]]
       |> Enum.flat_map(&project_path(ctx, &1))
-      |> Enum.map(fn path -> fn -> path |> read_json() |> mcp_servers_map() end end)
+      |> Enum.map(fn path -> fn -> ctx |> read_json(path) |> mcp_servers_map() end end)
       |> first_with_servers()
       |> json_servers("claude", :project)
 
     user_mcp_json =
       for dir <- List.wrap(user_dir),
-          do: fn -> dir |> Path.join("mcp.json") |> read_json() |> mcp_servers_map() end
+          do: fn -> ctx |> read_json(Path.join(dir, "mcp.json")) |> mcp_servers_map() end
 
     user =
       [fn -> mcp_servers_map(user_document) end | user_mcp_json]
@@ -497,7 +875,7 @@ defmodule LemonSkills.McpDiscovery do
     project = for path <- project_path(ctx, [".codex", "config.toml"]), do: {path, :project}
     user = for path <- foreign_user_path(ctx, [".codex", "config.toml"]), do: {path, :global}
 
-    Enum.flat_map(project ++ user, fn {path, scope} -> codex_servers(path, scope) end)
+    Enum.flat_map(project ++ user, fn {path, scope} -> codex_servers(ctx, path, scope) end)
   end
 
   defp provider(:gemini, ctx) do
@@ -505,12 +883,10 @@ defmodule LemonSkills.McpDiscovery do
     user = for path <- foreign_user_path(ctx, [".gemini", "settings.json"]), do: {path, :global}
 
     Enum.flat_map(project ++ user, fn {path, scope} ->
-      path
-      |> read_json()
+      ctx
+      |> read_json(path)
       |> mcp_servers_map()
-      |> expand_env()
-      |> sorted()
-      |> Enum.flat_map(fn {name, raw} -> server(name, gemini_fields(raw), "gemini", scope) end)
+      |> imported("gemini", scope, &gemini_fields/1)
     end)
   end
 
@@ -521,7 +897,7 @@ defmodule LemonSkills.McpDiscovery do
     user = for path <- foreign_user_path(ctx, [".cursor", "mcp.json"]), do: {path, :global}
 
     Enum.flat_map(project ++ user, fn {path, scope} ->
-      path |> read_json() |> mcp_servers_map() |> json_servers("cursor", scope)
+      ctx |> read_json(path) |> mcp_servers_map() |> json_servers("cursor", scope)
     end)
   end
 
@@ -534,26 +910,21 @@ defmodule LemonSkills.McpDiscovery do
           do: {path, :global}
 
     Enum.flat_map(project ++ user, fn {path, scope} ->
-      path
-      |> read_json()
+      ctx
+      |> read_json(path)
       |> mcp_servers_map()
-      |> expand_env()
-      |> sorted()
-      |> Enum.flat_map(fn {name, raw} ->
-        fields =
-          if is_map(raw), do: Map.put(raw, "url", raw["serverUrl"] || raw["url"]), else: raw
-
-        server(name, json_fields(fields), "windsurf", scope)
+      |> imported("windsurf", scope, fn raw ->
+        if is_map(raw),
+          do: json_fields(Map.put(raw, "url", raw["serverUrl"] || raw["url"])),
+          else: json_fields(raw)
       end)
     end)
   end
 
   defp provider(:vscode, ctx) do
     Enum.flat_map(project_path(ctx, [".vscode", "mcp.json"]), fn path ->
-      document = read_json(path)
-
       servers =
-        case document do
+        case read_json(ctx, path) do
           %{"servers" => %{} = servers} -> servers
           %{"mcp" => %{"servers" => %{} = servers}} -> servers
           _ -> %{}
@@ -561,11 +932,10 @@ defmodule LemonSkills.McpDiscovery do
 
       servers
       |> replace_workspace_folder(ctx.cwd)
-      |> expand_env()
-      |> sorted()
-      |> Enum.flat_map(fn {name, raw} ->
-        fields = if is_map(raw), do: Map.put_new(raw, "type", raw["transport"]), else: raw
-        server(name, json_fields(fields), "vscode", :project)
+      |> imported("vscode", :project, fn raw ->
+        if is_map(raw),
+          do: json_fields(Map.put_new(raw, "type", raw["transport"])),
+          else: json_fields(raw)
       end)
     end)
   end
@@ -573,7 +943,8 @@ defmodule LemonSkills.McpDiscovery do
   defp provider(:mcp_json, ctx) do
     for file <- ["mcp.json", ".mcp.json"],
         path <- project_path(ctx, [file]),
-        server <- path |> read_json() |> mcp_servers_map() |> json_servers("mcp-json", :project),
+        server <-
+          ctx |> read_json(path) |> mcp_servers_map() |> json_servers("mcp-json", :project),
         do: server
   end
 
@@ -631,8 +1002,8 @@ defmodule LemonSkills.McpDiscovery do
 
   # ── JSON providers ───────────────────────────────────────────────────────────
 
-  defp read_json(path) do
-    with {:ok, bytes} <- File.read(path),
+  defp read_json(ctx, path) do
+    with {:ok, bytes} <- read_file(ctx, path),
          {:ok, %{} = document} <- Jason.decode(bytes) do
       document
     else
@@ -640,15 +1011,41 @@ defmodule LemonSkills.McpDiscovery do
     end
   end
 
+  # Project files come from the call's snapshot; user files are read directly.
+  defp read_file(ctx, path) do
+    case Map.fetch(ctx.files_read, path) do
+      {:ok, {:ok, bytes}} -> {:ok, bytes}
+      {:ok, _absent_or_invalid} -> :error
+      :error -> File.read(path)
+    end
+  end
+
   defp mcp_servers_map(%{"mcpServers" => %{} = servers}), do: servers
   defp mcp_servers_map(_document), do: %{}
 
-  defp json_servers(servers, provider, scope) do
+  defp json_servers(servers, provider, scope),
+    do: imported(servers, provider, scope, &json_fields/1)
+
+  defp imported(servers, provider, scope, fields) do
     servers
-    |> expand_env()
     |> sorted()
-    |> Enum.flat_map(fn {name, raw} -> server(name, json_fields(raw), provider, scope) end)
+    |> Enum.flat_map(fn {name, raw} ->
+      case host_values(raw, scope) do
+        {:ok, raw} -> server(name, fields.(raw), provider, scope)
+        {:error, keys} -> rejected(name, provider, keys)
+      end
+    end)
   end
+
+  # User files expand `${VAR}`; project files never read host values.
+  defp host_values(raw, :project) do
+    case references(raw, @host_placeholder) do
+      [] -> {:ok, raw}
+      keys -> {:error, keys}
+    end
+  end
+
+  defp host_values(raw, _scope), do: {:ok, expand_env(raw)}
 
   defp json_fields(raw) when is_map(raw) do
     %{
@@ -703,20 +1100,28 @@ defmodule LemonSkills.McpDiscovery do
 
   # ── Codex ────────────────────────────────────────────────────────────────────
 
-  defp codex_servers(path, scope) do
-    with {:ok, bytes} <- File.read(path),
+  defp codex_servers(ctx, path, scope) do
+    with {:ok, bytes} <- read_file(ctx, path),
          {:ok, %{"mcp_servers" => %{} = servers}} <- Toml.decode(bytes) do
       config_dir = Path.dirname(path)
 
       servers
       |> sorted()
       |> Enum.flat_map(fn {name, raw} ->
-        server(name, codex_fields(raw, config_dir), "codex", scope)
+        case codex_host_keys(raw, scope) do
+          [] -> server(name, codex_fields(raw, config_dir), "codex", scope)
+          keys -> rejected(name, "codex", keys)
+        end
       end)
     else
       _ -> []
     end
   end
+
+  defp codex_host_keys(raw, :project) when is_map(raw),
+    do: Enum.filter(@codex_host_keys, &Map.has_key?(raw, &1))
+
+  defp codex_host_keys(_raw, _scope), do: []
 
   defp codex_fields(raw, config_dir) when is_map(raw) do
     cwd =
@@ -806,6 +1211,9 @@ defmodule LemonSkills.McpDiscovery do
 
   # Layers in ascending precedence; each server deep-merges across layers like
   # OpenCode itself, and is attributed to the highest layer that defines it.
+  # Substitution runs after the merge and only for user-attributed servers (all
+  # user layers share one directory); a project-attributed server carrying any
+  # `{env:}`/`{file:}` directive, from any layer, is rejected instead.
   defp opencode_servers(ctx) do
     user =
       for file <- ["opencode.json", "opencode.jsonc"],
@@ -820,12 +1228,16 @@ defmodule LemonSkills.McpDiscovery do
 
     (user ++ project)
     |> Enum.reduce(%{}, fn {path, scope}, merged ->
-      case read_opencode(path, ctx.home) do
+      case read_opencode(ctx, path) do
         %{"mcp" => %{} = servers} ->
           Enum.reduce(servers, merged, fn
             {name, %{} = raw}, acc ->
-              Map.update(acc, name, {raw, scope}, fn {previous, _scope} ->
-                {deep_merge(previous, raw), scope}
+              keys = references(raw, @opencode_directive)
+              layer = {raw, scope, Path.dirname(path), keys}
+
+              Map.update(acc, name, layer, fn {previous, _scope, _dir, previous_keys} ->
+                {deep_merge(previous, raw), scope, Path.dirname(path),
+                 Enum.uniq(previous_keys ++ keys)}
               end)
 
             _, acc ->
@@ -837,15 +1249,22 @@ defmodule LemonSkills.McpDiscovery do
       end
     end)
     |> sorted()
-    |> Enum.flat_map(fn {name, {raw, scope}} ->
-      server(name, opencode_fields(raw), "opencode", scope)
+    |> Enum.flat_map(fn
+      {name, {_raw, :project, _dir, [_ | _] = keys}} ->
+        rejected(name, "opencode", keys)
+
+      {name, {raw, :project, _dir, []}} ->
+        server(name, opencode_fields(raw), "opencode", :project)
+
+      {name, {raw, scope, dir, _keys}} ->
+        server(name, opencode_fields(substitute_opencode(raw, dir, ctx.home)), "opencode", scope)
     end)
   end
 
-  defp read_opencode(path, home) do
-    with {:ok, bytes} <- File.read(path),
+  defp read_opencode(ctx, path) do
+    with {:ok, bytes} <- read_file(ctx, path),
          {:ok, %{} = document} <- bytes |> strip_jsonc() |> Jason.decode() do
-      substitute_opencode(document, Path.dirname(path), home)
+      document
     else
       _ -> nil
     end
@@ -854,7 +1273,7 @@ defmodule LemonSkills.McpDiscovery do
   # Match both directives in one pass so inserted values cannot become imports
   # or interpolation directives, regardless of which source supplied them.
   defp substitute_opencode(value, config_dir, home) when is_binary(value) do
-    Regex.replace(~r/\{(env|file):([^}]+)\}/, value, fn
+    Regex.replace(@opencode_directive, value, fn
       _, "env", name -> System.get_env(name) || ""
       _, "file", path -> opencode_file(path, config_dir, home)
     end)
@@ -868,20 +1287,14 @@ defmodule LemonSkills.McpDiscovery do
 
   defp substitute_opencode(value, _config_dir, _home), do: value
 
+  # Only user layers are substituted, and those exist only with a home.
   defp opencode_file(path, config_dir, home) do
     path =
-      cond do
-        String.starts_with?(path, "~/") and is_binary(home) ->
-          Path.join(home, String.slice(path, 2..-1//1))
+      if String.starts_with?(path, "~/"),
+        do: Path.join(home, String.slice(path, 2..-1//1)),
+        else: rooted(path, config_dir)
 
-        String.starts_with?(path, "~/") ->
-          nil
-
-        true ->
-          rooted(path, config_dir)
-      end
-
-    case path && File.read(path) do
+    case File.read(path) do
       {:ok, content} -> String.trim(content)
       _ -> ""
     end
@@ -1100,4 +1513,40 @@ defmodule LemonSkills.McpDiscovery do
     do: Map.new(value, fn {key, item} -> {key, expand_env(item)} end)
 
   defp expand_env(value), do: value
+
+  # Dotted key paths of string values matching `pattern`; map keys stay literal
+  # everywhere, so only values can reference host data.
+  defp references(value, pattern, path \\ [])
+
+  defp references(value, pattern, path) when is_binary(value),
+    do: if(Regex.match?(pattern, value), do: [key_path(path)], else: [])
+
+  defp references(value, pattern, path) when is_list(value) do
+    value
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {item, index} -> references(item, pattern, [index | path]) end)
+  end
+
+  defp references(value, pattern, path) when is_map(value) do
+    value
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.flat_map(fn {key, item} -> references(item, pattern, [key | path]) end)
+  end
+
+  defp references(_value, _pattern, _path), do: []
+
+  defp key_path([]), do: "."
+  defp key_path(path), do: path |> Enum.reverse() |> Enum.map_join(".", &to_string/1)
+
+  defp rejected(name, provider, keys) do
+    [
+      {:rejected,
+       %{
+         "reason" => "host_value_reference",
+         "provider" => provider,
+         "server" => if(is_binary(name) and String.valid?(name), do: display(name), else: "?"),
+         "keys" => keys |> Enum.take(@max_finding_keys) |> Enum.map(&display/1)
+       }}
+    ]
+  end
 end

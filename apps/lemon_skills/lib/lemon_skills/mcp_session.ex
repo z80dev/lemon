@@ -34,10 +34,20 @@ defmodule LemonSkills.McpSession do
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @spec open(term(), String.t(), [map()], pid()) :: :ok | {:error, atom()}
-  def open(id, cwd, configs, owner_pid) do
+  @doc """
+  Attach explicit definitions for an owner-bound session.
+
+  `project_trust: %{project:, digest:}` is internal provenance from
+  `LemonSkills.McpConfig.fetch/2` for a project entry; it is never read from the
+  definitions themselves. With it, every spawn and reconnect re-checks that the
+  operator still trusts exactly that project content, so trust revoked between
+  fetch and attach starts nothing.
+  """
+  @spec open(term(), String.t(), [map()], pid(), keyword()) :: :ok | {:error, atom()}
+  def open(id, cwd, configs, owner_pid, opts \\ []) do
     with :ok <- validate_identity(id, cwd, owner_pid),
-         {:ok, configs} <- normalize_configs(configs) do
+         {:ok, configs} <- normalize_configs(configs),
+         {:ok, configs} <- bind_project(configs, Keyword.get(opts, :project_trust)) do
       request(
         {:open, id, Path.expand(cwd), configs, owner_pid},
         {:error, :runtime_unavailable},
@@ -45,6 +55,30 @@ defmodule LemonSkills.McpSession do
       )
     end
   end
+
+  defp bind_project(configs, nil), do: {:ok, configs}
+
+  defp bind_project(configs, %{project: project, digest: digest})
+       when is_binary(project) and is_binary(digest) do
+    provenance = %{project: project, digest: digest, external: false}
+
+    {:ok,
+     Enum.map(configs, fn
+       {:stdio, command, args} ->
+         {:stdio, command, args, [project_trust: provenance]}
+
+       {:stdio, command, args, opts} ->
+         {:stdio, command, args, opts ++ [project_trust: provenance]}
+
+       {transport, url} ->
+         {transport, url, [project_trust: provenance]}
+
+       {transport, url, opts} ->
+         {transport, url, opts ++ [project_trust: provenance]}
+     end)}
+  end
+
+  defp bind_project(_configs, _provenance), do: {:error, :invalid_config}
 
   @doc """
   Attach profile streamable-HTTP definitions (`name`, `url`, `headers`, `enabledTools`).
@@ -487,7 +521,8 @@ defmodule LemonSkills.McpSession do
              :discovery_failed,
              :timeout,
              :task_capacity_reached,
-             :task_supervisor_unavailable
+             :task_supervisor_unavailable,
+             :project_untrusted
            ] ->
         {:error, reason}
 

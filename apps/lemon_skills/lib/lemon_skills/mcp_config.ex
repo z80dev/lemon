@@ -8,9 +8,15 @@ defmodule LemonSkills.McpConfig do
   `enabled_servers` allowlist of the selected Lemon file; they apply to every
   merged source, including servers imported by `LemonSkills.McpDiscovery`.
   `list/1` with `all: true` reports the effective merged inventory.
+
+  `trust_project/2` and `revoke_project_trust/1` maintain the operator's trust
+  records for other tools' project MCP files in
+  `LemonSkills.Config.mcp_project_trust_file/0` (agent directory only). A record
+  binds an expanded project path to one digest from
+  `LemonSkills.McpDiscovery.project_status/2`; project files never grant trust.
   """
 
-  alias LemonSkills.Config
+  alias LemonSkills.{Config, McpDiscovery}
 
   @spec path(keyword()) :: String.t()
   def path(opts \\ []) do
@@ -30,12 +36,35 @@ defmodule LemonSkills.McpConfig do
     end
   end
 
+  @doc """
+  The exact entry `name` for `lemon mcp test`, which runs it, with its project
+  provenance (`nil` for the global file). A project entry comes from the trusted
+  project snapshot (`LemonSkills.McpDiscovery`), never from a fresh read:
+  `{:error, :untrusted_project}` while the project's MCP files are untrusted or
+  changed, and entries with host-secret references are absent. Pass the
+  provenance to `LemonSkills.McpSession.open/5` so the spawn re-checks trust.
+  """
+  @spec fetch(String.t(), keyword()) ::
+          {:ok, map(), %{project: String.t(), digest: String.t()} | nil} | {:error, atom()}
   def fetch(name, opts \\ []) do
-    with {:ok, document, _original} <- load(path(opts)) do
-      case Enum.filter(Map.get(document, "servers", []), &(&1["name"] == name)) do
-        [entry] -> {:ok, entry}
+    with {:ok, document, provenance} <- runnable_document(opts) do
+      servers = if is_list(document["servers"]), do: document["servers"], else: []
+
+      case Enum.filter(servers, &(is_map(&1) and &1["name"] == name)) do
+        [entry] -> {:ok, entry, provenance}
         [] -> {:error, :not_found}
         _ -> {:error, :duplicate_name}
+      end
+    end
+  end
+
+  defp runnable_document(opts) do
+    if opts[:global] do
+      with {:ok, document, _original} <- load(path(opts)), do: {:ok, document, nil}
+    else
+      case McpDiscovery.project_config(Keyword.get(opts, :cwd, File.cwd!())) do
+        %{trust: trust} when trust in [:untrusted, :changed] -> {:error, :untrusted_project}
+        %{lemon: document, provenance: provenance} -> {:ok, document, provenance}
       end
     end
   end
@@ -113,6 +142,63 @@ defmodule LemonSkills.McpConfig do
   def valid_reference?(name) do
     is_binary(name) and byte_size(name) <= 128 and
       Config.validate_mcp_metadata(name: name) == :ok
+  end
+
+  @doc "Digest the operator trusted for other tools' MCP files in `cwd`, or `nil`."
+  @spec project_trust(String.t()) :: String.t() | nil
+  def project_trust(cwd) when is_binary(cwd) do
+    with {:ok, %{"projects" => %{} = projects}, _bytes} <-
+           load(Config.mcp_project_trust_file()),
+         %{"digest" => digest} when is_binary(digest) <- projects[Path.expand(cwd)] do
+      digest
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Trust other tools' MCP files in `cwd` for exactly `digest`.
+
+  `digest` must equal the current `LemonSkills.McpDiscovery.project_status/2`
+  digest, so the operator approves the files they previewed; otherwise returns
+  `{:error, :stale_digest}` (or `:no_project_config` without project files).
+  Any later edit, addition or removal of a project file changes the digest and
+  suspends trust.
+  """
+  @spec trust_project(String.t(), String.t()) :: :ok | {:error, atom()}
+  def trust_project(cwd, digest) when is_binary(cwd) and is_binary(digest) do
+    project = Path.expand(cwd)
+
+    case McpDiscovery.project_status(project) do
+      %{digest: nil} -> {:error, :no_project_config}
+      %{digest: ^digest} -> update_project_trust(project, %{"digest" => digest})
+      _ -> {:error, :stale_digest}
+    end
+  end
+
+  @doc "Remove the operator's trust record for `cwd`, if any."
+  @spec revoke_project_trust(String.t()) :: :ok | {:error, atom()}
+  def revoke_project_trust(cwd) when is_binary(cwd),
+    do: update_project_trust(Path.expand(cwd), nil)
+
+  defp update_project_trust(project, record) do
+    result =
+      mutate_file(Config.mcp_project_trust_file(), fn document ->
+        case Map.get(document, "projects", %{}) do
+          %{} = projects ->
+            projects =
+              if record,
+                do: Map.put(projects, project, record),
+                else: Map.delete(projects, project)
+
+            {:ok, Map.put(document, "projects", projects)}
+
+          _ ->
+            {:error, :invalid_config}
+        end
+      end)
+
+    with {:ok, _original, _bytes} <- result, do: :ok
   end
 
   def valid_name?(name),
@@ -261,15 +347,29 @@ defmodule LemonSkills.McpConfig do
     end
   end
 
+  # Operator edits of a trusted (or still empty) project keep its trust record
+  # bound to exactly the bytes written; see `McpDiscovery.operator_lemon_write/1`.
   defp mutate(opts, update) do
-    path = path(opts)
+    project = if !opts[:global], do: Path.expand(Keyword.get(opts, :cwd, File.cwd!()))
+    rebind = project && McpDiscovery.operator_lemon_write(project)
+
+    with {:ok, original, bytes} <- mutate_file(path(opts), update) do
+      case rebind && rebind.(original, bytes) do
+        digest when is_binary(digest) -> update_project_trust(project, %{"digest" => digest})
+        _ -> :ok
+      end
+    end
+  end
+
+  defp mutate_file(path, update) do
     lock = path <> ".lock"
 
     with :ok <- make_parent(path), :ok <- acquire_lock(lock) do
       try do
         with {:ok, document, original} <- load(path),
-             {:ok, updated} <- update.(document) do
-          save(path, updated, original)
+             {:ok, updated} <- update.(document),
+             {:ok, bytes} <- save(path, updated, original) do
+          {:ok, original, bytes}
         end
       after
         File.rmdir(lock)
@@ -294,12 +394,13 @@ defmodule LemonSkills.McpConfig do
 
   defp save(path, document, original) do
     temp = path <> ".tmp." <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    bytes = Jason.encode!(document, pretty: true) <> "\n"
 
     try do
-      with :ok <- write_private(temp, Jason.encode!(document, pretty: true) <> "\n"),
+      with :ok <- write_private(temp, bytes),
            :ok <- unchanged(path, original),
            :ok <- File.rename(temp, path) do
-        :ok
+        {:ok, bytes}
       else
         {:error, :changed} -> {:error, :changed}
         _ -> {:error, :write_failed}

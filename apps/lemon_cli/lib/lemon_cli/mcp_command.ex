@@ -2,6 +2,7 @@ defmodule LemonCli.McpCommand do
   @moduledoc "Mix-free named MCP configuration commands for source and packaged launchers."
 
   alias LemonSkills.McpConfig
+  alias LemonSkills.McpDiscovery
   alias LemonSkills.McpSession
 
   @common [global: :boolean, cwd: :string, json: :boolean]
@@ -17,13 +18,15 @@ defmodule LemonCli.McpCommand do
 
   @spec run([String.t()]) :: 0 | 1 | 2
   def run([action | args])
-      when action in ["add", "list", "remove", "test", "enable", "disable"] do
+      when action in ["add", "list", "remove", "test", "enable", "disable", "trust", "untrust"] do
     {flags, command_args} = split_command_args(args)
 
     switches =
       case action do
         "add" -> @common ++ @add
         "list" -> @common ++ [all: :boolean]
+        "trust" -> [cwd: :string, json: :boolean, digest: :string]
+        "untrust" -> [cwd: :string, json: :boolean]
         _ -> @common
       end
 
@@ -53,6 +56,7 @@ defmodule LemonCli.McpCommand do
   end
 
   defp request("list", [], _opts, nil), do: {:ok, nil}
+  defp request(action, [], _opts, nil) when action in ["trust", "untrust"], do: {:ok, nil}
 
   defp request(action, [name], _opts, nil) when action in ["remove", "test"] do
     if McpConfig.valid_name?(name), do: {:ok, name}, else: :error
@@ -126,26 +130,80 @@ defmodule LemonCli.McpCommand do
 
   defp execute("list", _, opts) do
     with {:ok, servers} <- McpConfig.list(opts) do
-      if opts[:all], do: {:ok, %{"effective" => servers}}, else: {:ok, %{"servers" => servers}}
+      cond do
+        opts[:all] != true ->
+          {:ok, %{"servers" => servers}}
+
+        opts[:global] ->
+          {:ok, %{"effective" => servers}}
+
+        true ->
+          trust = project_trust(Keyword.get(opts, :cwd, File.cwd!()), false)
+          {:ok, %{"effective" => servers, "project_trust" => trust}}
+      end
     end
+  end
+
+  defp execute("trust", _, opts) do
+    cwd = Keyword.get(opts, :cwd, File.cwd!())
+
+    case opts[:digest] do
+      nil ->
+        {:ok, %{"project_trust" => project_trust(cwd, true)}}
+
+      digest ->
+        with :ok <- McpConfig.trust_project(cwd, digest), do: {:ok, %{"status" => "trusted"}}
+    end
+  end
+
+  defp execute("untrust", _, opts) do
+    with :ok <- McpConfig.revoke_project_trust(Keyword.get(opts, :cwd, File.cwd!())),
+         do: {:ok, %{"status" => "untrusted"}}
   end
 
   defp execute("test", name, opts) do
-    with {:ok, entry} <- McpConfig.fetch(name, opts) do
-      LemonCli.Onboarding.LogSilencer.with_quiet_logs(true, fn -> test_connection(entry, opts) end)
+    with {:ok, entry, provenance} <- McpConfig.fetch(name, opts) do
+      LemonCli.Onboarding.LogSilencer.with_quiet_logs(true, fn ->
+        test_connection(entry, provenance, opts)
+      end)
     end
   end
 
-  defp test_connection(entry, opts) do
+  # `list --all` stays a redacted inventory (counts only); the command and URL
+  # previews are shown by `trust`, the review surface.
+  defp project_trust(cwd, previews?) do
+    status = McpDiscovery.project_status(cwd)
+
+    summary = %{
+      "project" => status.project,
+      "label" => status.label,
+      "cwd_arg" => status.cwd_arg,
+      "trust" => Atom.to_string(status.trust),
+      "digest" => status.digest,
+      "files" => status.files,
+      "server_count" => length(status.servers),
+      "findings" => status.findings
+    }
+
+    if previews?, do: Map.put(summary, "servers", status.servers), else: summary
+  end
+
+  # Project provenance from `fetch` travels with the entry, so the spawn
+  # re-checks that the project is still trusted.
+  defp test_connection(entry, provenance, opts) do
     id = "mcp-test-" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+    cwd = Keyword.get(opts, :cwd, File.cwd!())
 
     case Application.ensure_all_started(:lemon_skills) do
       {:ok, _} ->
         try do
-          case McpSession.open(id, Keyword.get(opts, :cwd, File.cwd!()), [entry], self()) do
+          case McpSession.open(id, cwd, [entry], self(), project_trust: provenance) do
             :ok ->
               tools = McpSession.tools(id)
               {:ok, %{"status" => "connected", "tool_count" => length(tools)}}
+
+            {:error, :project_untrusted} ->
+              {:error, :untrusted_project}
 
             _ ->
               {:error, :connection_failed}
@@ -178,7 +236,7 @@ defmodule LemonCli.McpCommand do
     0
   end
 
-  defp render({:ok, %{"effective" => servers}}, false) do
+  defp render({:ok, %{"effective" => servers} = payload}, false) do
     if servers == [] do
       IO.puts("No MCP servers configured or discovered for this scope.")
     else
@@ -195,6 +253,20 @@ defmodule LemonCli.McpCommand do
         )
       end)
     end
+
+    render_project_trust(payload["project_trust"], false)
+    0
+  end
+
+  defp render({:ok, %{"project_trust" => trust}}, false) do
+    render_project_trust(trust, true)
+    0
+  end
+
+  defp render({:ok, %{"status" => status}}, false) when status in ["trusted", "untrusted"] do
+    IO.puts(
+      "Other tools' MCP project files #{if status == "trusted", do: "trusted for this exact content", else: "no longer trusted"}. New sessions read the updated trust."
+    )
 
     0
   end
@@ -224,6 +296,62 @@ defmodule LemonCli.McpCommand do
     1
   end
 
+  defp render_project_trust(nil, _verbose?), do: :ok
+  defp render_project_trust(%{"trust" => "none"}, false), do: :ok
+
+  defp render_project_trust(%{"trust" => "none", "label" => label}, true),
+    do: IO.puts("No project MCP files in #{label}.")
+
+  defp render_project_trust(trust, review?) do
+    state =
+      case trust["trust"] do
+        "trusted" -> "trusted"
+        "changed" -> "changed since trusted; nothing is started until trusted again"
+        _ -> "untrusted; nothing is started until trusted"
+      end
+
+    IO.puts("Project MCP files in #{trust["label"]}: #{state}")
+    IO.puts("  files: " <> Enum.join(trust["files"], ", "))
+
+    if review? do
+      Enum.each(trust["servers"], fn server ->
+        IO.puts(
+          "  #{server["name"]}\t#{server["provider"]}\t#{server["transport"]}\t#{server["preview"]}"
+        )
+      end)
+    else
+      IO.puts("  servers: #{trust["server_count"]}")
+    end
+
+    for %{"reason" => "host_value_reference"} = finding <- trust["findings"] do
+      IO.puts(
+        "  rejected #{finding["server"]} (#{finding["provider"]}): project files cannot read host values (#{Enum.join(finding["keys"], ", ")})"
+      )
+    end
+
+    # The path is only offered as a command argument when it can be shown
+    # exactly; otherwise the operator runs the command from that directory.
+    cwd = if trust["cwd_arg"], do: " --cwd " <> trust["cwd_arg"], else: ""
+
+    unsafe =
+      if trust["cwd_arg"],
+        do: "",
+        else: " (run it inside that directory; its path cannot be shown safely)"
+
+    cond do
+      trust["trust"] == "trusted" ->
+        :ok
+
+      review? ->
+        IO.puts(
+          "  Review these files, then run: lemon mcp trust#{cwd} --digest #{trust["digest"]}#{unsafe}"
+        )
+
+      true ->
+        IO.puts("  Review with: lemon mcp trust#{cwd}#{unsafe}")
+    end
+  end
+
   defp error_message(:duplicate_name),
     do: "The name already exists or is ambiguous; use --replace only for a unique entry."
 
@@ -237,6 +365,17 @@ defmodule LemonCli.McpCommand do
 
   defp error_message(:changed),
     do: "The MCP file changed during this operation; no changes were written."
+
+  defp error_message(:stale_digest),
+    do:
+      "The project's MCP files changed since that digest; run `lemon mcp trust` again and review them."
+
+  defp error_message(:no_project_config),
+    do: "No project MCP files were found in that directory."
+
+  defp error_message(:untrusted_project),
+    do:
+      "This project's MCP files are not trusted; review them with `lemon mcp trust` before testing."
 
   defp error_message(:connection_failed),
     do: "The MCP server could not connect and discover tools."

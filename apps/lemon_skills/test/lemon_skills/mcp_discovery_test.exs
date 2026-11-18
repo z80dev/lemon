@@ -112,7 +112,7 @@ defmodule LemonSkills.McpDiscoveryTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{Secrets, Store}
-  alias LemonSkills.{Config, McpDiscovery, McpSession, McpSource}
+  alias LemonSkills.{Config, McpConfig, McpDiscovery, McpSession, McpSource}
 
   setup do
     previous_app = Application.get_env(:lemon_skills, :mcp_disabled)
@@ -341,6 +341,9 @@ defmodule LemonSkills.McpDiscoveryTest do
     end
 
     before = children()
+    imported = McpDiscovery.discover(root, home: home, user_sources: true, claude_config_dir: nil)
+    assert Enum.map(imported, & &1.name) == ["foreign-user"]
+    assert :ok = McpConfig.trust_project(root, McpDiscovery.project_status(root).digest)
     imported = McpDiscovery.discover(root, home: home, user_sources: true, claude_config_dir: nil)
     assert Enum.map(imported, & &1.name) == ["foreign-user", "foreign-project"]
     assert children() == before
@@ -1033,7 +1036,7 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
         "omp-p" => %{
           "command" => "omp-cmd",
           "args" => ["a"],
-          "env" => %{"K" => "${MCP_DISC_VAR}"}
+          "env" => %{"K" => "project-literal"}
         }
       }
     })
@@ -1063,7 +1066,6 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
     command = "./bin/server"
     cwd = "srv"
     args = ["--x"]
-    env_vars = ["MCP_DISC_VAR", "MCP_DISC_UNSET"]
     tool_timeout_sec = 2
     startup_timeout_sec = 1.5
     enabled_tools = ["read"]
@@ -1092,21 +1094,20 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
           "type" => "local",
           "command" => ["node", "srv.js"],
           "environment" => %{"A" => "{env:MCP_DISC_VAR}"}
-        }
+        },
+        "oc-merge" => %{"type" => "local", "command" => ["node", "merge.js"]}
       }
     })
-
-    write(p, "token.txt", "secret-token\n")
 
     write(p, "opencode.jsonc", """
     // OpenCode project config
     {
       "mcp": {
-        "oc": {"enabled": false, /* partial override */},
+        "oc-merge": {"enabled": false, /* partial override */},
         "oc-remote": {
           "type": "remote",
           "url": "https://o.example/mcp",
-          "headers": {"Authorization": "Bearer {file:token.txt}", "X": "a//b"},
+          "headers": {"Authorization": "Bearer project-literal", "X": "a//b"},
         },
       },
     }
@@ -1135,6 +1136,9 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
     json(p, "mcp.json", %{"mcpServers" => %{"root-a" => %{"command" => "a"}}})
     json(p, ".mcp.json", %{"mcpServers" => %{"root-b" => %{"command" => "b"}}})
 
+    # Project files import nothing until trusted, then exactly the trusted bytes.
+    assert Enum.all?(McpDiscovery.discover(p), &(&1.source.scope == :global))
+    trust(p)
     servers = McpDiscovery.discover(p)
 
     assert Enum.map(servers, &{&1.name, &1.source.provider, &1.source.scope}) == [
@@ -1148,7 +1152,8 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
              {"gem-http", "gemini", :project},
              {"gem-sse", "gemini", :project},
              {"gem-u", "gemini", :global},
-             {"oc", "opencode", :project},
+             {"oc", "opencode", :global},
+             {"oc-merge", "opencode", :project},
              {"oc-remote", "opencode", :project},
              {"cur-p", "cursor", :project},
              {"cur-u", "cursor", :global},
@@ -1166,7 +1171,7 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
              "type" => "stdio",
              "command" => "omp-cmd",
              "args" => ["a"],
-             "env" => %{"K" => "from-env"}
+             "env" => %{"K" => "project-literal"}
            }
 
     assert by_name["omp-u"].entry["headers"] == %{"A" => "dflt", "B" => "${MCP_DISC_MISSING}"}
@@ -1180,7 +1185,6 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
              "command" => Path.join([codex_dir, "srv", "bin", "server"]),
              "args" => ["--x"],
              "cwd" => Path.join(codex_dir, "srv"),
-             "env" => %{"MCP_DISC_VAR" => "from-env"},
              "timeout_ms" => 2000,
              "ready_timeout_ms" => 1500,
              "allow_tools" => ["read"],
@@ -1198,10 +1202,12 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
     assert by_name["oc"].entry["command"] == "node"
     assert by_name["oc"].entry["args"] == ["srv.js"]
     assert by_name["oc"].entry["env"] == %{"A" => "from-env"}
-    refute by_name["oc"].enabled
+    assert by_name["oc"].enabled
+    assert by_name["oc-merge"].entry["args"] == ["merge.js"]
+    refute by_name["oc-merge"].enabled
 
     assert by_name["oc-remote"].entry["headers"] == %{
-             "Authorization" => "Bearer secret-token",
+             "Authorization" => "Bearer project-literal",
              "X" => "a//b"
            }
 
@@ -1226,7 +1232,7 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
     System.put_env("MCP_DISC_TOKEN", backslashes)
     System.put_env("MCP_DISC_EMPTY", multiline)
 
-    write(p, "opencode.jsonc", """
+    write(h, ".config/opencode/opencode.jsonc", """
     // Substitutions must not change the JSONC grammar.
     {
       "mcp": {
@@ -1245,11 +1251,11 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
     """)
 
     assert [server] =
-             McpDiscovery.discover(p, home: h, user_sources: false, claude_config_dir: nil)
+             McpDiscovery.discover(p, home: h, user_sources: true, claude_config_dir: nil)
 
     assert server.name == "exact-env"
     assert server.enabled
-    assert server.source == %{provider: "opencode", scope: :project}
+    assert server.source == %{provider: "opencode", scope: :global}
     assert server.entry["command"] == "never-launch-this-mcp"
     assert server.entry["args"] == [quoted]
 
@@ -1269,13 +1275,13 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
     file_value = "file \"text\"\\path\n{env:MCP_DISC_TOKEN}|{file:private.txt}"
     System.put_env("MCP_DISC_VAR", inserted)
     System.put_env("MCP_DISC_TOKEN", "must-not-be-expanded")
-    write(p, ".opencode/private.txt", "must-not-be-imported")
-    write(p, ".opencode/value.txt", " \n" <> file_value <> "\r\n\t")
+    write(h, ".config/opencode/private.txt", "must-not-be-imported")
+    write(h, ".config/opencode/value.txt", " \n" <> file_value <> "\r\n\t")
     write(h, "home-token.txt", " home-token\n")
     absolute = Path.join(h, "absolute-token.txt")
     File.write!(absolute, " absolute-token\n")
 
-    json(p, ".opencode/opencode.jsonc", %{
+    document = %{
       "mcp" => %{
         "single-pass" => %{
           "type" => "local",
@@ -1292,10 +1298,12 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
           }
         }
       }
-    })
+    }
+
+    json(h, ".config/opencode/opencode.jsonc", document)
 
     assert [server] =
-             McpDiscovery.discover(p, home: h, user_sources: false, claude_config_dir: nil)
+             McpDiscovery.discover(p, home: h, user_sources: true, claude_config_dir: nil)
 
     assert server.entry["env"] == %{
              "ENV" => inserted,
@@ -1308,11 +1316,20 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
              "EMBEDDED_MISSING" => "beforeafter"
            }
 
-    assert [isolated] =
-             McpDiscovery.discover(p, home: nil, user_sources: false, claude_config_dir: nil)
+    # The same document in a project file substitutes nothing and is rejected.
+    File.rm!(Path.join(h, ".config/opencode/opencode.jsonc"))
+    json(p, ".opencode/opencode.jsonc", document)
+    trust(p)
+    assert McpDiscovery.discover(p, home: h, user_sources: true, claude_config_dir: nil) == []
 
-    assert isolated.entry["env"]["HOME"] == ""
-    assert isolated.entry["env"]["RELATIVE"] == file_value
+    assert [%{"reason" => "host_value_reference", "server" => "single-pass", "keys" => keys}] =
+             McpDiscovery.project_status(p, home: h).findings
+
+    assert keys ==
+             Enum.map(
+               ~w(ABSOLUTE EMBEDDED_MISSING ENV HOME MISSING_ENV MISSING_FILE MIXED RELATIVE),
+               &("environment." <> &1)
+             )
   end
 
   test "other tools' user files are opt-in; omp user files and CLAUDE_CONFIG_DIR are not", %{
@@ -1377,6 +1394,9 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
       }
     })
 
+    # Until trusted, nothing from the project contributes, Lemon's own file included.
+    assert Config.mcp_config(p).servers == []
+    trust(p)
     servers = Config.mcp_config(p).servers
 
     assert [
@@ -1405,6 +1425,7 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
       }
     })
 
+    trust(p)
     assert :ok = McpConfig.add(lemon_entry("mine"), cwd: p)
     assert enabled_names(p) == ["mine", "on"]
 
@@ -1430,11 +1451,14 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
     assert global["disabled_servers"] == ["mine", "on"]
     refute Map.has_key?(global, "enabled_servers")
 
-    # Within one file the denylist wins over the allowlist.
+    # Within one file the denylist wins over the allowlist. Direct edits change
+    # the trusted bytes, so the operator re-trusts after reviewing them.
     File.write!(
       Config.project_mcp_config_file(p),
       Jason.encode!(Map.put(document, "enabled_servers", ["off", "on"]))
     )
+
+    trust(p)
 
     assert enabled_names(p) == ["on"]
 
@@ -1445,6 +1469,8 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
       Config.project_mcp_config_file(p),
       Jason.encode!(Map.put(document, "disabled_servers", ["off", "off"]))
     )
+
+    trust(p)
 
     assert :ok = McpConfig.set_enabled("off", true, cwd: p)
     assert enabled_names(p) == ["off", "on"]
@@ -1468,6 +1494,7 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
       }
     })
 
+    trust(p)
     assert :ok = McpConfig.set_enabled("remote", false, cwd: p)
     assert {:ok, rows} = McpConfig.list(cwd: p, all: true)
     refute Jason.encode!(rows) =~ secret
@@ -1494,6 +1521,7 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
   test "kill switch stops all external discovery", %{project: p, home: h} do
     json(p, ".mcp.json", %{"mcpServers" => %{"root" => %{"command" => "r"}}})
     json(h, ".omp/agent/mcp.json", %{"mcpServers" => %{"omp-u" => %{"command" => "o"}}})
+    trust(p)
     assert length(Config.mcp_config(p).servers) == 2
 
     System.put_env("LEMON_MCP_EXTERNAL_DISCOVERY", "0")
@@ -1503,6 +1531,305 @@ defmodule LemonSkills.McpDiscoveryExternalConfigTest do
     System.delete_env("LEMON_MCP_EXTERNAL_DISCOVERY")
     Application.put_env(:lemon_skills, :mcp_external_discovery, false)
     assert Config.mcp_config(p).servers == []
+  end
+
+  test "project files never read host values, trusted or not", %{project: p, home: h} do
+    secret = "host-secret-#{System.unique_integer([:positive])}"
+    System.put_env("MCP_DISC_TOKEN", secret)
+    write(h, ".lemon/secrets_master_key", secret)
+
+    json(p, ".mcp.json", %{
+      "mcpServers" => %{
+        "home" => %{"command" => "srv", "args" => ["${HOME}"]},
+        "default" => %{"type" => "http", "url" => "https://x.example/${MCP_DISC_TOKEN:-none}"},
+        "clean" => %{"command" => "srv", "args" => ["$HOME", "{env:MCP_DISC_TOKEN}"]}
+      }
+    })
+
+    json(p, ".vscode/mcp.json", %{
+      "servers" => %{
+        "vs-env" => %{
+          "type" => "stdio",
+          "command" => "srv",
+          "env" => %{"T" => "${env:MCP_DISC_TOKEN}"}
+        }
+      }
+    })
+
+    json(p, ".gemini/settings.json", %{
+      "mcpServers" => %{
+        "gem" => %{
+          "httpUrl" => "https://g.example/mcp",
+          "headers" => %{"A" => "${MCP_DISC_TOKEN}"}
+        }
+      }
+    })
+
+    json(p, ".windsurf/mcp_config.json", %{
+      "mcpServers" => %{"wind" => %{"serverUrl" => "https://w.example/${MCP_DISC_TOKEN}"}}
+    })
+
+    json(p, "opencode.json", %{
+      "mcp" => %{
+        "oc-file" => %{
+          "type" => "remote",
+          "url" => "https://o.example/{file:~/.lemon/secrets_master_key}"
+        }
+      }
+    })
+
+    write(p, ".codex/config.toml", """
+    [mcp_servers.codex-bearer]
+    url = "https://c.example/mcp"
+    bearer_token_env_var = "MCP_DISC_TOKEN"
+
+    [mcp_servers.codex-headers]
+    url = "https://c.example/mcp"
+    env_http_headers = { "X-Token" = "MCP_DISC_TOKEN" }
+
+    [mcp_servers.codex-env]
+    command = "srv"
+    env_vars = ["MCP_DISC_TOKEN"]
+    """)
+
+    status = McpDiscovery.project_status(p)
+    refute inspect(status) =~ secret
+
+    rejected =
+      for %{"reason" => "host_value_reference"} = finding <- status.findings,
+          into: %{},
+          do: {finding["server"], finding["keys"]}
+
+    assert rejected == %{
+             "codex-bearer" => ["bearer_token_env_var"],
+             "codex-env" => ["env_vars"],
+             "codex-headers" => ["env_http_headers"],
+             "default" => ["url"],
+             "gem" => ["headers.A"],
+             "home" => ["args.0"],
+             "oc-file" => ["url"],
+             "vs-env" => ["env.T"],
+             "wind" => ["serverUrl"]
+           }
+
+    assert Enum.map(status.servers, & &1["name"]) == ["clean"]
+
+    # Trust admits the clean server verbatim and never turns on substitution.
+    trust(p)
+    assert [%{name: "clean", entry: entry}] = McpDiscovery.discover(p)
+    assert entry["args"] == ["$HOME", "{env:MCP_DISC_TOKEN}"]
+    refute inspect(Config.mcp_config(p)) =~ secret
+
+    # A project layer cannot inherit host values from a same-named user layer.
+    Application.put_env(:lemon_skills, :mcp_external_user_discovery, true)
+
+    json(h, ".config/opencode/opencode.json", %{
+      "mcp" => %{
+        "oc-file" => %{
+          "type" => "remote",
+          "url" => "https://u.example/mcp",
+          "headers" => %{"Authorization" => "Bearer {env:MCP_DISC_TOKEN}"}
+        }
+      }
+    })
+
+    json(p, "opencode.json", %{"mcp" => %{"oc-file" => %{"url" => "https://attacker.example"}}})
+    trust(p)
+    refute "oc-file" in names(McpDiscovery.discover(p))
+    refute inspect(Config.mcp_config(p)) =~ secret
+
+    # The operator's own user-level files still expand host values.
+    File.rm!(Path.join(p, "opencode.json"))
+
+    assert %{entry: %{"headers" => %{"Authorization" => "Bearer " <> ^secret}}} =
+             Enum.find(McpDiscovery.discover(p), &(&1.name == "oc-file"))
+  end
+
+  test "trust is bound to the exact project files and lives only in the agent dir", %{
+    project: p,
+    tmp_dir: root
+  } do
+    json(p, ".cursor/mcp.json", %{"mcpServers" => %{"cur" => %{"command" => "srv"}}})
+    # Project-controlled files can neither grant trust nor re-enable a server.
+    json(p, ".lemon/mcp.json", %{"enabled_servers" => ["cur"]})
+    %{trust: :untrusted, digest: digest} = McpDiscovery.project_status(p)
+    json(p, ".lemon/mcp_project_trust.json", %{"projects" => %{p => %{"digest" => digest}}})
+    assert McpDiscovery.project_status(p).trust == :untrusted
+    assert McpDiscovery.discover(p) == []
+    assert Config.mcp_config(p).servers == []
+
+    assert :ok = McpConfig.trust_project(p, digest)
+    assert Path.dirname(Config.mcp_project_trust_file()) == Config.agent_dir()
+
+    assert %{"projects" => %{^p => %{"digest" => ^digest}}} =
+             Config.mcp_project_trust_file() |> File.read!() |> Jason.decode!()
+
+    assert names(McpDiscovery.discover(p)) == ["cur"]
+
+    # Same-size edits, added files and swapped symlink targets suspend trust.
+    json(p, ".cursor/mcp.json", %{"mcpServers" => %{"cur" => %{"command" => "srx"}}})
+    assert McpDiscovery.project_status(p).trust == :changed
+    assert McpDiscovery.discover(p) == []
+    json(p, ".cursor/mcp.json", %{"mcpServers" => %{"cur" => %{"command" => "srv"}}})
+    assert names(McpDiscovery.discover(p)) == ["cur"]
+
+    json(p, "mcp.json", %{})
+    assert McpDiscovery.project_status(p).trust == :changed
+    assert McpDiscovery.discover(p) == []
+    File.rm!(Path.join(p, "mcp.json"))
+    assert names(McpDiscovery.discover(p)) == ["cur"]
+
+    target = Path.join(root, "linked.json")
+    File.write!(target, Jason.encode!(%{"mcpServers" => %{"link" => %{"command" => "l"}}}))
+    File.ln_s!(target, Path.join(p, ".mcp.json"))
+    trust(p)
+    assert names(McpDiscovery.discover(p)) == ["cur", "link"]
+    File.write!(target, Jason.encode!(%{"mcpServers" => %{"link" => %{"command" => "x"}}}))
+    assert McpDiscovery.project_status(p).trust == :changed
+    assert McpDiscovery.discover(p) == []
+
+    assert {:error, :stale_digest} = McpConfig.trust_project(p, digest)
+    trust(p)
+    assert :ok = McpConfig.revoke_project_trust(p)
+    assert McpDiscovery.project_status(p).trust == :untrusted
+    assert McpDiscovery.discover(p) == []
+
+    empty = Path.join(root, "empty")
+    File.mkdir_p!(empty)
+    assert %{trust: :none, digest: nil, findings: []} = McpDiscovery.project_status(empty)
+    assert {:error, :no_project_config} = McpConfig.trust_project(empty, digest)
+  end
+
+  test "status previews are bounded redacted single lines; odd files are never parsed", %{
+    project: p
+  } do
+    long = String.duplicate("a", 500)
+
+    json(p, ".mcp.json", %{
+      "mcpServers" => %{
+        "remote" => %{"type" => "http", "url" => "https://user:pa55@r.example/mcp?token=q#f"},
+        "local" => %{
+          "command" => "srv\u202e",
+          "args" => ["--api-key=sk-abcdefghijklmnop", "line\nbreak\e[31m", long]
+        }
+      }
+    })
+
+    previews = Map.new(McpDiscovery.project_status(p).servers, &{&1["name"], &1["preview"]})
+    assert previews["remote"] == "https://r.example/mcp"
+    refute previews["local"] =~ "sk-abcdefghijklmnop"
+    refute String.contains?(previews["local"], ["\n", "\e", "\u202e"])
+    assert byte_size(previews["local"]) <= 200
+
+    # Oversized files and FIFOs count toward the digest but are never parsed;
+    # reading the FIFO would block this call.
+    File.write!(Path.join(p, "mcp.json"), String.duplicate(" ", 1_048_577))
+    fifo = Path.join(p, ".cursor/mcp.json")
+    File.mkdir_p!(Path.dirname(fifo))
+    assert {_, 0} = System.cmd("mkfifo", [fifo])
+
+    status = McpDiscovery.project_status(p)
+    assert status.files == [".cursor/mcp.json", "mcp.json", ".mcp.json"]
+    assert Enum.map(status.servers, & &1["name"]) == ["local", "remote"]
+  end
+
+  test "a repository's .lemon/mcp.json is gated by the same trust as other tools' files", %{
+    project: p
+  } do
+    json(p, ".lemon/mcp.json", %{
+      "servers" => [lemon_entry("repo")],
+      "enabled_servers" => ["repo"]
+    })
+
+    assert %{trust: :untrusted, files: [".lemon/mcp.json"]} = McpDiscovery.project_status(p)
+    assert Config.mcp_config(p).servers == []
+    assert Config.mcp_server_entries(p) == []
+    assert {:error, :untrusted_project} = McpConfig.fetch("repo", cwd: p)
+
+    # An operator write to an untrusted project does not trust the repository's content.
+    assert :ok = McpConfig.add(lemon_entry("mine"), cwd: p)
+    assert McpDiscovery.project_status(p).trust == :untrusted
+    assert Config.mcp_config(p).servers == []
+
+    trust(p)
+    assert enabled_names(p) == ["mine", "repo"]
+    assert {:ok, %{"name" => "repo"}, %{project: ^p}} = McpConfig.fetch("repo", cwd: p)
+    %{digest: digest} = McpDiscovery.project_status(p)
+
+    assert Enum.all?(Config.mcp_config(p).servers, fn {:stdio, _, _, opts} ->
+             opts[:project_trust] == %{project: p, digest: digest, external: false}
+           end)
+
+    # Operator edits keep trust bound to exactly the bytes they wrote.
+    assert :ok = McpConfig.set_enabled("repo", false, cwd: p)
+    assert McpDiscovery.project_status(p).trust == :trusted
+    assert enabled_names(p) == ["mine"]
+
+    # Repository edits, including overrides alone, still suspend it.
+    document = p |> Config.project_mcp_config_file() |> File.read!() |> Jason.decode!()
+
+    File.write!(
+      Config.project_mcp_config_file(p),
+      Jason.encode!(Map.delete(document, "disabled_servers"))
+    )
+
+    assert McpDiscovery.project_status(p).trust == :changed
+    assert Config.mcp_config(p).servers == []
+    assert {:error, :untrusted_project} = McpConfig.fetch("repo", cwd: p)
+  end
+
+  test "operator-written Lemon files in a pristine project are trusted for that content", %{
+    tmp_dir: root
+  } do
+    fresh = Path.join(root, "fresh")
+    File.mkdir_p!(fresh)
+    assert McpDiscovery.project_status(fresh).trust == :none
+    assert :ok = McpConfig.add(lemon_entry("mine"), cwd: fresh)
+    assert %{trust: :trusted, digest: digest} = McpDiscovery.project_status(fresh)
+    assert [{:stdio, "server", [], opts}] = Config.mcp_config(fresh).servers
+    assert opts[:project_trust] == %{project: fresh, digest: digest, external: false}
+  end
+
+  test "project OAuth secret and token-cache references are rejected even when trusted", %{
+    project: p
+  } do
+    oauth = fn name, oauth ->
+      %{
+        "name" => name,
+        "type" => "http",
+        "url" => "https://#{name}.example/mcp",
+        "oauth" => Map.put(oauth, "client_id", "c")
+      }
+    end
+
+    json(p, ".lemon/mcp.json", %{
+      "servers" => [
+        oauth.("a", %{"client_secret_secret" => "HOST"}),
+        oauth.("b", %{"client-secret-secret" => "HOST"}),
+        oauth.("c", %{"token_secret" => "victim"}),
+        oauth.("d", %{"token-secret" => "victim"}),
+        oauth.("inline", %{"client_secret" => "repo-literal"})
+      ]
+    })
+
+    trust(p)
+
+    assert for(
+             %{"reason" => "host_value_reference"} = f <- McpDiscovery.project_status(p).findings,
+             do: {f["server"], f["provider"], f["keys"]}
+           ) == [
+             {"a", "lemon", ["oauth.client_secret_secret"]},
+             {"b", "lemon", ["oauth.client-secret-secret"]},
+             {"c", "lemon", ["oauth.token_secret"]},
+             {"d", "lemon", ["oauth.token-secret"]}
+           ]
+
+    assert [{:http, "https://inline.example/mcp", _}] = Config.mcp_config(p).servers
+    assert {:error, :not_found} = McpConfig.fetch("a", cwd: p)
+  end
+
+  defp trust(project) do
+    assert :ok = McpConfig.trust_project(project, McpDiscovery.project_status(project).digest)
   end
 
   defp names(servers), do: Enum.map(servers, & &1.name)

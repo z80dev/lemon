@@ -594,6 +594,9 @@ defmodule LemonMCP.SkillsMcpSourceTest do
             })
           )
 
+          # The operator trusts this project's MCP files (see `lemon mcp trust`).
+          digest = LemonSkills.McpDiscovery.project_status(cwd).digest
+          :ok = LemonSkills.McpConfig.trust_project(cwd, digest)
           cwd
         end
 

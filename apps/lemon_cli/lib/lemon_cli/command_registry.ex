@@ -329,8 +329,8 @@ defmodule LemonCli.CommandRegistry do
       name: "mcp",
       summary: "Manage and test named MCP servers",
       usage:
-        "lemon mcp add NAME (--stdio COMMAND [-- ARG...] | --http URL) [options]\n       lemon mcp list [--all]|remove NAME|test NAME|enable NAME|disable NAME [options]",
-      subcommands: subcommands(~w(add list remove test enable disable)),
+        "lemon mcp add NAME (--stdio COMMAND [-- ARG...] | --http URL) [options]\n       lemon mcp list [--all]|remove NAME|test NAME|enable NAME|disable NAME [options]\n       lemon mcp trust [--digest DIGEST]|untrust [--cwd PATH] [--json]",
+      subcommands: subcommands(~w(add list remove test enable disable trust untrust)),
       options: [
         option(
           "--global",
@@ -341,7 +341,12 @@ defmodule LemonCli.CommandRegistry do
         option(
           "--all",
           ["--all"],
-          "list: effective servers incl. other tools' configs, with source and state"
+          "list: effective servers incl. other tools' configs, with source, state and project trust"
+        ),
+        option(
+          "--digest DIGEST",
+          ["--digest"],
+          "trust: trust other tools' project MCP files with exactly this previewed digest"
         ),
         option("--stdio COMMAND", ["--stdio"], "Executable; pass its arguments after --"),
         option("--http URL", ["--http"], "Streamable HTTP MCP endpoint"),

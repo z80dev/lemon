@@ -88,6 +88,7 @@ config :lemon_core, :doctor_checks, [
   LemonControlPlane.Doctor.Checks.Listeners,
   LemonMemory.Doctor.Checks.Memory,
   LemonSkills.Doctor.Checks.Skills,
+  LemonSkills.Doctor.Checks.McpProjectTrust,
   LemonAutomation.Doctor.Checks.Synthesis,
   LemonAutomation.Doctor.Checks.Cron,
   LemonChannels.Doctor.Checks.Channels

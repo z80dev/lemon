@@ -265,8 +265,9 @@ defmodule LemonSkills.McpSource do
   tools (published name, raw remote name or utility kind, remote description).
 
   This is a pure read: it neither reloads configuration nor connects. A scope
-  that has never been discovered reports `loaded: false`. `refresh/0` reloads
-  the global configuration and reconnects.
+  that has never been discovered reports `loaded: false`. `project_scopes` lists
+  every project directory a session has loaded (for project trust status).
+  `refresh/0` reloads every loaded scope and reconnects.
   """
   @spec inventory(keyword()) :: map()
   def inventory(opts \\ []), do: inventory(__MODULE__, opts)
@@ -574,11 +575,12 @@ defmodule LemonSkills.McpSource do
   end
 
   def handle_call({:inventory, _opts}, _from, %{disabled: true} = state) do
-    {:reply, %{disabled: true, loaded: false, servers: []}, state}
+    {:reply, %{disabled: true, loaded: false, servers: [], project_scopes: []}, state}
   end
 
   def handle_call({:inventory, opts}, _from, state) do
     scope = source_scope(state, opts)
+    project_scopes = state.scopes |> Map.keys() |> Enum.filter(&is_binary/1) |> Enum.sort()
 
     reply =
       case Map.fetch(state.scopes, scope) do
@@ -592,10 +594,10 @@ defmodule LemonSkills.McpSource do
               end
             end)
 
-          %{disabled: false, loaded: true, servers: servers}
+          %{disabled: false, loaded: true, servers: servers, project_scopes: project_scopes}
 
         :error ->
-          %{disabled: false, loaded: false, servers: []}
+          %{disabled: false, loaded: false, servers: [], project_scopes: project_scopes}
       end
 
     {:reply, reply, state}
@@ -858,22 +860,28 @@ defmodule LemonSkills.McpSource do
   end
 
   defp run_job(:discover_ready, state) do
-    state = maybe_reload_servers(state, cwd: state.cwd)
-    {tools, state} = refresh_tools(state)
+    # Explicit project-origin configs (e.g. `lemon mcp test`) must not report a
+    # ready, empty session after their trust was revoked; nothing is started.
+    if is_list(state.configs) and Enum.any?(state.configs, &(not trusted_config?(&1))) do
+      {{:error, :project_untrusted}, state}
+    else
+      state = maybe_reload_servers(state, cwd: state.cwd)
+      {tools, state} = refresh_tools(state)
 
-    result =
-      cond do
-        Enum.any?(state.servers, fn {_, server} -> server.last_error == "connection failed" end) ->
-          {:error, :connection_failed}
+      result =
+        cond do
+          Enum.any?(state.servers, fn {_, server} -> server.last_error == "connection failed" end) ->
+            {:error, :connection_failed}
 
-        Enum.any?(state.servers, fn {_, server} -> not server.connected end) ->
-          {:error, :discovery_failed}
+          Enum.any?(state.servers, fn {_, server} -> not server.connected end) ->
+            {:error, :discovery_failed}
 
-        true ->
-          {:ok, tools}
-      end
+          true ->
+            {:ok, tools}
+        end
 
-    {result, state}
+      {result, state}
+    end
   end
 
   defp run_job(:remote_tools, state) do
@@ -934,11 +942,21 @@ defmodule LemonSkills.McpSource do
          }}
       end)
 
-    {_, state} = %{state | servers: servers} |> maybe_reload_servers([]) |> refresh_tools()
+    # Reload the global scope and every loaded project scope, so project servers
+    # whose trust was revoked elsewhere are evicted rather than reconnected.
+    scopes = Enum.uniq([nil | Map.keys(state.scopes)])
+
+    {_, state} =
+      scopes
+      |> Enum.reduce(%{state | servers: servers}, &maybe_reload_servers(&2, cwd: &1))
+      |> refresh_tools()
+
     {:ok, state}
   end
 
   defp run_job({:refresh_servers, names}, state) do
+    state = evict_untrusted(state)
+    names = names && Enum.filter(names, &Map.has_key?(state.servers, &1))
     {_, state} = refresh_tools(state, names)
     {:ok, state}
   end
@@ -954,6 +972,8 @@ defmodule LemonSkills.McpSource do
   end
 
   defp run_job({:reconnect, name, token}, state) do
+    state = evict_untrusted(state)
+
     case state.servers[name] do
       %{reconnect_token: ^token, unavailable: false} = server ->
         server = %{server | reconnect_timer: nil, reconnect_token: nil}
@@ -1311,7 +1331,69 @@ defmodule LemonSkills.McpSource do
       end)
 
     cache = if Map.get(state.scopes, scope) == names, do: cache, else: %{}
-    %{state | servers: servers, scopes: scopes, tool_cache: cache}
+    evict_untrusted(%{state | servers: servers, scopes: scopes, tool_cache: cache})
+  end
+
+  # Project-origin servers carry `project_trust` provenance. Close and forget
+  # every server whose project trust, digest or discovery switch no longer
+  # holds, in every scope, cancelling its pending reconnect.
+  defp evict_untrusted(state) do
+    {invalid, _checked} =
+      Enum.reduce(state.servers, {[], %{}}, fn {name, server}, {invalid, checked} ->
+        case project_provenance(server.config) do
+          nil ->
+            {invalid, checked}
+
+          provenance ->
+            trusted =
+              Map.get_lazy(checked, provenance, fn ->
+                LemonSkills.McpDiscovery.project_trusted?(provenance)
+              end)
+
+            {if(trusted, do: invalid, else: [name | invalid]),
+             Map.put(checked, provenance, trusted)}
+        end
+      end)
+
+    if invalid == [] do
+      state
+    else
+      Enum.each(invalid, fn name ->
+        server = state.servers[name]
+        if server.reconnect_timer, do: Process.cancel_timer(server.reconnect_timer)
+        close_client(server)
+      end)
+
+      invalid = MapSet.new(invalid)
+
+      %{
+        state
+        | servers: Map.reject(state.servers, fn {name, _} -> MapSet.member?(invalid, name) end),
+          scopes:
+            Map.new(state.scopes, fn {scope, names} ->
+              {scope, Enum.reject(names, &MapSet.member?(invalid, &1))}
+            end),
+          tool_cache:
+            Map.reject(state.tool_cache, fn {_, entry} ->
+              MapSet.member?(invalid, entry.server_name)
+            end)
+      }
+    end
+  end
+
+  defp project_provenance(config) do
+    case config do
+      {:stdio, _command, _args, opts} -> Keyword.get(opts, :project_trust)
+      {transport, _url, opts} when transport in [:http, :sse] -> Keyword.get(opts, :project_trust)
+      _ -> nil
+    end
+  end
+
+  defp trusted_config?(config) do
+    case project_provenance(config) do
+      nil -> true
+      provenance -> LemonSkills.McpDiscovery.project_trusted?(provenance)
+    end
   end
 
   defp refresh_server(name, server) do
@@ -1537,7 +1619,14 @@ defmodule LemonSkills.McpSource do
     end
   end
 
-  defp ensure_client(%{config: config} = server, :stdio) do
+  # Every spawn and reconnect re-checks a project-origin server's provenance.
+  defp ensure_client(%{config: config} = server, transport) do
+    if trusted_config?(config),
+      do: start_client(server, transport),
+      else: {:error, :project_untrusted}
+  end
+
+  defp start_client(%{config: config} = server, :stdio) do
     {command, args, source_opts} = stdio_parts(config)
 
     opts =
@@ -1559,7 +1648,7 @@ defmodule LemonSkills.McpSource do
     end
   end
 
-  defp ensure_client(%{config: config} = server, :http) do
+  defp start_client(%{config: config} = server, :http) do
     {url, opts} = http_parts(config)
     oauth = resolved_http_oauth(Keyword.get(opts, :oauth, []))
 
@@ -1579,7 +1668,7 @@ defmodule LemonSkills.McpSource do
     end
   end
 
-  defp ensure_client(%{config: config} = server, :sse) do
+  defp start_client(%{config: config} = server, :sse) do
     {url, opts} = http_parts(config)
     ready_timeout_ms = client_ready_timeout_ms(opts)
 

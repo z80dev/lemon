@@ -743,8 +743,15 @@ defmodule LemonSkills.Config do
   Server precedence for matching names (first wins, unnamed entries are
   additive): project `.lemon/mcp.json`, global `<agent_dir>/mcp.json`,
   `mcp_servers/0`, then servers imported from other tools by
-  `LemonSkills.McpDiscovery`. Disabled servers are omitted; see
-  `mcp_server_entries/1` for the full inventory with enable state.
+  `LemonSkills.McpDiscovery`. Project files, the project `.lemon/mcp.json`
+  included (its servers, `enabled_servers`/`disabled_servers` and `enabled`),
+  contribute only while the operator trusts their current digest; their servers
+  carry `project_trust: %{project:, digest:, external:}` so connection setup
+  re-checks that trust. So does a global or runtime server that runs only
+  because the trusted project enables it (`enabled_servers` or `enabled`); it
+  is a separate instance from the same server enabled independently. Disabled
+  servers are omitted; see `mcp_server_entries/1` for the full inventory with
+  enable state.
 
   ## Parameters
 
@@ -752,16 +759,21 @@ defmodule LemonSkills.Config do
   """
   @spec mcp_config(String.t() | nil) :: %{servers: [mcp_server_config()], enabled: boolean()}
   def mcp_config(cwd \\ nil) do
-    {project_config, global_config} = mcp_documents(cwd)
+    {project, global_config} = mcp_documents(cwd)
+    global_enabled = Map.get(global_config, "enabled", true)
+    enabled = Map.get(project.lemon, "enabled", global_enabled)
 
     servers =
-      for %{enabled: true, config: config} <- mcp_entries(cwd, project_config, global_config),
-          do: config
+      for %{enabled: true, config: config} <- mcp_entries(project, global_config), do: config
 
-    %{
-      servers: servers,
-      enabled: Map.get(project_config, "enabled", Map.get(global_config, "enabled", true))
-    }
+    # When only the trusted project's `enabled` flag turns MCP on, every server
+    # runs on that project's authority and inherits its provenance.
+    servers =
+      if enabled not in [false, nil] and global_enabled in [false, nil],
+        do: Enum.map(servers, &depend_on_project(&1, project.provenance)),
+        else: servers
+
+    %{servers: servers, enabled: enabled}
   end
 
   @typedoc "One merged MCP server with its source and enable state."
@@ -786,8 +798,8 @@ defmodule LemonSkills.Config do
   """
   @spec mcp_server_entries(String.t() | nil) :: [mcp_server_entry()]
   def mcp_server_entries(cwd \\ nil) do
-    {project_config, global_config} = mcp_documents(cwd)
-    mcp_entries(cwd, project_config, global_config)
+    {project, global_config} = mcp_documents(cwd)
+    mcp_entries(project, global_config)
   end
 
   @doc """
@@ -803,35 +815,31 @@ defmodule LemonSkills.Config do
       if not isolated_skill_roots?(), do: System.user_home()
   end
 
+  # The project document comes from the same gated snapshot as the imports.
   defp mcp_documents(cwd) do
-    project = if cwd, do: load_mcp_config_from_file(project_mcp_config_file(cwd)), else: %{}
-    {project, load_mcp_config_from_file(global_mcp_config_file())}
+    {LemonSkills.McpDiscovery.project_config(cwd),
+     load_mcp_config_from_file(global_mcp_config_file())}
   end
 
-  defp mcp_entries(cwd, project_config, global_config) do
-    external =
-      if LemonSkills.McpDiscovery.enabled?(),
-        do: LemonSkills.McpDiscovery.discover(cwd),
-        else: []
+  defp mcp_entries(project, global_config) do
+    project_config = project.lemon
+    provenance = project.provenance
 
     candidates =
-      document_candidates(project_config, :project) ++
-        document_candidates(global_config, :global) ++
+      document_candidates(project_config, :project, provenance) ++
+        document_candidates(global_config, :global, nil) ++
         (mcp_servers()
          |> Enum.flat_map(&parse_mcp_server_config/1)
          |> Enum.flat_map(&tagged_candidates(&1, true, "lemon", :runtime))) ++
-        Enum.flat_map(external, fn server ->
+        Enum.flat_map(project.servers, fn server ->
           server.entry
           |> parse_mcp_server_config()
           |> Enum.map(&put_mcp_opt(&1, :source, server.source))
+          |> Enum.map(&put_project_trust(&1, server.source.scope, provenance, true))
           |> Enum.flat_map(
             &tagged_candidates(&1, server.enabled, server.source.provider, server.source.scope)
           )
         end)
-
-    override = fn name ->
-      mcp_override(project_config, name) || mcp_override(global_config, name)
-    end
 
     candidates
     |> Enum.reduce({[], MapSet.new()}, fn entry, {entries, names} ->
@@ -848,20 +856,45 @@ defmodule LemonSkills.Config do
     |> elem(0)
     |> Enum.reverse()
     |> Enum.map(fn entry ->
-      state = if is_binary(entry.name), do: override.(entry.name)
+      {project_state, global_state} =
+        if is_binary(entry.name),
+          do: {mcp_override(project_config, entry.name), mcp_override(global_config, entry.name)},
+          else: {nil, nil}
 
-      enabled =
-        case state do
-          :disabled -> false
-          :enabled -> true
-          nil -> entry.source_enabled
-        end
+      state = project_state || global_state
+      enabled = override_enabled(state, entry.source_enabled)
 
-      entry |> Map.put(:override, state) |> Map.put(:enabled, enabled)
+      # A server enabled only by the trusted project's `enabled_servers` runs on
+      # that project's authority: it carries the project's provenance, so it is
+      # a separate instance from an independently enabled one and is evicted and
+      # never reconnected once that trust is revoked.
+      config =
+        if enabled and project_state == :enabled and
+             not override_enabled(global_state, entry.source_enabled),
+           do: depend_on_project(entry.config, provenance),
+           else: entry.config
+
+      %{entry | config: config} |> Map.put(:override, state) |> Map.put(:enabled, enabled)
     end)
   end
 
-  defp document_candidates(document, scope) do
+  defp override_enabled(:disabled, _source_enabled), do: false
+  defp override_enabled(:enabled, _source_enabled), do: true
+  defp override_enabled(nil, source_enabled), do: source_enabled
+
+  defp depend_on_project(config, provenance) when is_map(provenance) do
+    if Keyword.has_key?(mcp_config_opts(config), :project_trust),
+      do: config,
+      else: put_mcp_opt(config, :project_trust, Map.put(provenance, :external, false))
+  end
+
+  defp depend_on_project(config, nil), do: config
+
+  defp mcp_config_opts({:stdio, _command, _args, opts}), do: opts
+  defp mcp_config_opts({_transport, _url, opts}) when is_list(opts), do: opts
+  defp mcp_config_opts(_config), do: []
+
+  defp document_candidates(document, scope, provenance) do
     case Map.get(document, "servers", []) do
       servers when is_list(servers) ->
         Enum.flat_map(servers, fn entry ->
@@ -871,6 +904,7 @@ defmodule LemonSkills.Config do
 
           entry
           |> parse_mcp_server_config()
+          |> Enum.map(&put_project_trust(&1, scope, provenance, false))
           |> Enum.flat_map(&tagged_candidates(&1, enabled, "lemon", scope))
         end)
 
@@ -878,6 +912,11 @@ defmodule LemonSkills.Config do
         []
     end
   end
+
+  defp put_project_trust(config, :project, provenance, external) when is_map(provenance),
+    do: put_mcp_opt(config, :project_trust, Map.put(provenance, :external, external))
+
+  defp put_project_trust(config, _scope, _provenance, _external), do: config
 
   defp tagged_candidates(config, enabled, provider, scope) do
     [
@@ -929,6 +968,16 @@ defmodule LemonSkills.Config do
   @spec global_mcp_config_file() :: String.t()
   def global_mcp_config_file do
     Path.join(agent_dir(), "mcp.json")
+  end
+
+  @doc """
+  Operator trust records for foreign MCP project configs (see
+  `LemonSkills.McpConfig.trust_project/2`). Always under the agent directory,
+  never inside a project.
+  """
+  @spec mcp_project_trust_file() :: String.t()
+  def mcp_project_trust_file do
+    Path.join(agent_dir(), "mcp_project_trust.json")
   end
 
   @doc """

@@ -44,7 +44,7 @@ defmodule LemonCli.McpCommandTest do
       end)
 
     refute output =~ secret
-    assert {:ok, entry} = McpConfig.fetch("local", cwd: root)
+    assert {:ok, entry, %{project: _, digest: _}} = McpConfig.fetch("local", cwd: root)
     assert entry["args"] == ["--help", secret]
     assert entry["approval"] == "always"
     assert entry["tool_approvals"] == %{"read" => "never"}
@@ -100,19 +100,28 @@ defmodule LemonCli.McpCommandTest do
     saved = Application.fetch_env(:lemon_skills, :mcp_external_discovery)
     saved_home = Application.fetch_env(:lemon_skills, :mcp_discovery_home)
     saved_servers = System.get_env("LEMON_MCP_SERVERS")
+    saved_agent_dir = System.get_env("LEMON_AGENT_DIR")
+    agent_dir = root <> "-agent"
 
     on_exit(fn ->
       restore_app(:mcp_external_discovery, saved)
       restore_app(:mcp_discovery_home, saved_home)
+      File.rm_rf!(agent_dir)
 
       if saved_servers,
         do: System.put_env("LEMON_MCP_SERVERS", saved_servers),
         else: System.delete_env("LEMON_MCP_SERVERS")
+
+      if saved_agent_dir,
+        do: System.put_env("LEMON_AGENT_DIR", saved_agent_dir),
+        else: System.delete_env("LEMON_AGENT_DIR")
     end)
 
     Application.put_env(:lemon_skills, :mcp_external_discovery, true)
     Application.put_env(:lemon_skills, :mcp_discovery_home, Path.join(root, "home"))
     System.put_env("LEMON_MCP_SERVERS", "[]")
+    # Trust records belong to the operator's agent dir, outside the project.
+    System.put_env("LEMON_AGENT_DIR", agent_dir)
     secret = "sensitive-credential"
     File.mkdir_p!(Path.join(root, ".cursor"))
 
@@ -132,6 +141,41 @@ defmodule LemonCli.McpCommandTest do
       |> Map.fetch!("effective")
       |> Map.new(&{&1["name"], {&1["provider"], &1["scope"], &1["enabled"]}})
     end
+
+    # Another tool's project file is inert until the operator trusts it.
+    assert list.() == %{}
+
+    pending =
+      capture_io(fn -> assert CLI.run(["mcp", "list", "--all", "--cwd", root, "--json"]) == 0 end)
+      |> Jason.decode!()
+      |> Map.fetch!("project_trust")
+
+    assert %{"trust" => "untrusted", "files" => [".cursor/mcp.json"], "server_count" => 2} =
+             pending
+
+    refute Map.has_key?(pending, "servers")
+    text = capture_io(fn -> assert CLI.run(["mcp", "list", "--all", "--cwd", root]) == 0 end)
+    assert text =~ "untrusted; nothing is started until trusted"
+    refute text =~ secret
+
+    review =
+      capture_io(fn -> assert CLI.run(["mcp", "trust", "--cwd", root, "--json"]) == 0 end)
+      |> Jason.decode!()
+      |> Map.fetch!("project_trust")
+
+    assert Enum.map(review["servers"], &{&1["name"], &1["preview"]}) == [
+             {"dormant", "server"},
+             {"imported", "server " <> secret}
+           ]
+
+    capture_io(:stderr, fn ->
+      assert CLI.run(["mcp", "trust", "--cwd", root, "--digest", String.duplicate("0", 64)]) ==
+               1
+    end)
+
+    capture_io(fn ->
+      assert CLI.run(["mcp", "trust", "--cwd", root, "--digest", review["digest"]]) == 0
+    end)
 
     assert list.() == %{
              "dormant" => {"cursor", "project", false},
@@ -210,6 +254,78 @@ defmodule LemonCli.McpCommandTest do
 
     assert Jason.decode!(output) == %{"status" => "connected", "tool_count" => 1}
     refute File.exists?(marker)
+  end
+
+  test "test refuses a repository's untrusted .lemon/mcp.json without spawning it", %{
+    tmp_dir: root
+  } do
+    marker = Path.join(root, "spawned")
+    File.mkdir_p!(Path.join(root, ".lemon"))
+
+    File.write!(
+      Path.join(root, ".lemon/mcp.json"),
+      Jason.encode!(%{
+        "servers" => [
+          %{
+            "name" => "repo",
+            "type" => "stdio",
+            "command" => System.find_executable("sh"),
+            "args" => ["-c", "printf x > \"$0\"", marker]
+          }
+        ]
+      })
+    )
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["mcp", "test", "repo", "--cwd", root]) == 1
+      end)
+
+    assert error =~ "lemon mcp trust"
+    Process.sleep(200)
+    refute File.exists?(marker)
+  end
+
+  test "trust output sanitizes the project path and only suggests shell-safe commands", %{
+    tmp_dir: root
+  } do
+    saved_agent_dir = System.get_env("LEMON_AGENT_DIR")
+
+    on_exit(fn ->
+      if saved_agent_dir,
+        do: System.put_env("LEMON_AGENT_DIR", saved_agent_dir),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+
+    System.put_env("LEMON_AGENT_DIR", Path.join(root, "agent"))
+    quoted = Path.join(root, "a'b \"c\" $(touch pwned); `id` & d")
+    hostile = Path.join(root, "x\e[2J\ny\u202e")
+
+    for dir <- [quoted, hostile] do
+      File.mkdir_p!(Path.join(dir, ".lemon"))
+
+      File.write!(
+        Path.join(dir, ".lemon/mcp.json"),
+        Jason.encode!(%{"servers" => [%{"name" => "s", "type" => "stdio", "command" => "srv"}]})
+      )
+    end
+
+    text = capture_io(fn -> assert CLI.run(["mcp", "trust", "--cwd", quoted]) == 0 end)
+
+    assert [argument] =
+             Regex.run(~r/lemon mcp trust --cwd (.+) --digest [0-9a-f]{64}$/m, text,
+               capture: :all_but_first
+             )
+
+    assert {^quoted, 0} = System.cmd("sh", ["-c", "printf %s " <> argument], cd: root)
+    refute File.exists?(Path.join(root, "pwned"))
+
+    for args <- [["trust", "--cwd", hostile], ["list", "--all", "--cwd", hostile]] do
+      text = capture_io(fn -> assert CLI.run(["mcp" | args]) == 0 end)
+      refute String.contains?(text, ["\e", "\u202e", "x\ny"])
+      assert text =~ "x?[2J?y?"
+      refute text =~ "--cwd"
+    end
   end
 
   defp restore_app(key, :error), do: Application.delete_env(:lemon_skills, key)

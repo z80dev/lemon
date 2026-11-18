@@ -1,7 +1,7 @@
 defmodule LemonSkills.McpConfigTest do
   use ExUnit.Case, async: false
 
-  alias LemonSkills.{Config, McpConfig}
+  alias LemonSkills.{Config, McpConfig, McpDiscovery}
 
   @moduletag :tmp_dir
 
@@ -31,13 +31,18 @@ defmodule LemonSkills.McpConfigTest do
       Jason.encode!(%{"enabled" => false, "future" => [1], "servers" => [original]})
     )
 
+    # A pre-existing project file is repository content: the operator trusts it
+    # before their own edits keep that trust bound to what they write.
+    cwd = opts[:cwd]
+    assert {:error, :untrusted_project} = McpConfig.fetch("one", opts)
+    assert :ok = McpConfig.trust_project(cwd, McpDiscovery.project_status(cwd).digest)
     bytes = File.read!(path)
 
     assert {:error, :duplicate_name} = McpConfig.add(entry("one"), opts)
     assert File.read!(path) == bytes
     updated = Map.put(entry("one"), "env", %{"OTHER" => "value"})
     assert :ok = McpConfig.add(updated, Keyword.put(opts, :replace, true))
-    assert {:ok, saved} = McpConfig.fetch("one", opts)
+    assert {:ok, saved, %{digest: _}} = McpConfig.fetch("one", opts)
     assert saved["extension"] == %{"x" => 1}
     assert saved["env"] == %{"TOKEN" => "private", "OTHER" => "value"}
     document = path |> File.read!() |> Jason.decode!()

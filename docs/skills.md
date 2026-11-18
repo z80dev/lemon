@@ -495,6 +495,9 @@ lemon mcp add local --stdio server --env API_KEY=value -- --server-option
 lemon mcp list --json
 lemon mcp list --global
 lemon mcp list --all
+lemon mcp trust                 # review other tools' project MCP files
+lemon mcp trust --digest DIGEST # trust exactly the reviewed content
+lemon mcp untrust
 lemon mcp disable github
 lemon mcp enable github --global
 lemon mcp test filesystem
@@ -513,7 +516,9 @@ header, and per-tool-policy entries are reported as counts.
 `list --all` instead shows the effective merged set for the project (or the
 global scope with `--global`), including servers imported from other tools,
 with each server's source (`provider:scope`) and whether it is enabled; its
-`--json` form uses an `effective` key and the same redaction.
+`--json` form uses an `effective` key and the same redaction. For a project it
+also summarizes [project trust](#project-trust) under `project_trust` (state,
+digest, file names, server count and findings, never commands or URLs).
 
 `enable NAME` / `disable NAME` maintain the `enabled_servers` allowlist and
 `disabled_servers` denylist of the selected Lemon file (project by default,
@@ -620,27 +625,93 @@ imported; configure those servers in Lemon's own file. A missing `type` means
 stdio with a `command` or Streamable HTTP with a `url`; Gemini `httpUrl` is
 Streamable HTTP and its bare `url` is SSE; OpenCode `local`/`remote` map to
 stdio/HTTP; Windsurf `serverUrl` is the URL. Entries with both a command and a
-URL, or with invalid names, are skipped and do not claim a name. `${VAR}` and
-`${VAR:-default}` expand in the JSON providers (unresolved placeholders stay
-literal); VS Code `${workspaceFolder}` is the project directory; OpenCode files
-use OpenCode's `{env:VAR}` / `{file:path}` substitution and JSONC; Codex
-`env_vars`, `env_http_headers`, and `bearer_token_env_var` read the current
-environment, and relative Codex `cwd`/`./command` values resolve against the
-config file's directory. Imported servers keep Lemon's namespacing, validation,
-and approval behavior; without an `approval` field they default to `never`, like
-hand-written Lemon entries.
+URL, or with invalid names, are skipped and do not claim a name. Relative Codex
+`cwd`/`./command` values resolve against the config file's directory. Imported
+servers keep Lemon's namespacing, validation, and approval behavior; without an
+`approval` field they default to `never`, like hand-written Lemon entries.
 
-**Trust:** a project-level file from any of these tools starts its stdio servers
-the same way `.lemon/mcp.json` does when a session opens in that directory.
-Review a repository's MCP files before running Lemon in it, disable unwanted
-servers by name, or turn discovery off:
+Only user-level files read host values: `${VAR}` and `${VAR:-default}` expand
+in the JSON providers (unresolved placeholders stay literal); OpenCode files use
+OpenCode's `{env:VAR}` / `{file:path}` substitution and JSONC; Codex `env_vars`,
+`env_http_headers`, and `bearer_token_env_var` read the current environment.
+Project files never do, trusted or not: a project server whose values contain
+`${...}`, `{env:...}` or `{file:...}`, or a Codex project server with
+`env_vars`, `env_http_headers` or `bearer_token_env_var`, is rejected with a
+`host_value_reference` finding instead of expanding (a repository cannot place
+`$HOME`, a token or `~/.lemon/secrets_master_key` in a URL or header). An
+OpenCode project layer that overrides a user-level server carrying such values
+is rejected the same way. VS Code `${workspaceFolder}` is still the project
+directory. Configure credentials for those servers in Lemon's own MCP file.
+
+#### Project trust
+
+A cloned repository's MCP files are untrusted, Lemon's own `.lemon/mcp.json`
+included. Lemon starts and connects **nothing** from a project's
+`.lemon/mcp.json` (its servers, `enabled_servers`/`disabled_servers` and
+`enabled`) or from the project column above until the operator trusts that
+project's exact files:
+
+```bash
+lemon mcp trust --cwd PATH                  # files, digest, previews, findings
+lemon mcp trust --cwd PATH --digest DIGEST  # trust exactly what was reviewed
+lemon mcp untrust --cwd PATH
+```
+
+`trust` without `--digest` lists the files found, a bounded, redacted,
+single-line preview of each server's command or URL (URLs without credentials,
+query or fragment) and any rejected servers. The digest covers
+`.lemon/mcp.json` and every project file in the table, present or absent, so
+editing, adding, removing or re-pointing a symlinked one suspends trust until it
+is granted again; a stale digest is refused. Project files are read once per
+session build (regular files up to 1 MiB), and the digested bytes are the parsed
+bytes. Trust records live only in `<agent_dir>/mcp_project_trust.json`
+(respecting `LEMON_AGENT_DIR`), never in the project, and project files cannot
+grant it.
+
+`lemon mcp add|remove|enable|disable` on a project you already trust (or one
+with no project MCP files yet) re-binds the record to exactly the bytes they
+write; on an untrusted project they do not trust the repository's content.
+`lemon mcp test NAME` runs a project entry only from the trusted snapshot and
+re-checks that trust when it spawns, so trust revoked in between starts nothing.
+
+Project `.lemon/mcp.json` entries also never resolve host secrets: an entry
+with OAuth `client_secret_secret` or `token_secret` (encrypted-store or
+environment client secrets, persisted token caches) is rejected with a
+`host_value_reference` finding, trusted or not. Configure those servers in the
+global `~/.lemon/agent/mcp.json`.
+
+Trusted project servers carry their project and digest to connection setup, as
+does a global server that runs only because a trusted project's
+`enabled_servers` (or `enabled`) turns it on; the same server enabled
+independently is a separate instance. Every spawn and reconnect re-checks the
+trust record, the files' digest and, for other tools' files, the discovery
+switch; scope reloads and `mcp.servers.refresh` evict servers that no longer
+pass, in every loaded project, and cancel their reconnects.
+
+`lemon mcp list --all` summarizes pending trust; `lemon doctor` warns about
+pending or changed project files (`mcp.project_trust`) and rejected references
+(`mcp.project_host_values`); the control-plane `mcp.servers.list` method
+(`projectTrust`) and the web `/mcp` page show the same status for project
+directories that sessions have loaded. Viewing status never grants trust or
+reconnects. Project paths are printed terminal-safe, and command suggestions
+include `--cwd` only when the path can be quoted exactly.
+
+**Limitation:** the trust record is an ordinary file in the agent directory. An
+agent session with write access outside its project (or shell access) can write
+it, just as it can rewrite `~/.lemon/config.toml`; protecting operator state
+from write-enabled agents is tracked separately. Restrict write and shell tools
+for sessions in untrusted repositories.
+
+Turn all external discovery off (including trusted other-tool project files;
+Lemon's own trusted `.lemon/mcp.json` still applies), or opt in other tools'
+user-level files:
 
 ```bash
 export LEMON_MCP_EXTERNAL_DISCOVERY=0      # or config :lemon_skills, :mcp_external_discovery, false
 export LEMON_MCP_EXTERNAL_USER_DISCOVERY=1 # or config :lemon_skills, :mcp_external_user_discovery, true
 ```
 
-Project files and the omp user file are read by default. Other tools'
+Trusted project files and the omp user file are read by default. Other tools'
 user-level files are opt-in, matching omp; setting `CLAUDE_CONFIG_DIR` opts in
 Claude Code's user files from that directory. User-level files are read from
 the home directory, or from `config :lemon_skills, :mcp_discovery_home`; when
@@ -719,7 +790,8 @@ Create MCP configuration files:
 }
 ```
 
-**Project configuration**: `.lemon/mcp.json`
+**Project configuration**: `.lemon/mcp.json` (loaded only while the project is
+trusted; see [Project trust](#project-trust))
 ```json
 {
   "enabled": true,

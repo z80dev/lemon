@@ -7,6 +7,11 @@ defmodule LemonWeb.McpLive do
   `mcp.servers.refresh` (async: it reloads configuration, reconnects dead
   clients and re-discovers tools). Servers are shown by configured name and a
   redacted label (executable basename / URL host) only.
+
+  Project MCP trust (`projectTrust`) for directories that sessions have loaded
+  is displayed read-only: pending or changed trust, rejected host-secret
+  references and redacted previews. Granting trust stays a terminal action
+  (`lemon mcp trust`); this page has no control for it.
   """
 
   use LemonWeb, :live_view
@@ -91,12 +96,20 @@ defmodule LemonWeb.McpLive do
         apply_payload(socket, payload)
 
       {:error, error} ->
-        assign(socket, state: {:error, Rpc.message(error)}, servers: [], summary: %{})
+        assign(socket,
+          state: {:error, Rpc.message(error)},
+          servers: [],
+          summary: %{},
+          project_trust: []
+        )
     end
   end
 
   defp apply_payload(socket, payload) do
     servers = payload |> Map.get("servers", []) |> List.wrap() |> Enum.filter(&is_map/1)
+
+    project_trust =
+      payload |> Map.get("projectTrust", []) |> List.wrap() |> Enum.filter(&is_map/1)
 
     state =
       cond do
@@ -105,8 +118,24 @@ defmodule LemonWeb.McpLive do
         true -> :ok
       end
 
-    assign(socket, state: state, servers: servers, summary: payload["summary"] || %{})
+    assign(socket,
+      state: state,
+      servers: servers,
+      summary: payload["summary"] || %{},
+      project_trust: project_trust
+    )
   end
+
+  defp trust_tone("trusted"), do: "success"
+  defp trust_tone("changed"), do: "danger"
+  defp trust_tone(_), do: "warning"
+
+  defp trust_title("trusted"), do: "Trusted project MCP files"
+  defp trust_title("changed"), do: "Project MCP files changed since they were trusted"
+  defp trust_title(_), do: "Untrusted project MCP files"
+
+  defp list(value), do: value |> List.wrap() |> Enum.filter(&is_map/1)
+  defp text_list(value), do: value |> List.wrap() |> Enum.filter(&is_binary/1)
 
   # ── View helpers ─────────────────────────────────────────────────────────
 
@@ -223,6 +252,38 @@ defmodule LemonWeb.McpLive do
       <.callout :if={@state == :not_loaded} tone="info" title="Not discovered yet" class="mb-4">
         The runtime has not loaded its MCP configuration yet. Reconnect to load it and connect.
       </.callout>
+
+      <section :if={@project_trust != []} id="mcp-project-trust" class="mb-4 space-y-2">
+        <.callout
+          :for={entry <- @project_trust}
+          tone={trust_tone(entry["trust"])}
+          title={trust_title(entry["trust"])}
+        >
+          <p class="break-all font-mono text-2xs">{entry["project"]}</p>
+          <p class="text-xs">
+            Files: <span class="font-mono">{Enum.join(text_list(entry["files"]), ", ")}</span>
+          </p>
+          <ul :if={list(entry["servers"]) != []} class="mt-1 space-y-0.5 text-xs">
+            <li :for={server <- list(entry["servers"])}>
+              <span class="font-semibold">{server["name"]}</span>
+              · {server["provider"]} · {transport_label(server["transport"])} ·
+              <code class="break-all font-mono">{server["preview"]}</code>
+            </li>
+          </ul>
+          <ul :if={list(entry["rejected"]) != []} class="mt-1 space-y-0.5 text-xs">
+            <li :for={rejected <- list(entry["rejected"])}>
+              Rejected <span class="font-semibold">{rejected["server"]}</span>
+              ({rejected["provider"]}): references host values or secrets
+              (<span class="font-mono">{Enum.join(text_list(rejected["keys"]), ", ")}</span>)
+            </li>
+          </ul>
+          <p :if={entry["trust"] != "trusted"} class="mt-1 text-xs text-muted">
+            Nothing from these files starts until the operator reviews and trusts them from
+            a terminal on the runtime host with <code class="font-mono">lemon mcp trust</code>
+            in that directory. This page never grants trust.
+          </p>
+        </.callout>
+      </section>
 
       <div :if={@state == :ok and @servers == []} id="mcp-empty">
         <.empty_state

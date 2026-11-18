@@ -122,6 +122,63 @@ defmodule LemonWeb.McpLiveTest do
     assert html =~ "docs/skills.md"
   end
 
+  test "pending project trust is shown with redacted previews and no grant action", %{
+    conn: conn,
+    root: root
+  } do
+    project = Path.join(root, "project")
+    saved = Map.new(["LEMON_AGENT_DIR", "LEMON_MCP_SERVERS"], &{&1, System.get_env(&1)})
+
+    on_exit(fn ->
+      Enum.each(saved, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+    end)
+
+    System.put_env("LEMON_AGENT_DIR", Path.join(root, "agent"))
+    System.put_env("LEMON_MCP_SERVERS", "[]")
+    File.mkdir_p!(Path.join(project, ".lemon"))
+
+    File.write!(
+      Path.join(project, ".lemon/mcp.json"),
+      Jason.encode!(%{
+        "servers" => [
+          %{
+            "name" => "repo-tool",
+            "type" => "stdio",
+            "command" => "repo-server",
+            "args" => ["--token=sk-abcdefghijklmnop"]
+          },
+          %{
+            "name" => "repo-oauth",
+            "type" => "http",
+            "url" => "https://o.example/mcp",
+            "oauth" => %{"client_id" => "c", "token_secret" => "victim"}
+          }
+        ]
+      })
+    )
+
+    name = :"web_mcp_project_#{System.unique_integer([:positive])}"
+    start_supervised!({LemonSkills.McpSource, name: name, refresh_interval_ms: 3_600_000})
+    assert [] = LemonSkills.McpSource.discover_tools(name, cwd: project)
+    Application.put_env(:lemon_control_plane, :mcp_source, name)
+
+    {:ok, view, html} = live(conn, "/mcp")
+
+    assert has_element?(view, "#mcp-project-trust")
+    assert html =~ "Untrusted project MCP files"
+    assert html =~ ".lemon/mcp.json"
+    assert html =~ "repo-tool"
+    assert html =~ "repo-server"
+    assert html =~ "repo-oauth"
+    assert html =~ "lemon mcp trust"
+    refute html =~ "sk-abcdefghijklmnop"
+    refute has_element?(view, "#mcp-project-trust button")
+    assert LemonSkills.McpConfig.project_trust(project) == nil
+  end
+
   test "an unavailable source is not shown as empty", %{conn: conn} do
     Application.put_env(:lemon_control_plane, :mcp_source, :web_mcp_missing)
     {:ok, view, html} = live(conn, "/mcp")

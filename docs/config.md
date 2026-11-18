@@ -839,27 +839,38 @@ tunes depth, runtime, merge-back and persona availability/models.
 
 ## External MCP Configuration
 
-Lemon imports project MCP definitions from supported coding-tool configs;
-Lemon's own `.lemon/mcp.json` entries take precedence. Other tools' user-global
-configs require `LEMON_MCP_EXTERNAL_USER_DISCOVERY=1` (the omp user config is
-read by default, and `CLAUDE_CONFIG_DIR` opts in Claude user files).
-Disabled entries still claim their names; importing configuration does not
-launch an MCP server. See [MCP management](skills.md#manage-named-mcp-servers).
+Lemon imports MCP definitions from supported coding-tool configs; Lemon's own
+`.lemon/mcp.json` entries take precedence. Project files, the project
+`.lemon/mcp.json` included, start nothing until the operator trusts that
+project's exact files with `lemon mcp trust`; the digest-bound trust record
+lives in `<agent_dir>/mcp_project_trust.json`, never in the project, and every
+spawn or reconnect re-checks it. Other tools' user-global configs require
+`LEMON_MCP_EXTERNAL_USER_DISCOVERY=1` (the omp user config is read by default,
+and `CLAUDE_CONFIG_DIR` opts in Claude user files). Disabled entries still
+claim their names; importing configuration does not launch an MCP server. See
+[MCP management](skills.md#manage-named-mcp-servers) and
+[project trust](skills.md#project-trust).
+
+Only user-level files read host values. Project files never substitute
+`${VAR}`, `{env:}` or `{file:}`, or use Codex `env_vars`, `env_http_headers` or
+`bearer_token_env_var`, and a project `.lemon/mcp.json` never names OAuth
+`client_secret_secret` or `token_secret`; such project servers are rejected
+with a `host_value_reference` finding.
 
 OpenCode `opencode.json` and `opencode.jsonc` files accept comments and trailing
-commas. After JSONC decoding, Lemon substitutes `{env:NAME}` and `{file:path}`
-once within string **values**, including command arguments, environment
-values, URLs and headers; object keys are not interpolated. Environment
-values retain their exact bytes, including quotes, backslashes, newlines and
-leading/trailing whitespace. An unset environment variable substitutes an
-empty string.
+commas. In user-level OpenCode files, after JSONC decoding, Lemon substitutes
+`{env:NAME}` and `{file:path}` once within string **values**, including command
+arguments, environment values, URLs and headers; object keys are not
+interpolated. Environment values retain their exact bytes, including quotes,
+backslashes, newlines and leading/trailing whitespace. An unset environment
+variable substitutes an empty string.
 
 File placeholders resolve relative to the containing config file, accept
-absolute paths, and resolve `~/` against the discovery home when one is
-available. File contents are trimmed of leading/trailing whitespace; a missing
-or unreadable file (or `~/` without a discovery home) substitutes an empty
-string. Neither inserted environment values nor inserted file contents are
-interpreted again as JSON, interpolation directives or file imports.
+absolute paths, and resolve `~/` against the discovery home. File contents are
+trimmed of leading/trailing whitespace; a missing or unreadable file
+substitutes an empty string. Neither inserted environment values nor inserted
+file contents are interpreted again as JSON, interpolation directives or file
+imports.
 
 ## Environment Overrides
 

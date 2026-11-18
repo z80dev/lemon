@@ -225,6 +225,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.Audit.LlmReviewer` | `lib/lemon_skills/audit/llm_reviewer.ex` | Optional model-backed review for suspicious or malicious skill content |
 | `LemonSkills.Config` | `lib/lemon_skills/config.ex` | Directory paths, config load/save, ancestor `.agents/skills` discovery, git root detection |
 | `LemonSkills.Doctor.Checks.Skills` | `lib/lemon_skills/doctor/checks/skills.ex` | `lemon doctor` check for the global skills directory, registered via `config :lemon_core, :doctor_checks` |
+| `LemonSkills.Doctor.Checks.McpProjectTrust` | `lib/lemon_skills/doctor/checks/mcp_project_trust.ex` | `lemon doctor` check for other tools' project MCP files pending trust or rejected for host-value references |
 | `LemonSkills.BuiltinSeeder` | `lib/lemon_skills/builtin_seeder.ex` | Copies bundled skills from priv/ to user config dir on startup |
 | `LemonSkills.Discovery` | `lib/lemon_skills/discovery.ex` | Online skill discovery from GitHub (topic search) and registry URL probing |
 | `LemonSkills.HttpClient` | `lib/lemon_skills/http_client.ex` | HTTP client behaviour for dependency injection |
@@ -244,7 +245,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.SkillView` | `lib/lemon_skills/skill_view.ex` | Display projection of an entry: active state and what is missing |
 | `LemonSkills.PromptView` | `lib/lemon_skills/prompt_view.ex` | Renders bounded skill metadata into an agent's system prompt |
 | `LemonSkills.McpSource` | `lib/lemon_skills/mcp_source.ex` | MCP servers as a runtime tool source (stdio, HTTP, SSE) |
-| `LemonSkills.McpDiscovery` | `lib/lemon_skills/mcp_discovery.ex` | Imports MCP servers from other tools' configs (omp, Claude Code, Codex, Gemini, OpenCode, Cursor, Windsurf, VS Code, `mcp.json`) |
+| `LemonSkills.McpDiscovery` | `lib/lemon_skills/mcp_discovery.ex` | Imports MCP servers from other tools' configs (omp, Claude Code, Codex, Gemini, OpenCode, Cursor, Windsurf, VS Code, `mcp.json`); project files only while the operator trusts their digest, never with host-value substitution |
 | `LemonSkills.Source` | `lib/lemon_skills/source.ex` | Behaviour every skill source implements; `Sources.*` are its implementations |
 | `LemonSkills.SourceRouter` | `lib/lemon_skills/source_router.ex` | Resolves a URL or path to the source module that handles it |
 | `LemonSkills.Sources.Hermes` | `lib/lemon_skills/sources/hermes.ex` | Live official Nous Hermes catalog and sparse skill import source |
@@ -660,7 +661,7 @@ mix lemon.skill info <key>                    # Show skill details
 | `:http_client` | module | `LemonSkills.HttpClient.Httpc` | HTTP client module for discovery |
 | `:mcp_servers` | list | `[]` | MCP servers to expose as tools (see `LemonSkills.McpSource`) |
 | `:mcp_disabled` | boolean | `false` | Turn the MCP tool source off entirely |
-| `:mcp_external_discovery` | boolean | `true` | Import MCP servers from other tools' config files |
+| `:mcp_external_discovery` | boolean | `true` | Import MCP servers from other tools' config files (project files still need `lemon mcp trust`) |
 | `:mcp_external_user_discovery` | boolean | `false` | Also import other tools' user-level (`~/`) MCP files |
 | `:mcp_discovery_home` | string | home, unless isolated | Home directory for user-level MCP discovery |
 | `:audit_llm` | keyword | `[enabled: false]` | Optional model-backed audit review (`:enabled`, `:model`) |

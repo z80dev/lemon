@@ -6,6 +6,11 @@ defmodule LemonControlPlane.Methods.McpSupport do
   # commands, arguments, URLs, headers, environment, OAuth settings and raw
   # transport errors never cross the wire. Remote tool names/descriptions are
   # untrusted remote metadata and are bounded.
+  #
+  # `projectTrust` reports, for each project directory a session has loaded,
+  # pending or changed project MCP trust, rejected host-secret references and
+  # bounded redacted command/URL previews from `LemonSkills.McpDiscovery`. It
+  # only reads files: viewing never connects, reconnects or grants trust.
 
   alias LemonControlPlane.Methods.SkillsSupport
   alias LemonControlPlane.Protocol.Errors
@@ -13,6 +18,7 @@ defmodule LemonControlPlane.Methods.McpSupport do
   @max_servers 100
   @max_tools 100
   @max_description 280
+  @max_projects 20
 
   @doc "The registered MCP source (overridable for isolated tests)."
   def source, do: Application.get_env(:lemon_control_plane, :mcp_source, LemonSkills.McpSource)
@@ -39,18 +45,46 @@ defmodule LemonControlPlane.Methods.McpSupport do
       "available" => false,
       "loaded" => false,
       "servers" => [],
-      "summary" => summary([], false)
+      "summary" => summary([], false),
+      "projectTrust" => []
     }
   end
 
-  defp project(%{servers: servers, loaded: loaded}) do
+  defp project(%{servers: servers, loaded: loaded} = inventory) do
     projected = servers |> Enum.take(@max_servers) |> Enum.map(&server/1)
 
     %{
       "available" => true,
       "loaded" => loaded,
       "servers" => projected,
-      "summary" => summary(projected, length(servers) > length(projected))
+      "summary" => summary(projected, length(servers) > length(projected)),
+      "projectTrust" => project_trust(Map.get(inventory, :project_scopes, []))
+    }
+  end
+
+  defp project_trust(scopes) do
+    scopes
+    |> Enum.take(@max_projects)
+    |> Enum.flat_map(fn scope ->
+      case LemonSkills.McpDiscovery.project_status(scope) do
+        %{trust: :none} -> []
+        status -> [trust_entry(status)]
+      end
+    end)
+  end
+
+  defp trust_entry(status) do
+    %{
+      "project" => status.label,
+      "trust" => Atom.to_string(status.trust),
+      "files" => status.files,
+      "servers" =>
+        Enum.map(status.servers, &Map.take(&1, ~w(name provider transport enabled preview))),
+      "rejected" =>
+        for(
+          %{"reason" => "host_value_reference"} = finding <- status.findings,
+          do: Map.take(finding, ~w(server provider keys))
+        )
     }
   end
 
@@ -110,7 +144,9 @@ defmodule LemonControlPlane.Methods.McpServersList do
   @moduledoc """
   Handler for the read-only `mcp.servers.list` method: the runtime's globally
   configured MCP servers with connection status, transport, counts and their
-  published tools. Pure read; it never connects or reloads configuration.
+  published tools, plus `projectTrust` for loaded project directories (pending
+  or changed trust, rejected host-secret references, redacted previews). Pure
+  read; it never connects, reloads configuration or grants trust.
   """
 
   @behaviour LemonControlPlane.Method
