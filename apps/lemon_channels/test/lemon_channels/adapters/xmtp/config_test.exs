@@ -193,6 +193,21 @@ defmodule LemonChannels.Adapters.Xmtp.ConfigTest do
       assert errors == []
     end
 
+    test "validates allowed_inboxes and allow_all, passing them through resolve" do
+      resolved = Config.resolve(%{"allowed_inboxes" => ["abc123"], "allow_all" => false})
+      assert resolved.allowed_inboxes == ["abc123"]
+      assert resolved.allow_all == false
+      assert Config.validate(resolved, []) == []
+
+      for bad <- ["abc123", [""], [123]] do
+        errors = Config.validate(%{allowed_inboxes: bad}, [])
+        assert Enum.any?(errors, &String.contains?(&1, "gateway.xmtp.allowed_inboxes"))
+      end
+
+      errors = Config.validate(%{allow_all: "yes"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.xmtp.allow_all"))
+    end
+
     test "rejects non-map sections" do
       assert Config.validate(nil, []) == ["gateway.xmtp: must be a map"]
     end

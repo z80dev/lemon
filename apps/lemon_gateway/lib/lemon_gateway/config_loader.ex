@@ -259,7 +259,10 @@ defmodule LemonGateway.ConfigLoader do
       db_path: resolve_env_ref(fetch(xmtp, :db_path)),
       bridge_script: resolve_env_ref(fetch(xmtp, :bridge_script)),
       mock_mode: fetch(xmtp, :mock_mode),
-      sdk_module: resolve_env_ref(fetch(xmtp, :sdk_module))
+      sdk_module: resolve_env_ref(fetch(xmtp, :sdk_module)),
+      # Fail-closed sender authorization: no allowlist drops every inbound message.
+      allowed_inboxes: fetch(xmtp, :allowed_inboxes),
+      allow_all: fetch(xmtp, :allow_all)
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()

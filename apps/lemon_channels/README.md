@@ -879,6 +879,18 @@ duplicate a run. A definite router rejection is left unacknowledged so polling
 can redeliver it. `XMTP.Transport` supplies the script name, event tag, and log
 label directly to the shared `LemonChannels.PortBridge` GenServer.
 
+Inbound messages are authorized before dedupe, placeholder replies or
+submission: the sender inbox id must be in `gateway.xmtp.allowed_inboxes`
+(empty or missing drops everything unless `allow_all = true`), and group
+messages must mention the bot (`@<bot inbox id>` or `@<bot wallet>`). The
+policy is re-read from the current config for every message, so a config
+reload revokes access without a restart. Dropped messages are acknowledged to
+the bridge so it stops re-emitting them (they are not replayed later), and the
+drop log carries identifiers only, never content. The bridge syncs and lists
+only `ALLOWED` and `UNKNOWN` consent conversations, drops `DENIED` ones even if
+the SDK returns them, and re-checks consent immediately before every send. See
+[config docs](../../docs/config.md#sender-authorization).
+
 #### Configuration
 
 Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`. The XMTP transport still checks `enable_xmtp: true` before starting its bridge.

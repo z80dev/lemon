@@ -282,6 +282,10 @@ poll_interval_ms = 1500
 connect_timeout_ms = 15000
 require_live = true
 mock_mode = false
+# Required: XMTP inbox ids allowed to start runs. With no allowlist every
+# inbound message is dropped.
+allowed_inboxes = ["<sender inbox id>"]
+# allow_all = true               # explicit opt-out: accept every sender when allowed_inboxes is empty
 
 [gateway.voice]
 enabled = false
@@ -3190,6 +3194,8 @@ poll_interval_ms = 1500
 connect_timeout_ms = 15000
 require_live = true                 # production default: do not allow mock fallback
 mock_mode = false                   # set true only for local bridge testing
+allowed_inboxes = ["<sender inbox id>"]  # required: who may start runs (fail-closed when empty)
+# allow_all = true                 # explicit opt-out: accept every sender when allowed_inboxes is empty
 # Optional:
 # api_url = "https://api.xmtp.network"
 # inbox_id = "..."
@@ -3200,7 +3206,51 @@ Notes:
 - When `enable_xmtp = true`, Lemon auto-registers and starts the XMTP channel adapter.
 - `require_live = true` keeps health/readiness red unless the bridge is truly live (not mock mode).
 - `wallet_key_secret` is the canonical credential field. It can point to a Lemon secret name or to an env var name when using secret resolution with env fallback.
-- Non-text XMTP messages currently receive a text-only fallback response.
+- Non-text XMTP messages from authorized senders receive a text-only fallback response.
+
+### Sender authorization
+
+The XMTP adapter fails closed. It accepts messages only from the XMTP inbox ids
+listed in `gateway.xmtp.allowed_inboxes` (matched case-insensitively against the
+message's authenticated sender inbox id, never a resolved wallet address). With an
+empty or missing allowlist the adapter is unpaired: it logs a startup warning and
+drops every inbound message. `allow_all = true` explicitly accepts every sender when
+no allowlist is set; anyone who can message the wallet can then run the agent. A
+non-empty allowlist always wins over `allow_all`.
+
+- The policy (`allowed_inboxes`, `allow_all`) is re-read from the current config for every
+  inbound message, so a config reload that removes an inbox or turns `allow_all` off
+  applies to the next message without restarting the adapter.
+- Dropped messages are never deduped, replied to or submitted. The warning log names
+  the reason (`unpaired` or `sender_not_allowed`), the sender inbox id and the
+  conversation id, never the message content; use it to find an inbox id to allow.
+- Group conversations also require a mention of the bot: `@<bot inbox id>` or
+  `@<bot wallet address>` (case-insensitive). Group messages without one do not trigger
+  a run, even from an allowed sender.
+- The bridge never syncs, lists or streams conversations whose XMTP consent state is
+  `DENIED`. Conversations in the `ALLOWED` and `UNKNOWN` states (every new inbound DM
+  starts as `UNKNOWN`) are polled, and their senders are then checked against the
+  allowlist.
+- The bridge also re-reads a conversation's consent immediately before every send
+  (agent replies, placeholder and failure replies) and refuses `DENIED` or unreadable
+  consent with a `conversation_not_allowed` bridge error, so denying a conversation
+  also stops outbound delivery to it.
+
+### Upgrading an existing XMTP deployment
+
+Earlier releases accepted every XMTP sender. After upgrading, an XMTP adapter with no
+`allowed_inboxes` ignores all inbound messages until you act:
+
+1. Add each permitted sender's inbox id to `gateway.xmtp.allowed_inboxes`. Inbox ids
+   of senders who message the bot appear in the `xmtp inbound dropped:
+   reason=unpaired` warning log.
+2. Tell group members to mention the bot (`@<bot inbox id>` or `@<bot wallet address>`);
+   unmentioned group messages no longer start runs.
+3. Only if you deliberately want any XMTP identity to run the agent, set
+   `allow_all = true` and leave `allowed_inboxes` empty. This is an explicit opt-out
+   of sender authorization and is logged as a warning at startup.
+4. Messages dropped before you authorize a sender are acknowledged to the bridge and
+   are not replayed when the allowlist changes; those senders must send them again.
 
 ## Voice
 

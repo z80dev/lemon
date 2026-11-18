@@ -10,6 +10,10 @@ defmodule LemonChannels.Adapters.Xmtp.Config do
 
   Wallet environment references (`${NAME}`) are resolved before reaching the
   bridge. Secret names remain references to the encrypted secret store.
+
+  Inbound authorization fails closed: `allowed_inboxes` lists the XMTP inbox
+  ids allowed to start runs. With none configured every inbound message is
+  dropped unless `allow_all = true` is set explicitly.
   """
 
   @behaviour LemonCore.Config.Gateway.Channel
@@ -81,9 +85,24 @@ defmodule LemonChannels.Adapters.Xmtp.Config do
       "gateway.xmtp.max_connections"
     )
     |> Validator.validate_boolean(Map.get(section, :enable_relay), "gateway.xmtp.enable_relay")
+    |> validate_allowed_inboxes(Map.get(section, :allowed_inboxes))
+    |> Validator.validate_boolean(Map.get(section, :allow_all), "gateway.xmtp.allow_all")
   end
 
   def validate(_section, errors), do: ["gateway.xmtp: must be a map" | errors]
+
+  defp validate_allowed_inboxes(errors, nil), do: errors
+
+  defp validate_allowed_inboxes(errors, inboxes) when is_list(inboxes) do
+    if Enum.all?(inboxes, &(is_binary(&1) and String.trim(&1) != "")) do
+      errors
+    else
+      ["gateway.xmtp.allowed_inboxes: must be a list of non-empty inbox id strings" | errors]
+    end
+  end
+
+  defp validate_allowed_inboxes(errors, _inboxes),
+    do: ["gateway.xmtp.allowed_inboxes: must be a list of inbox id strings" | errors]
 
   defp validate_wallet_key(errors, nil), do: errors
 

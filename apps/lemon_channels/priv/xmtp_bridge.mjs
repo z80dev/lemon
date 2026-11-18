@@ -21,9 +21,11 @@ const MAX_SEEN_MESSAGE_KEYS = 5000;
 const ETH_IDENTIFIER_KIND = 0;
 const CONSENT_UNKNOWN = 0;
 const CONSENT_ALLOWED = 1;
-const CONSENT_DENIED = 2;
 const GROUP_MESSAGE_KIND_APPLICATION = 0;
-const ALL_CONSENT_STATES = [CONSENT_UNKNOWN, CONSENT_ALLOWED, CONSENT_DENIED];
+// DENIED conversations are never synced, listed or streamed. UNKNOWN stays in
+// because every new inbound DM starts there; Elixir authorizes each sender
+// against gateway.xmtp.allowed_inboxes before anything runs.
+const SYNCED_CONSENT_STATES = [CONSENT_ALLOWED, CONSENT_UNKNOWN];
 const SYNC_ALL_INTERVAL_MS = 15_000;
 let viemSignerUtilsPromise = null;
 
@@ -540,26 +542,42 @@ async function createClient(moduleName, sdkModule, connectCommand) {
   );
 }
 
+async function conversationConsentState(conversation) {
+  const value = conversation?.consentState;
+
+  try {
+    return typeof value === "function" ? await value.call(conversation) : value;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// The SDK filter is not trusted alone: a conversation is kept only when its own
+// consent state is readable and synced, so DENIED (or unreadable) ones drop out.
+async function syncedConsentConversations(conversations) {
+  if (!Array.isArray(conversations)) return [];
+
+  const kept = [];
+  for (const conversation of conversations) {
+    if (SYNCED_CONSENT_STATES.includes(await conversationConsentState(conversation))) {
+      kept.push(conversation);
+    }
+  }
+
+  return kept;
+}
+
 async function listConversations(client) {
   if (!client) return [];
 
   const api = client.conversations || client;
 
   if (typeof api.list === "function") {
-    try {
-      const result = await api.list({ consentStates: ALL_CONSENT_STATES });
-      if (Array.isArray(result)) return result;
-    } catch (_error) {
-      // Fall through to try list() without options for older SDKs.
-    }
-
-    const fallback = await api.list();
-    return Array.isArray(fallback) ? fallback : [];
+    return syncedConsentConversations(await api.list({ consentStates: SYNCED_CONSENT_STATES }));
   }
 
   if (typeof client.listConversations === "function") {
-    const result = await client.listConversations();
-    return Array.isArray(result) ? result : [];
+    return syncedConsentConversations(await client.listConversations());
   }
 
   return [];
@@ -646,7 +664,7 @@ async function syncConversations(client, options = {}) {
   const shouldSyncAll = forceSyncAll || now - state.lastNetworkSyncAtMs >= SYNC_ALL_INTERVAL_MS;
 
   if (shouldSyncAll && typeof api.syncAll === "function") {
-    await api.syncAll(ALL_CONSENT_STATES);
+    await api.syncAll(SYNCED_CONSENT_STATES);
     state.lastNetworkSyncAtMs = now;
     return;
   }
@@ -657,7 +675,7 @@ async function syncConversations(client, options = {}) {
   }
 
   if (typeof api.syncAll === "function") {
-    await api.syncAll(ALL_CONSENT_STATES);
+    await api.syncAll(SYNCED_CONSENT_STATES);
     state.lastNetworkSyncAtMs = now;
   }
 }
@@ -884,6 +902,17 @@ async function handleSend(command) {
     if (!conversation) {
       emitError("XMTP conversation not found", {
         code: "conversation_not_found",
+        conversation_id: conversationIdValue,
+      });
+      return;
+    }
+
+    // Re-read consent right before every send, whether the conversation came
+    // from the poll cache or a direct lookup: an operator may have denied it
+    // since. DENIED or unreadable consent never receives a message.
+    if (!SYNCED_CONSENT_STATES.includes(await conversationConsentState(conversation))) {
+      emitError("XMTP conversation consent does not allow sending", {
+        code: "conversation_not_allowed",
         conversation_id: conversationIdValue,
       });
       return;

@@ -43,10 +43,12 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
   @impl true
   def init(opts) do
-    cfg =
-      config()
+    config_overrides =
+      %{}
       |> merge_config(Keyword.get(opts, :config))
       |> merge_config(Keyword.drop(opts, [:config]))
+
+    cfg = merge_config(config(), config_overrides)
 
     :ok = Ets.init(@dedupe_table)
     :ets.delete_all_objects(@dedupe_table)
@@ -60,24 +62,29 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     require_live = require_live?(cfg)
     connect_timer_ref = schedule_connect_timeout(connect_timeout_ms)
 
-    {:ok,
-     %{
-       port_server: port_server,
-       connect_cfg: cfg,
-       poll_interval_ms: poll_interval_ms,
-       connect_timeout_ms: connect_timeout_ms,
-       require_live: require_live,
-       connected?: false,
-       connection_mode: nil,
-       last_connected_at: nil,
-       last_error: nil,
-       fatal_error: nil,
-       poll_timer_ref: nil,
-       connect_timer_ref: connect_timer_ref,
-       account_id: normalize_account_id(cfg),
-       seen_inbound_order: :queue.new(),
-       seen_inbound_count: 0
-     }}
+    state = %{
+      port_server: port_server,
+      connect_cfg: cfg,
+      poll_interval_ms: poll_interval_ms,
+      connect_timeout_ms: connect_timeout_ms,
+      require_live: require_live,
+      connected?: false,
+      connection_mode: nil,
+      last_connected_at: nil,
+      last_error: nil,
+      fatal_error: nil,
+      poll_timer_ref: nil,
+      connect_timer_ref: connect_timer_ref,
+      account_id: normalize_account_id(cfg),
+      config_overrides: config_overrides,
+      self_inbox_id: normalize_inbox_id(fetch_meta(cfg, :inbox_id)),
+      self_wallet_address: normalize_wallet(fetch_meta(cfg, :wallet_address)),
+      seen_inbound_order: :queue.new(),
+      seen_inbound_count: 0
+    }
+
+    log_authorization_mode(authorization_policy(state))
+    {:ok, state}
   rescue
     error ->
       Logger.warning("xmtp transport failed to initialize: #{inspect(error)}")
@@ -266,6 +273,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
           last_error: nil
       }
       |> maybe_clear_fatal_for_live()
+      |> remember_self_identity(event)
 
     case {mode, state.require_live} do
       {:live, _} ->
@@ -315,32 +323,17 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   defp handle_bridge_event(%{"type" => "message"} = event, state) do
     if receive_available?(state) do
       normalized = normalize_inbound(event)
-      dedupe_key = inbound_dedupe_key(normalized, event)
       bridge_dedupe_key = normalize_blank(event["bridge_dedupe_key"])
 
-      if Ets.check_and_mark(@dedupe_table, dedupe_key, :infinity) == :seen do
-        _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
-        Logger.debug("xmtp duplicate inbound ignored")
-        state
-      else
-        case handle_inbound(normalized, state) do
-          {:ok, state} ->
-            _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
-            remember_new_inbound_key(state, dedupe_key)
+      case authorize_inbound(normalized, state) do
+        :ok ->
+          handle_authorized_message(normalized, event, bridge_dedupe_key, state)
 
-          {{:error, _} = error, state} ->
-            state =
-              if SubmissionOutcome.uncertain?(error) do
-                _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
-                remember_new_inbound_key(state, dedupe_key)
-              else
-                Ets.forget(@dedupe_table, dedupe_key)
-                state
-              end
-
-            send_submission_failure(normalized, state.port_server, error)
-            state
-        end
+        {:drop, reason} ->
+          log_dropped_inbound(reason, normalized)
+          # Stop the bridge re-emitting it; nothing is deduped, replied or submitted.
+          _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
+          state
       end
     else
       Logger.warning("xmtp inbound ignored because transport is unavailable")
@@ -371,6 +364,139 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   end
 
   defp handle_bridge_event(_event, state), do: state
+
+  defp handle_authorized_message(normalized, event, bridge_dedupe_key, state) do
+    dedupe_key = inbound_dedupe_key(normalized, event)
+
+    if Ets.check_and_mark(@dedupe_table, dedupe_key, :infinity) == :seen do
+      _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
+      Logger.debug("xmtp duplicate inbound ignored")
+      state
+    else
+      case handle_inbound(normalized, state) do
+        {:ok, state} ->
+          _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
+          remember_new_inbound_key(state, dedupe_key)
+
+        {{:error, _} = error, state} ->
+          state =
+            if SubmissionOutcome.uncertain?(error) do
+              _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
+              remember_new_inbound_key(state, dedupe_key)
+            else
+              Ets.forget(@dedupe_table, dedupe_key)
+              state
+            end
+
+          send_submission_failure(normalized, state.port_server, error)
+          state
+      end
+    end
+  end
+
+  # Sender authorization, checked before dedupe, placeholder replies and
+  # submission. A non-empty `allowed_inboxes` is authoritative; with none the
+  # transport is unpaired and drops everything unless `allow_all` is explicit.
+  # Only the MLS-authenticated sender inbox id is trusted, never a wallet the
+  # bridge resolved for display. Group messages must also mention the bot.
+  defp authorize_inbound(normalized, state) do
+    policy = authorization_policy(state)
+
+    with :ok <- sender_authorization(policy, normalized.sender_inbox_id) do
+      if normalized.is_group and not mentions_self?(normalized.prompt, state),
+        do: {:drop, :no_mention},
+        else: :ok
+    end
+  end
+
+  # Read for every message from the cached canonical config, so a config reload
+  # that narrows or revokes access applies to the next message without a
+  # restart. Start options (tests and harnesses) still override it, as in init.
+  # Secret references are not resolved here; the policy never needs them.
+  defp authorization_policy(state) do
+    cfg = merge_config(GatewayConfig.get(:xmtp, %{}), state.config_overrides)
+
+    %{
+      allowed_inboxes: parse_allowed_inboxes(fetch_meta(cfg, :allowed_inboxes)),
+      allow_all: fetch_meta(cfg, :allow_all) == true
+    }
+  end
+
+  defp sender_authorization(%{allowed_inboxes: allowed} = policy, sender_inbox_id) do
+    cond do
+      MapSet.size(allowed) > 0 ->
+        if is_binary(sender_inbox_id) and MapSet.member?(allowed, sender_inbox_id),
+          do: :ok,
+          else: {:drop, :sender_not_allowed}
+
+      policy.allow_all ->
+        :ok
+
+      true ->
+        {:drop, :unpaired}
+    end
+  end
+
+  defp mentions_self?(text, state) when is_binary(text) do
+    [state.self_inbox_id, state.self_wallet_address]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.any?(fn id -> Regex.match?(~r/(?:^|\W)@#{Regex.escape(id)}(?!\w)/iu, text) end)
+  end
+
+  defp mentions_self?(_text, _state), do: false
+
+  defp remember_self_identity(state, event) do
+    %{
+      state
+      | self_inbox_id: normalize_inbox_id(event["inbox_id"]) || state.self_inbox_id,
+        self_wallet_address:
+          normalize_wallet(event["wallet_address"]) || state.self_wallet_address
+    }
+  end
+
+  defp parse_allowed_inboxes(list) when is_list(list) do
+    list
+    |> Enum.map(&normalize_inbox_id/1)
+    |> Enum.filter(&is_binary/1)
+    |> MapSet.new()
+  end
+
+  defp parse_allowed_inboxes(_), do: MapSet.new()
+
+  # Content-free: identifiers and the reason only, never the message body.
+  defp log_dropped_inbound(:no_mention, normalized) do
+    Logger.debug(
+      "xmtp inbound dropped: reason=no_mention conversation_id=#{inspect(normalized.conversation_id)}"
+    )
+  end
+
+  defp log_dropped_inbound(reason, normalized) do
+    Logger.warning(
+      "xmtp inbound dropped: reason=#{reason} " <>
+        "sender_inbox_id=#{inspect(normalized.sender_inbox_id)} " <>
+        "conversation_id=#{inspect(normalized.conversation_id)}; " <>
+        "add the inbox id to gateway.xmtp.allowed_inboxes to authorize it"
+    )
+  end
+
+  defp log_authorization_mode(policy) do
+    cond do
+      MapSet.size(policy.allowed_inboxes) > 0 ->
+        :ok
+
+      policy.allow_all ->
+        Logger.warning(
+          "XMTP accepts every sender (gateway.xmtp.allow_all = true); " <>
+            "anyone who can message the wallet can run the agent"
+        )
+
+      true ->
+        Logger.warning(
+          "XMTP is not paired: gateway.xmtp.allowed_inboxes is empty, " <>
+            "so every inbound message is ignored"
+        )
+    end
+  end
 
   defp handle_inbound(normalized, state) do
     case inbound_action(normalized) do

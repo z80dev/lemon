@@ -67,7 +67,8 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
       xmtp: %{
         require_live: false,
         poll_interval_ms: 30_000,
-        connect_timeout_ms: 5_000
+        connect_timeout_ms: 5_000,
+        allowed_inboxes: ["inbox-e2e-1", "inbox-submission-outcome"]
       }
     })
 

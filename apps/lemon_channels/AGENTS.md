@@ -40,6 +40,12 @@ and script notifications.
 - Discord slash commands must pass the same guild/channel allowlists and
   `deny_unbound_channels` checks as ordinary messages before any read, mutation,
   cancellation, reflection or runtime call.
+- XMTP authorizes the MLS-authenticated sender inbox id against
+  `gateway.xmtp.allowed_inboxes`, re-read from current config per message,
+  before dedupe, placeholder replies or submission; empty is deny-all unless
+  `allow_all: true`. Group messages also need an `@` mention of the bot inbox
+  id or wallet. The bridge never syncs, lists or streams DENIED-consent
+  conversations and re-checks consent immediately before every send.
 - Group/supergroup/channel trigger mode defaults to mentions. Keep topic/thread
   scope in auth, bindings, delivery and state keys.
 - Diagnostics and notification JSON expose bounded metadata, not credentials,
