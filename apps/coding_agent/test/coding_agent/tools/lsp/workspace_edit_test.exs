@@ -362,4 +362,136 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
     refute File.exists?(Path.join(tmp, "never.c"))
     assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id, opts[:session_id])
   end
+
+  describe "operations revalidated against earlier operations" do
+    setup %{tmp: tmp} do
+      ws = Path.join(tmp, "ws")
+      outside = Path.join(tmp, "outside")
+      File.mkdir_p!(Path.join(ws, "d"))
+      File.mkdir_p!(outside)
+      File.write!(Path.join(outside, "secret.c"), "secret\n")
+      File.ln_s!(outside, Path.join(ws, "d/sub"))
+      File.ln_s!(Path.join(outside, "secret.c"), Path.join(ws, "d/file.c"))
+      {:ok, ws: ws, outside: outside}
+    end
+
+    defp run(ws, changes) do
+      {:ok, ops} = WorkspaceEdit.plan(%{"documentChanges" => changes})
+      WorkspaceEdit.apply(ops, ws, [filesystem_checkpoints: false], nil, %{tool: "lsp"})
+    end
+
+    defp rename_d(ws),
+      do: %{"kind" => "rename", "oldUri" => uri(ws, "d"), "newUri" => uri(ws, "e")}
+
+    test "rename then text edit through a moved symlinked directory", %{ws: ws, outside: out} do
+      File.write!(Path.join(out, "x.c"), "keep\n")
+
+      result =
+        run(ws, [
+          rename_d(ws),
+          %{"textDocument" => %{"uri" => uri(ws, "e/sub/x.c")}, "edits" => [edit(0, 0, 4, "PWN")]}
+        ])
+
+      assert {:error, message, _receipt} = result
+      assert message =~ "symlink"
+      assert File.read!(Path.join(out, "x.c")) == "keep\n"
+    end
+
+    test "rename then text edit of a moved file symlink", %{ws: ws, outside: out} do
+      result =
+        run(ws, [
+          rename_d(ws),
+          %{"textDocument" => %{"uri" => uri(ws, "e/file.c")}, "edits" => [edit(0, 0, 0, "x")]}
+        ])
+
+      assert {:error, message, _receipt} = result
+      assert message =~ "symlink"
+      assert File.read!(Path.join(out, "secret.c")) == "secret\n"
+      assert File.read_link!(Path.join(ws, "e/file.c")) == Path.join(out, "secret.c")
+    end
+
+    test "rename then create or delete below a moved symlink", %{ws: ws, outside: out} do
+      for change <- [
+            %{"kind" => "create", "uri" => uri(ws, "e/sub/new.c")},
+            %{"kind" => "delete", "uri" => uri(ws, "e/sub/secret.c")},
+            %{
+              "kind" => "rename",
+              "oldUri" => uri(ws, "e/sub/secret.c"),
+              "newUri" => uri(ws, "s.c")
+            }
+          ] do
+        assert {:error, message, _receipt} = run(ws, [rename_d(ws), change])
+        assert message =~ "symlink"
+        assert File.read!(Path.join(out, "secret.c")) == "secret\n"
+        refute File.exists?(Path.join(out, "new.c"))
+        refute File.exists?(Path.join(ws, "s.c"))
+        File.rename!(Path.join(ws, "e"), Path.join(ws, "d"))
+      end
+    end
+
+    test "delete then rename a symlink-holding directory into its place", %{ws: ws, outside: out} do
+      File.mkdir_p!(Path.join(ws, "e/sub"))
+      File.write!(Path.join(ws, "e/sub/secret.c"), "inside\n")
+
+      result =
+        run(ws, [
+          %{"kind" => "delete", "uri" => uri(ws, "e"), "options" => %{"recursive" => true}},
+          rename_d(ws),
+          %{
+            "textDocument" => %{"uri" => uri(ws, "e/sub/secret.c")},
+            "edits" => [edit(0, 0, 6, "PWN")]
+          }
+        ])
+
+      assert {:error, message, _receipt} = result
+      assert message =~ "symlink"
+      assert File.read!(Path.join(out, "secret.c")) == "secret\n"
+    end
+
+    test "refuses targets outside the workspace before any write", %{ws: ws, outside: out} do
+      File.write!(Path.join(ws, "in.c"), "in\n")
+      File.mkdir_p!(Path.join(out, "tree"))
+      File.write!(Path.join(out, "tree/t.c"), "t\n")
+      ext = &Text.path_to_uri(Path.join(out, &1))
+      first = %{"kind" => "create", "uri" => uri(ws, "first.c")}
+
+      for change <- [
+            %{"textDocument" => %{"uri" => ext.("secret.c")}, "edits" => [edit(0, 0, 6, "PWN")]},
+            %{"kind" => "create", "uri" => ext.("new.c")},
+            %{"kind" => "create", "uri" => ext.("secret.c"), "options" => %{"overwrite" => true}},
+            %{"kind" => "delete", "uri" => ext.("secret.c")},
+            %{"kind" => "delete", "uri" => ext.("tree"), "options" => %{"recursive" => true}},
+            %{"kind" => "rename", "oldUri" => ext.("secret.c"), "newUri" => uri(ws, "s.c")},
+            %{"kind" => "rename", "oldUri" => uri(ws, "in.c"), "newUri" => ext.("in.c")},
+            %{
+              "kind" => "rename",
+              "oldUri" => uri(ws, "in.c"),
+              "newUri" => ext.("secret.c"),
+              "options" => %{"overwrite" => true}
+            }
+          ] do
+        assert {:error, message} = run(ws, [first, change])
+        assert message =~ "outside the workspace"
+        refute File.exists?(Path.join(ws, "first.c"))
+        assert File.read!(Path.join(out, "secret.c")) == "secret\n"
+        assert File.read!(Path.join(out, "tree/t.c")) == "t\n"
+        assert File.read!(Path.join(ws, "in.c")) == "in\n"
+        refute File.exists?(Path.join(out, "new.c"))
+        refute File.exists?(Path.join(out, "in.c"))
+        refute File.exists?(Path.join(ws, "s.c"))
+      end
+    end
+
+    test "session confinement stays stricter than the workspace", %{ws: ws} do
+      {:ok, ops} =
+        WorkspaceEdit.plan(%{
+          "documentChanges" => [%{"kind" => "create", "uri" => uri(ws, "x.c")}]
+        })
+
+      opts = [filesystem_checkpoints: false, confine_mutations_to: Path.join(ws, "d")]
+      assert {:error, message} = WorkspaceEdit.apply(ops, ws, opts, nil, %{})
+      assert message =~ "confined"
+      refute File.exists?(Path.join(ws, "x.c"))
+    end
+  end
 end

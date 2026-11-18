@@ -8,8 +8,13 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   legacy `changes` map becomes one text operation per file.
 
   Applying follows the coding-tool mutation conventions: every affected path
-  is locked through `CodingAgent.MutationLock`, targets are validated with
-  `FileValidation.check_mutation_target/2`, a filesystem checkpoint is taken
+  is locked through `CodingAgent.MutationLock`, and every target (both rename
+  endpoints included) must lie inside the workspace (`cwd`) — server-supplied
+  targets outside it are refused — and pass
+  `FileValidation.check_mutation_target/2` (including any stricter session
+  confinement) plus a canonical-path check, both up front and again
+  immediately before each operation (so an earlier rename or create cannot
+  route a later operation through a symlink); a filesystem checkpoint is taken
   before the first write, text edits for untouched files are computed (and
   thereby validated) before anything is written, files are replaced atomically
   through a sibling temp file, and `FileReadTracker` is refreshed afterwards.
@@ -20,6 +25,7 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   alias CodingAgent.Tools.{CheckpointGuard, FileValidation}
   alias CodingAgent.Tools.Lsp.Text
   alias LemonAgent.Tools.AbortHelpers
+  alias LemonCore.TrustedRoot
 
   @type op ::
           %{kind: :text, path: String.t(), edits: [map()]}
@@ -185,14 +191,10 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
 
   @doc "Every filesystem path the operations may change."
   @spec affected_paths([op()]) :: [String.t()]
-  def affected_paths(ops) do
-    ops
-    |> Enum.flat_map(fn
-      %{kind: :rename, from: from, to: to} -> [from, to]
-      %{path: path} -> [path]
-    end)
-    |> Enum.uniq()
-  end
+  def affected_paths(ops), do: ops |> Enum.flat_map(&op_paths/1) |> Enum.uniq()
+
+  defp op_paths(%{kind: :rename, from: from, to: to}), do: [from, to]
+  defp op_paths(%{path: path}), do: [path]
 
   @doc """
   Apply planned operations to disk.
@@ -285,22 +287,65 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
     end
   end
 
-  defp validate_targets(ops, cwd, opts) do
+  defp validate_targets(ops, cwd, opts), do: ops |> affected_paths() |> check_targets(cwd, opts)
+
+  # Run before each operation is committed as well as up front: an earlier
+  # create, rename or delete can move a symlink under a path that was missing
+  # or a real directory when the whole edit was first validated.
+  defp check_targets(paths, cwd, opts) do
     mutation_opts =
       opts |> Keyword.put(:mutation_root, cwd) |> Keyword.put(:allow_directories, true)
 
-    ops
-    |> Enum.flat_map(fn
-      %{kind: :rename, from: from, to: to} -> [from, to]
-      %{path: path} -> [path]
-    end)
-    |> Enum.uniq()
-    |> Enum.reduce_while(:ok, fn path, :ok ->
-      case FileValidation.check_mutation_target(path, mutation_opts) do
-        :ok -> {:cont, :ok}
+    Enum.reduce_while(paths, :ok, fn path, :ok ->
+      with :ok <- FileValidation.check_mutation_target(path, mutation_opts),
+           :ok <- check_canonical(path, cwd) do
+        {:cont, :ok}
+      else
         error -> {:halt, error}
       end
     end)
+  end
+
+  # Every target (both rename endpoints included) must lie inside the
+  # workspace and resolve, through its nearest existing ancestor, to the same
+  # relative place inside the canonical workspace. Session confinement
+  # (`confine_mutations_to:`) is enforced on top by `check_mutation_target/2`.
+  defp check_canonical(path, cwd) do
+    cwd = Path.expand(cwd)
+
+    if TrustedRoot.inside?(path, cwd) do
+      existing = existing_ancestor(path)
+
+      expected =
+        with {:ok, real_cwd} <- TrustedRoot.realpath(cwd) do
+          if existing == cwd,
+            do: {:ok, real_cwd},
+            else: {:ok, Path.join(real_cwd, Path.relative_to(existing, cwd))}
+        end
+
+      case {expected, TrustedRoot.realpath(existing)} do
+        {{:ok, real}, {:ok, real}} ->
+          :ok
+
+        {{:ok, _}, {:ok, _}} ->
+          {:error, "Workspace edit target resolves through a symlink: #{path}"}
+
+        _ ->
+          {:error, "Cannot resolve workspace edit target: #{path}"}
+      end
+    else
+      {:error, "Workspace edit target is outside the workspace #{cwd}: #{path}"}
+    end
+  end
+
+  # The target itself when it exists (checked above to be no symlink), else
+  # its deepest existing parent.
+  defp existing_ancestor(path) do
+    parent = Path.dirname(path)
+
+    if parent == path or match?({:ok, _}, File.lstat(path)),
+      do: path,
+      else: existing_ancestor(parent)
   end
 
   # Text edits for files no earlier resource operation touches are computed
@@ -340,10 +385,11 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   defp commit(prepared, cwd, signal, opts) do
     Enum.reduce_while(prepared, {:ok, [], []}, fn op, {:ok, changed, applied} ->
       result =
-        with :ok <- check_deadline(opts) do
-          if AbortHelpers.aborted?(signal),
-            do: {:error, "Operation aborted"},
-            else: commit_op(op, cwd)
+        with :ok <- check_deadline(opts),
+             :ok <-
+               if(AbortHelpers.aborted?(signal), do: {:error, "Operation aborted"}, else: :ok),
+             :ok <- check_targets(op_paths(op), cwd, opts) do
+          commit_op(op, cwd)
         end
 
       case result do
