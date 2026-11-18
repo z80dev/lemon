@@ -48,6 +48,9 @@ defmodule LemonControlPlane.HTTP.RouterTest do
     previous_image_url_fetcher =
       Application.fetch_env(:lemon_control_plane, :openai_compat_image_url_fetcher)
 
+    previous_image_url_http_options =
+      Application.fetch_env(:lemon_control_plane, :openai_compat_image_url_http_options)
+
     on_exit(fn ->
       if previous do
         Application.put_env(:lemon_control_plane, :openai_compat_submitter, previous)
@@ -80,6 +83,7 @@ defmodule LemonControlPlane.HTTP.RouterTest do
       restore_env(:openai_compat_image_url_fetch, previous_image_url_fetch)
       restore_env(:openai_compat_image_url_allowed_hosts, previous_image_url_allowed_hosts)
       restore_env(:openai_compat_image_url_fetcher, previous_image_url_fetcher)
+      restore_env(:openai_compat_image_url_http_options, previous_image_url_http_options)
       restore_env(:model_catalog, previous_catalog)
     end)
 
@@ -470,6 +474,174 @@ defmodule LemonControlPlane.HTTP.RouterTest do
 
     assert response.status == 400
     assert response.body["error"]["message"] == "image URL host is not allowed"
+  end
+
+  describe "default remote image URL fetcher" do
+    setup do
+      Application.put_env(:lemon_control_plane, :openai_compat_image_url_fetch, true)
+
+      Application.put_env(:lemon_control_plane, :openai_compat_image_url_allowed_hosts, [
+        "images.example.test"
+      ])
+
+      Application.delete_env(:lemon_control_plane, :openai_compat_image_url_fetcher)
+      :ok
+    end
+
+    # Serves one TLS response for `images.example.test` on loopback. The
+    # resolver passthrough maps the allowlisted host to 127.0.0.1 (permitted
+    # only through the internal test env key) and records any other lookup.
+    defp image_server(handler) do
+      parent = self()
+      san = {:Extension, {2, 5, 29, 17}, false, [{:dNSName, ~c"images.example.test"}]}
+      key = [key: {:namedCurve, :secp256r1}, digest: :sha256]
+
+      %{server_config: server, client_config: client} =
+        :public_key.pkix_test_data(%{
+          server_chain: %{root: key, intermediates: [], peer: [{:extensions, [san]} | key]},
+          client_chain: %{root: key, intermediates: [], peer: key}
+        })
+
+      {:ok, listen} =
+        :ssl.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}] ++ server)
+
+      {:ok, {_, port}} = :ssl.sockname(listen)
+
+      server_pid =
+        spawn_link(fn ->
+          {:ok, socket} = :ssl.transport_accept(listen)
+          {:ok, socket} = :ssl.handshake(socket, 5_000)
+          {:ok, head} = :ssl.recv(socket, 0, 5_000)
+          send(parent, {:image_hop, head})
+          handler.(socket)
+        end)
+
+      on_exit(fn ->
+        Process.unlink(server_pid)
+        Process.exit(server_pid, :kill)
+        :ssl.close(listen)
+      end)
+
+      Application.put_env(:lemon_control_plane, :openai_compat_image_url_http_options,
+        allow_private: true,
+        ssl: [cacerts: client[:cacerts]],
+        resolver: fn
+          "images.example.test" ->
+            {:ok, [{127, 0, 0, 1}]}
+
+          host ->
+            send(parent, {:resolved, host})
+            {:ok, [{169, 254, 169, 254}]}
+        end
+      )
+
+      "https://images.example.test:#{port}/a.png"
+    end
+
+    defp post_image(url, submitter) do
+      Application.put_env(:lemon_control_plane, :openai_compat_submitter, submitter)
+
+      :post
+      |> json_conn("/v1/chat/completions", %{
+        "model" => "openai:gpt-4o",
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "text", "text" => "describe this"},
+              %{"type" => "image_url", "image_url" => url}
+            ]
+          }
+        ]
+      })
+      |> Router.call([])
+      |> json_response()
+    end
+
+    defp no_submit, do: fn _ -> flunk("image fetch failure must not submit a run") end
+
+    test "does not follow a redirect from an allowed host to an internal target" do
+      url =
+        image_server(fn socket ->
+          :ssl.send(
+            socket,
+            "HTTP/1.1 302 Found\r\nlocation: http://169.254.169.254/latest/meta-data/\r\n" <>
+              "content-length: 0\r\n\r\n"
+          )
+
+          Process.sleep(10_000)
+        end)
+
+      response = post_image(url, no_submit())
+
+      assert_receive {:image_hop, "GET /a.png" <> _}
+      refute_received {:image_hop, _}
+      refute_received {:resolved, _}
+      assert response.status == 502
+    end
+
+    test "rejects a non-image content type from headers without reading the body" do
+      url =
+        image_server(fn socket ->
+          # Headers only; the body never arrives, so a body read would hang.
+          :ssl.send(
+            socket,
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 1000000\r\n\r\n"
+          )
+
+          Process.sleep(10_000)
+        end)
+
+      started = System.monotonic_time(:millisecond)
+      response = post_image(url, no_submit())
+
+      assert response.status == 400
+      assert response.body["error"]["message"] == "image URL MIME type is unsupported"
+      assert System.monotonic_time(:millisecond) - started < 2_000
+    end
+
+    test "rejects a body over the image size cap while streaming" do
+      url =
+        image_server(fn socket ->
+          :ssl.send(
+            socket,
+            "HTTP/1.1 200 OK\r\ncontent-type: image/png\r\ntransfer-encoding: chunked\r\n\r\n"
+          )
+
+          chunk = :binary.copy("x", 1_000_000)
+          frame = Integer.to_string(byte_size(chunk), 16) <> "\r\n" <> chunk <> "\r\n"
+          for _ <- 1..40, do: :ssl.send(socket, frame)
+          Process.sleep(10_000)
+        end)
+
+      response = post_image(url, no_submit())
+
+      assert response.status == 413
+    end
+
+    test "accepts an allowed image through the pinned fetcher" do
+      parent = self()
+
+      url =
+        image_server(fn socket ->
+          :ssl.send(
+            socket,
+            "HTTP/1.1 200 OK\r\ncontent-type: image/png; x=1\r\ncontent-length: 8\r\n\r\nPNGBYTES"
+          )
+
+          Process.sleep(10_000)
+        end)
+
+      response =
+        post_image(url, fn request ->
+          send(parent, {:submitted, request})
+          {:ok, "run_pinned_image"}
+        end)
+
+      assert response.status == 200
+      assert_receive {:submitted, request}
+      assert request.images == [%{data: Base.encode64("PNGBYTES"), mime_type: "image/png"}]
+    end
   end
 
   test "chat completions can stream answer deltas as SSE" do

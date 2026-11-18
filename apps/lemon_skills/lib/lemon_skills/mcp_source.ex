@@ -1678,7 +1678,7 @@ defmodule LemonSkills.McpSource do
         headers: Keyword.get(opts, :headers, []),
         timeout: ready_timeout_ms,
         timeout_ms: Keyword.get(opts, :timeout_ms, @client_request_timeout_ms)
-      ] ++ notification_opts(server)
+      ] ++ Keyword.take(opts, [:origin_policy]) ++ notification_opts(server)
 
     with {:ok, client_mod} <- sse_client_module() do
       start_ready_client(client_mod, client_opts, ready_timeout_ms, server.source)

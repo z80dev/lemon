@@ -59,29 +59,16 @@ defmodule LemonMCP.NotificationsTest do
 
   test "legacy SSE dispatches fragmented notifications and ignores server requests" do
     owner = self()
-    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
-    on_exit(fn -> :gen_tcp.close(listener) end)
-    {:ok, {_, port}} = :inet.sockname(listener)
-    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
-    {:ok, conn, request_id} = Mint.HTTP.request(conn, "GET", "/sse", [], nil)
-    socket = Mint.HTTP.get_socket(conn)
+    reader = spawn(fn -> :ok end)
 
     state = %{
       task_supervisor: start_supervised!({Task.Supervisor, max_children: 32}),
-      stream_request_id: request_id,
-      stream_conn: conn,
-      stream_socket: socket,
+      stream_reader: reader,
       sse_buffer: "",
+      sse_event_bytes: 0,
       sse_event: %{event: nil, data: []},
       config: %{notification_handler: fn notification -> send(owner, notification) end}
     }
-
-    {:noreply, state} =
-      LemonMCP.Client.SSE.handle_info(
-        {:tcp, socket,
-         "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n"},
-        state
-      )
 
     state =
       Enum.reduce(
@@ -98,14 +85,14 @@ defmodule LemonMCP.NotificationsTest do
 
           {:noreply, partial} =
             LemonMCP.Client.SSE.handle_info(
-              {:tcp, socket, http_chunk("data: " <> data <> "\n")},
+              {:mcp_sse, reader, {:chunks, ["data: " <> data <> "\n"]}},
               state
             )
 
           refute_receive %{method: ^method}
 
           {:noreply, state} =
-            LemonMCP.Client.SSE.handle_info({:tcp, socket, http_chunk("\n")}, partial)
+            LemonMCP.Client.SSE.handle_info({:mcp_sse, reader, {:chunks, ["\n"]}}, partial)
 
           assert_receive %{method: ^method, params: ^params}
           state
@@ -116,16 +103,12 @@ defmodule LemonMCP.NotificationsTest do
 
     assert {:noreply, _} =
              LemonMCP.Client.SSE.handle_info(
-               {:tcp, socket, http_chunk("data: " <> request <> "\n\n")},
+               {:mcp_sse, reader, {:chunks, ["data: " <> request <> "\n\n"]}},
                state
              )
 
     refute_receive %{method: "server/request"}
-    Mint.HTTP.close(conn)
   end
-
-  defp http_chunk(data),
-    do: IO.iodata_to_binary([Integer.to_string(byte_size(data), 16), "\r\n", data, "\r\n"])
 
   for kind <- [:stdio, :http], mode <- [:receive, :crash, :slow, :none] do
     test "#{kind} isolates #{mode} notification handlers" do

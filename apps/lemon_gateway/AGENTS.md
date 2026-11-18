@@ -51,6 +51,11 @@ Webhook mutation boundaries are deliberately conservative:
 - Expiry removes response snapshots before primary fences on ordered backends;
   SQLite removes durable pairs transactionally. Failed cleanup neither permits
   replay nor advances the sweep watermark.
+- Callback URLs are checked with `LemonCore.Net.Address` at submission (DNS
+  failure is a rejection, metadata is refused even with
+  `allow_private_callback_hosts`) and delivered only through
+  `LemonCore.Net.HTTP`, which re-authorizes and pins the address on every
+  attempt and never follows a redirect. Do not post callbacks with httpc/Req.
 
 ## Operations
 

@@ -12,7 +12,6 @@ defmodule LemonControlPlane.OpenAICompat do
   alias LemonControlPlane.Methods.AgentWait
   alias LemonControlPlane.Methods.ModelsList
   alias LemonAgent.ModelRuntime.ProviderNames
-  alias LemonCore.Httpc
   alias LemonCore.RunRequest
   alias LemonCore.ToolPolicy
 
@@ -557,34 +556,74 @@ defmodule LemonControlPlane.OpenAICompat do
     end
   end
 
+  @image_url_fetch_timeout_ms 5_000
+
+  # Pinned fetch via the shared address policy: public destinations only, no
+  # redirects (any 3xx fails). Status and content-type are checked from the
+  # headers before any body is read; the body is then pulled under the size cap
+  # and one overall deadline. The `:openai_compat_image_url_http_options` env is
+  # an internal test seam passing `:resolver`/`:allow_private`/`:ssl` through to
+  # `LemonCore.Net.HTTP` so tests can use a loopback TLS listener.
   defp default_image_url_fetcher(reference, opts) do
     max_bytes = Keyword.fetch!(opts, :max_bytes)
+    deadline = System.monotonic_time(:millisecond) + @image_url_fetch_timeout_ms
 
-    request = {String.to_charlist(reference), []}
-    http_options = [timeout: 5_000, connect_timeout: 5_000]
-    options = [body_format: :binary]
+    test_opts =
+      :lemon_control_plane
+      |> Application.get_env(:openai_compat_image_url_http_options, [])
+      |> Keyword.take([:resolver, :allow_private, :ssl])
 
-    case Httpc.request(:get, request, http_options, options) do
-      {:ok, {{_http_version, 200, _reason}, headers, body}} when is_binary(body) ->
-        mime_type = response_mime_type(headers)
-        byte_size = byte_size(body)
+    case LemonCore.Net.HTTP.open_stream(
+           :get,
+           reference,
+           [timeout_ms: @image_url_fetch_timeout_ms] ++ test_opts
+         ) do
+      {:ok, stream} ->
+        try do
+          mime_type = response_mime_type(stream.headers)
 
-        cond do
-          byte_size > max_bytes ->
-            {:error, {413, "image URL response exceeds size limit"}}
+          cond do
+            stream.status != 200 ->
+              {:error, {502, "image URL fetch returned HTTP #{stream.status}"}}
 
-          not image_mime_type?(mime_type) ->
-            {:error, {400, "image URL MIME type is unsupported"}}
+            not image_mime_type?(mime_type) ->
+              {:error, {400, "image URL MIME type is unsupported"}}
 
-          true ->
-            {:ok, %{mime_type: mime_type, data: Base.encode64(body), byte_size: byte_size}}
+            true ->
+              with {:ok, body} <- read_image_body(stream, [], 0, max_bytes, deadline) do
+                {:ok,
+                 %{mime_type: mime_type, data: Base.encode64(body), byte_size: byte_size(body)}}
+              end
+          end
+        after
+          LemonCore.Net.HTTP.close_stream(stream)
         end
-
-      {:ok, {{_http_version, status, _reason}, _headers, _body}} ->
-        {:error, {502, "image URL fetch returned HTTP #{status}"}}
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp read_image_body(stream, acc, size, max_bytes, deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      {:error, :timeout}
+    else
+      case LemonCore.Net.HTTP.stream_next(stream, remaining) do
+        {status, stream, chunks} when status in [:ok, :done] ->
+          size = size + IO.iodata_length(chunks)
+          acc = [acc | chunks]
+
+          cond do
+            size > max_bytes -> {:error, {413, "image URL response exceeds size limit"}}
+            status == :done -> {:ok, IO.iodata_to_binary(acc)}
+            true -> read_image_body(stream, acc, size, max_bytes, deadline)
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 

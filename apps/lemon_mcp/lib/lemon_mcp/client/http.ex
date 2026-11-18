@@ -95,7 +95,6 @@ defmodule LemonMCP.Client.HTTP do
       destination_pin: nil,
       peer_owner:
         Keyword.get(opts, :peer_owner, &LemonCore.LoopbackListener.peer_owned_by_self?/2),
-      http_profile: :default,
       headers: Keyword.get(opts, :headers, []),
       oauth: Keyword.get(opts, :oauth, []),
       oauth_token_cache:
@@ -111,13 +110,12 @@ defmodule LemonMCP.Client.HTTP do
          {:ok, pin} <-
            destination_pin(config.url, config.origin_policy, Keyword.get(opts, :destination_pin)),
          :ok <- ensure_http_apps(),
-         {:ok, profile} <- start_http_profile(config.origin_policy),
          {:ok, task_supervisor} <- Protocol.start_notification_supervisor(opts) do
       state =
         %{
           state: :initializing,
           task_supervisor: task_supervisor,
-          config: %{config | destination_pin: pin, http_profile: profile},
+          config: %{config | destination_pin: pin},
           server_info: nil,
           server_capabilities: nil,
           protocol_version: nil,
@@ -525,64 +523,13 @@ defmodule LemonMCP.Client.HTTP do
 
   defp destination_pin(_url, _policy, _pin), do: {:error, :invalid_destination_pin}
 
-  defp start_http_profile(nil), do: {:ok, :default}
-
-  defp start_http_profile(_policy) do
-    # This profile never inherits operator proxies/cookies. It uses no pooled
-    # connections: IP-keyed reuse could cross original TLS/Host identities.
-    case :inets.start(:httpc, profile: :lemon_mcp_pinned) do
-      {:ok, _pid} -> configure_pinned_profile()
-      {:error, {:already_started, _pid}} -> configure_pinned_profile()
-      {:error, _reason} -> {:error, :http_transport_unavailable}
-    end
-  end
-
-  defp configure_pinned_profile do
-    :ok =
-      :httpc.set_options(
-        [
-          cookies: :disabled,
-          max_keep_alive_length: 0,
-          keep_alive_timeout: 0,
-          ipfamily: :inet6fb4
-        ],
-        :lemon_mcp_pinned
-      )
-
-    {:ok, :lemon_mcp_pinned}
-  end
-
   defp http_request(method, url, headers, body, state, pin) do
-    {url, headers, tls_opts} = pinned_request(url, headers, pin)
     timeout = state.config.timeout_ms
-    http_opts = [timeout: timeout, connect_timeout: timeout, autoredirect: false] ++ tls_opts
-
-    request =
-      case body do
-        nil -> {to_charlist(url), headers}
-        {content_type, data} -> {to_charlist(url), headers, content_type, data}
-      end
 
     response =
-      if OriginPolicy.ownership_required?(pin) do
-        LemonMCP.HTTP.OwnedConnection.request(
-          method,
-          url,
-          headers,
-          body,
-          pin,
-          timeout,
-          tls_opts,
-          state.config.peer_owner
-        )
-      else
-        :httpc.request(
-          method,
-          request,
-          http_opts,
-          [body_format: :binary],
-          state.config.http_profile
-        )
+      case pin do
+        nil -> legacy_request(method, url, headers, body, timeout)
+        pin -> pinned_request(method, url, headers, body, timeout, pin, state)
       end
 
     case response do
@@ -602,64 +549,66 @@ defmodule LemonMCP.Client.HTTP do
     end
   end
 
-  defp pinned_request(url, headers, nil), do: {url, headers, []}
-
-  defp pinned_request(url, headers, pin) do
-    original = URI.parse(pin.origin)
-    address = pin.address |> :inet.ntoa() |> to_string()
-    uri = URI.parse(url)
-    url = URI.to_string(%{uri | scheme: pin.scheme, host: address, port: pin.port})
-    host = if String.contains?(original.host, ":"), do: "[#{original.host}]", else: original.host
-    default_port = if pin.scheme == "https", do: 443, else: 80
-    host = if pin.port == default_port, do: host, else: "#{host}:#{pin.port}"
-
-    headers =
-      [
-        {~c"host", to_charlist(host)},
-        {~c"connection", ~c"close"}
-        | Enum.reject(headers, fn {key, _value} ->
-            String.downcase(to_string(key)) in ["host", "connection"]
-          end)
-      ]
-
-    tls_opts =
-      if pin.scheme == "https" do
-        reference =
-          case :inet.parse_address(to_charlist(original.host)) do
-            {:ok, ip} -> {:ip, ip}
-            {:error, _} -> {:dns_id, to_charlist(original.host)}
-          end
-
-        sni = if elem(reference, 0) == :dns_id, do: elem(reference, 1), else: :disable
-
-        [
-          ssl: [
-            verify: :verify_peer,
-            cacerts: :public_key.cacerts_get(),
-            server_name_indication: sni,
-            customize_hostname_check: [
-              match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
-            ],
-            verify_fun: {&verify_original_peer/3, reference}
-          ]
-        ]
-      else
-        []
+  # Operator networking without an origin policy keeps the default httpc
+  # profile (proxies, OS resolution) as before.
+  defp legacy_request(method, url, headers, body, timeout) do
+    request =
+      case body do
+        nil -> {to_charlist(url), headers}
+        {content_type, data} -> {to_charlist(url), headers, content_type, data}
       end
 
-    {url, headers, tls_opts}
+    :httpc.request(
+      method,
+      request,
+      [timeout: timeout, connect_timeout: timeout, autoredirect: false],
+      body_format: :binary
+    )
   end
 
-  defp verify_original_peer(_cert, {:bad_cert, reason}, _reference), do: {:fail, reason}
-  defp verify_original_peer(_cert, {:extension, _extension}, reference), do: {:unknown, reference}
-  defp verify_original_peer(_cert, :valid, reference), do: {:valid, reference}
+  # The pin is the authorized destination: the request goes to its address on
+  # one unpooled connection while Host/TLS identity stay the pin's host.
+  defp pinned_request(method, url, headers, body, timeout, pin, state) do
+    uri = URI.parse(url)
+    url = URI.to_string(%{uri | scheme: pin.scheme, host: pin.host, port: pin.port})
 
-  defp verify_original_peer(cert, :valid_peer, reference) do
-    if :public_key.pkix_verify_hostname(cert, [reference],
-         match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
-       ),
-       do: {:valid, reference},
-       else: {:fail, :hostname_check_failed}
+    headers =
+      Enum.map(headers, fn {key, value} -> {to_string(key), to_string(value)} end)
+      |> Enum.reject(fn {key, _} -> String.downcase(key) in ["host", "connection"] end)
+
+    # The body's type is authoritative, as with :httpc. A second content-type
+    # header joins into "application/json, application/json", which strict
+    # servers (Lemon Bot among them) reject as unsupported media.
+    {headers, data} =
+      case body do
+        nil ->
+          {headers, nil}
+
+        {type, data} ->
+          headers =
+            Enum.reject(headers, fn {key, _} -> String.downcase(key) == "content-type" end)
+
+          {[{"content-type", to_string(type)} | headers], data}
+      end
+
+    peer_check = if OriginPolicy.ownership_required?(pin), do: state.config.peer_owner
+
+    case LemonCore.Net.HTTP.request(method, url,
+           address: pin.address,
+           headers: headers,
+           body: data,
+           timeout_ms: timeout,
+           peer_check: peer_check
+         ) do
+      {:ok, %{status: status, headers: resp_headers, body: resp_body}} ->
+        resp_headers =
+          Enum.map(resp_headers, fn {k, v} -> {to_charlist(k), to_charlist(v)} end)
+
+        {:ok, {{~c"HTTP/1.1", status, ~c""}, resp_headers, resp_body}}
+
+      {:error, _} = error ->
+        error
+    end
   end
 
   defp auth_metadata(headers, state) do
@@ -862,9 +811,8 @@ defmodule LemonMCP.Client.HTTP do
     do: LemonCore.LoopbackListener.literal_loopback?(URI.parse(origin).host)
 
   defp oauth_http_request(method, url, headers, body, state) do
-    with {:ok, pin} <- oauth_pin(url, state),
-         {:ok, profile} <- start_http_profile(:pinned) do
-      http_request(method, url, headers, body, put_in(state.config.http_profile, profile), pin)
+    with {:ok, pin} <- oauth_pin(url, state) do
+      http_request(method, url, headers, body, state, pin)
     end
   end
 

@@ -2,46 +2,77 @@ defmodule CodingAgent.Tools.WebGuardBodyLimitTest do
   use ExUnit.Case, async: true
   alias CodingAgent.Tools.WebGuard
 
-  test "halts on the first chunk exceeding the limit without reading subsequent chunks" do
+  # Serves one chunked response; `chunks` are sent in order. With `finish?:
+  # false` the final chunk is withheld and the socket is held open.
+  defp serve_chunked(chunks, finish?) do
     parent = self()
 
-    get = fn _, opts ->
-      into = Keyword.fetch!(opts, :into)
+    {:ok, listen} =
+      :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
 
-      {_, response} =
-        Enum.reduce_while(["123", "456", "never"], {Req.new(), Req.Response.new()}, fn chunk,
-                                                                                       acc ->
+    {:ok, port} = :inet.port(listen)
+
+    pid =
+      spawn_link(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen)
+        {:ok, _request} = :gen_tcp.recv(socket, 0, 5_000)
+
+        :ok =
+          :gen_tcp.send(
+            socket,
+            "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n"
+          )
+
+        for chunk <- chunks do
           send(parent, {:chunk, chunk})
-          into.({:data, chunk}, acc)
-        end)
 
-      {:ok, response}
-    end
+          :ok =
+            :gen_tcp.send(
+              socket,
+              Integer.to_string(byte_size(chunk), 16) <> "\r\n" <> chunk <> "\r\n"
+            )
+        end
+
+        if finish? do
+          :gen_tcp.send(socket, "0\r\n\r\n")
+          :gen_tcp.close(socket)
+        else
+          Process.sleep(10_000)
+        end
+      end)
+
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    "http://127.0.0.1:#{port}/"
+  end
+
+  test "halts on the first chunk exceeding the limit without waiting for the rest" do
+    url = serve_chunked(["123", "456"], false)
 
     assert {:error, {:body_too_large, %{max_body_bytes: 5}}} =
-             WebGuard.guarded_get("https://8.8.8.8", http_get: get, max_body_bytes: 5)
+             WebGuard.guarded_get(url,
+               allow_private_network: true,
+               max_body_bytes: 5,
+               timeout_ms: 5_000
+             )
 
     assert_received {:chunk, "123"}
     assert_received {:chunk, "456"}
-    refute_received {:chunk, "never"}
   end
 
   test "assembles ordered chunks exactly at the cap" do
-    get = fn _, opts ->
-      into = Keyword.fetch!(opts, :into)
-      {:cont, acc} = into.({:data, "12"}, {Req.new(), Req.Response.new()})
-      {:cont, {_, response}} = into.({:data, "345"}, acc)
-      {:ok, response}
-    end
+    url = serve_chunked(["12", "345"], true)
 
-    assert {:ok, %{body: "12345"}, _} =
-             WebGuard.guarded_get("https://8.8.8.8", http_get: get, max_body_bytes: 5)
+    assert {:ok, %{status: 200, body: "12345"}, _} =
+             WebGuard.guarded_get(url, allow_private_network: true, max_body_bytes: 5)
   end
 
-  test "default is five MiB and injected nonstreaming responses are also bounded" do
-    get = fn _, _ -> {:ok, Req.Response.new(body: :binary.copy("a", 5 * 1024 * 1024 + 1))} end
+  test "default is five MiB and injected transport responses are also bounded" do
+    send_fn = fn request ->
+      assert request.max_body_bytes == 5 * 1024 * 1024
+      {:ok, %{status: 200, headers: [], body: :binary.copy("a", 5 * 1024 * 1024 + 1)}}
+    end
 
     assert {:error, {:body_too_large, %{max_body_bytes: 5_242_880}}} =
-             WebGuard.guarded_get("https://8.8.8.8", http_get: get)
+             WebGuard.guarded_get("https://8.8.8.8", send: send_fn)
   end
 end

@@ -4,41 +4,32 @@ defmodule LemonSkills.McpSourceLifecycleTest do
   alias LemonSkills.McpSource
 
   test "legacy SSE loss exits the client so the host observes transport loss" do
-    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
-    on_exit(fn -> :gen_tcp.close(listener) end)
-    {:ok, {_, port}} = :inet.sockname(listener)
-    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
-    {:ok, conn, id} = Mint.HTTP.request(conn, "GET", "/sse", [], nil)
-    socket = Mint.HTTP.get_socket(conn)
-
-    state = %{
-      state: :ready,
-      stream_request_id: id,
-      stream_conn: conn,
-      stream_socket: socket
-    }
+    reader = spawn(fn -> :ok end)
+    state = %{state: :ready, stream_reader: reader}
 
     for event <- [
-          {:tcp_closed, socket},
-          {:tcp_error, socket, :closed},
-          {:mcp_stream_closed, id}
+          {:mcp_sse, reader, {:error, :http_request_failed}},
+          {:mcp_stream_closed, reader}
         ] do
-      assert {:stop, :normal, %{state: :disconnected, stream_request_id: nil}} =
+      assert {:stop, :normal, %{state: :disconnected, stream_reader: nil}} =
                SSE.handle_info(event, state)
     end
 
-    {:ok, _conn} = Mint.HTTP.close(conn)
+    # The end of the response is processed, then reported as stream loss.
+    assert {:noreply, ^state} = SSE.handle_info({:mcp_sse, reader, :done}, state)
+    assert_received {:mcp_stream_closed, ^reader}
   end
 
   test "legacy SSE ignores stray messages without exposing their contents" do
-    state = %{state: :ready, stream_request_id: make_ref(), stream_socket: make_ref()}
+    state = %{state: :ready, stream_reader: spawn(fn -> :ok end)}
+    other = spawn(fn -> :ok end)
 
     log =
       ExUnit.CaptureLog.capture_log(fn ->
         for event <- [
               {:stray, "private message contents"},
-              {:tcp_closed, make_ref()},
-              {:mcp_stream_closed, make_ref()}
+              {:mcp_sse, other, {:error, :closed}},
+              {:mcp_stream_closed, other}
             ] do
           assert {:noreply, ^state} = SSE.handle_info(event, state)
         end

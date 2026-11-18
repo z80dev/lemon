@@ -263,7 +263,7 @@ defmodule CodingAgent.Tools.WebFetch do
       allow_private_network: runtime.allow_private_network,
       allowed_hostnames: runtime.allowed_hostnames,
       resolve_host: runtime.resolve_host,
-      http_get: runtime.http_get
+      send: runtime.fetch_send
     ]
   end
 
@@ -1221,7 +1221,7 @@ defmodule CodingAgent.Tools.WebFetch do
           normalize_optional_string(get_map_value(exa_cfg, :base_url, nil)) ||
             "https://api.exa.ai"
       },
-      http_get: Keyword.get(opts, :http_get, &Req.get/2),
+      fetch_send: Keyword.get(opts, :fetch_send),
       resolve_host: Keyword.get(opts, :resolve_host),
       http_post: Keyword.get(opts, :http_post, &Req.post/2)
     }

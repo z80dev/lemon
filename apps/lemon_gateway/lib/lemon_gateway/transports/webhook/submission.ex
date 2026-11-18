@@ -61,6 +61,7 @@ defmodule LemonGateway.Transports.Webhook.Submission do
         timeout_ms: timeout_ms,
         callback_wait_timeout_ms: callback_wait_timeout_ms,
         callback_url: callback_url,
+        callback_allow_private: allow_private_callback_hosts == true,
         metadata: normalized.metadata,
         attachments: normalized.attachments,
         callback_retry: callback_retry

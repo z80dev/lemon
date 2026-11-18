@@ -1283,7 +1283,7 @@ defmodule LemonMCP.ClientTest do
   end
 
   defp start_coalesced_sse_transport(fragmented) do
-    {post_port, store} = start_sse_transport()
+    {:ok, store} = start_supervised({Agent, fn -> %{} end})
 
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
@@ -1298,7 +1298,9 @@ defmodule LemonMCP.ClientTest do
        stream_pid = self()
        Agent.update(store, &Map.put(&1, "coalesced", stream_pid))
 
-       endpoint = "data: http://127.0.0.1:#{post_port}/messages/coalesced\n\n"
+       # The endpoint is absolute but on the stream's own origin; the POSTs
+       # arrive on later connections to this listener.
+       endpoint = "data: http://127.0.0.1:#{port}/messages/coalesced\n\n"
 
        chunks =
          if fragmented,
@@ -1315,10 +1317,42 @@ defmodule LemonMCP.ClientTest do
            Enum.map(chunks, &http_chunk/1)
          ])
 
+       spawn_link(fn -> accept_coalesced_posts(listener, stream_pid) end)
        raw_sse_loop(socket)
      end})
 
     {port, store}
+  end
+
+  defp accept_coalesced_posts(listener, stream_pid) do
+    case :gen_tcp.accept(listener) do
+      {:ok, socket} ->
+        body = read_post_body(socket, "")
+
+        if response =
+             LemonMCP.TestSupport.FixtureServer.response_for(Jason.decode!(body), "SSE Fixture") do
+          send(stream_pid, {:sse_message, Jason.encode!(response)})
+        end
+
+        :ok = :gen_tcp.send(socket, "HTTP/1.1 202 Accepted\r\ncontent-length: 0\r\n\r\n")
+        :gen_tcp.close(socket)
+        accept_coalesced_posts(listener, stream_pid)
+
+      {:error, _} ->
+        :ok
+    end
+  end
+
+  defp read_post_body(socket, buffer) do
+    with [head, body] <- :binary.split(buffer, "\r\n\r\n"),
+         [_, length] <- Regex.run(~r/content-length:\s*(\d+)/i, head),
+         true <- byte_size(body) >= String.to_integer(length) do
+      body
+    else
+      _ ->
+        {:ok, data} = :gen_tcp.recv(socket, 0, 1_000)
+        read_post_body(socket, buffer <> data)
+    end
   end
 
   defp raw_sse_loop(socket) do

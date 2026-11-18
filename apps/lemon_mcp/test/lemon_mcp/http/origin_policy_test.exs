@@ -228,7 +228,7 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
                  resolver([private])
                )
 
-      assert {:error, :invalid_dns_answer} =
+      assert {:error, :dns_resolution_failed} =
                OriginPolicy.pin(@url, approved, resolver([{127, 0, 0, 999}]))
 
       assert {:error, :destination_not_public} =
@@ -381,7 +381,7 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
             {0, 0, 0, 0, 0, 0, 0, 65_536},
             nil
           ] do
-        assert {:error, :invalid_dns_answer} =
+        assert {:error, :dns_resolution_failed} =
                  OriginPolicy.pin(@url, approved, resolver([@public_v4, invalid]))
       end
     end
@@ -440,6 +440,30 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
                })
 
       assert address in [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}]
+    end
+
+    test "inet_aton literal aliases canonicalize to the real IP and never pin as public" do
+      assert {:ok, "http://169.254.169.254"} = OriginPolicy.canonical_origin("http://2852039166/")
+      assert {:ok, "http://169.254.169.254"} = OriginPolicy.canonical_origin("http://0xa9fea9fe/")
+
+      for url <- ["http://2852039166/", "http://0xa9fea9fe/", "http://2130706433/"] do
+        {:ok, origin} = OriginPolicy.canonical_origin(url)
+
+        assert {:error, :destination_not_public} =
+                 OriginPolicy.pin(url, policy([origin]), resolver([@public_v4]))
+      end
+    end
+
+    test "metadata destinations are refused even for approved private origins" do
+      approved = %{allowed_origins: [@origin], approved_private_origins: [@origin]}
+
+      for address <- [{169, 254, 169, 254}, {0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0xA9FE}] do
+        assert {:error, :destination_not_public} =
+                 OriginPolicy.pin(@url, approved, resolver([address]))
+      end
+
+      assert {:ok, %{address: {10, 0, 0, 1}}} =
+               OriginPolicy.pin(@url, approved, resolver([{10, 0, 0, 1}]))
     end
   end
 end

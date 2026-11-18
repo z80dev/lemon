@@ -210,7 +210,7 @@ defmodule LemonCore.Context do
   defp resolve_url(reference, url, opts, budget) do
     fetch_opts =
       opts
-      |> Keyword.take([:resolve_fun, :request_fun, :max_redirects])
+      |> Keyword.take([:resolve_fun, :send_fun, :max_redirects])
       |> Keyword.merge(max_input_bytes: budget.max_input_bytes, timeout_ms: budget.timeout_ms)
 
     with {:ok, binary, metadata} <- URLFetcher.fetch(url, fetch_opts),

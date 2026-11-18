@@ -115,6 +115,15 @@ apps; optional consumers register at runtime. See [README](README.md),
   `Drain.request_stop/1` (or SIGTERM when `signal_trap` is enabled), never a
   bare `System.stop/1`.
 
+## Outbound network guards
+
+- `LemonCore.Net.Address` is the only address classifier (public, private,
+  metadata) and `LemonCore.Net.HTTP` the only guarded fetcher. Webhook
+  callbacks, `webfetch`, context `@url:` references, MCP origin pins and
+  browser route checks all use them; never add a local `private_ip?`, resolver
+  or redirect-following client to a guard. DNS failure is never public,
+  metadata is never reachable, and redirects are re-authorized per hop.
+
 ## Verification and packaging
 
 From the umbrella root: `mix test apps/lemon_core/test`.

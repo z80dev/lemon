@@ -15,8 +15,10 @@ defmodule LemonMCP.HTTP.OriginPolicy do
   authority field is neither inspected nor rewritten. A discarded invalid port
   is rejected, never replaced with the scheme's default port.
 
-  Every A and AAAA answer must be public unless that exact allowed origin is
-  explicitly approved for private networking. The selected address is stable
+  Addresses are classified by `LemonCore.Net.Address`. Every A and AAAA answer
+  must be public unless that exact allowed origin is
+  explicitly approved for private networking; metadata addresses are refused
+  even then. The selected address is stable
   regardless of DNS answer order. The transport must use this address without
   resolving again, preserve the origin's Host/TLS identity and disable redirects.
   A pin is internal process data, never authority accepted from a server config.
@@ -31,14 +33,14 @@ defmodule LemonMCP.HTTP.OriginPolicy do
   @max_host_bytes 1_024
   @max_origin_bytes 512
   @max_policy_origins 128
-  @max_addresses 64
+
+  alias LemonCore.Net.Address
 
   @type error ::
           :invalid_url
           | :invalid_origin_policy
           | :origin_not_allowed
           | :dns_resolution_failed
-          | :invalid_dns_answer
           | :too_many_dns_addresses
           | :destination_not_public
           | :private_origin_not_owned
@@ -196,12 +198,14 @@ defmodule LemonMCP.HTTP.OriginPolicy do
       Regex.match?(~r/\A(?:\[[0-9a-fA-F:.]+\]|[^:\[\]]+)(?::[0-9]{1,5})?\z/u, authority)
   end
 
+  # inet_aton aliases (`2130706433`, `0x7f.1`) canonicalize to their dotted
+  # address so origin matching, ownership and classification see the real IP.
   defp canonical_host(host) do
-    case :inet.parse_strict_address(String.to_charlist(host)) do
+    case Address.parse_literal(host) do
       {:ok, address} ->
         {:ok, address |> :inet.ntoa() |> List.to_string()}
 
-      {:error, _} ->
+      :error ->
         canonical_dns_host(host)
     end
   end
@@ -283,95 +287,23 @@ defmodule LemonMCP.HTTP.OriginPolicy do
     if origin in allowed, do: :ok, else: {:error, :origin_not_allowed}
   end
 
+  # Literal hosts, including inet_aton alias forms such as `2852039166`, are
+  # classified without DNS; names resolve through the shared fail-closed resolver.
   defp resolve(host, opts) when is_list(opts) do
-    case :inet.parse_strict_address(String.to_charlist(host)) do
+    case Address.parse_literal(host) do
       {:ok, address} -> {:ok, [address]}
-      {:error, _} -> call_resolver(host, Keyword.get(opts, :resolver, &system_resolve/1))
+      :error -> Address.resolve(host, resolver: Keyword.get(opts, :resolver))
     end
-  rescue
-    _ -> {:error, :dns_resolution_failed}
-  catch
-    _, _ -> {:error, :dns_resolution_failed}
   end
 
   defp resolve(_, _), do: {:error, :dns_resolution_failed}
 
-  defp call_resolver(host, resolver) when is_function(resolver, 1) do
-    case resolver.(host) do
-      {:ok, addresses} when is_list(addresses) ->
-        bounded = Enum.take(addresses, @max_addresses + 1)
-
-        cond do
-          length(bounded) > @max_addresses -> {:error, :too_many_dns_addresses}
-          bounded == [] -> {:error, :dns_resolution_failed}
-          true -> {:ok, bounded}
-        end
-
-      _ ->
-        {:error, :dns_resolution_failed}
-    end
-  end
-
-  defp call_resolver(_, _), do: {:error, :dns_resolution_failed}
-
-  defp system_resolve(host) do
-    hostname = String.to_charlist(host)
-    ipv4 = :inet.getaddrs(hostname, :inet)
-    ipv6 = :inet.getaddrs(hostname, :inet6)
-
-    with {:ok, v4} <- dns_family(ipv4),
-         {:ok, v6} <- dns_family(ipv6) do
-      {:ok, v4 ++ v6}
-    end
-  end
-
-  defp dns_family({:ok, addresses}) when is_list(addresses), do: {:ok, addresses}
-  defp dns_family({:error, reason}) when reason in [:nxdomain, :enodata], do: {:ok, []}
-  defp dns_family(_), do: {:error, :dns_resolution_failed}
-
+  # Metadata is never reachable, even for approved private origins.
   defp validate_addresses(addresses, approved?) do
-    cond do
-      not Enum.all?(addresses, &valid_address?/1) -> {:error, :invalid_dns_answer}
-      approved? or Enum.all?(addresses, &public_address?/1) -> :ok
-      true -> {:error, :destination_not_public}
+    case Address.classify_all(addresses) do
+      :public -> :ok
+      :private when approved? -> :ok
+      _ -> {:error, :destination_not_public}
     end
-  end
-
-  defp valid_address?(address) when is_tuple(address) and tuple_size(address) == 4 do
-    address |> Tuple.to_list() |> Enum.all?(&(is_integer(&1) and &1 in 0..255))
-  end
-
-  defp valid_address?(address) when is_tuple(address) and tuple_size(address) == 8 do
-    address |> Tuple.to_list() |> Enum.all?(&(is_integer(&1) and &1 in 0..65_535))
-  end
-
-  defp valid_address?(_), do: false
-
-  # IPv4-mapped IPv6 has exactly the IPv4 destination's classification.
-  defp public_address?({0, 0, 0, 0, 0, 0xFFFF, high, low}) do
-    public_address?({div(high, 256), rem(high, 256), div(low, 256), rem(low, 256)})
-  end
-
-  defp public_address?({a, b, c, _d}) do
-    not (a in [0, 10, 127] or a >= 224 or
-           (a == 100 and b in 64..127) or
-           (a == 169 and b == 254) or
-           (a == 172 and b in 16..31) or
-           (a == 192 and b == 0 and c in [0, 2]) or
-           (a == 192 and b == 88 and c == 99) or
-           (a == 192 and b == 168) or
-           (a == 198 and b in [18, 19]) or
-           (a == 198 and b == 51 and c == 100) or
-           (a == 203 and b == 0 and c == 113))
-  end
-
-  # Only allocated global unicast is eligible. Exclude special-protocol space,
-  # documentation and deprecated 6to4 (which can conceal an embedded IPv4 hop).
-  defp public_address?({first, second, _, _, _, _, _, _}) do
-    first in 0x2000..0x3FFF and
-      not ((first == 0x2001 and second < 0x0200) or
-             (first == 0x2001 and second == 0x0DB8) or
-             first == 0x2002 or
-             (first == 0x3FFF and second < 0x1000))
   end
 end
