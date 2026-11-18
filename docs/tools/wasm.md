@@ -59,7 +59,7 @@ The runtime sends host calls to Lemon as `host_call` events with a `channel`:
   author-declared `tool_invoke.aliases`. Lemon runs it only as a regular host
   tool from the session's policy-authorized catalog.
 - `internal`: a secret lookup made by the runtime itself (credential injection,
-  `{{SECRET:name}}` placeholders, `secret-exists`). The event names the calling
+  <code v-pre>{{SECRET:name}}</code> placeholders, `secret-exists`). The event names the calling
   tool in `caller`.
 
 Reserved targets are served only on the `internal` channel:
@@ -93,7 +93,7 @@ The runtime process starts with every environment variable unset except
 Lemon's environment never reach it. Commands run through the `exec` capability
 start from an empty environment. They get only `PATH`, `LANG`/`LC_*`, `TMPDIR`
 and a sandbox `HOME` (a per-runtime temp directory), plus the env the tool
-passes, whose `{{SECRET:name}}` placeholders must pass `secrets.allowed_names`.
+passes, whose <code v-pre>{{SECRET:name}}</code> placeholders must pass `secrets.allowed_names`.
 
 ## Runtime Build
 
