@@ -814,12 +814,22 @@ defmodule LemonCli.CLI do
 
         @exit_error
 
-      {:error, {:key_file_exists, path}} ->
+      {:error, :master_key_exists} ->
         IO.puts(
           :stderr,
-          "A secrets master key already exists at #{path}. Re-run with --force to " <>
-            "replace it — every secret encrypted under the old key becomes unreadable. " <>
+          "A secrets master key already exists (see `lemon secrets status`). Re-run with --force " <>
+            "to replace it — every secret encrypted under the old key becomes unreadable. " <>
             "To change the key and keep secrets, run `lemon secrets rotate-key`."
+        )
+
+        @exit_error
+
+      {:error, {:master_key_check_failed, reason}} ->
+        IO.puts(
+          :stderr,
+          "Could not check for an existing secrets master key: #{format_reason(reason)}. " <>
+            "Nothing was written. Run `lemon secrets status` for diagnostics and restore " <>
+            "access to the keychain or key file."
         )
 
         @exit_error
@@ -827,7 +837,7 @@ defmodule LemonCli.CLI do
       {:error, reason} ->
         IO.puts(
           :stderr,
-          "Could not initialize the secrets master key: #{format_reason(reason)}. Run `lemon secrets init` after checking keychain access."
+          "Could not initialize the secrets master key: #{format_reason(reason)}. Run `lemon secrets status` for diagnostics."
         )
 
         @exit_error
@@ -876,7 +886,8 @@ defmodule LemonCli.CLI do
             IO.puts(
               :stderr,
               "Secrets master key is not base64-encoded 32-byte key material. " <>
-                "Generate one with `lemon secrets init` or openssl rand -base64 32."
+                "Run `lemon secrets status` for diagnostics; to keep secrets encrypted under it, " <>
+                "allow legacy raw keys and run `lemon secrets rotate-key`."
             )
 
             @exit_error
@@ -885,8 +896,18 @@ defmodule LemonCli.CLI do
             IO.puts(
               :stderr,
               "Could not read the secrets master key from keychain: #{format_reason(reason)}. " <>
-                "Run `lemon secrets status` for diagnostics, then re-run `lemon secrets init` " <>
-                "or set #{MasterKey.env_var()}."
+                "Nothing was written. Run `lemon secrets status` for diagnostics and restore " <>
+                "keychain access; do not re-initialize the key."
+            )
+
+            @exit_error
+
+          {:error, :master_key_mismatch} ->
+            IO.puts(
+              :stderr,
+              "The resolved secrets master key does not open the stored secrets, so nothing was written. " <>
+                "Run `lemon secrets status` to see which key source is in use (a stale " <>
+                "#{MasterKey.env_var()} or a replaced keychain entry) and restore the original key."
             )
 
             @exit_error
@@ -894,7 +915,7 @@ defmodule LemonCli.CLI do
           {:error, reason} ->
             IO.puts(
               :stderr,
-              "Could not store the secret: #{format_reason(reason)}. Run `lemon secrets init`, then retry `lemon secrets set`."
+              "Could not store the secret: #{format_reason(reason)}. Run `lemon secrets status` for diagnostics."
             )
 
             @exit_error
@@ -1090,18 +1111,63 @@ defmodule LemonCli.CLI do
   end
 
   defp secrets_rotate_key(args) do
-    case OptionParser.parse(args, strict: [confirm: :string]) do
+    switches = [confirm: :string, resume: :boolean, abandon: :boolean, confirm_abandon: :boolean]
+
+    case OptionParser.parse(args, strict: switches) do
       {parsed, [], []} ->
         ensure_apps_started!([:lemon_core])
+        confirmed? = parsed[:confirm_abandon] == true
 
-        case parsed[:confirm] do
-          nil -> rotate_key_preview()
-          token -> rotate_key_apply(token)
+        case {parsed[:confirm], parsed[:resume] == true, parsed[:abandon] == true, confirmed?} do
+          {nil, false, false, false} -> rotate_key_preview()
+          {token, false, false, false} -> rotate_key_apply(token)
+          {nil, true, false, false} -> rotate_key_recover(:resume, [])
+          {nil, false, true, _} -> rotate_key_abandon(confirmed?)
+          _conflicting -> rotate_key_usage()
         end
 
       _other ->
-        IO.puts(:stderr, "Usage: lemon secrets rotate-key [--confirm <token>]")
-        @exit_usage
+        rotate_key_usage()
+    end
+  end
+
+  defp rotate_key_usage do
+    IO.puts(
+      :stderr,
+      "Usage: lemon secrets rotate-key [--confirm <token> | --resume | --abandon --confirm-abandon]"
+    )
+
+    @exit_usage
+  end
+
+  # Abandoning is an operator assertion that cannot be checked: always show
+  # the warning, and act only with the explicit confirmation flag.
+  defp rotate_key_abandon(confirmed?) do
+    IO.puts(:stderr, KeyRotation.abandon_warning())
+    rotate_key_recover(:abandon, confirm_abandon: confirmed?)
+  end
+
+  # Settles a rotation whose key switch is pending; KeyRotation.recover/2
+  # reads the provider itself before changing anything.
+  defp rotate_key_recover(action, opts) do
+    case KeyRotation.recover(action, opts) do
+      {:ok, %{action: :resumed} = result} ->
+        IO.puts(
+          "Resumed: #{format_key_source(result)} holds the new master key. " <>
+            "Run `lemon secrets rotate-key` to finish re-encrypting."
+        )
+
+        @exit_ok
+
+      {:ok, %{action: :abandoned} = result} ->
+        IO.puts(
+          "Abandoned the pending key switch; #{format_key_source(result)} keeps the current key."
+        )
+
+        @exit_ok
+
+      {:error, reason} ->
+        rotate_key_error(reason)
     end
   end
 

@@ -54,6 +54,7 @@ Credential-pool/default policy and provider/model header precedence are unchange
 - Timeout (`Task.yield` expiry) -> `{:error, :timeout}`
 - Non-macOS / missing `security` executable -> `{:error, :unavailable}`
 - Empty retrieved value -> treated as missing (`{:error, :missing}`)
+- Exit code `45` (errSecDuplicateItem) on `add-generic-password` -> `{:error, :eexist}`. `put_master_key/2` never passes `-U` unless called with `force: true` (key rotation), so an existing item is never replaced by `init`.
 
 ## Master Key Resolution Precedence
 
@@ -79,7 +80,7 @@ Additional nuance:
 - If keychain returns malformed key material, env fallback is attempted first; only then returns `:invalid_master_key`.
 - Key material must be base64-encoded 32-byte data. Raw passphrase-like strings are rejected with `:weak_master_key` (there is no password stretching); `allow_legacy_raw_keys: true` restores the old behaviour for setups that already encrypted secrets under such a value. `lemon secrets rotate-key` moves such a setup onto a generated key.
 - `status/1` suppresses expected keychain absence (`:missing`, `:keychain_unavailable`) from `keychain_error` while still surfacing hard failures.
-- The local source launcher `bin/lemon` also normalizes `LEMON_SECRETS_MASTER_KEY` from `~/.lemon/secrets_master_key` on non-macOS systems so stale desktop/session env does not override the working local key by accident.
+- One precedence contract for every entry point (`bin/lemon`, `bin/lemon-gateway`, the release, CLI, Mix tasks, runtime): launchers never choose a key. `bin/lemon` and `bin/lemon-gateway` only read the default Keychain item and pass it in `LEMON_SECRETS_KEYCHAIN_PRELOAD`, which stands in for the keychain provider's own read at its configured position (long-lived BEAM processes may be denied Keychain access). If a later provider holds a different valid key than the one that answers, resolution fails with `{:conflicting_master_keys, sources}` instead of letting provider order decide.
 - `status/1` reuses its Keychain lookup when resolving the active source.
 - CLI setup commands use `MasterKey.scoped/1`: Keychain results (including failures)
   are cached only in the caller for the command lifetime, nested scopes share the
@@ -120,8 +121,15 @@ audit log; credential writes and rotation retain their durability requirements.
 
 ## Operator Notes
 
-- `mix lemon.secrets.init` is the preferred bootstrap path everywhere: it stores the generated key in the keychain on macOS and writes the key file (`0600`) on other platforms. It refuses to overwrite an existing key file unless `--force` is passed; forcing a new key makes existing secrets unreadable, so change a key in use with `lemon secrets rotate-key` instead.
-- For local non-macOS development, keep `~/.lemon/secrets_master_key` as the canonical master key file. `bin/lemon` will export that value into `LEMON_SECRETS_MASTER_KEY` before boot when the file exists.
+- `mix lemon.secrets.init` / `lemon secrets init` is the preferred bootstrap path everywhere: it stores the generated key in the keychain on macOS and writes the key file (`0600`) on other platforms. It first reads every configured provider and refuses with `:master_key_exists` when any holds key material (usable or not, including an env var, an empty or unreadable key file, or a dangling key-file symlink), and with `{:master_key_check_failed, reason}` when a provider cannot be read (for example a transient Keychain failure). Only `--force` replaces a key; forcing a new key makes existing secrets unreadable, so change a key in use with `lemon secrets rotate-key` instead. `lemon setup` auto-initializes only when resolution reports `:missing_master_key`; any other key error is reported with `lemon secrets status` guidance.
+- Initialization is race-free: `init`, key rotation and a backup restore hold the cross-process key lock (`.secrets_master_key.lock` next to the key file), the key file is published with a hard link that never replaces an existing file unless `force: true`, and a failed occupancy check is an error (`{:key_file_check_failed, reason}`). Backup restore installs every file with a no-replace hard link, so a key that appears after its conflict check is never replaced.
+- Store key verifier: a reserved `:key_check` row in the secrets table holds HMAC-SHA256 of a fixed label under the store's master key. It is kept through secret deletion and expiry. `Secrets.set/3`, `set_if_revision/4` and `restore/3` refuse with `:master_key_mismatch` when the resolved key does not match it; reads report `:master_key_mismatch` instead of `:decrypt_failed`, and `Secrets.resolve/2` / `resolve_local/2` return that error instead of falling back to external or environment credentials. A store without a verifier (written before this change) is migrated by the first write whose key opens every live record; any other key is refused. Rotation checks the verifier and records the pending new key durably before switching (`next`); how a pending switch is settled is described below. Rotation also refuses with `{:multiple_key_sources, sources}` when a second provider holds a key.
+- Fail-closed fallback: when a stored credential exists but its master key cannot be established — `:master_key_mismatch`, `{:conflicting_master_keys, _}`, `{:keychain_failed, _}`, `{:key_provider_failed, _, _}`, `:invalid_master_key`, `:weak_master_key` — `Secrets.resolve/2` and `resolve_local/2` return that error and never fall back to external or environment credentials. Only `:missing_master_key` (no key configured at all) may fall back.
+- Rotation clears its pending verifier only when the provider reported a failure before attempting the write (`:unavailable`, `:invalid_value`) and still holds the old key. Every other unsuccessful outcome — timeouts, `{:command_failed, ...}` and other wrapped or unknown errors — stays pending (`{:key_switch_unverified, source}`) even when the old key is observed afterwards, because the write may still land. While a switch is pending, secret writes return `:key_rotation_incomplete`, and a new rotation is admitted only once the provider holds the pending new key; under the previous key it is refused with `:key_rotation_unresolved`, so a retry can never replace the staged ciphertext a delayed write needs. Settle it with `lemon secrets rotate-key --resume` (or `mix lemon.secrets.rotate_key --resume`), which commits once the provider holds the new key, or `--abandon --confirm-abandon`. Rotation and recovery read the providers directly and ignore the launcher's `LEMON_SECRETS_KEYCHAIN_PRELOAD`.
+- `--abandon` asserts that the earlier write of the new key was cancelled and can never land (the rotation crashed before switching, or the process that issued the write is gone). It always prints a warning, acts only with `--confirm-abandon`, and requires the provider to still hold the previous key. Before confirming, establish that the write was cancelled and securely preserve a copy of the current master key and of the secrets store. Abandoning does not make the store safe against a write that lands later: records not rewritten since keep a staged copy the new key opens, but every record written after abandoning is encrypted under the previous key only, and the store's verifier rejects the new key.
+- Backup restore holds the key lock for the target root and for the configured key file's directory (nested paths such as `~/.lemon/keys/master` included), and its rollback also uses no-replace links.
+- An unreadable key file is reported as `{:key_file_unreadable, reason}` (a provider failure), not as a missing key.
+- For local non-macOS development, keep `~/.lemon/secrets_master_key` as the canonical master key file and do not also set `LEMON_SECRETS_MASTER_KEY` to a different value: every entry point reads the file through the file provider, and a conflicting env key makes resolution fail.
 - `lemon secrets sources status|test` returns only source readiness,
   provenance, counts, byte counts, duration, and stable error kinds. Combined
   stdout/stderr and resolved values are never included.
@@ -134,6 +142,18 @@ audit log; credential writes and rotation retain their durability requirements.
   [macOS privacy permissions](agent-safety-contract.md#macos-permissions).
   Signed releases retain a stable signing identity and avoid that rebuild
   re-prompt; no signed DMG is published yet.
+
+#### Recovering from a late publication after `--abandon`
+
+Symptom: secret reads and writes fail with `:master_key_mismatch` and the key provider holds a key you did not expect (the abandoned new key landed).
+
+1. Stop every writer: the runtime (`lemon stop`) and any CLI or Mix command that sets secrets.
+2. Preserve both keys and the state: copy the key the provider now holds, the preserved previous key, and the secrets store (or take a `lemon backup` including credentials) to a safe place before changing anything.
+3. Restore the key that matches the store's verifier — the previous key preserved before abandoning — into the provider that supplies the key (the Keychain item or the key file).
+4. Restart every process that caches the resolved key (the runtime and long-lived readers), so none keeps reading with the wrong one.
+5. Verify before rotating: `lemon secrets status` reports the expected source, and existing secrets read back. Only then rotate again with `lemon secrets rotate-key`.
+
+Recovery may be impossible without the preserved previous key: records written after abandoning open only with it. Never reinitialize the key (`lemon secrets init --force`) or delete the store's `:key_check` verifier row to get past the mismatch; both make the affected secrets permanently unreadable or hide which key they need.
 
 ## Conditional Credential Saves
 

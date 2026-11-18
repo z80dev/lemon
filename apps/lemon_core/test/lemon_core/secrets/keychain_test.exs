@@ -31,7 +31,7 @@ defmodule LemonCore.Secrets.KeychainTest do
   # Mock runner that simulates successful add/update
   defp mock_runner_add_success(cmd, args, _opts) do
     case {cmd, args} do
-      {"security", ["add-generic-password", "-U" | _]} ->
+      {"security", ["add-generic-password", "-s" | _]} ->
         {"", 0}
 
       {"security", ["find-generic-password", "-s", "-a", "-w" | _]} ->
@@ -75,8 +75,7 @@ defmodule LemonCore.Secrets.KeychainTest do
       {"security", ["find-generic-password", "-s", "CustomService", "-a", "CustomAccount", "-w"]} ->
         {"custom-service-key\n", 0}
 
-      {"security",
-       ["add-generic-password", "-U", "-s", "CustomService", "-a", "CustomAccount" | _]} ->
+      {"security", ["add-generic-password", "-s", "CustomService", "-a", "CustomAccount" | _]} ->
         {"", 0}
 
       {"security", ["delete-generic-password", "-s", "CustomService", "-a", "CustomAccount"]} ->
@@ -280,8 +279,8 @@ defmodule LemonCore.Secrets.KeychainTest do
             assert "CustomService" in args
             assert "CustomAccount" in args
             assert "custom-value" in args
-            # Update flag should be present
-            assert "-U" in args
+            # Never update in place without force: true
+            refute "-U" in args
             {"", 0}
           end,
           service: "CustomService",
@@ -291,13 +290,29 @@ defmodule LemonCore.Secrets.KeychainTest do
       assert :ok = captured
     end
 
-    test "uses -U flag for update-or-create behavior" do
-      Keychain.put_master_key("my-value",
-        runner: fn _cmd, args, _opts ->
-          assert "-U" in args
-          {"", 0}
-        end
-      )
+    test "adds without -U so an existing item is never replaced" do
+      parent = self()
+
+      runner = fn _cmd, args, _opts ->
+        send(parent, {:args, args})
+        {"security: The specified item already exists in the keychain.", 45}
+      end
+
+      assert {:error, :eexist} = Keychain.put_master_key("my-value", runner: runner)
+      assert_received {:args, args}
+      refute "-U" in args
+    end
+
+    test "replaces in place with -U only when force: true" do
+      parent = self()
+
+      runner = fn _cmd, args, _opts ->
+        send(parent, {:args, args})
+        {"", 0}
+      end
+
+      assert :ok = Keychain.put_master_key("my-value", runner: runner, force: true)
+      assert_received {:args, ["add-generic-password", "-U" | _]}
     end
   end
 
@@ -388,7 +403,7 @@ defmodule LemonCore.Secrets.KeychainTest do
         state = Agent.get(agent, & &1)
 
         case {cmd, args} do
-          {"security", ["add-generic-password", "-U", "-s", _, "-a", _, "-w", value]} ->
+          {"security", ["add-generic-password", "-s", _, "-a", _, "-w", value]} ->
             Agent.update(agent, fn _ -> %{stored: value} end)
             {"", 0}
 

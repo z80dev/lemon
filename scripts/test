@@ -49,6 +49,7 @@ SCRUB_CREDENTIAL_ENV_VARS=(
   LEMON_EVAL_API_KEY
   LEMON_EVAL_API_KEY_SECRET
   LEMON_SECRETS_MASTER_KEY
+  LEMON_SECRETS_KEYCHAIN_PRELOAD
   MINIMAX_API_KEY
   MISTRAL_API_KEY
   MOONSHOT_API_KEY
@@ -291,6 +292,7 @@ run_quality() {
   run_shellcheck
   bash scripts/test_lemon_tui_auth.sh
   bash scripts/test_lemon_launcher_reuse.sh
+  bash scripts/test_lemon_launcher_master_key.sh
   bash scripts/test_lemonup.sh
   mix lemon.skill.lint
   mix lemon.quality

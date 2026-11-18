@@ -20,7 +20,8 @@ defmodule LemonCli.Setup.OmpAuthTest do
     System.put_env("HOME", home)
     System.put_env("PATH", bin <> ":" <> (previous["PATH"] || "/usr/bin:/bin"))
     System.delete_env("KIMI_API_KEY")
-    System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
+    master_key = Base.encode64(:crypto.strong_rand_bytes(32))
+    System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
     Application.put_env(:lemon_core, Secrets, key_providers: [:env])
     clear_secrets()
     {:ok, _} = Secrets.set("untouched_kimi_login", "synthetic-existing-login")
@@ -70,7 +71,8 @@ defmodule LemonCli.Setup.OmpAuthTest do
      omp: omp,
      calls: calls,
      token: token,
-     stored: stored}
+     stored: stored,
+     master_key: master_key}
   end
 
   test "non-interactive omp onboarding discovers the absolute executable without storing tokens",
@@ -214,7 +216,9 @@ defmodule LemonCli.Setup.OmpAuthTest do
 
   test "mixed-case omp selection preserves the real stored OAuth login and secret-name case",
        ctx do
-    System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
+    # The store already holds a record under the setup key; a different key is
+    # refused for writes (`:master_key_mismatch`).
+    System.put_env("LEMON_SECRETS_MASTER_KEY", ctx.master_key)
     Application.put_env(:lemon_core, Secrets, key_providers: [:env])
     secret_name = "MixedCase_KimiOAuth"
 

@@ -45,7 +45,7 @@ defmodule LemonCore.Secrets.KeyProviderTest do
     put_settings(original, key_providers: [:file, :env], key_file: path)
 
     env_getter = fn
-      "LEMON_SECRETS_MASTER_KEY" -> Base.encode64(:binary.copy(<<3>>, 32))
+      "LEMON_SECRETS_MASTER_KEY" -> Base.encode64(:binary.copy(<<2>>, 32))
       _ -> nil
     end
 

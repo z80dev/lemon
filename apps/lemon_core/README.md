@@ -401,7 +401,7 @@ Secrets are encrypted at rest with AES-256-GCM. Per-secret encryption keys are d
 
 The order and the locations are configurable via `config :lemon_core, LemonCore.Secrets, key_providers: [:keychain, :env, :file], key_file: ..., env_var: ...`; see `LemonCore.Secrets.KeyProvider`. The key must be base64-encoded 32 bytes.
 
-For local Linux/dev usage, treat `~/.lemon/secrets_master_key` as the canonical master key file. `./bin/lemon` normalizes `LEMON_SECRETS_MASTER_KEY` from that file before boot so stale inherited shell env does not override the working local key.
+For local Linux/dev usage, treat `~/.lemon/secrets_master_key` as the canonical master key file. Every entry point (`./bin/lemon`, the release, CLI, Mix, runtime) resolves the same provider chain; launchers never export the key file, and a stale `LEMON_SECRETS_MASTER_KEY` holding a different key makes resolution fail with `{:conflicting_master_keys, sources}` instead of silently winning or losing. See [the secrets contract](../../docs/security/secrets-and-keychain.md).
 
 To change the master key without re-entering secrets, run `lemon secrets rotate-key` (or `mix lemon.secrets.rotate_key`): it previews, then with the preview's `--confirm` token re-encrypts every stored secret under a new key and writes that key to the Keychain entry or key file that supplied the old one. See `LemonCore.Secrets.KeyRotation` and [the secrets contract](../../docs/security/secrets-and-keychain.md#master-key-rotation).
 

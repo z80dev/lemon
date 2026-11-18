@@ -634,7 +634,19 @@ defmodule LemonCli.CLITest do
         assert CLI.run(["secrets", "rotate-key", "extra"]) == 2
       end)
 
-    assert error =~ "Usage: lemon secrets rotate-key [--confirm <token>]"
+    assert error =~
+             "Usage: lemon secrets rotate-key [--confirm <token> | --resume | --abandon --confirm-abandon]"
+  end
+
+  test "secrets rotate-key --abandon warns and needs explicit confirmation" do
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["secrets", "rotate-key", "--abandon"]) == 1
+      end)
+
+    assert error =~ "WARNING: abandoning a pending key switch"
+    assert error =~ "securely preserve a copy of the current master key"
+    assert error =~ "--abandon --confirm-abandon"
   end
 
   describe "setup_required?/0" do

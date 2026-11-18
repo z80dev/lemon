@@ -533,20 +533,19 @@ parse_runtime_options() {
   runtime_paths
 }
 
-# Long-lived BEAM processes may be denied keychain reads, and stale session env
-# must not beat the canonical key file, so resolve the master key before boot.
+# Long-lived BEAM processes may be denied keychain reads, so pass the Keychain
+# item the launcher can read to the runtime's keychain provider. The launcher
+# never chooses between providers: the runtime resolves keychain, env var and
+# key file in its configured order, exactly like the CLI and Mix tasks, and
+# fails on conflicting keys.
 load_secrets_master_key() {
-  local key_file="$LEMON_HOME_DIR/secrets_master_key" key=""
-  if [ "$(uname -s)" != "Darwin" ] && [ -r "$key_file" ]; then
-    key="$(cat "$key_file")"
-    [ -z "$key" ] || { export LEMON_SECRETS_MASTER_KEY="$key"; info "Loaded secrets master key from $key_file."; }
-  fi
-  if [ -z "${LEMON_SECRETS_MASTER_KEY:-}" ] && command -v security >/dev/null 2>&1; then
-    key="$(security find-generic-password -s "Lemon Secrets" -a default -w 2>/dev/null ||
-      security find-generic-password -s "Lemon Secrets" -a default -w \
-        "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)"
-    [ -z "$key" ] || { export LEMON_SECRETS_MASTER_KEY="$key"; info "Loaded secrets master key from keychain."; }
-  fi
+  local key=""
+  [ -z "${LEMON_SECRETS_KEYCHAIN_PRELOAD:-}" ] || return 0
+  command -v security >/dev/null 2>&1 || return 0
+  key="$(security find-generic-password -s "Lemon Secrets" -a default -w 2>/dev/null ||
+    security find-generic-password -s "Lemon Secrets" -a default -w \
+      "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)"
+  [ -z "$key" ] || { export LEMON_SECRETS_KEYCHAIN_PRELOAD="$key"; info "Preloaded secrets master key from keychain."; }
 }
 
 # Starts the unified runtime in the foreground (exec) or background.

@@ -59,6 +59,14 @@ defmodule LemonCore.Backup do
   `:runtime_probe` accepts a `(port -> boolean)` probe, and
   `:after_runtime_check` accepts a zero-arity synchronization hook invoked under
   the lifecycle lock after the final check, before staging.
+
+  Restore then holds the secrets key lock (`LemonCore.Secrets.KeyLock`) for the
+  target root and for the configured master-key file's directory (resolved
+  like `LemonCore.Secrets.KeyProvider.key_file/1` with the restore's
+  `:home_dir`, plus any `:secrets_opts`), so key initialization and rotation
+  never interleave with installation or rollback. Files are installed, and
+  rolled back, with no-replace hard links: a file that appears concurrently is
+  never overwritten.
   """
 
   import Bitwise
@@ -66,6 +74,7 @@ defmodule LemonCore.Backup do
   alias Exqlite.Sqlite3
   alias LemonCore.Paths
   alias LemonCore.Runtime.Health
+  alias LemonCore.Secrets.KeyLock
 
   @compile {:no_warn_undefined, Exqlite.Sqlite3}
 
@@ -219,12 +228,31 @@ defmodule LemonCore.Backup do
              with :ok <- ensure_no_daemon(target, opts) do
                after_runtime_check(opts)
 
-               with_lock(target, fn ->
-                 do_restore(bundle, target, manifest, manifest_digest, entries, summary, opts)
+               # Credential files are installed and rolled back under the same
+               # cross-process key lock as key initialization and rotation, for
+               # the target root and the configured key-file directory (which
+               # may be nested inside the target, or elsewhere).
+               KeyLock.with_dirs_lock(key_lock_dirs(target, opts), [], fn ->
+                 with_lock(target, fn ->
+                   do_restore(bundle, target, manifest, manifest_digest, entries, summary, opts)
+                 end)
                end)
              end
            end) do
       {:ok, result}
+    end
+  end
+
+  defp key_lock_dirs(target, opts) do
+    key_opts =
+      opts
+      |> paths_opts()
+      |> Keyword.take([:home_dir])
+      |> Keyword.merge(Keyword.get(opts, :secrets_opts, []))
+
+    case LemonCore.Secrets.KeyProvider.key_file(key_opts) do
+      nil -> [target]
+      key_file -> [target, Path.dirname(key_file)]
     end
   end
 
@@ -1001,6 +1029,11 @@ defmodule LemonCore.Backup do
     end)
   end
 
+  # Every destination is absent here: authorized conflicts were moved to the
+  # rollback directory and identical files are skipped. Installing by hard link
+  # fails with `:eexist` instead of replacing a file that appeared since the
+  # conflict check (for example a master key created by `lemon secrets init`),
+  # which is never authorized for replacement.
   defp install_staged_files(stage, target, entries) do
     Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, installed} ->
       relative = entry["path"]
@@ -1008,7 +1041,8 @@ defmodule LemonCore.Backup do
       destination = Path.join(target, relative)
 
       with :ok <- mkdir_p_private(Path.dirname(destination)),
-           :ok <- File.rename(source, destination),
+           :ok <- File.ln(source, destination),
+           _ <- File.rm(source),
            :ok <- sync_dir(Path.dirname(destination)) do
         {:cont, {:ok, [relative | installed]}}
       else
@@ -1033,9 +1067,12 @@ defmodule LemonCore.Backup do
         source = Path.join(rollback, relative)
         destination = Path.join(target, relative)
 
+        # Compensation never replaces a file created since it moved aside
+        # (for example a master key initialized meanwhile).
         result =
           with :ok <- mkdir_p_private(Path.dirname(destination)),
-               :ok <- File.rename(source, destination),
+               :ok <- File.ln(source, destination),
+               _ <- File.rm(source),
                :ok <- sync_dir(Path.dirname(destination)) do
             :ok
           end
@@ -1386,6 +1423,9 @@ defmodule LemonCore.Backup do
         "runtime_or_generated"
 
       relative == ".backup-restore.lock" ->
+        "runtime_lock"
+
+      Enum.any?(parts, &String.starts_with?(&1, KeyLock.lock_name())) ->
         "runtime_lock"
 
       String.starts_with?(base, "support-bundle-") ->

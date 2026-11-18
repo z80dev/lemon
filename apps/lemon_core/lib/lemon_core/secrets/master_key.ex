@@ -38,6 +38,15 @@ defmodule LemonCore.Secrets.MasterKey do
   retired key. Rotation clears the cache under that same lease; cache misses are
   serialized with invalidation.
 
+  ## Conflicting keys
+
+  Every entry point (`bin/lemon`, the release, CLI, Mix tasks and the
+  runtime) resolves through this chain; launchers never pick a key
+  themselves. The first provider holding a key answers, and if a later
+  provider holds a different valid key, resolution fails with
+  `{:error, {:conflicting_master_keys, sources}}` rather than letting
+  provider order decide which key a given process uses.
+
   ## Scoped resolution
 
   `scoped/1` memoizes Keychain fetches, including failures, for one command in
@@ -49,7 +58,7 @@ defmodule LemonCore.Secrets.MasterKey do
   require Logger
 
   alias LemonCore.RuntimeCache
-  alias LemonCore.Secrets.KeyProvider
+  alias LemonCore.Secrets.{KeyLock, KeyProvider}
 
   @master_key_bytes 32
   @cache_key {__MODULE__, :resolved_key}
@@ -190,20 +199,61 @@ defmodule LemonCore.Secrets.MasterKey do
 
   On macOS that is the Keychain; elsewhere the keychain provider reports itself
   unavailable and the key lands in the configured key file (`0600`). Pass
-  `target: :file` (or any provider name) to force one, and `force: true` to
-  replace an existing key file — note that doing so makes every secret already
-  encrypted under the old key unreadable; `LemonCore.Secrets.KeyRotation`
-  changes a key in use without losing secrets.
+  `target: :file` (or any provider name) to force one.
+
+  Every configured provider is checked first. When any of them holds key
+  material (usable or not) `init` returns `{:error, :master_key_exists}`; when
+  one cannot be read it returns `{:error, {:master_key_check_failed, reason}}`
+  rather than assuming nothing is there. A provider that refuses the write
+  because an entry already exists (keychain item, key file present even if
+  unreadable) also yields `:master_key_exists`. Only `force: true` skips the
+  check and replaces the key — every secret already encrypted under the old
+  key becomes unreadable; `LemonCore.Secrets.KeyRotation` changes a key in use
+  without losing secrets.
   """
   @spec init(keyword()) :: {:ok, map()} | {:error, atom() | tuple()}
   def init(opts \\ []) do
-    with_cache_invalidation(fn ->
-      encoded = generate_encoded_key()
+    targets = init_targets(opts)
 
+    if Enum.any?(targets, &KeyProvider.available?(&1, opts)) do
+      # The key lock makes check-then-write one step across OS processes and
+      # across providers; the file provider additionally publishes without
+      # replacing, so a key that appears regardless is never overwritten.
+      KeyLock.with_lock(opts, fn ->
+        with_cache_invalidation(fn ->
+          with :ok <- ensure_no_existing_key(opts) do
+            init_chain(targets, generate_encoded_key(), opts, [])
+          end
+        end)
+      end)
+    else
+      # Nothing can hold a key: report why without writing anything.
+      init_chain(targets, nil, opts, [])
+    end
+  end
+
+  defp ensure_no_existing_key(opts) do
+    if Keyword.get(opts, :force, false) do
+      :ok
+    else
       opts
-      |> init_targets()
-      |> init_chain(encoded, opts, [])
-    end)
+      |> KeyProvider.order()
+      |> Enum.reduce_while(:ok, fn provider, :ok ->
+        case fetch_uncached(provider, opts) do
+          {:ok, _key} ->
+            {:halt, {:error, :master_key_exists}}
+
+          {:error, reason} when reason in @skip_reasons ->
+            {:cont, :ok}
+
+          {:error, reason} when reason in @invalid_reasons ->
+            {:halt, {:error, :master_key_exists}}
+
+          {:error, reason} ->
+            {:halt, {:error, {:master_key_check_failed, wrap_error(provider, reason)}}}
+        end
+      end)
+    end
   end
 
   @spec status(keyword()) :: map()
@@ -303,7 +353,12 @@ defmodule LemonCore.Secrets.MasterKey do
   defp resolve_chain([provider | rest], opts, acc, prefetched) do
     case Map.get_lazy(prefetched, provider, fn -> fetch_from(provider, opts) end) do
       {:ok, key} ->
-        {:ok, key, KeyProvider.name(provider)}
+        name = KeyProvider.name(provider)
+
+        case conflicting_sources(rest, key, opts) do
+          [] -> {:ok, key, name}
+          others -> {:error, {:conflicting_master_keys, [name | others]}}
+        end
 
       {:error, reason} when reason in @skip_reasons ->
         resolve_chain(rest, opts, acc, prefetched)
@@ -325,6 +380,30 @@ defmodule LemonCore.Secrets.MasterKey do
           prefetched
         )
     end
+  end
+
+  # One precedence contract for every entry point: the first provider that
+  # holds a key answers, and any later provider holding a *different* key makes
+  # resolution fail instead of silently depending on which provider a given
+  # launcher, CLI or runtime consulted first. Later providers that are absent,
+  # unreadable or hold invalid material cannot conflict and are ignored.
+  defp conflicting_sources(providers, key, opts) do
+    for provider <- providers,
+        match?({:ok, other} when other != key, fetch_from(provider, opts)),
+        do: KeyProvider.name(provider)
+  end
+
+  @doc """
+  Names of the providers, other than `source`, that currently hold usable
+  key material. Key rotation refuses while there is any: it can only rewrite
+  one provider, and the others would then conflict with the new key.
+  """
+  @spec other_sources(source(), keyword()) :: [source()]
+  def other_sources(source, opts) do
+    for provider <- KeyProvider.order(opts),
+        KeyProvider.name(provider) != source,
+        match?({:ok, _}, fetch_from(provider, opts)),
+        do: KeyProvider.name(provider)
   end
 
   defp init_targets(opts) do
@@ -396,6 +475,10 @@ defmodule LemonCore.Secrets.MasterKey do
 
   defp provider_error({:error, reason}) when reason not in @skip_reasons, do: reason
   defp provider_error(_result), do: nil
+
+  # An entry appearing between the check and the write is still an existing key.
+  defp init_error(_provider, :eexist), do: :master_key_exists
+  defp init_error(_provider, {:key_file_exists, _path}), do: :master_key_exists
 
   defp init_error(provider, reason) do
     case KeyProvider.name(provider) do

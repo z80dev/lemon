@@ -20,10 +20,11 @@ defmodule LemonCore.Secrets.ExternalTest do
     System.put_env("AMBIENT_SECRET_SHOULD_NOT_PASS", "ambient-never-print")
     System.delete_env("STUB_SECRET")
     System.delete_env("OTHER_STUB_SECRET")
-    :ok = Secrets.delete("STUB_SECRET")
-    :ok = Secrets.delete("stub_bootstrap")
-    :ok = Secrets.delete("op_bootstrap")
-    :ok = Secrets.delete("bws_bootstrap")
+    # A fresh master key per test: records and the store's key verifier from
+    # earlier tests belong to other keys and would correctly refuse writes.
+    for {ref, _} <- LemonCore.Store.list(Secrets.table()),
+        do: LemonCore.Store.delete(Secrets.table(), ref)
+
     SourceCache.clear()
 
     stub = Path.join(tmp_dir, "secret-source-stub")

@@ -42,14 +42,22 @@ defmodule Mix.Tasks.Lemon.Secrets.Set do
       {:error, :weak_master_key} ->
         Mix.raise(
           "Secrets master key is not base64-encoded 32-byte key material. " <>
-            "Generate one with mix lemon.secrets.init or openssl rand -base64 32."
+            "Run mix lemon.secrets.status for diagnostics; to keep secrets encrypted under it, " <>
+            "allow legacy raw keys and run mix lemon.secrets.rotate_key."
         )
 
       {:error, {:keychain_failed, reason}} ->
         Mix.raise(
           "Failed to read secrets master key from keychain: #{inspect(reason)}. " <>
-            "Run mix lemon.secrets.status for diagnostics, then re-run mix lemon.secrets.init " <>
-            "or set LEMON_SECRETS_MASTER_KEY."
+            "Nothing was written. Run mix lemon.secrets.status for diagnostics and restore " <>
+            "keychain access; do not re-initialize the key."
+        )
+
+      {:error, :master_key_mismatch} ->
+        Mix.raise(
+          "The resolved secrets master key does not open the stored secrets, so nothing was " <>
+            "written. Run mix lemon.secrets.status to see which key source is in use and " <>
+            "restore the original key."
         )
 
       {:error, reason} ->
