@@ -144,7 +144,10 @@ defmodule Lemon.Reload do
   @doc """
   Compiles and loads a trusted extension source file, then soft-purges old code.
 
-  Supports only the common lock options; source compilation always runs.
+  Supports the common lock options plus `:source`: the file's bytes as already
+  read by the caller. With `:source` those exact bytes are compiled under the
+  file name (`Code.compile_string/2`) and the file is not read again, so a
+  caller that hashed the bytes knows exactly what ran.
   `metadata.compiled_modules` lists modules on success. Empty or missing paths
   and compilation exceptions produce an error-status result with
   `metadata.error_message`. Compiler options are restored after compilation,
@@ -152,9 +155,11 @@ defmodule Lemon.Reload do
   """
   @spec reload_extension(String.t(), keyword()) :: {:ok, result()} | {:error, term()}
   def reload_extension(path, opts \\ []) when is_binary(path) do
+    source = Keyword.get(opts, :source)
+
     with_reload_lock(opts, fn ->
       telemetry_span(:extension, path, fn ->
-        do_reload_extension(path)
+        do_reload_extension(path, source)
       end)
     end)
   end
@@ -220,7 +225,7 @@ defmodule Lemon.Reload do
             |> List.wrap()
 
           app_results = Enum.map(apps, &unwrap(do_reload_app(&1)))
-          extension_results = Enum.map(extension_paths, &unwrap(do_reload_extension(&1)))
+          extension_results = Enum.map(extension_paths, &unwrap(do_reload_extension(&1, nil)))
           code_change_results = Enum.map(code_change_targets, &do_change_code_target/1)
 
           results = app_results ++ extension_results ++ code_change_results
@@ -342,7 +347,7 @@ defmodule Lemon.Reload do
     end
   end
 
-  defp do_reload_extension(path) do
+  defp do_reload_extension(path, source) do
     started = System.monotonic_time()
 
     cond do
@@ -359,7 +364,7 @@ defmodule Lemon.Reload do
            metadata: %{error_message: "Extension path is empty"}
          }}
 
-      not File.regular?(path) ->
+      is_nil(source) and not File.regular?(path) ->
         {:ok,
          %{
            kind: :extension,
@@ -380,9 +385,12 @@ defmodule Lemon.Reload do
           # Compilation runs arbitrary top-level extension code, even if it fails.
           LemonCore.NativeProcess.unsupported!()
 
-          modules =
-            Code.compile_file(path)
-            |> Enum.map(fn {module, _binary} -> module end)
+          compiled =
+            if is_binary(source),
+              do: Code.compile_string(source, path),
+              else: Code.compile_file(path)
+
+          modules = Enum.map(compiled, fn {module, _binary} -> module end)
 
           Enum.each(modules, &Code.ensure_loaded?/1)
 

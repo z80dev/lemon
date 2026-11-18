@@ -36,11 +36,15 @@ max_tool_invoke_depth = 4
 `CACHE_COMPILED`, `CACHE_DIR`, `MAX_TOOL_INVOKE_DEPTH`) override these keys; see
 [Configuration](../config.md#wasm-tools).
 
-Discovery roots:
+Discovery roots (operator-controlled only; a project's `.lemon/wasm-tools` is
+never searched):
 
-1. `<cwd>/.lemon/wasm-tools`
-2. `<agent dir>/wasm-tools` (`~/.lemon/agent/wasm-tools` by default; `LEMON_AGENT_DIR` changes the agent dir)
-3. `runtime.tools.wasm.tool_paths`
+1. `<agent dir>/wasm-tools` (`~/.lemon/agent/wasm-tools` by default; `LEMON_AGENT_DIR` changes the agent dir)
+2. `runtime.tools.wasm.tool_paths` (relative entries, like `runtime_path` and
+   `cache_dir`, resolve against the global config directory `~/.lemon`)
+
+`[runtime.extensions] enabled = false` also disables WASM tools: the sidecar is
+not started at session start or reload.
 
 Each module is discovered as:
 

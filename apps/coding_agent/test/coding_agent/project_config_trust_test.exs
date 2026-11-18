@@ -246,7 +246,7 @@ defmodule CodingAgent.ProjectConfigTrustTest do
         """
       )
 
-    paths = ExtensionLifecycle.extension_paths(ctx.project, settings)
+    paths = ExtensionLifecycle.extension_paths(settings)
     refute extension_dir in paths
     Extensions.load_extensions_with_errors(paths)
     refute File.exists?(marker)

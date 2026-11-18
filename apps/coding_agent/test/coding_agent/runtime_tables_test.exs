@@ -44,7 +44,7 @@ defmodule CodingAgent.RuntimeTablesTest do
     assert_receive {:DOWN, ^ref, :process, ^caller, :normal}
     key = {Path.expand(tmp_dir), []}
 
-    assert [{^key, %{extensions: [__MODULE__], load_errors: []}}] =
+    assert [{^key, %{extensions: [__MODULE__]}}] =
              :ets.lookup(@extension_table, key)
 
     assert :ets.info(@extension_table, :owner) == Process.whereis(RuntimeTables)

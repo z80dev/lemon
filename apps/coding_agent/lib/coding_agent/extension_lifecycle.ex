@@ -40,6 +40,7 @@ defmodule CodingAgent.ExtensionLifecycle do
   """
   @spec initialize(keyword()) :: lifecycle_result()
   def initialize(opts) do
+    refuse_if_compromised!()
     cwd = Keyword.fetch!(opts, :cwd)
     config_cwd = Keyword.get(opts, :config_cwd) || cwd
     settings_manager = Keyword.fetch!(opts, :settings_manager)
@@ -53,19 +54,14 @@ defmodule CodingAgent.ExtensionLifecycle do
     approval_context =
       Keyword.get(opts, :approval_context, Keyword.get(tool_opts, :approval_context))
 
-    extension_paths = extension_paths(config_cwd, settings_manager)
+    extension_paths = extension_paths(settings_manager)
 
     {extensions, load_errors} =
       case Keyword.fetch(tool_opts, :extension_inventory) do
-        {:ok, {extensions, load_errors}} ->
-          {extensions, load_errors}
-
-        :error ->
-          inventory = load_extensions(extension_paths)
-          {extensions, load_errors} = inventory
-          ToolRegistry.prime_extension_cache(cwd, extension_paths, extensions, load_errors)
-          inventory
+        {:ok, {extensions, load_errors}} -> {extensions, load_errors}
+        :error -> ToolRegistry.extension_inventory(cwd, extension_paths)
       end
+      |> require_complete!()
 
     hooks = Extensions.get_hooks(extensions)
     provider_registration = Extensions.register_extension_providers(extensions)
@@ -74,6 +70,7 @@ defmodule CodingAgent.ExtensionLifecycle do
       tool_opts
       |> Keyword.put(:config_cwd, config_cwd)
       |> Keyword.put(:extension_paths, extension_paths)
+      |> Keyword.put(:extension_inventory, {extensions, load_errors})
       |> Keyword.put(:wasm_tools, wasm_tools)
       |> Keyword.put(:wasm_status, wasm_status)
       |> Keyword.put(:tool_policy, tool_policy)
@@ -115,7 +112,7 @@ defmodule CodingAgent.ExtensionLifecycle do
     %{
       extensions: extensions,
       hooks: hooks,
-      tools: tools,
+      tools: ToolExecutor.gate_all_on_compromise(tools),
       tool_catalog: tool_catalog,
       extension_status_report: extension_status_report,
       extension_paths: extension_paths,
@@ -133,6 +130,7 @@ defmodule CodingAgent.ExtensionLifecycle do
   """
   @spec reload(keyword()) :: lifecycle_result()
   def reload(opts) do
+    refuse_if_compromised!()
     cwd = Keyword.fetch!(opts, :cwd)
     config_cwd = Keyword.get(opts, :config_cwd) || cwd
     settings_manager = Keyword.fetch!(opts, :settings_manager)
@@ -156,11 +154,13 @@ defmodule CodingAgent.ExtensionLifecycle do
 
     Extensions.unregister_extension_providers(old_provider_registration)
 
-    extension_paths = extension_paths(config_cwd, settings_manager)
+    extension_paths = extension_paths(settings_manager)
+    # Dropping the cwd's inventory forces a recompile of its sources.
     ToolRegistry.invalidate_extension_cache(cwd)
 
-    {extensions, load_errors} = load_extensions(extension_paths)
-    ToolRegistry.prime_extension_cache(cwd, extension_paths, extensions, load_errors)
+    {extensions, load_errors} =
+      cwd |> ToolRegistry.extension_inventory(extension_paths) |> require_complete!()
+
     unload_removed_extensions(previous_status_report, extensions)
 
     hooks = Extensions.get_hooks(extensions)
@@ -170,6 +170,7 @@ defmodule CodingAgent.ExtensionLifecycle do
       tool_opts
       |> Keyword.put(:config_cwd, config_cwd)
       |> Keyword.put(:extension_paths, extension_paths)
+      |> Keyword.put(:extension_inventory, {extensions, load_errors})
       |> Keyword.put(:wasm_tools, wasm_tools)
       |> Keyword.put(:wasm_status, wasm_status)
 
@@ -213,7 +214,7 @@ defmodule CodingAgent.ExtensionLifecycle do
     %{
       extensions: extensions,
       hooks: hooks,
-      tools: tools,
+      tools: ToolExecutor.gate_all_on_compromise(tools),
       tool_catalog: tool_catalog,
       extension_status_report: extension_status_report,
       extension_paths: extension_paths,
@@ -247,7 +248,8 @@ defmodule CodingAgent.ExtensionLifecycle do
     tool_opts =
       tool_opts
       |> Keyword.put(:config_cwd, config_cwd)
-      |> Keyword.put(:extension_paths, extension_paths(config_cwd, settings_manager))
+      |> Keyword.put(:extension_paths, extension_paths(settings_manager))
+      |> Keyword.put(:extension_inventory, {Keyword.fetch!(opts, :extensions), []})
       |> Keyword.put(:wasm_tools, Keyword.get(opts, :wasm_tools, []))
       |> Keyword.put(:wasm_status, Keyword.get(opts, :wasm_status))
       |> Keyword.put(:tool_policy, tool_policy)
@@ -274,43 +276,66 @@ defmodule CodingAgent.ExtensionLifecycle do
 
     emit_disclosure_telemetry(disclosure_report)
 
-    %{tools: tools, tool_catalog: tool_catalog, tool_disclosure: disclosure_report}
+    %{
+      tools: ToolExecutor.gate_all_on_compromise(tools),
+      tool_catalog: tool_catalog,
+      tool_disclosure: disclosure_report
+    }
   end
 
   @doc """
-  Resolve extension search paths for a working directory and settings.
+  Resolve extension search paths from settings.
+
+  This is the only extension path resolver: session start, reload, tool
+  rebuilds and `CodingAgent.ToolRegistry` all use it. It returns `[]` when
+  `runtime.extensions.enabled` is false. Paths come only from operator config:
+  the merged config's project layer never carries `extension_paths` or
+  `[runtime.extensions]` (`LemonCore.Config.ProjectLayer`). A relative path is
+  anchored at the directory of the global config file (`~/.lemon` by default),
+  never at a session or project directory, and `auto_load_default_paths` adds
+  only the global `~/.lemon/agent/extensions`. A project's `.lemon/extensions`
+  is never loaded; an operator who trusts one lists its absolute path.
   """
-  @spec extension_paths(String.t(), term()) :: [String.t()]
-  def extension_paths(cwd, settings_manager) do
+  @spec extension_paths(term()) :: [String.t()]
+  def extension_paths(%{extensions_enabled: false}), do: []
+
+  def extension_paths(settings_manager) do
+    operator_root = Path.dirname(LemonCore.Paths.global_config())
+
     settings_paths =
       case settings_manager do
-        %{extension_paths: paths} when is_list(paths) -> paths
-        _ -> []
+        %{extension_paths: paths} when is_list(paths) ->
+          paths |> Enum.filter(&is_binary/1) |> Enum.map(&Path.expand(&1, operator_root))
+
+        _ ->
+          []
       end
 
     default_paths =
-      if auto_load_default_paths?(settings_manager) do
-        [
-          Config.extensions_dir(),
-          Config.project_extensions_dir(cwd)
-        ]
-      else
-        []
-      end
+      if auto_load_default_paths?(settings_manager), do: [Config.extensions_dir()], else: []
 
     settings_paths ++ default_paths
   end
 
+  # A session never runs with a partial extension set: a missing extension may
+  # be the one that enforces policy through hooks.
+  defp require_complete!({extensions, []}) do
+    refuse_if_compromised!()
+    {extensions, []}
+  end
+
+  defp require_complete!({_extensions, errors}) do
+    raise CodingAgent.ExtensionLifecycle.LoadError, errors: errors
+  end
+
+  # Fail-stop: no session starts, reloads or loads extensions once a module
+  # collision has set the runtime-wide latch.
+  defp refuse_if_compromised! do
+    if Extensions.compromised?(), do: raise(CodingAgent.ExtensionLifecycle.CompromisedError)
+  end
+
   defp auto_load_default_paths?(%{extension_auto_load_default_paths: true}), do: true
   defp auto_load_default_paths?(_), do: false
-
-  @spec load_extensions([String.t()]) :: {[module()], [Extensions.load_error()]}
-  defp load_extensions(extension_paths) do
-    {:ok, extensions, load_errors, _validation_errors} =
-      Extensions.load_extensions_with_errors(extension_paths)
-
-    {extensions, load_errors}
-  end
 
   defp unload_removed_extensions(%{extensions: previous}, extensions) when is_list(previous) do
     previous

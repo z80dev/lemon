@@ -50,7 +50,27 @@ defmodule CodingAgent.SessionRegistry do
   @spec list_ids() :: [String.t()]
   def list_ids do
     if Process.whereis(@registry) do
-      Registry.select(@registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+      Registry.select(@registry, [{{:"$1", :_, :_}, [{:is_binary, :"$1"}], [:"$1"]}])
+    else
+      []
+    end
+  end
+
+  @doc """
+  Track the calling session process as live, named or not, so a runtime-wide
+  fail-stop can reach every session. The entry disappears when it exits.
+  """
+  @spec track_live() :: :ok
+  def track_live do
+    if Process.whereis(@registry), do: Registry.register(@registry, {:live, self()}, nil)
+    :ok
+  end
+
+  @doc "Pids of every live session process, named or not."
+  @spec live_pids() :: [pid()]
+  def live_pids do
+    if Process.whereis(@registry) do
+      Registry.select(@registry, [{{{:live, :"$1"}, :_, :_}, [], [:"$1"]}])
     else
       []
     end

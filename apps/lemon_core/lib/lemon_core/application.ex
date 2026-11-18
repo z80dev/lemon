@@ -79,6 +79,7 @@ defmodule LemonCore.Application do
     children =
       [
         LemonCore.RuntimeCache,
+        LemonCore.RuntimeLatch,
         {DynamicSupervisor, strategy: :one_for_one, name: LemonCore.Dedupe.Supervisor},
         LemonCore.Bus.child_spec_for_backend(),
         LemonCore.Drain,

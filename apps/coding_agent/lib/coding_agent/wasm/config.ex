@@ -36,35 +36,41 @@ defmodule CodingAgent.Wasm.Config do
             cache_dir: nil,
             max_tool_invoke_depth: @default_max_depth
 
-  @spec load(String.t(), map() | nil) :: t()
-  def load(cwd, settings_manager \\ nil) do
-    cwd = Path.expand(cwd)
+  @doc """
+  Build the WASM configuration from operator settings.
+
+  WASM tools are extensions: `runtime.extensions.enabled = false` disables the
+  runtime (no discovery, startup or reload). Tools are discovered only in the
+  global `<agent dir>/wasm-tools` and operator `tool_paths`; a project's
+  `.lemon/wasm-tools` is never loaded. Relative `tool_paths`, `runtime_path`
+  and `cache_dir` are anchored at the directory of the global config file,
+  never at a session or project directory.
+  """
+  @spec load(map() | nil) :: t()
+  def load(settings_manager \\ nil) do
+    operator_root = Path.dirname(LemonCore.Paths.global_config())
 
     wasm =
       settings_manager
       |> extract_wasm_map()
       |> stringify_keys()
 
-    extra_tool_paths = parse_paths(wasm["tool_paths"], cwd)
+    extra_tool_paths = parse_paths(wasm["tool_paths"], operator_root)
 
     runtime_path =
       wasm
       |> Map.get("runtime_path")
-      |> parse_optional_path(cwd)
+      |> parse_optional_path(operator_root)
 
     cache_dir =
       wasm
       |> Map.get("cache_dir")
-      |> parse_optional_path(cwd)
+      |> parse_optional_path(operator_root)
 
-    discover_paths =
-      [
-        Path.join(cwd, ".lemon/wasm-tools"),
-        Path.join(AgentConfig.agent_dir(), "wasm-tools")
-      ] ++ extra_tool_paths
+    discover_paths = [Path.join(AgentConfig.agent_dir(), "wasm-tools") | extra_tool_paths]
 
     %__MODULE__{
-      enabled: parse_boolean(wasm["enabled"], false),
+      enabled: extensions_enabled?(settings_manager) and parse_boolean(wasm["enabled"], false),
       auto_build: parse_boolean(wasm["auto_build"], true),
       runtime_path: runtime_path,
       tool_paths: extra_tool_paths,
@@ -79,6 +85,9 @@ defmodule CodingAgent.Wasm.Config do
         parse_positive_integer(wasm["max_tool_invoke_depth"], @default_max_depth)
     }
   end
+
+  defp extensions_enabled?(%{extensions_enabled: false}), do: false
+  defp extensions_enabled?(_settings), do: true
 
   defp extract_wasm_map(%{tools: tools}) when is_map(tools) do
     Map.get(tools, :wasm) || Map.get(tools, "wasm") || %{}

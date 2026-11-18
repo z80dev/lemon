@@ -4,25 +4,69 @@ Extensions are the plugin system for Lemon. They allow you to add custom tools, 
 
 ## Quick Start
 
-1. Create a file in `~/.lemon/agent/extensions/` (global) or `.lemon/extensions/` (project-local)
+1. Create a file in `~/.lemon/agent/extensions/` or another directory you control
 2. Implement the `CodingAgent.Extensions.Extension` behaviour
-3. Trust the directory with `[runtime.extensions] auto_load_default_paths = true`, or add an explicit `[runtime] extension_paths = [...]` entry
+3. Trust the directory in the global config: `[runtime.extensions] auto_load_default_paths = true` for `~/.lemon/agent/extensions/`, or an explicit `[runtime] extension_paths = [...]` entry
 4. The extension will be loaded on session start
 
 By default, Lemon scans default extension directories for diagnostics and
 manifest metadata without executing third-party code. Code execution requires
 either explicit `extension_paths` configuration or
-`auto_load_default_paths = true` for the default global/project directories.
-Set `[runtime.extensions] enabled = false` to stop the tool registry from loading
-extension paths while keeping manifest diagnostics and support-bundle visibility.
+`auto_load_default_paths = true` for the global `~/.lemon/agent/extensions/`.
+Both are operator-only: a project `.lemon/config.toml` cannot set them.
+Set `[runtime.extensions] enabled = false` to stop all extension code execution
+(BEAM extensions and WASM tools: no compilation, hooks, providers or WASM
+runtime) while keeping manifest diagnostics and support-bundle visibility.
 
-For Files-enabled Bots, the Bot folder is a tool execution directory, not a
-trusted project root. Session startup, extension reload and tool rebuild resolve
-project extensions from the trusted `config_cwd`, never from the Bot folder.
-Project instructions, prompt templates, rules, personas, skills, MCP configuration
-and WASM discovery use that same configuration boundary (profile-scoped skills
-retain their dedicated profile workspace). Writing `.lemon/extensions/*.exs` or
-`AGENTS.md` in a Bot folder does not grant it extension or system-prompt authority.
+A repository's `.lemon/extensions/` (and `.lemon/wasm-tools/`) is never loaded,
+for any session: a repository you open is not trusted to run code in the
+controller. To run a project's extensions, add the directory's absolute path to
+`extension_paths` in the global config. A relative `extension_paths` entry is
+resolved against the global config directory (`~/.lemon`), never against the
+session or project directory.
+
+Extension sources in operator-configured paths are operator-trusted code: they
+compile into, and run inside, the controller BEAM with its full authority. The
+protections below keep sessions consistent and fail closed; they are not a
+sandbox against a malicious source you have configured.
+
+Every configured extension must load. If any file fails to compile, load or
+validate (including a lock timeout), session start fails and a reload stops the
+session, with an error naming the file: a session never runs with part of its
+hooks. All extension compilation, and every inventory lookup and publication,
+runs under one node-wide lock. Each source file is read once and those exact
+bytes are compiled and fingerprinted. Every loaded extension module records the
+source realpath, the content hash of the bytes it came from and a load
+generation; an inventory is reused only while its sources are byte-identical
+and every module still carries the recorded hash, so a recompile from another
+working directory drops (and rebuilds) every inventory it affected. An
+inventory with errors is never reused.
+
+A module is owned by the source file that first defined it; another file
+defining the same module is refused before compiling, as is an extension
+redefining a Lemon module, so `defmodule` names in an extension must be literal
+aliases. Code created dynamically (`Module.create`, macro-generated modules) is
+checked after compiling, including when the compile then fails: a module that
+replaced another source's code is poisoned.
+
+Any detected collision is a runtime-wide fail-stop. It trips
+`LemonCore.RuntimeLatch`, a boot-sticky `:persistent_term` flag written once
+per VM; it survives a restart of the latch's notifier process and clears only
+when the runtime restarts. While it is tripped:
+`LemonAgent.Loop` refuses every tool call for every agent, including
+auxiliary agents such as background reviews (plan-mode direct dispatch, the
+`tool_invoke` bridge, extension tool hooks and node tool requests check it
+too); running background reviews are cancelled; every running coding session
+is aborted; extension hooks are not dispatched; every extension-registered
+provider is unregistered and none can register; and every session start or
+extension reload fails with
+`extension module collision detected; restart the runtime`.
+
+`Lemon.Reload.reload_system/1` (with `:extensions`) and
+`CodingAgent.Extensions.clear_extension_cache/0` are privileged APIs outside
+this ownership protocol: the first compiles with module conflicts ignored and
+records no ownership, and the second forgets ownership (poisoning persists).
+Neither is reachable from a session.
 
 ## Extension Behaviour
 
@@ -514,12 +558,12 @@ Search provider `config` supports `priority` (integer, default `0`); the whole
 Extension manifests are discovered from:
 
 1. **Global directory**: `~/.lemon/agent/extensions/`
-2. **Project-local directory**: `.lemon/extensions/` (relative to working directory)
+2. **Project-local directory**: `.lemon/extensions/` (manifests only; never compiled)
 
 Extension code is loaded from:
 
-1. **Explicit runtime paths**: `[runtime] extension_paths = ["~/trusted-extensions"]` (or `LEMON_EXTENSION_PATHS`, comma-separated, which takes precedence over the config value)
-2. **Default directories** only when `[runtime.extensions] auto_load_default_paths = true`
+1. **Explicit runtime paths**: `[runtime] extension_paths = ["~/trusted-extensions"]` (or `LEMON_EXTENSION_PATHS`, comma-separated, which takes precedence over the config value); relative entries resolve against `~/.lemon`
+2. **The global default directory** only when `[runtime.extensions] auto_load_default_paths = true`
 
 Supported file patterns:
 - `*.ex` and `*.exs` files in the extensions directory

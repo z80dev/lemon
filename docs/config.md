@@ -257,14 +257,24 @@ enabled = false
 
 [runtime]
 # Explicitly trusted extension directories. Files here can be compiled and executed.
+# Global config or LEMON_EXTENSION_PATHS only; a project .lemon/config.toml value is
+# ignored. Relative paths resolve against the global config directory (~/.lemon),
+# never the session or project directory. A project's .lemon/extensions is never
+# loaded; list its absolute path here to trust it.
 extension_paths = []
 # Optional cap on tool-using turns per prompt. Unset or 0 = unlimited (default).
 # max_tool_turns = 200
 
 [runtime.extensions]
-# Disable all extension code execution while keeping manifest diagnostics available.
+# false: no session compiles an extension file, installs an extension hook,
+# registers an extension provider or starts the WASM runtime; manifest
+# diagnostics stay available.
 enabled = true
-# Keep default global/project extension directories diagnostics-only unless trusted.
+# true also loads the global ~/.lemon/agent/extensions (never a project dir).
+# Like `enabled`, operator-only: ignored in a project .lemon/config.toml.
+# Any configured extension that fails to load fails session start (reload stops
+# the session). Extensions compile once per path set and recompile only when a
+# source file's bytes change (or on an explicit reload).
 auto_load_default_paths = false
 
 [runtime.tools.web.search]

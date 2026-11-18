@@ -119,11 +119,15 @@ defmodule CodingAgent.SessionExtensionsTest do
     )
   end
 
+  # Project extension directories are never auto-loaded; the fixture directory
+  # is listed as an operator path instead.
   defp start_session(opts) do
+    cwd = Keyword.get(opts, :cwd, System.tmp_dir!())
+
     opts =
       opts
       |> Keyword.put_new(:settings_manager, %SettingsManager{
-        extension_auto_load_default_paths: true
+        extension_paths: [Path.join(cwd, ".lemon/extensions")]
       })
       |> default_opts()
 

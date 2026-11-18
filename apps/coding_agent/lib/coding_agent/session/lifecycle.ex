@@ -232,8 +232,7 @@ defmodule CodingAgent.Session.Lifecycle do
         settings_manager,
         session_manager.header.id,
         tool_policy,
-        approval_context,
-        config_cwd
+        approval_context
       )
 
     # The plan gate is also a tool option so self-gated tools (`task`) can

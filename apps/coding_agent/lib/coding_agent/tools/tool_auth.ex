@@ -58,13 +58,13 @@ defmodule CodingAgent.Tools.ToolAuth do
           pid() | nil,
           map() | nil
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, _on_update, cwd, session_pid, settings_manager) do
+  def execute(_tool_call_id, params, signal, _on_update, _cwd, session_pid, settings_manager) do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
       with {:ok, name} <- extract_tool_name(params),
            :ok <- ensure_known_wasm_tool(name, session_pid),
-           {:ok, result} <- authenticate_tool(name, cwd, settings_manager) do
+           {:ok, result} <- authenticate_tool(name, settings_manager) do
         to_tool_result(result)
       else
         {:error, :invalid_name} ->
@@ -120,8 +120,8 @@ defmodule CodingAgent.Tools.ToolAuth do
 
   defp ensure_known_wasm_tool(_name, _), do: :ok
 
-  defp authenticate_tool(name, cwd, settings_manager) do
-    case find_capabilities_path(name, cwd, settings_manager) do
+  defp authenticate_tool(name, settings_manager) do
+    case find_capabilities_path(name, settings_manager) do
       nil ->
         {:ok, no_auth_required_result(name)}
 
@@ -240,8 +240,8 @@ defmodule CodingAgent.Tools.ToolAuth do
     "Provide your #{display_name} token by setting Lemon secret `#{secret_name}` and retrying tool_auth."
   end
 
-  defp find_capabilities_path(name, cwd, settings_manager) do
-    WasmConfig.load(cwd, settings_manager).discover_paths
+  defp find_capabilities_path(name, settings_manager) do
+    WasmConfig.load(settings_manager).discover_paths
     |> Enum.map(&Path.join(&1, "#{name}.capabilities.json"))
     |> Enum.find(&File.regular?/1)
   end

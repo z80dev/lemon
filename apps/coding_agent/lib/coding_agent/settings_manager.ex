@@ -84,6 +84,7 @@ defmodule CodingAgent.SettingsManager do
           task: task_settings(),
 
           # Extension settings
+          extensions_enabled: boolean(),
           extension_paths: [String.t()],
           extension_auto_load_default_paths: boolean(),
 
@@ -127,6 +128,7 @@ defmodule CodingAgent.SettingsManager do
     tools: %{},
 
     # Extension settings
+    extensions_enabled: true,
     extension_paths: [],
     extension_auto_load_default_paths: false,
 
@@ -216,6 +218,7 @@ defmodule CodingAgent.SettingsManager do
       command_prefix: Map.get(shell, :command_prefix),
       auto_resize_images: Map.get(tools, :auto_resize_images, true),
       tools: tools,
+      extensions_enabled: Map.get(extensions, :enabled, true) not in [false, "false"],
       extension_paths: Map.get(agent, :extension_paths, []),
       extension_auto_load_default_paths: Map.get(extensions, :auto_load_default_paths, false),
       secret_obfuscation_enabled:

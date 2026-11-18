@@ -206,7 +206,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
       :ok ->
         config =
           Keyword.get_lazy(opts, :wasm_config, fn ->
-            Config.load(cwd, Keyword.get(opts, :settings_manager))
+            Config.load(Keyword.get(opts, :settings_manager))
           end)
 
         host_invoke_fun = Keyword.get(opts, :host_invoke_fun, &default_host_invoke/2)

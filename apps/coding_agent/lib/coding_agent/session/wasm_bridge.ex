@@ -31,18 +31,10 @@ defmodule CodingAgent.Session.WasmBridge do
           CodingAgent.SettingsManager.t(),
           String.t(),
           map() | nil,
-          map() | nil,
-          String.t() | nil
+          map() | nil
         ) :: map()
-  def maybe_start_wasm_sidecar(
-        cwd,
-        settings_manager,
-        session_id,
-        tool_policy,
-        approval_context,
-        config_cwd \\ nil
-      ) do
-    wasm_config = WasmConfig.load(config_cwd || cwd, settings_manager)
+  def maybe_start_wasm_sidecar(cwd, settings_manager, session_id, tool_policy, approval_context) do
+    wasm_config = WasmConfig.load(settings_manager)
 
     if wasm_config.enabled do
       session_pid = self()
@@ -123,6 +115,19 @@ defmodule CodingAgent.Session.WasmBridge do
   @spec reload_wasm_tools(map()) :: map()
   def reload_wasm_tools(state) do
     cond do
+      # Disabled (including by the extension kill switch): stop a running
+      # sidecar instead of rediscovering through it.
+      not WasmConfig.load(state.settings_manager).enabled ->
+        if is_pid(state.wasm_sidecar_pid),
+          do: _ = SidecarSupervisor.stop_sidecar(state.wasm_sidecar_pid)
+
+        %{
+          sidecar_pid: nil,
+          wasm_tools: [],
+          wasm_tool_names: [],
+          wasm_status: wasm_disabled_status(:disabled_in_config)
+        }
+
       is_pid(state.wasm_sidecar_pid) and Process.alive?(state.wasm_sidecar_pid) ->
         case SidecarSession.discover(state.wasm_sidecar_pid) do
           {:ok, discover} ->
@@ -171,8 +176,7 @@ defmodule CodingAgent.Session.WasmBridge do
           state.settings_manager,
           state.session_manager.header.id,
           state.tool_policy,
-          state.approval_context,
-          state.config_cwd
+          state.approval_context
         )
     end
   end

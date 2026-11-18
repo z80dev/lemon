@@ -138,15 +138,29 @@ defmodule CodingAgent.Extensions.ToolHooks do
     }
 
     wrapped_execute = fn tool_call_id, params, signal, on_update ->
-      event = Map.merge(base_event, %{tool_call_id: tool_call_id, args: params})
+      if LemonCore.RuntimeLatch.tripped?() do
+        # Runtime fail-stop: neither the extension hooks nor the tool may run.
+        %AgentToolResult{
+          content: [
+            %TextContent{
+              type: :text,
+              text: "Tool not run: runtime fail-stop; restart the runtime"
+            }
+          ],
+          details: %{reason: :runtime_fail_stop},
+          is_error: true
+        }
+      else
+        event = Map.merge(base_event, %{tool_call_id: tool_call_id, args: params})
 
-      case run_call_hooks(call_hooks, event) do
-        {:block, reason, context} ->
-          tool.name |> blocked_result(reason) |> AdditionalContext.append(context)
+        case run_call_hooks(call_hooks, event) do
+          {:block, reason, context} ->
+            tool.name |> blocked_result(reason) |> AdditionalContext.append(context)
 
-        {:ok, args, context} ->
-          event = event |> Map.put(:args, args) |> Map.put(:additional_context, context)
-          execute(args, tool_call_id, signal, on_update, original_execute, result_hooks, event)
+          {:ok, args, context} ->
+            event = event |> Map.put(:args, args) |> Map.put(:additional_context, context)
+            execute(args, tool_call_id, signal, on_update, original_execute, result_hooks, event)
+        end
       end
     end
 

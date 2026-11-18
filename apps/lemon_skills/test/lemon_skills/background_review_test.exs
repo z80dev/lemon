@@ -410,6 +410,120 @@ defmodule LemonSkills.BackgroundReviewTest do
     assert error =~ "pinned"
   end
 
+  describe "runtime fail-stop" do
+    setup do
+      on_exit(&reset_runtime_latch/0)
+    end
+
+    test "a running review refuses its next tool call once the latch trips", ctx do
+      target = self()
+      model = %Model{id: "mock", provider: :mock, api: :mock}
+      request = Map.put(ctx.request, :learning_review_options, fn _ -> {:ok, [model: model]} end)
+
+      stream = fn _, context, _ ->
+        tool_result? = Enum.any?(context.messages, &(Map.get(&1, :role) == :tool_result))
+
+        {content, reason} =
+          if tool_result? do
+            send(target, {:after_tool, inspect(context.messages, limit: :infinity)})
+            {[%TextContent{text: "done"}], :stop}
+          else
+            # The review is already running; the latch trips before it asks
+            # for its next tool.
+            send(target, {:review_running, self()})
+            receive do: (:continue -> :ok)
+
+            {[
+               %LemonAi.Types.ToolCall{
+                 id: LemonCore.Id.uuid(),
+                 name: "skill_manage",
+                 arguments: %{"action" => "list"}
+               }
+             ], :tool_use}
+          end
+
+        response = %AssistantMessage{
+          content: content,
+          stop_reason: reason,
+          provider: :mock,
+          model: "mock"
+        }
+
+        {:ok, events} = LemonAi.EventStream.start_link()
+        LemonAi.EventStream.push(events, {:done, reason, response})
+        LemonAi.EventStream.complete(events, response)
+        {:ok, events}
+      end
+
+      review =
+        Task.async(fn -> BackgroundReview.run(request, %{}, "digest", stream_fn: stream) end)
+
+      assert_receive {:review_running, provider}, 5_000
+      :ok = LemonCore.RuntimeLatch.trip(:test_fail_stop)
+      send(provider, :continue)
+
+      assert_receive {:after_tool, messages}, 5_000
+      assert messages =~ "runtime fail-stop"
+      Task.await(review, 5_000)
+    end
+
+    test "tripping the latch cancels a running background review", ctx do
+      configure(ctx, %{"background_review" => %{"enabled" => true}, "memory_turn_interval" => 1})
+      assert turn(ctx) == :skip
+      finish(ctx)
+      assert_receive {:review, worker, _, _, _}
+      ref = Process.monitor(worker)
+
+      :ok = LemonCore.RuntimeLatch.trip(:test_fail_stop)
+
+      assert_receive {:DOWN, ^ref, :process, ^worker, _reason}, 5_000
+    end
+
+    test "after the latch owner restarts, a trip still cancels a running review", ctx do
+      before = :sys.get_state(ctx.server).latch_monitor
+      restart_latch_owner()
+      # The nudge server noticed the restart and subscribed to the new owner.
+      assert eventually(fn -> :sys.get_state(ctx.server).latch_monitor not in [nil, before] end)
+
+      configure(ctx, %{"background_review" => %{"enabled" => true}, "memory_turn_interval" => 1})
+      assert turn(ctx) == :skip
+      finish(ctx)
+      assert_receive {:review, worker, _, _, _}
+      ref = Process.monitor(worker)
+
+      :ok = LemonCore.RuntimeLatch.trip(:test_fail_stop)
+      assert_receive {:DOWN, ^ref, :process, ^worker, _reason}, 5_000
+
+      # A second restart keeps the trip.
+      restart_latch_owner()
+      assert LemonCore.RuntimeLatch.tripped?()
+    end
+  end
+
+  # Test-only: erase the boot-sticky trip (production clears only on restart).
+  defp reset_runtime_latch do
+    :persistent_term.erase({LemonCore.RuntimeLatch, :tripped})
+  end
+
+  # Kill the latch owner and wait for its supervisor to restart it.
+  defp restart_latch_owner do
+    old = Process.whereis(LemonCore.RuntimeLatch)
+    Process.exit(old, :kill)
+
+    assert eventually(fn ->
+             new = Process.whereis(LemonCore.RuntimeLatch)
+             is_pid(new) and new != old
+           end)
+  end
+
+  defp eventually(fun, attempts \\ 100) do
+    cond do
+      fun.() -> true
+      attempts == 0 -> false
+      true -> Process.sleep(20) && eventually(fun, attempts - 1)
+    end
+  end
+
   defp configure(ctx, settings),
     do: Config.save_config(%{"learning_nudge" => settings}, false, ctx.request.cwd)
 
