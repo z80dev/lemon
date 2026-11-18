@@ -6,7 +6,9 @@ defmodule LemonGateway.Voice.DeepgramClient do
   and forward transcripts to the call session.
   """
 
-  use WebSockex
+  # A Deepgram socket belongs to exactly one call: never restart it, so a
+  # disconnect cannot leave a replacement socket attached to an ended call.
+  use WebSockex, restart: :temporary
 
   require Logger
 
@@ -51,6 +53,36 @@ defmodule LemonGateway.Voice.DeepgramClient do
   def via_tuple(call_sid) do
     {:via, Registry, {LemonGateway.Voice.DeepgramRegistry, call_sid}}
   end
+
+  @doc """
+  Stops the call's current Deepgram socket, if any. Idempotent.
+  """
+  @spec stop_for_call(String.t()) :: :ok
+  def stop_for_call(call_sid) when is_binary(call_sid) do
+    if Process.whereis(LemonGateway.Voice.DeepgramRegistry) do
+      case Registry.lookup(LemonGateway.Voice.DeepgramRegistry, call_sid) do
+        [{pid, _}] -> stop(pid)
+        [] -> :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  @doc """
+  Stops a Deepgram socket started under `LemonGateway.Voice.DeepgramSupervisor`.
+  """
+  @spec stop(pid() | nil) :: :ok
+  def stop(pid) when is_pid(pid) do
+    case Process.whereis(LemonGateway.Voice.DeepgramSupervisor) do
+      nil -> :ok
+      sup -> _ = DynamicSupervisor.terminate_child(sup, pid)
+    end
+
+    :ok
+  end
+
+  def stop(_), do: :ok
 
   @doc """
   Sends audio data to Deepgram for transcription.

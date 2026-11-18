@@ -56,6 +56,58 @@ defmodule LemonGateway.Sms.TwilioSignature do
     Base.encode64(mac)
   end
 
+  @doc """
+  Reconstructs the URL Twilio signed for `conn`, honouring `X-Forwarded-*`.
+
+  When the request came through a proxy (`X-Forwarded-Proto` or
+  `X-Forwarded-Host` present), the backend listener port is never used: the port
+  comes only from `X-Forwarded-Port` (or a port already in the forwarded host),
+  otherwise the scheme's default port is assumed. Forwarded headers only choose
+  which URL is checked; a forged value still needs a valid HMAC from the auth token.
+  """
+  @spec request_url(Plug.Conn.t()) :: String.t()
+  def request_url(conn) do
+    forwarded_proto = forwarded_header(conn, "x-forwarded-proto")
+    forwarded_host = forwarded_header(conn, "x-forwarded-host")
+    scheme = forwarded_proto || Atom.to_string(conn.scheme)
+    host = forwarded_host || conn.host
+
+    port =
+      case forwarded_header(conn, "x-forwarded-port") do
+        nil ->
+          if forwarded_proto || forwarded_host, do: nil, else: conn.port
+
+        p ->
+          case Integer.parse(p) do
+            {n, ""} -> n
+            _ -> nil
+          end
+      end
+
+    include_port? =
+      is_integer(port) and
+        not String.contains?(host || "", ":") and
+        not (scheme == "http" and port == 80) and
+        not (scheme == "https" and port == 443)
+
+    base =
+      if include_port? do
+        "#{scheme}://#{host}:#{port}"
+      else
+        "#{scheme}://#{host}"
+      end
+
+    base <>
+      conn.request_path <> if(conn.query_string != "", do: "?" <> conn.query_string, else: "")
+  end
+
+  defp forwarded_header(conn, name) do
+    case Plug.Conn.get_req_header(conn, name) do
+      [value | _] when is_binary(value) and value != "" -> String.trim(value)
+      _ -> nil
+    end
+  end
+
   defp canonical_param_string(params) when is_map(params) do
     params
     |> Enum.flat_map(fn

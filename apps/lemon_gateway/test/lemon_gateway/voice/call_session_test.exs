@@ -180,6 +180,64 @@ defmodule LemonGateway.Voice.CallSessionTest do
     assert hd(data.conversation_history).content == "no websocket"
   end
 
+  describe "call-owned sockets" do
+    setup do
+      unless Process.whereis(LemonGateway.Voice.DeepgramSupervisor) do
+        start_supervised!(
+          {DynamicSupervisor,
+           name: LemonGateway.Voice.DeepgramSupervisor, strategy: :one_for_one},
+          id: :deepgram_sup
+        )
+      end
+
+      :ok
+    end
+
+    test "Deepgram client child spec is never restarted" do
+      spec = LemonGateway.Voice.DeepgramClient.child_spec(call_sid: "CA1", session_pid: self())
+      assert spec.restart == :temporary
+    end
+
+    test "self-terminating session closes its Deepgram socket and the Twilio stream", context do
+      session = start_call(context, silence_timeout_ms: 1_000)
+      deepgram = start_fake_deepgram()
+      deepgram_ref = Process.monitor(deepgram)
+      CallSession.register_deepgram_ws(session, deepgram)
+      session_ref = Process.monitor(session)
+
+      # Silence path: goodbye, then the session stops itself.
+      assert_receive {:tts, "Thanks for calling! Goodbye.", goodbye}, 2_000
+      send(goodbye, {:release, <<0, 0>>})
+      assert_receive {:DOWN, ^session_ref, :process, ^session, :normal}, 4_000
+      assert_receive {:DOWN, ^deepgram_ref, :process, ^deepgram, _}, 1_000
+      assert_receive :call_ended
+    end
+
+    test "a killed session takes its Deepgram socket down", context do
+      session = start_call(context)
+      deepgram = start_fake_deepgram()
+      deepgram_ref = Process.monitor(deepgram)
+      CallSession.register_deepgram_ws(session, deepgram)
+      _ = :sys.get_state(session)
+      Process.exit(session, :kill)
+      assert_receive {:DOWN, ^deepgram_ref, :process, ^deepgram, _}, 1_000
+    end
+  end
+
+  defp start_fake_deepgram do
+    {:ok, pid} =
+      DynamicSupervisor.start_child(
+        LemonGateway.Voice.DeepgramSupervisor,
+        %{
+          id: :fake,
+          start: {Agent, :start_link, [fn -> :ok end]},
+          restart: :temporary
+        }
+      )
+
+    pid
+  end
+
   defp start_call(context, opts \\ []) do
     owner = self()
 

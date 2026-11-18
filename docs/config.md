@@ -3288,6 +3288,20 @@ silence_timeout_ms = 5000
 Canonical voice settings are loaded from `gateway.voice`. Legacy `:lemon_gateway` app env
 fallbacks remain only as temporary compatibility shims and should not be used for new setup.
 
+Every voice webhook and the media-stream WebSocket handshake must carry a valid
+`X-Twilio-Signature` made with the configured Twilio auth token over the URL derived
+from `public_url` (request and `X-Forwarded-*` headers are never used). An `https://`
+`public_url` and the auth token are both required: without either, or with an `http://`
+`public_url`, every voice request gets 403. Set `public_url` to the exact origin
+configured in Twilio. The WebSocket handshake signature is accepted over the `wss://` or
+`https://` form of that URL, with or without a trailing `/`. The TwiML `<Stream>` URL is the
+query-free `wss://` form of `public_url`; call metadata and an expiring per-call token
+bound to the authenticated CallSid travel as `<Parameter>` elements and are verified from
+the stream's `start` message before any call session, Deepgram socket or recording is
+created. Deepgram sockets are owned by the call and closed whenever it ends.
+Recording downloads only contact `https://api.twilio.com` (Basic auth is never sent
+elsewhere or on redirects), and recording filenames are sanitized.
+
 ## Channel Voice Replies
 
 Voice replies are opt-in separately for each channel, under

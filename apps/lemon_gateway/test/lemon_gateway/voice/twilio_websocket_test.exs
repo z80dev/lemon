@@ -1,7 +1,7 @@
 defmodule LemonGateway.Voice.TwilioWebSocketTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
-  alias LemonGateway.Voice.TwilioWebSocket
+  alias LemonGateway.Voice.{StreamToken, TwilioWebSocket}
 
   test "speech_complete forwards notification to call session process" do
     state = %{call_sid: "call-1", session_pid: self(), stream_sid: "MS123"}
@@ -38,23 +38,90 @@ defmodule LemonGateway.Voice.TwilioWebSocketTest do
     assert_receive {:"$gen_cast", {:audio_from_twilio, <<1, 2, 3, 4>>}}, 500
   end
 
-  test "start event binds provisional call sid to twilio call sid" do
-    state = %{
-      call_sid: "temp_deadbeef",
-      session_pid: self(),
-      deepgram_pid: self(),
-      stream_sid: nil,
-      audio_buffer: <<>>
-    }
+  describe "start event stream token" do
+    setup do
+      key = :"Elixir.LemonGateway.Config"
+      old = Application.get_env(:lemon_gateway, key)
+      Application.put_env(:lemon_gateway, key, %{voice: %{twilio_auth_token: "ws-test-token"}})
 
-    frame =
-      Jason.encode!(%{
-        "event" => "start",
-        "start" => %{"streamSid" => "MS123", "callSid" => "CAabc123"}
+      on_exit(fn ->
+        if old,
+          do: Application.put_env(:lemon_gateway, key, old),
+          else: Application.delete_env(:lemon_gateway, key)
+      end)
+    end
+
+    test "connection starts without any call resources" do
+      assert {:ok, %{session_pid: nil, deepgram_pid: nil, call_sid: nil}} =
+               TwilioWebSocket.init([])
+    end
+
+    test "start without a token closes the stream before creating resources" do
+      {:ok, state} = TwilioWebSocket.init([])
+
+      # CallSessionSupervisor is not running here: any resource creation would raise.
+      assert {:stop, :normal, %{session_pid: nil}} =
+               TwilioWebSocket.handle_in({start_frame("CAabc", %{}), [opcode: :text]}, state)
+    end
+
+    test "start with a token for another call closes the stream" do
+      {:ok, state} = TwilioWebSocket.init([])
+      token = StreamToken.sign("CAother", "+1", "+2")
+
+      params = %{"callSid" => "CAabc", "from" => "+1", "to" => "+2", "token" => token}
+
+      assert {:stop, :normal, %{session_pid: nil}} =
+               TwilioWebSocket.handle_in({start_frame("CAabc", params), [opcode: :text]}, state)
+    end
+
+    test "start with tampered metadata closes the stream" do
+      {:ok, state} = TwilioWebSocket.init([])
+      token = StreamToken.sign("CAabc", "+1", "+2")
+
+      params = %{"callSid" => "CAabc", "from" => "+9", "to" => "+2", "token" => token}
+
+      assert {:stop, :normal, %{session_pid: nil}} =
+               TwilioWebSocket.handle_in({start_frame("CAabc", params), [opcode: :text]}, state)
+    end
+
+    test "media before an authenticated start is dropped" do
+      {:ok, state} = TwilioWebSocket.init([])
+
+      frame =
+        Jason.encode!(%{"event" => "media", "media" => %{"payload" => Base.encode64("x")}})
+
+      assert {:ok, %{audio_buffer: <<>>}} =
+               TwilioWebSocket.handle_in({frame, [opcode: :text]}, state)
+    end
+
+    test "StreamToken rejects expired tokens and fails closed without an auth token" do
+      now = System.system_time(:second)
+      token = StreamToken.sign("CA1", "+1", "+2", now - 1_000)
+      assert {:error, :expired} = StreamToken.verify(token, "CA1", "+1", "+2", now)
+      fresh = StreamToken.sign("CA1", "+1", "+2", now)
+      assert :ok = StreamToken.verify(fresh, "CA1", "+1", "+2", now)
+
+      Application.put_env(:lemon_gateway, :"Elixir.LemonGateway.Config", %{
+        voice: %{twilio_auth_token: ""}
       })
 
-    assert {:ok, new_state} = TwilioWebSocket.handle_in({frame, [opcode: :text]}, state)
-    assert new_state.stream_sid == "MS123"
-    assert new_state.call_sid == "CAabc123"
+      assert {:error, :no_auth_token} = StreamToken.verify(fresh, "CA1", "+1", "+2", now)
+    end
+  end
+
+  test "call_ended from the session closes the stream" do
+    state = %{call_sid: "CA1", session_pid: self(), deepgram_pid: nil, stream_sid: "MS1"}
+    assert {:stop, :normal, %{session_pid: nil}} = TwilioWebSocket.handle_info(:call_ended, state)
+  end
+
+  defp start_frame(call_sid, custom) do
+    Jason.encode!(%{
+      "event" => "start",
+      "start" => %{
+        "streamSid" => "MS123",
+        "callSid" => call_sid,
+        "customParameters" => custom
+      }
+    })
   end
 end

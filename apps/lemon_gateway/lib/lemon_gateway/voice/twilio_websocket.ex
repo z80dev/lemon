@@ -4,40 +4,33 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
 
   Handles the WebSocket connection from Twilio for a voice call,
   receiving audio (mulaw 8kHz) and sending synthesized speech back.
+
+  The call session, Deepgram socket and recording are created only after the
+  `start` message carries a valid `LemonGateway.Voice.StreamToken` (from
+  `start.customParameters`) bound to `start.callSid`; otherwise the socket closes.
   """
 
   @behaviour WebSock
 
   require Logger
 
-  alias LemonGateway.Voice.{CallSession, Config, DeepgramClient, RecordingManager}
+  alias LemonGateway.Voice.{
+    CallSession,
+    Config,
+    DeepgramClient,
+    RecordingManager,
+    StreamToken
+  }
 
   # WebSock Callbacks
 
   @impl WebSock
   @spec init(keyword()) :: {:ok, map()}
-  def init(opts) do
-    call_sid = Keyword.fetch!(opts, :call_sid)
-    from_number = Keyword.get(opts, :from_number, "unknown")
-    to_number = Keyword.get(opts, :to_number, "unknown")
-
-    Logger.info("Twilio WebSocket initializing for call #{call_sid}")
-
-    session_pid = ensure_call_session(call_sid, from_number, to_number)
-    deepgram_pid = ensure_deepgram_client(call_sid, session_pid)
-
-    state = %{
-      call_sid: call_sid,
-      session_pid: session_pid,
-      deepgram_pid: deepgram_pid,
-      stream_sid: nil,
-      audio_buffer: <<>>
-    }
-
-    # Register with call session
-    CallSession.register_twilio_ws(session_pid, self())
-
-    {:ok, state}
+  def init(_opts) do
+    # No call resources exist until the `start` message presents a valid
+    # per-call StreamToken (see handle_twilio_message/2 for "start").
+    {:ok,
+     %{call_sid: nil, session_pid: nil, deepgram_pid: nil, stream_sid: nil, audio_buffer: <<>>}}
   end
 
   @impl WebSock
@@ -108,6 +101,11 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
     {:ok, state}
   end
 
+  def handle_info(:call_ended, state) do
+    # The CallSession ended on its own (silence, max duration); close the stream.
+    {:stop, :normal, %{state | session_pid: nil}}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("Unhandled message in TwilioWebSocket: #{inspect(msg)}")
     {:ok, state}
@@ -117,8 +115,9 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
   def terminate(reason, state) do
     Logger.info("Twilio WebSocket terminated for call #{state.call_sid}: #{inspect(reason)}")
 
-    # End the call session
-    CallSession.end_call(state.session_pid)
+    # End the call session and the call's current Deepgram socket
+    if is_pid(state.session_pid), do: CallSession.end_call(state.session_pid)
+    if is_binary(state.call_sid), do: DeepgramClient.stop_for_call(state.call_sid)
 
     :ok
   end
@@ -130,24 +129,47 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
     {:ok, state}
   end
 
+  defp handle_twilio_message(%{"event" => "start"}, %{session_pid: pid} = state)
+       when is_pid(pid) do
+    Logger.warning("Ignoring duplicate Twilio start for call #{state.call_sid}")
+    {:ok, state}
+  end
+
   defp handle_twilio_message(%{"event" => "start"} = data, state) do
     stream_sid = dig_in(data, ["start", "streamSid"])
     call_sid = dig_in(data, ["start", "callSid"])
+    custom = dig_in(data, ["start", "customParameters"])
+    custom = if is_map(custom), do: custom, else: %{}
+    from_number = custom["from"]
+    to_number = custom["to"]
 
-    if is_binary(call_sid) and call_sid != state.call_sid and
-         not provisional_call_sid?(state.call_sid) do
-      Logger.warning(
-        "Twilio call SID mismatch for stream #{stream_sid}: websocket_sid=#{state.call_sid}, twilio_sid=#{call_sid}"
-      )
+    with true <- custom["callSid"] == call_sid || {:error, :call_sid_mismatch},
+         :ok <- StreamToken.verify(custom["token"], call_sid, from_number, to_number) do
+      Logger.info("Twilio stream started: stream_sid=#{stream_sid}, call_sid=#{call_sid}")
+
+      session_pid = ensure_call_session(call_sid, from_number, to_number)
+      deepgram_pid = ensure_deepgram_client(call_sid, session_pid)
+      CallSession.register_twilio_ws(session_pid, self())
+
+      # Start recording via Twilio REST API (dual-channel)
+      start_call_recording(call_sid)
+
+      {:ok,
+       %{
+         state
+         | stream_sid: stream_sid,
+           call_sid: call_sid,
+           session_pid: session_pid,
+           deepgram_pid: deepgram_pid
+       }}
+    else
+      {:error, reason} ->
+        Logger.warning(
+          "Rejected Twilio media stream #{inspect(stream_sid)}: invalid stream token (#{reason})"
+        )
+
+        {:stop, :normal, state}
     end
-
-    Logger.info("Twilio stream started: stream_sid=#{stream_sid}, call_sid=#{call_sid}")
-
-    # Start recording via Twilio REST API (dual-channel)
-    actual_call_sid = call_sid || state.call_sid
-    start_call_recording(actual_call_sid)
-
-    {:ok, %{state | stream_sid: stream_sid, call_sid: actual_call_sid}}
   end
 
   defp handle_twilio_message(%{"event" => "media"} = data, state) do
@@ -155,7 +177,7 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
     track = dig_in(data, ["media", "track"])
 
     # Process inbound caller audio. Some providers omit `track` on inbound frames.
-    if payload && (track == "inbound" || is_nil(track)) do
+    if is_pid(state.session_pid) && payload && (track == "inbound" || is_nil(track)) do
       # Decode base64 mulaw audio
       audio_data = Base.decode64!(payload)
 
@@ -182,9 +204,7 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
   defp handle_twilio_message(%{"event" => "stop"} = data, state) do
     Logger.info("Twilio stream stopped: #{inspect(data)}")
 
-    # End the call session
-    CallSession.end_call(state.session_pid)
-
+    # terminate/2 ends the call session and its Deepgram socket.
     {:stop, :normal, state}
   end
 
@@ -198,12 +218,6 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
       if is_map(acc), do: Map.get(acc, key), else: nil
     end)
   end
-
-  defp provisional_call_sid?(call_sid) when is_binary(call_sid) do
-    String.starts_with?(call_sid, "temp_")
-  end
-
-  defp provisional_call_sid?(_), do: false
 
   defp ensure_call_session(call_sid, from_number, to_number) do
     case DynamicSupervisor.start_child(

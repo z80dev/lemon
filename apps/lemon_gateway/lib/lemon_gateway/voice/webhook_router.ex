@@ -7,13 +7,25 @@ defmodule LemonGateway.Voice.WebhookRouter do
   - POST /webhooks/twilio/voice/status - Call status callbacks
   - POST /webhooks/twilio/voice/recording - Recording status callback (auto-downloads)
   - WebSocket /webhooks/twilio/voice/stream - Media stream
+
+  Every request, including the media-stream WebSocket handshake, must carry a
+  valid `X-Twilio-Signature` computed with the configured Twilio auth token over
+  the URL derived from `[gateway.voice] public_url` (never from request or
+  forwarded headers) and the POST form parameters. Unsigned or mis-signed
+  requests, and all requests when no auth token or `public_url` is configured,
+  are rejected with 403 before any parameter is used.
+
+  The TwiML `<Stream>` URL is the query-free `wss://` form of `public_url`; call
+  metadata and an expiring `LemonGateway.Voice.StreamToken` bound to the
+  authenticated CallSid travel as `<Parameter>` elements.
   """
 
   use Plug.Router
 
   require Logger
 
-  alias LemonGateway.Voice.RecordingDownloader
+  alias LemonGateway.Sms.TwilioSignature
+  alias LemonGateway.Voice.{Config, RecordingDownloader, StreamToken}
 
   plug(Plug.Logger, log: :debug)
   plug(LemonGateway.DrainGuard)
@@ -23,6 +35,8 @@ defmodule LemonGateway.Voice.WebhookRouter do
     pass: ["*/*"],
     json_decoder: Jason
   )
+
+  plug(:verify_twilio_signature)
 
   plug(:match)
   plug(:dispatch)
@@ -35,13 +49,15 @@ defmodule LemonGateway.Voice.WebhookRouter do
       "Incoming Twilio voice call: #{inspect(Map.take(params, ["CallSid", "From", "To"]))}"
     )
 
-    # Generate TwiML to connect to Media Stream
-    # Use the host from the incoming request so Twilio connects back to the same URL
-    twiml = generate_twiml(conn, params)
+    case params["CallSid"] do
+      call_sid when is_binary(call_sid) and call_sid != "" ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/xml")
+        |> Plug.Conn.send_resp(200, generate_twiml(params))
 
-    conn
-    |> Plug.Conn.put_resp_content_type("application/xml")
-    |> Plug.Conn.send_resp(200, twiml)
+      _ ->
+        send_resp(conn, 400, "missing CallSid")
+    end
   end
 
   # Call status callbacks
@@ -87,28 +103,12 @@ defmodule LemonGateway.Voice.WebhookRouter do
   end
 
   # WebSocket upgrade for media stream
+  # Twilio's <Stream> url does not support query strings; call metadata and the
+  # per-call stream token arrive in the `start` message's customParameters and
+  # are verified by TwilioWebSocket before any call resource is created.
   get "/webhooks/twilio/voice/stream" do
-    # Extract call info from query params or headers
-    call_sid = conn.params["callSid"] || conn.params["CallSid"] || fallback_call_sid()
-    from_number = conn.params["from"] || conn.params["From"] || "unknown"
-    to_number = conn.params["to"] || conn.params["To"] || "unknown"
-
-    if call_sid == "unknown" or from_number == "unknown" do
-      Logger.warning(
-        "Voice stream connected without full metadata: " <>
-          "query=#{inspect(conn.query_string)}, params=#{inspect(conn.params)}"
-      )
-    end
-
-    Logger.info("WebSocket connection request for call #{call_sid}")
-
-    # Upgrade to WebSocket using WebSockAdapter
     conn
-    |> WebSockAdapter.upgrade(
-      LemonGateway.Voice.TwilioWebSocket,
-      [call_sid: call_sid, from_number: from_number, to_number: to_number],
-      timeout: 60_000
-    )
+    |> WebSockAdapter.upgrade(LemonGateway.Voice.TwilioWebSocket, [], timeout: 60_000)
     |> halt()
   end
 
@@ -118,48 +118,107 @@ defmodule LemonGateway.Voice.WebhookRouter do
 
   # Private Functions
 
-  defp generate_twiml(conn, params) do
-    # Get the host from the incoming request
-    # Check for X-Forwarded-Host header first (set by proxies/tunnels)
-    host =
+  defp verify_twilio_signature(conn, _opts) do
+    provided = List.first(Plug.Conn.get_req_header(conn, "x-twilio-signature"))
+    auth_token = Config.twilio_auth_token()
+
+    valid? =
+      case signed_urls(conn) do
+        {:ok, urls} ->
+          # Twilio signs POST form params; the WebSocket handshake is signed over the URL only.
+          signed_params =
+            case {conn.method, conn.body_params} do
+              {"POST", %{} = body} -> body
+              _ -> %{}
+            end
+
+          Enum.any?(urls, &TwilioSignature.valid?(auth_token, &1, signed_params, provided))
+
+        :error ->
+          Logger.warning(
+            "Voice webhooks require an https [gateway.voice] public_url; rejecting request"
+          )
+
+          false
+      end
+
+    if valid? do
       conn
-      |> Plug.Conn.get_req_header("x-forwarded-host")
-      |> List.first()
-      |> case do
-        nil -> conn.host || "localhost"
-        forwarded -> forwarded
-      end
+    else
+      Logger.warning("Rejected voice webhook with invalid Twilio signature: #{conn.request_path}")
 
-    # Check for X-Forwarded-Proto to determine if we're behind HTTPS
-    proto =
       conn
-      |> Plug.Conn.get_req_header("x-forwarded-proto")
-      |> List.first()
-      |> case do
-        "https" -> "wss"
-        _ -> if conn.scheme == :https, do: "wss", else: "ws"
+      |> send_resp(403, "forbidden")
+      |> halt()
+    end
+  end
+
+  # Candidate URLs Twilio may have signed, built only from the configured https
+  # public origin (never from request or forwarded headers). Per Twilio's security
+  # docs, voice HTTPS callbacks are signed without the port. The WSS handshake's
+  # exact canonical form is not documented, so both the wss:// and https:// forms,
+  # each with and without a trailing "/", are accepted (all HMAC'd with the same
+  # auth token).
+  defp signed_urls(conn) do
+    with {:ok, origin} <- public_origin() do
+      path = conn.request_path
+
+      case conn.method do
+        "GET" ->
+          urls =
+            for base <- [stream_origin(origin), URI.to_string(origin)],
+                suffix <- ["", "/"],
+                do: base <> path <> suffix
+
+          {:ok, urls}
+
+        _ ->
+          query = if conn.query_string != "", do: "?" <> conn.query_string, else: ""
+          {:ok, [URI.to_string(origin) <> path <> query]}
       end
+    end
+  end
 
-    base_stream_url = "#{proto}://#{host}/webhooks/twilio/voice/stream"
+  # Voice requires an https public_url: Twilio only streams to wss://, and the
+  # signed callback URL must be the public TLS origin.
+  defp public_origin do
+    with base when is_binary(base) and base != "" <- Config.public_url(),
+         {:ok, %URI{scheme: "https", host: host} = uri}
+         when is_binary(host) and host != "" <- URI.new(base) do
+      {:ok, %URI{scheme: "https", host: host, path: String.trim_trailing(uri.path || "", "/")}}
+    else
+      _ -> :error
+    end
+  end
 
-    query_params =
-      [{"callSid", params["CallSid"]}, {"from", params["From"]}, {"to", params["To"]}]
-      |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
+  defp stream_origin(%URI{} = origin), do: URI.to_string(%URI{origin | scheme: "wss"})
 
-    stream_url =
-      case query_params do
-        [] -> base_stream_url
-        _ -> base_stream_url <> "?" <> URI.encode_query(query_params)
-      end
+  defp generate_twiml(params) do
+    # The signature plug already proved public_url is configured.
+    {:ok, origin} = public_origin()
+    stream_url = stream_origin(origin) <> "/webhooks/twilio/voice/stream"
+    call_sid = params["CallSid"]
+    from = params["From"] || ""
+    to = params["To"] || ""
 
-    Logger.info("TwiML Stream URL: #{stream_url} (host=#{host}, proto=#{proto})")
-    escaped_stream_url = xml_escape_attr(stream_url)
+    parameters =
+      [
+        {"callSid", call_sid},
+        {"from", from},
+        {"to", to},
+        {"token", StreamToken.sign(call_sid, from, to)}
+      ]
+      |> Enum.map_join("\n", fn {name, value} ->
+        ~s(      <Parameter name="#{name}" value="#{xml_escape_attr(value)}" />)
+      end)
 
     """
     <?xml version="1.0" encoding="UTF-8"?>
     <Response>
       <Connect>
-        <Stream url="#{escaped_stream_url}" />
+        <Stream url="#{xml_escape_attr(stream_url)}">
+    #{parameters}
+        </Stream>
       </Connect>
     </Response>
     """
@@ -172,9 +231,5 @@ defmodule LemonGateway.Voice.WebhookRouter do
     |> String.replace("\"", "&quot;")
     |> String.replace("<", "&lt;")
     |> String.replace(">", "&gt;")
-  end
-
-  defp fallback_call_sid do
-    "temp_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
   end
 end
