@@ -32,7 +32,7 @@ defmodule CodingAgent.Tools.Eval do
   """
 
   alias CodingAgent.Eval.{Bridge, Kernel, KernelSupervisor, Output}
-  alias CodingAgent.Tools.Bash.StreamingPreview
+  alias CodingAgent.Tools.Bash.{CommandPolicy, StreamingPreview}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -115,6 +115,18 @@ defmodule CodingAgent.Tools.Eval do
   def execute(tool_call_id, params, signal, on_update, cwd, opts) do
     started = System.monotonic_time(:millisecond)
 
+    if CommandPolicy.restricted?(Keyword.get(opts, :tool_policy)) do
+      %AgentToolResult{
+        content: [%TextContent{text: CommandPolicy.unavailable("eval")}],
+        details: %{outcome: :not_started, reason: :tool_policy},
+        is_error: true
+      }
+    else
+      execute_allowed(tool_call_id, params, signal, on_update, cwd, opts, started)
+    end
+  end
+
+  defp execute_allowed(tool_call_id, params, signal, on_update, cwd, opts, started) do
     with {:ok, request} <- validate(params) do
       if AbortSignal.aborted?(signal) do
         finish(request, :not_started, Output.new(), nil, started)

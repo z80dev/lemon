@@ -1,10 +1,11 @@
 defmodule CodingAgent.ToolExecutor do
   @moduledoc """
-  Tool execution wrapper that integrates approval gating.
+  The approval request behind every gated tool call.
 
-  This module provides a way to wrap tool execution with approval checks
-  based on the ToolPolicy. When a tool requires approval, execution is
-  paused until approval is granted or denied.
+  `CodingAgent.ToolRegistry` owns the single approval gate: it decides per call
+  whether a tool needs review (`ToolRegistry.get_tool_tuples/2` for registry
+  tools, `ToolRegistry.finalize_tools/3` for executor extra tools and
+  hand-assembled sets) and calls `execute_with_approval/4` when it does.
 
   Approval failures are fail-closed. Exceptions, exits, throws, malformed
   replies, and unknown scopes never authorize execution. Raw approval-service
@@ -14,14 +15,6 @@ defmodule CodingAgent.ToolExecutor do
   Denials, approval timeouts, and approval failures return an
   `AgentToolResult` with `is_error: true`, so the model sees an error tool
   result rather than a successful one.
-
-  ## Usage
-
-      # Wrap a tool with approval enforcement
-      wrapped_tool = ToolExecutor.wrap_with_approval(tool, policy, context)
-
-      # Or wrap all tools in a list
-      wrapped_tools = ToolExecutor.wrap_all_with_approval(tools, policy, context)
 
   ## Context
 
@@ -34,9 +27,7 @@ defmodule CodingAgent.ToolExecutor do
   - `:timeout_ms` - Approval timeout in milliseconds (optional; default: no timeout)
   """
 
-  alias CodingAgent.ToolPolicy
-  alias CodingAgent.WorkspaceReads
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
   require Logger
@@ -56,41 +47,6 @@ defmodule CodingAgent.ToolExecutor do
     :approve_agent,
     :approve_global
   ]
-
-  @doc """
-  Wrap a single tool with approval checks.
-
-  Argument-sensitive tools resolve the gate at execution time, including after
-  an outer on_tool_call hook has rewritten arguments. `webfetch`/`websearch`
-  are wrapped whenever a folder-read exemption could apply or the session is
-  already fenced, so a narrowed policy or a tool reload cannot drop the egress
-  gate a restored or inherited fence earned.
-  """
-  @spec wrap_with_approval(AgentTool.t(), ToolPolicy.policy(), map()) :: AgentTool.t()
-  # Registry-attested completion tools report data to the caller; they grant no
-  # workspace or external capability and remain available to read-only children.
-  def wrap_with_approval(%AgentTool{trusted_terminal: true} = tool, _policy, _context),
-    do: tool
-
-  def wrap_with_approval(%AgentTool{} = tool, policy, context) do
-    if tool.name == "lsp" or
-         tool.name in ["webfetch", "websearch"] or
-         ToolPolicy.requires_approval?(policy, tool.name, %{}, context[:approval_tier]) do
-      wrap_tool(tool, policy, context)
-    else
-      tool
-    end
-  end
-
-  @doc """
-  Wrap all tools in a list with approval checks based on the policy.
-  """
-  @spec wrap_all_with_approval([AgentTool.t()], ToolPolicy.policy(), map()) :: [AgentTool.t()]
-  def wrap_all_with_approval(tools, policy, context) do
-    Enum.map(tools, fn tool ->
-      wrap_with_approval(tool, policy, context)
-    end)
-  end
 
   @doc """
   Execute a tool with approval check.
@@ -151,46 +107,6 @@ defmodule CodingAgent.ToolExecutor do
   end
 
   # Private helpers
-
-  defp wrap_tool(%AgentTool{} = tool, policy, context) do
-    original_execute = tool.execute
-
-    wrapped_execute = fn tool_call_id, params, signal, on_update ->
-      params = WorkspaceReads.resolve_params(tool.name, params, context)
-
-      policy_required =
-        ToolPolicy.requires_approval?(policy, tool.name, params, context[:approval_tier])
-
-      # The exemption only applies when the egress fence became durable first;
-      # an unfenceable session reviews the read instead.
-      required =
-        cond do
-          tool.name in ["webfetch", "websearch"] and WorkspaceReads.fenced?(context) ->
-            true
-
-          tool.name in ["read", "ls", "grep"] and policy_required ->
-            not (WorkspaceReads.exempt?(policy, tool.name, params, context) and
-                   WorkspaceReads.fence!(context) == :ok)
-
-          true ->
-            policy_required
-        end
-
-      if required do
-        execute_with_approval(
-          tool.name,
-          params,
-          fn -> original_execute.(tool_call_id, params, signal, on_update) end,
-          Map.put(context, :tool_call_id, tool_call_id)
-        )
-      else
-        original_execute.(tool_call_id, params, signal, on_update)
-      end
-    end
-
-    # Streamed arguments would act before the approval gate decides.
-    %{tool | execute: wrapped_execute, on_stream: nil}
-  end
 
   defp request_approval(
          run_id,

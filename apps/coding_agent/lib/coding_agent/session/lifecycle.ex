@@ -277,6 +277,11 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
       |> Keyword.put(:plan_gate, plan_gate)
 
+    # Delegated children and reloads inherit `:extra_tools`; keep only what this
+    # session's policy admits (a child still applies its own, narrower floor).
+    extra_tools = CodingAgent.ToolRegistry.permitted_tools(extra_tools, tool_opts)
+    tool_opts = Keyword.put(tool_opts, :extra_tools, extra_tools)
+
     stage_started = System.monotonic_time()
 
     lifecycle =
@@ -721,6 +726,8 @@ defmodule CodingAgent.Session.Lifecycle do
         config_cwd: state.config_cwd,
         settings_manager: state.settings_manager,
         tool_opts: tool_opts,
+        # A hand-assembled toolset stays the same closed set across reloads.
+        custom_tools: Keyword.get(state.tool_opts, :tools),
         extra_tools: state.extra_tools,
         wasm_tools: wasm_reload.wasm_tools,
         wasm_status: wasm_reload.wasm_status,

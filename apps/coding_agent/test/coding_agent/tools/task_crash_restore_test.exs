@@ -626,7 +626,13 @@ defmodule CodingAgent.Tools.TaskCrashRestoreTest do
                  %{
                    "prompt" => "Complete the child assignment.",
                    "async" => true,
-                   "auto_followup" => false
+                   "auto_followup" => false,
+                   # The leaf worker profile admits only catalogued tools; the
+                   # fixture's extra tool must be granted by name.
+                   "tool_policy" => %{
+                     "allow" =>
+                       LemonCore.ToolPolicy.from_profile(:leaf_worker).allow ++ ["crash_effect"]
+                   }
                  },
                  params
                ),

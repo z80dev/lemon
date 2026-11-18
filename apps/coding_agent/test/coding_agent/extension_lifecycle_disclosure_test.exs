@@ -24,6 +24,10 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
   defp settings, do: %{extension_paths: [], extension_auto_load_default_paths: true}
 
+  # These tests exercise disclosure, not policy: the session-level policy is the
+  # explicit full-access root default (a missing policy is deny-all).
+  defp full, do: ToolPolicy.from_profile(:full_access)
+
   defp mcp_tool(name, opts \\ []) do
     tool = %AgentTool{
       name: name,
@@ -80,6 +84,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
           settings_manager: settings(),
           tool_opts: [
             mcp_tools: inventory,
+            tool_policy: full(),
             tool_disclosure: [budget_tokens: 1],
             tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir)
           ]
@@ -165,6 +170,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
           secret_obfuscator: obfuscator,
           tool_opts: [
             mcp_tools: inventory,
+            tool_policy: full(),
             tool_disclosure: disclosure,
             tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir)
           ]
@@ -218,7 +224,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [tool_disclosure: [budget_tokens: 1]]
+          tool_opts: [tool_policy: full(), tool_disclosure: [budget_tokens: 1]]
         )
 
       tool_names = names(result.tools)
@@ -232,7 +238,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
     end
 
     test "the default configuration changes nothing", %{tmp_dir: tmp_dir} do
-      tool_opts = []
+      tool_opts = [tool_policy: full()]
 
       result =
         ExtensionLifecycle.initialize(
@@ -301,7 +307,11 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
           cwd: tmp_dir,
           settings_manager: settings(),
           extra_tools: [extra],
-          tool_opts: [mcp_tools: [mcp_tool("mcp_fixture_alpha")], tool_disclosure: disclosure]
+          tool_opts: [
+            mcp_tools: [mcp_tool("mcp_fixture_alpha")],
+            tool_policy: full(),
+            tool_disclosure: disclosure
+          ]
         )
       end
 
@@ -358,7 +368,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings_manager,
-          tool_opts: [mcp_tools: inventory]
+          tool_opts: [mcp_tools: inventory, tool_policy: full()]
         )
 
       assert activating.tool_disclosure.active == true
@@ -367,7 +377,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings_manager,
-          tool_opts: [mcp_tools: inventory, tool_disclosure: [enabled: false]]
+          tool_opts: [mcp_tools: inventory, tool_policy: full(), tool_disclosure: [enabled: false]]
         )
 
       assert overridden.tool_disclosure.active == false
@@ -390,6 +400,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
             cwd: tmp_dir,
             settings_manager: settings(),
             tool_opts: [
+              tool_policy: full(),
               tool_disclosure: [budget_tokens: 1, profile: profile],
               tool_intent_recorder: CodingAgent.Test.ToolIntentRecorder.new(tmp_dir)
             ],
@@ -432,7 +443,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
             cwd: tmp_dir,
             settings_manager: settings(),
             custom_tools: [],
-            tool_opts: [extension_inventory: {[], []}, mcp_tools: []]
+            tool_opts: [extension_inventory: {[], []}, mcp_tools: [], tool_policy: full()]
           )
         end)
         |> Task.await()
@@ -445,6 +456,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
           settings_manager: settings(),
           tool_opts: [
             mcp_tools: [mcp_tool("mcp_fixture_alpha")],
+            tool_policy: full(),
             tool_disclosure: [budget_tokens: 1]
           ]
         )
@@ -567,7 +579,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: settings(),
-          tool_opts: [mcp_tools: inventory]
+          tool_opts: [mcp_tools: inventory, tool_policy: full()]
         )
 
       assert initial.tool_disclosure.active == false
@@ -576,7 +588,11 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
       reload_opts = [
         cwd: tmp_dir,
         settings_manager: settings(),
-        tool_opts: [mcp_tools: inventory, tool_disclosure: [budget_tokens: 1]],
+        tool_opts: [
+          mcp_tools: inventory,
+          tool_policy: full(),
+          tool_disclosure: [budget_tokens: 1]
+        ],
         previous_status_report: initial.extension_status_report
       ]
 

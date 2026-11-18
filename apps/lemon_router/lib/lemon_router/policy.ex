@@ -21,10 +21,11 @@ defmodule LemonRouter.Policy do
         },
         # Blocked tools (cannot be used at all)
         blocked_tools: ["process_kill", "exec_raw"],
-        # Allowed commands (whitelist for bash/exec)
-        allowed_commands: ["git", "npm", "cargo"],
+        # Allowed commands (whitelist for bash), enforced by
+        # CodingAgent.Tools.Bash.CommandPolicy
+        allowed_commands: ["git status", "npm test"],
         # Blocked commands (blacklist)
-        blocked_commands: ["rm -rf /", "sudo"],
+        blocked_commands: ["rm -rf", "sudo"],
         # Max file size for write operations
         max_file_size: 1_048_576
       }
@@ -118,32 +119,6 @@ defmodule LemonRouter.Policy do
   """
   @spec tool_blocked?(map(), binary()) :: boolean()
   def tool_blocked?(policy, tool), do: not ToolPolicy.allowed?(policy, tool)
-
-  @doc """
-  Check if a command is allowed by the policy.
-
-  If no allowed_commands list is specified, all commands are allowed.
-  If a blocked_commands list exists, those are always blocked.
-  """
-  @spec command_allowed?(map(), binary()) :: boolean()
-  def command_allowed?(policy, command) do
-    case ToolPolicy.parse(policy) do
-      {:ok, policy} ->
-        not command_matches_any?(command, policy.blocked_commands) and
-          (policy.allowed_commands == :all or
-             command_matches_any?(command, policy.allowed_commands))
-
-      {:error, _reason} ->
-        false
-    end
-  end
-
-  defp command_matches_any?(command, patterns) do
-    Enum.any?(patterns, fn pattern ->
-      String.starts_with?(command, pattern) or
-        String.contains?(command, pattern)
-    end)
-  end
 
   # Load agent policy from store
   defp get_agent_policy(nil), do: nil

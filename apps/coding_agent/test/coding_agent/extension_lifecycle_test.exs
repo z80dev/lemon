@@ -4,6 +4,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Config
   alias CodingAgent.ExtensionLifecycle
+  alias CodingAgent.ToolPolicy
 
   @moduletag :tmp_dir
 
@@ -139,7 +140,8 @@ defmodule CodingAgent.ExtensionLifecycleTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
-          tool_opts: []
+          tool_opts: [],
+          tool_policy: ToolPolicy.from_profile(:full_access)
         )
 
       assert extension_module in result.extensions
@@ -155,7 +157,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
       cleanup_module(extension_module)
     end
 
-    test "merges custom, extension, and extra tools when custom tools are provided", %{
+    test "a custom toolset is closed: custom and extra tools only, no extension tools", %{
       tmp_dir: tmp_dir
     } do
       extension_module =
@@ -186,13 +188,14 @@ defmodule CodingAgent.ExtensionLifecycleTest do
           cwd: tmp_dir,
           settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
           tool_opts: [],
+          tool_policy: ToolPolicy.from_profile(:full_access),
           custom_tools: [custom_tool],
           extra_tools: [extra_tool]
         )
 
       tool_names = Enum.map(result.tools, & &1.name)
       assert "custom_only_tool" in tool_names
-      assert "ext_custom_tool" in tool_names
+      refute "ext_custom_tool" in tool_names
       assert "extra_only_tool" in tool_names
       refute "read" in tool_names
 
@@ -211,7 +214,8 @@ defmodule CodingAgent.ExtensionLifecycleTest do
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
           settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
-          tool_opts: []
+          tool_opts: [],
+          tool_policy: ToolPolicy.from_profile(:full_access)
         )
 
       second_module =
@@ -233,6 +237,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
           cwd: tmp_dir,
           settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
           tool_opts: [],
+          tool_policy: ToolPolicy.from_profile(:full_access),
           extra_tools: [extra_tool],
           previous_status_report: initial.extension_status_report
         )

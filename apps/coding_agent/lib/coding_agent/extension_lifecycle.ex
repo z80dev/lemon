@@ -19,7 +19,7 @@ defmodule CodingAgent.ExtensionLifecycle do
   alias CodingAgent.Extensions.ToolHooks
   alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.ToolDisclosure
-  alias CodingAgent.ToolExecutor
+  alias CodingAgent.ToolPolicy
   alias CodingAgent.ToolRegistry
   alias LemonAgent.Types.AgentTool
 
@@ -48,7 +48,7 @@ defmodule CodingAgent.ExtensionLifecycle do
     extra_tools = Keyword.get(opts, :extra_tools, [])
     wasm_tools = Keyword.get(opts, :wasm_tools, [])
     wasm_status = Keyword.get(opts, :wasm_status)
-    tool_policy = Keyword.get(opts, :tool_policy, Keyword.get(tool_opts, :tool_policy))
+    tool_policy = session_policy(opts, tool_opts)
 
     approval_context =
       Keyword.get(opts, :approval_context, Keyword.get(tool_opts, :approval_context))
@@ -92,11 +92,8 @@ defmodule CodingAgent.ExtensionLifecycle do
       build_tools(
         cwd,
         tool_opts,
-        extensions,
         custom_tools,
         extra_tools,
-        tool_policy,
-        approval_context,
         disclosure_cfg,
         hooks,
         Keyword.get(opts, :secret_obfuscator)
@@ -140,10 +137,11 @@ defmodule CodingAgent.ExtensionLifecycle do
     config_cwd = Keyword.get(opts, :config_cwd) || cwd
     settings_manager = Keyword.fetch!(opts, :settings_manager)
     tool_opts = Keyword.get(opts, :tool_opts, [])
+    custom_tools = Keyword.get(opts, :custom_tools)
     extra_tools = Keyword.get(opts, :extra_tools, [])
     wasm_tools = Keyword.get(opts, :wasm_tools, [])
     wasm_status = Keyword.get(opts, :wasm_status)
-    tool_policy = Keyword.get(opts, :tool_policy, Keyword.get(tool_opts, :tool_policy))
+    tool_policy = session_policy(opts, tool_opts)
 
     approval_context =
       Keyword.get(opts, :approval_context, Keyword.get(tool_opts, :approval_context))
@@ -188,28 +186,15 @@ defmodule CodingAgent.ExtensionLifecycle do
         Keyword.get(tool_opts, :session_mode, :chat)
       )
 
-    tool_opts = Keyword.put(tool_opts, :tool_disclosure, disclosure_cfg)
-
-    hook_context = tool_hook_context(cwd, tool_opts)
-    obfuscator = Keyword.get(opts, :secret_obfuscator)
-
-    %{tools: tools, catalog: tool_catalog, report: disclosure_report} =
-      ToolDisclosure.apply(
-        cwd
-        |> ToolRegistry.get_tool_tuples(tool_opts)
-        |> ToolHooks.wrap_tuples(hooks, hook_context)
-        |> SecretObfuscator.wrap_tuples(obfuscator),
-        extra_tools
-        |> Enum.map(&ToolRegistry.wrap_unmanaged_tool/1)
-        |> Enum.map(&CodingAgent.ToolIntent.wrap(&1, tool_opts))
-        |> ToolExecutor.wrap_all_with_approval(
-          tool_policy,
-          Map.put(approval_context || %{}, :approval_tier, :exec)
-        )
-        |> ToolHooks.wrap_tools(hooks, hook_context)
-        |> SecretObfuscator.wrap_tools(obfuscator),
+    {tools, tool_catalog, disclosure_report} =
+      build_tools(
+        cwd,
+        tool_opts,
+        custom_tools,
+        extra_tools,
         disclosure_cfg,
-        authority: Keyword.get(tool_opts, :tool_policy)
+        hooks,
+        Keyword.get(opts, :secret_obfuscator)
       )
 
     emit_disclosure_telemetry(disclosure_report)
@@ -254,7 +239,7 @@ defmodule CodingAgent.ExtensionLifecycle do
     config_cwd = Keyword.get(opts, :config_cwd) || cwd
     settings_manager = Keyword.fetch!(opts, :settings_manager)
     tool_opts = Keyword.get(opts, :tool_opts, [])
-    tool_policy = Keyword.get(opts, :tool_policy, Keyword.get(tool_opts, :tool_policy))
+    tool_policy = session_policy(opts, tool_opts)
 
     approval_context =
       Keyword.get(opts, :approval_context, Keyword.get(tool_opts, :approval_context))
@@ -280,11 +265,8 @@ defmodule CodingAgent.ExtensionLifecycle do
       build_tools(
         cwd,
         tool_opts,
-        Keyword.fetch!(opts, :extensions),
         Keyword.get(opts, :custom_tools),
         Keyword.get(opts, :extra_tools, []),
-        tool_policy,
-        approval_context,
         disclosure_cfg,
         Keyword.fetch!(opts, :hooks),
         Keyword.get(opts, :secret_obfuscator)
@@ -339,30 +321,20 @@ defmodule CodingAgent.ExtensionLifecycle do
 
   defp unload_removed_extensions(_previous_status_report, _extensions), do: :ok
 
+  # Every tool list a session sees is finalized here: registry tuples come back
+  # from `ToolRegistry.get_tool_tuples/2` already filtered and gated, and
+  # caller-supplied tools go through `ToolRegistry.finalize_tools/3`, the same
+  # policy floor and approval gate.
   @spec build_tools(
           String.t(),
           keyword(),
-          [module()],
           [AgentTool.t()] | nil,
           [AgentTool.t()],
-          term(),
-          term(),
           ToolDisclosure.config(),
           keyword([function()]),
           SecretObfuscator.t() | nil
         ) :: {[AgentTool.t()], ToolDisclosure.catalog(), ToolDisclosure.report()}
-  defp build_tools(
-         cwd,
-         tool_opts,
-         extensions,
-         custom_tools,
-         extra_tools,
-         tool_policy,
-         approval_context,
-         disclosure_cfg,
-         hooks,
-         obfuscator
-       ) do
+  defp build_tools(cwd, tool_opts, custom_tools, extra_tools, disclosure_cfg, hooks, obfuscator) do
     tool_opts = Keyword.put(tool_opts, :tool_disclosure, disclosure_cfg)
 
     hook_context = tool_hook_context(cwd, tool_opts)
@@ -382,53 +354,39 @@ defmodule CodingAgent.ExtensionLifecycle do
             |> ToolHooks.wrap_tuples(hooks, hook_context)
             |> SecretObfuscator.wrap_tuples(obfuscator),
             extra_tools
-            |> Enum.map(&ToolRegistry.wrap_unmanaged_tool/1)
-            |> Enum.map(&CodingAgent.ToolIntent.wrap(&1, tool_opts))
-            |> ToolExecutor.wrap_all_with_approval(
-              tool_policy,
-              Map.put(approval_context || %{}, :approval_tier, :exec)
-            )
+            |> ToolRegistry.finalize_tools(cwd, tool_opts)
             |> ToolHooks.wrap_tools(hooks, hook_context)
             |> SecretObfuscator.wrap_tools(obfuscator),
             disclosure_cfg,
-            authority: Keyword.get(tool_opts, :tool_policy)
+            authority: Keyword.get(tool_opts, :tool_policy),
+            finalize_bridges: &ToolRegistry.gate_bridge_tuples(&1, cwd, tool_opts)
           )
 
         {tools, catalog, report}
 
       custom ->
-        extension_tools = Extensions.get_tools(extensions, cwd)
-
-        all_tools =
-          (Enum.reject(custom ++ extension_tools, &(&1.name in terminal_names)) ++ extra_tools)
-          |> Enum.map(fn tool ->
-            tool
-            |> ToolRegistry.wrap_unmanaged_tool()
-            |> CodingAgent.ToolIntent.wrap(tool_opts)
-          end)
-
+        # A hand-assembled toolset is a closed set: exactly these tools plus the
+        # caller's extra tools, through the same floor and gate. No extension or
+        # registry tool joins it, so there is no long tail to defer and no
+        # registry source tags to partition by.
         tools =
-          if tool_policy && approval_context do
-            ToolExecutor.wrap_all_with_approval(
-              all_tools,
-              tool_policy,
-              Map.put(approval_context, :approval_tier, :exec)
-            )
-          else
-            all_tools
-          end
-
-        # A hand-assembled toolset is the caller's business: they chose exactly
-        # these tools, so there is no long tail to defer and no registry source
-        # tags to partition by.
-        tools =
-          tools
+          (Enum.reject(custom, &(&1.name in terminal_names)) ++ extra_tools)
+          |> ToolRegistry.finalize_tools(cwd, tool_opts)
           |> ToolHooks.wrap_tools(hooks, hook_context)
           |> SecretObfuscator.wrap_tools(obfuscator)
 
         {tools, ToolDisclosure.catalog_for_tools(tools),
          ToolDisclosure.skipped_report(:custom_tools, disclosure_cfg)}
     end
+  end
+
+  # The one place a session-built tool list resolves its policy. Sessions always
+  # pass their validated policy, whose root default is full access (see
+  # `LemonCore.ExecutionContext.new/1`); a caller that supplies none gets the
+  # deny-all floor, never full access.
+  defp session_policy(opts, tool_opts) do
+    Keyword.get(opts, :tool_policy) || Keyword.get(tool_opts, :tool_policy) ||
+      ToolPolicy.deny_all()
   end
 
   defp tool_hook_context(cwd, tool_opts) do

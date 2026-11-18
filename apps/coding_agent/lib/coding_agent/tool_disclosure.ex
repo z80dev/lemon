@@ -91,6 +91,7 @@ defmodule CodingAgent.ToolDisclosure do
   alias LemonAgent.Types.AgentTool
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
+  alias LemonCore.ToolPolicy
 
   @bridge_names ["tool_search", "tool_invoke"]
 
@@ -141,7 +142,13 @@ defmodule CodingAgent.ToolDisclosure do
 
   @type report :: %{
           active: boolean(),
-          reason: :under_budget | :disabled | :custom_tools | :nothing_to_defer | nil,
+          reason:
+            :under_budget
+            | :disabled
+            | :bridges_denied
+            | :custom_tools
+            | :nothing_to_defer
+            | nil,
           profile: profile(),
           catalog_digest: String.t() | nil,
           estimated_tokens: non_neg_integer(),
@@ -356,6 +363,12 @@ defmodule CodingAgent.ToolDisclosure do
     * `:authority` — the session's tool policy (or any term describing what the
       session may run). It is folded into `catalog_digest`, so a policy change
       yields a different catalog identity even when the visible schemas match.
+      Disclosure activates only when it admits both `tool_search` and
+      `tool_invoke`; otherwise every tool stays directly disclosed
+      (`reason: :bridges_denied`).
+    * `:finalize_bridges` — applied to the two bridge tuples before exposure;
+      sessions pass `CodingAgent.ToolRegistry.gate_bridge_tuples/3`, the same
+      approval gate as every other tool.
 
   Returns `%{tools: [AgentTool.t()], catalog: catalog(), report: report()}`.
   `catalog` is the frozen, wrapped runtime inventory shared by disclosure and
@@ -381,8 +394,13 @@ defmodule CodingAgent.ToolDisclosure do
       not cfg.enabled ->
         passthrough(tool_tuples, extra_tools, :disabled, estimated, cfg, authority)
 
+      # Hidden tools are only reachable through the bridges; a policy that does
+      # not admit both keeps every tool disclosed directly instead.
+      not bridges_allowed?(authority) ->
+        passthrough(tool_tuples, extra_tools, :bridges_denied, estimated, cfg, authority)
+
       cfg.profile == :code_mode ->
-        activate(tool_tuples, extra_tools, estimated, cfg, authority)
+        activate(tool_tuples, extra_tools, estimated, cfg, authority, opts)
 
       # Coding defers optional tools regardless of the legacy budget trigger.
       cfg.profile == :legacy and estimated <= cfg.budget_tokens ->
@@ -395,9 +413,14 @@ defmodule CodingAgent.ToolDisclosure do
         passthrough(tool_tuples, extra_tools, :nothing_to_defer, estimated, cfg, authority)
 
       true ->
-        activate(tool_tuples, extra_tools, estimated, cfg, authority)
+        activate(tool_tuples, extra_tools, estimated, cfg, authority, opts)
     end
   end
+
+  defp bridges_allowed?(nil), do: true
+
+  defp bridges_allowed?(authority),
+    do: Enum.all?(@bridge_names, &ToolPolicy.allowed?(authority, &1))
 
   defp passthrough(tool_tuples, extra_tools, reason, estimated, cfg, authority) do
     exposed = tool_tuples ++ Enum.map(extra_tools, &{&1.name, &1, :extra})
@@ -425,7 +448,7 @@ defmodule CodingAgent.ToolDisclosure do
     }
   end
 
-  defp activate(tool_tuples, extra_tools, estimated, cfg, authority) do
+  defp activate(tool_tuples, extra_tools, estimated, cfg, authority, opts) do
     {shadowing, real_tuples} =
       Enum.split_with(tool_tuples, fn {name, _tool, _source} -> name in @bridge_names end)
 
@@ -454,10 +477,17 @@ defmodule CodingAgent.ToolDisclosure do
     {search_tool, tier} = build_tool_search(catalog, hidden_names, cfg)
     invoke_tool = build_tool_invoke(catalog)
 
+    # Bridges pass the session's final gate like any other tool, so an explicit
+    # approval requirement on `tool_search`/`tool_invoke` holds.
+    finalize_bridges = Keyword.get(opts, :finalize_bridges, & &1)
+
     exposed =
       pinned ++
         Enum.map(real_extras, &{&1.name, &1, :extra}) ++
-        [{search_tool.name, search_tool, :bridge}, {invoke_tool.name, invoke_tool, :bridge}]
+        finalize_bridges.([
+          {search_tool.name, search_tool, :bridge},
+          {invoke_tool.name, invoke_tool, :bridge}
+        ])
 
     tools =
       exposed

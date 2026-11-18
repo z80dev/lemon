@@ -18,11 +18,12 @@ defmodule LemonAgent.ToolRegistry do
 
   ## Precedence
 
-  Built-ins win. A registration whose name collides with a built-in is kept in
-  the registry but ignored by the consumer that already has that name, so a
-  satellite can never silently replace a platform tool. `CodingAgent.ToolRegistry`
-  applies this by filtering registrations with `available/1` before appending
-  them to its built-ins.
+  Built-ins win. `register/3` refuses every name `LemonCore.ToolCatalog`
+  classifies for a compiled-in platform tool, and a consumer that already has a
+  name still ignores a registration for it, so a satellite can never silently
+  replace a platform tool. `CodingAgent.ToolRegistry` applies the second rule by
+  filtering registrations with `available/1` before appending them to its
+  built-ins.
 
   The rule is worth stating in terms of what it protects rather than as a
   merge order. `CodingAgent.ToolRegistry.get_tool/3` resolves through that same
@@ -55,6 +56,15 @@ defmodule LemonAgent.ToolRegistry do
   its credentials are missing, so it is safe to register unconditionally.
   Registering from the application callback is what makes ordering irrelevant.
 
+  ## Policy classification
+
+  Restricted policy profiles (`safe_mode`, `subagent_restricted`, `leaf_worker`,
+  `no_external`, `read_only`, `minimal_core`) are allow lists over
+  `LemonCore.ToolCatalog`. A registered satellite tool is unclassified, so those
+  profiles deny it; full-access, orchestrator and custom policies grant it by
+  name. A tool that bounds its own effects (for example `omp`) receives the
+  caller's effective `:tool_policy` in its constructor options.
+
   Registrations carry native-process provenance: `:unknown` (the default) fences
   module loading, construction and execution as arbitrary code when the optional
   native launch ledger is enabled. Use `native_process_ownership: :managed` only
@@ -73,6 +83,10 @@ defmodule LemonAgent.ToolRegistry do
 
   @doc """
   Register `module` under `name`, replacing any previous registration for it.
+
+  A name `LemonCore.ToolCatalog` classifies for a compiled-in platform tool is
+  refused, so a contribution cannot inherit that tool's policy classification.
+  Every other registration is unclassified: restricted policy profiles deny it.
   """
   @spec register(tool_name(), module(), keyword()) :: :ok
   def register(name, module, opts \\ []) when is_atom(name) and is_atom(module) do
@@ -80,6 +94,10 @@ defmodule LemonAgent.ToolRegistry do
 
     unless ownership in [:managed, :unknown] do
       raise ArgumentError, "invalid native process ownership"
+    end
+
+    unless LemonCore.ToolCatalog.registrable?(Atom.to_string(name)) do
+      raise ArgumentError, "tool name #{name} is reserved for a platform tool"
     end
 
     unless function_exported?(module, :tool, 2) or loadable?(module, ownership) do

@@ -37,6 +37,7 @@ defmodule CodingAgent.Tools.Bash do
 
   alias CodingAgent.Tools.Bash.{
     Capture,
+    CommandPolicy,
     GitGuard,
     Interceptor,
     InternalUrlExpansion,
@@ -222,8 +223,10 @@ defmodule CodingAgent.Tools.Bash do
 
         with {:ok, run_cwd} <- resolve_cwd(Map.get(params, "cwd"), state.cwd || cwd),
              {:ok, call_env} <- validate_env(Map.get(params, "env")),
+             :ok <- CommandPolicy.check_env(call_env, Keyword.get(opts, :tool_policy)),
              env = Map.merge(state.env, call_env),
              {:ok, command} <- InternalUrlExpansion.expand(command, Keyword.put(opts, :cwd, cwd)),
+             :ok <- CommandPolicy.check(command, Keyword.get(opts, :tool_policy)),
              :ok <- Interceptor.check(command, opts),
              :ok <- GitGuard.check(command, run_cwd, Keyword.put(opts, :command_env, env)) do
           cond do

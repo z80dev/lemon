@@ -34,6 +34,8 @@ defmodule LemonOmp do
   @type reason ::
           :not_installed
           | :invalid_cwd
+          | :command_lists_not_enforced
+          | :worker_exceeds_policy
           | :not_a_git_repo
           | :worktree_failed
           | :invalid_prompt
@@ -304,12 +306,20 @@ defmodule LemonOmp do
   Steer the running turn (`:steer`), queue a follow-up (`:follow_up`), or stop
   it and start over atomically in omp (`:redirect`). When the session is idle,
   every mode starts a new turn with `message`.
+
+  `:authorize` (a function of the session's wire map returning `:ok` or
+  `{:error, reason}`) lets the caller refuse a worker whose recorded authority
+  exceeds its current policy before anything is delivered.
   """
   @spec send_message(String.t(), String.t(), :steer | :follow_up | :redirect, keyword()) ::
           {:ok, map()} | {:error, reason()}
   def send_message(id, message, mode, opts \\ [])
       when mode in [:steer, :follow_up, :redirect] do
+    authorize = Keyword.get(opts, :authorize, fn _wire -> :ok end)
+
     with {:ok, message} <- validate_message(message),
+         {:ok, _pid, wire} <- fetch(id, opts),
+         :ok <- authorize.(wire),
          {:ok, pid} <- fetch_live(id, opts) do
       Session.send_message(pid, message, mode)
     end
@@ -588,7 +598,24 @@ defmodule LemonOmp do
   def error_message(:not_installed),
     do: "omp is not installed (no `omp` executable on PATH; set LEMON_OMP_BIN to point at it)."
 
-  def error_message(:invalid_cwd), do: "cwd must be an existing directory."
+  def error_message(:invalid_cwd),
+    do:
+      "cwd must be an existing directory, inside this conversation's workspace unless its tool policy allows unreviewed execution."
+
+  def error_message(:not_permitted),
+    do: "this conversation's tool policy does not permit omp."
+
+  def error_message(:approval_mode_not_permitted),
+    do:
+      "this conversation's tool policy does not permit that omp approval mode; use always-ask, or write when edits run unreviewed."
+
+  def error_message(:command_lists_not_enforced),
+    do:
+      "this conversation's tool policy restricts shell commands (allowed_commands/blocked_commands), which omp cannot enforce; omp delegation is unavailable."
+
+  def error_message(:worker_exceeds_policy),
+    do:
+      "this omp session was started with more authority (approval mode or workspace) than this conversation's tool policy now permits; close it and start a new one."
 
   def error_message(:not_a_git_repo),
     do: "isolate requires cwd inside a git work tree with a HEAD commit."

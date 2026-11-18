@@ -5,6 +5,8 @@ defmodule LemonOmp.WorktreeTest do
 
   alias LemonOmp.Tools.Omp
 
+  @full LemonCore.ToolPolicy.from_profile(:full_access)
+
   setup do
     use_fake_omp()
     put_app_env(:max_sessions, 4)
@@ -202,7 +204,8 @@ defmodule LemonOmp.WorktreeTest do
         nil,
         nil,
         cwd: ctx.cwd,
-        session_key: "agent:worktrees"
+        session_key: "agent:worktrees",
+        tool_policy: @full
       )
 
     refute result.is_error
@@ -225,7 +228,13 @@ defmodule LemonOmp.WorktreeTest do
     assert found["worktree"]["branch"] == wire["worktree"]["branch"]
     assert {:ok, [direct]} = LemonOmp.discover(wire["cwd"])
     assert direct["worktree"]["path"] == wire["cwd"]
-    result = Omp.execute("discover", %{"action" => "discover"}, nil, nil, cwd: ctx.cwd)
+
+    result =
+      Omp.execute("discover", %{"action" => "discover"}, nil, nil,
+        cwd: ctx.cwd,
+        tool_policy: @full
+      )
+
     assert hd(result.content).text =~ "kept worktree #{wire["worktree"]["branch"]}"
 
     assert {:ok, resumed} = LemonOmp.start(%{cwd: ctx.cwd, resume: "fake-session"})
@@ -285,7 +294,8 @@ defmodule LemonOmp.WorktreeTest do
     result =
       Omp.execute("resume", %{"action" => "resume", "omp_session_id" => "fake-session"}, nil, nil,
         cwd: other,
-        session_key: "agent:resume-committed"
+        session_key: "agent:resume-committed",
+        tool_policy: @full
       )
 
     refute result.is_error
@@ -324,7 +334,8 @@ defmodule LemonOmp.WorktreeTest do
         nil,
         nil,
         cwd: ctx.cwd,
-        session_key: "agent:resume-deleted"
+        session_key: "agent:resume-deleted",
+        tool_policy: @full
       )
 
     refute result.is_error

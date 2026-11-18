@@ -9,11 +9,15 @@ defmodule LemonOmp.Tools.OmpTest do
   alias LemonAi.Types.TextContent
   alias LemonOmp.Tools.Omp
 
+  # The tool is bounded by its caller's policy; these tests exercise omp itself
+  # under full access (see omp_policy_test.exs for the bounds).
+  @full LemonCore.ToolPolicy.from_profile(:full_access)
+
   setup do
     use_fake_omp()
     ws = workspace!()
     key = "agent:omp-tool-test:#{System.unique_integer([:positive])}"
-    {:ok, ws: ws, key: key, tool: Omp.tool(ws, session_key: key)}
+    {:ok, ws: ws, key: key, tool: Omp.tool(ws, session_key: key, tool_policy: @full)}
   end
 
   defp run(tool, params, on_update \\ nil, signal \\ nil),
@@ -53,7 +57,7 @@ defmodule LemonOmp.Tools.OmpTest do
         LemonAgent.ToolRegistry.build_tool(:managed, fn ->
           assert LemonCore.NativeProcess.snapshot() == []
 
-          tool = Omp.tool(ctx.ws, session_key: ctx.key)
+          tool = Omp.tool(ctx.ws, session_key: ctx.key, tool_policy: @full)
           execute = tool.execute
 
           %{
@@ -81,7 +85,7 @@ defmodule LemonOmp.Tools.OmpTest do
 
       tool =
         LemonAgent.ToolRegistry.build_tool(:managed, fn ->
-          Omp.tool(ctx.ws, session_key: ctx.key)
+          Omp.tool(ctx.ws, session_key: ctx.key, tool_policy: @full)
         end)
 
       GenServer.stop(LemonCore.NativeProcess)
@@ -163,7 +167,7 @@ defmodule LemonOmp.Tools.OmpTest do
     assert text(configured) =~ "model fake/cheap, thinking minimal"
     assert text(configured) =~ "next model call"
 
-    foreign = Omp.tool(ctx.ws, session_key: "another-conversation")
+    foreign = Omp.tool(ctx.ws, session_key: "another-conversation", tool_policy: @full)
     denied = run(foreign, %{"action" => "configure", "id" => id, "thinking" => "low"})
     assert denied.is_error
     assert denied.details["error"] == "not_found"
@@ -240,7 +244,7 @@ defmodule LemonOmp.Tools.OmpTest do
     assert text(transcript) =~ "[toolResult write]\nmessage 60 "
     refute text(transcript) =~ "\u202e"
 
-    foreign = Omp.tool(ctx.ws, session_key: "another-conversation")
+    foreign = Omp.tool(ctx.ws, session_key: "another-conversation", tool_policy: @full)
     denied = run(foreign, %{"action" => "subagent", "id" => id, "subagent_id" => "child-1"})
     assert denied.is_error
     assert denied.details["error"] == "not_found"
@@ -275,7 +279,14 @@ defmodule LemonOmp.Tools.OmpTest do
   end
 
   test "parallel workers forward approval modes and native routing context", ctx do
-    tool = Omp.tool(ctx.ws, session_key: ctx.key, session_id: "batch-native", run_id: "batch-run")
+    tool =
+      Omp.tool(ctx.ws,
+        session_key: ctx.key,
+        session_id: "batch-native",
+        run_id: "batch-run",
+        tool_policy: @full
+      )
+
     LemonCore.Bus.subscribe("exec_approvals")
     workspaces = [ctx.ws, workspace!()]
     modes = ["always-ask", "write"]
@@ -307,7 +318,14 @@ defmodule LemonOmp.Tools.OmpTest do
   end
 
   test "start and resume forward approval mode and native approval routing context", ctx do
-    tool = Omp.tool(ctx.ws, session_key: ctx.key, session_id: "native-id", run_id: "run-id")
+    tool =
+      Omp.tool(ctx.ws,
+        session_key: ctx.key,
+        session_id: "native-id",
+        run_id: "run-id",
+        tool_policy: @full
+      )
+
     LemonCore.Bus.subscribe("exec_approvals")
 
     for params <- [

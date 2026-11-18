@@ -4,7 +4,7 @@ defmodule LemonRouter.PolicyResolutionTest do
   alias LemonRouter.Policy
 
   @moduledoc """
-  Tests for the new policy resolution helpers: approval_required?, tool_blocked?, command_allowed?
+  Tests for the new policy resolution helpers: approval_required?, tool_blocked?
   """
 
   describe "approval_required?/2" do
@@ -77,50 +77,6 @@ defmodule LemonRouter.PolicyResolutionTest do
       policy = %{}
 
       assert Policy.tool_blocked?(policy, "bash") == false
-    end
-  end
-
-  describe "command_allowed?/2" do
-    test "returns false when command matches blocked_commands pattern" do
-      policy = %{blocked_commands: ["rm -rf", "sudo"]}
-
-      assert Policy.command_allowed?(policy, "rm -rf /") == false
-      assert Policy.command_allowed?(policy, "sudo apt install") == false
-    end
-
-    test "returns true when command is in allowed_commands list" do
-      policy = %{allowed_commands: ["git", "npm", "cargo"]}
-
-      assert Policy.command_allowed?(policy, "git status") == true
-      assert Policy.command_allowed?(policy, "npm install") == true
-    end
-
-    test "returns false when command is not in allowed_commands list" do
-      policy = %{allowed_commands: ["git", "npm"]}
-
-      assert Policy.command_allowed?(policy, "curl http://example.com") == false
-    end
-
-    test "returns true when no allowed_commands specified" do
-      policy = %{}
-
-      assert Policy.command_allowed?(policy, "any command") == true
-    end
-
-    test "returns false when allowed_commands is explicitly empty" do
-      policy = %{allowed_commands: []}
-
-      assert Policy.command_allowed?(policy, "any command") == false
-    end
-
-    test "blocked_commands takes precedence over allowed_commands" do
-      policy = %{
-        allowed_commands: ["sudo apt"],
-        blocked_commands: ["sudo"]
-      }
-
-      # Even though "sudo apt" matches allowed, "sudo" is blocked
-      assert Policy.command_allowed?(policy, "sudo apt install vim") == false
     end
   end
 

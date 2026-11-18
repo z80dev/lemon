@@ -17,7 +17,8 @@ maps. It validates:
 - `approvals`
 - `no_reply`
 - `profile`
-- command restrictions and file-size limits retained by router policy
+- `allowed_commands` / `blocked_commands` (see [Command lists](#command-lists))
+- file-size limits retained by router policy
 
 An absent policy is `{:error, :policy_absent}`. Execution entry points handle
 absence by choosing an explicit trusted default; they do not use that default
@@ -58,6 +59,42 @@ Legacy router code treated both a missing value and an empty list as
 unrestricted; after this upgrade, operators who intend unrestricted command
 execution must omit the field or set it to `"all"`. The stricter interpretation
 is intentional so an ambiguous stored restriction cannot fail open.
+
+## Command lists
+
+`allowed_commands` and `blocked_commands` are enforced by
+`CodingAgent.Tools.Bash.CommandPolicy` at every shell execution point, after
+internal URL expansion and before anything is spawned: the `bash` tool
+(foreground, PTY, background, named service and ACP terminal runs, locally and
+on execution nodes through `coding_agent.tool`). A refused command returns an
+error result that names the list.
+
+- `blocked_commands` matches broadly. Each simple command, including those
+  inside subshells, command substitutions and quoted strings that contain
+  whitespace (`bash -c '...'`), is split into words; an entry such as
+  `"rm -rf"` matches when a word whose basename is `rm` is followed, in order,
+  by `-rf`. `sudo rm -rf`, `/bin/rm -rf` and `echo rm -rf` all match.
+- `allowed_commands` matches narrowly. Every simple command must begin with an
+  entry's words exactly, with no path, variable-assignment or wrapper prefix
+  (`sudo`, `env`); no word may contain `<` or `>` (redirection, here-docs and
+  substitutions are refused); and the `env` parameter is refused. An empty
+  list allows nothing.
+- `process_input` checks what it writes against `blocked_commands`.
+- `eval` and `debug` run code no command list can inspect, so they refuse every
+  call while either list is set. For the same reason the `lsp` tool refuses
+  every action except `status` before any language server starts or syncs
+  (servers run build tools and project code), `lsp_diagnostics` refuses to run
+  project checkers and compilers, and the formatter refuses to launch. On
+  `write`, `edit` and `patch`, an explicit `diagnostics: true` or
+  `format: true` is refused and a configured default is skipped.
+- `omp` cannot enforce either list, so it refuses `start`, `start_many`,
+  `resume` and `send` while either list is set.
+
+This is a best-effort string check, not a sandbox. The shell can still build a
+command at run time (variable expansion, `eval`, aliases, a script on disk, an
+interpreter reading stdin, flag spellings such as `rm -r -f`), so a blocklist
+cannot contain a determined caller. Use `allow`/`deny` on tools, approvals and
+OS isolation for that; `GitGuard` remains a separate footgun check.
 
 ## Execution context
 

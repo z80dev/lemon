@@ -31,33 +31,40 @@ defmodule LemonAgent.ToolRegistryTest do
   end
 
   describe "precedence" do
-    test "available/1 drops a registration colliding with a built-in name" do
-      ToolRegistry.register(:bash, RegistryFakeBash)
+    test "register/3 refuses a platform tool's name; available/1 drops taken names" do
+      assert_raise ArgumentError, ~r/reserved for a platform tool/, fn ->
+        ToolRegistry.register(:bash, RegistryFakeBash)
+      end
+
+      ToolRegistry.register(:forecast, RegistryFakeBash)
       ToolRegistry.register(:weather, RegistryWeather)
 
-      available = ToolRegistry.available([:read, :bash, :write])
+      assert ToolRegistry.all() == [
+               {:forecast, RegistryFakeBash, :unknown},
+               {:weather, RegistryWeather, :unknown}
+             ]
 
-      assert available == [{:weather, RegistryWeather, :unknown}]
+      assert ToolRegistry.available([:read, :forecast]) == [{:weather, RegistryWeather, :unknown}]
     end
 
     test "available/1 keeps registration order" do
       ToolRegistry.register(:weather, RegistryWeather)
-      ToolRegistry.register(:bash, RegistryFakeBash)
+      ToolRegistry.register(:forecast, RegistryFakeBash)
 
       assert ToolRegistry.available([]) == [
                {:weather, RegistryWeather, :unknown},
-               {:bash, RegistryFakeBash, :unknown}
+               {:forecast, RegistryFakeBash, :unknown}
              ]
     end
 
     test "re-registering a name replaces it in place" do
       ToolRegistry.register(:weather, RegistryWeather)
-      ToolRegistry.register(:bash, RegistryFakeBash)
+      ToolRegistry.register(:forecast, RegistryFakeBash)
       ToolRegistry.register(:weather, RegistryFakeBash)
 
       assert ToolRegistry.all() == [
                {:weather, RegistryFakeBash, :unknown},
-               {:bash, RegistryFakeBash, :unknown}
+               {:forecast, RegistryFakeBash, :unknown}
              ]
     end
   end

@@ -167,7 +167,6 @@ defmodule LemonRouter.PolicyTest do
                })
 
       assert policy.allowed_commands == []
-      refute Policy.command_allowed?(policy, "git status")
     end
 
     test "legacy and nested session policy floors intersect without routing fields" do

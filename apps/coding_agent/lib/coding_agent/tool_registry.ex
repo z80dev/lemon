@@ -173,6 +173,8 @@ defmodule CodingAgent.ToolRegistry do
 
   defp tool_tuples(cwd, opts, browser_wanted?) do
     {disabled, enabled_only, tool_policy} = filters = tool_filters(opts)
+    # Tools that bound their own effects (omp) read the effective policy.
+    opts = Keyword.put(opts, :tool_policy, tool_policy)
     include_extensions = Keyword.get(opts, :include_extensions, true)
     include_mcp = Keyword.get(opts, :include_mcp, true)
 
@@ -221,33 +223,7 @@ defmodule CodingAgent.ToolRegistry do
     {resolved_tools, _conflicts} =
       resolve_tools(builtin, wasm_tools, extension_tools, mcp_tools, true)
 
-    folder_ctx =
-      Keyword.take(opts, [
-        :bot_folder_root,
-        :config_cwd,
-        :native_source_profile_id,
-        :execution_context
-      ])
-
-    approval_ctx =
-      case Keyword.get(opts, :approval_context) do
-        ctx when is_map(ctx) ->
-          Enum.reduce(folder_ctx, ctx, fn {key, value}, acc -> Map.put_new(acc, key, value) end)
-
-        _ ->
-          Keyword.take(opts, [
-            :run_id,
-            :session_id,
-            :session_key,
-            :agent_id,
-            :invocation_context_key,
-            :approval_request_fun
-          ])
-          |> Keyword.merge(folder_ctx)
-          |> Map.new()
-      end
-      |> Map.put_new(:cwd, cwd)
-      |> Map.put(:workspace_dir, Keyword.get(opts, :workspace_dir))
+    resolved_tools = drop_reserved_contributions(resolved_tools)
 
     resolved_tools
     |> filter_tools(disabled, enabled_only)
@@ -257,7 +233,96 @@ defmodule CodingAgent.ToolRegistry do
     |> Enum.map(fn {name, tool, source} ->
       {name, ToolIntent.wrap(tool, opts), source}
     end)
-    |> maybe_wrap_approval(tool_policy, approval_ctx)
+    |> gate_tuples(tool_policy, approval_context(cwd, opts))
+  end
+
+  @doc """
+  Finalize caller-supplied tools — executor extra tools and hand-assembled
+  (`tools:`) sets — through the same policy floor and approval gate as registry
+  tools: a tool the resolved policy does not allow is dropped, and every other
+  tool is approval-gated at the `:exec` tier (its name earns no lower tier).
+
+  Registry-attested completion tools (`trusted_terminal?/1`) report data to the
+  caller, grant no capability and pass without the floor or gate. Input order is
+  preserved. Callers resolve a missing policy before calling (see
+  `CodingAgent.ExtensionLifecycle`); this function applies `:tool_policy` from
+  `opts` exactly as `get_tool_tuples/2` does.
+  """
+  @spec finalize_tools([AgentTool.t()], String.t(), tool_opts()) :: [AgentTool.t()]
+  def finalize_tools(tools, cwd, opts) when is_list(tools) do
+    {_disabled, _enabled_only, tool_policy} = tool_filters(opts)
+    approval_ctx = approval_context(cwd, opts)
+
+    tools
+    |> permitted_tools(opts)
+    |> Enum.map(fn %AgentTool{} = tool ->
+      terminal? = trusted_terminal?(tool)
+      tool = tool |> wrap_unmanaged_tool() |> ToolIntent.wrap(opts)
+
+      if terminal?,
+        do: tool,
+        else:
+          [{tool.name, tool, :extra}] |> gate_tuples(tool_policy, approval_ctx) |> hd() |> elem(1)
+    end)
+  end
+
+  @doc """
+  Gate the disclosure bridges (`tool_search`, `tool_invoke`) with the session's
+  approval gate. They are platform tools, so their catalogue tier applies; the
+  policy filter itself runs in `CodingAgent.ToolDisclosure.apply/4`, which
+  discloses everything directly when the policy does not admit both bridges.
+  """
+  @spec gate_bridge_tuples([tool_tuple()], String.t(), tool_opts()) :: [tool_tuple()]
+  def gate_bridge_tuples(tuples, cwd, opts) when is_list(tuples) do
+    {_disabled, _enabled_only, tool_policy} = tool_filters(opts)
+
+    tuples
+    |> Enum.map(fn {name, tool, _source} -> {name, tool, :builtin} end)
+    |> gate_tuples(tool_policy, approval_context(cwd, opts))
+    |> Enum.map(fn {name, tool, :builtin} -> {name, tool, :bridge} end)
+  end
+
+  @doc """
+  The caller-supplied tools `finalize_tools/3` keeps, unwrapped: those the
+  resolved policy allows plus registry-attested completion tools. Sessions pass
+  this list to delegated children, which apply their own narrower floor.
+  """
+  @spec permitted_tools([AgentTool.t()], tool_opts()) :: [AgentTool.t()]
+  def permitted_tools(tools, opts) when is_list(tools) do
+    {_disabled, _enabled_only, tool_policy} = tool_filters(opts)
+
+    Enum.filter(tools, fn %AgentTool{} = tool ->
+      trusted_terminal?(tool) or ToolPolicy.allowed?(tool_policy, tool.name)
+    end)
+  end
+
+  defp approval_context(cwd, opts) do
+    folder_ctx =
+      Keyword.take(opts, [
+        :bot_folder_root,
+        :config_cwd,
+        :native_source_profile_id,
+        :execution_context
+      ])
+
+    case Keyword.get(opts, :approval_context) do
+      ctx when is_map(ctx) ->
+        Enum.reduce(folder_ctx, ctx, fn {key, value}, acc -> Map.put_new(acc, key, value) end)
+
+      _ ->
+        Keyword.take(opts, [
+          :run_id,
+          :session_id,
+          :session_key,
+          :agent_id,
+          :invocation_context_key,
+          :approval_request_fun
+        ])
+        |> Keyword.merge(folder_ctx)
+        |> Map.new()
+    end
+    |> Map.put_new(:cwd, cwd)
+    |> Map.put(:workspace_dir, Keyword.get(opts, :workspace_dir))
   end
 
   defp configure_bash(tools, cwd, opts) do
@@ -484,6 +549,8 @@ defmodule CodingAgent.ToolRegistry do
 
     {resolved_tools, conflicts} =
       resolve_tools(builtin, wasm_tools, extension_tools, mcp_tools, false)
+
+    resolved_tools = drop_reserved_contributions(resolved_tools)
 
     wasm_count = source_count(resolved_tools, :wasm)
     builtin_count = source_count(resolved_tools, :builtin)
@@ -1094,13 +1161,26 @@ defmodule CodingAgent.ToolRegistry do
     end)
   end
 
+  # A catalogued name belongs to its platform owner. When that owner is absent
+  # (an unavailable built-in, an executor extra tool), a WASM, extension or MCP
+  # tool must not take the name and inherit its policy classification.
+  defp drop_reserved_contributions(tools) do
+    Enum.reject(tools, fn {name, _tool, source} ->
+      source != :builtin and LemonCore.ToolCatalog.reserved?(name)
+    end)
+  end
+
   defp filter_policy_blocked(tools, tool_policy) do
     Enum.filter(tools, fn {name, _tool, _source} ->
       ToolPolicy.allowed?(tool_policy, name)
     end)
   end
 
-  defp maybe_wrap_approval(tools, tool_policy, approval_context) do
+  # The one approval gate for every session tool. Only registry-built tuples are
+  # tagged `:builtin`; caller-supplied tools arrive as `:extra` (exec tier, no
+  # folder-read exemption), MCP/WASM/extension tools with their own source tags.
+  @doc false
+  def gate_tuples(tools, tool_policy, approval_context) do
     Enum.map(tools, fn {name, tool, source} ->
       tool = if source == :builtin, do: tool, else: %{tool | trusted_terminal: false}
       original_execute = tool.execute

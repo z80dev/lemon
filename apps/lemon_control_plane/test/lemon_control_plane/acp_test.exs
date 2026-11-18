@@ -201,7 +201,25 @@ defmodule LemonControlPlane.ACPTest do
     assert request.meta.origin == :acp
     assert request.meta.acp_session_id == session_id
     assert request.meta.acp_resource_link_count == 1
-    assert "edit" in request.tool_policy.require_approval
+    assert request.tool_policy == %{approval_mode: :ask}
+
+    # Every executable route needs review under ACP ask, not a fixed name list.
+    for {tool, args} <- [
+          {"edit", %{}},
+          {"bash", %{}},
+          {"eval", %{}},
+          {"debug", %{}},
+          {"lsp", %{"action" => "rename", "apply" => true}},
+          {"lsp_diagnostics", %{}},
+          {"cua_js", %{}},
+          {"omp", %{}},
+          {"honcho_conclude", %{}}
+        ] do
+      assert LemonCore.ToolPolicy.requires_approval?(request.tool_policy, tool, args),
+             "#{tool} must require approval under ACP ask"
+    end
+
+    refute LemonCore.ToolPolicy.requires_approval?(request.tool_policy, "read", %{})
   end
 
   test "records safe ACP client filesystem capability summaries on sessions and prompts" do
@@ -992,7 +1010,7 @@ defmodule LemonControlPlane.ACPTest do
     queue_prompt(id)
     assert_receive {:submitted, request}
     refute request.tool_policy[:profile] == :read_only
-    assert "write" in request.tool_policy.require_approval
+    assert request.tool_policy.approval_mode == :ask
 
     assert {:ok, %{"stopReason" => "end_turn"}} =
              plan_prompt(id, "/plan", &send(parent, {:plan_off, &1}))
