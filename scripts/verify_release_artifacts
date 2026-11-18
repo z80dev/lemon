@@ -14,6 +14,7 @@ Verifies a manifest.json (schema 2) and the release tarballs it describes:
     --platform, only that platform's profiles)
   - lemon_tui is required on every platform but is not a BEAM release
   - darwin runtimes contain link-free bundled Python and both license notices
+  - runtime profiles contain the executable lemon_core ConfinedFS helper
 
 Platform tags: linux-x86_64, linux-arm64, darwin-arm64.
 EOF
@@ -286,6 +287,20 @@ for artifact in artifacts:
                         errors.append(f"{filename}: missing nonempty regular {name}")
                 if any(member.issym() or member.islnk() for member in members):
                     errors.append(f"{filename}: runtime archive must not contain links")
+        except (OSError, tarfile.TarError) as error:
+            errors.append(f"{filename}: unreadable runtime archive: {error}")
+
+    # LemonCore.ConfinedFS's helper: without it confined file operations fail
+    # closed, so a runtime release must ship it as a regular executable.
+    if profile in ("lemon_runtime_min", "lemon_runtime_full"):
+        try:
+            with tarfile.open(artifact_path) as archive:
+                helpers = [
+                    member for member in archive.getmembers()
+                    if re.fullmatch(r"(?:\./)?lib/lemon_core-[^/]+/priv/lemon_confined_fs", member.name)
+                ]
+                if len(helpers) != 1 or not helpers[0].isfile() or not helpers[0].mode & 0o111:
+                    errors.append(f"{filename}: missing executable lemon_core priv/lemon_confined_fs helper")
         except (OSError, tarfile.TarError) as error:
             errors.append(f"{filename}: unreadable runtime archive: {error}")
 

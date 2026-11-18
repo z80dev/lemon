@@ -5,12 +5,14 @@ defmodule CodingAgent.Tools.Sqlite do
 
   def ident(name), do: ~s(") <> String.replace(name, ~s("), ~s("")) <> ~s(")
 
-  def with_connection(path, mode, fun) do
-    case open(path, mode) do
+  # Read views open an existing database file read-only (`SQLITE_OPEN_READONLY`
+  # never creates one) with `PRAGMA query_only`.
+  def with_connection(path, :readonly, fun) do
+    case Sqlite3.open(path, mode: :readonly) do
       {:ok, conn} ->
         try do
           with :ok <- Sqlite3.execute(conn, "PRAGMA busy_timeout = 3000"),
-               :ok <- query_only(conn, mode) do
+               :ok <- Sqlite3.execute(conn, "PRAGMA query_only = 1") do
             fun.(conn)
           end
         after
@@ -22,16 +24,51 @@ defmodule CodingAgent.Tools.Sqlite do
     end
   end
 
-  # Sqlite3.open(:readwrite) includes CREATE; row writes must never create a DB.
-  defp open(path, :readwrite) do
-    flags = Exqlite.Flags.put_file_open_flags([:sqlite_open_readwrite])
-    Exqlite.Sqlite3NIF.open(path, flags)
+  @doc """
+  Run `fun` on a private in-memory copy of the database image `bytes`.
+
+  SQLite never gets a filesystem path: it creates no journal, WAL or temp
+  file (`temp_store = MEMORY`) and follows no symlink. When `fun` returns
+  `{:ok, result}` this returns `{:ok, result, image}` with the database image
+  after `fun`. An image in WAL format (file format bytes 18-19 = 2) is opened
+  in rollback format, since no WAL file belongs to it, and the returned image
+  is put back in WAL format.
+  """
+  def with_image(bytes, fun) when is_binary(bytes) do
+    {wal?, image} = rollback_format(bytes)
+
+    case Sqlite3.open(":memory:") do
+      {:ok, conn} ->
+        try do
+          with :ok <- deserialize(conn, image),
+               :ok <- Sqlite3.execute(conn, "PRAGMA temp_store = MEMORY"),
+               {:ok, result} <- fun.(conn),
+               {:ok, image} <- Sqlite3.serialize(conn, "main") do
+            {:ok, result, if(wal?, do: wal_format(image), else: image)}
+          end
+        after
+          Sqlite3.close(conn)
+        end
+
+      {:error, _} ->
+        {:error, "Cannot open SQLite database"}
+    end
   end
 
-  defp open(path, :readonly), do: Sqlite3.open(path, mode: :readonly)
+  defp deserialize(conn, image) do
+    case Sqlite3.deserialize(conn, "main", image) do
+      :ok -> :ok
+      {:error, _} -> {:error, "Cannot open SQLite database"}
+    end
+  end
 
-  defp query_only(conn, :readonly), do: Sqlite3.execute(conn, "PRAGMA query_only = 1")
-  defp query_only(_conn, :readwrite), do: :ok
+  defp rollback_format(<<head::binary-size(18), 2, 2, rest::binary>>),
+    do: {true, <<head::binary, 1, 1, rest::binary>>}
+
+  defp rollback_format(bytes), do: {false, bytes}
+
+  defp wal_format(<<head::binary-size(18), _write, _read, rest::binary>>),
+    do: <<head::binary, 2, 2, rest::binary>>
 
   def query(conn, sql, args \\ [], max_rows \\ :infinity) do
     with {:ok, stmt} <- Sqlite3.prepare(conn, sql) do

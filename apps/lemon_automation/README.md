@@ -429,7 +429,7 @@ LemonAutomation behavior is controlled through cron job fields plus a small appl
 - **Retry policy**: `max_retries` defaults to `0`; `retry_backoff_ms` defaults to `30_000` and applies to scheduled failure/timeout retries
 - **Output truncation**: Run output capped at 1,000 characters in CronStore; forwarded summaries capped at 12,000 bytes
 - **Memory file limits**: 24,000 chars max per memory file, 8,000 chars injected into prompts, 2,000 chars per run result entry
-- **Memory file location**: Always `~/.lemon/cron_memory/{job_id}.md` (Lemon state directory); not configurable per job. Symlinked or hard-linked entries are neither read nor written; writes go through an exclusive temporary file and a rename (residual directory-swap window: shared finding NEW-6)
+- **Memory file location**: Always `~/.lemon/cron_memory/{job_id}.md` (Lemon state directory); not configurable per job. Symlinked or hard-linked entries are neither read nor written; I/O is descriptor-bound (`LemonCore.ConfinedFS`), so swapping `cron_memory` for a symlink cannot redirect it, and writes go through an exclusive temporary file and a rename
 - **Cron run tool block**: every cron run blocks `cron`, `goal`, `kanban`, `agent_message` and `peer`, which start work that does not carry the run's authority
 - **Goal judge runner**: dev/prod default to `LemonAutomation.GoalJudge.RouterRunner`; set `LEMON_GOAL_JUDGE_MODEL` or pass `judge_model` from the control plane/TUI to choose a specific judge model
 - **Goal loop scheduler**: automatic per-goal scheduling persists across restarts; `:goal_loop_scheduler_interval_ms` defaults to 30,000 and `:goal_loop_scan_limit` defaults to 50.

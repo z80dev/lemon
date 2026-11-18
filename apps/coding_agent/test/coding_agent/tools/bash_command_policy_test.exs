@@ -234,9 +234,9 @@ defmodule CodingAgent.Tools.BashCommandPolicyTest do
     policy = ToolPolicy.custom(allowed_commands: [])
     parent = self()
 
-    formatter = fn path, opts ->
+    formatter = fn path, content, opts ->
       send(parent, {:formatter_ran, path, opts})
-      {:ok, :unchanged}
+      {:ok, content}
     end
 
     for name <- ["write", "edit"], option <- ["diagnostics", "format"] do
@@ -256,7 +256,7 @@ defmodule CodingAgent.Tools.BashCommandPolicyTest do
         tool_policy: policy,
         diagnostics: true,
         format: true,
-        format_file_fun: formatter,
+        format_content_fun: formatter,
         include_extensions: false,
         include_mcp: false,
         session_id: "command-policy-#{System.unique_integer([:positive])}",
@@ -277,19 +277,22 @@ defmodule CodingAgent.Tools.BashCommandPolicyTest do
     parent = self()
 
     assert {:error, reason} =
-             CodingAgent.Tools.LspFormatter.format_file(path, cwd: cwd, tool_policy: policy)
+             CodingAgent.Tools.LspFormatter.format_content(path, File.read!(path),
+               cwd: cwd,
+               tool_policy: policy
+             )
 
     assert reason =~ "tool policy"
 
-    formatter = fn p, o ->
+    formatter = fn p, _content, o ->
       send(parent, {:formatter_ran, p, o})
-      {:ok, :formatted}
+      {:ok, "formatted\n"}
     end
 
-    assert {false, nil} =
-             CodingAgent.Tools.LspFormatter.after_write(path, true, cwd,
+    assert {"defmodule A do end\n", false, nil} =
+             CodingAgent.Tools.LspFormatter.after_write(path, "defmodule A do end\n", true, cwd,
                tool_policy: policy,
-               format_file_fun: formatter
+               format_content_fun: formatter
              )
 
     refute_received {:formatter_ran, _, _}

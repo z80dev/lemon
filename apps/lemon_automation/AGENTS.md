@@ -72,10 +72,11 @@ stores, not a second agent engine. See [README](README.md) and
 - `CronMemory` is job-local markdown at the Lemon-owned
   `cron_memory/<job id>.md` (digest name for unsafe ids), bounded on injection
   and compacted as it grows. No caller chooses the path. I/O goes through
-  `read_confined`/`replace_confined`: real directory, regular single-link file,
-  opened-handle inode check, re-`lstat` around each step, exclusive temporary
-  file plus rename (never in place). The directory-swap window is shared
-  finding NEW-6. Do not create a separate general-purpose memory service here.
+  `read_confined`/`replace_confined` on `LemonCore.ConfinedFS` rooted at the
+  state directory: a no-follow handle on `cron_memory`, regular single-link
+  file, opened-inode check, exclusive temporary file plus `renameat` (never in
+  place), so a directory swapped for a symlink cannot redirect the I/O. Do not
+  create a separate general-purpose memory service here.
 
 ## Heartbeats
 

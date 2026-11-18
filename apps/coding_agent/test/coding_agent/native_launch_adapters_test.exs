@@ -182,7 +182,10 @@ defmodule CodingAgent.NativeLaunchAdaptersTest do
 
     assert diagnostics.command_exit_status == 1
     assert byte_size(diagnostics.raw_output) <= 64_000
-    assert {:error, message} = LspFormatter.format_file(path, cwd: project, timeout_ms: 5_000)
+
+    assert {:error, message} =
+             LspFormatter.format_content(path, "package main\n", cwd: project, timeout_ms: 5_000)
+
     assert message =~ "formatter exited with status 1"
     assert byte_size(message) < 9_000
     assert File.read!(path) == "package main\n"

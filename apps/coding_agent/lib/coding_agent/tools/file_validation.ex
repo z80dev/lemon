@@ -4,9 +4,23 @@ defmodule CodingAgent.Tools.FileValidation do
 
   Used by Read, Write, Edit, Grep, Ls, Find, and Patch tools to
   eliminate duplicated File.stat dispatch logic.
+
+  Validation is path-based. The mutation I/O helpers (`regular_file_identity/2`,
+  `read_regular_file/3`, `write_regular_file/3`, `create_regular_file/3`,
+  `replace_regular_file/4`, `delete_regular_file/2`) then perform the reads and
+  writes with `LemonCore.ConfinedFS` below the same trusted boundary the checks
+  use, so a directory swapped for a symlink after validation is refused instead
+  of followed. The explicit `allow_symlinks: true` trusted mode keeps legacy
+  path-based I/O and is outside that guarantee.
   """
 
+  alias LemonCore.ConfinedFS
+  alias LemonCore.ConfinedFS.Stat
+
   @max_path_length 4096
+
+  # Whole-file reads through the descriptor-bound helper are bounded.
+  @max_read_bytes 256 * 1024 * 1024
 
   @doc """
   Rejects binary data before text matching or newline normalization.
@@ -116,7 +130,7 @@ defmodule CodingAgent.Tools.FileValidation do
 
   def check_mutation_target(path, opts) when is_binary(path) do
     allow_symlinks = Keyword.get(opts, :allow_symlinks, false)
-    root = Keyword.get(opts, :confine_mutations_to) || Keyword.get(opts, :mutation_root)
+    root = mutation_root(opts)
     boundary = mutation_boundary(path, root)
 
     with :ok <- validate_mutation_path(path),
@@ -178,23 +192,279 @@ defmodule CodingAgent.Tools.FileValidation do
     end
   end
 
-  @doc "Pin a file's device/inode identity, rejecting symlinks unless explicitly trusted."
+  # -- Mutation I/O -----------------------------------------------------------
+  #
+  # Each helper opens a LemonCore.ConfinedFS session at the trusted boundary of
+  # the path (the directory check_mutation_target/2 checks below) and walks the
+  # remaining components without following symlinks. Errors fail closed; there
+  # is no path-based fallback. Identities from `allow_symlinks: true` (legacy
+  # `File.Stat` or `%{link:, target:}` maps) keep the path-based behavior.
+
+  @doc """
+  Pin a regular file's identity for the read, write, replace and delete helpers.
+
+  `path` is opened below its trusted mutation boundary: `confine_mutations_to:`
+  or `mutation_root:` when `path` is inside it, otherwise the first component
+  below `/`, exactly as `check_mutation_target/2` decides. Every component below
+  the boundary is walked without following symlinks, so a symlink anywhere
+  below it, even one swapped in after validation, is refused. The identity holds
+  that location, the `LemonCore.ConfinedFS.Stat` and the permission bits as
+  `:mode`.
+
+  `allow_symlinks: true` is the trusted legacy mode: it pins the file by path and
+  follows symlinks, outside the descriptor-bound guarantee.
+  """
   def regular_file_identity(path, opts \\ []) do
+    if Keyword.get(opts, :allow_symlinks, false) do
+      legacy_identity(path, true)
+    else
+      with_parent(path, opts, [], fn fs, dir, name, location ->
+        case ConfinedFS.stat(fs, dir, name) do
+          {:ok, %Stat{type: :regular} = stat} ->
+            {:ok, Map.merge(location, %{stat: stat, mode: stat.mode})}
+
+          {:ok, %Stat{}} ->
+            identity_error(path)
+
+          {:error, reason} ->
+            confined_error(reason, path)
+        end
+      end)
+    end
+  end
+
+  @doc """
+  Read only the pinned regular file; never expose a replacement path's contents.
+
+  Options: `:max_bytes` (default 256 MiB; a larger file is refused) and
+  `prefix: true`, which returns at most the first `:max_bytes` bytes instead.
+  """
+  def read_regular_file(path, identity, opts \\ [])
+
+  def read_regular_file(path, %{stat: %Stat{} = stat} = identity, opts) do
+    max = Keyword.get(opts, :max_bytes, @max_read_bytes)
+    prefix = Keyword.get(opts, :prefix, false)
+
+    with_identity(path, identity, fn fs, dir, name ->
+      case ConfinedFS.read(fs, dir, name, max, expect: stat, prefix: prefix) do
+        {:ok, content, _stat} -> {:ok, content}
+        {:error, :too_large} -> too_large(path, max)
+        {:error, reason} -> identity_bound_error(reason, path)
+      end
+    end)
+  end
+
+  def read_regular_file(path, identity, opts) do
+    max = Keyword.get(opts, :max_bytes, @max_read_bytes)
+    prefix = Keyword.get(opts, :prefix, false)
+
+    with_legacy_file(path, identity, [:read, :binary], fn io ->
+      case IO.binread(io, if(prefix, do: max, else: :eof)) do
+        content when is_binary(content) and byte_size(content) > max -> too_large(path, max)
+        content when is_binary(content) -> {:ok, content}
+        :eof -> {:ok, ""}
+        error -> error
+      end
+    end)
+  end
+
+  @doc """
+  Overwrite the pinned regular file in place (same inode, mode and links) through
+  a checked handle, never a path that was redirected after checking.
+  """
+  def write_regular_file(path, %{stat: %Stat{} = stat} = identity, content) do
+    with_identity(path, identity, fn fs, dir, name ->
+      case ConfinedFS.overwrite(fs, dir, name, content, expect: stat) do
+        {:ok, _stat} -> :ok
+        {:error, reason} -> identity_bound_error(reason, path)
+      end
+    end)
+  end
+
+  def write_regular_file(path, identity, content) do
+    with_legacy_file(path, identity, [:read, :write, :binary], fn io ->
+      with {:ok, 0} <- :file.position(io, :bof),
+           :ok <- IO.binwrite(io, content),
+           :ok <- :file.truncate(io) do
+        :ok
+      end
+    end)
+  end
+
+  @doc """
+  Exclusively create the regular file `path` with `content`, creating missing
+  parent directories, below the boundary `regular_file_identity/2` uses (same
+  options). `mode:` sets exact permission bits; otherwise the umask applies. An
+  existing entry is `{:error, :eexist}`.
+  """
+  def create_regular_file(path, content, opts \\ []) do
+    mode = Keyword.get(opts, :mode)
+
+    if Keyword.get(opts, :allow_symlinks, false) do
+      with :ok <- File.mkdir_p(Path.dirname(path)),
+           :ok <- File.write(path, content, [:exclusive]) do
+        if mode, do: File.chmod(path, mode), else: :ok
+      end
+    else
+      mode_opts = if mode, do: [mode: mode, exact_mode: true], else: []
+
+      with_parent(path, opts, [create: true], fn fs, dir, name, _location ->
+        case ConfinedFS.create(fs, dir, name, content, mode_opts) do
+          {:ok, _stat} -> :ok
+          {:error, reason} -> confined_error(reason, path)
+        end
+      end)
+    end
+  end
+
+  @doc """
+  Atomically replace `path` with `content` through a privately staged temporary
+  file renamed over it. With `nil` the file is published only while `path` is
+  still absent (atomic no-replace; missing parent directories are created,
+  `opts` as for `create_regular_file/3`). With an `identity`, its permission
+  bits are kept and the entry is checked to still be that file immediately
+  before the rename: best-effort conflict detection, not compare-and-swap.
+  """
+  def replace_regular_file(path, identity, content, opts \\ [])
+
+  def replace_regular_file(path, %{stat: %Stat{} = stat} = identity, content, _opts) do
+    with_identity(path, identity, fn fs, dir, name ->
+      case ConfinedFS.replace(fs, dir, name, content, expect: stat, preserve_mode: true) do
+        {:ok, _stat} -> :ok
+        {:error, reason} -> identity_bound_error(reason, path)
+      end
+    end)
+  end
+
+  def replace_regular_file(path, nil, content, opts) do
+    if Keyword.get(opts, :allow_symlinks, false) do
+      legacy_replace(path, content)
+    else
+      with_parent(path, opts, [create: true], fn fs, dir, name, _location ->
+        case ConfinedFS.replace(fs, dir, name, content, expect: :absent) do
+          {:ok, _stat} -> :ok
+          {:error, reason} -> confined_error(reason, path)
+        end
+      end)
+    end
+  end
+
+  def replace_regular_file(path, identity, content, _opts) do
+    with :ok <- check_legacy_identity(path, identity), do: legacy_replace(path, content)
+  end
+
+  @doc """
+  Remove the pinned regular file. The entry is checked to still be that file
+  immediately before the unlink (best-effort, not compare-and-swap); the
+  removal never follows a symlink or leaves the walked directory.
+  """
+  def delete_regular_file(path, %{stat: %Stat{} = stat} = identity) do
+    with_identity(path, identity, fn fs, dir, name ->
+      case ConfinedFS.unlink(fs, dir, name, expect: stat) do
+        :ok -> :ok
+        {:error, reason} -> identity_bound_error(reason, path)
+      end
+    end)
+  end
+
+  def delete_regular_file(path, identity) do
+    with :ok <- check_legacy_identity(path, identity), do: File.rm(path)
+  end
+
+  defp with_parent(path, opts, dir_opts, fun) do
+    with {:ok, root, parts} <- mutation_location(path, opts) do
+      with_session(root, path, fn fs ->
+        case ConfinedFS.open_parent(fs, :root, parts, dir_opts) do
+          {:ok, dir, name} -> fun.(fs, dir, name, %{root: root, parts: parts})
+          {:error, reason} -> confined_error(reason, path)
+        end
+      end)
+    end
+  end
+
+  defp with_identity(path, %{root: root, parts: parts}, fun) do
+    with_session(root, path, fn fs ->
+      case ConfinedFS.open_parent(fs, :root, parts) do
+        {:ok, dir, name} -> fun.(fs, dir, name)
+        {:error, reason} -> identity_bound_error(reason, path)
+      end
+    end)
+  end
+
+  defp with_session(root, path, fun) do
+    case ConfinedFS.open(root) do
+      {:ok, fs} ->
+        try do
+          fun.(fs)
+        after
+          ConfinedFS.close(fs)
+        end
+
+      {:error, reason} ->
+        confined_error(reason, path)
+    end
+  end
+
+  @doc """
+  The `LemonCore.ConfinedFS` session root and components for mutating `path`:
+  the same trusted boundary `check_mutation_target/2` uses with the same
+  `opts` (`confine_mutations_to:`/`mutation_root:` when `path` is inside it,
+  otherwise the first component below `/`). A path that is the boundary
+  itself (e.g. `/name`) is located from its parent. Works for absent paths
+  and directories.
+  """
+  @spec mutation_location(String.t(), keyword()) ::
+          {:ok, String.t(), [String.t(), ...]} | {:error, String.t()}
+  def mutation_location(path, opts) do
+    expanded = Path.expand(path)
+
+    root =
+      case mutation_boundary(expanded, mutation_root(opts)) do
+        ^expanded -> Path.dirname(expanded)
+        boundary -> boundary
+      end
+
+    case ConfinedFS.beneath(root, expanded) do
+      {:ok, [_ | _] = parts} -> {:ok, root, parts}
+      _ -> {:error, "Invalid mutation target: #{path}"}
+    end
+  end
+
+  defp identity_bound_error(reason, path) when reason in [:symlink, :not_regular, :changed],
+    do: identity_error(path)
+
+  defp identity_bound_error(reason, path), do: confined_error(reason, path)
+
+  @doc "The tool error for a `LemonCore.ConfinedFS` failure `reason` on `path`."
+  @spec confined_error(atom(), String.t()) :: {:error, term()}
+  def confined_error(:symlink, path),
+    do: {:error, "Cannot follow a symlink in the path (symlinks are refused): #{path}"}
+
+  def confined_error(reason, path) when reason in [:not_regular, :changed],
+    do: identity_error(path)
+
+  def confined_error(reason, path)
+      when reason in [:helper_unavailable, :helper_failed, :helper_timeout],
+      do: {:error, "Confined file access is unavailable (#{reason}); refusing #{path}"}
+
+  def confined_error(reason, _path), do: {:error, reason}
+
+  defp too_large(path, max), do: {:error, "File exceeds the #{max}-byte read limit: #{path}"}
+
+  # -- Legacy (allow_symlinks: true) path-based I/O ---------------------------
+
+  defp legacy_identity(path, follow_symlinks) do
     case File.lstat(path) do
       {:ok, %File.Stat{type: :regular} = stat} ->
         {:ok, stat}
 
-      {:ok, %File.Stat{type: :symlink} = link} ->
-        if Keyword.get(opts, :allow_symlinks, false) do
-          case File.stat(path) do
-            {:ok, %File.Stat{type: :regular} = target} ->
-              {:ok, %{link: link, target: target, mode: target.mode}}
+      {:ok, %File.Stat{type: :symlink} = link} when follow_symlinks ->
+        case File.stat(path) do
+          {:ok, %File.Stat{type: :regular} = target} ->
+            {:ok, %{link: link, target: target, mode: target.mode}}
 
-            _ ->
-              identity_error(path)
-          end
-        else
-          identity_error(path)
+          _ ->
+            identity_error(path)
         end
 
       {:ok, _} ->
@@ -205,38 +475,16 @@ defmodule CodingAgent.Tools.FileValidation do
     end
   end
 
-  @doc "Read only the pinned regular file; never expose a replacement path's contents."
-  def read_regular_file(path, identity) do
-    with_regular_file(path, identity, [:read, :binary], fn io ->
-      case IO.binread(io, :eof) do
-        content when is_binary(content) -> {:ok, content}
-        :eof -> {:ok, ""}
-        error -> error
-      end
-    end)
-  end
-
-  @doc "Write through a checked handle, not a path that can be redirected after checking."
-  def write_regular_file(path, identity, content) do
-    with_regular_file(path, identity, [:read, :write, :binary], fn io ->
-      with {:ok, 0} <- :file.position(io, :bof),
-           :ok <- IO.binwrite(io, content),
-           :ok <- :file.truncate(io) do
-        :ok
-      end
-    end)
-  end
-
-  defp with_regular_file(path, identity, modes, fun) do
-    with :ok <- check_file_identity(path, identity),
+  defp with_legacy_file(path, identity, modes, fun) do
+    with :ok <- check_legacy_identity(path, identity),
          {:ok, io} <- File.open(path, modes) do
       try do
         with {:ok, info} <- :file.read_file_info(io),
              true <-
                same_identity?(File.Stat.from_record(info), Map.get(identity, :target, identity)),
-             :ok <- check_file_identity(path, identity) do
+             :ok <- check_legacy_identity(path, identity) do
           result = fun.(io)
-          with :ok <- check_file_identity(path, identity), do: result
+          with :ok <- check_legacy_identity(path, identity), do: result
         else
           false -> identity_error(path)
           error -> error
@@ -247,10 +495,32 @@ defmodule CodingAgent.Tools.FileValidation do
     end
   end
 
-  defp check_file_identity(path, expected) do
-    with {:ok, actual} <-
-           regular_file_identity(path, allow_symlinks: Map.has_key?(expected, :link)) do
+  defp check_legacy_identity(path, expected) do
+    with {:ok, actual} <- legacy_identity(path, Map.has_key?(expected, :link)) do
       if same_identity?(actual, expected), do: :ok, else: identity_error(path)
+    end
+  end
+
+  defp legacy_replace(path, content) do
+    with :ok <- File.mkdir_p(Path.dirname(path)) do
+      temp = path <> ".tmp-#{System.unique_integer([:positive])}"
+
+      try do
+        with :ok <- File.write(temp, content, [:exclusive]),
+             :ok <- legacy_preserve_mode(path, temp) do
+          File.rename(temp, path)
+        end
+      after
+        File.rm(temp)
+      end
+    end
+  end
+
+  defp legacy_preserve_mode(path, temp) do
+    case File.stat(path) do
+      {:ok, stat} -> File.chmod(temp, stat.mode)
+      {:error, :enoent} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -352,6 +622,9 @@ defmodule CodingAgent.Tools.FileValidation do
         {:error, format_file_error(reason, path, "symlink target")}
     end
   end
+
+  defp mutation_root(opts),
+    do: Keyword.get(opts, :confine_mutations_to) || Keyword.get(opts, :mutation_root)
 
   defp mutation_boundary(path, root) when is_binary(root) do
     expanded_path = Path.expand(path)

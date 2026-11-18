@@ -33,6 +33,10 @@ defmodule CodingAgent.Tools.Edit do
     concurrent edits of the same file both apply.
   - When the session has read the file, the edit is refused if the file
     changed on disk since that read (`CodingAgent.FileReadTracker`).
+  - Local reads, the pre-write recheck, the in-place write and the
+    post-format read run descriptor-bound below the validated mutation
+    boundary (`FileValidation.regular_file_identity/2`), pinned to the file's
+    device and inode; a symlink swapped into the path is refused.
   - UTF-8 BOM, CRLF/LF line endings, and the trailing newline are preserved.
   - Binary data (invalid UTF-8 or NUL bytes) is rejected before matching.
 
@@ -257,14 +261,11 @@ defmodule CodingAgent.Tools.Edit do
 
   defp edit_local(path, resolved_path, edit_spec, diagnostics?, signal, cwd, opts) do
     baseline = LspDiagnostics.baseline(resolved_path, cwd, diagnostics?, opts)
+    mutation_opts = Keyword.put(opts, :mutation_root, cwd)
 
     with :ok <- check_abort(signal),
-         {:ok, identity} <- FileValidation.regular_file_identity(resolved_path, opts),
-         :ok <-
-           FileValidation.check_mutation_target(
-             resolved_path,
-             Keyword.put(opts, :mutation_root, cwd)
-           ),
+         {:ok, identity} <- FileValidation.regular_file_identity(resolved_path, mutation_opts),
+         :ok <- FileValidation.check_mutation_target(resolved_path, mutation_opts),
          {:ok, raw_content} <- FileValidation.read_regular_file(resolved_path, identity),
          :ok <- FileValidation.check_text_content(raw_content, path),
          :ok <- check_read_tracker(opts, resolved_path, raw_content, edit_spec),
@@ -283,13 +284,15 @@ defmodule CodingAgent.Tools.Edit do
              path: resolved_path
            }),
          :ok <- verify_source_unchanged(resolved_path, identity, raw_content, opts, edit_spec),
-         :ok <- FileValidation.write_regular_file(resolved_path, identity, final_content) do
-      {formatted, format_error} =
-        LspFormatter.after_write(resolved_path, Keyword.get(opts, :format, false), cwd, opts)
-
-      final_content =
-        if Keyword.get(opts, :format, false), do: File.read!(resolved_path), else: final_content
-
+         :ok <- FileValidation.write_regular_file(resolved_path, identity, final_content),
+         {final_content, formatted, format_error} =
+           LspFormatter.after_write(
+             resolved_path,
+             final_content,
+             Keyword.get(opts, :format, false),
+             cwd,
+             opts
+           ) do
       FileReadTracker.record(opts, resolved_path, final_content)
       snapshot = AnchoredEdit.snapshot(final_content)
       {_bom, written_text} = FileFormatHelpers.strip_bom(final_content)

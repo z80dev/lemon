@@ -11,7 +11,7 @@ defmodule CodingAgent.Tools.EditFormatTest do
     path = Path.join(cwd, "file.txt")
     File.write!(path, "old\n")
 
-    formatter = fn ^path, opts ->
+    formatter = fn ^path, "new\n", opts ->
       assert opts == [
                cwd: cwd,
                timeout_ms: 321,
@@ -20,13 +20,12 @@ defmodule CodingAgent.Tools.EditFormatTest do
                session_id: cwd
              ]
 
-      File.write!(path, "formatted\nnew\n")
-      {:ok, :formatted}
+      {:ok, "formatted\nnew\n"}
     end
 
     opts = [
       session_id: cwd,
-      format_file_fun: formatter,
+      format_content_fun: formatter,
       format_timeout_ms: 321,
       enforce_seen_lines: false
     ]
@@ -70,12 +69,9 @@ defmodule CodingAgent.Tools.EditFormatTest do
     path = Path.join(cwd, "file.txt")
     File.write!(path, "old\n")
 
-    formatter = fn ^path, _ ->
-      File.write!(path, "formatted\n")
-      {:ok, :formatted}
-    end
+    formatter = fn ^path, _content, _ -> {:ok, "formatted\n"} end
 
-    opts = [format: true, format_file_fun: formatter]
+    opts = [format: true, format_content_fun: formatter]
     params = %{"path" => path, "old_text" => "old", "new_text" => "new"}
 
     assert %AgentToolResult{details: %{formatted: false}} =
@@ -98,14 +94,21 @@ defmodule CodingAgent.Tools.EditFormatTest do
     File.write!(Path.join(cwd, "source.txt"), "source\n")
     File.write!(Path.join(cwd, "delete.txt"), "delete\n")
 
-    formatter = fn path, _ ->
+    formatter = fn path, content, _ ->
       assert Path.basename(path) in ["add.txt", "update.txt", "moved.txt"]
-      File.write!(path, "formatted\n" <> File.read!(path))
-      {:ok, :formatted}
+      {:ok, "formatted\n" <> content}
     end
 
-    opts = [session_id: cwd, format: true, format_file_fun: formatter, enforce_seen_lines: false]
+    opts = [
+      session_id: cwd,
+      format: true,
+      format_content_fun: formatter,
+      enforce_seen_lines: false
+    ]
+
     on_exit(fn -> FileReadTracker.forget_session(cwd) end)
+    FileReadTracker.record(opts, Path.join(cwd, "delete.txt"), "delete\n")
+    FileReadTracker.record(opts, Path.join(cwd, "source.txt"), "source\n")
 
     patch =
       "*** Begin Patch\n*** Add File: add.txt\n+added\n*** Update File: update.txt\n@@\n-old\n+updated\n*** Update File: source.txt\n*** Move to: moved.txt\n@@\n-source\n+moved\n*** Delete File: delete.txt\n*** End Patch"
@@ -125,6 +128,11 @@ defmodule CodingAgent.Tools.EditFormatTest do
 
     refute File.exists?(Path.join(cwd, "source.txt"))
     refute File.exists?(Path.join(cwd, "delete.txt"))
+
+    # Removed and moved-away paths are forgotten, not re-read.
+    for name <- ["delete.txt", "source.txt"],
+        do: assert(FileReadTracker.check(opts, Path.join(cwd, name), "recreated\n") == :ok)
+
     entry = Enum.find(details.perFileResults, &(&1.path == Path.join(cwd, "update.txt")))
 
     assert %AgentToolResult{} =
@@ -148,7 +156,7 @@ defmodule CodingAgent.Tools.EditFormatTest do
   test "formatter errors do not undo successful edits or advertise stale tags", %{tmp_dir: cwd} do
     path = Path.join(cwd, "file.txt")
     File.write!(path, "old\n")
-    opts = [format_file_fun: fn _, _ -> {:error, "formatter failed"} end]
+    opts = [format_content_fun: fn _, _, _ -> {:error, "formatter failed"} end]
 
     assert %AgentToolResult{details: details} =
              Edit.execute(

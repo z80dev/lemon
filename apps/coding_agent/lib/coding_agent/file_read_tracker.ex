@@ -3,8 +3,9 @@ defmodule CodingAgent.FileReadTracker do
   Per-session record of file contents the agent has seen, used to reject
   edits against a stale view of a file.
 
-  `read` records a digest of the file it returned; `write`, `edit`, and
-  `patch` refresh the digest after their own writes. Text `edit` calls `check/3`
+  `read` records a digest of the file it returned; mutation tools record the
+  bytes they committed (`record/3`, `record_digest/3`), never a re-read of the
+  path, and `forget/2` paths they removed. Text `edit` calls `check/3`
   before applying a replacement: when the session has a recorded digest for
   the file and the bytes on disk no longer match it, the file was changed
   behind the agent's back (by the user, a formatter, `bash`, or another
@@ -112,23 +113,16 @@ defmodule CodingAgent.FileReadTracker do
   end
 
   @doc """
-  Refresh the session's view of each path from disk (after the agent wrote
-  them). Paths that no longer exist are forgotten.
+  Forget the session's view of `path` (after the agent removed or moved it).
   """
-  @spec refresh(keyword(), [String.t()]) :: :ok
-  def refresh(opts, paths) when is_list(paths) do
+  @spec forget(keyword(), String.t()) :: :ok
+  def forget(opts, path) when is_binary(path) do
     with {:ok, scope} <- scope(opts),
          true <- table_ready?() do
-      Enum.each(paths, fn path ->
-        case File.read(path) do
-          {:ok, content} ->
-            record(opts, path, content)
-
-          {:error, _} ->
-            :ets.delete(@table, {scope, Path.expand(path)})
-            :ets.delete(@snapshots, {scope, Path.expand(path)})
-        end
-      end)
+      key = {scope, Path.expand(path)}
+      :ets.delete(@table, key)
+      :ets.delete(@snapshots, key)
+      :ets.delete(@seen, key)
     end
 
     :ok

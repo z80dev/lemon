@@ -102,7 +102,7 @@ defmodule CodingAgent.Tools.LspDiagnosticsTest do
         assert result.status == :clean
         assert result.language == :python
         assert result.diagnostics == []
-        assert result.source == "python py_compile"
+        assert result.source == "python compile"
       end
     end
 
@@ -115,7 +115,7 @@ defmodule CodingAgent.Tools.LspDiagnosticsTest do
         assert result.status == :diagnostics
         assert result.language == :python
 
-        assert [%{line: 1, severity: "error", source: "python py_compile"} = diagnostic] =
+        assert [%{line: 1, severity: "error", source: "python compile"} = diagnostic] =
                  result.diagnostics
 
         assert diagnostic.message =~ "SyntaxError"
@@ -249,6 +249,39 @@ defmodule CodingAgent.Tools.LspDiagnosticsTest do
       assert {:ok, result} = LspDiagnostics.diagnose_file(path, tmp_dir)
       assert result.status == :skipped
       assert result.reason == "unsupported file extension"
+    end
+
+    test "a FIFO is refused without blocking", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "pipe.ex")
+      {_, 0} = System.cmd("mkfifo", [path])
+
+      task = Task.async(fn -> LspDiagnostics.diagnose_file(path, tmp_dir, semantic: false) end)
+      assert {:ok, {:error, message}} = Task.yield(task, 5_000)
+      assert message =~ "no longer regular"
+    end
+
+    test "a symlink below the working directory is refused", %{tmp_dir: tmp_dir} do
+      outside = Path.join(tmp_dir, "outside")
+      project = Path.join(tmp_dir, "project")
+      File.mkdir_p!(outside)
+      File.mkdir_p!(project)
+      File.write!(Path.join(outside, "a.ex"), "value = (\n")
+      File.ln_s!(outside, Path.join(project, "lib"))
+
+      assert {:error, message} =
+               LspDiagnostics.diagnose_file("lib/a.ex", project, semantic: false)
+
+      assert message =~ "symlink"
+    end
+
+    test "Python checks write no bytecode next to the source", %{tmp_dir: tmp_dir} do
+      if python_available?() do
+        path = Path.join(tmp_dir, "ok.py")
+        File.write!(path, "value = 1\n")
+
+        assert {:ok, %{status: :clean}} = LspDiagnostics.diagnose_file(path, tmp_dir)
+        refute File.exists?(Path.join(tmp_dir, "__pycache__"))
+      end
     end
   end
 

@@ -25,8 +25,9 @@ those packages' public APIs reach it through Hex.
 
 ## Build and check
 
-Source development uses OTP 29.1.2+, Elixir 1.20.5+, Bun 1.4.4+ for the TUI, and
-Node.js 24 LTS+ for the documentation and browser client.
+Source development uses OTP 29.1.2+, Elixir 1.20.5+, a C toolchain with `make`
+(native deps and `lemon_core`'s file-confinement helper), Bun 1.4.4+ for the
+TUI, and Node.js 24 LTS+ for the documentation and browser client.
 
 ```bash
 mix deps.get

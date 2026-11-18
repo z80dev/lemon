@@ -10,9 +10,19 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   Applying follows the coding-tool mutation conventions: every affected path
   is locked through `CodingAgent.MutationLock`, targets are validated with
   `FileValidation.check_mutation_target/2`, a filesystem checkpoint is taken
-  before the first write, text edits for untouched files are computed (and
-  thereby validated) before anything is written, files are replaced atomically
-  through a sibling temp file, and `FileReadTracker` is refreshed afterwards.
+  before the first write, and text edits for untouched files are computed (and
+  thereby validated) before anything is written.
+
+  Every read, write, create, rename and delete then runs descriptor-bound
+  below the boundary the validation used (`LemonCore.ConfinedFS`, through the
+  `FileValidation` identity helpers where they apply), so a directory swapped
+  for a symlink after validation is refused instead of followed; symlinks are
+  refused even with `allow_symlinks: true`. Text files are pinned when read
+  and replaced atomically with their mode kept; missing parents are created
+  one directory at a time; a rename must stay below one trusted directory
+  (the workspace) and a recursive delete never follows symlinks. The session's
+  `FileReadTracker` records the bytes committed and forgets deleted and
+  renamed-away paths.
   """
 
   alias CodingAgent.FileReadTracker
@@ -20,6 +30,7 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   alias CodingAgent.Tools.{CheckpointGuard, FileValidation}
   alias CodingAgent.Tools.Lsp.Text
   alias LemonAgent.Tools.AbortHelpers
+  alias LemonCore.ConfinedFS
 
   @type op ::
           %{kind: :text, path: String.t(), edits: [map()]}
@@ -200,8 +211,8 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
   Returns changed paths, summary lines and checkpoint on success or a mid-way
   failure. The error receipt retains the preimage of every planned target and
   lists paths written before the failure, including created parent directories,
-  leftover temp files, files created before a failed write and partially deleted
-  trees. Created parents and partially deleted trees are reported by their root.
+  files created before a failed write and partially deleted trees. Created
+  parents and partially deleted trees are reported by their root.
   """
   @spec apply([op()], String.t(), keyword(), reference() | nil, map()) ::
           {:ok, %{changed: [String.t()], applied: [String.t()], checkpoint: map() | nil}}
@@ -213,22 +224,20 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
 
   def apply(ops, cwd, opts, signal, meta) do
     paths = affected_paths(ops)
+    io_opts = opts |> Keyword.put(:mutation_root, cwd) |> Keyword.put(:allow_symlinks, false)
 
     MutationLock.with_locks(Enum.map(paths, &MutationLock.path_key/1), fn ->
       with :ok <- check_deadline(opts),
            :ok <- validate_targets(ops, cwd, opts),
            :ok <- validate_versions(ops, opts),
-           {:ok, prepared} <- prepare(ops, opts),
+           {:ok, prepared} <- prepare(ops, io_opts),
            {:ok, checkpoint} <- CheckpointGuard.before_mutation(paths, cwd, opts, meta),
            :ok <- notify_checkpoint(checkpoint, opts) do
-        case commit(prepared, cwd, signal, opts) do
+        case commit(prepared, cwd, signal, io_opts) do
           {:ok, changed, applied} ->
-            FileReadTracker.refresh(opts, paths)
             {:ok, %{changed: changed, applied: applied, checkpoint: checkpoint}}
 
           {:error, reason, changed, applied} ->
-            FileReadTracker.refresh(opts, paths)
-
             if is_nil(checkpoint) and changed == [],
               do: {:error, reason},
               else:
@@ -323,10 +332,10 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
     if Enum.any?(touched, &within?(path, &1)) do
       {:ok, op}
     else
-      with {:ok, original} <- read(path),
+      with {:ok, identity, original} <- read(path, opts),
            :ok <- check_original(original, path, opts),
            {:ok, content} <- edited(original, edits, path) do
-        {:ok, Map.merge(op, %{original: original, content: content})}
+        {:ok, Map.merge(op, %{identity: identity, original: original, content: content})}
       end
     end
   end
@@ -343,7 +352,7 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
         with :ok <- check_deadline(opts) do
           if AbortHelpers.aborted?(signal),
             do: {:error, "Operation aborted"},
-            else: commit_op(op, cwd)
+            else: commit_op(op, cwd, opts)
         end
 
       case result do
@@ -360,11 +369,16 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
     end)
   end
 
-  defp commit_op(%{kind: :text, path: path, original: original, content: content} = op, cwd) do
-    case read(path) do
+  defp commit_op(
+         %{kind: :text, path: path, identity: identity, original: original, content: content} =
+           op,
+         cwd,
+         opts
+       ) do
+    case FileValidation.read_regular_file(path, identity) do
       {:ok, ^original} ->
-        with {:ok, created} <- atomic_write(path, content) do
-          {:ok, created ++ [path],
+        with :ok <- replace(path, identity, content, opts) do
+          {:ok, [path],
            "Applied #{plural(length(op.edits), "edit")} to #{Text.display_path(path, cwd)}"}
         end
 
@@ -372,112 +386,170 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
         {:error, "File changed while applying the edit: #{path}"}
 
       error ->
-        error
+        fs(error, path)
     end
   end
 
-  defp commit_op(%{kind: :text, path: path, edits: edits}, cwd) do
-    with {:ok, original} <- read(path),
+  defp commit_op(%{kind: :text, path: path, edits: edits}, cwd, opts) do
+    with {:ok, identity, original} <- read(path, opts),
          {:ok, content} <- edited(original, edits, path),
-         {:ok, created} <- atomic_write(path, content) do
-      {:ok, created ++ [path],
-       "Applied #{plural(length(edits), "edit")} to #{Text.display_path(path, cwd)}"}
+         :ok <- replace(path, identity, content, opts) do
+      {:ok, [path], "Applied #{plural(length(edits), "edit")} to #{Text.display_path(path, cwd)}"}
     end
   end
 
-  defp commit_op(%{kind: :create, path: path, options: options}, cwd) do
-    exists? = match?({:ok, _}, File.lstat(path))
+  defp commit_op(%{kind: :create, path: path, options: options}, cwd, opts) do
+    with {:ok, existing} <-
+           confined([path], opts, fn cfs, [parts] -> lookup(cfs, parts, path) end) do
+      exists? = existing != nil
 
-    cond do
-      exists? and options["overwrite"] == true ->
-        with {:ok, created} <- atomic_write(path, ""),
-             do: {:ok, created ++ [path], "Created #{Text.display_path(path, cwd)} (overwrote)"}
+      cond do
+        exists? and options["overwrite"] == true ->
+          with {:ok, identity} <- pin(path, opts),
+               :ok <- replace(path, identity, "", opts),
+               do: {:ok, [path], "Created #{Text.display_path(path, cwd)} (overwrote)"}
 
-      exists? and options["ignoreIfExists"] == true ->
-        {:ok, [], nil}
+        exists? and options["ignoreIfExists"] == true ->
+          {:ok, [], nil}
 
-      exists? ->
-        {:error, "Cannot create #{path}: it already exists"}
+        exists? ->
+          {:error, "Cannot create #{path}: it already exists"}
 
-      true ->
-        with {:ok, created} <- mkdir_parent(path) do
-          case File.write(path, "", [:exclusive]) do
-            :ok ->
-              {:ok, created ++ [path], "Created #{Text.display_path(path, cwd)}"}
+        true ->
+          confined([path], opts, fn cfs, [parts] -> create(cfs, path, parts, cwd, opts) end)
+      end
+    end
+  end
 
-            # Without :eexist the exclusive open succeeded, so a remaining file is ours.
-            {:error, reason} ->
-              left =
-                if reason != :eexist and match?({:ok, _}, File.lstat(path)), do: [path], else: []
+  defp commit_op(%{kind: :rename, from: from, to: to, options: options}, cwd, opts) do
+    confined([from, to], opts, fn cfs, [from_parts, to_parts] ->
+      with {:ok, target} <- if(from != to, do: lookup(cfs, to_parts, to), else: {:ok, nil}) do
+        target_exists? = target != nil
 
-              {:error, fs_message(reason, path), created ++ left}
-          end
+        cond do
+          target_exists? and options["overwrite"] != true and options["ignoreIfExists"] == true ->
+            {:ok, [], nil}
+
+          target_exists? and options["overwrite"] != true ->
+            {:error, "Cannot rename #{from} to #{to}: the target already exists"}
+
+          target_exists? and target.type == :directory ->
+            {:error, "Cannot rename #{from} over existing directory #{to}"}
+
+          true ->
+            rename(cfs, {from, from_parts}, {to, to_parts}, options, cwd, opts)
         end
-    end
+      end
+    end)
   end
 
-  defp commit_op(%{kind: :rename, from: from, to: to, options: options}, cwd) do
-    target_exists? = from != to and match?({:ok, _}, File.lstat(to))
+  defp commit_op(%{kind: :delete, path: path, options: options}, cwd, opts) do
+    confined([path], opts, fn cfs, [parts] ->
+      case entry(cfs, parts) do
+        {:error, :enoent} ->
+          if options["ignoreIfNotExists"] == true,
+            do: {:ok, [], nil},
+            else: {:error, "Cannot delete #{path}: it does not exist"}
 
-    cond do
-      target_exists? and options["overwrite"] != true and options["ignoreIfExists"] == true ->
-        {:ok, [], nil}
+        {:ok, dir, name, %ConfinedFS.Stat{type: :directory}} ->
+          result =
+            if options["recursive"] == true,
+              do: remove_tree(cfs, dir, name, path),
+              else: fs(ConfinedFS.rmdir(cfs, dir, name), path)
 
-      target_exists? and options["overwrite"] != true ->
-        {:error, "Cannot rename #{from} to #{to}: the target already exists"}
+          with :ok <- result, do: deleted(path, cwd, opts)
 
-      target_exists? and File.dir?(to) ->
-        {:error, "Cannot rename #{from} over existing directory #{to}"}
+        {:ok, dir, name, stat} ->
+          with :ok <- fs(ConfinedFS.unlink(cfs, dir, name, expect: stat), path),
+               do: deleted(path, cwd, opts)
 
-      true ->
-        with {:ok, created} <- mkdir_parent(to) do
-          case fs(File.rename(from, to), from) do
-            :ok ->
-              {:ok, created ++ [from, to],
-               "Renamed #{Text.display_path(from, cwd)} → #{Text.display_path(to, cwd)}"}
+        {:error, reason} ->
+          fs({:error, reason}, path)
+      end
+    end)
+  end
 
-            {:error, reason} ->
-              {:error, reason, created}
-          end
+  # Without :eexist the exclusive create succeeded, so a remaining file is ours.
+  defp create(cfs, path, parts, cwd, opts) do
+    case open_parent(cfs, path, parts) do
+      {:ok, dir, name, created} ->
+        case ConfinedFS.create(cfs, dir, name, "") do
+          {:ok, _stat} ->
+            FileReadTracker.record(opts, path, "")
+            {:ok, created ++ [path], "Created #{Text.display_path(path, cwd)}"}
+
+          {:error, reason} ->
+            left =
+              if reason != :eexist and match?({:ok, _}, ConfinedFS.stat(cfs, dir, name)),
+                do: [path],
+                else: []
+
+            {:error, fs_message(reason, path), created ++ left}
         end
+
+      {:error, reason, created} ->
+        {:error, fs_message(reason, Path.dirname(path)), created}
     end
   end
 
-  defp commit_op(%{kind: :delete, path: path, options: options}, cwd) do
-    case File.lstat(path) do
-      {:error, :enoent} ->
-        if options["ignoreIfNotExists"] == true,
-          do: {:ok, [], nil},
-          else: {:error, "Cannot delete #{path}: it does not exist"}
+  # Without explicit `overwrite` the rename never replaces a destination, even
+  # one created after the existence check (`no_replace`, atomic); such a late
+  # destination is then skipped under `ignoreIfExists`, as an earlier one is.
+  # A rename to the same path is not a replacement.
+  defp rename(cfs, {from, from_parts}, {to, to_parts}, options, cwd, opts) do
+    no_replace = from != to and options["overwrite"] != true
 
-      {:ok, %File.Stat{type: :directory}} ->
-        result =
-          if options["recursive"] == true,
-            do: rm_rf(path),
-            else: fs(File.rmdir(path), path)
+    case open_parent(cfs, to, to_parts) do
+      {:ok, to_dir, to_name, created} ->
+        with {:ok, from_dir, from_name} <- ConfinedFS.open_parent(cfs, :root, from_parts),
+             :ok <- before_rename(opts),
+             :ok <-
+               ConfinedFS.rename(cfs, from_dir, from_name, to_dir, to_name,
+                 no_replace: no_replace
+               ) do
+          FileReadTracker.forget(opts, from)
+          FileReadTracker.forget(opts, to)
 
-        with :ok <- result, do: {:ok, [path], "Deleted #{Text.display_path(path, cwd)}"}
+          {:ok, created ++ [from, to],
+           "Renamed #{Text.display_path(from, cwd)} → #{Text.display_path(to, cwd)}"}
+        else
+          {:error, :eexist} when no_replace ->
+            if options["ignoreIfExists"] == true,
+              do: {:ok, created, nil},
+              else: {:error, "Cannot rename #{from} to #{to}: the target already exists", created}
 
-      {:ok, _stat} ->
-        with :ok <- fs(File.rm(path), path),
-             do: {:ok, [path], "Deleted #{Text.display_path(path, cwd)}"}
+          {:error, reason} ->
+            {:error, fs_message(reason, from), created}
+        end
 
-      {:error, reason} ->
-        fs({:error, reason}, path)
+      {:error, reason, created} ->
+        {:error, fs_message(reason, Path.dirname(to)), created}
     end
+  end
+
+  # Test seam: `opts[:before_rename]` runs after the destination checks and
+  # just before the rename, where a concurrent writer could create the target.
+  defp before_rename(opts) do
+    if hook = Keyword.get(opts, :before_rename), do: hook.()
+    :ok
+  end
+
+  defp deleted(path, cwd, opts) do
+    FileReadTracker.forget(opts, path)
+    {:ok, [path], "Deleted #{Text.display_path(path, cwd)}"}
   end
 
   # A failed recursive delete may already have removed part of the tree.
-  defp rm_rf(path) do
+  defp remove_tree(cfs, dir, name, path) do
     before = tree_fingerprint(path)
 
-    case File.rm_rf(path) do
-      {:ok, _} ->
+    case ConfinedFS.remove_tree(cfs, dir, name) do
+      :ok ->
         :ok
 
-      {:error, reason, file} ->
+      {:error, reason} ->
         unchanged? = before != :unknown and tree_fingerprint(path) == before
-        {:error, fs_message(reason, file), if(unchanged?, do: [], else: [path])}
+        {:error, fs_message(reason, path), if(unchanged?, do: [], else: [path])}
     end
   end
 
@@ -495,72 +567,117 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEdit do
     end
   end
 
-  defp read(path) do
-    case File.read(path) do
-      {:ok, content} -> {:ok, content}
+  defp pin(path, opts) do
+    case FileValidation.regular_file_identity(path, opts) do
+      {:ok, identity} -> {:ok, identity}
       error -> fs(error, path)
     end
   end
 
-  # Replace `path` through a sibling temp file so readers never observe a
-  # partially written file. The original file mode is preserved. Returns the
-  # parent directory this created, or every path left behind on failure.
-  defp atomic_write(path, content) do
-    tmp =
-      Path.join(
-        Path.dirname(path),
-        ".#{Path.basename(path)}.lemon-lsp-#{System.unique_integer([:positive])}.tmp"
-      )
-
-    mode =
-      case File.stat(path) do
-        {:ok, %File.Stat{mode: mode}} -> Bitwise.band(mode, 0o7777)
-        _ -> nil
+  # Pins the regular file and reads only that file.
+  defp read(path, opts) do
+    with {:ok, identity} <- pin(path, opts) do
+      case FileValidation.read_regular_file(path, identity) do
+        {:ok, content} -> {:ok, identity, content}
+        error -> fs(error, path)
       end
+    end
+  end
 
-    with {:ok, created} <- mkdir_parent(path) do
-      with :ok <- fs(File.write(tmp, content, [:exclusive]), tmp),
-           :ok <- if(mode, do: fs(File.chmod(tmp, mode), tmp), else: :ok),
-           :ok <- fs(File.rename(tmp, path), path) do
-        {:ok, created}
-      else
+  # Atomically replaces the pinned file, keeping its mode, through a private
+  # temp file renamed over it, and records the committed bytes.
+  defp replace(path, identity, content, opts) do
+    with :ok <- fs(FileValidation.replace_regular_file(path, identity, content, opts), path) do
+      FileReadTracker.record(opts, path, content)
+    end
+  end
+
+  # Runs `fun` with the components of each path in one LemonCore.ConfinedFS
+  # session rooted at the boundary check_mutation_target/2 validated them
+  # below (same opts). Paths below different boundaries fail closed.
+  defp confined(paths, opts, fun) do
+    with {:ok, root, parts} <- locate(paths, opts) do
+      case ConfinedFS.with_root(root, &fun.(&1, parts)) do
+        {:error, reason} when is_atom(reason) -> fs({:error, reason}, hd(paths))
+        result -> result
+      end
+    end
+  end
+
+  defp locate(paths, opts) do
+    Enum.reduce_while(paths, {:ok, nil, []}, fn path, {:ok, root, acc} ->
+      case FileValidation.mutation_location(path, opts) do
+        {:ok, here, parts} when is_nil(root) or here == root ->
+          {:cont, {:ok, here, acc ++ [parts]}}
+
+        {:ok, _other, _parts} ->
+          {:halt,
+           {:error,
+            "Workspace edit paths must be below the same trusted directory: " <>
+              Enum.join(paths, ", ")}}
+
+        error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  # lstat of the entry `parts` names, never following a symlink on the way.
+  defp entry(cfs, parts) do
+    with {:ok, dir, name} <- ConfinedFS.open_parent(cfs, :root, parts),
+         {:ok, stat} <- ConfinedFS.stat(cfs, dir, name) do
+      {:ok, dir, name, stat}
+    end
+  end
+
+  defp lookup(cfs, parts, path) do
+    case entry(cfs, parts) do
+      {:ok, _dir, _name, stat} -> {:ok, stat}
+      {:error, :enoent} -> {:ok, nil}
+      error -> fs(error, path)
+    end
+  end
+
+  # Opens the parent of `parts`, creating missing directories one at a time
+  # without following symlinks, and reports the topmost one it created.
+  defp open_parent(cfs, path, parts) do
+    {dirs, [name]} = Enum.split(parts, -1)
+    root = Enum.reduce(parts, path, fn _part, at -> Path.dirname(at) end)
+
+    dirs
+    |> Enum.reduce_while({:ok, :root, root, []}, fn part, {:ok, dir, at, created} ->
+      at = Path.join(at, part)
+
+      case ConfinedFS.mkdir(cfs, dir, part) do
+        result when result in [:ok, {:error, :eexist}] ->
+          created = if result == :ok and created == [], do: [at], else: created
+
+          case ConfinedFS.open_dir(cfs, dir, [part]) do
+            {:ok, handle} -> {:cont, {:ok, handle, at, created}}
+            {:error, reason} -> {:halt, {:error, reason, created}}
+          end
+
         {:error, reason} ->
-          left = if File.rm(tmp) in [:ok, {:error, :enoent}], do: [], else: [tmp]
-          {:error, reason, created ++ left}
+          {:halt, {:error, reason, created}}
       end
-    end
-  end
-
-  # Creates missing parents and reports the topmost directory it created.
-  defp mkdir_parent(path) do
-    dir = Path.dirname(path)
-    missing = missing_ancestor(dir)
-
-    case File.mkdir_p(dir) do
-      :ok ->
-        {:ok, List.wrap(missing)}
-
-      {:error, reason} ->
-        created = if missing && match?({:ok, _}, File.lstat(missing)), do: [missing], else: []
-        {:error, fs_message(reason, dir), created}
-    end
-  end
-
-  defp missing_ancestor(dir) do
-    case File.lstat(dir) do
-      {:ok, _} ->
-        nil
-
-      {:error, _} ->
-        parent = Path.dirname(dir)
-        if parent == dir, do: dir, else: missing_ancestor(parent) || dir
+    end)
+    |> case do
+      {:ok, dir, _at, created} -> {:ok, dir, name, created}
+      error -> error
     end
   end
 
   defp fs(:ok, _path), do: :ok
   defp fs({:error, reason}, path), do: {:error, fs_message(reason, path)}
 
-  defp fs_message(reason, path), do: FileValidation.format_file_error(reason, path, "file")
+  defp fs_message(reason, _path) when is_binary(reason), do: reason
+
+  defp fs_message(reason, path) do
+    case FileValidation.confined_error(reason, path) do
+      {:error, message} when is_binary(message) -> message
+      {:error, reason} -> FileValidation.format_file_error(reason, path, "file")
+    end
+  end
 
   defp partial_error(reason, []), do: reason
 

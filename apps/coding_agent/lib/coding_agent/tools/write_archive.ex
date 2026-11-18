@@ -1,12 +1,17 @@
 defmodule CodingAgent.Tools.WriteArchive do
   @moduledoc false
 
+  # The existing archive is read and atomically replaced through the
+  # descriptor-bound FileValidation helpers below the validated mutation
+  # boundary; members are rebuilt in memory, never in a shared temp path, and
+  # the read tracker records the committed archive bytes.
+
   require Record
   Record.defrecordp(:zip_file, Record.extract(:zip_file, from_lib: "stdlib/include/zip.hrl"))
   Record.defrecordp(:file_info, Record.extract(:file_info, from_lib: "kernel/include/file.hrl"))
 
   alias CodingAgent.{FileReadTracker, MutationLock}
-  alias CodingAgent.Tools.{CheckpointGuard, FileValidation, Read, ReadArchive, ReadFormats}
+  alias CodingAgent.Tools.{CheckpointGuard, FileValidation, Read, ReadArchive}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -15,13 +20,14 @@ defmodule CodingAgent.Tools.WriteArchive do
 
   def write({path, member}, content, signal, cwd, opts) do
     path = Path.expand(path)
+    mutation_opts = Keyword.put(opts, :mutation_root, cwd)
 
     MutationLock.with_lock(MutationLock.path_key(path), fn ->
       with :ok <- validate_member(member),
-           :ok <-
-             FileValidation.check_mutation_target(path, Keyword.put(opts, :mutation_root, cwd)),
+           :ok <- FileValidation.check_mutation_target(path, mutation_opts),
            :ok <- check_abort(signal),
-           {:ok, bytes} <- rewrite(path, member, content, opts),
+           {:ok, identity, existing} <- existing_archive(path, mutation_opts),
+           {:ok, bytes} <- rewrite(path, existing, member, content),
            {:ok, checkpoint} <-
              CheckpointGuard.before_mutation([path], cwd, opts, %{
                tool: "write",
@@ -29,8 +35,8 @@ defmodule CodingAgent.Tools.WriteArchive do
                path: path
              }),
            :ok <- check_abort(signal),
-           :ok <- replace(path, bytes) do
-        FileReadTracker.refresh(opts, [path])
+           :ok <- replace(path, identity, bytes, mutation_opts) do
+        FileReadTracker.record(opts, path, bytes)
 
         %AgentToolResult{
           content: [
@@ -74,23 +80,40 @@ defmodule CodingAgent.Tools.WriteArchive do
     end
   end
 
-  defp rewrite(path, member, content, opts) do
-    with :ok <- check_existing(path, opts) do
-      if String.downcase(Path.extname(path)) == ".zip",
-        do: rewrite_zip(path, member, content),
-        else: rewrite_tar(path, member, content)
+  defp existing_archive(path, opts) do
+    max_bytes = Keyword.get(opts, :format_max_input_bytes, 128 * 1024 * 1024)
+
+    with {:ok, identity} <- FileValidation.regular_file_identity(path, opts),
+         {:ok, bytes} <- FileValidation.read_regular_file(path, identity, max_bytes: max_bytes) do
+      {:ok, identity, bytes}
+    else
+      {:error, :enoent} -> {:ok, nil, nil}
+      {:error, reason} -> {:error, archive_error(reason, path)}
     end
   end
 
-  defp check_existing(path, opts) do
-    if File.exists?(path), do: ReadFormats.check_input(path, opts), else: :ok
+  defp replace(path, identity, bytes, opts) do
+    case FileValidation.replace_regular_file(path, identity, bytes, opts) do
+      :ok -> :ok
+      {:error, :eexist} -> {:error, "Archive appeared after validation; nothing was written"}
+      {:error, reason} -> {:error, archive_error(reason, path)}
+    end
   end
 
-  defp rewrite_zip(path, member, content) do
-    with {:ok, records} <- zip_records(path),
+  defp archive_error(reason, _path) when is_binary(reason), do: reason
+  defp archive_error(reason, path), do: FileValidation.format_file_error(reason, path, "archive")
+
+  defp rewrite(path, existing, member, content) do
+    if String.downcase(Path.extname(path)) == ".zip",
+      do: rewrite_zip(existing, member, content),
+      else: rewrite_tar(path, existing, member, content)
+  end
+
+  defp rewrite_zip(existing, member, content) do
+    with {:ok, records} <- zip_records(existing),
          :ok <- file_target(records, member),
          :ok <- complete_content(records, member, content),
-         {:ok, files} <- zip_files(path, records, member, content),
+         {:ok, files} <- zip_files(existing, records, member, content),
          {:ok, {_, bytes}} <- :zip.create(~c"archive.zip", files, [:memory]) do
       {:ok, bytes}
     else
@@ -99,29 +122,24 @@ defmodule CodingAgent.Tools.WriteArchive do
     end
   end
 
-  defp zip_records(path) do
-    if File.exists?(path) do
-      case :zip.list_dir(String.to_charlist(path)) do
-        {:ok, records} ->
-          {:ok,
-           for(
-             zip_file(name: name, info: info) <- records,
-             do: %{name: List.to_string(name), type: file_info(info, :type), info: info}
-           )}
+  defp zip_records(nil), do: {:ok, []}
 
-        _ ->
-          {:error, "Cannot list ZIP archive"}
-      end
-    else
-      {:ok, []}
+  defp zip_records(existing) do
+    case :zip.list_dir(existing) do
+      {:ok, records} ->
+        {:ok,
+         for(
+           zip_file(name: name, info: info) <- records,
+           do: %{name: List.to_string(name), type: file_info(info, :type), info: info}
+         )}
+
+      _ ->
+        {:error, "Cannot list ZIP archive"}
     end
   end
 
-  defp zip_files(path, records, member, content) do
-    extracted =
-      if File.exists?(path),
-        do: :zip.extract(String.to_charlist(path), [:memory]),
-        else: {:ok, []}
+  defp zip_files(existing, records, member, content) do
+    extracted = if existing, do: :zip.extract(existing, [:memory]), else: {:ok, []}
 
     with {:ok, entries} <- extracted do
       data = Map.new(entries, fn {name, bytes} -> {List.to_string(name), bytes} end)
@@ -171,8 +189,8 @@ defmodule CodingAgent.Tools.WriteArchive do
 
   # Keep every unrelated TAR header, payload, link and extension record verbatim.
   # erl_tar validates the stream and supplies resolved PAX/GNU member names.
-  defp rewrite_tar(path, member, content) do
-    with {:ok, raw} <- tar_bytes(path),
+  defp rewrite_tar(path, existing, member, content) do
+    with {:ok, raw} <- tar_bytes(path, existing),
          {:ok, table} <- :erl_tar.table({:binary, raw}, [:verbose]),
          records =
            Enum.map(table, fn {name, type, size, time, mode, uid, gid} ->
@@ -200,41 +218,41 @@ defmodule CodingAgent.Tools.WriteArchive do
     end
   end
 
-  defp tar_bytes(path) do
-    if File.exists?(path) do
-      with {:ok, bytes} <- File.read(path) do
-        {:ok, if(compressed?(path), do: :zlib.gunzip(bytes), else: bytes)}
-      end
-    else
-      {:ok, :binary.copy(<<0>>, 1024)}
-    end
-  end
+  defp tar_bytes(_path, nil), do: {:ok, :binary.copy(<<0>>, 1024)}
+
+  defp tar_bytes(path, existing),
+    do: {:ok, if(compressed?(path), do: :zlib.gunzip(existing), else: existing)}
 
   defp compressed?(path), do: String.ends_with?(String.downcase(path), [".tar.gz", ".tgz"])
 
+  # erl_tar writes the single member to an in-memory file.
   defp tar_member(member, content, record) do
-    temp = Path.join(System.tmp_dir!(), "lemon-tar-member-#{System.unique_integer([:positive])}")
-
     opts =
       if record,
         do: [mtime: record.time, mode: record.mode, uid: record.uid, gid: record.gid],
         else: []
 
+    {:ok, ram} = :file.open("", [:ram, :read, :write, :binary])
+
     try do
-      with :ok <-
-             :erl_tar.create(
-               String.to_charlist(temp),
-               [{String.to_charlist(member), content}],
-               opts
-             ),
-           {:ok, bytes} <- File.read(temp),
+      with {:ok, tar} <- :erl_tar.init(ram, :write, &ram_tar/2),
+           :ok <- :erl_tar.add(tar, content, String.to_charlist(member), opts),
+           :ok <- :erl_tar.close(tar),
+           {:ok, size} <- :file.position(ram, :eof),
+           {:ok, 0} <- :file.position(ram, :bof),
+           {:ok, bytes} <- :file.read(ram, size),
            {:ok, chunks} <- keep_tar(bytes, [%{name: member}], "", [], []) do
         {:ok, IO.iodata_to_binary(Enum.reverse(chunks))}
       end
     after
-      File.rm(temp)
+      :file.close(ram)
     end
   end
+
+  defp ram_tar(:write, {ram, data}), do: :file.write(ram, data)
+  defp ram_tar(:position, {ram, position}), do: :file.position(ram, position)
+  defp ram_tar(:read2, {ram, size}), do: :file.read(ram, size)
+  defp ram_tar(:close, _ram), do: :ok
 
   defp keep_tar(<<0::4096, _::binary>>, [], _member, [], acc), do: {:ok, acc}
 
@@ -264,27 +282,5 @@ defmodule CodingAgent.Tools.WriteArchive do
 
   defp tar_size(field) do
     field |> :binary.split(<<0>>) |> hd() |> String.trim() |> String.to_integer(8)
-  end
-
-  defp replace(path, bytes) do
-    File.mkdir_p!(Path.dirname(path))
-    temp = path <> ".tmp-#{System.unique_integer([:positive])}"
-
-    try do
-      with :ok <- File.write(temp, bytes, [:exclusive]),
-           :ok <- preserve_mode(path, temp),
-           :ok <- File.rename(temp, path),
-           do: :ok
-    after
-      File.rm(temp)
-    end
-  end
-
-  defp preserve_mode(path, temp) do
-    case File.stat(path) do
-      {:ok, stat} -> File.chmod(temp, stat.mode)
-      {:error, :enoent} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
   end
 end

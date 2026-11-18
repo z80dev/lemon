@@ -2,7 +2,8 @@ defmodule CodingAgent.Tools.LspFormatterTest do
   @moduledoc """
   Tests for the LSP-inspired auto-formatter.
   """
-  use ExUnit.Case, async: true
+  # Fake formatters are installed on PATH.
+  use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.LspFormatter
 
@@ -36,50 +37,220 @@ defmodule CodingAgent.Tools.LspFormatterTest do
   end
 
   # ============================================================================
-  # format_file/2
+  # format_content/3
   # ============================================================================
 
-  describe "format_file/2" do
-    test "returns :unchanged for files without formatters", %{tmp_dir: tmp_dir} do
+  describe "format_content/3" do
+    test "returns the content for files without formatters", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "file.xyz")
-      File.write!(path, "content")
-
-      assert {:ok, :unchanged} = LspFormatter.format_file(path)
+      assert {:ok, "content"} = LspFormatter.format_content(path, "content")
     end
 
-    test "returns :unchanged for non-existent formatter executables", %{tmp_dir: tmp_dir} do
-      # Create a file with a known extension but the formatter won't be available
-      path = Path.join(tmp_dir, "test.ex")
-      File.write!(path, "content")
-
-      # When mix is not available, should return unchanged
-      result = LspFormatter.format_file(path)
-
-      assert result == {:ok, :unchanged} or match?({:ok, _}, result) or
-               match?({:error, _}, result)
+    test "returns the content when the formatter executable is missing", %{tmp_dir: tmp_dir} do
+      with_path(Path.join(tmp_dir, "empty-bin"), fn ->
+        path = Path.join(tmp_dir, "main.go")
+        assert {:ok, "package main\n"} = LspFormatter.format_content(path, "package main\n")
+      end)
     end
 
-    test "handles missing files gracefully" do
-      result = LspFormatter.format_file("/nonexistent/path/file.ex")
-      # Should either return unchanged or error, not crash
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+    test "rejects a non-positive timeout", %{tmp_dir: tmp_dir} do
+      fake_formatter(tmp_dir, "gofmt", "cat")
+
+      with_path(bin(tmp_dir), fn ->
+        assert {:error, "timeout must be a positive integer"} =
+                 LspFormatter.format_content(project_file(tmp_dir), "x", timeout_ms: 0)
+      end)
     end
 
-    test "respects timeout option", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "test.ex")
-      File.write!(path, "content")
+    test "the formatter filters a private staged copy and never sees the workspace file",
+         %{tmp_dir: tmp_dir} do
+      project = Path.join(tmp_dir, "project")
+      File.mkdir_p!(project)
+      path = Path.join(project, "main.go")
+      File.write!(path, "on disk\n")
+      record = Path.join(tmp_dir, "record")
 
-      result = LspFormatter.format_file(path, timeout_ms: 1)
-      # With very short timeout, might timeout or complete quickly
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+      fake_formatter(tmp_dir, "gofmt", """
+      printf 'args=%s\\n' "$*" > '#{record}'
+      printf '// fmt\\n'; cat
+      """)
+
+      with_path(bin(tmp_dir), fn ->
+        assert {:ok, "// fmt\nstaged\n"} =
+                 LspFormatter.format_content(path, "staged\n", cwd: project)
+      end)
+
+      assert File.read!(path) == "on disk\n"
+      assert File.read!(record) == "args=\n"
     end
 
-    test "respects cwd option", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "test.ex")
-      File.write!(path, "content")
+    test "configuration hints and working directories follow the formatter", %{tmp_dir: tmp_dir} do
+      project = Path.join(tmp_dir, "project")
+      File.mkdir_p!(Path.join(project, "lib"))
+      record = Path.join(tmp_dir, "record")
+      echo = "printf '%s|%s\\n' \"$*\" \"$PWD\" > '#{record}'; cat"
 
-      result = LspFormatter.format_file(path, cwd: tmp_dir)
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+      for name <- ["mix", "prettier", "black", "rustfmt"], do: fake_formatter(tmp_dir, name, echo)
+
+      with_path(bin(tmp_dir), fn ->
+        cases = [
+          {"lib/a.ex", "format --stdin-filename lib/a.ex -|#{project}"},
+          {"lib/a.ts", "--stdin-filepath #{project}/lib/a.ts|#{project}"},
+          {"lib/a.py", "--quiet --stdin-filename #{project}/lib/a.py -|#{project}"},
+          {"lib/a.rs", "--emit stdout|#{project}/lib"}
+        ]
+
+        for {rel, expected} <- cases do
+          path = Path.join(project, rel)
+          assert {:ok, "x\n"} = LspFormatter.format_content(path, "x\n", cwd: project)
+          [args, cwd] = record |> File.read!() |> String.trim() |> String.split("|")
+          [expected_args, expected_cwd] = String.split(expected, "|")
+          assert args == expected_args
+          assert Path.expand(cwd) |> real() == real(expected_cwd)
+        end
+      end)
+    end
+
+    test "formatter output is bounded", %{tmp_dir: tmp_dir} do
+      fake_formatter(tmp_dir, "gofmt", "cat >/dev/null; head -c 9000000 /dev/zero")
+
+      with_path(bin(tmp_dir), fn ->
+        assert {:error, "formatter output exceeds 8388608 bytes"} =
+                 LspFormatter.format_content(project_file(tmp_dir), "package main\n")
+      end)
+    end
+
+    test "formatter input is bounded", %{tmp_dir: tmp_dir} do
+      fake_formatter(tmp_dir, "gofmt", "cat")
+      big = :binary.copy("a", 8 * 1024 * 1024 + 1)
+
+      with_path(bin(tmp_dir), fn ->
+        assert {:error, "formatter input exceeds 8388608 bytes"} =
+                 LspFormatter.format_content(project_file(tmp_dir), big)
+      end)
+    end
+
+    test "empty output for non-empty input is refused", %{tmp_dir: tmp_dir} do
+      fake_formatter(tmp_dir, "gofmt", "cat >/dev/null")
+
+      with_path(bin(tmp_dir), fn ->
+        assert {:error, "formatter produced no output"} =
+                 LspFormatter.format_content(project_file(tmp_dir), "package main\n")
+      end)
+    end
+
+    test "a failing formatter reports its status", %{tmp_dir: tmp_dir} do
+      fake_formatter(tmp_dir, "gofmt", "echo broken >&2; exit 2")
+
+      with_path(bin(tmp_dir), fn ->
+        assert {:error, "formatter exited with status 2: broken"} =
+                 LspFormatter.format_content(project_file(tmp_dir), "package main\n")
+      end)
+    end
+
+    @tag :requires_mix
+    test "formats Elixir with the real mix formatter", %{tmp_dir: tmp_dir} do
+      if System.find_executable("mix") do
+        path = Path.join(tmp_dir, "test.ex")
+
+        assert {:ok, formatted} =
+                 LspFormatter.format_content(
+                   path,
+                   "defmodule Test do def hello do :world end end",
+                   cwd: tmp_dir,
+                   timeout_ms: 60_000
+                 )
+
+        assert formatted == "defmodule Test do\n  def hello do\n    :world\n  end\nend\n"
+      end
+    end
+  end
+
+  # ============================================================================
+  # after_write/5
+  # ============================================================================
+
+  describe "after_write/5" do
+    test "commits the formatted bytes into the file Lemon wrote", %{tmp_dir: cwd} do
+      path = Path.join(cwd, "a.go")
+      File.write!(path, "written\n")
+      inode = File.stat!(path).inode
+      formatter = fn ^path, "written\n", _ -> {:ok, "formatted\n"} end
+
+      assert {"formatted\n", true, nil} =
+               LspFormatter.after_write(path, "written\n", true, cwd,
+                 format_content_fun: formatter
+               )
+
+      assert File.read!(path) == "formatted\n"
+      assert File.stat!(path).inode == inode
+    end
+
+    test "unchanged output leaves the file alone", %{tmp_dir: cwd} do
+      path = Path.join(cwd, "a.go")
+      File.write!(path, "written\n")
+
+      assert {"written\n", false, nil} =
+               LspFormatter.after_write(path, "written\n", true, cwd,
+                 format_content_fun: fn _, content, _ -> {:ok, content} end
+               )
+    end
+
+    test "a file changed before formatting is not formatted", %{tmp_dir: cwd} do
+      path = Path.join(cwd, "a.go")
+      File.write!(path, "someone else\n")
+      parent = self()
+
+      formatter = fn _, _, _ ->
+        send(parent, :ran)
+        {:ok, "formatted\n"}
+      end
+
+      assert {"written\n", false, error} =
+               LspFormatter.after_write(path, "written\n", true, cwd,
+                 format_content_fun: formatter
+               )
+
+      assert error =~ "changed after it was written"
+      refute_received :ran
+      assert File.read!(path) == "someone else\n"
+    end
+
+    test "a file changed while the formatter ran keeps the concurrent bytes", %{tmp_dir: cwd} do
+      path = Path.join(cwd, "a.go")
+      File.write!(path, "written\n")
+
+      formatter = fn ^path, _, _ ->
+        File.write!(path, "concurrent\n")
+        {:ok, "formatted\n"}
+      end
+
+      assert {"written\n", false, error} =
+               LspFormatter.after_write(path, "written\n", true, cwd,
+                 format_content_fun: formatter
+               )
+
+      assert error =~ "changed after it was written"
+      assert File.read!(path) == "concurrent\n"
+    end
+
+    test "a file replaced while the formatter ran is refused", %{tmp_dir: cwd} do
+      path = Path.join(cwd, "a.go")
+      File.write!(path, "written\n")
+
+      formatter = fn ^path, _, _ ->
+        File.rm!(path)
+        File.write!(path, "written\n")
+        {:ok, "formatted\n"}
+      end
+
+      assert {"written\n", false, error} =
+               LspFormatter.after_write(path, "written\n", true, cwd,
+                 format_content_fun: formatter
+               )
+
+      assert error =~ "File identity changed"
+      assert File.read!(path) == "written\n"
     end
   end
 
@@ -124,57 +295,40 @@ defmodule CodingAgent.Tools.LspFormatterTest do
     end
   end
 
-  # ============================================================================
-  # Elixir formatting (if available)
-  # ============================================================================
+  defp bin(tmp_dir), do: Path.join(tmp_dir, "bin")
 
-  describe "elixir formatting" do
-    @tag :requires_mix
-    test "formats Elixir files when mix is available", %{tmp_dir: tmp_dir} do
-      # Skip if mix is not available
-      if System.find_executable("mix") do
-        path = Path.join(tmp_dir, "test.ex")
-        # Write unformatted code
-        File.write!(path, "defmodule Test do def hello do :world end end")
+  # A workspace file beside (not above) the operator bin; only its directory
+  # exists (unresolvable roots refuse every executable).
+  defp project_file(tmp_dir) do
+    project = Path.join(tmp_dir, "project")
+    File.mkdir_p!(project)
+    Path.join(project, "main.go")
+  end
 
-        result = LspFormatter.format_file(path)
+  # Operator formatters live outside the project tree.
+  defp fake_formatter(tmp_dir, name, body) do
+    File.mkdir_p!(bin(tmp_dir))
+    path = Path.join(bin(tmp_dir), name)
+    File.write!(path, "#!/bin/sh\n" <> body <> "\n")
+    File.chmod!(path, 0o755)
+  end
 
-        case result do
-          {:ok, _} ->
-            # File should now be formatted
-            content = File.read!(path)
-            # Formatted elixir has newlines
-            assert content =~ "\n"
+  defp with_path(dir, fun) do
+    File.mkdir_p!(dir)
+    previous = System.get_env("PATH")
+    System.put_env("PATH", dir <> ":/usr/bin:/bin")
 
-          {:error, _} ->
-            # Formatting might fail in some environments, that's ok
-            :ok
-        end
-      end
+    try do
+      fun.()
+    after
+      System.put_env("PATH", previous)
     end
   end
 
-  # ============================================================================
-  # Error handling
-  # ============================================================================
-
-  describe "error handling" do
-    test "handles timeout gracefully", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "test.ex")
-      File.write!(path, "content")
-
-      # Very short timeout should cause issues
-      result = LspFormatter.format_file(path, timeout_ms: 0)
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-
-    test "handles paths with spaces", %{tmp_dir: tmp_dir} do
-      path = Path.join([tmp_dir, "path with spaces", "test.ex"])
-      File.mkdir_p!(Path.dirname(path))
-      File.write!(path, "content")
-
-      result = LspFormatter.format_file(path)
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+  defp real(path) do
+    case LemonCore.TrustedRoot.realpath(path) do
+      {:ok, real} -> real
+      _ -> path
     end
   end
 end

@@ -67,7 +67,11 @@ defmodule CodingAgent.Tools.LspCheckerIsolationTest do
 
     task =
       Task.async(fn ->
-        LspFormatter.format_file(path, cwd: ctx.project, timeout_ms: 60_000, signal: signal)
+        LspFormatter.format_content(path, "x = 1\n",
+          cwd: ctx.project,
+          timeout_ms: 60_000,
+          signal: signal
+        )
       end)
 
     pids = await_pids(ctx.pid_file, 100)
@@ -131,7 +135,7 @@ defmodule CodingAgent.Tools.LspCheckerIsolationTest do
     assert {:ok, %{status: :skipped}} = LspDiagnostics.diagnose_file(go, ctx.project)
 
     assert {:error, "refused repo-local executable: black" <> _} =
-             LspFormatter.format_file(py, cwd: ctx.project)
+             LspFormatter.format_content(py, "x = 1\n", cwd: ctx.project)
 
     assert {:ok, _} = LspDiagnostics.diagnose_file(go, ctx.project, repo_local_tools: true)
     assert File.exists?(repo_marker)

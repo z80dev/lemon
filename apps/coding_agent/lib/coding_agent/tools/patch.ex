@@ -140,9 +140,13 @@ defmodule CodingAgent.Tools.Patch do
 
   Every source, target and move destination passes
   `FileValidation.check_mutation_target/2` with `mutation_root: cwd`, so symlinked
-  ancestors below cwd are rejected. The check is repeated right before each commit;
-  this narrows, but does not close, the window in which a concurrent filesystem
-  writer could swap an ancestor for a symlink between the check and the write.
+  ancestors below cwd are rejected, and the check is repeated right before each
+  commit. Source reads, in-place updates, exclusive creates (with missing parent
+  directories), move/delete removals and their identity checks then run through
+  `FileValidation`'s descriptor-bound helpers below that same boundary, so an
+  ancestor a concurrent writer swaps for a symlink after the check is refused
+  rather than followed. `allow_symlinks: true` keeps legacy path-based I/O and is
+  outside that guarantee.
 
   ## Returns
 
@@ -201,8 +205,8 @@ defmodule CodingAgent.Tools.Patch do
              prepared_operations,
              signal,
              Keyword.put(opts, :mutation_root, cwd)
-           ) do
-      prepared_operations = format_prepared_files(prepared_operations, cwd, opts)
+           ),
+         prepared_operations = format_prepared_files(prepared_operations, cwd, opts) do
       file_results = prepared_file_results(prepared_operations)
       formatted = Enum.any?(prepared_operations, &Map.get(&1, :formatted, false))
 
@@ -212,7 +216,7 @@ defmodule CodingAgent.Tools.Patch do
         |> Enum.map_join("", &"\n[#{&1.path}##{&1.snapshot}]")
 
       format_text = if formatted, do: "\nFormatted changed files.", else: ""
-      FileReadTracker.refresh(opts, paths)
+      record_committed(opts, paths, prepared_operations)
 
       {diagnostics, diagnostics_text} =
         patch_diagnostics(summary.details.changed, cwd, baselines, diagnostics?, opts)
@@ -231,6 +235,22 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
+  # The session's view is the bytes the patch committed (after formatting);
+  # paths it deleted or moved away are forgotten. Nothing is re-read by path.
+  defp record_committed(opts, paths, entries) do
+    committed =
+      for %{target: target, new_content: content} when is_binary(content) <- entries,
+          into: %{},
+          do: {target, content}
+
+    Enum.each(paths, fn path ->
+      case Map.fetch(committed, path) do
+        {:ok, content} -> FileReadTracker.record(opts, path, content)
+        :error -> FileReadTracker.forget(opts, path)
+      end
+    end)
+  end
+
   defp execute_acp_patch(operations, cwd, signal, opts) do
     with :ok <- validate_acp_operations(operations, cwd, opts),
          {:ok, summary} <- apply_operations_acp(operations, cwd, signal, opts) do
@@ -246,7 +266,7 @@ defmodule CodingAgent.Tools.Patch do
   defp diagnostic_baselines(operations, cwd, true, opts) do
     operations
     |> operation_paths(cwd)
-    |> Enum.filter(&File.regular?/1)
+    |> Enum.filter(&regular_file?(&1, cwd, opts))
     |> Map.new(fn path -> {path, LspDiagnostics.baseline(path, cwd, true, opts)} end)
   end
 
@@ -255,7 +275,7 @@ defmodule CodingAgent.Tools.Patch do
   defp patch_diagnostics(changed, cwd, baselines, true, opts) do
     reports =
       changed
-      |> Enum.filter(&File.regular?/1)
+      |> Enum.filter(&regular_file?(&1, cwd, opts))
       |> Enum.map(fn path ->
         baseline = Map.get(baselines, path)
         {report, _text} = LspDiagnostics.post_edit(path, cwd, baseline, true, opts)
@@ -292,6 +312,11 @@ defmodule CodingAgent.Tools.Patch do
 
   defp maybe_put_diagnostics(details, diagnostics),
     do: Map.put(details, :diagnostics, diagnostics)
+
+  # Descriptor-bound probe below the mutation boundary; diagnostics then read
+  # the file the same way (`LspDiagnostics`).
+  defp regular_file?(path, cwd, opts),
+    do: match?({:ok, _}, FileValidation.regular_file_identity(path, mutation_opts(cwd, opts)))
 
   # ============================================================================
   # Parameter Extraction and Validation
@@ -568,11 +593,15 @@ defmodule CodingAgent.Tools.Patch do
   # Shared mutator check: rejects symlinked ancestors below cwd, symlinked leaves
   # (unless :allow_symlinks), directories, special files and unwritable targets.
   defp check_mutation_target(resolved_path, cwd, opts) do
-    FileValidation.check_mutation_target(resolved_path,
-      allow_symlinks: Keyword.get(opts, :allow_symlinks, false) == true,
-      mutation_root: cwd
-    )
+    FileValidation.check_mutation_target(resolved_path, mutation_opts(cwd, opts))
   end
+
+  # Validation and file I/O share one trusted boundary: cwd, or the filesystem
+  # anchor for a path outside it; symlinks are followed only when allowed.
+  defp mutation_opts(cwd, opts),
+    do: [allow_symlinks: Keyword.get(opts, :allow_symlinks, false) == true, mutation_root: cwd]
+
+  defp commit_opts(opts), do: mutation_opts(Keyword.fetch!(opts, :mutation_root), opts)
 
   # ============================================================================
   # Patch Parsing
@@ -953,7 +982,7 @@ defmodule CodingAgent.Tools.Patch do
   defp prepare_operation(%{type: :delete, path: path} = operation, cwd, signal, opts) do
     source = resolve_path(path, cwd)
 
-    with {:ok, content, mode, identity} <- source_data(source, opts, []),
+    with {:ok, content, mode, identity} <- source_data(source, cwd, opts, []),
          :ok <- validate_deleted_content(content, operation, signal) do
       {:ok,
        %{
@@ -983,7 +1012,7 @@ defmodule CodingAgent.Tools.Patch do
 
     needles = for hunk <- hunks, change <- hunk.changes, change.type != :add, do: change.content
 
-    with {:ok, content, mode, identity} <- source_data(source, opts, needles),
+    with {:ok, content, mode, identity} <- source_data(source, cwd, opts, needles),
          {:ok, new_content, additions, removals} <- apply_hunks(content, hunks, signal) do
       {:ok,
        %{
@@ -1012,7 +1041,7 @@ defmodule CodingAgent.Tools.Patch do
 
   defp validate_deleted_content(_content, _operation, _signal), do: :ok
 
-  defp source_data(path, opts, needles) do
+  defp source_data(path, cwd, opts, needles) do
     case Map.fetch(Keyword.get(opts, :prepared_files, %{}), path) do
       {:ok, nil} ->
         {:error, :enoent}
@@ -1021,7 +1050,8 @@ defmodule CodingAgent.Tools.Patch do
         {:ok, content, mode, nil}
 
       :error ->
-        with {:ok, identity} <- FileValidation.regular_file_identity(path, opts),
+        with {:ok, identity} <-
+               FileValidation.regular_file_identity(path, mutation_opts(cwd, opts)),
              {:ok, content} <- FileValidation.read_regular_file(path, identity),
              :ok <- check_source_snapshot(path, content, opts, needles) do
           {:ok, content, identity.mode, identity}
@@ -1046,9 +1076,9 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  # Re-run the shared mutation check right before each commit. This narrows, but
-  # does not close, an ancestor-swap race: a concurrent filesystem writer can still
-  # replace an ancestor with a symlink between this check and the path-based write.
+  # Re-run the shared mutation check right before each commit. The commit's own
+  # reads and writes are descriptor-bound and pinned to the preflighted identity,
+  # so a later ancestor swap is refused rather than followed.
   defp verify_prepared_operation(prepared, opts) do
     with :ok <- recheck_mutation_targets(prepared, opts) do
       verify_prepared_contents(prepared, opts)
@@ -1069,13 +1099,13 @@ defmodule CodingAgent.Tools.Patch do
     end)
   end
 
-  defp verify_prepared_contents(%{type: :add, target: target}, _opts) do
-    verify_path_absent(target)
+  defp verify_prepared_contents(%{type: :add, target: target}, opts) do
+    verify_path_absent(target, opts)
   end
 
   defp verify_prepared_contents(%{type: :move} = prepared, opts) do
     with :ok <- verify_source_unchanged(prepared, opts),
-         :ok <- verify_path_absent(prepared.target) do
+         :ok <- verify_path_absent(prepared.target, opts) do
       :ok
     end
   end
@@ -1105,10 +1135,10 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp verify_path_absent(path) do
-    case File.lstat(path) do
+  defp verify_path_absent(path, opts) do
+    case FileValidation.regular_file_identity(path, commit_opts(opts)) do
       {:error, :enoent} -> :ok
-      {:ok, _stat} -> {:error, "Patch target appeared after preflight: #{path}"}
+      {:ok, _identity} -> {:error, "Patch target appeared after preflight: #{path}"}
       {:error, reason} -> {:error, format_error(reason, path)}
     end
   end
@@ -1170,12 +1200,14 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   defp commit_verified_operation(prepared, signal, acc, opts) do
-    case commit_prepared_operation(prepared, signal) do
+    io_opts = commit_opts(opts)
+
+    case commit_prepared_operation(prepared, signal, io_opts) do
       :ok ->
         identity =
           if prepared.type == :delete,
             do: {:ok, nil},
-            else: FileValidation.regular_file_identity(prepared.target, opts)
+            else: FileValidation.regular_file_identity(prepared.target, io_opts)
 
         case identity do
           {:ok, identity} ->
@@ -1201,7 +1233,7 @@ defmodule CodingAgent.Tools.Patch do
         end
 
       {:error, reason} ->
-        current = current_operation_changes(prepared)
+        current = current_operation_changes(prepared, io_opts)
 
         error =
           case current do
@@ -1213,77 +1245,72 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp current_operation_changes(%{type: :add, target: target}) do
-    if path_exists?(target), do: [target], else: []
+  defp current_operation_changes(%{type: :add, target: target}, opts) do
+    if path_exists?(target, opts), do: [target], else: []
   end
 
-  defp current_operation_changes(%{type: :delete, source: source}) do
-    if path_exists?(source), do: [], else: [source]
+  defp current_operation_changes(%{type: :delete, source: source}, opts) do
+    if path_exists?(source, opts), do: [], else: [source]
   end
 
-  defp current_operation_changes(%{type: :update} = prepared) do
-    if file_matches?(prepared.source, prepared.original_content), do: [], else: [prepared.source]
+  defp current_operation_changes(%{type: :update} = prepared, opts) do
+    if file_matches?(prepared.source, prepared.original_content, opts),
+      do: [],
+      else: [prepared.source]
   end
 
-  defp current_operation_changes(%{type: :move} = prepared) do
-    target_changes = if path_exists?(prepared.target), do: [prepared.target], else: []
+  defp current_operation_changes(%{type: :move} = prepared, opts) do
+    target_changes = if path_exists?(prepared.target, opts), do: [prepared.target], else: []
 
     source_changes =
-      if file_matches?(prepared.source, prepared.original_content),
+      if file_matches?(prepared.source, prepared.original_content, opts),
         do: [],
         else: [prepared.source]
 
     target_changes ++ source_changes
   end
 
-  defp path_exists?(path) do
-    match?({:ok, _}, File.lstat(path))
+  defp path_exists?(path, opts) do
+    FileValidation.regular_file_identity(path, opts) != {:error, :enoent}
   end
 
-  defp file_matches?(path, expected) do
-    match?({:ok, ^expected}, File.read(path))
-  end
+  defp file_matches?(path, expected, opts) do
+    case FileValidation.regular_file_identity(path, opts) do
+      {:ok, identity} ->
+        match?({:ok, ^expected}, FileValidation.read_regular_file(path, identity))
 
-  defp commit_prepared_operation(%{type: :add} = prepared, signal) do
-    with :ok <- ensure_parent_dir(prepared.target),
-         :ok <- safe_write_new_file(prepared.target, prepared.new_content, signal) do
-      :ok
+      _ ->
+        false
     end
   end
 
-  defp commit_prepared_operation(%{type: :delete, source: source}, _signal) do
-    case File.rm(source) do
+  defp commit_prepared_operation(%{type: :add} = prepared, signal, opts) do
+    safe_write_new_file(prepared.target, prepared.new_content, nil, signal, opts)
+  end
+
+  defp commit_prepared_operation(%{type: :delete, source: source} = prepared, _signal, _opts) do
+    case FileValidation.delete_regular_file(source, prepared.identity) do
       :ok -> :ok
       {:error, reason} -> {:error, format_error(reason, source)}
     end
   end
 
-  defp commit_prepared_operation(%{type: :update} = prepared, signal) do
+  defp commit_prepared_operation(%{type: :update} = prepared, signal, _opts) do
     safe_write_file(prepared.target, prepared.identity, prepared.new_content, signal)
   end
 
-  defp commit_prepared_operation(%{type: :move} = prepared, signal) do
-    with :ok <- ensure_parent_dir(prepared.target),
-         :ok <- safe_write_new_file(prepared.target, prepared.new_content, signal),
-         :ok <- chmod_moved_target(prepared.target, prepared.mode),
-         :ok <- remove_moved_source(prepared.source, prepared.target) do
-      :ok
-    end
-  end
+  # The destination is created exclusively with the source's permission bits
+  # before the pinned source is removed.
+  defp commit_prepared_operation(%{type: :move} = prepared, signal, opts) do
+    with :ok <-
+           safe_write_new_file(prepared.target, prepared.new_content, prepared.mode, signal, opts) do
+      case FileValidation.delete_regular_file(prepared.source, prepared.identity) do
+        :ok ->
+          :ok
 
-  defp chmod_moved_target(_path, nil), do: :ok
-
-  defp chmod_moved_target(path, mode) do
-    case File.chmod(path, mode) do
-      :ok -> :ok
-      {:error, reason} -> {:error, "#{format_error(reason, path)} while preserving file mode"}
-    end
-  end
-
-  defp remove_moved_source(source, target) do
-    case File.rm(source) do
-      :ok -> :ok
-      {:error, reason} -> {:error, "#{format_error(reason, source)} after writing #{target}"}
+        {:error, reason} ->
+          {:error, "#{format_error(reason, prepared.source)} after writing #{prepared.target}"}
+      end
     end
   end
 
@@ -1304,6 +1331,8 @@ defmodule CodingAgent.Tools.Patch do
     paths =
       Enum.flat_map(prepared, &[&1.source, &1.target]) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
+    enabled = Keyword.get(opts, :format, false)
+
     paths
     |> Enum.map(&Map.fetch!(changes, &1))
     |> Enum.reject(&(&1.original_content == nil and &1.new_content == nil))
@@ -1312,9 +1341,8 @@ defmodule CodingAgent.Tools.Patch do
         entry
 
       entry ->
-        enabled = Keyword.get(opts, :format, false)
-        {formatted, error} = LspFormatter.after_write(entry.target, enabled, cwd, opts)
-        content = if enabled, do: File.read!(entry.target), else: entry.new_content
+        {content, formatted, error} =
+          LspFormatter.after_write(entry.target, entry.new_content, enabled, cwd, opts)
 
         entry
         |> Map.put(:new_content, content)
@@ -1548,11 +1576,13 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp safe_write_new_file(path, content, signal) do
+  defp safe_write_new_file(path, content, mode, signal, opts) do
     if aborted?(signal) do
       {:error, "Operation aborted"}
     else
-      case File.write(path, content, [:exclusive]) do
+      opts = if mode, do: Keyword.put(opts, :mode, mode), else: opts
+
+      case FileValidation.create_regular_file(path, content, opts) do
         :ok ->
           :ok
 
@@ -1814,24 +1844,6 @@ defmodule CodingAgent.Tools.Patch do
 
   # Expand absolute paths too so `cwd/../x` cannot pass a lexical containment check.
   defp resolve_path(path, cwd), do: path |> PathHelpers.resolve_path(cwd) |> Path.expand()
-
-  defp ensure_parent_dir(path) do
-    dir = Path.dirname(path)
-
-    case File.mkdir_p(dir) do
-      :ok ->
-        :ok
-
-      {:error, :eacces} ->
-        {:error, "Permission denied when creating directory: #{dir}"}
-
-      {:error, :enospc} ->
-        {:error, "No space left on device when creating directory: #{dir}"}
-
-      {:error, reason} ->
-        {:error, format_error(reason, dir)}
-    end
-  end
 
   defp file_exists?(path), do: FileValidation.file_exists?(path)
 

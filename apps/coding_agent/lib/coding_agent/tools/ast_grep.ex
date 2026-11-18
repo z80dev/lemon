@@ -20,7 +20,12 @@ defmodule CodingAgent.Tools.AstGrep do
   `expected_matches` equal to the complete preview count. Output limits never
   limit the replacement scope. Plans reject overlapping matches, stale source
   bytes, binary files and symlinks (including parent directory symlinks), before
-  any write. Matching and capture substitution come exclusively from CLI JSON;
+  any write. Each planned file's identity (device and inode) is pinned when it is
+  planned; the preview read, the commit-time content recheck and the in-place
+  write all go through a descriptor-bound walk below the workspace
+  (`FileValidation.read_regular_file/3`, `write_regular_file/3`), so a directory
+  or file swapped for a symlink after validation is refused rather than followed.
+  Matching and capture substitution come exclusively from CLI JSON;
   the CLI never receives `--update-all`. Writes use the normal mutation locks,
   read tracker and filesystem checkpoint guard. A session-scoped preview records
   the source digest, so an intervening edit requires re-reading before applying.
@@ -42,7 +47,8 @@ defmodule CodingAgent.Tools.AstGrep do
   No installation, network access or credential discovery occurs at runtime.
 
   Options: `:ast_grep_timeout_ms` (30_000), `:max_bytes` (32_768), `:spill_dir`
-  (system temp directory), plus the standard session/checkpoint options. Large
+  (default: the session spill directory; never shared temp; a result that needs
+  a spill without one is an error), plus the standard session/checkpoint options. Large
   results spill complete JSONL match records to `full_output_path`, with
   `artifact_uri` and an artifact notice when session storage is available.
   Use `read` with offset/limit to retrieve them. Visible positions are one-based; CLI JSON
@@ -51,6 +57,7 @@ defmodule CodingAgent.Tools.AstGrep do
   """
 
   alias CodingAgent.{FileReadTracker, MutationLock}
+  alias LemonCore.ConfinedFS
   alias CodingAgent.Tools.AstGrep.{Backend, Scope}
   alias CodingAgent.Tools.{CheckpointGuard, FileValidation, PathHelpers, ReadFormatCommand}
   alias LemonAgent.Security.ToolResultTrust
@@ -483,12 +490,16 @@ defmodule CodingAgent.Tools.AstGrep do
     |> Enum.group_by(& &1["file"])
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.reduce_while({:ok, []}, fn {path, file_matches}, {:ok, plans} ->
-      with :ok <- FileValidation.check_mutation_target(path, mutation_opts(opts, cwd)),
-           {:ok, source} <- File.read(path),
+      mutation_opts = mutation_opts(opts, cwd)
+
+      with :ok <- FileValidation.check_mutation_target(path, mutation_opts),
+           {:ok, identity} <- FileValidation.regular_file_identity(path, mutation_opts),
+           {:ok, source} <- FileValidation.read_regular_file(path, identity),
            :ok <- FileValidation.check_text_content(source, path),
            :ok <- FileReadTracker.check(opts, path, source),
            {:ok, rewritten} <- rewrite_source(source, file_matches, request.rewrite) do
-        {:cont, {:ok, [%{path: path, source: source, rewritten: rewritten} | plans]}}
+        plan = %{path: path, identity: identity, source: source, rewritten: rewritten}
+        {:cont, {:ok, [plan | plans]}}
       else
         error -> {:halt, error}
       end
@@ -621,7 +632,7 @@ defmodule CodingAgent.Tools.AstGrep do
     Enum.reduce_while(plans, :ok, fn plan, :ok ->
       with :ok <- check_abort(signal),
            :ok <- FileValidation.check_mutation_target(plan.path, mutation_opts(opts, cwd)),
-           {:ok, current} <- File.read(plan.path),
+           {:ok, current} <- FileValidation.read_regular_file(plan.path, plan.identity),
            true <- current == plan.source do
         {:cont, :ok}
       else
@@ -640,9 +651,9 @@ defmodule CodingAgent.Tools.AstGrep do
     Enum.reduce_while(plans, {:ok, []}, fn plan, {:ok, written} ->
       with :ok <- check_abort(signal),
            :ok <- FileValidation.check_mutation_target(plan.path, mutation_opts(opts, cwd)),
-           {:ok, current} <- File.read(plan.path),
+           {:ok, current} <- FileValidation.read_regular_file(plan.path, plan.identity),
            true <- current == plan.source,
-           :ok <- File.write(plan.path, plan.rewritten) do
+           :ok <- FileValidation.write_regular_file(plan.path, plan.identity, plan.rewritten) do
         FileReadTracker.record(opts, plan.path, plan.rewritten)
         {:cont, {:ok, [plan.path | written]}}
       else
@@ -725,17 +736,31 @@ defmodule CodingAgent.Tools.AstGrep do
     location <> "\n" <> match["text"] <> replacement <> "\nCaptures: " <> captures
   end
 
+  # The spill directory is the session's trusted spill directory (`:spill_dir`,
+  # else `Artifacts.spill_dir/2`), never shared temp. The file gets an
+  # unpredictable name and is created exclusively (no-follow, 0600) through a
+  # descriptor rooted at that directory.
   defp spill(matches, opts) do
-    dir = Keyword.get(opts, :spill_dir, System.tmp_dir!())
+    name = "lemon-ast-grep-" <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
+    name = name <> ".jsonl"
+    data = Enum.map(matches, &[Jason.encode!(&1), "\n"])
 
-    path =
-      Path.join(dir, "lemon-ast-grep-#{System.unique_integer([:positive, :monotonic])}.jsonl")
-
-    with :ok <- File.mkdir_p(dir),
-         :ok <- File.write(path, Enum.map(matches, &[Jason.encode!(&1), "\n"]), [:exclusive]) do
-      {:ok, path}
+    with {:ok, dir} <- spill_dir(opts),
+         :ok <- File.mkdir_p(dir),
+         {:ok, _stat} <-
+           ConfinedFS.with_root(dir, fn fs ->
+             ConfinedFS.create(fs, :root, name, data, mode: 0o600, exact_mode: true)
+           end) do
+      {:ok, Path.join(dir, name)}
     else
       {:error, reason} -> {:error, "Cannot save complete structural result: #{inspect(reason)}"}
+    end
+  end
+
+  defp spill_dir(opts) do
+    case Keyword.get(opts, :spill_dir) do
+      dir when is_binary(dir) -> {:ok, Path.expand(dir)}
+      nil -> CodingAgent.Artifacts.spill_dir(Keyword.fetch!(opts, :cwd), opts)
     end
   end
 

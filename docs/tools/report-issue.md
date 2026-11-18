@@ -16,7 +16,11 @@ UTC `timestamp`, and `session_id` to `tool-issues.jsonl` beneath the session's
 state/spill directory. A nonempty session id is required. The file is private
 (mode 0600), and writes are serialized. It retains the newest complete records
 within a 1 MiB byte budget, dropping oldest records on rotation. A failed write
-returns an error rather than claiming the report was recorded.
+returns an error rather than claiming the report was recorded. The spill
+directory is the trusted root: the log is read, appended and rotated only
+through a descriptor on it that never follows symlinks, so a log entry replaced
+by a symlink is refused, never written through. A log already over the budget
+(written by something else) is replaced by the new record alone.
 
 The tool has the read approval tier and requires no approval by default,
 including the standard ask/write/yolo modes. Explicit per-tool approval

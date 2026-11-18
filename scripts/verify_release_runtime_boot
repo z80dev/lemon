@@ -267,6 +267,21 @@ assert_full_profile_static_files() {
   fi
 }
 
+# LemonCore.ConfinedFS performs file transfers, tool writes, checkpoint
+# restores and cron-memory I/O through its compiled helper; without it those
+# operations fail closed.
+assert_confined_fs_helper() {
+  local profile="$1"
+  local extract_dir="$2"
+  local helper
+
+  helper="$(compgen -G "$extract_dir/lib/lemon_core-*/priv/lemon_confined_fs" | head -n 1)"
+  if [ -z "$helper" ] || [ -L "$helper" ] || [ ! -f "$helper" ] || [ ! -x "$helper" ]; then
+    echo "$profile: missing executable lemon_core priv/lemon_confined_fs helper" >&2
+    exit 1
+  fi
+}
+
 # Runtime profiles bundle the local browser driver with its production
 # dependencies. Loading it through the release's own inspection helper proves
 # the exports and playwright-core resolve; it never launches a browser.
@@ -671,6 +686,7 @@ boot_one_profile() {
   case "$profile" in
     lemon_runtime_min | lemon_runtime_full)
       assert_bundled_browser_driver "$profile" "$extract_dir"
+      assert_confined_fs_helper "$profile" "$extract_dir"
       if [ -n "$darwin_runtime" ]; then
         assert_bundled_python "$profile" "$extract_dir"
       fi
