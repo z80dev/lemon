@@ -895,6 +895,61 @@ the SDK returns them, and re-checks consent immediately before every send. See
 
 Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`. The XMTP transport still checks `enable_xmtp: true` before starting its bridge.
 
+### Email
+
+**Plugin ID**: `"email"` | **Chunk limit**: none
+
+Inbound mail arrives as a provider webhook at `POST /email` on
+`LemonChannels.InboundHttp`; replies go out over SMTP. The `x-webhook-token`
+header authenticates the provider only, so every message is also sender
+authorized by `Email.SenderAuth` before it is normalized, threaded, reserved or
+submitted. Refused senders get `403` and leave no state behind.
+
+```toml
+[gateway.email.inbound]
+token = "a long random string"
+# Required. Bare mailbox addresses; empty or missing refuses every sender.
+allowed_senders = ["you@example.com"]
+# Required. The authserv-id your provider stamps on its Authentication-Results
+# header. Mail must carry that verdict with dmarc=pass for the From domain (or
+# dkim=pass signed by the From domain). Missing it refuses every sender.
+authserv_id = "mx.your-provider.example"
+```
+
+- Verdicts are read from an `authentication_results` payload field, a raw
+  `headers` block or map, a Postmark-style `Headers` list, or Mailgun-style
+  `message-headers` pairs. Only the first header with the configured
+  authserv-id is trusted, so a forged copy lower in the message cannot override
+  it. Set `authserv_id` only to an id your provider actually stamps on every
+  message.
+- Any verdict reporting `dmarc=fail` for the `From` domain is refused.
+- Addresses are parsed whole, the same way inbound and outbound: a bare
+  mailbox or a single `Name <mailbox>`, with a dot-atom local part (so
+  `o'connor@example.com` stays exactly that) and a multi-label ASCII domain.
+  Anything else (quoted local parts, address literals, non-ASCII mailboxes,
+  several addresses) is refused rather than approximated: the sender gets 400,
+  a reply fails with `missing_recipient`, and a malformed configured `from` or
+  `reply_to` fails delivery.
+- Thread state (message→thread mappings, subject, reference chain) is owned by
+  the inbox and the authorized sender. Another sender naming your Message-IDs
+  starts their own thread and never sees or changes yours. Rows written before
+  this scoping are not adopted; an existing conversation's next reply starts
+  fresh thread state.
+- Outbound replies refuse header-breaking values: a subject is unfolded and
+  dropped (for `(no subject)`) if any line break or control character remains,
+  and Message-IDs that are not single `left@right` tokens are discarded.
+- Accepted mail reaches the agent as an unverified, non-owner identity, and its
+  sender, subject, body and attachment lines are fenced as untrusted content
+  (`LemonAgent.Security.ExternalContent`, source `Email`).
+
+> [!WARNING]
+> **Unsafe opt-out for providers without verdicts.** If your provider supplies
+> no `Authentication-Results` at all, `sender_auth = "from_only_unsafe"` (with
+> no `authserv_id`) admits allowlisted addresses on the `From` header alone.
+> `From` is trivially forged: anyone who knows an allowlisted address can then
+> run the agent as that sender. The adapter logs a warning at startup while
+> this is set. A configured `authserv_id` is still enforced alongside it.
+
 ### WhatsApp
 
 **Plugin ID**: `"whatsapp"` | **Chunk limit**: 4096

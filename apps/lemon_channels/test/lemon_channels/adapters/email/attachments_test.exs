@@ -121,15 +121,19 @@ defmodule LemonChannels.Adapters.Email.AttachmentsTest do
       assert message.message.text =~ "see attached"
       assert message.message.text =~ "Attachments:"
       assert message.message.text =~ "spec.md"
+      # Attachment names are sender-controlled, so they stay inside the fence.
+      assert message.message.text =~
+               ~r/Attachments:\n- spec\.md .*\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>\z/
 
       assert [%{filename: "spec.md"}] = message.meta.attachments
     end
 
-    test "leaves the text alone when there are none" do
+    test "leaves the body alone when there are none" do
       {:ok, message} =
         Email.normalize_inbound(%{"from" => "a@b.test", "text" => "nothing attached"})
 
-      assert message.message.text == "nothing attached"
+      assert message.message.text =~ "---\nnothing attached\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
+      refute message.message.text =~ "Attachments:"
       assert message.meta.attachments == []
     end
   end

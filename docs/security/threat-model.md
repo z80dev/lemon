@@ -278,6 +278,35 @@ accepts unauthenticated POSTs is a spam relay into someone's agent." A malformed
 config yields *no* token and therefore a 401: unreadable configuration must not
 fail open.
 
+**Sender authorization.** The token authenticates the mail *provider*, not the
+sender: anyone can mail the provider address with any `From`. After parsing,
+`LemonChannels.Adapters.Email.SenderAuth` admits only `From` mailboxes listed
+in `gateway.email.inbound.allowed_senders` (exact, case-insensitive; an empty,
+missing or malformed list refuses everyone) **and** only with a provider
+attestation: the first RFC 8601 `Authentication-Results` verdict stamped with
+the pinned `gateway.email.inbound.authserv_id` must report `dmarc=pass` for the
+`From` domain or a `dkim=pass` whose signing domain equals it. SPF alone,
+foreign or forged lower verdicts, non-passing and missing verdicts are refused,
+and without `authserv_id` every sender is refused. A verdict reporting
+`dmarc=fail` for the `From` domain is always refused. A refused sender gets
+`403` before thread state, attachment writes, the idempotency reservation or
+router submission. The guarantee depends on the provider stamping every
+message with its own `Authentication-Results` (and stripping inbound copies
+claiming its id). The only way to admit mail without a verdict is the explicit
+`sender_auth = "from_only_unsafe"` opt-out, which reduces authorization to a
+forgeable `From` and is logged as a warning at startup. Accepted email is still
+an unverified, non-owner identity downstream.
+
+**Email thread isolation and reply headers.** Email thread state (message→thread
+mappings, subject, reference chain) is keyed by inbox and authorized sender, on
+both the inbound and outbound paths, so one sender cannot join, read through the
+agent's reply, or overwrite another's thread by naming its Message-IDs; legacy
+unscoped rows are never adopted. Outbound composition unfolds folded subjects,
+refuses any subject or threading id that still carries a line break or control
+character, keeps only single-token `left@right` Message-IDs, and refuses to
+render any header value that is not a single line, so text from a sender cannot
+inject headers (such as `Reply-To`) into the agent's reply.
+
 **Bounded body.** `Plug.Parsers` enforces a configurable `max_body_bytes`;
 over the limit the caller gets `413` instead of the server buffering unbounded
 input. The limit is resolved per request, not frozen into the pipeline.
@@ -325,7 +354,9 @@ the [agent safety contract](agent-safety-contract.md#lemon-bot-remembered-approv
 Content from outside the trust boundary — email bodies, web-search/fetch
 results, other agents' output — is wrapped before it reaches a model, by
 `LemonAgent.Security.ExternalContent` (with a `CodingAgent.Security.ExternalContent`
-counterpart for tool results).
+counterpart for tool results). For email, `LemonChannels.Adapters.Email`
+fences the whole prompt it builds (sender, subject, body and attachment lines)
+with source `Email` before the message is submitted to the router.
 
 `wrap_external_content/2` fences the content between explicit
 `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` markers, prefixed with a security notice

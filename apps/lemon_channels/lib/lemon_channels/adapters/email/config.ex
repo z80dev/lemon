@@ -52,6 +52,7 @@ defmodule LemonChannels.Adapters.Email.Config do
     case tail do
       [] -> value
       _ when is_map(value) -> fetch(value, tail)
+      [_ | _] when is_list(value) -> if Keyword.keyword?(value), do: fetch(Map.new(value), tail)
       _ -> nil
     end
   end
@@ -95,6 +96,77 @@ defmodule LemonChannels.Adapters.Email.Config do
       _ -> nil
     end
   end
+
+  @doc """
+  The senders allowed to reach the agent through the inbound webhook:
+  `gateway.email.inbound.allowed_senders`, trimmed and lowercased.
+
+  Entries that are not strings containing `@` are dropped, and anything other
+  than a list yields `[]`, which `LemonChannels.Adapters.Email.SenderAuth`
+  treats as "refuse everyone". An unreadable allowlist must not fail open.
+  """
+  @spec allowed_senders(map()) :: [binary()]
+  def allowed_senders(cfg) when is_map(cfg) do
+    case fetch(cfg, [:inbound, :allowed_senders]) do
+      senders when is_list(senders) ->
+        for sender when is_binary(sender) <- senders,
+            normalized = sender |> String.trim() |> String.downcase(),
+            String.contains?(normalized, "@"),
+            do: normalized
+
+      _ ->
+        []
+    end
+  end
+
+  def allowed_senders(_cfg), do: []
+
+  @doc """
+  The sender-attestation policy for inbound mail.
+
+    * `{:required, authserv_id}` — `gateway.email.inbound.authserv_id` is set:
+      every message needs a passing `Authentication-Results` verdict stamped
+      with that id. This is the only accepting policy unless the operator opts
+      out explicitly, and it applies even alongside the opt-out.
+    * `:from_only_unsafe` — no `authserv_id`, and
+      `gateway.email.inbound.sender_auth = "from_only_unsafe"`: the allowlisted
+      `From` alone admits a message, so anyone who forges that address can
+      reach the agent. For providers that supply no verdict at all.
+    * `{:invalid, reason}` — anything else, including the default of no
+      `authserv_id` and no opt-out. Every sender is refused.
+  """
+  @spec sender_attestation(map()) ::
+          {:required, binary()}
+          | :from_only_unsafe
+          | {:invalid, :authserv_id_missing | :authserv_id_invalid | :sender_auth_invalid}
+  def sender_attestation(cfg) when is_map(cfg) do
+    mode = fetch(cfg, [:inbound, :sender_auth])
+
+    cond do
+      mode not in [nil, "authentication_results", "from_only_unsafe"] ->
+        {:invalid, :sender_auth_invalid}
+
+      true ->
+        case fetch(cfg, [:inbound, :authserv_id]) do
+          nil when mode == "from_only_unsafe" ->
+            :from_only_unsafe
+
+          nil ->
+            {:invalid, :authserv_id_missing}
+
+          value when is_binary(value) ->
+            case blank_to_nil(value) do
+              nil -> {:invalid, :authserv_id_invalid}
+              id -> {:required, String.downcase(id)}
+            end
+
+          _ ->
+            {:invalid, :authserv_id_invalid}
+        end
+    end
+  end
+
+  def sender_attestation(_cfg), do: {:invalid, :authserv_id_missing}
 
   @doc "Trims a binary and maps the empty result to `nil`; anything else to `nil`."
   @spec blank_to_nil(term()) :: binary() | nil

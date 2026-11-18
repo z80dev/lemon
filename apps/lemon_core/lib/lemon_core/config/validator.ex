@@ -572,10 +572,62 @@ defmodule LemonCore.Config.Validator do
       Map.get(inbound, :max_body_bytes),
       "gateway.email.inbound.max_body_bytes"
     )
+    |> validate_email_allowed_senders(email_inbound_value(inbound, :allowed_senders))
+    |> validate_email_authserv_id(email_inbound_value(inbound, :authserv_id))
+    |> validate_email_sender_auth(email_inbound_value(inbound, :sender_auth))
   end
 
   defp validate_email_inbound_config(errors, _),
     do: ["gateway.email.inbound: must be a map" | errors]
+
+  defp validate_email_sender_auth(errors, value)
+       when value in [nil, "authentication_results", "from_only_unsafe"],
+       do: errors
+
+  defp validate_email_sender_auth(errors, _value),
+    do: [
+      "gateway.email.inbound.sender_auth: invalid value. Valid: authentication_results, from_only_unsafe"
+      | errors
+    ]
+
+  # The `email` section is a passthrough whose nested maps keep TOML's string
+  # keys, so the sender-authorization keys are read in both forms.
+  defp email_inbound_value(inbound, key),
+    do: Map.get(inbound, key, Map.get(inbound, Atom.to_string(key)))
+
+  defp validate_email_allowed_senders(errors, nil), do: errors
+
+  defp validate_email_allowed_senders(errors, senders) when is_list(senders) do
+    if Enum.all?(senders, &bare_email_address?/1) do
+      errors
+    else
+      [
+        "gateway.email.inbound.allowed_senders: must be a list of bare email addresses (user@domain)"
+        | errors
+      ]
+    end
+  end
+
+  defp validate_email_allowed_senders(errors, _senders),
+    do: ["gateway.email.inbound.allowed_senders: must be a list of email addresses" | errors]
+
+  defp bare_email_address?(value) when is_binary(value),
+    do: Regex.match?(~r/\A[^@\s<>"(),;]+@[^@\s<>"(),;]+\z/, String.trim(value))
+
+  defp bare_email_address?(_value), do: false
+
+  defp validate_email_authserv_id(errors, nil), do: errors
+
+  defp validate_email_authserv_id(errors, value) when is_binary(value) do
+    if String.trim(value) == "" or String.match?(String.trim(value), ~r/[\s;()"]/) do
+      ["gateway.email.inbound.authserv_id: must be a single authserv-id token" | errors]
+    else
+      errors
+    end
+  end
+
+  defp validate_email_authserv_id(errors, _value),
+    do: ["gateway.email.inbound.authserv_id: must be a string" | errors]
 
   defp validate_email_outbound_config(errors, nil), do: errors
 

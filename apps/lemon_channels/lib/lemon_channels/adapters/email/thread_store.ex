@@ -26,17 +26,29 @@ defmodule LemonChannels.Adapters.Email.ThreadStore do
   which is the difference between a reply that lands inside the recipient's
   existing conversation and one that starts a new one.
 
+  ## Ownership
+
+  Every row is owned by a **scope**: the inbox the mail was addressed to and the
+  authorized sender, as built by `scope/2`. Lookups and writes only ever touch
+  rows of the caller's scope, so one sender who learns (or guesses) another
+  sender's Message-ID cannot join that thread, read its subject and reference
+  chain through the agent's reply, or overwrite them. The inbound half scopes by
+  `{account_id, sender}` of the authorized message and the outbound half by the
+  payload's `{account_id, peer.id}`, which are the same pair for a reply.
+
+  Rows written before scoping existed (keyed by a bare message or thread id)
+  have no owner and are never read: a reply on such a thread starts fresh
+  state rather than adopting metadata just because an id matches.
+
   ## Storage
 
-  Two `LemonCore.Store` tables, carried over unchanged from
-  `LemonGateway.Transports.Email` so an existing deployment's threads survive
-  the cutover:
+  Two `LemonCore.Store` tables:
 
-    * `:email_message_threads` — `message_id => %{"thread_id" => …}`
-    * `:email_thread_state` — `thread_id => %{"references" => […], "subject" => …}`
+    * `:email_message_threads` — `{inbox, sender, message_id} => %{"thread_id" => …}`
+    * `:email_thread_state` — `{inbox, sender, thread_id} => %{"references" => […], "subject" => …}`
 
-  Every operation degrades to a no-op when no store is running: reads answer
-  `nil` and writes answer `{:error, :store_unavailable}` without raising, so an
+  Every operation degrades to a no-op when no store is running or no scope is
+  known: reads answer `nil`/`%{}` and writes answer without raising, so an
   adapter in a runtime with no store behaves exactly like the stateless one
   rather than failing to accept mail.
   """
@@ -47,31 +59,49 @@ defmodule LemonChannels.Adapters.Email.ThreadStore do
   @message_thread_table :email_message_threads
   @thread_state_table :email_thread_state
 
-  @doc """
-  The thread id for a parsed message.
+  @type scope :: {inbox :: binary(), sender :: binary()}
 
-  Returns the thread of the first known ancestor — nearest first, since the
-  immediate parent is the strongest evidence — and otherwise `fallback`, which
-  is the caller's stateless computation.
+  @doc """
+  The ownership scope for an inbox and a sender address, or `nil` when either
+  is missing. Both are trimmed and lowercased.
   """
-  @spec resolve(map(), binary()) :: binary()
-  def resolve(parsed, fallback) when is_binary(fallback) do
+  @spec scope(term(), term()) :: scope() | nil
+  def scope(inbox, sender) when is_binary(inbox) and is_binary(sender) do
+    case {normalize_owner(inbox), normalize_owner(sender)} do
+      {"", _sender} -> nil
+      {_inbox, ""} -> nil
+      scope -> scope
+    end
+  end
+
+  def scope(_inbox, _sender), do: nil
+
+  @doc """
+  The thread id for a parsed message within `scope`.
+
+  Returns the thread of the first ancestor known *in this scope* — nearest
+  first, since the immediate parent is the strongest evidence — and otherwise
+  `fallback`, which is the caller's stateless computation.
+  """
+  @spec resolve(map(), binary(), scope() | nil) :: binary()
+  def resolve(parsed, fallback, scope) when is_binary(fallback) do
     candidates =
       [parsed[:message_id], parsed[:in_reply_to] | Enum.reverse(parsed[:references] || [])]
       |> Enum.reject(&is_nil/1)
 
-    Enum.find_value(candidates, fallback, &thread_of/1)
+    Enum.find_value(candidates, fallback, &thread_of(scope, &1))
   end
 
   @doc """
-  Records an inbound message against `thread_id` and returns the thread's state.
+  Records an inbound message against `thread_id` in `scope` and returns the
+  thread's state.
 
   The returned map is authoritative for the send that follows even when the
   store is unavailable, since it is computed before being written.
   """
-  @spec record_inbound(map(), binary()) :: map()
-  def record_inbound(parsed, thread_id) when is_binary(thread_id) do
-    existing = state(thread_id)
+  @spec record_inbound(map(), binary(), scope() | nil) :: map()
+  def record_inbound(parsed, thread_id, scope) when is_binary(thread_id) do
+    existing = state(scope, thread_id)
 
     references =
       MessageId.merge([
@@ -91,25 +121,25 @@ defmodule LemonChannels.Adapters.Email.ThreadStore do
       "updated_at_ms" => System.system_time(:millisecond)
     }
 
-    _ = put_message_thread(parsed[:message_id], thread_id)
-    _ = put(@thread_state_table, thread_id, state)
+    _ = put_message_thread(scope, parsed[:message_id], thread_id)
+    _ = put_scoped(@thread_state_table, scope, thread_id, state)
 
     state
   end
 
   @doc """
-  Records a message this adapter sent, so the reply to it resolves to the same
-  thread and the chain keeps growing.
+  Records a message this adapter sent in `scope`, so the reply to it resolves
+  to the same thread and the chain keeps growing.
   """
-  @spec record_outbound(binary() | nil, binary(), [binary()]) :: :ok
-  def record_outbound(thread_id, message_id, references)
+  @spec record_outbound(scope() | nil, binary() | nil, binary(), [binary()]) :: :ok
+  def record_outbound(scope, thread_id, message_id, references)
       when is_binary(thread_id) and is_binary(message_id) do
-    existing = state(thread_id)
+    existing = state(scope, thread_id)
 
-    _ = put_message_thread(message_id, thread_id)
+    _ = put_message_thread(scope, message_id, thread_id)
 
     _ =
-      put(@thread_state_table, thread_id, %{
+      put_scoped(@thread_state_table, scope, thread_id, %{
         "thread_id" => thread_id,
         "references" => MessageId.merge([existing["references"], references, [message_id]]),
         "last_message_id" => message_id,
@@ -122,44 +152,42 @@ defmodule LemonChannels.Adapters.Email.ThreadStore do
     :ok
   end
 
-  def record_outbound(_thread_id, _message_id, _references), do: :ok
+  def record_outbound(_scope, _thread_id, _message_id, _references), do: :ok
 
   @doc """
-  The stored state for a thread, string-keyed, or `%{}` when there is none.
-
-  Normalizes atom-keyed values too: the tables outlive process restarts and
-  backend swaps, and older rows were written with atom keys.
+  The stored state for a thread in `scope`, string-keyed, or `%{}` when there
+  is none (including when `scope` is `nil`).
   """
-  @spec state(binary() | nil) :: map()
-  def state(thread_id) when is_binary(thread_id) do
-    case get(@thread_state_table, thread_id) do
+  @spec state(scope() | nil, binary() | nil) :: map()
+  def state(scope, thread_id) when is_binary(thread_id) do
+    case get_scoped(@thread_state_table, scope, thread_id) do
       %{} = stored -> normalize_keys(stored)
       _ -> %{}
     end
   end
 
-  def state(_thread_id), do: %{}
+  def state(_scope, _thread_id), do: %{}
 
-  defp thread_of(message_id) when is_binary(message_id) do
-    case get(@message_thread_table, message_id) do
+  defp thread_of(scope, message_id) when is_binary(message_id) do
+    case get_scoped(@message_thread_table, scope, message_id) do
       %{"thread_id" => thread_id} when is_binary(thread_id) and thread_id != "" -> thread_id
-      %{thread_id: thread_id} when is_binary(thread_id) and thread_id != "" -> thread_id
-      thread_id when is_binary(thread_id) and thread_id != "" -> thread_id
       _ -> nil
     end
   end
 
-  defp thread_of(_message_id), do: nil
+  defp thread_of(_scope, _message_id), do: nil
 
-  defp put_message_thread(message_id, thread_id)
+  defp put_message_thread(scope, message_id, thread_id)
        when is_binary(message_id) and is_binary(thread_id) do
-    put(@message_thread_table, message_id, %{
+    put_scoped(@message_thread_table, scope, message_id, %{
       "thread_id" => thread_id,
       "updated_at_ms" => System.system_time(:millisecond)
     })
   end
 
-  defp put_message_thread(_message_id, _thread_id), do: :ok
+  defp put_message_thread(_scope, _message_id, _thread_id), do: :ok
+
+  defp normalize_owner(value), do: value |> String.trim() |> String.downcase()
 
   defp normalize_keys(map) do
     Map.new(map, fn
@@ -167,6 +195,12 @@ defmodule LemonChannels.Adapters.Email.ThreadStore do
       pair -> pair
     end)
   end
+
+  defp get_scoped(table, {inbox, sender}, id), do: get(table, {inbox, sender, id})
+  defp get_scoped(_table, _scope, _id), do: nil
+
+  defp put_scoped(table, {inbox, sender}, id, value), do: put(table, {inbox, sender, id}, value)
+  defp put_scoped(_table, _scope, _id, _value), do: :ok
 
   # The store is optional infrastructure for this adapter, not a dependency of
   # accepting mail — a failed read or write costs thread continuity, nothing
