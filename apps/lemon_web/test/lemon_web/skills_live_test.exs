@@ -62,6 +62,9 @@ defmodule LemonWeb.SkillsLiveTest do
     path = Path.join(dir, key)
     File.mkdir_p!(path)
     File.write!(Path.join(path, "SKILL.md"), "---\n#{frontmatter}\n---\nBody for #{key}\n")
+    # Loading and readiness require an operator-side grant for these exact bytes.
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(path)
+    :ok = LemonSkills.Audit.State.authorize(:global, key, hash, :pass)
     LemonSkills.Registry.refresh()
   end
 

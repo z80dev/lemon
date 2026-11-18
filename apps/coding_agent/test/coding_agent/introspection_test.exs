@@ -184,6 +184,8 @@ defmodule CodingAgent.IntrospectionTest do
     skill_dir = Path.join([cwd, ".lemon", "skill", key])
     File.mkdir_p!(skill_dir)
     File.write!(Path.join(skill_dir, "SKILL.md"), skill_md)
+    isolate_agent_dir!(cwd)
+    authorize_skill!(skill_dir, {:project, cwd})
     skill_dir
   end
 
@@ -557,5 +559,21 @@ defmodule CodingAgent.IntrospectionTest do
 
       GenServer.stop(session, :normal)
     end
+  end
+
+  defp isolate_agent_dir!(dir) do
+    previous = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", Path.join(dir, "agent"))
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("LEMON_AGENT_DIR", previous),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+  end
+
+  defp authorize_skill!(dir, scope) do
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(dir)
+    :ok = LemonSkills.Audit.State.authorize(scope, Path.basename(dir), hash, :pass)
   end
 end

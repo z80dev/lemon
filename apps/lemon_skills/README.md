@@ -409,8 +409,8 @@ Every install/update for a non-builtin skill runs through the audit path before 
 
 Agent-authored skill writes use the same bundle audit path through `skill_manage`. The tool writes only to the configured project or global skill directories, restricts supporting files to `references/`, `templates/`, `scripts/`, and `assets/`, and rolls back blocked audit verdicts before refreshing the registry. `skill_manage` also exposes a `report` action that summarizes usage sidecar rows and flags stale/archive candidates before an agent curates skills.
 
-1. The package computes a deterministic bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`. Symlinked bundle entries are rejected so the audit payload cannot escape the skill root.
-2. `LemonSkills.Audit.BundleAudit` reuses cached results from `skills.audit.json` only when the bundle hash and audit fingerprint still match.
+1. The package computes a deterministic, length-delimited and versioned bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`. Symlinked bundle entries and entry names with control/format characters, `\`, `:` or invalid UTF-8 are blocking violations, so the audit payload cannot escape the skill root and no file name can forge another bundle's hash.
+2. `LemonSkills.Audit.BundleAudit` reuses cached results from operator-side audit state only when the bundle hash and audit fingerprint still match. A repository's `.lemon/skills.audit.json` is never read.
 3. `LemonSkills.Audit.Engine` runs deterministic checks for destructive commands, remote execution, exfiltration, traversal, and escape patterns across all auditable text files in the bundle. Backslash-escaped Markdown operators are treated as prose, while real unescaped download-to-interpreter pipelines remain hard blocks.
 4. If configured, `LemonSkills.Audit.BundleAudit` runs one `LemonSkills.Audit.LlmReviewer` pass over the bundle payload, classifying the skill as `pass`, `warn`, or `block`. Per-call `:llm` options override application configuration; direct `Engine` calls remain deterministic.
 5. The installer enforces the verdict:
@@ -428,10 +428,14 @@ config :lemon_skills, :audit_llm,
 
 The configured model can be either a bare model id such as `"gpt-4o-mini"` or a provider-qualified id such as `"openai:gpt-4o-mini"`.
 
-Detailed audit state is persisted separately from provenance lockfiles:
+Detailed audit state and load authorizations are persisted operator-side, separately from provenance lockfiles:
 
 - global: `~/.lemon/agent/skills.audit.json`
-- project: `<cwd>/.lemon/skills.audit.json`
+- project: `~/.lemon/agent/skill_audits/project-<sha256 of the project real path>.json`
+
+`read_skill` and `skill://` load a skill only when the registry found an authorization for its exact live bundle hash: an audit `:pass` (recorded by `BundleAudit.audit/4`), an operator-approved `:warn` or block override (`LemonSkills.Audit.State.authorize/4`, called by the installer), or a byte-identical builtin. `LemonSkills.Status.loadable?/2` re-hashes the live bundle on every load, so any file change revokes loading until `lemon skill audit <key>` (or a reinstall) authorizes the new bytes. Lockfile `audit_status`, particularly in a project lockfile, is descriptive only. Lockfile and audit-state files are written through `LemonSkills.MetadataFile`: contained below the project or agent directory, never through symlinks, special files or hard links, replaced atomically with mode `0600`.
+
+Upgrade path (one-time): on hydration, the Registry queues skills installed in `Config.global_skills_dir/0` that meet three conditions: the global lockfile records a completed install (`pass`/`warn`/`overridden`); the record's `bundle_hash` equals the pre-v2 hash (`Bundle.legacy_hash/1`) of the unchanged live bytes; and the skill holds no grant for its live hash. Each queued skill gets `BundleAudit.audit/4` with the LLM reviewer disabled, under `LemonSkills.TaskSupervisor` (lint plus engine, as at install), and the Registry then reloads. Only a `:pass` grants. Each `{key, hash}` is attempted once, and bytes that already have an audit record are never re-queued. Edits after install, v2 records, pending records, other global roots and project skills always need `lemon skill audit`.
 
 ## How Skills Are Executed (Consumed)
 

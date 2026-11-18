@@ -19,7 +19,8 @@ defmodule LemonSkills.Entry do
 
   ## v2 provenance fields (optional, nil when absent)
 
-  - `source_kind` — one of `:builtin`, `:local`, `:git`, `:registry`, `:well_known`
+  - `source_kind` — one of `:builtin`, `:local`, `:git`, `:registry`, `:well_known`,
+    `:hermes` (imported by the Hermes migration)
   - `source_id` — original install identifier (URL, path, registry ref)
   - `trust_level` — one of `:builtin`, `:official`, `:trusted`, `:community`
   - `content_hash` — SHA-256 hex of the installed `SKILL.md` content
@@ -29,6 +30,11 @@ defmodule LemonSkills.Entry do
   - `updated_at` — `DateTime` of last update
   - `audit_status` — `:pending`, `:pass`, `:warn`, `:block`, or `:overridden`
   - `audit_findings` — list of audit finding strings
+  - `authorized_hash` — the live bundle hash the registry found authorized for
+    loading (an operator-side audit pass, warning approval or block override
+    for exactly these bytes, or a byte-identical builtin), `nil` otherwise.
+    Set only by registry hydration, never from lockfile provenance;
+    `LemonSkills.Status.loadable?/2` re-checks it against the live bundle.
 
   Backward-compatible: all v2 fields default to `nil`. Existing call sites
   that only read v1 fields continue to work without changes.
@@ -53,7 +59,7 @@ defmodule LemonSkills.Entry do
 
   @type source :: :global | :project | String.t()
   @type status :: :ready | :missing_deps | :missing_config | :disabled | :error
-  @type source_kind :: :builtin | :local | :git | :registry | :well_known
+  @type source_kind :: :builtin | :local | :git | :registry | :well_known | :hermes
   @type trust_level :: :builtin | :official | :trusted | :community
   @type audit_status :: :pending | :pass | :warn | :block | :overridden
 
@@ -77,7 +83,8 @@ defmodule LemonSkills.Entry do
           updated_at: DateTime.t() | nil,
           audit_status: audit_status() | nil,
           audit_findings: [String.t()],
-          hidden_from_model: boolean()
+          hidden_from_model: boolean(),
+          authorized_hash: String.t() | nil
         }
 
   @enforce_keys [:key, :path]
@@ -101,7 +108,8 @@ defmodule LemonSkills.Entry do
     enabled: true,
     status: :ready,
     audit_findings: [],
-    hidden_from_model: false
+    hidden_from_model: false,
+    authorized_hash: nil
   ]
 
   # ---------------------------------------------------------------------------
@@ -207,15 +215,15 @@ defmodule LemonSkills.Entry do
     %{
       entry
       | source_kind: parse_atom(prov["source_kind"]),
-        source_id: prov["source_id"],
+        source_id: string_or_nil(prov["source_id"]),
         trust_level: parse_atom(prov["trust_level"]),
-        content_hash: prov["content_hash"],
-        bundle_hash: prov["bundle_hash"],
-        upstream_hash: prov["upstream_hash"],
+        content_hash: string_or_nil(prov["content_hash"]),
+        bundle_hash: string_or_nil(prov["bundle_hash"]),
+        upstream_hash: string_or_nil(prov["upstream_hash"]),
         installed_at: parse_datetime(prov["installed_at"]),
         updated_at: parse_datetime(prov["updated_at"]),
         audit_status: parse_atom(prov["audit_status"]),
-        audit_findings: List.wrap(prov["audit_findings"])
+        audit_findings: prov["audit_findings"] |> List.wrap() |> Enum.filter(&is_binary/1)
     }
   end
 
@@ -233,9 +241,12 @@ defmodule LemonSkills.Entry do
   @spec skill_file(t()) :: String.t()
   def skill_file(%__MODULE__{path: path}), do: Path.join(path, "SKILL.md")
 
-  @doc "Read the SKILL.md content."
+  @doc """
+  Read the SKILL.md content through the bundle resolver: a symlinked, special
+  or oversized `SKILL.md` is refused.
+  """
   @spec content(t()) :: {:ok, String.t()} | {:error, term()}
-  def content(%__MODULE__{} = entry), do: entry |> skill_file() |> File.read()
+  def content(%__MODULE__{path: path}), do: LemonSkills.Bundle.read_file(path, "SKILL.md")
 
   @doc """
   Compute the SHA-256 hex digest of the entry's SKILL.md content.
@@ -291,22 +302,22 @@ defmodule LemonSkills.Entry do
   # ---------------------------------------------------------------------------
 
   @valid_atoms ~w(
-    builtin local git registry well_known
+    builtin local git registry well_known hermes
     official trusted community
     pending pass warn block overridden
     ready missing_deps missing_config disabled error
     global project
   )a
 
-  defp parse_atom(nil), do: nil
-
   defp parse_atom(s) when is_binary(s) do
     Enum.find(@valid_atoms, fn a -> Atom.to_string(a) == s end)
   end
 
-  defp parse_atom(a) when is_atom(a), do: a
+  defp parse_atom(a) when is_atom(a) and a in @valid_atoms, do: a
+  defp parse_atom(_), do: nil
 
-  defp parse_datetime(nil), do: nil
+  defp string_or_nil(s) when is_binary(s), do: s
+  defp string_or_nil(_), do: nil
 
   defp parse_datetime(s) when is_binary(s) do
     case DateTime.from_iso8601(s) do
@@ -314,6 +325,8 @@ defmodule LemonSkills.Entry do
       _ -> nil
     end
   end
+
+  defp parse_datetime(_), do: nil
 
   defp datetime_to_iso(nil), do: nil
   defp datetime_to_iso(%DateTime{} = dt), do: DateTime.to_iso8601(dt)

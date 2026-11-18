@@ -60,11 +60,14 @@ defmodule LemonSkills.Sources.Local do
         {:error, {:missing_skill_file, skill_file}}
 
       true ->
+        # Copies only the bundle layout, never following links; a source with
+        # hidden, out-of-layout, symlinked or special entries is refused.
         File.rm_rf(dest_dir)
 
-        case File.cp_r(source_path, dest_dir) do
-          {:ok, _} -> {:ok, dest_dir}
-          {:error, reason, _path} -> {:error, {:copy_failed, reason}}
+        case LemonSkills.Bundle.copy_tree(source_path, dest_dir) do
+          {:ok, dest} -> {:ok, dest}
+          {:error, {:bundle_violations, _} = reason} -> {:error, reason}
+          {:error, reason} -> {:error, {:copy_failed, reason}}
         end
     end
   end

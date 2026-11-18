@@ -42,8 +42,9 @@ defmodule LemonSkills.Sources.Git do
 
     File.rm_rf(dest_dir)
 
-    clone_args =
-      ["clone", "--depth", to_string(depth), "--branch", branch, url, dest_dir]
+    # `core.symlinks=false` checks symlinks out as plain files; the installer's
+    # bundle scan then audits or rejects every entry of the fetched tree.
+    clone_args = clone_args(depth, ["--branch", branch], url, dest_dir)
 
     case System.cmd("git", clone_args, stderr_to_stdout: true) do
       {_out, 0} ->
@@ -53,7 +54,7 @@ defmodule LemonSkills.Sources.Git do
 
       {output, _code} ->
         # Retry without --branch in case the default branch differs.
-        retry_args = ["clone", "--depth", to_string(depth), url, dest_dir]
+        retry_args = clone_args(depth, [], url, dest_dir)
 
         case System.cmd("git", retry_args, stderr_to_stdout: true) do
           {_out2, 0} ->
@@ -66,10 +67,15 @@ defmodule LemonSkills.Sources.Git do
     end
   end
 
+  defp clone_args(depth, branch_args, url, dest_dir) do
+    ["-c", "core.symlinks=false", "clone", "--no-recurse-submodules", "--depth", to_string(depth)] ++
+      branch_args ++ ["--", url, dest_dir]
+  end
+
   @impl true
   def upstream_hash(url, _opts) when is_binary(url) do
     # Fetch the latest commit hash of the default remote HEAD.
-    case System.cmd("git", ["ls-remote", url, "HEAD"], stderr_to_stdout: true) do
+    case System.cmd("git", ["ls-remote", "--", url, "HEAD"], stderr_to_stdout: true) do
       {output, 0} ->
         case String.split(output, "\t", parts: 2) do
           [hash | _] -> {:ok, String.trim(hash)}

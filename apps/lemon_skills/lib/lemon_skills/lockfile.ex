@@ -10,6 +10,14 @@ defmodule LemonSkills.Lockfile do
   # - **Project**: `<cwd>/.lemon/skills.lock.json` — provenance for
   #   project-specific installs.
   #
+  # Lockfile provenance is descriptive. A project lockfile is repository
+  # content: it never authorizes loading or skips an audit (authorizations are
+  # operator-side, see `LemonSkills.Audit.State`). Reads and writes are
+  # contained by `LemonSkills.MetadataFile`: the project directory or the
+  # agent directory is the trusted anchor, symlinked components and
+  # non-regular or hard-linked lockfiles are refused, and writes replace the
+  # file atomically (0600) without following the destination.
+  #
   # Each lockfile is a JSON object with a `"version"` integer and a `"skills"`
   # map from skill key to a provenance record (see
   # `LemonSkills.Entry.to_lockfile_record/1`).
@@ -48,12 +56,12 @@ defmodule LemonSkills.Lockfile do
   #       }
   #     }
 
-  alias LemonSkills.Config
+  alias LemonSkills.{Config, MetadataFile, SkillRoot}
 
   @lockfile_name "skills.lock.json"
   @current_version 1
 
-  @type scope :: :global | {:project, String.t()}
+  @type scope :: :global | {:project, String.t()} | {:agent_dir, String.t()}
   @type skill_record :: %{String.t() => term()}
   @type skills_map :: %{String.t() => skill_record()}
 
@@ -68,6 +76,10 @@ defmodule LemonSkills.Lockfile do
   def path({:project, cwd}) when is_binary(cwd),
     do: Path.join([cwd, ".lemon", @lockfile_name])
 
+  # An explicit agent directory, for offline imports into a target other than
+  # the configured one (e.g. `lemon migrate hermes --target`).
+  def path({:agent_dir, dir}) when is_binary(dir), do: Path.join(dir, @lockfile_name)
+
   # ---------------------------------------------------------------------------
   # Read
   # ---------------------------------------------------------------------------
@@ -80,9 +92,7 @@ defmodule LemonSkills.Lockfile do
   """
   @spec read(scope()) :: {:ok, skills_map()} | {:error, term()}
   def read(scope) do
-    path = path(scope)
-
-    case File.read(path) do
+    case MetadataFile.read(read_anchor(scope), path(scope)) do
       {:ok, content} ->
         case Jason.decode(content) do
           {:ok, %{"skills" => skills}} when is_map(skills) ->
@@ -134,9 +144,9 @@ defmodule LemonSkills.Lockfile do
   """
   @spec put(scope(), skill_record()) :: :ok | {:error, term()}
   def put(scope, %{"key" => key} = record) when is_binary(key) do
-    with_file_lock(scope, fn ->
+    with_file_lock(scope, fn anchor ->
       with {:ok, skills} <- read(scope) do
-        write(scope, Map.put(skills, key, record))
+        write(anchor, scope, Map.put(skills, key, record))
       end
     end)
   end
@@ -148,9 +158,9 @@ defmodule LemonSkills.Lockfile do
   """
   @spec delete(scope(), String.t()) :: :ok | {:error, term()}
   def delete(scope, key) when is_binary(key) do
-    with_file_lock(scope, fn ->
+    with_file_lock(scope, fn anchor ->
       with {:ok, skills} <- read(scope) do
-        write(scope, Map.delete(skills, key))
+        write(anchor, scope, Map.delete(skills, key))
       end
     end)
   end
@@ -159,21 +169,28 @@ defmodule LemonSkills.Lockfile do
   # Private
   # ---------------------------------------------------------------------------
 
-  defp write(scope, skills) do
-    path = path(scope)
-    File.mkdir_p!(Path.dirname(path))
-
+  defp write(anchor, scope, skills) do
     payload = %{"version" => @current_version, "skills" => skills}
 
     case Jason.encode(payload, pretty: true) do
-      {:ok, json} -> File.write(path, json)
+      {:ok, json} -> MetadataFile.write(anchor, path(scope), json)
       {:error, reason} -> {:error, {:json_encode, reason}}
     end
   end
 
   defp with_file_lock(scope, fun) do
-    lock_path = path(scope) <> ".lock"
-    File.mkdir_p!(Path.dirname(lock_path))
-    LemonCore.Service.Lock.with_lock_path(lock_path, [timeout: 1_000], fun)
+    with {:ok, anchor} <- write_anchor(scope) do
+      MetadataFile.with_lock(anchor, path(scope), fn -> fun.(anchor) end)
+    end
   end
+
+  defp read_anchor(:global), do: Path.expand(Config.agent_dir())
+  defp read_anchor({:project, cwd}), do: Path.expand(cwd)
+  defp read_anchor({:agent_dir, dir}), do: Path.expand(dir)
+
+  # Agent directories are validated as independently trusted before a write;
+  # the project directory is the anchor of its own `.lemon/` metadata.
+  defp write_anchor(:global), do: SkillRoot.trusted_dir(Config.agent_dir())
+  defp write_anchor({:project, cwd}), do: {:ok, Path.expand(cwd)}
+  defp write_anchor({:agent_dir, dir}), do: SkillRoot.trusted_dir(dir)
 end

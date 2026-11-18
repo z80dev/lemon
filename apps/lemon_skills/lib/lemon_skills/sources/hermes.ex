@@ -306,11 +306,14 @@ defmodule LemonSkills.Sources.Hermes do
         {:error, :not_found}
 
       true ->
+        # Copies only the bundle layout and never follows links; hidden,
+        # out-of-layout, symlinked or special entries refuse the fetch.
         File.rm_rf(dest_dir)
 
-        case File.cp_r(source, dest_dir) do
-          {:ok, _} -> {:ok, dest_dir}
-          {:error, reason, path} -> {:error, {:copy_failed, path, reason}}
+        case LemonSkills.Bundle.copy_tree(source, dest_dir) do
+          {:ok, dest} -> {:ok, dest}
+          {:error, {:bundle_violations, _} = reason} -> {:error, reason}
+          {:error, reason} -> {:error, {:copy_failed, source, reason}}
         end
     end
   end
@@ -324,6 +327,8 @@ defmodule LemonSkills.Sources.Hermes do
              System.cmd(
                "git",
                [
+                 "-c",
+                 "core.symlinks=false",
                  "clone",
                  "--depth",
                  "1",

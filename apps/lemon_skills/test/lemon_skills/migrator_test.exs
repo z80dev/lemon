@@ -55,7 +55,8 @@ defmodule LemonSkills.MigratorTest do
     {:ok, record} = Lockfile.get(:global, "my-local-skill")
     assert record["source_kind"] == "local"
     assert record["trust_level"] == "community"
-    assert record["audit_status"] == "pass"
+    # Unaudited content is never recorded as `pass`.
+    assert record["audit_status"] == "pending"
     assert is_binary(record["installed_at"])
   end
 

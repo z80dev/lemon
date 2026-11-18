@@ -148,6 +148,9 @@ defmodule CodingAgent.ProfileSkillsTest do
       Path.join(directory, "SKILL.md"),
       "---\nname: #{name}\ndescription: #{description}\n---\n\n" <> body
     )
+
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(directory)
+    :ok = LemonSkills.Audit.State.authorize({:project, scope}, key, hash, :pass)
   end
 
   defp text(result), do: Enum.map_join(result.content, "\n", & &1.text)

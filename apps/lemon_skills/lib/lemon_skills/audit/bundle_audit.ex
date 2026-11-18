@@ -19,11 +19,28 @@ defmodule LemonSkills.Audit.BundleAudit do
   Re-auditing an unchanged skill on every start would be slow and, with the LLM
   pass on, expensive. A verdict is therefore stored by
   `LemonSkills.Audit.State` under an *audit fingerprint* covering both the
-  bundle content hash and the audit configuration (engine, lint and LLM policy
-  versions, whether the LLM pass ran, and which model). Any change to the skill
-  *or* to the audit itself invalidates the cache, so a cached `:pass` always
-  means "this exact content passed this exact audit".
+  bundle content hash and the audit configuration (fingerprint, engine, lint
+  and LLM policy versions, whether the LLM pass ran, and which model). Any
+  change to the skill *or* to the audit itself invalidates the cache, so a
+  cached `:pass` always means "this exact content passed this exact audit".
+
+  The cache is operator-side state under the agent directory, for project
+  audits too: a repository's `.lemon/skills.audit.json` is never consulted,
+  so repository content can never supply a verdict.
+
+  ## Load authorization
+
+  A `:pass` verdict for a `:skill` records a load authorization for that
+  exact bundle hash. A `:warn` or `:block` verdict authorizes nothing and
+  revokes every earlier authorization for that hash, so an operator's warning
+  approval or block override (recorded separately by the installer through
+  `LemonSkills.Audit.State.authorize/4`) must postdate the latest adverse
+  verdict.
   """
+
+  # 2: length-delimited bundle hashes and scan-time entry-name validation;
+  # every earlier verdict is re-audited.
+  @fingerprint_version 2
 
   require Logger
 
@@ -46,14 +63,23 @@ defmodule LemonSkills.Audit.BundleAudit do
   - `:llm` — keyword overrides for the optional LLM pass (`:enabled`, `:model`,
     `:reviewer`, `:runner`, `:max_bundle_bytes`), taking precedence over the
     `:audit_llm` application environment
+  - `:expected_hash` — the bundle hash the caller already vetted; when the
+    scan audited here hashes differently, nothing is audited, recorded or
+    granted and `{:error, {:bundle_changed, expected, actual}}` is returned
 
   Returns `{:ok, record}`, where `record` is a string-keyed map holding
   `"key"`, `"kind"`, `"bundle_hash"`, `"audit_fingerprint"`, `"scanned_at"`,
-  `"lint_valid"`, `"lint_issues"`, `"static_verdict"`, `"static_findings"`,
+  `"files"` (the exact audited `path`/`sha256`/`size` set), `"violations"`
+  (layout violations, each a blocking finding), `"lint_valid"`,
+  `"lint_issues"`, `"static_verdict"`, `"static_findings"`,
   `"llm_verdict"`, `"llm_findings"`, `"llm_model"`, `"llm_review_complete"`,
   `"llm_policy_version"`, `"final_verdict"`, `"approval_required"`,
   `"combined_findings"`, and `"cached"` — `true` when the verdict was served
   from state rather than recomputed.
+
+  For a `:skill`, the verdict reconciles that exact hash's load grants in the
+  same state write: `pass` grants it, `warn`/`block` revoke every earlier grant
+  for it (`LemonSkills.Audit.State.record_audit/5`).
 
   Returns `{:error, reason}` when the bundle hash cannot be computed (missing or
   unreadable directory) or the verdict cannot be persisted. An LLM pass that
@@ -66,18 +92,26 @@ defmodule LemonSkills.Audit.BundleAudit do
     kind = Keyword.get(opts, :kind, :skill)
     force = Keyword.get(opts, :force, false)
 
-    with {:ok, bundle_hash} <- Bundle.compute_hash(bundle_path) do
+    with {:ok, scan} <- Bundle.scan(bundle_path),
+         bundle_hash = Bundle.hash(scan),
+         :ok <- expect_hash(Keyword.get(opts, :expected_hash), bundle_hash) do
       fingerprint = audit_fingerprint(bundle_hash, opts)
 
       case maybe_cached(scope, kind, key, fingerprint, force) do
         {:ok, record} ->
-          {:ok, Map.put(record, "cached", true)}
+          with :ok <- State.record_audit(scope, kind, key, record, store: false) do
+            {:ok, Map.put(record, "cached", true)}
+          end
 
         :stale ->
-          run_and_store(bundle_path, scope, kind, key, bundle_hash, fingerprint, opts)
+          run_and_store(scan, scope, kind, key, bundle_hash, fingerprint, opts)
       end
     end
   end
+
+  defp expect_hash(nil, _bundle_hash), do: :ok
+  defp expect_hash(hash, hash), do: :ok
+  defp expect_hash(expected, actual), do: {:error, {:bundle_changed, expected, actual}}
 
   @doc """
   Returns the cache key for an audit of a bundle with hash `bundle_hash`.
@@ -93,6 +127,7 @@ defmodule LemonSkills.Audit.BundleAudit do
     llm = llm_config(opts)
 
     [
+      "fingerprint_version=#{@fingerprint_version}",
       "bundle_hash=#{bundle_hash}",
       "engine_version=#{Engine.version()}",
       "lint_version=#{SkillLint.version()}",
@@ -143,10 +178,11 @@ defmodule LemonSkills.Audit.BundleAudit do
     end
   end
 
-  defp run_and_store(bundle_path, scope, kind, key, bundle_hash, fingerprint, opts) do
+  defp run_and_store(scan, scope, kind, key, bundle_hash, fingerprint, opts) do
+    bundle_path = scan.root
     lint_result = SkillLint.lint_skill(bundle_path, include_audit: false)
-    {static_verdict, static_findings} = Engine.audit_bundle(bundle_path)
-    {llm_verdict, llm_findings, llm_model} = run_llm_review(bundle_path, static_findings, opts)
+    {static_verdict, static_findings} = Engine.audit_scan(scan)
+    {llm_verdict, llm_findings, llm_model} = run_llm_review(scan, static_findings, opts)
 
     lint_verdict = lint_verdict(lint_result.issues)
     final_verdict = worst_verdict([lint_verdict, static_verdict, llm_verdict])
@@ -157,6 +193,14 @@ defmodule LemonSkills.Audit.BundleAudit do
       "bundle_hash" => bundle_hash,
       "audit_fingerprint" => fingerprint,
       "scanned_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "files" =>
+        Enum.map(scan.files, fn file ->
+          %{"path" => file.path, "sha256" => file.sha256, "size" => file.size}
+        end),
+      "violations" =>
+        Enum.map(scan.violations, fn v ->
+          %{"path" => v.path, "reason" => Atom.to_string(v.reason)}
+        end),
       "lint_valid" => lint_result.valid?,
       "lint_issues" => Enum.map(lint_result.issues, &encode_issue/1),
       "static_verdict" => Atom.to_string(static_verdict),
@@ -172,50 +216,43 @@ defmodule LemonSkills.Audit.BundleAudit do
         combined_findings(lint_result.issues, static_findings, llm_findings, final_verdict)
     }
 
-    with :ok <- State.put(scope, kind, key, record) do
+    with :ok <- State.record_audit(scope, kind, key, record) do
       {:ok, Map.put(record, "cached", false)}
     end
   end
 
-  defp run_llm_review(bundle_path, static_findings, opts) do
+  defp run_llm_review(scan, static_findings, opts) do
     llm = llm_config(opts)
+    bundle_path = scan.root
 
     if llm.enabled and is_binary(llm.model) and llm.model != "" do
-      case Bundle.review_payload(bundle_path, max_bytes: llm.max_bundle_bytes) do
-        {:ok, payload} ->
-          review_opts =
-            llm.extra
-            |> Keyword.put(:model, llm.model)
-            |> Keyword.put(:reviewer, llm.reviewer)
-            |> maybe_put(:runner, llm.runner)
+      {:ok, payload} = Bundle.review_payload(scan, max_bytes: llm.max_bundle_bytes)
 
-          summary =
-            Enum.map_join(static_findings, "\n", fn finding ->
-              "- " <> Finding.summary(finding)
-            end)
+      review_opts =
+        llm.extra
+        |> Keyword.put(:model, llm.model)
+        |> Keyword.put(:reviewer, llm.reviewer)
+        |> maybe_put(:runner, llm.runner)
 
-          full_payload =
-            if summary == "" do
-              payload
-            else
-              payload <> "\n\nDeterministic findings:\n" <> summary
-            end
+      summary =
+        Enum.map_join(static_findings, "\n", fn finding ->
+          "- " <> Finding.summary(finding)
+        end)
 
-          case llm.reviewer.review(full_payload, review_opts) do
-            {:ok, {verdict, findings}} ->
-              {verdict, findings, llm.model}
+      full_payload =
+        if summary == "" do
+          payload
+        else
+          payload <> "\n\nDeterministic findings:\n" <> summary
+        end
 
-            {:error, reason} ->
-              Logger.warning(
-                "[BundleAudit] LLM audit unavailable for #{bundle_path}: #{inspect(reason)}"
-              )
-
-              {nil, [], llm.model}
-          end
+      case llm.reviewer.review(full_payload, review_opts) do
+        {:ok, {verdict, findings}} ->
+          {verdict, findings, llm.model}
 
         {:error, reason} ->
           Logger.warning(
-            "[BundleAudit] could not build LLM payload for #{bundle_path}: #{inspect(reason)}"
+            "[BundleAudit] LLM audit unavailable for #{bundle_path}: #{inspect(reason)}"
           )
 
           {nil, [], llm.model}

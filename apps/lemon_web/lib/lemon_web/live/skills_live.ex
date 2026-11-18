@@ -312,7 +312,7 @@ defmodule LemonWeb.SkillsLive do
   defp attention?(skill),
     do:
       skill["enabled"] == true and
-        skill["activation"] in ["not_ready", "blocked", "platform_incompatible"]
+        skill["activation"] in ["not_ready", "blocked", "platform_incompatible", "unaudited"]
 
   defp sources(skills) do
     skills
@@ -352,6 +352,7 @@ defmodule LemonWeb.SkillsLive do
         "not_ready" -> {"warning", "Needs setup"}
         "hidden" -> {"neutral", "Disabled"}
         "blocked" -> {"danger", "Blocked"}
+        "unaudited" -> {"warning", "Needs audit"}
         "platform_incompatible" -> {"neutral", "Unsupported OS"}
         _ -> {"neutral", "Unknown"}
       end

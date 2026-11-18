@@ -95,8 +95,8 @@ defmodule LemonSkills.SkillView do
   Return `true` for views that should be shown to the agent or in the CLI.
 
   A view is displayable when `activation_state` is `:active` or `:not_ready`.
-  Hidden, platform-incompatible, and blocked skills are excluded from normal
-  display.
+  Hidden, platform-incompatible, blocked and unaudited skills are excluded from
+  normal display.
   """
   @spec displayable?(t()) :: boolean()
   def displayable?(%__MODULE__{activation_state: state}),

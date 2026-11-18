@@ -253,6 +253,9 @@ defmodule LemonSkills.RegistryRelevanceTest do
       "---\nname: Dynamic Status\ndescription: statuscacheprobe helper\nrequires:\n  config:\n    - #{env_key}\n---\nbody"
     )
 
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(skill_dir)
+    :ok = LemonSkills.Audit.State.authorize({:project, tmp_dir}, "dynamic-status", hash, :pass)
+
     LemonSkills.refresh(cwd: tmp_dir)
 
     assert [%{activation_state: :not_ready}] =

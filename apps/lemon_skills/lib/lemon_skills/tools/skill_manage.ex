@@ -11,8 +11,8 @@ defmodule LemonSkills.Tools.SkillManage do
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonSkills.Audit.BundleAudit
-  alias LemonSkills.{Config, Manifest, Registry}
+  alias LemonSkills.Audit.{BundleAudit, State}
+  alias LemonSkills.{Bundle, Config, Installer, Manifest, Registry, SkillRoot}
 
   @max_name_length 64
   @max_skill_content_chars 100_000
@@ -158,8 +158,10 @@ defmodule LemonSkills.Tools.SkillManage do
   - `"stale_after_days"` (report, default `30`) / `"archive_after_days"` (report,
     default `90`) - positive integers (or integer strings)
 
-  Writes are audited via `LemonSkills.Audit.BundleAudit` with rollback on a
-  blocking finding, and the registry is refreshed afterwards. Returns
+  Content changes (create, edit, patch, write_file, remove_file) are built in a
+  private staging copy outside every skill root, audited there via
+  `LemonSkills.Audit.BundleAudit`, and only the audited file set is activated;
+  a blocked bundle is never published. The registry is refreshed afterwards. Returns
   `%LemonAgent.Types.AgentToolResult{}` on success with `content` holding a
   status message and `details` an action-specific map (`path`, `file_path`,
   `replacements`, `audit`, `lifecycle_state`, `skills`, ...). Errors surface as
@@ -214,9 +216,11 @@ defmodule LemonSkills.Tools.SkillManage do
     with {:ok, content} <- required_string(params, "content", preserve?: true),
          :ok <- validate_skill_content(content),
          {:ok, dir} <- new_skill_dir(root, name),
-         :ok <- File.mkdir_p(dir),
-         :ok <- write_new_skill_file(dir, content),
-         {:ok, audit} <- audit_or_rollback(dir, audit_scope(scope, cwd), name, {:dir, dir}),
+         :ok <- SkillRoot.ensure_dir(root_anchor(scope, cwd), root),
+         {:ok, audit, _} <-
+           stage_audit_activate(scope, cwd, name, nil, dir, fn proposed ->
+             File.write(Path.join(proposed, "SKILL.md"), content)
+           end),
          :ok <- refresh_registry(scope, cwd) do
       ok("Skill '#{name}' created at #{dir}.", %{action: "create", path: dir, audit: audit})
     end
@@ -226,37 +230,34 @@ defmodule LemonSkills.Tools.SkillManage do
     with {:ok, content} <- required_string(params, "content", preserve?: true),
          :ok <- validate_skill_content(content),
          {:ok, dir} <- existing_skill_dir(root, name),
-         skill_file = Path.join(dir, "SKILL.md"),
-         {:ok, original} <- File.read(skill_file),
-         :ok <- atomic_write(skill_file, content),
-         {:ok, audit} <-
-           audit_or_rollback(dir, audit_scope(scope, cwd), name, {skill_file, original}),
+         {:ok, audit, _} <-
+           stage_audit_activate(scope, cwd, name, dir, dir, fn proposed ->
+             File.write(Path.join(proposed, "SKILL.md"), content)
+           end),
          :ok <- refresh_registry(scope, cwd) do
       ok("Skill '#{name}' updated.", %{action: "edit", path: dir, audit: audit})
     end
   end
 
   defp dispatch("patch", name, params, scope, root, cwd) do
+    replace_all? = truthy?(Map.get(params, "replace_all"))
+
     with {:ok, old_string} <- required_string(params, "old_string", preserve?: true),
          {:ok, new_string} <-
            required_string(params, "new_string", allow_empty?: true, preserve?: true),
          {:ok, dir} <- existing_skill_dir(root, name),
-         {:ok, target} <- target_file(dir, Map.get(params, "file_path")),
-         :ok <- reject_symlink_path(dir, target),
-         {:ok, original} <- File.read(target),
-         {:ok, updated, replacements} <-
-           patch_content(
-             original,
-             old_string,
-             new_string,
-             truthy?(Map.get(params, "replace_all"))
-           ),
-         :ok <- validate_target_content(target, dir, updated),
-         :ok <- atomic_write(target, updated),
-         {:ok, audit} <- audit_or_rollback(dir, audit_scope(scope, cwd), name, {target, original}),
+         {:ok, rel} <- target_rel(Map.get(params, "file_path")),
+         {:ok, audit, replacements} <-
+           stage_audit_activate(scope, cwd, name, dir, dir, fn proposed ->
+             with {:ok, original} <- read_staged_file(proposed, rel),
+                  {:ok, updated, count} <-
+                    patch_content(original, old_string, new_string, replace_all?),
+                  :ok <- validate_target_content(rel, updated),
+                  :ok <- File.write(Path.join(proposed, rel), updated) do
+               {:ok, count}
+             end
+           end),
          :ok <- refresh_registry(scope, cwd) do
-      rel = Path.relative_to(target, dir)
-
       ok("Patched #{rel} in skill '#{name}' (#{replacements} replacement(s)).", %{
         action: "patch",
         path: dir,
@@ -270,7 +271,7 @@ defmodule LemonSkills.Tools.SkillManage do
   defp dispatch("delete", name, _params, scope, root, cwd) do
     with {:ok, dir} <- existing_skill_dir(root, name),
          :ok <- reject_pinned(name, scope, cwd, "delete"),
-         {:ok, _} <- File.rm_rf(dir),
+         :ok <- SkillRoot.remove(root_anchor(scope, cwd), dir),
          :ok <- refresh_registry(scope, cwd) do
       ok("Skill '#{name}' deleted.", %{action: "delete", path: dir})
     end
@@ -282,16 +283,20 @@ defmodule LemonSkills.Tools.SkillManage do
            required_string(params, "file_content", allow_empty?: true, preserve?: true),
          :ok <- validate_supporting_file_size(file_content),
          {:ok, dir} <- existing_skill_dir(root, name),
-         {:ok, target} <- target_file(dir, file_path),
-         :ok <- reject_symlink_path(dir, target),
-         original <- read_optional(target),
-         :ok <- atomic_write(target, file_content),
-         {:ok, audit} <- audit_or_rollback(dir, audit_scope(scope, cwd), name, {target, original}),
+         {:ok, rel} <- target_rel(file_path),
+         {:ok, audit, _} <-
+           stage_audit_activate(scope, cwd, name, dir, dir, fn proposed ->
+             target = Path.join(proposed, rel)
+
+             with :ok <- File.mkdir_p(Path.dirname(target)) do
+               File.write(target, file_content)
+             end
+           end),
          :ok <- refresh_registry(scope, cwd) do
-      ok("File '#{Path.relative_to(target, dir)}' written to skill '#{name}'.", %{
+      ok("File '#{rel}' written to skill '#{name}'.", %{
         action: "write_file",
         path: dir,
-        file_path: Path.relative_to(target, dir),
+        file_path: rel,
         audit: audit
       })
     end
@@ -300,18 +305,21 @@ defmodule LemonSkills.Tools.SkillManage do
   defp dispatch("remove_file", name, params, scope, root, cwd) do
     with {:ok, file_path} <- required_string(params, "file_path"),
          {:ok, dir} <- existing_skill_dir(root, name),
-         {:ok, target} <- target_file(dir, file_path),
-         :ok <- reject_symlink_path(dir, target),
-         true <-
-           File.regular?(target) || {:error, "File not found: #{Path.relative_to(target, dir)}"},
-         {:ok, original} <- File.read(target),
-         :ok <- File.rm(target),
-         {:ok, audit} <- audit_or_rollback(dir, audit_scope(scope, cwd), name, {target, original}),
+         {:ok, rel} <- target_rel(file_path),
+         {:ok, audit, _} <-
+           stage_audit_activate(scope, cwd, name, dir, dir, fn proposed ->
+             target = Path.join(proposed, rel)
+
+             case File.lstat(target) do
+               {:ok, %File.Stat{type: :regular}} -> File.rm(target)
+               _ -> {:error, "File not found: #{rel}"}
+             end
+           end),
          :ok <- refresh_registry(scope, cwd) do
-      ok("File '#{Path.relative_to(target, dir)}' removed from skill '#{name}'.", %{
+      ok("File '#{rel}' removed from skill '#{name}'.", %{
         action: "remove_file",
         path: dir,
-        file_path: Path.relative_to(target, dir),
+        file_path: rel,
         audit: audit
       })
     end
@@ -417,12 +425,29 @@ defmodule LemonSkills.Tools.SkillManage do
   defp validate_name_for_action("report", ""), do: :ok
   defp validate_name_for_action(_action, name), do: validate_name(name)
 
-  defp skills_root(:global, _cwd), do: {:ok, Config.global_skills_dir()}
+  # The scope's mutable root, resolved against its trusted anchor: the project
+  # directory, or the validated agent dir for the global root. Every component
+  # below the anchor must be a real directory.
+  defp skills_root(scope, cwd) do
+    with {:ok, configured} <- configured_root(scope, cwd),
+         {:ok, root, anchor} <- SkillRoot.resolve_root(configured, audit_scope(scope, cwd)),
+         :ok <- SkillRoot.check_dir(anchor, root, allow_missing: true) do
+      {:ok, root}
+    else
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+      {:error, reason} -> {:error, "Unsafe #{scope} skill directory: #{inspect(reason)}"}
+    end
+  end
 
-  defp skills_root(:project, cwd) when is_binary(cwd) and cwd != "",
+  defp configured_root(:global, _cwd), do: {:ok, Config.global_skills_dir()}
+
+  defp configured_root(:project, cwd) when is_binary(cwd) and cwd != "",
     do: {:ok, Config.project_skills_dir(cwd)}
 
-  defp skills_root(:project, _cwd), do: {:error, "project scope requires cwd"}
+  defp configured_root(:project, _cwd), do: {:error, "project scope requires cwd"}
+
+  defp root_anchor(:global, _cwd), do: Path.expand(Config.agent_dir())
+  defp root_anchor(:project, cwd), do: Path.expand(cwd)
 
   defp validate_name(name) do
     cond do
@@ -511,15 +536,20 @@ defmodule LemonSkills.Tools.SkillManage do
     end
   end
 
-  defp target_file(dir, nil), do: {:ok, Path.join(dir, "SKILL.md")}
-  defp target_file(dir, ""), do: {:ok, Path.join(dir, "SKILL.md")}
+  defp target_rel(nil), do: {:ok, "SKILL.md"}
+  defp target_rel(""), do: {:ok, "SKILL.md"}
 
-  defp target_file(dir, file_path) when is_binary(file_path) do
+  defp target_rel(file_path) when is_binary(file_path) do
     parts = Path.split(file_path)
+    segments = String.split(file_path, "/")
 
     cond do
       Path.type(file_path) == :absolute or ".." in parts ->
         {:error, "file_path must be relative and may not contain '..'"}
+
+      String.contains?(file_path, "\\") or
+          Enum.any?(segments, &(&1 in ["", "."] or String.starts_with?(&1, "."))) ->
+        {:error, "file_path segments may not be empty or hidden (start with '.')"}
 
       parts == [] or hd(parts) not in @allowed_support_dirs ->
         {:error, "file_path must be under one of: #{Enum.join(@allowed_support_dirs, ", ")}"}
@@ -528,26 +558,14 @@ defmodule LemonSkills.Tools.SkillManage do
         {:error, "file_path must include a filename under #{hd(parts)}/"}
 
       true ->
-        target = Path.expand(Path.join(dir, file_path))
-        expanded_dir = Path.expand(dir)
-
-        if target == expanded_dir or not String.starts_with?(target, expanded_dir <> "/") do
-          {:error, "file_path escapes the skill directory"}
-        else
-          {:ok, target}
-        end
+        {:ok, Enum.join(segments, "/")}
     end
   end
 
-  defp target_file(_dir, _), do: {:error, "file_path must be a string"}
+  defp target_rel(_), do: {:error, "file_path must be a string"}
 
-  defp validate_target_content(target, dir, content) do
-    if Path.expand(target) == Path.expand(Path.join(dir, "SKILL.md")) do
-      validate_skill_content(content)
-    else
-      validate_supporting_file_size(content)
-    end
-  end
+  defp validate_target_content("SKILL.md", content), do: validate_skill_content(content)
+  defp validate_target_content(_rel, content), do: validate_supporting_file_size(content)
 
   defp patch_content(content, old_string, new_string, replace_all?) do
     matches = :binary.matches(content, old_string)
@@ -562,24 +580,6 @@ defmodule LemonSkills.Tools.SkillManage do
 
       true ->
         {:ok, String.replace(content, old_string, new_string, global: replace_all?), count}
-    end
-  end
-
-  defp audit_or_rollback(dir, audit_scope, name, rollback) do
-    case BundleAudit.audit(dir, audit_scope, name, kind: :skill, force: true) do
-      {:ok, audit} ->
-        case BundleAudit.audit_status(audit) do
-          :block ->
-            rollback(rollback)
-            {:error, "Skill blocked by security audit: #{format_findings(audit)}"}
-
-          _ ->
-            {:ok, summarize_audit(audit)}
-        end
-
-      {:error, reason} ->
-        rollback(rollback)
-        {:error, "Skill audit failed: #{inspect(reason)}"}
     end
   end
 
@@ -662,9 +662,109 @@ defmodule LemonSkills.Tools.SkillManage do
     end
   end
 
-  defp rollback({:dir, dir}), do: File.rm_rf(dir)
-  defp rollback({path, nil}), do: File.rm(path)
-  defp rollback({path, content}), do: atomic_write(path, content)
+  # Builds the proposed bundle in a private staging dir outside every skill
+  # root: a copy of the live bundle's verified files (a live bundle holding a
+  # symlink, hard link or any other layout violation is refused before any
+  # file is read), then `mutate` applied to that copy. The staged bundle is
+  # scanned and audited, and only that exact audited file set is activated
+  # through `Installer.activate_audited/4`. Nothing is published before the
+  # audit passes, so there is never a rollback of live content.
+  defp stage_audit_activate(scope, cwd, name, live_dir, dest, mutate) do
+    Installer.with_private_staging(fn staging ->
+      proposed = Path.join(staging, "bundle")
+
+      with :ok <- seed_proposed(live_dir, proposed),
+           {:ok, meta} <- run_mutation(mutate, proposed),
+           {:ok, scan} <- scan_proposed(proposed),
+           {:ok, audit} <- audit_proposed(proposed, scan, audit_scope(scope, cwd), name),
+           :ok <- activate_proposed(scan, dest, scope, cwd, live_dir != nil),
+           :ok <- grant_passed(audit, scope, cwd, name) do
+        {:ok, summarize_audit(audit), meta}
+      end
+    end)
+  end
+
+  defp seed_proposed(nil, proposed), do: File.mkdir(proposed)
+
+  defp seed_proposed(live_dir, proposed) do
+    case Bundle.scan(live_dir) do
+      {:ok, %{violations: []} = scan} ->
+        case Bundle.copy_files(scan, proposed) do
+          :ok -> :ok
+          {:error, reason} -> {:error, "Skill changed while staging: #{inspect(reason)}"}
+        end
+
+      {:ok, %{violations: violations}} ->
+        {:error,
+         "Skill has unsafe entries and cannot be edited: " <>
+           Enum.map_join(Enum.take(violations, 3), "; ", &Bundle.describe_violation/1)}
+
+      {:error, reason} ->
+        {:error, "Cannot read skill bundle: #{inspect(reason)}"}
+    end
+  end
+
+  defp run_mutation(mutate, proposed) do
+    case mutate.(proposed) do
+      :ok -> {:ok, nil}
+      {:ok, meta} -> {:ok, meta}
+      {:error, reason} when is_binary(reason) -> {:error, reason}
+      {:error, reason} -> {:error, "Failed to stage skill change: #{inspect(reason)}"}
+    end
+  end
+
+  defp scan_proposed(proposed) do
+    case Bundle.scan(proposed) do
+      {:ok, %{violations: []} = scan} ->
+        {:ok, scan}
+
+      {:ok, %{violations: violations}} ->
+        {:error,
+         "Skill blocked by security audit: " <>
+           Enum.map_join(Enum.take(violations, 3), "; ", &Bundle.describe_violation/1)}
+
+      {:error, reason} ->
+        {:error, "Cannot scan staged skill: #{inspect(reason)}"}
+    end
+  end
+
+  defp audit_proposed(proposed, scan, audit_scope, name) do
+    hash = Bundle.hash(scan)
+
+    case BundleAudit.audit(proposed, audit_scope, name, kind: :skill, force: true) do
+      {:ok, %{"bundle_hash" => ^hash} = audit} ->
+        case BundleAudit.audit_status(audit) do
+          :block -> {:error, "Skill blocked by security audit: #{format_findings(audit)}"}
+          _ -> {:ok, audit}
+        end
+
+      {:ok, _audit} ->
+        {:error, "Staged skill changed during audit"}
+
+      {:error, reason} ->
+        {:error, "Skill audit failed: #{inspect(reason)}"}
+    end
+  end
+
+  defp activate_proposed(scan, dest, scope, cwd, replace?),
+    do: Installer.activate_audited(scan, dest, audit_scope(scope, cwd), replace?)
+
+  # A passing audit is granted for its exact bundle hash. A warn verdict is
+  # activated without a load grant: the mutation approval is not an audit
+  # approval, so it stays unloadable until an operator approves that bundle.
+  defp grant_passed(audit, scope, cwd, name) do
+    case BundleAudit.audit_status(audit) do
+      :pass -> State.authorize(audit_scope(scope, cwd), name, audit["bundle_hash"], :pass)
+      _ -> :ok
+    end
+  end
+
+  defp read_staged_file(proposed, rel) do
+    case Bundle.read_file(proposed, rel) do
+      {:ok, content} -> {:ok, content}
+      {:error, reason} -> {:error, "Cannot read #{rel}: #{reason}"}
+    end
+  end
 
   defp refresh_registry(:global, cwd) do
     Registry.refresh(cwd: nil)
@@ -678,81 +778,10 @@ defmodule LemonSkills.Tools.SkillManage do
 
   defp refresh_registry(:project, cwd), do: Registry.refresh(cwd: cwd)
 
-  defp read_optional(path) do
-    if File.regular?(path) do
-      case File.read(path) do
-        {:ok, content} -> content
-        _ -> nil
-      end
-    else
-      nil
-    end
-  end
-
   defp safe_directory?(path) do
     case File.lstat(path) do
       {:ok, %File.Stat{type: :directory}} -> true
       _ -> false
-    end
-  end
-
-  defp reject_symlink_path(dir, target) do
-    dir = Path.expand(dir)
-    target = Path.expand(target)
-
-    dir
-    |> symlink_check_paths(target)
-    |> Enum.find_value(:ok, fn path ->
-      case File.lstat(path) do
-        {:ok, %File.Stat{type: :symlink}} ->
-          {:error, "refusing to write through symlink: #{path}"}
-
-        _ ->
-          nil
-      end
-    end)
-  end
-
-  defp symlink_check_paths(dir, target) do
-    target
-    |> Path.relative_to(dir)
-    |> Path.split()
-    |> Enum.scan(dir, &Path.join(&2, &1))
-    |> Enum.reject(&(&1 == target and not File.exists?(&1)))
-  end
-
-  defp write_new_skill_file(dir, content) do
-    case atomic_write(Path.join(dir, "SKILL.md"), content) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        File.rm_rf(dir)
-        {:error, reason}
-    end
-  end
-
-  defp atomic_write(path, content) do
-    tmp =
-      Path.join(
-        Path.dirname(path),
-        ".#{Path.basename(path)}.tmp.#{System.unique_integer([:positive])}"
-      )
-
-    result =
-      with :ok <- File.mkdir_p(Path.dirname(path)),
-           :ok <- File.write(tmp, content),
-           :ok <- File.rename(tmp, path) do
-        :ok
-      end
-
-    case result do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        File.rm(tmp)
-        {:error, reason}
     end
   end
 

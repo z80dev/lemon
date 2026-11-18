@@ -55,6 +55,9 @@ defmodule CodingAgent.InternalReferenceUrlsTest do
     global = create_skill(Config.global_skills_dir(), "SameKey", "global")
     project = create_skill(Config.project_skills_dir(cwd), "SameKey", "project")
     global_only = create_skill(Config.global_skills_dir(), "GlobalOnly", "global only")
+    authorize_skill!(global, :global)
+    authorize_skill!(project, {:project, cwd})
+    authorize_skill!(global_only, :global)
     LemonSkills.refresh(cwd: cwd)
 
     assert {:ok, path} = InternalUrls.resolve("skill://SameKey", cwd: cwd)
@@ -72,6 +75,7 @@ defmodule CodingAgent.InternalReferenceUrlsTest do
     reference = Path.join(bundle, "references/Nested/Usage Guide.md")
     File.mkdir_p!(Path.dirname(reference))
     File.write!(reference, "reference")
+    authorize_skill!(bundle, {:project, cwd})
     LemonSkills.refresh(cwd: cwd)
 
     assert {:ok, reference} ==
@@ -145,6 +149,7 @@ defmodule CodingAgent.InternalReferenceUrlsTest do
   test "reports missing skills, missing files and directory references", %{cwd: cwd} do
     bundle = create_skill(Config.project_skills_dir(cwd), "demo")
     File.mkdir_p!(Path.join(bundle, "references"))
+    authorize_skill!(bundle, {:project, cwd})
     LemonSkills.refresh(cwd: cwd)
 
     assert {:error, "Skill not found"} = InternalUrls.resolve("skill://absent", cwd: cwd)
@@ -156,23 +161,27 @@ defmodule CodingAgent.InternalReferenceUrlsTest do
              InternalUrls.resolve("skill://demo/references", cwd: cwd)
   end
 
-  test "respects disabled configuration and missing requirements", %{cwd: cwd} do
-    create_skill(Config.project_skills_dir(cwd), "disabled")
+  test "refuses disabled skills but reads skills that only miss requirements", %{cwd: cwd} do
+    disabled = create_skill(Config.project_skills_dir(cwd), "disabled")
 
-    create_skill(
-      Config.project_skills_dir(cwd),
-      "not-ready",
-      "body",
-      "requires:\n  bins:\n    - lemon-internal-urls-nonexistent-binary"
-    )
+    not_ready =
+      create_skill(
+        Config.project_skills_dir(cwd),
+        "not-ready",
+        "body",
+        "requires:\n  bins:\n    - lemon-internal-urls-nonexistent-binary"
+      )
 
+    authorize_skill!(disabled, {:project, cwd})
+    authorize_skill!(not_ready, {:project, cwd})
     assert :ok = Config.save_config(%{"disabled" => ["disabled"]}, false, cwd)
     LemonSkills.refresh(cwd: cwd)
 
-    for key <- ["disabled", "not-ready"] do
-      assert {:error, "Skill is disabled or not ready"} =
-               InternalUrls.resolve("skill://" <> key, cwd: cwd)
-    end
+    assert {:error, "Skill is disabled, blocked or not authorized for its current content"} =
+             InternalUrls.resolve("skill://disabled", cwd: cwd)
+
+    assert {:ok, Path.join(not_ready, "SKILL.md")} ==
+             InternalUrls.resolve("skill://not-ready", cwd: cwd)
   end
 
   test "rejects file and directory symlinks beneath the bundle", %{cwd: cwd, tmp_dir: tmp_dir} do
@@ -184,6 +193,7 @@ defmodule CodingAgent.InternalReferenceUrlsTest do
     File.ln_s!(Path.join(outside, "secret.md"), Path.join(bundle, "escape.md"))
     File.ln_s!(outside, Path.join(bundle, "references"))
     File.ln_s!(Path.join(bundle, "inside.md"), Path.join(bundle, "linked.md"))
+    authorize_skill!(bundle, {:project, cwd})
     LemonSkills.refresh(cwd: cwd)
 
     for path <- ["escape.md", "references/secret.md", "linked.md"] do
@@ -199,20 +209,32 @@ defmodule CodingAgent.InternalReferenceUrlsTest do
     File.ln_s!(Path.join(source, "SKILL.md"), Path.join(bundle, "SKILL.md"))
     LemonSkills.refresh(cwd: cwd)
 
-    assert {:error, "Symlinks beneath a skill bundle are not allowed"} =
+    # A symlinked SKILL.md is never read, so the bundle is not registered.
+    assert {:error, "Skill not found"} =
              InternalUrls.resolve("skill://demo", cwd: cwd)
   end
 
-  test "permits a registered linked bundle root", %{cwd: cwd, tmp_dir: tmp_dir} do
+  test "permits a linked bundle root in a user-owned global root only", %{
+    cwd: cwd,
+    tmp_dir: tmp_dir
+  } do
     source = create_skill(tmp_dir, "source")
-    root = Config.project_skills_dir(cwd)
-    File.mkdir_p!(root)
-    linked = Path.join(root, "linked")
+    global_root = Config.global_skills_dir()
+    File.mkdir_p!(global_root)
+    linked = Path.join(global_root, "linked")
     File.ln_s!(source, linked)
+    project_root = Config.project_skills_dir(cwd)
+    File.mkdir_p!(project_root)
+    File.ln_s!(source, Path.join(project_root, "repo-linked"))
+    authorize_skill!(linked, :global)
+    authorize_skill!(Path.join(project_root, "repo-linked"), {:project, cwd})
+    LemonSkills.refresh()
     LemonSkills.refresh(cwd: cwd)
 
     assert {:ok, Path.join(linked, "SKILL.md")} ==
              InternalUrls.resolve("skill://linked", cwd: cwd)
+
+    assert {:error, "Skill not found"} = InternalUrls.resolve("skill://repo-linked", cwd: cwd)
   end
 
   test "dispatches artifacts with session options unchanged", %{cwd: cwd, tmp_dir: tmp_dir} do
@@ -227,6 +249,11 @@ defmodule CodingAgent.InternalReferenceUrlsTest do
     assert {:ok, path} == InternalUrls.resolve(uri, opts)
     assert InternalUrls.resolve(uri, cwd: cwd) == Artifacts.resolve(uri, cwd, cwd: cwd)
     assert {:error, _} = InternalUrls.resolve("artifact://../outside", opts)
+  end
+
+  defp authorize_skill!(dir, scope) do
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(dir)
+    :ok = LemonSkills.Audit.State.authorize(scope, Path.basename(dir), hash, :pass)
   end
 
   defp create_skill(root, key, body \\ "body", metadata \\ "") do

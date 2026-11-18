@@ -31,7 +31,12 @@ defmodule LemonSkills.Registry do
 
   use GenServer
 
-  alias LemonSkills.{Entry, Manifest, Config, Discovery, Lockfile}
+  alias LemonSkills.{Bundle, Entry, Manifest, Config, Discovery, Lockfile, TrustPolicy}
+  alias LemonSkills.Audit.BundleAudit
+  alias LemonSkills.Audit.State, as: AuditState
+  alias LemonSkills.Sources.Builtin
+
+  require Logger
 
   @identity_check_interval_ms 50
 
@@ -43,7 +48,8 @@ defmodule LemonSkills.Registry do
           global_identity: term(),
           project_identities: %{String.t() => term()},
           global_identity_checked_at: integer() | nil,
-          project_identity_checked_at: %{String.t() => integer() | nil}
+          project_identity_checked_at: %{String.t() => integer() | nil},
+          auto_audited: MapSet.t()
         }
 
   # ============================================================================
@@ -318,7 +324,8 @@ defmodule LemonSkills.Registry do
       global_identity: nil,
       project_identities: %{},
       global_identity_checked_at: nil,
-      project_identity_checked_at: %{}
+      project_identity_checked_at: %{},
+      auto_audited: MapSet.new()
     }
 
     # Load global skills on startup
@@ -474,6 +481,70 @@ defmodule LemonSkills.Registry do
     {:reply, :ok, state}
   end
 
+  # One-time upgrade path for unchanged skills installed into the agent
+  # directory before the v2 hash format (see `upgrade_candidate/3`):
+  # a supervised task runs the static install audit (lint + engine, no LLM
+  # reviewer) on the live bytes. A pass records a grant exactly as an install
+  # would; warn and block verdicts authorize nothing. Each `{key, hash}` is
+  # attempted once per registry lifetime, and bytes that already carry an
+  # audit record are never queued, so verdicts that do not authorize cannot
+  # loop.
+  @impl true
+  def handle_info({:auto_audit, candidates}, state) do
+    pending = Enum.reject(candidates, &MapSet.member?(state.auto_audited, auto_audit_id(&1)))
+
+    cond do
+      pending == [] ->
+        {:noreply, state}
+
+      is_nil(Process.whereis(LemonSkills.TaskSupervisor)) ->
+        Process.send_after(self(), {:auto_audit, pending}, 100)
+        {:noreply, state}
+
+      true ->
+        {:ok, _pid} =
+          Task.Supervisor.start_child(LemonSkills.TaskSupervisor, fn ->
+            Enum.each(pending, &static_audit/1)
+            GenServer.cast(__MODULE__, :auto_audit_done)
+          end)
+
+        attempted = Enum.reduce(pending, state.auto_audited, &MapSet.put(&2, auto_audit_id(&1)))
+        {:noreply, %{state | auto_audited: attempted}}
+    end
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
+
+  @impl true
+  def handle_cast(:auto_audit_done, state) do
+    {global_identity, _project_identity} = cache_identity(nil)
+
+    {:noreply,
+     %{
+       load_global_skills(state)
+       | global_identity: global_identity,
+         global_identity_checked_at: monotonic_ms()
+     }}
+  end
+
+  defp auto_audit_id(%{key: key, hash: hash}), do: {key, hash}
+
+  # The audit is bound to the hash found eligible: if the bundle changed since,
+  # nothing is audited, recorded or granted.
+  defp static_audit(%{key: key, path: path, hash: hash}) do
+    case BundleAudit.audit(path, :global, key, llm: [enabled: false], expected_hash: hash) do
+      {:ok, record} ->
+        Logger.info(
+          "[Registry] upgrade audit of global skill '#{key}': #{record["final_verdict"]}"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Registry] upgrade audit of global skill '#{key}' failed: #{inspect(reason)}"
+        )
+    end
+  end
+
   # ============================================================================
   # Private Functions
   # ============================================================================
@@ -488,8 +559,12 @@ defmodule LemonSkills.Registry do
         Map.merge(acc, dir_skills, fn _key, existing, _incoming -> existing end)
       end)
 
-    # Hydrate provenance from the global lockfile where records are present.
-    skills = hydrate_from_lockfile(skills, :global)
+    # Hydrate provenance from the global lockfile where records are present,
+    # then bind each entry to its operator-side authorization.
+    hydrated = hydrate_from_lockfile(skills, :global)
+    records = audit_records(:global)
+    skills = authorize_entries(hydrated, records, :global)
+    queue_upgrade_audits(hydrated, skills, records)
 
     rebuild_global_derived(%{state | global_skills: skills})
   end
@@ -506,8 +581,12 @@ defmodule LemonSkills.Registry do
         Map.merge(acc, dir_skills, fn _key, existing, _incoming -> existing end)
       end)
 
-    # Hydrate provenance from the project lockfile where records are present.
-    skills = hydrate_from_lockfile(skills, {:project, cwd})
+    # Hydrate provenance from the project lockfile where records are present,
+    # then bind each entry to its operator-side authorization.
+    skills =
+      skills
+      |> hydrate_from_lockfile({:project, cwd})
+      |> authorize_entries(audit_records({:project, cwd}), {:project, cwd})
 
     project_skills = Map.put(state.project_skills, cwd, skills)
     state = %{state | project_skills: project_skills}
@@ -521,7 +600,9 @@ defmodule LemonSkills.Registry do
       |> Enum.sort()
       |> Enum.filter(fn name ->
         path = Path.join(dir, name)
-        File.dir?(path) and File.exists?(Path.join(path, "SKILL.md"))
+
+        not String.starts_with?(name, ".") and linkable_skill_dir?(path, source) and
+          File.exists?(Path.join(path, "SKILL.md"))
       end)
       |> Enum.map(fn name ->
         path = Path.join(dir, name)
@@ -536,11 +617,18 @@ defmodule LemonSkills.Registry do
     _ -> %{}
   end
 
+  # Project skill roots are repository content: a skill dir there must be a
+  # real directory, never a link out of the repository. Global roots are
+  # user-owned, so a linked skill dir there is allowed.
+  defp linkable_skill_dir?(path, :project),
+    do: match?({:ok, %File.Stat{type: :directory}}, File.lstat(path))
+
+  defp linkable_skill_dir?(path, _source), do: File.dir?(path)
+
   defp load_skill_entry(path, source) do
     entry = Entry.new(path, source: source)
-    skill_file = Entry.skill_file(entry)
 
-    case File.read(skill_file) do
+    case Entry.content(entry) do
       {:ok, content} ->
         case Manifest.parse_and_validate(content) do
           {:ok, manifest, _body} ->
@@ -658,14 +746,21 @@ defmodule LemonSkills.Registry do
     |> Enum.uniq()
   end
 
+  # Lockfile provenance is descriptive and, for projects, repository-controlled:
+  # every record is reconciled against what its source can actually produce.
   defp hydrate_from_lockfile(skills, scope) do
     case Lockfile.read(scope) do
       {:ok, records} when map_size(records) > 0 ->
         Map.new(skills, fn {key, entry} ->
           entry =
             case Map.fetch(records, key) do
-              {:ok, record} -> Entry.with_provenance(entry, record)
-              :error -> entry
+              {:ok, record} when is_map(record) ->
+                entry
+                |> Entry.with_provenance(record)
+                |> TrustPolicy.reconcile_provenance(scope)
+
+              _ ->
+                entry
             end
 
           {key, entry}
@@ -673,6 +768,94 @@ defmodule LemonSkills.Registry do
 
       _ ->
         skills
+    end
+  end
+
+  # The authorization of record is operator-side (`LemonSkills.Audit.State`),
+  # never lockfile provenance. An entry is authorized only when a grant (or a
+  # byte-identical builtin) matches its live bundle hash; anything else is
+  # pending (or the verdict an audit of these exact bytes reached) and
+  # `Status.loadable?/2` refuses it.
+  defp authorize_entries(skills, records, scope) do
+    Map.new(skills, fn {key, entry} -> {key, authorize_entry(entry, records, scope)} end)
+  end
+
+  defp audit_records(scope) do
+    case AuditState.read(scope) do
+      {:ok, records} -> records
+      {:error, _} -> %{}
+    end
+  end
+
+  # Only skills installed into the agent directory's own skill root, whose
+  # operator-side global lockfile records a completed install (`pass`, `warn`
+  # or `overridden`), qualify; pending imports, hand-placed directories,
+  # other global roots and every project skill still need `lemon skill audit`.
+  defp queue_upgrade_audits(hydrated, authorized, records) do
+    root = Path.expand(Config.global_skills_dir())
+
+    candidates =
+      Enum.flat_map(authorized, fn
+        {key, %Entry{authorized_hash: nil}} ->
+          upgrade_candidate(Map.fetch!(hydrated, key), root, records)
+
+        _authorized ->
+          []
+      end)
+
+    if candidates != [], do: send(self(), {:auto_audit, candidates})
+    :ok
+  end
+
+  # One-time upgrade only: the lockfile's `bundle_hash` must be the pre-v2
+  # hash of exactly the live bytes, i.e. the bundle is unchanged since an
+  # install recorded before the v2 hash format. Records with a v2 hash, edits
+  # after install and records without a hash need `lemon skill audit`.
+  defp upgrade_candidate(%Entry{key: key, audit_status: status} = entry, root, records)
+       when status in [:pass, :warn, :overridden] and is_binary(entry.bundle_hash) do
+    with true <- Path.dirname(Path.expand(entry.path)) == root,
+         {:ok, scan} <- Bundle.scan(entry.path),
+         true <- Bundle.legacy_hash(scan) == entry.bundle_hash,
+         hash = Bundle.hash(scan),
+         false <- match?(%{"bundle_hash" => ^hash}, Map.get(records, "skill:#{key}")) do
+      [%{key: key, path: entry.path, hash: hash}]
+    else
+      _ -> []
+    end
+  end
+
+  defp upgrade_candidate(_entry, _root, _records), do: []
+
+  defp authorize_entry(%Entry{} = entry, records, scope) do
+    live_hash = Entry.compute_bundle_hash(entry)
+
+    cond do
+      is_nil(live_hash) ->
+        %{entry | authorized_hash: nil, audit_status: unauthorized_status(entry, records, nil)}
+
+      scope == :global and Builtin.verified_install?(entry) ->
+        %{entry | authorized_hash: live_hash}
+
+      status = AuditState.grant_status(records, entry.key, live_hash) ->
+        %{entry | authorized_hash: live_hash, audit_status: status}
+
+      true ->
+        %{
+          entry
+          | authorized_hash: nil,
+            audit_status: unauthorized_status(entry, records, live_hash)
+        }
+    end
+  end
+
+  defp unauthorized_status(entry, records, live_hash) do
+    case Map.get(records, "skill:#{entry.key}") do
+      %{"bundle_hash" => ^live_hash, "final_verdict" => verdict}
+      when is_binary(live_hash) and verdict in ["warn", "block"] ->
+        String.to_existing_atom(verdict)
+
+      _ ->
+        if entry.audit_status == :block, do: :block, else: :pending
     end
   end
 
@@ -841,11 +1024,11 @@ defmodule LemonSkills.Registry do
   defp maybe_reload_project(state, _cwd, _identity), do: state
 
   defp cache_identity(cwd) do
-    global = scope_identity(Config.global_skills_dirs(), Lockfile.path(:global))
+    global = scope_identity(Config.global_skills_dirs(), metadata_files(:global))
 
     project =
       if is_binary(cwd) do
-        scope_identity(Config.project_skills_dirs(cwd), Lockfile.path({:project, cwd}))
+        scope_identity(Config.project_skills_dirs(cwd), metadata_files({:project, cwd}))
       end
 
     {global, project}
@@ -853,23 +1036,26 @@ defmodule LemonSkills.Registry do
 
   defp cache_identity(cwd, check_global?, check_project?) do
     global =
-      if check_global?, do: scope_identity(Config.global_skills_dirs(), Lockfile.path(:global))
+      if check_global?, do: scope_identity(Config.global_skills_dirs(), metadata_files(:global))
 
     project =
       if check_project? and is_binary(cwd) do
-        scope_identity(Config.project_skills_dirs(cwd), Lockfile.path({:project, cwd}))
+        scope_identity(Config.project_skills_dirs(cwd), metadata_files({:project, cwd}))
       end
 
     {global, project}
   end
 
-  defp scope_identity(dirs, lockfile) do
+  # Provenance and authorization changes both re-hydrate the scope.
+  defp metadata_files(scope), do: [Lockfile.path(scope), AuditState.path(scope)]
+
+  defp scope_identity(dirs, metadata_files) do
     files =
       dirs
       |> Enum.flat_map(&skill_file_identities/1)
       |> Enum.sort()
 
-    {dirs, files, file_identity(lockfile)}
+    {dirs, files, Enum.map(metadata_files, &file_identity/1)}
   end
 
   defp skill_file_identities(dir) do
@@ -877,6 +1063,7 @@ defmodule LemonSkills.Registry do
       {:ok, names} ->
         names
         |> Enum.sort()
+        |> Enum.reject(&String.starts_with?(&1, "."))
         |> Enum.flat_map(fn name ->
           skill_file = Path.join([dir, name, "SKILL.md"])
 

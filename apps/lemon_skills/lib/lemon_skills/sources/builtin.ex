@@ -57,6 +57,37 @@ defmodule LemonSkills.Sources.Builtin do
   @impl true
   def trust_for_ref(_id), do: :builtin
 
+  @doc """
+  Returns `true` only for a global entry claiming builtin provenance whose
+  installed bundle is byte-identical to the bundle shipped in this release.
+
+  Lockfile provenance is user-editable, so a `builtin` claim alone is never a
+  trust attestation; every gate that would treat a skill as builtin (approval
+  skipping, instruction trust) uses this check.
+  """
+  @spec verified_install?(Entry.t()) :: boolean()
+  def verified_install?(%Entry{
+        source: :global,
+        source_kind: :builtin,
+        trust_level: :builtin,
+        audit_status: audit_status,
+        key: key,
+        path: installed_path
+      })
+      when audit_status not in [:warn, :block, :overridden] and is_binary(key) do
+    with root when is_binary(root) <- builtin_root(),
+         canonical_path = Path.join(root, key),
+         true <- not String.contains?(key, ["/", "\\"]) and File.dir?(canonical_path),
+         {:ok, canonical_hash} <- LemonSkills.Bundle.compute_hash(canonical_path),
+         {:ok, ^canonical_hash} <- LemonSkills.Bundle.compute_hash(installed_path) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  def verified_install?(_entry), do: false
+
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------

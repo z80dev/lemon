@@ -174,6 +174,7 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
     path = write_skill(root, "deploy", "Deployment guide", "first body")
     File.mkdir_p!(Path.join(path, "references"))
     File.write!(Path.join(path, "references/details.md"), "deployment reference")
+    authorize!(path, cwd)
     Registry.refresh(cwd: cwd)
     assert :error = Registry.get("deploy")
     assert :error = Registry.get("Deployment guide", cwd: cwd)
@@ -184,6 +185,7 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
     assert text =~ "first body"
 
     write_skill(root, "deploy", "Deployment guide", "newer body")
+    authorize!(path, cwd)
     Registry.refresh(cwd: cwd)
 
     assert %AgentToolResult{trust: :untrusted, content: [%TextContent{text: updated}]} =
@@ -215,6 +217,12 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
     assert Enum.map(Registry.list(cwd: cwd), & &1.key) == ["alpha", "zulu"]
     assert :error = Registry.get("nested", cwd: cwd)
     assert :error = Registry.get("invalid", cwd: cwd)
+  end
+
+  # Loading requires an operator-side grant for the exact bundle bytes.
+  defp authorize!(path, cwd) do
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(path)
+    :ok = LemonSkills.Audit.State.authorize({:project, cwd}, Path.basename(path), hash, :pass)
   end
 
   defp write_skill(root, key, name, body) do

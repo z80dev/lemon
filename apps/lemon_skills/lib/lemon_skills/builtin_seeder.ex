@@ -13,7 +13,7 @@ defmodule LemonSkills.BuiltinSeeder do
   - Never overwrites an existing skill directory (treat it as user-owned).
   """
 
-  alias LemonSkills.{Config, Entry, Lockfile, Manifest}
+  alias LemonSkills.{Bundle, Config, Entry, Installer, Lockfile, Manifest, SkillRoot}
 
   require Logger
 
@@ -60,16 +60,20 @@ defmodule LemonSkills.BuiltinSeeder do
         :ok
 
       true ->
-        dest_root = Config.global_skills_dir()
-        File.mkdir_p!(dest_root)
-
-        source_root
-        |> File.ls!()
-        |> Enum.map(&Path.join(source_root, &1))
-        |> Enum.filter(&File.dir?/1)
-        |> Enum.each(fn skill_dir ->
-          seed_one(skill_dir, dest_root)
-        end)
+        # The global root is anchored at the validated agent dir; a symlinked
+        # agent dir or skill root is never seeded through.
+        with {:ok, dest_root, anchor} <-
+               SkillRoot.resolve_root(Config.global_skills_dir(), :global),
+             :ok <- SkillRoot.ensure_dir(anchor, dest_root) do
+          source_root
+          |> File.ls!()
+          |> Enum.map(&Path.join(source_root, &1))
+          |> Enum.filter(&File.dir?/1)
+          |> Enum.each(&seed_one(&1, dest_root))
+        else
+          {:error, reason} ->
+            Logger.warning("[BuiltinSeeder] unsafe global skill root: #{inspect(reason)}")
+        end
 
         :ok
     end
@@ -92,22 +96,24 @@ defmodule LemonSkills.BuiltinSeeder do
 
         :ok
 
-      File.dir?(dest_skill_dir) ->
+      match?({:ok, _}, File.lstat(dest_skill_dir)) ->
         :ok
 
       true ->
-        case File.cp_r(source_skill_dir, dest_skill_dir) do
-          {:ok, _} ->
-            seed_lockfile_record(skill_name, dest_skill_dir)
-            :ok
-
-          {:error, reason, path} ->
+        # Copies exactly the scanned bundle files through the installer's
+        # contained activation (root chain re-checked, live set verified).
+        with {:ok, scan} <- Bundle.scan(source_skill_dir),
+             :ok <- Bundle.require_clean(scan),
+             :ok <- Installer.activate_audited(scan, dest_skill_dir, :global, false) do
+          seed_lockfile_record(skill_name, dest_skill_dir)
+        else
+          {:error, reason} ->
             Logger.warning(
-              "[BuiltinSeeder] failed to copy builtin skill '#{skill_name}' to #{dest_skill_dir}: #{inspect(reason)} at #{path}"
+              "[BuiltinSeeder] failed to seed builtin skill '#{skill_name}' to #{dest_skill_dir}: #{inspect(reason)}"
             )
-
-            :ok
         end
+
+        :ok
     end
   end
 

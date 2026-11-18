@@ -339,11 +339,14 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       skill_dir = Path.join([cwd, ".lemon", "skill", "cache-probe"])
       File.mkdir_p!(skill_dir)
+      isolate_agent_dir!(cwd)
 
       File.write!(
         Path.join(skill_dir, "SKILL.md"),
         "---\nname: Cache Probe\ndescription: Generic helper\nkeywords:\n  - quasarprobe\n---\nbody"
       )
+
+      authorize_skill!(skill_dir, {:project, cwd})
 
       on_exit(fn -> File.rm_rf(cwd) end)
       LemonSkills.refresh(cwd: cwd)
@@ -796,5 +799,21 @@ defmodule CodingAgent.SessionRecalledContextTest do
     else
       :ok
     end
+  end
+
+  defp isolate_agent_dir!(dir) do
+    previous = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", Path.join(dir, "agent"))
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("LEMON_AGENT_DIR", previous),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+  end
+
+  defp authorize_skill!(dir, scope) do
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(dir)
+    :ok = LemonSkills.Audit.State.authorize(scope, Path.basename(dir), hash, :pass)
   end
 end

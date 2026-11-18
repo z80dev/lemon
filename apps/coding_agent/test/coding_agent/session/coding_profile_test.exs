@@ -1,5 +1,5 @@
 defmodule CodingAgent.Session.CodingProfileTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodingAgent.{Session, SettingsManager, SystemPrompt, ToolDisclosure}
   alias CodingAgent.Session.PromptComposer
@@ -123,6 +123,7 @@ defmodule CodingAgent.Session.CodingProfileTest do
   end
 
   test "coding skill metadata stays discoverable without full descriptions", %{tmp_dir: root} do
+    isolate_agent_dir!(root)
     skill = Path.join(root, ".lemon/skill/compact-example")
     File.mkdir_p!(skill)
     description = String.duplicate("discoverable ", 30)
@@ -131,6 +132,8 @@ defmodule CodingAgent.Session.CodingProfileTest do
       Path.join(skill, "SKILL.md"),
       "---\nname: compact-example\ndescription: #{description}\n---\nFull workflow body\n"
     )
+
+    authorize_skill!(skill, {:project, root})
 
     opts = %{
       workspace_dir: Path.join(root, "workspace"),
@@ -177,5 +180,21 @@ defmodule CodingAgent.Session.CodingProfileTest do
     explicit = %{tools: %{disclosure: %{profile: "legacy"}}}
     assert ToolDisclosure.config(explicit, nil, :coding).profile == :legacy
     assert ToolDisclosure.config(settings, [profile: :legacy], :coding).profile == :legacy
+  end
+
+  defp isolate_agent_dir!(dir) do
+    previous = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", Path.join(dir, "agent"))
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("LEMON_AGENT_DIR", previous),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+  end
+
+  defp authorize_skill!(dir, scope) do
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(dir)
+    :ok = LemonSkills.Audit.State.authorize(scope, Path.basename(dir), hash, :pass)
   end
 end

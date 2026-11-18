@@ -19,6 +19,9 @@ defmodule LemonSkills.HiddenSkillTest do
 
     Body of #{key}
     """)
+
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(dir)
+    :ok = LemonSkills.Audit.State.authorize({:project, root}, key, hash, :pass)
   end
 
   test "hide / disable-model-invocation skills leave model prompts but stay loadable",

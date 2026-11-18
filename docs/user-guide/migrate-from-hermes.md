@@ -30,7 +30,7 @@ Common options:
 | `--overwrite` | Replace conflicting target files. Existing files are copied into the migration backup area first. |
 | `--skill-conflict skip` | Treat an existing skill folder as a conflict. This is the default. |
 | `--skill-conflict rename` | Import conflicting skills as `<name>-hermes-import`. |
-| `--include-skill-assets` | Also copy skill files that are not recognised skill content, after you have reviewed the `gated` list. |
+| `--include-skill-assets` | Also import unrecognised skill files inside the skill bundle layout (`references/`, `templates/`, `scripts/`, `assets/`), after you have reviewed the `gated` list. |
 | `--no-backup` | Skip the pre-migration `lemon backup` bundle. |
 | `--dry-run` | Print the preview and exit without writing. |
 | `--yes` | Apply without the confirmation prompt (conflicts still require `--overwrite`). |
@@ -51,7 +51,7 @@ before writing. If conflicts are present, it refuses to apply unless
 | `SOUL.md` | `<target>/agent/workspace/SOUL.md` |
 | `memories/MEMORY.md` | Compact `<target>/agent/workspace/MEMORY.md`; overflow goes to `memory/topics/hermes-imported-memory.md` |
 | `memories/USER.md` | Compact `<target>/agent/workspace/USER.md`; overflow goes to `memory/topics/hermes-imported-user_profile.md` |
-| `skills/*/` | `<target>/agent/skill/<skill-name>/`: `SKILL.md` and recognised text files only (see [Credential handling](#credential-handling)) |
+| `skills/*/` | `<target>/agent/skill/<skill-name>/`: `SKILL.md` and recognised text files only, installed through the skill audit and recorded as `pending` (see [Credential handling](#credential-handling)) |
 | `config.yaml` model/provider base URLs | Compatible `[defaults]` and `[providers.*]` entries in `<target>/config.toml` |
 | `$HERMES_HOME/honcho.json` or `~/.honcho/config.json` | Supported settings in `[honcho]`; API key in Lemon encrypted secrets with `--preset full --migrate-secrets` |
 | `.env` allowlisted secrets | Lemon encrypted secrets, only with `--preset full --migrate-secrets`. An existing Lemon secret with the same name is always a conflict; a different existing credential reference in `config.toml` is a conflict unless `--overwrite` is set. |
@@ -217,12 +217,24 @@ credential reference is written, and the rest of the migration continues.
 
 - Skills: only `SKILL.md` and UTF-8 text files with a known source or document
   extension (`.md`, `.txt`, `.py`, `.sh`, `.js`, `.ts` and similar) under
-  `references/`, `scripts/`, `templates/`, `examples/` or `docs/` are copied.
-  Every other file, including dotfiles and any JSON, YAML or extensionless
-  file, is reported as `gated` and not copied. After reviewing the listed
-  files, `--include-skill-assets` copies them too (each is listed as
-  `migrated`); symlinks and special files are never copied. Copied text is not
-  scanned for secrets.
+  `references/`, `scripts/` or `templates/` are selected. Every other file,
+  including dotfiles and any JSON, YAML or extensionless file, is reported as
+  `gated` and not copied. After reviewing the listed files,
+  `--include-skill-assets` also imports the ones inside the skill bundle
+  layout (`references/`, `templates/`, `scripts/`, `assets/`; each is listed
+  as `migrated`); files outside that layout, symlinks, hard-linked files,
+  symlinked skill directories and special files are never read or imported.
+  Imported text is not scanned for secrets.
+- Selected skill files are staged in a private temporary directory outside
+  every skill root and installed through the skill installer's audit: the
+  exact staged file set is scanned, a skill the audit blocks is reported as
+  `blocked` and not imported, and only the audited files are activated. An
+  imported skill is recorded in `<target>/agent/skills.lock.json` with
+  `source_kind: hermes`, `trust_level: community` and `audit_status: pending`,
+  so Lemon's normal audit and approval pipeline still judges it before it is
+  trusted: a pending skill is not loadable until you run
+  `lemon skill audit <skill-key>` (add `--approve` to accept `warn` findings).
+  The report and `summary.md` list each skill's audit status and verdict.
 - `config.yaml` is archived reduced to `model` and provider `base_url` values;
   every other top-level section is reported by name as `gated`, never copied.
 - URLs with userinfo, a query string or a fragment are never imported into

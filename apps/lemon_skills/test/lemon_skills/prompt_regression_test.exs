@@ -382,10 +382,13 @@ defmodule LemonSkills.PromptRegressionTest do
     text
   end
 
+  # Loading requires an operator-side grant for the exact bundle bytes.
   defp write_skill!(tmp_dir, key, skill_md) do
     skill_dir = Path.join([tmp_dir, ".lemon", "skill", key])
     File.mkdir_p!(skill_dir)
     File.write!(Path.join(skill_dir, "SKILL.md"), skill_md)
+    {:ok, hash} = LemonSkills.Bundle.compute_hash(skill_dir)
+    :ok = LemonSkills.Audit.State.authorize({:project, tmp_dir}, key, hash, :pass)
     skill_dir
   end
 

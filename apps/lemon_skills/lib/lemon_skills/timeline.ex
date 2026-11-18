@@ -114,7 +114,9 @@ defmodule LemonSkills.Timeline do
 
         with {:ok, usage} <- read_map(Usage.usage_file(usage_opts(scope)), "skills", boundary),
              {:ok, installs} <- read_map(Lockfile.path(scope), "skills", boundary),
-             {:ok, audits} <- read_map(State.path(scope), "records", boundary),
+             # Audit state is operator-side for every scope (under the agent dir).
+             {:ok, audits} <-
+               read_map(State.path(scope), "records", Path.expand(Config.agent_dir())),
              {:ok, drafts} <- draft_events(scope, memory_items) do
           events =
             Enum.flat_map(usage, fn {key, record} ->
@@ -240,7 +242,7 @@ defmodule LemonSkills.Timeline do
       {:ok, entries} when length(entries) <= @max_records ->
         Enum.reduce_while(Enum.sort(entries), {:ok, []}, fn key, {:ok, acc} ->
           if Regex.match?(~r/\A[a-z0-9][a-z0-9._-]{0,127}\z/, key) do
-            case read_map(Path.join([root, key, ".draft_meta.json"]), nil, scope_home(scope)) do
+            case read_draft_meta(Path.join(root, key), scope_home(scope)) do
               {:ok, meta} ->
                 source = meta["source_doc_id"]
 
@@ -274,6 +276,18 @@ defmodule LemonSkills.Timeline do
 
       _ ->
         {:error, :timeline_unavailable}
+    end
+  end
+
+  # Draft metadata sits beside the draft bundle; drafts written before that
+  # move still carry it inside.
+  defp read_draft_meta(dir, boundary) do
+    case read_map(DraftStore.meta_path(dir), nil, boundary) do
+      {:ok, meta} when map_size(meta) == 0 ->
+        read_map(Path.join(dir, ".draft_meta.json"), nil, boundary)
+
+      result ->
+        result
     end
   end
 

@@ -176,9 +176,9 @@ defmodule LemonSkills.Audit.EngineTest do
   # ── audit_entry/1 ────────────────────────────────────────────────────────────
 
   describe "audit_entry/1" do
-    test "returns warn with unreadable_content when SKILL.md is missing" do
+    test "blocks with unreadable_content when the bundle is missing" do
       entry = %Entry{key: "test", path: "/nonexistent/path"}
-      assert {:warn, [finding]} = Engine.audit_entry(entry)
+      assert {:block, [finding]} = Engine.audit_entry(entry)
       assert finding.rule == "unreadable_content"
     end
 

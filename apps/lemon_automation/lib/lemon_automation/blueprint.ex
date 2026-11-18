@@ -23,6 +23,7 @@ defmodule LemonAutomation.Blueprint do
   alias LemonCore.ProfileStore
   alias LemonSkills.Audit.{Engine, SkillLint}
   alias LemonSkills.{Bundle, Config, Manifest}
+  alias LemonSkills.Audit.State, as: SkillAuditState
 
   @format "lemon-skill-automation-bundle"
   @version 1
@@ -32,10 +33,8 @@ defmodule LemonAutomation.Blueprint do
   @max_skills 16
   @max_automations 1
   @max_files 256
-  @max_file_bytes 1_048_576
   @max_total_bytes 8_388_608
   @max_prompt_bytes 8_192
-  @allowed_skill_root_entries ~w(SKILL.md references templates scripts assets)
   @archive_extensions ~w(.7z .bz2 .gz .jar .rar .tar .tgz .war .xz .zip)
   @id_regex ~r/^[a-z0-9][a-z0-9_-]{0,63}$/
   @control_regex ~r/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u
@@ -428,7 +427,6 @@ defmodule LemonAutomation.Blueprint do
        }, next_totals}
     else
       {:error, _} = error -> error
-      false -> error(:duplicate_skill, "Bundle skill keys must be unique")
     end
   end
 
@@ -776,52 +774,104 @@ defmodule LemonAutomation.Blueprint do
 
     case stage_and_commit_skills(actions, state.profile["paths"]["skills"], opts) do
       {:ok, created} ->
-        case enable_profile_skills(state.bundle.skills, workspace) do
-          :ok ->
-            case refresh_skills(workspace, opts) do
-              :ok ->
-                result =
-                  Enum.map(state.skill_actions, fn action ->
-                    status =
-                      cond do
-                        action.action in [:create, :create_enable] -> "created"
-                        action.action == :enable -> "enabled"
-                        true -> "unchanged"
-                      end
+        undo = fn granted ->
+          revoke_skill_grants(workspace, granted)
+          rollback_skills(created)
+          restore_file(config_path, config_snapshot)
+        end
 
-                    %{
-                      "key" => action.skill.key,
-                      "status" => status,
-                      "bundleHash" => action.skill.bundle_hash,
-                      "trustLevel" => "untrusted",
-                      "auditStatus" => "pass"
-                    }
-                  end)
-
-                rollback = fn ->
-                  rollback_skills(created)
-                  restore_file(config_path, config_snapshot)
-                  _ = refresh_skills(workspace, opts)
-                  :ok
+        with {:ok, granted} <- authorize_skills(state.skill_actions, workspace),
+             :ok <- enable_or_undo(state.bundle.skills, workspace, fn -> undo.(granted) end),
+             :ok <- refresh_or_undo(workspace, opts, fn -> undo.(granted) end) do
+          result =
+            Enum.map(state.skill_actions, fn action ->
+              status =
+                cond do
+                  action.action in [:create, :create_enable] -> "created"
+                  action.action == :enable -> "enabled"
+                  true -> "unchanged"
                 end
 
-                {:ok, result, rollback}
+              %{
+                "key" => action.skill.key,
+                "status" => status,
+                "bundleHash" => action.skill.bundle_hash,
+                "trustLevel" => "untrusted",
+                "auditStatus" => "pass"
+              }
+            end)
 
-              {:error, _} = error ->
-                rollback_skills(created)
-                restore_file(config_path, config_snapshot)
-                error
-            end
+          rollback = fn ->
+            undo.(granted)
+            _ = refresh_skills(workspace, opts)
+            :ok
+          end
+
+          {:ok, result, rollback}
+        else
+          {:error, {:authorize_failed, granted, error}} ->
+            undo.(granted)
+            error
 
           {:error, _} = error ->
-            rollback_skills(created)
-            restore_file(config_path, config_snapshot)
             error
         end
 
       {:error, _} = error ->
         error
     end
+  end
+
+  defp enable_or_undo(skills, workspace, undo) do
+    with {:error, _} = error <- enable_profile_skills(skills, workspace) do
+      undo.()
+      error
+    end
+  end
+
+  defp refresh_or_undo(workspace, opts, undo) do
+    with {:error, _} = error <- refresh_skills(workspace, opts) do
+      undo.()
+      error
+    end
+  end
+
+  # Every imported skill passed the static audit on the exact bytes now live
+  # at its destination (staged bytes were re-verified before commit; unchanged
+  # and enable actions matched the bundle hash at planning). The confirmed
+  # activation therefore persists an exact-bundle project-scope load grant for
+  # each one. Returns the grants this activation newly added, so a rollback
+  # revokes only those and leaves grants that existed before untouched.
+  defp authorize_skills(actions, workspace) do
+    scope = {:project, workspace}
+
+    existing =
+      case SkillAuditState.read(scope) do
+        {:ok, records} -> records
+        {:error, _} -> %{}
+      end
+
+    Enum.reduce_while(actions, {:ok, []}, fn action, {:ok, granted} ->
+      %{key: key, bundle_hash: hash} = action.skill
+
+      with {:ok, ^hash} <- Bundle.compute_hash(action.destination),
+           :ok <- SkillAuditState.authorize(scope, key, hash, :pass) do
+        added = if SkillAuditState.grant_status(existing, key, hash), do: [], else: [{key, hash}]
+        {:cont, {:ok, added ++ granted}}
+      else
+        _ ->
+          {:halt,
+           {:error,
+            {:authorize_failed, granted,
+             error(:skill_authorization_failed, "Profile skill authorization failed")}}}
+      end
+    end)
+  end
+
+  defp revoke_skill_grants(workspace, granted) do
+    Enum.each(granted, fn {key, hash} ->
+      _ = SkillAuditState.revoke({:project, workspace}, key, hash)
+    end)
   end
 
   defp apply_automation(state, rollback) do
@@ -907,7 +957,6 @@ defmodule LemonAutomation.Blueprint do
         {:cont, :ok}
       else
         {:error, _} = error -> {:halt, error}
-        _ -> {:halt, error(:staged_bundle_changed, "Staged skill verification failed")}
       end
     end)
   end
@@ -1033,81 +1082,60 @@ defmodule LemonAutomation.Blueprint do
     }
   end
 
+  # Layout, symlink, special-file and size rules come from the one skill bundle
+  # policy, `LemonSkills.Bundle.scan/1`; portable bundles additionally refuse
+  # archives.
   defp scan_skill_tree(root) do
     with {:ok, root} <- require_directory(root, :invalid_skill_path),
-         {:ok, names} <- File.ls(root) |> map_file_error(:invalid_skill_path),
-         true <- "SKILL.md" in names || error(:invalid_skill, "Skill is missing SKILL.md"),
-         true <-
-           not Enum.any?(names, &archive_extension?/1) ||
-             error(:archive_not_supported, "Skill bundles cannot contain archives"),
-         true <-
-           Enum.all?(names, &(&1 in @allowed_skill_root_entries)) ||
-             error(
-               :invalid_skill_layout,
-               "Skill contains files outside the audited bundle layout"
-             ) do
-      walk_skill_entries(root, root, names, %{files: 0, bytes: 0, file_entries: []})
-    else
-      {:error, _} = error -> error
+         {:ok, scan} <- Bundle.scan(root) |> map_file_error(:invalid_skill_path),
+         :ok <- reject_archives(scan),
+         :ok <- reject_bundle_violations(scan.violations) do
+      entries = Enum.map(scan.files, &%{path: &1.path, full_path: &1.full_path, size: &1.size})
+
+      {:ok,
+       %{
+         files: length(entries),
+         bytes: Enum.reduce(entries, 0, &(&1.size + &2)),
+         file_entries: entries
+       }}
     end
   end
 
-  defp walk_skill_entries(_root, _current, [], state), do: {:ok, state}
+  defp reject_archives(%{files: files, violations: violations}) do
+    if Enum.any?(
+         Enum.map(files, & &1.path) ++ Enum.map(violations, & &1.path),
+         &archive_extension?/1
+       ),
+       do: error(:archive_not_supported, "Skill bundles cannot contain archives"),
+       else: :ok
+  end
 
-  defp walk_skill_entries(root, current, [name | rest], state) do
-    path = Path.join(current, name)
-    relative = Path.relative_to(path, root) |> String.replace("\\", "/")
+  defp reject_bundle_violations([]), do: :ok
+
+  defp reject_bundle_violations(violations) do
+    reasons = MapSet.new(violations, & &1.reason)
 
     cond do
-      byte_size(relative) > 512 ->
-        error(:bundle_limit_exceeded, "Skill path exceeds the byte limit")
+      MapSet.member?(reasons, :missing_skill_md) ->
+        error(:invalid_skill, "Skill is missing SKILL.md")
 
-      archive_extension?(path) ->
-        error(:archive_not_supported, "Skill bundles cannot contain archives")
+      MapSet.member?(reasons, :symlink) ->
+        error(:symlink_not_allowed, "Skill bundles cannot contain symlinks")
+
+      MapSet.member?(reasons, :not_regular) ->
+        error(:unsafe_file_type, "Skill bundles may contain regular files and directories only")
+
+      Enum.any?(
+        [:too_large, :too_many_files, :total_too_large, :path_too_long],
+        &MapSet.member?(reasons, &1)
+      ) ->
+        error(:bundle_limit_exceeded, "Skill bundle exceeds a file, path or byte limit")
+
+      MapSet.member?(reasons, :unreadable) ->
+        error(:invalid_skill_path, "Skill bundle entry could not be inspected")
 
       true ->
-        case File.lstat(path) do
-          {:ok, %File.Stat{type: :symlink}} ->
-            error(:symlink_not_allowed, "Skill bundles cannot contain symlinks")
-
-          {:ok, %File.Stat{type: :directory}} ->
-            with {:ok, children} <- File.ls(path) |> map_file_error(:invalid_skill_path),
-                 {:ok, next} <- walk_skill_entries(root, path, Enum.sort(children), state) do
-              walk_skill_entries(root, current, rest, next)
-            end
-
-          {:ok, %File.Stat{type: :regular, size: size}} ->
-            cond do
-              size > @max_file_bytes ->
-                error(:bundle_limit_exceeded, "Skill file exceeds the byte limit")
-
-              state.files + 1 > @max_files ->
-                error(:bundle_limit_exceeded, "Bundle contains too many files")
-
-              state.bytes + size > @max_total_bytes ->
-                error(:bundle_limit_exceeded, "Bundle exceeds the total byte limit")
-
-              true ->
-                entry = %{path: relative, full_path: path, size: size}
-
-                next = %{
-                  files: state.files + 1,
-                  bytes: state.bytes + size,
-                  file_entries: [entry | state.file_entries]
-                }
-
-                walk_skill_entries(root, current, rest, next)
-            end
-
-          {:ok, _} ->
-            error(
-              :unsafe_file_type,
-              "Skill bundles may contain regular files and directories only"
-            )
-
-          {:error, _} ->
-            error(:invalid_skill_path, "Skill bundle entry could not be inspected")
-        end
+        error(:invalid_skill_layout, "Skill contains files outside the audited bundle layout")
     end
   end
 

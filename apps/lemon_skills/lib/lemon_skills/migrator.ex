@@ -14,9 +14,12 @@ defmodule LemonSkills.Migrator do
 
      | Bucket      | source_kind | trust_level | audit_status | Criteria                         |
      |-------------|-------------|-------------|--------------|----------------------------------|
-     | `:builtin`  | `builtin`   | `builtin`   | `pass`       | name matches a repo-bundled skill|
+     | `:builtin`  | `builtin`   | `builtin`   | `pass`       | byte-identical to a bundled skill|
      | `:git`      | `git`       | `community` | `pending`    | `.git/` directory present        |
-     | `:local`    | `local`     | `community` | `pass`       | everything else                  |
+     | `:local`    | `local`     | `community` | `pending`    | everything else                  |
+
+     A directory merely named like a bundled skill is not `builtin`. Dot-dirs
+     (staging/activation/backup leftovers) are never classified.
 
   5. Writes a minimal provenance record to the global lockfile for each newly
      classified skill.
@@ -94,12 +97,28 @@ defmodule LemonSkills.Migrator do
   defp classified?(%{"source_kind" => v}) when is_binary(v) and v != "", do: true
   defp classified?(_), do: false
 
+  # `builtin` requires a byte-identical copy of the bundle shipped in this
+  # release; a directory merely *named* like a builtin is ordinary community
+  # content. Nothing the migrator classifies is audited, so it never records
+  # `pass` for a non-builtin directory.
   defp classify(name, path, builtin_names) do
     cond do
-      name in builtin_names -> :builtin
+      name in builtin_names and shipped_builtin?(name, path) -> :builtin
       File.dir?(Path.join(path, ".git")) -> :git
       true -> :local
     end
+  end
+
+  defp shipped_builtin?(name, path) do
+    entry =
+      Entry.new(path,
+        source: :global,
+        source_kind: :builtin,
+        trust_level: :builtin,
+        audit_status: :pass
+      )
+
+    LemonSkills.Sources.Builtin.verified_install?(%{entry | key: name})
   end
 
   defp write_record(name, path, bucket) do
@@ -116,7 +135,7 @@ defmodule LemonSkills.Migrator do
       )
 
     entry =
-      case File.read(Entry.skill_file(entry)) do
+      case Entry.content(entry) do
         {:ok, content} ->
           case Manifest.parse(content) do
             {:ok, manifest, _body} ->
@@ -137,7 +156,10 @@ defmodule LemonSkills.Migrator do
 
     case Lockfile.put(:global, record) do
       :ok ->
-        Logger.debug("[Migrator] classified '#{name}' as #{bucket}")
+        Logger.info(
+          "[Migrator] classified '#{name}' as #{bucket} " <>
+            "(trust #{trust_level(bucket)}, audit #{audit_status(bucket)})"
+        )
 
       {:error, reason} ->
         Logger.warning(
@@ -154,8 +176,7 @@ defmodule LemonSkills.Migrator do
   defp trust_level(_), do: :community
 
   defp audit_status(:builtin), do: :pass
-  defp audit_status(:git), do: :pending
-  defp audit_status(:local), do: :pass
+  defp audit_status(_unaudited), do: :pending
 
   # For legacy git clones, attempt to read the remote.origin.url from .git/config.
   defp maybe_git_remote(path, :git) do
@@ -175,11 +196,13 @@ defmodule LemonSkills.Migrator do
 
   defp maybe_git_remote(_path, _bucket), do: nil
 
-  # Scan a directory for skill subdirs (subdirs containing SKILL.md).
+  # Scan a directory for skill subdirs (subdirs containing SKILL.md). Dot-dirs
+  # are never skills: staging, activation and backup dirs live there.
   defp scan_skills_dir(dir) do
     if File.dir?(dir) do
       dir
       |> File.ls!()
+      |> Enum.reject(&String.starts_with?(&1, "."))
       |> Enum.map(fn name -> {name, Path.join(dir, name)} end)
       |> Enum.filter(fn {_name, path} ->
         File.dir?(path) and File.exists?(Path.join(path, "SKILL.md"))
