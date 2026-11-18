@@ -43,8 +43,12 @@ defmodule LemonCore.FileAccessTest do
       end
 
       for glob <- ~w(*.{pem,key} secret[0-9].txt secret[-x].txt [a-b] **/*.pem d/** {a,c} x.{pem}) do
+        # No `File.cd!`: the working directory is VM-global and other test
+        # files are still being required by relative path.
         expected =
-          File.cd!(dir, fn -> Path.wildcard(glob, match_dot: true) end)
+          Path.join(dir, glob)
+          |> Path.wildcard(match_dot: true)
+          |> Enum.map(&Path.relative_to(&1, dir))
           |> Enum.filter(&File.regular?(Path.join(dir, &1)))
           |> Enum.sort()
 
