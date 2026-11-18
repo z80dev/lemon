@@ -558,7 +558,10 @@ Search provider `config` supports `priority` (integer, default `0`); the whole
 Extension manifests are discovered from:
 
 1. **Global directory**: `~/.lemon/agent/extensions/`
-2. **Project-local directory**: `.lemon/extensions/` (manifests only; never compiled)
+2. **Explicit runtime paths** (`[runtime] extension_paths`)
+
+A repository's `.lemon/extensions/` is neither loaded nor reported by
+diagnostics.
 
 Extension code is loaded from:
 

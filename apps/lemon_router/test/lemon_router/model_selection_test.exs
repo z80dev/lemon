@@ -70,6 +70,20 @@ defmodule LemonRouter.ModelSelectionTest do
              ModelSelection.resolve(%{model_explicit: true})
   end
 
+  test "only profile and router-default selections are operator-sourced" do
+    assert ModelSelection.operator_source?(%{profile_model: "@coding"})
+    assert ModelSelection.operator_source?(%{default_model: "@coding"})
+    assert ModelSelection.operator_source?(%{profile_model: "@coding", history_model: "h"})
+    refute ModelSelection.operator_source?(%{history_model: "h", default_model: "d"})
+
+    for slot <- [:explicit_model, :meta_model, :session_model] do
+      refute ModelSelection.operator_source?(%{slot => "chosen", profile_model: "@coding"})
+    end
+
+    refute ModelSelection.operator_source?(%{explicit_model: "  ", meta_model: nil})
+    refute ModelSelection.operator_source?(%{})
+  end
+
   test "inherited explicit intent survives profile, history and default model fallback" do
     for slot <- [:profile_model, :history_model, :default_model] do
       for explicit <- [nil, false, true] do

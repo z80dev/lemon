@@ -227,12 +227,10 @@ defmodule CodingAgent.SessionRecalledContextTest do
     session = start_session()
     cwd = Session.get_state(session).cwd
 
-    :ok =
-      LemonSkills.Config.save_config(
-        %{"learning_nudge" => %{"memory_turn_interval" => 2}},
-        false,
-        cwd
-      )
+    # learning_nudge intervals are operator settings (a project file may only
+    # lengthen them), so configure the isolated global skills.json.
+    isolate_agent_dir!(cwd)
+    :ok = LemonSkills.Config.save_config(%{"learning_nudge" => %{"memory_turn_interval" => 2}})
 
     unsubscribe = Session.subscribe(session)
     :ok = Session.prompt(session, "first")

@@ -71,6 +71,8 @@ defmodule CodingAgent.Session.Presentation do
     [cwd: cwd, register: true, executor_root: true]
     |> maybe_add_opt(:model, Keyword.get(opts, :model))
     |> maybe_add_opt(:model_explicit, boolean_or_nil(Keyword.get(opts, :model_explicit)))
+    |> maybe_add_opt(:model_source, Keyword.get(opts, :model_source))
+    |> maybe_add_opt(:model_origin, Keyword.get(opts, :model_origin))
     |> maybe_add_opt(:thinking_level, Keyword.get(opts, :thinking_level))
     |> maybe_add_opt(:system_prompt, Keyword.get(opts, :system_prompt))
     |> maybe_add_opt(:profile_instructions, Keyword.get(opts, :profile_instructions))

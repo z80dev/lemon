@@ -59,8 +59,9 @@ contribute to these reminders. Counters are isolated by live session process and
 reset when that session exits or Lemon restarts; historical transcripts are not
 scanned to rebuild them.
 
-Customize `learning_nudge` in `~/.lemon/agent/skills.json`, or override it in the
-project's `.lemon/skills.json`:
+Customize `learning_nudge` in `~/.lemon/agent/skills.json`. A project's
+`.lemon/skills.json` can only narrow it: set `enabled` to `false` or raise the
+intervals; other project keys, including `background_review`, are ignored:
 
 ```json
 {

@@ -15,16 +15,16 @@ defmodule LemonCore.Config.ProjectLayer do
   Allowed preferences (project value wins):
 
     * `defaults.provider`, `defaults.model`, `defaults.thinking_level`
-    * `model_roles.*`, `model_routing.*` (`max_cost_usd` only lowers;
-      operator-enabled routing, which enforces the cap, cannot be disabled)
+    * `model_roles.*`
     * `tui.*` (`prompt_history` may only be turned off)
     * `runtime.compaction.*`, `runtime.task.agent_models.*`
     * `runtime.tools.auto_resize_images`, `runtime.tools.edit.enforce_seen_lines`,
       `runtime.tools.bash.interceptor.*`
     * `runtime.tools.disclosure.*` (`profile` limited to `auto`, `coding`,
       `legacy`)
-    * `profiles.<operator id>.name`, `description`, `avatar`, `model` for a
-      profile the operator already defines (`default` always exists)
+    * `profiles.<operator id>.name`, `description`, `avatar` for a profile the
+      operator already defines (`default` always exists); a profile's `model`
+      is operator-only, since delegated runs use it without the task gate
 
   Narrow-only policy (the result is never wider than the operator value):
 
@@ -33,7 +33,9 @@ defmodule LemonCore.Config.ProjectLayer do
     * `runtime.task.per_call_model` lowers, `per_call_model_allow` intersects
     * `runtime.task.disabled_agents`: union with the operator list
     * `runtime.max_tool_turns`, `budgets.*`, `model_routing.max_cost_usd`: a
-      cap no higher than the operator's (any cap when the operator has none)
+      cap no higher than the operator's (any cap when the operator has none).
+      Every other `model_routing` key (`enabled`, `rules`) is operator-only:
+      routing picks the request model after task selection is gated.
     * `runtime.tools.bash.git_guard`, `runtime.secret_obfuscation.enabled`,
       `memory.write_approval`, `skills.write_approval`: only `true`
     * `memory.auto_recall`: only `false`
@@ -61,18 +63,14 @@ defmodule LemonCore.Config.ProjectLayer do
   # Unset sits between `yolo` (skips even WASM capability approvals) and `write`.
   @approval_rank %{"yolo" => 0, nil => 1, "write" => 2, "ask" => 3}
   @disclosure_profiles ~w(auto coding legacy)
-  @profile_preferences ~w(name description avatar model)
+  @profile_preferences ~w(name description avatar)
 
   @rules %{
     "defaults" => %{"provider" => :allow, "model" => :allow, "thinking_level" => :allow},
     "model_roles" => :allow,
-    "model_routing" => %{
-      # Routing is where the per-request cost cap is enforced, so a project
-      # cannot switch off operator-enabled routing.
-      "enabled" => {:narrow, :keep_enabled},
-      "max_cost_usd" => {:narrow, :lower_cap},
-      :any => :allow
-    },
+    # Routing rules and enablement choose the request model, so they are
+    # operator authority; a project may only lower the routing cost cap.
+    "model_routing" => %{"max_cost_usd" => {:narrow, :lower_cap}},
     "tui" => %{"prompt_history" => {:narrow, :false_only}, :any => :allow},
     "budgets" => %{:any => {:narrow, :lower_cap}},
     "features" => %{:any => {:narrow, :off_only}},
@@ -226,8 +224,6 @@ defmodule LemonCore.Config.ProjectLayer do
 
   # ── narrowing ──────────────────────────────────────────────────────────────
 
-  defp narrow(:keep_enabled, true, false), do: :error
-  defp narrow(:keep_enabled, _operator, value) when is_boolean(value), do: {:ok, value}
   defp narrow(:true_only, _operator, true), do: {:ok, true}
   defp narrow(:false_only, _operator, false), do: {:ok, false}
   defp narrow(:off_only, _operator, "off"), do: {:ok, "off"}

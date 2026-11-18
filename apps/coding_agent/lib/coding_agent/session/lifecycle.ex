@@ -4,6 +4,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
   alias CodingAgent.ExtensionLifecycle
   alias CodingAgent.Extensions
+  alias CodingAgent.ModelProvenance
   alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.Session
 
@@ -33,7 +34,6 @@ defmodule CodingAgent.Session.Lifecycle do
   alias CodingAgent.Workspace
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.ModelRuntime.StreamOptions
-  alias LemonAgent.ModelRuntime.ModelRouting
 
   defp emit_start_stage(stage, started, session_id) do
     :telemetry.execute(
@@ -153,16 +153,33 @@ defmodule CodingAgent.Session.Lifecycle do
         do: requested_model,
         else: restored_context.model || requested_model
 
-    model = ModelResolver.resolve_session_model(selector, settings_manager)
+    # A router-marked profile or router-default selector is operator
+    # configuration: it resolves (roles included) against the operator layer
+    # of this session's settings, never a project override.
+    operator_selector? =
+      Keyword.get(opts, :model_source) == :operator and not is_nil(requested_model) and
+        selector == requested_model
 
-    model_routing =
-      unless model_explicit do
-        ModelRouting.prepare(
-          settings_manager.model_routing,
-          &ModelResolver.resolve_session_model(&1, settings_manager),
-          settings_manager.providers
-        )
+    {model, resolved_origin} =
+      if operator_selector?,
+        do: ModelProvenance.resolve_operator(selector, settings_manager),
+        else: {ModelResolver.resolve_session_model(selector, settings_manager), nil}
+
+    # Provenance of the session's own model (from the provenance pair loaded
+    # with the settings), inherited by task children so a project-origin
+    # choice stays gated after it resolves to a concrete model. Task children
+    # receive it from their launch; an explicit caller choice is the
+    # operator's; a restored model keeps its journaled origin.
+    model_origin =
+      cond do
+        origin = Keyword.get(opts, :model_origin) -> origin
+        resolved_origin -> resolved_origin
+        requested_explicit -> :operator
+        restored_context.model -> ModelProvenance.restored(restored_context, settings_manager)
+        true -> ModelProvenance.origin(requested_model, settings_manager)
       end
+
+    model_routing = unless model_explicit, do: ModelProvenance.prepare_routing(settings_manager)
 
     thinking_level =
       LemonAgent.AutoThinking.normalize_level(
@@ -185,7 +202,8 @@ defmodule CodingAgent.Session.Lifecycle do
       session_manager
       |> SessionManager.append_entry(
         SessionManager.SessionEntry.model_change(model.provider, model.id,
-          explicit: model_explicit
+          explicit: model_explicit,
+          origin: model_origin
         )
       )
       |> SessionManager.append_entry(
@@ -223,8 +241,7 @@ defmodule CodingAgent.Session.Lifecycle do
         end
       end)
 
-    secret_obfuscator =
-      SecretObfuscator.for_session(settings_manager, cwd)
+    secret_obfuscator = SecretObfuscator.for_session(settings_manager)
 
     wasm_boot =
       WasmBridge.maybe_start_wasm_sidecar(
@@ -243,6 +260,7 @@ defmodule CodingAgent.Session.Lifecycle do
       opts
       |> Keyword.put(:model, model)
       |> Keyword.put(:model_explicit, model_explicit)
+      |> Keyword.put(:model_origin, model_origin)
       |> Keyword.put(:thinking_level, thinking_level)
       |> Keyword.put(:parent_session, session_manager.header.id)
       |> Keyword.put(:session_id, session_manager.header.id)
@@ -589,6 +607,7 @@ defmodule CodingAgent.Session.Lifecycle do
       cwd: cwd,
       tools: tools,
       model: model,
+      model_origin: model_origin,
       thinking_level: thinking_level,
       system_prompt: system_prompt,
       base_system_prompt: base_system_prompt,
@@ -681,6 +700,9 @@ defmodule CodingAgent.Session.Lifecycle do
         model_explicit:
           SessionManager.build_session_context(state.session_manager).model_explicit,
         thinking_level: state.thinking_level,
+        # Tools are rebuilt with the model and its origin together, so a
+        # rebuilt task tool gates children exactly as the current model requires.
+        model_origin: state.model_origin,
         parent_session: state.session_manager.header.id,
         session_id: state.session_manager.header.id,
         session_pid: self(),
@@ -814,7 +836,8 @@ defmodule CodingAgent.Session.Lifecycle do
           SessionManager.new(state.cwd)
           |> SessionManager.append_entry(
             SessionManager.SessionEntry.model_change(state.model.provider, state.model.id,
-              explicit: model_explicit
+              explicit: model_explicit,
+              origin: state.model_origin
             )
           )
           |> SessionManager.append_entry(
@@ -888,6 +911,7 @@ defmodule CodingAgent.Session.Lifecycle do
     tool_opts =
       Keyword.merge(state.tool_opts,
         model: state.model,
+        model_origin: state.model_origin,
         model_explicit:
           SessionManager.build_session_context(state.session_manager).model_explicit,
         thinking_level: state.thinking_level,

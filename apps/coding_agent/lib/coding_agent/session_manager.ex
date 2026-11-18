@@ -99,6 +99,8 @@ defmodule CodingAgent.SessionManager do
             provider: String.t() | nil,
             model_id: String.t() | nil,
             model_explicit: boolean() | nil,
+            # :project | :operator (CodingAgent.ModelProvenance); nil in older journals
+            model_origin: :project | :operator | nil,
             # compaction type
             summary: String.t() | nil,
             first_kept_entry_id: String.t() | nil,
@@ -133,6 +135,7 @@ defmodule CodingAgent.SessionManager do
       :provider,
       :model_id,
       :model_explicit,
+      :model_origin,
       # compaction
       :summary,
       :first_kept_entry_id,
@@ -183,6 +186,7 @@ defmodule CodingAgent.SessionManager do
         provider: provider,
         model_id: model_id,
         model_explicit: Keyword.get(opts, :explicit),
+        model_origin: Keyword.get(opts, :origin),
         id: Keyword.get(opts, :id),
         parent_id: Keyword.get(opts, :parent_id),
         timestamp: Keyword.get(opts, :timestamp, System.system_time(:millisecond))
@@ -938,12 +942,16 @@ defmodule CodingAgent.SessionManager do
   If compaction exists: emit summary first, then kept entries.
   Extracts thinking_level and model from path.
 
-  Returns `%{messages: [...], thinking_level: atom, model: %{provider: str, model_id: str} | nil}`
+  Returns `%{messages: [...], thinking_level: atom, model: %{provider: str, model_id: str} | nil,
+  model_explicit: boolean, model_origin: :project | :operator | nil}`; `model_origin` is
+  the latest model change's recorded provenance (nil when it predates provenance).
   """
   @spec build_session_context(Session.t(), String.t() | nil) :: %{
           messages: [map()],
           thinking_level: atom(),
-          model: %{provider: String.t(), model_id: String.t()} | nil
+          model: %{provider: String.t(), model_id: String.t()} | nil,
+          model_explicit: boolean(),
+          model_origin: :project | :operator | nil
         }
   def build_session_context(%Session{} = session, leaf_id \\ nil) do
     branch = pruned_branch(session, leaf_id)
@@ -1001,11 +1009,13 @@ defmodule CodingAgent.SessionManager do
       end
 
     # Extract model (find latest model_change)
-    model =
+    latest_model =
       branch
       |> Enum.filter(fn entry -> entry.type == :model_change end)
       |> List.last()
-      |> case do
+
+    model =
+      case latest_model do
         nil -> nil
         entry -> %{provider: entry.provider, model_id: entry.model_id}
       end
@@ -1018,7 +1028,8 @@ defmodule CodingAgent.SessionManager do
         Enum.reduce(branch, false, fn
           %{type: :model_change, model_explicit: explicit}, _ -> explicit != false
           _, explicit -> explicit
-        end)
+        end),
+      model_origin: latest_model && latest_model.model_origin
     }
   end
 
@@ -1143,6 +1154,7 @@ defmodule CodingAgent.SessionManager do
       provider: map["provider"],
       model_id: map["modelId"],
       model_explicit: map["modelExplicit"],
+      model_origin: parse_model_origin(map["modelOrigin"]),
       summary: map["summary"],
       first_kept_entry_id: map["firstKeptEntryId"],
       tokens_before: map["tokensBefore"],
@@ -1169,6 +1181,11 @@ defmodule CodingAgent.SessionManager do
   defp parse_entry_type("custom"), do: :custom
   defp parse_entry_type("customMessage"), do: :custom_message
   defp parse_entry_type(_), do: :custom
+
+  defp parse_model_origin("project"), do: :project
+  defp parse_model_origin("operator"), do: :operator
+  defp parse_model_origin(origin) when origin in [:project, :operator], do: origin
+  defp parse_model_origin(_), do: nil
 
   defp parse_thinking_level(nil), do: nil
   defp parse_thinking_level("off"), do: :off
@@ -1427,6 +1444,11 @@ defmodule CodingAgent.SessionManager do
             "modelId" => entry.model_id,
             "modelExplicit" => entry.model_explicit
           }
+          |> then(fn map ->
+            if entry.model_origin,
+              do: Map.put(map, "modelOrigin", Atom.to_string(entry.model_origin)),
+              else: map
+          end)
 
         :compaction ->
           %{

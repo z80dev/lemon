@@ -100,7 +100,7 @@ defmodule LemonCore.Config.ModelRolesTest do
     assert Config.to_map(Config.load(context.project, cache: false)).model_routing == %{}
   end
 
-  test "model_routing raw table merges global then project without resolving models", context do
+  test "model_routing is read raw from the global file; project rules are ignored", context do
     File.write!(Path.join([context.home, ".lemon", "config.toml"]), """
     [model_routing]
     enabled = false
@@ -114,6 +114,7 @@ defmodule LemonCore.Config.ModelRolesTest do
     File.write!(Path.join([context.project, ".lemon", "config.toml"]), """
     [model_routing]
     enabled = true
+    max_cost_usd = 0.5
 
     [[model_routing.rules]]
     model = "openai:gpt-4o"
@@ -121,12 +122,11 @@ defmodule LemonCore.Config.ModelRolesTest do
     min_chars = 10
     """)
 
+    # Only the project's lower cap survives.
     expected = %{
-      "enabled" => true,
-      "max_cost_usd" => 1.5,
-      "rules" => [
-        %{"model" => "openai:gpt-4o", "contains" => "refactor", "min_chars" => 10}
-      ]
+      "enabled" => false,
+      "max_cost_usd" => 0.5,
+      "rules" => [%{"model" => "@smol", "max_chars" => 200}]
     }
 
     assert Modular.load(project_dir: context.project).model_routing == expected

@@ -40,7 +40,9 @@ defmodule CodingAgent.Subagents do
     * Thinking levels are off, minimal, low, medium, high, or xhigh (`max` is
       xhigh) and are exposed as `thinking_level`.
     * `spawns` is `"*"` (`:all`) or a list of persona IDs. When absent and
-      `tools` includes `task`, it defaults to `:all`.
+      `tools` includes `task`, it defaults to `:all`. At launch it is
+      intersected with the launching session's own spawns list, and `tools`
+      with the parent's tool policy, so a persona never widens either.
     * `output` is a JSON Schema (when it has `$schema`, or a JSON type without
       JTD-only keywords) or a JSON Type Definition (RFC 8927) converted to JSON
       Schema and exposed as `output_schema`. JTD properties forms allow extra

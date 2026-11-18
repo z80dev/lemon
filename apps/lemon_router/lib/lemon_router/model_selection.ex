@@ -51,6 +51,24 @@ defmodule LemonRouter.ModelSelection do
 
   def resolve(_), do: %{model: nil, model_explicit: false}
 
+  @doc """
+  Whether `resolve/1` selects its model from operator configuration: the
+  agent profile model or the router default (no request, meta, session or
+  routing-feedback model). Sessions resolve such a selector, `@role`
+  included, against the operator's settings only.
+  """
+  @spec operator_source?(map()) :: boolean()
+  def operator_source?(input) when is_map(input) do
+    selected? = fn key -> not is_nil(normalize_string(input[key])) end
+
+    not selected?.(:explicit_model) and not selected?.(:meta_model) and
+      not selected?.(:session_model) and
+      (selected?.(:profile_model) or
+         (not selected?.(:history_model) and selected?.(:default_model)))
+  end
+
+  def operator_source?(_), do: false
+
   defp normalize_string(value) when is_binary(value) do
     trimmed = String.trim(value)
     if trimmed == "", do: nil, else: trimmed

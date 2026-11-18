@@ -115,13 +115,6 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       assert ControlPlaneProvider.todo_progress("no-such-session-#{System.unique_integer()}") ==
                nil
     end
-
-    test "extension_dirs returns global then project" do
-      assert ControlPlaneProvider.extension_dirs("/tmp/some-project") == [
-               CodingAgent.Config.extensions_dir(),
-               CodingAgent.Config.project_extensions_dir("/tmp/some-project")
-             ]
-    end
   end
 
   describe "trusted addressing context" do

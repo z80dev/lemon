@@ -5,12 +5,38 @@ defmodule LemonSkills.LearningNudgeTest do
 
   @moduletag :tmp_dir
 
-  setup %{tmp_dir: cwd} do
+  setup %{tmp_dir: tmp_dir} do
+    previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "agent"))
+
+    on_exit(fn ->
+      if previous_agent_dir,
+        do: System.put_env("LEMON_AGENT_DIR", previous_agent_dir),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+
+    cwd = Path.join(tmp_dir, "project")
     server = start_supervised!({LearningNudge, name: nil})
     session = spawn(fn -> receive do: (:stop -> :ok) end)
     on_exit(fn -> send(session, :stop) end)
     request = %{session_scope: :main, session_pid: session, cwd: cwd}
     %{server: server, request: request}
+  end
+
+  test "a project skills.json cannot speed up or re-enable reminders", ctx do
+    configure(ctx, %{"enabled" => false})
+
+    Config.save_config(
+      %{"learning_nudge" => %{"enabled" => true, "memory_turn_interval" => 1}},
+      false,
+      ctx.request.cwd
+    )
+
+    for _ <- 1..12, do: assert(turn(ctx) == :skip)
+
+    configure(ctx, %{})
+    for _ <- 1..9, do: assert(turn(ctx) == :skip)
+    assert {:ok, _} = turn(ctx)
   end
 
   test "default memory reminder appears on turn ten and repeats periodically", ctx do
@@ -143,8 +169,8 @@ defmodule LemonSkills.LearningNudgeTest do
 
   defp turn(ctx), do: LearningNudge.contribute(ctx.request, server: ctx.server)
 
-  defp configure(ctx, settings) do
-    Config.save_config(%{"learning_nudge" => settings}, false, ctx.request.cwd)
+  defp configure(_ctx, settings) do
+    Config.save_config(%{"learning_nudge" => settings})
   end
 
   defp dispatch(ctx, name) do

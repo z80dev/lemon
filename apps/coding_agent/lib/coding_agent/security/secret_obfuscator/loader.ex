@@ -1,8 +1,10 @@
 defmodule CodingAgent.Security.SecretObfuscator.Loader do
   @moduledoc false
-  # Secret sources: secret-shaped environment variables, `secrets.yml` (global
-  # `<agent_dir>/secrets.yml` and project `<cwd>/.lemon/secrets.yml`) and the
-  # built-in credential-token regex.
+  # Secret sources: secret-shaped environment variables, the operator's
+  # `<agent_dir>/secrets.yml` and the built-in credential-token regex. A
+  # repository's `.lemon/secrets.yml` is never read: secret sources are operator
+  # authority, and a project entry could downgrade or label-probe an operator
+  # secret.
 
   require Logger
 
@@ -54,17 +56,9 @@ defmodule CodingAgent.Security.SecretObfuscator.Loader do
     ]
   end
 
-  @doc """
-  Load `secrets.yml` entries; project entries override global entries with the
-  same `content`.
-  """
-  @spec file_entries(Path.t(), Path.t()) :: [entry()]
-  def file_entries(cwd, agent_dir) do
-    global = load_file(Path.join(agent_dir, "secrets.yml"))
-    project = load_file(Path.join([cwd, ".lemon", "secrets.yml"]))
-    project_contents = MapSet.new(project, & &1.content)
-    Enum.reject(global, &MapSet.member?(project_contents, &1.content)) ++ project
-  end
+  @doc "Load the operator's `<agent_dir>/secrets.yml` entries."
+  @spec file_entries(Path.t()) :: [entry()]
+  def file_entries(agent_dir), do: load_file(Path.join(agent_dir, "secrets.yml"))
 
   @doc """
   Compile a secret regex. Accepts `/pattern/flags` literal syntax; JavaScript

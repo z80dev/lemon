@@ -191,7 +191,12 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
         additionalProperties: false
       """)
 
-      session_settings = %{settings() | model_roles: %{"coding" => "openai:gpt-4o-mini"}}
+      # This project persona's thinking level needs per-call selection on.
+      session_settings = %{
+        settings()
+        | model_roles: %{"coding" => "openai:gpt-4o-mini"},
+          task: %{settings().task | per_call_model: "on"}
+      }
 
       assert {:ok, validated} =
                Params.validate_run_params(%{"prompt" => "Plan", "agent" => "planner"}, cwd,

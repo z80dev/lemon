@@ -17,7 +17,7 @@ defmodule CodingAgent.Tools.Agent do
   require Logger
 
   alias CodingAgent.AsyncFollowups
-  alias CodingAgent.{RunGraph, Subagents, TaskStore}
+  alias CodingAgent.{ModelProvenance, RunGraph, SettingsManager, Subagents, TaskStore}
   alias CodingAgent.Tools.Task.{Control, Params, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -525,7 +525,8 @@ defmodule CodingAgent.Tools.Agent do
 
       with {:ok, execution_context} <-
              delegated_execution_context(validated, child_policy, run_id, cwd, opts),
-           {:ok, request_cwd} <- delegated_cwd(validated, execution_context, cwd) do
+           {:ok, request_cwd} <- delegated_cwd(validated, execution_context, cwd),
+           {:ok, model, model_origin} <- delegated_model(validated, persona, role_cwd, opts) do
         base_meta =
           %{
             parent_run_id: parent_run_id,
@@ -589,6 +590,10 @@ defmodule CodingAgent.Tools.Agent do
           )
           |> Map.put(:shared_memory_grant, Keyword.get(opts, :shared_memory_grant) == true)
           |> Map.put(:mcp_servers, Keyword.get(opts, :invocation_mcp_servers))
+          # Provenance of the concrete model admitted against this session's
+          # settings; only a project origin travels (it can only tighten).
+          |> Map.drop(["model_origin"])
+          |> Map.put(:model_origin, if(model_origin == :project, do: :project))
           |> compact_map()
 
         request =
@@ -599,7 +604,7 @@ defmodule CodingAgent.Tools.Agent do
             agent_id: validated.agent_id,
             prompt: prompt,
             queue_mode: validated.queue_mode,
-            model: validated.model || persona_model(persona),
+            model: model,
             model_explicit: not is_nil(validated.model) or Params.inherited_model_explicit(opts),
             cwd: request_cwd,
             tool_policy: execution_context.tool_policy,
@@ -1244,9 +1249,34 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp persona_model(%{model: model}) when is_binary(model), do: model
-  defp persona_model(%{role: role}) when is_binary(role), do: "@" <> role
-  defp persona_model(_), do: nil
+  # The delegated run's model, resolved against this (parent) session's
+  # settings snapshot into a concrete `provider:id`, never an alias the
+  # destination could re-resolve under its own cwd's project config. An
+  # explicit selector is the caller's (already through the per-call
+  # preflight); a persona's model passes the gate when the persona (or the
+  # role it names) comes from the project, and a refused one leaves the run
+  # on its operator profile and defaults.
+  defp delegated_model(%{model: model}, _persona, cwd, opts) when is_binary(model),
+    do: ModelProvenance.delegate(model, parent_settings(cwd, opts))
+
+  defp delegated_model(_validated, persona, cwd, opts) do
+    selector =
+      case persona do
+        %{model: model} when is_binary(model) -> model
+        %{role: role} when is_binary(role) -> "@" <> role
+        _ -> nil
+      end
+
+    origin = if match?(%{source: :project}, persona), do: :project, else: :operator
+
+    case selector && ModelProvenance.admit(selector, origin, parent_settings(cwd, opts)) do
+      {model, origin} -> {:ok, model, origin}
+      nil -> {:ok, nil, nil}
+    end
+  end
+
+  defp parent_settings(cwd, opts),
+    do: Keyword.get(opts, :settings_manager) || SettingsManager.load(cwd)
 
   defp resolve_delegated_session_key(%{agent_id: agent_id, continue_session: true}, opts) do
     parent = parent_scope(opts)

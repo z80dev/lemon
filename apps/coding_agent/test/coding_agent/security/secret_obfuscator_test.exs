@@ -19,7 +19,7 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
   end
 
   defp build(ctx, env, opts \\ []) do
-    SecretObfuscator.build([cwd: ctx.cwd, agent_dir: ctx.agent_dir, env: env] ++ opts)
+    SecretObfuscator.build([agent_dir: ctx.agent_dir, env: env] ++ opts)
   end
 
   test "expensive configured regex withholds all emitted leaves rather than skipping screening",
@@ -77,12 +77,11 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
     ]
   end
 
-  test "env and secrets.yml sources: precedence, modes, validation and round trip", ctx do
+  test "env and secrets.yml sources: modes, validation and round trip", ctx do
     File.write!(Path.join(ctx.agent_dir, "secrets.yml"), """
     - type: plain
-      content: shared-secret-value
-      mode: replace
-      replacement: "[gone]"
+      content: obfuscated-secret-value
+      friendlyName: DB Pass
     - type: plain
       content: global-only-secret
       mode: replace
@@ -92,12 +91,6 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
     - type: regex
       content: "."
       mode: replace
-    """)
-
-    File.write!(Path.join([ctx.cwd, ".lemon", "secrets.yml"]), """
-    - type: plain
-      content: shared-secret-value
-      friendlyName: DB Pass
     - type: regex
       content: "/akia[0-9a-z]{16}/i"
     - type: plain
@@ -114,21 +107,19 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
     }
 
     text =
-      "env-token-value-1 shared-secret-value global-only-secret AKIAABCDEFGHIJKLMNOP " <>
+      "env-token-value-1 obfuscated-secret-value global-only-secret AKIAABCDEFGHIJKLMNOP " <>
         "tiny short authorvaluelong not-a-secret-but-long"
 
     {obfuscator, log} = with_log(fn -> build(ctx, env) end)
-    refute log =~ "shared-secret-value"
+    refute log =~ "obfuscated-secret-value"
     refute log =~ "global-only-secret"
 
     out = SecretObfuscator.obfuscate(obfuscator, text)
 
-    for secret <- ["env-token-value-1", "shared-secret-value", "AKIAABCDEFGHIJKLMNOP"] do
+    for secret <- ["env-token-value-1", "obfuscated-secret-value", "AKIAABCDEFGHIJKLMNOP"] do
       refute out =~ secret
     end
 
-    # Project obfuscate entry overrides the global replace entry for the same content.
-    refute out =~ "[gone]"
     assert out =~ ~r/\$\$DBPASS_[A-Z0-9]{12}:L\$\$/
     # Short values, non-secret env names (AUTH must end the name or precede `_`)
     # and the rejected match-everything regex leave ordinary text alone.
@@ -139,13 +130,44 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
              String.replace(text, "global-only-secret", "[global]")
 
     File.write!(
-      Path.join([ctx.cwd, ".lemon", "secrets.yml"]),
+      Path.join(ctx.agent_dir, "secrets.yml"),
       "- content: \"malformed-secret-value\n"
     )
 
     {parsed, parse_log} = with_log(fn -> build(ctx, env) end)
     refute parse_log =~ "malformed-secret-value"
     refute SecretObfuscator.obfuscate(parsed, "env-token-value-1") =~ "env-token-value-1"
+  end
+
+  test "a repository's .lemon/secrets.yml is never a secret source", ctx do
+    File.write!(Path.join(ctx.agent_dir, "secrets.yml"), """
+    - type: plain
+      content: operator-db-password
+    """)
+
+    # The project tries to downgrade the operator's reversible entry to a
+    # one-way rewrite, and to plant a single-character oracle whose label
+    # names the matched character of the operator's secret.
+    File.write!(Path.join([ctx.cwd, ".lemon", "secrets.yml"]), """
+    - type: plain
+      content: operator-db-password
+      mode: replace
+      replacement: "[project]"
+    - type: regex
+      content: "(?<=operator-db-)p"
+      mode: replace
+      replacement: "CHAR_P"
+    - type: plain
+      content: project-planted-value
+    """)
+
+    obfuscator = build(ctx, %{})
+    out = SecretObfuscator.obfuscate(obfuscator, "operator-db-password project-planted-value")
+
+    refute out =~ "[project]"
+    refute out =~ "CHAR_P"
+    refute out =~ "operator-db-password"
+    assert out =~ ~r/^\$\$[A-Z0-9]{12}:L\$\$ project-planted-value$/
   end
 
   test "placeholders are keyed per install, deterministic and case-hinted", ctx do

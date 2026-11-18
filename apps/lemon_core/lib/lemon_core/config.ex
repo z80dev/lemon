@@ -29,7 +29,8 @@ defmodule LemonCore.Config do
             agents: %{},
             memory: %{auto_recall: true, write_approval: false},
             skills: %{write_approval: false, allowed_private_git_hosts: []},
-            secrets: %LemonCore.Config.Secrets{}
+            secrets: %LemonCore.Config.Secrets{},
+            provenance: nil
 
   @type provider_config :: %{
           optional(:api_key) => String.t() | nil,
@@ -54,8 +55,18 @@ defmodule LemonCore.Config do
           agents: map(),
           memory: %{auto_recall: boolean(), write_approval: boolean()},
           skills: %{write_approval: boolean(), allowed_private_git_hosts: [String.t()]},
-          secrets: LemonCore.Config.Secrets.t()
+          secrets: LemonCore.Config.Secrets.t(),
+          provenance: provenance() | nil
         }
+
+  @typedoc """
+  The layers a loaded config was merged from, taken from the same file read:
+  the operator's configuration alone (global file and environment) and the
+  admitted project layer (`%{}` without a project file). Lets callers tell
+  project-origin values (model, roles, task agent models) from operator ones
+  without re-reading disk. `nil` for configs not loaded from disk.
+  """
+  @type provenance :: %{operator: t(), project: map()}
 
   @doc """
   Path to global config file.
@@ -121,17 +132,19 @@ defmodule LemonCore.Config do
     project_dir = if is_binary(cwd) and cwd != "", do: cwd, else: File.cwd!()
 
     # Use Modular for the main config (this enforces deprecated section checks
-    # and applies environment variable overrides during resolution).
-    modular = Modular.load(project_dir: project_dir)
-
-    # Profiles/agents are not in the Modular struct; read them from the same
+    # and applies environment variable overrides during resolution). Profiles
+    # and agents are not in the Modular struct; read them from the same
     # trust-filtered merge so a project file cannot widen an operator profile.
-    raw = Modular.merged_settings(project_dir)
-    profiles = raw["profiles"] || %{}
-    defaults = raw["defaults"] || %{}
+    layers = Modular.load_with_layers(project_dir: project_dir)
+    operator = from_modular_settings(layers.operator, layers.operator_settings)
 
-    from_modular(modular, profiles, defaults)
+    layers.config
+    |> from_modular_settings(layers.merged)
+    |> Map.put(:provenance, %{operator: operator, project: layers.project})
   end
+
+  defp from_modular_settings(modular, raw),
+    do: from_modular(modular, raw["profiles"] || %{}, raw["defaults"] || %{})
 
   @doc """
   Load a single TOML file without environment overrides.
@@ -431,7 +444,16 @@ defmodule LemonCore.Config do
       agents: deep_merge_values(config.agents, overrides["agents"]),
       memory: deep_merge_values(config.memory, overrides["memory"]),
       skills: deep_merge_values(config.skills, overrides["skills"]),
-      secrets: config.secrets
+      secrets: config.secrets,
+      # Caller overrides are operator values: they apply to the operator layer too.
+      provenance:
+        case config.provenance do
+          %{operator: operator} = provenance ->
+            %{provenance | operator: apply_overrides(operator, overrides)}
+
+          nil ->
+            nil
+        end
     }
   end
 

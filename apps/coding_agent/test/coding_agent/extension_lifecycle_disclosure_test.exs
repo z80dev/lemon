@@ -147,12 +147,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
       on_exit(fn -> cleanup_module(module) end)
       secret = "fixture-disclosure-secret"
 
-      obfuscator =
-        SecretObfuscator.build(
-          cwd: tmp_dir,
-          agent_dir: tmp_dir,
-          env: %{"API_KEY" => secret}
-        )
+      obfuscator = SecretObfuscator.build(agent_dir: tmp_dir, env: %{"API_KEY" => secret})
 
       placeholder = SecretObfuscator.obfuscate(obfuscator, secret)
       path = Path.join(tmp_dir, "restored.txt")

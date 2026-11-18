@@ -5,8 +5,8 @@ defmodule CodingAgent.Tools.Task.Params do
 
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.BudgetEnforcer
+  alias CodingAgent.ModelProvenance
   alias CodingAgent.Session
-  alias CodingAgent.Session.ModelResolver
   alias CodingAgent.SettingsManager
   alias CodingAgent.Subagents
   alias CodingAgent.ToolPolicy
@@ -255,6 +255,7 @@ defmodule CodingAgent.Tools.Task.Params do
              launch =
                persona
                |> persona_launch(explicit, task_settings, current_task_depth(opts))
+               |> narrow_spawns(Keyword.get(opts, :task_allowed_agents))
                |> restrict_for_plan_mode(opts),
              :ok <- StructuredOutput.validate_schema(launch.output_schema) do
           followup_queue_mode =
@@ -338,10 +339,12 @@ defmodule CodingAgent.Tools.Task.Params do
   allowlist from explicit parameters, the persona and `[runtime.task]` settings.
 
   Explicit values win (an explicit `false`/`true` schema included); then
-  `agent_models[persona.id]`, then the persona's own fields. A non-read-only
-  persona with `spawns` gains `task` while its child depth is below `max_depth`;
-  a child at the cap is always denied `task`. `parent_depth` is the launching
-  session's depth (0 for main sessions).
+  `agent_models[persona.id]`, then the persona's own fields. `model_origin`
+  records where the model came from so `ModelProvenance` can gate project-origin
+  selections when the child starts; a project persona's thinking level is
+  gated here. A non-read-only persona with `spawns` gains `task` while its
+  child depth is below `max_depth`; a child at the cap is always denied
+  `task`. `parent_depth` is the launching session's depth (0 for main sessions).
   """
   @spec persona_launch(map() | nil, map(), map(), non_neg_integer()) :: map()
   def persona_launch(persona, explicit, task_settings, parent_depth) do
@@ -354,16 +357,52 @@ defmodule CodingAgent.Tools.Task.Params do
       |> Subagents.tool_policy(explicit[:tool_policy] || default_task_tool_policy(spawn_agents))
       |> cap_delegation(task_settings.max_depth, child_depth)
 
+    {model, model_origin} = launch_model(persona, explicit, task_settings)
+
+    thinking_level =
+      case explicit[:thinking_level] do
+        nil ->
+          ModelProvenance.thinking_level(
+            persona_value(persona, :thinking_level),
+            persona_origin(persona),
+            task_settings
+          )
+
+        level ->
+          level
+      end
+
     %{
-      model:
-        explicit[:model] || agent_model_override(task_settings, persona) ||
-          persona_model(persona),
-      thinking_level: explicit_or_persona(explicit[:thinking_level], persona, :thinking_level),
+      model: model,
+      model_origin: model_origin,
+      thinking_level: thinking_level,
       output_schema: explicit_or_persona(explicit[:output_schema], persona, :output_schema),
       tool_policy: tool_policy,
       task_allowed_agents: spawn_agents
     }
   end
+
+  defp launch_model(persona, explicit, task_settings) do
+    cond do
+      explicit[:model] ->
+        {explicit[:model], :explicit}
+
+      model = agent_model_override(task_settings, persona) ->
+        {model, {:agent_models, persona.id}}
+
+      model = persona_model(persona) ->
+        {model, persona_origin(persona)}
+
+      true ->
+        {nil, nil}
+    end
+  end
+
+  defp persona_origin(%{source: :project}), do: :project
+  defp persona_origin(_persona), do: :operator
+
+  defp persona_value(nil, _key), do: nil
+  defp persona_value(persona, key), do: Map.get(persona, key)
 
   @doc "Ensures `opts` carries a loaded settings manager so one launch reads config once."
   @spec with_settings(String.t(), keyword()) :: keyword()
@@ -556,9 +595,12 @@ defmodule CodingAgent.Tools.Task.Params do
   `[runtime.task].per_call_model = "off"` (the default) refuses `model` and
   `thinking_level`; `"on"` accepts them, with `model` limited to
   `per_call_model_allow` when that list is set. An allowlist entry matches the
-  request literally (`@role`) or the canonical `provider/model` it resolves to.
-  Persona and `[runtime.task].agent_models` models are operator configuration
-  and are never gated.
+  request literally (`@role`, unless it resolves through a role the project
+  config defines) or the canonical `provider/model` it resolves to.
+  Global and builtin persona models and operator `agent_models` are operator
+  configuration; project personas, project `agent_models`, project
+  `model_roles` and a project default model are gated by `ModelProvenance` when
+  the child starts.
   """
   @spec check_per_call_model(map(), String.t(), keyword()) :: :ok | {:error, String.t()}
   def check_per_call_model(params, cwd, opts) when is_map(params) do
@@ -607,21 +649,11 @@ defmodule CodingAgent.Tools.Task.Params do
   defp per_call_model_allowed?(_model, nil, _cwd, _opts), do: true
 
   defp per_call_model_allowed?(model, allow, cwd, opts) do
-    model in allow or
-      (not String.starts_with?(model, "@") and canonical_model(model, cwd, opts) in allow)
-  end
-
-  defp canonical_model(model, cwd, opts) do
     settings =
       Keyword.get(opts, :settings_manager) ||
         SettingsManager.load(Keyword.get(opts, :config_cwd) || cwd)
 
-    case ModelResolver.resolve_session_model(model, settings) do
-      %LemonAi.Types.Model{provider: provider, id: id} -> "#{provider}/#{id}"
-      _ -> nil
-    end
-  rescue
-    _ -> nil
+    ModelProvenance.allow_listed?(model, allow, settings, resolve_inherited_model(opts))
   end
 
   @doc """
@@ -700,6 +732,20 @@ defmodule CodingAgent.Tools.Task.Params do
       do: policy,
       else: Map.update(policy, :deny, ["task"], &Enum.uniq(&1 ++ ["task"]))
   end
+
+  # A child's spawns list never exceeds the launching session's own list; a
+  # child without its own list (delegation granted by tool_policy) inherits it.
+  defp narrow_spawns(launch, parent) when is_list(parent) do
+    narrowed =
+      case launch.task_allowed_agents do
+        agents when is_list(agents) -> Enum.filter(agents, &(&1 in parent))
+        _all_or_unset -> parent
+      end
+
+    %{launch | task_allowed_agents: narrowed}
+  end
+
+  defp narrow_spawns(launch, _parent), do: launch
 
   defp valid_task_name?(nil), do: true
 
@@ -849,22 +895,23 @@ defmodule CodingAgent.Tools.Task.Params do
 
   @doc false
   @spec resolve_task_model(String.t(), keyword(), map()) ::
-          {term(), CodingAgent.SettingsManager.t()}
+          {term(), CodingAgent.SettingsManager.t(), :project | :operator}
   def resolve_task_model(cwd, opts, validated) do
     settings =
       Keyword.get(opts, :settings_manager) ||
         SettingsManager.load(Keyword.get(opts, :config_cwd) || cwd)
 
-    inherited_model = resolve_inherited_model(opts)
+    parent = resolve_inherited_model(opts)
 
-    model =
-      ModelResolver.resolve_task_model(
+    {model, origin} =
+      ModelProvenance.resolve_child(
         validated[:model],
+        validated[:model_origin] || if(validated[:model], do: :explicit),
         settings,
-        inherited_model
+        parent
       )
 
-    {model, settings}
+    {model, settings, origin}
   end
 
   @spec build_session_opts(String.t(), keyword(), map()) :: keyword()
@@ -876,7 +923,7 @@ defmodule CodingAgent.Tools.Task.Params do
         Enum.reject(inherited_extra_tools, &(&1.name == "submit_result")) ++
         maybe_build_ask_parent_tools(cwd, opts)
 
-    {task_model, settings} = resolve_task_model(cwd, opts, validated)
+    {task_model, settings, model_origin} = resolve_task_model(cwd, opts, validated)
     parent_session = Keyword.get(opts, :parent_session)
     parent_state = if is_pid(parent_session), do: inherited_session_state(opts)
     inherited_context = inherited_execution_context(opts, parent_state)
@@ -950,13 +997,17 @@ defmodule CodingAgent.Tools.Task.Params do
       []
       |> maybe_put_kw(:system_prompt, child_system_prompt(opts, validated))
       |> maybe_put_kw(:model, task_model)
+      |> Keyword.put(:model_origin, model_origin)
       |> Keyword.put(
         :model_explicit,
         validated[:model_explicit] == true or
           (is_nil(validated[:source_session_file]) and
              inherited_model_explicit(opts, parent_state))
       )
-      |> maybe_put_kw(:thinking_level, validated[:thinking_level])
+      |> maybe_put_kw(
+        :thinking_level,
+        ModelProvenance.child_thinking(validated[:thinking_level], settings)
+      )
       |> Keyword.put(:task_depth, current_task_depth(opts) + 1)
       |> Keyword.put(:task_child, true)
       |> maybe_put_kw(:task_allowed_agents, validated[:task_allowed_agents])
@@ -1368,6 +1419,8 @@ defmodule CodingAgent.Tools.Task.Params do
     end
   end
 
+  # The parent's model and its recorded origin, always taken together from the
+  # same source: the launch options, else the live parent session.
   defp resolve_inherited_model(opts) do
     with nil <- Keyword.get(opts, :model),
          session_pid when is_pid(session_pid) <- Keyword.get(opts, :session_pid),
@@ -1377,10 +1430,9 @@ defmodule CodingAgent.Tools.Task.Params do
          state when is_map(state) <- safe_get_session_state(session_module, session_pid),
          model when (is_binary(model) and model != "") or is_struct(model, LemonAi.Types.Model) <-
            Map.get(state, :model) do
-      model
+      {model, Map.get(state, :model_origin)}
     else
-      model when is_binary(model) and model != "" -> model
-      _ -> Keyword.get(opts, :model)
+      _ -> {Keyword.get(opts, :model), Keyword.get(opts, :model_origin)}
     end
   end
 

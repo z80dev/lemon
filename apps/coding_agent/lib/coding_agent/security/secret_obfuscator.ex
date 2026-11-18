@@ -9,9 +9,9 @@ defmodule CodingAgent.Security.SecretObfuscator do
       `PASSWORD`, `PASS`, `AUTH`, `CREDENTIAL`, `PRIVATE` or `OAUTH` (followed by
       `_` or the end of the name, case-insensitive) with a value of at least 8
       characters;
-    * `secrets.yml` entries from `<agent_dir>/secrets.yml` and
-      `<cwd>/.lemon/secrets.yml` (project entries override global entries with
-      the same `content`);
+    * the operator's `<agent_dir>/secrets.yml` entries (a repository's
+      `.lemon/secrets.yml` is never read: secret sources are operator
+      authority);
     * a built-in reversible regex for GitHub-, GitLab-, OpenAI- and
       Anthropic-style credential tokens.
 
@@ -53,27 +53,23 @@ defmodule CodingAgent.Security.SecretObfuscator do
   Build the session obfuscator when `[runtime.secret_obfuscation]` is enabled;
   returns nil otherwise. See `build/1` for `opts`.
   """
-  @spec for_session(term(), String.t(), keyword()) :: t() | nil
-  def for_session(settings, cwd, opts \\ [])
-
-  def for_session(%{secret_obfuscation_enabled: true}, cwd, opts),
-    do: build(Keyword.put(opts, :cwd, cwd))
-
-  def for_session(_settings, _cwd, _opts), do: nil
+  @spec for_session(term(), keyword()) :: t() | nil
+  def for_session(settings, opts \\ [])
+  def for_session(%{secret_obfuscation_enabled: true}, opts), do: build(opts)
+  def for_session(_settings, _opts), do: nil
 
   @doc """
   Build an obfuscator from every secret source.
 
-  Options: `:cwd` (required), `:agent_dir` (default `CodingAgent.Config.agent_dir/0`),
+  Options: `:agent_dir` (default `CodingAgent.Config.agent_dir/0`),
   `:env` (default `System.get_env/0`), `:key_path` (default
   `<agent_dir>/secret-placeholder.key`).
   """
   @spec build(keyword()) :: t()
-  def build(opts) do
-    cwd = Keyword.fetch!(opts, :cwd)
+  def build(opts \\ []) do
     agent_dir = Keyword.get_lazy(opts, :agent_dir, &CodingAgent.Config.agent_dir/0)
     env = Keyword.get_lazy(opts, :env, &System.get_env/0)
-    configured = Loader.env_entries(env) ++ Loader.file_entries(cwd, agent_dir)
+    configured = Loader.env_entries(env) ++ Loader.file_entries(agent_dir)
     entries = configured ++ Loader.builtin_entries()
     plain = Enum.filter(entries, &(&1.type == :plain))
     configured_values = MapSet.new(plain, & &1.content)

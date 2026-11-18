@@ -23,12 +23,13 @@ defmodule CodingAgent.Session.Planning do
 
   alias CodingAgent.Extensions.ToolHooks
   alias CodingAgent.Messages.CustomMessage
+  alias CodingAgent.ModelProvenance
   alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
   alias CodingAgent.Tools.{Edit, Write, WriteArchive, WriteSqlite}
-  alias LemonAgent.ModelRuntime.{ModelRouting, SessionPins}
+  alias LemonAgent.ModelRuntime.SessionPins
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
@@ -80,8 +81,14 @@ defmodule CodingAgent.Session.Planning do
       settings = CodingAgent.SettingsManager.load(session.header.cwd)
       context = SessionManager.build_session_context(session)
 
+      current_origin =
+        if context.model,
+          do: ModelProvenance.restored(context, settings),
+          else: ModelProvenance.origin(nil, settings)
+
       with {:ok, model} <- current_model(context.model, settings),
-           {:ok, _model, manager} <- transition_model(session, action, settings, model) do
+           {:ok, _model, _origin, manager} <-
+             transition_model(session, action, settings, {model, current_origin}) do
         {:ok, status(manager), manager}
       end
     else
@@ -97,16 +104,22 @@ defmodule CodingAgent.Session.Planning do
   Transitions a live session using the same model-role journal as stopped sessions.
 
   Resolve all models before mutation. The journal stores the previous execution
-  model and preserves its automatic/explicit selection provenance through the
-  planning model, so restart needs no runtime-only plan state.
+  model and preserves its automatic/explicit selection provenance and its origin
+  (`CodingAgent.ModelProvenance`) through the planning model, so restart needs
+  no runtime-only plan state.
   """
   def transition_session(state, action, _opts) when action in [:enter, :exit] do
-    with {:ok, model, manager} <-
-           transition_model(state.session_manager, action, state.settings_manager, state.model) do
+    with {:ok, model, origin, manager} <-
+           transition_model(
+             state.session_manager,
+             action,
+             state.settings_manager,
+             {state.model, state.model_origin}
+           ) do
       state =
         if manager == state.session_manager,
           do: state,
-          else: change_model(%{state | session_manager: manager}, model) |> refresh()
+          else: change_model(%{state | session_manager: manager}, model, origin) |> refresh()
 
       {:ok, status(manager), state}
     end
@@ -122,30 +135,33 @@ defmodule CodingAgent.Session.Planning do
   defp changes_mode?(:enter, plan), do: plan["mode"] == "code"
   defp changes_mode?(:exit, plan), do: plan["mode"] == "plan"
 
-  defp transition_model(session, action, settings, current) do
+  defp transition_model(session, action, settings, {current, current_origin}) do
     plan = stored(session)
 
     case {action, plan["mode"]} do
       {:enter, "code"} ->
-        with {:ok, model} <- planning_model(current, settings) do
+        with {:ok, model, origin} <- planning_model({current, current_origin}, settings) do
           next = %{
             plan
             | "mode" => "plan",
               "execution_model" =>
-                if(different_model?(current, model), do: model_descriptor(current))
+                if(different_model?(current, model),
+                  do: model_descriptor(current, current_origin)
+                )
           }
 
-          {:ok, model, append_model_transition(session, next, current, model)}
+          {:ok, model, origin, append_model_transition(session, next, current, model, origin)}
         end
 
       {:exit, "plan"} ->
-        with {:ok, model} <- execution_model(current, settings, plan) do
-          {:ok, model,
-           append_model_transition(session, %{plan | "mode" => "code"}, current, model)}
+        with {:ok, model, origin} <-
+               execution_model({current, current_origin}, settings, plan) do
+          {:ok, model, origin,
+           append_model_transition(session, %{plan | "mode" => "code"}, current, model, origin)}
         end
 
       _ ->
-        {:ok, current, session}
+        {:ok, current, current_origin, session}
     end
   end
 
@@ -155,16 +171,32 @@ defmodule CodingAgent.Session.Planning do
 
   defp current_model(selector, settings), do: resolve_model(selector, settings)
 
-  defp planning_model(current, settings) do
-    if Map.has_key?(settings.model_roles, "plan"),
-      do: resolve_model("@plan", settings),
-      else: {:ok, current}
+  defp planning_model({current, current_origin}, settings) do
+    if Map.has_key?(settings.model_roles, "plan") do
+      with {:ok, model} <- resolve_model("@plan", settings),
+           do: {:ok, model, ModelProvenance.origin("@plan", settings)}
+    else
+      {:ok, current, current_origin}
+    end
   end
 
-  defp execution_model(_current, settings, %{"execution_model" => %{} = spec}),
-    do: resolve_model(spec, settings)
+  # The execution model returns with the origin journaled beside it; a
+  # descriptor from before provenance counts as a model of unknown selection.
+  defp execution_model(_current, settings, %{"execution_model" => %{} = spec}) do
+    with {:ok, model} <- resolve_model(Map.delete(spec, "origin"), settings) do
+      origin =
+        case spec["origin"] do
+          "project" -> :project
+          "operator" -> :operator
+          _ -> ModelProvenance.origin(model, settings)
+        end
 
-  defp execution_model(current, _settings, _plan), do: {:ok, current}
+      {:ok, model, origin}
+    end
+  end
+
+  defp execution_model({current, current_origin}, _settings, _plan),
+    do: {:ok, current, current_origin}
 
   defp resolve_model(selector, settings) do
     {:ok, ModelResolver.resolve_session_model(selector, settings)}
@@ -172,8 +204,10 @@ defmodule CodingAgent.Session.Planning do
     ArgumentError -> {:error, :invalid_plan_model}
   end
 
-  defp model_descriptor(model),
-    do: %{"provider" => to_string(model.provider), "model" => model.id}
+  defp model_descriptor(model, origin) do
+    %{"provider" => to_string(model.provider), "model" => model.id}
+    |> then(&if(origin, do: Map.put(&1, "origin", Atom.to_string(origin)), else: &1))
+  end
 
   defp different_model?(nil, nil), do: false
   defp different_model?(nil, _model), do: true
@@ -181,7 +215,7 @@ defmodule CodingAgent.Session.Planning do
   defp different_model?(current, model),
     do: {current.provider, current.id} != {model.provider, model.id}
 
-  defp append_model_transition(session, plan, current, model) do
+  defp append_model_transition(session, plan, current, model, origin) do
     {:ok, _status, session} = append(session, plan)
 
     if different_model?(current, model) do
@@ -190,7 +224,7 @@ defmodule CodingAgent.Session.Planning do
       session =
         SessionManager.append_entry(
           session,
-          SessionEntry.model_change(model.provider, model.id, explicit: explicit)
+          SessionEntry.model_change(model.provider, model.id, explicit: explicit, origin: origin)
         )
 
       SessionPins.clear(session.header.id)
@@ -200,22 +234,17 @@ defmodule CodingAgent.Session.Planning do
     end
   end
 
-  defp change_model(state, model) do
+  defp change_model(state, model, origin) do
     if different_model?(state.model, model) do
       state = CodingAgent.Session.ResponsesTransport.reset(state)
       context = SessionManager.build_session_context(state.session_manager)
 
       model_routing =
-        unless context.model_explicit do
-          ModelRouting.prepare(
-            state.settings_manager.model_routing,
-            &ModelResolver.resolve_session_model(&1, state.settings_manager),
-            state.settings_manager.providers
-          )
-        end
+        unless context.model_explicit,
+          do: ModelProvenance.prepare_routing(state.settings_manager)
 
       :ok = LemonAgent.Agent.set_model(state.agent, model, model_routing: model_routing)
-      %{state | model: model}
+      %{state | model: model, model_origin: origin}
     else
       state
     end
@@ -244,9 +273,14 @@ defmodule CodingAgent.Session.Planning do
     }
   end
 
-  defp normalize_model_descriptor(%{"provider" => provider, "model" => model})
-       when is_binary(provider) and is_binary(model),
-       do: %{"provider" => provider, "model" => model}
+  defp normalize_model_descriptor(%{"provider" => provider, "model" => model} = spec)
+       when is_binary(provider) and is_binary(model) do
+    descriptor = %{"provider" => provider, "model" => model}
+
+    if spec["origin"] in ["project", "operator"],
+      do: Map.put(descriptor, "origin", spec["origin"]),
+      else: descriptor
+  end
 
   defp normalize_model_descriptor(_), do: nil
 
@@ -398,18 +432,22 @@ defmodule CodingAgent.Session.Planning do
             %{plan | "path" => path}
         end
 
+      current = {state.model, state.model_origin}
+
       result =
         if decision == :approve,
-          do: execution_model(state.model, state.settings_manager, plan),
-          else: {:ok, state.model}
+          do: execution_model(current, state.settings_manager, plan),
+          else: {:ok, state.model, state.model_origin}
 
-      with {:ok, model} <- result do
+      with {:ok, model, origin} <- result do
         state =
           if next == plan do
             state
           else
-            manager = append_model_transition(state.session_manager, next, state.model, model)
-            change_model(%{state | session_manager: manager}, model) |> refresh()
+            manager =
+              append_model_transition(state.session_manager, next, state.model, model, origin)
+
+            change_model(%{state | session_manager: manager}, model, origin) |> refresh()
           end
 
         if decision == :approve and state.is_streaming do

@@ -290,8 +290,7 @@ defmodule CodingAgent.Session.PlanningTest do
     File.mkdir_p!(agent_dir)
     previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
     System.put_env("LEMON_AGENT_DIR", agent_dir)
-    File.mkdir_p!(Path.join(root, ".lemon"))
-    File.write!(Path.join(root, ".lemon/secrets.yml"), "- type: plain\n  content: #{secret}\n")
+    File.write!(Path.join(agent_dir, "secrets.yml"), "- type: plain\n  content: #{secret}\n")
     ext_dir = Path.join(root, ".lemon/extensions")
     File.mkdir_p!(ext_dir)
     module_name = "NativePlanRefresh#{System.unique_integer([:positive])}"
@@ -645,12 +644,7 @@ defmodule CodingAgent.Session.PlanningTest do
     {:ok, _, manager} = Planning.transition(manager, :enter, [])
     secret = "private-plan-secret"
 
-    obfuscator =
-      SecretObfuscator.build(
-        cwd: root,
-        agent_dir: root,
-        env: %{"API_KEY" => secret}
-      )
+    obfuscator = SecretObfuscator.build(agent_dir: root, env: %{"API_KEY" => secret})
 
     placeholder = SecretObfuscator.obfuscate(obfuscator, secret)
     parent = self()
@@ -1084,9 +1078,11 @@ defmodule CodingAgent.Session.PlanningTest do
     planned = stopped_manager(root, key)
     assert planned.leaf_id != before.leaf_id
 
+    # The execution model is the project default: its origin is journaled with it.
     assert execution_descriptor(planned) == %{
              "provider" => "plan-fixture",
-             "model" => "execution"
+             "model" => "execution",
+             "origin" => "project"
            }
 
     assert model_changes(planned) == [{"plan-fixture", "planning"}]
@@ -1142,7 +1138,13 @@ defmodule CodingAgent.Session.PlanningTest do
              CodingAgent.ControlPlaneProvider.session_plan(key, root, :enter, [])
 
     planned = stopped_manager(root, key)
-    assert execution_descriptor(planned) == %{"provider" => "openai", "model" => "gpt-4"}
+
+    assert execution_descriptor(planned) == %{
+             "provider" => "openai",
+             "model" => "gpt-4",
+             "origin" => "operator"
+           }
+
     assert model_changes(planned) == [{"openai", "gpt-4"}, {"plan-fixture", "planning"}]
     assert length(SessionManager.entries(planned)) == length(SessionManager.entries(sibling)) + 2
 
@@ -1197,7 +1199,8 @@ defmodule CodingAgent.Session.PlanningTest do
 
     assert execution_descriptor(manager) == %{
              "provider" => "plan-fixture",
-             "model" => "execution"
+             "model" => "execution",
+             "origin" => "project"
            }
 
     session =
