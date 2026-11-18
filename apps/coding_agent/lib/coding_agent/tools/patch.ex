@@ -158,6 +158,8 @@ defmodule CodingAgent.Tools.Patch do
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
+    opts = Keyword.put(opts, :signal, signal)
+
     if aborted?(signal) do
       {:error, "Operation aborted"}
     else

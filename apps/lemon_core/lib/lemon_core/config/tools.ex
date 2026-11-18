@@ -163,7 +163,7 @@ defmodule LemonCore.Config.Tools do
   @type t :: %__MODULE__{
           auto_resize_images: boolean(),
           approval_mode: String.t() | nil,
-          edit: %{enforce_seen_lines: boolean()},
+          edit: %{enforce_seen_lines: boolean(), repo_local_tools: boolean()},
           bash: %{git_guard: boolean(), interceptor: %{enabled: boolean(), rules: [map()]}},
           lsp: map(),
           intent_tracing: boolean(),
@@ -274,7 +274,10 @@ defmodule LemonCore.Config.Tools do
   defp resolve_edit(settings) do
     case Map.get(settings, "edit", %{}) do
       section when is_map(section) ->
-        %{enforce_seen_lines: Map.get(section, "enforce_seen_lines", true)}
+        %{
+          enforce_seen_lines: Map.get(section, "enforce_seen_lines", true),
+          repo_local_tools: Map.get(section, "repo_local_tools", false)
+        }
 
       invalid ->
         invalid
@@ -574,7 +577,7 @@ defmodule LemonCore.Config.Tools do
     %{
       "auto_resize_images" => true,
       "checkpoint" => %{"enabled" => false},
-      "edit" => %{"enforce_seen_lines" => true},
+      "edit" => %{"enforce_seen_lines" => true, "repo_local_tools" => false},
       "semantic_find" => %{
         "enabled" => false,
         "model" => nil,

@@ -170,6 +170,9 @@ defmodule CodingAgent.Tools.Write do
   end
 
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
+    # Post-write checkers and formatters run under this call's abort signal.
+    opts = Keyword.put(opts, :signal, signal)
+
     # Check for abort at start
     if AbortSignal.aborted?(signal) do
       {:error, :aborted}

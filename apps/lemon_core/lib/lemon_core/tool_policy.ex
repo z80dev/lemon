@@ -112,6 +112,7 @@ defmodule LemonCore.ToolPolicy do
   @internal_tools ToolCatalog.names_without([:external])
   @leaf_worker_tools ToolCatalog.names_without([:delegation])
   @lsp_read_actions ~w(diagnostics definition type_definition implementation references hover symbols rename rename_file code_actions capabilities status)
+  @checker_mutation_tools ~w(write edit patch)
   @browser_local_document_tools ~w(browser_navigate browser_tab_open browser_snapshot browser_get_content browser_screenshot browser_analyze)
 
   @doc """
@@ -137,6 +138,11 @@ defmodule LemonCore.ToolPolicy do
   # Raw cookie values are session credentials.
   def tier("browser_get_cookies", args) when is_map(args) do
     if flag_set?(args, ["includeValues", "include_values"]), do: :write, else: :read
+  end
+
+  # `diagnostics`/`format` run project toolchains (compilers, formatters, repo binaries).
+  def tier(tool, args) when tool in @checker_mutation_tools and is_map(args) do
+    if flag_set?(args, ["diagnostics", "format"]), do: :exec, else: ToolCatalog.tier(tool)
   end
 
   def tier(tool, _args), do: ToolCatalog.tier(tool)

@@ -173,7 +173,10 @@ defmodule CodingAgent.Tools.Edit do
           keyword()
         ) :: AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
-    opts = Keyword.put(opts, :replace_all, params["replace_all"] == true)
+    opts =
+      opts
+      |> Keyword.put(:replace_all, params["replace_all"] == true)
+      |> Keyword.put(:signal, signal)
 
     if aborted?(signal) do
       {:error, "Operation aborted"}

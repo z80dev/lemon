@@ -116,11 +116,11 @@ defmodule CodingAgent.ToolIntentDurabilityTest do
 
   test "builtins conservatively classify effectful families" do
     for name <-
-          ~w(write edit patch bash eval debug ast_grep lsp agent task browser_snapshot media_status remember kanban) do
+          ~w(write edit patch bash eval debug ast_grep lsp lsp_diagnostics agent task browser_snapshot media_status remember kanban) do
       assert ToolIntent.builtin_effect(name) == :external
     end
 
-    for name <- ~w(read ls grep find recall lsp_diagnostics) do
+    for name <- ~w(read ls grep find recall) do
       assert ToolIntent.builtin_effect(name) == :none
     end
 
