@@ -8,7 +8,10 @@ defmodule LemonSkills.SkillRoot do
   # be a real directory (lstat, never followed):
   #
   #   * project roots (`<dir>/.lemon/skill`, `<dir>/.agents/skills`, ...) live in
-  #     repository content, so their anchor is the project directory;
+  #     repository content, so their anchor is the project's
+  #     `LemonCore.TrustedRoot` (the validated Git root's realpath, or the cwd's
+  #     realpath outside a repository) — the same root the loaders read from. A
+  #     project root outside that trusted root is never mutated;
   #   * the global root `<agent_dir>/skill` is anchored at the agent dir's real
   #     path, which must itself be a real directory (not a symlink) owned by the
   #     current user. A global root that is not under that trusted agent dir is
@@ -17,6 +20,7 @@ defmodule LemonSkills.SkillRoot do
   # A skill directory that is itself a symlink is unlinked, never followed, when
   # removed.
 
+  alias LemonCore.TrustedRoot
   alias LemonSkills.Config
 
   @type scope :: :global | {:project, String.t()}
@@ -28,9 +32,9 @@ defmodule LemonSkills.SkillRoot do
   """
   @spec locate(String.t(), scope()) :: {:ok, String.t(), String.t()} | {:error, term()}
   def locate(path, scope) when is_binary(path) do
-    root = path |> Path.expand() |> Path.dirname()
+    root = path |> Path.expand() |> Path.dirname() |> physical(scope)
 
-    case Enum.find(roots(scope), &(Path.expand(&1) == root)) do
+    case Enum.find(roots(scope), &(physical(Path.expand(&1), scope) == root)) do
       nil -> {:error, :outside_skill_roots}
       configured -> resolve_root(configured, scope)
     end
@@ -52,10 +56,31 @@ defmodule LemonSkills.SkillRoot do
     end
   end
 
-  def resolve_root(root, {:project, _cwd}) do
-    root = Path.expand(root)
-    {:ok, root, root |> Path.dirname() |> Path.dirname()}
+  def resolve_root(root, {:project, cwd} = scope) do
+    anchor = TrustedRoot.resolve(cwd)
+    root = root |> Path.expand() |> physical(scope)
+
+    if root != anchor and TrustedRoot.inside?(root, anchor),
+      do: {:ok, root, anchor},
+      else: {:error, :outside_trusted_root}
   end
+
+  # Project roots are compared and anchored by physical path: a lexical path
+  # under `cwd` is re-spelled under `cwd`'s realpath (configured roots from
+  # `Config.project_skills_dirs/1` already are realpaths). Components below the
+  # cwd are not resolved; `check_dir/3` refuses symlinks among them.
+  defp physical(path, {:project, cwd}) do
+    cwd = Path.expand(cwd)
+
+    with true <- path == cwd or String.starts_with?(path, cwd <> "/"),
+         {:ok, real_cwd} <- TrustedRoot.realpath(cwd) do
+      if path == cwd, do: real_cwd, else: Path.join(real_cwd, Path.relative_to(path, cwd))
+    else
+      _ -> path
+    end
+  end
+
+  defp physical(path, :global), do: path
 
   @doc """
   Validates an independently trusted directory and returns its expanded path.
@@ -177,8 +202,13 @@ defmodule LemonSkills.SkillRoot do
 
   defp roots(:global), do: Config.global_skills_dirs()
 
+  # Unresolved candidates, so a symlinked `.lemon` or skill root is seen (and
+  # refused by `check_dir/3`) rather than hidden behind its realpath.
   defp roots({:project, cwd}) when is_binary(cwd) do
-    [Config.project_skills_dir(cwd) | Config.project_skills_dirs(cwd)]
+    [
+      Config.project_skills_dir(cwd)
+      | Config.project_skills_candidates(cwd, TrustedRoot.resolve(cwd))
+    ]
   end
 
   @doc false

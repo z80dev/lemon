@@ -270,6 +270,24 @@ describe("trusted-root confinement", () => {
 		expect(result.entries).toEqual([]);
 	});
 
+	test("SKILL.md reads are no-follow, single-link and bounded in every root", async () => {
+		const agentDir = join(root, "agent");
+		await fixture(join(root, "outside/secret.md"), secret);
+		await mkdir(join(agentDir, "skill/linked"), { recursive: true });
+		await symlink(join(root, "outside/secret.md"), join(agentDir, "skill/linked/SKILL.md"));
+		await mkdir(join(agentDir, "skill/hard"), { recursive: true });
+		await link(join(root, "outside/secret.md"), join(agentDir, "skill/hard/SKILL.md"));
+		await fixture(join(agentDir, "skill/huge/SKILL.md"), "x".repeat(1024 * 1024 + 1));
+		await fixture(join(cwd, ".agents/skills/big/SKILL.md"), "y".repeat(1024 * 1024 + 1));
+		await fixture(join(agentDir, "skill/fine/SKILL.md"), "Fine skill");
+		const result = await discoverPaletteResources({ cwd, home, agentDir, env: {} });
+		expect(result.entries.map((item) => item.name)).toEqual(["fine"]);
+		expect(JSON.stringify(result.entries)).not.toContain(secret);
+		const issues = result.issues.join(" ");
+		expect(issues).toContain("hard-linked");
+		expect(issues).toContain("oversized");
+	});
+
 	test("an empty fake .git in a parent does not widen the root", async () => {
 		const parent = join(root, "fake");
 		const work = join(parent, "work");

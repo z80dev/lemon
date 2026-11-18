@@ -174,7 +174,10 @@ export async function discoverPaletteResources(
 		visited.add(root);
 		for (const name of (await list(root, result, confine)).sort()) {
 			if (name.startsWith(".") || names.has(name)) continue;
-			const content = await readResource(join(root, name, "SKILL.md"), result, confine);
+			const content = await readResource(join(root, name, "SKILL.md"), result, confine, {
+				strict: true,
+				maxBytes: MAX_SKILL_BYTES,
+			});
 			if (content === undefined) continue;
 			names.add(name);
 			result.entries.push({
@@ -459,14 +462,22 @@ async function list(
 	}
 }
 
-/** Project files must resolve inside the root, be regular, and not be hard-linked. */
+/** Matches the daemon's per-file skill bundle bound (`LemonSkills.Bundle`). */
+const MAX_SKILL_BYTES = 1024 * 1024;
+
+/**
+ * Project files must resolve inside the root, be regular, and not be
+ * hard-linked. `strict` applies the same no-follow, single-link, bounded read to
+ * unconfined roots too (skill files in user-level roots).
+ */
 async function readResource(
 	path: string,
 	result: { issues: string[] },
 	confine?: string,
+	options: { strict?: boolean; maxBytes?: number } = {},
 ): Promise<string | undefined> {
 	try {
-		if (!confine) {
+		if (!confine && !options.strict) {
 			if (!(await stat(path)).isFile()) return undefined;
 			return await readFile(path, "utf8");
 		}
@@ -481,7 +492,19 @@ async function readResource(
 				result.issues.push(`Ignoring hard-linked resource ${path}`);
 				return undefined;
 			}
-			return await handle.readFile("utf8");
+			if (options.maxBytes === undefined) return await handle.readFile("utf8");
+			const buffer = Buffer.alloc(options.maxBytes + 1);
+			let length = 0;
+			while (length < buffer.length) {
+				const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+				if (bytesRead === 0) break;
+				length += bytesRead;
+			}
+			if (length > options.maxBytes) {
+				result.issues.push(`Ignoring oversized resource ${path}`);
+				return undefined;
+			}
+			return buffer.toString("utf8", 0, length);
 		} finally {
 			await handle.close();
 		}

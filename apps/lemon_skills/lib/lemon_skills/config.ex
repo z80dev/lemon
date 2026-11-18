@@ -244,15 +244,9 @@ defmodule LemonSkills.Config do
   @spec project_skills_dirs(String.t()) :: [String.t()]
   def project_skills_dirs(cwd) do
     root = TrustedRoot.resolve(cwd)
-    ancestors = TrustedRoot.ancestors(cwd, root)
 
-    ancestor_dirs =
-      for dir <- ancestors,
-          sub <- [".agents", ".omp", ".claude", ".codex", ".github"],
-          do: Path.join([dir, sub, "skills"])
-
-    Enum.map(Enum.take(ancestors, 1), &project_skills_dir/1)
-    |> Enum.concat(ancestor_dirs)
+    cwd
+    |> project_skills_candidates(root)
     |> Enum.flat_map(fn dir ->
       case TrustedRoot.dir(dir, root) do
         {:ok, real} -> [real]
@@ -260,6 +254,24 @@ defmodule LemonSkills.Config do
       end
     end)
     |> Enum.uniq()
+  end
+
+  @doc """
+  The unresolved project skill directory candidates of `project_skills_dirs/1`
+  below the trusted `root`, in the same precedence order. Each is spelled
+  under a real ancestor of cwd; components inside the candidate are not
+  resolved, so mutation checks can refuse symlinks among them.
+  """
+  @spec project_skills_candidates(String.t(), String.t()) :: [String.t()]
+  def project_skills_candidates(cwd, root) do
+    ancestors = TrustedRoot.ancestors(cwd, root)
+
+    ancestor_dirs =
+      for dir <- ancestors,
+          sub <- [".agents", ".omp", ".claude", ".codex", ".github"],
+          do: Path.join([dir, sub, "skills"])
+
+    Enum.map(Enum.take(ancestors, 1), &project_skills_dir/1) ++ ancestor_dirs
   end
 
   @doc """

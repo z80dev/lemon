@@ -194,11 +194,23 @@ defmodule CodingAgent.Tools.SendFile do
         {:error, @policy_error}
 
       root ->
-        case FileAccess.read_file(root.real, Path.relative_to(resolved, root.real), deny_globs(files), max_bytes) do
-          {:ok, _name, _bytes} = ok -> ok
-          {:error, "File is too large."} -> {:error, "File is too large. Max allowed is #{max_bytes} bytes."}
-          {:error, "Not found."} -> {:error, "File not found."}
-          {:error, _message} = error -> error
+        case FileAccess.read_file(
+               root.real,
+               Path.relative_to(resolved, root.real),
+               deny_globs(files),
+               max_bytes
+             ) do
+          {:ok, _name, _bytes} = ok ->
+            ok
+
+          {:error, "File is too large."} ->
+            {:error, "File is too large. Max allowed is #{max_bytes} bytes."}
+
+          {:error, "Not found."} ->
+            {:error, "File not found."}
+
+          {:error, _message} = error ->
+            error
         end
     end
   end
@@ -226,7 +238,9 @@ defmodule CodingAgent.Tools.SendFile do
     end
   end
 
-  defp setting(cfg, key) when is_map(cfg), do: Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
+  defp setting(cfg, key) when is_map(cfg),
+    do: Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
+
   defp setting(cfg, key) when is_list(cfg), do: if(Keyword.keyword?(cfg), do: cfg[key])
 
   defp optional_string(params, key) do
