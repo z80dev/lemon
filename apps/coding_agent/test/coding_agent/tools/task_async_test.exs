@@ -519,53 +519,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       refute_receive {:router_submit, %RunRequest{}, _}, 150
     end
 
-    test "queue_mode interrupt still uses router when a streaming parent session exists" do
-      result =
-        Task.execute(
-          "call_router_interrupt",
-          %{
-            "description" => "Interrupt routing task",
-            "prompt" => "Return completion",
-            "async" => true,
-            "auto_followup" => true,
-            "queue_mode" => "interrupt",
-            "session_key" => "agent:review:main",
-            "agent_id" => "review",
-            "meta" => %{"origin" => "task_async_test"}
-          },
-          nil,
-          nil,
-          "/tmp",
-          run_override: fn _on_update, _signal ->
-            %LemonAgent.Types.AgentToolResult{
-              content: [%LemonAi.Types.TextContent{text: "interrupt output"}],
-              details: %{status: "completed"}
-            }
-          end,
-          session_module: __MODULE__.TaskAsyncSessionSpy,
-          session_pid: self(),
-          session_key: "agent:main:main",
-          agent_id: "main",
-          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
-        )
-
-      assert %LemonAgent.Types.AgentToolResult{} = result
-      refute_receive {:session_async_followup, _message}, 150
-      assert_receive {:router_submit, %RunRequest{queue_mode: :interrupt} = followup, 1}, 1_000
-      assert followup.session_key == "agent:review:main"
-      assert followup.agent_id == "review"
-      assert followup.meta["origin"] == "task_async_test"
-
-      assert followup.meta["async_followups"] == [
-               %{
-                 source: :task,
-                 task_id: result.details.task_id,
-                 run_id: result.details.run_id,
-                 delivery: :interrupt
-               }
-             ]
-    end
-
     test "queue_mode collect still uses router when a streaming parent session exists" do
       result =
         Task.execute(

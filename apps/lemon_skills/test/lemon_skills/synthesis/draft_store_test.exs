@@ -31,7 +31,7 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
       draft = sample_draft()
       assert :ok = DraftStore.put(draft, opts(ctx))
 
-      dir = DraftStore.draft_dir(draft.key, opts(ctx))
+      assert {:ok, dir} = DraftStore.draft_dir(draft.key, opts(ctx))
       assert File.regular?(Path.join(dir, "SKILL.md"))
       assert File.regular?(Path.join(dir, ".draft_meta.json"))
     end
@@ -39,7 +39,7 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
     test "SKILL.md contains the draft content", ctx do
       draft = sample_draft()
       DraftStore.put(draft, opts(ctx))
-      dir = DraftStore.draft_dir(draft.key, opts(ctx))
+      assert {:ok, dir} = DraftStore.draft_dir(draft.key, opts(ctx))
       content = File.read!(Path.join(dir, "SKILL.md"))
       assert content == draft.content
     end
@@ -47,7 +47,7 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
     test "meta file contains source_doc_id", ctx do
       draft = sample_draft()
       DraftStore.put(draft, opts(ctx))
-      dir = DraftStore.draft_dir(draft.key, opts(ctx))
+      assert {:ok, dir} = DraftStore.draft_dir(draft.key, opts(ctx))
       meta = Jason.decode!(File.read!(Path.join(dir, ".draft_meta.json")))
       assert meta["source_doc_id"] == "doc-abc123"
       assert meta["source_digest"] == String.duplicate("a", 64)
@@ -168,7 +168,7 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
     test "removes the draft directory", ctx do
       draft = sample_draft()
       DraftStore.put(draft, opts(ctx))
-      dir = DraftStore.draft_dir(draft.key, opts(ctx))
+      assert {:ok, dir} = DraftStore.draft_dir(draft.key, opts(ctx))
       assert File.dir?(dir)
 
       assert :ok = DraftStore.delete(draft.key, opts(ctx))

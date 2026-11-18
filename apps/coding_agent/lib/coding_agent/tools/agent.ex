@@ -21,7 +21,10 @@ defmodule CodingAgent.Tools.Agent do
   alias LemonCore.{Bus, Events, RouterBridge, RunRequest, SessionKey, Store}
 
   @valid_actions ["run", "poll", "join"]
-  @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
+  # Model-selectable submission and completion queues. `interrupt` aborts a
+  # running conversation, so it is reachable only through trusted operator
+  # config (`config :coding_agent, :async_followups, default_queue_mode: ...`).
+  @valid_queue_modes ["collect", "followup", "steer", "steer_backlog"]
   @default_sync_timeout_ms 120_000
   @default_watcher_timeout_ms 30 * 60 * 1000
   @default_reconciliation_timeout_ms 30 * 60 * 1000
@@ -70,10 +73,6 @@ defmodule CodingAgent.Tools.Agent do
           "continue_session" => %{
             "type" => "boolean",
             "description" => "Default true: reuse the deterministic delegated session"
-          },
-          "session_key" => %{
-            "type" => "string",
-            "description" => "Explicit delegated session key; must be valid"
           },
           "queue_mode" => %{
             "type" => "string",
@@ -1199,7 +1198,6 @@ defmodule CodingAgent.Tools.Agent do
     async? = Map.get(params, "async", true)
     auto_followup = Map.get(params, "auto_followup", true)
     continue_session = Map.get(params, "continue_session", true)
-    explicit_session_key = Map.get(params, "session_key") |> normalize_optional_string()
     queue_mode = Map.get(params, "queue_mode", "collect")
     followup_queue_mode = Map.get(params, "followup_queue_mode")
     timeout_ms = Map.get(params, "timeout_ms", @default_sync_timeout_ms)
@@ -1231,8 +1229,10 @@ defmodule CodingAgent.Tools.Agent do
       not is_boolean(continue_session) ->
         {:error, "continue_session must be a boolean"}
 
-      not is_nil(explicit_session_key) and not SessionKey.valid?(explicit_session_key) ->
-        {:error, "session_key must be a valid Lemon session key"}
+      # Delegated sessions are derived from the launching session, never chosen
+      # by the model: an explicit key could steer another conversation.
+      Map.has_key?(params, "session_key") ->
+        {:error, "session_key is not accepted; delegated sessions derive from this session"}
 
       not valid_queue_mode?(queue_mode) ->
         {:error, "queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
@@ -1272,7 +1272,6 @@ defmodule CodingAgent.Tools.Agent do
            async: async?,
            auto_followup: auto_followup,
            continue_session: continue_session,
-           explicit_session_key: explicit_session_key,
            queue_mode: normalize_queue_mode(queue_mode),
            followup_queue_mode:
              if(is_nil(followup_queue_mode),
@@ -1310,9 +1309,6 @@ defmodule CodingAgent.Tools.Agent do
   defp normalize_join_mode(:wait_all), do: :wait_all
   defp normalize_join_mode(:wait_any), do: :wait_any
   defp normalize_join_mode(_), do: :wait_all
-
-  defp resolve_delegated_session_key(%{explicit_session_key: key}, _opts) when is_binary(key),
-    do: {:ok, key}
 
   defp resolve_delegated_session_key(%{agent_id: agent_id, continue_session: true}, opts) do
     parent = parent_scope(opts)
@@ -1439,7 +1435,6 @@ defmodule CodingAgent.Tools.Agent do
       "followup" -> :followup
       "steer" -> :steer
       "steer_backlog" -> :steer_backlog
-      "interrupt" -> :interrupt
       _ -> :collect
     end
   end

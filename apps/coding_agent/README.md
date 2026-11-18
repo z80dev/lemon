@@ -559,6 +559,16 @@ Instead of `prompt`, a task (or batch item or swarm node) may pass `steps`: one 
 
 Async completions reach the parent as `Task <name> (<task_id>) [<persona>] completed.` or `… failed: <reason>`, followed by the child's visible answer, so a parent with several children in flight can attribute each one; a failure keeps any partial answer under the failure line. Answers longer than 12,000 characters keep the first 10,000 and end with a pointer to `read agent://<task_id>`, which returns the full stored output.
 
+A task child's routing identity (`session_key`, `agent_id`) is always the
+launching session's captured context: the `task` tool rejects `session_key` and
+`agent_id` arguments, and the `agent` tool rejects an explicit delegated
+`session_key`. Completions therefore land only in the launching session, and
+session-scoped tools in the child (such as `peer`) act as the launching owner.
+The model may choose `collect`, `followup`, `steer` or `steer_backlog` for a
+task's `queue_mode` and for the `agent` tool's `queue_mode` and
+`followup_queue_mode`; `interrupt` is rejected there and is operator-only
+(`config :coding_agent, :async_followups, default_queue_mode: :interrupt`).
+
 Native `task` and delegated `agent` completions for the same parent and execution
 authority share a fixed **50 ms completion-batch window**, starting with the first
 arrival (later completions do not extend it). This is a caller latency policy for

@@ -999,7 +999,43 @@ defmodule CodingAgent.Tools.AgentTest do
     refute_receive {:router_submit, %RunRequest{}, 2}, 150
   end
 
-  test "followup_queue_mode interrupt routes through router" do
+  test "model-supplied interrupt is rejected for submission and completion queues" do
+    for key <- ["queue_mode", "followup_queue_mode"], value <- ["interrupt", "INTERRUPT"] do
+      result =
+        AgentTool.execute(
+          "call_1",
+          %{
+            "agent_id" => "oracle",
+            "prompt" => "provide update",
+            "async" => true,
+            "auto_followup" => true,
+            key => value
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+          session_module: __MODULE__.AgentTestSessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          session_id: "sess_main",
+          agent_id: "main"
+        )
+
+      assert {:error, message} = result, inspect({key, value, result})
+      assert message =~ key
+      refute message =~ "interrupt"
+      refute_receive {:router_submit, %RunRequest{}, _}, 50
+    end
+
+    schema = AgentTool.tool("/tmp").parameters["properties"]
+    refute "interrupt" in schema["queue_mode"]["enum"]
+    refute "interrupt" in schema["followup_queue_mode"]["enum"]
+  end
+
+  test "operator-configured interrupt still governs the completion followup" do
+    Application.put_env(:coding_agent, :async_followups, default_queue_mode: :interrupt)
+
     result =
       AgentTool.execute(
         "call_1",
@@ -1007,8 +1043,7 @@ defmodule CodingAgent.Tools.AgentTest do
           "agent_id" => "oracle",
           "prompt" => "provide update",
           "async" => true,
-          "auto_followup" => true,
-          "followup_queue_mode" => "interrupt"
+          "auto_followup" => true
         },
         nil,
         nil,
@@ -1021,7 +1056,7 @@ defmodule CodingAgent.Tools.AgentTest do
         agent_id: "main"
       )
 
-    assert_receive {:router_submit, %RunRequest{}, 1}
+    assert_receive {:router_submit, %RunRequest{queue_mode: :collect}, 1}
 
     :ok =
       Bus.broadcast(
@@ -1031,6 +1066,7 @@ defmodule CodingAgent.Tools.AgentTest do
 
     refute_receive {:session_async_followup, _message}, 150
     assert_receive {:router_submit, %RunRequest{queue_mode: :interrupt} = followup, 2}, 2_000
+    assert followup.session_key == "agent:main:main"
     assert followup.prompt =~ "oracle update"
   end
 
@@ -1078,7 +1114,7 @@ defmodule CodingAgent.Tools.AgentTest do
           "prompt" => "provide update",
           "async" => true,
           "auto_followup" => true,
-          "queue_mode" => "interrupt",
+          "queue_mode" => "steer",
           "followup_queue_mode" => "followup"
         },
         nil,
@@ -1092,7 +1128,7 @@ defmodule CodingAgent.Tools.AgentTest do
         agent_id: "main"
       )
 
-    assert_receive {:router_submit, %RunRequest{queue_mode: :interrupt}, 1}
+    assert_receive {:router_submit, %RunRequest{queue_mode: :steer}, 1}
 
     :ok =
       Bus.broadcast(

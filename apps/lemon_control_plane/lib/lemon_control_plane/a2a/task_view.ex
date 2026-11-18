@@ -16,9 +16,11 @@ defmodule LemonControlPlane.A2A.TaskView do
     )
   end
 
+  # Only the inbound exchange is rendered: a peer-chosen `contextId` that
+  # collides with an outbound context never pulls in the outbound transcript.
   defp history(task) do
     task.peer_id
-    |> A2AStore.history(task.context_id, limit: 100)
+    |> A2AStore.history(task.context_id, limit: 100, direction: :inbound)
     |> Enum.map(fn message ->
       Protocol.message(message.role, message.text,
         message_id: message.id,

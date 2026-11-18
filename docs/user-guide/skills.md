@@ -602,7 +602,10 @@ lemon skill draft delete <draft-key>
 
 Drafts are global unless you pass `--local` (project drafts under `--cwd=PATH` or
 the current directory). `--force` overwrites an existing skill on `publish` and
-skips the confirmation on `delete`.
+is the only way to skip the confirmation on `delete`; any answer other than `y`
+cancels without deleting. Draft keys must match `^[a-z0-9][a-z0-9._-]*$`, and
+drafts whose directory (or the drafts root below the agent dir or project) is a
+symlink are refused rather than read, published or deleted.
 
 > **Note:** Synthesized drafts require human review before promotion. The audit
 > engine runs automatically during generation. Drafts with `:block` findings are

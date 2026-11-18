@@ -2,8 +2,12 @@ defmodule LemonSkills.Tools.Peer do
   @moduledoc """
   Persistent A2A peer conversation and coordination tool.
 
-  `message` resumes the peer's default context. `new` deliberately starts and
-  selects a fresh context. Remote text is always returned as untrusted content.
+  Conversations belong to the calling session: `tool/2` requires the canonical
+  `:session_key` and `:agent_id`, and every context, default pointer and task it
+  touches is owned by that pair. `message` resumes the session's default context
+  with a peer; `new` deliberately starts and selects a fresh one. Contexts and
+  tasks created for another session are refused. Remote text is always returned
+  as untrusted content.
   """
 
   alias LemonAgent.AbortSignal
@@ -15,7 +19,7 @@ defmodule LemonSkills.Tools.Peer do
   @actions ~w(list discover message new history status cancel)
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
-  def tool(_cwd, _opts \\ []) do
+  def tool(_cwd, opts \\ []) do
     %AgentTool{
       name: "peer",
       timeout_ms: :infinity,
@@ -46,47 +50,65 @@ defmodule LemonSkills.Tools.Peer do
         },
         "required" => ["action"]
       },
-      execute: &execute/4
+      execute: &execute(&1, &2, &3, &4, opts)
     }
   end
 
-  @spec execute(binary(), map(), reference() | nil, function() | nil) ::
+  @spec execute(binary(), map(), reference() | nil, function() | nil, keyword()) ::
           LemonAgent.Types.AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, _on_update) do
-    if AbortSignal.aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
-      dispatch(params)
+  def execute(_tool_call_id, params, signal, _on_update, opts) do
+    cond do
+      AbortSignal.aborted?(signal) ->
+        {:error, "Operation aborted"}
+
+      owner = owner(opts) ->
+        dispatch(params, owner)
+
+      true ->
+        {:error, "peer requires a session_key and agent_id in the tool context"}
     end
   end
 
-  defp dispatch(%{"action" => "list"}), do: list_peers()
-  defp dispatch(%{"action" => "discover"} = params), do: with_peer(params, &discover/1)
+  defp owner(opts) do
+    case {opts[:agent_id], opts[:session_key]} do
+      {agent_id, session_key}
+      when is_binary(agent_id) and agent_id != "" and is_binary(session_key) and
+             session_key != "" ->
+        {agent_id, session_key}
 
-  defp dispatch(%{"action" => "message"} = params),
-    do: with_peer(params, &send_persistent(&1, params, false))
+      _ ->
+        nil
+    end
+  end
 
-  defp dispatch(%{"action" => "new"} = params),
-    do: with_peer(params, &send_persistent(&1, params, true))
+  defp dispatch(%{"action" => "list"}, owner), do: list_peers(owner)
+  defp dispatch(%{"action" => "discover"} = params, _owner), do: with_peer(params, &discover/1)
 
-  defp dispatch(%{"action" => "history"} = params), do: with_peer(params, &history(&1, params))
+  defp dispatch(%{"action" => "message"} = params, owner),
+    do: with_peer(params, &send_persistent(&1, owner, params, false))
 
-  defp dispatch(%{"action" => "status"} = params),
-    do: with_peer(params, &task_action(&1, params, :status))
+  defp dispatch(%{"action" => "new"} = params, owner),
+    do: with_peer(params, &send_persistent(&1, owner, params, true))
 
-  defp dispatch(%{"action" => "cancel"} = params),
-    do: with_peer(params, &task_action(&1, params, :cancel))
+  defp dispatch(%{"action" => "history"} = params, owner),
+    do: with_peer(params, &history(&1, owner, params))
 
-  defp dispatch(%{"action" => action}) when is_binary(action),
+  defp dispatch(%{"action" => "status"} = params, owner),
+    do: with_peer(params, &task_action(&1, owner, params, :status))
+
+  defp dispatch(%{"action" => "cancel"} = params, owner),
+    do: with_peer(params, &task_action(&1, owner, params, :cancel))
+
+  defp dispatch(%{"action" => action}, _owner) when is_binary(action),
     do: {:error, "unsupported peer action: #{action}"}
 
-  defp dispatch(_), do: {:error, "missing required parameter: action"}
+  defp dispatch(_, _owner), do: {:error, "missing required parameter: action"}
 
-  defp list_peers do
+  defp list_peers(owner) do
     peers =
       peer_config()
       |> Enum.map(fn {id, peer} ->
-        context = A2AStore.default_context(id)
+        context = A2AStore.default_context(id, owner)
 
         %{
           id: id,
@@ -108,13 +130,13 @@ defmodule LemonSkills.Tools.Peer do
     end
   end
 
-  defp send_persistent(peer, params, new?) do
+  defp send_persistent(peer, owner, params, new?) do
     with {:ok, text} <- required_string(params, "text"),
-         {:ok, context} <- context(peer.id, new?),
+         {:ok, context} <- context(peer.id, owner, new?),
          message = Protocol.message("ROLE_USER", text, context_id: context.id),
          {:ok, response} <- Client.send_message(peer.url, message, client_opts(peer)),
          {:ok, remote} <- Protocol.unwrap_task(response),
-         {:ok, payload} <- persist_response(peer.id, context.id, message, remote) do
+         {:ok, payload} <- persist_response(peer.id, owner, context.id, message, remote) do
       result(payload)
     else
       {:error, reason} when is_binary(reason) -> {:error, reason}
@@ -122,36 +144,49 @@ defmodule LemonSkills.Tools.Peer do
     end
   end
 
-  defp history(peer, params) do
+  defp history(peer, owner, params) do
     context =
       case params["context_id"] do
-        id when is_binary(id) and id != "" -> A2AStore.get_context(:outbound, peer.id, id)
-        _ -> A2AStore.default_context(peer.id)
+        id when is_binary(id) and id != "" -> A2AStore.owned_context(peer.id, owner, id)
+        _ -> A2AStore.default_context(peer.id, owner)
       end
 
-    if context do
-      limit = normalize_limit(params["limit"])
+    cond do
+      context ->
+        limit = normalize_limit(params["limit"])
 
-      result(%{
-        peer_id: peer.id,
-        context: context,
-        messages: A2AStore.history(peer.id, context.id, limit: limit)
-      })
-    else
-      {:error, "peer has no conversation yet"}
+        result(%{
+          peer_id: peer.id,
+          context:
+            Map.take(context, [:id, :peer_id, :turn_count, :created_at_ms, :updated_at_ms]),
+          messages: A2AStore.history(peer.id, context.id, limit: limit, direction: :outbound)
+        })
+
+      is_binary(params["context_id"]) and params["context_id"] != "" ->
+        {:error, "unknown context_id for this session"}
+
+      true ->
+        {:error, "peer has no conversation yet"}
     end
   end
 
-  defp task_action(peer, params, action) do
+  defp task_action(peer, owner, params, action) do
     with {:ok, task_id} <- required_string(params, "task_id"),
-         result <- call_task(peer, task_id, action),
-         {:ok, response} <- result,
+         {:ok, owned} <- owned_task(peer.id, owner, task_id),
+         {:ok, response} <- call_task(peer, task_id, action),
          {:ok, remote} <- Protocol.unwrap_task(response) do
-      _ = persist_remote_task(peer.id, remote)
+      _ = persist_remote_task(peer.id, owner, owned.context_id, Map.put(remote, "id", task_id))
       result(%{peer_id: peer.id, task: remote})
     else
       {:error, reason} when is_binary(reason) -> {:error, reason}
       {:error, reason} -> request_error(reason)
+    end
+  end
+
+  defp owned_task(peer_id, owner, task_id) do
+    case A2AStore.owned_task(peer_id, owner, task_id) do
+      nil -> {:error, "unknown task_id for this session"}
+      task -> {:ok, task}
     end
   end
 
@@ -161,21 +196,16 @@ defmodule LemonSkills.Tools.Peer do
   defp call_task(peer, task_id, :cancel),
     do: Client.cancel_task(peer.url, task_id, client_opts(peer))
 
-  defp context(peer_id, true) do
-    with {:ok, context} <- A2AStore.create_context(:outbound, peer_id),
-         :ok <- A2AStore.set_default_context(peer_id, context.id) do
-      {:ok, context}
-    end
-  end
+  defp context(peer_id, owner, true), do: A2AStore.new_owned_context(peer_id, owner)
 
-  defp context(peer_id, false) do
-    case A2AStore.default_context(peer_id) do
-      nil -> context(peer_id, true)
+  defp context(peer_id, owner, false) do
+    case A2AStore.default_context(peer_id, owner) do
+      nil -> context(peer_id, owner, true)
       context -> {:ok, context}
     end
   end
 
-  defp persist_response(peer_id, context_id, sent, remote) do
+  defp persist_response(peer_id, owner, context_id, sent, remote) do
     task_id = remote["id"] || remote["taskId"]
 
     {:ok, _} =
@@ -204,7 +234,7 @@ defmodule LemonSkills.Tools.Peer do
     end
 
     {:ok, context} = A2AStore.increment_turn(:outbound, peer_id, context_id)
-    _ = persist_remote_task(peer_id, Map.put_new(remote, "contextId", context_id))
+    _ = persist_remote_task(peer_id, owner, context_id, remote)
 
     {:ok,
      %{
@@ -216,15 +246,16 @@ defmodule LemonSkills.Tools.Peer do
      }}
   end
 
-  defp persist_remote_task(peer_id, remote) do
+  # The task is bound to the local context it was created in; a remote-supplied
+  # `contextId` never re-homes it.
+  defp persist_remote_task(peer_id, owner, context_id, remote) do
     id = remote["id"] || remote["taskId"]
 
     if is_binary(id) do
-      A2AStore.put_task(%{
+      A2AStore.put_owned_task(owner, %{
         id: id,
-        direction: :outbound,
         peer_id: peer_id,
-        context_id: remote["contextId"],
+        context_id: context_id,
         state: get_in(remote, ["status", "state"]),
         answer: remote_text(remote)
       })

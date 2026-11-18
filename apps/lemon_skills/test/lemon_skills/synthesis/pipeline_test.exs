@@ -350,7 +350,8 @@ defmodule LemonSkills.Synthesis.PipelineTest do
 
       assert [key] = result.generated
       assert result.skipped == []
-      assert File.dir?(DraftStore.draft_dir(key, global: false, cwd: ctx.tmp))
+      assert {:ok, dir} = DraftStore.draft_dir(key, global: false, cwd: ctx.tmp)
+      assert File.dir?(dir)
     end
 
     test "blocking audit records :blocked_by_audit and deletes the draft", ctx do

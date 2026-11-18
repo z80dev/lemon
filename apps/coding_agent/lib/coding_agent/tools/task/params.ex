@@ -17,7 +17,9 @@ defmodule CodingAgent.Tools.Task.Params do
   alias LemonAgent.Types.AgentTool
   alias LemonCore.SessionKey
 
-  @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
+  # Model-selectable followup queues. `interrupt` aborts the launching run, so it
+  # stays operator-only (`async_followups` config), never a tool argument.
+  @valid_queue_modes ["collect", "followup", "steer", "steer_backlog"]
   @schema_modes ["strict", "permissive"]
   @max_context_bytes 64 * 1024
   @max_steps 4
@@ -134,8 +136,6 @@ defmodule CodingAgent.Tools.Task.Params do
     output_schema = Map.get(params, "output_schema")
     tool_policy = Map.get(params, "tool_policy")
     meta = Map.get(params, "meta")
-    session_key = normalize_optional_string(Map.get(params, "session_key"))
-    agent_id = normalize_optional_string(Map.get(params, "agent_id"))
     queue_mode = Map.get(params, "queue_mode")
     context = Map.get(params, "context")
     schema_mode = Map.get(params, "schema_mode")
@@ -188,11 +188,10 @@ defmodule CodingAgent.Tools.Task.Params do
       not is_nil(meta) and not is_map(meta) ->
         {:error, "meta must be an object"}
 
-      not is_nil(session_key) and not SessionKey.valid?(session_key) ->
-        {:error, "session_key must be a valid Lemon session key"}
-
-      not is_nil(agent_id) and not is_binary(agent_id) ->
-        {:error, "agent_id must be a string"}
+      # Routing identity comes only from the launching session's captured opts.
+      Map.has_key?(params, "session_key") or Map.has_key?(params, "agent_id") ->
+        {:error,
+         "session_key and agent_id are not accepted; task children always report to the launching session"}
 
       not is_nil(queue_mode) and not is_binary(queue_mode) ->
         {:error, "queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
@@ -278,9 +277,7 @@ defmodule CodingAgent.Tools.Task.Params do
             merge: merge,
             cwd: delegated_cwd,
             meta: sanitize_child_metadata(meta || %{}),
-            session_key: session_key,
             source_session_file: source_session_file,
-            agent_id: agent_id,
             queue_mode: followup_queue_mode,
             resolved_queue_mode:
               AsyncFollowups.resolve_async_followup_queue_mode(followup_queue_mode, :followup)
@@ -951,8 +948,6 @@ defmodule CodingAgent.Tools.Task.Params do
       |> maybe_put_kw(:task_allowed_agents, validated[:task_allowed_agents])
       |> maybe_put_kw(:tool_policy, child_policy)
       |> maybe_put_kw(:execution_context, child_execution_context(cwd, validated, opts))
-      |> maybe_put_kw(:session_key, validated[:session_key])
-      |> maybe_put_kw(:agent_id, validated[:agent_id])
       |> maybe_put_kw(:extra_tools, child_extra_tools_if_present(child_extra_tools))
       |> maybe_put_kw(:workspace_read_fenced, if(parent_fenced?, do: true, else: nil))
       |> maybe_put_kw(:session_file, validated[:seance_session_file])

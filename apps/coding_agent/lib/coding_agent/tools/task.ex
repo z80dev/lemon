@@ -166,18 +166,10 @@ defmodule CodingAgent.Tools.Task do
             "type" => "object",
             "description" => "Lifecycle/followup metadata"
           },
-          "session_key" => %{
-            "type" => "string",
-            "description" => "Parent session routing override"
-          },
-          "agent_id" => %{
-            "type" => "string",
-            "description" => "Parent agent routing override"
-          },
           "queue_mode" => %{
             "type" => "string",
             "enum" => Params.valid_queue_modes(),
-            "description" => "Followup delivery queue; default followup"
+            "description" => "Followup delivery queue for this session; default followup"
           }
         },
         "required" => []
