@@ -211,6 +211,38 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Extensions and WASM tools load only from operator paths (relative entries
+  resolve against `~/.lemon`; project `.lemon/extensions` and `.lemon/wasm-tools`
+  never load). Sources are hashed and compiled from the same bytes, modules are
+  owned per source, a failed load fails session start, and any module collision
+  trips a runtime latch that refuses every tool, hook and extension provider
+  until restart.
+- WASM secret lookups use an internal host channel checked against the calling
+  tool's `secrets.allowed_names`; the runtime and its `exec` commands no longer
+  inherit Lemon's environment.
+- New `operator.content` scope (default for operator tokens). Read-only
+  control-plane methods and the event stream return metadata only; `config.get`,
+  MCP previews and `doctor.run` details need `operator.admin`.
+- OpenAI-compatible and ACP tokens are owned, confined API principals: own
+  runs and sessions only, own session namespace and workspace, no approval
+  relaxation.
+- One outbound address policy and pinned fetcher (`LemonCore.Net`) for webhook
+  callbacks, web fetch, URL context, MCP (including SSE), image URLs and the
+  browser egress proxy: metadata and alias addresses refused, no implicit
+  redirects, bounded deadlines and bodies.
+- Browser: `file:`, `data:` and `blob:` documents need `allowLocalDocument`
+  (exec tier) for navigation, reads and captures; cookie values need write tier;
+  artifact paths are project-confined; attaching to an unlaunched browser needs
+  `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS`.
+- Doctor output and support bundles apply one redaction policy (paths, ids,
+  emails, phone numbers, hosts, URLs, names, exception text); config is exported
+  as a settings projection.
+- The assistant home and profile workspaces are never treated as projects:
+  their instructions, rules, commands, personas and `.lemon/config.toml` are
+  ignored; bootstrap files load only through the persona gate.
+- Channel `/bg` runs use the agent, policy floor and workspace named by the
+  session key; Telegram `/model` pickers and buttons bind to their opener; agent
+  `poll`/`join` reach only the caller's tasks.
 - Restricted tool profiles (`safe_mode`, `subagent_restricted`, `leaf_worker`,
   `no_external`) are allow lists over one tool catalog and deny unclassified,
   MCP, extension and satellite tools. Every tool source passes one final policy
