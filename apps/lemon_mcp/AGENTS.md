@@ -25,6 +25,18 @@ and [skills integration](../../docs/skills.md#mcp-model-context-protocol-server-
 - HTTP OAuth discovers protected-resource/authorization metadata with
   metadata-only headers. Never forward configured MCP auth headers or bearer
   tokens to metadata URLs.
+- Bind discovery to the configured server: the PRM `resource` must equal the
+  configured URL and the AS `issuer` the requested issuer. Token/authorization
+  endpoints come only from validated AS metadata, are HTTPS or literal loopback,
+  share the issuer origin unless allowlisted, and every OAuth connection is
+  pinned (public-only without a policy) before any credential is sent. Server
+  JSON never supplies internal metadata fields; policy mode allowlist-checks the
+  authorization endpoint before it reaches a provider/observer/approval.
+- Grants are bound to issuer + client_id (persisted with the token). An issuer
+  change fails with `:oauth_issuer_changed` before refresh or client secrets;
+  never silently fall back to a fresh grant. Operator credentials need
+  `oauth.issuer` (exact match) unless the issuer shares the server origin; a
+  configured `refresh_token` always requires `oauth.issuer`.
 - Prefer refresh-token grant after an eligible 401; preserve rotated refresh
   tokens. Fall back to client credentials only according to the existing flow.
 - Public-client PKCE uses the explicit authorization-code callback boundary.

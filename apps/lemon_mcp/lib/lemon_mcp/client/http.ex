@@ -14,6 +14,13 @@ defmodule LemonMCP.Client.HTTP do
   computed by the host before resolving credentials, never a server config field.
   Policy clients connect directly to the pinned address while retaining the
   original Host and TLS identity. All requests reject redirects.
+
+  OAuth discovery is bound to the configured URL: the protected resource must
+  be that URL, the authorization-server `issuer` must equal the requested
+  issuer, and token/authorization endpoints must be HTTPS (or literal loopback)
+  on the issuer's origin unless an origin policy allowlists them. OAuth
+  connections are always DNS-pinned; without a policy only public addresses,
+  the server's own origin and (for a loopback server) loopback are allowed.
   """
 
   use GenServer
@@ -22,6 +29,14 @@ defmodule LemonMCP.Client.HTTP do
   alias LemonMCP.HTTP.OriginPolicy
 
   require Logger
+
+  # Keys Lemon adds to discovered metadata; never accepted from a server.
+  @internal_metadata_keys [
+    "authorization_server_metadata",
+    "metadata_url",
+    "resource_metadata_url",
+    "www_authenticate"
+  ]
 
   @type client_state :: :disconnected | :initializing | :ready
 
@@ -92,7 +107,8 @@ defmodule LemonMCP.Client.HTTP do
       timeout_ms: Keyword.get(opts, :timeout_ms, 30_000)
     }
 
-    with {:ok, pin} <-
+    with :ok <- validate_oauth_config(config.oauth),
+         {:ok, pin} <-
            destination_pin(config.url, config.origin_policy, Keyword.get(opts, :destination_pin)),
          :ok <- ensure_http_apps(),
          {:ok, profile} <- start_http_profile(config.origin_policy),
@@ -108,7 +124,8 @@ defmodule LemonMCP.Client.HTTP do
           session_id: nil,
           oauth_access_token: nil,
           oauth_refresh_token: nil,
-          oauth_metadata: nil
+          oauth_metadata: nil,
+          oauth_issuer: nil
         }
         |> load_oauth_token_cache()
 
@@ -535,58 +552,53 @@ defmodule LemonMCP.Client.HTTP do
     {:ok, :lemon_mcp_pinned}
   end
 
-  defp http_request(method, url, headers, body, state, pin \\ :resolve) do
-    policy = state.config.origin_policy
+  defp http_request(method, url, headers, body, state, pin) do
+    {url, headers, tls_opts} = pinned_request(url, headers, pin)
+    timeout = state.config.timeout_ms
+    http_opts = [timeout: timeout, connect_timeout: timeout, autoredirect: false] ++ tls_opts
 
-    with {:ok, pin} <-
-           if(pin == :resolve, do: OriginPolicy.pin(url, policy), else: {:ok, pin}) do
-      {url, headers, tls_opts} = pinned_request(url, headers, pin)
-      timeout = state.config.timeout_ms
-      http_opts = [timeout: timeout, connect_timeout: timeout, autoredirect: false] ++ tls_opts
-
-      request =
-        case body do
-          nil -> {to_charlist(url), headers}
-          {content_type, data} -> {to_charlist(url), headers, content_type, data}
-        end
-
-      response =
-        if OriginPolicy.ownership_required?(pin) do
-          LemonMCP.HTTP.OwnedConnection.request(
-            method,
-            url,
-            headers,
-            body,
-            pin,
-            timeout,
-            tls_opts,
-            state.config.peer_owner
-          )
-        else
-          :httpc.request(
-            method,
-            request,
-            http_opts,
-            [body_format: :binary],
-            state.config.http_profile
-          )
-        end
-
-      case response do
-        {:ok, {{_version, status, _reason}, _headers, _body}} when status in 300..399 ->
-          {:error, :redirect_forbidden}
-
-        {:error, :private_origin_not_owned} = error ->
-          error
-
-        {:error, reason} ->
-          if is_nil(policy),
-            do: {:error, {:http_request_failed, reason}},
-            else: {:error, :http_request_failed}
-
-        response ->
-          response
+    request =
+      case body do
+        nil -> {to_charlist(url), headers}
+        {content_type, data} -> {to_charlist(url), headers, content_type, data}
       end
+
+    response =
+      if OriginPolicy.ownership_required?(pin) do
+        LemonMCP.HTTP.OwnedConnection.request(
+          method,
+          url,
+          headers,
+          body,
+          pin,
+          timeout,
+          tls_opts,
+          state.config.peer_owner
+        )
+      else
+        :httpc.request(
+          method,
+          request,
+          http_opts,
+          [body_format: :binary],
+          state.config.http_profile
+        )
+      end
+
+    case response do
+      {:ok, {{_version, status, _reason}, _headers, _body}} when status in 300..399 ->
+        {:error, :redirect_forbidden}
+
+      {:error, :private_origin_not_owned} = error ->
+        error
+
+      {:error, reason} ->
+        if is_nil(state.config.origin_policy),
+          do: {:error, {:http_request_failed, reason}},
+          else: {:error, :http_request_failed}
+
+      response ->
+        response
     end
   end
 
@@ -666,10 +678,44 @@ defmodule LemonMCP.Client.HTTP do
 
   defp fetch_resource_metadata(url, state) do
     case fetch_metadata_json(url, state) do
-      {:ok, metadata} -> put_authorization_server_metadata(metadata, state)
-      {:error, metadata} when is_map(metadata) -> {:ok, metadata}
-      {:error, reason} -> {:error, reason}
+      {:ok, metadata} ->
+        # Server JSON never supplies Lemon's own enrichment fields: AS records
+        # are built only from validated discovery below.
+        metadata = Map.drop(metadata, @internal_metadata_keys)
+
+        with :ok <- validate_resource(metadata, state),
+             do: put_authorization_server_metadata(metadata, state)
+
+      {:error, metadata} when is_map(metadata) ->
+        {:ok, metadata}
+
+      {:error, reason} ->
+        {:error, reason}
     end
+  end
+
+  # RFC 9728 §3.3: the protected resource must be the configured MCP URL, so
+  # the server cannot choose the audience of the tokens Lemon requests.
+  defp validate_resource(%{"resource" => resource}, state) when is_binary(resource) do
+    if same_resource?(resource, state.config.url),
+      do: :ok,
+      else: {:error, :invalid_oauth_metadata}
+  end
+
+  defp validate_resource(_metadata, _state), do: {:error, :invalid_oauth_metadata}
+
+  defp same_resource?(resource, configured) do
+    with {:ok, origin} <- OriginPolicy.canonical_origin(resource),
+         {:ok, ^origin} <- OriginPolicy.canonical_origin(configured) do
+      resource_path(resource) == resource_path(configured)
+    else
+      _ -> false
+    end
+  end
+
+  defp resource_path(url) do
+    uri = URI.parse(url)
+    {if(uri.path in [nil, ""], do: "/", else: uri.path), uri.query}
   end
 
   defp put_authorization_server_metadata(%{"authorization_servers" => servers} = metadata, state)
@@ -694,24 +740,24 @@ defmodule LemonMCP.Client.HTTP do
   defp put_authorization_server_metadata(metadata, _state), do: {:ok, metadata}
 
   defp fetch_authorization_server_metadata(issuer, state) do
-    with metadata_url when is_binary(metadata_url) <- authorization_server_metadata_url(issuer),
-         {:ok, metadata} <- fetch_metadata_json(metadata_url, state) do
-      {:ok,
-       metadata
-       |> Map.put_new("issuer", issuer)
-       |> Map.put("metadata_url", metadata_url)}
+    with {:ok, metadata_url} <- authorization_server_metadata_url(issuer),
+         {:ok, metadata} <- fetch_metadata_json(metadata_url, state),
+         :ok <- validate_authorization_server_metadata(metadata, issuer, state) do
+      {:ok, Map.put(metadata, "metadata_url", metadata_url)}
     else
       {:error, metadata} when is_map(metadata) -> {:ok, Map.put(metadata, "issuer", issuer)}
       {:error, reason} -> {:error, reason}
-      _ -> {:ok, %{"issuer" => issuer, "metadata_error" => "invalid_issuer"}}
     end
   end
 
-  defp authorization_server_metadata_url(issuer) do
+  # RFC 8414 §3: the issuer identifier has no query or fragment, and the
+  # returned `issuer` must be identical to the one requested.
+  defp authorization_server_metadata_url(issuer) when is_binary(issuer) do
     uri = URI.parse(issuer)
 
-    with scheme when scheme in ["http", "https"] <- uri.scheme,
-         host when is_binary(host) <- uri.host do
+    with {:ok, _origin} <- OriginPolicy.canonical_origin(issuer),
+         nil <- uri.query,
+         nil <- uri.fragment do
       path =
         case uri.path do
           nil -> ""
@@ -720,17 +766,112 @@ defmodule LemonMCP.Client.HTTP do
           path -> String.trim_trailing(path, "/")
         end
 
-      %{uri | path: "/.well-known/oauth-authorization-server" <> path, query: nil, fragment: nil}
-      |> URI.to_string()
+      {:ok,
+       %{uri | path: "/.well-known/oauth-authorization-server" <> path}
+       |> URI.to_string()}
     else
-      _ -> nil
+      _ -> {:error, :invalid_oauth_metadata}
+    end
+  end
+
+  defp authorization_server_metadata_url(_issuer), do: {:error, :invalid_oauth_metadata}
+
+  defp validate_authorization_server_metadata(metadata, issuer, state) do
+    with true <- Map.get(metadata, "issuer") === issuer || {:error, :invalid_oauth_metadata},
+         :ok <- validate_optional_endpoint(metadata, "token_endpoint", issuer, state) do
+      validate_optional_endpoint(metadata, "authorization_endpoint", issuer, state)
+    end
+  end
+
+  defp validate_optional_endpoint(metadata, key, issuer, state) do
+    case Map.fetch(metadata, key) do
+      :error -> :ok
+      {:ok, endpoint} -> validate_oauth_endpoint(endpoint, issuer, state)
+    end
+  end
+
+  # A token or authorization endpoint must be HTTPS (or literal loopback) and,
+  # without an operator allowlist, on the issuer's own origin; with one, its
+  # origin must be allowlisted. The authorization URL is opened by a browser,
+  # never pinned, so membership is checked here before it is exposed.
+  defp validate_oauth_endpoint(endpoint, issuer, state) when is_binary(endpoint) do
+    with {:ok, origin} <- oauth_origin(endpoint),
+         :ok <- require_secure_oauth_origin(origin),
+         {:ok, issuer_origin} <- oauth_origin(issuer) do
+      case state.config.origin_policy do
+        nil when origin == issuer_origin -> :ok
+        nil -> {:error, :origin_not_allowed}
+        policy -> OriginPolicy.authorize_origin(endpoint, policy)
+      end
+    end
+  end
+
+  defp validate_oauth_endpoint(_endpoint, _issuer, _state), do: {:error, :invalid_oauth_metadata}
+
+  defp oauth_origin(url) do
+    case OriginPolicy.canonical_origin(url) do
+      {:ok, origin} -> {:ok, origin}
+      {:error, _} -> {:error, :invalid_oauth_metadata}
+    end
+  end
+
+  defp require_secure_oauth_origin(origin) do
+    case URI.parse(origin) do
+      %URI{scheme: "https"} -> :ok
+      %URI{scheme: "http", host: host} -> loopback_or_insecure(host)
+      _ -> {:error, :insecure_oauth_endpoint}
+    end
+  end
+
+  defp loopback_or_insecure(host) do
+    if LemonCore.LoopbackListener.literal_loopback?(host),
+      do: :ok,
+      else: {:error, :insecure_oauth_endpoint}
+  end
+
+  # Every OAuth discovery and token connection is HTTPS (or literal loopback)
+  # and address-pinned. The operator policy applies when configured; otherwise
+  # destinations must be public, except the configured server's own origin and,
+  # for a literal-loopback server, other literal-loopback origins.
+  defp oauth_pin(url, state) do
+    with {:ok, origin} <- oauth_origin(url),
+         :ok <- require_secure_oauth_origin(origin) do
+      OriginPolicy.pin(url, state.config.origin_policy || implicit_oauth_policy(origin, state))
+    end
+  end
+
+  defp implicit_oauth_policy(origin, state) do
+    approved =
+      case OriginPolicy.canonical_origin(state.config.url) do
+        {:ok, ^origin} ->
+          [origin]
+
+        {:ok, server_origin} ->
+          if loopback_origin?(server_origin) and loopback_origin?(origin),
+            do: [origin],
+            else: []
+
+        _ ->
+          []
+      end
+
+    %{allowed_origins: [origin], approved_private_origins: approved}
+  end
+
+  defp loopback_origin?(origin),
+    do: LemonCore.LoopbackListener.literal_loopback?(URI.parse(origin).host)
+
+  defp oauth_http_request(method, url, headers, body, state) do
+    with {:ok, pin} <- oauth_pin(url, state),
+         {:ok, profile} <- start_http_profile(:pinned) do
+      http_request(method, url, headers, body, put_in(state.config.http_profile, profile), pin)
     end
   end
 
   defp fetch_metadata_json(url, state) do
     headers = http_headers([{"accept", "application/json"}])
 
-    case http_request(:get, url, headers, nil, state) do
+    case oauth_http_request(:get, url, headers, nil, state) do
       {:ok, {{_version, status, _reason}, _headers, body}} when status in 200..299 ->
         case Jason.decode(to_string(body)) do
           {:ok, metadata} when is_map(metadata) ->
@@ -749,10 +890,11 @@ defmodule LemonMCP.Client.HTTP do
              %{"metadata_error" => "http_#{status}", "metadata_error_reason" => to_string(reason)}},
           else: {:error, :metadata_http_error}
 
+      {:error, {:http_request_failed, reason}} ->
+        {:error, %{"metadata_error" => inspect(reason)}}
+
       {:error, reason} ->
-        if is_nil(state.config.origin_policy) and reason != :redirect_forbidden,
-          do: {:error, %{"metadata_error" => inspect(reason)}},
-          else: {:error, reason}
+        {:error, reason}
     end
   end
 
@@ -766,34 +908,118 @@ defmodule LemonMCP.Client.HTTP do
 
   defp maybe_authorize(metadata, state) do
     with {:ok, oauth} <- oauth_options(state.config.oauth),
-         token_endpoint when is_binary(token_endpoint) <- token_endpoint(metadata) do
-      case maybe_fetch_refresh_token(token_endpoint, metadata, oauth, state) do
+         {:ok, target} <- oauth_target(metadata, state),
+         :ok <- require_bound_issuer(target, state),
+         :ok <- require_operator_issuer(target, oauth, state) do
+      case maybe_fetch_refresh_token(target, oauth, state) do
         {:ok, token} ->
-          {:ok, put_oauth_token(state, metadata, token)}
+          {:ok, put_oauth_token(state, metadata, target, token)}
 
         {:error, reason} ->
           {:error, reason}
 
         :error ->
-          fetch_new_token(token_endpoint, metadata, oauth, state)
+          fetch_new_token(target, metadata, oauth, state)
       end
     else
+      {:error, reason} -> {:error, reason}
       _ -> :error
     end
   end
 
-  defp fetch_new_token(token_endpoint, metadata, oauth, state) do
+  # Credentials obtained from one issuer are never sent to another: once a
+  # token is held, an issuer change fails before refresh or client secrets
+  # are used, and requires the operator to re-authorize (clear the cache).
+  defp require_bound_issuer(_target, %{oauth_issuer: nil}), do: :ok
+  defp require_bound_issuer(%{issuer: issuer}, %{oauth_issuer: issuer}), do: :ok
+  defp require_bound_issuer(_target, _state), do: {:error, :oauth_issuer_changed}
+
+  # Operator-supplied credentials go only to an issuer the operator chose: the
+  # configured `oauth.issuer` exactly, or, without one, an issuer on the
+  # configured server's own origin (client secrets only; a configured refresh
+  # token always requires `oauth.issuer`, enforced at startup).
+  defp require_operator_issuer(%{issuer: discovered}, oauth, state) do
+    case Keyword.get(oauth, :issuer) do
+      issuer when is_binary(issuer) ->
+        if discovered === issuer, do: :ok, else: {:error, :oauth_issuer_mismatch}
+
+      _ ->
+        if bearer_token?(Keyword.get(oauth, :client_secret)) and
+             OriginPolicy.canonical_origin(discovered) !=
+               OriginPolicy.canonical_origin(state.config.url),
+           do: {:error, :oauth_issuer_required},
+           else: :ok
+    end
+  end
+
+  defp validate_oauth_config(oauth) do
+    case oauth_options(oauth) do
+      {:ok, oauth} ->
+        case Keyword.get(oauth, :issuer) do
+          nil ->
+            if bearer_token?(Keyword.get(oauth, :refresh_token)),
+              do: {:error, :oauth_issuer_required},
+              else: :ok
+
+          issuer when is_binary(issuer) ->
+            case authorization_server_metadata_url(issuer) do
+              {:ok, _url} -> :ok
+              _ -> {:error, :invalid_oauth_issuer}
+            end
+
+          _ ->
+            {:error, :invalid_oauth_issuer}
+        end
+
+      :error ->
+        :ok
+    end
+  end
+
+  # Re-validates metadata at use, so cached metadata is held to the same
+  # binding as freshly discovered metadata. Endpoints come only from an
+  # issuer's authorization-server metadata, never the protected resource.
+  defp oauth_target(%{"resource" => _} = metadata, state) do
+    with :ok <- validate_resource(metadata, state),
+         %{"issuer" => issuer, "token_endpoint" => token_endpoint} = server <-
+           first_authorization_server(metadata),
+         :ok <- validate_oauth_endpoint(token_endpoint, issuer, state),
+         :ok <- validate_optional_endpoint(server, "authorization_endpoint", issuer, state) do
+      {:ok,
+       %{
+         issuer: issuer,
+         token_endpoint: token_endpoint,
+         authorization_endpoint: Map.get(server, "authorization_endpoint"),
+         resource: state.config.url
+       }}
+    else
+      nil -> :error
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_oauth_metadata}
+    end
+  end
+
+  defp oauth_target(_metadata, _state), do: :error
+
+  defp first_authorization_server(%{"authorization_server_metadata" => servers})
+       when is_list(servers) do
+    Enum.find(servers, &(is_map(&1) and Map.has_key?(&1, "token_endpoint")))
+  end
+
+  defp first_authorization_server(_metadata), do: nil
+
+  defp fetch_new_token(target, metadata, oauth, state) do
     cond do
       authorization_code_provider?(oauth) ->
-        case fetch_authorization_code_token(token_endpoint, metadata, oauth, state) do
-          {:ok, token} -> {:ok, put_oauth_token(state, metadata, token)}
+        case fetch_authorization_code_token(target, oauth, state) do
+          {:ok, token} -> {:ok, put_oauth_token(state, metadata, target, token)}
           {:error, reason} -> {:error, reason}
           :error -> :error
         end
 
       client_credentials_oauth?(oauth) ->
-        case fetch_client_credentials_token(token_endpoint, metadata, oauth, state) do
-          {:ok, token} -> {:ok, put_oauth_token(state, metadata, token)}
+        case fetch_client_credentials_token(target, oauth, state) do
+          {:ok, token} -> {:ok, put_oauth_token(state, metadata, target, token)}
           {:error, reason} -> {:error, reason}
           :error -> :error
         end
@@ -862,6 +1088,7 @@ defmodule LemonMCP.Client.HTTP do
   defp normalize_oauth_key("redirect_uri"), do: :redirect_uri
   defp normalize_oauth_key("redirect-uri"), do: :redirect_uri
   defp normalize_oauth_key("scope"), do: :scope
+  defp normalize_oauth_key("issuer"), do: :issuer
   defp normalize_oauth_key("scopes"), do: :scopes
   defp normalize_oauth_key("refresh_token"), do: :refresh_token
   defp normalize_oauth_key("refresh-token"), do: :refresh_token
@@ -873,30 +1100,7 @@ defmodule LemonMCP.Client.HTTP do
   defp normalize_oauth_key("auth-code-provider"), do: :auth_code_provider
   defp normalize_oauth_key(key), do: key
 
-  defp token_endpoint(%{"authorization_server_metadata" => metadata}) when is_list(metadata) do
-    Enum.find_value(metadata, fn
-      %{"token_endpoint" => endpoint} when is_binary(endpoint) -> endpoint
-      _ -> nil
-    end)
-  end
-
-  defp token_endpoint(%{"token_endpoint" => endpoint}) when is_binary(endpoint), do: endpoint
-  defp token_endpoint(_metadata), do: nil
-
-  defp authorization_endpoint(%{"authorization_server_metadata" => metadata})
-       when is_list(metadata) do
-    Enum.find_value(metadata, fn
-      %{"authorization_endpoint" => endpoint} when is_binary(endpoint) -> endpoint
-      _ -> nil
-    end)
-  end
-
-  defp authorization_endpoint(%{"authorization_endpoint" => endpoint}) when is_binary(endpoint),
-    do: endpoint
-
-  defp authorization_endpoint(_metadata), do: nil
-
-  defp fetch_client_credentials_token(token_endpoint, metadata, oauth, state) do
+  defp fetch_client_credentials_token(target, oauth, state) do
     params = %{
       "grant_type" => "client_credentials",
       "client_id" => Keyword.fetch!(oauth, :client_id)
@@ -907,7 +1111,7 @@ defmodule LemonMCP.Client.HTTP do
         body =
           params
           |> maybe_put_scope(oauth)
-          |> maybe_put_resource(metadata)
+          |> maybe_put_resource(target)
           |> URI.encode_query()
 
         headers =
@@ -918,7 +1122,7 @@ defmodule LemonMCP.Client.HTTP do
             ] ++ auth_headers
           )
 
-        case oauth_token_request(token_endpoint, headers, body, state) do
+        case oauth_token_request(target.token_endpoint, headers, body, state) do
           {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
             decode_oauth_token(response_body)
 
@@ -934,8 +1138,8 @@ defmodule LemonMCP.Client.HTTP do
     end
   end
 
-  defp fetch_authorization_code_token(token_endpoint, metadata, oauth, state) do
-    with {:ok, authorization_request} <- build_authorization_request(metadata, oauth),
+  defp fetch_authorization_code_token(target, oauth, state) do
+    with {:ok, authorization_request} <- build_authorization_request(target, oauth),
          {:ok, code} <- request_authorization_code(oauth, authorization_request) do
       params = %{
         "grant_type" => "authorization_code",
@@ -955,7 +1159,7 @@ defmodule LemonMCP.Client.HTTP do
           body =
             params
             |> maybe_put_scope(oauth)
-            |> maybe_put_resource(metadata)
+            |> maybe_put_resource(target)
             |> URI.encode_query()
 
           headers =
@@ -966,7 +1170,7 @@ defmodule LemonMCP.Client.HTTP do
               ] ++ auth_headers
             )
 
-          case oauth_token_request(token_endpoint, headers, body, state) do
+          case oauth_token_request(target.token_endpoint, headers, body, state) do
             {:ok, {{_version, status, _reason}, _headers, response_body}}
             when status in 200..299 ->
               decode_oauth_token(response_body)
@@ -986,8 +1190,8 @@ defmodule LemonMCP.Client.HTTP do
     end
   end
 
-  defp build_authorization_request(metadata, oauth) do
-    with endpoint when is_binary(endpoint) <- authorization_endpoint(metadata),
+  defp build_authorization_request(target, oauth) do
+    with endpoint when is_binary(endpoint) <- target.authorization_endpoint,
          {:ok, verifier, challenge} <- pkce_pair() do
       state = authorization_state()
 
@@ -1008,7 +1212,7 @@ defmodule LemonMCP.Client.HTTP do
       params =
         params
         |> maybe_put_scope(oauth)
-        |> maybe_put_resource(metadata)
+        |> maybe_put_resource(target)
 
       {:ok,
        %{
@@ -1019,7 +1223,7 @@ defmodule LemonMCP.Client.HTTP do
          code_challenge_method: "S256",
          code_verifier: verifier,
          redirect_uri: Keyword.get(oauth, :redirect_uri),
-         resource: Map.get(metadata, "resource"),
+         resource: target.resource,
          scope: Map.get(params, "scope"),
          state: state
        }}
@@ -1076,7 +1280,7 @@ defmodule LemonMCP.Client.HTTP do
     |> Base.url_encode64(padding: false)
   end
 
-  defp maybe_fetch_refresh_token(token_endpoint, metadata, oauth, state) do
+  defp maybe_fetch_refresh_token(target, oauth, state) do
     refresh_token =
       cond do
         bearer_token?(state.oauth_refresh_token) -> state.oauth_refresh_token
@@ -1085,13 +1289,13 @@ defmodule LemonMCP.Client.HTTP do
       end
 
     if bearer_token?(refresh_token) do
-      fetch_refresh_token(token_endpoint, metadata, oauth, refresh_token, state)
+      fetch_refresh_token(target, oauth, refresh_token, state)
     else
       :error
     end
   end
 
-  defp fetch_refresh_token(token_endpoint, metadata, oauth, refresh_token, state) do
+  defp fetch_refresh_token(target, oauth, refresh_token, state) do
     params = %{
       "grant_type" => "refresh_token",
       "refresh_token" => refresh_token,
@@ -1103,7 +1307,7 @@ defmodule LemonMCP.Client.HTTP do
         body =
           params
           |> maybe_put_scope(oauth)
-          |> maybe_put_resource(metadata)
+          |> maybe_put_resource(target)
           |> URI.encode_query()
 
         headers =
@@ -1114,7 +1318,7 @@ defmodule LemonMCP.Client.HTTP do
             ] ++ auth_headers
           )
 
-        case oauth_token_request(token_endpoint, headers, body, state) do
+        case oauth_token_request(target.token_endpoint, headers, body, state) do
           {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
             decode_oauth_token(response_body)
 
@@ -1130,29 +1334,22 @@ defmodule LemonMCP.Client.HTTP do
     end
   end
 
+  # The endpoint was validated against its issuer; this connection is pinned
+  # before any client credential is written. Pin and policy errors surface.
   defp oauth_token_request(url, headers, body, state) do
-    case http_request(
+    case oauth_http_request(
            :post,
            url,
            headers,
            {~c"application/x-www-form-urlencoded", to_charlist(body)},
            state
          ) do
-      {:error, reason} when not is_nil(state.config.origin_policy) ->
-        {:error, reason}
-
-      {:error, :redirect_forbidden} ->
-        {:error, :redirect_forbidden}
-
-      {:error, _reason} ->
-        :error
-
-      response ->
-        response
+      {:error, {:http_request_failed, _reason}} -> :error
+      response -> response
     end
   end
 
-  defp put_oauth_token(state, metadata, token) do
+  defp put_oauth_token(state, metadata, target, token) do
     refresh_token =
       case Map.get(token, :refresh_token) do
         value when is_binary(value) and value != "" -> value
@@ -1163,7 +1360,8 @@ defmodule LemonMCP.Client.HTTP do
       state
       | oauth_access_token: token.access_token,
         oauth_refresh_token: refresh_token,
-        oauth_metadata: metadata
+        oauth_metadata: metadata,
+        oauth_issuer: target.issuer
     }
 
     # The fresh token is used for this connection either way; a failed save is
@@ -1218,13 +1416,17 @@ defmodule LemonMCP.Client.HTTP do
     access_token = Map.get(token, :access_token) || Map.get(token, "access_token")
     refresh_token = Map.get(token, :refresh_token) || Map.get(token, "refresh_token")
     metadata = Map.get(token, :metadata) || Map.get(token, "metadata")
+    issuer = Map.get(token, :issuer) || Map.get(token, "issuer")
+    client_id = Map.get(token, :client_id) || Map.get(token, "client_id")
 
     if bearer_token?(access_token) or bearer_token?(refresh_token) do
       {:ok,
        %{
          access_token: access_token,
          refresh_token: refresh_token,
-         metadata: if(is_map(metadata), do: metadata, else: nil)
+         metadata: if(is_map(metadata), do: metadata, else: nil),
+         issuer: issuer,
+         client_id: client_id
        }}
     else
       :error
@@ -1233,13 +1435,37 @@ defmodule LemonMCP.Client.HTTP do
 
   defp normalize_cached_oauth_token(_token), do: :error
 
+  # A cached grant is usable only with the issuer and client that issued it.
+  # An entry recorded for another client is ignored. One without a recorded
+  # issuer and client keeps only its access token (sent to the MCP server,
+  # never an issuer); its refresh token and metadata are not trusted.
   defp apply_cached_oauth_token(state, token) do
-    %{
-      state
-      | oauth_access_token: token.access_token,
-        oauth_refresh_token: token.refresh_token,
-        oauth_metadata: token.metadata
-    }
+    client_id = configured_client_id(state)
+
+    cond do
+      not is_nil(token.client_id) and token.client_id != client_id ->
+        state
+
+      is_binary(client_id) and token.client_id == client_id and is_binary(token.issuer) and
+          token.issuer != "" ->
+        %{
+          state
+          | oauth_access_token: token.access_token,
+            oauth_refresh_token: token.refresh_token,
+            oauth_metadata: token.metadata,
+            oauth_issuer: token.issuer
+        }
+
+      true ->
+        %{state | oauth_access_token: token.access_token}
+    end
+  end
+
+  defp configured_client_id(state) do
+    case oauth_options(state.config.oauth) do
+      {:ok, oauth} -> Keyword.get(oauth, :client_id)
+      _ -> nil
+    end
   end
 
   defp persist_oauth_token_cache(%{config: %{oauth_token_cache: nil}}), do: :ok
@@ -1248,7 +1474,9 @@ defmodule LemonMCP.Client.HTTP do
     payload = %{
       access_token: state.oauth_access_token,
       refresh_token: state.oauth_refresh_token,
-      metadata: state.oauth_metadata
+      metadata: state.oauth_metadata,
+      issuer: state.oauth_issuer,
+      client_id: configured_client_id(state)
     }
 
     case cache_save(state.config.oauth_token_cache, payload) do
@@ -1322,11 +1550,8 @@ defmodule LemonMCP.Client.HTTP do
     if is_binary(scope) and scope != "", do: Map.put(params, "scope", scope), else: params
   end
 
-  defp maybe_put_resource(params, %{"resource" => resource}) when is_binary(resource) do
-    Map.put(params, "resource", resource)
-  end
-
-  defp maybe_put_resource(params, _metadata), do: params
+  defp maybe_put_resource(params, %{resource: resource}),
+    do: Map.put(params, "resource", resource)
 
   defp decode_oauth_token(response_body) do
     with {:ok, %{"access_token" => token} = response} <- Jason.decode(to_string(response_body)),

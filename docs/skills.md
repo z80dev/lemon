@@ -867,7 +867,7 @@ params and must return either `{:ok, result_map}` or `{:error, reason}`.
 | `type` | string | Yes | Must be `"http"` |
 | `url` | string | Yes | The MCP server URL |
 | `headers` | object | No | Additional HTTP headers |
-| `oauth` | object | No | OAuth settings: client-credentials `client_id` / `client_secret`, `client_secret_secret`, optional `token_secret`, or `flow: "authorization_code_pkce"` with public `client_id`, local `redirect_uri`, optional `scope` / `scopes`, `token_secret`, `authorization_timeout_ms`, `authorization_approval` (defaults true for local PKCE), and an optional runtime callback provider |
+| `oauth` | object | No | OAuth settings: client-credentials `client_id` / `client_secret`, `client_secret_secret`, optional `token_secret`, or `flow: "authorization_code_pkce"` with public `client_id`, local `redirect_uri`, optional `scope` / `scopes`, `token_secret`, `authorization_timeout_ms`, `authorization_approval` (defaults true for local PKCE), and an optional runtime callback provider. Optional `issuer` pins the authorization server: discovery must return exactly that issuer before any credential is sent. Without `issuer`, a client secret is sent only to an issuer on the MCP server's own origin, and a configured refresh token is refused (`oauth_issuer_required`) |
 | `ready_timeout_ms` | integer | No | Client startup/readiness wait in milliseconds (default: `5000`; PKCE authorization can extend this through `oauth.authorization_timeout_ms`) |
 | `timeout_ms` | integer | No | HTTP request timeout (default: `10000`); tool invocation waits are capped at `300000` |
 | `allow_tools` / `block_tools` | array | No | Exact MCP tool names to allow or block |
