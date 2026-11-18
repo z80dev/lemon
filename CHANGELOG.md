@@ -204,6 +204,30 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Checkpoints: IDs are validated as `chk_<16 hex>` at every filesystem
+  boundary; ownership is the trusted session id for capture and access (never a
+  model-supplied session key); user-facing diff/restore/delete require an
+  owner; restore and diff are confined to the roots recorded at capture, and
+  diff refuses symlinked parents. Checkpoints captured before this release are
+  refused, and chat `/checkpoint` is unavailable until channel ownership lands.
+- Execution nodes: the launchers remove `LEMON_NODE_OPERATOR_TOKEN` and
+  `LEMON_NODE_TOKEN` at startup and hand them to `lemon node` on a pipe drained
+  before any application starts. Bash, PTY, process, eval, debug, host-command,
+  task-worktree Git and stdio MCP children never inherit `LEMON_NODE_*TOKEN*`,
+  `LEMON_SECRETS_*` or `LEMON_*_API_KEY`.
+- Crash reports no longer leak prompts, answers or process state: a primary
+  `:logger` filter sanitizes OTP crash, terminate, supervisor and Task reports;
+  agent, session and run processes redact `format_status`; and a Sentry
+  `before_send` scrubber drops state, messages, crash reasons, exception bodies,
+  frame variables and breadcrumbs.
+- Email inbound only accepts `From` mailboxes listed in
+  `gateway.email.inbound.allowed_senders` that carry a passing provider verdict
+  stamped with `gateway.email.inbound.authserv_id`; without it all inbound mail
+  is refused unless the startup-warned `sender_auth = "from_only_unsafe"`
+  opt-out is set. Refused senders get 403 before any state write. Thread state is
+  owned per inbox and sender, outbound replies refuse header-breaking values, and
+  email content reaches the model inside the untrusted fence. **Upgrade:** set
+  `allowed_senders` and `authserv_id`.
 - Voice webhooks and the media-stream WebSocket require a valid
   `X-Twilio-Signature` over the configured https `[gateway.voice] public_url`
   (403 otherwise; http and missing `public_url` are refused). `<Stream>` uses a
