@@ -8,16 +8,21 @@ defmodule LemonHoncho.Tools.Search do
   actually said, and the wrong tool for a judgement that has to be synthesized
   from many sessions.
 
-  ## Session scope, and the fallback that matters
+  ## Scope never widens
 
   `scope: "session"` — the default — searches only the current conversation,
   which is what a model usually means by "what did we say about this". That
   requires knowing which Honcho session the run maps to. When the session
-  manager has never seen this run, the id has to be *derived* rather than
-  looked up, and a derived id may name a session that Honcho has no messages
-  for; searching it would return nothing and read as "the user never mentioned
-  it", which is a wrong answer rather than an empty one. So an unmapped session
-  falls back to the workspace search and the result says which one ran.
+  manager has not mapped this run yet (first turn, `recall_mode: :tools`, a
+  failed initialization, an evicted entry), no request is made and the result
+  says the conversation is not mapped. It never falls back to a wider search:
+  a different scope than the one asked for is a different answer, and the
+  wider one used to be every user's memory.
+
+  `scope: "workspace"` searches every session of the requesting owner — the
+  same agent profile and the same resolved human peer (`LemonHoncho.Owner`) —
+  and nobody else's. The client sends the owner as a filter and drops any hit
+  not tagged for exactly that owner, including untagged legacy messages.
 
   ## Distinct from `recall`
 
@@ -67,7 +72,7 @@ defmodule LemonHoncho.Tools.Search do
   them — returning the matching excerpts verbatim, with no synthesis. Use it to find what was actually said, and \
   prefer it over honcho_reasoning whenever a quote or one specific detail would answer the question, since it \
   costs no server-side reasoning. Searches the current conversation by default; pass scope="workspace" to search \
-  every session Honcho holds for this user. This searches Honcho's own store and is separate from recall, \
+  every session Honcho holds for this user with this assistant. This searches Honcho's own store and is separate from recall, \
   which searches the local memory notes and past conversations — an empty result here says nothing about what is in those.\
   """
 
@@ -102,7 +107,7 @@ defmodule LemonHoncho.Tools.Search do
             "enum" => @scopes,
             "description" =>
               ~s|"session" (the default) searches this conversation only; "workspace" searches every | <>
-                "session stored for this user."
+                "session stored for this user with this assistant."
           }
         },
         "required" => ["query"]
@@ -128,13 +133,15 @@ defmodule LemonHoncho.Tools.Search do
 
     with :ok <- Common.gate(config),
          {:ok, request} <- normalize(params),
-         scope = Common.scope(config, opts),
-         searched = searched_scope(request, scope),
+         {:ok, scope} <- Common.scope(config, opts),
+         {:ok, searched} <- searched_scope(request, scope),
          {:ok, hits} <- search(config, request, scope, searched) do
       format(hits, request, scope, searched)
     else
       {:error, :not_configured} -> not_configured()
       {:error, :context_only} -> context_only()
+      {:error, :unproven_context} -> Common.unproven_context(@tool_name)
+      {:error, :not_mapped} -> not_mapped()
       {:error, {:invalid_input, message}} -> failure(message)
       {:error, {:withheld, parameter}} -> withheld(parameter)
       {:error, {:unauthorized, _body}} -> failure(Common.unauthorized_message())
@@ -205,17 +212,23 @@ defmodule LemonHoncho.Tools.Search do
   ## The call
 
   # A session search is only meaningful against a session Honcho actually knows
-  # about; see the moduledoc for why an unmapped one widens rather than returns
-  # an empty list.
-  defp searched_scope(%{scope: "session"}, %{mapped?: true}), do: :session
-  defp searched_scope(_request, _scope), do: :workspace
+  # about; see the moduledoc for why an unmapped one is refused, not widened.
+  defp searched_scope(%{scope: "session"}, %{mapped?: true}), do: {:ok, :session}
+  defp searched_scope(%{scope: "session"}, _scope), do: {:error, :not_mapped}
+  defp searched_scope(%{scope: "workspace"}, _scope), do: {:ok, :workspace}
 
   defp search(%Config{} = config, request, scope, :session) do
-    Common.client().session_search(config, scope.session_id, request.query, limit: request.limit)
+    Common.client().session_search(config, scope.session_id, request.query,
+      limit: request.limit,
+      owner: scope.owner
+    )
   end
 
-  defp search(%Config{} = config, request, _scope, :workspace) do
-    Common.client().workspace_search(config, request.query, limit: request.limit)
+  defp search(%Config{} = config, request, scope, :workspace) do
+    Common.client().workspace_search(config, request.query,
+      limit: request.limit,
+      owner: scope.owner
+    )
   end
 
   ## Results
@@ -240,7 +253,7 @@ defmodule LemonHoncho.Tools.Search do
   end
 
   defp searched_label(:session), do: "this session"
-  defp searched_label(:workspace), do: "all sessions"
+  defp searched_label(:workspace), do: "all of your sessions"
 
   # Honcho's search results are messages, and the field a message's text lives
   # under has varied between API versions; anything unrecognized is inspected
@@ -274,6 +287,22 @@ defmodule LemonHoncho.Tools.Search do
       ". What Honcho knows about this user is already in your system prompt — read it there.",
       "query it directly"
     )
+  end
+
+  # A refusal, not an error and not an empty result: "no matches" would claim
+  # the conversation was searched, and searching something wider would be a
+  # different answer than the one asked for.
+  defp not_mapped do
+    text = """
+    This conversation is not mapped to a Honcho session yet, so no search ran. \
+    Its Honcho session is resolved in the background after its first turn; try again \
+    on a later turn, or pass scope="workspace" to search your other stored sessions.
+    """
+
+    %AgentToolResult{
+      content: [%TextContent{text: text}],
+      details: %{error: :not_mapped, requested_scope: "session", searched_scope: nil}
+    }
   end
 
   # A refusal, not an error: the model can only rephrase if the turn survives.

@@ -25,7 +25,8 @@ additional provider, never a replacement.
 | `LemonHoncho.Config` | Every knob resolved into one struct; never raises, degrades a bad value to its default |
 | `LemonHoncho.Client` | The only module that talks HTTP to Honcho; returns `{:ok, term}` / `{:error, term}` and never raises |
 | `LemonHoncho.Client.Tripwire` | A client stand-in that refuses every request and names it; what the test environment is pinned to |
-| `LemonHoncho.SessionName` | Maps a run to the Honcho session id its memory belongs to, per `session_strategy` |
+| `LemonHoncho.SessionName` | Maps a run to the Honcho session id its memory belongs to: a label plus a digest of the `session_strategy` place and the run's agent, peer and memory ownership |
+| `LemonHoncho.Owner` | Whose memory a run is (agent, human, memory ownership), from proof only; derives the owner-scoped `v2` user and assistant peers, the session identity and the tag every message carries and every search requires |
 | `LemonHoncho.SessionManager` | The single process that talks to Honcho: caches the context block per session, refreshes on a cadence, uploads finished runs, and keeps the set of tracked sessions bounded |
 | `LemonHoncho.Egress` | The one gate every piece of user-derived text passes on its way out: clip to the caller's budget, then withhold entirely if the clipped text looks like it carries a secret |
 | `LemonHoncho.Context` | Pure rendering: turns what Honcho returned into the labelled block a model reads, within budget, and `split/1` divides that block into its stable and volatile halves |
@@ -192,7 +193,7 @@ at boot, under the same gate as the memory provider and context contributor:
 | Tool | Honcho capability it exposes | Refused when |
 |---|---|---|
 | `honcho_reasoning` | The dialectic: a synthesized answer about a peer, an LLM call on Honcho's side | — |
-| `honcho_search` | Semantic search over stored messages, in one session or across the workspace | — |
+| `honcho_search` | Semantic search over the requester's own stored messages: this (mapped) session, or all of their sessions with this agent; an unmapped session is refused, never widened | — |
 | `honcho_context` | The assembled session and peer context: summary, representation, peer card | — |
 | `honcho_profile` | Reading a peer card, or replacing it wholesale | writes, when `save_messages?` is false |
 | `honcho_conclude` | Three exclusive actions: `conclusion` creates, `query` searches, `delete_id` deletes | create and delete, when `save_messages?` is false |
@@ -434,6 +435,7 @@ Worth knowing before you go looking for it:
   nothing is fetched before the user speaks.
 * **Search results are messages, not runs.** A Honcho hit is one utterance by one
   peer, so `LemonHoncho.MemoryProvider` puts it in `answer_summary` and leaves
-  `prompt_summary`, `run_id`, `tools_used`, and `model` empty. Honcho also has no
-  partition matching a Lemon agent id or workspace key, so `:agent` and `:workspace`
-  searches degrade to a workspace-wide semantic search rather than narrowing.
+  `prompt_summary`, `run_id`, `tools_used`, and `model` empty. Searches are filtered to
+  the requester's agent, peer and memory ownership; the provider answers only
+  `:session` searches of a mapped session, and returns `[]` for `:agent`,
+  `:workspace` and `:all`, whose options do not identify the person asking.

@@ -45,7 +45,7 @@ defmodule LemonHoncho.ToolsCommonTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonHoncho.{Config, SessionManager, SessionName}
+  alias LemonHoncho.{Config, Owner, SessionManager, SessionName}
   alias LemonHoncho.Tools.Common
   alias LemonHoncho.ToolsCommonTest.StubClient
 
@@ -63,19 +63,60 @@ defmodule LemonHoncho.ToolsCommonTest do
     :ok
   end
 
-  test "untracked channel tool calls use the turn peer while local tools keep configured peer" do
+  test "channel tool calls use the sender's owner peers; local tools the operator's" do
     config = %Config{@open | runtime_peer_prefix: "gateway_"}
     identity = %{channel_id: "discord", sender_id: "123"}
+    key = "agent:demo:discord:default:dm:123"
 
-    channel =
-      Common.scope(config,
-        session_key: "agent:demo:discord:default:dm:123",
-        channel_identity: identity
-      )
+    {:ok, channel} = Common.scope(config, session_key: key, channel_identity: identity)
 
-    assert channel.peers.user == "gateway_discord_123"
-    local = Common.scope(config, session_key: "untracked-cli")
-    assert local.peers.user == config.user_peer
+    assert channel.owner.human == "gateway_discord_123"
+    assert channel.owner == Owner.new(config, key, identity, "legacy")
+    assert channel.peers == %{user: channel.owner.user_peer, ai: channel.owner.ai_peer}
+    assert channel.peers.user =~ ~r/\Av2-u-gateway_discord_123-[0-9a-f]{32}\z/
+    assert channel.peers.ai =~ ~r/\Av2-a-lemon-[0-9a-f]{32}\z/
+
+    {:ok, local} = Common.scope(config, session_key: "untracked-cli")
+    assert local.owner.human == config.user_peer
+    refute local.peers.ai == channel.peers.ai
+  end
+
+  test "every part of the owner partitions the peers, assistant included" do
+    base = Owner.new(@open, @key, nil, "legacy")
+
+    for other <- [
+          Owner.new(@open, "agent:other:main", nil, "legacy"),
+          Owner.new(@open, @key, %{channel_id: "telegram", sender_id: "1"}, "legacy"),
+          Owner.new(@open, @key, nil, "private:actor-a")
+        ] do
+      refute other.digest == base.digest
+      refute other.user_peer == base.user_peer
+      refute other.ai_peer == base.ai_peer
+    end
+  end
+
+  test "a proven private context gets its own owner; an unproven claim gets no scope" do
+    private = [
+      session_key: @key,
+      memory_context_key: "actor-a",
+      invocation_context_key: "epoch-1",
+      memory_context_verified: true
+    ]
+
+    assert {:ok, scope} = Common.scope(@open, private)
+    assert scope.owner.memory == "private:actor-a"
+
+    {:ok, legacy} = Common.scope(@open, session_key: @key)
+    refute scope.session_id == legacy.session_id
+    refute scope.peers.user == legacy.peers.user
+    refute scope.peers.ai == legacy.peers.ai
+
+    for claim <- [
+          Keyword.delete(private, :invocation_context_key),
+          Keyword.put(private, :memory_context_verified, false)
+        ] do
+      assert Common.scope(@open, claim) == {:error, :unproven_context}
+    end
   end
 
   describe "gate/2" do
@@ -191,28 +232,12 @@ defmodule LemonHoncho.ToolsCommonTest do
     end
   end
 
-  describe "peers/2" do
-    test "no key yields the configured pair" do
-      assert Common.peers(@open, nil) == %{user: "user", ai: "lemon"}
-    end
+  defp owner, do: Owner.new(@open, @key, nil, "legacy")
+  defp owner_peers, do: %{user: owner().user_peer, ai: owner().ai_peer}
 
-    test "a key the manager has never seen yields the configured pair" do
-      assert Common.peers(@open, "never-served") == %{user: "user", ai: "lemon"}
-    end
-  end
-
-  describe "derived_session_id/2" do
-    test "it derives the id the session manager itself would derive" do
-      opts = [cwd: @cwd, session_key: @key]
-
-      assert Common.derived_session_id(@open, opts) ==
-               SessionName.resolve(@open, cwd: @cwd, session_key: @key, session_id: nil)
-    end
-
-    test "it always returns a usable id, even with nothing to go on" do
-      assert is_binary(Common.derived_session_id(@open, []))
-      assert Common.derived_session_id(@open, []) != ""
-    end
+  # The id the manager derives for `@key` served from `@cwd` by the operator.
+  defp manager_derived_id do
+    SessionName.resolve(@open, cwd: @cwd, session_key: @key, session_id: nil, owner: owner())
   end
 
   describe "client/0" do
@@ -232,12 +257,12 @@ defmodule LemonHoncho.ToolsCommonTest do
       assert Common.latest_session_key() == nil
     end
 
-    test "scope/2 derives the session and falls back to the configured peers" do
-      scope = Common.scope(@open, cwd: @cwd, session_key: @key)
+    test "scope/2 derives the session the manager would, with the owner's peers" do
+      {:ok, scope} = Common.scope(@open, cwd: @cwd, session_key: @key)
 
       refute scope.mapped?
-      assert scope.session_id == Common.derived_session_id(@open, cwd: @cwd, session_key: @key)
-      assert scope.peers == %{user: "user", ai: "lemon"}
+      assert scope.session_id == manager_derived_id()
+      assert scope.peers == owner_peers()
     end
   end
 
@@ -263,22 +288,24 @@ defmodule LemonHoncho.ToolsCommonTest do
       :ok
     end
 
-    test "scope/2 uses the manager's session id and the peers it recorded" do
-      scope = Common.scope(@open, cwd: @cwd, session_key: @key)
+    test "scope/2 uses the manager's session id and the owner's peers" do
+      {:ok, scope} = Common.scope(@open, cwd: @cwd, session_key: @key)
 
       assert scope.mapped?
-      assert {:ok, scope.session_id} == SessionManager.honcho_session_id(@key)
-      assert scope.peers == %{user: "user", ai: "lemon"}
+      assert {:ok, scope.session_id} == SessionManager.honcho_session_id(entry_key())
+      assert scope.session_id == manager_derived_id()
+      assert scope.peers == owner_peers()
     end
 
     # The whole point of the precedence rule: the key the manager served under
     # is the key the tool has to ask with, whatever else the opts carry.
     test "scope/2 follows the precedence rule to the served session" do
-      mapped = Common.scope(@open, cwd: "/tmp/somewhere-else", session_key: @key)
+      {:ok, mapped} = Common.scope(@open, cwd: "/tmp/somewhere-else", session_key: @key)
 
       assert mapped.mapped?
 
-      unmapped = Common.scope(@open, cwd: "/tmp/somewhere-else", session_key: "never-served")
+      {:ok, unmapped} =
+        Common.scope(@open, cwd: "/tmp/somewhere-else", session_key: "never-served")
 
       refute unmapped.mapped?
     end
@@ -292,13 +319,15 @@ defmodule LemonHoncho.ToolsCommonTest do
       assert Common.latest_session_key() == "agent:common:second"
     end
 
-    test "latest_session_key/0 is the fallback when the opts name no session" do
-      scope = Common.scope(@open, [])
+    test "a tool whose opts name no session never borrows the most recent one" do
+      {:ok, scope} = Common.scope(@open, [])
 
-      assert scope.mapped?
-      assert {:ok, scope.session_id} == SessionManager.honcho_session_id(@key)
+      refute scope.mapped?
+      refute {:ok, scope.session_id} == SessionManager.honcho_session_id(entry_key())
     end
   end
+
+  defp entry_key, do: SessionManager.entry_key(@key, owner())
 
   test "excerpt rendering shares fallback fields, labels, and clipping" do
     keys = {["content", "text"], ["peer_id", "author"]}

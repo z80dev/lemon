@@ -34,19 +34,21 @@ defmodule LemonHoncho.Tools.Common do
 
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
-  alias LemonHoncho.{Config, SessionManager, SessionName}
+  alias LemonHoncho.{Config, Owner, SessionManager, SessionName}
 
   @typedoc """
-  Which Honcho session and peers a tool call belongs to.
+  Which Honcho session, peers and owner a tool call belongs to.
 
   `mapped?` distinguishes a session id the manager resolved from one derived
   locally, which is the difference between "Honcho has never heard of this
-  session" and "this session is empty" — see `scope/2`.
+  session" and "this session is empty" — see `scope/2`. `owner` is whose
+  messages a search may return (`LemonHoncho.Owner`).
   """
   @type scope :: %{
           session_id: String.t(),
           mapped?: boolean(),
-          peers: %{user: String.t(), ai: String.t()}
+          peers: %{user: String.t(), ai: String.t()},
+          owner: Owner.t()
         }
 
   @typedoc "The access a call needs; see `gate/2`."
@@ -87,41 +89,46 @@ defmodule LemonHoncho.Tools.Common do
   end
 
   @doc """
-  The Honcho session and peers the tool options in `opts` name.
+  The Honcho session, peers and owner the tool options in `opts` name.
 
-  `LemonHoncho.SessionManager` keys its sessions by `session_key/1`, so asking
-  it with the same key is what makes a tool call land on the session the
-  injected context came from — and, through `peers/2`, on the same pair of
-  peers that context was assembled for.
+  The owner (`LemonHoncho.Owner.from_context/2`) is the complete identity the
+  options prove — agent, resolved human, memory ownership — and the peers are
+  always the owner's own (`v2-u-…`/`v2-a-…`). Every representation, card,
+  dialectic answer and conclusion a tool reads or writes therefore belongs to
+  this owner and nobody else. A call without a proven owner (a partial or
+  unproven private context, or a channel conversation that does not name its
+  sender) is `{:error, :unproven_context}`.
 
-  When that lookup fails — a tool called outside a session, or before the first
-  refresh resolved the id — `LemonHoncho.SessionName` derives the id the
-  manager itself would have derived, which is the same string under every
-  strategy but `:per_session`. `mapped?` records which of the two happened,
-  because a derived id may name a session Honcho holds no messages for, and a
-  search of it would return nothing and read as "the user never mentioned it".
+  The session comes from `LemonHoncho.SessionManager`, under the same
+  `{session key, owner}` entry key the injected context was served from. When
+  the manager has no mapping — a tool called before the first refresh resolved
+  the id, or with no session key at all — `LemonHoncho.SessionName` derives the
+  id the manager itself would derive. `mapped?` records which of the two
+  happened, because a derived id may name a session Honcho holds no messages
+  for, and a search of it would return nothing and read as "the user never
+  mentioned it".
+
+  A call whose options name no session never borrows another one: guessing
+  "the most recently served session" would hand one gateway user's session
+  and memory to whichever tool call came next.
   """
-  @spec scope(Config.t(), keyword()) :: scope()
+  @spec scope(Config.t(), keyword()) :: {:ok, scope()} | {:error, :unproven_context}
   def scope(%Config{} = config, opts) do
-    identity =
-      LemonHoncho.UserPeer.identity(
-        Keyword.get(opts, :session_key),
-        Keyword.get(opts, :channel_identity)
-      )
+    case Owner.from_context(config, opts) do
+      {:ok, owner} ->
+        key = session_key(opts)
+        peers = %{user: owner.user_peer, ai: owner.ai_peer}
 
-    key = session_key(opts) || latest_session_key()
-    key = key && LemonHoncho.UserPeer.cache_key(key, config, identity)
+        session =
+          case key && SessionManager.honcho_session_id(SessionManager.entry_key(key, owner)) do
+            {:ok, session_id} -> %{session_id: session_id, mapped?: true}
+            _other -> %{session_id: derived_session_id(config, opts, owner), mapped?: false}
+          end
 
-    case key && SessionManager.honcho_session_id(key) do
-      {:ok, session_id} ->
-        %{session_id: session_id, mapped?: true, peers: peers(config, key)}
+        {:ok, Map.merge(session, %{peers: peers, owner: owner})}
 
-      _other ->
-        %{
-          session_id: derived_session_id(config, opts),
-          mapped?: false,
-          peers: %{user: LemonHoncho.UserPeer.resolve(config, identity), ai: config.ai_peer}
-        }
+      :error ->
+        {:error, :unproven_context}
     end
   end
 
@@ -144,22 +151,13 @@ defmodule LemonHoncho.Tools.Common do
   @doc """
   The key of the most recently served session, or `nil` when none is tracked.
 
-  The fallback for a tool called with no session key at all — a REPL, a test, a
-  host that builds its tools without options. Guessing the most recent session
-  is better than guessing none, because the alternative is a derived id that
-  may name an empty session.
+  For the operator's `mix lemon.honcho context` command only. Tool calls never
+  use it (see `scope/2`): in a multi-user gateway the most recent session is
+  usually someone else's.
 
-  This is the one call in the tool path that asks `SessionManager.sessions/0`,
-  which the manager's own documentation calls the wrong thing to ask on the
-  turn path: it builds a list of every tracked session (up to the manager's cap
-  of 500) inside the server and copies it to the caller. That is affordable
-  here and would not be on the turn path — this runs once per tool call, only
-  when no key was supplied, and the manager exposes no cheaper accessor for
-  "which session was served last" (`cold?/1` answers a different question, and
-  `honcho_session_id/1` and `peers/1` both need the key we are looking for).
-  Keeping it to one call site is what makes adding such an accessor a one-line
-  change later. The scan itself is a single pass rather than a sort, since only
-  the maximum is wanted.
+  It asks `SessionManager.sessions/0`, which builds a list of every tracked
+  session (up to the manager's cap of 500) inside the server, so it is not
+  for the turn path.
   """
   # CLI context selection also includes sessions still awaiting remote initialization.
   @spec latest_session_key(keyword()) :: String.t() | nil
@@ -174,35 +172,30 @@ defmodule LemonHoncho.Tools.Common do
     end
   end
 
-  @doc """
-  The Honcho session id `opts` resolves to without consulting the manager.
-
-  Used when the manager has no mapping for the key; see `scope/2`.
-  """
-  @spec derived_session_id(Config.t(), keyword()) :: String.t()
-  def derived_session_id(%Config{} = config, opts) do
+  # The id the manager would derive for this run's place and owner; used when
+  # the manager has no mapping for the key.
+  defp derived_session_id(%Config{} = config, opts, owner) do
     SessionName.resolve(config,
       cwd: Keyword.get(opts, :cwd),
       session_key: Keyword.get(opts, :session_key),
-      session_id: Keyword.get(opts, :session_id)
+      session_id: Keyword.get(opts, :session_id),
+      owner: owner
     )
   end
 
   @doc """
-  The user and assistant peers for `key`, falling back to the configured pair.
-
-  The manager records the peers a session was initialised with, and reading
-  them back is what keeps a conclusion written by a tool call and one derived
-  from injected context on the same pair even after an operator changes
-  `HONCHO_PEER` mid-run. `nil` — or a key the manager does not know — yields
-  the configured pair, which is what the session would have been given anyway.
+  The result for a tool called without a proven memory owner: a partial or
+  unproven private memory context, or a channel conversation that does not name
+  its sender (a subagent of a channel run, for one).
   """
-  @spec peers(Config.t(), String.t() | nil) :: %{user: String.t(), ai: String.t()}
-  def peers(%Config{} = config, key) do
-    case key && SessionManager.peers(key) do
-      {:ok, peers} -> peers
-      _other -> %{user: config.user_peer, ai: config.ai_peer}
-    end
+  @spec unproven_context(String.t()) :: AgentToolResult.t()
+  def unproven_context(tool) do
+    failure(
+      tool,
+      "Honcho memory is unavailable: whose memory this run may use is not proven " <>
+        "(an unproven private memory context, or a channel conversation without its sender), " <>
+        "so no Honcho memory was read or written."
+    )
   end
 
   @doc "Renders a search hit using the supplied text and label key candidates."

@@ -106,8 +106,8 @@ defmodule LemonHoncho.Client.Tripwire do
   def query_conclusions(_config, _query, _opts \\ []), do: blocked!(:query_conclusions)
 
   @doc false
-  @spec delete_conclusion(term(), term()) :: no_return()
-  def delete_conclusion(_config, _conclusion_id), do: blocked!(:delete_conclusion)
+  @spec delete_conclusion(term(), term(), term()) :: no_return()
+  def delete_conclusion(_config, _conclusion_id, _owner_peers), do: blocked!(:delete_conclusion)
 
   # One message for every entry point, naming the call, so a tripped wire in a
   # far-away suite reads as "this test reached for Honcho" rather than as an

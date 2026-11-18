@@ -78,9 +78,11 @@ defmodule LemonHoncho.ClientTest do
     test "add_messages wraps the messages in a messages key" do
       stub_json([])
 
+      metadata = %{"lemon_agent_id" => "demo", "lemon_user_peer" => "z80"}
+
       messages = [
-        %{content: "how do I deploy?", peer_id: "z80"},
-        %{content: "with mix release", peer_id: "lemon"}
+        %{content: "how do I deploy?", peer_id: "z80", metadata: metadata},
+        %{content: "with mix release", peer_id: "lemon", bogus: "dropped"}
       ]
 
       assert {:ok, []} = Client.add_messages(config(), "proj", messages)
@@ -91,7 +93,7 @@ defmodule LemonHoncho.ClientTest do
 
       assert request.body == %{
                "messages" => [
-                 %{"content" => "how do I deploy?", "peer_id" => "z80"},
+                 %{"content" => "how do I deploy?", "peer_id" => "z80", "metadata" => metadata},
                  %{"content" => "with mix release", "peer_id" => "lemon"}
                ]
              }
@@ -174,27 +176,49 @@ defmodule LemonHoncho.ClientTest do
              }
     end
 
-    test "session_search posts query and limit and returns the result list" do
-      stub_json([%{"id" => "m1"}])
+    test "session_search filters by owner on the wire and in the result" do
+      owner = owner()
+      other = LemonHoncho.Owner.new(config(), "agent:other:main", nil, "legacy")
+      own = %{"id" => "m1", "metadata" => LemonHoncho.Owner.metadata(owner)}
+      foreign = %{"id" => "m2", "metadata" => LemonHoncho.Owner.metadata(other)}
+      stub_json([own, foreign, %{"id" => "m3"}])
 
-      assert {:ok, [%{"id" => "m1"}]} =
-               Client.session_search(config(), "proj", "deploy", limit: 5)
+      assert {:ok, [^own]} =
+               Client.session_search(config(), "proj", "deploy", limit: 5, owner: owner)
 
       assert_received {:honcho_request, request}
       assert request.method == "POST"
       assert request.path == "/v3/workspaces/lemon/sessions/proj/search"
-      assert request.body == %{"query" => "deploy", "limit" => 5}
+
+      assert request.body == %{
+               "query" => "deploy",
+               "limit" => 5,
+               "filters" => %{"metadata" => LemonHoncho.Owner.metadata(owner)}
+             }
     end
 
-    test "workspace_search searches across sessions and defaults the limit" do
+    test "workspace_search searches the owner's sessions and defaults the limit" do
+      owner = owner()
       stub_json([])
 
-      assert {:ok, []} = Client.workspace_search(config(), "deploy")
+      assert {:ok, []} = Client.workspace_search(config(), "deploy", owner: owner)
 
       assert_received {:honcho_request, request}
       assert request.method == "POST"
       assert request.path == "/v3/workspaces/lemon/search"
-      assert request.body == %{"query" => "deploy", "limit" => 10}
+      assert request.body["limit"] == 10
+      assert request.body["filters"] == %{"metadata" => LemonHoncho.Owner.metadata(owner)}
+    end
+
+    test "a search without an owner is refused before any request" do
+      stub_json([%{"id" => "m1"}])
+
+      assert Client.workspace_search(config(), "deploy") == {:error, :unscoped_search}
+
+      assert Client.session_search(config(), "proj", "deploy", limit: 5) ==
+               {:error, :unscoped_search}
+
+      refute_received {:honcho_request, _request}
     end
 
     test "get_peer_card reads the card route and unwraps peer_card" do
@@ -253,12 +277,12 @@ defmodule LemonHoncho.ClientTest do
     end
 
     test "query_conclusions sends observer and observed inside filters" do
-      stub_json([%{"content" => "uses zsh"}])
+      hit = %{"content" => "uses zsh", "observer_id" => "lemon", "observed_id" => "z80"}
+      stub_json([hit])
 
       opts = [observer_id: "lemon", observed_id: "z80", top_k: 3]
 
-      assert {:ok, [%{"content" => "uses zsh"}]} =
-               Client.query_conclusions(config(), "shell", opts)
+      assert {:ok, [^hit]} = Client.query_conclusions(config(), "shell", opts)
 
       assert_received {:honcho_request, request}
       assert request.method == "POST"
@@ -271,14 +295,62 @@ defmodule LemonHoncho.ClientTest do
              }
     end
 
-    test "delete_conclusion deletes by id and normalizes the empty body" do
-      stub_response(204, "")
+    test "delete_conclusion deletes only a conclusion written by the given peers" do
+      peers = %{observer_id: "v2-a-lemon-x", observed_id: "v2-u-z80-x"}
 
-      assert Client.delete_conclusion(config(), "conc_1") == {:ok, %{}}
+      stub_recording(fn conn ->
+        case conn.method do
+          "GET" ->
+            Req.Test.json(conn, %{
+              "id" => "conc_1",
+              "observer_id" => peers.observer_id,
+              "observed_id" => peers.observed_id
+            })
 
-      assert_received {:honcho_request, request}
-      assert request.method == "DELETE"
-      assert request.path == "/v3/workspaces/lemon/conclusions/conc_1"
+          "DELETE" ->
+            Plug.Conn.send_resp(conn, 204, "")
+        end
+      end)
+
+      assert Client.delete_conclusion(config(), "conc_1", peers) == {:ok, %{}}
+
+      assert_received {:honcho_request,
+                       %{method: "GET", path: "/v3/workspaces/lemon/conclusions/conc_1"}}
+
+      assert_received {:honcho_request,
+                       %{method: "DELETE", path: "/v3/workspaces/lemon/conclusions/conc_1"}}
+    end
+
+    test "delete_conclusion refuses another owner's, or an unreadable, conclusion" do
+      peers = %{observer_id: "v2-a-lemon-x", observed_id: "v2-u-z80-x"}
+
+      for body <- [
+            %{
+              "id" => "conc_1",
+              "observer_id" => peers.observer_id,
+              "observed_id" => "v2-u-bob-y"
+            },
+            %{"id" => "conc_1", "observer_id" => "lemon", "observed_id" => "z80"},
+            %{}
+          ] do
+        stub_json(body)
+
+        assert Client.delete_conclusion(config(), "conc_1", peers) == {:error, :not_owned}
+        assert_received {:honcho_request, %{method: "GET"}}
+        refute_received {:honcho_request, %{method: "DELETE"}}
+      end
+
+      stub_response(404, "")
+      assert {:error, {:api_error, 404, _}} = Client.delete_conclusion(config(), "conc_1", peers)
+      refute_received {:honcho_request, %{method: "DELETE"}}
+    end
+
+    test "query_conclusions drops conclusions outside the requested pair" do
+      own = %{"id" => "c1", "observer_id" => "a", "observed_id" => "u"}
+      stub_json([own, %{"id" => "c2", "observer_id" => "a", "observed_id" => "other"}])
+
+      assert Client.query_conclusions(config(), "q", observer_id: "a", observed_id: "u") ==
+               {:ok, [own]}
     end
   end
 
@@ -412,7 +484,8 @@ defmodule LemonHoncho.ClientTest do
     test "an unexpected search payload degrades to an empty list" do
       stub_json(%{"unexpected" => true})
 
-      assert {:ok, []} = Client.workspace_search(config(), "deploy")
+      owner = owner()
+      assert {:ok, []} = Client.workspace_search(config(), "deploy", owner: owner)
     end
   end
 
@@ -421,6 +494,8 @@ defmodule LemonHoncho.ClientTest do
   defp config(overrides \\ []) do
     struct!(Config, Keyword.merge([api_key: "sk-test", workspace: "lemon"], overrides))
   end
+
+  defp owner, do: LemonHoncho.Owner.new(config(), "agent:demo:main", nil, "legacy")
 
   # Every stub records the outbound request into the test's mailbox rather than
   # asserting inside the plug: the client rescues exceptions raised by the

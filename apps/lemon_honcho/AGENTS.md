@@ -39,14 +39,30 @@ explicit tools and a memory provider through platform registries. See
 - Session entries are bounded and idle-evicted through `track_entry/3`. Refresh
   workers and waiters pin entries; both reads and uploads touch them. Entries are
   reconstructible cache, not durable state. Never bypass admission/eviction.
-- Session names preserve a hash of the original key after sanitization/truncation
-  so long or punctuation-different keys cannot merge private memory.
+- Every Honcho identity derives from the complete `LemonHoncho.Owner` (agent,
+  resolved human, memory ownership): owner-scoped `v2-u-`/`v2-a-` peers (the
+  assistant too — its self-representation reaches every prompt), session ids
+  (label plus a length-prefixed digest of the `v2` namespace, strategy, full place,
+  non-main session key and owner digest), and message tags. Never derive any of
+  them from a part of the owner, a bare basename or a lossy sanitized string.
+- Cache entries are keyed `{session key, owner digest}` (`SessionManager.entry_key/2`)
+  and the stored owner is re-checked before reuse; never build entry keys by string
+  concatenation.
+- Owner proof comes only from a live request's admitted `ContextScope` fields or a
+  document's persisted stamps, plus transport identity for channel keys. Unproven,
+  partial or shared claims, and channel keys without a sender, get nothing (no
+  upload, no context, tools refuse). Pre-`v2` records are never read.
 
 ## Privacy and remote failures
 
 - Remote outages cost the turn its memory block, not its ability to run. Provider
-  failures return `[]`; scoped searches without a scope key also return `[]`,
-  never widen to a workspace-wide query.
+  failures return `[]`. Searches never widen: an unmapped session is "not mapped"
+  (tool) or `[]` (provider); provider scopes without a person (`:agent`,
+  `:workspace`, `:all`) return `[]`. Every search requires an `Owner` in the client,
+  which filters server-side and drops non-matching hits client-side.
+- Uploaded messages carry the owner tag. Conclusion queries are also filtered
+  client-side by observer/observed, and `Client.delete_conclusion/3` reads the
+  conclusion back and deletes only one written by the caller's own peers.
 - Every prose field sent remotely goes through `Egress.screen/2`: clip to the
   call-site budget first, screen the bytes that would travel, then withhold the
   whole value on a suspected credential. Never partially redact-and-send or log

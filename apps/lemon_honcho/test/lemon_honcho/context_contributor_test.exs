@@ -172,6 +172,8 @@ defmodule LemonHoncho.ContextContributorTest do
     LEMON_HONCHO_RECALL_MODE
     LEMON_HONCHO_FIRST_TURN_WAIT_MS
     LEMON_HONCHO_INJECT_IN_SUBAGENTS
+    HONCHO_PEER
+    HONCHO_AI_PEER
   )
 
   @app_keys [
@@ -180,7 +182,9 @@ defmodule LemonHoncho.ContextContributorTest do
     :base_url,
     :recall_mode,
     :first_turn_wait_ms,
-    :inject_in_subagents
+    :inject_in_subagents,
+    :user_peer,
+    :ai_peer
   ]
 
   setup do
@@ -503,6 +507,10 @@ defmodule LemonHoncho.ContextContributorTest do
   # contributor has no manager handle to ask.
   defp configure(overrides) do
     Application.put_env(:lemon_honcho, :api_key, "sk-test")
+    # The manager's pinned config and the contributor's loaded one must name the
+    # same owner, or they would key the same turn differently.
+    Application.put_env(:lemon_honcho, :user_peer, "user")
+    Application.put_env(:lemon_honcho, :ai_peer, "lemon")
     Enum.each(overrides, fn {key, value} -> Application.put_env(:lemon_honcho, key, value) end)
 
     :ok

@@ -57,7 +57,6 @@ defmodule LemonHoncho.UserPeerTest do
 
     for identity <- [nil, %{}, %{sender_id: "123"}] do
       assert UserPeer.resolve(config, identity) == "owner"
-      assert UserPeer.cache_key("local", config, identity) == "local"
     end
   end
 

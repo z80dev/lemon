@@ -25,9 +25,14 @@ defmodule LemonHoncho.Tools.Conclude do
   A conclusion is recorded as the assistant peer observing the user peer, and
   tagged with the current Honcho session so it can be traced back to the
   conversation that produced it. A search is filtered to that same pair, so what
-  comes back is what a create here would have written. The peers come from the
-  session manager, so a conclusion written by a tool call and one derived from
-  injected context land on the same pair.
+  comes back is what a create here would have written. Both peers are the run's
+  owner-scoped peers (`LemonHoncho.Owner`), so conclusions never cross agents,
+  people or memory contexts.
+
+  A delete is ownership-bound: `LemonHoncho.Client.delete_conclusion/3` reads
+  the conclusion back and deletes it only if it was written by exactly this
+  pair. A conclusion id from anywhere else — another person's, another
+  profile's, a pre-`v2` one — is refused and nothing is deleted.
 
   ## Read and write are gated differently
 
@@ -155,15 +160,17 @@ defmodule LemonHoncho.Tools.Conclude do
     with :ok <- Common.gate(config),
          {:ok, request} <- normalize(params),
          :ok <- writable(config, request),
-         scope = Common.scope(config, opts),
+         {:ok, scope} <- Common.scope(config, opts),
          {:ok, body} <- apply_action(config, request, scope) do
       format(request, scope, body)
     else
       {:error, :not_configured} -> not_configured()
       {:error, :context_only} -> context_only()
+      {:error, :unproven_context} -> Common.unproven_context(@tool_name)
       {:error, {:uploads_disabled, action}} -> uploads_disabled(action)
       {:error, {:invalid_input, message}} -> failure(message)
       {:error, {:withheld, parameter}} -> withheld(parameter)
+      {:error, :not_owned} -> failure(not_owned_message())
       {:error, {:unauthorized, _body}} -> failure(Common.unauthorized_message())
       {:error, {:api_error, status, body}} -> failure(Common.api_message(status, body))
       {:error, reason} -> failure("Honcho conclusion request failed: #{inspect(reason)}")
@@ -289,8 +296,11 @@ defmodule LemonHoncho.Tools.Conclude do
     Common.client().create_conclusions(config, [conclusion])
   end
 
-  defp apply_action(%Config{} = config, %{action: :delete} = request, _scope) do
-    Common.client().delete_conclusion(config, request.delete_id)
+  defp apply_action(%Config{} = config, %{action: :delete} = request, scope) do
+    Common.client().delete_conclusion(config, request.delete_id, %{
+      observer_id: scope.peers.ai,
+      observed_id: scope.peers.user
+    })
   end
 
   # Filtered to the same observer/observed pair a create here would write, so a
@@ -418,6 +428,11 @@ defmodule LemonHoncho.Tools.Conclude do
   defp withheld_effect("query"), do: "no search ran"
 
   defp failure(message), do: Common.failure(@tool_name, message)
+
+  defp not_owned_message do
+    "That conclusion is not one recorded for this user in this memory, so nothing was " <>
+      "deleted. Only ids returned by a 'query' in this conversation can be deleted."
+  end
 
   ## The write gate
 
