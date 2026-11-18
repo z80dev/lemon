@@ -47,6 +47,38 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       assert ctx.identity == nil
     end
 
+    test "operator.content is granted only when an explicit scope list names it" do
+      {:ok, read_only} =
+        Authorize.from_params(%{"role" => "operator", "scopes" => ["operator.read"]})
+
+      assert read_only.scopes == [:read]
+      refute Authorize.content?(read_only)
+      refute Authorize.content?(%{auth: read_only})
+
+      {:ok, content} =
+        Authorize.from_params(%{
+          "role" => "operator",
+          "scopes" => ["operator.read", "operator.content"]
+        })
+
+      assert content.scopes == [:read, :content]
+      assert Authorize.content?(content)
+      assert Authorize.content?(%{auth: content})
+
+      {:ok, short} = Authorize.from_params(%{"role" => "operator", "scopes" => ["content"]})
+      assert short.scopes == [:content]
+    end
+
+    test "content?/1 fails closed for missing, node and malformed contexts" do
+      refute Authorize.content?(nil)
+      refute Authorize.content?(%{})
+      refute Authorize.content?(%{auth: nil})
+      refute Authorize.content?(%{auth: %{role: :operator}})
+      refute Authorize.content?(%{auth: %{role: :node, scopes: [:content]}})
+      refute Authorize.content?(%{role: :enrollment, scopes: [:content]})
+      assert Authorize.content?(Authorize.default_operator())
+    end
+
     test "does not accept params-only node or unsupported roles" do
       assert {:error, {:unauthorized, "A valid node session token is required"}} =
                Authorize.from_params(%{"role" => "node", "client" => %{"id" => "node-123"}},
@@ -106,7 +138,7 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
                )
 
       assert ctx.role == :operator
-      assert ctx.scopes == [:admin, :read, :write, :approvals, :pairing]
+      assert ctx.scopes == [:admin, :read, :write, :approvals, :pairing, :content]
       assert ctx.client_id == "authenticated-operator"
       assert ctx.token == nil
       refute inspect(ctx) =~ operator_token
@@ -177,7 +209,7 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
     test "default_operator/0 returns full operator context" do
       assert Authorize.default_operator() == %{
                role: :operator,
-               scopes: [:admin, :read, :write, :approvals, :pairing],
+               scopes: [:admin, :read, :write, :approvals, :pairing, :content],
                token: nil,
                client_id: nil
              }

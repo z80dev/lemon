@@ -64,6 +64,20 @@ defmodule LemonControlPlane.EventProjection do
     end
   end
 
+  @goal_verdict_sources ~w(judge manual preview judge_failure_policy unknown)
+
+  @doc """
+  The read-only view of a goal loop verdict `source`: one of the server-side
+  provenance values (`judge`, `manual`, `preview`, `judge_failure_policy`,
+  `unknown`), with `judge:<model>` reduced to `judge`, or `nil` for anything
+  else. Older stored verdicts may hold a model-written source, so the stored
+  value is never passed through as text.
+  """
+  @spec goal_verdict_source(term()) :: String.t() | nil
+  def goal_verdict_source(source) when source in @goal_verdict_sources, do: source
+  def goal_verdict_source("judge:" <> _model), do: "judge"
+  def goal_verdict_source(_source), do: nil
+
   defp budget, do: %{bytes: @max_bytes, items: @max_items}
 
   defp result_fields(%AgentToolResult{} = result), do: visible_result_fields(result)

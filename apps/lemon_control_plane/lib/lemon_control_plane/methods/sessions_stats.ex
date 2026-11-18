@@ -1,5 +1,11 @@
 defmodule LemonControlPlane.Methods.SessionsStats do
-  @moduledoc "Returns bounded, redacted aggregate statistics over durable sessions."
+  @moduledoc """
+  Returns bounded, redacted aggregate statistics over durable sessions. `query`
+  matches prompt and answer text and so needs `operator.content`.
+  """
+
+  alias LemonControlPlane.Auth.Authorize
+  alias LemonControlPlane.Methods.SessionsList
 
   @behaviour LemonControlPlane.Method
 
@@ -12,10 +18,12 @@ defmodule LemonControlPlane.Methods.SessionsStats do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     params = params || %{}
+    content? = Authorize.content?(ctx)
 
     with {:ok, query} <- query(params["query"]),
+         :ok <- SessionsList.content_query(query, content?),
          {:ok, group_limit} <- group_limit(params["groupLimit"]),
          {:ok, report} <-
            LemonCore.SessionLifecycle.stats(
@@ -25,8 +33,11 @@ defmodule LemonControlPlane.Methods.SessionsStats do
              archived: boolean_filter(params["archived"]),
              group_limit: group_limit
            ) do
-      {:ok, format(report)}
+      {:ok, report |> format() |> Map.put("contentWithheld", not content?)}
     else
+      {:error, {:forbidden, _, _}} = forbidden ->
+        forbidden
+
       {:error, :invalid_query} ->
         {:error, {:invalid_params, "query must be at most 512 bytes", nil}}
 

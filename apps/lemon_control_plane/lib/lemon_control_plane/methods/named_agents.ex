@@ -7,6 +7,7 @@ defmodule LemonControlPlane.Methods.NamedAgents do
   Unknown mutation outcomes are explicitly unsafe to retry.
   """
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonCore.AgentMessaging
 
   def handle(action, params, ctx, required_scope) do
@@ -15,13 +16,49 @@ defmodule LemonControlPlane.Methods.NamedAgents do
     with :ok <- authorize(ctx, required_scope),
          :ok <- validate(action, params),
          {:ok, scope} <- scope(params, ctx) do
-      invoke(action, params, ctx, scope) |> project(action)
+      invoke(action, params, ctx, scope) |> project(action) |> withhold(action, params, ctx)
     end
   rescue
     _ -> error(:outcome_unknown)
   catch
     :exit, _ -> error(:outcome_unknown)
     :throw, _ -> error(:outcome_unknown)
+  end
+
+  # Identity labels and message answers are content; the read methods drop
+  # them without `operator.content`. `query` also matches labels, so a
+  # metadata-only list keeps only entries whose id or name matches.
+  # Mutation receipts are unchanged.
+  defp withhold({:ok, result}, action, params, ctx) when action in [:list, :get] do
+    content? = Authorize.content?(ctx)
+
+    result =
+      cond do
+        content? ->
+          result
+
+        action == :list ->
+          query = params |> Map.get("query", "") |> String.downcase()
+
+          Map.update!(result, "agents", fn agents ->
+            for agent <- agents, metadata_match?(agent, query), do: Map.delete(agent, "label")
+          end)
+
+        true ->
+          Map.delete(result, "response")
+      end
+
+    {:ok, Map.put(result, "contentWithheld", not content?)}
+  end
+
+  defp withhold(result, _action, _params, _ctx), do: result
+
+  defp metadata_match?(_agent, ""), do: true
+
+  defp metadata_match?(agent, query) do
+    Enum.any?([agent["id"], agent["name"]], fn value ->
+      is_binary(value) and String.contains?(String.downcase(value), query)
+    end)
   end
 
   defp authorize(%{auth: %{role: :operator, scopes: scopes}}, required) do

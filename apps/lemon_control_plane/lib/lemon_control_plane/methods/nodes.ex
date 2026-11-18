@@ -157,6 +157,8 @@ defmodule LemonControlPlane.Methods.NodesList do
   live online/offline presence, last seen, capability names and session
   credential state, plus pending (unexpired) pairing requests with their
   verification codes. No token, token hash or challenge ever leaves the server.
+  The verification `code` is returned only to callers holding `operator.pairing`
+  (the scope that may approve it), matching `node.pair.requested` events.
   """
 
   @behaviour LemonControlPlane.Method
@@ -171,21 +173,27 @@ defmodule LemonControlPlane.Methods.NodesList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     params = params || %{}
 
     if valid_filters?(params) do
-      list(params)
+      list(params, pairing?(ctx))
     else
       {:error, Errors.invalid_request("Invalid exact node name or nodeId filter")}
     end
   end
 
-  defp list(params) do
+  defp pairing?(%{auth: %{role: :operator, scopes: scopes}}) when is_list(scopes),
+    do: :pairing in scopes
+
+  defp pairing?(_ctx), do: false
+
+  defp list(params, pairing?) do
     now = System.system_time(:millisecond)
     live = NodesSupport.live_nodes()
     {nodes, nodes_truncated?} = NodesSupport.nodes(live, params)
     {pairings, pairings_truncated?} = NodesSupport.pairings(now, params)
+    pairings = if pairing?, do: pairings, else: Enum.map(pairings, &Map.delete(&1, "code"))
 
     {:ok,
      %{

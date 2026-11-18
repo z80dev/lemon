@@ -32,7 +32,8 @@ defmodule LemonControlPlane.Methods.AgentsList do
            "summary" => payload["summary"] || %{"agentCount" => length(agents)},
            "includesMessageBodies" => false,
            "includesSecretValues" => false,
-           "includesCredentials" => false
+           "includesCredentials" => false,
+           "contentWithheld" => payload["contentWithheld"]
          }}
 
       error ->

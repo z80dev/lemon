@@ -2,10 +2,14 @@ defmodule LemonControlPlane.Methods.AgentWait do
   @moduledoc """
   Handler for the agent.wait method.
 
-  Waits for a run to complete and returns the result.
+  Waits for a run to complete and returns the result. The answer and error text
+  are content and need `operator.content`; read-only callers learn completion,
+  status, usage and error presence only, and `includeAnswer` is ignored.
   """
 
   @behaviour LemonControlPlane.Method
+
+  alias LemonControlPlane.Auth.Authorize
 
   @impl true
   def name, do: "agent.wait"
@@ -14,7 +18,7 @@ defmodule LemonControlPlane.Methods.AgentWait do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     run_id = params["runId"]
     timeout_ms = params["timeoutMs"] || 60_000
     include_answer = Map.get(params, "includeAnswer", true)
@@ -29,7 +33,7 @@ defmodule LemonControlPlane.Methods.AgentWait do
       true ->
         case wait_for_run(run_id, timeout_ms) do
           {:ok, completed} ->
-            {:ok, format_result(completed, include_answer)}
+            {:ok, format_result(completed, include_answer, Authorize.content?(ctx))}
 
           {:error, :timeout} ->
             {:error, {:timeout, "Run did not complete within timeout", run_id}}
@@ -108,14 +112,24 @@ defmodule LemonControlPlane.Methods.AgentWait do
     {:ok, completed}
   end
 
-  defp format_result(completed, include_answer) when is_map(completed) do
+  defp format_result(completed, include_answer, content?) when is_map(completed) do
+    error = completed_value(completed, :error, "error")
+
     result = %{
       "runId" => completed_value(completed, :run_id, "runId"),
       "ok" => completed_value(completed, :ok, "ok"),
-      "answer" =>
-        if(include_answer, do: format_answer(completed_value(completed, :answer, "answer"))),
-      "error" => format_error(completed_value(completed, :error, "error"))
+      "contentWithheld" => not content?
     }
+
+    result =
+      if content?,
+        do:
+          Map.merge(result, %{
+            "answer" =>
+              if(include_answer, do: format_answer(completed_value(completed, :answer, "answer"))),
+            "error" => format_error(error)
+          }),
+        else: result
 
     meta = completed_value(completed, :meta, "meta") || %{}
 
@@ -135,7 +149,7 @@ defmodule LemonControlPlane.Methods.AgentWait do
         result
       end
 
-    Map.put(result, "summary", summary(result))
+    Map.put(result, "summary", summary(result, error))
   end
 
   defp maybe_put(result, _key, nil), do: result
@@ -149,9 +163,8 @@ defmodule LemonControlPlane.Methods.AgentWait do
     end
   end
 
-  defp summary(result) do
+  defp summary(result, error) do
     answer = result["answer"]
-    error = result["error"]
 
     %{
       "runId" => result["runId"],

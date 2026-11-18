@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.NullableUsageTest do
   use ExUnit.Case, async: false
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   alias LemonControlPlane.Methods.{SessionDetail, UsageStatus}
   alias LemonCore.{RunStore, UsageStore}
 
@@ -77,7 +79,7 @@ defmodule LemonControlPlane.Methods.NullableUsageTest do
                })
     end
 
-    assert {:ok, detail} = SessionDetail.handle(%{"sessionKey" => session_key}, %{})
+    assert {:ok, detail} = SessionDetail.handle(%{"sessionKey" => session_key}, @operator_ctx)
     rows = Map.new(detail["runs"], &{&1["runId"], &1["tokens"]})
 
     assert rows[Enum.at(run_ids, 0)] == %{

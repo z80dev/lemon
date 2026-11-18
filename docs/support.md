@@ -424,8 +424,9 @@ manual `run_now` requests remain allowed during that hold; see
 
 Cron lifecycle actions also write durable operator audit events to
 `:cron_audit_events`. The control-plane `cron.audit` read method returns raw
-operator IDs for authorized clients shows the most recent lifecycle
-audit entries, and the WebSocket event bridge emits `cron.audit` updates.
+operator IDs for authorized clients and shows the most recent lifecycle audit
+entries (free-text `reason` values need `operator.content`), and the WebSocket
+event bridge emits `cron.audit` updates.
 Support bundles include only redacted audit counts, action counts, recent action
 shape, reason hashes, ID hashes, and changed-field names.
 

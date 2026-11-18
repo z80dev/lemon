@@ -289,9 +289,14 @@ defmodule LemonControlPlane.Methods.BackgroundStatus do
 end
 
 defmodule LemonControlPlane.Methods.BackgroundResult do
-  @moduledoc "Returns a completed background command answer when ready."
+  @moduledoc """
+  Returns a completed background command answer when ready. The answer is
+  content and needs `operator.content`; read-only callers learn readiness and
+  the answer size only.
+  """
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.BackgroundCommandSupport, as: Support
 
   @impl true
@@ -301,10 +306,10 @@ defmodule LemonControlPlane.Methods.BackgroundResult do
   def scopes, do: [:read]
 
   @impl true
-  def handle(%{"id" => id}, _ctx) when is_binary(id) do
+  def handle(%{"id" => id}, ctx) when is_binary(id) do
     case Support.call(:background_result, [id]) do
       {:ok, answer} when is_binary(answer) ->
-        {:ok, %{"id" => id, "ready" => true, "answer" => answer}}
+        {:ok, ready(id, answer, Authorize.content?(ctx))}
 
       {:ok, _invalid_answer} ->
         Support.error(:result, :invalid_runtime_response)
@@ -321,6 +326,17 @@ defmodule LemonControlPlane.Methods.BackgroundResult do
   end
 
   def handle(_, _), do: {:error, {:invalid_request, "id is required", nil}}
+
+  defp ready(id, answer, content?) do
+    payload = %{
+      "id" => id,
+      "ready" => true,
+      "answerBytes" => byte_size(answer),
+      "contentWithheld" => not content?
+    }
+
+    if content?, do: Map.put(payload, "answer", answer), else: payload
+  end
 end
 
 defmodule LemonControlPlane.Methods.BackgroundCancel do

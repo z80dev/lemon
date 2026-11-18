@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.ParamsTest do
   use ExUnit.Case, async: true
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   alias LemonControlPlane.Methods.{Params, TasksActiveList, TasksRecentList}
 
   test "exact parameter keys take precedence even for false and nil" do
@@ -32,8 +34,8 @@ defmodule LemonControlPlane.Methods.ParamsTest do
 
   test "task listing preserves the active and recent response differences" do
     params = %{"status" => "completed", "include_events" => "true", "event_limit" => "12"}
-    assert {:ok, active} = TasksActiveList.handle(params, %{})
-    assert {:ok, recent} = TasksRecentList.handle(params, %{})
+    assert {:ok, active} = TasksActiveList.handle(params, @operator_ctx)
+    assert {:ok, recent} = TasksRecentList.handle(params, @operator_ctx)
     refute Map.has_key?(active["filters"], "status")
     refute Map.has_key?(active["summary"], "averageDurationMs")
     assert recent["filters"]["status"] == "completed"

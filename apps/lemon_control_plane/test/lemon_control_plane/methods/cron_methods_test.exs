@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.CronMethodsTest do
   use ExUnit.Case, async: false
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   alias LemonAutomation.CronManager
   alias LemonAutomation.{CronRun, CronStore}
 
@@ -48,7 +50,7 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
     assert Enum.find(CronManager.list(), &(&1.id == job.id)).failure_state.consecutive_failures ==
              1
 
-    assert {:ok, %{"jobs" => jobs}} = CronList.handle(%{"failing" => true}, %{})
+    assert {:ok, %{"jobs" => jobs}} = CronList.handle(%{"failing" => true}, @operator_ctx)
 
     assert Enum.any?(
              jobs,
@@ -63,7 +65,7 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
     run = job.id |> CronRun.new(:manual) |> CronRun.start(nil)
     CronStore.put_run(run)
     send(CronManager, {:run_complete, run.id, {:ok, "[SILENT]"}})
-    assert {:ok, %{"jobs" => jobs}} = CronList.handle(%{"failing" => true}, %{})
+    assert {:ok, %{"jobs" => jobs}} = CronList.handle(%{"failing" => true}, @operator_ctx)
     refute Enum.any?(jobs, &(&1["id"] == job.id))
   end
 
@@ -198,7 +200,7 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
     on_exit(fn -> CronManager.remove(id) end)
 
     assert CronStore.get_job(id).profile_id == "routine-profile"
-    assert {:ok, %{"jobs" => jobs}} = CronList.handle(%{}, %{})
+    assert {:ok, %{"jobs" => jobs}} = CronList.handle(%{}, @operator_ctx)
     listed = Enum.find(jobs, &(&1["id"] == id))
     assert listed["profileId"] == "routine-profile"
     refute inspect(added) =~ "routine-private-token"
@@ -221,7 +223,7 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
   end
 
   test "cron.list redacts target text by default and exposes byte summaries", %{job: job} do
-    assert {:ok, %{"jobs" => jobs, "summary" => summary}} = CronList.handle(%{}, %{})
+    assert {:ok, %{"jobs" => jobs, "summary" => summary}} = CronList.handle(%{}, @operator_ctx)
 
     listed = Enum.find(jobs, &(&1["id"] == job.id))
     assert listed["prompt"] == nil
@@ -234,7 +236,7 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
     assert summary["cleanup"]["includesCommandText"] == false
 
     assert {:ok, %{"jobs" => raw_jobs, "summary" => raw_summary}} =
-             CronList.handle(%{"includeTargetText" => true}, %{})
+             CronList.handle(%{"includeTargetText" => true}, @operator_ctx)
 
     raw_listed = Enum.find(raw_jobs, &(&1["id"] == job.id))
     assert raw_listed["prompt"] == "ping"
@@ -466,7 +468,7 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
     end)
 
     assert {:ok, %{"runs" => runs, "summary" => summary}} =
-             CronRunsMethod.handle(%{"id" => job.id, "limit" => 10}, %{})
+             CronRunsMethod.handle(%{"id" => job.id, "limit" => 10}, @operator_ctx)
 
     listed = Enum.find(runs, &(&1["id"] == completed_id))
     assert listed["summary"]["outputBytes"] == byte_size("cron output body api_key=test123")
@@ -495,7 +497,7 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
                  "includeRunRecord" => true,
                  "includeIntrospection" => true
                },
-               %{}
+               @operator_ctx
              )
 
     assert full_summary["fullOutputReturned"] == true
@@ -625,7 +627,10 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
       })
 
     assert {:ok, %{"events" => [payload], "total" => 1, "summary" => summary}} =
-             CronAudit.handle(%{"jobId" => job.id, "action" => "run_aborted"}, %{})
+             CronAudit.handle(
+               %{"jobId" => job.id, "action" => "run_aborted"},
+               %{auth: %{role: :operator, scopes: [:read, :content]}}
+             )
 
     assert payload["id"] == event.id
     assert payload["jobId"] == job.id

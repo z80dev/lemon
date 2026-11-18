@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.SystemMethodsTest do
   use ExUnit.Case, async: true
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   alias LemonControlPlane.Methods.LogsTail
 
   defmodule LogRingStub do
@@ -37,7 +39,7 @@ defmodule LemonControlPlane.Methods.SystemMethodsTest do
     end
 
     test "returns filtered logs with summary and cleanup flags" do
-      {:ok, result} = LogsTail.handle(%{"lines" => "10", "filter" => "INFO"}, %{})
+      {:ok, result} = LogsTail.handle(%{"lines" => "10", "filter" => "INFO"}, @operator_ctx)
 
       assert result["total"] == 2
       assert result["filters"]["limit"] == 10
@@ -45,10 +47,7 @@ defmodule LemonControlPlane.Methods.SystemMethodsTest do
       assert result["summary"]["count"] == 2
       assert result["summary"]["levelCounts"]["info"] == 2
 
-      assert result["logs"] |> hd() |> get_in(["metadata", "token"]) == %{
-               "redacted" => true,
-               "kind" => "secret"
-             }
+      assert result["logs"] |> hd() |> get_in(["metadata", "token"]) == "[REDACTED]"
 
       assert result["logs"] |> hd() |> get_in(["metadata", "safe"]) == "ok"
       refute inspect(result) =~ "test123"
@@ -67,7 +66,7 @@ defmodule LemonControlPlane.Methods.SystemMethodsTest do
         :"Elixir.LemonControlPlane.MissingLogRingForTest"
       )
 
-      {:ok, result} = LogsTail.handle(%{"limit" => -1}, %{})
+      {:ok, result} = LogsTail.handle(%{"limit" => -1}, @operator_ctx)
 
       assert result["logs"] == []
       assert result["total"] == 0

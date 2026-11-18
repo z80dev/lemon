@@ -30,7 +30,9 @@ defmodule LemonControlPlane.Methods.MemoryTest do
 
     {:ok, _} = ProfileStore.create(%{"id" => "memory-alpha"})
     {:ok, _} = ProfileStore.create(%{"id" => "memory-beta"})
-    {:ok, ctx: %{memory_opts: [store: store]}}
+    # Memory bodies need `operator.content`; these tests assert them.
+    {:ok,
+     ctx: %{memory_opts: [store: store], auth: %{role: :operator, scopes: [:admin, :content]}}}
   end
 
   test "local profile add, list, search, get and confirmed delete roundtrip", %{ctx: ctx} do
@@ -171,7 +173,8 @@ defmodule LemonControlPlane.Methods.MemoryTest do
         "payload" => %{"items" => [], "nextCursor" => nil}
       })
 
-    assert Task.await(task) == {:ok, %{"items" => [], "nextCursor" => nil}}
+    assert Task.await(task) ==
+             {:ok, %{"items" => [], "nextCursor" => nil, "contentWithheld" => false}}
 
     get_task =
       Task.async(fn ->
@@ -343,7 +346,7 @@ defmodule LemonControlPlane.Methods.MemoryTest do
     }
 
     :ok = NodeRegistry.complete(node_id, payload["invokeId"], %{"ok" => true, "payload" => reply})
-    assert Task.await(task) == {:ok, reply}
+    assert Task.await(task) == {:ok, Map.put(reply, "contentWithheld", false)}
 
     shared = %{
       "profileId" => "memory-scoped-remote",
@@ -364,7 +367,7 @@ defmodule LemonControlPlane.Methods.MemoryTest do
         "payload" => shared_reply
       })
 
-    assert Task.await(shared_task) == {:ok, shared_reply}
+    assert Task.await(shared_task) == {:ok, Map.put(shared_reply, "contentWithheld", false)}
     :ok = NodeRegistry.unregister(node_id, self())
   end
 

@@ -862,9 +862,14 @@ defmodule LemonControlPlane.OpenAICompat do
     Application.get_env(:lemon_control_plane, :openai_compat_submitter, &LemonRouter.submit/1)
   end
 
+  # The API token authorized this caller to submit the run, so it receives the
+  # run's answer (content) back.
   defp waiter do
     Application.get_env(:lemon_control_plane, :openai_compat_waiter, fn run_id, timeout_ms ->
-      AgentWait.handle(%{"runId" => run_id, "timeoutMs" => timeout_ms}, %{})
+      AgentWait.handle(
+        %{"runId" => run_id, "timeoutMs" => timeout_ms},
+        %{auth: %{role: :operator, scopes: [:read, :content]}}
+      )
     end)
   end
 

@@ -692,7 +692,8 @@ pass, in every loaded project, and cancel their reconnects.
 pending or changed project files (`mcp.project_trust`) and rejected references
 (`mcp.project_host_values`); the control-plane `mcp.servers.list` method
 (`projectTrust`) and the web `/mcp` page show the same status for project
-directories that sessions have loaded. Viewing status never grants trust or
+directories that sessions have loaded; command/URL previews there need
+`operator.admin`. Viewing status never grants trust or
 reconnects. Project paths are printed terminal-safe, and command suggestions
 include `--cwd` only when the path can be quoted exactly.
 

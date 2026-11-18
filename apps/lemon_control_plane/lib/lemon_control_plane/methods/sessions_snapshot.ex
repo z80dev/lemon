@@ -34,6 +34,11 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   @identity_fields ~w(sessionKey sessionId branchId revision runId attempt)
   @row_fields ~w(id role content timestampMs ok truncated toolCallId toolName title
     arguments phase cancelled durationMs details runId)
+  # Without `operator.content` rows keep only identity, role, timing and status.
+  @metadata_row_fields ~w(id role timestampMs ok toolCallId toolName phase cancelled
+    durationMs runId)
+  @metadata_todo_fields ~w(id status priority dependencies)
+  @private_keys ~w(__struct__ path cwd owner pid thinking state config callback)
   @argument_fields ~w(command query pattern limit offset timeout timeout_ms max_output_chars)
   @detail_fields ~w(status exit_code exitCode truncated timed_out timedOut background
     process_id processId run_id runId session_id sessionId session_key sessionKey
@@ -173,20 +178,24 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
         else: []
 
     actions = actions(rows ++ event_rows, run_id, streaming)
-    messages = rows |> Enum.take(-limit) |> Enum.map(&snapshot_row/1)
+    content? = Authorize.content?(ctx)
+    messages = rows |> Enum.take(-limit) |> Enum.map(&snapshot_row(&1, content?))
     {messages, messages_cut} = fit(messages, 40_960, true)
-    {actions, actions_cut} = actions |> Enum.map(&snapshot_row/1) |> fit(16_384, false)
+
+    {actions, actions_cut} =
+      actions |> Enum.map(&snapshot_row(&1, content?)) |> fit(16_384, false)
+
     approvals = approvals(key, run_id, native.session_id, ctx)
-    children = children(key, native.session_id)
+    children = children(key, native.session_id, content?)
     processes = processes(native.session_id)
-    todos = todos(key, native.cwd)
-    plan = plan(native.plan)
+    todos = todos(key, native.cwd, content?)
+    plan = plan(native.plan, content?)
     answer_text = if terminal, do: field(completed, :answer) || "", else: answer(turn_rows)
 
     answer = %{
-      "text" => text(answer_text, 16_384),
+      "text" => if(content?, do: text(answer_text, 16_384)),
       "canonical" => terminal,
-      "truncated" => byte_size(safe_text(answer_text)) > 16_384
+      "truncated" => content? and byte_size(safe_text(answer_text)) > 16_384
     }
 
     identity = %{
@@ -201,6 +210,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
     result = %{
       "status" => "ok",
+      "contentWithheld" => not content?,
       "sessionKey" => key,
       "identity" => identity,
       "continuation" => continues_run?(continuation, native, identity, terminal),
@@ -566,7 +576,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
       else: task_lineage(tasks, expanded, root_run, owner)
   end
 
-  defp children(key, owner) do
+  defp children(key, owner, content?) do
     case AgentRuntime.call(:list_tasks, [], :unavailable) do
       tasks when is_list(tasks) ->
         items =
@@ -587,7 +597,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
               "status" => label(status),
               "terminal" => status in [:completed, :error, :cancelled, :timeout, :aborted],
               "sessionId" => field(record, :session_id),
-              "answer" => child_answer(field(record, :result))
+              "answer" => if(content?, do: child_answer(field(record, :result)))
             }
           end)
 
@@ -623,10 +633,11 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     end
   end
 
-  defp todos(key, cwd) do
+  defp todos(key, cwd, content?) do
     case AgentRuntime.call(:session_todos, [key, cwd], {:error, :unavailable}) do
       {:ok, items, revision} when is_list(items) ->
-        items = Enum.map(items, &public_fields(&1, @todo_fields))
+        fields = if content?, do: @todo_fields, else: @metadata_todo_fields
+        items = Enum.map(items, &public_fields(&1, fields))
         collection(items, 8_192) |> Map.put("revision", clean_revision(revision))
 
       _ ->
@@ -639,7 +650,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
   defp clean_revision(_), do: nil
 
-  defp plan(value) when is_map(value) do
+  defp plan(value, content?) when is_map(value) do
     content = field(value, :content)
 
     if is_nil(content) and not is_nil(field(value, :path)) do
@@ -649,17 +660,19 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
         "status" => "ok",
         "value" => %{
           "mode" => field(value, :mode),
-          "content" => if(is_binary(content), do: text(content, 8_192)),
-          "truncated" => is_binary(content) and byte_size(safe_text(content)) > 8_192
+          "content" => if(content? and is_binary(content), do: text(content, 8_192)),
+          "truncated" => content? and is_binary(content) and byte_size(safe_text(content)) > 8_192
         }
       }
     end
   end
 
-  defp plan(_), do: %{"status" => "unavailable"}
+  defp plan(_, _content?), do: %{"status" => "unavailable"}
 
   defp collection(items, budget) do
-    projected = items |> Enum.take(100) |> Enum.map(&clean(&1, 0))
+    projected =
+      items |> Enum.take(100) |> Enum.map(&LemonCore.Redact.project(&1, drop_keys: @private_keys))
+
     {bounded, cut} = fit(projected, budget, false)
 
     %{
@@ -681,14 +694,18 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     {if(newest, do: kept, else: Enum.reverse(kept)), cut}
   end
 
-  defp snapshot_row(row) do
+  defp snapshot_row(row, false),
+    do:
+      row |> Map.take(@metadata_row_fields) |> LemonCore.Redact.project(drop_keys: @private_keys)
+
+  defp snapshot_row(row, true) do
     public =
       row
       |> Map.take(@row_fields)
       |> Map.put("arguments", public_fields(row["arguments"], @argument_fields))
       |> Map.put("details", public_fields(row["details"], @detail_fields))
 
-    projected = clean(public, 0)
+    projected = LemonCore.Redact.project(public, drop_keys: @private_keys)
     Map.put(projected, "truncated", row["truncated"] == true or clipped?(public))
   end
 
@@ -726,40 +743,6 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     do: length(value) > 100 or Enum.any?(value, &clipped?/1)
 
   defp clipped?(_), do: false
-
-  defp clean(_, depth) when depth > 6, do: nil
-
-  defp clean(value, depth) when is_map(value) do
-    value
-    |> Enum.reject(fn {key, _} ->
-      to_string(key) in [
-        "__struct__",
-        "path",
-        "cwd",
-        "owner",
-        "pid",
-        "thinking",
-        "state",
-        "config",
-        "callback"
-      ]
-    end)
-    |> Enum.take(40)
-    |> Map.new(fn {key, value} ->
-      key = to_string(key)
-
-      {key,
-       if(LemonCore.Redact.sensitive_key?(key), do: "[REDACTED]", else: clean(value, depth + 1))}
-    end)
-  end
-
-  defp clean(value, depth) when is_list(value),
-    do: value |> Enum.take(100) |> Enum.map(&clean(&1, depth + 1))
-
-  defp clean(value, _) when is_binary(value), do: text(value, 4_096)
-  defp clean(value, _) when is_number(value) or is_boolean(value) or is_nil(value), do: value
-  defp clean(value, _) when is_atom(value), do: Atom.to_string(value)
-  defp clean(_, _), do: nil
 
   defp answer(rows) do
     # The caller supplies only this input's projected rows, including async

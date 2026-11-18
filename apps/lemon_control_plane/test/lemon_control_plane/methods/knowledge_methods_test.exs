@@ -279,7 +279,19 @@ defmodule LemonControlPlane.Methods.KnowledgeMethodsTest do
               "name" => "native",
               "type" => "stdio",
               "command" => System.find_executable("sh"),
-              "args" => ["-c", "printf x > \"$0\"", marker, "--api-key=sk-abcdefghijklmnop"]
+              "args" => [
+                "-c",
+                "printf x > \"$0\"",
+                marker,
+                "--api-key=sk-abcdefghijklmnop",
+                "--token",
+                "OPAQUE_ARG_7Q2X9"
+              ]
+            },
+            %{
+              "name" => "remote",
+              "type" => "http",
+              "url" => "https://r.example/hooks/OPAQUE_PATH_7Q2X9/mcp"
             },
             %{
               "name" => "oauth",
@@ -307,10 +319,29 @@ defmodule LemonControlPlane.Methods.KnowledgeMethodsTest do
       assert entry["trust"] == "untrusted"
       assert entry["files"] == [".lemon/mcp.json"]
 
-      assert [%{"name" => "native", "provider" => "lemon", "transport" => "stdio"} = native] =
-               entry["servers"]
+      assert [
+               %{"name" => "native", "provider" => "lemon", "transport" => "stdio"} = native,
+               %{"name" => "remote", "transport" => "http"}
+             ] = entry["servers"]
 
       refute native["preview"] =~ "sk-abcdefghijklmnop"
+      # Admin callers see the configured command and URL previews.
+      assert native["preview"] =~ "OPAQUE_ARG_7Q2X9"
+
+      # Read scope gets name, transport and trust metadata, never command
+      # arguments or URL paths.
+      assert {:ok, %{"projectTrust" => [read_entry]} = read} =
+               call("mcp.servers.list", %{}, @reader)
+
+      refute Jason.encode!(read) =~ "OPAQUE_ARG_7Q2X9"
+      refute Jason.encode!(read) =~ "OPAQUE_PATH_7Q2X9"
+      assert read_entry["trust"] == "untrusted"
+      assert read["previewsWithheld"] == true
+
+      assert [%{"name" => "native", "transport" => "stdio"} = read_native, %{"name" => "remote"}] =
+               read_entry["servers"]
+
+      refute Map.has_key?(read_native, "preview")
 
       assert [%{"server" => "oauth", "keys" => ["oauth.client_secret_secret"]}] =
                entry["rejected"]
@@ -395,6 +426,13 @@ defmodule LemonControlPlane.Methods.KnowledgeMethodsTest do
       encoded = Jason.encode!(%{nodes: nodes, pairings: pairings})
       refute encoded =~ "stored-token-hash-value"
       refute encoded =~ "pending-challenge-secret"
+
+      # The verification code is pairing authority, not read metadata.
+      assert {:ok, %{"pairings" => read_pairings}} = call("nodes.list", %{}, @reader)
+      read_pairing = Enum.find(read_pairings, &(&1["pairingId"] == ctx.pairing_id))
+      assert read_pairing["nodeName"] == "Laptop"
+      refute Map.has_key?(read_pairing, "code")
+      refute Jason.encode!(read_pairings) =~ "123456"
     end
 
     test "nodes.revoke requires the exact durable name and invalidates sessions", ctx do

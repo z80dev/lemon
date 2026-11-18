@@ -43,7 +43,9 @@ defmodule LemonControlPlane.Methods.ProcessJobsSupport do
        else: {:error, :unavailable}
   end
 
-  def project_list(key, %{} = result) do
+  # Command text and output are content; without `operator.content` list and
+  # detail carry ids, status, timing, exit codes and sizes only.
+  def project_list(key, %{} = result, content?) do
     jobs = fetch(result, :jobs)
     agents = fetch(result, :agents)
     root = identifier(fetch(result, :root_id))
@@ -51,7 +53,10 @@ defmodule LemonControlPlane.Methods.ProcessJobsSupport do
     if is_list(jobs) and is_list(agents) and Enum.all?(jobs, &is_map/1) and
          Enum.all?(agents, &is_map/1) do
       projected =
-        jobs |> Enum.take(@max_jobs) |> Enum.map(&project_job/1) |> Enum.reject(&is_nil/1)
+        jobs
+        |> Enum.take(@max_jobs)
+        |> Enum.map(&project_job(&1, content?))
+        |> Enum.reject(&is_nil/1)
 
       listed = agents |> Enum.take(@max_agents) |> Enum.map(&project_agent/1)
       total = integer(fetch(result, :total)) || length(jobs)
@@ -65,41 +70,48 @@ defmodule LemonControlPlane.Methods.ProcessJobsSupport do
          "jobs" => projected,
          "agents" => Enum.reject(listed, &is_nil/1),
          "total" => max(total, length(projected)),
-         "truncated" => fetch(result, :truncated) == true or length(jobs) > @max_jobs
+         "truncated" => fetch(result, :truncated) == true or length(jobs) > @max_jobs,
+         "contentWithheld" => not content?
        }}
     else
       {:error, :invalid_runtime_response}
     end
   end
 
-  def project_list(_key, _result), do: {:error, :invalid_runtime_response}
+  def project_list(_key, _result, _content?), do: {:error, :invalid_runtime_response}
 
-  def project_detail(key, %{} = result) do
-    case project_job(result) do
+  def project_detail(key, %{} = result, content?) do
+    case project_job(result, content?) do
       nil ->
         {:error, :invalid_runtime_response}
 
       job ->
+        detail = %{
+          "cwd" => text(fetch(result, :cwd), @max_cwd_bytes),
+          "backend" => label(fetch(result, :backend)),
+          "pids" => pids(fetch(result, :pids)),
+          "outputTruncated" => fetch(result, :output_truncated) == true,
+          "outputBytes" => integer(fetch(result, :output_bytes))
+        }
+
+        detail =
+          if content?,
+            do: Map.put(detail, "output", output(fetch(result, :output))),
+            else: detail
+
         {:ok,
          %{
            "sessionKey" => key,
-           "job" =>
-             Map.merge(job, %{
-               "cwd" => text(fetch(result, :cwd), @max_cwd_bytes),
-               "backend" => label(fetch(result, :backend)),
-               "pids" => pids(fetch(result, :pids)),
-               "output" => output(fetch(result, :output)),
-               "outputTruncated" => fetch(result, :output_truncated) == true,
-               "outputBytes" => integer(fetch(result, :output_bytes))
-             })
+           "job" => Map.merge(job, detail),
+           "contentWithheld" => not content?
          }}
     end
   end
 
-  def project_detail(_key, _result), do: {:error, :invalid_runtime_response}
+  def project_detail(_key, _result, _content?), do: {:error, :invalid_runtime_response}
 
   def project_cancel(key, job_id, %{} = result) do
-    case project_job(result) do
+    case project_job(result, true) do
       %{"id" => ^job_id} = job ->
         {:ok, %{"sessionKey" => key, "jobId" => job_id, "cancelled" => true, "job" => job}}
 
@@ -127,19 +139,25 @@ defmodule LemonControlPlane.Methods.ProcessJobsSupport do
     {:error, {:unavailable, "Background job runtime unavailable", %{"reason" => "unavailable"}}}
   end
 
-  defp project_job(job) do
+  defp project_job(job, content?) do
     with id when is_binary(id) <- identifier(fetch(job, :id)),
          true <- Regex.match?(~r/\A[A-Za-z0-9_-]+\z/, id) do
+      command = text(fetch(job, :command), @max_command_bytes)
+
       %{
         "id" => id,
         "status" => status(fetch(job, :status)),
         "ownerId" => identifier(fetch(job, :owner_id)),
-        "command" => text(fetch(job, :command), @max_command_bytes),
         "startedAt" => integer(fetch(job, :started_ms)),
         "endedAt" => integer(fetch(job, :ended_ms)),
         "exitCode" => integer(fetch(job, :exit_code)),
         "launch" => label(fetch(job, :launch))
       }
+      |> then(fn payload ->
+        if content?,
+          do: Map.put(payload, "command", command),
+          else: Map.put(payload, "commandBytes", if(command, do: byte_size(command), else: 0))
+      end)
     else
       _ -> nil
     end
@@ -239,9 +257,11 @@ defmodule LemonControlPlane.Methods.ProcessJobsList do
   The runtime scopes by native session owner; a session with no live owner
   reports `live: false` and no jobs. Commands are redacted and bounded, and the
   list is capped at 100 newest jobs with `total`/`truncated` reporting the rest.
+  Command text needs `operator.content`; read-only callers get `commandBytes`.
   """
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.ProcessJobsSupport, as: Support
 
   @impl true
@@ -251,11 +271,11 @@ defmodule LemonControlPlane.Methods.ProcessJobsList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     with {:ok, key} <- Support.key(params) do
       case Support.call(:session_jobs, [key]) do
         {:ok, result} ->
-          case Support.project_list(key, result) do
+          case Support.project_list(key, result, Authorize.content?(ctx)) do
             {:ok, payload} -> {:ok, payload}
             {:error, reason} -> Support.failure(reason)
           end
@@ -276,10 +296,12 @@ defmodule LemonControlPlane.Methods.ProcessJobsInspect do
 
   Reading never consumes output the owning agent has yet to read. `tailBytes`
   bounds the tail (default 16 KiB, at most 64 KiB); a job outside the session's
-  owners is reported as not found.
+  owners is reported as not found. Command text and the output tail need
+  `operator.content`; read-only callers get status, timing and sizes.
   """
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.NativeSessions
   alias LemonControlPlane.Methods.ProcessJobsSupport, as: Support
 
@@ -290,7 +312,7 @@ defmodule LemonControlPlane.Methods.ProcessJobsInspect do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     with {:ok, key} <- Support.key(params),
          {:ok, job_id} <- Support.job_id(params),
          {:ok, tail} <-
@@ -303,7 +325,7 @@ defmodule LemonControlPlane.Methods.ProcessJobsInspect do
            ) do
       case Support.call(:session_job, [key, job_id, [tail_bytes: tail]]) do
         {:ok, result} ->
-          case Support.project_detail(key, result) do
+          case Support.project_detail(key, result, Authorize.content?(ctx)) do
             {:ok, payload} -> {:ok, payload}
             {:error, reason} -> Support.failure(reason)
           end

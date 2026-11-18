@@ -2,16 +2,21 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   @moduledoc """
   Handler for the chat.history method.
 
-  Returns the conversation history for a session.
+  Returns the conversation history for a session. Message bodies, tool titles,
+  arguments and details are content and need `operator.content`; read-only
+  callers get each row's id, role, timing, status and tool identity only.
   """
 
   import LemonControlPlane.Methods.Params, only: [get_param: 2, truthy?: 2]
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonCore.AgentRuntime
-  alias LemonControlPlane.Methods.NativeSessions
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.EventProjection
+  alias LemonControlPlane.Methods.NativeSessions
+  alias LemonCore.AgentRuntime
+
+  @metadata_fields ~w(id role timestampMs ok toolCallId toolName phase cancelled durationMs)
 
   @default_limit 50
   @max_limit 200
@@ -24,22 +29,27 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     params = params || %{}
     session_key = get_param(params, "sessionKey")
     limit = normalize_limit(get_param(params, "limit"))
     before_id = get_param(params, "beforeId")
-    include_full_text = truthy?(get_param(params, "includeFullText"), true)
+    content? = Authorize.content?(ctx)
+    include_full_text = content? and truthy?(get_param(params, "includeFullText"), true)
 
     if is_nil(session_key) or session_key == "" do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
       with {:ok, history} <- history(params, session_key, limit, before_id, include_full_text) do
+        messages =
+          if content?, do: history, else: Enum.map(history, &Map.take(&1, @metadata_fields))
+
         {:ok,
          %{
            "sessionKey" => session_key,
-           "messages" => history,
-           "summary" => summary(history, limit, before_id, include_full_text)
+           "messages" => messages,
+           "contentWithheld" => not content?,
+           "summary" => summary(messages, limit, before_id, content?, include_full_text)
          }}
       end
     end
@@ -442,7 +452,7 @@ defmodule LemonControlPlane.Methods.ChatHistory do
     end
   end
 
-  defp summary(messages, limit, before_id, include_full_text) do
+  defp summary(messages, limit, before_id, content?, include_full_text) do
     %{
       "count" => length(messages),
       "limit" => limit,
@@ -452,7 +462,7 @@ defmodule LemonControlPlane.Methods.ChatHistory do
       "errorCount" => Enum.count(messages, &(&1["ok"] == false)),
       "truncatedCount" => Enum.count(messages, &(&1["truncated"] == true)),
       "cleanup" => %{
-        "includesMessageBodies" => true,
+        "includesMessageBodies" => content?,
         "includesFullText" => include_full_text == true,
         "includesRawEvents" => false,
         "includesRunRecords" => false,

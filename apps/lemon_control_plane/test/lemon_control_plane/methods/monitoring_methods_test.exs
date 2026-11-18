@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
   use ExUnit.Case, async: true
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   @moduledoc """
   Tests for the control-plane monitoring method implementations:
   - RunsActiveList
@@ -220,57 +222,57 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
     end
 
     test "handle/2 with nil params returns valid tasks list" do
-      {:ok, result} = TasksActiveList.handle(nil, %{})
+      {:ok, result} = TasksActiveList.handle(nil, @operator_ctx)
       assert is_list(result["tasks"])
       assert is_integer(result["total"])
       assert is_map(result["filters"])
     end
 
     test "handle/2 with empty params returns valid tasks list" do
-      {:ok, result} = TasksActiveList.handle(%{}, %{})
+      {:ok, result} = TasksActiveList.handle(%{}, @operator_ctx)
       assert is_list(result["tasks"])
       assert is_integer(result["total"])
       assert is_map(result["filters"])
     end
 
     test "handle/2 total matches tasks count" do
-      {:ok, result} = TasksActiveList.handle(%{}, %{})
+      {:ok, result} = TasksActiveList.handle(%{}, @operator_ctx)
       assert result["total"] == length(result["tasks"])
     end
 
     test "handle/2 with runId filter records filter in response" do
-      {:ok, result} = TasksActiveList.handle(%{"runId" => "run-abc"}, %{})
+      {:ok, result} = TasksActiveList.handle(%{"runId" => "run-abc"}, @operator_ctx)
       assert result["filters"]["runId"] == "run-abc"
     end
 
     test "handle/2 with agentId filter records filter in response" do
-      {:ok, result} = TasksActiveList.handle(%{"agentId" => "test-agent"}, %{})
+      {:ok, result} = TasksActiveList.handle(%{"agentId" => "test-agent"}, @operator_ctx)
       assert result["filters"]["agentId"] == "test-agent"
     end
 
     test "handle/2 with valid limit records limit in filters" do
-      {:ok, result} = TasksActiveList.handle(%{"limit" => 10}, %{})
+      {:ok, result} = TasksActiveList.handle(%{"limit" => 10}, @operator_ctx)
       assert result["filters"]["limit"] == 10
     end
 
     test "handle/2 with limit as string parses it" do
-      {:ok, result} = TasksActiveList.handle(%{"limit" => "15"}, %{})
+      {:ok, result} = TasksActiveList.handle(%{"limit" => "15"}, @operator_ctx)
       assert result["filters"]["limit"] == 15
     end
 
     test "handle/2 clamps limit to max 200" do
-      {:ok, result} = TasksActiveList.handle(%{"limit" => 9999}, %{})
+      {:ok, result} = TasksActiveList.handle(%{"limit" => 9999}, @operator_ctx)
       assert result["filters"]["limit"] <= 200
     end
 
     test "handle/2 with negative limit uses default" do
-      {:ok, result} = TasksActiveList.handle(%{"limit" => -3}, %{})
+      {:ok, result} = TasksActiveList.handle(%{"limit" => -3}, @operator_ctx)
       assert is_integer(result["filters"]["limit"])
       assert result["filters"]["limit"] > 0
     end
 
     test "handle/2 response always contains tasks, total, and filters keys" do
-      {:ok, result} = TasksActiveList.handle(%{}, %{})
+      {:ok, result} = TasksActiveList.handle(%{}, @operator_ctx)
       assert Map.has_key?(result, "tasks")
       assert Map.has_key?(result, "total")
       assert Map.has_key?(result, "filters")
@@ -278,7 +280,7 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
 
     test "handle/2 returns active task summary and truthful include flags" do
       {:ok, result} =
-        TasksActiveList.handle(%{"runId" => "run-1", "includeEvents" => true}, %{})
+        TasksActiveList.handle(%{"runId" => "run-1", "includeEvents" => true}, @operator_ctx)
 
       assert result["summary"]["count"] == result["total"]
       assert is_map(result["summary"]["statusCounts"])
@@ -286,20 +288,26 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
       assert is_integer(result["summary"]["eventCount"])
       assert is_integer(result["summary"]["reasoningCount"])
       assert result["summary"]["filtersApplied"] == ["runId"]
-      assert result["summary"]["cleanup"]["includesTaskEvents"] == true
+      # Flags describe returned content, not merely the requested options.
+      assert result["summary"]["cleanup"]["includesTaskEvents"] ==
+               Enum.any?(result["tasks"], &(&1["events"] not in [nil, []]))
+
       assert result["summary"]["cleanup"]["includesTaskRecords"] == false
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
 
     test "handle/2 filters contains runId and agentId keys" do
-      {:ok, result} = TasksActiveList.handle(%{}, %{})
+      {:ok, result} = TasksActiveList.handle(%{}, @operator_ctx)
       assert Map.has_key?(result["filters"], "runId")
       assert Map.has_key?(result["filters"], "agentId")
     end
 
     test "handle/2 with combined filters returns valid response" do
       {:ok, result} =
-        TasksActiveList.handle(%{"runId" => "run-1", "agentId" => "agent-1", "limit" => 5}, %{})
+        TasksActiveList.handle(
+          %{"runId" => "run-1", "agentId" => "agent-1", "limit" => 5},
+          @operator_ctx
+        )
 
       assert is_list(result["tasks"])
       assert result["filters"]["runId"] == "run-1"
@@ -319,62 +327,62 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
     end
 
     test "handle/2 with nil params returns valid tasks list" do
-      {:ok, result} = TasksRecentList.handle(nil, %{})
+      {:ok, result} = TasksRecentList.handle(nil, @operator_ctx)
       assert is_list(result["tasks"])
       assert is_integer(result["total"])
       assert is_map(result["filters"])
     end
 
     test "handle/2 with empty params returns valid tasks list" do
-      {:ok, result} = TasksRecentList.handle(%{}, %{})
+      {:ok, result} = TasksRecentList.handle(%{}, @operator_ctx)
       assert is_list(result["tasks"])
       assert is_integer(result["total"])
       assert is_map(result["filters"])
     end
 
     test "handle/2 total matches tasks count" do
-      {:ok, result} = TasksRecentList.handle(%{}, %{})
+      {:ok, result} = TasksRecentList.handle(%{}, @operator_ctx)
       assert result["total"] == length(result["tasks"])
     end
 
     test "handle/2 with runId filter records filter in response" do
-      {:ok, result} = TasksRecentList.handle(%{"runId" => "run-xyz"}, %{})
+      {:ok, result} = TasksRecentList.handle(%{"runId" => "run-xyz"}, @operator_ctx)
       assert result["filters"]["runId"] == "run-xyz"
     end
 
     test "handle/2 with agentId filter records filter in response" do
-      {:ok, result} = TasksRecentList.handle(%{"agentId" => "my-agent"}, %{})
+      {:ok, result} = TasksRecentList.handle(%{"agentId" => "my-agent"}, @operator_ctx)
       assert result["filters"]["agentId"] == "my-agent"
     end
 
     test "handle/2 with status filter records filter in response" do
-      {:ok, result} = TasksRecentList.handle(%{"status" => "completed"}, %{})
+      {:ok, result} = TasksRecentList.handle(%{"status" => "completed"}, @operator_ctx)
       assert result["filters"]["status"] == "completed"
     end
 
     test "handle/2 with valid limit records limit in filters" do
-      {:ok, result} = TasksRecentList.handle(%{"limit" => 25}, %{})
+      {:ok, result} = TasksRecentList.handle(%{"limit" => 25}, @operator_ctx)
       assert result["filters"]["limit"] == 25
     end
 
     test "handle/2 with limit as string parses it" do
-      {:ok, result} = TasksRecentList.handle(%{"limit" => "40"}, %{})
+      {:ok, result} = TasksRecentList.handle(%{"limit" => "40"}, @operator_ctx)
       assert result["filters"]["limit"] == 40
     end
 
     test "handle/2 clamps limit to max 200" do
-      {:ok, result} = TasksRecentList.handle(%{"limit" => 5000}, %{})
+      {:ok, result} = TasksRecentList.handle(%{"limit" => 5000}, @operator_ctx)
       assert result["filters"]["limit"] <= 200
     end
 
     test "handle/2 with negative limit uses default" do
-      {:ok, result} = TasksRecentList.handle(%{"limit" => -10}, %{})
+      {:ok, result} = TasksRecentList.handle(%{"limit" => -10}, @operator_ctx)
       assert is_integer(result["filters"]["limit"])
       assert result["filters"]["limit"] > 0
     end
 
     test "handle/2 response always contains tasks, total, and filters keys" do
-      {:ok, result} = TasksRecentList.handle(%{}, %{})
+      {:ok, result} = TasksRecentList.handle(%{}, @operator_ctx)
       assert Map.has_key?(result, "tasks")
       assert Map.has_key?(result, "total")
       assert Map.has_key?(result, "filters")
@@ -382,7 +390,7 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
 
     test "handle/2 returns recent task summary and truthful include flags" do
       {:ok, result} =
-        TasksRecentList.handle(%{"status" => "error", "includeRecord" => true}, %{})
+        TasksRecentList.handle(%{"status" => "error", "includeRecord" => true}, @operator_ctx)
 
       assert result["summary"]["count"] == result["total"]
       assert is_map(result["summary"]["statusCounts"])
@@ -391,29 +399,32 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
       assert is_integer(result["summary"]["reasoningCount"])
       assert result["summary"]["filtersApplied"] == ["status"]
       assert result["summary"]["cleanup"]["includesTaskEvents"] == false
-      assert result["summary"]["cleanup"]["includesTaskRecords"] == true
+
+      assert result["summary"]["cleanup"]["includesTaskRecords"] ==
+               Enum.any?(result["tasks"], &Map.has_key?(&1, "record"))
+
       assert result["summary"]["cleanup"]["includesCredentials"] == false
     end
 
     test "handle/2 filters always contains status key" do
-      {:ok, result} = TasksRecentList.handle(%{}, %{})
+      {:ok, result} = TasksRecentList.handle(%{}, @operator_ctx)
       assert Map.has_key?(result["filters"], "status")
     end
 
     test "handle/2 with timeout status filter returns valid response" do
-      {:ok, result} = TasksRecentList.handle(%{"status" => "timeout"}, %{})
+      {:ok, result} = TasksRecentList.handle(%{"status" => "timeout"}, @operator_ctx)
       assert is_list(result["tasks"])
       assert result["filters"]["status"] == "timeout"
     end
 
     test "handle/2 with aborted status filter returns valid response" do
-      {:ok, result} = TasksRecentList.handle(%{"status" => "aborted"}, %{})
+      {:ok, result} = TasksRecentList.handle(%{"status" => "aborted"}, @operator_ctx)
       assert is_list(result["tasks"])
       assert result["filters"]["status"] == "aborted"
     end
 
     test "handle/2 with error status filter returns valid response" do
-      {:ok, result} = TasksRecentList.handle(%{"status" => "error"}, %{})
+      {:ok, result} = TasksRecentList.handle(%{"status" => "error"}, @operator_ctx)
       assert is_list(result["tasks"])
       assert result["filters"]["status"] == "error"
     end

@@ -111,7 +111,9 @@ throttled to about one update per 300 ms, with a final update always sent.
 Multi-worker results include combined `usage`; `start_many` also includes
 `errors` with a zero-based task index and safe error message. The session
 object is the same snapshot the control plane returns
-from `omp.sessions.get`: `id`, `ompSessionId`, `title`, `cwd`, `model`,
+from `omp.sessions.get` (for callers with `operator.content`; read-only callers
+receive the metadata projection in `docs/reference/control-plane.md`): `id`,
+`ompSessionId`, `title`, `cwd`, `model`,
 `worktree` (null or `path`, `branch`, `base` short SHA or null when the original
 creation reflog is unavailable, `repo` main checkout root;
 after cleanup also `kept`, `dirty`, `commits`),

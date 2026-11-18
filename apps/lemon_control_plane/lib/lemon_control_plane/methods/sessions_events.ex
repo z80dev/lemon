@@ -3,8 +3,11 @@ defmodule LemonControlPlane.Methods.SessionsEvents do
   Bounded replay of native session broadcasts after an owner/branch-epoch cursor.
 
   Authorization is checked against current connection membership before and after
-  the runtime read. An expired cursor requires snapshot recovery; unavailable
-  runtime reads never masquerade as an empty replay or an expired cursor.
+  the runtime read. Each replayed inner event is then authorized with
+  `EventBridge.authorize_event/3` against the scopes of that post-read check, so a
+  read-only caller receives the same metadata-only view live fanout gives it. An
+  expired cursor requires snapshot recovery; unavailable runtime reads never
+  masquerade as an empty replay or an expired cursor.
   """
   @behaviour LemonControlPlane.Method
 
@@ -25,10 +28,10 @@ defmodule LemonControlPlane.Methods.SessionsEvents do
     with {:ok, key} <- NativeSessions.string(params, "sessionKey", 1024),
          {:ok, cursor} <- cursor(params["cursor"]),
          {:ok, limit} <- NativeSessions.integer(params, "limit", 50, 1, 100),
-         :ok <- authorize(ctx),
+         {:ok, _scopes} <- authorize(ctx),
          result <- AgentRuntime.call(:session_event_replay, [key, cursor, limit], :unavailable),
-         :ok <- authorize(ctx) do
-      project(key, cursor, limit, result)
+         {:ok, scopes} <- authorize(ctx) do
+      project(key, cursor, limit, result, scopes)
     end
   rescue
     _ -> unavailable()
@@ -51,8 +54,10 @@ defmodule LemonControlPlane.Methods.SessionsEvents do
 
   defp cursor(_), do: NativeSessions.invalid("cursor must be a version 1 session event cursor")
 
+  # Returns the current operator scopes: the registered connection's when the
+  # request came over a connection, otherwise the in-process context's.
   defp authorize(%{auth: auth} = ctx) do
-    with :ok <- operator(auth) do
+    with {:ok, _} <- operator(auth) do
       case ctx do
         %{conn_pid: pid} when is_pid(pid) ->
           matches =
@@ -69,21 +74,28 @@ defmodule LemonControlPlane.Methods.SessionsEvents do
           forbidden()
 
         _ ->
-          :ok
+          operator(auth)
       end
     end
   end
 
   defp authorize(_), do: forbidden()
 
-  defp operator(%{role: :operator, scopes: scopes} = auth) when is_list(scopes),
-    do: Authorize.authorize(auth, name(), scopes())
+  defp operator(%{role: :operator, scopes: scopes} = auth) when is_list(scopes) do
+    with :ok <- Authorize.authorize(auth, name(), scopes()), do: {:ok, scopes}
+  end
 
   defp operator(_), do: forbidden()
 
-  defp project(key, after_cursor, limit, {:ok, %{events: entries, cursor: last, has_more: more}})
+  defp project(
+         key,
+         after_cursor,
+         limit,
+         {:ok, %{events: entries, cursor: last, has_more: more}},
+         scopes
+       )
        when is_list(entries) and is_boolean(more) and length(entries) <= limit do
-    with {:ok, projected, expected_last} <- entries(entries, after_cursor, []),
+    with {:ok, projected, expected_last} <- entries(entries, after_cursor, scopes, []),
          true <- last == expected_last and (not more or projected != []) do
       {:ok,
        %{
@@ -98,7 +110,7 @@ defmodule LemonControlPlane.Methods.SessionsEvents do
     end
   end
 
-  defp project(key, _cursor, _limit, {:error, :cursor_expired}) do
+  defp project(key, _cursor, _limit, {:error, :cursor_expired}, _scopes) do
     {:ok,
      %{
        "status" => "cursor_expired",
@@ -109,14 +121,14 @@ defmodule LemonControlPlane.Methods.SessionsEvents do
      }}
   end
 
-  defp project(_key, _cursor, _limit, {:error, :unsupported_cursor_version}),
+  defp project(_key, _cursor, _limit, {:error, :unsupported_cursor_version}, _scopes),
     do: unsupported_version()
 
-  defp project(_, _, _, _), do: unavailable()
+  defp project(_, _, _, _, _), do: unavailable()
 
-  defp entries([], cursor, acc), do: {:ok, Enum.reverse(acc), cursor}
+  defp entries([], cursor, _scopes, acc), do: {:ok, Enum.reverse(acc), cursor}
 
-  defp entries([%{cursor: next, event_id: id, events: events} | rest], previous, acc)
+  defp entries([%{cursor: next, event_id: id, events: events} | rest], previous, scopes, acc)
        when is_list(events) do
     with {:ok, ^next} <- cursor(next),
          true <- Map.delete(next, "seq") == Map.delete(previous, "seq"),
@@ -125,16 +137,17 @@ defmodule LemonControlPlane.Methods.SessionsEvents do
       projected =
         for event <- events,
             {name, payload} <- [EventBridge.project(event)],
+            {name, payload} <- [EventBridge.authorize_event(name, payload, scopes)],
             do: %{"event" => name, "payload" => payload}
 
       entry = %{"cursor" => next, "eventId" => id, "events" => projected}
-      entries(rest, next, [entry | acc])
+      entries(rest, next, scopes, [entry | acc])
     else
       _ -> :invalid
     end
   end
 
-  defp entries(_, _, _), do: :invalid
+  defp entries(_, _, _, _), do: :invalid
 
   defp unsupported_version do
     {:error,

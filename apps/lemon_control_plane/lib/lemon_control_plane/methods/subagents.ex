@@ -28,13 +28,15 @@ defmodule LemonControlPlane.Methods.SubagentSupport do
     end
   end
 
-  def project_agents(agents) when is_list(agents) do
-    {:ok, agents |> Enum.flat_map(&project_agent/1)}
+  # `description` (the assignment) and `activity` (current tool/step text) are
+  # content; without `operator.content` the roster carries metadata only.
+  def project_agents(agents, content?) when is_list(agents) do
+    {:ok, agents |> Enum.flat_map(&project_agent(&1, content?))}
   end
 
-  def project_agents(_agents), do: {:error, :invalid_runtime_response}
+  def project_agents(_agents, _content?), do: {:error, :invalid_runtime_response}
 
-  defp project_agent(agent) when is_map(agent) do
+  defp project_agent(agent, content?) when is_map(agent) do
     with {:ok, id} <- identifier(fetch(agent, :task_id)),
          status when status in @statuses <- string(fetch(agent, :status)) do
       [
@@ -48,9 +50,9 @@ defmodule LemonControlPlane.Methods.SubagentSupport do
         |> put("parentTaskId", optional_identifier(fetch(agent, :parent_task_id)))
         |> put("name", label(fetch(agent, :name)))
         |> put("agent", label(fetch(agent, :agent)))
-        |> put("description", label(fetch(agent, :description)))
+        |> put("description", if(content?, do: label(fetch(agent, :description))))
         |> put("model", label(fetch(agent, :model)))
-        |> put("activity", label(fetch(agent, :activity)))
+        |> put("activity", if(content?, do: label(fetch(agent, :activity))))
         |> put("createdAtMs", count(fetch(agent, :created_at_ms)))
         |> put("startedAtMs", count(fetch(agent, :started_at_ms)))
         |> put("completedAtMs", count(fetch(agent, :completed_at_ms)))
@@ -63,26 +65,32 @@ defmodule LemonControlPlane.Methods.SubagentSupport do
     end
   end
 
-  defp project_agent(_agent), do: []
+  defp project_agent(_agent, _content?), do: []
 
-  def project_transcript(task_id, transcript) when is_map(transcript) do
+  def project_transcript(task_id, transcript, content?) when is_map(transcript) do
     with ^task_id <- fetch(transcript, :task_id),
          status when status in @statuses <- string(fetch(transcript, :status)),
          text when is_binary(text) <- fetch(transcript, :text),
          true <- String.valid?(text) and byte_size(text) <= @max_text_bytes do
+      payload = %{
+        "taskId" => task_id,
+        "status" => status,
+        "truncated" => fetch(transcript, :truncated) == true,
+        "contentWithheld" => not content?
+      }
+
       {:ok,
-       %{
-         "taskId" => task_id,
-         "status" => status,
-         "text" => text,
-         "truncated" => fetch(transcript, :truncated) == true
-       }}
+       if(content?,
+         do: Map.put(payload, "text", text),
+         else: Map.put(payload, "textBytes", byte_size(text))
+       )}
     else
       _ -> {:error, :invalid_runtime_response}
     end
   end
 
-  def project_transcript(_task_id, _transcript), do: {:error, :invalid_runtime_response}
+  def project_transcript(_task_id, _transcript, _content?),
+    do: {:error, :invalid_runtime_response}
 
   def project_delivery(task_id, delivery) when delivery in @deliveries do
     {:ok,
@@ -205,10 +213,12 @@ defmodule LemonControlPlane.Methods.SubagentsList do
   @moduledoc """
   Agent Hub roster: the task subagents of one session, nested children
   included, with status, persona, model, timing, activity and usage. Bounded
-  display fields only — no prompts, raw paths or credentials.
+  display fields only — no prompts, raw paths or credentials. `description` and
+  `activity` are content and need `operator.content`.
   """
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.SubagentSupport, as: Support
 
   @impl true
@@ -218,13 +228,21 @@ defmodule LemonControlPlane.Methods.SubagentsList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
+    content? = Authorize.content?(ctx)
+
     with {:ok, key} <- Support.session_key(params) do
       case Support.call(:subagents_list, [key]) do
         {:ok, agents} ->
-          case Support.project_agents(agents) do
+          case Support.project_agents(agents, content?) do
             {:ok, projected} ->
-              {:ok, %{"sessionKey" => key, "agents" => projected, "total" => length(projected)}}
+              {:ok,
+               %{
+                 "sessionKey" => key,
+                 "agents" => projected,
+                 "total" => length(projected),
+                 "contentWithheld" => not content?
+               }}
 
             {:error, reason} ->
               Support.error(reason)
@@ -244,10 +262,12 @@ defmodule LemonControlPlane.Methods.SubagentsTranscript do
   @moduledoc """
   Bounded visible transcript of one of the session's subagents — the same
   projection as the agent-facing `history://<task_id>`. Child output is
-  untrusted text; hidden reasoning is never included.
+  untrusted text; hidden reasoning is never included. The text needs
+  `operator.content`; read-only callers get status and `textBytes`.
   """
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.SubagentSupport, as: Support
 
   @impl true
@@ -257,12 +277,12 @@ defmodule LemonControlPlane.Methods.SubagentsTranscript do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     with {:ok, key} <- Support.session_key(params),
          {:ok, task_id} <- Support.task_id(params) do
       case Support.call(:subagent_transcript, [key, task_id]) do
         {:ok, transcript} ->
-          case Support.project_transcript(task_id, transcript) do
+          case Support.project_transcript(task_id, transcript, Authorize.content?(ctx)) do
             {:ok, payload} -> {:ok, payload}
             {:error, reason} -> Support.error(reason)
           end

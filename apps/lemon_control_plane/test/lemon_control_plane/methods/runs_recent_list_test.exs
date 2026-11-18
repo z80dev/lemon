@@ -367,7 +367,10 @@ defmodule LemonControlPlane.Methods.RunsRecentListTest do
   end
 
   defp recent(ctx, params \\ %{}) do
-    RunsRecentList.handle(Map.put(params, "sessionKey", ctx.session_key), %{})
+    RunsRecentList.handle(
+      Map.put(params, "sessionKey", ctx.session_key),
+      %{auth: %{role: :operator, scopes: [:read, :content]}}
+    )
   end
 
   defp event(ctx, type, payload, opts \\ []) do

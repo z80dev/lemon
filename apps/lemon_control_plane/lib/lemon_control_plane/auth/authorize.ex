@@ -20,6 +20,14 @@ defmodule LemonControlPlane.Auth.Authorize do
   - `operator.write` - Write operations (agent, chat, etc.)
   - `operator.approvals` - Approval management (exec.approvals.*, exec.approval.*)
   - `operator.pairing` - Node pairing (node.pair.*)
+  - `operator.content` - Transcript and content access: prompts, answers,
+    reasoning, tool arguments/results, run records, raw events, cron target
+    text, background answers, session exports, log messages and live
+    `chat`/`session.event` text. Without it a `read` caller receives
+    metadata-only projections (ids, status, counts, timings) and include flags
+    that would return content are ignored. The configured operator token and
+    tokenless operator contexts receive it by default; a connection that names
+    its scopes explicitly receives it only when it lists it.
 
   ## Node Scopes
 
@@ -43,7 +51,7 @@ defmodule LemonControlPlane.Auth.Authorize do
   alias LemonControlPlane.Auth.TokenStore
   alias LemonControlPlane.ListenerPolicy
 
-  @operator_scopes [:admin, :read, :write, :approvals, :pairing]
+  @operator_scopes [:admin, :read, :write, :approvals, :pairing, :content]
   @api_scopes [:read, :write]
 
   @type role :: :operator | :node | :enrollment | :api
@@ -53,6 +61,7 @@ defmodule LemonControlPlane.Auth.Authorize do
           | :write
           | :approvals
           | :pairing
+          | :content
           | :invoke
           | :event
           | :enroll
@@ -311,6 +320,16 @@ defmodule LemonControlPlane.Auth.Authorize do
   end
 
   @doc """
+  Whether an operator method context (`%{auth: auth}`) or auth context may
+  receive transcript and content payloads. Fails closed: a missing context, a
+  non-operator role or a scope list without `:content` is metadata-only.
+  """
+  @spec content?(map() | nil) :: boolean()
+  def content?(%{auth: auth}), do: content?(auth)
+  def content?(%{role: :operator, scopes: scopes}) when is_list(scopes), do: :content in scopes
+  def content?(_ctx), do: false
+
+  @doc """
   Checks if the auth context is authorized for the given method.
 
   Returns `:ok` if authorized, `{:error, reason}` otherwise.
@@ -382,10 +401,12 @@ defmodule LemonControlPlane.Auth.Authorize do
   defp parse_scope("operator.write"), do: :write
   defp parse_scope("operator.approvals"), do: :approvals
   defp parse_scope("operator.pairing"), do: :pairing
+  defp parse_scope("operator.content"), do: :content
   defp parse_scope("node.invoke"), do: :invoke
   defp parse_scope("node.event"), do: :event
   defp parse_scope("admin"), do: :admin
   defp parse_scope("read"), do: :read
   defp parse_scope("write"), do: :write
+  defp parse_scope("content"), do: :content
   defp parse_scope(_), do: nil
 end

@@ -221,7 +221,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
 
     # The approval's mirrored owner event may advance the cursor between the
     # two reads. Honor the explicit safe-read retry without resolving approval.
-    result = stable_snapshot(params(c), ctx([:read, :approvals]), 10)
+    result = stable_snapshot(params(c), ctx([:read, :approvals, :content]), 10)
     assert result["identity"]["sessionId"] == root_owner
     assert result["identity"]["runId"] == c.id
 
@@ -290,11 +290,14 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     on_exit(fn -> Enum.each(records, &CodingAgent.TaskStore.delete_task/1) end)
     tasks = CodingAgent.TaskStore.list(:all) |> Enum.filter(fn {id, _} -> id in records end)
     Agent.update(c.state, &%{&1 | tasks: tasks})
-    assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals]))
+    assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals, :content]))
     assert Enum.map(result["snapshot"]["approvals"]["items"], & &1["id"]) == ["child", "nested"]
 
     Agent.update(c.state, &%{&1 | tasks: :unavailable})
-    assert {:ok, unavailable} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals]))
+
+    assert {:ok, unavailable} =
+             SessionsSnapshot.handle(params(c), ctx([:read, :approvals, :content]))
+
     assert unavailable["snapshot"]["approvals"] == %{"status" => "unavailable"}
   end
 
@@ -494,7 +497,10 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     approval = approval(c, "pending")
     :ok = ExecApprovalStore.put_pending(approval.id, approval)
     Agent.update(c.state, &Map.put(&1, :barrier, 2))
-    request = Task.async(fn -> SessionsSnapshot.handle(params(c), ctx([:read, :approvals])) end)
+
+    request =
+      Task.async(fn -> SessionsSnapshot.handle(params(c), ctx([:read, :approvals, :content])) end)
+
     assert_receive {:snapshot_barrier, 2, reader}, 5_000
 
     assert {:ok, %{decision: :deny}} =
@@ -506,7 +512,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
              Task.await(request)
 
     refute Map.has_key?(raced, "snapshot")
-    assert {:ok, current} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals]))
+    assert {:ok, current} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals, :content]))
 
     assert current["snapshot"]["approvals"] == %{
              "status" => "ok",
@@ -586,7 +592,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
       })
 
     on_exit(fn -> ExecApprovalStore.delete_pending("foreign-#{c.id}") end)
-    assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals]))
+    assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx([:read, :approvals, :content]))
     assert_receive {:process_owner, "native-owner"}
 
     assert [%{"taskId" => ^child, "terminal" => true, "answer" => "Visible child result"}] =
@@ -686,6 +692,74 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     assert result["snapshot"]["messagesTruncated"]
     assert result["snapshot"]["plan"]["value"]["truncated"]
     assert Agent.get(c.state, fn state -> elem(state.native_result, 1).entries end) == entries
+  end
+
+  test "read-only callers get a metadata-only snapshot without operator.content", c do
+    prose = "The merger closes Friday at 41 dollars per share"
+    unlabelled = "PROMPT_SECRET_7Q2X9"
+    content = "#{prose} #{unlabelled}"
+
+    entries = [
+      %{
+        type: :message,
+        id: "user",
+        message: %{role: :user, content: "Summarise #{content}", timestamp: 1_800_000_000_000}
+      },
+      %{
+        type: :message,
+        id: "assistant",
+        message: %{
+          role: :assistant,
+          content: [
+            %{type: :text, text: "Answer: #{content}"},
+            %{type: :tool_call, id: "call", name: "bash", arguments: %{"command" => content}}
+          ]
+        }
+      }
+    ]
+
+    child = %{
+      session_key: c.key,
+      parent_session_id: "native-owner",
+      run_id: "child-run",
+      status: :completed,
+      result: %{answer: "Child: #{content}"}
+    }
+
+    Agent.update(
+      c.state,
+      &%{
+        &1
+        | native_result:
+            {:ok, %{c.native | entries: entries, plan: %{"mode" => "plan", "content" => content}}},
+          tasks: [{"child-task", child}],
+          todos: {:ok, [%{"id" => "todo", "content" => content, "status" => "pending"}], {1, nil}}
+      }
+    )
+
+    read = stable_snapshot(params(c), ctx([:read]), 10)
+    encoded = Jason.encode!(read)
+    refute encoded =~ "merger closes Friday"
+    refute encoded =~ unlabelled
+    assert read["contentWithheld"] == true
+    assert read["snapshot"]["answer"]["text"] == nil
+
+    assert Enum.map(read["snapshot"]["messages"], & &1["role"]) == [
+             "user",
+             "assistant",
+             "tool_use"
+           ]
+
+    assert [%{"toolCallId" => "call", "toolName" => "bash"}] = read["snapshot"]["actions"]
+    assert [%{"taskId" => "child-task", "answer" => nil}] = read["snapshot"]["children"]["items"]
+    assert [%{"id" => "todo", "status" => "pending"} = todo] = read["snapshot"]["todos"]["items"]
+    refute Map.has_key?(todo, "content")
+    assert read["snapshot"]["plan"]["value"]["content"] == nil
+
+    full = stable_snapshot(params(c), ctx(), 10)
+    assert full["contentWithheld"] == false
+    assert Jason.encode!(full) =~ "merger closes Friday"
+    assert Jason.encode!(full) =~ unlabelled
   end
 
   test "selected branch revision replaces todo and plan state and rejects stale identities", c do
@@ -1399,7 +1473,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
   end
 
   defp stable_snapshot(_params, _context, 0), do: flunk("Snapshot never stabilized")
-  defp ctx(scopes \\ [:read]), do: %{auth: %{role: :operator, scopes: scopes}}
+  defp ctx(scopes \\ [:read, :content]), do: %{auth: %{role: :operator, scopes: scopes}}
 
   defp finalize(c, completed),
     do: RunStore.finalize(c.id, %{session_key: c.key, prompt: "Run tool", completed: completed})

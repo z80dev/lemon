@@ -2,10 +2,17 @@ defmodule LemonControlPlane.Methods.AgentDirectoryList do
   @moduledoc """
   Handler for the `agent.directory.list` method.
 
-  Returns discoverability metadata for agents and (optionally) sessions.
+  Returns discoverability metadata for agents and (optionally) sessions. Agent
+  descriptions are operator-authored prose: without `operator.content` they are
+  omitted and `contentWithheld` is true. Chat peer labels and topic names are
+  session identity metadata, as in `sessions.list` and `sessions.active.list`.
   """
 
   import LemonControlPlane.Methods.Params, only: [get_param: 2]
+
+  alias LemonControlPlane.Auth.Authorize
+
+  @content_agent_keys ~w(description)
 
   @behaviour LemonControlPlane.Method
 
@@ -16,7 +23,8 @@ defmodule LemonControlPlane.Methods.AgentDirectoryList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
+    content? = Authorize.content?(ctx)
     agent_id = get_param(params, "agentId")
     include_sessions? = get_param(params, "includeSessions")
     include_sessions? = if is_nil(include_sessions?), do: true, else: include_sessions? == true
@@ -26,7 +34,11 @@ defmodule LemonControlPlane.Methods.AgentDirectoryList do
     with agents when is_list(agents) <- LemonRouter.list_agent_directory(),
          sessions when is_list(sessions) <-
            list_sessions(include_sessions?, agent_id, route, limit) do
-      agents = agents |> maybe_filter_agents(agent_id) |> Enum.map(&format_agent/1)
+      agents =
+        agents
+        |> maybe_filter_agents(agent_id)
+        |> Enum.map(&(&1 |> format_agent() |> withhold(@content_agent_keys, content?)))
+
       sessions = Enum.map(sessions, &format_session/1)
 
       {:ok,
@@ -38,7 +50,8 @@ defmodule LemonControlPlane.Methods.AgentDirectoryList do
          "summary" => directory_summary(agents, sessions, include_sessions?),
          "includesMessageBodies" => false,
          "includesSecretValues" => false,
-         "includesCredentials" => false
+         "includesCredentials" => false,
+         "contentWithheld" => not content?
        }}
     else
       {:error, _reason} -> {:error, {:unavailable, "Agent directory is unavailable", nil}}
@@ -66,6 +79,9 @@ defmodule LemonControlPlane.Methods.AgentDirectoryList do
   defp maybe_filter_agents(agents, agent_id) do
     Enum.filter(agents, &(&1.agent_id == agent_id))
   end
+
+  defp withhold(entry, _keys, true), do: entry
+  defp withhold(entry, keys, false), do: Map.drop(entry, keys)
 
   defp format_agent(agent) do
     %{

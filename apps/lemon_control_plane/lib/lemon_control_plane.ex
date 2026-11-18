@@ -29,10 +29,12 @@ defmodule LemonControlPlane do
   Each role has associated scopes that control method access:
 
   - `operator.admin` - Administrative operations
-  - `operator.read` - Read-only operations
+  - `operator.read` - Read-only operations (metadata-only projections)
   - `operator.write` - Write operations
   - `operator.approvals` - Approval management
   - `operator.pairing` - Node pairing
+  - `operator.content` - Transcript and content payloads (prompts, answers,
+    task results, run records, raw events, live chat text)
 
   ## Example
 

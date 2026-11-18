@@ -3,9 +3,24 @@ defmodule LemonControlPlane.EventBridge do
   Bridges events from LemonCore.Bus to WebSocket clients.
 
   This GenServer subscribes to relevant bus topics and forwards events
-  to connected non-node WebSocket clients as event frames. Authenticated nodes
+  to connected operator WebSocket clients as event frames. Authenticated nodes
   receive only traffic sent directly to their connection as targeted
   `{:node_event, event_name, payload}` messages.
+
+  ## Per-recipient authorization
+
+  Each Bus event is projected once (`project/1`) and then authorized per
+  recipient with `authorize_event/3` against the connection's registered
+  `auth.scopes`. A connection without a current operator auth context receives
+  nothing. Approval events require `:approvals`, pairing events `:pairing`;
+  every other event requires `:read` or `:content`. Without `:content` a
+  recipient receives only an explicit allowlist of metadata events, each reduced
+  to an explicit key allowlist: no chat text, answers, tool arguments/results,
+  task text, prompt questions or omp snapshots. `session.event` batches are
+  authorized per inner event and always forwarded, so cursor continuity survives
+  an emptied batch. Views are computed once per distinct scope set and admitted
+  inline in registry order. `sessions.events` replay applies the same function.
+
   Unmapped-event warning suppression uses bridge-owned ETS and resets when the
   supervised bridge restarts; event producers never own that cache.
 
@@ -96,6 +111,48 @@ defmodule LemonControlPlane.EventBridge do
 
   # State version tracking for client reconciliation
   @state_version_keys [:presence, :health, :cron]
+
+  # Scopes that select an event view (see `authorize_event/3`).
+  @event_scopes [:read, :content, :approvals, :pairing]
+  @approval_events ["exec.approval.requested", "exec.approval.resolved"]
+  @pairing_events ["node.pair.requested", "node.pair.resolved"]
+
+  @task_metadata ~w(taskId parentRunId runId sessionKey agentId startedAtMs completedAtMs
+                    engine role ok durationMs timeoutMs)
+
+  # Read-only (no `:content`) allowlist: event name => forwarded metadata keys.
+  # Anything absent here, and every absent key, is withheld.
+  @metadata_keys %{
+    "goal" => ~w(type sessionKey goalId agentId status objectiveBytes continuationCount lastRunId
+         loopStatus),
+    "cron" =>
+      ~w(type runId cronRunId jobId jobName agentId sessionKey triggeredBy startedAtMs status
+         suppressed durationMs),
+    "cron.audit" =>
+      ~w(type auditId jobId cronRunId runId source status triggeredBy changedFields tsMs),
+    "cron.job" => ~w(type jobId name schedule enabled agentId sessionKey nextRunAtMs),
+    "tick" => ~w(timestampMs),
+    "presence" => ~w(connections count),
+    "heartbeat" => ~w(agentId status runId jobId timestampMs),
+    # `payload` is a free-form map with no schema, so read-only recipients get
+    # only the envelope.
+    "metrics" => ~w(timestampMs runId sessionKey),
+    "log" => ~w(level timestampMs runId sessionKey),
+    "node.invoke.request" => ~w(invokeId nodeId method timeoutMs cleanup),
+    "node.invoke.completed" => ~w(invokeId nodeId ok cleanup),
+    "task.started" => @task_metadata,
+    "task.completed" => @task_metadata,
+    "task.error" => @task_metadata,
+    "task.timeout" => @task_metadata,
+    "task.aborted" => @task_metadata,
+    "run.graph.changed" => ~w(runId parentRunId sessionKey status event timestampMs),
+    "stream.resync" => ~w(reason sessionKey runId),
+    "channel.delivery" =>
+      ~w(intentId runId sessionKey channelId accountId peerKind peerId threadId kind ok
+         durationMs tsMs),
+    "session.prompt.requested" => ~w(promptId sessionKey runId requestedAtMs expiresAtMs),
+    "session.prompt.resolved" => ~w(promptId sessionKey runId status)
+  }
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -238,7 +295,8 @@ defmodule LemonControlPlane.EventBridge do
   defp state_version_key_for(:cron_job_deleted), do: :cron
   defp state_version_key_for(_), do: nil
 
-  # Broadcast an event to all connected clients
+  # Broadcast an event to every authorized operator connection. Each distinct
+  # scope set's view is computed once; admission stays inline and in registry order.
   defp broadcast_event(event, state_version) do
     case project(event) do
       nil ->
@@ -246,30 +304,62 @@ defmodule LemonControlPlane.EventBridge do
 
       {event_name, payload} ->
         Connections.dispatch(fn entries ->
-          clients = Enum.filter(entries, fn {_id, info} -> general_event_client?(info) end)
-          dispatch_event(clients, event_name, payload, state_version)
+          {deliveries, _views} =
+            Enum.flat_map_reduce(entries, %{}, fn {_id, info}, views ->
+              recipient_view(info, event_name, payload, views)
+            end)
+
+          dispatch_event(deliveries, event_name, state_version)
         end)
     end
   end
+
+  defp recipient_view(info, event_name, payload, views) do
+    case recipient_scopes(info) do
+      nil ->
+        {[], views}
+
+      scopes ->
+        {view, views} =
+          case Map.fetch(views, scopes) do
+            {:ok, view} ->
+              {view, views}
+
+            :error ->
+              view = authorize_event(event_name, payload, scopes)
+              {view, Map.put(views, scopes, view)}
+          end
+
+        if view, do: {[{info.delivery, view}], views}, else: {[], views}
+    end
+  end
+
+  # Only the scopes that select an event view form the grouping key, so order,
+  # duplicates and unrelated scopes never multiply projections.
+  defp recipient_scopes(%{role: :operator, auth: %{role: :operator, scopes: scopes}})
+       when is_list(scopes),
+       do: scopes |> Enum.filter(&(&1 in @event_scopes)) |> Enum.uniq() |> Enum.sort()
+
+  defp recipient_scopes(_info), do: nil
 
   defp general_event_client?(%{role: role})
        when role in [:node, "node", :enrollment, "enrollment"], do: false
 
   defp general_event_client?(_info), do: true
 
-  defp dispatch_event(clients, event_name, payload, state_version) do
-    payload_meta = %{event: event_name, recipients: length(clients)}
+  defp dispatch_event(deliveries, event_name, state_version) do
+    recipients = length(deliveries)
 
     LemonCore.Telemetry.emit(
       [:lemon, :control_plane, :event_bridge, :broadcast],
-      %{count: 1, recipients: length(clients)},
-      payload_meta
+      %{count: 1, recipients: recipients},
+      %{event: event_name, recipients: recipients}
     )
 
     # Inline admission is nonblocking and preserves event order. A task per event
     # simply moved an unbounded queue into the task supervisor.
-    Enum.each(clients, fn {_conn_id, info} ->
-      Delivery.send(info.delivery, {:event, event_name, payload, state_version})
+    Enum.each(deliveries, fn {delivery, {name, payload}} ->
+      Delivery.send(delivery, {:event, name, payload, state_version})
     end)
   end
 
@@ -352,6 +442,141 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   def project(_), do: nil
+
+  @doc """
+  Returns the view of a projected event (`project/1`) that a recipient holding
+  `scopes` may receive, or `nil` when it may receive none.
+
+  - `exec.approval.*` requires `:approvals` and `node.pair.*` requires
+    `:pairing`; their payloads are otherwise unchanged.
+  - Every other event requires `:read` or `:content`.
+  - With `:content` the payload is unchanged. Without it only allowlisted
+    metadata events are forwarded, each reduced to allowlisted metadata keys;
+    `chat`, `omp.session` and unknown events are withheld.
+  - `session.event` keeps `sessionKey`, `eventId` and `cursor` and authorizes
+    each inner event with these rules, dropping denied ones. The batch is
+    forwarded even when emptied so replay cursors stay continuous.
+
+  Scopes are the operator scope atoms of `LemonControlPlane.Auth.Authorize`;
+  anything else grants nothing.
+  """
+  @spec authorize_event(String.t(), term(), [atom()]) :: {String.t(), term()} | nil
+  def authorize_event(event_name, payload, scopes)
+      when is_binary(event_name) and is_list(scopes) do
+    cond do
+      event_name in @approval_events ->
+        if :approvals in scopes, do: {event_name, payload}
+
+      event_name in @pairing_events ->
+        if :pairing in scopes, do: {event_name, payload}
+
+      :read not in scopes and :content not in scopes ->
+        nil
+
+      event_name == "session.event" ->
+        authorize_batch(payload, scopes)
+
+      :content in scopes ->
+        {event_name, payload}
+
+      true ->
+        metadata_view(event_name, payload)
+    end
+  end
+
+  def authorize_event(_event_name, _payload, _scopes), do: nil
+
+  defp authorize_batch(%{"events" => events} = batch, scopes) when is_list(events) do
+    authorized =
+      for %{"event" => name, "payload" => payload} <- events,
+          {name, payload} <- [authorize_event(name, payload, scopes)],
+          do: %{"event" => name, "payload" => payload}
+
+    {"session.event",
+     batch
+     |> Map.take(["sessionKey", "eventId", "cursor"])
+     |> Map.put("events", authorized)}
+  end
+
+  defp authorize_batch(_batch, _scopes), do: nil
+
+  defp metadata_view("agent", %{"type" => type} = payload) do
+    case agent_metadata(type, payload) do
+      nil -> nil
+      view -> {"agent", view}
+    end
+  end
+
+  # The judge's `reason` quotes the objective and run result; read-only
+  # recipients get only the verdict's enumerated action and provenance.
+  defp metadata_view("goal", payload) when is_map(payload) do
+    view =
+      payload
+      |> Map.take(Map.fetch!(@metadata_keys, "goal"))
+      |> Map.put("loopVerdict", loop_verdict_metadata(payload["loopVerdict"]))
+
+    {"goal", view}
+  end
+
+  # Bounded system status without a payload contract or transcript source.
+  defp metadata_view(name, payload) when name in ["health", "shutdown"], do: {name, payload}
+
+  defp metadata_view(name, payload)
+       when is_map(payload) and is_map_key(@metadata_keys, name),
+       do: {name, Map.take(payload, Map.fetch!(@metadata_keys, name))}
+
+  defp metadata_view(_name, _payload), do: nil
+
+  @verdict_keys [{"action", :action}, {"source", :source}, {"atMs", :atMs}, {"runId", :runId}]
+
+  defp loop_verdict_metadata(verdict) when is_map(verdict) do
+    @verdict_keys
+    |> Enum.map(fn {key, atom_key} ->
+      {key, Map.get(verdict, key, Map.get(verdict, atom_key))}
+    end)
+    |> Enum.map(fn
+      {"source", source} ->
+        {"source", LemonControlPlane.EventProjection.goal_verdict_source(source)}
+
+      pair ->
+        pair
+    end)
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp loop_verdict_metadata(_verdict), do: nil
+
+  defp agent_metadata("started", payload),
+    do:
+      Map.take(
+        payload,
+        ~w(type runId sessionKey engine parentRunId model provider thinkingLevel)
+      )
+
+  defp agent_metadata("completed", payload),
+    do: Map.take(payload, ~w(type runId sessionKey ok cancelled durationMs usage model))
+
+  defp agent_metadata("tool_use", payload) do
+    action =
+      case payload["action"] do
+        action when is_map(action) -> Map.take(action, ["id", "kind"])
+        _ -> nil
+      end
+
+    payload
+    |> Map.take(~w(type runId sessionKey phase ok))
+    |> Map.put("action", action)
+  end
+
+  defp agent_metadata("checkpoint_" <> _, payload),
+    do:
+      Map.take(
+        payload,
+        ~w(type runId sessionKey checkpointId checkpointKind pathCount restoredCount)
+      )
+
+  defp agent_metadata(_type, _payload), do: nil
 
   defp map_event_type(
          :session_event,

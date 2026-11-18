@@ -68,12 +68,16 @@ initial snapshot, resolved auth scopes and payload/buffer/tick policy. Discover
 the actual supported surface there; do not assume an old method inventory.
 A second connect is rejected as already connected.
 
-Operator scopes include read, write, admin, approvals and pairing. The
-credential fixes the granted set; a client's `scopes` can only narrow it, never
-add to it. Request only what the client needs; a method requires a matching
-authorized scope declared by its handler's `scopes/0`. Before
+Operator scopes include read, write, admin, approvals, pairing and content.
+`operator.read` is metadata-only; transcript and content payloads (prompts,
+answers, task results, run records, raw events, live `chat` text, exports, log
+messages) additionally need `operator.content`. The credential fixes the
+granted set; a client's `scopes` can only narrow it, never add to it. Request
+only what the client needs; a method requires a matching authorized scope
+declared by its handler's `scopes/0`. Before
 handshake, ordinary method calls are rejected. Unknown methods, invalid params,
-missing auth and insufficient scopes remain distinct protocol errors.
+missing auth and insufficient scopes remain distinct protocol errors. See
+`docs/reference/control-plane.md` for each method's read-only projection.
 
 Tokenless loopback is disabled by default. The compatibility setting
 `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true` is only for direct local
@@ -759,8 +763,10 @@ delivery epochs so queued messages from a replaced subscription cannot mutate
 the recovered view or fence newly connected recipients.
 
 Authorization is checked on each snapshot read. Operators intentionally have
-global session inspection through `operator.read`; paired nodes have no such
-privilege. Approval payloads additionally require `operator.approvals`.
+global session inspection through `operator.read`, which returns metadata only;
+transcript rows, answers, todos and plans additionally need `operator.content`.
+Paired nodes have no such privilege. Approval payloads additionally require
+`operator.approvals`.
 Reconnect authentication uses the current credential, never the previous
 socket's privileges. Process/child projections use exact session ownership,
 and foreign native headers are rejected. This is not a new per-session
@@ -916,7 +922,9 @@ summary may have committed even when its acknowledgement was lost.
 
 The `memory.*` methods address a managed profile by `profileId`; they never accept
 a workspace path or arbitrary installation-wide scope. Reads require `operator.read`;
-add and delete require `operator.admin`. All run asynchronously so a named-node
+memory text additionally needs `operator.content` (read-only callers get `textBytes`
+instead of `text`, `memory.list` ignores `query`, and `memory.search` returns no
+items). Add and delete require `operator.admin`. All run asynchronously so a named-node
 request does not block the connection's events or heartbeat.
 
 | Method | Parameters | Successful payload |

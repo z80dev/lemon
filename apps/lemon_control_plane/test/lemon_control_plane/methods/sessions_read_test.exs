@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.SessionsReadTest do
   use ExUnit.Case, async: false
 
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
+
   alias LemonControlPlane.Methods.{Registry, SessionDetail, SessionsGet, SessionsHistory}
   alias LemonCore.{RunStore, SessionLifecycle}
 
@@ -28,7 +30,7 @@ defmodule LemonControlPlane.Methods.SessionsReadTest do
     assert row["sessionKey"] == key
     assert row["title"] == "Native fork source"
     assert row["pinned"]
-    assert {:ok, detail} = SessionDetail.handle(%{"sessionKey" => key}, %{})
+    assert {:ok, detail} = SessionDetail.handle(%{"sessionKey" => key}, @operator_ctx)
     assert detail["session"]["title"] == "Native fork source"
     assert detail["session"]["pinned"]
   end
@@ -52,7 +54,7 @@ defmodule LemonControlPlane.Methods.SessionsReadTest do
              Registry.dispatch(
                "sessions.history",
                %{"sessionKey" => key, "limit" => 1},
-               read_context()
+               @operator_ctx
              )
 
     assert row.session_key == key

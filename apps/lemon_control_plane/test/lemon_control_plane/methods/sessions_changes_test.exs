@@ -4,6 +4,7 @@ defmodule LemonControlPlane.Methods.SessionsChangesTest do
   alias LemonControlPlane.Methods.{Registry, SessionsChanges}
 
   @key "agent:default:web:local:dm:changes"
+  @operator_ctx %{auth: %{role: :operator, scopes: [:read, :content]}}
 
   setup do
     root = Path.join(System.tmp_dir!(), "lemon-changes-#{System.unique_integer([:positive])}")
@@ -49,7 +50,8 @@ defmodule LemonControlPlane.Methods.SessionsChangesTest do
     root
   end
 
-  defp call(params), do: SessionsChanges.handle(Map.put_new(params, "sessionKey", @key), %{})
+  defp call(params),
+    do: SessionsChanges.handle(Map.put_new(params, "sessionKey", @key), @operator_ctx)
 
   test "lists bounded status with codes, counts and branch", %{root: root} do
     repo!(root)

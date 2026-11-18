@@ -1,6 +1,7 @@
 defmodule LemonControlPlane.Methods.MemorySupport do
   @moduledoc false
 
+  alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Protocol.Errors
   alias LemonCore.{JSONPayload, NodeRegistry, ProfileStore}
   alias LemonMemory.{ContextScope, Lifecycle, Safety}
@@ -9,15 +10,20 @@ defmodule LemonControlPlane.Methods.MemorySupport do
   @max_result_bytes 256 * 1_024
   @fields ~w(profileId query limit cursor id text kind confirm memoryScope memoryContextKey)
   @kinds ~w(user memory run learned_source project_learning)
+  @reads ~w(list search get)
 
+  # Memory bodies are content. Without `operator.content` reads return ids,
+  # kinds, sources, timestamps and body sizes; `query` would turn search and
+  # filtered listing into a body-probing oracle, so search returns nothing and
+  # list ignores the filter.
   def handle(operation, params, ctx) when is_map(params) do
+    content? = operation not in @reads or Authorize.content?(ctx)
+
     with :ok <- validate(operation, params),
          :ok <- validate_scope(params),
          {:ok, profile} <- ProfileStore.get(params["profileId"]),
-         {:ok, payload} <- execute(operation, profile, Map.take(params, @fields), ctx),
-         {:ok, projection} <- project(operation, payload),
-         {:ok, projection} <- scoped_projection(params, payload, projection) do
-      {:ok, projection}
+         {:ok, projection} <- run(operation, profile, params, ctx, content?) do
+      {:ok, withhold(operation, projection, content?)}
     else
       {:rpc_error, error} -> {:error, error}
       {:error, reason} -> error(reason)
@@ -29,6 +35,35 @@ defmodule LemonControlPlane.Methods.MemorySupport do
   end
 
   def handle(_operation, _params, _ctx), do: error(:invalid_params)
+
+  defp run("search", _profile, _params, _ctx, false),
+    do: {:ok, %{"items" => [], "nextCursor" => nil}}
+
+  defp run(operation, profile, params, ctx, content?) do
+    args = Map.take(params, @fields)
+    args = if content?, do: args, else: Map.delete(args, "query")
+
+    with {:ok, payload} <- execute(operation, profile, args, ctx),
+         {:ok, projection} <- project(operation, payload) do
+      scoped_projection(params, payload, projection)
+    end
+  end
+
+  defp withhold(operation, projection, _content?) when operation not in @reads, do: projection
+  defp withhold(_operation, projection, true), do: Map.put(projection, "contentWithheld", false)
+
+  defp withhold(_operation, projection, false) do
+    projection
+    |> Map.replace_lazy("items", &Enum.map(&1, fn item -> metadata_item(item) end))
+    |> Map.replace_lazy("item", &metadata_item/1)
+    |> Map.put("contentWithheld", true)
+  end
+
+  defp metadata_item(item) do
+    item
+    |> Map.delete("text")
+    |> Map.put("textBytes", byte_size(item["text"]))
+  end
 
   defp validate_scope(params) do
     case ContextScope.selection(params) do
