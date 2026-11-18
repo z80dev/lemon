@@ -23,6 +23,10 @@ defmodule LemonCore.Config.Agent do
       # default) or 0 means unlimited: a turn ends when the model stops
       # calling tools.
       max_tool_turns = 0
+      # Optional absolute path of the git Lemon runs for its own repository
+      # reads (LemonCore.SafeGit). Global config only; unset uses the first git
+      # in /usr/bin, /usr/local/bin, /opt/homebrew/bin, /bin (never PATH).
+      # git_path = "/usr/bin/git"
 
       [runtime.extensions]
       enabled = true
@@ -92,6 +96,7 @@ defmodule LemonCore.Config.Agent do
     :retry,
     :max_tool_turns,
     :shell,
+    :git_path,
     :extensions,
     :extension_paths,
     :budget_defaults,
@@ -122,6 +127,7 @@ defmodule LemonCore.Config.Agent do
             path: String.t() | nil,
             command_prefix: String.t() | nil
           },
+          git_path: String.t() | nil,
           extensions: %{
             enabled: boolean(),
             auto_load_default_paths: boolean()
@@ -163,6 +169,7 @@ defmodule LemonCore.Config.Agent do
       retry: resolve_retry(agent_settings),
       max_tool_turns: resolve_max_tool_turns(agent_settings),
       shell: resolve_shell(agent_settings),
+      git_path: resolve_git_path(agent_settings),
       extensions: resolve_extensions(agent_settings),
       extension_paths: resolve_extension_paths(agent_settings),
       budget_defaults: resolve_budget_defaults(agent_settings),
@@ -307,6 +314,14 @@ defmodule LemonCore.Config.Agent do
             )
         )
     }
+  end
+
+  # Operator-only: `LemonCore.Config.ProjectLayer` rejects it in a project file.
+  defp resolve_git_path(settings) do
+    case settings["git_path"] do
+      path when is_binary(path) and path != "" -> path
+      _ -> nil
+    end
   end
 
   defp resolve_shell(settings) do

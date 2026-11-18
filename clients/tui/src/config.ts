@@ -76,6 +76,11 @@ export interface LemonConfig {
 		vim_mode?: boolean;
 		keys?: unknown;
 	};
+	/** Operator settings the TUI honours from the global file only. */
+	runtime?: {
+		/** Absolute git for the status line's repository read (never a PATH lookup). */
+		git_path?: unknown;
+	};
 }
 
 /**
@@ -135,6 +140,8 @@ export async function loadConfig(cwd?: string): Promise<LemonConfig> {
 			...pick(projectDefaults, PROJECT_DEFAULT_KEYS),
 		},
 		tui,
+		// Operator-only: a project file never supplies an executable path.
+		runtime: global.runtime,
 	};
 }
 

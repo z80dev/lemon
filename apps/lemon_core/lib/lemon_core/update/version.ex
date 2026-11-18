@@ -79,17 +79,11 @@ defmodule LemonCore.Update.Version do
   end
 
   defp source_commit do
-    case System.find_executable("git") do
-      nil ->
-        "unknown"
-
-      git ->
-        case System.cmd(git, ["-C", source_root(), "rev-parse", "--short=12", "HEAD"],
-               stderr_to_stdout: true
-             ) do
-          {commit, 0} -> String.trim(commit)
-          _ -> "unknown"
-        end
+    with {:ok, repo} <- LemonCore.SafeGit.repository(source_root()),
+         {:ok, commit, 0} <- LemonCore.SafeGit.run(repo, ["rev-parse", "--short=12", "HEAD"]) do
+      String.trim(commit)
+    else
+      _ -> "unknown"
     end
   end
 

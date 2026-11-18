@@ -130,15 +130,20 @@ defmodule CodingAgent.SystemPromptEnvironmentTest do
     test "Git timeout and failed executable lookup are unavailable, not no repository", %{
       tmp_dir: tmp_dir
     } do
+      # The repository is found with file reads; the injected executables
+      # (outside it: SafeGit refuses an executable inside the repository)
+      # then fail when SafeGit runs them.
+      repo = Path.join(tmp_dir, "repo")
+      {_, 0} = System.cmd(git!(), ["init", "-q", repo])
       executable = Path.join(tmp_dir, "slow-git")
       File.write!(executable, "#!/bin/sh\nexec sleep 2\n")
       File.chmod!(executable, 0o755)
 
-      timed_out = Environment.capture(tmp_dir, git_executable: executable, git_timeout_ms: 10)
-      missing = Environment.capture(tmp_dir, git_executable: Path.join(tmp_dir, "missing-git"))
+      timed_out = Environment.capture(repo, git_executable: executable, git_timeout_ms: 10)
+      missing = Environment.capture(repo, git_executable: Path.join(tmp_dir, "missing-git"))
 
-      assert timed_out =~ "Git repository: unavailable (timeout)"
-      assert missing =~ "Git repository: unavailable"
+      assert timed_out =~ "Git discovery unavailable (timeout)"
+      assert missing =~ "Git discovery unavailable"
       refute timed_out =~ "Git repository: no"
       refute missing =~ "Git repository: no"
     end

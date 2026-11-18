@@ -4,11 +4,14 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
   status` file list with per-file `+`/`-` counts, or — when `path` is given —
   one bounded unified diff.
 
-  Targets resolve like `sessions.context` (`sessionKey` + `cwd`). Git runs
-  directly (never through a shell) with a deadline and an output cap, with
-  literal pathspecs, no external diff/textconv drivers, no fsmonitor hook and
-  no optional index locks, so a repository's own configuration cannot make a
-  read run commands or write to the index.
+  Targets resolve like `sessions.context` (`sessionKey` + `cwd`). Every Git
+  command runs through `LemonCore.SafeGit`: the repository is located with file
+  reads and must be owned by the Lemon user, and Git runs without a shell, with
+  a minimal environment, a deadline, an output cap, literal pathspecs, no
+  optional index locks and every program-selecting setting (fsmonitor, hooks,
+  filter/diff drivers, external diff, submodule recursion) disabled, so a
+  repository's own configuration cannot make a read run commands or write to
+  the index. A repository failing SafeGit's checks answers `unavailable`.
 
   Results are limited to the `cwd` subtree: listed paths are relative to `cwd`
   and a diff is served only for a path that the current status reports as
@@ -25,6 +28,7 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.NativeSessions
+  alias LemonCore.SafeGit
 
   @max_files 300
   @max_status_bytes 2_000_000
@@ -35,18 +39,8 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
   @timeout_ms 5_000
   @max_path_bytes 4_096
 
-  @git_config [
-    "--no-optional-locks",
-    "--literal-pathspecs",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "core.quotepath=off",
-    "-c",
-    "color.ui=never",
-    "-c",
-    "diff.noprefix=false"
-  ]
+  # Output formatting the parsers below rely on; SafeGit's settings follow.
+  @format_config [{"core.quotepath", "off"}, {"diff.noprefix", "false"}]
 
   @impl true
   def name, do: "sessions.changes"
@@ -67,8 +61,8 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
          :ok <- workspace(cwd),
          {:ok, git} <- git_executable() do
       case repository(git, cwd) do
-        {:ok, repo} when is_nil(path) -> status_response(git, cwd, key, repo)
-        {:ok, repo} -> diff_response(git, cwd, key, repo, path, content?)
+        {:ok, git, repo} when is_nil(path) -> status_response(git, cwd, key, repo)
+        {:ok, git, repo} -> diff_response(git, cwd, key, repo, path, content?)
         :not_repository -> {:ok, not_repository(key, path)}
         {:error, reason} -> failure(reason)
       end
@@ -116,9 +110,9 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
   end
 
   defp git_executable do
-    case System.find_executable("git") do
-      nil -> {:error, {:unavailable, "git is not available on this host", nil}}
-      git -> {:ok, git}
+    case SafeGit.executable() do
+      {:ok, git} -> {:ok, git}
+      {:error, _} -> {:error, {:unavailable, "git is not available on this host", nil}}
     end
   end
 
@@ -133,22 +127,32 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
 
   # ── Repository discovery ───────────────────────────────────────────────
 
-  defp repository(git, cwd) do
-    case git(git, cwd, ["rev-parse", "--is-inside-work-tree", "--show-prefix"], 4_096) do
-      {:ok, out, 0} ->
-        case String.split(out, "\n") do
-          ["true", prefix | _] -> {:ok, %{prefix: prefix, base: base(git, cwd)}}
-          _ -> :not_repository
+  # `git` becomes the SafeGit repository and executable every later command
+  # uses.
+  defp repository(executable, cwd) do
+    case SafeGit.repository(cwd) do
+      {:ok, safe} ->
+        git = %{executable: executable, repo: safe}
+
+        case git(git, cwd, ["rev-parse", "--is-inside-work-tree", "--show-prefix"], 4_096) do
+          {:ok, out, 0} ->
+            case String.split(out, "\n") do
+              ["true", prefix | _] -> {:ok, git, %{prefix: prefix, base: base(git, cwd)}}
+              _ -> :not_repository
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+
+          _ ->
+            {:error, :git_failed}
         end
 
-      {:ok, out, _status} ->
-        if out =~ "not a git repository", do: :not_repository, else: {:error, :git_failed}
+      :not_repository ->
+        :not_repository
 
       {:error, reason} ->
         {:error, reason}
-
-      {:truncated, _, _} ->
-        {:error, :git_failed}
     end
   end
 
@@ -551,67 +555,14 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
 
   # ── Git runner ─────────────────────────────────────────────────────────
 
-  # A port rather than System.cmd/3 so output is bounded while it is read and
-  # the command is closed on timeout or overflow. No shell is involved.
-  defp git(git, cwd, args, max_bytes) do
-    port =
-      Port.open({:spawn_executable, String.to_charlist(git)}, [
-        :binary,
-        :exit_status,
-        :use_stdio,
-        :stderr_to_stdout,
-        :hide,
-        cd: String.to_charlist(cwd),
-        args: Enum.map(@git_config ++ args, &String.to_charlist/1),
-        env: [
-          {~c"GIT_OPTIONAL_LOCKS", ~c"0"},
-          {~c"GIT_TERMINAL_PROMPT", ~c"0"},
-          {~c"GIT_PAGER", ~c"cat"},
-          {~c"LC_ALL", ~c"C"},
-          {~c"GIT_DIR", false},
-          {~c"GIT_WORK_TREE", false},
-          {~c"GIT_INDEX_FILE", false},
-          {~c"GIT_EXTERNAL_DIFF", false}
-        ]
-      ])
-
-    collect(port, System.monotonic_time(:millisecond) + @timeout_ms, [], 0, max_bytes)
-  rescue
-    _ -> {:error, :command_unavailable}
-  end
-
-  defp collect(port, deadline, chunks, size, max_bytes) do
-    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
-
-    receive do
-      {^port, {:data, data}} ->
-        if size + byte_size(data) > max_bytes do
-          part = binary_part(data, 0, max_bytes - size)
-          close_port(port)
-          {:truncated, IO.iodata_to_binary(Enum.reverse([part | chunks])), :unknown}
-        else
-          collect(port, deadline, [data | chunks], size + byte_size(data), max_bytes)
-        end
-
-      {^port, {:exit_status, status}} ->
-        {:ok, IO.iodata_to_binary(Enum.reverse(chunks)), status}
-    after
-      remaining ->
-        close_port(port)
-        {:error, :timeout}
-    end
-  end
-
-  defp close_port(port) do
-    Port.close(port)
-
-    receive do
-      {^port, {:exit_status, _}} -> :ok
-    after
-      0 -> :ok
-    end
-  rescue
-    ArgumentError -> :ok
+  defp git(%{executable: executable, repo: repo}, cwd, args, max_bytes) do
+    SafeGit.run(repo, args,
+      git: executable,
+      cd: cwd,
+      timeout_ms: @timeout_ms,
+      max_bytes: max_bytes,
+      config: @format_config
+    )
   end
 
   # Strings leave as valid, bounded UTF-8 (file names and contents need not be).

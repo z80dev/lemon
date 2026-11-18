@@ -9,18 +9,18 @@ defmodule CodingAgent.InternalUrls.GitHubProtocol do
   @max_pages 10
 
   def read(uri, cwd, opts) do
-    with {:ok, kind, owner, repo, number, view} <- parse(uri, cwd, opts),
+    with {:ok, kind, owner, repo, number, view} <- parse(uri, cwd),
          {:ok, text} <- render(kind, owner, repo, number, view, cwd, opts) do
       %AgentToolResult{content: [%TextContent{text: bounded(text)}], details: %{url: uri}}
       |> ToolResultTrust.untrusted(:api)
     end
   end
 
-  defp parse(uri, cwd, opts) do
+  defp parse(uri, cwd) do
     [kind, reference] = String.split(uri, "://", parts: 2)
     segments = String.split(reference, "/")
 
-    with {:ok, owner, repo, number, rest} <- reference(segments, cwd, opts),
+    with {:ok, owner, repo, number, rest} <- reference(segments, cwd),
          true <- valid_repo_part?(owner) and valid_repo_part?(repo),
          {number, ""} when number > 0 <- Integer.parse(number),
          {:ok, view} <- view(kind, rest) do
@@ -31,9 +31,9 @@ defmodule CodingAgent.InternalUrls.GitHubProtocol do
     end
   end
 
-  defp reference([number | rest] = segments, cwd, opts) do
+  defp reference([number | rest] = segments, cwd) do
     if Regex.match?(~r/\A[0-9]+\z/, number) do
-      with {:ok, owner, repo} <- origin(cwd, opts), do: {:ok, owner, repo, number, rest}
+      with {:ok, owner, repo} <- origin(cwd), do: {:ok, owner, repo, number, rest}
     else
       case segments do
         [owner, repo, number | rest] -> {:ok, owner, repo, number, rest}
@@ -55,24 +55,26 @@ defmodule CodingAgent.InternalUrls.GitHubProtocol do
 
   defp view(_, _), do: {:error, "Malformed GitHub internal URL"}
 
-  defp origin(cwd, opts) do
-    case command("git", ["remote", "get-url", "origin"], cwd, opts) do
-      {remote, 0} ->
-        case Regex.run(
-               ~r/\A(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^\/\s]+)\/([^\/\s]+)\z/,
-               String.trim(remote),
-               capture: :all_but_first
-             ) do
-          [owner, repo] ->
-            {:ok, owner, String.replace_suffix(repo, ".git", "")}
+  # The cwd repository is read through SafeGit: its configuration must not make
+  # resolving an issue reference run a program.
+  defp origin(cwd) do
+    with {:ok, repo} <- LemonCore.SafeGit.repository(cwd),
+         {:ok, remote, 0} <-
+           LemonCore.SafeGit.run(repo, ["remote", "get-url", "origin"], cd: cwd) do
+      case Regex.run(
+             ~r/\A(?:https?:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^\/\s]+)\/([^\/\s]+)\z/,
+             String.trim(remote),
+             capture: :all_but_first
+           ) do
+        [owner, repo] ->
+          {:ok, owner, String.replace_suffix(repo, ".git", "")}
 
-          _ ->
-            {:error,
-             "The cwd origin remote is not a GitHub repository; use an explicit owner/repo URL"}
-        end
-
-      _ ->
-        {:error, "Cannot resolve the cwd origin remote; use an explicit owner/repo URL"}
+        _ ->
+          {:error,
+           "The cwd origin remote is not a GitHub repository; use an explicit owner/repo URL"}
+      end
+    else
+      _ -> {:error, "Cannot resolve the cwd origin remote; use an explicit owner/repo URL"}
     end
   end
 

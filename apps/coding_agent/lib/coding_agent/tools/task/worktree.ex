@@ -230,10 +230,12 @@ defmodule CodingAgent.Tools.Task.Worktree do
     end
   end
 
+  # The operator-trusted executable (`LemonCore.SafeGit.executable/0`), never
+  # one found on a workspace-controlled PATH.
   defp git_executable do
-    case System.find_executable("git") do
-      nil -> {:error, "Git executable is required to prepare a task worktree"}
-      git -> {:ok, git}
+    case LemonCore.SafeGit.executable() do
+      {:ok, git} -> {:ok, git}
+      {:error, _} -> {:error, "Git executable is required to prepare a task worktree"}
     end
   end
 

@@ -298,6 +298,15 @@ defmodule LemonCore.Config.Validator do
     )
     |> validate_task_config(Map.get(agent, :task))
     |> validate_compaction_thresholds(Map.get(agent, :compaction))
+    |> validate_git_path(Map.get(agent, :git_path))
+  end
+
+  defp validate_git_path(errors, nil), do: errors
+
+  defp validate_git_path(errors, path) do
+    if is_binary(path) and Path.type(path) == :absolute,
+      do: errors,
+      else: ["runtime.git_path: must be an absolute executable path" | errors]
   end
 
   defp validate_compaction_thresholds(errors, %{} = compaction) do

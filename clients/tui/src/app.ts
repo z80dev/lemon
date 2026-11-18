@@ -158,6 +158,8 @@ export interface AppShellOptions {
 	cwd?: string;
 	/** Test seam for the status bar's git poll. */
 	readBranch?: (cwd: string) => Promise<string | null>;
+	/** `[runtime] git_path` from the global config for that poll. */
+	gitPath?: unknown;
 	/**
 	 * What `main.ts` resolved from env + config. `auto` keeps following the
 	 * terminal's OSC 11 reports for as long as the client runs.
@@ -399,7 +401,8 @@ export class AppShell {
 		this.#statusBar = new StatusBar({
 			data: () => this.statusData(),
 			cwd: this.#cwd,
-			readBranch: options.readBranch ?? getGitModeline,
+			readBranch:
+				options.readBranch ?? ((cwd) => getGitModeline(cwd, { gitPath: options.gitPath })),
 			onChange: () => this.tui.requestRender(),
 			onNativeAction: (action) => this.#statusAction(action),
 		});

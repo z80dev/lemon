@@ -5,9 +5,11 @@ defmodule LemonCore.Context do
   Supported references are `@file:<path>`, `@folder:<path>`, `@git-diff`
   (optionally `:staged` or `:<safe-revision>`), `@url:<http(s)-url>`, and
   `@session:<session-key>`. Local references are confined to `:root`, reject
-  traversal and symlinks, and never use a shell. Document bytes are delegated
-  to `LemonCore.Context.Document`, which sniffs PDF, DOCX, XLSX, PPTX, ipynb,
-  and plain text.
+  traversal and symlinks, and never use a shell. `@git-diff` runs through
+  `LemonCore.SafeGit`, so the repository's configuration cannot make it run a
+  program (no external diff, textconv, filter or fsmonitor). Document bytes are
+  delegated to `LemonCore.Context.Document`, which sniffs PDF, DOCX, XLSX,
+  PPTX, ipynb, and plain text.
 
   `preview/2` performs the same bounded selection as `resolve/2` but removes
   selected text. Every response includes the effective budget, selected byte
@@ -15,7 +17,7 @@ defmodule LemonCore.Context do
   """
 
   alias LemonCore.Context.{Document, URLFetcher}
-  alias LemonCore.SessionLifecycle
+  alias LemonCore.{SafeGit, SessionLifecycle}
 
   @version 1
   @default_max_output_bytes 120_000
@@ -195,15 +197,29 @@ defmodule LemonCore.Context do
   defp resolve_git_diff(reference, selector, root, budget) do
     with :ok <- safe_git_selector(selector),
          {args, label} <- git_args(selector),
-         {output, 0} <-
-           System.cmd("git", ["-C", root, "diff", "--no-ext-diff"] ++ args,
-             stderr_to_stdout: true
-           ),
+         {:ok, output} <- git_diff(root, args, budget),
          :ok <- under_size(byte_size(output), budget.max_input_bytes) do
       source(reference, "git-diff", label, output, line_count(output), [], format: :diff)
     else
       {:error, reason} -> omit(reference, reason_name(reason))
-      {_output, _status} -> omit(reference, "git_diff_failed")
+    end
+  end
+
+  defp git_diff(root, args, budget) do
+    with {:ok, repo} <- SafeGit.repository(root),
+         {:ok, output, 0} <-
+           SafeGit.run(repo, ["diff" | args],
+             cd: root,
+             timeout_ms: budget.timeout_ms,
+             max_bytes: budget.max_input_bytes + 1
+           ) do
+      {:ok, output}
+    else
+      {:truncated, output, _} ->
+        {:error, {:input_too_large, byte_size(output), budget.max_input_bytes}}
+
+      _ ->
+        {:error, :git_diff_failed}
     end
   end
 

@@ -3,8 +3,10 @@ defmodule CodingAgent.Tools.IgnoreFilter do
   `.gitignore`/`.ignore` filtering for the Elixir fallbacks of `find` and
   `grep`, matching what `fd`/`rg` skip by default.
 
-  Git supplies repository/global `.gitignore` semantics through `check-ignore`.
-  When Git is unavailable or the search root is itself ignored, local
+  Git supplies repository `.gitignore` semantics through `check-ignore`, run by
+  `LemonCore.SafeGit` (global configuration is not read, so only the default
+  `~/.config/git/ignore` global file applies). When Git is unavailable, the
+  repository fails SafeGit's checks or the search root is itself ignored, local
   `.gitignore` files under that root are evaluated instead. Hierarchical
   `.ignore` files are evaluated independently, including outside a repository,
   and take precedence over all `.gitignore` rules.
@@ -142,13 +144,13 @@ defmodule CodingAgent.Tools.IgnoreFilter do
   end
 
   defp git_ignored(paths, search_dir) do
-    with git when is_binary(git) <- System.find_executable("git"),
-         {:ok, root_ignored} <- check_ignore(git, search_dir, [search_dir]),
+    with {:ok, repo} <- LemonCore.SafeGit.repository(search_dir),
+         {:ok, root_ignored} <- check_ignore(repo, search_dir, [search_dir]),
          true <- MapSet.size(root_ignored) == 0 do
       paths
       |> Enum.chunk_every(@check_ignore_chunk)
       |> Enum.reduce_while({:ok, MapSet.new()}, fn chunk, {:ok, acc} ->
-        case check_ignore(git, search_dir, chunk) do
+        case check_ignore(repo, search_dir, chunk) do
           {:ok, ignored} -> {:cont, {:ok, MapSet.union(acc, ignored)}}
           :unavailable -> {:halt, :unavailable}
         end
@@ -158,35 +160,23 @@ defmodule CodingAgent.Tools.IgnoreFilter do
     end
   end
 
-  defp check_ignore(git, search_dir, paths) do
+  defp check_ignore(repo, search_dir, paths) do
     # Git accepts -z only with --stdin. Verbose non-matches produce exactly
     # four NUL-delimited fields per input, so we can read the complete batch
-    # before closing stdin. GIT_FLUSH avoids waiting on Git's output buffer.
-    args = [
-      "-C",
-      search_dir,
-      "check-ignore",
-      "--no-index",
-      "--stdin",
-      "-z",
-      "--verbose",
-      "--non-matching"
-    ]
+    # before closing stdin. SafeGit sets GIT_FLUSH so Git does not buffer.
+    args = ["check-ignore", "--no-index", "--stdin", "-z", "--verbose", "--non-matching"]
 
-    port =
-      LemonCore.NativeProcess.open({:spawn_executable, git}, [
-        :binary,
-        :exit_status,
-        :stderr_to_stdout,
-        args: args,
-        env: [{~c"GIT_FLUSH", ~c"1"}]
-      ])
+    case LemonCore.SafeGit.open(repo, args, cd: search_dir) do
+      {:ok, %{port: port} = handle} ->
+        try do
+          true = Port.command(port, Enum.map(paths, &[&1, 0]))
+          collect_check_ignore(port, length(paths) * 4, [])
+        after
+          LemonCore.SafeGit.close(handle)
+        end
 
-    try do
-      true = Port.command(port, Enum.map(paths, &[&1, 0]))
-      collect_check_ignore(port, length(paths) * 4, [])
-    after
-      if Port.info(port), do: Port.close(port)
+      {:error, _} ->
+        :unavailable
     end
   rescue
     _ -> :unavailable

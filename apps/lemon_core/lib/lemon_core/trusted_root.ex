@@ -44,6 +44,71 @@ defmodule LemonCore.TrustedRoot do
   """
 
   @max_gitfile_bytes 4_096
+  @metadata_timeout_ms 1_000
+  @metadata_reader "/usr/bin/head"
+
+  @doc """
+  Read a small Git metadata file (`.git` file, `commondir`, `HEAD`): at most
+  `max` bytes of a regular file, else `:error`.
+
+  The file must be regular by `lstat` before and after the read, with the same
+  identity. The read itself runs in a killable child (`#{@metadata_reader}`)
+  with a #{@metadata_timeout_ms} ms deadline, so a path swapped for a FIFO or
+  device between the checks cannot block the caller.
+  """
+  @spec read_metadata(String.t(), pos_integer()) :: {:ok, binary()} | :error
+  def read_metadata(path, max \\ @max_gitfile_bytes) when is_binary(path) do
+    with {:ok, %{type: :regular} = before} <- File.lstat(path),
+         {:ok, data} <- killable_read(path, max),
+         {:ok, %{type: :regular} = after_stat} <- File.lstat(path),
+         true <-
+           before.inode == after_stat.inode and before.major_device == after_stat.major_device and
+             before.minor_device == after_stat.minor_device do
+      {:ok, data}
+    else
+      _ -> :error
+    end
+  end
+
+  defp killable_read(path, max) do
+    port =
+      LemonCore.NativeProcess.open({:spawn_executable, @metadata_reader}, [
+        :binary,
+        :exit_status,
+        :use_stdio,
+        :hide,
+        args: ["-c", Integer.to_string(max + 1), "--", path],
+        env: for({name, _} <- System.get_env(), do: {String.to_charlist(name), false})
+      ])
+
+    collect_metadata(port, System.monotonic_time(:millisecond) + @metadata_timeout_ms, [], max)
+  rescue
+    _ -> :error
+  end
+
+  defp collect_metadata(port, deadline, chunks, max) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {^port, {:data, data}} ->
+        collect_metadata(port, deadline, [data | chunks], max)
+
+      {^port, {:exit_status, 0}} ->
+        data = IO.iodata_to_binary(Enum.reverse(chunks))
+        if byte_size(data) <= max, do: {:ok, data}, else: :error
+
+      {^port, {:exit_status, _}} ->
+        :error
+    after
+      remaining ->
+        with {:os_pid, pid} when pid > 1 <- Port.info(port, :os_pid) do
+          LemonCore.ProcessGroup.terminate(pid, scope: :process)
+        end
+
+        if Port.info(port), do: Port.close(port)
+        :error
+    end
+  end
 
   @doc """
   Resolve every path component, failing closed on missing paths or symlink
@@ -76,6 +141,30 @@ defmodule LemonCore.TrustedRoot do
   @spec git_root(String.t()) :: String.t() | nil
   def git_root(dir) when is_binary(dir), do: find_git_root(Path.expand(dir))
   def git_root(_), do: nil
+
+  @doc """
+  The directories Git uses for the repository whose root is `root` (a
+  `git_root/1` result): `git_dir` is `root/.git` or the `gitdir:` target of a
+  `.git` file, and `common_dir` is the directory named by its `commondir`
+  file (linked worktrees), else `git_dir`, as Git resolves them. Both are
+  realpaths. `:error` unless `root/.git` is a repository marker and the common
+  directory holds `objects/` and `refs/`.
+  """
+  @spec git_dirs(String.t()) :: {:ok, %{git_dir: String.t(), common_dir: String.t()}} | :error
+  def git_dirs(root) when is_binary(root) do
+    marker = Path.join(root, ".git")
+
+    with true <- repository_marker?(marker),
+         {:ok, git_dir} <- marker_git_dir(marker),
+         {:ok, git_dir} <- realpath(git_dir),
+         {:ok, common} <- common_dir(git_dir),
+         {:ok, common} <- realpath(common),
+         true <- store_dir?(common) do
+      {:ok, %{git_dir: git_dir, common_dir: common}}
+    else
+      _ -> :error
+    end
+  end
 
   @doc """
   `dir` and its ancestors up to and including `root`, nearest first, as
@@ -247,13 +336,47 @@ defmodule LemonCore.TrustedRoot do
   end
 
   defp gitfile_repository?(marker) do
-    with {:ok, data} <- read_bounded(marker, @max_gitfile_bytes),
-         [_, target] <- Regex.run(~r/\Agitdir:[ \t]*(\S[^\r\n]*?)[ \t]*\r?\n?\z/, data),
-         gitdir = Path.expand(target, Path.dirname(marker)),
+    with {:ok, gitdir} <- gitfile_target(marker),
          {:ok, %{type: :directory}} <- File.stat(gitdir) do
       repository_dir?(gitdir)
     else
       _ -> false
+    end
+  end
+
+  defp marker_git_dir(marker) do
+    case File.lstat(marker) do
+      {:ok, %{type: :directory}} -> {:ok, marker}
+      {:ok, %{type: :regular}} -> gitfile_target(marker)
+      _ -> :error
+    end
+  end
+
+  defp gitfile_target(marker) do
+    with {:ok, data} <- read_metadata(marker),
+         [_, target] <- Regex.run(~r/\Agitdir:[ \t]*(\S[^\r\n]*?)[ \t]*\r?\n?\z/, data) do
+      {:ok, Path.expand(target, Path.dirname(marker))}
+    else
+      _ -> :error
+    end
+  end
+
+  # Git uses the directory a `commondir` file names whenever that file exists.
+  defp common_dir(git_dir) do
+    path = Path.join(git_dir, "commondir")
+
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} ->
+        case read_metadata(path) do
+          {:ok, data} -> {:ok, data |> String.trim() |> Path.expand(git_dir)}
+          _ -> :error
+        end
+
+      {:error, :enoent} ->
+        {:ok, git_dir}
+
+      _ ->
+        :error
     end
   end
 
@@ -265,7 +388,7 @@ defmodule LemonCore.TrustedRoot do
   end
 
   defp common_store?(gitdir) do
-    case read_bounded(Path.join(gitdir, "commondir"), @max_gitfile_bytes) do
+    case read_metadata(Path.join(gitdir, "commondir")) do
       {:ok, data} ->
         common = data |> String.trim() |> Path.expand(gitdir)
         store_dir?(common)

@@ -124,6 +124,20 @@ apps; optional consumers register at runtime. See [README](README.md),
   or redirect-following client to a guard. DNS failure is never public,
   metadata is never reachable, and redirects are re-authorized per hop.
 
+## Automatic Git
+
+- `LemonCore.SafeGit` is the only runner for Git commands Lemon starts on its
+  own in a project repository (environment context, ignore filtering, origin
+  lookup, `@git-diff`, `sessions.changes`, omp discovery/cleanup reads,
+  build/version metadata). It runs the operator-trusted `git`
+  (`SafeGit.executable/0`: `[runtime] git_path` or fixed system directories,
+  never `PATH`), locates the repository with bounded file reads, requires
+  Lemon-user ownership, uses a minimal environment and a private `GIT_DIR`
+  whose Lemon-written config replaces the repository's. Never add a bare
+  `System.cmd("git", …)` or a `PATH` lookup for such a read; extend SafeGit's
+  subcommand set instead. See the threat model's "Repositories Lemon reads on
+  its own".
+
 ## Verification and packaging
 
 From the umbrella root: `mix test apps/lemon_core/test`.

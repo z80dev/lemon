@@ -54,9 +54,10 @@ Everything else is **operator-only** and must live in `~/.lemon/config.toml`:
 references), `[secrets]` and external secret sources, `[gateway]` (including
 voice reply hosts and keys), web search/fetch hosts, keys and SSRF switches
 (`allow_private_network`, `allowed_hostnames`), `runtime.extension_paths` and
-`[runtime.extensions]`, `[runtime.shell]`, LSP server commands/args/env, WASM
-settings, `[runtime.provider_routing]` and credential pools, `[logging]`,
-`[automation]`, update settings, and any key not listed above.
+`[runtime.extensions]`, `[runtime.shell]`, `runtime.git_path`, LSP server
+commands/args/env, WASM settings, `[runtime.provider_routing]` and credential
+pools, `[logging]`, `[automation]`, update settings, and any key not listed
+above.
 
 An ignored project key is never silently dropped: runtime loading logs a
 warning, and `lemon config validate` and `lemon doctor` report one error per
@@ -264,6 +265,11 @@ enabled = false
 extension_paths = []
 # Optional cap on tool-using turns per prompt. Unset or 0 = unlimited (default).
 # max_tool_turns = 200
+# Optional absolute path of the git Lemon runs for its own repository reads
+# (environment context, sessions.changes, @git-diff, omp discovery) and the TUI
+# status line. Global config only. Unset: the first git in /usr/bin,
+# /usr/local/bin, /opt/homebrew/bin, /bin; PATH is never searched. Git >= 2.31.
+# git_path = "/usr/bin/git"
 
 [runtime.extensions]
 # false: no session compiles an extension file, installs an extension hook,
