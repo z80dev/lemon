@@ -33,8 +33,26 @@ const MAX_LOG_ENTRIES: usize = 1000;
 const MAX_LOG_MESSAGE_BYTES: usize = 4096;
 const HOST_SECRET_EXISTS_TARGET: &str = "__lemon.secret.exists";
 const HOST_SECRET_RESOLVE_TARGET: &str = "__lemon.secret.resolve";
+const RESERVED_HOST_TARGET_PREFIX: &str = "__lemon";
 
-type HostInvokeFn = Arc<dyn Fn(String, String) -> Result<String, String> + Send + Sync>;
+/// Who is asking the host. `Tool` carries guest-chosen `tool-invoke` targets and
+/// may never reach reserved `__lemon.*` targets. `Internal` is runtime-originated
+/// (secret lookups) and names the tool whose `secrets.allowed_names` apply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostCallChannel {
+    Tool,
+    Internal { caller: String },
+}
+
+pub type HostInvokeFn =
+    Arc<dyn Fn(HostCallChannel, String, String) -> Result<String, String> + Send + Sync>;
+
+fn is_reserved_host_target(target: &str) -> bool {
+    target
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with(RESERVED_HOST_TARGET_PREFIX)
+}
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -226,6 +244,7 @@ impl Runtime {
                         schema_json: prepared.schema_json.clone(),
                         capabilities: prepared.capabilities.summary(),
                         auth: discovered_tool_auth(&prepared.capabilities),
+                        secret_allowed_names: prepared.capabilities.secret_allowed_names(),
                         warnings: Vec::new(),
                     });
 
@@ -358,12 +377,13 @@ fn extract_metadata(
     };
 
     let host_invoke: HostInvokeFn =
-        Arc::new(|tool, _params| Err(format!("host invoke unavailable for {}", tool)));
+        Arc::new(|_channel, tool, _params| Err(format!("host invoke unavailable for {}", tool)));
 
     let mut store = Store::new(
         engine,
         StoreData::new(
             runtime,
+            fallback_name.to_string(),
             CapabilitiesFile::default(),
             PathBuf::from("."),
             0,
@@ -480,6 +500,7 @@ fn invoke_tool_internal(
         &snapshot.engine,
         StoreData::new(
             snapshot.clone(),
+            tool.name.clone(),
             tool.capabilities.clone(),
             workspace_root,
             depth,
@@ -598,6 +619,8 @@ impl ResourceLimiter for WasmResourceLimiter {
 
 struct StoreData {
     runtime: RuntimeSnapshot,
+    /// Discovered name of the tool this store runs; names the caller on internal host calls.
+    tool_name: String,
     capabilities: CapabilitiesFile,
     workspace_root: PathBuf,
     depth: u32,
@@ -615,6 +638,7 @@ struct StoreData {
 impl StoreData {
     fn new(
         runtime: RuntimeSnapshot,
+        tool_name: String,
         capabilities: CapabilitiesFile,
         workspace_root: PathBuf,
         depth: u32,
@@ -632,6 +656,7 @@ impl StoreData {
 
         Self {
             runtime,
+            tool_name,
             capabilities,
             workspace_root,
             depth,
@@ -779,19 +804,42 @@ impl StoreData {
         self.env_secret(name).is_some()
     }
 
+    fn internal_channel(&self) -> HostCallChannel {
+        HostCallChannel::Internal {
+            caller: self.tool_name.clone(),
+        }
+    }
+
     fn host_secret_exists(&self, name: &str) -> Option<bool> {
+        if !self.capabilities.secret_allowed(name) {
+            return Some(false);
+        }
+
         let payload = json!({ "name": name }).to_string();
 
-        let response = (self.host_invoke)(HOST_SECRET_EXISTS_TARGET.to_string(), payload).ok()?;
+        let response = (self.host_invoke)(
+            self.internal_channel(),
+            HOST_SECRET_EXISTS_TARGET.to_string(),
+            payload,
+        )
+        .ok()?;
         parse_host_secret_exists(&response)
     }
 
     fn resolve_secret_for_host(&self, name: &str) -> Option<String> {
+        if !self.capabilities.secret_allowed(name) {
+            return None;
+        }
+
         let payload = json!({ "name": name }).to_string();
 
-        let from_host = (self.host_invoke)(HOST_SECRET_RESOLVE_TARGET.to_string(), payload)
-            .ok()
-            .and_then(|response| parse_host_secret_value(&response));
+        let from_host = (self.host_invoke)(
+            self.internal_channel(),
+            HOST_SECRET_RESOLVE_TARGET.to_string(),
+            payload,
+        )
+        .ok()
+        .and_then(|response| parse_host_secret_value(&response));
 
         from_host.or_else(|| self.env_secret(name))
     }
@@ -980,6 +1028,15 @@ impl near::agent::host::Host for StoreData {
             .resolve_tool_alias(&alias)
             .ok_or_else(|| format!("unknown tool alias: {}", alias))?;
 
+        // Aliases are author-supplied; reserved host targets are reachable only
+        // through the runtime's internal channel under the caller's allowlist.
+        if is_reserved_host_target(&target) {
+            return Err(format!(
+                "reserved host target cannot be aliased: {}",
+                target.trim()
+            ));
+        }
+
         self.tool_invoke_count += 1;
         if self.tool_invoke_count > self.capabilities.tool_invoke_limit() {
             return Err("tool invocation rate limit exceeded".to_string());
@@ -1012,7 +1069,7 @@ impl near::agent::host::Host for StoreData {
 
             Ok(result.output_json.unwrap_or_else(|| "null".to_string()))
         } else {
-            (self.host_invoke)(target, params_json)
+            (self.host_invoke)(HostCallChannel::Tool, target, params_json)
         }
     }
 
@@ -1072,8 +1129,12 @@ impl near::agent::host::Host for StoreData {
                 }),
         );
 
+        // Never inherit the runtime's environment: only a non-secret baseline
+        // plus the guest's env, whose secrets passed the allowlist above.
         let mut cmd = Command::new(&program);
         cmd.args(&resolved_args);
+        cmd.env_clear();
+        cmd.envs(exec_baseline_env()?);
         for (key, value) in &resolved_env {
             cmd.env(key, value);
         }
@@ -1096,6 +1157,27 @@ impl near::agent::host::Host for StoreData {
             stderr,
         })
     }
+}
+
+const EXEC_DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
+/// Non-secret environment for exec subprocesses: PATH, locale, TMPDIR, and a
+/// sandbox HOME so tools cannot read the user's dotfiles via `$HOME`.
+fn exec_baseline_env() -> Result<Vec<(String, String)>, String> {
+    let tmp = std::env::temp_dir();
+    let home = tmp.join(format!("lemon-wasm-exec-home-{}", std::process::id()));
+    fs::create_dir_all(&home).map_err(|err| format!("failed to create exec HOME: {}", err))?;
+
+    let mut env = vec![
+        (
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_else(|_| EXEC_DEFAULT_PATH.to_string()),
+        ),
+        ("HOME".to_string(), home.to_string_lossy().into_owned()),
+        ("TMPDIR".to_string(), tmp.to_string_lossy().into_owned()),
+    ];
+    env.extend(std::env::vars().filter(|(key, _)| key == "LANG" || key.starts_with("LC_")));
+    Ok(env)
 }
 
 fn resolve_secret_placeholders_with<F>(
@@ -1416,9 +1498,7 @@ mod tests {
     // ==================== exec_command integration tests ====================
     // These test the full exec path using real programs (echo, cat, etc.)
 
-    use super::{
-        HostInvokeFn, RuntimeSnapshot, StoreData,
-    };
+    use super::{HostCallChannel, HostInvokeFn, RuntimeSnapshot, StoreData};
     use crate::capabilities::{
         CapabilitiesFile, ExecAllowlistEntry, ExecCapabilitySchema, RateLimitSchema,
         SecretsCapabilitySchema,
@@ -1426,21 +1506,29 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    type HostCallLog = Arc<std::sync::Mutex<Vec<(HostCallChannel, String)>>>;
+
     fn make_store_data(capabilities: CapabilitiesFile) -> StoreData {
-        let host_invoke: HostInvokeFn = Arc::new(|target, params| {
-            // Mock secret resolution: return the secret name as value for testing
-            if target == "__lemon.secret.resolve" {
-                let parsed: serde_json::Value =
-                    serde_json::from_str(&params).unwrap_or_default();
+        make_recording_store_data(capabilities).0
+    }
+
+    fn make_recording_store_data(capabilities: CapabilitiesFile) -> (StoreData, HostCallLog) {
+        let calls: HostCallLog = Arc::default();
+        let log = calls.clone();
+        let host_invoke: HostInvokeFn = Arc::new(move |channel, target, params| {
+            log.lock().unwrap().push((channel.clone(), target.clone()));
+            // Mirror the host: reserved targets only on the internal channel.
+            let internal = matches!(channel, HostCallChannel::Internal { .. });
+            if target == "__lemon.secret.resolve" && internal {
+                let parsed: serde_json::Value = serde_json::from_str(&params).unwrap_or_default();
                 let name = parsed["name"].as_str().unwrap_or("");
                 match name {
                     "TEST_SECRET" => Ok(r#"{"value":"s3cret_val"}"#.to_string()),
                     "ETH_PRIVATE_KEY" => Ok(r#"{"value":"0xdeadbeef1234567890"}"#.to_string()),
                     _ => Err(format!("unknown secret: {}", name)),
                 }
-            } else if target == "__lemon.secret.exists" {
-                let parsed: serde_json::Value =
-                    serde_json::from_str(&params).unwrap_or_default();
+            } else if target == "__lemon.secret.exists" && internal {
+                let parsed: serde_json::Value = serde_json::from_str(&params).unwrap_or_default();
                 let name = parsed["name"].as_str().unwrap_or("");
                 match name {
                     "TEST_SECRET" | "ETH_PRIVATE_KEY" => Ok(r#"{"exists":true}"#.to_string()),
@@ -1457,14 +1545,16 @@ mod tests {
             tools: Arc::new(HashMap::new()),
         };
 
-        StoreData::new(
+        let store = StoreData::new(
             runtime,
+            "test_tool".to_string(),
             capabilities,
             PathBuf::from("."),
             0,
             4,
             host_invoke,
-        )
+        );
+        (store, calls)
     }
 
     fn exec_caps_for_echo() -> CapabilitiesFile {
@@ -1798,5 +1888,160 @@ mod tests {
         let result = result.expect("exec should succeed");
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout.trim(), "hello_env");
+    }
+
+    // ==================== reserved host target tests ====================
+
+    fn caps_with_alias(target: &str) -> CapabilitiesFile {
+        CapabilitiesFile {
+            tool_invoke: Some(crate::capabilities::ToolInvokeCapabilitySchema {
+                aliases: [("steal".to_string(), target.to_string())]
+                    .into_iter()
+                    .collect(),
+                rate_limit: None,
+            }),
+            secrets: Some(SecretsCapabilitySchema {
+                allowed_names: vec!["TEST_*".to_string()],
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tool_invoke_alias_to_reserved_secret_target_is_rejected() {
+        use super::near::agent::host::Host;
+
+        for target in [
+            "__lemon.secret.resolve",
+            "__lemon.secret.exists",
+            "__LEMON.secret.resolve",
+            " __lemon.secret.resolve",
+            "__lemon.anything",
+        ] {
+            let mut store = make_store_data(caps_with_alias(target));
+            let result = store.tool_invoke(
+                "steal".to_string(),
+                r#"{"name":"ETH_PRIVATE_KEY"}"#.to_string(),
+            );
+            let err = result.expect_err("reserved alias must fail");
+            assert!(
+                err.contains("reserved host target"),
+                "target {target:?}: unexpected error {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn secret_lookups_use_internal_channel_naming_the_caller() {
+        use super::near::agent::host::Host;
+
+        let (mut store, calls) = make_recording_store_data(caps_with_alias("other_tool"));
+        assert!(store.secret_exists("TEST_SECRET".to_string()));
+        // Not in the allowlist: never reaches the host at all.
+        assert!(!store.secret_exists("ETH_PRIVATE_KEY".to_string()));
+        assert_eq!(store.resolve_secret_for_host("ETH_PRIVATE_KEY"), None);
+
+        let _ = store.tool_invoke("steal".to_string(), "{}".to_string());
+
+        let calls = calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            vec![
+                (
+                    HostCallChannel::Internal {
+                        caller: "test_tool".to_string()
+                    },
+                    "__lemon.secret.exists".to_string()
+                ),
+                (HostCallChannel::Tool, "other_tool".to_string()),
+            ]
+        );
+    }
+
+    fn printenv_caps(allowed_names: Vec<String>) -> CapabilitiesFile {
+        CapabilitiesFile {
+            exec: Some(ExecCapabilitySchema {
+                allowlist: vec![ExecAllowlistEntry {
+                    program: "printenv".to_string(),
+                    allowed_subcommands: vec![],
+                    blocked_flags: vec![],
+                }],
+                credentials: HashMap::new(),
+                rate_limit: None,
+                timeout_secs: Some(10),
+            }),
+            secrets: Some(SecretsCapabilitySchema { allowed_names }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn exec_does_not_inherit_parent_secret_env() {
+        use super::near::agent::host::Host;
+
+        // SAFETY: test-only variable name, not read by other tests.
+        unsafe { std::env::set_var("LEMON_T01C_PARENT_ONLY_SECRET", "parent-leak-value") };
+
+        // Empty allowlist: the parent secret must be absent and placeholders refused.
+        let mut store = make_store_data(printenv_caps(vec![]));
+        let out = store
+            .exec_command(
+                "printenv".to_string(),
+                "[]".to_string(),
+                "{}".to_string(),
+                Some(5000),
+            )
+            .expect("printenv runs");
+        assert!(!out.stdout.contains("parent-leak-value"), "{}", out.stdout);
+        assert!(!out.stdout.contains("LEMON_T01C_PARENT_ONLY_SECRET"));
+        assert!(out.stdout.contains("PATH="));
+        assert!(!out.stdout.contains(&format!(
+            "HOME={}\n",
+            std::env::var("HOME").unwrap_or_default()
+        )));
+
+        let denied = store.exec_command(
+            "printenv".to_string(),
+            "[]".to_string(),
+            r#"{"X":"{{SECRET:TEST_SECRET}}"}"#.to_string(),
+            Some(5000),
+        );
+        assert!(denied.unwrap_err().contains("not allowed"));
+
+        // Allowed injection reaches the child (redacted in output), parent secret still absent.
+        let mut store = make_store_data(printenv_caps(vec!["TEST_*".to_string()]));
+        let out = store
+            .exec_command(
+                "printenv".to_string(),
+                "[]".to_string(),
+                r#"{"X":"{{SECRET:TEST_SECRET}}"}"#.to_string(),
+                Some(5000),
+            )
+            .expect("printenv runs");
+        assert!(out.stdout.contains("X=[REDACTED]"), "{}", out.stdout);
+        assert!(!out.stdout.contains("parent-leak-value"));
+    }
+
+    #[test]
+    fn padded_secret_names_and_patterns_never_match() {
+        use super::near::agent::host::Host;
+
+        let caps = printenv_caps(vec!["TEST_SECRET".to_string(), " ETH_*".to_string()]);
+        assert!(caps.validate().is_err());
+        assert!(caps.secret_allowed("TEST_SECRET"));
+        for name in [
+            " TEST_SECRET",
+            "TEST_SECRET ",
+            "",
+            " ETH_PRIVATE_KEY",
+            "ETH_PRIVATE_KEY",
+        ] {
+            assert!(!caps.secret_allowed(name), "{name:?}");
+        }
+
+        let (mut store, calls) = make_recording_store_data(caps);
+        assert!(!store.secret_exists(" TEST_SECRET".to_string()));
+        assert!(!store.secret_exists("ETH_PRIVATE_KEY".to_string()));
+        assert!(calls.lock().unwrap().is_empty());
     }
 }

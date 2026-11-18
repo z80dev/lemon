@@ -85,6 +85,9 @@ pub struct DiscoveredTool {
     pub capabilities: ToolCapabilitiesSummary,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<DiscoveredToolAuth>,
+    /// `secrets.allowed_names` patterns; the host checks internal secret calls against them.
+    #[serde(default)]
+    pub secret_allowed_names: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -125,6 +128,11 @@ pub enum OutboundMessage {
         call_id: String,
         tool: String,
         params_json: String,
+        /// `tool` for guest `tool-invoke` aliases, `internal` for runtime secret lookups.
+        channel: String,
+        /// Tool whose capabilities govern an `internal` call.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        caller: Option<String>,
     },
 }
 

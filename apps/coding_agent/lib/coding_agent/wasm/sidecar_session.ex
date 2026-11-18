@@ -65,6 +65,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
           schema_json: String.t(),
           capabilities: map(),
           auth: map() | nil,
+          secret_allowed_names: [String.t()],
           warnings: [String.t()]
         }
 
@@ -428,13 +429,26 @@ defmodule CodingAgent.Wasm.SidecarSession do
       :binary,
       :exit_status,
       :use_stdio,
-      {:cd, cwd}
+      {:cd, cwd},
+      {:env, sidecar_env()}
     ]
 
     port = LemonCore.NativeProcess.open({:spawn_executable, runtime_path}, opts)
     {:ok, port}
   rescue
     error -> {:error, {:port_start_failed, error}}
+  end
+
+  # The runtime must not inherit provider keys or bot tokens: unset every
+  # variable except a non-secret baseline. Secrets reach it only through the
+  # allowlisted `__lemon.secret.*` internal channel.
+  @sidecar_env_keep ~w(PATH HOME LANG TMPDIR)
+
+  @doc false
+  def sidecar_env(env \\ System.get_env()) do
+    for {key, _value} <- env,
+        key not in @sidecar_env_keep and not String.starts_with?(key, "LC_"),
+        do: {String.to_charlist(key), false}
   end
 
   defp send_hello(state) do
@@ -528,10 +542,19 @@ defmodule CodingAgent.Wasm.SidecarSession do
            "call_id" => call_id,
            "tool" => tool,
            "params_json" => params_json
-         }
+         } = msg
        ) do
+    result =
+      case host_channel(state, msg, tool) do
+        {:ok, channel} ->
+          invoke_host_for_request(state.host_invoke_fun, invocation, channel, tool, params_json)
+
+        {:error, _} = error ->
+          error
+      end
+
     response_payload =
-      case invoke_host_for_request(state.host_invoke_fun, invocation, tool, params_json) do
+      case result do
         {:ok, output_json} ->
           %{
             "call_id" => call_id,
@@ -555,7 +578,31 @@ defmodule CodingAgent.Wasm.SidecarSession do
 
   defp handle_host_call_event(state, _msg), do: state
 
-  defp invoke_host_for_request(fun, invocation, tool, params_json) do
+  # The runtime marks its own secret lookups `internal` and names the calling
+  # tool; guest `tool-invoke` aliases arrive as `tool` (or with no channel) and
+  # may never reach reserved `__lemon.*` targets. The caller must be a tool
+  # this sidecar discovered; its declared `secrets.allowed_names` travel with
+  # the call so the host can refuse names outside them.
+  defp host_channel(state, %{"channel" => "internal"} = msg, _tool) do
+    caller = msg["caller"]
+
+    case Enum.find(state.discovered, &(is_binary(caller) and &1.name == caller)) do
+      %{secret_allowed_names: allowed} -> {:ok, {:internal, caller, allowed}}
+      nil -> {:error, :unknown_caller}
+    end
+  end
+
+  defp host_channel(_state, msg, tool) when is_binary(tool) do
+    cond do
+      Map.get(msg, "channel", "tool") != "tool" -> {:error, :invalid_host_channel}
+      Protocol.reserved_host_target?(tool) -> {:error, :reserved_target}
+      true -> {:ok, :tool}
+    end
+  end
+
+  defp host_channel(_state, _msg, _tool), do: {:error, :invalid_host_channel}
+
+  defp invoke_host_for_request(fun, invocation, channel, tool, params_json) do
     cond do
       not Process.alive?(invocation.owner) or AbortSignal.aborted?(invocation.signal) ->
         {:error, :aborted}
@@ -563,16 +610,20 @@ defmodule CodingAgent.Wasm.SidecarSession do
       expired?(invocation.deadline) ->
         {:error, :timeout}
 
-      true ->
-        context = Map.take(invocation, [:owner, :deadline, :signal, :parent_intent_scope])
+      is_function(fun, 3) ->
+        context =
+          invocation
+          |> Map.take([:owner, :deadline, :signal, :parent_intent_scope])
+          |> Map.put(:host_channel, channel)
 
-        safe_host_invoke(
-          fn name, params ->
-            if is_function(fun, 3), do: fun.(name, params, context), else: fun.(name, params)
-          end,
-          tool,
-          params_json
-        )
+        safe_host_invoke(fn name, params -> fun.(name, params, context) end, tool, params_json)
+
+      channel == :tool ->
+        safe_host_invoke(fun, tool, params_json)
+
+      true ->
+        # A context-less callback cannot enforce the caller's secret allowlist.
+        {:error, :host_invoke_not_configured}
     end
   end
 
@@ -596,7 +647,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
   end
 
   defp normalize_discover_result(result) when is_map(result) do
-    tools =
+    {tools, rejected} =
       result
       |> Map.get("tools", [])
       |> Enum.filter(&is_map/1)
@@ -608,20 +659,31 @@ defmodule CodingAgent.Wasm.SidecarSession do
           schema_json: to_string(tool["schema_json"] || "{}"),
           capabilities: normalize_capabilities(tool["capabilities"] || %{}),
           auth: normalize_auth_metadata(tool["auth"]),
+          # Never trimmed: the host matches exactly what the runtime enforces.
+          secret_allowed_names: tool["secret_allowed_names"] || [],
           warnings: normalize_string_list(tool["warnings"] || [])
         }
       end)
       |> Enum.reject(&(&1.name == ""))
+      |> Enum.split_with(&canonical_secret_patterns?(&1.secret_allowed_names))
+
+    rejected_errors =
+      Enum.map(rejected, &"tool #{&1.name}: non-canonical secrets.allowed_names")
 
     %{
       tools: tools,
       warnings: normalize_string_list(result["warnings"] || []),
-      errors: normalize_string_list(result["errors"] || [])
+      errors: normalize_string_list(result["errors"] || []) ++ rejected_errors
     }
   end
 
   defp normalize_discover_result(_),
     do: %{tools: [], warnings: [], errors: ["invalid_discover_result"]}
+
+  defp canonical_secret_patterns?(patterns) when is_list(patterns),
+    do: Enum.all?(patterns, &Protocol.canonical_secret_name?/1)
+
+  defp canonical_secret_patterns?(_patterns), do: false
 
   defp normalize_invoke_result(result) when is_map(result) do
     %{

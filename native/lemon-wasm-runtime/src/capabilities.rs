@@ -23,13 +23,33 @@ pub struct CapabilitiesFile {
     pub exec: Option<ExecCapabilitySchema>,
 }
 
+/// A secret name or allowlist pattern is canonical when non-empty and free of
+/// leading/trailing whitespace. Lemon's host applies the same rule.
+pub fn is_canonical_secret_name(value: &str) -> bool {
+    !value.is_empty() && value.trim() == value
+}
+
 impl CapabilitiesFile {
     pub fn from_json_file(path: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read capabilities file {}", path.display()))?;
         let parsed: Self = serde_json::from_str(&raw)
             .with_context(|| format!("failed to parse capabilities file {}", path.display()))?;
+        parsed
+            .validate()
+            .with_context(|| format!("invalid capabilities file {}", path.display()))?;
         Ok(parsed)
+    }
+
+    /// Rejects non-canonical `secrets.allowed_names` patterns (empty or with
+    /// surrounding whitespace); patterns are never trimmed.
+    pub fn validate(&self) -> Result<()> {
+        for pattern in self.secret_allowed_names() {
+            if !is_canonical_secret_name(&pattern) {
+                anyhow::bail!("non-canonical secrets.allowed_names pattern: {:?}", pattern);
+            }
+        }
+        Ok(())
     }
 
     pub fn summary(&self) -> ToolCapabilitiesSummary {
@@ -43,12 +63,23 @@ impl CapabilitiesFile {
         }
     }
 
+    pub fn secret_allowed_names(&self) -> Vec<String> {
+        self.secrets
+            .as_ref()
+            .map(|secrets| secrets.allowed_names.clone())
+            .unwrap_or_default()
+    }
+
     pub fn secret_allowed(&self, name: &str) -> bool {
+        if !is_canonical_secret_name(name) {
+            return false;
+        }
+
         match &self.secrets {
             Some(secrets) => secrets
                 .allowed_names
                 .iter()
-                .any(|pattern| match_pattern(pattern, name)),
+                .any(|pattern| is_canonical_secret_name(pattern) && match_pattern(pattern, name)),
             None => false,
         }
     }

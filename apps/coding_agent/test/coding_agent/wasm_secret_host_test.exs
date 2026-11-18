@@ -20,17 +20,13 @@ defmodule CodingAgent.WasmSecretHostTest do
     :ok
   end
 
-  test "reserved __lemon.secret.exists checks encrypted store" do
+  test "reserved __lemon.secret.exists checks encrypted store on the internal channel" do
     assert {:ok, _} = Secrets.set("WASM_TEST_SECRET", "stored")
 
     session = start_session()
 
     assert {:ok, payload} =
-             GenServer.call(
-               session,
-               {:wasm_host_tool_invoke, "__lemon.secret.exists",
-                Jason.encode!(%{"name" => "WASM_TEST_SECRET"})}
-             )
+             internal_call(session, "__lemon.secret.exists", "WASM_TEST_SECRET", ["WASM_TEST_*"])
 
     assert Jason.decode!(payload) == %{"exists" => true}
     GenServer.stop(session)
@@ -42,14 +38,92 @@ defmodule CodingAgent.WasmSecretHostTest do
     session = start_session()
 
     assert {:ok, payload} =
-             GenServer.call(
-               session,
-               {:wasm_host_tool_invoke, "__lemon.secret.resolve",
-                Jason.encode!(%{"name" => "ENV_ONLY_SECRET"})}
-             )
+             internal_call(session, "__lemon.secret.resolve", "ENV_ONLY_SECRET", [
+               "ENV_ONLY_SECRET"
+             ])
 
     assert Jason.decode!(payload) == %{"value" => "env-value", "source" => "env"}
     GenServer.stop(session)
+  end
+
+  test "reserved targets are refused on the tool channel" do
+    assert {:ok, _} = Secrets.set("WASM_TEST_SECRET", "stored")
+    session = start_session()
+    params = Jason.encode!(%{"name" => "WASM_TEST_SECRET"})
+
+    for target <- ["__lemon.secret.resolve", "__lemon.secret.exists", "__lemon.other"] do
+      assert {:error, :reserved_target} =
+               GenServer.call(session, {:wasm_host_tool_invoke, target, params})
+
+      assert {:error, :reserved_target} =
+               GenServer.call(
+                 session,
+                 {:wasm_host_tool_invoke, target, params, host_context(:tool)}
+               )
+    end
+
+    GenServer.stop(session)
+  end
+
+  test "internal channel refuses secret names outside the caller allowlist" do
+    assert {:ok, _} = Secrets.set("WASM_TEST_SECRET", "stored")
+    System.put_env("ENV_ONLY_SECRET", "env-value")
+    session = start_session()
+
+    for target <- ["__lemon.secret.resolve", "__lemon.secret.exists"],
+        name <- ["WASM_TEST_SECRET", "ENV_ONLY_SECRET"] do
+      assert {:error, :secret_not_allowed} =
+               internal_call(session, target, name, ["ALLOWED_*"])
+
+      assert {:error, :secret_not_allowed} = internal_call(session, target, name, [])
+    end
+
+    GenServer.stop(session)
+  end
+
+  test "internal channel only serves reserved secret targets" do
+    session = start_session()
+
+    assert {:error, :invalid_internal_target} =
+             internal_call(session, "read", "WASM_TEST_SECRET", ["*"])
+
+    GenServer.stop(session)
+  end
+
+  test "padded names and whitespace-prefixed patterns are never trimmed into a match" do
+    assert {:ok, _} = Secrets.set("WASM_TEST_SECRET", "stored")
+    session = start_session()
+
+    for target <- ["__lemon.secret.resolve", "__lemon.secret.exists"] do
+      for name <- [" WASM_TEST_SECRET", "WASM_TEST_SECRET ", "\nWASM_TEST_SECRET", ""] do
+        assert {:error, :invalid_secret_name} =
+                 internal_call(session, target, name, ["WASM_*"])
+      end
+
+      for pattern <- [" WASM_*", "WASM_* ", " WASM_TEST_SECRET", "", " *"] do
+        assert {:error, :secret_not_allowed} =
+                 internal_call(session, target, "WASM_TEST_SECRET", [pattern])
+      end
+    end
+
+    GenServer.stop(session)
+  end
+
+  defp internal_call(session, target, name, allowed) do
+    GenServer.call(
+      session,
+      {:wasm_host_tool_invoke, target, Jason.encode!(%{"name" => name}),
+       host_context({:internal, "caller_tool", allowed})}
+    )
+  end
+
+  defp host_context(channel) do
+    %{
+      deadline: System.monotonic_time(:millisecond) + 10_000,
+      owner: self(),
+      signal: nil,
+      host_channel: channel
+    }
   end
 
   defp start_session do
