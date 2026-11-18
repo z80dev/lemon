@@ -188,6 +188,8 @@ defmodule LemonBrowser.CloudSession do
              name: nil,
              cdp_endpoint: session.cdp_endpoint,
              attach_only: true,
+             # Hosted browsers egress from the provider's network, not this host.
+             allow_unenforced_egress: true,
              driver_path: Keyword.get(provider_opts, :driver_path)
            ) do
         {:ok, driver} ->

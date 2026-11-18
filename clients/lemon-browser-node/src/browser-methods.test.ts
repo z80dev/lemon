@@ -316,6 +316,65 @@ describe('handleBrowserMethod extra controls', () => {
     expect(saved).toEqual([{ selector: '#download', opts: { timeout: 250 } }, path.join(tmpDir, 'proof.txt')]);
   });
 
+  function fakeDownloadPage(saved: string[]) {
+    return {
+      waitForEvent: async () => ({
+        suggestedFilename: () => 'proof.txt',
+        saveAs: async (targetPath: string) => {
+          saved.push(targetPath);
+          await fs.writeFile(targetPath, 'download proof');
+        },
+      }),
+      click: async () => undefined,
+    } as unknown as Parameters<typeof handleBrowserMethod>[0]; // minimal Page fake
+  }
+
+  it('saves to the validated explicit path unchanged, trailing whitespace included', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemon-browser-download-'));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'lemon-browser-outside-'));
+    await fs.symlink(outside, path.join(tmpDir, 'escape'));
+    const saved: string[] = [];
+
+    const target = path.join(tmpDir, 'escape ');
+    await handleBrowserMethod(fakeDownloadPage(saved), 'browser.download', { path: target });
+
+    expect(saved).toEqual([target]);
+    expect(await fs.readdir(outside)).toEqual([]);
+    expect((await fs.lstat(target)).isFile()).toBe(true);
+  });
+
+  it('treats a dangling symlink as an occupied default download name', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lemon-browser-download-'));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'lemon-browser-outside-'));
+    const outsideTarget = path.join(outside, 'stolen.txt');
+    await fs.symlink(outsideTarget, path.join(tmpDir, 'proof.txt'));
+    const saved: string[] = [];
+
+    const result = await handleBrowserMethod(fakeDownloadPage(saved), 'browser.download', { dir: tmpDir });
+
+    expect(saved).toEqual([path.join(tmpDir, 'proof-1.txt')]);
+    expect(result).toMatchObject({ path: path.join(tmpDir, 'proof-1.txt') });
+    await expect(fs.lstat(outsideTarget)).rejects.toThrow();
+  });
+
+  it('refuses to screenshot an open file: page without allowLocalDocument', async () => {
+    let captures = 0;
+    const page = {
+      url: () => 'file:///etc/passwd',
+      screenshot: async () => {
+        captures += 1;
+        return Buffer.from('png');
+      },
+    } as unknown as Parameters<typeof handleBrowserMethod>[0]; // minimal Page fake
+
+    await expect(handleBrowserMethod(page, 'browser.screenshot', {})).rejects.toThrow(/allowLocalDocument/);
+    expect(captures).toBe(0);
+
+    const result = await handleBrowserMethod(page, 'browser.screenshot', { allowLocalDocument: true });
+    expect(captures).toBe(1);
+    expect(result).toMatchObject({ url: 'file:///etc/passwd' });
+  });
+
   it('scrolls by delta and returns position', async () => {
     const evaluations: unknown[] = [];
     const page = {

@@ -167,6 +167,7 @@ the requests in flight fail; the next request starts a fresh one.
 | `LEMON_BROWSER_DRIVER_PATH` | — | Path to the driver program |
 | `LEMON_BROWSER_CDP_ENDPOINT` | — | CDP websocket endpoint to attach to instead of launching a browser |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Only attach to an existing browser, never launch one |
+| `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS` | `false` | Required to attach to a browser Lemon did not launch; such a browser bypasses the driver's egress proxy |
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port for a managed browser (positive integers only) |
 | `LEMON_BROWSER_RELAY_TOKEN` | — | Required shared secret for the loopback MV3 extension/CDP relay |
 | `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |

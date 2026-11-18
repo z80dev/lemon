@@ -1,5 +1,7 @@
 defmodule CodingAgent.Tools.BrowserTest do
   use ExUnit.Case, async: false
+  # Page URL the driver reports with every capture.
+  @page_url "https://example.com/"
 
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.ImageContent
@@ -13,6 +15,8 @@ defmodule CodingAgent.Tools.BrowserTest do
       )
 
     File.mkdir_p!(tmp_dir)
+    # Browser file paths resolve to physical paths (`/var` -> `/private/var` on macOS).
+    {:ok, tmp_dir} = LemonCore.TrustedRoot.realpath(tmp_dir)
 
     on_exit(fn -> File.rm_rf(tmp_dir) end)
 
@@ -601,12 +605,278 @@ defmodule CodingAgent.Tools.BrowserTest do
     refute inspect(failed) =~ outside_path
   end
 
+  describe "project containment for browser file paths" do
+    setup %{tmp_dir: tmp_dir} do
+      outside =
+        Path.join(
+          System.tmp_dir!(),
+          "lemon-browser-outside-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(outside)
+      on_exit(fn -> File.rm_rf(outside) end)
+
+      secret = Path.join(outside, "secret.txt")
+      File.write!(secret, "outside-secret")
+      File.ln_s!(outside, Path.join(tmp_dir, "linked-dir"))
+      File.ln_s!(secret, Path.join(tmp_dir, "linked-secret.txt"))
+
+      {:ok, outside: outside, secret: secret}
+    end
+
+    test "browser_screenshot rejects absolute paths outside the project", %{tmp_dir: tmp_dir} do
+      target = "/tmp/lemon-browser-shot-#{System.unique_integer([:positive])}.png"
+      on_exit(fn -> File.rm(target) end)
+
+      tool = browser_tool("browser_screenshot", tmp_dir, browser_request: png_request())
+
+      assert {:error, "browser_screenshot output path must be under the current project"} =
+               tool.execute.("call-1", %{"path" => target}, nil, nil)
+
+      refute File.exists?(target)
+    end
+
+    test "browser_screenshot rejects relative escapes and symlinked directories", %{
+      tmp_dir: tmp_dir,
+      outside: outside
+    } do
+      tool = browser_tool("browser_screenshot", tmp_dir, browser_request: png_request())
+      escape = "../#{Path.basename(outside)}/escape.png"
+
+      for path <- [escape, "linked-dir/shot.png", "linked-secret.txt"] do
+        assert {:error, "browser_screenshot output path must be under the current project"} =
+                 tool.execute.("call-1", %{"path" => path}, nil, nil)
+      end
+
+      refute File.exists?(Path.join(outside, "escape.png"))
+      refute File.exists?(Path.join(outside, "shot.png"))
+      assert File.read!(Path.join(outside, "secret.txt")) == "outside-secret"
+    end
+
+    test "browser_screenshot rejects a dangling symlink leaf", %{
+      tmp_dir: tmp_dir,
+      outside: outside
+    } do
+      target = Path.join(outside, "dangling.png")
+      File.ln_s!(target, Path.join(tmp_dir, "dangling.png"))
+      tool = browser_tool("browser_screenshot", tmp_dir, browser_request: png_request())
+
+      assert {:error, _} = tool.execute.("call-1", %{"path" => "dangling.png"}, nil, nil)
+      refute File.exists?(target)
+    end
+
+    test "browser_analyze rejects symlinked output directories", %{
+      tmp_dir: tmp_dir,
+      outside: outside
+    } do
+      tool = browser_tool("browser_analyze", tmp_dir, browser_request: png_request())
+
+      assert {:error, "path must be under the current project for browser_analyze"} =
+               tool.execute.(
+                 "call-1",
+                 %{"path" => "linked-dir/vision.png", "provider" => "local_vision"},
+                 nil,
+                 nil
+               )
+
+      refute File.exists?(Path.join(outside, "vision.png"))
+    end
+
+    test "browser_upload_file rejects symlinked and hard-linked files", %{
+      tmp_dir: tmp_dir,
+      secret: secret
+    } do
+      File.ln!(secret, Path.join(tmp_dir, "hard-secret.txt"))
+
+      request = fn _method, _args, _timeout ->
+        flunk("browser request should not run for rejected upload files")
+      end
+
+      tool = browser_tool("browser_upload_file", tmp_dir, browser_request: request)
+
+      for path <- ["linked-secret.txt", "linked-dir/secret.txt", "hard-secret.txt"] do
+        assert {:error, "browser_upload_file path must be under the current project"} =
+                 tool.execute.("call-1", %{"selector" => "#f", "path" => path}, nil, nil)
+      end
+    end
+
+    test "browser_download rejects symlinked output paths", %{tmp_dir: tmp_dir} do
+      request = fn _method, _args, _timeout ->
+        flunk("browser request should not run for rejected download paths")
+      end
+
+      tool = browser_tool("browser_download", tmp_dir, browser_request: request)
+
+      for path <- ["linked-dir/out.txt", "linked-secret.txt"] do
+        assert {:error, "browser_download output path must be under the current project"} =
+                 tool.execute.("call-1", %{"selector" => "#d", "path" => path}, nil, nil)
+      end
+    end
+
+    test "default screenshot and analyze destinations are checked too", %{
+      tmp_dir: tmp_dir,
+      outside: outside
+    } do
+      File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+      File.ln_s!(outside, Path.join(tmp_dir, ".lemon/browser-artifacts"))
+
+      shot = browser_tool("browser_screenshot", tmp_dir, browser_request: png_request())
+
+      assert {:error, "browser_screenshot output path must be under the current project"} =
+               shot.execute.("call-1", %{}, nil, nil)
+
+      analyze = browser_tool("browser_analyze", tmp_dir, browser_request: png_request())
+
+      assert {:error, "path must be under the current project for browser_analyze"} =
+               analyze.execute.("call-1", %{"provider" => "local_vision"}, nil, nil)
+
+      assert File.ls!(outside) == ["secret.txt"]
+    end
+
+    test "browser_download forwards the validated path unchanged", %{tmp_dir: tmp_dir} do
+      parent = self()
+      File.ln_s!(System.tmp_dir!(), Path.join(tmp_dir, "escape"))
+
+      request = fn method, args, _timeout ->
+        send(parent, {:browser_request, method, args})
+        {:ok, %{"downloaded" => true}}
+      end
+
+      tool = browser_tool("browser_download", tmp_dir, browser_request: request)
+      tool.execute.("call-1", %{"selector" => "#d", "path" => "escape "}, nil, nil)
+
+      expected = Path.join(tmp_dir, "escape ")
+      assert_received {:browser_request, "browser.download", %{"path" => ^expected}}
+    end
+  end
+
+  describe "local documents" do
+    test "file:, data: and blob: navigation needs allowLocalDocument" do
+      request = fn method, args, _timeout ->
+        send(self(), {:browser_request, method, args})
+        {:ok, %{"url" => args["url"]}}
+      end
+
+      for {name, url} <- [
+            {"browser_navigate", "file:///etc/passwd"},
+            {"browser_navigate", "FILE:///etc/passwd"},
+            {"browser_navigate", "data:text/html,hi"},
+            {"browser_tab_open", "blob:https://example.com/x"}
+          ] do
+        tool = browser_tool(name, "/tmp", browser_request: request)
+
+        assert {:error, message} = tool.execute.("call-1", %{"url" => url}, nil, nil)
+        assert message =~ "requires allowLocalDocument"
+        refute_received {:browser_request, _, _}
+
+        result =
+          tool.execute.("call-1", %{"url" => url, "allowLocalDocument" => true}, nil, nil)
+
+        refute match?({:error, _}, result)
+        assert_received {:browser_request, _, %{"url" => ^url}}
+      end
+    end
+
+    test "screenshot and analyze of an open local document need allowLocalDocument", %{
+      tmp_dir: tmp_dir
+    } do
+      png = Base.encode64(<<137, 80, 78, 71, 13, 10, 26, 10>>)
+      # The media analysis path consumes the test mailbox, so record captures in an Agent.
+      {:ok, captures} = Agent.start_link(fn -> [] end)
+
+      request = fn "browser.screenshot", args, _timeout ->
+        Agent.update(captures, &[args | &1])
+        {:ok, %{"url" => "file:///etc/passwd", "contentType" => "image/png", "base64" => png}}
+      end
+
+      artifacts = Path.join(tmp_dir, ".lemon/browser-artifacts")
+
+      for {name, params} <- [
+            {"browser_screenshot", %{"includeImage" => true}},
+            {"browser_analyze", %{"includeImage" => true, "provider" => "local_vision"}}
+          ] do
+        Agent.update(captures, fn _ -> [] end)
+        tool = browser_tool(name, tmp_dir, browser_request: request)
+
+        assert {:error, message} = tool.execute.("call-1", params, nil, nil)
+        assert message =~ "allowLocalDocument"
+        refute message =~ png
+        assert [args] = Agent.get(captures, & &1)
+        refute Map.has_key?(args, "allowLocalDocument")
+        # Nothing was written, so no image reached the model or a vision provider.
+        assert File.ls(artifacts) in [{:error, :enoent}, {:ok, []}]
+        refute File.exists?(Path.join(tmp_dir, ".lemon/media-artifacts"))
+
+        result =
+          tool.execute.("call-2", Map.put(params, "allowLocalDocument", true), nil, nil)
+
+        refute match?({:error, _}, result)
+        assert [%{"allowLocalDocument" => true}, _] = Agent.get(captures, & &1)
+        File.rm_rf!(Path.join(tmp_dir, ".lemon"))
+      end
+    end
+
+    test "a capture without URL metadata fails closed for every backend", %{
+      tmp_dir: tmp_dir
+    } do
+      # The pre-fix Tern screenshot answer: image bytes, no page URL.
+      tern_shape = %{"base64" => Base.encode64("image"), "contentType" => "image/jpeg"}
+
+      for name <- ["browser_screenshot", "browser_analyze"] do
+        tool =
+          browser_tool(name, tmp_dir, browser_request: fn _, _, _ -> {:ok, tern_shape} end)
+
+        assert {:error, message} =
+                 tool.execute.("call-1", %{"provider" => "local_vision"}, nil, nil)
+
+        assert message =~ "did not report the page URL"
+        refute File.exists?(Path.join(tmp_dir, ".lemon"))
+      end
+
+      # No backend attestation can stand in for the URL.
+      attested = Map.put(tern_shape, "localDocumentGuarded", true)
+
+      tool =
+        browser_tool("browser_screenshot", tmp_dir,
+          browser_request: fn _, _, _ -> {:ok, attested} end
+        )
+
+      assert {:error, _} = tool.execute.("call-1", %{}, nil, nil)
+    end
+
+    test "content reads of a local document are refused without approval" do
+      for {name, payload} <- [
+            {"browser_get_content", %{"url" => "file:///etc/passwd", "text" => "root:x:0:0"}},
+            {"browser_snapshot", %{"snapshot" => "URL: file:///etc/passwd\n\nroot:x:0:0"}}
+          ] do
+        parent = self()
+
+        request = fn _method, args, _timeout ->
+          send(parent, {:args, args})
+          {:ok, payload}
+        end
+
+        tool = browser_tool(name, "/tmp", browser_request: request)
+
+        assert {:error, message} = tool.execute.("call-1", %{}, nil, nil)
+        assert message =~ "local document" or message =~ "file:, data: or blob:"
+        refute message =~ "root:x"
+        assert_received {:args, args}
+        refute Map.has_key?(args, "allowLocalDocument")
+
+        result = tool.execute.("call-1", %{"allowLocalDocument" => true}, nil, nil)
+        refute match?({:error, _}, result)
+        assert_received {:args, %{"allowLocalDocument" => true}}
+      end
+    end
+  end
+
   test "browser_snapshot forwards optional snapshot limits" do
     parent = self()
 
     request = fn method, args, timeout_ms ->
       send(parent, {:browser_request, method, args, timeout_ms})
-      {:ok, %{"snapshot" => "URL: file:///tmp/page.html", "displayedNodes" => 1}}
+      {:ok, %{"snapshot" => "URL: https://example.com/page.html", "displayedNodes" => 1}}
     end
 
     tool = browser_tool("browser_snapshot", "/tmp", browser_request: request)
@@ -631,7 +901,7 @@ defmodule CodingAgent.Tools.BrowserTest do
     png = <<137, 80, 78, 71, 13, 10, 26, 10>>
 
     request = fn "browser.screenshot", %{"type" => "png"}, 30_000 ->
-      {:ok, %{"contentType" => "image/png", "base64" => Base.encode64(png)}}
+      {:ok, %{"url" => @page_url, "contentType" => "image/png", "base64" => Base.encode64(png)}}
     end
 
     path = Path.join(tmp_dir, "shot.png")
@@ -654,7 +924,7 @@ defmodule CodingAgent.Tools.BrowserTest do
 
     request = fn "browser.screenshot", args, 30_000 ->
       send(parent, {:browser_args, args})
-      {:ok, %{"contentType" => "image/png", "base64" => encoded}}
+      {:ok, %{"url" => @page_url, "contentType" => "image/png", "base64" => encoded}}
     end
 
     path = Path.join(tmp_dir, "vision.png")
@@ -681,7 +951,7 @@ defmodule CodingAgent.Tools.BrowserTest do
 
     request = fn "browser.screenshot", args, 30_000 ->
       Agent.update(args_agent, fn existing -> [args | existing] end)
-      {:ok, %{"contentType" => "image/png", "base64" => encoded}}
+      {:ok, %{"url" => @page_url, "contentType" => "image/png", "base64" => encoded}}
     end
 
     on_update = fn update ->
@@ -737,7 +1007,7 @@ defmodule CodingAgent.Tools.BrowserTest do
     {:ok, requests} = Agent.start_link(fn -> [] end)
 
     browser_request = fn "browser.screenshot", %{"type" => "png"}, 30_000 ->
-      {:ok, %{"contentType" => "image/png", "base64" => encoded}}
+      {:ok, %{"url" => @page_url, "contentType" => "image/png", "base64" => encoded}}
     end
 
     http_post = fn url, request_opts ->
@@ -807,7 +1077,7 @@ defmodule CodingAgent.Tools.BrowserTest do
     png = <<137, 80, 78, 71, 13, 10, 26, 10>>
 
     request = fn "browser.screenshot", %{"type" => "png"}, 30_000 ->
-      {:ok, %{"contentType" => "image/png", "base64" => Base.encode64(png)}}
+      {:ok, %{"url" => @page_url, "contentType" => "image/png", "base64" => Base.encode64(png)}}
     end
 
     path = Path.join(tmp_dir, "channel-shot.png")
@@ -837,7 +1107,7 @@ defmodule CodingAgent.Tools.BrowserTest do
     File.touch!(stale, {{2020, 1, 1}, {0, 0, 0}})
 
     request = fn "browser.screenshot", %{"type" => "png"}, 30_000 ->
-      {:ok, %{"contentType" => "image/png", "base64" => Base.encode64(png)}}
+      {:ok, %{"url" => @page_url, "contentType" => "image/png", "base64" => Base.encode64(png)}}
     end
 
     tool = browser_tool("browser_screenshot", tmp_dir, browser_request: request)
@@ -1212,5 +1482,20 @@ defmodule CodingAgent.Tools.BrowserTest do
   defp browser_tool(name, cwd, opts) do
     module = Module.concat(CodingAgent.Tools, Macro.camelize(name))
     module.tool(cwd, opts)
+  end
+
+  defp png_request do
+    fn
+      "browser.screenshot", _args, _timeout ->
+        {:ok,
+         %{
+           "url" => @page_url,
+           "contentType" => "image/png",
+           "base64" => Base.encode64(<<137, 80>>)
+         }}
+
+      method, _args, _timeout ->
+        flunk("unexpected browser request #{method}")
+    end
   end
 end

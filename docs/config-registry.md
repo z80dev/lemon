@@ -94,6 +94,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `BROWSER_USE_API_KEY` | string | _(none)_ | yes | `lemon_browser` | Browser Use Cloud API key for hosted browser sessions. |
 | `CAMOFOX_API_KEY` | string | _(none)_ | yes | `lemon_browser` | Optional bearer key for the configured Camofox server. |
 | `CAMOFOX_URL` | string | _(none)_ |  | `lemon_browser` | Base URL for a Camofox REST/Firefox browser server. |
+| `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS` | boolean | `false` |  | `lemon_browser` | Allow the browser driver to attach to a browser Lemon did not launch (CDP endpoint, relay, attach-only). Such a browser bypasses the driver's egress proxy, so metadata/link-local egress is not enforced at connection time. |
 | `LEMON_BROWSER_ATTACH_ONLY` | boolean | `false` |  | `lemon_browser` | Whether the browser tool only attaches to an existing browser instead of launching one. |
 | `LEMON_BROWSER_BACKEND` | string | `local` |  | `lemon_browser` | Browser backend id: local, controller, hybrid, browserbase, browser_use, firecrawl, or camofox. |
 | `LEMON_BROWSER_CDP_ENDPOINT` | string | _(none)_ |  | `lemon_browser` | Chrome DevTools Protocol websocket endpoint to attach to instead of launching a browser. |

@@ -2801,6 +2801,7 @@ The following environment variables configure individual backends:
 | `LEMON_BROWSER_DRIVER_PATH` | auto | Browser Node driver path |
 | `LEMON_BROWSER_CDP_ENDPOINT` | none | HTTP discovery or direct `ws`/`wss` CDP endpoint |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Never launch a replacement browser |
+| `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS` | `false` | Required to attach to any browser Lemon did not launch (CDP endpoint, attach-only, relay); such a browser bypasses the egress proxy |
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Managed local Chrome CDP port |
 | `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |
 | `LEMON_BROWSER_RELAY_TOKEN` | none | Required relay shared secret |

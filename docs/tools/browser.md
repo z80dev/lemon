@@ -105,6 +105,7 @@ Environment variables read by `lemon_browser` (from
 | `LEMON_BROWSER_DRIVER_PATH` | unset | Path to the driver program. Otherwise the driver bundled in a release (`lemon_browser` `priv/driver`) is used, then `clients/lemon-browser-node/dist/local-driver.js` under the source checkout (`LEMON_PATH`). The working directory is not searched. |
 | `LEMON_BROWSER_CDP_ENDPOINT` | unset | CDP websocket endpoint to attach to instead of launching a browser. |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Attach only; never launch a browser. |
+| `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS` | `false` | Required to attach to a browser Lemon did not launch (CDP endpoint, attach-only, relay, or a Chrome already listening on the CDP port). Without it the driver refuses to attach. See "Egress enforcement". |
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port for a managed browser. Only positive integers are accepted. |
 | `LEMON_BROWSER_USER_DATA_DIR` | unset | Opt in to a dedicated managed Chrome user-data directory, using its cookies/logins. Default browser data directories are refused. |
 | `LEMON_BROWSER_PROFILE_DIRECTORY` | unset | Profile inside that data directory, e.g. `Default` or `Profile 1`. |
@@ -248,15 +249,36 @@ Notes:
   every route, and unresolvable hosts are refused. The driver repeats the
   metadata check before `navigate` and `tabOpen`. See "Egress enforcement"
   below for what is enforced per connection. The `route` argument is stripped before dispatch to the driver.
+- `file:`, `data:` and `blob:` documents can expose local files.
+  `browser_navigate` and `browser_tab_open` refuse them unless
+  `allowLocalDocument: true` is passed. `browser_get_content`,
+  `browser_snapshot`, `browser_screenshot` and `browser_analyze` refuse to read
+  or capture a page whose current URL uses one of those schemes (including a
+  page already open in the browser) without the same flag: the driver checks
+  before capturing, and Lemon checks the returned page URL again before any
+  content, image or artifact reaches the model or a vision provider.
+  The flag makes these calls exec tier in tool policy, so they go through
+  approval under the `ask` and `write` approval modes.
 - `browser_screenshot` returns redacted metadata and the artifact path by
   default. `includeImage: true` adds a model-visible image block; `sendToChannel:
   true` marks the artifact for delivery through the Telegram/Discord final-answer
   path.
+- Explicit file paths for `browser_screenshot`, `browser_analyze`,
+  `browser_download` and `browser_upload_file`, and the default
+  `.lemon/browser-artifacts` directory, must resolve inside the current project.
+  The check resolves symlinks first (an in-project link to a file or directory
+  outside the project is refused), refuses dangling symlinks and hard-linked
+  files, and the tool then uses the resolved physical path. The one exception
+  is an operator-configured artifacts directory (`:browser_artifacts_dir`),
+  which is trusted configuration and may be outside the project; default
+  screenshots and downloads then go there unchecked.
 - `browser_analyze` returns the analysis text as untrusted output plus safe
   screenshot and analysis metadata. The `prompt` is stored only as redacted
   metadata. `sendToChannel` requests final-answer delivery of the analysis
   artifact; `sendScreenshotToChannel` requests delivery of the screenshot.
 - `browser_get_cookies` redacts values (`[redacted]`) unless `includeValues: true`.
+  Any value other than an explicit false (`false`, `"false"`, `0`, `"no"`, `""`)
+  makes the call write tier, so raw values need approval under `ask` mode.
 - `browser_events` dialogs are dismissed by the helper after they are recorded.
 - Raw CDP (`browser.cdp`) is not exposed to the model. At the driver layer it
   requires developer mode, and the Node driver accepts only read-only methods
@@ -292,24 +314,34 @@ Notes:
 - Enterprise policies that override the command line (`ProxySettings`,
   `ProxyMode`, `WebRtcIPHandlingPolicy` and similar) are an unsupported
   configuration: they can remove the proxy, and Lemon does not detect this.
-- **Every other browser is unprotected at egress.** This includes an explicit
-  `cdp` endpoint, `LEMON_BROWSER_ATTACH_ONLY`, the extension `relay`, and the
-  driver automatically attaching to a Chrome that was already listening on the
-  configured CDP port (even one a previous driver run launched). It also
-  includes the hosted providers (Browserbase, Browser Use, Firecrawl,
-  Camofox). For these, only the `RoutePolicy` and driver pre-checks of the
-  requested `navigate`/`tabOpen` URL apply. Redirects, page scripts,
-  subresources, workers and DNS changes are **not** filtered. Do not rely on
-  Lemon to keep such a browser away from cloud metadata; isolate it at the
+- **Every other browser is unprotected at egress**, so the driver refuses to
+  attach to one unless the operator sets `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS=1`
+  (or passes `--allow-unenforced-egress`). This covers an explicit `cdp`
+  endpoint, `LEMON_BROWSER_ATTACH_ONLY`, the extension `relay`, and a Chrome
+  that was already listening on the configured CDP port (even one a previous
+  driver run launched). Hosted provider sessions (Browserbase, Browser Use,
+  Firecrawl) set the opt-in themselves: their browsers egress from the
+  provider's network, not this host. Camofox is a separate REST backend. With
+  the opt-in, only the `RoutePolicy` and driver pre-checks of the requested
+  `navigate`/`tabOpen` URL apply. Redirects, page scripts, subresources,
+  workers and DNS changes are **not** filtered. Isolate such a browser at the
   network level.
 
 ## Artifacts and file paths
 
 - Screenshots and downloads are written under `.lemon/browser-artifacts/` in the
-  active working directory unless a `path` is given.
-- Download `path` and upload `path`/`paths` must resolve inside the current
-  project. Upload sources must be existing regular files. A download output path
-  must be a file path, not a directory.
+  active working directory unless a `path` is given. That default directory gets
+  the same physical project check as an explicit path.
+- Exception: when the operator configures an artifacts directory
+  (`:browser_artifacts_dir`), default screenshots and downloads are written
+  there as given, even if it is outside the project. This is a trusted-config
+  exception; explicit `path` arguments are still confined to the project.
+- Explicit download `path` and upload `path`/`paths` must resolve inside the
+  current project. Upload sources must be existing regular files. A download output path
+  must be a file path, not a directory. The driver writes to the validated path
+  exactly as given, and for a default download it reserves the file name with an
+  exclusive create, so an existing entry (including a dangling symlink) is never
+  reused.
 - Artifacts are pruned by age and count: 14 days or the newest 100 files,
   whichever retains fewer old artifacts.
 
@@ -369,8 +401,11 @@ Notes:
 - `browser navigation could not resolve host: <host>`: DNS returned no address;
   navigation fails closed.
 - `browser_upload_file path must be under the current project` /
-  `must be an existing file`: move the file into the project and pass a path to
-  an existing file.
+  `must be an existing file`: move the file into the project (not a symlink or
+  hard link to a file elsewhere) and pass a path to an existing file.
+- `browser_screenshot output path must be under the current project` /
+  `path must be under the current project for browser_analyze`: pass a path
+  inside the project, or omit `path` to use the managed artifact directory.
 - `browser_download output path must be under the current project` /
   `must be a file path`: pass a file path inside the project, or omit `path`.
 - `Browser request timed out`: raise `timeoutMs` (max 120000) or check that the

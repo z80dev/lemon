@@ -144,10 +144,82 @@ defmodule LemonBrowser.CamofoxSessionTest do
     assert_received {:post, "http://camofox.test:9377/tabs/tab-secret-1/type", type_opts}
     assert type_opts[:json]["text"] == secret
 
-    assert {:ok, %{"contentType" => "image/webp", "base64" => encoded}} =
+    assert {:ok,
+            %{"contentType" => "image/webp", "base64" => encoded, "url" => "https://example.com"}} =
              CamofoxSession.request("browser.screenshot", %{}, 1_000, opts)
 
     assert Base.decode64!(encoded) == <<1, 2, 3>>
+  end
+
+  describe "screenshot reads the tab's current URL" do
+    defp capture_opts(opts, session, snapshot_body, private?) do
+      parent = self()
+      base_get = opts[:http_get]
+
+      get = fn url, request_opts ->
+        if String.ends_with?(url, "/snapshot") do
+          send(parent, {:snapshot_get, url})
+          {:ok, %Req.Response{status: 200, headers: %{}, body: snapshot_body.()}}
+        else
+          if String.ends_with?(url, "/screenshot"), do: send(parent, {:screenshot_get, url})
+          base_get.(url, request_opts)
+        end
+      end
+
+      opts
+      |> Keyword.put(:session_id, session)
+      |> Keyword.put(:http_get, get)
+      |> Keyword.update!(:provider_config, &Map.put(&1, :allow_private_network, private?))
+    end
+
+    test "a file: page is refused even with allow_private_network", %{opts: opts} do
+      # Navigation recorded a public URL; the tab has since moved to a file: page.
+      {:ok, page} = Agent.start_link(fn -> "https://example.com" end)
+      body = fn -> %{"url" => Agent.get(page, & &1), "snapshot" => ""} end
+      opts = capture_opts(opts, "camofox-file-page", body, true)
+
+      assert {:ok, _} =
+               CamofoxSession.request(
+                 "browser.navigate",
+                 %{"url" => "https://example.com"},
+                 1_000,
+                 opts
+               )
+
+      Agent.update(page, fn _ -> "file:///etc/passwd" end)
+
+      assert {:error, reason} = CamofoxSession.request("browser.screenshot", %{}, 1_000, opts)
+      assert reason =~ "allowLocalDocument"
+      assert_received {:snapshot_get, _}
+      refute_received {:screenshot_get, _}
+
+      assert {:ok, %{"url" => "file:///etc/passwd"}} =
+               CamofoxSession.request(
+                 "browser.screenshot",
+                 %{"allowLocalDocument" => true},
+                 1_000,
+                 opts
+               )
+    end
+
+    test "a missing current URL fails closed", %{opts: opts} do
+      {:ok, page} = Agent.start_link(fn -> %{"url" => "https://example.com"} end)
+      opts = capture_opts(opts, "camofox-no-url", fn -> Agent.get(page, & &1) end, false)
+
+      assert {:ok, _} =
+               CamofoxSession.request(
+                 "browser.navigate",
+                 %{"url" => "https://example.com"},
+                 1_000,
+                 opts
+               )
+
+      Agent.update(page, fn _ -> %{"snapshot" => ""} end)
+
+      assert {:error, reason} = CamofoxSession.request("browser.screenshot", %{}, 1_000, opts)
+      assert reason =~ "current URL"
+      refute_received {:screenshot_get, _}
+    end
   end
 
   test "blocks private targets before any remote navigation request", %{opts: opts} do

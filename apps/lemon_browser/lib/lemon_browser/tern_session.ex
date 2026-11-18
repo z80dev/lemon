@@ -578,16 +578,21 @@ defmodule LemonBrowser.TernSession do
     type = if args["type"] == "jpeg", do: "jpeg", else: "png"
     fields = %{"format" => type, "full" => args["fullPage"] == true}
 
-    case op(state, "capture", fields) do
-      {:ok, %{"data" => data}} when is_binary(data) ->
-        # The tool layer owns saving, retention, includeImage, and channel delivery.
-        {:ok, %{"base64" => data, "contentType" => "image/" <> type}}
+    # A block (including an adopted user block) may show a file:, data: or
+    # blob: document; capturing it needs the approval-gated flag.
+    with {:ok, url} <- current_url(state),
+         :ok <- local_document_allowed(url, args) do
+      case op(state, "capture", fields) do
+        {:ok, %{"data" => data}} when is_binary(data) ->
+          # The tool layer owns saving, retention, includeImage, and channel delivery.
+          {:ok, %{"base64" => data, "contentType" => "image/" <> type, "url" => url}}
 
-      {:ok, _} ->
-        {:error, {:protocol, "Tern capture answered without image data"}}
+        {:ok, _} ->
+          {:error, {:protocol, "Tern capture answered without image data"}}
 
-      {:error, _} = error ->
-        error
+        {:error, _} = error ->
+          error
+      end
     end
   end
 
@@ -988,6 +993,27 @@ defmodule LemonBrowser.TernSession do
       fun.()
     else
       {:error, {:timeout, "Tern browser request timed out"}}
+    end
+  end
+
+  defp current_url(state) do
+    case evaluate(state, "function() { return location.href; }", [], "isolated") do
+      {:ok, url} when is_binary(url) and url != "" -> {:ok, url}
+      {:ok, _} -> {:error, {:protocol, "Tern did not report the block's document URL"}}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp local_document_allowed(url, args) do
+    scheme = url |> URI.parse() |> Map.get(:scheme)
+
+    if is_binary(scheme) and String.downcase(scheme) in ["file", "data", "blob"] and
+         args["allowLocalDocument"] != true do
+      {:error,
+       {:invalid,
+        "browser capture refused: the current page is a file:, data: or blob: document; pass allowLocalDocument: true (approval-gated)"}}
+    else
+      :ok
     end
   end
 

@@ -268,6 +268,7 @@ defmodule LemonCore.ToolPolicy do
   @browser_read_tools ~w(browser_tabs browser_snapshot browser_get_content browser_wait_for_selector browser_events browser_get_cookies)
   @browser_write_tools ~w(browser_tab_open browser_tab_activate browser_tab_close browser_navigate browser_click browser_type browser_hover browser_select_option browser_upload_file browser_download browser_press browser_scroll browser_back browser_set_cookies browser_clear_state browser_screenshot)
   @lsp_read_actions ~w(diagnostics definition type_definition implementation references hover symbols rename rename_file code_actions capabilities status)
+  @browser_local_document_tools ~w(browser_navigate browser_tab_open browser_snapshot browser_get_content browser_screenshot browser_analyze)
 
   @doc "Classifies built-ins; unclassified, external and executable surfaces fail closed to exec."
   @spec tier(String.t(), map()) :: tier()
@@ -279,12 +280,45 @@ defmodule LemonCore.ToolPolicy do
     if action in @lsp_read_actions and apply? in [false, nil], do: :read, else: :exec
   end
 
-  def tier(tool, _args) when tool in @write_tools or tool in @browser_write_tools, do: :write
+  # Opening or reading a file:/data:/blob: document can expose local files.
+  def tier(tool, args) when tool in @browser_local_document_tools and is_map(args) do
+    if flag_set?(args, ["allowLocalDocument", "allow_local_document"]),
+      do: :exec,
+      else: tier_by_name(tool)
+  end
 
-  def tier(tool, _args) when tool in @approval_read_tools or tool in @browser_read_tools,
+  # Raw cookie values are session credentials.
+  def tier("browser_get_cookies", args) when is_map(args) do
+    if flag_set?(args, ["includeValues", "include_values"]), do: :write, else: :read
+  end
+
+  def tier(tool, _args), do: tier_by_name(tool)
+
+  defp tier_by_name(tool) when tool in @write_tools or tool in @browser_write_tools, do: :write
+
+  defp tier_by_name(tool) when tool in @approval_read_tools or tool in @browser_read_tools,
     do: :read
 
-  def tier(_tool, _args), do: :exec
+  defp tier_by_name(_tool), do: :exec
+
+  # Fails closed: any value other than an explicit false spelling counts as set.
+  defp flag_set?(args, keys) do
+    Enum.any?(keys, fn key ->
+      Enum.any?([key, String.to_atom(key)], fn k ->
+        case Map.fetch(args, k) do
+          {:ok, value} -> not falsy_flag?(value)
+          :error -> false
+        end
+      end)
+    end)
+  end
+
+  defp falsy_flag?(value) when value in [nil, false, 0], do: true
+
+  defp falsy_flag?(value) when is_binary(value),
+    do: String.downcase(String.trim(value)) in ["", "false", "0", "no", "off"]
+
+  defp falsy_flag?(_value), do: false
 
   @doc "Seeds only an unset mode from config. Explicit PolicyStore/session policy wins."
   def with_default_approval_mode(policy, mode) do

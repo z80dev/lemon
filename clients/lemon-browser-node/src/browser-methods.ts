@@ -37,10 +37,12 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
       };
     }
     case 'browser.screenshot': {
+      assertLocalDocumentReadAllowed(page, a);
       const fullPage = a.fullPage === true;
       const type = (a.type === 'jpeg' ? 'jpeg' : 'png') as 'png' | 'jpeg';
       const buf = await page.screenshot({ fullPage, type });
       return {
+        url: currentPageUrl(page),
         contentType: type === 'jpeg' ? 'image/jpeg' : 'image/png',
         base64: buf.toString('base64'),
       };
@@ -102,8 +104,9 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
     case 'browser.download': {
       const selector = String(a.selector ?? '');
       const timeout = normalizeTimeout(a.timeoutMs);
-      const explicitPath = typeof a.path === 'string' && a.path.trim() !== '' ? a.path.trim() : '';
-      const downloadDir = typeof a.dir === 'string' && a.dir.trim() !== '' ? a.dir.trim() : process.cwd();
+      // Paths are used exactly as validated by the caller; a blank value means "omitted".
+      const explicitPath = typeof a.path === 'string' && a.path.trim() !== '' ? a.path : '';
+      const downloadDir = typeof a.dir === 'string' && a.dir.trim() !== '' ? a.dir : process.cwd();
       const waitForDownload = page.waitForEvent('download', { timeout });
 
       const download = selector
@@ -111,9 +114,21 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
         : await waitForDownload;
 
       const suggestedFilename = download.suggestedFilename();
-      const targetPath = explicitPath || (await uniqueDownloadPath(downloadDir, suggestedFilename));
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await download.saveAs(targetPath);
+      let targetPath: string;
+      if (explicitPath) {
+        targetPath = explicitPath;
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      } else {
+        await fs.mkdir(downloadDir, { recursive: true });
+        targetPath = await reserveDownloadPath(downloadDir, suggestedFilename);
+      }
+
+      try {
+        await download.saveAs(targetPath);
+      } catch (err) {
+        if (!explicitPath) await fs.rm(targetPath, { force: true }).catch(() => undefined);
+        throw err;
+      }
 
       const stat = await fs.stat(targetPath).catch(() => null);
 
@@ -198,6 +213,7 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
       return { found: true };
     }
     case 'browser.getContent': {
+      assertLocalDocumentReadAllowed(page, a);
       const includeHtml = a.includeHtml !== false;
       const includeText = a.includeText !== false;
       if (!includeHtml && !includeText) {
@@ -247,6 +263,7 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
       return result;
     }
     case 'browser.snapshot': {
+      assertLocalDocumentReadAllowed(page, a);
       const maxChars = normalizePositiveInt(a.maxChars, 12_000);
       const maxNodes = normalizePositiveInt(a.maxNodes, 350);
       const includeText = a.includeText !== false;
@@ -572,24 +589,54 @@ function normalizeDelay(v: any): number | undefined {
   return n;
 }
 
-async function uniqueDownloadPath(dir: string, suggestedFilename: string): Promise<string> {
+// file:, data: and blob: documents can expose local files; reading one (even if
+// it was already open in an attached browser) needs the approval-gated flag.
+function currentPageUrl(page: Page): string | undefined {
+  try {
+    return page.url();
+  } catch {
+    return undefined;
+  }
+}
+
+function assertLocalDocumentReadAllowed(page: Page, a: { allowLocalDocument?: unknown }): void {
+  if (a.allowLocalDocument === true) return;
+  let scheme = '';
+  try {
+    scheme = new URL(currentPageUrl(page) ?? '').protocol;
+  } catch {
+    return;
+  }
+  if (scheme === 'file:' || scheme === 'data:' || scheme === 'blob:') {
+    throw new Error(
+      'browser content read refused: the current page is a file:, data: or blob: document; pass allowLocalDocument: true (approval-gated)',
+    );
+  }
+}
+
+// Picks a free name in `dir` and creates it exclusively (O_CREAT|O_EXCL), so an
+// existing entry of any kind, including a dangling symlink, counts as taken and
+// the name is reserved before `saveAs` writes to it.
+async function reserveDownloadPath(dir: string, suggestedFilename: string): Promise<string> {
   const name = sanitizeDownloadFilename(suggestedFilename || 'download');
   const parsed = path.parse(name);
   const root = parsed.name || 'download';
   const ext = parsed.ext || '';
 
-  for (let index = 0; index < 1000; index += 1) {
-    const suffix = index === 0 ? '' : `-${index}`;
+  for (let index = 0; index <= 1000; index += 1) {
+    const suffix = index === 0 ? '' : index === 1000 ? `-${Date.now()}` : `-${index}`;
     const candidate = path.join(dir, `${root}${suffix}${ext}`);
 
     try {
-      await fs.access(candidate);
-    } catch {
+      const handle = await fs.open(candidate, 'wx');
+      await handle.close();
       return candidate;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
   }
 
-  return path.join(dir, `${root}-${Date.now()}${ext}`);
+  throw new Error('browser.download could not reserve a free download filename');
 }
 
 function sanitizeDownloadFilename(value: string): string {

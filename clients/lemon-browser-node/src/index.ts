@@ -16,6 +16,7 @@ export type BrowserNodeConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
+  allowUnenforcedEgress: boolean;
   cdpEndpoint?: string;
 };
 
@@ -28,6 +29,7 @@ export async function runBrowserNode(cfg: BrowserNodeConfig): Promise<void> {
     headless: cfg.headless,
     noSandbox: cfg.noSandbox,
     attachOnly: cfg.attachOnly,
+    allowUnenforcedEgress: cfg.allowUnenforcedEgress,
   });
   await chrome.start();
 

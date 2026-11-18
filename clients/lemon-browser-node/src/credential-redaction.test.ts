@@ -93,6 +93,7 @@ describe('CDP credential redaction', () => {
         headless: true,
         noSandbox: false,
         attachOnly: true,
+        allowUnenforcedEgress: true,
       });
       const error = await session.start().then(
         () => null,

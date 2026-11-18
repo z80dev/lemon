@@ -16,6 +16,7 @@ export type BrowserNodeCliConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
+  allowUnenforcedEgress: boolean;
   executablePath: string | null;
   openclawProfile: string;
   userDataDir: string;
@@ -41,6 +42,8 @@ export function resolveCliConfig(params: {
   const headless = asBool(params.args['headless']);
   const noSandbox = asBool(params.args['no-sandbox']);
   const attachOnly = asBool(params.args['attach-only']) || !!cdpEndpoint;
+  const allowUnenforcedEgress =
+    asBool(params.args['allow-unenforced-egress']) || asBool(env.LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS);
   const executablePath = asString(params.args['executable-path']) ?? asString(env.LEMON_CHROME_EXECUTABLE);
 
   const openclawProfile = asString(params.args['openclaw-profile']) ?? 'openclaw';
@@ -71,6 +74,7 @@ export function resolveCliConfig(params: {
     headless,
     noSandbox,
     attachOnly,
+    allowUnenforcedEgress,
     executablePath,
     openclawProfile,
     userDataDir,
@@ -195,6 +199,7 @@ async function main() {
     headless: config.headless,
     noSandbox: config.noSandbox,
     attachOnly: config.attachOnly,
+    allowUnenforcedEgress: config.allowUnenforcedEgress,
   });
 }
 
