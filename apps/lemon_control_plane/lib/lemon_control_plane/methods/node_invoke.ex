@@ -150,13 +150,15 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
       nil ->
         {:error, Errors.not_found("Node not found")}
 
-      _node ->
+      node ->
         recipient = ctx[:conn_pid] || self()
+        args = canonical_args(method, args, node_id, node)
 
         case LemonCore.NodeRegistry.invoke_node(node_id, method, args,
                recipient: recipient,
                timeout_ms: timeout_ms,
-               max_payload_bytes: max_payload
+               max_payload_bytes: max_payload,
+               session_lifecycle_admission: method == "coding_agent.run"
              ) do
           {:ok, invoke_id} ->
             invocation = %{
@@ -202,6 +204,22 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
           {:error, {:node_offline, _node}} ->
             {:error, Errors.unavailable("Node is not online")}
 
+          {:error, :session_lifecycle_in_progress} ->
+            {:error,
+             Errors.error(
+               :conflict,
+               "A reset or deletion of this session is in progress",
+               %{"reason" => "lifecycle_in_progress", "retrySafe" => true}
+             )}
+
+          {:error, :session_lifecycle_unavailable} ->
+            {:error,
+             Errors.error(
+               :unavailable,
+               "Session lifecycle state is unavailable; the run was not started",
+               %{"reason" => "unavailable", "retrySafe" => true}
+             )}
+
           {:error, :invalid_timeout} ->
             {:error, Errors.invalid_request("timeoutMs must be a positive integer")}
 
@@ -218,6 +236,35 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
         end
     end
   end
+
+  # The run id and session key are fixed once, here: the session is admitted
+  # under this exact key and the worker executes under it, never re-deriving it.
+  defp canonical_args("coding_agent.run", args, node_id, node) do
+    run_id = trimmed(Map.get(args, "runId")) || "node:" <> LemonCore.Id.uuid()
+
+    session_key =
+      trimmed(Map.get(args, "sessionKey")) || "node:#{node_name(node_id, node)}:#{run_id}"
+
+    Map.merge(args, %{"runId" => run_id, "sessionKey" => session_key})
+  end
+
+  defp canonical_args(_method, args, _node_id, _node), do: args
+
+  defp node_name(node_id, node) do
+    case LemonCore.NodeRegistry.resolve_id(node_id) do
+      {:ok, %{name: name}} -> name
+      _ -> Map.get(node, :name) || Map.get(node, "name") || node_id
+    end
+  end
+
+  defp trimmed(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp trimmed(_value), do: nil
 
   defp payload_error_kind({kind, _detail})
        when kind in [:max_bytes, :max_depth, :max_items, :not_json_safe],

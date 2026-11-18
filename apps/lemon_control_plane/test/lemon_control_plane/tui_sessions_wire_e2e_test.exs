@@ -50,7 +50,11 @@ defmodule LemonControlPlane.TuiSessionsWireE2ETest do
     )
 
     on_exit(fn ->
-      Enum.each([prune_key, delete_key, keep_key], &SessionLifecycle.delete/1)
+      Enum.each(
+        [prune_key, delete_key, keep_key],
+        &LemonControlPlane.TestSupport.SessionCleanup.delete/1
+      )
+
       clear_table(:sessions_index)
       clear_table(:session_metadata_v1)
       restore_table(:sessions_index, session_index)

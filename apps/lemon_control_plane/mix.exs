@@ -10,12 +10,16 @@ defmodule LemonControlPlane.MixProject do
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
       test_pattern: "*_test.exs",
+      elixirc_paths: elixirc_paths(Mix.env()),
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 67]],
       deps: deps()
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_env), do: ["lib"]
 
   def application do
     [

@@ -24,8 +24,11 @@ defmodule LemonGateway do
   Submits an execution command for execution.
 
   Starts a Run directly. The Run claims its engine session before waiting
-  for a global execution permit; the router owns conversation ordering.
+  for a global execution permit; the router owns conversation ordering. No
+  router admission covers this run, so it is refused with
+  `{:error, :session_lifecycle_in_progress}` while a session reset or delete
+  holds its session, and is reported as session activity until it ends.
   """
   @spec submit(ExecutionCommand.t()) :: :ok | {:error, term()}
-  def submit(%ExecutionCommand{} = command), do: LemonGateway.Runtime.submit_execution(command)
+  def submit(%ExecutionCommand{} = command), do: LemonGateway.Runtime.submit_unadmitted(command)
 end

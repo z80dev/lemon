@@ -63,7 +63,9 @@ apps; optional consumers register at runtime. See [README](README.md),
 - Operator session list/search/stats/export/prune uses `SessionLifecycle`.
   Reads are bounded/redacted; stats preserve exact totals with capped dimensions.
   Delete requires exact-key confirmation and verified completion; prune requires
-  the preview's exact candidate token and millisecond cutoff.
+  the preview's exact candidate token and millisecond cutoff. Reset and delete
+  require a lifecycle fence generation (`fence_generation:`); prune deletes only
+  through the caller's `:fenced_delete`.
 - Distinguish strict persistence failures from absence when enforcing durable
   uniqueness, replay fences or destructive confirmation. A missing-looking
   compatibility read is not evidence that a mutation is safe to repeat.

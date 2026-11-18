@@ -238,6 +238,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodeMcpDiscover,
     LemonControlPlane.Methods.NodeProfilePaths,
     LemonControlPlane.Methods.NodeInvokeResult,
+    LemonControlPlane.Methods.NodeInvokeActive,
     LemonControlPlane.Methods.NodeInvokeEvent,
     LemonControlPlane.Methods.NodeInvokeControlResult,
     LemonControlPlane.Methods.NodeNativeFollowup,

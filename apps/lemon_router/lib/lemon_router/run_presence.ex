@@ -17,13 +17,19 @@ defmodule LemonRouter.RunPresence do
          {:ok, before} <- RunOrchestrator.presence_snapshot(),
          {:ok, active} <- LemonRouter.active_runs(),
          {:ok, coordinated} <- SessionCoordinator.presence_entries(),
+         {:ok, unadmitted} <- LemonCore.SessionActivity.entries(),
          {:ok, durable} <- durable_entries(before),
          {:ok, after_snapshot} <- RunOrchestrator.presence_snapshot(),
          true <- before == after_snapshot,
          true <- Process.whereis(LemonRouter.RunRegistry) == registry,
          true <- Process.whereis(RunOrchestrator) == owner do
+      # Unadmitted entries are native follow-up turns, direct node invocations
+      # and direct gateway runs registered for their execution lifetime (active),
+      # plus remote invocations whose stop is unproven (unknown). Their presence
+      # identities never collide with router run ids.
       entries =
-        durable ++ coordinated ++ Enum.map(active, &Map.put(&1, :status, :active))
+        durable ++
+          coordinated ++ Enum.map(active, &Map.put(&1, :status, :active)) ++ unadmitted
 
       entries = Enum.reduce(entries, %{}, &merge_entry/2) |> Map.values()
       scoped = Enum.flat_map(entries, &scope_entry(&1, filters))
@@ -41,12 +47,14 @@ defmodule LemonRouter.RunPresence do
         entries
         |> Enum.filter(&(&1.status == :active))
         |> Enum.flat_map(&scope_entry(&1, filters))
-        |> Enum.map(
-          &Map.merge(
+        |> Enum.map(fn entry ->
+          Map.merge(
             %{session_key: nil, agent_id: nil, profile_id: nil, engine: nil, started_at_ms: nil},
-            &1
+            entry
+            |> Map.put(:run_id, display_run_id(entry))
+            |> Map.delete(:caller_run_id)
           )
-        )
+        end)
         |> Enum.sort_by(&(&1.started_at_ms || 0), :desc)
 
       {:ok, %{runs: runs, presence: presence, entries: scoped}}
@@ -60,6 +68,12 @@ defmodule LemonRouter.RunPresence do
   catch
     :exit, _ -> {:error, :unavailable}
   end
+
+  defp display_run_id(%{run_id: {:session_activity, ref}} = entry),
+    do: Map.get(entry, :caller_run_id) || "session-activity:#{:erlang.ref_to_list(ref)}"
+
+  defp display_run_id(%{run_id: {:unresolved, id}}), do: "node-invocation:#{id}"
+  defp display_run_id(%{run_id: run_id}), do: run_id
 
   defp durable_entries(%{admissions: admissions, receipts: receipts}) do
     ids = Map.keys(admissions) ++ Map.keys(receipts)

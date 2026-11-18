@@ -53,7 +53,7 @@ defmodule LemonCli.SessionsCommandTest do
     session_key = "agent:cli_sessions_#{suffix}:main"
     run_id = "run-cli-sessions-#{suffix}"
 
-    on_exit(fn -> SessionLifecycle.delete(session_key) end)
+    on_exit(fn -> LemonCli.TestSupport.SessionCleanup.delete(session_key) end)
 
     {:ok, session_key: session_key, run_id: run_id, suffix: suffix}
   end

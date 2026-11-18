@@ -125,7 +125,7 @@ defmodule LemonCore.ContextTest do
     session_key = "agent:context_session_#{suffix}:main"
     run_id = "context-session-run-#{suffix}"
     secret = "context-session-secret-#{suffix}"
-    on_exit(fn -> SessionLifecycle.delete(session_key) end)
+    on_exit(fn -> LemonCore.TestSupport.SessionCleanup.delete(session_key) end)
 
     :ok =
       RunStore.finalize(run_id, %{

@@ -57,7 +57,7 @@ defmodule LemonWeb.ShellLiveTest do
 
     assert eventually(fn -> SessionLifecycle.get(key) != nil end)
     if title, do: {:ok, _} = SessionLifecycle.patch(key, %{title: title})
-    on_exit(fn -> SessionLifecycle.delete(key) end)
+    on_exit(fn -> LemonWeb.TestSupport.SessionCleanup.delete(key) end)
   end
 
   defp eventually(fun, attempts \\ 400) do

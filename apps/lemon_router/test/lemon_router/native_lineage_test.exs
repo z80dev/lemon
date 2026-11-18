@@ -806,6 +806,31 @@ defmodule LemonRouter.NativeLineageTest do
     refute_receive {:native_dispatch, _}, 50
   end
 
+  test "a follow-up refused by the lifecycle fence is recorded as rejected, never unknown",
+       ctx do
+    {_source, root} = admit_root(ctx)
+    fresh = fresh_request(ctx, "fenced")
+    :ok = hold_lifecycle_fence(ctx, fresh.session_key)
+
+    task =
+      Task.async(fn ->
+        RunOrchestrator.submit_native_followup(ctx.server, captured(root), fresh)
+      end)
+
+    assert_receive {:issuer_pending, issuer, id, _, _, _, _, _}, 2000
+    send(issuer, {:issuer_reply, id, 200, approved(id)})
+    assert Task.await(task) == {:error, :session_lifecycle_in_progress}
+    refute_receive {:native_dispatch, _}, 50
+
+    assert {:ok, %{terminal: true, native_followup: %{status: :rejected}}} =
+             Store.fetch(RunOrchestrator.admission_table(), id)
+
+    assert RunOrchestrator.submit_native_followup(ctx.server, captured(root), fresh) ==
+             {:error, :rejected}
+
+    refute_receive {:issuer_pending, _, _, _, _, _, _, _}, 50
+  end
+
   test "ambiguous dispatch retains F across owner restart and never reissues or redispatches",
        ctx do
     {_source, root} = admit_root(ctx)
@@ -1896,6 +1921,15 @@ defmodule LemonRouter.NativeLineageTest do
     assert :ok = CodingAgent.Session.prompt(session, request.prompt)
     assert_receive {:session_event, _, {:error, :model_routing_cost_cap, _}, _}, 5_000
     refute_received :unexpected_provider_call
+  end
+
+  # The test process holds the session's lifecycle fence until it exits.
+  defp hold_lifecycle_fence(ctx, session_key) do
+    assert {:ok, generation} =
+             RunOrchestrator.fence_session_lifecycle(ctx.server, session_key, :reset, "test")
+
+    on_exit(fn -> LemonCore.LifecycleFenceStore.release(session_key, generation) end)
+    :ok
   end
 
   defp restore_env(app, key, {:ok, value}), do: Application.put_env(app, key, value)

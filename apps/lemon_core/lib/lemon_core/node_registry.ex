@@ -183,7 +183,10 @@ defmodule LemonCore.NodeRegistry do
   `expected_pid` and `expected_generation` pin prior inspection to the dispatch
   session. `required_native_privacy_context: 1` requires its privacy descriptor;
   `required_process_execution: 1` requires the real run/get/cancel protocol.
-  Admission errors are definite pre-dispatch failures.
+  `session_lifecycle_admission: true` makes an unadmitted `coding_agent.run`
+  register as its session's activity for the invocation's lifetime, and refuses
+  it with `{:error, :session_lifecycle_in_progress}` while a reset or delete
+  holds the session. Admission errors are definite pre-dispatch failures.
   """
   def invoke_node(node_id, method, args, opts \\ [])
       when is_binary(node_id) and is_binary(method) and is_map(args),
@@ -214,18 +217,50 @@ defmodule LemonCore.NodeRegistry do
   def cancel(invoke_id, reason \\ :cancelled) when is_binary(invoke_id),
     do: NodeInvocation.call(invoke_id, {:cancel, reason}, :ok)
 
+  # A terminal result for an invocation whose owner already ended (it was
+  # cancelled, or its connection dropped) proves that remote run stopped.
   def complete(node_id, invoke_id, result, error \\ nil)
-      when is_binary(node_id) and is_binary(invoke_id),
-      do:
-        NodeInvocation.call(invoke_id, {:complete, node_id, result, error}, {:error, :not_found})
+      when is_binary(node_id) and is_binary(invoke_id) do
+    invoke_id
+    |> NodeInvocation.call({:complete, node_id, result, error}, :missing)
+    |> resolve_missing(invoke_id, node_id)
+  end
 
-  def complete_session(node_id, pid, generation, invoke_id, result, error \\ nil),
-    do:
-      NodeInvocation.call(
-        invoke_id,
-        {:complete_session, node_id, pid, generation, result, error},
-        {:error, :not_found}
-      )
+  def complete_session(node_id, pid, generation, invoke_id, result, error \\ nil) do
+    invoke_id
+    |> NodeInvocation.call({:complete_session, node_id, pid, generation, result, error}, :missing)
+    |> resolve_missing(invoke_id, node_id)
+  end
+
+  defp resolve_missing(:missing, invoke_id, node_id) do
+    case LemonCore.SessionActivity.resolve_unresolved(invoke_id, node_id) do
+      :resolved -> :ok
+      :not_found -> {:error, :not_found}
+    end
+  end
+
+  defp resolve_missing(result, _invoke_id, _node_id), do: result
+
+  @doc """
+  The worker on the live connection `pid` reports, after its cancellation
+  barrier, every invocation it still runs or is still stopping. Unresolved
+  presence its earlier connections left for any other invocation is cleared.
+  """
+  @spec report_active(String.t(), pid(), non_neg_integer(), [String.t()]) ::
+          :ok | {:error, :stale_session | :unavailable}
+  def report_active(node_id, pid, generation, invoke_ids)
+      when is_binary(node_id) and is_pid(pid) and is_list(invoke_ids) do
+    case lookup(node_id) do
+      {_owner, %{pid: ^pid, generation: ^generation}} ->
+        case LemonCore.SessionActivity.resolve_reported_active(node_id, pid, invoke_ids) do
+          :ok -> :ok
+          {:error, _} -> {:error, :unavailable}
+        end
+
+      _ ->
+        {:error, :stale_session}
+    end
+  end
 
   def event_session(node_id, pid, generation, invoke_id, seq, event),
     do:
@@ -438,6 +473,7 @@ defmodule LemonCore.NodeRegistry do
                ) do
             {:ok, _pid} -> {:ok, id}
             {:error, {:invalid_payload, reason}} -> {:error, {:invalid_payload, reason}}
+            {:error, {:session_lifecycle, reason}} -> {:error, reason}
             {:error, _} -> {:error, :invocation_unavailable}
           end
         end

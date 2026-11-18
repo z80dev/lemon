@@ -9,7 +9,7 @@ defmodule LemonControlPlane.Methods.SessionsReadTest do
     key = "agent:lifecycle_read_#{System.unique_integer([:positive])}:main"
     agent = LemonCore.SessionKey.agent_id(key)
     :ok = RunStore.create_session_index(key, agent, :tui)
-    on_exit(fn -> SessionLifecycle.delete(key) end)
+    on_exit(fn -> LemonControlPlane.TestSupport.SessionCleanup.delete(key) end)
     %{key: key, agent: agent}
   end
 

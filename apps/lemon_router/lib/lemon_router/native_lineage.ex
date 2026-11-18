@@ -811,7 +811,7 @@ defmodule LemonRouter.NativeLineage do
           :outcome_unknown ->
             {:error, :outcome_unknown}
 
-          status when status in [:denied, :admission_unavailable, :aborted] ->
+          status when status in [:denied, :admission_unavailable, :aborted, :rejected] ->
             {:error, status}
 
           _ ->
@@ -897,7 +897,7 @@ defmodule LemonRouter.NativeLineage do
     with {:ok, %{native_followup: lineage} = entry} <- Store.fetch(@table, run_id),
          replacement = Map.put(entry, :native_followup, Map.put(lineage, :status, status)),
          replacement <-
-           if(status in [:denied, :admission_unavailable, :aborted],
+           if(status in [:denied, :admission_unavailable, :aborted, :rejected],
              do: replacement |> Map.put(:terminal, true) |> Map.put(:state, "native_rejected"),
              else: replacement
            ),

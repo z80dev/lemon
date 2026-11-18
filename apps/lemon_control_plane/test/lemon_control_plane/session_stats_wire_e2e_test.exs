@@ -37,7 +37,7 @@ defmodule LemonControlPlane.SessionStatsWireE2ETest do
     assert {:ok, _} = SessionLifecycle.patch(session_key, %{pinned: true})
 
     on_exit(fn ->
-      SessionLifecycle.delete(session_key)
+      LemonControlPlane.TestSupport.SessionCleanup.delete(session_key)
       clear_table(:sessions_index)
       clear_table(:session_metadata_v1)
       restore_table(:sessions_index, sessions)

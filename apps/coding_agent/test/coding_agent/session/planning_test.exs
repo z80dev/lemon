@@ -973,7 +973,7 @@ defmodule CodingAgent.Session.PlanningTest do
   } do
     write_role_config(root)
     key = planning_key()
-    on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+    on_exit(fn -> CodingAgent.TestSupport.SessionCleanup.delete(key) end)
     assert {:ok, _} = CodingAgent.ControlPlaneProvider.session_create(key, root)
     before = stopped_manager(root, key)
 
@@ -1025,7 +1025,7 @@ defmodule CodingAgent.Session.PlanningTest do
   } do
     write_role_config(root)
     key = planning_key()
-    on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+    on_exit(fn -> CodingAgent.TestSupport.SessionCleanup.delete(key) end)
     assert {:ok, _} = CodingAgent.ControlPlaneProvider.session_create(key, root)
 
     active =
@@ -1056,7 +1056,7 @@ defmodule CodingAgent.Session.PlanningTest do
   } do
     write_role_config(root)
     key = planning_key()
-    on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+    on_exit(fn -> CodingAgent.TestSupport.SessionCleanup.delete(key) end)
     assert {:ok, _} = CodingAgent.ControlPlaneProvider.session_create(key, root)
     manager = stopped_manager(root, key)
     opts = offline_resume_opts(root, key, manager.file_path, Path.join(root, "workspace"))
@@ -1087,7 +1087,7 @@ defmodule CodingAgent.Session.PlanningTest do
   } do
     write_role_config(root)
     key = planning_key()
-    on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+    on_exit(fn -> CodingAgent.TestSupport.SessionCleanup.delete(key) end)
 
     assert {:ok, %{"mode" => "plan"}} =
              CodingAgent.ControlPlaneProvider.session_plan(key, root, :enter, [])
@@ -1134,7 +1134,7 @@ defmodule CodingAgent.Session.PlanningTest do
     write_role_config(root, "unknown-provider:missing")
     key = planning_key()
     fresh = planning_key()
-    on_exit(fn -> Enum.each([key, fresh], &LemonCore.SessionLifecycle.delete/1) end)
+    on_exit(fn -> Enum.each([key, fresh], &CodingAgent.TestSupport.SessionCleanup.delete/1) end)
     assert {:ok, _} = CodingAgent.ControlPlaneProvider.session_create(key, root)
     manager = stopped_manager(root, key)
     bytes = File.read!(manager.file_path)
@@ -1159,7 +1159,7 @@ defmodule CodingAgent.Session.PlanningTest do
   test "same-model stopped planning toggles append no model change entries", %{root: root} do
     write_role_config(root, "plan-fixture:execution")
     key = planning_key()
-    on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+    on_exit(fn -> CodingAgent.TestSupport.SessionCleanup.delete(key) end)
     assert {:ok, _} = CodingAgent.ControlPlaneProvider.session_create(key, root)
 
     for action <- [:enter, :exit, :enter, :exit] do
@@ -1292,7 +1292,7 @@ defmodule CodingAgent.Session.PlanningTest do
 
   test "entering before the first run creates one durable native planning session", %{root: root} do
     key = "agent:plan-test-#{System.unique_integer([:positive])}:main"
-    on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+    on_exit(fn -> CodingAgent.TestSupport.SessionCleanup.delete(key) end)
 
     assert {:ok, %{"mode" => "code", "path" => nil, "content" => nil}} =
              CodingAgent.ControlPlaneProvider.session_plan(key, root, :status, [])
@@ -1317,7 +1317,7 @@ defmodule CodingAgent.Session.PlanningTest do
     root: root
   } do
     key = "agent:create-test-#{System.unique_integer([:positive])}:main"
-    on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+    on_exit(fn -> CodingAgent.TestSupport.SessionCleanup.delete(key) end)
 
     assert {:error, :not_found} =
              LemonCore.SessionLifecycle.patch(key, %{title: "Before first turn"})
@@ -1355,7 +1355,7 @@ defmodule CodingAgent.Session.PlanningTest do
              CodingAgent.ControlPlaneProvider.session_create("unknown-legacy", root)
 
     key = "agent:existing-test-#{System.unique_integer([:positive])}:main"
-    on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+    on_exit(fn -> CodingAgent.TestSupport.SessionCleanup.delete(key) end)
 
     :ok =
       LemonCore.RunStore.create_session_index(
