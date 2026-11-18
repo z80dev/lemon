@@ -124,6 +124,8 @@ and script notifications.
 - `/model` scope is deliberate: session choices stay session-local, while
   future-session defaults are chat-wide even when selected from a topic. Accept
   exact labels and plain provider/model IDs; selections are not ordinary prompts.
+  A reply-keyboard picker answers only its opener, after the trigger gate, and
+  expires when idle.
 - `/new` increments `{account, chat, thread}` generation before new mappings.
   Session/resume keys include generation and message ID, invalidating old replies
   without full scans. Abort/cleanup/reflection is background work; reflection

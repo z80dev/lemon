@@ -363,6 +363,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {:noreply, state}
   end
 
+  def handle_info({:model_picker_expired, key, token}, state) do
+    {:noreply, ModelPicker.expire_model_picker(state, key, token)}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true

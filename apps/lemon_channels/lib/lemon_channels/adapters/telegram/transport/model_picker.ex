@@ -6,6 +6,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   pagination, selection state transitions, and model catalog lookup used by the
   Telegram adapter. Each reply-keyboard conversation retains its opening catalog:
   navigation neither repeats credential discovery nor changes model indices.
+
+  A reply-keyboard picker belongs to the member who sent `/model`: only that
+  sender's messages in the same chat/topic answer it, and only after the group
+  trigger gate admitted them. The keyboard is `selective`, and an idle picker
+  expires after ten minutes, releasing its catalog snapshot.
   """
 
   alias LemonAgent.ModelRuntime.ModelCatalog
@@ -26,6 +31,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   @model_picker_close "Close"
   @model_picker_scope_session "This session"
   @model_picker_scope_future "All future sessions"
+  # Idle lifetime of a reply-keyboard picker and its retained catalog snapshot.
+  @model_picker_ttl_ms :timer.minutes(10)
+  @model_picker_unbound_refusal "Model selection in a group needs your own member account: anonymous admins and channel posts can't use /model here."
 
   def handle_model_command(state, inbound) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
@@ -88,7 +96,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
 
             state
 
-          true ->
+          inbound.peer.kind == :dm ->
             _ =
               send_model_picker_message(
                 state,
@@ -96,7 +104,24 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
                 thread_id,
                 user_msg_id,
                 text,
-                callback_model_provider_markup(providers, 0)
+                CallbackHandler.callback_model_provider_markup(
+                  providers,
+                  0,
+                  CallbackHandler.model_callback_owner(state, chat_id, member_sender_id(inbound))
+                )
+              )
+
+            state
+
+          true ->
+            _ =
+              send_model_picker_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                @model_picker_unbound_refusal,
+                model_picker_remove_markup()
               )
 
             state
@@ -116,9 +141,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         {state, false}
 
       true ->
-        pickers = state.model_pickers || %{}
+        state = drop_expired_model_pickers(state)
 
-        case lookup_model_picker(pickers, inbound) do
+        case lookup_model_picker(state.model_pickers, inbound) do
           nil ->
             {state, false}
 
@@ -143,38 +168,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     error -> {:error, error}
   end
 
+  # A reply-keyboard picker answers only the member who opened it: other
+  # members' messages (and the opener's once the picker expired) are ordinary
+  # messages.
   defp lookup_model_picker(pickers, inbound) when is_map(pickers) do
-    case model_picker_key(inbound) do
-      nil ->
-        scope_model_picker(pickers, inbound)
-
-      key ->
-        case Map.fetch(pickers, key) do
-          {:ok, picker} -> {key, picker}
-          :error -> scope_model_picker(pickers, inbound)
-        end
+    with key when not is_nil(key) <- model_picker_key(inbound),
+         {:ok, picker} <- Map.fetch(pickers, key) do
+      {key, picker}
+    else
+      _ -> nil
     end
   end
 
   defp lookup_model_picker(_pickers, _inbound), do: nil
-
-  defp scope_model_picker(pickers, inbound) when is_map(pickers) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
-
-    pickers
-    |> Enum.filter(fn
-      {{picker_chat_id, picker_thread_id, _sender_id}, _picker} ->
-        picker_chat_id == chat_id and picker_thread_id == thread_id
-
-      _ ->
-        false
-    end)
-    |> case do
-      [{key, picker}] -> {key, picker}
-      _ -> nil
-    end
-  end
 
   defp consume_invalid_model_picker_input(state, inbound, key, picker) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
@@ -682,7 +688,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
   defp model_picker_key(inbound) do
     chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
     thread_id = parse_int(inbound.peer.thread_id)
-    sender_id = normalize_sender_id(inbound.sender && inbound.sender.id)
+    sender_id = member_sender_id(inbound)
 
     if is_integer(chat_id) and not is_nil(sender_id) do
       {chat_id, thread_id, sender_id}
@@ -690,6 +696,24 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
       nil
     end
   end
+
+  # Only an individual human member can own a picker. Anonymous admins
+  # (GroupAnonymousBot), channel posts and other `sender_chat` or bot identities
+  # are shared or synthetic, so they are unbound.
+  defp member_sender_id(inbound) do
+    message = raw_message(inbound.raw)
+
+    cond do
+      is_map(message["sender_chat"]) -> nil
+      is_nil(inbound.sender) or Map.get(inbound.sender, :bot) == true -> nil
+      true -> normalize_sender_id(inbound.sender.id)
+    end
+  end
+
+  defp raw_message(%{"message" => message}) when is_map(message), do: message
+  defp raw_message(%{"edited_message" => message}) when is_map(message), do: message
+  defp raw_message(%{"channel_post" => message}) when is_map(message), do: message
+  defp raw_message(_raw), do: %{}
 
   defp normalize_sender_id(id) when is_integer(id), do: Integer.to_string(id)
 
@@ -700,9 +724,45 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
 
   defp normalize_sender_id(_), do: nil
 
+  @doc """
+  Drops the picker under `key` when its idle TTL elapsed. `token` identifies the
+  picker revision that scheduled the expiry, so a refreshed picker survives.
+  """
+  def expire_model_picker(state, key, token) do
+    case Map.get(state.model_pickers || %{}, key) do
+      %{expiry_token: ^token} -> drop_model_picker(state, key)
+      _ -> state
+    end
+  end
+
   defp put_model_picker(state, key, picker) when is_map(picker) do
+    token = make_ref()
+    Process.send_after(self(), {:model_picker_expired, key, token}, @model_picker_ttl_ms)
+
+    picker =
+      Map.merge(picker, %{
+        expiry_token: token,
+        expires_at_ms: System.monotonic_time(:millisecond) + @model_picker_ttl_ms
+      })
+
     put_in(state, [:model_pickers], Map.put(state.model_pickers || %{}, key, picker))
   end
+
+  defp drop_expired_model_pickers(state) do
+    now = System.monotonic_time(:millisecond)
+
+    pickers =
+      state.model_pickers
+      |> Kernel.||(%{})
+      |> Map.reject(fn {_key, picker} -> expired_model_picker?(picker, now) end)
+
+    put_in(state, [:model_pickers], pickers)
+  end
+
+  defp expired_model_picker?(%{expires_at_ms: expires_at_ms}, now) when is_integer(expires_at_ms),
+    do: now >= expires_at_ms
+
+  defp expired_model_picker?(_picker, _now), do: true
 
   defp drop_model_picker(state, key) do
     put_in(state, [:model_pickers], Map.delete(state.model_pickers || %{}, key))
@@ -765,7 +825,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     %{
       "keyboard" => rows,
       "resize_keyboard" => true,
-      "one_time_keyboard" => true
+      "one_time_keyboard" => true,
+      "selective" => true
     }
   end
 
@@ -782,7 +843,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     %{
       "keyboard" => rows,
       "resize_keyboard" => true,
-      "one_time_keyboard" => true
+      "one_time_keyboard" => true,
+      "selective" => true
     }
   end
 
@@ -794,12 +856,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         [%{"text" => @model_picker_back}, %{"text" => @model_picker_close}]
       ],
       "resize_keyboard" => true,
-      "one_time_keyboard" => true
+      "one_time_keyboard" => true,
+      "selective" => true
     }
   end
 
   defp model_picker_remove_markup do
-    %{"remove_keyboard" => true}
+    %{"remove_keyboard" => true, "selective" => true}
   end
 
   defp invalid_picker_selection_text(error_text, body)
@@ -997,10 +1060,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
       {:error, _} = error ->
         error
     end
-  end
-
-  defp callback_model_provider_markup(providers, page) when is_list(providers) do
-    CallbackHandler.callback_model_provider_markup(providers, page)
   end
 
   defp parse_int(nil), do: nil
