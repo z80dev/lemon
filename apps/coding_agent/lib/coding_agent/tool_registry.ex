@@ -580,7 +580,7 @@ defmodule CodingAgent.ToolRegistry do
         Tools.Checkpoint.available?(Keyword.put(opts, :cwd, cwd))
 
       {:ast_grep, _module, _ownership} ->
-        match?({:ok, _}, Tools.AstGrep.availability(opts))
+        match?({:ok, _}, Tools.AstGrep.availability(cwd, opts))
 
       {:semantic_find, _module, _ownership} ->
         Tools.SemanticFind.available?(Keyword.put(opts, :cwd, cwd))

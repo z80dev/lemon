@@ -865,7 +865,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
     System.put_env("PATH", operator_bin)
 
     assert {:ok, %{name: :pdftotext, executable: ^executable}} =
-             ReadPdf.backend(cwd, pdf_system_only: true)
+             ReadPdf.backend(cwd)
   end
 
   @tag :tmp_dir
@@ -942,7 +942,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
 
     tool = WebFetch.tool(cwd, http_get: http_get, cache_opts: [persistent: false])
 
-    case ReadPdf.backend(cwd, pdf_system_only: true) do
+    case ReadPdf.backend(cwd) do
       {:ok, %{name: backend}} ->
         result = tool.execute.("id", %{"url" => "https://8.8.8.8/doc.pdf"}, nil, nil)
         assert result.trust == :untrusted

@@ -29,8 +29,10 @@ defmodule CodingAgent.Tools.ReadImage do
 
   def supported?(path), do: Map.has_key?(@types, String.downcase(Path.extname(path)))
 
-  def backend do
-    case System.find_executable("sips") do
+  # Only absolute operator PATH entries outside the session project (and its
+  # ancestor `.lemon` trees, including symlink targets) may supply `sips`.
+  def backend(cwd) do
+    case ReadFormatCommand.system_executable("sips", cwd) do
       nil ->
         {:error,
          "Bounded image previews require macOS sips. Install a supported image backend or resize externally to at most 1568 pixels and 4 MiB before reading."}
@@ -40,11 +42,11 @@ defmodule CodingAgent.Tools.ReadImage do
     end
   end
 
-  def read(path, _params, signal, opts) do
+  def read(path, _params, signal, cwd, opts) do
     with :ok <- check_abort(signal),
          :ok <- ReadFormats.check_input(path, opts),
          {:ok, stat} <- File.stat(path) do
-      case backend() do
+      case backend(cwd) do
         {:ok, backend} ->
           read_with_backend(path, stat, backend.executable, signal, opts)
 

@@ -13,7 +13,7 @@ external-content tools:
   on the operator's PATH). Only absolute PATH entries are used; workspace
   binaries and ancestor `.lemon` trees are excluded, including canonical
   symlink targets. Normal absolute user-installed toolchain paths outside
-  those project trees remain available. Unlike local `read`, fetching never discovers or
+  those project trees remain available. Like local `read`, fetching never discovers or
   probes project/ancestor `.lemon/read-formats-venv` interpreters. An operator
   may explicitly trust one with `WebFetch.tool(cwd, pdf_python: "/trusted/venv/bin/python3")`;
   this constructor option is not exposed to model-supplied fetch arguments.
