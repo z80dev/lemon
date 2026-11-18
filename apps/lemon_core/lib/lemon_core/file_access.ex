@@ -167,23 +167,27 @@ defmodule LemonCore.FileAccess do
           pos_integer()
         ) :: {:ok, String.t()} | {:error, String.t()}
   def put(root, rel, cfg, fetch, force, default_max) when is_function(fetch, 0) do
-    with {:ok, [_ | _] = parts} <- split_relative(rel) do
-      in_root(root, fn fs ->
-        with {:ok, walked} <- walk(fs, parts, :put),
-             :ok <- ensure_allowed(walked.parts, cfg_value(cfg, :deny_globs)),
-             {:ok, bytes} when is_binary(bytes) <- fetch.(),
-             :ok <-
-               within_size(byte_size(bytes), max_bytes(cfg, :max_upload_bytes, default_max)),
-             :ok <- write(fs, walked, bytes, force) do
-          {:ok, Enum.join(walked.parts, "/")}
-        else
-          {:error, msg} when is_binary(msg) -> {:error, msg}
-          _ -> {:error, "Failed to write file."}
-        end
-      end)
-    else
-      {:ok, []} -> {:error, "Invalid path."}
-      {:error, _} = error -> error
+    case split_relative(rel) do
+      {:ok, [_ | _] = parts} ->
+        in_root(root, fn fs ->
+          with {:ok, walked} <- walk(fs, parts, :put),
+               :ok <- ensure_allowed(walked.parts, cfg_value(cfg, :deny_globs)),
+               {:ok, bytes} when is_binary(bytes) <- fetch.(),
+               :ok <-
+                 within_size(byte_size(bytes), max_bytes(cfg, :max_upload_bytes, default_max)),
+               :ok <- write(fs, walked, bytes, force) do
+            {:ok, Enum.join(walked.parts, "/")}
+          else
+            {:error, msg} when is_binary(msg) -> {:error, msg}
+            _ -> {:error, "Failed to write file."}
+          end
+        end)
+
+      {:ok, []} ->
+        {:error, "Invalid path."}
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -231,23 +235,27 @@ defmodule LemonCore.FileAccess do
   @spec read_file(root(), term(), term(), pos_integer()) ::
           {:ok, String.t(), binary()} | {:error, String.t()}
   def read_file(root, rel, globs, max_bytes) do
-    with {:ok, [_ | _] = parts} <- split_relative(rel) do
-      in_root(root, fn fs ->
-        with {:ok, walked} <- walk(fs, parts, :get),
-             :ok <- ensure_allowed(walked.parts, globs) do
-          case walked.stat do
-            %Stat{type: :regular} ->
-              with {:ok, bytes} <- read_regular(fs, walked, max_bytes),
-                   do: {:ok, walked.name, bytes}
+    case split_relative(rel) do
+      {:ok, [_ | _] = parts} ->
+        in_root(root, fn fs ->
+          with {:ok, walked} <- walk(fs, parts, :get),
+               :ok <- ensure_allowed(walked.parts, globs) do
+            case walked.stat do
+              %Stat{type: :regular} ->
+                with {:ok, bytes} <- read_regular(fs, walked, max_bytes),
+                     do: {:ok, walked.name, bytes}
 
-            _directory ->
-              {:error, "Not a regular file."}
+              _directory ->
+                {:error, "Not a regular file."}
+            end
           end
-        end
-      end)
-    else
-      {:ok, []} -> {:error, "Invalid path."}
-      {:error, _} = error -> error
+        end)
+
+      {:ok, []} ->
+        {:error, "Invalid path."}
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -457,9 +465,8 @@ defmodule LemonCore.FileAccess do
   defp walk(fs, parts, mode), do: walk(fs, :root, parts, [], mode)
 
   defp walk(fs, :root, [], [], _mode) do
-    with {:ok, stat} <- ConfinedFS.stat(fs, :root) do
-      {:ok, %{dir: :root, name: nil, stat: stat, missing: [], parts: []}}
-    else
+    case ConfinedFS.stat(fs, :root) do
+      {:ok, stat} -> {:ok, %{dir: :root, name: nil, stat: stat, missing: [], parts: []}}
       _ -> {:error, "Not found."}
     end
   end

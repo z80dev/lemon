@@ -410,7 +410,9 @@ defmodule CodingAgent.ExecutionNode.CredentialIsolationTest do
         )
 
       File.mkdir_p!(Path.join(ctx.home, "lemon_bot"))
-      plain = Path.join(ctx.home, "plugins")
+      # A non-credential directory below the Lemon home that operator-state
+      # protection also leaves writable (a kanban worktree).
+      plain = Path.join([ctx.home, "kanban", "worktrees", "plain"])
       File.mkdir_p!(plain)
 
       for dir <- [ctx.home | dirs] do

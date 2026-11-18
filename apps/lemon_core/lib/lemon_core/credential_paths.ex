@@ -195,13 +195,13 @@ defmodule LemonCore.CredentialPaths do
       pid ->
         key = {__MODULE__, :store_files}
 
-        case :persistent_term.get(key, nil) do
+        case LemonCore.RuntimeCache.get(key) do
           {^pid, files} ->
             files
 
           _ ->
             files = store_location_files()
-            :persistent_term.put(key, {pid, files})
+            :ok = LemonCore.RuntimeCache.put(key, {pid, files})
             files
         end
     end

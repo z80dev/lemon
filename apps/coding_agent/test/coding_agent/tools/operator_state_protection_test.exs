@@ -76,7 +76,9 @@ defmodule CodingAgent.Tools.OperatorStateProtectionTest do
             Path.join([ctx.state, "nodes", "execution", "node-x.json"])
           ] do
         assert {:error, message} = write(ctx.workspace, path, "x"), path
-        assert message =~ "operator state"
+        # Credential locations (the key file, node tokens) are refused by the
+        # credential check, which runs first.
+        assert message =~ ~r/operator state|Lemon credential file/
         refute File.exists?(path)
       end
     end

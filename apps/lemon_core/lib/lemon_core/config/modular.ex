@@ -488,7 +488,7 @@ defmodule LemonCore.Config.Modular do
 
     {settings, rejected, project} =
       Enum.reduce(project_sources, {operator, [], %{}}, fn {path, raw},
-                                                          {merged, rejected, project} ->
+                                                           {merged, rejected, project} ->
         raw = LegacyAgentMigration.migrate_settings(raw)
         {merged, ignored} = ProjectLayer.merge(merged, raw)
         {admitted, _ignored} = ProjectLayer.merge(%{}, raw)

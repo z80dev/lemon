@@ -146,8 +146,7 @@ defmodule LemonRouter.SubmissionBuilder do
           # A profile or router-default selector is operator configuration: the
           # session resolves it (roles included) against operator settings only.
           # Always set here, so a caller's meta cannot claim it.
-          model_source:
-            if(ModelSelection.operator_source?(selection_input), do: :operator),
+          model_source: if(ModelSelection.operator_source?(selection_input), do: :operator),
           # A delegating session's admitted request model carries its project
           # origin; only that tightening claim survives, never an operator one.
           model_origin:

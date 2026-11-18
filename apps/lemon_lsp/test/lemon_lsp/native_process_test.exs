@@ -30,7 +30,15 @@ defmodule LemonLsp.NativeProcessTest do
 
     System.put_env(@command_env, System.find_executable("cat"))
     assert {:ok, _} = ServerManager.start_session(:elixir_ls, cwd: dir, session_id: session_id)
-    assert [{_, %{backend: :local, workload_identity: identity}, _}] = NativeProcess.snapshot()
+
+    # Tracked one-shot commands (probes run during start) also appear in the
+    # ledger, already terminated; the running server is the one live record.
+    assert [%{backend: :local, workload_identity: identity}] =
+             for(
+               {_, %{termination_confirmed: false} = record, _} <- NativeProcess.snapshot(),
+               do: record
+             )
+
     assert ProcessGroup.valid_identity?(identity)
     assert {:ok, %{status: :stopped}} = ServerManager.stop_session(session_id)
   end

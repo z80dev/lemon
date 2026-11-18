@@ -134,7 +134,9 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
     assert {:error, message} =
              WorkspaceEdit.apply(ops, tmp, [filesystem_checkpoints: false], nil, %{tool: "lsp"})
 
-    assert message =~ "same trusted directory"
+    # The up-front workspace check refuses before ConfinedFS's own
+    # same-trusted-directory rename check is reached.
+    assert message =~ "outside the workspace"
     assert File.read!(Path.join(tmp, "a.c")) == "aaa\n"
     assert File.ls!(other) == []
   end

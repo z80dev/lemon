@@ -874,27 +874,29 @@ defmodule LemonCore.Checkpoint do
   end
 
   defp snapshot_directory(fs, dir, name, path, stat, budget, depth, fingerprint?) do
-    with {:ok, handle} <- ConfinedFS.open_dir(fs, dir, [name]) do
-      try do
-        with {:ok, %ConfinedFS.Stat{} = opened} <- ConfinedFS.stat(fs, handle),
-             true <- ConfinedFS.Stat.same_object?(opened, stat),
-             {:ok, listed} <- ConfinedFS.list(fs, handle, max_entries: budget.entries),
-             names = listed |> Enum.map(&elem(&1, 0)) |> Enum.sort(),
-             {:ok, entries, budget} <-
-               snapshot_children(fs, handle, path, names, budget, depth, fingerprint?) do
-          {:ok, %{exists: true, type: "directory", mode: lstat_mode(opened), entries: entries},
-           budget}
-        else
-          false -> {:error, {:file_changed_during_capture, path}}
-          {:error, :too_many} -> {:error, :snapshot_entries_exceeded}
-          {:error, reason} when is_atom(reason) -> {:error, {:stat_failed, path, reason}}
-          error -> error
+    case ConfinedFS.open_dir(fs, dir, [name]) do
+      {:ok, handle} ->
+        try do
+          with {:ok, %ConfinedFS.Stat{} = opened} <- ConfinedFS.stat(fs, handle),
+               true <- ConfinedFS.Stat.same_object?(opened, stat),
+               {:ok, listed} <- ConfinedFS.list(fs, handle, max_entries: budget.entries),
+               names = listed |> Enum.map(&elem(&1, 0)) |> Enum.sort(),
+               {:ok, entries, budget} <-
+                 snapshot_children(fs, handle, path, names, budget, depth, fingerprint?) do
+            {:ok, %{exists: true, type: "directory", mode: lstat_mode(opened), entries: entries},
+             budget}
+          else
+            false -> {:error, {:file_changed_during_capture, path}}
+            {:error, :too_many} -> {:error, :snapshot_entries_exceeded}
+            {:error, reason} when is_atom(reason) -> {:error, {:stat_failed, path, reason}}
+            error -> error
+          end
+        after
+          ConfinedFS.close_dir(fs, handle)
         end
-      after
-        ConfinedFS.close_dir(fs, handle)
-      end
-    else
-      {:error, reason} -> {:error, {:stat_failed, path, reason}}
+
+      {:error, reason} ->
+        {:error, {:stat_failed, path, reason}}
     end
   end
 

@@ -83,11 +83,13 @@ defmodule CodingAgent.Tools.MutationSwapRaceTest do
 
       # Swap before the source is pinned, restore for validation, and swap
       # again right after validation's last parent check. A descriptor-bound
-      # pin is not redirected, so validation then sees the swap.
+      # pin is not redirected, so validation then sees the swap. The first
+      # `sub` lstat is a component walk that runs while the first swap is in
+      # place; validation's last parent check is the second.
       steps = [
         {{:read_link_info, target, 1}, :swap},
         {{:read_link_info, target, 2}, :restore},
-        {{:read_link_info, ctx.sub, 1}, :swap}
+        {{:read_link_info, ctx.sub, 2}, :swap}
       ]
 
       assert_refused(ctx, race(ctx, steps, fn -> edit(ctx) end))
