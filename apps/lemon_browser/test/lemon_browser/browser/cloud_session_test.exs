@@ -26,6 +26,12 @@ defmodule LemonBrowser.CloudSessionTest do
 
     def close_session(id, opts) do
       config = Keyword.fetch!(opts, :provider_config)
+      # Mirrors real providers: inline key first, then the configured secret.
+      key =
+        LemonBrowser.SessionProviders.Helpers.get_value(config, :api_key) ||
+          LemonBrowser.SessionProviders.Helpers.secret("TEST_HOSTED_API_KEY")
+
+      send(config.test_pid, {:close_key, id, key})
       send(config.test_pid, {:closed, id})
       :ok
     end
@@ -152,6 +158,149 @@ defmodule LemonBrowser.CloudSessionTest do
     assert_received {:closed, "provider-one"}
     assert_received {:closed, "provider-two"}
   end
+
+  test "session and driver process state never expose CDP or provider credentials", %{
+    driver: driver
+  } do
+    opts = [
+      session_id: "state-scope",
+      provider_config: %{test_pid: self(), api_key: "provider-api-secret"},
+      driver_path: driver,
+      browser_idle_timeout_ms: 5_000
+    ]
+
+    assert {:ok, _} = CloudSession.request(:test_hosted, "browser.tabs", %{}, 1_000, opts)
+
+    scope = %{session_id: "state-scope", browser_profile_id: nil, run_id: nil}
+    [{pid, _}] = Registry.lookup(LemonBrowser.CloudSessionRegistry, {:test_hosted, scope})
+    {:links, links} = Process.info(pid, :links)
+    driver_pid = Enum.find(links, &match?(%{port: port} when is_port(port), safe_state(&1)))
+    assert is_pid(driver_pid)
+
+    supervisor = Process.whereis(LemonBrowser.CloudSessionSupervisor)
+
+    for target <- [pid, driver_pid, supervisor],
+        secret <- ["credential@", "provider-api-secret"] do
+      refute contains_secret?(:sys.get_state(target), secret)
+      refute inspect(:sys.get_status(target), limit: :infinity) =~ secret
+    end
+
+    # Closing still works with the credential-free retained configuration.
+    GenServer.stop(pid, :normal, 1_000)
+    assert_received {:closed, "provider-state-scope"}
+  end
+
+  test "a driver that cannot start releases the provider session it was created for" do
+    opts = [
+      session_id: "no-driver",
+      provider_config: %{test_pid: self(), api_key: "failed-start-secret"},
+      driver_path: "/nonexistent/lemon-driver.js",
+      browser_idle_timeout_ms: 5_000
+    ]
+
+    assert {:error, reason} = CloudSession.request(:test_hosted, "browser.tabs", %{}, 1_000, opts)
+    assert reason =~ "does not exist"
+    assert_received {:created, "no-driver"}
+    assert_received {:close_key, "provider-no-driver", "failed-start-secret"}
+    assert_received {:closed, "provider-no-driver"}
+
+    scope = %{session_id: "no-driver", browser_profile_id: nil, run_id: nil}
+    [{pid, _}] = Registry.lookup(LemonBrowser.CloudSessionRegistry, {:test_hosted, scope})
+    state = :sys.get_state(pid)
+    assert state.session == nil
+    assert state.credential_ref == nil
+    assert state.driver == nil
+
+    for target <- [pid, Process.whereis(LemonBrowser.CredentialVault)],
+        secret <- ["credential@", "failed-start-secret"] do
+      refute contains_secret?(:sys.get_state(target), secret)
+    end
+  end
+
+  for {label, global} <- [{"absent", nil}, {"different", "global-other-secret"}] do
+    test "idle expiry and termination close with the session's inline key (global #{label})", %{
+      driver: driver
+    } do
+      with_env("TEST_HOSTED_API_KEY", unquote(global), fn ->
+        base = [
+          provider_config: %{test_pid: self(), api_key: "inline-session-secret"},
+          driver_path: driver
+        ]
+
+        idle = base ++ [session_id: "idle-close", browser_idle_timeout_ms: 60]
+        assert {:ok, _} = CloudSession.request(:test_hosted, "browser.tabs", %{}, 1_000, idle)
+        assert_receive {:close_key, "provider-idle-close", "inline-session-secret"}, 2_000
+
+        live = base ++ [session_id: "stop-close", browser_idle_timeout_ms: 5_000]
+        assert {:ok, _} = CloudSession.request(:test_hosted, "browser.tabs", %{}, 1_000, live)
+        scope = %{session_id: "stop-close", browser_profile_id: nil, run_id: nil}
+        [{pid, _}] = Registry.lookup(LemonBrowser.CloudSessionRegistry, {:test_hosted, scope})
+
+        for target <- [pid, Process.whereis(LemonBrowser.CredentialVault)] do
+          refute contains_secret?(:sys.get_state(target), "inline-session-secret")
+        end
+
+        GenServer.stop(pid, :normal, 1_000)
+        assert_received {:close_key, "provider-stop-close", "inline-session-secret"}
+      end)
+    end
+  end
+
+  test "provider URLs embedding credentials are rejected before any session state", %{
+    driver: driver
+  } do
+    opts = [
+      session_id: "userinfo-url",
+      provider_config: %{test_pid: self(), base_url: "https://user:url-secret@api.test"},
+      driver_path: driver
+    ]
+
+    assert {:error, reason} = CloudSession.request(:test_hosted, "browser.tabs", %{}, 1_000, opts)
+    assert reason =~ "must not embed credentials"
+    refute_received {:created, _}
+    assert CloudSession.status(:test_hosted) == []
+
+    supervisor = Process.whereis(LemonBrowser.CloudSessionSupervisor)
+    refute contains_secret?(:sys.get_state(supervisor), "url-secret")
+  end
+
+  defp with_env(name, value, fun) do
+    original = System.get_env(name)
+    if value, do: System.put_env(name, value), else: System.delete_env(name)
+
+    try do
+      fun.()
+    after
+      if original, do: System.put_env(name, original), else: System.delete_env(name)
+    end
+  end
+
+  defp safe_state(pid) when is_pid(pid) do
+    :sys.get_state(pid, 500)
+  catch
+    :exit, _ -> nil
+  end
+
+  defp safe_state(_port), do: nil
+
+  # Walks the whole term, including closure environments.
+  defp contains_secret?(term, secret) when is_binary(term), do: String.contains?(term, secret)
+
+  defp contains_secret?(term, secret) when is_tuple(term),
+    do: contains_secret?(Tuple.to_list(term), secret)
+
+  defp contains_secret?(term, secret) when is_map(term),
+    do: contains_secret?(:maps.to_list(term), secret)
+
+  defp contains_secret?([head | tail], secret),
+    do: contains_secret?(head, secret) or contains_secret?(tail, secret)
+
+  defp contains_secret?(term, secret) when is_function(term) do
+    {:env, env} = :erlang.fun_info(term, :env)
+    contains_secret?(env, secret)
+  end
+
+  defp contains_secret?(_term, _secret), do: false
 
   defp stop_fake_sessions do
     LemonBrowser.CloudSessionRegistry

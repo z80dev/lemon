@@ -4,10 +4,12 @@ defmodule LemonControlPlane.A2A.Router do
   use Plug.Router
 
   alias LemonControlPlane.A2A.{Auth, Config, Handler, TaskView}
+  alias LemonControlPlane.HTTP.RequestOrigin
   alias LemonCore.RateLimiter
   alias LemonCore.A2A.Protocol
   alias LemonCore.A2AStore
 
+  plug(:require_trusted_host)
   plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
   plug(:match)
   plug(:dispatch)
@@ -34,6 +36,16 @@ defmodule LemonControlPlane.A2A.Router do
 
   match _ do
     json(conn, 404, %{"error" => "Not found"})
+  end
+
+  # Loopback peers must name this listener in Host, so a DNS-rebound page cannot
+  # ride tokenless loopback A2A into dispatch.
+  defp require_trusted_host(conn, _opts) do
+    if RequestOrigin.a2a_host_allowed?(conn, Config.current()) do
+      conn
+    else
+      conn |> json(403, %{"error" => "Host not allowed"}) |> halt()
+    end
   end
 
   defp dispatch_rpc(conn) do

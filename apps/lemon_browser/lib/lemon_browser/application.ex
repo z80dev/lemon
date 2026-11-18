@@ -6,6 +6,8 @@ defmodule LemonBrowser.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      # Started before the session supervisors so it outlives their cleanup.
+      LemonBrowser.CredentialVault,
       {Registry, keys: :unique, name: LemonBrowser.CloudSessionRegistry},
       {DynamicSupervisor, strategy: :one_for_one, name: LemonBrowser.CloudSessionSupervisor},
       {Registry, keys: :unique, name: LemonBrowser.CamofoxSessionRegistry},

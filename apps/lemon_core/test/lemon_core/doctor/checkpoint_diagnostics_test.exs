@@ -33,7 +33,7 @@ defmodule LemonCore.Doctor.CheckpointDiagnosticsTest do
 
     File.write!(Path.join(tmp_dir, "bad.json"), "not json")
 
-    summary = CheckpointDiagnostics.summary(checkpoint_dir: tmp_dir, limit: 5)
+    summary = CheckpointDiagnostics.summary(:operator, checkpoint_dir: tmp_dir, limit: 5)
 
     assert summary.exists == true
     assert summary.count == 1

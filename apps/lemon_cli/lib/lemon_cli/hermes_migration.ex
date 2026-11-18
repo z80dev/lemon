@@ -10,13 +10,16 @@ defmodule LemonCli.HermesMigration do
   @entry_delimiter "\n§\n"
   @memory_limit 2_200
   @user_limit 1_375
+  @journal_file "journal.jsonl"
+  @config_archive_header "# Hermes config.yaml reduced to supported non-secret fields"
+  # Destination TOML table and key for each allowlisted secret's reference.
   @secret_names %{
-    "ANTHROPIC_API_KEY" => {"anthropic", "api_key_secret"},
-    "OPENAI_API_KEY" => {"openai", "api_key_secret"},
-    "OPENAI_CODEX_API_KEY" => {"openai-codex", "api_key_secret"},
-    "OPENCODE_API_KEY" => {"opencode", "api_key_secret"},
-    "ZAI_API_KEY" => {"zai", "api_key_secret"},
-    "MINIMAX_API_KEY" => {"minimax", "api_key_secret"},
+    "ANTHROPIC_API_KEY" => {"providers.anthropic", "api_key_secret"},
+    "OPENAI_API_KEY" => {"providers.openai", "api_key_secret"},
+    "OPENAI_CODEX_API_KEY" => {"providers.openai-codex", "api_key_secret"},
+    "OPENCODE_API_KEY" => {"providers.opencode", "api_key_secret"},
+    "ZAI_API_KEY" => {"providers.zai", "api_key_secret"},
+    "MINIMAX_API_KEY" => {"providers.minimax", "api_key_secret"},
     "TELEGRAM_BOT_TOKEN" => {"gateway.telegram", "bot_token_secret"},
     "DISCORD_BOT_TOKEN" => {"gateway.discord", "bot_token_secret"},
     "ELEVENLABS_API_KEY" => {"gateway.voice", "elevenlabs_api_key_secret"},
@@ -64,9 +67,73 @@ defmodule LemonCli.HermesMigration do
     run(Keyword.put(opts, :execute, false))
   end
 
+  @doc """
+  Applies the migration offline.
+
+  Refuses while a Lemon runtime uses the target and holds the restore
+  lifecycle locks for the whole run, so no runtime, restore or other migration
+  can write the target meanwhile. With `backup: true` an existing target is
+  first snapshotted with `LemonCore.Backup.create/1`; the bundle path is
+  reported as `"backup"`. A refusal returns a report with `"error"` set and
+  nothing written.
+  """
   def apply(opts \\ []) do
-    run(Keyword.put(opts, :execute, true))
+    target = target_root(opts)
+
+    result =
+      LemonCore.Backup.with_offline_target(target, offline_opts(opts), fn ->
+        with {:ok, bundle} <- pre_migration_backup(target, opts) do
+          {:ok, run(opts |> Keyword.put(:execute, true) |> Keyword.put(:backup_bundle, bundle))}
+        end
+      end)
+
+    case result do
+      {:ok, report} -> report
+      {:error, reason} -> refused_report(opts, target, reason)
+    end
   end
+
+  defp target_root(opts), do: path(opts[:target] || Path.join(System.user_home!(), ".lemon"))
+
+  defp offline_opts(opts), do: Keyword.take(opts, [:runtime_probe, :after_runtime_check])
+
+  defp pre_migration_backup(target, opts) do
+    if Keyword.get(opts, :backup, false) and File.dir?(target) do
+      case LemonCore.Backup.create(paths_opts: [home_state_dir: target]) do
+        {:ok, %{path: bundle}} -> {:ok, bundle}
+        {:error, reason} -> {:error, {:backup_failed, reason}}
+      end
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp refused_report(opts, target, reason) do
+    message = refusal_reason(reason)
+    items = [item("migration", nil, target, "error", message)]
+
+    %{
+      "source" => source_root(opts),
+      "target" => target,
+      "execute" => true,
+      "error" => message,
+      "backup" => nil,
+      "output_dir" => nil,
+      "summary" => summarize(items),
+      "items" => items
+    }
+  end
+
+  defp refusal_reason(:daemon_running),
+    do: "A Lemon runtime is using the target; stop it first (migration runs offline)"
+
+  defp refusal_reason(:backup_restore_locked),
+    do: "Another migration, backup restore or runtime start holds the target lock"
+
+  defp refusal_reason({:backup_failed, reason}),
+    do: "Could not create pre-migration backup: #{inspect(reason)}"
+
+  defp refusal_reason(reason), do: "Migration refused: #{inspect(reason)}"
 
   defp source_root(opts) do
     path(
@@ -148,7 +215,7 @@ defmodule LemonCli.HermesMigration do
       )
     ]
 
-    items = List.flatten(items)
+    items = List.flatten(items) ++ legacy_archive_items(target_root)
 
     %{
       "source" => source_root,
@@ -160,9 +227,9 @@ defmodule LemonCli.HermesMigration do
     }
   end
 
-  def run(opts) do
+  defp run(opts) do
     source_root = source_root(opts)
-    target_root = path(opts[:target] || Path.join(System.user_home!(), ".lemon"))
+    target_root = target_root(opts)
     execute? = Keyword.get(opts, :execute, false)
     overwrite? = Keyword.get(opts, :overwrite, false)
     migrate_secrets? = Keyword.get(opts, :migrate_secrets, false)
@@ -184,9 +251,12 @@ defmodule LemonCli.HermesMigration do
       report_dir: report_dir,
       backup_dir: Path.join(report_dir, "backups"),
       archive_dir: Path.join(report_dir, "archive"),
+      backup_bundle: opts[:backup_bundle],
       execute?: execute?,
       overwrite?: overwrite?,
       migrate_secrets?: migrate_secrets?,
+      include_skill_assets?: Keyword.get(opts, :include_skill_assets, false),
+      before_config_write: opts[:before_config_write],
       skill_conflict: skill_conflict,
       sections: sections
     }
@@ -204,6 +274,8 @@ defmodule LemonCli.HermesMigration do
       |> maybe_add(ctx, :archive, &archive_unmapped/1)
       |> List.flatten()
 
+    items = items ++ content_warning(items) ++ legacy_archive_items(target_root)
+
     report = %{
       "source" => source_root,
       "target" => target_root,
@@ -211,6 +283,7 @@ defmodule LemonCli.HermesMigration do
       "preset" => Keyword.get(opts, :preset, "user-data"),
       "migrate_secrets" => migrate_secrets?,
       "skill_conflict" => skill_conflict,
+      "backup" => opts[:backup_bundle],
       "output_dir" => if(execute?, do: report_dir, else: nil),
       "summary" => summarize(items),
       "items" => Enum.map(items, &redact_item/1)
@@ -225,32 +298,240 @@ defmodule LemonCli.HermesMigration do
     report
   end
 
+  @doc """
+  Reverts an applied migration from the journal in its report directory.
+
+  Runs offline under the same exclusion as `apply/1`. Paths the migration
+  created are removed and plain files it modified are restored from the copies
+  taken before their first change. A secret the migration created is deleted
+  only from the same store and only while it is still that exact value.
+  Imported session memory is never rolled back here: restore the pre-migration
+  backup bundle for the store. Empty parent directories and the report
+  directory itself are left in place.
+  """
+  def rollback(report_dir, opts \\ []) do
+    report_dir = path(report_dir)
+
+    with {:ok, body} <- File.read(Path.join(report_dir, "report.json")),
+         {:ok, %{"target" => target}} when is_binary(target) <- Jason.decode(body),
+         {:ok, report} <-
+           LemonCore.Backup.with_offline_target(target, offline_opts(opts), fn ->
+             {:ok, do_rollback(report_dir)}
+           end) do
+      report
+    else
+      {:error, reason} -> rollback_report(report_dir, [rollback_error(report_dir, reason)])
+      _ -> rollback_report(report_dir, [rollback_error(report_dir, :invalid_report)])
+    end
+  end
+
+  defp do_rollback(report_dir) do
+    journal = Path.join(report_dir, @journal_file)
+
+    items =
+      case File.read(journal) do
+        {:ok, body} ->
+          body
+          |> String.split("\n", trim: true)
+          |> Enum.map(&Jason.decode!/1)
+          |> Enum.reverse()
+          |> Enum.map(&undo_entry(report_dir, &1))
+
+        {:error, reason} ->
+          [rollback_error(journal, reason)]
+      end
+
+    report = rollback_report(report_dir, items)
+    File.write!(Path.join(report_dir, "rollback.json"), Jason.encode!(report, pretty: true))
+    report
+  end
+
+  # Rollback is complete only when nothing is left for the operator to recover.
+  defp rollback_report(report_dir, items) do
+    %{
+      "report_dir" => report_dir,
+      "complete" => not Enum.any?(items, &(&1["status"] in ["error", "manual"])),
+      "summary" => Enum.frequencies_by(items, & &1["status"]),
+      "items" => Enum.map(items, &redact_item/1)
+    }
+  end
+
+  defp undo_entry(_report_dir, %{"op" => "created", "path" => path}) do
+    case File.rm_rf(path) do
+      {:ok, _} -> item("rollback", path, nil, "reverted", "Removed path created by the migration")
+      {:error, reason, _} -> rollback_error(path, reason)
+    end
+  end
+
+  defp undo_entry(report_dir, %{"op" => "modified", "path" => path, "backup" => backup}) do
+    if inside?(path(backup), report_dir) and File.exists?(backup) do
+      _ = File.rm_rf!(path)
+      copy_path!(backup, path, overwrite: true)
+      item("rollback", path, nil, "restored", "Restored the pre-migration copy")
+    else
+      rollback_error(path, :missing_backup)
+    end
+  rescue
+    e in File.Error -> rollback_error(path, e.reason)
+  end
+
+  defp undo_entry(_report_dir, %{
+         "op" => "secret_created",
+         "name" => name,
+         "store" => store,
+         "incarnation" => incarnation
+       }) do
+    entry = &item("rollback", name, nil, &1, &2, %{"name" => name}, true)
+
+    case store_identity() do
+      {:ok, ^store} ->
+        case Secrets.delete_if_incarnation(name, incarnation) do
+          :ok ->
+            entry.("reverted", "Deleted the secret created by the migration")
+
+          {:error, :stale_revision} ->
+            entry.(
+              "manual",
+              "Secret changed or was removed after the migration created it; left untouched"
+            )
+
+          {:error, reason} ->
+            entry.("error", "Could not delete the secret: #{inspect(reason)}")
+        end
+
+      _other ->
+        entry.(
+          "error",
+          "The active secret store is not the one the migration wrote (#{store}); secret not deleted"
+        )
+    end
+  end
+
+  defp undo_entry(_report_dir, %{"op" => "database", "path" => path, "existed" => false}) do
+    results = Enum.map(["", "-wal", "-shm", "-journal"], &File.rm_rf(path <> &1))
+
+    case Enum.find(results, &match?({:error, _, _}, &1)) do
+      nil ->
+        item(
+          "rollback",
+          path,
+          nil,
+          "reverted",
+          "Removed session memory database the migration created"
+        )
+
+      {:error, reason, _} ->
+        rollback_error(path, reason)
+    end
+  end
+
+  defp undo_entry(_report_dir, %{"op" => "database", "path" => path}) do
+    item(
+      "rollback",
+      path,
+      nil,
+      "manual",
+      "Imported session memory was added to an existing database and is not rolled back; restore the pre-migration backup bundle (lemon backup restore) to revert it"
+    )
+  end
+
+  defp undo_entry(_report_dir, entry),
+    do: item("rollback", inspect(entry["op"]), nil, "error", "Unknown journal entry")
+
+  defp rollback_error(path, reason),
+    do: item("rollback", path, nil, "error", "Rollback failed: #{inspect(reason)}")
+
+  # Records a destination before its first mutation in this run: new paths as
+  # `created`, existing ones as `modified` with a copy under `backups/`.
+  defp journal!(ctx, path) do
+    if ctx.execute? and not journaled?(ctx, path) do
+      entry =
+        case File.lstat(path) do
+          {:ok, _} ->
+            %{"op" => "modified", "path" => path, "backup" => backup_existing(ctx, path)}
+
+          {:error, _} ->
+            %{"op" => "created", "path" => path}
+        end
+
+      append_journal!(ctx, entry)
+    end
+
+    :ok
+  end
+
+  defp journaled?(ctx, path) do
+    case File.read(Path.join(ctx.report_dir, @journal_file)) do
+      {:ok, body} ->
+        body
+        |> String.split("\n", trim: true)
+        |> Enum.any?(&(Jason.decode!(&1)["path"] == path))
+
+      {:error, _} ->
+        false
+    end
+  end
+
+  defp append_journal!(ctx, entry) do
+    journal = Path.join(ctx.report_dir, @journal_file)
+    File.mkdir_p!(ctx.report_dir)
+    File.write!(journal, Jason.encode!(entry) <> "\n", [:append])
+    File.chmod!(journal, 0o600)
+  end
+
+  @legacy_reason "May hold plaintext Hermes credentials copied by an earlier migration. " <>
+                   "Lemon no longer creates it and never backs it up. Review it, delete it " <>
+                   "once you no longer need it, and rotate any credentials it contained."
+
+  # Value-free warnings for plaintext copies made by earlier migration versions.
+  defp legacy_archive_items(target_root) do
+    archived =
+      [target_root, "migration", "hermes", "*", "archive"]
+      |> Path.join()
+      |> Path.wildcard()
+      |> Enum.flat_map(fn dir ->
+        config = Path.join(dir, "config.yaml")
+
+        Enum.filter([Path.join(dir, "auth.json"), Path.join(dir, "cron")], &File.exists?/1) ++
+          if(File.regular?(config) and not reduced_config_archive?(config),
+            do: [config],
+            else: []
+          )
+      end)
+
+    zips = Path.wildcard(Path.join([target_root, "backups", "pre-hermes-migration-*.zip"]))
+
+    Enum.map(archived ++ zips, &item("legacy_archive", &1, nil, "warning", @legacy_reason))
+  end
+
+  defp reduced_config_archive?(path) do
+    case File.open(path, [:read], &IO.read(&1, :line)) do
+      {:ok, line} when is_binary(line) -> String.trim_trailing(line) == @config_archive_header
+      _ -> false
+    end
+  end
+
+  @content_kinds ~w(soul memory user_profile skill sessions)
+
+  defp content_warning(items) do
+    if Enum.any?(items, &(&1["kind"] in @content_kinds and &1["status"] in ~w(planned migrated))) do
+      [
+        item(
+          "content",
+          nil,
+          nil,
+          "warning",
+          "Persona, memory, skill and session text is imported as written and is not scanned for embedded secrets; review it and move any credentials into Lemon secrets"
+        )
+      ]
+    else
+      []
+    end
+  end
+
   def has_conflicts?(%{"summary" => %{"conflict" => count}}), do: count > 0
 
   def has_conflicts?(_), do: false
-
-  def create_backup(target_root) do
-    target_root = path(target_root)
-
-    if File.dir?(target_root) do
-      backup_dir = Path.join(target_root, "backups")
-      File.mkdir_p!(backup_dir)
-      archive = Path.join(backup_dir, "pre-hermes-migration-#{timestamp()}.zip")
-
-      entries =
-        target_root
-        |> recursive_files()
-        |> Enum.reject(&String.starts_with?(&1, backup_dir <> "/"))
-        |> Enum.map(fn file -> file |> Path.relative_to(target_root) |> String.to_charlist() end)
-
-      case :zip.create(String.to_charlist(archive), entries, cwd: String.to_charlist(target_root)) do
-        {:ok, _} -> {:ok, archive}
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      :none
-    end
-  end
 
   defp maybe_add(items, ctx, section, fun) do
     if MapSet.member?(ctx.sections, section), do: [fun.(ctx) | items], else: items
@@ -329,20 +610,16 @@ defmodule LemonCli.HermesMigration do
 
   defp migrate_secrets(ctx) do
     env_path = Path.join(ctx.source_root, ".env")
-    env = parse_env(env_path)
 
-    if env == %{} do
-      [item("secrets", env_path, nil, "skipped", "No allowlisted Hermes secrets found")]
-    else
-      env
-      |> Enum.filter(fn {name, value} ->
-        Map.has_key?(@secret_names, name) and String.trim(value) != ""
-      end)
-      |> Enum.map(fn {name, value} -> import_secret(ctx, name, value) end)
-      |> case do
-        [] -> [item("secrets", env_path, nil, "skipped", "No allowlisted Hermes secrets found")]
-        items -> items
-      end
+    env_path
+    |> parse_env()
+    |> Enum.filter(fn {name, value} ->
+      Map.has_key?(@secret_names, name) and String.trim(value) != ""
+    end)
+    |> Enum.map(fn {name, value} -> import_secret(ctx, name, value) end)
+    |> case do
+      [] -> [item("secrets", env_path, nil, "skipped", "No allowlisted Hermes secrets found")]
+      items -> items
     end
   end
 
@@ -387,6 +664,24 @@ defmodule LemonCli.HermesMigration do
           case Map.fetch(@honcho_fields, key) do
             {:ok, {dest_key, type}} ->
               case honcho_value(value, type) do
+                {:ok, converted} when dest_key == "base_url" and not is_nil(converted) ->
+                  if safe_url?(converted) do
+                    {next, entry} =
+                      honcho_config_item(
+                        ctx,
+                        source,
+                        target,
+                        existing,
+                        content,
+                        dest_key,
+                        converted
+                      )
+
+                    {next, [entry | entries]}
+                  else
+                    {content, [credential_url_item(source, target, "honcho.base_url") | entries]}
+                  end
+
                 {:ok, converted} ->
                   {next, entry} =
                     honcho_config_item(
@@ -414,13 +709,15 @@ defmodule LemonCli.HermesMigration do
           end
         end)
 
-      {patched, secret_items} = honcho_secret(ctx, source, target, existing, patched, config)
+      {with_secret, secret_items, pending} =
+        honcho_secret(ctx, source, existing, patched, config)
 
-      if ctx.execute? and patched != content do
-        _ = backup_existing(ctx, target)
-        File.mkdir_p!(Path.dirname(target))
-        File.write!(target, patched)
-      end
+      secret_items =
+        if ctx.execute? and (with_secret != content or pending != nil) do
+          write_honcho(ctx, target, content, patched, with_secret, pending, secret_items)
+        else
+          secret_items
+        end
 
       unsupported_items =
         Enum.map(unsupported, &honcho_unsupported(source, target, &1, "Unsupported Honcho key"))
@@ -580,10 +877,12 @@ defmodule LemonCli.HermesMigration do
     end
   end
 
-  defp honcho_secret(ctx, source, _target, existing, content, config) do
+  # Returns the config with the secret reference, the secret items, and the
+  # secret still to be written (only when executing) by `write_honcho/7`.
+  defp honcho_secret(ctx, source, existing, content, config) do
     case normalize_string(config["apiKey"]) do
       nil ->
-        {content, []}
+        {content, [], nil}
 
       value ->
         name = "HONCHO_API_KEY"
@@ -595,46 +894,111 @@ defmodule LemonCli.HermesMigration do
         cond do
           not MapSet.member?(ctx.sections, :secrets) ->
             {content,
-             [entry.("gated", "Honcho API key requires --preset full --migrate-secrets")]}
+             [entry.("gated", "Honcho API key requires --preset full --migrate-secrets")], nil}
+
+          match?({:outside, _}, secret_store_scope(ctx)) ->
+            {:outside, reason} = secret_store_scope(ctx)
+            {content, [entry.("gated", outside_store_reason(reason))], nil}
 
           not ctx.overwrite? and
               (not is_nil(get_in(existing, ["honcho", "api_key_secret"])) or
                  not is_nil(get_in(existing, ["honcho", "api_key"]))) ->
-            {content, [entry.("conflict", "Target Honcho credential setting exists")]}
+            {content, [entry.("conflict", "Target Honcho credential setting exists")], nil}
 
           true ->
             case Secrets.list() do
               {:ok, secrets} ->
-                if not ctx.overwrite? and Enum.any?(secrets, &(&1.name == name)) do
-                  {content, [entry.("conflict", "Target Honcho secret exists")]}
-                else
-                  honcho_store_secret(ctx, content, value, entry)
+                cond do
+                  Enum.any?(secrets, &(&1.name == name)) ->
+                    {content, [entry.("conflict", existing_secret_reason(name))], nil}
+
+                  ctx.execute? ->
+                    patched =
+                      content
+                      |> TomlPatch.delete_key("honcho", "api_key")
+                      |> TomlPatch.upsert_string("honcho", "api_key_secret", name)
+
+                    {patched,
+                     [entry.("migrated", "Imported Honcho API key into encrypted secrets")],
+                     {name, value}}
+
+                  true ->
+                    {content,
+                     [
+                       entry.(
+                         "planned",
+                         "Honcho API key would be imported into encrypted secrets"
+                       )
+                     ], nil}
                 end
 
               {:error, _} ->
-                {content, [entry.("error", "Could not inspect Lemon secrets")]}
+                {content, [entry.("error", "Could not inspect Lemon secrets")], nil}
             end
         end
     end
   end
 
-  defp honcho_store_secret(ctx, content, value, entry) do
-    if ctx.execute? do
-      case Secrets.set("HONCHO_API_KEY", value, provider: "hermes_migration") do
-        {:ok, _} ->
-          patched =
-            content
-            |> TomlPatch.delete_key("honcho", "api_key")
-            |> TomlPatch.upsert_string("honcho", "api_key_secret", "HONCHO_API_KEY")
-
-          {patched, [entry.("migrated", "Imported Honcho API key into encrypted secrets")]}
-
-        {:error, _} ->
-          {content,
-           [entry.("error", "Honcho secret import failed; check Lemon secrets master key")]}
+  # Writes the Honcho config only if it is unchanged since it was read. With a
+  # pending secret, the secret is written first and undone if the config write
+  # fails; on a secret failure the non-secret settings are still written.
+  defp write_honcho(ctx, target, content, patched, with_secret, pending, secret_items) do
+    write = fn new ->
+      fn ->
+        update_config_file(ctx, target, fn current ->
+          if current == content, do: {:ok, new}, else: {:error, :config_changed}
+        end)
       end
-    else
-      {content, [entry.("planned", "Honcho API key would be imported into encrypted secrets")]}
+    end
+
+    {secret_items, config_result} =
+      case pending do
+        nil ->
+          {secret_items, write.(patched).()}
+
+        {name, value} ->
+          result =
+            case secret_store_scope(ctx) do
+              {:ok, store} ->
+                write_secret_then_config(ctx, store, name, value, write.(with_secret))
+
+              {:outside, reason} ->
+                {:error, {:outside, reason}}
+            end
+
+          case result do
+            :ok ->
+              {secret_items, :ok}
+
+            {:error, reason} ->
+              failed =
+                Enum.map(
+                  secret_items,
+                  &Map.merge(&1, %{
+                    "status" => secret_failure_status(reason),
+                    "reason" => "Honcho " <> secret_failure_reason(reason)
+                  })
+                )
+
+              {failed, write.(patched).()}
+          end
+      end
+
+    case config_result do
+      :ok ->
+        secret_items
+
+      {:error, reason} ->
+        secret_items ++
+          [
+            item(
+              "honcho",
+              target,
+              target,
+              "error",
+              "Honcho settings not written: #{config_failure_reason(reason)}"
+            )
+          ]
     end
   end
 
@@ -679,35 +1043,224 @@ defmodule LemonCli.HermesMigration do
     end
   end
 
+  # auth.json is never copied: it holds tokens and is reported as gated instead.
+  # config.yaml is archived reduced to the supported non-secret fields and cron
+  # jobs only by name and schedule; everything else is reported, never copied.
   defp archive_unmapped(ctx) do
-    candidates = [
-      {"config.yaml", Path.join(ctx.source_root, "config.yaml")},
-      {"auth.json", Path.join(ctx.source_root, "auth.json")},
-      {"cron", Path.join(ctx.source_root, "cron")}
-    ]
+    auth = Path.join(ctx.source_root, "auth.json")
 
-    candidates
-    |> Enum.filter(fn {_name, path} -> File.exists?(path) end)
-    |> Enum.map(fn {name, source} ->
-      dest = Path.join(ctx.archive_dir, name)
+    auth_items =
+      if File.exists?(auth) do
+        [
+          item(
+            "archive",
+            auth,
+            nil,
+            "gated",
+            "Hermes auth.json holds credentials and is never archived; import supported credentials with --preset full --migrate-secrets",
+            %{},
+            true
+          )
+        ]
+      else
+        []
+      end
 
-      _ =
-        if ctx.execute? do
-          copy_path!(source, dest, overwrite: true)
-        end
+    archive_items =
+      archive_config_yaml(ctx, Path.join(ctx.source_root, "config.yaml")) ++
+        archive_cron(ctx, Path.join(ctx.source_root, "cron"))
 
-      item(
-        "archive",
-        source,
-        dest,
-        if(ctx.execute?, do: "archived", else: "planned"),
-        "Archived for manual review"
-      )
-    end)
-    |> case do
+    case auth_items ++ archive_items do
       [] -> [item("archive", ctx.source_root, nil, "skipped", "No unmapped Hermes files found")]
       items -> items
     end
+  end
+
+  defp archive_config_yaml(ctx, source) do
+    with true <- File.exists?(source),
+         {:ok, config} <- YamlElixir.read_from_file(source) do
+      {kept, unsupported} = supported_config(config)
+      dest = Path.join(ctx.archive_dir, "config.yaml")
+
+      # JSON is valid YAML, so the reduced copy stays readable as config.yaml.
+      _ =
+        if ctx.execute? do
+          write_private!(
+            dest,
+            @config_archive_header <> "\n" <> Jason.encode!(kept, pretty: true) <> "\n"
+          )
+        end
+
+      [archive_item(ctx, source, dest, "Archived supported non-secret config fields")] ++
+        if unsupported == [] do
+          []
+        else
+          [
+            item(
+              "archive",
+              source,
+              nil,
+              "gated",
+              "Unsupported config.yaml sections were neither imported nor archived; review them in the Hermes home",
+              %{"keys" => unsupported}
+            )
+          ]
+        end
+    else
+      false ->
+        []
+
+      {:error, _} ->
+        [item("archive", source, nil, "skipped", "Unparseable Hermes config.yaml not archived")]
+    end
+  end
+
+  defp supported_config(config) when is_map(config) do
+    kept =
+      [
+        {"model", normalize_string(config["model"])},
+        {"providers", supported_providers(config["providers"])}
+      ]
+      |> Enum.reject(fn {_key, value} -> value in [nil, %{}] end)
+      |> Map.new()
+
+    unsupported =
+      config
+      |> Map.keys()
+      |> Enum.map(&to_string/1)
+      |> Enum.reject(&(&1 in ["model", "providers"]))
+      |> Enum.sort()
+
+    {kept, unsupported}
+  end
+
+  defp supported_config(_config), do: {%{}, []}
+
+  defp supported_providers(providers) when is_map(providers) do
+    providers
+    |> Enum.flat_map(fn {name, provider} ->
+      url = if is_map(provider), do: provider_base_url(provider)
+
+      if is_binary(url) and safe_url?(url),
+        do: [{to_string(name), %{"base_url" => url}}],
+        else: []
+    end)
+    |> Map.new()
+  end
+
+  defp supported_providers(_providers), do: nil
+
+  defp provider_base_url(provider),
+    do: normalize_string(provider["base_url"] || provider["baseUrl"])
+
+  # A mapped URL must not carry credentials: no userinfo, query or fragment.
+  defp safe_url?(url) do
+    case URI.new(url) do
+      {:ok, %URI{userinfo: nil, query: nil, fragment: nil, host: host}} when is_binary(host) ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp credential_url_item(source, target, key) do
+    item(
+      "config",
+      source,
+      target,
+      "gated",
+      "URL with userinfo, query or fragment not imported; it may embed credentials. Set it manually without them and keep credentials in Lemon secrets",
+      %{"key" => key}
+    )
+  end
+
+  @cron_fields ~w(id name schedule cron enabled timezone)
+
+  defp archive_cron(ctx, source) do
+    case File.lstat(source) do
+      {:ok, %File.Stat{type: :directory}} ->
+        files = private_regular_files(source)
+        dest = Path.join(ctx.archive_dir, "cron.json")
+
+        _ =
+          if ctx.execute? do
+            summary = %{
+              "jobs" => Enum.flat_map(files, &cron_jobs/1),
+              "files" => Enum.map(files, &Path.relative_to(&1, source))
+            }
+
+            write_private!(dest, Jason.encode!(summary, pretty: true) <> "\n")
+          end
+
+        [
+          archive_item(
+            ctx,
+            source,
+            dest,
+            "Archived cron job names and schedules only; commands, prompts and environment were not copied, so recreate the jobs manually"
+          )
+        ]
+
+      {:ok, _} ->
+        [
+          item(
+            "archive",
+            source,
+            nil,
+            "gated",
+            "Hermes cron path is not a directory; not archived"
+          )
+        ]
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  defp private_regular_files(dir) do
+    dir
+    |> Path.join("**/*")
+    |> Path.wildcard(match_dot: true)
+    |> Enum.filter(&match?({:ok, %File.Stat{type: :regular}}, File.lstat(&1)))
+    |> Enum.sort()
+  end
+
+  defp cron_jobs(file) do
+    parsed =
+      case Path.extname(file) do
+        ".json" -> with {:ok, body} <- File.read(file), do: Jason.decode(body)
+        ext when ext in [".yaml", ".yml"] -> YamlElixir.read_from_file(file)
+        _ -> :skip
+      end
+
+    jobs =
+      case parsed do
+        {:ok, list} when is_list(list) -> list
+        {:ok, %{"jobs" => list}} when is_list(list) -> list
+        {:ok, map} when is_map(map) -> [map]
+        _ -> []
+      end
+
+    jobs
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(fn job ->
+      for {k, v} <- job, k in @cron_fields, scalar?(v), into: %{}, do: {k, v}
+    end)
+    |> Enum.reject(&(&1 == %{}))
+  end
+
+  defp scalar?(value), do: is_binary(value) or is_number(value) or is_boolean(value)
+
+  defp write_private!(dest, content) do
+    _ = File.rm_rf!(dest)
+    File.mkdir_p!(Path.dirname(dest))
+    File.write!(dest, content)
+    File.chmod!(dest, 0o600)
+  end
+
+  defp archive_item(ctx, source, dest, reason) do
+    item("archive", source, dest, if(ctx.execute?, do: "archived", else: "planned"), reason)
   end
 
   defp audit_file(kind, source, reason) do
@@ -892,7 +1445,7 @@ defmodule LemonCli.HermesMigration do
 
       true ->
         if ctx.execute? do
-          _ = backup_existing(ctx, dest)
+          journal!(ctx, dest)
           File.mkdir_p!(Path.dirname(dest))
           File.cp!(source, dest)
         end
@@ -910,12 +1463,13 @@ defmodule LemonCli.HermesMigration do
       {merged, details, overflow} = merge_entries(existing, incoming, limit)
 
       if ctx.execute? do
-        _ = backup_existing(ctx, target)
+        journal!(ctx, target)
         File.mkdir_p!(Path.dirname(target))
         File.write!(target, Enum.join(merged, @entry_delimiter))
 
         if overflow != [] do
           overflow_path = overflow_path(ctx, kind)
+          journal!(ctx, overflow_path)
           File.mkdir_p!(Path.dirname(overflow_path))
           File.write!(overflow_path, Enum.join(overflow, "\n\n"))
         end
@@ -954,81 +1508,186 @@ defmodule LemonCli.HermesMigration do
 
       File.exists?(target) and ctx.skill_conflict == "rename" ->
         renamed = unique_path(Path.join(ctx.skill_dir, "#{base}-hermes-import"))
+        _ = if ctx.execute?, do: journal!(ctx, renamed)
+        skipped = copy_skill_tree(ctx, source, renamed)
 
-        _ =
-          if ctx.execute? do
-            copy_path!(source, renamed, overwrite: false)
-          end
-
-        item(
-          "skill",
-          source,
-          renamed,
-          if(ctx.execute?, do: "migrated", else: "planned"),
-          "Imported under renamed folder",
-          %{"renamed_from" => target}
-        )
+        [
+          item(
+            "skill",
+            source,
+            renamed,
+            if(ctx.execute?, do: "migrated", else: "planned"),
+            "Imported under renamed folder",
+            %{"renamed_from" => target}
+          )
+          | skipped
+        ]
 
       true ->
         _ =
           if ctx.execute? do
-            _ = backup_existing(ctx, target)
-            copy_path!(source, target, overwrite: true)
+            journal!(ctx, target)
+            File.rm_rf!(target)
           end
 
-        item(
-          "skill",
-          source,
-          target,
-          if(ctx.execute?, do: "migrated", else: "planned"),
-          "Copied skill directory"
-        )
+        skipped = copy_skill_tree(ctx, source, target)
+
+        [
+          item(
+            "skill",
+            source,
+            target,
+            if(ctx.execute?, do: "migrated", else: "planned"),
+            "Copied skill directory"
+          )
+          | skipped
+        ]
     end
   end
 
+  @skill_text_dirs ~w(references scripts templates examples docs)
+  @skill_text_exts ~w(.md .markdown .txt .rst .py .sh .bash .js .mjs .ts .rb .lua .sql .html .css .csv)
+
+  # Copies recognised skill content only: SKILL.md plus UTF-8 text files with a
+  # known extension under the conventional skill directories. Every other file
+  # is gated unless --include-skill-assets approves it; symlinks and special
+  # files are never copied. Copies only when executing.
+  defp copy_skill_tree(ctx, source, dest), do: copy_skill_tree(ctx, source, source, dest)
+
+  defp copy_skill_tree(ctx, root, source, dest) do
+    _ = if ctx.execute?, do: File.mkdir_p!(dest)
+
+    source
+    |> File.ls!()
+    |> Enum.sort()
+    |> Enum.flat_map(fn name ->
+      from = Path.join(source, name)
+      to = Path.join(dest, name)
+
+      case File.lstat!(from) do
+        %File.Stat{type: :directory} ->
+          copy_skill_tree(ctx, root, from, to)
+
+        %File.Stat{type: :regular, mode: mode} ->
+          cond do
+            recognised_skill_file?(Path.relative_to(from, root), from) ->
+              copy_skill_file(ctx, from, to, mode)
+              []
+
+            ctx.include_skill_assets? ->
+              copy_skill_file(ctx, from, to, mode)
+
+              [
+                item(
+                  "skill_file",
+                  from,
+                  to,
+                  if(ctx.execute?, do: "migrated", else: "planned"),
+                  "Unrecognised skill asset copied because --include-skill-assets was given; review it for credentials"
+                )
+              ]
+
+            true ->
+              [
+                gated_skill_file(
+                  from,
+                  "Unrecognised skill asset not imported; review it, then rerun with --include-skill-assets to copy all assets"
+                )
+              ]
+          end
+
+        _other ->
+          [gated_skill_file(from, "Symlink or special file not imported")]
+      end
+    end)
+    |> tap(fn _ ->
+      if ctx.execute?, do: File.chmod!(dest, Bitwise.band(File.stat!(source).mode, 0o7777))
+    end)
+  end
+
+  defp copy_skill_file(ctx, from, to, mode) do
+    if ctx.execute? do
+      File.cp!(from, to)
+      File.chmod!(to, Bitwise.band(mode, 0o7777))
+    end
+  end
+
+  defp recognised_skill_file?("SKILL.md", _path), do: true
+
+  defp recognised_skill_file?(relative, path) do
+    case Path.split(relative) do
+      [dir | [_ | _] = rest] ->
+        dir in @skill_text_dirs and not Enum.any?(rest, &String.starts_with?(&1, ".")) and
+          Path.extname(relative) in @skill_text_exts and String.valid?(File.read!(path))
+
+      _ ->
+        false
+    end
+  end
+
+  defp gated_skill_file(path, reason), do: item("skill_file", path, nil, "gated", reason)
+
   defp patch_config_item(ctx, source, target, config) do
     content = if File.exists?(target), do: File.read!(target), else: ""
-    patched = content
+    providers = if is_map(config["providers"]), do: config["providers"], else: %{}
+
+    url_items =
+      Enum.flat_map(providers, fn {name, provider} ->
+        url = if is_map(provider), do: provider_base_url(provider)
+
+        if is_binary(url) and not safe_url?(url),
+          do: [credential_url_item(source, target, "providers.#{name}.base_url")],
+          else: []
+      end)
 
     patched =
       case normalize_string(config["model"]) do
-        nil -> patched
-        model -> patch_model(patched, model)
+        nil -> content
+        model -> patch_model(content, model)
       end
 
-    patched =
-      config
-      |> Map.get("providers", %{})
-      |> patch_providers(patched)
+    patched = patch_providers(providers, patched)
 
-    cond do
-      patched == content ->
-        item("config", source, target, "skipped", "No compatible Hermes config values found")
+    config_item =
+      cond do
+        patched == content ->
+          item("config", source, target, "skipped", "No compatible Hermes config values found")
 
-      not ctx.overwrite? and config_values_changed?(Toml.decode!(content), Toml.decode!(patched)) ->
-        item(
-          "config",
-          source,
-          target,
-          "conflict",
-          "Target config values exist and overwrite is disabled"
-        )
+        not ctx.overwrite? and
+            config_values_changed?(Toml.decode!(content), Toml.decode!(patched)) ->
+          item(
+            "config",
+            source,
+            target,
+            "conflict",
+            "Target config values exist and overwrite is disabled"
+          )
 
-      true ->
-        if ctx.execute? do
-          _ = backup_existing(ctx, target)
-          File.mkdir_p!(Path.dirname(target))
-          File.write!(target, patched)
-        end
+        not ctx.execute? ->
+          item("config", source, target, "planned", "Mapped compatible config.yaml values")
 
-        item(
-          "config",
-          source,
-          target,
-          if(ctx.execute?, do: "migrated", else: "planned"),
-          "Mapped compatible config.yaml values into Lemon TOML"
-        )
-    end
+        true ->
+          result =
+            update_config_file(ctx, target, fn current ->
+              if current == content, do: {:ok, patched}, else: {:error, :config_changed}
+            end)
+
+          case result do
+            :ok ->
+              item(
+                "config",
+                source,
+                target,
+                "migrated",
+                "Mapped compatible config.yaml values into Lemon TOML"
+              )
+
+            {:error, reason} ->
+              item("config", source, target, "error", config_failure_reason(reason))
+          end
+      end
+
+    [config_item | url_items]
   end
 
   defp config_values_changed?(existing, patched) do
@@ -1057,13 +1716,10 @@ defmodule LemonCli.HermesMigration do
     Enum.reduce(providers, content, fn {name, provider}, acc ->
       if is_map(provider) do
         table = "providers.#{name}"
+        url = provider_base_url(provider)
 
         acc
-        |> maybe_upsert(
-          table,
-          "base_url",
-          normalize_string(provider["base_url"] || provider["baseUrl"])
-        )
+        |> maybe_upsert(table, "base_url", if(url && safe_url?(url), do: url))
         |> maybe_upsert(table, "api_key_secret", secret_name_for_provider(name))
       else
         acc
@@ -1075,55 +1731,249 @@ defmodule LemonCli.HermesMigration do
 
   defp import_secret(ctx, name, value) do
     {table, key} = Map.fetch!(@secret_names, name)
-    config_path = ctx.config_path
+    reference_path = String.split(table, ".") ++ [key]
+    source = Path.join(ctx.source_root, ".env")
 
-    if ctx.execute? do
-      case Secrets.set(name, value, provider: "hermes_migration") do
-        {:ok, _} ->
-          patch_secret_config(config_path, table, key, name)
+    entry = fn status, reason ->
+      item("secret", source, name, status, reason, %{"name" => name}, true)
+    end
 
-          item(
-            "secret",
-            Path.join(ctx.source_root, ".env"),
-            name,
-            "migrated",
-            "Imported allowlisted secret",
-            %{"name" => name},
-            true
-          )
+    conflicting_reference? = fn config ->
+      not ctx.overwrite? and get_in(config, reference_path) not in [nil, name]
+    end
 
-        {:error, reason} ->
-          item(
-            "secret",
-            Path.join(ctx.source_root, ".env"),
-            name,
-            "error",
-            "Secret import failed: #{inspect(reason)}",
-            %{"name" => name},
-            true
-          )
+    with {:ok, store} <- secret_store_scope(ctx),
+         {:ok, existing} <- read_target_config(ctx.config_path),
+         {:ok, secrets} <- Secrets.list() do
+      cond do
+        conflicting_reference?.(existing) ->
+          entry.("conflict", "Target #{table}.#{key} references a different credential")
+
+        Enum.any?(secrets, &(&1.name == name)) ->
+          entry.("conflict", existing_secret_reason(name))
+
+        not ctx.execute? ->
+          entry.("planned", "Allowlisted secret would be imported")
+
+        true ->
+          update_config = fn ->
+            update_config_file(ctx, ctx.config_path, fn current ->
+              with {:ok, config} <- Toml.decode(current) do
+                if conflicting_reference?.(config),
+                  do: {:error, :conflict},
+                  else: {:ok, TomlPatch.upsert_string(current, table, key, name)}
+              end
+            end)
+          end
+
+          case write_secret_then_config(ctx, store, name, value, update_config) do
+            :ok ->
+              entry.("migrated", "Imported allowlisted secret")
+
+            {:error, reason} ->
+              entry.(secret_failure_status(reason), secret_failure_reason(reason))
+          end
       end
     else
-      item(
-        "secret",
-        Path.join(ctx.source_root, ".env"),
-        name,
-        "planned",
-        "Allowlisted secret would be imported",
-        %{"name" => name},
-        true
-      )
+      {:outside, reason} -> entry.("gated", outside_store_reason(reason))
+      {:error, _} -> entry.("error", "Could not inspect target config or Lemon secrets")
     end
   end
 
-  defp patch_secret_config(config_path, table, key, secret_name) do
-    content = if File.exists?(config_path), do: File.read!(config_path), else: ""
-    patched = TomlPatch.upsert_string(content, table, key, secret_name)
-    File.mkdir_p!(Path.dirname(config_path))
-    File.write!(config_path, patched)
+  defp existing_secret_reason(name) do
+    "Target secret exists and is never replaced by migration (even with --overwrite); delete it first with `lemon secrets delete #{name}` to import"
+  end
+
+  # Secret migration writes the running store, so it is only allowed when that
+  # store's physical database lies inside the target, is reached without
+  # symlinks, and (when applying) is present in the pre-migration backup.
+  # Returns the store identity recorded in the journal.
+  defp secret_store_scope(ctx) do
+    case LemonCore.Store.location() do
+      {_backend, nil} ->
+        store_identity()
+
+      {_backend, db} ->
+        physical = LemonCore.Backup.physical_path(db)
+        target = LemonCore.Backup.physical_path(ctx.target_root)
+        relative = Path.relative_to(physical, target)
+
+        cond do
+          not inside?(physical, target) ->
+            {:outside, "the active secret store #{physical} is outside --target #{target}"}
+
+          Path.relative_to(path(db), ctx.target_root) != relative ->
+            {:outside, "the active secret store #{db} is reached through a symlink"}
+
+          ctx.execute? and not covered_by_backup?(ctx[:backup_bundle], relative) ->
+            {:outside,
+             "the pre-migration backup does not include the active secret store (#{relative}); apply without --no-backup"}
+
+          true ->
+            {:ok, "sqlite:" <> physical}
+        end
+    end
+  end
+
+  defp covered_by_backup?(nil, _relative), do: false
+
+  defp covered_by_backup?(bundle, relative),
+    do:
+      match?({:ok, %File.Stat{type: :regular}}, File.lstat(Path.join([bundle, "data", relative])))
+
+  # In-memory stores have no file; their identity is the running process.
+  defp store_identity do
+    case LemonCore.Store.location() do
+      {_backend, nil} -> {:ok, "memory:" <> inspect(Process.whereis(LemonCore.Store))}
+      {_backend, db} -> {:ok, "sqlite:" <> LemonCore.Backup.physical_path(db)}
+    end
+  end
+
+  defp outside_store_reason(reason) do
+    "Secret migration refused: #{reason}. Neither the pre-migration backup nor rollback would cover it"
+  end
+
+  # Creates the secret only if absent, then runs the conditional config update.
+  # If the update fails, exactly the created value is deleted again; a failed
+  # compensation is reported. Success is journaled with the store identity and
+  # the value's incarnation so rollback can delete only that value.
+  defp write_secret_then_config(ctx, store, name, value, update_config) do
+    case Secrets.create(name, value, provider: "hermes_migration") do
+      {:ok, %{incarnation: incarnation}} when is_binary(incarnation) ->
+        case update_config.() do
+          :ok ->
+            append_journal!(ctx, %{
+              "op" => "secret_created",
+              "name" => name,
+              "store" => store,
+              "incarnation" => incarnation
+            })
+
+            :ok
+
+          {:error, reason} ->
+            case Secrets.delete_if_incarnation(name, incarnation) do
+              :ok -> {:error, reason}
+              {:error, undo} -> {:error, {:compensation_failed, reason, undo}}
+            end
+        end
+
+      {:ok, _metadata} ->
+        {:error, :missing_incarnation}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp secret_failure_status(reason) when reason in [:already_exists, :conflict, :config_changed],
+    do: "conflict"
+
+  defp secret_failure_status(_reason), do: "error"
+
+  defp secret_failure_reason(:already_exists),
+    do: "secret appeared in the target during migration; it was not replaced"
+
+  defp secret_failure_reason(reason) when reason in [:conflict, :config_changed],
+    do: "secret not imported: #{config_failure_reason(reason)}"
+
+  defp secret_failure_reason({:compensation_failed, reason, undo}) do
+    "secret was created but #{config_failure_reason(reason)}, and removing the created secret failed (#{inspect(undo)}); it is still stored without a config reference, delete or reference it manually"
+  end
+
+  defp secret_failure_reason(reason),
+    do: "secret not imported: #{config_failure_reason(reason)}"
+
+  defp config_failure_reason(:conflict),
+    do: "the target config gained a different credential reference during migration"
+
+  defp config_failure_reason(:config_changed),
+    do: "the target config changed during migration"
+
+  defp config_failure_reason(reason),
+    do: "config update or secret write failed (#{inspect(reason)})"
+
+  # Re-reads the config, lets `fun` decide on the current content, and replaces
+  # the file atomically. Journals the file before its first change.
+  defp update_config_file(ctx, path, fun) do
+    current =
+      case File.read(path) do
+        {:ok, content} -> {:ok, content}
+        {:error, :enoent} -> {:ok, ""}
+        error -> error
+      end
+
+    with {:ok, current} <- current,
+         {:ok, patched} <- fun.(current) do
+      if patched == current do
+        :ok
+      else
+        journal!(ctx, path)
+        atomic_write(ctx, path, patched)
+      end
+    end
+  rescue
+    e in [File.Error, Jason.DecodeError] -> {:error, Exception.message(e)}
+  end
+
+  # The new content is written into a freshly created private (0700) sibling
+  # directory, so the temp file is unreachable by others whatever the umask.
+  # The file is narrowed to 0600 (or the stricter existing mode), synced and
+  # renamed into place on the same filesystem, then the directory is removed.
+  defp atomic_write(ctx, path, content) do
+    dir = Path.join(Path.dirname(path), ".lemon-migrate-#{System.unique_integer([:positive])}")
+    tmp = Path.join(dir, Path.basename(path))
+
+    mode =
+      case File.stat(path) do
+        {:ok, %File.Stat{mode: existing}} -> Bitwise.band(existing, 0o600)
+        {:error, _} -> 0o600
+      end
+
+    try do
+      with :ok <- File.mkdir_p(Path.dirname(path)),
+           :ok <- File.mkdir(dir),
+           :ok <- File.chmod(dir, 0o700),
+           {:ok, %File.Stat{type: :directory, mode: dir_mode}} <- File.lstat(dir),
+           true <- Bitwise.band(dir_mode, 0o077) == 0,
+           _ <- before_config_write(ctx, dir),
+           {:ok, io} <- File.open(tmp, [:write, :exclusive, :binary]) do
+        result =
+          try do
+            with :ok <- File.chmod(tmp, mode),
+                 :ok <- IO.binwrite(io, content),
+                 :ok <- :file.sync(io),
+                 do: :ok
+          after
+            File.close(io)
+          end
+
+        with :ok <- result, do: File.rename(tmp, path)
+      else
+        {:ok, %File.Stat{}} -> {:error, :temp_dir_not_private}
+        false -> {:error, :temp_dir_not_private}
+        error -> error
+      end
+    after
+      File.rm_rf(dir)
+    end
+  end
+
+  # Test seam: observes the private directory before any content is written.
+  defp before_config_write(ctx, dir) do
+    case ctx[:before_config_write] do
+      hook when is_function(hook, 1) -> hook.(dir)
+      _ -> :ok
+    end
   end
 
   defp import_session_documents(ctx, db_path) do
+    # SQLite files are never journaled or raw-copied. Rollback removes the
+    # database only if this migration created it; otherwise it points at the
+    # pre-migration backup bundle, which holds a consistent snapshot.
+    db = Path.join(ctx.store_dir, "memory.sqlite3")
+    append_journal!(ctx, %{"op" => "database", "path" => db, "existed" => File.exists?(db)})
+
     {:ok, store} =
       Store.start_link(
         name: :"hermes_migration_memory_#{System.unique_integer([:positive])}",
@@ -1351,7 +2201,8 @@ defmodule LemonCli.HermesMigration do
       "conflict" => Map.get(statuses, "conflict", 0),
       "error" => Map.get(statuses, "error", 0),
       "unsupported" => Map.get(statuses, "unsupported", 0),
-      "gated" => Map.get(statuses, "gated", 0)
+      "gated" => Map.get(statuses, "gated", 0),
+      "warning" => Map.get(statuses, "warning", 0)
     }
   end
 
@@ -1365,7 +2216,8 @@ defmodule LemonCli.HermesMigration do
       "gated" => Map.get(statuses, "gated", 0),
       "unsupported" => Map.get(statuses, "unsupported", 0),
       "missing" => Map.get(statuses, "missing", 0),
-      "error" => Map.get(statuses, "error", 0)
+      "error" => Map.get(statuses, "error", 0),
+      "warning" => Map.get(statuses, "warning", 0)
     }
   end
 
@@ -1394,6 +2246,9 @@ defmodule LemonCli.HermesMigration do
     - errors: #{summary["error"]}
     - unsupported: #{summary["unsupported"]}
     - gated: #{summary["gated"]}
+    - warnings: #{summary["warning"]}
+
+    Undo this migration with `lemon migrate hermes rollback #{report["output_dir"]}`.
     """
   end
 
@@ -1439,6 +2294,19 @@ defmodule LemonCli.HermesMigration do
     else
       File.cp!(source, dest)
     end
+
+    copy_mode!(source, dest)
+  end
+
+  # Copies keep the source permission bits so a 0600 file never lands 0644.
+  defp copy_mode!(source, dest) do
+    if File.dir?(source) do
+      source
+      |> File.ls!()
+      |> Enum.each(&copy_mode!(Path.join(source, &1), Path.join(dest, &1)))
+    end
+
+    File.chmod!(dest, Bitwise.band(File.stat!(source).mode, 0o7777))
   end
 
   defp same_file?(source, dest) do
@@ -1469,9 +2337,10 @@ defmodule LemonCli.HermesMigration do
   end
 
   defp secret_name_for_provider(name) do
-    @secret_names
-    |> Enum.find_value(fn
-      {secret, {provider, "api_key_secret"}} when provider == name -> secret
+    table = "providers.#{name}"
+
+    Enum.find_value(@secret_names, fn
+      {secret, {^table, "api_key_secret"}} -> secret
       _ -> nil
     end)
   end
@@ -1530,14 +2399,9 @@ defmodule LemonCli.HermesMigration do
     Path.join([ctx.workspace_dir, "memory", "topics", "hermes-imported-#{kind}.md"])
   end
 
-  defp recursive_files(root) do
-    root
-    |> Path.join("**/*")
-    |> Path.wildcard(match_dot: true)
-    |> Enum.filter(&File.regular?/1)
-  end
-
   defp path(value), do: value |> Path.expand()
+
+  defp inside?(path, root), do: path == root or String.starts_with?(path, root <> "/")
 
   defp timestamp do
     DateTime.utc_now() |> Calendar.strftime("%Y%m%d-%H%M%S")

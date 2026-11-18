@@ -676,6 +676,13 @@ timeout and paste the full redirect URL from the address bar. A token printed
 by `claude setup-token` may be pasted at the same prompt; it is stored as a
 static credential without refresh.
 
+The redirect or pasted value must carry the `state` Lemon sent, whether it
+reaches the loopback listener or the prompt. A bare code, or a URL or
+`code=` query without `state`, is rejected (`missing_oauth_state`) and a
+different state fails with `oauth_state_mismatch`; neither is exchanged. The
+same rule applies to the OpenAI Codex, Gemini CLI and Antigravity browser
+sign-ins, whose manual fallback is the full callback URL from the address bar.
+
 The login is encrypted in Lemon's secret store under `llm_anthropic_api_key`
 (`--secret-name` overrides it) and referenced by `auth_source = "oauth"` and
 `oauth_secret`. Access tokens last about eight hours; Lemon refreshes them five
@@ -2029,13 +2036,14 @@ The generated script matches the invoking launcher. Release VM tools (remote, ev
 Import user data from a Hermes home.
 
 ```text
-lemon migrate hermes [audit] [options]
+lemon migrate hermes [audit|rollback DIR] [options]
 ```
 
 | Subcommand | Purpose |
 | --- | --- |
 | `hermes` | Preview, then import a Hermes home into Lemon |
 | `audit` | Read-only compatibility audit (`migrate hermes audit`) |
+| `rollback` | Undo an applied migration from its report directory journal |
 
 | Option | Purpose |
 | --- | --- |
@@ -2045,10 +2053,11 @@ lemon migrate hermes [audit] [options]
 | `--preset user-data\|full` | Import scope (default: user-data) |
 | `--migrate-secrets` | Import allowlisted secrets |
 | `--skill-conflict skip\|rename` | Existing skill policy |
+| `--include-skill-assets` | Also copy unrecognised skill files |
 | `--dry-run` | Preview without writing |
 | `--yes` | Apply without prompting |
 | `--overwrite` | Replace conflicting target files |
-| `--no-backup` | Skip the pre-migration zip backup |
+| `--no-backup` | Skip the pre-migration lemon backup bundle |
 | `--json` | Emit the audit as JSON |
 
 Migration always previews first and refuses conflicts unless --overwrite is set. Without --yes it asks before writing. Secret values are never printed or written to reports.

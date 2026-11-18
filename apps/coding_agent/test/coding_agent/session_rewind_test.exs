@@ -689,7 +689,7 @@ defmodule CodingAgent.SessionRewindTest do
 
     File.rm!(link)
     File.write!(link, "replacement")
-    assert {:ok, _} = Checkpoint.restore_filesystem(checkpoint.id)
+    assert {:ok, _} = Checkpoint.restore_filesystem(checkpoint.id, session.header.id)
     assert File.read_link!(link) == outside
     assert File.read!(outside) == String.duplicate("x", 100)
   end
@@ -713,7 +713,7 @@ defmodule CodingAgent.SessionRewindTest do
       )
 
     File.write!(path, "new content")
-    assert {:error, _} = Checkpoint.restore_filesystem(invalid.id)
+    assert {:error, _} = Checkpoint.restore_filesystem(invalid.id, session.header.id)
     assert File.read!(path) == "new content"
     assert File.dir?(root)
     nested = Path.join(root, "file")
@@ -724,7 +724,7 @@ defmodule CodingAgent.SessionRewindTest do
     File.write!(Path.join(other, "file"), "external content")
     File.rm_rf!(root)
     File.ln_s!(other, root)
-    assert {:error, _} = Checkpoint.restore_filesystem(checkpoint.id)
+    assert {:error, _} = Checkpoint.restore_filesystem(checkpoint.id, session.header.id)
     assert File.read!(Path.join(other, "file")) == "external content"
     assert {:error, _} = Checkpoint.create_filesystem(session.header.id, [nested], cwd: dir)
   end
@@ -974,6 +974,33 @@ defmodule CodingAgent.SessionRewindTest do
       assert result["restoredPaths"] == [path]
       assert File.read!(path) == "original\n"
     end
+  end
+
+  test "preview reports pre-roots checkpoints as unavailable", %{session: session, dir: dir} do
+    path = Path.join(dir, "legacy.txt")
+    File.write!(path, "original\n")
+    target = user(session, "legacy edit")
+    arguments = %{"path" => path, "old_text" => "original", "new_text" => "edited"}
+    edit = Edit.execute("edit", arguments, nil, nil, dir, session_id: session.header.id)
+
+    # Simulate a checkpoint captured before roots were recorded.
+    file = Path.join(Checkpoint.checkpoint_dir(), edit.details.checkpoint_id <> ".json")
+    stored = Jason.decode!(File.read!(file))
+
+    File.write!(
+      file,
+      Jason.encode!(update_in(stored, ["state", "filesystem"], &Map.delete(&1, "roots")))
+    )
+
+    full =
+      target
+      |> persisted_invocation("edit", arguments, false, :success, edit.details)
+      |> SessionManager.persist(session.file_path)
+
+    assert {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+    assert preview["unrestorableTools"] == ["edit"]
+    assert preview["restorePaths"] == []
+    assert File.read!(path) == "edited\n"
   end
 
   test "goal metadata cannot exempt unidentified or filesystem checkpoint calls", %{

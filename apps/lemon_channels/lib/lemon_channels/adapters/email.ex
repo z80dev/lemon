@@ -39,7 +39,7 @@ defmodule LemonChannels.Adapters.Email do
   ## Receiving — off until you turn it on
 
   The adapter is registered by default, but **inbound mail is not**. Outbound
-  works as soon as a relay is configured; receiving takes two more deliberate
+  works as soon as a relay is configured; receiving takes three more deliberate
   steps, because an inbound mail endpoint is a public door into an agent and
   nobody should open one by upgrading:
 
@@ -49,7 +49,11 @@ defmodule LemonChannels.Adapters.Email do
         ip: {127, 0, 0, 1}
 
       config :lemon_channels, LemonChannels.Adapters.Email,
-        webhook_token: "a long random string"
+        webhook_token: "a long random string",
+        inbound: %{
+          allowed_senders: ["you@example.com"],
+          authserv_id: "mx.your-provider.example"
+        }
 
   With the listener on, the adapter registers
   `LemonChannels.Adapters.Email.Webhook` at `POST /email`, and your provider
@@ -59,6 +63,21 @@ defmodule LemonChannels.Adapters.Email do
   all. This is the same posture the gateway transport it replaced had: dead
   until explicitly enabled.
 
+  The token only proves the request came from your provider; anyone can mail
+  the provider address with any `From`. Senders are therefore authorized
+  separately by `LemonChannels.Adapters.Email.SenderAuth`: the `From` address
+  must be in `gateway.email.inbound.allowed_senders`, and your provider's
+  `Authentication-Results` verdict stamped with
+  `gateway.email.inbound.authserv_id` must authenticate the `From` domain
+  (DMARC pass, or DKIM pass signed by that domain). Missing either setting
+  refuses every message with a 403. Only for a provider that supplies no verdict
+  at all, `sender_auth: "from_only_unsafe"` admits allowlisted addresses on the
+  `From` header alone — which anyone can forge — and is logged as a warning at
+  startup. Thread state is kept per inbox and sender (see
+  `LemonChannels.Adapters.Email.ThreadStore`). Accepted mail reaches the agent
+  fenced as untrusted email content (`LemonAgent.Security.ExternalContent`),
+  never as instructions.
+
   Point the listener at loopback and put a reverse proxy in front of it unless
   you have a reason not to.
   """
@@ -67,7 +86,8 @@ defmodule LemonChannels.Adapters.Email do
 
   require Logger
 
-  alias LemonChannels.Adapters.Email.{Attachments, MessageId, Outbound, ThreadStore}
+  alias LemonAgent.Security.ExternalContent
+  alias LemonChannels.Adapters.Email.{Address, Attachments, MessageId, Outbound, ThreadStore}
   alias LemonCore.InboundMessage
 
   @channel_id "email"
@@ -103,11 +123,20 @@ defmodule LemonChannels.Adapters.Email do
   @doc """
   Registers the webhook handler. Returns `:ignore` so the adapter occupies no
   process — all it needs is a route.
+
+  When the route is registered, the inbound sender policy is checked and every
+  `LemonChannels.Adapters.Email.SenderAuth.config_warnings/1` entry is logged:
+  an endpoint that refuses everything, or one running the unsafe
+  `from_only_unsafe` opt-out, should never be silent.
   """
   @spec start_link() :: :ignore
   def start_link do
     case LemonChannels.InboundHttp.register(@channel_id, __MODULE__.Webhook) do
       :ok ->
+        __MODULE__.Config.get()
+        |> __MODULE__.SenderAuth.config_warnings()
+        |> Enum.each(fn warning -> Logger.warning(warning) end)
+
         :ignore
 
       {:error, :not_running} ->
@@ -125,21 +154,25 @@ defmodule LemonChannels.Adapters.Email do
         {:error, :missing_from}
 
       from ->
-        thread = ThreadStore.resolve(parsed, thread_id(parsed))
+        account_id = primary_recipient(parsed.to)
+        # Thread state is owned by this inbox and this sender: another sender
+        # naming one of these message ids never reaches it. See ThreadStore.
+        scope = ThreadStore.scope(account_id, from)
+        thread = ThreadStore.resolve(parsed, thread_id(parsed), scope)
         {attachments, writes} = Attachments.prepare(parsed.attachments)
 
-        _ = ThreadStore.record_inbound(parsed, thread)
+        _ = ThreadStore.record_inbound(parsed, thread, scope)
         _ = Attachments.schedule(writes)
 
         {:ok,
          InboundMessage.new(
            channel_id: @channel_id,
-           account_id: primary_recipient(parsed.to),
+           account_id: account_id,
            peer: %{kind: :dm, id: from, thread_id: thread},
            sender: %{id: from, username: from, display_name: parsed.from_name},
            message: %{
              id: parsed.message_id,
-             text: message_text(parsed, attachments),
+             text: fenced_text(parsed, attachments),
              timestamp: System.system_time(:millisecond),
              reply_to_id: parsed.in_reply_to
            },
@@ -219,6 +252,19 @@ defmodule LemonChannels.Adapters.Email do
 
   # The prompt an engine sees is `message.text` and nothing else, so an
   # attachment the agent cannot see the path of may as well not have arrived.
+  # Everything in it was written by whoever sent the mail, so subject, body and
+  # attachment lines are fenced as untrusted email content; the fence also
+  # neutralizes any marker the sender embedded to close it early.
+  defp fenced_text(parsed, attachments) do
+    parsed
+    |> message_text(attachments)
+    |> ExternalContent.wrap_external_content(
+      source: :email,
+      sender: parsed.from,
+      subject: parsed.subject
+    )
+  end
+
   defp message_text(parsed, attachments) do
     case Attachments.describe(attachments) do
       [] -> body_text(parsed)
@@ -241,17 +287,9 @@ defmodule LemonChannels.Adapters.Email do
   defp primary_recipient([first | _]), do: first
   defp primary_recipient(_), do: @channel_id
 
-  defp address(nil), do: nil
-
-  defp address(value) when is_binary(value) do
-    # "Display Name <a@b.c>" -> "a@b.c"
-    case Regex.run(~r/<([^>]+)>/, value) do
-      [_, addr] -> String.downcase(String.trim(addr))
-      _ -> value |> String.trim() |> String.downcase() |> blank_to_nil()
-    end
-  end
-
-  defp address(_), do: nil
+  # The whole-mailbox parser shared with outbound delivery: the address that is
+  # authorized here is exactly the one replies are sent to. See `Address`.
+  defp address(value), do: Address.parse(value)
 
   defp address_list(nil), do: []
 

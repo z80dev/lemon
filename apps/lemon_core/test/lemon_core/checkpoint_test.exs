@@ -28,7 +28,7 @@ defmodule LemonCore.CheckpointTest do
     assert listed.id == checkpoint.id
     assert Checkpoint.exists?(checkpoint.id)
     assert Checkpoint.stats(session_id).count == 1
-    assert :ok = Checkpoint.delete(checkpoint.id)
+    assert :ok = Checkpoint.delete(checkpoint.id, session_id)
     refute Checkpoint.exists?(checkpoint.id)
   end
 
@@ -100,13 +100,13 @@ defmodule LemonCore.CheckpointTest do
     assert checkpoint_id == checkpoint.id
     File.write!(path, "after\n")
 
-    assert {:ok, diff} = Checkpoint.diff_filesystem(checkpoint.id)
+    assert {:ok, diff} = Checkpoint.diff_filesystem(checkpoint.id, session_id)
     assert diff.changed == [path]
     assert diff.output =~ "-before"
     assert diff.output =~ "+after"
 
     assert {:ok, restored} =
-             Checkpoint.restore_filesystem(checkpoint.id,
+             Checkpoint.restore_filesystem(checkpoint.id, session_id,
                paths: [path],
                run_id: run_id,
                session_key: session_id

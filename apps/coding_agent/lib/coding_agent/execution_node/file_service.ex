@@ -115,7 +115,8 @@ defmodule CodingAgent.ExecutionNode.FileService do
             :binary,
             :exit_status,
             {:packet, 4},
-            {:args, [helper]}
+            {:args, [helper]},
+            {:env, LemonCore.ChildEnv.port_env()}
           ])
 
         {:ok, port}

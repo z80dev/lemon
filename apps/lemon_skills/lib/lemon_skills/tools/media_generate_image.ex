@@ -20,7 +20,6 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
     only: [
       bounded_integer: 3,
       optional_string: 1,
-      provider_config_value: 2,
       provider_error_kind: 1,
       reject_blank_values: 1,
       transient_status?: 1,
@@ -36,7 +35,6 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   @local_model "local_svg_preview"
   @default_openai_model "gpt-image-1"
   @default_vertex_model "imagen-4.0-generate-001"
-  @default_openai_base_url "https://api.openai.com/v1"
   @default_vertex_location "us-central1"
   @image_formats %{
     "png" => "image/png",
@@ -290,15 +288,15 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
     config = Keyword.get_lazy(opts, :media_image_config, fn -> Config.load(cwd) end)
     provider_cfg = ProviderNames.provider_config(config.providers, :openai) || %{}
 
-    %{
-      api_key: Keyword.get(opts, :openai_image_api_key),
-      base_url:
-        Keyword.get(opts, :openai_image_base_url) ||
-          optional_string(provider_config_value(provider_cfg, :base_url)) ||
-          @default_openai_base_url,
-      provider_cfg: provider_cfg,
-      http_post: Keyword.get(opts, :media_image_http_post, &Req.post/2)
-    }
+    {:ok, endpoint} =
+      MediaCommon.openai_compatible_endpoint(
+        :openai,
+        provider_cfg,
+        Keyword.get(opts, :openai_image_api_key),
+        Keyword.get(opts, :openai_image_base_url)
+      )
+
+    Map.put(endpoint, :http_post, Keyword.get(opts, :media_image_http_post, &Req.post/2))
   end
 
   defp vertex_runtime(cwd, opts) do

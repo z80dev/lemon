@@ -3,7 +3,7 @@ defmodule LemonBrowser.CamofoxSession do
 
   use GenServer
 
-  alias LemonBrowser.RoutePolicy
+  alias LemonBrowser.{CredentialVault, RoutePolicy}
   alias LemonBrowser.SessionProviders.Helpers
 
   @registry LemonBrowser.CamofoxSessionRegistry
@@ -22,13 +22,19 @@ defmodule LemonBrowser.CamofoxSession do
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.fetch!(opts, :name))
 
   def available?(opts \\ []) do
-    not is_nil(resolve_base_url(opts))
+    match?({:ok, _url}, resolve_base_url(opts))
   end
 
   def request(method, args, timeout_ms, opts) do
     with {:ok, scope} <- exact_scope(opts),
+         {:ok, _url} <- base_url_status(opts),
          {:ok, pid} <- ensure_started(scope, opts) do
-      GenServer.call(pid, {:request, method, args, timeout_ms}, timeout_ms + 5_000)
+      # An inline API key travels with each call and is never retained.
+      GenServer.call(
+        pid,
+        {:request, method, args, timeout_ms, inline_api_key(opts)},
+        timeout_ms + 5_000
+      )
     end
   end
 
@@ -45,6 +51,19 @@ defmodule LemonBrowser.CamofoxSession do
     |> Enum.reject(&is_nil/1)
   end
 
+  # The API key and request payloads never reach crash reports or
+  # `:sys.get_status/1`.
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, _} -> {:state, :redacted}
+      {:message, _} -> {:message, :redacted}
+      {:reason, _} -> {:reason, :redacted}
+      {:log, _} -> {:log, []}
+      pair -> pair
+    end)
+  end
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -59,6 +78,9 @@ defmodule LemonBrowser.CamofoxSession do
        user_id: config.user_id || "lemon_#{hash(scope.session_id)}",
        session_key: config.session_key || "session_#{hash(scope.session_id)}",
        tab_id: nil,
+       # An inline API key lives in the CredentialVault for this session's
+       # lifetime, so cleanup authenticates as the session that created state.
+       credential_ref: nil,
        current_url: nil,
        idle_timeout_ms: idle_timeout_ms,
        idle_timer: schedule_idle(idle_timeout_ms),
@@ -71,8 +93,8 @@ defmodule LemonBrowser.CamofoxSession do
   @impl true
   def handle_call(:status, _from, state), do: {:reply, public_status(state), state}
 
-  def handle_call({:request, method, args, timeout_ms}, _from, state) do
-    state = reset_idle(state)
+  def handle_call({:request, method, args, timeout_ms, api_key}, _from, state) do
+    state = state |> reset_idle() |> remember_api_key(api_key)
 
     case dispatch(method, args, timeout_ms, state) do
       {:ok, result, state} ->
@@ -82,6 +104,11 @@ defmodule LemonBrowser.CamofoxSession do
         {:reply, {:error, reason}, touch(state, safe_reason(reason))}
     end
   end
+
+  defp remember_api_key(%{credential_ref: nil} = state, api_key) when is_binary(api_key),
+    do: %{state | credential_ref: CredentialVault.put(self(), %{api_key: api_key})}
+
+  defp remember_api_key(state, _api_key), do: state
 
   @impl true
   def handle_info(:idle_timeout, state), do: {:stop, :normal, state}
@@ -329,7 +356,7 @@ defmodule LemonBrowser.CamofoxSession do
 
     decode_response(
       request.(state.config.base_url <> path,
-        headers: state.config.headers,
+        headers: headers(state),
         json: body,
         receive_timeout: timeout
       )
@@ -341,7 +368,7 @@ defmodule LemonBrowser.CamofoxSession do
 
     decode_response(
       request.(state.config.base_url <> path,
-        headers: state.config.headers,
+        headers: headers(state),
         params: params,
         receive_timeout: timeout
       )
@@ -352,7 +379,7 @@ defmodule LemonBrowser.CamofoxSession do
     request = state.config.http_get
 
     case request.(state.config.base_url <> path,
-           headers: state.config.headers,
+           headers: headers(state),
            params: [userId: state.user_id],
            receive_timeout: timeout
          ) do
@@ -373,7 +400,7 @@ defmodule LemonBrowser.CamofoxSession do
 
     _ =
       request.(state.config.base_url <> "/sessions/" <> URI.encode(state.user_id),
-        headers: state.config.headers,
+        headers: headers(state),
         receive_timeout: 5_000
       )
 
@@ -416,7 +443,7 @@ defmodule LemonBrowser.CamofoxSession do
           key: scope,
           name: name,
           scope: scope,
-          provider_config: Keyword.get(opts, :provider_config, %{}),
+          provider_config: retained_provider_config(opts),
           http_get: Keyword.get(opts, :http_get, &Req.get/2),
           http_post: Keyword.get(opts, :http_post, &Req.post/2),
           http_delete: Keyword.get(opts, :http_delete, &Req.delete/2),
@@ -433,15 +460,10 @@ defmodule LemonBrowser.CamofoxSession do
 
   defp resolve_config(opts) do
     cfg = Keyword.get(opts, :provider_config, %{})
-    api_key = Helpers.get_value(cfg, :api_key) |> Helpers.normalize()
-
-    headers =
-      [{"accept", "application/json"}, {"content-type", "application/json"}]
-      |> maybe_add_auth(api_key || Helpers.secret("CAMOFOX_API_KEY"))
+    {:ok, base_url} = resolve_base_url(opts)
 
     %{
-      base_url: resolve_base_url(opts),
-      headers: headers,
+      base_url: base_url,
       user_id: Helpers.get_value(cfg, :user_id) |> Helpers.normalize(),
       session_key: Helpers.get_value(cfg, :session_key) |> Helpers.normalize(),
       managed_persistence: Helpers.truthy(Helpers.get_value(cfg, :managed_persistence), false),
@@ -453,14 +475,61 @@ defmodule LemonBrowser.CamofoxSession do
     }
   end
 
+  # Authorization is assembled per HTTP call from the session's original
+  # inline key (held in the CredentialVault) or the configured secret.
+  defp headers(state) do
+    api_key =
+      Map.get(CredentialVault.fetch(state.credential_ref), :api_key) ||
+        Helpers.secret("CAMOFOX_API_KEY")
+
+    maybe_add_auth(
+      [{"accept", "application/json"}, {"content-type", "application/json"}],
+      api_key
+    )
+  end
+
+  defp inline_api_key(opts) do
+    opts
+    |> Keyword.get(:provider_config, %{})
+    |> Helpers.get_value(:api_key)
+    |> Helpers.normalize()
+  end
+
+  defp retained_provider_config(opts) do
+    case Keyword.get(opts, :provider_config, %{}) do
+      config when is_map(config) -> Map.drop(config, [:api_key, "api_key"])
+      _ -> %{}
+    end
+  end
+
+  defp base_url_status(opts) do
+    case resolve_base_url(opts) do
+      {:ok, url} ->
+        {:ok, url}
+
+      {:error, :userinfo} ->
+        {:error, "Camofox base_url must not embed credentials; set CAMOFOX_API_KEY"}
+
+      {:error, :missing} ->
+        {:error, "Camofox base_url is not configured"}
+    end
+  end
+
+  # Credentials embedded in the URL would sit in process state and every
+  # request log; they are rejected rather than stripped.
   defp resolve_base_url(opts) do
     opts
     |> Keyword.get(:provider_config, %{})
     |> Helpers.get_value(:base_url, System.get_env("CAMOFOX_URL"))
     |> Helpers.normalize()
     |> case do
-      nil -> nil
-      value -> String.trim_trailing(value, "/")
+      nil ->
+        {:error, :missing}
+
+      value ->
+        if URI.parse(value).userinfo,
+          do: {:error, :userinfo},
+          else: {:ok, String.trim_trailing(value, "/")}
     end
   end
 

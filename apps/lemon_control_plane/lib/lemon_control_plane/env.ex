@@ -61,6 +61,19 @@ defmodule LemonControlPlane.Env do
       apps: [:lemon_control_plane]
     },
     %{
+      name: :lemon_control_plane_allowed_origins,
+      env_var: "LEMON_CONTROL_PLANE_ALLOWED_ORIGINS",
+      aliases: [],
+      type: :list,
+      default: [],
+      doc:
+        "Extra exact browser origins (scheme://host[:port]) allowed to open /ws and /acp/ws besides the control plane's own and LemonWeb's; their hosts are also accepted as Host from loopback peers.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
       name: :lemon_control_plane_public_ws_url,
       env_var: "LEMON_CONTROL_PLANE_PUBLIC_WS_URL",
       aliases: [],

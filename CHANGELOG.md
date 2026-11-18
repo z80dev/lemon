@@ -211,6 +211,95 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Checkpoints: IDs are validated as `chk_<16 hex>` at every filesystem
+  boundary; ownership is the trusted session id for capture and access (never a
+  model-supplied session key); user-facing diff/restore/delete require an
+  owner; restore and diff are confined to the roots recorded at capture, and
+  diff refuses symlinked parents. Checkpoints captured before this release are
+  refused, and chat `/checkpoint` is unavailable until channel ownership lands.
+- Execution nodes: the launchers remove `LEMON_NODE_OPERATOR_TOKEN` and
+  `LEMON_NODE_TOKEN` at startup and hand them to `lemon node` on a pipe drained
+  before any application starts. Bash, PTY, process, eval, debug, host-command,
+  task-worktree Git and stdio MCP children never inherit `LEMON_NODE_*TOKEN*`,
+  `LEMON_SECRETS_*` or `LEMON_*_API_KEY`.
+- Crash reports no longer leak prompts, answers or process state: a primary
+  `:logger` filter sanitizes OTP crash, terminate, supervisor and Task reports;
+  agent, session and run processes redact `format_status`; and a Sentry
+  `before_send` scrubber drops state, messages, crash reasons, exception bodies,
+  frame variables and breadcrumbs.
+- Email inbound only accepts `From` mailboxes listed in
+  `gateway.email.inbound.allowed_senders` that carry a passing provider verdict
+  stamped with `gateway.email.inbound.authserv_id`; without it all inbound mail
+  is refused unless the startup-warned `sender_auth = "from_only_unsafe"`
+  opt-out is set. Refused senders get 403 before any state write. Thread state is
+  owned per inbox and sender, outbound replies refuse header-breaking values, and
+  email content reaches the model inside the untrusted fence. **Upgrade:** set
+  `allowed_senders` and `authserv_id`.
+- Voice webhooks and the media-stream WebSocket require a valid
+  `X-Twilio-Signature` over the configured https `[gateway.voice] public_url`
+  (403 otherwise; http and missing `public_url` are refused). `<Stream>` uses a
+  query-free `wss://` URL with `<Parameter>` metadata and an expiring per-call
+  token verified before any paid resource is created. Recording downloads only
+  contact `https://api.twilio.com` and never forward credentials on redirects;
+  filenames are sanitized. Deepgram sockets are owned by the call. SMS signature
+  URLs no longer insert the backend port behind proxies.
+- OAuth sign-in for Anthropic, OpenAI Codex, Gemini CLI, Antigravity and Z.AI
+  requires the returned `state` to equal the one Lemon sent, byte for byte;
+  missing or different state is refused before any token exchange. The loopback
+  listener completes only on a `GET` to its path with a matching Host and state
+  and keeps waiting through other requests. Antigravity no longer uses the PKCE
+  verifier as `state`. MCP authorization providers must echo state, the MCP
+  loopback flow no longer logs the authorization URL, and local PKCE sign-in
+  without an approval channel or observer fails with
+  `mcp_oauth_authorization_channel_required`. OpenRouter bare codes remain
+  accepted (PKCE, no state by design).
+- Debug tool: adapter-reported `systemProcessId`s are never signalled;
+  `startDebugging` from user-chosen remote DAP endpoints is refused;
+  adapter-requested sessions are capped at 16 per root (256 globally);
+  non-loopback `attach` requires `debug_allow_remote_attach`; stop excerpts are
+  read with descriptor-relative `O_NOFOLLOW` traversal (none without python3);
+  large output spills only to exclusive session artifacts.
+- Browser: CDP endpoints are no longer passed on the driver's argv or kept in
+  process state; inline provider and Camofox keys live in a private,
+  session-scoped credential vault; credential-bearing provider URLs are
+  rejected; connection errors drop URL credentials; the driver and local Chrome
+  no longer inherit credential variables; LSP sessions no longer keep
+  `initialization_options` in state.
+- Browser navigation classifies destinations after normalizing IP aliases and
+  resolving DNS, blocking cloud metadata and link-local addresses on every
+  route. Lemon-launched Chrome routes HTTP(S), WebSocket and service-worker
+  traffic through a driver-owned egress proxy that checks the IP it connects to.
+  Raw CDP is limited to read-only methods. Attached, relay and hosted browsers
+  are not egress-filtered (documented).
+- The control plane refuses WebSocket upgrades whose Origin is not exactly its
+  own origin, a configured LemonWeb origin, or an entry in
+  `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS`; loopback peers of the main and A2A
+  listeners must send a loopback, bind or configured Host on every route.
+- `lemon migrate hermes` no longer archives `auth.json` or credential-bearing
+  config, imports only recognised skill content (`--include-skill-assets` for
+  the rest), creates secrets only if absent and bound to the migrated store,
+  runs apply and rollback offline under the backup lifecycle locks, takes a
+  Lemon backup bundle beforehand, and stages config rewrites in a private
+  directory. `lemon backup` always excludes `migration/`. Legacy plaintext
+  archives are reported with rotation guidance. New `lemon migrate hermes
+  rollback DIR`.
+- Patch tool targets (including move destinations and unified diffs) go through
+  `FileValidation.check_mutation_target` with `mutation_root: cwd`; absolute
+  paths outside cwd are rejected unless `allow_path_traversal` is set.
+- TUI: `!cmd` and `{!cmd}` run only after the user confirms the exact command
+  text in a modal (Cancel by default; Run disabled when the command can't be
+  shown in full). Pasted, template, skill and restored text is sanitized and
+  escaped. Interactive `!cmd` is no longer killed after 120 s.
+- PDF, image-preview (`sips`) and `ast_grep` backends resolve only from absolute
+  operator PATH entries outside the workspace or explicit overrides; project
+  `.lemon/read-formats-venv` interpreters are never run; PDF Python runs with
+  `-I`.
+- Media tools never send one provider's API key to another provider's host, and
+  Perplexity web search picks its destination from the credential it sends.
+- Automatic project-memory capture keeps the verified private memory context and
+  skips unproven contexts; cron forwarded summaries are not ingested; Telegram
+  `/new` reflection only uses history with matching ownership.
+
 - In a cloned repository, Lemon no longer starts or connects project MCP
   servers until the operator runs `lemon mcp trust` for that project's exact
   content. This covers Lemon's own `.lemon/mcp.json` (including

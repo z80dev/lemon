@@ -58,16 +58,6 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     {:ok, home: home}
   end
 
-  test "parse_authorization_input handles callback URL and code#state" do
-    assert {:ok, %{code: "abc", state: "state1"}} =
-             OpenAICodexOAuth.parse_authorization_input(
-               "http://localhost:1455/auth/callback?code=abc&state=state1"
-             )
-
-    assert {:ok, %{code: "xyz", state: "state2"}} =
-             OpenAICodexOAuth.parse_authorization_input("xyz#state2")
-  end
-
   test "resolve_api_key_from_secret returns stored access token" do
     jwt = make_jwt("acc_test", 3_600)
 

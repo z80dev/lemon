@@ -109,6 +109,59 @@ defmodule LemonCli.MigrateCommandTest do
     assert File.read!(soul) == "Hermes persona\n"
   end
 
+  test "pre-migration backup is a verifiable Lemon backup without credentials", %{
+    source: source,
+    target: target
+  } do
+    File.mkdir_p!(Path.join([target, "agent", "workspace"]))
+    File.write!(Path.join([target, "agent", "workspace", "MEMORY.md"]), "existing memory\n")
+    File.write!(Path.join(target, "secrets_master_key"), "MASTER-KEY-BYTES-42")
+    File.write!(Path.join(target, "env"), "export TOKEN=env-secret-42\n")
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["migrate", "hermes", "--yes", "--source", source, "--target", target]) ==
+                 0
+      end)
+
+    [_, bundle] = Regex.run(~r/Pre-migration backup: (\S+)/, output)
+
+    assert {:ok, %{verified: true, includes_credentials: false}} =
+             LemonCore.Backup.verify(bundle, target: target)
+
+    assert File.read!(Path.join([bundle, "data", "agent", "workspace", "MEMORY.md"])) ==
+             "existing memory\n"
+
+    refute File.exists?(Path.join([bundle, "data", "secrets_master_key"]))
+    refute File.exists?(Path.join([bundle, "data", "env"]))
+
+    verify_output =
+      capture_io(fn -> assert CLI.run(["backup", "verify", bundle]) == 0 end)
+
+    assert verify_output =~ "Backup verified:"
+  end
+
+  test "rollback subcommand reverts an applied migration", %{
+    source: source,
+    target: target,
+    soul: soul
+  } do
+    output =
+      capture_io(fn ->
+        assert CLI.run(["migrate", "hermes", "--yes", "--source", source, "--target", target]) ==
+                 0
+      end)
+
+    [_, report_dir] = Regex.run(~r/Report: (\S+)/, output)
+    assert File.read!(soul) == "Hermes persona\n"
+
+    rollback =
+      capture_io(fn -> assert CLI.run(["migrate", "hermes", "rollback", report_dir]) == 0 end)
+
+    assert rollback =~ "Migration Rollback"
+    refute File.exists?(soul)
+  end
+
   test "conflicts fail closed unless --overwrite", %{source: source, target: target, soul: soul} do
     File.mkdir_p!(Path.dirname(soul))
     File.write!(soul, "Existing Lemon persona\n")
@@ -133,6 +186,6 @@ defmodule LemonCli.MigrateCommandTest do
       end)
 
     assert error =~ "--preset must be one of: user-data, full"
-    assert error =~ "Usage: lemon migrate hermes [audit] [options]"
+    assert error =~ "Usage: lemon migrate hermes [audit|rollback DIR] [options]"
   end
 end

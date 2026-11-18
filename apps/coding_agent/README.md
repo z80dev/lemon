@@ -246,8 +246,10 @@ read in memory, not extracted into the workspace. `offset`/`limit` select displa
 lines; follow `next_offset` for bounded directory/member/document output.
 PDFs support `page`/`page_limit`; notebooks support `cell`/`cell_limit` and include
 source, execution counts, text outputs, and errors. PDF extraction requires
-`pdftotext`, `mutool`, or Python with `pypdf`/PyMuPDF; a project-local
-`.lemon/read-formats-venv` is discovered automatically. No backend means an
+`pdftotext`, `mutool`, or Python with `pypdf`/PyMuPDF on the operator's absolute
+PATH outside the project (Python always runs with `-I`). Project/ancestor
+`.lemon/read-formats-venv` interpreters are never auto-discovered; an operator
+may trust one explicitly with `Read.tool(cwd, pdf_python: path)`. No backend means an
 actionable error, not fabricated text. On macOS, `sips` supplies proportional
 image previews (maximum dimension 1568 by default) with original/preview
 dimensions and an animation first-frame notice; original bytes remain untouched.

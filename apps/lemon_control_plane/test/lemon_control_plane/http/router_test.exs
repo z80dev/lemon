@@ -2,7 +2,7 @@ defmodule LemonControlPlane.HTTP.RouterTest do
   use ExUnit.Case, async: false
 
   import Plug.Conn
-  import Plug.Test
+  import Plug.Test, except: [conn: 2, conn: 3]
 
   alias LemonControlPlane.HTTP.Router
 
@@ -1071,6 +1071,10 @@ defmodule LemonControlPlane.HTTP.RouterTest do
     conn(method, path, Jason.encode!(body))
     |> put_req_header("content-type", "application/json")
   end
+
+  # The router refuses non-loopback Host headers from loopback peers.
+  defp conn(method, path, body \\ nil),
+    do: %{Plug.Test.conn(method, path, body) | host: "localhost"}
 
   defp json_response(conn) do
     %{status: conn.status, body: Jason.decode!(conn.resp_body)}

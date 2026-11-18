@@ -177,6 +177,7 @@ The `omp` command/protocol/panel/formatter files are native client adapters to
 | `clients/tui/src/ui/plan-review.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/ui/replay-overlays.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/ui/row-frame-provider.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
+| `clients/tui/src/ui/shell-confirm.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/ui/theme/appearance.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/ui/theme/theme.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |
 | `clients/tui/src/ui/theme/tui-adapters.ts` | omp packages 18.20.2 | depend on package (presentation); native daemon boundary | `clients/tui/test` |

@@ -11,6 +11,8 @@ defmodule LemonMemory.Ingest do
   - The `session_search` feature flag gates whether ingest is active. The flag
     defaults to `:"default-on"`; set `LEMON_FEATURE_SESSION_SEARCH=off` (or
     `[features] session_search = "off"`) to make `ingest/3` a no-op.
+  - A summary whose `meta.memory_ingest` is `false` (a notification-only
+    duplicate of a run already ingested under its own owner) is never ingested.
   - Feature flags are resolved from config loaded via the injected
     `:config_loader` and cached in the server state with a short TTL
     (`:config_ttl_ms`, default 30s), so a full TOML config load does
@@ -166,7 +168,9 @@ defmodule LemonMemory.Ingest do
 
     # Short-circuit: with both consumers disabled there is nothing to do, so
     # skip building the Document entirely.
-    if session_search? or routing_feedback? do
+    # Notification-only duplicates (e.g. cron's forwarded summary) carry no
+    # admitted owner; ingesting them would relabel private output as legacy.
+    if not memory_opt_out?(summary) and (session_search? or routing_feedback?) do
       try do
         doc = Document.from_run(run_id, record, summary)
 
@@ -216,6 +220,9 @@ defmodule LemonMemory.Ingest do
   # A document is only worth ingesting if it has a session_key.
   defp valid_doc?(%Document{session_key: sk}) when is_binary(sk) and sk != "", do: true
   defp valid_doc?(_), do: false
+
+  defp memory_opt_out?(%{meta: %{memory_ingest: false}}), do: true
+  defp memory_opt_out?(_), do: false
 
   # Return the cached Features struct, reloading config when the TTL elapsed.
   defp resolve_features(state) do

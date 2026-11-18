@@ -4,7 +4,10 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ShellResult } from "../../src/shell.ts";
-import { CommandController } from "../../src/ui/controllers/command-controller.ts";
+import {
+	CommandController,
+	type ShellConfirmRequest,
+} from "../../src/ui/controllers/command-controller.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { createHarness, type Harness } from "../helpers/command-harness.ts";
@@ -13,6 +16,8 @@ let harness: Harness;
 let delivered: string[];
 let shellCalls: Array<{ command: string; interactive: boolean }>;
 let suspends: string[];
+let confirmations: ShellConfirmRequest[];
+let confirmAnswer: boolean;
 
 function makeController(
 	overrides: Partial<ConstructorParameters<typeof CommandController>[0]> = {},
@@ -33,6 +38,10 @@ function makeController(
 			stop: () => suspends.push("stop"),
 			start: () => suspends.push("start"),
 		},
+		confirmShell: async (request) => {
+			confirmations.push(request);
+			return confirmAnswer;
+		},
 		runShell: async (command, options): Promise<ShellResult> => {
 			shellCalls.push({ command, interactive: options?.interactive === true });
 			if (command.startsWith("fail")) {
@@ -50,6 +59,8 @@ beforeEach(async () => {
 	delivered = [];
 	shellCalls = [];
 	suspends = [];
+	confirmations = [];
+	confirmAnswer = true;
 });
 
 afterEach(() => {
@@ -131,5 +142,44 @@ describe("{!cmd}", () => {
 		await makeController().handleSubmit("write \\{!cmd} in the docs");
 		expect(shellCalls).toHaveLength(0);
 		expect(delivered).toEqual(["write {!cmd} in the docs"]);
+	});
+});
+
+describe("confirmation", () => {
+	test("a !cmd runs only the exact confirmed command", async () => {
+		await makeController().handleSubmit("  !git status --short  ");
+		expect(confirmations).toEqual([{ kind: "interactive", commands: ["git status --short"] }]);
+		expect(shellCalls).toEqual([{ command: "git status --short", interactive: true }]);
+	});
+
+	test("every {!cmd} span is listed before any of them runs", async () => {
+		await makeController().handleSubmit("{!a} and {! b c } and \\{!literal}");
+		expect(confirmations).toEqual([{ kind: "captured", commands: ["a", "b c"] }]);
+		expect(shellCalls.map((call) => call.command)).toEqual(["a", "b c"]);
+	});
+
+	test("declining runs nothing, sends nothing and keeps the draft", async () => {
+		confirmAnswer = false;
+		const controller = makeController();
+		expect(await controller.handleSubmit("!rm -rf ~")).toBe("rejected");
+		expect(await controller.handleSubmit("x {!touch pwned}")).toBe("rejected");
+		expect(shellCalls).toEqual([]);
+		expect(delivered).toEqual([]);
+		expect(suspends).toEqual([]);
+		expect(harness.host.text).toContain("shell command not run");
+	});
+
+	test("without a confirmation surface no shell escape ever runs", async () => {
+		const controller = makeController({ confirmShell: undefined });
+		expect(await controller.handleSubmit("!touch pwned")).toBe("rejected");
+		expect(await controller.handleSubmit("x {!touch pwned}")).toBe("rejected");
+		expect(shellCalls).toEqual([]);
+		expect(delivered).toEqual([]);
+	});
+
+	test("prompts without shell syntax never ask", async () => {
+		await makeController().handleSubmit("plain {json: !true}");
+		expect(confirmations).toEqual([]);
+		expect(delivered).toEqual(["plain {json: !true}"]);
 	});
 });

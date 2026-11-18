@@ -17,6 +17,19 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   than running open. An inbound mail endpoint that accepts unauthenticated
   POSTs is a spam relay into someone's agent.
 
+  ## Sender authorization
+
+  The token authenticates the provider, not the person who wrote the mail.
+  After parsing, `LemonChannels.Adapters.Email.SenderAuth` checks the `From`
+  mailbox against `gateway.email.inbound.allowed_senders` (empty refuses
+  everyone) and requires the provider's pinned `Authentication-Results`
+  verdict (no `authserv_id` refuses everyone unless the documented unsafe
+  opt-out is set). A refused sender gets 403 before
+  `Email.normalize_inbound/1` or the idempotency reservation run, so it writes
+  no `:email_*` row, schedules no attachment write and submits no run. The
+  policy is re-read for every request, so a provider retry of a refused message
+  is judged against the configuration current at that moment.
+
   ## Delivery receipts
 
   A normalized provider Message-ID is required, hashed before it is persisted,
@@ -48,6 +61,7 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   require Logger
 
   alias LemonChannels.Adapters.Email
+  alias LemonChannels.Adapters.Email.SenderAuth
   alias LemonChannels.Runtime
   alias LemonChannels.SubmissionOutcome
   alias LemonCore.Store
@@ -82,22 +96,51 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   end
 
   defp accept(conn) do
-    case Email.normalize_inbound(conn.body_params) do
-      {:ok, message} ->
-        replay_content_identity = replay_content_identity(conn.body_params)
+    raw = conn.body_params
 
-        case reserve(message) do
-          {:duplicate, receipt} -> duplicate_receipt(conn, receipt)
-          {:new, reservation} -> handoff(conn, message, reservation, replay_content_identity)
-          {:error, :missing_message_id} -> Plug.Conn.send_resp(conn, 400, "missing message id")
-          {:error, :idempotency_unavailable} -> Plug.Conn.send_resp(conn, 503, "unavailable")
-        end
+    with :ok <- authorize_sender(raw),
+         {:ok, message} <- Email.normalize_inbound(raw) do
+      replay_content_identity = replay_content_identity(raw)
+
+      case reserve(message) do
+        {:duplicate, receipt} -> duplicate_receipt(conn, receipt)
+        {:new, reservation} -> handoff(conn, message, reservation, replay_content_identity)
+        {:error, :missing_message_id} -> Plug.Conn.send_resp(conn, 400, "missing message id")
+        {:error, :idempotency_unavailable} -> Plug.Conn.send_resp(conn, 503, "unavailable")
+      end
+    else
+      {:error, {:sender_rejected, reason, sender}} ->
+        Logger.warning(
+          "email webhook rejected sender: reason=#{reason} sender=#{inspect(String.slice(sender, 0, 254))}"
+        )
+
+        Plug.Conn.send_resp(conn, 403, "forbidden")
 
       {:error, reason} ->
         Logger.warning("email webhook rejected payload: #{inspect(reason)}")
         Plug.Conn.send_resp(conn, 400, "bad request")
     end
   end
+
+  # Runs before `Email.normalize_inbound/1`, which records thread state and
+  # schedules attachment writes, and before the idempotency reservation: an
+  # unauthorized sender leaves no row, no file and no run behind. A payload
+  # without a sender is left for `normalize_inbound/1` to reject as malformed;
+  # it writes nothing before doing so.
+  defp authorize_sender(raw) when is_map(raw) do
+    case Email.parse(raw) do
+      %{from: from} when is_binary(from) ->
+        case SenderAuth.authorize(from, raw, Email.Config.get()) do
+          :ok -> :ok
+          {:error, reason} -> {:error, {:sender_rejected, reason, from}}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp authorize_sender(_raw), do: {:error, :invalid_payload}
 
   defp handoff(conn, message, reservation, replay_content_identity) do
     case deliver_to_router(message, reservation, replay_content_identity) do

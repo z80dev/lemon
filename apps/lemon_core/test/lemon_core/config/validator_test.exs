@@ -1050,6 +1050,35 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "bind_host"))
     end
 
+    test "validates inbound sender authorization keys in atom and TOML string form" do
+      for inbound <- [
+            %{allowed_senders: ["owner@example.com"], authserv_id: "mx.provider.test"},
+            %{"allowed_senders" => [" Owner@Example.com "], "authserv_id" => "mx.provider.test"},
+            %{allowed_senders: []},
+            %{"sender_auth" => "from_only_unsafe"},
+            %{sender_auth: "authentication_results"}
+          ] do
+        assert Validator.validate_email_config([], %{inbound: inbound}) == []
+      end
+
+      for {inbound, field} <- [
+            {%{allowed_senders: "owner@example.com"}, "allowed_senders"},
+            {%{"allowed_senders" => ["Owner <owner@example.com>"]}, "allowed_senders"},
+            {%{allowed_senders: ["example.com"]}, "allowed_senders"},
+            {%{allowed_senders: [42]}, "allowed_senders"},
+            {%{"authserv_id" => "  "}, "authserv_id"},
+            {%{authserv_id: "mx.provider.test; dmarc=pass"}, "authserv_id"},
+            {%{authserv_id: :mx}, "authserv_id"},
+            {%{sender_auth: "off"}, "sender_auth"},
+            {%{"sender_auth" => true}, "sender_auth"}
+          ] do
+        errors = Validator.validate_email_config([], %{inbound: inbound})
+
+        assert Enum.any?(errors, &String.starts_with?(&1, "gateway.email.inbound.#{field}:")),
+               "expected a #{field} error for #{inspect(inbound)}, got #{inspect(errors)}"
+      end
+    end
+
     test "validates email outbound config" do
       errors =
         Validator.validate_email_config([], %{

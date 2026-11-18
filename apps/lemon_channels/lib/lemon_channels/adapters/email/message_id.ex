@@ -16,7 +16,16 @@ defmodule LemonChannels.Adapters.Email.MessageId do
 
   @max_references 25
 
-  @doc "The bare id, brackets and whitespace stripped, or `nil` if there is none."
+  @doc """
+  The bare id, brackets and surrounding whitespace stripped, or `nil` if there
+  is none or it is not a valid id.
+
+  A valid id is `left@right` in printable US-ASCII with no whitespace, angle
+  brackets or second `@`, at most 998 bytes. Anything else — notably a value
+  carrying CR/LF — is treated as absent, because ids are written back into
+  `In-Reply-To` and `References` headers of outbound mail and a line break
+  there would let the original sender inject headers of their own.
+  """
   @spec normalize(term()) :: binary() | nil
   def normalize(nil), do: nil
 
@@ -25,17 +34,23 @@ defmodule LemonChannels.Adapters.Email.MessageId do
   def normalize({_name, value}), do: normalize(value)
 
   def normalize(value) when is_binary(value) do
-    value
-    |> String.trim()
-    |> String.trim_leading("<")
-    |> String.trim_trailing(">")
-    |> case do
-      "" -> nil
-      id -> id
-    end
+    id =
+      value
+      |> String.trim()
+      |> String.trim_leading("<")
+      |> String.trim_trailing(">")
+
+    if valid?(id), do: id
   end
 
   def normalize(_value), do: nil
+
+  @doc "Whether `id` is a bare message id safe to render into a header."
+  @spec valid?(term()) :: boolean()
+  def valid?(id) when is_binary(id) and byte_size(id) <= 998,
+    do: Regex.match?(~r/\A[\x21-\x3B\x3D\x3F\x41-\x7E]+@[\x21-\x3B\x3D\x3F\x41-\x7E]+\z/, id)
+
+  def valid?(_id), do: false
 
   @doc """
   Every id in a `References`-style value, oldest first.
@@ -90,7 +105,7 @@ defmodule LemonChannels.Adapters.Email.MessageId do
   @doc "Renders an id for a header, or `nil` so the header can be omitted."
   @spec format(term()) :: binary() | nil
   def format(nil), do: nil
-  def format(value) when is_binary(value), do: "<" <> value <> ">"
+  def format(value) when is_binary(value), do: if(valid?(value), do: "<" <> value <> ">")
   def format(_value), do: nil
 
   @doc "Renders a list of ids for a `References` header, or `nil` when empty."

@@ -177,6 +177,11 @@ System.put_env(
   Path.join(System.tmp_dir!(), "lemon_browser_test_no_such_dir/local-driver.js")
 )
 
+# Browser navigation classifies hostnames by their resolved addresses. Unit tests
+# must not depend on live DNS: every name resolves to one public documentation
+# address unless a test passes its own `resolve_host:` option.
+config :lemon_browser, :resolve_host, fn _host -> {:ok, [{93, 184, 215, 14}]} end
+
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
 # the application under test.

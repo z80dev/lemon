@@ -27,6 +27,22 @@ defmodule LemonMemory.ContextScope do
   ]
   @ownership_fields @fields ++ Enum.map(@fields, &Atom.to_string/1) ++ @wire_fields ++ @wire_atoms
 
+  @admitted_fields [
+    :invocation_context_key,
+    :memory_context_key,
+    :memory_context_verified,
+    :shared_memory_grant
+  ]
+
+  @doc """
+  The admitted runtime memory-context fields carried from a trusted request.
+
+  Every caller that forwards a session's memory context uses this one accessor,
+  so a new ownership field cannot be dropped by a hand-copied key list.
+  """
+  def admitted(context) when is_map(context), do: Map.take(context, @admitted_fields)
+  def admitted(_), do: %{}
+
   def valid_key?(key) when is_binary(key) and byte_size(key) in 1..128,
     do: Regex.match?(@key, key)
 

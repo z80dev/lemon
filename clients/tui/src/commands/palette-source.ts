@@ -9,6 +9,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fuzzyRank } from "@oh-my-pi/pi-tui/fuzzy";
+import { inertComposerText } from "../shell.ts";
 import type { PickerItem } from "../ui/components/pickers.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
 
@@ -16,6 +17,11 @@ export interface PaletteEntry extends PickerItem {
 	kind: "command" | "skill" | "template";
 	name: string;
 	aliases: readonly string[];
+	/**
+	 * Composer text. Template and skill text comes from files a cloned repo
+	 * controls, so its `{!cmd}` / leading `!` shell syntax is escaped and reaches
+	 * the model literally.
+	 */
 	insertText: string;
 	available: boolean;
 	reason?: string;
@@ -121,7 +127,7 @@ export async function discoverPaletteResources(
 				aliases: [],
 				kind: "template",
 				description: `${firstLine(content)} · local prompt`,
-				insertText: content.trim(),
+				insertText: inertComposerText(content.trim()),
 				available: content.trim().length > 0,
 				reason: content.trim() ? undefined : "prompt file is empty",
 			});
@@ -168,7 +174,7 @@ export async function discoverPaletteResources(
 				aliases: [],
 				kind: "skill",
 				description: `${skillDescription(content)} · local skill; daemon checks readiness on read_skill`,
-				insertText: skillPrompt(name),
+				insertText: inertComposerText(skillPrompt(name)),
 				available: true,
 			});
 		}

@@ -61,6 +61,20 @@ Existing LAN clients must explicitly opt in and restart:
 | `LEMON_CONTROL_PLANE_NODE_BIND_IP` | `127.0.0.1` | Node-only gateway |
 | `LEMON_CONTROL_PLANE_NODE_PORT` | `4044` | Node-only port; `0` disables it |
 | `LEMON_CONTROL_PLANE_REMOTE_HTTP` | empty | Comma-separated subset of `openai,acp` |
+| `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` | empty | Comma-separated exact browser origins allowed on `/ws` and `/acp/ws` |
+
+Loopback peers of the main and A2A listeners must send a `Host` of `localhost`,
+a loopback IP, the listener's bind address, or (main) a host from
+`LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` / (A2A) the hostname of `public_url`
+(any path ignored); anything else, including `*.localhost`, is 403 before
+parsing, which defeats DNS rebinding. `/ws` and `/acp/ws` refuse a WebSocket
+upgrade whose `Origin` is not exactly (scheme, host, port) the control plane's
+own origin, LemonWeb's origin (`http://` + `localhost`/loopback/bind IP +
+`LEMON_WEB_PORT`, plus `LEMON_WEB_HOST` with its URL scheme and port), or a
+`LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` entry; other localhost ports are refused.
+Native clients that omit `Origin` (Lemon's CLI, TUI and ACP clients) are
+unaffected; a native client that does send `Origin` must send one of those
+exact accepted values, or add its origin to `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS`.
 
 Bind values must be literal IPv4 or IPv6 addresses. Non-loopback main and web
 binds require `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` and refuse
@@ -794,7 +808,25 @@ without recovery credentials use the explicit operator-authorized
 pairing. `LEMON_NODE_TOKEN` supplies an existing session token. Prefer these
 environment variables to `--operator-token` / `--token` so credentials do not
 enter shell history. These values are runtime CLI inputs, not `config.toml`
-keys.
+keys. The `lemon` launchers (source and release) remove both variables at
+startup and hand them to `lemon node` only on an anonymous pipe (fd 3) that
+the VM drains before any application starts; nothing is written to disk, and
+an unreadable handoff refuses to start. They never appear in the VM's initial
+environment (`/proc/<pid>/environ`, `ps -E`) or in any child process.
+Node child processes (bash, PTY, process, eval, debug,
+host commands, task-worktree Git and stdio MCP servers) never inherit
+`LEMON_NODE_*TOKEN*`, `LEMON_SECRETS_*` or `LEMON_*_API_KEY` variables;
+ordinary provider keys such as `OPENAI_API_KEY` are still inherited.
+
+These protections keep credentials out of child environments only. Node
+tools run as the same OS user as the node, so they can still read anything
+that user can: the stored node session and recovery tokens under
+`~/.lemon/nodes/execution/`, and the memory of the node process. Running the
+node under a dedicated account does not change this, because its tools still
+share that account. Keeping these credentials from the node's own tools needs
+an enforced OS boundary between the credential owner and the execution
+children (for example, tools sandboxed or run as a different user); Lemon does
+not provide one yet.
 
 `LEMON_NODE_CAPABILITIES` (or `--capabilities`) sets the destination-local tool
 ceiling to `all` or a comma-separated list such as `read,write,bash`. Every
@@ -3292,6 +3324,20 @@ silence_timeout_ms = 5000
 
 Canonical voice settings are loaded from `gateway.voice`. Legacy `:lemon_gateway` app env
 fallbacks remain only as temporary compatibility shims and should not be used for new setup.
+
+Every voice webhook and the media-stream WebSocket handshake must carry a valid
+`X-Twilio-Signature` made with the configured Twilio auth token over the URL derived
+from `public_url` (request and `X-Forwarded-*` headers are never used). An `https://`
+`public_url` and the auth token are both required: without either, or with an `http://`
+`public_url`, every voice request gets 403. Set `public_url` to the exact origin
+configured in Twilio. The WebSocket handshake signature is accepted over the `wss://` or
+`https://` form of that URL, with or without a trailing `/`. The TwiML `<Stream>` URL is the
+query-free `wss://` form of `public_url`; call metadata and an expiring per-call token
+bound to the authenticated CallSid travel as `<Parameter>` elements and are verified from
+the stream's `start` message before any call session, Deepgram socket or recording is
+created. Deepgram sockets are owned by the call and closed whenever it ends.
+Recording downloads only contact `https://api.twilio.com` (Basic auth is never sent
+elsewhere or on redirects), and recording filenames are sanitized.
 
 ## Channel Voice Replies
 

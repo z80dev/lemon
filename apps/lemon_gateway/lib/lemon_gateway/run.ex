@@ -26,6 +26,18 @@ defmodule LemonGateway.Run do
   4. Coalesced output is enqueued to LemonChannels.Outbox for delivery
   """
   use GenServer
+
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_server(status, [
+      :run_id,
+      :session_key,
+      :current_phase,
+      :completed,
+      :cancelled
+    ])
+  end
+
   require Logger
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
@@ -147,7 +159,10 @@ defmodule LemonGateway.Run do
       {:error, "executor_resolution_exception: " <> Exception.message(error)}
   catch
     :exit, reason ->
-      Logger.error("Gateway run executor resolution exited reason=#{inspect(reason)}")
+      Logger.error(
+        "Gateway run executor resolution exited reason=#{LemonCore.StatusRedaction.inspect_reason(reason)}"
+      )
+
       {:error, "executor_resolution_exit: " <> inspect(reason)}
 
     kind, reason ->

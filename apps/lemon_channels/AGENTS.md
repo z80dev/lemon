@@ -46,6 +46,22 @@ and script notifications.
   `allow_all: true`. Group messages also need an `@` mention of the bot inbox
   id or wallet. The bridge never syncs, lists or streams DENIED-consent
   conversations and re-checks consent immediately before every send.
+- The email webhook authorizes the parsed `From` mailbox with
+  `Email.SenderAuth` (`gateway.email.inbound.allowed_senders`, empty is
+  deny-all; a passing provider `Authentication-Results` verdict pinned by
+  `authserv_id` is required, and no `authserv_id` is deny-all unless the
+  documented, startup-warned `sender_auth = "from_only_unsafe"` opt-out is
+  set; `dmarc=fail` always refused), re-read per request, and answers 403
+  before `normalize_inbound/1`, thread/attachment writes, reservation or
+  submission. Email prompts stay fenced with `ExternalContent` (source
+  `:email`); never hand the router unfenced sender text.
+- Email `ThreadStore` rows are keyed by `{inbox, sender, id}` on inbound and
+  outbound paths; never read unscoped (legacy) rows. Every email address
+  (sender, recipient, inbox, From/Reply-To config) goes through
+  `Email.Address.parse/1`, the one whole-mailbox parser; never extract a
+  substring or approximate an address it refuses. Outbound headers take only
+  single-line values: unfold, refuse control characters, and keep only
+  `MessageId.valid?/1` ids.
 - Group/supergroup/channel trigger mode defaults to mentions. Keep topic/thread
   scope in auth, bindings, delivery and state keys.
 - Diagnostics and notification JSON expose bounded metadata, not credentials,

@@ -203,6 +203,25 @@ test("a failed prompt that never reached storage returns to the draft instead of
 	expect(h.host.deliveries).toEqual([]);
 });
 
+test("a stored prompt returned to the draft keeps its shell syntax literal", async () => {
+	h.store.focused.addUser("{!touch pwned} was quoted here");
+	await h.run("/retry");
+	expect(h.host.draft).toBe("\\{!touch pwned} was quoted here");
+	expect(h.store.drafts.get("s")).toBe("\\{!touch pwned} was quoted here");
+});
+
+test("an acknowledged resend of a prompt with shell syntax clears its staged draft", async () => {
+	const prompt = "second {!touch pwned}";
+	h.server.onMethod("sessions.rewind", (params: { dryRun?: boolean }) =>
+		params.dryRun ? { ...preview, prompt } : { ...confirmed, prompt },
+	);
+	h.store.focused.addUser(prompt);
+	await h.run("/retry");
+	expect(h.host.deliveries).toEqual([{ text: prompt, mode: "queue" }]);
+	expect(h.host.draft).toBe("");
+	expect(h.store.drafts.get("s") ?? "").toBe("");
+});
+
 test.each(["/retry", "/retry --force"])(
 	"%s refuses non-text journal content before confirming, resetting or resending",
 	async (command) => {

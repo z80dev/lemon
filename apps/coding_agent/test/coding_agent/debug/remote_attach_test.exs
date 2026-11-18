@@ -64,6 +64,55 @@ defmodule CodingAgent.Debug.RemoteAttachTest do
     assert {:ok, ^port} = :inet.port(listener)
   end
 
+  test "a remote root cannot spawn child sessions through startDebugging", %{tmp_dir: cwd} do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, packet: :raw, active: false, ip: {127, 0, 0, 1}])
+
+    {:ok, port} = :inet.port(listener)
+    parent = self()
+
+    peer =
+      Task.async(fn ->
+        Process.put(:reverse_start, true)
+        {:ok, socket} = :gen_tcp.accept(listener, 5_000)
+        serve(socket, [], "", nil, parent)
+      end)
+
+    key = "remote-dap-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      if pid = SessionServer.whereis(key),
+        do: DynamicSupervisor.terminate_child(CodingAgent.Debug.Supervisor, pid)
+
+      :gen_tcp.close(listener)
+      Process.exit(peer.pid, :kill)
+    end)
+
+    adapter = %{
+      name: "debugpy",
+      connect_mode: :remote,
+      host: "127.0.0.1",
+      port: port,
+      attach_defaults: %{},
+      command: nil,
+      args: []
+    }
+
+    assert {:ok, _} =
+             SessionServer.call(
+               key,
+               %{action: "attach", adapter: adapter, cwd: cwd, port: port, host: nil, pid: nil},
+               timeout_ms: 5_000
+             )
+
+    assert_receive {:remote_response, %{"command" => "startDebugging", "success" => false}},
+                   5_000
+
+    {_, %{children: children}} = :sys.get_state(SessionServer.whereis(key))
+    assert children == %{}
+    assert {:ok, _} = SessionServer.call(key, %{action: "terminate"}, timeout_ms: 5_000)
+  end
+
   defp serve(socket, [], buffer, attach, parent) do
     case :gen_tcp.recv(socket, 0, 5_000) do
       {:ok, data} ->
@@ -73,6 +122,11 @@ defmodule CodingAgent.Debug.RemoteAttachTest do
       {:error, :closed} ->
         :closed
     end
+  end
+
+  defp serve(socket, [%{"type" => "response"} = response | remaining], buffer, attach, parent) do
+    send(parent, {:remote_response, response})
+    serve(socket, remaining, buffer, attach, parent)
   end
 
   defp serve(socket, [request | remaining], buffer, attach, parent) do
@@ -88,6 +142,22 @@ defmodule CodingAgent.Debug.RemoteAttachTest do
 
         "attach" ->
           send(parent, {:remote_attach, request["arguments"]})
+
+          if Process.get(:reverse_start) do
+            :gen_tcp.send(
+              socket,
+              Protocol.encode(%{
+                "seq" => 2,
+                "type" => "request",
+                "command" => "startDebugging",
+                "arguments" => %{
+                  "request" => "launch",
+                  "configuration" => %{"program" => "child"}
+                }
+              })
+            )
+          end
+
           event(socket, "initialized", %{})
           request
 

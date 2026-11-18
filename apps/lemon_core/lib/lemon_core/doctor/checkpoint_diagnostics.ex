@@ -1,10 +1,18 @@
 defmodule LemonCore.Doctor.CheckpointDiagnostics do
   @moduledoc """
   Redacted diagnostics for the preview checkpoint store.
+
+  `summary/2` requires an explicit scope. `:operator` (support bundles, doctor)
+  summarizes the whole store. `{:session, owner}` is for user-facing callers:
+  it only counts and lists checkpoints whose recorded `session_id` equals
+  `owner`, and omits unreadable files whose owner cannot be established. A
+  missing or blank owner yields an empty summary.
   """
 
-  @spec summary(keyword()) :: map()
-  def summary(opts \\ []) do
+  @type scope :: :operator | {:session, String.t() | nil}
+
+  @spec summary(scope(), keyword()) :: map()
+  def summary(scope, opts) when scope == :operator or is_tuple(scope) do
     dir = Keyword.get(opts, :checkpoint_dir) || LemonCore.Paths.checkpoint_dir()
     limit = Keyword.get(opts, :limit, 20)
 
@@ -12,6 +20,7 @@ defmodule LemonCore.Doctor.CheckpointDiagnostics do
       dir
       |> checkpoint_files()
       |> Enum.map(&load_entry/1)
+      |> Enum.filter(&in_scope?(&1, scope))
 
     valid = Enum.flat_map(entries, &valid_entry/1)
 
@@ -40,23 +49,31 @@ defmodule LemonCore.Doctor.CheckpointDiagnostics do
     if File.dir?(dir), do: Path.wildcard(Path.join(dir, "*.json")), else: []
   end
 
+  defp in_scope?(_entry, :operator), do: true
+
+  defp in_scope?({:ok, _entry, _size, owner}, {:session, owner})
+       when is_binary(owner) and owner != "",
+       do: true
+
+  defp in_scope?(_entry, {:session, _owner}), do: false
+
   defp load_entry(path) do
     size = file_size(path)
 
     with {:ok, content} <- File.read(path),
-         {:ok, decoded} <- Jason.decode(content) do
-      {:ok, redacted_entry(decoded), size}
+         {:ok, decoded} when is_map(decoded) <- Jason.decode(content) do
+      {:ok, redacted_entry(decoded), size, Map.get(decoded, "session_id")}
     else
       _ -> {:invalid, size}
     end
   end
 
-  defp valid_entry({:ok, entry, _size}), do: [entry]
+  defp valid_entry({:ok, entry, _size, _owner}), do: [entry]
   defp valid_entry(_), do: []
 
   defp total_bytes(entries) do
     Enum.reduce(entries, 0, fn
-      {:ok, _entry, size}, acc -> acc + size
+      {:ok, _entry, size, _owner}, acc -> acc + size
       {:invalid, size}, acc -> acc + size
     end)
   end

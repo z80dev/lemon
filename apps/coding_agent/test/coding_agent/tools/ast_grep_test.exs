@@ -9,7 +9,7 @@ defmodule CodingAgent.Tools.AstGrepTest do
 
   test "missing explicit backend gives install instructions", %{tmp_dir: cwd} do
     opts = [ast_grep_executable: Path.join(cwd, "missing-ast-grep")]
-    assert {:error, message} = AstGrep.availability(opts)
+    assert {:error, message} = AstGrep.availability(cwd, opts)
     assert message =~ "brew install ast-grep"
     assert message =~ ":ast_grep_executable"
 
@@ -421,8 +421,8 @@ defmodule CodingAgent.Tools.AstGrepTest do
       assert File.read!(last) == "changedOutsideTool();\n"
       assert hd(result.content).text =~ "Already-written paths"
 
-      on_exit(fn -> CodingAgent.Checkpoint.delete(checkpoint_id) end)
-      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id)
+      on_exit(fn -> CodingAgent.Checkpoint.delete(checkpoint_id, session_id) end)
+      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id, session_id)
       assert Enum.all?(paths, &(File.read!(&1) == "oldApi(1);\n"))
     end
 

@@ -585,7 +585,7 @@ defmodule CodingAgent.Eval.Kernel do
       :hide,
       {:args, [driver_path(state.language)]},
       {:cd, state.cwd},
-      {:env, env}
+      {:env, LemonCore.ChildEnv.port_env(env)}
     ]
 
     try do

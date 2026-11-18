@@ -19,7 +19,6 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
     only: [
       bounded_integer: 3,
       optional_string: 1,
-      provider_config_value: 2,
       provider_error_kind: 1,
       transient_status?: 1,
       wait_for_job: 3
@@ -33,7 +32,6 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   @openai_provider "openai_vision"
   @local_model "local_vision_preview"
   @default_openai_model "gpt-4o-mini"
-  @default_openai_base_url "https://api.openai.com/v1"
   @default_prompt "Describe the image and note any visible text."
   @image_mime_types %{
     ".gif" => "image/gif",
@@ -158,6 +156,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
          {:ok, prompt} <- prompt(params),
          {:ok, provider} <- provider(params),
          {:ok, generation} <- generation(provider, params, image),
+         {:ok, runtime} <- runtime(cwd, opts, generation),
          {:ok, timeout_ms} <- MediaCommon.timeout_ms(params, @default_timeout_ms, @max_timeout_ms),
          {:ok, artifact_path} <-
            MediaCommon.artifact_path(params, cwd, opts, generation.format, "media-analysis"),
@@ -176,7 +175,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
                cwd,
                opts,
                artifact_path,
-               runner(cwd, opts, artifact_path, image, prompt, generation)
+               runner(artifact_path, image, prompt, generation, runtime)
              )
            ),
          :ok <- AbortHelpers.check_abort(signal),
@@ -293,12 +292,11 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
     end
   end
 
-  defp runner(_cwd, _opts, artifact_path, image, _prompt, %{provider: @local_provider}) do
+  defp runner(artifact_path, image, _prompt, %{provider: @local_provider}, _runtime) do
     &run_local_analysis(&1, artifact_path, image)
   end
 
-  defp runner(cwd, opts, artifact_path, image, prompt, %{provider: @openai_provider} = generation) do
-    runtime = openai_runtime(cwd, opts, generation)
+  defp runner(artifact_path, image, prompt, %{provider: @openai_provider} = generation, runtime) do
     &run_openai_analysis(&1, artifact_path, image, prompt, generation, runtime)
   end
 
@@ -322,22 +320,26 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
     end
   end
 
-  defp openai_runtime(cwd, opts, generation) do
+  defp runtime(_cwd, _opts, %{provider: @local_provider}), do: {:ok, nil}
+
+  defp runtime(cwd, opts, %{provider: @openai_provider} = generation) do
     config = Keyword.get_lazy(opts, :media_vision_config, fn -> Config.load(cwd) end)
     {provider, api_model} = openai_compatible_provider_and_model(generation.model)
-    provider_cfg = ProviderNames.provider_config(config.providers, provider) || %{}
+    provider_cfg = ProviderNames.provider_config(config.providers, provider)
 
-    %{
-      provider: provider,
-      api_model: api_model,
-      api_key: Keyword.get(opts, :openai_vision_api_key),
-      base_url:
-        Keyword.get(opts, :openai_vision_base_url) ||
-          optional_string(provider_config_value(provider_cfg, :base_url)) ||
-          @default_openai_base_url,
-      provider_cfg: provider_cfg,
-      http_post: Keyword.get(opts, :media_vision_http_post, &Req.post/2)
-    }
+    with {:ok, endpoint} <-
+           MediaCommon.openai_compatible_endpoint(
+             provider,
+             provider_cfg,
+             Keyword.get(opts, :openai_vision_api_key),
+             Keyword.get(opts, :openai_vision_base_url)
+           ) do
+      {:ok,
+       Map.merge(endpoint, %{
+         api_model: api_model,
+         http_post: Keyword.get(opts, :media_vision_http_post, &Req.post/2)
+       })}
+    end
   end
 
   defp openai_compatible_provider_and_model(model) when is_binary(model) do

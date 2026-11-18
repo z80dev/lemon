@@ -25,6 +25,10 @@ another session store, scheduler or agent runtime. See [README](README.md).
   `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` is explicit, default-off
   compatibility for actual direct loopback peers only. Use the socket peer
   supplied by the HTTP router; never trust address/role fields in request params.
+- `HTTP.RequestOrigin` guards the main and A2A listeners: loopback peers need a
+  loopback (or configured) `Host`, and `/ws` and `/acp/ws` accept only an absent
+  `Origin` or an exact trusted origin (own listener, LemonWeb, allowlist) before
+  upgrading. A missing socket peer is never loopback.
 - After `connect`, the server returns `hello-ok`; subsequent requests use the
   established auth context. Stored identity determines token role/scopes.
   Unknown identity types fail closed, never acquire operator privileges.

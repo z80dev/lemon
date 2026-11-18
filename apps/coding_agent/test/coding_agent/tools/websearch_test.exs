@@ -573,6 +573,117 @@ defmodule CodingAgent.Tools.WebSearchTest do
     assert {:error, "Operation aborted"} = tool.execute.("id", %{"query" => "hello"}, signal, nil)
   end
 
+  describe "perplexity credential/destination pairing" do
+    setup do
+      secret_name = "LEMON_T12F_PPLX_SECRET_#{System.unique_integer([:positive])}"
+
+      saved =
+        for var <- ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY", secret_name],
+            do: {var, System.get_env(var)}
+
+      Enum.each(saved, fn {var, _} -> System.delete_env(var) end)
+
+      on_exit(fn ->
+        Enum.each(saved, fn
+          {var, nil} -> System.delete_env(var)
+          {var, value} -> System.put_env(var, value)
+        end)
+      end)
+
+      %{secret_name: secret_name}
+    end
+
+    defp perplexity_capture(perplexity_cfg) do
+      parent = self()
+
+      http_post = fn url, opts ->
+        send(parent, {:http_post, url, opts})
+
+        {:ok,
+         %Req.Response{
+           status: 200,
+           headers: [{"content-type", "application/json"}],
+           body: %{"choices" => [%{"message" => %{"content" => "answer"}}], "citations" => []}
+         }}
+      end
+
+      tool =
+        WebSearch.tool("/tmp",
+          http_post: http_post,
+          settings_manager: %{
+            tools: %{web: %{search: %{provider: "perplexity", perplexity: perplexity_cfg}}}
+          }
+        )
+
+      tool.execute.("id", %{"query" => "q #{System.unique_integer()}"}, nil, nil)
+    end
+
+    defp assert_sent(host, key) do
+      assert_received {:http_post, url, opts}
+      assert URI.parse(url).host == host
+      assert inspect(opts) =~ "Bearer #{key}"
+      refute_received {:http_post, _, _}
+    end
+
+    test "secret-only Perplexity credential goes to Perplexity", %{secret_name: secret} do
+      System.put_env(secret, "pplx-secret-only")
+      perplexity_capture(%{api_key_secret: secret})
+      assert_sent("api.perplexity.ai", "pplx-secret-only")
+    end
+
+    test "secret-only OpenRouter credential goes to OpenRouter", %{secret_name: secret} do
+      System.put_env(secret, "sk-or-secret-only")
+      perplexity_capture(%{api_key_secret: secret})
+      assert_sent("openrouter.ai", "sk-or-secret-only")
+    end
+
+    test "OpenRouter secret is not sent to Perplexity when PERPLEXITY_API_KEY is set", %{
+      secret_name: secret
+    } do
+      System.put_env(secret, "sk-or-secret")
+      System.put_env("PERPLEXITY_API_KEY", "pplx-ambient")
+      perplexity_capture(%{api_key_secret: secret})
+      assert_sent("openrouter.ai", "sk-or-secret")
+    end
+
+    test "Perplexity secret is not sent to OpenRouter when OPENROUTER_API_KEY is set", %{
+      secret_name: secret
+    } do
+      System.put_env(secret, "pplx-secret")
+      System.put_env("OPENROUTER_API_KEY", "sk-or-ambient")
+      perplexity_capture(%{api_key_secret: secret})
+      assert_sent("api.perplexity.ai", "pplx-secret")
+    end
+
+    test "ambient keys each go to their own host" do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-ambient")
+      perplexity_capture(%{})
+      assert_sent("openrouter.ai", "sk-or-ambient")
+
+      System.put_env("PERPLEXITY_API_KEY", "pplx-ambient")
+      perplexity_capture(%{})
+      assert_sent("api.perplexity.ai", "pplx-ambient")
+    end
+
+    test "an OpenRouter-shaped key in PERPLEXITY_API_KEY is rejected without a request" do
+      System.put_env("PERPLEXITY_API_KEY", "sk-or-misfiled")
+      payload = decode_payload(perplexity_capture(%{}))
+      assert payload["error"] == "ambiguous_perplexity_endpoint"
+      refute_received {:http_post, _, _}
+    end
+
+    test "a secret key of unknown shape without base_url is rejected without a request", %{
+      secret_name: secret
+    } do
+      System.put_env(secret, "opaque-key")
+      System.put_env("PERPLEXITY_API_KEY", "pplx-ambient")
+      payload = decode_payload(perplexity_capture(%{api_key_secret: secret}))
+      assert payload["error"] == "ambiguous_perplexity_endpoint"
+      refute inspect(payload) =~ "opaque-key"
+      refute_received {:http_post, _, _}
+    end
+  end
+
   defp decode_payload(result) do
     [content] = result.content
     Jason.decode!(content.text)

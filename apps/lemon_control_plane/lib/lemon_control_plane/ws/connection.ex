@@ -78,7 +78,8 @@ defmodule LemonControlPlane.WS.Connection do
     conn_id = LemonCore.Id.uuid()
 
     local? =
-      Keyword.get(opts, :tokenless, true) and local_peer?(Keyword.get(opts, :peer)) and
+      Keyword.get(opts, :tokenless, true) and
+        Authorize.loopback_address?(Keyword.get(opts, :peer)) and
         Application.get_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, false) ==
           true
 
@@ -653,14 +654,6 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   defp authenticated_node_identity?(_identity, _node_id), do: false
-
-  # The HTTP router always supplies the actual socket peer. A loopback peer is
-  # eligible for tokenless compatibility only when the operator explicitly
-  # enables it; merely arriving from a local proxy is never sufficient by
-  # default. Direct callers of Authorize.from_params/1 retain their separate
-  # in-process compatibility behavior.
-  defp local_peer?(nil), do: true
-  defp local_peer?(peer), do: Authorize.loopback_address?(peer)
 
   defp get_field(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

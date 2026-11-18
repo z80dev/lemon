@@ -1645,6 +1645,8 @@ defmodule LemonControlPlane.ACPTest do
   defp json_conn(method, path, body) do
     method
     |> conn(path, Jason.encode!(body))
+    # The router refuses non-loopback Host headers from loopback peers.
+    |> Map.put(:host, "localhost")
     |> put_req_header("content-type", "application/json")
   end
 

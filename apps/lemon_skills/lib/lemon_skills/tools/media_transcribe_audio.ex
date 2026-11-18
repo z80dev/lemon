@@ -38,7 +38,6 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   @deepgram_provider "deepgram_transcribe"
   @local_model "local_transcript_preview"
   @default_openai_model "gpt-4o-mini-transcribe"
-  @default_openai_base_url "https://api.openai.com/v1"
   @default_deepgram_model "nova-3"
   @default_deepgram_base_url "https://api.deepgram.com/v1"
   @audio_mime_types %{
@@ -355,15 +354,19 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
     config = Keyword.get_lazy(opts, :media_transcription_config, fn -> Config.load(cwd) end)
     provider_cfg = ProviderNames.provider_config(config.providers, :openai) || %{}
 
-    %{
-      api_key: Keyword.get(opts, :openai_transcription_api_key),
-      base_url:
-        Keyword.get(opts, :openai_transcription_base_url) ||
-          optional_string(provider_config_value(provider_cfg, :base_url)) ||
-          @default_openai_base_url,
-      provider_cfg: provider_cfg,
-      http_post: Keyword.get(opts, :media_transcription_http_post, &Req.post/2)
-    }
+    {:ok, endpoint} =
+      MediaCommon.openai_compatible_endpoint(
+        :openai,
+        provider_cfg,
+        Keyword.get(opts, :openai_transcription_api_key),
+        Keyword.get(opts, :openai_transcription_base_url)
+      )
+
+    Map.put(
+      endpoint,
+      :http_post,
+      Keyword.get(opts, :media_transcription_http_post, &Req.post/2)
+    )
   end
 
   defp deepgram_runtime(cwd, opts) do

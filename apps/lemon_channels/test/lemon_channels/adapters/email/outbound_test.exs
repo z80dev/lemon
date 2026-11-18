@@ -473,7 +473,8 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
                  else: module
                )
              )
-           ), do: start_supervised!(module)
+           ),
+           do: start_supervised!(module)
       end
 
       :ok = Registry.register(Email)
@@ -671,6 +672,247 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
       assert {:ok, envelope} = Outbound.build_envelope(payload, %{})
       assert envelope.in_reply_to == "later@example.com"
       assert "later@example.com" in envelope.references
+    end
+  end
+
+  describe "header injection from untrusted thread metadata" do
+    # Subject and threading ids come from mail the original sender wrote. A line
+    # break that survived into an outbound header would let them add headers of
+    # their own to the agent's reply, e.g. a Reply-To steering the human's
+    # answer to them.
+
+    defp header_lines(rendered) do
+      [headers | _body] = String.split(rendered, "\r\n\r\n", parts: 2)
+      String.split(headers, "\r\n")
+    end
+
+    defp poison_thread(sender, fields) do
+      thread_id = "poisoned-#{System.unique_integer([:positive])}@example.com"
+
+      :ok =
+        LemonCore.Store.put(
+          :email_thread_state,
+          {"agent@lemon.test", sender, thread_id},
+          Map.put(fields, "thread_id", thread_id)
+        )
+
+      thread_id
+    end
+
+    test "a CR/LF subject from inbound mail cannot add headers to the delivered reply" do
+      test = self()
+
+      {:ok, message} =
+        Email.normalize_inbound(%{
+          "from" => "alice@example.com",
+          "to" => "agent@lemon.test",
+          "subject" => "hi\r\nReply-To: attacker@evil.test\r\nBcc: spy@evil.test",
+          "text" => "hello",
+          "message_id" => "<inject-#{System.unique_integer([:positive])}@example.com>"
+        })
+
+      {port, server} =
+        smtp_server(fn socket -> send(test, {:relay_body, accept_message(socket)}) end)
+
+      configure_relay(port)
+
+      assert {:ok, _id} =
+               Outbound.deliver(
+                 payload(
+                   peer: %{kind: :dm, id: "alice@example.com", thread_id: message.peer.thread_id}
+                 )
+               )
+
+      assert_receive {:relay_body, rendered}, 2_000
+      await(server)
+
+      lines = header_lines(rendered)
+      refute Enum.any?(lines, &String.match?(&1, ~r/\A(reply-to|bcc):/i))
+      assert "Subject: Re: (no subject)" in lines
+      refute rendered =~ "attacker@evil.test"
+    end
+
+    test "poisoned subject and reference values are refused at composition" do
+      thread_id =
+        poison_thread("alice@example.com", %{
+          "subject" => "ok\nBcc: spy@evil.test",
+          "references" => ["good@example.com", "bad@example.com\r\nBcc: spy@evil.test"],
+          "last_message_id" => "last@example.com>\r\nReply-To: attacker@evil.test"
+        })
+
+      payload =
+        payload(
+          peer: %{kind: :dm, id: "alice@example.com", thread_id: thread_id},
+          reply_to: "parent@example.com\r\nBcc: spy@evil.test"
+        )
+
+      assert {:ok, envelope} = Outbound.build_envelope(payload, %{})
+      assert envelope.subject == "Re: (no subject)"
+      assert envelope.in_reply_to == nil
+      assert hd(envelope.references) == "good@example.com"
+
+      # Whatever survives is a set of clean single-token ids, never a header.
+      for value <- [envelope.subject | envelope.references] do
+        refute value =~ ~r/[\r\n]/
+      end
+
+      assert Enum.all?(envelope.references, &LemonChannels.Adapters.Email.MessageId.valid?/1)
+    end
+
+    test "a control character other than a fold is refused; a folded subject is unfolded" do
+      for {subject, expected} <- [
+            {"Quarterly\r\n numbers", "Re: Quarterly numbers"},
+            {"Quarterly\n\tnumbers", "Re: Quarterly\tnumbers"},
+            {"bell\a", "Re: (no subject)"},
+            {"cr\r only", "Re: (no subject)"},
+            {"nul\0", "Re: (no subject)"}
+          ] do
+        thread_id = poison_thread("alice@example.com", %{"subject" => subject})
+        payload = payload(peer: %{kind: :dm, id: "alice@example.com", thread_id: thread_id})
+
+        assert {:ok, envelope} = Outbound.build_envelope(payload, %{})
+        assert envelope.subject == expected, "subject #{inspect(subject)}"
+      end
+
+      assert {:ok, envelope} =
+               Outbound.build_envelope(payload(meta: %{subject: "x\r\nBcc: spy@evil.test"}), %{})
+
+      assert envelope.subject == "Re: (no subject)"
+    end
+
+    test "message ids must be single, well-formed tokens" do
+      alias LemonChannels.Adapters.Email.MessageId
+
+      assert MessageId.normalize("<abc@example.com>") == "abc@example.com"
+      assert MessageId.normalize(" <root:a:b@x.test> ") == "root:a:b@x.test"
+
+      for bad <- [
+            "<abc@example.com\r\nBcc: spy@evil.test>",
+            "abc @example.com",
+            "no-at-sign",
+            "a@b@c",
+            "<a<b@c>",
+            "a@b\u00e9",
+            String.duplicate("a", 999) <> "@x"
+          ] do
+        assert MessageId.normalize(bad) == nil, "accepted #{inspect(bad)}"
+        assert MessageId.format(bad) == nil
+      end
+
+      assert MessageId.list("<ok@x.test> <bad@x.test\nBcc: y@z>") == ["ok@x.test"]
+    end
+  end
+
+  describe "the recipient is the whole authorized mailbox" do
+    # A substring match once turned `o'connor@example.com` into
+    # `connor@example.com`: a different person, who would then receive the
+    # reply and own its thread state. Inbound and outbound share one parser.
+
+    defp capture_envelope(test) do
+      fn socket ->
+        tcp_send(socket, "220 fake ESMTP")
+        _ehlo = tcp_recv(socket)
+        tcp_send(socket, "250 fake")
+        _mail_from = tcp_recv(socket)
+        tcp_send(socket, "250 ok")
+        send(test, {:rcpt_to, tcp_recv(socket)})
+        tcp_send(socket, "250 ok")
+        _data = tcp_recv(socket)
+        tcp_send(socket, "354 go ahead")
+        send(test, {:relay_body, read_data(socket, [])})
+        tcp_send(socket, "250 2.0.0 queued")
+      end
+    end
+
+    defp read_data(socket, acc) do
+      case tcp_recv(socket) do
+        ".\r\n" -> acc |> Enum.reverse() |> IO.iodata_to_binary()
+        {:error, _} = error -> error
+        line -> read_data(socket, [line | acc])
+      end
+    end
+
+    defp ingest(from, subject, message_id) do
+      {:ok, message} =
+        Email.normalize_inbound(%{
+          "from" => from,
+          "to" => "agent@lemon.test",
+          "subject" => subject,
+          "text" => "hi",
+          "message_id" => "<#{message_id}>"
+        })
+
+      message
+    end
+
+    test "an apostrophe local part is delivered to exactly that mailbox" do
+      test = self()
+      root = "apostrophe-#{System.unique_integer([:positive])}@example.com"
+      message = ingest("Pat O'Connor <O'Connor@Example.com>", "Contract", root)
+
+      assert message.peer.id == "o'connor@example.com"
+
+      {port, server} = smtp_server(capture_envelope(test))
+      configure_relay(port)
+
+      assert {:ok, _id} =
+               Outbound.deliver(
+                 payload(
+                   peer: %{kind: :dm, id: message.peer.id, thread_id: message.peer.thread_id}
+                 )
+               )
+
+      assert_receive {:rcpt_to, rcpt}, 2_000
+      assert_receive {:relay_body, rendered}, 2_000
+      await(server)
+
+      assert rcpt == "RCPT TO:<o'connor@example.com>\r\n"
+      assert [to_line] = Enum.filter(header_lines(rendered), &String.starts_with?(&1, "To:"))
+      assert to_line =~ "o'connor@example.com"
+      refute to_line =~ ~r/[^']connor@example\.com/
+      assert "Subject: Re: Contract" in header_lines(rendered)
+    end
+
+    test "the suffix mailbox neither reads nor writes the apostrophe mailbox's thread" do
+      shared_root = "shared-#{System.unique_integer([:positive])}@example.com"
+      owner = ingest("o'connor@example.com", "Owner only", shared_root)
+
+      suffix =
+        ingest("connor@example.com", nil, "suffix-#{System.unique_integer([:positive])}@x.test")
+
+      # Point the suffix mailbox's reply at the owner's thread id.
+      suffix_payload =
+        payload(peer: %{kind: :dm, id: suffix.peer.id, thread_id: owner.peer.thread_id})
+
+      assert {:ok, suffix_envelope} = Outbound.build_envelope(suffix_payload, %{})
+      assert suffix_envelope.to == "connor@example.com"
+      assert suffix_envelope.subject == "Re: (no subject)"
+      refute shared_root in suffix_envelope.references
+
+      owner_payload =
+        payload(peer: %{kind: :dm, id: owner.peer.id, thread_id: owner.peer.thread_id})
+
+      assert {:ok, owner_envelope} = Outbound.build_envelope(owner_payload, %{})
+      assert owner_envelope.to == "o'connor@example.com"
+      assert owner_envelope.subject == "Re: Owner only"
+      assert owner_envelope.thread_scope == {"agent@lemon.test", "o'connor@example.com"}
+      assert suffix_envelope.thread_scope == {"agent@lemon.test", "connor@example.com"}
+    end
+
+    test "an address the parser cannot represent exactly is refused, not trimmed" do
+      for peer <- ["x o'connor@example.com", "o'connor@example.com junk", "a@[127.0.0.1]"] do
+        assert {:error, :missing_recipient} =
+                 Outbound.build_envelope(
+                   payload(peer: %{kind: :dm, id: peer, thread_id: nil}),
+                   %{}
+                 )
+      end
+
+      assert {:error, :missing_sender} =
+               Outbound.build_envelope(payload(), %{from: "agent agent@lemon.test"})
+
+      assert {:error, :invalid_reply_to} =
+               Outbound.build_envelope(payload(), %{reply_to: "replies replies@lemon.test"})
     end
   end
 end

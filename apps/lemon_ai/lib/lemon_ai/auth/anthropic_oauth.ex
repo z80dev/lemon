@@ -34,6 +34,8 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   require Logger
 
+  import LemonAi.Auth.OAuthFlow, only: [non_empty_binary: 1, notify_auth: 3, notify_progress: 2]
+
   alias LemonAi.Auth.{OAuthFlow, OAuthPKCE, OAuthSecret}
 
   # Public client id, kept base64 so secret scanners do not flag it.
@@ -50,7 +52,6 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   # Rotation does not extend a grant: Anthropic rejects the refresh token about
   # 30 days after the interactive login, so the user must sign in again.
   @grant_ttl_ms 30 * 24 * 60 * 60 * 1000
-  @default_callback_timeout_ms 120_000
   @token_timeout_ms 30_000
   @oauth_env_vars ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_TOKEN"]
   @oauth_beta_features ["claude-code-20250219", "oauth-2025-04-20"]
@@ -131,62 +132,27 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   """
   @spec login_device_flow([login_opt()]) :: {:ok, oauth_secret()} | {:error, term()}
   def login_device_flow(opts \\ []) when is_list(opts) do
-    {redirect_uri, listener} = select_redirect(opts)
+    # The listener must know the state before the authorization URL exists.
+    state = Keyword.get(opts, :state) || OAuthPKCE.random_state(32)
+    {redirect_uri, listener} = select_redirect(state, opts)
 
     try do
-      with {:ok, auth} <- build_authorize_url(Keyword.put(opts, :redirect_uri, redirect_uri)),
+      with {:ok, auth} <-
+             build_authorize_url(Keyword.merge(opts, redirect_uri: redirect_uri, state: state)),
            :ok <- notify_auth(opts, auth.authorize_url, auth_instructions(listener)),
-           {:ok, input} <- await_authorization_input(opts, auth.redirect_uri, listener) do
+           {:ok, input} <-
+             OAuthFlow.await_authorization_input(
+               opts,
+               auth.redirect_uri,
+               listener,
+               code_prompt(listener)
+             ) do
         complete_login(input, auth, opts)
       end
     after
-      stop_listener(listener)
+      OAuthFlow.stop_callback_listener(listener)
     end
   end
-
-  @doc """
-  Parse pasted authorization input: a redirect URL, a query string containing
-  `code=`, `code#state`, or a bare code.
-  """
-  @spec parse_authorization_input(String.t()) ::
-          {:ok, %{code: String.t(), state: String.t() | nil}} | {:error, term()}
-  def parse_authorization_input(input) when is_binary(input) do
-    value = String.trim(input)
-
-    parsed =
-      cond do
-        value == "" ->
-          %{code: nil, state: nil}
-
-        String.contains?(value, "://") ->
-          case LemonAi.Auth.OAuthFlow.parse_authorization_uri(value) do
-            {:ok, %URI{query: query}} when is_binary(query) and query != "" ->
-              params = URI.decode_query(query)
-              %{code: params["code"], state: params["state"]}
-
-            _ ->
-              %{code: nil, state: nil}
-          end
-
-        String.contains?(value, "#") ->
-          [code, state] = String.split(value, "#", parts: 2)
-          %{code: code, state: state}
-
-        String.contains?(value, "code=") ->
-          params = URI.decode_query(value)
-          %{code: params["code"], state: params["state"]}
-
-        true ->
-          %{code: value, state: nil}
-      end
-
-    case non_empty_binary(parsed.code) do
-      nil -> {:error, :missing_authorization_code}
-      code -> {:ok, %{code: code, state: non_empty_binary(parsed.state)}}
-    end
-  end
-
-  def parse_authorization_input(_), do: {:error, :invalid_authorization_input}
 
   @doc """
   Exchange an authorization code and PKCE verifier for a secret payload.
@@ -314,47 +280,18 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   # ── Login ──────────────────────────────────────────────────────────────────
 
-  defp select_redirect(opts) do
-    listener_module = Keyword.get(opts, :local_callback_listener)
-    listen? = Keyword.get(opts, :listen_for_callback, true) and listener_module != nil
-
+  defp select_redirect(state, opts) do
     case Keyword.get(opts, :redirect_uri) do
       redirect_uri when is_binary(redirect_uri) ->
-        if listen? and listener_module.local_redirect_uri?(redirect_uri) do
-          {redirect_uri, start_listener(listener_module, redirect_uri, opts)}
-        else
-          {redirect_uri, nil}
-        end
+        {redirect_uri, OAuthFlow.start_callback_listener(redirect_uri, state, opts)}
 
-      nil when listen? ->
-        case start_listener(listener_module, @loopback_redirect_uri, opts) do
+      nil ->
+        case OAuthFlow.start_callback_listener(@loopback_redirect_uri, state, opts) do
           nil -> {@code_page_redirect_uri, nil}
           listener -> {@loopback_redirect_uri, listener}
         end
-
-      nil ->
-        {@code_page_redirect_uri, nil}
     end
   end
-
-  defp start_listener(listener_module, redirect_uri, opts) do
-    case listener_module.start(redirect_uri) do
-      {:ok, listener} ->
-        {listener_module, listener}
-
-      {:error, reason} ->
-        notify_progress(
-          opts,
-          "Could not listen on #{redirect_uri} (#{format_listener_error(reason)}). " <>
-            "Using the copy-code sign-in instead."
-        )
-
-        nil
-    end
-  end
-
-  defp stop_listener(nil), do: :ok
-  defp stop_listener({listener_module, listener}), do: listener_module.stop(listener)
 
   defp auth_instructions(nil) do
     "Sign in with your Claude Pro or Max account. Anthropic then shows an authorization " <>
@@ -366,55 +303,24 @@ defmodule LemonAi.Auth.AnthropicOAuth do
       "automatically."
   end
 
-  defp await_authorization_input(opts, _redirect_uri, nil), do: prompt_for_code(opts, :code_page)
+  defp code_prompt(nil),
+    do: %{
+      message: "Paste the authorization code Anthropic shows (code#state):",
+      placeholder: "code#state"
+    }
 
-  defp await_authorization_input(opts, redirect_uri, {listener_module, listener}) do
-    timeout_ms = Keyword.get(opts, :callback_timeout_ms, @default_callback_timeout_ms)
-    notify_progress(opts, "Waiting for the browser redirect to #{redirect_uri} ...")
-
-    case listener_module.wait(listener, timeout_ms) do
-      {:ok, callback_url} ->
-        {:ok, callback_url}
-
-      {:error, reason} ->
-        notify_progress(
-          opts,
-          "The browser redirect did not arrive (#{format_listener_error(reason)})."
-        )
-
-        prompt_for_code(opts, :loopback)
-    end
-  end
-
-  defp prompt_for_code(opts, mode) do
-    message =
-      case mode do
-        :code_page ->
-          "Paste the authorization code Anthropic shows (code#state):"
-
-        :loopback ->
-          "Paste the full redirect URL from the browser address bar (or code#state):"
-      end
-
-    case Keyword.get(opts, :on_prompt) do
-      prompt when is_function(prompt, 1) ->
-        case prompt.(%{message: message, placeholder: "code#state"})
-             |> normalize_prompt_input() do
-          "" -> {:error, :login_cancelled}
-          value -> {:ok, value}
-        end
-
-      _ ->
-        {:error, :prompt_callback_required}
-    end
-  end
+  defp code_prompt(_listener),
+    do: %{
+      message: "Paste the full redirect URL from the browser address bar (or code#state):",
+      placeholder: "code#state"
+    }
 
   defp complete_login(input, auth, opts) do
     if setup_token?(input) do
       {:ok, static_token_secret(input, "setup_token")}
     else
-      with {:ok, %{code: code, state: state}} <- parse_authorization_input(input),
-           :ok <- ensure_state_matches(auth.state, state) do
+      with {:ok, %{code: code, state: state}} <- OAuthFlow.parse_authorization_input(input),
+           :ok <- OAuthFlow.ensure_state_matches(auth.state, state) do
         notify_progress(opts, "Exchanging the authorization code for tokens...")
 
         exchange_code_for_secret(code, auth.code_verifier,
@@ -428,10 +334,6 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   defp setup_token?(input) do
     String.starts_with?(input, "sk-ant-oat") and not String.contains?(input, ["#", "://", "="])
   end
-
-  defp ensure_state_matches(_expected, nil), do: :ok
-  defp ensure_state_matches(expected, expected), do: :ok
-  defp ensure_state_matches(_expected, _provided), do: {:error, :oauth_state_mismatch}
 
   defp static_token_secret(access_token, source) do
     now = System.system_time(:millisecond)
@@ -647,35 +549,6 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   # ── Helpers ────────────────────────────────────────────────────────────────
 
-  defp notify_auth(opts, url, instructions) do
-    case Keyword.get(opts, :on_auth) do
-      callback when is_function(callback, 2) ->
-        callback.(url, instructions)
-        :ok
-
-      callback when is_function(callback, 1) ->
-        callback.(url)
-        :ok
-
-      _ ->
-        {:error, :auth_callback_required}
-    end
-  end
-
-  defp notify_progress(opts, message) do
-    case Keyword.get(opts, :on_progress) do
-      callback when is_function(callback, 1) -> callback.(message)
-      _ -> :ok
-    end
-
-    :ok
-  end
-
-  defp format_listener_error(:eaddrinuse), do: "port already in use"
-  defp format_listener_error(:timeout), do: "timed out"
-  defp format_listener_error(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp format_listener_error(_reason), do: "listener failed"
-
   defp nested_string(map, path) do
     case get_in(map, path) do
       value when is_binary(value) -> non_empty_binary(value)
@@ -687,22 +560,6 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  defp non_empty_binary(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  defp non_empty_binary(_), do: nil
-
-  defp normalize_prompt_input(value) when is_binary(value), do: String.trim(value)
-
-  defp normalize_prompt_input(value) when is_list(value),
-    do: value |> to_string() |> String.trim()
-
-  defp normalize_prompt_input(_), do: ""
 
   defp parse_integer(value) when is_integer(value), do: value
   defp parse_integer(value) when is_float(value), do: trunc(value)

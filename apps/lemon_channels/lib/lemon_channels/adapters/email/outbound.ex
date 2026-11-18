@@ -43,7 +43,7 @@ defmodule LemonChannels.Adapters.Email.Outbound do
 
   require Logger
 
-  alias LemonChannels.Adapters.Email.{Config, MessageId, ThreadStore}
+  alias LemonChannels.Adapters.Email.{Address, Config, MessageId, ThreadStore}
   alias LemonChannels.OutboundPayload
 
   @max_attachments 8
@@ -66,7 +66,14 @@ defmodule LemonChannels.Adapters.Email.Outbound do
          {:ok, body} <- build_body(payload),
          {:ok, rendered, message_id} <- build_message(envelope, body),
          :ok <- send_message(envelope, rendered) do
-      _ = ThreadStore.record_outbound(envelope.thread_id, message_id, envelope.references)
+      _ =
+        ThreadStore.record_outbound(
+          envelope.thread_scope,
+          envelope.thread_id,
+          message_id,
+          envelope.references
+        )
+
       {:ok, message_id}
     else
       {:error, reason} ->
@@ -182,10 +189,15 @@ defmodule LemonChannels.Adapters.Email.Outbound do
     do: build_envelope(payload, Config.get())
 
   def build_envelope(%OutboundPayload{} = payload, cfg) when is_map(cfg) do
-    thread_id = thread_id(payload)
-    thread = ThreadStore.state(thread_id)
-
+    # The recipient is the whole authorized mailbox the inbound half recorded as
+    # the peer, parsed by the same `Address` parser; anything it cannot
+    # represent exactly is refused rather than trimmed to a lookalike.
     to = address(peer_id(payload))
+    thread_id = thread_id(payload)
+    # Thread state is read only from the inbox and correspondent this reply is
+    # addressed to — the same scope the inbound half wrote it under.
+    scope = ThreadStore.scope(payload.account_id, to)
+    thread = ThreadStore.state(scope, thread_id)
 
     from =
       address(
@@ -194,14 +206,25 @@ defmodule LemonChannels.Adapters.Email.Outbound do
           payload.account_id
       )
 
+    configured_reply_to = Config.first_defined(cfg, [[:outbound, :reply_to], :reply_to])
+    reply_to = address(configured_reply_to)
+
     cond do
-      is_nil(to) -> {:error, :missing_recipient}
-      is_nil(from) -> {:error, :missing_sender}
-      true -> {:ok, compose_envelope(payload, cfg, thread, thread_id, to, from)}
+      is_nil(to) ->
+        {:error, :missing_recipient}
+
+      is_nil(from) ->
+        {:error, :missing_sender}
+
+      is_nil(reply_to) and configured_reply_to not in [nil, ""] ->
+        {:error, :invalid_reply_to}
+
+      true ->
+        {:ok, compose_envelope(payload, cfg, {scope, thread}, thread_id, {to, from, reply_to})}
     end
   end
 
-  defp compose_envelope(payload, cfg, thread, thread_id, to, from) do
+  defp compose_envelope(payload, cfg, {scope, thread}, thread_id, {to, from, reply_to}) do
     in_reply_to =
       MessageId.normalize(payload.reply_to) || MessageId.normalize(thread["last_message_id"])
 
@@ -212,7 +235,8 @@ defmodule LemonChannels.Adapters.Email.Outbound do
       in_reply_to: in_reply_to,
       references: MessageId.merge([thread["references"], [in_reply_to]]),
       thread_id: thread_id,
-      reply_to: address(Config.first_defined(cfg, [[:outbound, :reply_to], :reply_to])),
+      thread_scope: scope,
+      reply_to: reply_to,
       cfg: cfg
     }
   end
@@ -227,16 +251,30 @@ defmodule LemonChannels.Adapters.Email.Outbound do
 
   # The thread's subject is the one the human wrote. Only when the thread is
   # unknown — a send that did not originate from an inbound message — does the
-  # payload get to name it.
+  # payload get to name it. Both came from untrusted mail, so each must be a
+  # single header line before it is used.
   defp subject_for(%OutboundPayload{meta: meta}, thread) do
-    Config.blank_to_nil(thread["subject"]) || meta_subject(meta) || "(no subject)"
+    header_text(thread["subject"]) || meta_subject(meta) || "(no subject)"
   end
 
-  defp meta_subject(meta) when is_map(meta) do
-    Config.blank_to_nil(meta[:subject] || meta["subject"])
-  end
-
+  defp meta_subject(meta) when is_map(meta), do: header_text(meta[:subject] || meta["subject"])
   defp meta_subject(_meta), do: nil
+
+  # RFC 5322 unfolding removes a line break that precedes whitespace, so a
+  # legitimately folded subject becomes one line. Any line break or control
+  # character left after that would end the header and start another (a forged
+  # `Reply-To`, say), so such a value is refused outright rather than repaired.
+  @doc false
+  @spec header_text(term()) :: binary() | nil
+  def header_text(value) when is_binary(value) do
+    unfolded = String.replace(value, ~r/\r?\n(?=[ \t])/, "")
+
+    if String.valid?(unfolded) and not Regex.match?(~r/[\x00-\x08\x0A-\x1F\x7F]/, unfolded) do
+      Config.blank_to_nil(unfolded)
+    end
+  end
+
+  def header_text(_value), do: nil
 
   defp reply_subject(subject) do
     if String.match?(subject, ~r/^\s*re\s*:/i) do
@@ -293,24 +331,49 @@ defmodule LemonChannels.Adapters.Email.Outbound do
 
   defp build_message(envelope, body) do
     message_id = MessageId.generate(envelope.from)
+    in_reply_to = MessageId.format(envelope.in_reply_to)
+    references = references_header(envelope.references)
 
-    mail =
-      Mail.build_multipart()
-      |> Mail.put_from(envelope.from)
-      |> Mail.put_to(envelope.to)
-      |> Mail.put_subject(envelope.subject)
-      |> Mail.put_text(body.text)
-      |> Mail.put_html(html_body(body.text))
-      |> maybe_put_header("reply-to", envelope.reply_to)
-      |> maybe_put_header("in-reply-to", MessageId.format(envelope.in_reply_to))
-      |> maybe_put_header("references", references_header(envelope.references))
-      |> Mail.Message.put_header("message-id", MessageId.format(message_id))
-      |> put_attachments(body.attachments)
+    # Last line of defence: every value that becomes a header is one line.
+    # The composition above already refuses anything else; this keeps a future
+    # source of header text from reintroducing header injection silently.
+    unsafe =
+      Enum.find(
+        [
+          {:from, envelope.from},
+          {:to, envelope.to},
+          {:subject, envelope.subject},
+          {:reply_to, envelope.reply_to},
+          {:in_reply_to, in_reply_to},
+          {:message_id, message_id}
+          | Enum.map(references || [], &{:references, &1})
+        ],
+        fn {_name, value} -> is_binary(value) and not single_line?(value) end
+      )
 
-    {:ok, Mail.render(mail), message_id}
+    if unsafe do
+      {:error, {:unsafe_header, elem(unsafe, 0)}}
+    else
+      mail =
+        Mail.build_multipart()
+        |> Mail.put_from(envelope.from)
+        |> Mail.put_to(envelope.to)
+        |> Mail.put_subject(envelope.subject)
+        |> Mail.put_text(body.text)
+        |> Mail.put_html(html_body(body.text))
+        |> maybe_put_header("reply-to", envelope.reply_to)
+        |> maybe_put_header("in-reply-to", in_reply_to)
+        |> maybe_put_header("references", references)
+        |> Mail.Message.put_header("message-id", MessageId.format(message_id))
+        |> put_attachments(body.attachments)
+
+      {:ok, Mail.render(mail), message_id}
+    end
   rescue
     error -> {:error, {:build_message_failed, Exception.message(error)}}
   end
+
+  defp single_line?(value), do: not Regex.match?(~r/[\x00-\x08\x0A-\x1F\x7F]/, value)
 
   defp references_header([]), do: nil
   defp references_header(references), do: MessageId.format_list(references)
@@ -467,32 +530,9 @@ defmodule LemonChannels.Adapters.Email.Outbound do
   # Config value coercion
   # ---------------------------------------------------------------------------
 
-  defp address(nil), do: nil
-  defp address({_name, email}) when is_binary(email), do: address(email)
-  defp address(value) when is_binary(value) and byte_size(value) > 1_024, do: nil
-
-  defp address(value) when is_binary(value) do
-    value = String.trim(value)
-
-    cond do
-      value == "" ->
-        nil
-
-      String.contains?(value, "<") and String.contains?(value, ">") ->
-        case Regex.run(~r/<\s*([^>]+)\s*>/, value) do
-          [_, email] -> address(email)
-          _ -> nil
-        end
-
-      true ->
-        case Regex.run(~r/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,63}/i, value) do
-          [email] -> String.downcase(email)
-          _ -> nil
-        end
-    end
-  end
-
-  defp address(_value), do: nil
+  # Whole-mailbox parsing shared with the inbound half, never a substring match:
+  # `o'connor@example.com` must stay that mailbox, not become `connor@…`.
+  defp address(value), do: Address.parse(value)
 
   defp maybe_put_header(mail, _header, nil), do: mail
 

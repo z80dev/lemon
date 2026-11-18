@@ -4,6 +4,18 @@ defmodule LemonLsp.Session do
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
+  # Document text, diagnostics, launch settings and protocol traffic never
+  # reach crash reports or `:sys.get_status/1`.
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, _} -> {:state, :redacted}
+      {:message, _} -> {:message, :redacted}
+      {:reason, _} -> {:reason, :redacted}
+      {:log, _} -> {:log, []}
+      pair -> pair
+    end)
+  end
+
   def init(opts) do
     Process.flag(:trap_exit, true)
     manager = Keyword.fetch!(opts, :manager)
@@ -135,6 +147,7 @@ defmodule LemonLsp.Session do
               |> Map.merge(%{
                 session_id: id,
                 pool_key: key,
+                config_root: config_root,
                 owners: %{},
                 idle_timer: nil,
                 idle_timeout_ms: Map.get(lsp, "idle_timeout_ms", 30_000),
@@ -196,56 +209,57 @@ defmodule LemonLsp.Session do
           {:noreply, put_in(state.sessions[session_id], session)}
 
         :new ->
-          params =
-            if method == "initialize" and is_map(params),
-              do: Map.put(params, "initializationOptions", session.initialization_options),
-              else: params
+          case initialize_params(session, method, params) do
+            {:error, reason} ->
+              {:reply, {:error, reason}, state}
 
-          request_id = state.next_request_id + 1
+            {:ok, params} ->
+              request_id = state.next_request_id + 1
 
-          payload = %{
-            "jsonrpc" => "2.0",
-            "id" => request_id,
-            "method" => method,
-            "params" => params
-          }
+              payload = %{
+                "jsonrpc" => "2.0",
+                "id" => request_id,
+                "method" => method,
+                "params" => params
+              }
 
-          # The RPC client owns the deadline and transport request. The session
-          # retains LSP policy (initialization waiters and edit receipts).
-          :ok =
-            LemonCore.Rpc.Client.dispatch(
-              session.rpc,
-              request_id,
-              payload,
-              {self(), {:rpc_reply, request_id}},
-              timeout_ms,
-              self()
-            )
+              # The RPC client owns the deadline and transport request. The session
+              # retains LSP policy (initialization waiters and edit receipts).
+              :ok =
+                LemonCore.Rpc.Client.dispatch(
+                  session.rpc,
+                  request_id,
+                  payload,
+                  {self(), {:rpc_reply, request_id}},
+                  timeout_ms,
+                  self()
+                )
 
-          pending =
-            Map.put(session.pending, request_id, %{
-              from: from,
-              method: method,
-              params: params,
-              on_timeout: request_opts.on_timeout,
-              capture_edits: request_opts.capture_edits,
-              caller_ref: Process.monitor(elem(from, 0)),
-              waiters: [],
-              edits: [],
-              started_at: now_iso8601()
-            })
+              pending =
+                Map.put(session.pending, request_id, %{
+                  from: from,
+                  method: method,
+                  document_uri: pending_document_uri(method, params),
+                  on_timeout: request_opts.on_timeout,
+                  capture_edits: request_opts.capture_edits,
+                  caller_ref: Process.monitor(elem(from, 0)),
+                  waiters: [],
+                  edits: [],
+                  started_at: now_iso8601()
+                })
 
-          session =
-            session
-            |> Map.put(:pending, pending)
-            |> Map.update(:request_count, 1, &(&1 + 1))
+              session =
+                session
+                |> Map.put(:pending, pending)
+                |> Map.update(:request_count, 1, &(&1 + 1))
 
-          state =
-            state
-            |> put_in([:sessions, session_id], session)
-            |> Map.put(:next_request_id, request_id)
+              state =
+                state
+                |> put_in([:sessions, session_id], session)
+                |> Map.put(:next_request_id, request_id)
 
-          {:noreply, state}
+              {:noreply, state}
+          end
       end
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -593,6 +607,30 @@ defmodule LemonLsp.Session do
     }
   end
 
+  # Initialization options can carry credentials, so they are re-resolved from
+  # config at dispatch time rather than retained in session state.
+  defp initialize_params(session, "initialize", params) when is_map(params) do
+    {_server_id, _cwd, config_hash} = session.pool_key
+
+    case LemonLsp.Servers.resolve_command(session.server_id, session.config_root) do
+      {:ok, %{server: %{config_hash: ^config_hash}} = command} ->
+        {:ok, Map.put(params, "initializationOptions", command.initialization_options)}
+
+      {:ok, _command} ->
+        {:error, :lsp_config_changed}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp initialize_params(_session, _method, params), do: {:ok, params}
+
+  defp pending_document_uri("textDocument/diagnostic", %{"textDocument" => %{"uri" => uri}}),
+    do: uri
+
+  defp pending_document_uri(_method, _params), do: nil
+
   defp now_iso8601 do
     DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
   end
@@ -632,7 +670,6 @@ defmodule LemonLsp.Session do
        diagnostics_by_uri: %{},
        diagnostic_seq: 0,
        root: cwd,
-       initialization_options: command.initialization_options,
        initialized: false,
        server_id: command.server.id,
        label: command.server.label,
@@ -1289,7 +1326,7 @@ defmodule LemonLsp.Session do
 
     case pull_diagnostics(result) do
       {:ok, diagnostics} ->
-        uri = get_in(request, [:params, "textDocument", "uri"])
+        uri = Map.get(request, :document_uri)
         capture_diagnostics(session, %{"uri" => uri, "diagnostics" => diagnostics})
 
       :ignore ->

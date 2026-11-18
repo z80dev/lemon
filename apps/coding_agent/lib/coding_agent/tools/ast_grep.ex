@@ -32,9 +32,12 @@ defmodule CodingAgent.Tools.AstGrep do
 
   Install with `brew install ast-grep`, `npm install -g @ast-grep/cli`, or download
   a platform archive from https://github.com/ast-grep/ast-grep/releases.
-  `availability(opts)` probes `ast-grep`, then `sg`, on PATH and verifies its
-  version identifies ast-grep (the Unix group-switching `sg` is not accepted).
-  Set `:ast_grep_executable` to an absolute executable path to override discovery.
+  `availability(cwd, opts)` probes `ast-grep`, then `sg`, on absolute operator
+  PATH entries outside the session project and its ancestor `.lemon` trees
+  (symlink targets included; see `ReadFormatCommand.system_executable/2`) and
+  verifies its version identifies ast-grep (the Unix group-switching `sg` is not
+  accepted). Set the constructor option `:ast_grep_executable` to an absolute
+  executable path to override discovery.
   Missing or incompatible backends return actionable installation guidance.
   No installation, network access or credential discovery occurs at runtime.
 
@@ -49,7 +52,7 @@ defmodule CodingAgent.Tools.AstGrep do
 
   alias CodingAgent.{FileReadTracker, MutationLock}
   alias CodingAgent.Tools.AstGrep.{Backend, Scope}
-  alias CodingAgent.Tools.{CheckpointGuard, FileValidation, PathHelpers}
+  alias CodingAgent.Tools.{CheckpointGuard, FileValidation, PathHelpers, ReadFormatCommand}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -134,13 +137,16 @@ defmodule CodingAgent.Tools.AstGrep do
   end
 
   @doc "Checks executable discovery and ast-grep identity; never installs a backend."
-  @spec availability(keyword()) :: {:ok, String.t()} | {:error, String.t()}
-  def availability(opts \\ []) do
+  @spec availability(String.t(), keyword()) :: {:ok, String.t()} | {:error, String.t()}
+  def availability(cwd, opts \\ []) do
     candidates =
       case Keyword.get(opts, :ast_grep_executable) do
         nil ->
           Enum.reject(
-            [System.find_executable("ast-grep"), System.find_executable("sg")],
+            [
+              ReadFormatCommand.system_executable("ast-grep", cwd),
+              ReadFormatCommand.system_executable("sg", cwd)
+            ],
             &is_nil/1
           )
 
@@ -155,7 +161,7 @@ defmodule CodingAgent.Tools.AstGrep do
       candidates,
       {:error, "ast-grep CLI is unavailable or incompatible. " <> @install},
       fn path ->
-        case Backend.run(path, ["--version"], File.cwd!(), nil, 5_000) do
+        case Backend.run(path, ["--version"], cwd, nil, 5_000) do
           {:ok, {version, 0}} ->
             if Regex.match?(~r/\Aast-grep \d+\.\d+\.\d+/, String.trim(version)), do: {:ok, path}
 
@@ -173,7 +179,7 @@ defmodule CodingAgent.Tools.AstGrep do
            {:ok, request} <- validate(params),
            {:ok, paths} <- resolve_paths(request.paths, cwd),
            {:ok, paths} <- Scope.files(paths, request.max_files, signal),
-           {:ok, executable} <- availability(opts),
+           {:ok, executable} <- availability(cwd, opts),
            {:ok, matches, errors} <- scan_files(executable, request, paths, signal, cwd, opts),
            matches <- normalize_matches(matches, cwd),
            :ok <- check_abort(signal) do

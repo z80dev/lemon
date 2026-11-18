@@ -187,6 +187,104 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     assert {:ok, [^fact]} = Project.read(state, store: store)
   end
 
+  test "private memory context capture writes the private project document, never legacy", %{
+    state: state,
+    store: store
+  } do
+    fact = "Private sessions run mix test from apps/coding_agent."
+
+    private =
+      Map.put(state, :approval_context, %{
+        invocation_context_key: "inv-private-1",
+        memory_context_key: "private-actor-1",
+        memory_context_verified: true,
+        shared_memory_grant: true
+      })
+
+    complete = fn _, _, _ -> response([fact]) end
+
+    assert {:ok, _} =
+             ProjectMemory.after_turn(private, turn(fact), store: store, complete: complete)
+
+    assert :ok = ProjectMemory.flush(private, 5_000)
+
+    reader = Map.merge(state, private.approval_context) |> Map.put(:shared_memory_grant, false)
+    assert {:ok, [^fact]} = Project.read(reader, store: store)
+
+    # The legacy document for this profile and repository was never written,
+    # and a shared grant on the session is not exercised by automatic capture.
+    {:ok, legacy} = Project.scope(state)
+
+    assert {:error, :not_found} =
+             LemonMemory.Store.get_document(store, "mem_project_" <> legacy.key)
+
+    assert {:ok, []} = Project.read(state, store: store)
+    assert {:ok, []} = Project.read(Map.put(reader, :memory_context_key, "other"), store: store)
+  end
+
+  test "legacy session capture still writes the legacy project document", %{
+    state: state,
+    store: store
+  } do
+    fact = "Legacy sessions run mix format before commit."
+    legacy = Map.put(state, :approval_context, %{memory_context_verified: false})
+    complete = fn _, _, _ -> response([fact]) end
+
+    assert {:ok, _} =
+             ProjectMemory.after_turn(legacy, turn(fact), store: store, complete: complete)
+
+    assert :ok = ProjectMemory.flush(legacy, 5_000)
+    {:ok, scope} = Project.scope(state)
+    assert {:ok, _} = LemonMemory.Store.get_document(store, "mem_project_" <> scope.key)
+    assert {:ok, [^fact]} = Project.read(state, store: store)
+  end
+
+  test "unprovable memory context skips capture and logs instead of writing legacy", %{
+    state: state,
+    store: store
+  } do
+    owner = self()
+
+    complete = fn _, _, _ ->
+      send(owner, :unexpected_extraction)
+      response(["Never captured."])
+    end
+
+    opts = [store: store, complete: complete]
+
+    unproven = [
+      %{memory_context_key: "private-actor-1", memory_context_verified: true},
+      %{memory_context_key: "private-actor-1", invocation_context_key: "inv-1"},
+      %{invocation_context_key: "inv-1"},
+      # A bare grant and a bare scope marker are ownership claims too; neither
+      # may be projected away into a legacy capture.
+      %{shared_memory_grant: true},
+      %{memory_scope: :unproven},
+      %{memory_scope: :private}
+    ]
+
+    scoped_states =
+      Enum.map(unproven, &Map.put(state, :approval_context, &1)) ++
+        [Map.put(state, :memory_scope, :unproven), Map.put(state, :shared_memory_grant, true)]
+
+    for scoped <- scoped_states do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :skip = ProjectMemory.after_turn(scoped, turn("mix test"), opts)
+          assert :skip = ProjectMemory.after_compaction(scoped, "mix test", opts)
+        end)
+
+      assert log =~ "Project memory capture skipped: unproven memory context"
+      refute log =~ "private-actor-1"
+    end
+
+    refute_receive :unexpected_extraction, 100
+    {:ok, scope} = Project.scope(state)
+
+    assert {:error, :not_found} =
+             LemonMemory.Store.get_document(store, "mem_project_" <> scope.key)
+  end
+
   test "capture uses the configured summary model with its matching credentials", %{
     state: state,
     store: store
@@ -605,7 +703,7 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
       # Prove this batch really left dead owners behind while pruning is paused.
       keys = Registry.keys(CodingAgent.ProcessRegistry, worker)
       assert Enum.any?(keys, &match?({ProjectMemory, :slot, _}, &1))
-      assert Enum.any?(keys, &match?({ProjectMemory, :project, _}, &1))
+      assert Enum.any?(keys, &match?({ProjectMemory, :project, _, _}, &1))
     end
   end
 

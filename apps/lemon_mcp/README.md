@@ -206,7 +206,9 @@ authentication at the token endpoint.
 Public-client authorization-code + PKCE flows use an
 `:authorization_code_provider` callback. The callback receives the
 authorization request, should send the operator through `authorization_url`,
-and returns the callback code with the same state:
+and returns `{:ok, %{code: code, state: state}}` with the request's state. A
+bare code, a missing state or a different state is rejected before the token
+exchange:
 
 ```elixir
 {:ok, client} = LemonMCP.Client.HTTP.start_link(

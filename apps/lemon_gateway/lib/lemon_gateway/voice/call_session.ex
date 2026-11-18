@@ -164,6 +164,9 @@ defmodule LemonGateway.Voice.CallSession do
   end
 
   def handle_event(:cast, {:register_deepgram_ws, pid}, _state, data) do
+    # Linked so even an untrappable session death takes the Deepgram socket down;
+    # the session traps exits, so a Deepgram disconnect does not end the call.
+    Process.link(pid)
     {:keep_state, %{data | deepgram_ws_pid: pid}}
   end
 
@@ -256,6 +259,13 @@ defmodule LemonGateway.Voice.CallSession do
   @impl true
   def terminate(_reason, _state, data) do
     stop_task(data.task)
+
+    # The session owns the call: close its Deepgram socket and the Twilio stream
+    # however it ends (hang-up, silence, max duration, crash).
+    DeepgramClient.stop(data.deepgram_ws_pid)
+    if is_binary(data.call_sid), do: DeepgramClient.stop_for_call(data.call_sid)
+    if is_pid(data.twilio_ws_pid), do: send(data.twilio_ws_pid, :call_ended)
+
     Logger.info("Call session terminated: #{data.call_sid}")
     :ok
   end

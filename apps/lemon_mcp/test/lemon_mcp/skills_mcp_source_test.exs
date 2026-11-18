@@ -940,45 +940,72 @@ defmodule LemonMCP.SkillsMcpSourceTest do
          ]}
       ])
 
-      task = Task.async(fn -> McpSource.discover_tools(force_refresh: true) end)
+      {{authorization_request, tools}, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          task = Task.async(fn -> McpSource.discover_tools(force_refresh: true) end)
 
-      assert_receive {:mcp_oauth_authorization_request, authorization_request}, 1_000
-      assert authorization_request.client_id == "lemon-public"
-      assert authorization_request.redirect_uri == "http://127.0.0.1:#{callback_port}/callback"
-      assert authorization_request.scope == "tools"
-      assert authorization_request.resource == url
-      assert authorization_request.authorization_url =~ "response_type=code"
-      assert authorization_request.authorization_url =~ "code_challenge_method=S256"
+          assert_receive {:mcp_oauth_authorization_request, authorization_request}, 1_000
+          assert authorization_request.client_id == "lemon-public"
 
-      pending = wait_for_pending_approval(run_id)
+          assert authorization_request.redirect_uri ==
+                   "http://127.0.0.1:#{callback_port}/callback"
 
-      assert pending.tool == "mcp_mcp_oauth"
-      assert pending.session_key == session_key
-      assert pending.action.type == "mcp_oauth_authorization"
-      assert pending.action.authorization_url == authorization_request.authorization_url
-      assert pending.action.resource == url
-      assert pending.action.client_id == "lemon-public"
-      assert pending.action.redirect_uri == "http://127.0.0.1:#{callback_port}/callback"
-      assert pending.action.scope == "tools"
-      assert pending.action.state_hash
-      refute inspect(pending) =~ "code_verifier"
+          assert authorization_request.scope == "tools"
+          assert authorization_request.resource == url
+          assert authorization_request.authorization_url =~ "response_type=code"
+          assert authorization_request.authorization_url =~ "code_challenge_method=S256"
 
-      callback_url =
-        "http://127.0.0.1:#{callback_port}/callback?" <>
-          URI.encode_query(%{"code" => "loopback-code", "state" => authorization_request.state})
+          pending = wait_for_pending_approval(run_id)
 
-      assert {:ok, {{_, 200, _}, _headers, _body}} =
-               :httpc.request(
-                 :get,
-                 {String.to_charlist(callback_url), []},
-                 [timeout: 1_000, connect_timeout: 1_000],
-                 body_format: :binary
-               )
+          assert pending.tool == "mcp_mcp_oauth"
+          assert pending.session_key == session_key
+          assert pending.action.type == "mcp_oauth_authorization"
+          assert pending.action.authorization_url == authorization_request.authorization_url
+          assert pending.action.resource == url
+          assert pending.action.client_id == "lemon-public"
+          assert pending.action.redirect_uri == "http://127.0.0.1:#{callback_port}/callback"
+          assert pending.action.scope == "tools"
+          assert pending.action.state_hash
+          refute inspect(pending) =~ "code_verifier"
 
-      assert {:ok, %{decision: :approve_once, outcome: :approved}} =
-               LemonCore.ExecApprovals.resolve(pending.id, :approve_once)
+          # A forged callback is rejected without ending the wait.
+          forged_url =
+            "http://127.0.0.1:#{callback_port}/callback?code=forged-code&state=forged"
 
-      tools = Task.await(task, 5_000)
+          assert {:ok, {{_, 400, _}, _headers, _body}} =
+                   :httpc.request(
+                     :get,
+                     {String.to_charlist(forged_url), []},
+                     [timeout: 1_000, connect_timeout: 1_000],
+                     body_format: :binary
+                   )
+
+          callback_url =
+            "http://127.0.0.1:#{callback_port}/callback?" <>
+              URI.encode_query(%{
+                "code" => "loopback-code",
+                "state" => authorization_request.state
+              })
+
+          assert {:ok, {{_, 200, _}, _headers, _body}} =
+                   :httpc.request(
+                     :get,
+                     {String.to_charlist(callback_url), []},
+                     [timeout: 1_000, connect_timeout: 1_000],
+                     body_format: :binary
+                   )
+
+          assert {:ok, %{decision: :approve_once, outcome: :approved}} =
+                   LemonCore.ExecApprovals.resolve(pending.id, :approve_once)
+
+          {authorization_request, Task.await(task, 5_000)}
+        end)
+
+      assert log =~ "MCP OAuth authorization required"
+      refute log =~ authorization_request.state
+      refute log =~ "code_challenge"
+      refute log =~ authorization_request.authorization_url
+
       assert Enum.any?(tools, &(&1.label == "MCP secured_echo"))
 
       observed = Agent.get(store, &Enum.reverse/1)
@@ -998,6 +1025,77 @@ defmodule LemonMCP.SkillsMcpSourceTest do
                observed,
                &match?({:mcp, "tools/list", %{"authorization" => "Bearer fixture-token"}}, &1)
              )
+    end
+
+    test "approval disabled without an observer fails fast with a configuration error" do
+      {port, _store} = start_oauth_http_transport()
+      callback_port = free_port()
+      url = "http://127.0.0.1:#{port}/mcp"
+
+      Application.put_env(:lemon_skills, :mcp_servers, [
+        {:http, url,
+         oauth: [
+           flow: :authorization_code_pkce,
+           client_id: "lemon-public",
+           redirect_uri: "http://127.0.0.1:#{callback_port}/callback",
+           scopes: ["tools"],
+           authorization_timeout_ms: 15_000,
+           authorization_approval: false
+         ]}
+      ])
+
+      {{elapsed_us, tools}, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          :timer.tc(fn -> McpSource.discover_tools(force_refresh: true) end)
+        end)
+
+      refute Enum.any?(tools, &(&1.label == "MCP secured_echo"))
+      assert elapsed_us < 10_000_000
+      assert log =~ "authorization_approval is disabled and no authorization_request_observer"
+      refute log =~ "state="
+      refute log =~ "code_challenge"
+
+      # No listener was ever bound for the unusable flow.
+      assert {:error, _} =
+               :gen_tcp.connect(~c"127.0.0.1", callback_port, [:binary, active: false], 100)
+    end
+
+    test "approval disabled with an observer delivers the request and completes" do
+      {port, _store} = start_oauth_http_transport()
+      callback_port = free_port()
+      url = "http://127.0.0.1:#{port}/mcp"
+      test_pid = self()
+
+      Application.put_env(:lemon_skills, :mcp_servers, [
+        {:http, url,
+         oauth: [
+           flow: :authorization_code_pkce,
+           client_id: "lemon-public",
+           redirect_uri: "http://127.0.0.1:#{callback_port}/callback",
+           scopes: ["tools"],
+           authorization_timeout_ms: 15_000,
+           authorization_approval: false,
+           authorization_request_observer: test_pid
+         ]}
+      ])
+
+      task = Task.async(fn -> McpSource.discover_tools(force_refresh: true) end)
+      assert_receive {:mcp_oauth_authorization_request, request}, 5_000
+
+      callback_url =
+        "http://127.0.0.1:#{callback_port}/callback?" <>
+          URI.encode_query(%{"code" => "loopback-code", "state" => request.state})
+
+      assert {:ok, {{_, 200, _}, _headers, _body}} =
+               :httpc.request(
+                 :get,
+                 {String.to_charlist(callback_url), []},
+                 [timeout: 1_000, connect_timeout: 1_000],
+                 body_format: :binary
+               )
+
+      tools = Task.await(task, 5_000)
+      assert Enum.any?(tools, &(&1.label == "MCP secured_echo"))
     end
   end
 

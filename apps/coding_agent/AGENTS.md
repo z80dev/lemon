@@ -91,6 +91,11 @@ history, compaction and supervised delegation. The loop/model runtime comes from
   requires explicit operator authorization.
 - Prefer `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` to flags. Off-loopback
   uses `wss://`; plaintext requires explicit opt-in over a verified secure overlay.
+  The launchers unset both and hand them to the VM only on an fd-3 pipe
+  (`LemonCore.NodeCredentials`), drained before any app starts; `CLI.run/2`
+  takes them from there. Every child launcher (bash, PTY, process, eval, debug,
+  host command, task Git, stdio MCP) builds its env with `LemonCore.ChildEnv`,
+  which unsets `LEMON_NODE_*TOKEN*`, `LEMON_SECRETS_*` and `LEMON_*_API_KEY`.
 - The worker accepts the native run method, validates local cwd and strips routing
   `meta.node`. Only JSON-safe execution data crosses the wire; source callbacks,
   executor options, provider credentials and BEAM state never do.

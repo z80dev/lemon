@@ -549,6 +549,8 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     conn =
       :post
       |> conn("/", Jason.encode!(body))
+      # The router refuses non-loopback Host headers from loopback peers.
+      |> Map.put(:host, "localhost")
       |> put_req_header("content-type", "application/json")
       |> Router.call([])
 

@@ -94,7 +94,7 @@ defmodule CodingAgent.Tools.WriteArchiveTest do
     assert %AgentToolResult{details: %{checkpoint_id: id}} =
              write(dir, path <> ":file", "after", session_id: session)
 
-    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id)
+    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id, session)
     assert members(path)[~c"file"] == "before"
     File.ln_s!(path, Path.join(dir, "link.zip"))
     assert {:error, _} = write(dir, "link.zip:file", "blocked")

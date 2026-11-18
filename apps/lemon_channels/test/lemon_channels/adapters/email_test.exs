@@ -55,7 +55,12 @@ defmodule LemonChannels.Adapters.EmailTest do
       assert msg.account_id == "agent@lemon.test"
       assert msg.peer.kind == :dm
       assert msg.peer.id == "alice@example.com"
-      assert msg.message.text == "how is it going"
+      assert msg.message.text =~ "<<<EXTERNAL_UNTRUSTED_CONTENT>>>\nSource: Email\n"
+
+      assert msg.message.text =~
+               "From: alice@example.com\nSubject: Status?\n---\nhow is it going\n"
+
+      assert String.ends_with?(msg.message.text, "\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>")
       assert msg.message.id == "msg-1@example.com"
       assert msg.meta.subject == "Status?"
     end
@@ -70,6 +75,19 @@ defmodule LemonChannels.Adapters.EmailTest do
       assert msg.message.id == "abc@x.y"
     end
 
+    test "takes the mailbox from the angle address, never from a quoted display name" do
+      {:ok, msg} =
+        Email.normalize_inbound(payload(%{"from" => ~s("<owner@x.test>" <mallory@evil.test>)}))
+
+      assert msg.sender.id == "mallory@evil.test"
+
+      {:ok, msg} = Email.normalize_inbound(payload(%{"from" => "owner@x.test (Owner)"}))
+      assert msg.sender.id == "owner@x.test"
+
+      assert {:error, :missing_from} =
+               Email.normalize_inbound(payload(%{"from" => "A <a@x.test>, B <b@x.test>"}))
+    end
+
     test "rejects a payload with no sender" do
       assert {:error, :missing_from} = Email.normalize_inbound(payload(%{"from" => "  "}))
     end
@@ -82,7 +100,7 @@ defmodule LemonChannels.Adapters.EmailTest do
       raw = payload(%{"text" => nil, "html" => "<p>hello <b>there</b></p>"})
 
       {:ok, msg} = Email.normalize_inbound(raw)
-      assert msg.message.text == "hello there"
+      assert msg.message.text =~ "---\nhello there\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
     end
 
     test "accepts atom keys as well as string keys" do
@@ -90,7 +108,7 @@ defmodule LemonChannels.Adapters.EmailTest do
                Email.normalize_inbound(%{from: "bob@example.com", text: "hi", to: "a@b.c"})
 
       assert msg.sender.id == "bob@example.com"
-      assert msg.message.text == "hi"
+      assert msg.message.text =~ "---\nhi\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
     end
 
     test "carries reply_to_id and references through" do

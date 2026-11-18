@@ -580,19 +580,34 @@ describe("shell escapes", () => {
 		else process.env.LEMON_TUI_SHELL = previousShell;
 	});
 
+	/** Submit `text`, then pick Run on the confirmation that must appear. */
+	async function submitConfirmed(app: AppShell, terminal: MemoryTerminal, text: string) {
+		const submitted = app.submit(text);
+		await waitFor(
+			() =>
+				/Run th(is|ese) shell/.test(
+					renderPlain(app.selectors.current?.render(app.tui.terminal.columns) ?? []),
+				),
+			{ what: "shell confirmation" },
+		);
+		terminal.sendInput("\x1b[B");
+		terminal.sendInput("\r");
+		await submitted;
+	}
+
 	test("!cmd is recorded in the transcript and nothing is sent", async () => {
-		const { app, server } = await bootApp();
+		const { app, server, terminal } = await bootApp();
 		// The command owns the real terminal, so its output is not ours to
 		// capture — the transcript records that it ran and how it ended.
-		await app.submit("!true");
+		await submitConfirmed(app, terminal, "!true");
 		expect(chatText(app)).toContain("$ true");
 		expect(chatText(app)).toContain("ok");
 		expect(server.requestsFor("chat.send")).toHaveLength(0);
 	});
 
 	test("{!cmd} is interpolated into the prompt that is sent", async () => {
-		const { app, server } = await bootApp();
-		await app.submit("the answer is {!echo 42}");
+		const { app, server, terminal } = await bootApp();
+		await submitConfirmed(app, terminal, "the answer is {!echo 42}");
 		await waitFor(() => server.requestsFor("chat.send").length > 0, { what: "chat.send" });
 		expect(server.requestsFor("chat.send")[0].params).toMatchObject({
 			prompt: "the answer is 42",

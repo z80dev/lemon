@@ -28,6 +28,9 @@ defmodule LemonRouter.RestartCarryover do
 
   use GenServer
 
+  @impl true
+  def format_status(status), do: LemonCore.StatusRedaction.gen_server(status, [])
+
   @behaviour LemonCore.Drain
 
   require Logger

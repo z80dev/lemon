@@ -6,8 +6,16 @@
  *                 stdout before the prompt goes to the daemon.
  *
  * The two differ in more than syntax: the first is interactive (the caller
- * suspends the TUI so the command owns the terminal), the second is captured
- * and must never take the terminal, because the user is mid-prompt.
+ * suspends the TUI so the command owns the terminal and no deadline applies),
+ * the second is captured, bounded in time and size, and must never take the
+ * terminal, because the user is mid-prompt.
+ *
+ * Neither runs before the user confirms the exact command text at submit (the
+ * command controller's `confirmShell`), wherever the text came from. As a
+ * usability layer, text that enters the composer other than by typing — a
+ * paste, a prompt template or skill from the palette, a restored queue item or
+ * rewound prompt, a delegated send — is escaped first
+ * ({@link inertComposerText}), so it reaches the model verbatim without asking.
  *
  * Nothing here touches pi-tui; suspension is the controller's job, which keeps
  * this file testable without a terminal.
@@ -18,19 +26,28 @@ export interface ShellResult {
 	code: number;
 	stdout: string;
 	stderr: string;
-	/** Set when the command could not be started or exceeded its deadline. */
+	/** Set when the command could not be started, was stopped, or exceeded a limit. */
 	failure?: string;
+	/** Captured output hit {@link MAX_CAPTURED_OUTPUT_BYTES}; stdout holds the kept prefix. */
+	truncated?: boolean;
 }
 
 export interface RunShellOptions {
 	cwd?: string;
+	/** Captured commands default to {@link DEFAULT_SHELL_TIMEOUT_MS}; interactive ones to none. */
 	timeoutMs?: number;
 	/** The command inherits the terminal instead of being captured. */
 	interactive?: boolean;
 	env?: Record<string, string | undefined>;
+	/** Aborting stops the command's process tree; the result reports `cancelled`. */
+	signal?: AbortSignal;
 }
 
 export const DEFAULT_SHELL_TIMEOUT_MS = 120_000;
+/** Per captured stream; the command is stopped once either stream exceeds it. */
+export const MAX_CAPTURED_OUTPUT_BYTES = 64 * 1024;
+/** Lines of one `{!cmd}`'s output that reach the prompt. */
+export const MAX_INTERPOLATED_LINES = 200;
 
 /** The shell used for `!` and `{!}`; `$SHELL` when set, else /bin/sh. */
 export function shellBinary(env: NodeJS.ProcessEnv = process.env): string {
@@ -82,104 +99,166 @@ export function hasShellSpans(text: string): boolean {
 	return findShellSpans(text).length > 0;
 }
 
-/** Drop the escaping backslash from `\{!` once interpolation is done. */
-export function unescapeShellSpans(text: string): string {
-	return text.replace(/\\\{!/g, "{!");
+/**
+ * Make text that did not come from the keyboard inert: every `{!` gains a
+ * backslash, and when the text opens the prompt (`opensPrompt`) so does a
+ * leading `!`. One backslash is added even before existing ones, so
+ * {@link unescapeShellSyntax} restores exactly the original text on submit.
+ */
+export function escapeShellSyntax(text: string, opensPrompt = true): string {
+	const escaped = text.replace(/\{!/g, "\\{!");
+	return opensPrompt ? escaped.replace(/^(\s*)(\\*)!/, "$1\\$2!") : escaped;
+}
+
+/**
+ * Composer text that did not come from the keyboard. The editor's own load and
+ * paste sanitization (CRs normalized, C0 controls other than tab and newline
+ * dropped) runs first, so stripping cannot join `{` and `!` after the escape;
+ * then {@link escapeShellSyntax}.
+ */
+export function inertComposerText(text: string, opensPrompt = true): string {
+	const sanitized = text
+		.replace(/\r\n?/g, "\n")
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: Mirrors the editor's load/paste sanitization.
+		.replace(/[\x00-\x08\x0B-\x1F]/g, "");
+	return escapeShellSyntax(sanitized, opensPrompt);
+}
+
+/**
+ * Drop one escaping backslash from every `\{!` and, when `opensPrompt`, from a
+ * leading `\!`: the inverse of {@link escapeShellSyntax} for literal text.
+ */
+export function unescapeShellSyntax(text: string, opensPrompt = true): string {
+	const unescaped = text.replace(/\\\{!/g, "{!");
+	return opensPrompt ? unescaped.replace(/^(\s*)\\(\\*)!/, "$1$2!") : unescaped;
 }
 
 /**
  * Replace every `{!cmd}` span with the command's stdout (trailing newline
- * trimmed). A failing command is replaced by its stderr so the model sees what
- * went wrong instead of a silent gap; `onResult` lets the caller report it too.
+ * trimmed, at most {@link MAX_INTERPOLATED_LINES} lines). A failing command is
+ * replaced by its stderr so the model sees what went wrong instead of a silent
+ * gap; `onResult` lets the caller report it too. Escapes are removed from the
+ * literal text only, never from command output. Undefined means `signal`
+ * aborted: the prompt must not be sent.
  */
 export async function interpolateShellSpans(
 	text: string,
 	run: (command: string) => Promise<ShellResult>,
 	onResult?: (result: ShellResult) => void,
-): Promise<string> {
-	const spans = findShellSpans(text);
-	if (spans.length === 0) return unescapeShellSpans(text);
+	signal?: AbortSignal,
+): Promise<string | undefined> {
 	let output = "";
 	let cursor = 0;
-	for (const span of spans) {
-		output += text.slice(cursor, span.start);
+	for (const span of findShellSpans(text)) {
+		output += unescapeShellSyntax(text.slice(cursor, span.start), cursor === 0);
+		if (signal?.aborted) return undefined;
 		const result = await run(span.command);
+		if (signal?.aborted) return undefined;
 		onResult?.(result);
-		const body = result.code === 0 ? result.stdout : result.stderr || result.failure || "";
-		output += body.replace(/\n+$/, "");
+		output += interpolatedBody(result);
 		cursor = span.end;
 	}
-	output += text.slice(cursor);
-	return unescapeShellSpans(output);
+	return output + unescapeShellSyntax(text.slice(cursor), cursor === 0);
+}
+
+function interpolatedBody(result: ShellResult): string {
+	const body =
+		result.code === 0 || result.truncated ? result.stdout : result.stderr || result.failure || "";
+	const lines = body.replace(/\n+$/, "").split("\n");
+	const omitted = lines.length - MAX_INTERPOLATED_LINES;
+	if (omitted > 0) {
+		lines.length = MAX_INTERPOLATED_LINES;
+		lines.push(`[output of \`${result.command}\` truncated: ${omitted} more line(s)]`);
+	} else if (result.truncated) {
+		lines.push(`[output of \`${result.command}\` truncated at ${MAX_CAPTURED_OUTPUT_BYTES} bytes]`);
+	}
+	return lines.join("\n");
 }
 
 /**
- * Run a command through the shell. Never throws: a spawn failure or a timeout
- * comes back as a result with a non-zero code and a `failure` message, because
- * every caller wants to show it rather than handle it.
+ * Run a command through the shell. Never throws: a spawn failure, a timeout,
+ * an output overflow or a cancellation comes back as a result with a `failure`
+ * message, because every caller wants to show it rather than handle it.
+ *
+ * Only captured commands get a default deadline: an interactive command owns
+ * the terminal (an editor, a pager, an ssh session) and ends when the user
+ * ends it.
  */
 export async function runShellCommand(
 	command: string,
 	options: RunShellOptions = {},
 ): Promise<ShellResult> {
-	const timeoutMs = options.timeoutMs ?? DEFAULT_SHELL_TIMEOUT_MS;
+	const interactive = options.interactive === true;
+	const timeoutMs = options.timeoutMs ?? (interactive ? 0 : DEFAULT_SHELL_TIMEOUT_MS);
 	const base: ShellResult = { command, code: 0, stdout: "", stderr: "" };
+	if (options.signal?.aborted) return { ...base, code: 130, failure: "cancelled" };
 	try {
 		// Interactive commands must remain in the terminal's process group so
 		// full-screen programs and job control keep working.
-		const detached = process.platform !== "win32" && options.interactive !== true;
+		const detached = process.platform !== "win32" && !interactive;
 		const proc = Bun.spawn([shellBinary(), "-c", command], {
 			cwd: options.cwd ?? process.cwd(),
 			env: { ...process.env, ...options.env } as Record<string, string>,
-			stdin: options.interactive ? "inherit" : "ignore",
-			stdout: options.interactive ? "inherit" : "pipe",
-			stderr: options.interactive ? "inherit" : "pipe",
+			stdin: interactive ? "inherit" : "ignore",
+			stdout: interactive ? "inherit" : "pipe",
+			stderr: interactive ? "inherit" : "pipe",
 			// A shell can leave grandchildren holding the capture pipes open after
 			// the shell itself is killed. A private POSIX process group lets the
 			// deadline terminate the complete command tree.
 			detached,
 		});
 
-		let timedOut = false;
+		let failure: string | undefined;
 		let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 		let forceKillPromise: Promise<void> | undefined;
+		const stop = (reason: string) => {
+			if (failure !== undefined) return;
+			failure = reason;
+			killShellProcess(proc.pid, proc, detached, "SIGTERM");
+			const escalation = Promise.withResolvers<void>();
+			forceKillPromise = escalation.promise;
+			forceKillTimer = setTimeout(() => {
+				killShellProcess(proc.pid, proc, detached, "SIGKILL");
+				escalation.resolve();
+			}, 250);
+			// Captured POSIX commands await this escalation below. Preserve the
+			// non-blocking timer behavior everywhere else.
+			if (!detached) forceKillTimer.unref?.();
+		};
 		const timer =
 			timeoutMs > 0
-				? setTimeout(() => {
-						timedOut = true;
-						killShellProcess(proc.pid, proc, detached, "SIGTERM");
-						forceKillPromise = new Promise((resolve) => {
-							forceKillTimer = setTimeout(() => {
-								killShellProcess(proc.pid, proc, detached, "SIGKILL");
-								resolve();
-							}, 250);
-							// Captured POSIX commands await this escalation below. Preserve
-							// the existing non-blocking timer behavior everywhere else.
-							if (!detached) forceKillTimer.unref?.();
-						});
-					}, timeoutMs)
+				? setTimeout(() => stop(`timed out after ${timeoutMs}ms`), timeoutMs)
 				: undefined;
 		timer?.unref?.();
+		const cancel = () => stop("cancelled");
+		options.signal?.addEventListener("abort", cancel, { once: true });
 
-		const [stdout, stderr] = options.interactive
-			? ["", ""]
-			: await Promise.all([readStream(proc.stdout), readStream(proc.stderr)]);
-		const code = await proc.exited;
-		if (timer) clearTimeout(timer);
-		// A TERM-resistant descendant can redirect stdio, letting the parent
-		// exit and close our pipes before the process group is gone. Complete
-		// the scheduled escalation before declaring a captured POSIX timeout
-		// finished so no member of the private group escapes.
-		if (detached && forceKillPromise) await forceKillPromise;
-		if (forceKillTimer) clearTimeout(forceKillTimer);
+		try {
+			const overflow = () =>
+				stop(`output exceeded ${MAX_CAPTURED_OUTPUT_BYTES} bytes; command stopped`);
+			const [stdout, stderr] = interactive
+				? [CAPTURED_NOTHING, CAPTURED_NOTHING]
+				: await Promise.all([readCapped(proc.stdout, overflow), readCapped(proc.stderr, overflow)]);
+			const code = await proc.exited;
+			// A TERM-resistant descendant can redirect stdio, letting the parent
+			// exit and close our pipes before the process group is gone. Complete
+			// the scheduled escalation before declaring a stopped captured POSIX
+			// command finished so no member of the private group escapes.
+			if (detached && forceKillPromise) await forceKillPromise;
+			clearTimeout(forceKillTimer);
 
-		return {
-			...base,
-			code,
-			stdout,
-			stderr,
-			failure: timedOut ? `timed out after ${timeoutMs}ms` : undefined,
-		};
+			return {
+				...base,
+				code,
+				stdout: stdout.text,
+				stderr: stderr.text,
+				failure,
+				truncated: stdout.truncated || stderr.truncated || undefined,
+			};
+		} finally {
+			clearTimeout(timer);
+			options.signal?.removeEventListener("abort", cancel);
+		}
 	} catch (error) {
 		return {
 			...base,
@@ -203,11 +282,36 @@ function killShellProcess(
 	}
 }
 
-async function readStream(
+interface Captured {
+	text: string;
+	truncated: boolean;
+}
+
+const CAPTURED_NOTHING: Captured = { text: "", truncated: false };
+
+/**
+ * Read a capture pipe up to {@link MAX_CAPTURED_OUTPUT_BYTES}. Past the cap the
+ * reader stops consuming and `overflow` stops the command, so `{!yes}` cannot
+ * grow memory until the deadline.
+ */
+async function readCapped(
 	stream: ReadableStream<Uint8Array> | number | undefined,
-): Promise<string> {
-	if (!stream || typeof stream === "number") return "";
-	return await new Response(stream).text();
+	overflow: () => void,
+): Promise<Captured> {
+	if (!stream || typeof stream === "number") return CAPTURED_NOTHING;
+	const decoder = new TextDecoder();
+	let text = "";
+	let size = 0;
+	for await (const chunk of stream) {
+		const room = MAX_CAPTURED_OUTPUT_BYTES - size;
+		if (chunk.byteLength > room) {
+			overflow();
+			return { text: text + decoder.decode(chunk.subarray(0, room)), truncated: true };
+		}
+		size += chunk.byteLength;
+		text += decoder.decode(chunk, { stream: true });
+	}
+	return { text: text + decoder.decode(), truncated: false };
 }
 
 /** The transcript body for a finished `!cmd`, trimmed to `maxLines`. */

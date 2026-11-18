@@ -308,7 +308,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       LemonCore.ChatStateStore.delete(session_key)
       LemonCore.RunStore.delete_session(session_key)
       File.rm_rf!(CodingAgent.Config.sessions_dir(requirements_cwd))
-      CodingAgent.Checkpoint.delete(checkpoint.id)
+      CodingAgent.Checkpoint.delete(checkpoint.id, session_key)
       File.rm_rf(requirements_cwd)
     end)
 

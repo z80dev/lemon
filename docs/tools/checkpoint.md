@@ -40,10 +40,27 @@ The former filesystem `checkpoint` tool is now named `fs_checkpoint`. There is
 no alias. Migrate tool allow/deny lists and explicit tool requests to the new name
 when filesystem inspection or restoration is intended.
 
-- `action: "list"`: list checkpoints for the current session, or `session_id`.
+- `action: "list"`: list checkpoints for the current session.
 - `action: "diff"`: inspect a `checkpoint_id`, optionally limited to `paths`.
 - `action: "restore"`: restore a checkpoint, optionally limited to `paths`.
 - `action: "delete"`: delete a checkpoint by ID.
+
+Checkpoints are owned by the session id of the session that captured them
+(`CodingAgent.Checkpoint.owner/1`), and every action is scoped to that owner.
+The owner is never taken from model input (there is no `session_id`
+parameter) or from `session_key`/`run_id`, which task parameters can select.
+Without a session id, tools capture no checkpoint and `fs_checkpoint` refuses to
+run. Subagent/task children run in their own sessions and own their own
+checkpoints; they cannot reach the parent's. IDs must have the generated
+`chk_` + 16 hex digit shape. Malformed IDs and checkpoints owned by another
+session are reported as not found, and nothing is read, written or deleted.
+Restore and diff only act on the root paths recorded when the checkpoint was
+captured. Checkpoints whose snapshots name other paths, or that have no
+recorded roots, are refused; rewind preview lists their tools as unrestorable.
+No roots were recorded before this check existed (some of those checkpoints
+were also owned by a session key), so all such legacy checkpoints are
+unavailable to diff, restore and rewind rather than migrated. Diff does not
+read through a symlinked parent directory or leaf.
 
 Normal write/edit/patch operations still create filesystem checkpoints
 independently of the conversation checkpoint feature flag. Filesystem restoration

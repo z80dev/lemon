@@ -135,8 +135,14 @@ defmodule CodingAgent.Tools.Patch do
   - `on_update` - Callback for streaming partial results (unused for patch)
   - `cwd` - Current working directory for resolving relative paths
   - `opts` - Tool options:
-    - `:allow_symlinks` - Whether to allow modifying symlinks (default: false)
-    - `:allow_path_traversal` - Whether to allow paths that escape cwd (default: false)
+    - `:allow_symlinks` - Whether to allow modifying symlinked leaves and ancestors (default: false)
+    - `:allow_path_traversal` - Whether to allow relative or absolute paths outside cwd (default: false)
+
+  Every source, target and move destination passes
+  `FileValidation.check_mutation_target/2` with `mutation_root: cwd`, so symlinked
+  ancestors below cwd are rejected. The check is repeated right before each commit;
+  this narrows, but does not close, the window in which a concurrent filesystem
+  writer could swap an ancestor for a symlink between the check and the write.
 
   ## Returns
 
@@ -188,7 +194,12 @@ defmodule CodingAgent.Tools.Patch do
              action: "apply",
              operation_count: length(operations)
            }),
-         {:ok, summary} <- commit_prepared_operations(prepared_operations, signal, opts) do
+         {:ok, summary} <-
+           commit_prepared_operations(
+             prepared_operations,
+             signal,
+             Keyword.put(opts, :mutation_root, cwd)
+           ) do
       prepared_operations = format_prepared_files(prepared_operations, cwd, opts)
       file_results = prepared_file_results(prepared_operations)
       formatted = Enum.any?(prepared_operations, &Map.get(&1, :formatted, false))
@@ -430,16 +441,8 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   defp validate_acp_path(path, cwd, opts) do
-    with :ok <- validate_path_security(path),
-         resolved <- resolve_path(path, cwd),
-         :ok <-
-           validate_path_traversal(
-             path,
-             resolved,
-             cwd,
-             Keyword.get(opts, :allow_path_traversal, false)
-           ) do
-      :ok
+    with :ok <- validate_path_security(path) do
+      validate_containment(resolve_path(path, cwd), cwd, opts)
     end
   end
 
@@ -532,114 +535,40 @@ defmodule CodingAgent.Tools.Patch do
   @spec resolve_and_validate_path(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, String.t()}
   defp resolve_and_validate_path(path, cwd, opts) do
-    allow_traversal = Keyword.get(opts, :allow_path_traversal, false)
-    allow_symlinks = Keyword.get(opts, :allow_symlinks, false)
-
     resolved_path = resolve_path(path, cwd)
 
-    with :ok <- validate_path_traversal(path, resolved_path, cwd, allow_traversal),
-         :ok <- validate_target_type(resolved_path, allow_symlinks) do
+    with :ok <- validate_containment(resolved_path, cwd, opts),
+         :ok <- check_mutation_target(resolved_path, cwd, opts) do
       {:ok, resolved_path}
     end
   end
 
-  # Validate that relative paths don't escape the cwd
-  @spec validate_path_traversal(String.t(), String.t(), String.t(), boolean()) ::
-          :ok | {:error, String.t()}
-  defp validate_path_traversal(_original_path, _resolved_path, _cwd, true = _allow_traversal) do
-    :ok
-  end
+  # Every patch path, relative or absolute, must stay lexically inside cwd unless
+  # the caller explicitly opts into traversal.
+  defp validate_containment(resolved_path, cwd, opts) do
+    normalized_cwd = Path.expand(cwd)
 
-  defp validate_path_traversal(original_path, resolved_path, cwd, false = _allow_traversal) do
-    # Only check for relative paths
-    if Path.type(original_path) == :absolute do
-      :ok
-    else
-      # Normalize cwd for comparison
-      normalized_cwd = Path.expand(cwd)
-
-      if String.starts_with?(resolved_path, normalized_cwd <> "/") or
-           resolved_path == normalized_cwd do
+    cond do
+      Keyword.get(opts, :allow_path_traversal, false) == true ->
         :ok
-      else
+
+      resolved_path == normalized_cwd or
+          String.starts_with?(resolved_path, normalized_cwd <> "/") ->
+        :ok
+
+      true ->
         {:error,
          "Path traversal not allowed: resolved path '#{resolved_path}' is outside working directory '#{normalized_cwd}'"}
-      end
     end
   end
 
-  # Validate the target file type (check for symlinks, devices, etc.)
-  @spec validate_target_type(String.t(), boolean()) :: :ok | {:error, String.t()}
-  defp validate_target_type(path, allow_symlinks) do
-    # Use lstat to get info about the symlink itself, not the target
-    case File.lstat(path) do
-      {:ok, %File.Stat{type: :symlink}} when not allow_symlinks ->
-        {:error, "Cannot modify symlink: #{path}. Use :allow_symlinks option to override."}
-
-      {:ok, %File.Stat{type: :device}} ->
-        {:error, "Cannot modify device file: #{path}"}
-
-      {:ok, %File.Stat{type: :directory}} ->
-        {:error, "Cannot modify directory: #{path}. Please specify a file path."}
-
-      {:ok, %File.Stat{type: :other}} ->
-        {:error, "Cannot modify special file: #{path}"}
-
-      {:ok, %File.Stat{type: :regular}} ->
-        :ok
-
-      {:ok, %File.Stat{type: :symlink}} ->
-        # Symlinks allowed - validate the target
-        validate_symlink_target(path)
-
-      {:error, :enoent} ->
-        # File doesn't exist yet - this is fine for add operations
-        # But check if parent is a symlink when symlinks are not allowed
-        if allow_symlinks do
-          :ok
-        else
-          validate_parent_not_symlink(path)
-        end
-
-      {:error, _reason} ->
-        # Other errors will be handled during actual operation
-        :ok
-    end
-  end
-
-  # Validate that a symlink points to a regular file or non-existent path
-  defp validate_symlink_target(path) do
-    case File.stat(path) do
-      {:ok, %File.Stat{type: :regular}} ->
-        :ok
-
-      {:ok, %File.Stat{type: :directory}} ->
-        {:error, "Symlink points to a directory: #{path}"}
-
-      {:ok, %File.Stat{type: :device}} ->
-        {:error, "Symlink points to a device: #{path}"}
-
-      {:error, :enoent} ->
-        # Broken symlink - allow for delete
-        :ok
-
-      {:error, _reason} ->
-        :ok
-    end
-  end
-
-  # Check that parent directories are not symlinks (when symlinks not allowed)
-  defp validate_parent_not_symlink(path) do
-    parent = Path.dirname(path)
-
-    case File.lstat(parent) do
-      {:ok, %File.Stat{type: :symlink}} ->
-        {:error,
-         "Parent directory is a symlink: #{parent}. Use :allow_symlinks option to override."}
-
-      _ ->
-        :ok
-    end
+  # Shared mutator check: rejects symlinked ancestors below cwd, symlinked leaves
+  # (unless :allow_symlinks), directories, special files and unwritable targets.
+  defp check_mutation_target(resolved_path, cwd, opts) do
+    FileValidation.check_mutation_target(resolved_path,
+      allow_symlinks: Keyword.get(opts, :allow_symlinks, false) == true,
+      mutation_root: cwd
+    )
   end
 
   # ============================================================================
@@ -1114,18 +1043,41 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp verify_prepared_operation(%{type: :add, target: target}, _opts) do
+  # Re-run the shared mutation check right before each commit. This narrows, but
+  # does not close, an ancestor-swap race: a concurrent filesystem writer can still
+  # replace an ancestor with a symlink between this check and the path-based write.
+  defp verify_prepared_operation(prepared, opts) do
+    with :ok <- recheck_mutation_targets(prepared, opts) do
+      verify_prepared_contents(prepared, opts)
+    end
+  end
+
+  defp recheck_mutation_targets(prepared, opts) do
+    cwd = Keyword.fetch!(opts, :mutation_root)
+
+    [Map.get(prepared, :source), prepared.target]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.reduce_while(:ok, fn path, :ok ->
+      case check_mutation_target(path, cwd, opts) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp verify_prepared_contents(%{type: :add, target: target}, _opts) do
     verify_path_absent(target)
   end
 
-  defp verify_prepared_operation(%{type: :move} = prepared, opts) do
+  defp verify_prepared_contents(%{type: :move} = prepared, opts) do
     with :ok <- verify_source_unchanged(prepared, opts),
          :ok <- verify_path_absent(prepared.target) do
       :ok
     end
   end
 
-  defp verify_prepared_operation(prepared, opts), do: verify_source_unchanged(prepared, opts)
+  defp verify_prepared_contents(prepared, opts), do: verify_source_unchanged(prepared, opts)
 
   defp verify_source_unchanged(
          %{source: source, original_content: expected, identity: identity},
@@ -1624,12 +1576,20 @@ defmodule CodingAgent.Tools.Patch do
 
   defp apply_hunks(content, hunks, signal) do
     with :ok <- FileValidation.check_text_content(content, "Patch source") do
-      apply_text_hunks(content, hunks, signal)
+      {bom, body} = FileFormatHelpers.strip_bom(content)
+
+      case apply_text_hunks(body, hunks, signal) do
+        {:ok, text, adds, removes} when is_binary(bom) and text != "" ->
+          {:ok, bom <> text, adds, removes}
+
+        result ->
+          result
+      end
     end
   end
 
   defp apply_text_hunks(content, [%{unified: true} | _] = hunks, signal) do
-    newline = if String.contains?(content, "\r\n"), do: "\r\n", else: "\n"
+    newline = FileFormatHelpers.detect_line_ending(content)
     normalized = FileFormatHelpers.normalize_to_lf(content)
     lines = if content == "", do: [], else: AnchoredEdit.lines(normalized)
 
@@ -1684,7 +1644,7 @@ defmodule CodingAgent.Tools.Patch do
 
   defp apply_text_hunks(content, hunks, signal) do
     lines = String.split(content, ~r/\r?\n/, trim: false)
-    newline = if String.contains?(content, "\r\n"), do: "\r\n", else: "\n"
+    newline = FileFormatHelpers.detect_line_ending(content)
 
     result =
       Enum.reduce_while(hunks, {lines, 0, 0}, fn hunk, {acc_lines, acc_adds, acc_removes} ->
@@ -1849,7 +1809,8 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp resolve_path(path, cwd), do: PathHelpers.resolve_path(path, cwd)
+  # Expand absolute paths too so `cwd/../x` cannot pass a lexical containment check.
+  defp resolve_path(path, cwd), do: path |> PathHelpers.resolve_path(cwd) |> Path.expand()
 
   defp ensure_parent_dir(path) do
     dir = Path.dirname(path)

@@ -318,7 +318,7 @@ defmodule CodingAgent.Tools.LspTest do
     assert File.read!(Path.join(ctx.tmp, "src/fixed.c")) == ""
 
     for id <- Enum.reverse(command.details.checkpoint_ids) do
-      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id)
+      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id, ctx.session_id)
     end
 
     assert File.read!(path) == before_command
@@ -358,7 +358,7 @@ defmodule CodingAgent.Tools.LspTest do
     assert File.exists?(Path.join(ctx.tmp, "src/fixed.c"))
 
     for id <- Enum.reverse(result.details.checkpoint_ids) do
-      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id)
+      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id, ctx.session_id)
     end
 
     assert File.read!(path) == original
@@ -412,7 +412,7 @@ defmodule CodingAgent.Tools.LspTest do
     assert text!(result) =~ "checkpoint #{second_id} did not report its outcome"
 
     for id <- Enum.reverse(result.details.checkpoint_ids) do
-      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id)
+      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(id, ctx.session_id)
     end
 
     assert File.read!(path) == original

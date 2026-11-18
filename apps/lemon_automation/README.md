@@ -330,7 +330,7 @@ the curator report with the router run id for auditability.
 
 ### Session Isolation
 
-Each cron run executes in a forked sub-session (e.g., `agent:abc:main:sub:cron_12345`) to prevent cron activity from polluting the originating session's conversation history. Completion summaries are forwarded back to the base session as synthetic `run_completed` entries with `meta.cron_forwarded_summary = true`. The result is also sent through the `LemonRouter.ChannelsDelivery` -> `LemonChannels` path to the chat chosen by `CronDelivery`, so jobs created from the TUI, web UI, or CLI reach the paired owner chat and channel-origin jobs return to their chat even when no process is subscribed to the session topic.
+Each cron run executes in a forked sub-session (e.g., `agent:abc:main:sub:cron_12345`) to prevent cron activity from polluting the originating session's conversation history. Completion summaries are forwarded back to the base session as synthetic `run_completed` entries with `meta.cron_forwarded_summary = true`. These notification-only duplicates also carry `meta.memory_ingest = false` and `meta.memory_scope = :unproven`, so memory ingest skips them and they can never be stored or read as legacy memory; the cron run itself is ingested under its own admitted owner. The result is also sent through the `LemonRouter.ChannelsDelivery` -> `LemonChannels` path to the chat chosen by `CronDelivery`, so jobs created from the TUI, web UI, or CLI reach the paired owner chat and channel-origin jobs return to their chat even when no process is subscribed to the session topic.
 
 ### Persistent Cross-Run Memory
 

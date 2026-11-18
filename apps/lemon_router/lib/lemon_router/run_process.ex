@@ -46,6 +46,11 @@ defmodule LemonRouter.RunProcess do
 
   @behaviour :gen_statem
 
+  @impl true
+  def format_status(status) do
+    LemonCore.StatusRedaction.gen_statem(status, [:run_id, :session_key, :queue_mode])
+  end
+
   require Logger
 
   alias LemonCore.{Bus, Events, ExecutionCommand, Introspection}
@@ -725,7 +730,10 @@ defmodule LemonRouter.RunProcess do
   def handle_event(_type, _event, _phase, _state), do: :keep_state_and_data
 
   defp do_abort(state, reason) do
-    Logger.debug("RunProcess #{state.run_id} aborting: #{inspect(reason)}")
+    Logger.debug(
+      "RunProcess #{state.run_id} aborting: #{LemonCore.StatusRedaction.inspect_reason(reason)}"
+    )
+
     cancel_runtime_run(state.engine_runtime, state.run_id, reason)
 
     actions =

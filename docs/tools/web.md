@@ -13,7 +13,7 @@ external-content tools:
   on the operator's PATH). Only absolute PATH entries are used; workspace
   binaries and ancestor `.lemon` trees are excluded, including canonical
   symlink targets. Normal absolute user-installed toolchain paths outside
-  those project trees remain available. Unlike local `read`, fetching never discovers or
+  those project trees remain available. Like local `read`, fetching never discovers or
   probes project/ancestor `.lemon/read-formats-venv` interpreters. An operator
   may explicitly trust one with `WebFetch.tool(cwd, pdf_python: "/trusted/venv/bin/python3")`;
   this constructor option is not exposed to model-supplied fetch arguments.
@@ -135,9 +135,12 @@ falls back across identities.
 
 The `local` provider manages Chrome/Chromium over loopback CDP. To attach an
 existing CDP browser instead, set `LEMON_BROWSER_PROVIDER=cdp` and
-`LEMON_BROWSER_CDP_ENDPOINT` (or pass `--cdp-endpoint` when using the driver
-directly). CDP attachment never launches a replacement if the endpoint is
-unreachable, and connection errors redact endpoint credentials.
+`LEMON_BROWSER_CDP_ENDPOINT`. Lemon hands the endpoint (including relay and
+hosted-provider tokens) to the driver only through its environment, never its
+argv, and keeps it out of inspectable process state; `--cdp-endpoint` exists
+only for running the driver by hand and exposes the value to `ps`. CDP
+attachment never launches a replacement if the endpoint is unreachable, and
+connection errors redact endpoint credentials.
 
 Every page-scoped browser tool accepts optional `targetId`. When omitted it
 uses the session's active target; `browser_tab_activate` changes that active
@@ -272,7 +275,7 @@ Key resolution behavior:
 
 - Brave search uses `runtime.tools.web.search.api_key`, then `BRAVE_API_KEY`.
 - Exa uses `runtime.tools.web.search.providers.exa.api_key`, then `EXA_API_KEY`.
-- Perplexity search uses `runtime.tools.web.search.perplexity.api_key`, then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`.
+- Perplexity search uses `runtime.tools.web.search.perplexity.api_key` (or `api_key_secret`), then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`. The host is derived from the credential actually sent: `PERPLEXITY_API_KEY` goes to `api.perplexity.ai`, `OPENROUTER_API_KEY` to `openrouter.ai`, and a configured key or secret by its prefix (`pplx-` or `sk-or-`). Without an explicit `base_url`, a configured key of any other shape, or an env key carrying the other provider's prefix, fails with `ambiguous_perplexity_endpoint` before any request.
 - Firecrawl uses `runtime.tools.web.fetch.firecrawl.api_key`, then `FIRECRAWL_API_KEY`.
 
 ## Config Example
@@ -291,7 +294,7 @@ provider = "perplexity"
 
 [runtime.tools.web.search.perplexity]
 api_key = "<perplexity-api-key>"
-# base_url can be omitted; Lemon auto-selects Perplexity vs OpenRouter by key source/prefix.
+# base_url can be omitted for pplx-/sk-or- keys; Lemon pairs the host with the credential's source/prefix.
 model = "perplexity/sonar-pro"
 
 [runtime.tools.web.search.providers.searxng]
@@ -352,6 +355,7 @@ Config knobs:
 
 - `missing_brave_api_key`: set `BRAVE_API_KEY` or `runtime.tools.web.search.api_key`.
 - `missing_perplexity_api_key`: set `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` (or config key).
+- `ambiguous_perplexity_endpoint`: set `runtime.tools.web.search.perplexity.base_url`, or use a `pplx-`/`sk-or-` key.
 - `No provider in the search chain supports the requested freshness filter`: select a capable provider (Brave, Exa, Tavily, Kagi, DuckDuckGo or SearXNG). DuckDuckGo/SearXNG accept relative filters only.
 - `Invalid URL: must be http or https`: use a valid HTTP(S) URL.
 - `Blocked hostname` / `resolves to private/internal IP`: target is blocked by SSRF guards; use safer public host, or explicitly allow only what you trust.
