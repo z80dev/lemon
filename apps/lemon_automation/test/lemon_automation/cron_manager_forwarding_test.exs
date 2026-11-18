@@ -218,6 +218,10 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     assert forwarded_completed[:ok] == true
     assert is_binary(forwarded_completed[:answer])
     assert forwarded_completed[:answer] =~ "RUN SUMMARY"
+
+    # The notification duplicate must never be ingested as (or read as) legacy memory.
+    assert forwarded_summary[:meta][:memory_ingest] == false
+    assert forwarded_summary[:meta][:memory_scope] == :unproven
   end
 
   test "forwards completed cron summary into originating channel_peer session", %{token: token} do

@@ -36,9 +36,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
         callbacks
       )
       when is_binary(session_key) do
+    owner = history_owner(inbound.meta || %{})
+
     transcript =
       session_key
       |> RunStore.history(limit: 8)
+      |> Enum.filter(&reflectable?(&1, owner))
       |> format_run_history_transcript(max_chars: 12_000)
 
     if transcript == "" do
@@ -159,6 +162,50 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
     #{transcript}
     """
     |> String.trim()
+  end
+
+  # Reflection copies history into a new memory-recording run, so it may only
+  # read entries that memory could ingest and whose owner matches the run's own:
+  # notification-only duplicates (`memory_ingest: false`), unproven owners and
+  # other actors' private runs never reach the prompt.
+  @ownership_fields ~w(memory_scope memory_context_key memory_context_verified
+                       memory_shared_verified invocation_context_key shared_memory_grant
+                       memoryScope memoryContextKey memoryContextVerified
+                       memorySharedVerified invocationContextKey sharedMemoryGrant)
+
+  defp reflectable?({_run_id, data}, owner) when is_map(data) do
+    summary = data[:summary] || data["summary"] || %{}
+    meta = if is_map(summary), do: summary[:meta] || summary["meta"] || %{}, else: %{}
+
+    is_map(meta) and field(meta, "memory_ingest") != false and owner != :unproven and
+      history_owner(meta) == owner
+  end
+
+  defp reflectable?(_, _), do: false
+
+  defp history_owner(meta) when is_map(meta) do
+    key = field(meta, "memory_context_key")
+
+    cond do
+      field(meta, "memory_context_verified") == true and is_binary(key) and key != "" and
+          field(meta, "memory_scope") in [nil, :private, "private"] ->
+        {:private, key}
+
+      Enum.any?(@ownership_fields, &(field(meta, &1) not in [nil, false, "", :legacy, "legacy"])) ->
+        :unproven
+
+      true ->
+        :legacy
+    end
+  end
+
+  defp history_owner(_), do: :unproven
+
+  defp field(meta, name) do
+    case Map.fetch(meta, name) do
+      {:ok, value} -> value
+      :error -> Map.get(meta, String.to_atom(name))
+    end
   end
 
   defp format_run_history_entry({_run_id, data}) when is_map(data) do

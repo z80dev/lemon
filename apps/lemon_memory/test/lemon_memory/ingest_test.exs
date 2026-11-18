@@ -124,6 +124,42 @@ defmodule LemonMemory.IngestTest do
     end
   end
 
+  describe "notification-only duplicates" do
+    test "a cron forwarded summary is never ingested and never reads as legacy", %{
+      tmp_dir: tmp_dir
+    } do
+      counter = :counters.new(1, [:atomics])
+      Bus.subscribe("routing_feedback")
+
+      {:ok, pid, memory_store} =
+        start_isolated_ingest(tmp_dir, counter, %{session_search: true, routing_feedback: true})
+
+      {_run_id, record, summary} = make_ingest_args()
+
+      summary =
+        Map.put(summary, :meta, %{
+          origin: :cron,
+          cron_forwarded_summary: true,
+          memory_ingest: false,
+          memory_scope: :unproven,
+          cron_run_id: "cron_run_1"
+        })
+
+      Ingest.ingest(pid, "cron_notify_cron_run_1", record, summary)
+      :sys.get_state(pid)
+
+      assert [] =
+               LemonMemory.Store.get_by_session(memory_store, summary.session_key, limit: 10)
+
+      refute_receive %Event{type: :routing_feedback}, 50
+
+      # Any other consumer deriving a document still sees an unproven owner.
+      doc = LemonMemory.Document.from_run("cron_notify_cron_run_1", record, summary)
+      assert doc.meta["memory_scope"] == "unproven"
+      refute LemonMemory.ContextScope.matches?(doc.meta, :legacy)
+    end
+  end
+
   describe "disabled-features short-circuit" do
     test "skips Document.from_run entirely when both features are disabled", %{tmp_dir: tmp_dir} do
       counter = :counters.new(1, [:atomics])

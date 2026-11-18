@@ -13,10 +13,15 @@ defmodule CodingAgent.Session.ProjectMemory do
   extracted facts reach `LemonMemory.Project.capture/3`, never a transcript.
   One-shot callers can set the session option `:project_memory_capture` to
   `false` to skip auxiliary extraction without disabling project-memory recall.
+  Capture carries the session's admitted memory context (never a shared grant),
+  so private actors write their private project document; a context whose
+  ownership cannot be proven skips capture instead of falling back to legacy.
   """
 
+  require Logger
+
   alias LemonAi.Types.{AssistantMessage, Context, TextContent, UserMessage}
-  alias LemonMemory.Project
+  alias LemonMemory.{ContextScope, Project}
 
   @supervisor CodingAgent.TaskSupervisor
   @registry CodingAgent.ProcessRegistry
@@ -67,8 +72,9 @@ defmodule CodingAgent.Session.ProjectMemory do
   """
   def flush(context, timeout_ms \\ 65_000)
       when is_integer(timeout_ms) and timeout_ms >= 0 and timeout_ms <= 65_000 do
-    with {:ok, scope} <- Project.scope(context) do
-      case Registry.lookup(@registry, project_key(scope.key)) do
+    with {:ok, context, owner} <- capture_context(context),
+         {:ok, scope} <- Project.scope(context) do
+      case Registry.lookup(@registry, project_key(scope.key, owner)) do
         [{pid, _}] -> await_worker(pid, timeout_ms)
         [] -> :ok
       end
@@ -125,10 +131,9 @@ defmodule CodingAgent.Session.ProjectMemory do
   def decode_response(_), do: {:error, :extraction_failed}
 
   defp enqueue(state, input, opts) do
-    context = Map.take(state, @context_keys)
-
     with true <- Map.get(state, :project_memory_capture, true) != false,
          false <- input == "",
+         {:ok, context, owner} <- capture_context(state),
          {:ok, scope} <- Project.scope(context),
          key when is_binary(key) and key != "" <- Map.get(context, :session_key),
          true <- enabled?(context.cwd) do
@@ -138,7 +143,7 @@ defmodule CodingAgent.Session.ProjectMemory do
       obfuscator = Map.get(state, :secret_obfuscator)
       input = CodingAgent.Security.SecretObfuscator.obfuscate(obfuscator, input)
       job = %{context: context, runtime: runtime, input: input, opts: opts}
-      key = project_key(scope.key)
+      key = project_key(scope.key, owner)
       lock = {{__MODULE__, :admission}, self()}
 
       if :global.set_lock(lock, [node()], 0) do
@@ -158,6 +163,37 @@ defmodule CodingAgent.Session.ProjectMemory do
   catch
     :exit, _ -> {:error, :unavailable}
   end
+
+  # Ownership is proven on the complete, unprojected source (top-level fields and
+  # the admitted approval context) before anything is dropped, so an unproven
+  # marker or a bare grant can never be projected away into legacy. The capture
+  # context then carries the admitted fields through ContextScope's single
+  # accessor with the shared grant cleared: capture writes only the actor's own owner.
+  defp capture_context(state) when is_map(state) do
+    approval = Map.get(state, :approval_context) || %{}
+
+    with true <- is_map(approval),
+         {:ok, owner} <-
+           state
+           |> Map.drop([:__struct__, :approval_context])
+           |> Map.merge(approval)
+           |> ContextScope.scope() do
+      context =
+        state
+        |> Map.take(@context_keys)
+        |> Map.merge(ContextScope.admitted(state))
+        |> Map.merge(ContextScope.admitted(approval))
+        |> Map.put(:shared_memory_grant, false)
+
+      {:ok, context, owner}
+    else
+      _ ->
+        Logger.warning("Project memory capture skipped: unproven memory context")
+        {:error, :unproven_context}
+    end
+  end
+
+  defp capture_context(_), do: {:error, :unproven_context}
 
   defp enabled?(cwd) do
     config = LemonCore.Config.Modular.load(project_dir: cwd)
@@ -369,5 +405,5 @@ defmodule CodingAgent.Session.ProjectMemory do
   end
 
   defp valid_fact?(_), do: false
-  defp project_key(key), do: {__MODULE__, :project, key}
+  defp project_key(key, owner), do: {__MODULE__, :project, key, owner}
 end
