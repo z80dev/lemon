@@ -26,11 +26,13 @@ defmodule CodingAgent.ToolRegistryTest do
       ToolRegistry.invalidate_extension_cache()
     end)
 
+    # Project extension directories are never auto-loaded; the fixture
+    # directory is an operator path, relative to the global config directory.
     File.write!(
       Path.join(tmp_dir, "global.toml"),
       """
-      [runtime.extensions]
-      auto_load_default_paths = true
+      [runtime]
+      extension_paths = [".lemon/extensions"]
       """
     )
 

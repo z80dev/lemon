@@ -203,7 +203,7 @@ defmodule CodingAgent.ToolRegistry do
 
     extension_tools =
       if include_extensions do
-        {extensions, _load_errors} = extension_inventory(cwd, opts)
+        {extensions, _load_errors} = opts_extension_inventory(cwd, opts)
 
         Extensions.get_tools_with_source(extensions, cwd)
         |> Enum.map(fn {tool, ext_module} ->
@@ -378,6 +378,10 @@ defmodule CodingAgent.ToolRegistry do
 
   @doc """
   Prime the extension load cache for a cwd/path set.
+
+  The snapshot records the source fingerprint taken now, so a later edit,
+  addition or removal of an extension file invalidates it. An inventory with
+  load errors is never cached.
   """
   @spec prime_extension_cache(String.t(), [String.t()], [module()], [Extensions.load_error()]) ::
           :ok
@@ -385,13 +389,120 @@ defmodule CodingAgent.ToolRegistry do
       when is_list(extension_paths) and is_list(extensions) and is_list(load_errors) do
     key = cache_key(cwd, extension_paths)
 
-    snapshot = %{
-      extensions: sort_extensions(extensions),
-      load_errors: load_errors,
-      loaded_at: System.system_time(:millisecond)
-    }
+    Extensions.with_compile_lock(fn ->
+      if load_errors == [] do
+        insert_snapshot(key, Extensions.read_sources(extension_paths), extensions)
+      else
+        cache_delete(key)
+        :ok
+      end
+    end)
+  end
 
-    cache_insert(key, snapshot)
+  @doc """
+  Return the extension inventory for a resolved path set.
+
+  Lookup, compilation and publication run under the node-wide extension
+  compile lock (`Extensions.with_compile_lock/1`), shared by every key. Each
+  source file is read once; those bytes are hashed for the fingerprint and are
+  the bytes compiled. A cached inventory is reused only while its sources are
+  byte-identical, every module loaded from them still carries the content hash
+  recorded with the snapshot (another key may have recompiled them), and none
+  of its modules is poisoned. Only an inventory without load or validation
+  errors is cached; errors are returned as load errors (a validation failure
+  as `{:invalid_extension, module}`, a poisoned module as `{:poisoned, module}`).
+  """
+  @spec extension_inventory(String.t(), [String.t()]) :: {[module()], [Extensions.load_error()]}
+  def extension_inventory(cwd, extension_paths) when is_list(extension_paths) do
+    key = cache_key(cwd, extension_paths)
+    Extensions.with_compile_lock(fn -> load_or_reuse_inventory(key, extension_paths) end)
+  end
+
+  defp load_or_reuse_inventory(key, extension_paths) do
+    sources = Extensions.read_sources(extension_paths)
+    fingerprint = Extensions.source_fingerprint(sources)
+
+    case lookup_extension_inventory(key) do
+      {:ok, %{fingerprint: ^fingerprint, extensions: extensions} = snapshot} ->
+        if snapshot_valid?(snapshot),
+          do: {extensions, []},
+          else: load_inventory(key, sources)
+
+      _ ->
+        load_inventory(key, sources)
+    end
+  end
+
+  defp load_inventory(key, sources) do
+    {:ok, extensions, load_errors, validation_errors} = Extensions.load_sources(sources)
+
+    errors =
+      load_errors ++
+        Enum.map(validation_errors, &validation_load_error/1) ++
+        (extensions |> Enum.filter(&Extensions.poisoned?/1) |> Enum.map(&poisoned_load_error/1))
+
+    if errors == [],
+      do: insert_snapshot(key, sources, extensions),
+      else: cache_delete(key)
+
+    {sort_extensions(extensions), errors}
+  end
+
+  @doc """
+  Drop every cached inventory, under any key, whose loaded modules no longer
+  carry the content hashes recorded with it or that holds a poisoned module.
+  Called after every extension compile.
+  """
+  @spec drop_stale_inventories() :: :ok
+  def drop_stale_inventories do
+    cache_tab2list()
+    |> Enum.each(fn {key, snapshot} ->
+      unless snapshot_valid?(snapshot), do: cache_delete(key)
+    end)
+  end
+
+  defp snapshot_valid?(%{files: files, identity: identity, extensions: extensions}) do
+    identity(files) == identity and
+      not Enum.any?(extensions ++ Enum.map(identity, &elem(&1, 0)), &Extensions.poisoned?/1)
+  end
+
+  defp snapshot_valid?(_snapshot), do: false
+
+  defp identity(sources) do
+    sources
+    |> Extensions.loaded_identity()
+    |> Enum.map(fn {module, hash, _generation} -> {module, hash} end)
+  end
+
+  defp validation_load_error(%{module: module, source_path: path, errors: errors}) do
+    %{
+      source_path: path,
+      error: {:invalid_extension, module},
+      error_message:
+        "#{inspect(module)} failed validation: " <>
+          Enum.map_join(errors, ", ", &if(is_binary(&1), do: &1, else: inspect(&1)))
+    }
+  end
+
+  defp poisoned_load_error(module) do
+    %{
+      source_path: Extensions.get_source_path(module),
+      error: {:poisoned, module},
+      error_message: Extensions.poisoned_message(module)
+    }
+  end
+
+  defp insert_snapshot(key, sources, extensions) do
+    files = Enum.map(sources, fn {file, _read} -> {file, nil} end)
+
+    cache_insert(key, %{
+      extensions: sort_extensions(extensions),
+      fingerprint: Extensions.source_fingerprint(sources),
+      files: files,
+      identity: identity(files),
+      loaded_at: System.system_time(:millisecond)
+    })
+
     :ok
   end
 
@@ -492,7 +603,7 @@ defmodule CodingAgent.ToolRegistry do
 
     {extension_tools, load_errors} =
       if include_extensions do
-        {extensions, errors} = extension_inventory(cwd, opts)
+        {extensions, errors} = opts_extension_inventory(cwd, opts)
 
         tools =
           Extensions.get_tools_with_source(extensions, cwd)
@@ -735,13 +846,20 @@ defmodule CodingAgent.ToolRegistry do
     end
   end
 
+  # A discovery failure costs only the configured MCP tools; built-in,
+  # extension and session MCP tools still load. It is logged so a missing MCP
+  # inventory is never silent.
   defp discover_configured_mcp_tools(cwd) do
     tools = LemonSkills.McpSource.discover_tools(cwd: cwd)
     mcp_tuples_with_approval(tools, LemonSkills.McpSource.approval_policy())
   rescue
-    _ -> []
+    error ->
+      Logger.warning("MCP tool discovery failed: #{Exception.message(error)}")
+      []
   catch
-    :exit, _ -> []
+    :exit, reason ->
+      Logger.warning("MCP tool discovery failed: #{inspect(reason)}")
+      []
   end
 
   defp discover_session_mcp_tools(opts) do
@@ -767,59 +885,77 @@ defmodule CodingAgent.ToolRegistry do
     tool_name = tool.name
     extension_hash = hash_value(Atom.to_string(ext_module))
 
+    # Sessions built before a collision still hold this closure, so every call
+    # re-checks: once the extension's code (or a module from its source) is
+    # poisoned, the call is refused.
     wrapped_execute = fn tool_call_id, params, signal, on_update ->
-      base_meta = %{
-        host: :beam,
-        tool_name: tool_name,
-        extension_hash: extension_hash,
-        tool_call_hash: hash_value(tool_call_id)
-      }
-
-      LemonCore.Telemetry.emit([:coding_agent, :extension, :tool, :start], %{count: 1}, base_meta)
-      started_at = System.monotonic_time(:microsecond)
-
-      try do
-        LemonCore.NativeProcess.unsupported!()
-        result = original_execute.(tool_call_id, params, signal, on_update)
-        duration_us = System.monotonic_time(:microsecond) - started_at
-
-        LemonCore.Telemetry.emit(
-          [:coding_agent, :extension, :tool, :stop],
-          %{count: 1, duration_us: duration_us},
-          Map.put(base_meta, :status, extension_tool_status(result))
-        )
-
-        result
-      rescue
-        error ->
-          duration_us = System.monotonic_time(:microsecond) - started_at
-
-          LemonCore.Telemetry.emit(
-            [:coding_agent, :extension, :tool, :exception],
-            %{count: 1, duration_us: duration_us},
-            base_meta
-            |> Map.put(:kind, :error)
-            |> Map.put(:error_type, error.__struct__ |> Atom.to_string())
-          )
-
-          reraise error, __STACKTRACE__
-      catch
-        kind, reason ->
-          duration_us = System.monotonic_time(:microsecond) - started_at
-
-          LemonCore.Telemetry.emit(
-            [:coding_agent, :extension, :tool, :exception],
-            %{count: 1, duration_us: duration_us},
-            base_meta
-            |> Map.put(:kind, kind)
-            |> Map.put(:error_type, reason |> reason_type())
-          )
-
-          :erlang.raise(kind, reason, __STACKTRACE__)
+      if Extensions.poisoned?(ext_module) do
+        {:error, Extensions.poisoned_message(ext_module)}
+      else
+        run_extension_tool(original_execute, tool_name, extension_hash, [
+          tool_call_id,
+          params,
+          signal,
+          on_update
+        ])
       end
     end
 
     %{tool | execute: wrapped_execute}
+  end
+
+  defp run_extension_tool(original_execute, tool_name, extension_hash, args) do
+    [tool_call_id | _] = args
+
+    base_meta = %{
+      host: :beam,
+      tool_name: tool_name,
+      extension_hash: extension_hash,
+      tool_call_hash: hash_value(tool_call_id)
+    }
+
+    LemonCore.Telemetry.emit([:coding_agent, :extension, :tool, :start], %{count: 1}, base_meta)
+    started_at = System.monotonic_time(:microsecond)
+
+    try do
+      LemonCore.NativeProcess.unsupported!()
+      result = apply(original_execute, args)
+      duration_us = System.monotonic_time(:microsecond) - started_at
+
+      LemonCore.Telemetry.emit(
+        [:coding_agent, :extension, :tool, :stop],
+        %{count: 1, duration_us: duration_us},
+        Map.put(base_meta, :status, extension_tool_status(result))
+      )
+
+      result
+    rescue
+      error ->
+        duration_us = System.monotonic_time(:microsecond) - started_at
+
+        LemonCore.Telemetry.emit(
+          [:coding_agent, :extension, :tool, :exception],
+          %{count: 1, duration_us: duration_us},
+          base_meta
+          |> Map.put(:kind, :error)
+          |> Map.put(:error_type, error.__struct__ |> Atom.to_string())
+        )
+
+        reraise error, __STACKTRACE__
+    catch
+      kind, reason ->
+        duration_us = System.monotonic_time(:microsecond) - started_at
+
+        LemonCore.Telemetry.emit(
+          [:coding_agent, :extension, :tool, :exception],
+          %{count: 1, duration_us: duration_us},
+          base_meta
+          |> Map.put(:kind, kind)
+          |> Map.put(:error_type, reason |> reason_type())
+        )
+
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    end
   end
 
   defp extension_tool_status({:error, _reason}), do: :error
@@ -828,8 +964,9 @@ defmodule CodingAgent.ToolRegistry do
   defp reason_type(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_type(reason), do: reason |> :erlang.term_to_binary() |> hash_value()
 
-  @spec extension_inventory(String.t(), tool_opts()) :: {[module()], [Extensions.load_error()]}
-  defp extension_inventory(cwd, opts) do
+  @spec opts_extension_inventory(String.t(), tool_opts()) ::
+          {[module()], [Extensions.load_error()]}
+  defp opts_extension_inventory(cwd, opts) do
     case Keyword.fetch(opts, :extension_inventory) do
       {:ok, {extensions, load_errors}} ->
         {sort_extensions(extensions), load_errors}
@@ -840,21 +977,7 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   defp cached_extension_inventory(cwd, opts) do
-    extension_paths = resolve_extension_paths(cwd, opts)
-    key = cache_key(cwd, extension_paths)
-
-    case lookup_extension_inventory(key) do
-      {:ok, %{extensions: extensions, load_errors: load_errors}} ->
-        {extensions, load_errors}
-
-      :error ->
-        {:ok, extensions, load_errors, _validation_errors} =
-          Extensions.load_extensions_with_errors(extension_paths)
-
-        prime_extension_cache(cwd, extension_paths, extensions, load_errors)
-
-        {sort_extensions(extensions), load_errors}
-    end
+    extension_inventory(cwd, resolve_extension_paths(cwd, opts))
   end
 
   defp lookup_extension_inventory(key) do
@@ -864,90 +987,22 @@ defmodule CodingAgent.ToolRegistry do
     end
   end
 
-  # Extension discovery reads `.lemon` configuration, so it uses the trusted
-  # config root (the worker default cwd for a Bot folder), never a working
-  # directory the model itself can write.
+  # Callers without a session inventory resolve paths from operator config
+  # (`ExtensionLifecycle.extension_paths/1`); explicit `:extension_paths` are
+  # still subject to the kill switch. Config is read for `config_cwd` only to
+  # get the merged settings; no path is anchored there.
   defp resolve_extension_paths(cwd, opts) do
-    config_cwd = Keyword.get(opts, :config_cwd) || cwd
+    settings =
+      (Keyword.get(opts, :config_cwd) || cwd)
+      |> LemonCore.Config.cached()
+      |> CodingAgent.SettingsManager.from_config()
 
-    if extensions_enabled?(config_cwd) do
-      case Keyword.get(opts, :extension_paths) do
-        paths when is_list(paths) ->
-          paths
-
-        _ ->
-          configured_extension_paths(config_cwd) ++ default_extension_paths_if_trusted(config_cwd)
-      end
-    else
-      []
+    case {settings, Keyword.get(opts, :extension_paths)} do
+      {%{extensions_enabled: false}, _paths} -> []
+      {_settings, paths} when is_list(paths) -> paths
+      {settings, _} -> CodingAgent.ExtensionLifecycle.extension_paths(settings)
     end
   end
-
-  defp extensions_enabled?(cwd) do
-    cwd
-    |> load_agent_config()
-    |> Map.get(:extensions, %{})
-    |> map_value(:enabled)
-    |> enabled?()
-  end
-
-  defp configured_extension_paths(cwd) do
-    cwd
-    |> load_agent_config()
-    |> Map.get(:extension_paths, [])
-    |> List.wrap()
-    |> Enum.filter(&is_binary/1)
-    |> Enum.map(&expand_path(&1, cwd))
-  end
-
-  defp default_extension_paths_if_trusted(cwd) do
-    if default_extension_paths_trusted?(cwd) do
-      [
-        CodingAgent.Config.extensions_dir(),
-        CodingAgent.Config.project_extensions_dir(cwd)
-      ]
-    else
-      []
-    end
-  end
-
-  defp default_extension_paths_trusted?(cwd) do
-    cwd
-    |> load_agent_config()
-    |> Map.get(:extensions, %{})
-    |> map_value(:auto_load_default_paths)
-    |> truthy?()
-  end
-
-  defp load_agent_config(cwd) do
-    cwd
-    |> LemonCore.Config.load(cache: false)
-    |> Map.get(:agent, %{})
-  rescue
-    _ -> %{}
-  end
-
-  defp expand_path(path, cwd) do
-    cond do
-      String.starts_with?(path, "~/") -> Path.expand(path)
-      Path.type(path) == :absolute -> Path.expand(path)
-      true -> Path.expand(path, cwd)
-    end
-  end
-
-  defp map_value(map, key) when is_map(map) do
-    case Map.fetch(map, key) do
-      {:ok, value} -> value
-      :error -> Map.get(map, to_string(key))
-    end
-  end
-
-  defp map_value(_, _), do: nil
-
-  defp truthy?(value), do: value in [true, "true", 1]
-
-  defp enabled?(value) when value in [false, "false", 0], do: false
-  defp enabled?(_), do: true
 
   defp cache_key(cwd, extension_paths) do
     {Path.expand(cwd), normalize_paths(extension_paths)}

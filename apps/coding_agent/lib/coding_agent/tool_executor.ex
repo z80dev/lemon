@@ -93,6 +93,42 @@ defmodule CodingAgent.ToolExecutor do
   end
 
   @doc """
+  Gate every tool in a session's final tool list (built-ins included) on the
+  extension compromise latch (`CodingAgent.Extensions.compromised?/0`).
+
+  While the latch is set, each call returns an error result without running.
+  Session start and reload apply this outermost, so it also covers tools a
+  session built before the latch was set.
+  """
+  @spec gate_all_on_compromise([AgentTool.t()]) :: [AgentTool.t()]
+  def gate_all_on_compromise(tools), do: Enum.map(tools, &gate_on_compromise/1)
+
+  @doc "Gate one tool on the extension compromise latch; see `gate_all_on_compromise/1`."
+  @spec gate_on_compromise(AgentTool.t()) :: AgentTool.t()
+  def gate_on_compromise(%AgentTool{execute: execute} = tool) do
+    %{
+      tool
+      | execute: fn tool_call_id, params, signal, on_update ->
+          if CodingAgent.Extensions.compromised?() do
+            compromised_result()
+          else
+            execute.(tool_call_id, params, signal, on_update)
+          end
+        end
+    }
+  end
+
+  defp compromised_result do
+    message = CodingAgent.Extensions.compromised_message()
+
+    %AgentToolResult{
+      content: [%TextContent{text: "Tool not run: #{message}."}],
+      details: %{reason: :extensions_compromised, started: false},
+      is_error: true
+    }
+  end
+
+  @doc """
   Execute a tool with approval check.
 
   This function blocks until approval is granted, denied, times out, or fails.

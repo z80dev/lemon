@@ -91,13 +91,17 @@ defmodule LemonSkills.LearningNudge do
     :telemetry.detach(handler)
     :ok = :telemetry.attach_many(handler, @events, &__MODULE__.handle_session_event/4, self())
 
-    {:ok,
-     %{
-       handler: handler,
-       sessions: %{},
-       review_fun: Keyword.get(opts, :review_fun, &LemonSkills.BackgroundReview.run/3),
-       task_supervisor: Keyword.get(opts, :task_supervisor, LemonSkills.ReviewSupervisor)
-     }}
+    # Background reviews run agents with tools; a runtime fail-stop cancels them.
+    state = %{
+      handler: handler,
+      sessions: %{},
+      reviews: %{},
+      latch_monitor: nil,
+      review_fun: Keyword.get(opts, :review_fun, &LemonSkills.BackgroundReview.run/3),
+      task_supervisor: Keyword.get(opts, :task_supervisor, LemonSkills.ReviewSupervisor)
+    }
+
+    {:ok, subscribe_latch(state)}
   end
 
   @impl true
@@ -194,7 +198,8 @@ defmodule LemonSkills.LearningNudge do
            (session.previous_tools >= positive(session.config, "skill_tool_threshold", 15) and
               not session.previous_skill_managed))
 
-    if due && LemonSkills.BackgroundReview.enabled?(session.config) &&
+    if due && not LemonCore.RuntimeLatch.tripped?() &&
+         LemonSkills.BackgroundReview.enabled?(session.config) &&
          LemonSkills.BackgroundReview.eligible?(session.request) &&
          is_nil(session.review_ref) &&
          (is_nil(session.last_review) or
@@ -230,6 +235,7 @@ defmodule LemonSkills.LearningNudge do
               previous_skill_managed: false
           }
 
+          state = put_in(state.reviews[task.ref], task.pid)
           {:reply, :ok, put_in(state.sessions[pid], session)}
 
         {:error, _reason} ->
@@ -245,7 +251,28 @@ defmodule LemonSkills.LearningNudge do
     {:noreply, state}
   end
 
+  # The latch process restarted: subscribe to the new one. A trip recorded in
+  # the meantime is reported by `subscribe/0` itself and by the check here.
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{latch_monitor: ref} = state),
+    do: {:noreply, subscribe_latch(%{state | latch_monitor: nil})}
+
+  def handle_info(:subscribe_latch, state), do: {:noreply, subscribe_latch(state)}
+
+  # Runtime fail-stop: terminate every running background review.
+  def handle_info({:runtime_latch_tripped, _reason}, state) do
+    Enum.each(state.reviews, fn {_ref, task_pid} ->
+      _ = Task.Supervisor.terminate_child(state.task_supervisor, task_pid)
+    end)
+
+    sessions =
+      Map.new(state.sessions, fn {owner, session} -> {owner, %{session | review_ref: nil}} end)
+
+    {:noreply, %{state | reviews: %{}, sessions: sessions}}
+  end
+
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+    state = %{state | reviews: Map.delete(state.reviews, ref)}
+
     case Map.get(state.sessions, pid) do
       %{monitor: ^ref} ->
         {:noreply, %{state | sessions: Map.delete(state.sessions, pid)}}
@@ -259,6 +286,17 @@ defmodule LemonSkills.LearningNudge do
 
         {:noreply, %{state | sessions: sessions}}
     end
+  end
+
+  defp subscribe_latch(state) do
+    {:ok, latch} = LemonCore.RuntimeLatch.subscribe()
+    if LemonCore.RuntimeLatch.tripped?(), do: send(self(), {:runtime_latch_tripped, :tripped})
+    %{state | latch_monitor: Process.monitor(latch)}
+  catch
+    # Not restarted yet; retry shortly.
+    :exit, _reason ->
+      Process.send_after(self(), :subscribe_latch, 50)
+      state
   end
 
   @impl true

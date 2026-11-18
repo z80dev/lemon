@@ -24,6 +24,9 @@ defmodule LemonCore.PersistentTermHygieneTest do
     "apps/lemon_core/lib/lemon_core/browser_provider.ex" => [:put_computer_use_enabled],
     "apps/lemon_core/lib/lemon_core/bus.ex" => [:child_spec_for_backend],
     "apps/lemon_core/lib/lemon_core/exec_approval_expiry.ex" => [:init_runtime_id],
+    # Rare one-shot fail-stop write: at most once per VM, never cleared, so the
+    # trip survives a restart of the latch's own process.
+    "apps/lemon_core/lib/lemon_core/runtime_latch.ex" => [:record_trip],
     "apps/lemon_skills/lib/lemon_skills/curator_references.ex" => [:register],
     "apps/lemon_skills/lib/lemon_skills/skill_root.ex" => [:init_uid]
   }

@@ -56,7 +56,8 @@ defmodule CodingAgent.ExecutionNode.ToolService do
   """
   @spec run(map(), keyword()) :: {:ok, map()} | {:error, atom()}
   def run(args, opts) when is_map(args) do
-    with {:ok, request} <- decode(args),
+    with :ok <- refuse_if_extensions_compromised(),
+         {:ok, request} <- decode(args),
          {:ok, context} <- admit(request, opts),
          {:ok, owner} <- ToolSession.acquire(scoped_session(request.session_id)) do
       try do
@@ -76,6 +77,12 @@ defmodule CodingAgent.ExecutionNode.ToolService do
   end
 
   def run(_args, _opts), do: {:error, :invalid_tool_request}
+
+  # A node worker shares the controller's fail-stop: no tool runs once an
+  # extension module collision set the compromise latch.
+  defp refuse_if_extensions_compromised do
+    if CodingAgent.Extensions.compromised?(), do: {:error, :extensions_compromised}, else: :ok
+  end
 
   defp decode(args) do
     with {:version, 1} <- {:version, args["version"]},

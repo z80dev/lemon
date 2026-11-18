@@ -744,6 +744,16 @@ defmodule LemonAgent.Loop.ToolCalls do
       :ok
     end
 
+    # Runtime fail-stop (`LemonCore.RuntimeLatch`): once tripped, no agent runs
+    # any tool, including agents built before the trip.
+    if LemonCore.RuntimeLatch.tripped?() do
+      {tool_error_result("Tool not run: runtime fail-stop; restart the runtime"), true}
+    else
+      run_tool_call(tool, tool_call, signal, on_update)
+    end
+  end
+
+  defp run_tool_call(tool, tool_call, signal, on_update) do
     try do
       case tool.execute.(tool_call.id, tool_call.arguments, signal, on_update) do
         {:ok, %AgentToolResult{is_error: true} = result} -> {result, true}

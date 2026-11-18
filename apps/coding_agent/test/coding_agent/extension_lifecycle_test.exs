@@ -36,8 +36,8 @@ defmodule CodingAgent.ExtensionLifecycleTest do
 
     initial = ExtensionLifecycle.initialize(opts)
     refute File.exists?(marker)
-    assert Config.project_extensions_dir(trusted) in initial.extension_paths
-    refute Config.project_extensions_dir(bot) in initial.extension_paths
+    # Project extension directories are never auto-loaded, trusted root or not.
+    assert initial.extension_paths == [Config.extensions_dir()]
 
     reloaded = ExtensionLifecycle.reload(opts)
     refute File.exists?(marker)
@@ -196,29 +196,34 @@ defmodule CodingAgent.ExtensionLifecycleTest do
     assert steered =~ "TRUSTED_COMMAND steer"
   end
 
-  describe "extension_paths/2" do
-    test "uses explicit settings paths without auto-loading default directories", %{
-      tmp_dir: tmp_dir
-    } do
+  describe "extension_paths/1" do
+    test "uses explicit settings paths without auto-loading default directories" do
       settings_manager = %{extension_paths: ["/tmp/custom/a", "/tmp/custom/b"]}
 
-      assert ExtensionLifecycle.extension_paths(tmp_dir, settings_manager) == [
+      assert ExtensionLifecycle.extension_paths(settings_manager) == [
                "/tmp/custom/a",
                "/tmp/custom/b"
              ]
     end
 
-    test "merges settings paths before trusted global and project paths", %{tmp_dir: tmp_dir} do
+    test "auto_load_default_paths adds only the global extensions directory" do
       settings_manager = %{
         extension_paths: ["/tmp/custom/a", "/tmp/custom/b"],
         extension_auto_load_default_paths: true
       }
 
-      assert ExtensionLifecycle.extension_paths(tmp_dir, settings_manager) == [
+      assert ExtensionLifecycle.extension_paths(settings_manager) == [
                "/tmp/custom/a",
                "/tmp/custom/b",
-               Config.extensions_dir(),
-               Config.project_extensions_dir(tmp_dir)
+               Config.extensions_dir()
+             ]
+    end
+
+    test "relative paths are anchored at the global config directory" do
+      operator_root = Path.dirname(LemonCore.Paths.global_config())
+
+      assert ExtensionLifecycle.extension_paths(%{extension_paths: ["exts"]}) == [
+               Path.join(operator_root, "exts")
              ]
     end
   end
@@ -234,7 +239,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
       result =
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
-          settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
+          settings_manager: %{extension_paths: [Path.join(tmp_dir, ".lemon/extensions")]},
           tool_opts: []
         )
 
@@ -280,7 +285,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
       result =
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
-          settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
+          settings_manager: %{extension_paths: [Path.join(tmp_dir, ".lemon/extensions")]},
           tool_opts: [],
           custom_tools: [custom_tool],
           extra_tools: [extra_tool]
@@ -306,7 +311,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
       initial =
         ExtensionLifecycle.initialize(
           cwd: tmp_dir,
-          settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
+          settings_manager: %{extension_paths: [Path.join(tmp_dir, ".lemon/extensions")]},
           tool_opts: []
         )
 
@@ -327,7 +332,7 @@ defmodule CodingAgent.ExtensionLifecycleTest do
       reloaded =
         ExtensionLifecycle.reload(
           cwd: tmp_dir,
-          settings_manager: %{extension_paths: [], extension_auto_load_default_paths: true},
+          settings_manager: %{extension_paths: [Path.join(tmp_dir, ".lemon/extensions")]},
           tool_opts: [],
           extra_tools: [extra_tool],
           previous_status_report: initial.extension_status_report

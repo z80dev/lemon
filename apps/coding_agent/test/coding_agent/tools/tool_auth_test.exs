@@ -27,7 +27,7 @@ defmodule CodingAgent.Tools.ToolAuthTest do
       "http" => %{"allowlist" => [%{"host" => "api.example.com"}]}
     })
 
-    tool = ToolAuth.tool(tmp_dir, settings_manager: %SettingsManager{})
+    tool = ToolAuth.tool(tmp_dir, settings_manager: settings(tmp_dir))
     result = tool.execute.("call-1", %{"name" => "no_auth_tool"}, nil, nil)
 
     assert %AgentToolResult{} = result
@@ -46,7 +46,7 @@ defmodule CodingAgent.Tools.ToolAuthTest do
       }
     })
 
-    tool = ToolAuth.tool(tmp_dir, settings_manager: %SettingsManager{})
+    tool = ToolAuth.tool(tmp_dir, settings_manager: settings(tmp_dir))
     result = tool.execute.("call-2", %{"name" => "env_auth_tool"}, nil, nil)
 
     assert %AgentToolResult{} = result
@@ -66,7 +66,7 @@ defmodule CodingAgent.Tools.ToolAuthTest do
       }
     })
 
-    tool = ToolAuth.tool(tmp_dir, settings_manager: %SettingsManager{})
+    tool = ToolAuth.tool(tmp_dir, settings_manager: settings(tmp_dir))
     result = tool.execute.("call-3", %{"name" => "manual_auth_tool"}, nil, nil)
 
     assert %AgentToolResult{} = result
@@ -86,7 +86,7 @@ defmodule CodingAgent.Tools.ToolAuthTest do
       }
     })
 
-    tool = ToolAuth.tool(tmp_dir, settings_manager: %SettingsManager{})
+    tool = ToolAuth.tool(tmp_dir, settings_manager: settings(tmp_dir))
     result = tool.execute.("call-4", %{"name" => "existing_auth_tool"}, nil, nil)
 
     assert %AgentToolResult{} = result
@@ -94,12 +94,17 @@ defmodule CodingAgent.Tools.ToolAuthTest do
     assert result.details["awaiting_token"] == false
   end
 
+  # Project `.lemon/wasm-tools` is never searched; the fixture directory is an
+  # operator `tool_paths` entry (see `settings/1`).
   defp write_capabilities(tmp_dir, name, payload) do
-    tool_dir = Path.join(tmp_dir, ".lemon/wasm-tools")
+    tool_dir = Path.join(tmp_dir, "wasm-tools")
     File.mkdir_p!(tool_dir)
     cap_path = Path.join(tool_dir, "#{name}.capabilities.json")
     File.write!(cap_path, Jason.encode!(payload))
   end
+
+  defp settings(tmp_dir),
+    do: %SettingsManager{tools: %{wasm: %{tool_paths: [Path.join(tmp_dir, "wasm-tools")]}}}
 
   defp clear_secrets_table do
     Store.list(Secrets.table())

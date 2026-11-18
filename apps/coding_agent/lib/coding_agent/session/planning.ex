@@ -477,6 +477,9 @@ defmodule CodingAgent.Session.Planning do
       args = if is_map(params), do: Map.get(params, "args", %{}), else: %{}
 
       cond do
+        LemonCore.RuntimeLatch.tripped?() ->
+          fail_stopped()
+
         not planning?(context.gate) ->
           execute.(id, params, signal, on_update)
 
@@ -499,6 +502,9 @@ defmodule CodingAgent.Session.Planning do
 
     wrapped = fn id, params, signal, on_update ->
       cond do
+        LemonCore.RuntimeLatch.tripped?() ->
+          fail_stopped()
+
         not planning?(context.gate) ->
           execute.(id, params, signal, on_update)
 
@@ -545,7 +551,18 @@ defmodule CodingAgent.Session.Planning do
       |> ToolHooks.wrap_tools(Map.get(context, :hooks, []), context)
       |> SecretObfuscator.wrap_tools(Map.get(context, :secret_obfuscator))
 
-    wrapped
+    # Private plan tools are dispatched directly (and via the bridge), so they
+    # check the runtime fail-stop latch themselves.
+    execute = wrapped.execute
+
+    %{
+      wrapped
+      | execute: fn id, params, signal, on_update ->
+          if LemonCore.RuntimeLatch.tripped?(),
+            do: fail_stopped(),
+            else: execute.(id, params, signal, on_update)
+        end
+    }
   end
 
   defp planning?(gate), do: :atomics.get(gate, 1) == 1
@@ -584,6 +601,11 @@ defmodule CodingAgent.Session.Planning do
       {:error, reason} -> {:error, "Could not prepare the plan directory: #{reason}"}
     end
   end
+
+  # Direct dispatch (including private plan writes) bypasses the agent loop's
+  # gate, so the runtime fail-stop latch is checked here too.
+  defp fail_stopped,
+    do: error("Tool not run: runtime fail-stop; restart the runtime")
 
   defp blocked(name, context) do
     error(

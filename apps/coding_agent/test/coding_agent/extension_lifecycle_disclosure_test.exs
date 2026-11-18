@@ -16,13 +16,16 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
   @moduletag :tmp_dir
 
-  setup do
+  setup %{tmp_dir: tmp_dir} do
     CodingAgent.ToolRegistry.invalidate_extension_cache()
     CodingAgent.Extensions.clear_extension_cache()
+    Process.put({__MODULE__, :extension_dir}, Path.join(tmp_dir, ".lemon/extensions"))
     :ok
   end
 
-  defp settings, do: %{extension_paths: [], extension_auto_load_default_paths: true}
+  # Project extension directories are never auto-loaded; list the fixture
+  # directory as an operator path.
+  defp settings, do: %{extension_paths: [Process.get({__MODULE__, :extension_dir})]}
 
   defp mcp_tool(name, opts \\ []) do
     tool = %AgentTool{

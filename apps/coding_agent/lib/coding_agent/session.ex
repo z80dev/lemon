@@ -827,7 +827,8 @@ defmodule CodingAgent.Session do
       IO.puts("Loaded \#{report.total_loaded} extensions")
   """
   @spec reload_extensions(GenServer.server()) ::
-          {:ok, Extensions.extension_status_report()} | {:error, :already_streaming}
+          {:ok, Extensions.extension_status_report()}
+          | {:error, :already_streaming | {:extension_load_failed, String.t()}}
   def reload_extensions(session) do
     GenServer.call(session, :reload_extensions)
   end
@@ -1072,6 +1073,7 @@ defmodule CodingAgent.Session do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
+    CodingAgent.SessionRegistry.track_live()
 
     Ownership.initialize(opts, fn owned_opts ->
       connection =
@@ -1444,8 +1446,22 @@ defmodule CodingAgent.Session do
     if state.is_streaming or ManualOperation.in_flight?(state) do
       {:reply, {:error, :already_streaming}, state}
     else
-      {:ok, extension_status_report, new_state} = Lifecycle.reload_extensions(state)
-      {:reply, {:ok, extension_status_report}, new_state}
+      try do
+        {:ok, extension_status_report, new_state} = Lifecycle.reload_extensions(state)
+        {:reply, {:ok, extension_status_report}, new_state}
+      rescue
+        # Old providers are already unregistered and some modules may have been
+        # recompiled, so the session stops rather than run a partial set.
+        error in [
+          CodingAgent.ExtensionLifecycle.LoadError,
+          CodingAgent.ExtensionLifecycle.CompromisedError
+        ] ->
+          message = Exception.message(error)
+          Logger.error("Extension reload failed; stopping session: #{message}")
+
+          {:stop, {:shutdown, {:extension_load_failed, message}},
+           {:error, {:extension_load_failed, message}}, state}
+      end
     end
   end
 
@@ -1912,6 +1928,12 @@ defmodule CodingAgent.Session do
 
   @spec handle_info(term(), t()) :: {:noreply, t()} | {:stop, term(), t()}
   @impl true
+  # Runtime-wide fail-stop after an extension module collision.
+  def handle_info(:extensions_compromised, state) do
+    Logger.error("Aborting session: #{CodingAgent.Extensions.compromised_message()}")
+    {:stop, {:shutdown, :extensions_compromised}, state}
+  end
+
   def handle_info({:start_advisor, opts}, state) do
     session = self()
 

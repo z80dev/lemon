@@ -752,6 +752,59 @@ defmodule CodingAgent.Session.PlanningTest do
     end
   end
 
+  test "runtime fail-stop refuses plan-mode write/edit directly and through tool_invoke", %{
+    root: root
+  } do
+    on_exit(fn ->
+      # Test-only: clear the boot-sticky latch (production clears only on restart).
+      :persistent_term.erase({LemonCore.RuntimeLatch, :tripped})
+    end)
+
+    manager = SessionManager.new(root)
+    {:ok, _, manager} = Planning.transition(manager, :enter, [])
+    plan_file = Path.join(Planning.plan_dir(manager), "stop-plan.md")
+
+    context = %{
+      gate: Planning.new_gate(),
+      cwd: root,
+      session_pid: self(),
+      tool_intent_recorder: intent_recorder(root),
+      session_id: manager.header.id,
+      run_id: "run",
+      session_key: "key",
+      agent_id: "default",
+      approval_request_fun: nil
+    }
+
+    bridge = %{
+      writer()
+      | name: "tool_invoke",
+        execute: fn _, _, _, _ -> flunk("fail-stopped write escaped through the bridge") end
+    }
+
+    :ok = LemonCore.RuntimeLatch.trip(:test_fail_stop)
+
+    # Private plan tools alone, and guarding the session's own write/edit.
+    for base <- [[reader()], [reader(), writer()]] do
+      tools = Map.new(Planning.tools([bridge | base], manager, context), &{&1.name, &1})
+
+      for name <- ["write", "edit"] do
+        params = %{"path" => plan_file, "content" => "x", "old_text" => "a", "new_text" => "b"}
+        direct = tools[name].execute.("direct", params, nil, nil)
+        assert %AgentToolResult{is_error: true, content: [%{text: text}]} = direct
+        assert text =~ "runtime fail-stop"
+
+        bridged =
+          tools["tool_invoke"].execute.("bridge", %{"name" => name, "args" => params}, nil, nil)
+
+        assert %AgentToolResult{is_error: true, content: [%{text: text}]} = bridged
+        assert text =~ "runtime fail-stop"
+      end
+
+      refute File.exists?(plan_file)
+    end
+  end
+
   test "legacy reviewed-artifact entries load as plan mode and approved context", %{root: root} do
     artifact = Path.join(root, "legacy.md")
     File.write!(artifact, "# Legacy pending")

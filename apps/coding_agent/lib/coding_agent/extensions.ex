@@ -45,7 +45,6 @@ defmodule CodingAgent.Extensions do
       metadata = CodingAgent.Extensions.list_extensions()
   """
 
-  alias CodingAgent.Config
   alias Lemon.Reload
   require Logger
 
@@ -150,6 +149,15 @@ defmodule CodingAgent.Extensions do
   @source_path_table :coding_agent_extension_source_paths
   # ETS table for storing last extension load errors
   @load_error_table :coding_agent_extension_load_errors
+  # ETS table mapping each extension-defined module to
+  # {source realpath, content hash, load generation}
+  @owner_table :coding_agent_extension_module_owners
+  # ETS table of modules whose code another source replaced: {module, victim}
+  @poison_table :coding_agent_extension_poisoned_modules
+  # ETS table of live extension provider registrations: {{type, name}}
+  @provider_table :coding_agent_extension_providers
+  @compile_lock {__MODULE__, :compile}
+  @compile_lock_held {__MODULE__, :compile_lock_held}
   @last_load_errors_pd_key {__MODULE__, :last_load_errors}
 
   # ============================================================================
@@ -234,18 +242,61 @@ defmodule CodingAgent.Extensions do
   @spec load_extensions_with_errors([String.t()]) ::
           {:ok, loaded_extensions(), [load_error()], [validation_error()]}
   def load_extensions_with_errors(paths) when is_list(paths) do
-    # Ensure the source path table exists
+    paths |> read_sources() |> load_sources()
+  end
+
+  @typedoc "A discovered extension file and the bytes read from it, read once."
+  @type source :: {String.t(), {:ok, binary()} | {:error, term()}}
+
+  @doc """
+  Discover the extension files under `paths` and read each one once.
+
+  The returned bytes are what `load_sources/1` compiles and what
+  `source_fingerprint/1` hashes, so a fingerprint always names the code that ran.
+  """
+  @spec read_sources([String.t()]) :: [source()]
+  def read_sources(paths) when is_list(paths) do
+    paths
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&Path.expand/1)
+    |> Enum.filter(&File.dir?/1)
+    |> Enum.flat_map(&discover_extension_files/1)
+    |> Enum.uniq()
+    |> Enum.map(&{&1, File.read(&1)})
+  end
+
+  @doc """
+  Fingerprint sources from `read_sources/1`: each file with a SHA-256 of the
+  exact bytes read, so any edit, addition or removal changes it.
+  """
+  @spec source_fingerprint([source()]) :: [{String.t(), binary() | {:error, term()}}]
+  def source_fingerprint(sources) when is_list(sources) do
+    Enum.map(sources, fn
+      {file, {:ok, bytes}} -> {file, :crypto.hash(:sha256, bytes)}
+      {file, {:error, reason}} -> {file, {:error, reason}}
+    end)
+  end
+
+  @doc """
+  Compile sources from `read_sources/1` (never re-reading the files) and
+  validate the resulting extension modules. Same result shape as
+  `load_extensions_with_errors/1`.
+  """
+  @spec load_sources([source()]) ::
+          {:ok, loaded_extensions(), [load_error()], [validation_error()]}
+  def load_sources(sources) when is_list(sources) do
     ensure_source_path_table()
     ensure_load_error_table()
 
     {extensions, errors} =
-      paths
-      |> Enum.filter(&is_binary/1)
-      |> Enum.map(&Path.expand/1)
-      |> Enum.filter(&File.dir?/1)
-      |> Enum.flat_map(&discover_extension_files/1)
-      |> Enum.reduce({[], []}, fn file, {exts, errs} ->
-        case load_extension_file_safe(file) do
+      Enum.reduce(sources, {[], []}, fn {file, read}, {exts, errs} ->
+        result =
+          case read do
+            {:ok, bytes} -> load_extension_file_safe(file, bytes)
+            {:error, reason} -> {:error, reason, "Cannot read extension: #{inspect(reason)}"}
+          end
+
+        case result do
           {:ok, modules} ->
             valid_modules = Enum.filter(modules, &implements_extension?/1)
             {valid_modules ++ exts, errs}
@@ -288,31 +339,6 @@ defmodule CodingAgent.Extensions do
     store_validation_errors(Enum.reverse(validation_errors))
 
     {:ok, Enum.reverse(valid_extensions), load_errors, Enum.reverse(validation_errors)}
-  end
-
-  @doc """
-  Load extensions from default paths for a working directory.
-
-  Loads extensions from:
-  - Global extensions directory (`~/.lemon/agent/extensions/`)
-  - Project-local extensions (`.lemon/extensions/`)
-
-  ## Parameters
-
-    * `cwd` - The current working directory
-
-  ## Returns
-
-    * `{:ok, extensions}` - List of loaded extension modules
-  """
-  @spec load_default_extensions(String.t()) :: {:ok, loaded_extensions()}
-  def load_default_extensions(cwd) do
-    paths = [
-      Config.extensions_dir(),
-      Config.project_extensions_dir(cwd)
-    ]
-
-    load_extensions(paths)
   end
 
   # ============================================================================
@@ -473,6 +499,12 @@ defmodule CodingAgent.Extensions do
   """
   @spec register_extension_providers(loaded_extensions()) :: provider_registration_report()
   def register_extension_providers(extensions) when is_list(extensions) do
+    if compromised?(),
+      do: %{registered: [], conflicts: [], total_registered: 0, total_conflicts: 0},
+      else: do_register_extension_providers(extensions)
+  end
+
+  defp do_register_extension_providers(extensions) do
     # Get all provider specs with their source extension
     all_providers = get_providers(extensions)
 
@@ -526,6 +558,7 @@ defmodule CodingAgent.Extensions do
           # Register the winner
           true ->
             :ok = register_provider(type, name, winner_spec, winner_ext)
+            track_provider(type, name)
 
             registered_entry = %{
               type: type,
@@ -586,24 +619,40 @@ defmodule CodingAgent.Extensions do
   def unregister_extension_providers(nil), do: :ok
 
   def unregister_extension_providers(%{registered: registered}) when is_list(registered) do
-    Enum.each(registered, fn
-      %{type: :model, name: name} ->
-        LemonAi.ProviderRegistry.unregister(name)
+    Enum.each(registered, fn %{type: type, name: name} ->
+      unregister_provider(type, name)
 
-      %{type: :memory, name: name} ->
-        LemonMemory.Providers.unregister_provider(provider_id(name))
-
-      %{type: :search, name: name} ->
-        CodingAgent.Search.Registry.unregister(name)
-
-      _ ->
-        :ok
+      if :ets.whereis(@provider_table) != :undefined,
+        do: :ets.delete(@provider_table, {type, name})
     end)
 
     :ok
   end
 
   def unregister_extension_providers(_), do: :ok
+
+  defp unregister_provider(:model, name), do: LemonAi.ProviderRegistry.unregister(name)
+
+  defp unregister_provider(:memory, name),
+    do: LemonMemory.Providers.unregister_provider(provider_id(name))
+
+  defp unregister_provider(:search, name), do: CodingAgent.Search.Registry.unregister(name)
+  defp unregister_provider(_type, _name), do: :ok
+
+  # Every live extension provider registration, so a compromise can revoke all
+  # of them without calling back into extension code.
+  defp track_provider(type, name) do
+    CodingAgent.RuntimeTables.ensure_table(@provider_table)
+    :ets.insert(@provider_table, {{type, name}})
+  end
+
+  defp refused_hooks(event, hooks) do
+    if Keyword.get(hooks, event, []) != [] do
+      Logger.error("Extension hooks for #{event} refused: #{compromised_message()}")
+    end
+
+    []
+  end
 
   # ============================================================================
   # Hook Collection
@@ -674,7 +723,8 @@ defmodule CodingAgent.Extensions do
   """
   @spec execute_hooks(keyword([function()]), atom(), list()) :: :ok
   def execute_hooks(hooks, event, args \\ []) do
-    hook_fns = Keyword.get(hooks, event, [])
+    hook_fns =
+      if compromised?(), do: refused_hooks(event, hooks), else: Keyword.get(hooks, event, [])
 
     for hook_fn <- hook_fns do
       try do
@@ -974,9 +1024,11 @@ defmodule CodingAgent.Extensions do
           :ok
       end
 
-      case :ets.whereis(@source_path_table) do
-        :undefined -> :ok
-        _tid -> :ets.delete(@source_path_table, module)
+      for table <- [@source_path_table, @owner_table] do
+        case :ets.whereis(table) do
+          :undefined -> :ok
+          _tid -> :ets.delete(table, module)
+        end
       end
     end
 
@@ -1024,6 +1076,12 @@ defmodule CodingAgent.Extensions do
     case :ets.whereis(@source_path_table) do
       :undefined -> :ok
       _tid -> :ets.delete_all_objects(@source_path_table)
+    end
+
+    # Clear module ownership (modules still loaded in memory become unowned)
+    case :ets.whereis(@owner_table) do
+      :undefined -> :ok
+      _tid -> :ets.delete_all_objects(@owner_table)
     end
 
     # Clear the load error table
@@ -1151,8 +1209,8 @@ defmodule CodingAgent.Extensions do
   @spec discover_extensions(String.t()) :: [module()]
   defp discover_extensions(dir) do
     # Compile and load each file, extracting extension modules
-    dir
-    |> discover_extension_files()
+    [dir]
+    |> read_sources()
     |> Enum.flat_map(&load_extension_file/1)
     |> Enum.filter(&implements_extension?/1)
   end
@@ -1183,9 +1241,15 @@ defmodule CodingAgent.Extensions do
   end
 
   # Load and compile an extension file, tracking source paths
-  @spec load_extension_file(String.t()) :: [module()]
-  defp load_extension_file(path) do
-    case load_extension_file_safe(path) do
+  @spec load_extension_file(source()) :: [module()]
+  defp load_extension_file({path, read}) do
+    result =
+      case read do
+        {:ok, bytes} -> load_extension_file_safe(path, bytes)
+        {:error, reason} -> {:error, reason, inspect(reason)}
+      end
+
+    case result do
       {:ok, modules} ->
         modules
 
@@ -1195,30 +1259,352 @@ defmodule CodingAgent.Extensions do
     end
   end
 
-  # Load and compile an extension file with error tracking
+  @doc """
+  Run `fun` holding the node-wide extension compile lock.
+
+  Every extension compilation and every inventory lookup/publication runs under
+  this one lock, so no cache decision interleaves with a compile. Reentrant
+  within the holding process.
+  """
+  @spec with_compile_lock((-> result)) :: result when result: term()
+  def with_compile_lock(fun) when is_function(fun, 0) do
+    if Process.get(@compile_lock_held) do
+      fun.()
+    else
+      :global.trans(
+        {@compile_lock, self()},
+        fn ->
+          Process.put(@compile_lock_held, true)
+
+          try do
+            fun.()
+          after
+            Process.delete(@compile_lock_held)
+          end
+        end,
+        [node()],
+        :infinity
+      )
+    end
+  end
+
+  @doc """
+  Identity of the code currently loaded from `sources`: every module owned by
+  one of the source files, with the content hash and load generation it was
+  compiled from. A cached inventory is valid only while this is unchanged.
+  """
+  @spec loaded_identity([source()]) :: [{module(), binary(), integer()}]
+  def loaded_identity(sources) when is_list(sources) do
+    ensure_owner_table()
+    owners = MapSet.new(sources, fn {file, _read} -> owner_path(file) end)
+
+    @owner_table
+    |> :ets.tab2list()
+    |> Enum.filter(fn {_module, owner, _hash, _gen} -> MapSet.member?(owners, owner) end)
+    |> Enum.map(fn {module, _owner, hash, gen} -> {module, hash, gen} end)
+    |> Enum.sort()
+  end
+
+  @doc """
+  Whether `module` can no longer be trusted: it, or another module from its
+  source file, was replaced by a different source. Poisoning lasts until the
+  runtime restarts.
+  """
+  @spec poisoned?(module()) :: boolean()
+  def poisoned?(module) when is_atom(module) do
+    case :ets.whereis(@poison_table) do
+      :undefined ->
+        false
+
+      _tid ->
+        owner =
+          case :ets.lookup(@owner_table, module) do
+            [{^module, owner, _hash, _gen}] -> owner
+            [] -> nil
+          end
+
+        :ets.member(@poison_table, module) or
+          (owner != nil and :ets.match_object(@poison_table, {:_, owner}) != [])
+    end
+  end
+
+  @doc "Error message for a poisoned extension module."
+  @spec poisoned_message(module()) :: String.t()
+  def poisoned_message(module) do
+    "#{inspect(module)} is unusable: its code was replaced by another extension source; " <>
+      "restart the runtime"
+  end
+
+  @doc """
+  Whether the runtime fail-stop latch (`LemonCore.RuntimeLatch`) is tripped.
+
+  Any detected module collision trips it; it clears only when the runtime
+  restarts. While it is tripped every session start, tool call, extension hook
+  and extension provider is refused.
+  """
+  @spec compromised?() :: boolean()
+  def compromised?, do: LemonCore.RuntimeLatch.tripped?()
+
+  @doc "Error shown for everything refused while the compromise latch is set."
+  @spec compromised_message() :: String.t()
+  def compromised_message, do: "extension module collision detected; restart the runtime"
+
+  # Fail-stop: trip the runtime latch (agent loops refuse tools, background
+  # reviews cancel), revoke every extension provider registration (without
+  # calling extension code) and abort every running coding session.
+  defp trip_compromise_latch do
+    :ok = LemonCore.RuntimeLatch.trip(:extension_module_collision)
+
+    if :ets.whereis(@provider_table) != :undefined do
+      @provider_table
+      |> :ets.tab2list()
+      |> Enum.each(fn {{type, name} = key} ->
+        unregister_provider(type, name)
+        :ets.delete(@provider_table, key)
+      end)
+    end
+
+    # Sessions trap exits, so each is told to stop itself (a session starting
+    # in this very process fails through its own LoadError instead).
+    for pid <- CodingAgent.SessionRegistry.live_pids(), pid != self() do
+      send(pid, :extensions_compromised)
+    end
+
+    :ok
+  end
+
+  # Compile the captured bytes of an extension file with error tracking.
+  # Under the compile lock: modules a different source owns are refused before
+  # compiling; afterwards every module whose loaded code changed (including
+  # ones created dynamically, and on a failed compile) is checked again, and a
+  # module that replaced another source's code is poisoned. Every inventory is
+  # then invalidated, since a recompile changes shared module code.
   # Returns {:ok, modules} or {:error, error, message}
-  @spec load_extension_file_safe(String.t()) ::
+  @spec load_extension_file_safe(String.t(), binary()) ::
           {:ok, [module()]} | {:error, term(), String.t()}
-  defp load_extension_file_safe(path) do
-    case Reload.reload_extension(path, lock_retries: 10) do
+  defp load_extension_file_safe(path, bytes) do
+    owner = owner_path(path)
+
+    with_compile_lock(fn ->
+      with {:ok, declared} <- declared_modules(bytes, path),
+           :ok <- check_owners(declared, owner) do
+        compile_owned(path, bytes, owner)
+      end
+    end)
+  end
+
+  defp compile_owned(path, bytes, owner) do
+    before = loaded_code()
+    result = Reload.reload_extension(path, lock_retries: 10, source: bytes)
+    changed = changed_in_memory(before)
+    hash = :crypto.hash(:sha256, bytes)
+    gen = System.unique_integer([:monotonic, :positive])
+
+    compiled =
+      case result do
+        {:ok, %{status: status, metadata: %{compiled_modules: modules}}} when status != :error ->
+          modules
+
+        _ ->
+          []
+      end
+
+    touched = Enum.uniq(compiled ++ Map.keys(changed))
+
+    outcome =
+      case Enum.flat_map(touched, &collision(&1, owner, before)) do
+        [] ->
+          Enum.each(touched, &store_owner(&1, owner, hash, gen))
+          compile_result(result, path, compiled)
+
+        collisions ->
+          Enum.each(collisions, fn {module, victim} -> poison(module, victim) end)
+          trip_compromise_latch()
+          {module, victim} = hd(collisions)
+          {:error, {:module_owned, module}, owner_conflict_message(module, victim)}
+      end
+
+    # Shared module code changed: drop every inventory, under any key, whose
+    # recorded module hashes no longer match or that now holds poisoned code.
+    CodingAgent.ToolRegistry.drop_stale_inventories()
+    outcome
+  end
+
+  defp compile_result(result, path, compiled) do
+    case result do
       {:ok,
        %{status: :error, metadata: %{error_message: message}, errors: [%{reason: reason} | _]}} ->
         {:error, reason, message}
 
-      {:ok, %{metadata: %{compiled_modules: modules}}} ->
-        extension_modules = Enum.filter(modules, &implements_extension?/1)
-
-        # Store the source path for each module
-        Enum.each(extension_modules, fn module ->
-          store_source_path(module, path)
-        end)
-
+      {:ok, _} ->
+        extension_modules = Enum.filter(compiled, &implements_extension?/1)
+        Enum.each(extension_modules, &store_source_path(&1, path))
         {:ok, extension_modules}
 
       {:error, reason} ->
         {:error, reason, inspect(reason)}
     end
   end
+
+  # Loaded modules with their code digest and whether they came from a file.
+  defp loaded_code do
+    Map.new(:code.all_loaded(), fn {module, which} ->
+      {module, {module_md5(module), is_list(which) and which != []}}
+    end)
+  end
+
+  # Modules loaded from memory (compiled, not read from a .beam file) whose code
+  # is new or differs from `before`.
+  defp changed_in_memory(before) do
+    for {module, which} <- :code.all_loaded(),
+        which == [],
+        md5 = module_md5(module),
+        match?({^md5, _}, Map.get(before, module)) == false,
+        into: %{},
+        do: {module, md5}
+  end
+
+  defp module_md5(module) do
+    :erlang.get_module_info(module, :md5)
+  rescue
+    _ -> nil
+  end
+
+  # A changed module collides when another existing source owns it, or when it
+  # replaced release code.
+  defp collision(module, owner, before) do
+    case check_owners([module], owner) do
+      :ok ->
+        case Map.get(before, module) do
+          {_md5, true} -> [{module, "the release"}]
+          _ -> []
+        end
+
+      {:error, _reason, _message} ->
+        [{module, current_owner(module)}]
+    end
+  end
+
+  defp current_owner(module) do
+    case :ets.lookup(@owner_table, module) do
+      [{^module, owner, _hash, _gen}] -> owner
+      [] -> "the release"
+    end
+  end
+
+  defp poison(module, victim) do
+    CodingAgent.RuntimeTables.ensure_table(@poison_table)
+    :ets.insert(@poison_table, {module, victim})
+
+    Logger.error(
+      "Extension module #{inspect(module)} replaced code owned by #{victim}; " <>
+        "it is refused until the runtime restarts"
+    )
+  end
+
+  defp owner_path(path) do
+    case LemonCore.TrustedRoot.realpath(path) do
+      {:ok, real} -> real
+      {:error, _} -> Path.expand(path)
+    end
+  end
+
+  # A module is free when this source owns it, when its owning source file no
+  # longer exists (the module moved; any inventory that used the old file has a
+  # stale identity), or when no source owns it and it is not release code
+  # (loaded from a .beam file or preloaded).
+  defp check_owners(modules, owner) do
+    ensure_owner_table()
+
+    Enum.reduce_while(modules, :ok, fn module, :ok ->
+      case :ets.lookup(@owner_table, module) do
+        [{^module, ^owner, _hash, _gen}] ->
+          {:cont, :ok}
+
+        [{^module, other, _hash, _gen}] ->
+          if File.exists?(other),
+            do: {:halt, owner_conflict(module, other)},
+            else: {:cont, :ok}
+
+        [] ->
+          case :code.which(module) do
+            file when is_list(file) and file != [] ->
+              {:halt, owner_conflict(module, "the release")}
+
+            loaded when loaded in [:preloaded, :cover_compiled] ->
+              {:halt, owner_conflict(module, "the release")}
+
+            _ ->
+              {:cont, :ok}
+          end
+      end
+    end)
+  end
+
+  defp owner_conflict(module, other) do
+    {:error, {:module_owned, module}, owner_conflict_message(module, other)}
+  end
+
+  defp owner_conflict_message(module, other) do
+    "#{inspect(module)} is already defined by #{other}; an extension may not redefine it"
+  end
+
+  defp store_owner(module, owner, hash, gen) do
+    :ets.insert(@owner_table, {module, owner, hash, gen})
+  end
+
+  defp ensure_owner_table do
+    CodingAgent.RuntimeTables.ensure_table(@owner_table)
+    :ok
+  end
+
+  # Modules a source declares with literal `defmodule` names (nested names are
+  # resolved against their parent). A non-literal name cannot be checked before
+  # compilation and is refused. Unparsable source compiles to a syntax error.
+  defp declared_modules(bytes, path) do
+    case Code.string_to_quoted(bytes, file: path) do
+      {:ok, ast} ->
+        try do
+          {:ok, ast |> collect_modules(nil, []) |> Enum.uniq()}
+        catch
+          {:non_literal_module, line} ->
+            {:error, :non_literal_module,
+             "#{path}:#{line}: defmodule name must be a literal alias in an extension"}
+        end
+
+      {:error, _} ->
+        {:ok, []}
+    end
+  end
+
+  defp collect_modules({:defmodule, meta, [name, body]}, prefix, acc) do
+    module = literal_module(name, prefix) || throw({:non_literal_module, meta[:line]})
+    collect_modules(body, module, [module | acc])
+  end
+
+  defp collect_modules({left, _meta, args}, prefix, acc) when is_list(args) do
+    collect_modules(args, prefix, collect_modules(left, prefix, acc))
+  end
+
+  defp collect_modules({left, right}, prefix, acc),
+    do: collect_modules(right, prefix, collect_modules(left, prefix, acc))
+
+  defp collect_modules(list, prefix, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &collect_modules(&1, prefix, &2))
+
+  defp collect_modules(_other, _prefix, acc), do: acc
+
+  defp literal_module({:__aliases__, _, [{:__MODULE__, _, ctx} | rest]}, prefix)
+       when is_atom(ctx) and not is_nil(prefix) do
+    if Enum.all?(rest, &is_atom/1), do: Module.concat([prefix | rest])
+  end
+
+  defp literal_module({:__aliases__, _, parts}, prefix) do
+    if Enum.all?(parts, &is_atom/1), do: Module.concat(List.wrap(prefix) ++ parts)
+  end
+
+  defp literal_module(atom, _prefix) when is_atom(atom) and not is_nil(atom), do: atom
+  defp literal_module(_name, _prefix), do: nil
 
   # Check if a module implements the Extension behaviour
   @spec implements_extension?(module()) :: boolean()
