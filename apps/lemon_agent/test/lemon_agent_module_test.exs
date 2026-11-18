@@ -939,7 +939,7 @@ defmodule LemonAgent.ModuleTest do
       assert %AgentToolResult{} = result
       assert result.content == []
       assert result.details == nil
-      assert result.trust == :trusted
+      assert result.trust == :untrusted
     end
 
     test "creates tool result with content" do

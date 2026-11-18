@@ -365,21 +365,47 @@ the [agent safety contract](agent-safety-contract.md#lemon-bot-remembered-approv
 ## 5. Untrusted external content
 
 Content from outside the trust boundary — email bodies, web-search/fetch
-results, other agents' output — is wrapped before it reaches a model, by
-`LemonAgent.Security.ExternalContent` (with a `CodingAgent.Security.ExternalContent`
-counterpart for tool results). For email, `LemonChannels.Adapters.Email`
-fences the whole prompt it builds (sender, subject, body and attachment lines)
-with source `Email` before the message is submitted to the router.
+results, other agents' output, memory files — is wrapped before it reaches a
+model by `LemonAgent.Security.ExternalContent`. For email,
+`LemonChannels.Adapters.Email` fences the whole prompt it builds (sender,
+subject, body and attachment lines) with source `Email` before the message is
+submitted to the router.
 
-`wrap_external_content/2` fences the content between explicit
-`<<<EXTERNAL_UNTRUSTED_CONTENT>>>` markers, prefixed with a security notice
-instructing the model to treat everything inside as data, never as instructions
-or tool-policy overrides. Crucially, it **sanitizes those markers out of the
-content first** (`sanitize_markers/1` rewrites any embedded
-`<<<EXTERNAL_UNTRUSTED_CONTENT>>>` / end marker), so a malicious email cannot
-inject a fake "end of untrusted content" marker to break out of the fence. The
-source is labelled (`Email`, `Webhook`, `Web Search`, …) so the model knows the
-provenance.
+`wrap_external_content/2` fences the content between
+`<<<EXTERNAL_UNTRUSTED_CONTENT id="…">>>` and
+`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="…">>>` markers, prefixed with a security
+notice instructing the model to treat everything inside as data, never as
+instructions or tool-policy overrides. The protection against breaking out is
+**sanitisation**: anything shaped like a marker inside the content (any case,
+spacing or `id`) is rewritten before wrapping, so the only genuine end marker is
+the one appended by the wrapper. The `id` (an HMAC of the content under a
+per-node key) is not a secret — the model sees it and can repeat it — and is
+not what makes forged markers inert; it lets the notice name the closing marker
+and keeps identical content byte-identical for the prompt cache. The source is
+labelled (`Email`, `Web Fetch`, `Memory`, `Agent Output`, …).
+
+Tool results fail closed. `AgentToolResult` and `ToolResultMessage` default to
+`trust: :untrusted`; only the exact atom `:trusted` on the loop's own canonical
+message (an audited, platform-authored result produced in this process) is
+exempt. Loop-built results for `{:error, _}` returns, raised exceptions and
+unexpected values are untrusted and bounded to 16 KiB. `LemonAgent.Loop`
+applies `LemonAgent.Security.UntrustedToolBoundary` as the last step before
+every provider request, on the messages `convert_to_llm` produced, so every
+loop consumer is fenced; map-shaped and non-canonical tool-result messages are
+always wrapped. The bound is 60 000 bytes per text block by default (sessions
+pass their guardrail bound). Tools contributed through `LemonAgent.ToolRegistry`
+and extension tools are forced to `:untrusted` whatever shape they return.
+Tool results restored from a session file or imported as maps are always
+untrusted: a file is parsed, not authenticated. Subagent questions
+(`ask_parent`), child completions delivered to a parent and branch summaries
+reinserted into history are fenced as `Agent Output`; branch summarisation
+itself sees the branch inside an escaped untrusted boundary, like compaction.
+
+In the system prompt, `USER.md`/`MEMORY.md` and `LemonAgent.ContextRegistry`
+sections are fenced as `Memory`/`Contributed Context` data unless a contributor
+explicitly marks a section `trust: :trusted`, and they are placed after
+instructions, rules and the environment block so a memory write only changes
+the prompt tail.
 
 This is a **defense-in-depth mitigation against prompt injection, not a
 guarantee.** A sufficiently capable model can still be influenced by

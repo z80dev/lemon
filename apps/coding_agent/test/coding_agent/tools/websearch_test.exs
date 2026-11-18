@@ -293,17 +293,12 @@ defmodule CodingAgent.Tools.WebSearchTest do
     assert first_payload["cached"] == nil
     [first_result] = first_payload["results"]
     assert first_result["url"] == "https://example.com/lemon"
-    assert first_result["title"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    refute first_result["title"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
     assert first_payload["trust_metadata"]["untrusted"] == true
     assert first_payload["trust_metadata"]["source"] == "web_search"
     assert first_payload["trust_metadata"]["source_label"] == "Web Search"
-    assert first_payload["trust_metadata"]["wrapping_applied"] == true
-    assert first_payload["trust_metadata"]["warning_included"] == false
-
-    assert first_payload["trust_metadata"]["wrapped_fields"] == [
-             "results[].title",
-             "results[].description"
-           ]
+    assert first_payload["trust_metadata"]["wrapping_applied"] == false
+    assert first_payload["trust_metadata"]["wrapped_fields"] == []
 
     second = tool.execute.("id2", %{"query" => "lemon"}, nil, nil)
     assert second.trust == :untrusted
@@ -506,11 +501,11 @@ defmodule CodingAgent.Tools.WebSearchTest do
 
     assert payload["provider"] == "perplexity"
     assert payload["model"] == "perplexity/sonar"
-    assert payload["content"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    refute payload["content"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
     assert payload["citations"] == ["https://example.com/source"]
     assert payload["trust_metadata"]["untrusted"] == true
     assert payload["trust_metadata"]["source"] == "web_search"
-    assert payload["trust_metadata"]["wrapped_fields"] == ["content"]
+    assert payload["trust_metadata"]["wrapped_fields"] == []
     assert_received {:http_post, _, _}
   end
 
@@ -562,7 +557,7 @@ defmodule CodingAgent.Tools.WebSearchTest do
     assert length(payload["citations"]) == 2
     assert Enum.all?(payload["citations"], &(String.length(&1) <= 53))
     assert String.length(payload["content"]) < 1000
-    assert payload["content"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    assert payload["content"] =~ "Lemon"
   end
 
   test "handles already-aborted signal" do

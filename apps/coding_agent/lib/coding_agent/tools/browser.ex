@@ -1364,8 +1364,7 @@ defmodule CodingAgent.Tools.Browser do
     _ =
       on_update.(%AgentToolResult{
         content: [%TextContent{text: Jason.encode!(details)}],
-        details: details,
-        trust: :trusted
+        details: details
       })
 
     :ok

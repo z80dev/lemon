@@ -143,7 +143,7 @@ defmodule CodingAgent.Messages do
     defstruct role: :tool_result,
               tool_use_id: "",
               content: [],
-              trust: :trusted,
+              trust: :untrusted,
               is_error: false,
               timestamp: 0
   end
@@ -440,7 +440,18 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_to_llm(%BranchSummaryMessage{} = msg) do
-    content = "<branch_summary>\n#{msg.summary}\n</branch_summary>"
+    # The summary is model-written from attacker-reachable tool output, so it is
+    # reinserted fenced as untrusted data with its wrapper tags neutralised.
+    summary =
+      msg.summary
+      |> to_string()
+      |> String.replace(~r/<\s*\/?\s*branch_summary\b[^>]*>/i, "[branch_summary tag removed]")
+      |> LemonAgent.Security.ExternalContent.wrap_external_content(
+        source: :agent,
+        include_warning: true
+      )
+
+    content = "<branch_summary>\n#{summary}\n</branch_summary>"
 
     %LemonAi.Types.UserMessage{
       role: :user,
@@ -487,7 +498,8 @@ defmodule CodingAgent.Messages do
       tool_call_id: Map.get(msg, :tool_call_id) || Map.get(msg, :tool_use_id, ""),
       tool_name: Map.get(msg, :tool_name, ""),
       content: content,
-      trust: normalize_trust(Map.get(msg, :trust)),
+      # Map-shaped (imported/persisted) tool results never carry trust.
+      trust: :untrusted,
       is_error: Map.get(msg, :is_error, false),
       timestamp: Map.get(msg, :timestamp, 0)
     }
@@ -520,7 +532,7 @@ defmodule CodingAgent.Messages do
       tool_call_id: Map.get(msg, "tool_call_id") || Map.get(msg, "tool_use_id", ""),
       tool_name: Map.get(msg, "tool_name", ""),
       content: content,
-      trust: normalize_trust(Map.get(msg, "trust")),
+      trust: :untrusted,
       is_error: Map.get(msg, "is_error", false),
       timestamp: Map.get(msg, "timestamp", 0)
     }
@@ -664,11 +676,9 @@ defmodule CodingAgent.Messages do
   defp convert_cost(nil), do: nil
   defp convert_cost(cost) when is_float(cost), do: %LemonAi.Types.Cost{total: cost}
 
-  defp normalize_trust(:untrusted), do: :untrusted
-  defp normalize_trust("untrusted"), do: :untrusted
+  # Only an in-memory struct carrying the exact atom stays trusted.
   defp normalize_trust(:trusted), do: :trusted
-  defp normalize_trust("trusted"), do: :trusted
-  defp normalize_trust(_), do: :trusted
+  defp normalize_trust(_), do: :untrusted
 
   defp format_bash_output(%BashExecutionMessage{} = msg) do
     # Build list in reverse for O(n) performance, then reverse at end

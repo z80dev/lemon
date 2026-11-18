@@ -349,12 +349,12 @@ defmodule CodingAgent.Extensions.ToolHooks do
 
   defp apply_override(nil, result), do: result
 
+  # A hook replacement is extension-authored, so the result is untrusted.
   defp apply_override(override, result) do
-    %{
-      result
-      | content: Map.get(override, :content, result.content),
-        details: override_details(Map.get(override, :details), result.details)
-    }
+    result
+    |> Map.put(:content, Map.get(override, :content, result.content))
+    |> Map.put(:details, override_details(Map.get(override, :details), result.details))
+    |> Map.put(:trust, :untrusted)
   end
 
   defp override_details(nil, original), do: original

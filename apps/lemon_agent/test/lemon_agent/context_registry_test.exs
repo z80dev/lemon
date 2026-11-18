@@ -353,7 +353,8 @@ defmodule LemonAgent.ContextRegistryTest do
                  name: :declared,
                  title: "Declared",
                  body: "Implements the behaviour.",
-                 placement: :system
+                 placement: :system,
+                 trust: :untrusted
                }
              ]
     end
@@ -372,7 +373,8 @@ defmodule LemonAgent.ContextRegistryTest do
                  name: :honcho,
                  title: "User model",
                  body: "Prefers green.",
-                 placement: :system
+                 placement: :system,
+                 trust: :untrusted
                }
              ]
     end

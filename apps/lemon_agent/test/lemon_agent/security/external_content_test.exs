@@ -27,8 +27,8 @@ defmodule LemonAgent.Security.ExternalContentTest do
     assert wrapped =~ "Subject: safe� Forged: header"
     refute wrapped =~ "From: attacker\n"
     refute wrapped =~ "safe\r\nForged"
-    assert marker_count(wrapped, "<<<EXTERNAL_UNTRUSTED_CONTENT>>>") == 1
-    assert marker_count(wrapped, "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>") == 1
+    assert ExternalContent.envelope_count(wrapped) == 1
+    assert length(Regex.scan(~r/<<<\s*END_EXTERNAL_UNTRUSTED_CONTENT[^>]*>>>/i, wrapped)) == 1
 
     [from_line] = Regex.run(~r/^From: (.*)$/m, wrapped, capture: :all_but_first)
     assert byte_size(from_line) <= 256
@@ -95,9 +95,5 @@ defmodule LemonAgent.Security.ExternalContentTest do
 
     [content] = result.content
     assert Jason.decode!(content.text) == payload
-  end
-
-  defp marker_count(text, marker) do
-    text |> String.split(marker) |> length() |> Kernel.-(1)
   end
 end

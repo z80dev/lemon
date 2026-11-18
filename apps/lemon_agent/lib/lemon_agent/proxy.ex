@@ -651,11 +651,8 @@ defmodule LemonAgent.Proxy do
   defp encode_stop_reason(:error), do: "error"
   defp encode_stop_reason(nil), do: nil
 
-  defp encode_trust(:untrusted), do: "untrusted"
   defp encode_trust(:trusted), do: "trusted"
-  defp encode_trust("untrusted"), do: "untrusted"
-  defp encode_trust("trusted"), do: "trusted"
-  defp encode_trust(_), do: "trusted"
+  defp encode_trust(_), do: "untrusted"
 
   @doc """
   Parse partial/streaming JSON, attempting to complete incomplete JSON.

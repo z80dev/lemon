@@ -48,8 +48,10 @@ defmodule CodingAgent.Session.CodingProfileTest do
     state = root |> start_session(session_key: "agent:default:main") |> Session.get_state()
     assert state.system_prompt =~ "## Workspace Files (injected)"
     assert state.system_prompt =~ "## SOUL.md"
-    assert state.system_prompt =~ "## USER.md"
-    assert state.system_prompt =~ "## MEMORY.md"
+    refute state.system_prompt =~ "## USER.md"
+    refute state.system_prompt =~ "## MEMORY.md"
+    assert state.system_prompt =~ "Subject: USER.md"
+    assert state.system_prompt =~ "Subject: MEMORY.md"
     assert state.system_prompt =~ "Assistant Chat Bootstrap"
     assert state.extension_status_report.tool_disclosure.profile == :legacy
     assert Enum.any?(state.tools, &(&1.name == "skill_manage"))
@@ -78,6 +80,8 @@ defmodule CodingAgent.Session.CodingProfileTest do
         refute state.system_prompt =~ "## SOUL.md"
         refute state.system_prompt =~ "## USER.md"
         refute state.system_prompt =~ "## MEMORY.md"
+        refute state.system_prompt =~ "Subject: USER.md"
+        refute state.system_prompt =~ "Subject: MEMORY.md"
       end
     end
   end

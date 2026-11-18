@@ -41,7 +41,7 @@ defmodule LemonAgent.InterruptedToolResult do
 
     %AgentToolResult{
       content: if(partial, do: partial.content, else: []) ++ [%TextContent{text: notice}],
-      trust: if(partial, do: partial.trust, else: :trusted),
+      trust: if(partial && partial.trust != :trusted, do: :untrusted, else: :trusted),
       is_error: true,
       details: details
     }

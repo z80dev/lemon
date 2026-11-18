@@ -30,6 +30,10 @@ defmodule LemonAgent.Application do
 
   @impl true
   def start(_type, _args) do
+    # Fence keys exist before any worker can wrap or check untrusted content.
+    :ok = LemonAgent.Security.ExternalContent.init_key()
+    :ok = LemonAgent.Security.UntrustedToolBoundary.init_key()
+
     children = [
       # Signal levels live in atomics; Registry owns only live subscriptions.
       {Registry, keys: :duplicate, name: LemonAgent.AbortSignal.Registry},

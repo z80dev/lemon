@@ -59,7 +59,7 @@ defmodule LemonControlPlane.EventProjectionTest do
 
     projected = EventProjection.tool_result(result)
     assert projected["is_error"] == false
-    assert projected["trust"] == "trusted"
+    assert projected["trust"] == "untrusted"
 
     assert projected["content"] == [
              %{"type" => "text", "text" => "first"},

@@ -64,12 +64,12 @@ defmodule LemonAgent.Types do
     and is the right place for structured data (ids, counts, the raw response)
     that would only cost tokens in `:content`.
 
-    `:trust` marks content the tool did not author. Anything fetched from the
-    network, read from a user-supplied file, or returned by a third-party API
-    is `:untrusted`, which tells downstream rendering that instructions inside
-    it must not be obeyed. `LemonAgent.Security.ExternalContent` wraps such
-    content with the right framing and metadata — use it rather than setting
-    the field by hand.
+    `:trust` defaults to `:untrusted`: the pre-model boundary fences the content
+    so instructions inside it are treated as data. Only the explicit atom
+    `:trusted` opts out, and only for text the platform itself authored (an
+    audited decision — never for anything fetched from the network, read from
+    a file, returned by a third-party API or produced by another agent).
+    Registry-contributed tools are always forced to `:untrusted`.
 
     `:is_error` marks a result that reports a failure (a denied approval, a
     timed-out command) while keeping structured `:details`. The loop sends it
@@ -83,7 +83,7 @@ defmodule LemonAgent.Types do
             is_error: boolean(),
             terminate_turn: boolean()
           }
-    defstruct content: [], details: nil, trust: :trusted, is_error: false, terminate_turn: false
+    defstruct content: [], details: nil, trust: :untrusted, is_error: false, terminate_turn: false
   end
 
   # ============================================================================
@@ -549,6 +549,7 @@ defmodule LemonAgent.Types do
             tool_timeout_ms: pos_integer() | :infinity | nil,
             tool_task_supervisor: Supervisor.supervisor() | nil,
             intent_tracing: boolean(),
+            tool_result_max_bytes: pos_integer() | nil,
             tool_schema_snapshot: LemonAgent.Types.ToolSchemaSnapshot.t() | nil,
             budget_limits: map() | nil,
             budget_usage: LemonAgent.Budget.usage() | nil,
@@ -581,6 +582,7 @@ defmodule LemonAgent.Types do
               tool_timeout_ms: 300_000,
               tool_task_supervisor: nil,
               intent_tracing: true,
+              tool_result_max_bytes: nil,
               tool_schema_snapshot: nil,
               budget_limits: nil,
               budget_usage: nil,

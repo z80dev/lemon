@@ -13,6 +13,7 @@ defmodule CodingAgent.SystemPrompt do
 
   alias CodingAgent.Workspace
   alias LemonAgent.ContextRegistry
+  alias LemonAgent.Security.ExternalContent
   alias LemonSkills.PromptView
 
   @type opts :: %{
@@ -402,12 +403,13 @@ defmodule CodingAgent.SystemPrompt do
     end
   end
 
-  # Sections contributed through `LemonAgent.ContextRegistry` are rendered as
-  # ordinary markdown headings so they read like every other part of the prompt.
-  # With nothing registered `collect/1` returns `[]` and nothing is added — a
-  # build with no contributors is byte-for-byte the build it was before this
-  # section existed. Each contribution is its own `:memory` section: they are
-  # background about the user, joined with the same blank line as before.
+  # Sections contributed through `LemonAgent.ContextRegistry` are background
+  # about the user. A section is rendered as a markdown heading only when its
+  # contributor explicitly marked it `trust: :trusted`; every other section —
+  # including a hand-built map without `:trust` — is fenced in the
+  # untrusted-data envelope so its text reads as data, not instructions. With
+  # nothing registered `collect/1` returns `[]` and nothing is added. Each
+  # contribution is its own `:memory` section.
   #
   # Only the `:system` half of what was contributed is rendered here. The other
   # half is volatile by construction and belongs after the last prompt-cache
@@ -420,9 +422,22 @@ defmodule CodingAgent.SystemPrompt do
     cwd
     |> contributed_sections(session_scope, skill_context, opts)
     |> Enum.filter(&system_section?/1)
-    |> Enum.map(fn %{title: title, body: body} ->
-      section(:memory, contributed_label(title), "## #{title}\n\n#{body}")
+    |> Enum.map(fn %{title: title, body: body} = contributed ->
+      text =
+        if Map.get(contributed, :trust) == :trusted,
+          do: "## #{title}\n\n#{body}",
+          else: untrusted_block(body, :context, title)
+
+      section(:memory, contributed_label(title), text)
     end)
+  end
+
+  defp untrusted_block(body, source, subject) do
+    ExternalContent.wrap_external_content(body,
+      source: source,
+      subject: subject,
+      include_warning: true
+    )
   end
 
   defp contributed_label(title) when is_binary(title) do
@@ -580,12 +595,24 @@ defmodule CodingAgent.SystemPrompt do
         header
       end
 
+    # USER.md/MEMORY.md (and the shared-memory projections that replace them)
+    # are model-written via `remember` from chat input, so they are fenced as
+    # untrusted memory data rather than emitted as instruction headings.
     file_sections =
       Enum.map(files, fn file ->
-        category =
-          if String.downcase(file.name) in @memory_files, do: :memory, else: :context_files
-
-        section(category, "#{file.name} (assistant home)", "## #{file.name}\n#{file.content}")
+        if String.downcase(file.name) in @memory_files do
+          section(
+            :memory,
+            "#{file.name} (assistant home)",
+            untrusted_block(file.content, :memory, file.name)
+          )
+        else
+          section(
+            :context_files,
+            "#{file.name} (assistant home)",
+            "## #{file.name}\n#{file.content}"
+          )
+        end
       end)
 
     [section(:system_prompt, "Workspace files header", Enum.join(header, "\n")) | file_sections]

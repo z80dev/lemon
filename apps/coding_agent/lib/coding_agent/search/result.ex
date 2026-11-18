@@ -24,12 +24,7 @@ defmodule CodingAgent.Search.Result do
       "count" => length(results),
       "took_ms" => elapsed_ms(started_ms),
       "results" => results,
-      "trust_metadata" =>
-        ExternalContent.web_trust_metadata(
-          :web_search,
-          ["results[].title", "results[].description"],
-          warning_included: false
-        )
+      "trust_metadata" => search_trust_metadata()
     }
   end
 
@@ -47,69 +42,35 @@ defmodule CodingAgent.Search.Result do
       nil
     else
       %{
-        "title" => wrap(title),
+        "title" => title || "",
         "url" => url || "",
-        "description" => wrap(description),
+        "description" => description || "",
         "published" => optional_string(Keyword.get(opts, :published)),
         "site_name" => Keyword.get(opts, :site_name) || site_name(url)
       }
     end
   end
 
-  def wrap(nil), do: ""
-  def wrap(value), do: ExternalContent.wrap_web_content(value, :web_search)
-
-  def wrap_fetch_content(value, max_chars) when is_binary(value) and is_integer(max_chars) do
-    wrapper_with_warning = ExternalContent.wrap_web_content("", :web_fetch)
-
-    wrapper_without_warning =
-      ExternalContent.wrap_external_content("", source: :web_fetch, include_warning: false)
-
-    include_warning = String.length(wrapper_with_warning) <= max_chars
-
-    wrapper_overhead =
-      if include_warning,
-        do: String.length(wrapper_with_warning),
-        else: String.length(wrapper_without_warning)
-
-    max_inner = max(max_chars - wrapper_overhead, 0)
-    {truncated, truncated?} = bounded_text(value, max_inner)
-    wrapped = wrap_fetch_text(truncated, include_warning)
-
-    {final_wrapped, final_truncated, final_raw} =
-      if String.length(wrapped) > max_chars do
-        adjusted_max_inner = max(max_inner - (String.length(wrapped) - max_chars), 0)
-        {adjusted, adjusted_truncated?} = bounded_text(value, adjusted_max_inner)
-        {wrap_fetch_text(adjusted, include_warning), adjusted_truncated?, adjusted}
-      else
-        {wrapped, truncated?, truncated}
-      end
-
-    %{
-      text: final_wrapped,
-      truncated: final_truncated,
-      raw_length: String.length(final_raw),
-      wrapped_length: String.length(final_wrapped),
-      warning_included: include_warning
-    }
+  # The agent loop's untrusted-tool boundary fences each untrusted tool result
+  # exactly once, so provider fields carry plain (bounded) text.
+  def search_trust_metadata do
+    ExternalContent.trust_metadata(:web_search, wrapped_fields: [], wrapping_applied: false)
   end
 
-  def wrap_fetch_field(nil), do: nil
-  def wrap_fetch_field(""), do: nil
-
-  def wrap_fetch_field(value) do
-    ExternalContent.wrap_external_content(to_string_safe(value),
-      source: :web_fetch,
-      include_warning: false
-    )
+  def fetch_content(value, max_chars) when is_binary(value) and is_integer(max_chars) do
+    {text, truncated?} = bounded_text(value, max(max_chars, 0))
+    %{text: text, truncated: truncated?, length: String.length(text)}
   end
 
-  def fetch_trust_metadata(wrapped, wrapped_title \\ nil) do
-    wrapped_fields = if wrapped_title in [nil, ""], do: ["text"], else: ["text", "title"]
+  def fetch_field(nil), do: nil
+  def fetch_field(""), do: nil
+  def fetch_field(value), do: to_string_safe(value)
 
-    ExternalContent.web_trust_metadata(:web_fetch, wrapped_fields,
+  def fetch_trust_metadata do
+    ExternalContent.trust_metadata(:web_fetch,
       key_style: :camel_case,
-      warning_included: wrapped.warning_included
+      wrapped_fields: [],
+      wrapping_applied: false
     )
   end
 
@@ -149,12 +110,6 @@ defmodule CodingAgent.Search.Result do
     else
       {String.slice(value, 0, max_chars), true}
     end
-  end
-
-  defp wrap_fetch_text(content, true), do: ExternalContent.wrap_web_content(content, :web_fetch)
-
-  defp wrap_fetch_text(content, false) do
-    ExternalContent.wrap_external_content(content, source: :web_fetch, include_warning: false)
   end
 
   defp site_name(nil), do: nil

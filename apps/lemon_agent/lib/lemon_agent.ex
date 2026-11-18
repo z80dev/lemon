@@ -495,7 +495,7 @@ defmodule LemonAgent do
 
     * `:content` - List of content blocks (default: [])
     * `:details` - Optional details for logging/UI
-    * `:trust` - Tool result trust level, `:trusted` or `:untrusted` (default: `:trusted`)
+    * `:trust` - Tool result trust level, `:trusted` or `:untrusted` (default: `:untrusted`)
 
   ## Examples
 
@@ -509,7 +509,7 @@ defmodule LemonAgent do
     %AgentToolResult{
       content: Keyword.get(opts, :content, []),
       details: Keyword.get(opts, :details),
-      trust: Keyword.get(opts, :trust, :trusted)
+      trust: Keyword.get(opts, :trust, :untrusted)
     }
   end
 

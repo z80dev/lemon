@@ -5,6 +5,7 @@ defmodule CodingAgent.Tools.AskParent do
 
   alias CodingAgent.ParentQuestions
   alias LemonAgent.AbortSignal
+  alias LemonAgent.Security.ExternalContent
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonCore.Bus
@@ -340,10 +341,19 @@ defmodule CodingAgent.Tools.AskParent do
         ""
       end
 
+    # Everything below the header is child-authored and reaches the parent as a
+    # user-role message, so it is fenced once as untrusted agent output.
+    question =
+      ExternalContent.wrap_external_content(
+        "#{description_text}Blocked because: #{request.why_blocked}\n" <>
+          "Question: #{request.question}#{options_text}#{recommended_text}",
+        source: :agent,
+        include_warning: true
+      )
+
     """
     [subagent question #{request.id}]
-    #{description_text}Blocked because: #{request.why_blocked}
-    Question: #{request.question}#{options_text}#{recommended_text}
+    #{question}
 
     Use the `parent_question` tool with `action=\"answer\"`, `request_id=\"#{request.id}\"`, and your answer text.
     """

@@ -225,7 +225,8 @@ defmodule CodingAgent.Tools.BrowserTest do
     assert_receive {:browser_update, %AgentToolResult{} = started}
     assert_receive {:browser_update, %AgentToolResult{} = completed}
 
-    assert started.trust == :trusted
+    assert started.trust == :untrusted
+    assert completed.trust == :untrusted
     assert started.details["tool"] == "browser_navigate"
     assert started.details["method"] == "browser.navigate"
     assert started.details["phase"] == "started"

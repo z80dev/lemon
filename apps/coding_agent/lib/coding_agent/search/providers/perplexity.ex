@@ -4,7 +4,6 @@ defmodule CodingAgent.Search.Providers.Perplexity do
   @behaviour CodingAgent.Search.Provider
 
   alias CodingAgent.Search.Result
-  alias LemonAgent.Security.ExternalContent
 
   @perplexity_api_host "api.perplexity.ai"
 
@@ -73,10 +72,9 @@ defmodule CodingAgent.Search.Providers.Perplexity do
            "provider" => id(),
            "model" => context.model,
            "took_ms" => Result.elapsed_ms(started_ms),
-           "content" => ExternalContent.wrap_web_content(content, :web_search),
+           "content" => content,
            "citations" => citations,
-           "trust_metadata" =>
-             ExternalContent.web_trust_metadata(:web_search, ["content"], warning_included: false)
+           "trust_metadata" => Result.search_trust_metadata()
          }}
 
       {:ok, %Req.Response{status: status} = response} ->

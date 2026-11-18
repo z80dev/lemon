@@ -1,7 +1,7 @@
 defmodule CodingAgent.Security.LocalToolTrustIntegrationTest do
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Security.UntrustedToolBoundary
+  alias LemonAgent.Security.UntrustedToolBoundary
   alias CodingAgent.Tools.{Bash, Find, Grep, Read}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.AgentToolResult
@@ -88,10 +88,11 @@ defmodule CodingAgent.Security.LocalToolTrustIntegrationTest do
       assert text =~
                "SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source."
 
-      assert text =~ "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"
-      assert text =~ "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
-      assert marker_count(text, "<<<EXTERNAL_UNTRUSTED_CONTENT>>>") == 1
-      assert marker_count(text, "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>") == 1
+      assert text =~
+               ~r/<<<EXTERNAL_UNTRUSTED_CONTENT id="([0-9a-f]{16})">>>.*<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\1">>>/s
+
+      assert marker_count(text, ~r/<<<EXTERNAL_UNTRUSTED_CONTENT/) == 1
+      assert marker_count(text, ~r/<<<END_EXTERNAL_UNTRUSTED_CONTENT/) == 1
     end)
 
     read_text = wrapped_messages |> hd() |> Map.fetch!(:content) |> hd() |> Map.fetch!(:text)
@@ -140,6 +141,6 @@ defmodule CodingAgent.Security.LocalToolTrustIntegrationTest do
   end
 
   defp marker_count(text, marker) do
-    text |> String.split(marker) |> length() |> Kernel.-(1)
+    marker |> Regex.scan(text) |> length()
   end
 end

@@ -22,7 +22,10 @@ defmodule CodingAgent.Extensions.AdditionalContext do
 
   def append(result, ""), do: result
 
+  # Extension-authored text makes the whole result untrusted.
   def append(result, context) do
-    %{result | content: result.content ++ [%LemonAi.Types.TextContent{text: block(context)}]}
+    result
+    |> Map.put(:content, result.content ++ [%LemonAi.Types.TextContent{text: block(context)}])
+    |> Map.put(:trust, :untrusted)
   end
 end

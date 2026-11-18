@@ -279,7 +279,18 @@ defmodule LemonSkills.BackgroundReviewTest do
       remember.execute.("private", %{"text" => "Prefers concise review summaries"}, nil, nil)
 
     assert %LemonAgent.Types.AgentToolResult{trust: :untrusted} = result
-    assert hd(result.content).text =~ "EXTERNAL_UNTRUSTED_CONTENT"
+
+    # The result reaches the model through the loop boundary, fenced exactly once.
+    assert {:ok, [fenced]} =
+             LemonAgent.Security.UntrustedToolBoundary.transform([
+               %LemonAi.Types.ToolResultMessage{
+                 tool_name: "remember",
+                 trust: result.trust,
+                 content: result.content
+               }
+             ])
+
+    assert LemonAgent.Security.ExternalContent.envelope_count(hd(fenced.content).text) == 1
     assert {:ok, ["Prefers concise review summaries"]} = LemonMemory.Preferences.read(ctx.request)
     assert {:ok, []} = LemonMemory.Preferences.read_shared(ctx.request)
 

@@ -146,13 +146,20 @@ defmodule CodingAgent.Session.PromptComposer do
       |> List.flatten()
       |> Enum.map(&Map.put(&1, :directory_derived, false))
 
+    # Memory (USER.md/MEMORY.md and contributed context) is written from chat
+    # input and changes far more often than instructions, rules or the
+    # environment, so it goes last: a memory write then invalidates only the
+    # bytes after the last stable section.
+    {memory, directory} = Enum.split_with(directory, &(&1.category == :memory))
+
     directory_sections =
       [
         top_level(:system_prompt, "Prompt template", template_content),
         directory,
         ResourceLoader.instruction_sections(cwd),
         Rules.sections(cwd),
-        top_level(:system_prompt, "Environment", environment)
+        top_level(:system_prompt, "Environment", environment),
+        memory
       ]
       |> List.flatten()
       |> Enum.map(&Map.put(&1, :directory_derived, true))

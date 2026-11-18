@@ -165,7 +165,7 @@ defmodule CodingAgent.MessagesTest do
       assert %LemonAi.Types.ToolResultMessage{} = result
       assert result.role == :tool_result
       assert result.tool_call_id == "tool_123"
-      assert result.trust == :trusted
+      assert result.trust == :untrusted
       assert result.is_error == false
       assert result.timestamp == 789
       assert length(result.content) == 1
@@ -475,7 +475,7 @@ defmodule CodingAgent.MessagesTest do
       [result] = Messages.to_llm([msg])
       assert %LemonAi.Types.ToolResultMessage{} = result
       assert result.tool_call_id == "abc"
-      assert result.trust == :trusted
+      assert result.trust == :untrusted
       assert result.timestamp == 100
     end
 
@@ -1086,7 +1086,7 @@ defmodule CodingAgent.MessagesTest do
       msg = %{role: :tool_result, tool_use_id: "legacy_id", content: []}
       [result] = Messages.to_llm([msg])
       assert result.tool_call_id == "legacy_id"
-      assert result.trust == :trusted
+      assert result.trust == :untrusted
     end
 
     test "plain map with role: :tool_result prefers tool_call_id over tool_use_id" do
@@ -1430,7 +1430,7 @@ defmodule CodingAgent.MessagesTest do
       assert msg.role == :tool_result
       assert msg.tool_use_id == ""
       assert msg.content == []
-      assert msg.trust == :trusted
+      assert msg.trust == :untrusted
       assert msg.is_error == false
       assert msg.timestamp == 0
     end

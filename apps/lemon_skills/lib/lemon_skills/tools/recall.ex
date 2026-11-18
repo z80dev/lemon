@@ -25,6 +25,7 @@ defmodule LemonSkills.Tools.Recall do
   The write-side counterpart is `LemonSkills.Tools.Remember`.
   """
 
+  alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonMemory.{ContextScope, Preferences, Project, Query, SessionSearch}
@@ -169,9 +170,9 @@ defmodule LemonSkills.Tools.Recall do
       case result do
         {:ok, text} ->
           %AgentToolResult{
-            content: [%TextContent{text: "Untrusted recalled conversation data:\n\n" <> text}],
-            details: %{trust: :untrusted}
+            content: [%TextContent{text: "Untrusted recalled conversation data:\n\n" <> text}]
           }
+          |> ToolResultTrust.untrusted(:memory)
 
         {:error, _} ->
           {:error, "Scoped memory is unavailable"}
@@ -207,6 +208,7 @@ defmodule LemonSkills.Tools.Recall do
           project_facts: length(facts)
         }
       }
+      |> ToolResultTrust.untrusted(:memory)
     else
       {:error, :unproven_context} -> {:error, "recall requires a verified private memory context"}
       {:error, reason} when is_atom(reason) -> {:error, "Scoped memory is unavailable"}

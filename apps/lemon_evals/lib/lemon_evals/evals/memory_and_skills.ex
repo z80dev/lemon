@@ -9,7 +9,7 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
   import LemonEvals.Support
 
   alias LemonAgent.Types.AgentToolResult
-  alias CodingAgent.Security.UntrustedToolBoundary
+  alias LemonAgent.Security.UntrustedToolBoundary
   alias CodingAgent.SystemPrompt
   alias CodingAgent.Tools.{ReadSkill, SkillManage}
   alias LemonEvals.Types

@@ -101,8 +101,8 @@ defmodule CodingAgent.Search.Providers.Exa do
     case post(context, "/contents", body) do
       {:ok, %{"results" => [result | _]}} when is_map(result) ->
         text = result |> Map.get("text", "") |> Result.to_string_safe()
-        wrapped = Result.wrap_fetch_content(text, request.max_chars)
-        title = Result.wrap_fetch_field(Map.get(result, "title"))
+        content = Result.fetch_content(text, request.max_chars)
+        title = Result.fetch_field(Map.get(result, "title"))
 
         {:ok,
          %{
@@ -113,15 +113,14 @@ defmodule CodingAgent.Search.Providers.Exa do
            "title" => title,
            "extractMode" => Atom.to_string(request.extract_mode),
            "extractor" => "exa",
-           "truncated" => wrapped.truncated,
-           "length" => wrapped.wrapped_length,
-           "rawLength" => wrapped.raw_length,
-           "wrappedLength" => wrapped.wrapped_length,
+           "truncated" => content.truncated,
+           "length" => content.length,
+           "rawLength" => content.length,
            "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
            "tookMs" => max(System.monotonic_time(:millisecond) - started_ms, 0),
-           "text" => wrapped.text,
-           "__full_text" => if(wrapped.truncated, do: text),
-           "trustMetadata" => Result.fetch_trust_metadata(wrapped, title)
+           "text" => content.text,
+           "__full_text" => if(content.truncated, do: text),
+           "trustMetadata" => Result.fetch_trust_metadata()
          }}
 
       {:ok, decoded} ->

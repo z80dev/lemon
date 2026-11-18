@@ -9,8 +9,8 @@ defmodule LemonAi.Types do
   @typedoc """
   Trust level for tool-generated content.
 
-  - `:trusted` - Content can be treated as trusted
-  - `:untrusted` - Content should be handled as untrusted
+  - `:trusted` - Platform-authored content; only this exact atom is trusted
+  - `:untrusted` - Content should be handled as untrusted (the default)
   """
   @type trust_level :: :trusted | :untrusted
 
@@ -124,7 +124,7 @@ defmodule LemonAi.Types do
               tool_name: "",
               content: [],
               details: nil,
-              trust: :trusted,
+              trust: :untrusted,
               is_error: false,
               timestamp: 0
   end

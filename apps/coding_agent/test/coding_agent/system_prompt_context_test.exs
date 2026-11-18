@@ -5,7 +5,7 @@ defmodule CodingAgent.SystemPromptContextTest.Alpha do
 
   def contribute(request) do
     send(Process.whereis(@owner), {:contributed, __MODULE__, request})
-    {:ok, %{title: "Alpha Context", body: "alpha body line"}}
+    {:ok, %{title: "Alpha Context", body: "alpha body line", trust: :trusted}}
   end
 end
 
@@ -26,7 +26,7 @@ defmodule CodingAgent.SystemPromptContextTest.Patient do
 
   def contribute(_request) do
     Process.sleep(400)
-    {:ok, %{title: "Patient Context", body: "patient body line"}}
+    {:ok, %{title: "Patient Context", body: "patient body line", trust: :trusted}}
   end
 end
 
@@ -39,7 +39,7 @@ defmodule CodingAgent.SystemPromptContextTest.Splitter do
   def contribute(_request) do
     {:ok,
      [
-       %{title: "Stable Context", body: "stable body line", placement: :system},
+       %{title: "Stable Context", body: "stable body line", placement: :system, trust: :trusted},
        %{title: "Volatile Context", body: "volatile body line", placement: :user_message}
      ]}
   end
@@ -186,7 +186,9 @@ defmodule CodingAgent.SystemPromptContextTest do
     prompt = SystemPrompt.build(tmp_dir, build_opts(tmp_dir))
 
     assert String.contains?(prompt, "## Boundaries")
-    assert String.contains?(prompt, "## Beta Context")
+    # Beta declares no trust, so it is fenced as untrusted contributed data.
+    assert fenced_section?(prompt, "Beta Context", "beta body line")
+    refute String.contains?(prompt, "## Beta Context")
     refute String.contains?(prompt, "contributor is broken")
   end
 
@@ -213,7 +215,7 @@ defmodule CodingAgent.SystemPromptContextTest do
     prompt = SystemPrompt.build(tmp_dir, build_opts(tmp_dir))
 
     alpha_at = index_of(prompt, "## Alpha Context")
-    beta_at = index_of(prompt, "## Beta Context")
+    beta_at = index_of(prompt, "Subject: Beta Context")
     boundaries_at = index_of(prompt, "## Boundaries")
 
     assert alpha_at < beta_at
@@ -245,7 +247,13 @@ defmodule CodingAgent.SystemPromptContextTest do
       |> Map.merge(%{
         run_id: "no-collect-run",
         contributed_sections: [
-          %{name: :given, title: "Given Context", body: "given body line", placement: :system},
+          %{
+            name: :given,
+            title: "Given Context",
+            body: "given body line",
+            placement: :system,
+            trust: :trusted
+          },
           %{name: :given, title: "Given Volatile", body: "elsewhere", placement: :user_message}
         ]
       })
@@ -275,7 +283,9 @@ defmodule CodingAgent.SystemPromptContextTest do
 
     prompt = SystemPrompt.build(tmp_dir, opts)
 
-    assert String.contains?(prompt, "## Hand Built\n\nhand body")
+    # No `:trust` either, so it fails closed into the untrusted envelope.
+    assert fenced_section?(prompt, "Hand Built", "hand body")
+    refute String.contains?(prompt, "## Hand Built")
   end
 
   @tag :tmp_dir
@@ -284,7 +294,7 @@ defmodule CodingAgent.SystemPromptContextTest do
       tmp_dir
       |> build_opts()
       |> Map.put(:contributed_sections, [
-        %{name: :given, title: "Kept", body: "kept body", placement: :system},
+        %{name: :given, title: "Kept", body: "kept body", placement: :system, trust: :trusted},
         %{name: :given, title: "Elsewhere", body: "elsewhere body", placement: :prompt_suffix}
       ])
 
@@ -346,5 +356,15 @@ defmodule CodingAgent.SystemPromptContextTest do
   defp index_of(haystack, needle) do
     {index, _length} = :binary.match(haystack, needle)
     index
+  end
+
+  # An untrusted contributed section renders as exactly one ExternalContent
+  # envelope with matching ids, never as an instruction heading.
+  defp fenced_section?(prompt, title, body) do
+    pattern =
+      ~r/<<<EXTERNAL_UNTRUSTED_CONTENT id="([0-9a-f]{16})">>>\nSource: Contributed Context\nSubject: #{Regex.escape(title)}\n---\n#{Regex.escape(body)}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\1">>>/
+
+    Regex.match?(pattern, prompt) and
+      length(Regex.scan(~r/Subject: #{Regex.escape(title)}\n/, prompt)) == 1
   end
 end

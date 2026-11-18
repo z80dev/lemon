@@ -218,15 +218,19 @@ function diffFromHunks(hunks: readonly string[][], path: string | undefined): Na
 	});
 }
 
-/** Strip the daemon's untrusted-content envelope from web text (the model needs it; a reader does not). */
+const EXTERNAL_START = /<<<EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]*")?>>>/;
+const EXTERNAL_END = /<<<END_EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]*")?>>>/g;
+
+/** Strip the untrusted-content envelope (legacy or `id="…"` form) from web text; plain text passes through trimmed. */
 function unwrapExternal(value: unknown): string {
 	if (typeof value !== "string") return "";
-	const start = value.indexOf("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
-	if (start < 0) return value.trim();
-	let body = value.slice(start + "<<<EXTERNAL_UNTRUSTED_CONTENT>>>".length);
+	const start = EXTERNAL_START.exec(value);
+	if (!start) return value.trim();
+	let body = value.slice(start.index + start[0].length);
 	const separator = body.indexOf("\n---\n");
 	if (separator >= 0) body = body.slice(separator + "\n---\n".length);
-	const end = body.lastIndexOf("<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>");
+	let end = -1;
+	for (const match of body.matchAll(EXTERNAL_END)) end = match.index;
 	if (end >= 0) body = body.slice(0, end);
 	return body.trim();
 }
