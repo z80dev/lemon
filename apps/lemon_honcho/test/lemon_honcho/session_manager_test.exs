@@ -329,7 +329,7 @@ defmodule LemonHoncho.SessionManagerTest do
     test "serves a subagent when injection is switched on" do
       start_manager(inject_in_subagents?: true)
 
-      assert SessionManager.context_for(%{@request | session_scope: :subagent}) =~ "Knows user."
+      assert SessionManager.context_for(%{@request | session_scope: :subagent}) =~ "Knows #{u()}."
     end
   end
 
@@ -340,9 +340,9 @@ defmodule LemonHoncho.SessionManagerTest do
       block = SessionManager.context_for(@request)
 
       assert block =~ "Discussed the flaky test."
-      assert block =~ "Knows user."
-      assert block =~ "card for user"
-      assert block =~ "Knows lemon."
+      assert block =~ "Knows #{u()}."
+      assert block =~ "card for #{u()}"
+      assert block =~ "Knows #{a()}."
       assert block =~ "Right now they care about cadence."
     end
 
@@ -350,13 +350,14 @@ defmodule LemonHoncho.SessionManagerTest do
       start_manager(dialectic_cadence: 1)
 
       SessionManager.context_for(@request)
-      assert_receive {:honcho_call, :chat, {"lemon", cold, opts}}, 1_000
+      ai = a()
+      assert_receive {:honcho_call, :chat, {^ai, cold, opts}}, 1_000
       assert cold =~ "Who is this person?"
-      assert opts[:target] == "user"
+      assert opts[:target] == u()
 
       SessionManager.context_for(@request)
       await_idle(@session_key)
-      assert_receive {:honcho_call, :chat, {"lemon", warm, _opts}}, 1_000
+      assert_receive {:honcho_call, :chat, {^ai, warm, _opts}}, 1_000
       assert warm =~ "why is the build slow?"
     end
 
@@ -439,7 +440,7 @@ defmodule LemonHoncho.SessionManagerTest do
       # halves out of five turns. One is the whole point.
       assert length(volatile) == 5, "the dialectic never moved; the test proves nothing"
       assert length(stable) == 1
-      assert hd(stable) =~ "Knows user, selected for: nil"
+      assert hd(stable) =~ "Knows #{u()}, selected for: nil"
     end
 
     test "is fetched without a retrieval query, whatever the turn said" do
@@ -506,7 +507,7 @@ defmodule LemonHoncho.SessionManagerTest do
       # nothing else.
       refute warm =~ "Their current message:"
       assert warm =~ "Prioritize active context"
-      assert SessionManager.context_for(@request) =~ "Knows user."
+      assert SessionManager.context_for(@request) =~ "Knows #{u()}."
     end
 
     test "withholds the same query from the dialectic, the one place it travels" do
@@ -523,7 +524,8 @@ defmodule LemonHoncho.SessionManagerTest do
 
       SessionManager.context_for(Map.delete(@request, :query))
 
-      assert_receive {:honcho_call, :peer_context, {"user", opts}}, 1_000
+      user = u()
+      assert_receive {:honcho_call, :peer_context, {^user, opts}}, 1_000
       assert opts == []
       assert_receive {:honcho_call, :chat, {_peer, query, _opts}}, 1_000
       refute query =~ "Their current message:"
@@ -594,7 +596,7 @@ defmodule LemonHoncho.SessionManagerTest do
       # And the message it would have sent never arrived: the manager is still
       # holding the settled entry rather than an expired one.
       refute_receive {:refresh_expired, _key, _ref}, 50
-      assert SessionManager.context_for(@request) =~ "Knows user."
+      assert SessionManager.context_for(@request) =~ "Knows #{u()}."
     end
 
     test "arms the deadline before the worker exists, so an absurd timeout cannot orphan one" do
@@ -647,7 +649,7 @@ defmodule LemonHoncho.SessionManagerTest do
 
       assert waiters(@session_key) == []
       assert Process.alive?(Process.whereis(SessionManager))
-      assert SessionManager.context_for(@request) =~ "Knows user."
+      assert SessionManager.context_for(@request) =~ "Knows #{u()}."
     end
   end
 
@@ -681,8 +683,8 @@ defmodule LemonHoncho.SessionManagerTest do
           refute block =~ "nested"
 
           # And the same process is still the one holding the session.
-          assert SessionManager.cold?(@session_key) == false
-          assert SessionManager.honcho_session_id(@session_key) == {:ok, "lemon-honcho-test"}
+          assert SessionManager.cold?(entry(@session_key)) == false
+          assert SessionManager.honcho_session_id(entry(@session_key)) == {:ok, honcho_session()}
         end)
 
       refute logs =~ "Protocol.UndefinedError"
@@ -693,7 +695,7 @@ defmodule LemonHoncho.SessionManagerTest do
 
       block = SessionManager.context_for(@request)
 
-      assert block =~ "Knows user."
+      assert block =~ "Knows #{u()}."
       refute block =~ "## User profile"
     end
 
@@ -827,7 +829,7 @@ defmodule LemonHoncho.SessionManagerTest do
       # that never populates `:query` — the memory provider is one — would
       # otherwise spend a whole turn discovering its own session id.
       assert block =~ "Discussed the flaky test."
-      assert SessionManager.honcho_session_id(@session_key) == {:ok, "lemon-honcho-test"}
+      assert SessionManager.honcho_session_id(entry(@session_key)) == {:ok, honcho_session()}
     end
 
     test "the cold load happens once, not on every trivial turn afterwards" do
@@ -941,16 +943,18 @@ defmodule LemonHoncho.SessionManagerTest do
       owner = %{channel_id: "telegram", sender_id: "123", owner?: true}
       visitor = %{channel_id: "telegram", sender_id: "456", owner?: false}
 
-      for {identity, peer} <- [{owner, "user"}, {visitor, "telegram_456"}] do
+      for {identity, human} <- [{owner, "user"}, {visitor, "telegram_456"}] do
         request = @request |> Map.put(:session_key, key) |> Map.put(:channel_identity, identity)
+        peer = u(key, identity)
+        ai = a(key, identity)
+        assert owner_for(key, identity).human == human
         assert SessionManager.context_for(request) =~ "Knows #{peer}."
 
         SessionManager.sync_document(
           document(session_key: key, meta: %{channel_identity: identity})
         )
 
-        assert_receive {:honcho_call, :add_messages,
-                        {_, [%{peer_id: ^peer}, %{peer_id: "lemon"}]}},
+        assert_receive {:honcho_call, :add_messages, {_, [%{peer_id: ^peer}, %{peer_id: ^ai}]}},
                        1_000
       end
     end
@@ -983,16 +987,16 @@ defmodule LemonHoncho.SessionManagerTest do
       for {key, identity} <- cases do
         request = @request |> Map.put(:session_key, key) |> Map.put(:channel_identity, identity)
         context = SessionManager.context_for(request)
-        refute context =~ "Knows user."
-        refute context =~ "Knows alice."
+        refute context =~ "Knows v2-u-user-"
+        refute context =~ "Knows v2-u-alice-"
 
         SessionManager.sync_document(
           document(session_key: key, meta: %{channel_identity: identity})
         )
 
         assert_receive {:honcho_call, :add_messages, {_, [%{peer_id: peer}, _]}}, 1_000
-        refute peer in ["user", "alice"]
-        assert peer =~ "unverified"
+        refute peer =~ ~r/\Av2-u-(user|alice)-/
+        assert peer =~ ~r/\Av2-u-unverified_/
       end
     end
 
@@ -1008,22 +1012,22 @@ defmodule LemonHoncho.SessionManagerTest do
 
       for {key, identity} <- cases do
         request = @request |> Map.put(:session_key, key) |> Map.put(:channel_identity, identity)
-        refute SessionManager.context_for(request) =~ "Knows user."
+        refute SessionManager.context_for(request) =~ "Knows v2-u-user-"
 
         SessionManager.sync_document(
           document(session_key: key, meta: %{channel_identity: identity})
         )
 
         assert_receive {:honcho_call, :add_messages, {_, [%{peer_id: peer}, _]}}, 1_000
-        refute peer == "user"
+        refute peer =~ ~r/\Av2-u-user-/
       end
     end
 
     test "local sessions ignore channel-shaped metadata" do
       start_manager(runtime_peer_prefix: "gateway_")
       request = Map.put(@request, :channel_identity, %{channel_id: "telegram", sender_id: "123"})
-      assert SessionManager.context_for(request) =~ "Knows user."
-      refute_receive {:honcho_call, :ensure_peer, "gateway_telegram_123"}, 50
+      assert SessionManager.context_for(request) =~ "Knows #{u()}."
+      refute_receive {:honcho_call, :ensure_peer, "v2-u-gateway_telegram_123-" <> _}, 50
     end
 
     test "uploads summaries under the sender peer and skips bot-authored turns" do
@@ -1038,7 +1042,13 @@ defmodule LemonHoncho.SessionManagerTest do
       )
 
       assert_receive {:honcho_call, :add_messages, {_session, messages}}, 1_000
-      assert [%{peer_id: "gateway_telegram_123"}, %{peer_id: "lemon"}] = messages
+      assert [%{peer_id: "v2-u-gateway_telegram_123-" <> _ = user}, %{peer_id: ai}] = messages
+
+      assert user ==
+               u("agent:demo:telegram:default:dm:42", identity, runtime_peer_prefix: "gateway_")
+
+      assert ai ==
+               a("agent:demo:telegram:default:dm:42", identity, runtime_peer_prefix: "gateway_")
 
       bot = %{identity | is_bot: true}
 
@@ -1055,12 +1065,19 @@ defmodule LemonHoncho.SessionManagerTest do
       first = Map.put(request, :channel_identity, %{channel_id: "telegram", sender_id: "1"})
       second = Map.put(request, :channel_identity, %{channel_id: "telegram", sender_id: "2"})
 
-      assert SessionManager.context_for(first) =~ "gateway_telegram_1"
-      assert_receive {:honcho_call, :chat, {"lemon", _, first_opts}}, 1_000
-      assert first_opts[:target] == "gateway_telegram_1"
-      assert SessionManager.context_for(second) =~ "gateway_telegram_2"
-      assert_receive {:honcho_call, :chat, {"lemon", _, second_opts}}, 1_000
-      assert second_opts[:target] == "gateway_telegram_2"
+      prefix = [runtime_peer_prefix: "gateway_"]
+
+      for sender <- [first, second] do
+        user = u(sender.session_key, sender.channel_identity, prefix)
+        ai = a(sender.session_key, sender.channel_identity, prefix)
+        assert SessionManager.context_for(sender) =~ "Knows #{user}."
+        assert_receive {:honcho_call, :chat, {^ai, _, opts}}, 1_000
+        assert opts[:target] == user
+      end
+
+      refute u(first.session_key, first.channel_identity, prefix) ==
+               u(second.session_key, second.channel_identity, prefix)
+
       assert length(SessionManager.sessions()) == 2
     end
   end
@@ -1155,8 +1172,8 @@ defmodule LemonHoncho.SessionManagerTest do
       assert_receive {:honcho_call, :add_messages, {_session_id, messages}}, 1_000
 
       assert messages == [
-               %{content: "why is the build slow?", peer_id: "user"},
-               %{content: "Because the cache was cold.", peer_id: "lemon"}
+               %{content: "why is the build slow?", peer_id: u(), metadata: owner_tag()},
+               %{content: "Because the cache was cold.", peer_id: a(), metadata: owner_tag()}
              ]
     end
 
@@ -1166,7 +1183,10 @@ defmodule LemonHoncho.SessionManagerTest do
       SessionManager.sync_document(document(answer_summary: ""))
 
       assert_receive {:honcho_call, :add_messages, {_session_id, messages}}, 1_000
-      assert messages == [%{content: "why is the build slow?", peer_id: "user"}]
+
+      assert messages == [
+               %{content: "why is the build slow?", peer_id: u(), metadata: owner_tag()}
+             ]
     end
 
     test "clips content to message_max_chars" do
@@ -1274,14 +1294,17 @@ defmodule LemonHoncho.SessionManagerTest do
       serve("session-other")
 
       refute "session-evicted" in tracked_keys()
-      assert SessionManager.honcho_session_id("session-evicted") == {:error, :unknown_session}
+
+      assert SessionManager.honcho_session_id(entry("session-evicted")) ==
+               {:error, :unknown_session}
 
       serve("session-evicted")
 
       assert SessionManager.context_for(request_for("session-evicted")) =~
                "Discussed the flaky test."
 
-      assert SessionManager.honcho_session_id("session-evicted") == {:ok, "lemon-honcho-test"}
+      assert SessionManager.honcho_session_id(entry("session-evicted")) ==
+               {:ok, honcho_session("session-evicted")}
     end
   end
 
@@ -1289,7 +1312,7 @@ defmodule LemonHoncho.SessionManagerTest do
     test "is true for a key this manager has never served" do
       start_manager()
 
-      assert SessionManager.cold?("never-seen") == true
+      assert SessionManager.cold?(entry("never-seen")) == true
     end
 
     test "is true for a key that exists but has served no turn" do
@@ -1298,7 +1321,7 @@ defmodule LemonHoncho.SessionManagerTest do
       SessionManager.sync_document(document(session_key: "upload-only"))
       assert_receive {:honcho_call, :add_messages, _payload}, 1_000
 
-      assert SessionManager.cold?("upload-only") == true
+      assert SessionManager.cold?(entry("upload-only")) == true
     end
 
     test "is false once the session has served a turn and cached a block" do
@@ -1307,11 +1330,11 @@ defmodule LemonHoncho.SessionManagerTest do
       SessionManager.context_for(@request)
       await_idle(@session_key)
 
-      assert SessionManager.cold?(@session_key) == false
+      assert SessionManager.cold?(entry(@session_key)) == false
     end
 
     test "is false when the manager is not running, rather than raising" do
-      assert SessionManager.cold?(@session_key) == false
+      assert SessionManager.cold?(entry(@session_key)) == false
     end
   end
 
@@ -1352,7 +1375,7 @@ defmodule LemonHoncho.SessionManagerTest do
       {elapsed_us, sessions} = :timer.tc(&SessionManager.sessions/0)
 
       assert [%{session_key: @session_key, turns: 1} = session] = sessions
-      assert session.honcho_session_id == "lemon-honcho-test"
+      assert session.honcho_session_id == honcho_session()
       assert is_integer(session.last_context_at_ms)
       assert elapsed_us < 2_000_000
     end
@@ -1365,15 +1388,15 @@ defmodule LemonHoncho.SessionManagerTest do
       start_manager()
       SessionManager.context_for(@request)
 
-      assert SessionManager.honcho_session_id(@session_key) == {:ok, "lemon-honcho-test"}
-      assert SessionManager.peers(@session_key) == {:ok, %{user: "user", ai: "lemon"}}
+      assert SessionManager.honcho_session_id(entry(@session_key)) == {:ok, honcho_session()}
+      assert SessionManager.peers(entry(@session_key)) == {:ok, %{user: u(), ai: a()}}
     end
 
     test "honcho_session_id/1 and peers/1 report an unknown session rather than guessing" do
       start_manager()
 
-      assert SessionManager.honcho_session_id("never-seen") == {:error, :unknown_session}
-      assert SessionManager.peers("never-seen") == {:error, :unknown_session}
+      assert SessionManager.honcho_session_id(entry("never-seen")) == {:error, :unknown_session}
+      assert SessionManager.peers(entry("never-seen")) == {:error, :unknown_session}
     end
   end
 
@@ -1381,8 +1404,8 @@ defmodule LemonHoncho.SessionManagerTest do
     assert SessionManager.context_for(@request) == ""
     assert SessionManager.sync_document(document()) == :ok
     assert SessionManager.sessions() == []
-    assert SessionManager.honcho_session_id(@session_key) == {:error, :unavailable}
-    assert SessionManager.peers(@session_key) == {:error, :unavailable}
+    assert SessionManager.honcho_session_id(entry(@session_key)) == {:error, :unavailable}
+    assert SessionManager.peers(entry(@session_key)) == {:error, :unavailable}
   end
 
   ## Helpers
@@ -1423,7 +1446,9 @@ defmodule LemonHoncho.SessionManagerTest do
       "LEMON_HONCHO_SESSION_STRATEGY" => "per_directory",
       "LEMON_HONCHO_INJECT_IN_SUBAGENTS" => "false",
       "LEMON_HONCHO_SAVE_MESSAGES" => "true",
-      "LEMON_HONCHO_FIRST_TURN_WAIT_MS" => "0"
+      "LEMON_HONCHO_FIRST_TURN_WAIT_MS" => "0",
+      "HONCHO_PEER" => "user",
+      "HONCHO_AI_PEER" => "lemon"
     }
     |> Map.merge(overrides)
     |> put_env()
@@ -1469,7 +1494,10 @@ defmodule LemonHoncho.SessionManagerTest do
   end
 
   defp settled_block(key) do
-    SessionManager |> :sys.get_state() |> get_in([:sessions, key]) |> Map.fetch!(:last_context)
+    SessionManager
+    |> :sys.get_state()
+    |> get_in([:sessions, entry(key)])
+    |> Map.fetch!(:last_context)
   end
 
   # Every call of one kind the recorder forwarded, drained from the mailbox in
@@ -1503,6 +1531,34 @@ defmodule LemonHoncho.SessionManagerTest do
 
   defp request_for(key), do: %{@request | session_key: key}
 
+  # The Honcho session the owner's legacy run for `key` resolves to.
+  defp honcho_session(key \\ @session_key) do
+    LemonHoncho.SessionName.resolve(base_config(),
+      cwd: @request.cwd,
+      session_key: key,
+      owner: owner_for(key)
+    )
+  end
+
+  defp owner_tag, do: LemonHoncho.Owner.metadata(owner_for())
+
+  # The owner a request of this suite resolves to: its key, the transport
+  # identity the manager would accept for it, and legacy memory, under the
+  # suite's config with `overrides`.
+  defp owner_for(key \\ @session_key, identity \\ nil, overrides \\ []) do
+    config = struct!(base_config(), overrides)
+    identity = LemonHoncho.UserPeer.identity(key, identity)
+    LemonHoncho.Owner.new(config, key, identity, "legacy")
+  end
+
+  defp u(key \\ @session_key, identity \\ nil, overrides \\ []),
+    do: owner_for(key, identity, overrides).user_peer
+
+  defp a(key \\ @session_key, identity \\ nil, overrides \\ []),
+    do: owner_for(key, identity, overrides).ai_peer
+
+  defp entry(key), do: SessionManager.entry_key(key, owner_for(key))
+
   # One settled turn for `key`. The sleep is not padding: LRU eviction orders
   # entries by wall-clock touch time, and two turns inside the same millisecond
   # give it nothing to order by.
@@ -1515,7 +1571,12 @@ defmodule LemonHoncho.SessionManagerTest do
   end
 
   defp tracked_keys do
-    SessionManager |> :sys.get_state() |> Map.fetch!(:sessions) |> Map.keys() |> Enum.sort()
+    SessionManager
+    |> :sys.get_state()
+    |> Map.fetch!(:sessions)
+    |> Map.keys()
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.sort()
   end
 
   defp base_config do
@@ -1586,7 +1647,10 @@ defmodule LemonHoncho.SessionManagerTest do
   defp await_pending(key) do
     await_state(key, &(not is_nil(&1.pending_refresh)), 2_000, "no refresh started")
 
-    SessionManager |> :sys.get_state() |> get_in([:sessions, key]) |> Map.fetch!(:pending_refresh)
+    SessionManager
+    |> :sys.get_state()
+    |> get_in([:sessions, entry(key)])
+    |> Map.fetch!(:pending_refresh)
   end
 
   defp await_waiter(key) do
@@ -1594,7 +1658,7 @@ defmodule LemonHoncho.SessionManagerTest do
   end
 
   defp waiters(key) do
-    SessionManager |> :sys.get_state() |> get_in([:sessions, key]) |> Map.fetch!(:waiters)
+    SessionManager |> :sys.get_state() |> get_in([:sessions, entry(key)]) |> Map.fetch!(:waiters)
   end
 
   defp await_state(key, predicate, deadline, failure) do
@@ -1612,7 +1676,7 @@ defmodule LemonHoncho.SessionManagerTest do
   end
 
   defp entry_matches?(key, predicate) do
-    case SessionManager |> :sys.get_state() |> get_in([:sessions, key]) do
+    case SessionManager |> :sys.get_state() |> get_in([:sessions, entry(key)]) do
       nil -> false
       entry -> predicate.(entry)
     end

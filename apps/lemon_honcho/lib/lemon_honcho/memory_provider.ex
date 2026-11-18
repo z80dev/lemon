@@ -24,22 +24,23 @@ defmodule LemonHoncho.MemoryProvider do
 
   ## How a Lemon scope becomes a Honcho search
 
-  Honcho partitions memory by *session* inside a *workspace*, and knows nothing
-  about Lemon's agents or workspaces. The mapping follows from that:
+  Honcho partitions memory by *session* inside a *workspace*. A result may only
+  ever be the requester's own memory, so the mapping narrows or answers `[]`;
+  it never widens:
 
     * `:session` with a `:scope_key` whose Honcho session id is already known to
-      `LemonHoncho.SessionManager` searches that one session. This is the only
-      case that can be narrowed truthfully.
-    * `:agent`, `:workspace`, `:all`, and a `:session` whose key has no Honcho
-      mapping yet search the whole workspace. Honcho has no partition matching
-      an agent id or a Lemon workspace key, so a workspace-wide semantic search
-      is the most honest thing a scoped request can be answered with.
-    * A *scoped* search (`:session`, `:agent`, `:workspace`) that arrives with no
-      `:scope_key` returns `[]` without calling Honcho at all. The behaviour is
-      explicit that a missing scope key must narrow to nothing rather than widen
-      to everything, and that rule outranks the mapping above.
-
-  Only `:all` is unscoped, so only `:all` reaches Honcho without a key.
+      `LemonHoncho.SessionManager` searches that one session, filtered to the
+      requesting owner (`LemonHoncho.Owner`: the key's agent and the human peer
+      resolved from the key and its `:channel_identity`). The client drops
+      every hit not tagged for exactly that owner.
+    * A `:session` whose key has no Honcho mapping yet returns `[]` without a
+      request. Searching the workspace instead would answer with other
+      people's conversations.
+    * `:agent`, `:workspace`, `:all` and any unrecognised scope return `[]`
+      without a request. The provider options name an agent id or a Lemon
+      workspace key but not the human peer asking, so none of them can be
+      partitioned by person, and a workspace-wide search is every user's memory.
+    * A `:session` search with no `:scope_key` returns `[]` too.
 
   ## What a Honcho message becomes
 
@@ -57,13 +58,12 @@ defmodule LemonHoncho.MemoryProvider do
     * **`doc_id` is `"hon_"` plus Honcho's message id**, or a digest of the
       message when it has none, so that the registry's dedupe by `doc_id` treats
       the same message returned by two searches as one document.
-    * **`scope` echoes the requested scope**, except that `:all` — which is a
-      search scope but not a document scope — is recorded as `:global`, the
-      document scope with the same meaning.
-    * **`run_id` and `agent_id` are `""`**, not `nil`: both are declared
-      `binary()` and the registry sorts and dedupes over these structs, so a
-      `nil` in a `binary()` field is a type error waiting to surface somewhere
-      far from here.
+    * **`scope` is `:session`**, `session_key` is the requested key and
+      `agent_id` is that key's agent: every returned message was checked to
+      belong to that session's owner, so the labels are true.
+    * **`run_id` is `""`**, not `nil`: it is declared `binary()` and the
+      registry sorts and dedupes over these structs, so a `nil` in a `binary()`
+      field is a type error waiting to surface somewhere far from here.
 
   An entry that is not a map, or that carries no text, is dropped rather than
   turned into an empty document.
@@ -104,9 +104,7 @@ defmodule LemonHoncho.MemoryProvider do
 
   require Logger
 
-  alias LemonHoncho.Config
-  alias LemonHoncho.Egress
-  alias LemonHoncho.SessionManager
+  alias LemonHoncho.{Config, Egress, Owner, SessionManager}
   alias LemonMemory.Document
 
   @default_limit 5
@@ -120,9 +118,6 @@ defmodule LemonHoncho.MemoryProvider do
   @provider_name "honcho"
   @doc_id_prefix "hon_"
   @doc_id_digest_bytes 8
-
-  @scopes [:session, :agent, :workspace, :all]
-  @scoped [:session, :agent, :workspace]
 
   # Honcho answers in JSON, so every key arrives as a string. A stub — or a
   # future client that decodes into atoms — is read just as happily rather than
@@ -153,31 +148,32 @@ defmodule LemonHoncho.MemoryProvider do
   @doc """
   Searches Honcho and returns matching documents, or `[]`.
 
-  Honours `:scope`, `:scope_key` and `:limit` (default #{@default_limit}, capped
-  at #{@max_limit}); every other option, known to the platform or not, is
-  ignored. The query itself is trimmed and clipped to #{@max_query_chars}
-  characters, because Honcho searches semantically and a pasted transcript is a
-  slow embedding rather than a useful query, and then screened by
-  `LemonHoncho.Egress.screen/2` so that a query which looks like it carries a
-  credential is never put on the wire.
+  Honours `:scope`, `:scope_key`, `:channel_identity` and `:limit` (default
+  #{@default_limit}, capped at #{@max_limit}); every other option, known to the
+  platform or not, is ignored. The query itself is trimmed and clipped to
+  #{@max_query_chars} characters, because Honcho searches semantically and a
+  pasted transcript is a slow embedding rather than a useful query, and then
+  screened by `LemonHoncho.Egress.screen/2` so that a query which looks like it
+  carries a credential is never put on the wire.
 
   Returns `[]` — never an error tuple, never a raise — for a blank query, a
-  query withheld by the screen, an unconfigured integration, a scoped search
-  with no scope key, an unreachable Honcho, and a response it cannot make sense
-  of.
+  query withheld by the screen, an unconfigured integration, any scope other
+  than a mapped `:session`, an unreachable Honcho, and a response it cannot
+  make sense of.
   """
   @impl true
   @spec search(binary(), keyword()) :: [Document.t()]
   def search(query, opts) when is_binary(query) and is_list(opts) do
     config = Config.load()
-    scope = normalize_scope(Keyword.get(opts, :scope, :session))
 
     with true <- Config.configured?(config),
+         :session <- Keyword.get(opts, :scope, :session),
+         key when is_binary(key) <- present(Keyword.get(opts, :scope_key)),
          {:ok, trimmed} <- usable_query(query),
-         {:ok, route} <- route(scope, opts, config) do
+         {:ok, session_id, owner} <- session_route(key, opts, config) do
       config
-      |> fetch(route, trimmed, opts)
-      |> to_documents(scope, opts)
+      |> client().session_search(session_id, trimmed, limit: limit(opts), owner: owner)
+      |> to_documents(key, owner)
     else
       _not_searchable -> []
     end
@@ -195,51 +191,19 @@ defmodule LemonHoncho.MemoryProvider do
 
   ## Routing
 
-  # An unrecognized scope is treated as the unscoped one rather than rejected:
-  # the platform adds keys and values over time, and answering a future scope
-  # with a workspace-wide search is better than answering it with nothing.
-  defp normalize_scope(scope) when scope in @scopes, do: scope
-  defp normalize_scope(_other), do: :all
-
-  defp route(scope, opts, config) do
-    case {scope, present(Keyword.get(opts, :scope_key))} do
-      {:session, nil} ->
-        :error
-
-      {:session, key} ->
-        cache_key =
-          LemonHoncho.UserPeer.cache_key(
-            key,
-            config,
-            LemonHoncho.UserPeer.identity(key, Keyword.get(opts, :channel_identity))
-          )
-
-        {:ok, session_route(cache_key)}
-
-      {scoped, nil} when scoped in @scoped ->
-        :error
-
-      {_scope, _key} ->
-        {:ok, :workspace}
-    end
-  end
-
   # A session Honcho has never been told about cannot be searched by id, and
   # inventing one from `LemonHoncho.SessionName` would address a session that
-  # does not exist and 404. The workspace search is the degraded answer.
-  defp session_route(key) do
-    case SessionManager.honcho_session_id(key) do
-      {:ok, session_id} when is_binary(session_id) -> {:session, session_id}
-      _unmapped -> :workspace
+  # may not exist. "Not mapped" is `[]`, never a wider search. The owner comes
+  # from the options' admitted proof and transport identity, with the scope key
+  # as the session key; without a proven owner nothing is searched.
+  defp session_route(key, opts, config) do
+    with {:ok, owner} <- Owner.from_context(config, Keyword.put(opts, :session_key, key)),
+         {:ok, session_id} when is_binary(session_id) <-
+           SessionManager.honcho_session_id(SessionManager.entry_key(key, owner)) do
+      {:ok, session_id, owner}
+    else
+      _unmapped_or_unproven -> :error
     end
-  end
-
-  defp fetch(config, {:session, session_id}, query, opts) do
-    client().session_search(config, session_id, query, limit: limit(opts))
-  end
-
-  defp fetch(config, :workspace, query, opts) do
-    client().workspace_search(config, query, limit: limit(opts))
   end
 
   defp client, do: LemonHoncho.client()
@@ -264,29 +228,33 @@ defmodule LemonHoncho.MemoryProvider do
 
   ## Response mapping
 
-  defp to_documents({:ok, results}, scope, opts) when is_list(results) do
-    Enum.flat_map(results, &document(&1, scope, opts))
+  defp to_documents({:ok, results}, key, owner) when is_list(results) do
+    Enum.flat_map(results, &document(&1, key, owner))
   end
 
-  defp to_documents({:ok, _other}, _scope, _opts), do: []
+  defp to_documents({:ok, _other}, _key, _owner), do: []
 
-  defp to_documents({:error, reason}, _scope, _opts) do
+  defp to_documents({:error, reason}, _key, _owner) do
     Logger.debug("honcho: memory search failed: #{inspect(reason)}")
     []
   end
 
-  defp to_documents(_other, _scope, _opts), do: []
+  defp to_documents(_other, _key, _owner), do: []
 
-  defp document(entry, scope, opts) when is_map(entry) do
-    case content(entry) do
-      "" -> []
-      content -> [build(entry, content, scope, opts)]
+  # The client already drops hits of other owners; checking again here keeps
+  # the labels below true whichever client module is installed.
+  defp document(entry, key, owner) when is_map(entry) do
+    with true <- Owner.owns?(owner, entry),
+         content when content != "" <- content(entry) do
+      [build(entry, content, key, owner)]
+    else
+      _foreign_or_empty -> []
     end
   end
 
-  defp document(_entry, _scope, _opts), do: []
+  defp document(_entry, _key, _owner), do: []
 
-  defp build(entry, content, scope, opts) do
+  defp build(entry, content, key, %Owner{} = owner) do
     created_at = field(entry, "created_at")
     at_ms = timestamp(created_at)
     session_id = entry |> field("session_id") |> string() |> to_empty()
@@ -295,10 +263,10 @@ defmodule LemonHoncho.MemoryProvider do
     %Document{
       doc_id: doc_id(message_id, [content, session_id, string(created_at) || ""]),
       run_id: "",
-      session_key: session_key(scope, opts, session_id),
-      agent_id: agent_id(scope, opts),
+      session_key: key,
+      agent_id: owner.agent_id,
       workspace_key: nil,
-      scope: document_scope(scope),
+      scope: :session,
       started_at_ms: at_ms,
       ingested_at_ms: at_ms,
       prompt_summary: "",
@@ -314,27 +282,6 @@ defmodule LemonHoncho.MemoryProvider do
         session_id: session_id
       }
     }
-  end
-
-  # `:all` is a search scope but not a document scope; `:global` is the document
-  # scope that means the same thing.
-  defp document_scope(:all), do: :global
-  defp document_scope(scope), do: scope
-
-  defp session_key(:session, opts, _session_id) do
-    opts |> Keyword.get(:scope_key) |> string() |> to_empty()
-  end
-
-  defp session_key(_scope, _opts, session_id), do: session_id
-
-  # An agent-scoped search is keyed by the agent id, so the scope key *is* the
-  # agent id when no explicit one was passed.
-  defp agent_id(:agent, opts) do
-    to_empty(string(Keyword.get(opts, :agent_id)) || string(Keyword.get(opts, :scope_key)))
-  end
-
-  defp agent_id(_scope, opts) do
-    opts |> Keyword.get(:agent_id) |> string() |> to_empty()
   end
 
   # Honcho ids are stable, so they make the best dedupe key. A message without

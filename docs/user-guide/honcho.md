@@ -154,6 +154,15 @@ volatile caches are partitioned by peer even in a shared group conversation.
 Transport-marked bot turns are **not uploaded at all**, including their
 assistant response, so a bot's words never train the human peer.
 
+These rules choose the *human*; they are not the Honcho peer id by themselves.
+Every Honcho peer is owner-scoped: the human, the agent profile, and the memory
+ownership (legacy or a verified private context) together name a user peer
+`v2-u-<human>-<hash>` and an assistant peer `v2-a-<ai_peer>-<hash>`. So the same
+person talking to two profiles has two separate representations, peer cards and
+conclusion sets, and each owner has their own view of the assistant: what the
+assistant said to one person is never part of the assistant representation that
+reaches another person's prompt.
+
 ### Upload controls
 
 Uploads travel over Lemon's built-in memory ingest, and that pipeline sits behind the
@@ -386,18 +395,48 @@ Honcho hits alongside local ones in all three modes.
 ## Session Strategies
 
 A Honcho *session* is the container messages, summaries, and conclusions hang off.
-`LEMON_HONCHO_SESSION_STRATEGY` decides which of your runs share one.
+`LEMON_HONCHO_SESSION_STRATEGY` decides which places share one.
 
 | Strategy | One session per | Effect |
 |---|---|---|
-| `per-directory` (default) | working directory | Every run in a project accumulates into the same memory |
-| `per-repo` | git repository | Worktrees and subdirectories of one project share memory instead of fragmenting it |
+| `per-directory` (default) | working directory (full path) | Every run in a project accumulates into the same memory |
+| `per-repo` | git repository (full root path) | Subdirectories of one checkout share memory instead of fragmenting it |
 | `per-session` | Lemon session | Nothing is shared; each conversation starts clean |
-| `global` | everything | One session named after the workspace |
+| `global` | workspace | One session for every place |
 
-Session ids are sanitized to `[A-Za-z0-9_-]` and capped at 100 characters; an
-over-long id keeps a readable prefix and gains a short hash, so two long keys that
-share a leading segment never collide into one memory.
+Whatever the strategy, a session is never shared across **who** is talking:
+
+- each agent profile has its own sessions, even in the same directory;
+- each resolved human peer has its own sessions (see
+  [Gateway identity mapping](#gateway-identity-mapping)), so two senders never see
+  each other's session summary even though every channel run has a working
+  directory named `workspace`;
+- each channel conversation (any session key other than an agent's local main
+  session) has its own sessions, so a group chat never shares memory with a DM;
+- a verified private memory context has its own peer and sessions (below).
+
+A session id is a readable label (the directory or repository name, the session id,
+or the workspace) sanitized to `[A-Za-z0-9_-]`, followed by a 128-bit hash of the full
+place and identity, within Honcho's 100-character limit. The label alone never
+decides identity: `a:b` and `a/b`, or two `workspace` directories, are different
+sessions.
+
+**Behavior change — clean `v2` namespace.** Peer ids, session ids and message
+tags are all versioned, and nothing written before owner partitioning is ever read:
+the bare `user_peer`/`ai_peer` peers (their representations, peer cards and
+conclusions), directory-named sessions and their summaries, and untagged messages.
+Their ownership cannot be established after the fact — they may mix several people,
+profiles or private runs — so every owner starts with empty Honcho memory after the
+upgrade and builds it up again from new runs. The old records stay in the Honcho
+workspace untouched; delete them there if you no longer want them.
+
+**Private memory contexts.** A run admitted with a verified private memory context
+(the same proof Lemon's native memory uses for private history) has its own owner,
+so its own user peer, assistant peer and sessions; it never touches the legacy
+owner's, an alias's, or another context's, and only that context reads it back. A
+run whose ownership claim is partial or unproven — or a channel run that does not
+name its sender, such as a channel run's subagent — gets no Honcho memory at all:
+nothing is injected, its tools refuse, and its run summary is not uploaded.
 
 `mix lemon.honcho sessions` shows the mappings held by *the node the command itself
 starts* — not by a Lemon you have running, which is a separate node the command cannot
@@ -452,10 +491,10 @@ result rather than an error.
 | Tool | What it asks Honcho for |
 |---|---|
 | `honcho_reasoning` | A synthesized answer about the user — the dialectic endpoint, the expensive one |
-| `honcho_search` | Semantic search over stored messages, in this session or across the workspace |
+| `honcho_search` | Semantic search over your stored messages: this conversation (refused with "not mapped" until its Honcho session exists), or every session of yours with this assistant |
 | `honcho_context` | The assembled context: session summary, representation, peer card |
 | `honcho_profile` | Read the profile card, or replace it wholesale |
-| `honcho_conclude` | One of three exclusive actions: `conclusion` records a fact, `query` searches stored conclusions, `delete_id` removes one |
+| `honcho_conclude` | One of three exclusive actions: `conclusion` records a fact, `query` searches stored conclusions, `delete_id` removes one — only if Honcho confirms it was recorded for this same owner; any other id is refused and nothing is deleted |
 
 A conclusion is a fact stated outright rather than inferred — the thing to reach for
 when you tell the assistant something it should still know next month. `honcho_conclude`
@@ -597,9 +636,10 @@ model's own wording rather than yours, though in practice it is often a verbatim
 of what you just said. Setting `LEMON_HONCHO_SAVE_MESSAGES=false` stops the two that
 write.
 
-**4. Identifiers.** Your workspace name, the two peer ids, and the session id derived
-from your working directory, git repository, or session key — sanitized, and hashed
-when over-long.
+**4. Identifiers.** Your workspace name, the two peer ids, the session id (a label
+plus a hash of your working directory, git repository or session key and identity),
+and on every uploaded message an owner tag: the agent id, the human peer id and the
+memory ownership (`legacy` or `private:<context key>`).
 
 **What is never sent:** tool call arguments and results, file contents, diffs, command
 output, and the full transcript of a run. Nothing in Lemon hands that material to this
@@ -696,9 +736,12 @@ Worth knowing before you go looking for them:
 - **Observation is preset-only.** `directional` or `unified`; the four underlying
   flags are not individually settable from Lemon.
 - **Search returns messages, not runs.** A Honcho result is one utterance, so it fills
-  the answer half of a memory document and leaves the run fields empty. Honcho also has
-  no partition matching a Lemon agent or workspace, so those scopes search the whole
-  workspace rather than narrowing.
+  the answer half of a memory document and leaves the run fields empty. Every search
+  is filtered to the requester's own agent, peer and memory ownership, and hits not
+  tagged for exactly that owner are dropped client-side. The memory provider only
+  answers `session`-scoped searches of an already-mapped session; `agent`,
+  `workspace` and `all` scopes return nothing, because their options do not identify
+  the person asking.
 
 ---
 

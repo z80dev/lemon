@@ -84,7 +84,7 @@ defmodule LemonHoncho.Client do
 
   require Logger
 
-  alias LemonHoncho.Config
+  alias LemonHoncho.{Config, Owner}
 
   @typedoc "What every call in this module returns."
   @type result :: {:ok, term()} | {:error, term()}
@@ -99,7 +99,11 @@ defmodule LemonHoncho.Client do
   @type peer_spec :: {String.t(), peer_flags()}
 
   @typedoc "One message as Honcho stores it: content plus the peer who authored it."
-  @type message :: %{content: String.t(), peer_id: String.t()}
+  @type message :: %{
+          required(:content) => String.t(),
+          required(:peer_id) => String.t(),
+          optional(:metadata) => map()
+        }
 
   @typedoc "One conclusion: who observed whom, saying what, optionally in a session."
   @type conclusion :: %{
@@ -223,14 +227,15 @@ defmodule LemonHoncho.Client do
   @doc """
   Appends messages to a session.
 
-  Each message is `%{content: ..., peer_id: ...}`; the peer is the author, and
-  Honcho adds it to the session automatically if it is not a member yet.
+  Each message is `%{content: ..., peer_id: ...}` plus optional `metadata`
+  (the `LemonHoncho.Owner` tag); the peer is the author, and Honcho adds it to
+  the session automatically if it is not a member yet.
   Truncation is deliberately *not* done here — the caller owns
   `message_max_chars`, because only it knows which half of a turn to cut.
   """
   @spec add_messages(Config.t(), String.t(), [message()]) :: result()
   def add_messages(%Config{} = config, session_id, messages) when is_list(messages) do
-    body = %{messages: Enum.map(messages, &Map.take(&1, [:content, :peer_id]))}
+    body = %{messages: Enum.map(messages, &Map.take(&1, [:content, :peer_id, :metadata]))}
 
     request(config, :post, scoped(config, ["sessions", session_id, "messages"]), json: body)
   end
@@ -318,34 +323,55 @@ defmodule LemonHoncho.Client do
   end
 
   @doc """
-  Searches the messages of one session.
+  Searches the messages of one session that belong to one owner.
 
   ## Options
 
+    * `:owner` — required `t:LemonHoncho.Owner.t/0`. It is sent as the
+      server-side filter, and every hit whose metadata does not name exactly
+      this owner is dropped from the result, so a server that ignores the
+      filter, an untagged legacy message, or another sender's message never
+      reaches the caller. Without it the call returns
+      `{:error, :unscoped_search}` and sends nothing.
     * `:limit` — number of results (Honcho accepts 1..100, default #{@default_search_limit}).
-    * `:filters` — additional server-side filters.
   """
   @spec session_search(Config.t(), String.t(), String.t(), keyword()) ::
           {:ok, [map()]} | {:error, term()}
   def session_search(%Config{} = config, session_id, query, opts \\ []) do
-    body = search_body(query, opts)
-
-    config
-    |> request(:post, scoped(config, ["sessions", session_id, "search"]), json: body)
-    |> as_list()
+    owned_search(config, ["sessions", session_id, "search"], query, opts)
   end
 
   @doc """
-  Searches every message in the workspace, across sessions.
+  Searches one owner's messages across every session of the workspace.
 
-  Takes the same options as `session_search/4`.
+  Takes the same options as `session_search/4`, including the required `:owner`.
   """
   @spec workspace_search(Config.t(), String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def workspace_search(%Config{} = config, query, opts \\ []) do
-    config
-    |> request(:post, scoped(config, ["search"]), json: search_body(query, opts))
-    |> as_list()
+    owned_search(config, ["search"], query, opts)
   end
+
+  defp owned_search(config, segments, query, opts) do
+    case Keyword.get(opts, :owner) do
+      %Owner{} = owner ->
+        body = %{
+          query: query,
+          limit: Keyword.get(opts, :limit, @default_search_limit),
+          filters: Owner.filters(owner)
+        }
+
+        config
+        |> request(:post, scoped(config, segments), json: body)
+        |> as_list()
+        |> owned_by(owner)
+
+      _missing ->
+        {:error, :unscoped_search}
+    end
+  end
+
+  defp owned_by({:ok, hits}, owner), do: {:ok, Enum.filter(hits, &Owner.owns?(owner, &1))}
+  defp owned_by(other, _owner), do: other
 
   @doc """
   Reads a peer card — the short, human-readable profile Honcho keeps for a peer.
@@ -400,31 +426,70 @@ defmodule LemonHoncho.Client do
 
     * `:observer_id` / `:observed_id` — scope the search to one direction of
       observation. Both are sent inside `filters`, which is where Honcho's
-      conclusion API expects them.
+      conclusion API expects them, and every returned conclusion whose
+      observer or observed peer differs from a given filter is dropped, so a
+      server that ignores the filter cannot hand back another owner's facts.
     * `:top_k` — maximum results (default #{@default_top_k}).
   """
   @spec query_conclusions(Config.t(), String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def query_conclusions(%Config{} = config, query, opts \\ []) do
+    filters = opts |> query_params([:observer_id, :observed_id]) |> Map.new()
+
     body = %{
       query: query,
       top_k: Keyword.get(opts, :top_k, @default_top_k),
-      filters: opts |> query_params([:observer_id, :observed_id]) |> Map.new()
+      filters: filters
     }
 
     config
     |> request(:post, scoped(config, ["conclusions", "query"]), json: body)
     |> as_list()
+    |> matching(filters)
   end
 
-  @doc """
-  Deletes one conclusion by id.
+  defp matching({:ok, hits}, filters) do
+    {:ok,
+     Enum.filter(hits, fn hit ->
+       is_map(hit) and Enum.all?(filters, fn {key, value} -> hit[to_string(key)] == value end)
+     end)}
+  end
 
-  Honcho answers with an empty body, so a success is `{:ok, %{}}` — the same
-  shape every other empty response takes here.
+  defp matching(other, _filters), do: other
+
+  @doc """
+  Deletes one conclusion by id, if and only if it belongs to `owner_peers`.
+
+  A conclusion id is workspace-wide, so knowing one is not authority over it.
+  The conclusion is read back first and deleted only when its observer and
+  observed peers are exactly `owner_peers` (the caller's owner-scoped
+  `LemonHoncho.Owner` peers). Any other conclusion is `{:error, :not_owned}`,
+  and a failed lookup is returned as is; neither deletes anything.
+
+  Honcho answers the delete with an empty body, so a success is `{:ok, %{}}` —
+  the same shape every other empty response takes here.
   """
-  @spec delete_conclusion(Config.t(), String.t()) :: result()
-  def delete_conclusion(%Config{} = config, conclusion_id) when is_binary(conclusion_id) do
-    request(config, :delete, scoped(config, ["conclusions", conclusion_id]), [])
+  @spec delete_conclusion(Config.t(), String.t(), %{
+          observer_id: String.t(),
+          observed_id: String.t()
+        }) :: result()
+  def delete_conclusion(
+        %Config{} = config,
+        conclusion_id,
+        %{observer_id: observer, observed_id: observed}
+      )
+      when is_binary(conclusion_id) and is_binary(observer) and is_binary(observed) do
+    segments = scoped(config, ["conclusions", conclusion_id])
+
+    case request(config, :get, segments, []) do
+      {:ok, %{"observer_id" => ^observer, "observed_id" => ^observed}} ->
+        request(config, :delete, segments, [])
+
+      {:ok, _foreign_or_unreadable} ->
+        {:error, :not_owned}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   ## Request construction
@@ -663,11 +728,6 @@ defmodule LemonHoncho.Client do
   end
 
   defp observation_flags(flags), do: Map.take(flags, [:observe_me, :observe_others])
-
-  defp search_body(query, opts) do
-    %{query: query, limit: Keyword.get(opts, :limit, @default_search_limit)}
-    |> put_present(:filters, Keyword.get(opts, :filters))
-  end
 
   defp conclusion_payload(conclusion) do
     conclusion

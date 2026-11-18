@@ -1,8 +1,9 @@
 defmodule LemonHoncho.SessionNameTest do
   @moduledoc """
-  The interesting cases here are not the happy strategies but the two rules
-  that protect other people's memory: sanitization must not produce an empty
-  id, and truncation must not merge two distinct long keys into one session.
+  The interesting cases here are not the happy strategies but the rules that
+  protect other people's memory: an id is always a readable label plus a digest
+  of the full place and identity, sanitization must not produce an empty id or
+  merge distinct inputs, and nothing but identical inputs share a session.
   """
 
   use ExUnit.Case, async: false
@@ -12,42 +13,87 @@ defmodule LemonHoncho.SessionNameTest do
 
   @max_length 100
 
-  describe "strategies" do
-    test "per_session uses the Lemon session id" do
-      config = %Config{session_strategy: :per_session}
+  defp label!(id) do
+    assert [_, label] = Regex.run(~r/\A(.+)-[0-9a-f]{32}\z/, id)
+    assert String.length(id) <= @max_length
+    label
+  end
 
-      assert SessionName.resolve(config, session_id: "sess_abc123", session_key: "cli:local") ==
-               "sess_abc123"
+  describe "strategies" do
+    test "per_session labels with the Lemon session id" do
+      config = %Config{session_strategy: :per_session}
+      id = SessionName.resolve(config, session_id: "sess_abc123", session_key: "cli:local")
+
+      assert label!(id) == "sess_abc123"
+      refute id == SessionName.resolve(config, session_id: "sess_other", session_key: "cli:local")
     end
 
     test "per_session falls back to the session key when there is no session id" do
       config = %Config{session_strategy: :per_session}
 
-      assert SessionName.resolve(config, session_key: "telegram-4815162342") ==
+      assert label!(SessionName.resolve(config, session_key: "telegram-4815162342")) ==
                "telegram-4815162342"
     end
 
-    test "per_directory uses the directory basename and ignores the session key" do
+    test "per_directory labels with the basename but is keyed by the full path" do
       config = %Config{session_strategy: :per_directory}
+      id = SessionName.resolve(config, cwd: "/home/z80/dev/lemon", session_key: "agent:a:main")
 
-      assert SessionName.resolve(config, cwd: "/home/z80/dev/lemon", session_key: "cli:local") ==
-               "lemon"
+      assert label!(id) == "lemon"
+
+      assert id ==
+               SessionName.resolve(config,
+                 cwd: "/home/z80/dev/lemon",
+                 session_key: "agent:a:main"
+               )
+
+      refute id ==
+               SessionName.resolve(config, cwd: "/srv/other/lemon", session_key: "agent:a:main")
     end
 
-    test "global uses the workspace name" do
+    test "the owner and a channel conversation each separate" do
+      config = %Config{session_strategy: :per_directory}
+      owner = LemonHoncho.Owner.new(config, "agent:a:main", nil, "legacy")
+      base = [cwd: "/srv/workspace", session_key: "agent:a:main", owner: owner]
+      id = SessionName.resolve(config, base)
+
+      for {key, value} <- [
+            session_key: "agent:a:telegram:default:dm:1",
+            owner: LemonHoncho.Owner.new(config, "agent:b:main", nil, "legacy"),
+            owner:
+              LemonHoncho.Owner.new(
+                config,
+                "agent:a:main",
+                %{channel_id: "telegram", sender_id: "1"},
+                "legacy"
+              ),
+            owner: LemonHoncho.Owner.new(config, "agent:a:main", nil, "private:actor-a")
+          ] do
+        refute id == SessionName.resolve(config, Keyword.put(base, key, value))
+      end
+
+      # A main session's subagent stays in the main session's memory.
+      assert id ==
+               SessionName.resolve(config, Keyword.put(base, :session_key, "agent:a:main:sub:x"))
+    end
+
+    test "global labels with the workspace name and is still partitioned by owner" do
       config = %Config{session_strategy: :global, workspace: "lemon"}
+      id = SessionName.resolve(config, cwd: "/home/z80/dev/lemon", session_id: "sess_1")
+      other = LemonHoncho.Owner.new(config, "agent:b:main", nil, "legacy")
 
-      assert SessionName.resolve(config, cwd: "/home/z80/dev/lemon", session_id: "sess_1") ==
-               "lemon"
+      assert label!(id) == "lemon"
+      assert id == SessionName.resolve(config, cwd: "/elsewhere", session_id: "sess_2")
+      refute id == SessionName.resolve(config, cwd: "/elsewhere", owner: other)
     end
 
-    test "per_repo falls back to the directory basename outside a repository" do
+    test "per_repo falls back to the directory outside a repository" do
       config = %Config{session_strategy: :per_repo}
       cwd = Path.join(System.tmp_dir!(), "lemon-honcho-not-a-repo")
       File.mkdir_p!(cwd)
       on_exit(fn -> File.rm_rf(cwd) end)
 
-      assert SessionName.resolve(config, cwd: cwd) == "lemon-honcho-not-a-repo"
+      assert label!(SessionName.resolve(config, cwd: cwd)) == "lemon-honcho-not-a-repo"
     end
 
     @tag :tmp_dir
@@ -59,8 +105,10 @@ defmodule LemonHoncho.SessionNameTest do
         {_output, 0} = System.cmd("git", ["init", "--quiet", repo], stderr_to_stdout: true)
 
         config = %Config{session_strategy: :per_repo}
+        id = SessionName.resolve(config, cwd: nested)
 
-        assert SessionName.resolve(config, cwd: nested) == "my-repo"
+        assert label!(id) == "my-repo"
+        assert id == SessionName.resolve(config, cwd: repo)
       end
     end
   end
@@ -110,7 +158,7 @@ defmodule LemonHoncho.SessionNameTest do
       :ok = LemonCore.NativeProcess.configure!(context.ledger)
       config = %Config{session_strategy: :per_repo}
 
-      assert SessionName.resolve(config, cwd: context.cwd) == "provenance-root"
+      assert label!(SessionName.resolve(config, cwd: context.cwd)) == "provenance-root"
       assert File.read!(Path.join(context.cwd, "git-ran")) == "rev-parse\n--show-toplevel\n"
 
       assert [{_id, %{backend: :local, workload_identity: identity}, %{}}] =
@@ -124,24 +172,34 @@ defmodule LemonHoncho.SessionNameTest do
       refute Process.whereis(LemonCore.NativeProcess)
       config = %Config{session_strategy: :per_repo}
 
-      assert SessionName.resolve(config, cwd: context.cwd) == "fallback-directory"
+      assert label!(SessionName.resolve(config, cwd: context.cwd)) == "fallback-directory"
       refute File.exists?(Path.join(context.cwd, "git-ran"))
       refute File.exists?(context.ledger)
     end
   end
 
   describe "sanitization" do
-    test "collapses anything outside [A-Za-z0-9_-] and trims the edges" do
+    test "collapses anything outside [A-Za-z0-9_-] in the label and trims the edges" do
       config = %Config{session_strategy: :per_session}
 
-      assert SessionName.resolve(config, session_id: "  chat/42 ✨ notes  ") == "chat-42-notes"
-      assert SessionName.resolve(config, session_id: "!room:matrix.org") == "room-matrix-org"
+      assert label!(SessionName.resolve(config, session_id: "  chat/42 ✨ notes  ")) ==
+               "chat-42-notes"
+
+      assert label!(SessionName.resolve(config, session_id: "!room:matrix.org")) ==
+               "room-matrix-org"
     end
 
-    test "never returns an empty id, falling back to the workspace" do
+    test "inputs that sanitize to the same label are still different sessions" do
+      config = %Config{session_strategy: :per_session}
+
+      refute SessionName.resolve(config, session_id: "a:b") ==
+               SessionName.resolve(config, session_id: "a/b")
+    end
+
+    test "never returns an empty label, falling back to the workspace" do
       config = %Config{session_strategy: :per_session, workspace: "lemon"}
 
-      assert SessionName.resolve(config, session_id: "///") == "lemon"
+      assert label!(SessionName.resolve(config, session_id: "///")) == "lemon"
     end
 
     test "falls back past an unusable workspace to a constant" do
@@ -156,8 +214,8 @@ defmodule LemonHoncho.SessionNameTest do
       config = %Config{session_strategy: :per_session}
       id = SessionName.resolve(config, session_id: String.duplicate("a", 200))
 
-      assert String.length(id) <= @max_length
-      assert id =~ ~r/-[0-9a-f]{8}\z/
+      assert String.length(id) == @max_length
+      assert id =~ ~r/-[0-9a-f]{32}\z/
     end
 
     test "two long keys sharing a prefix do not collide" do
@@ -178,12 +236,6 @@ defmodule LemonHoncho.SessionNameTest do
 
       assert SessionName.resolve(config, session_id: key) ==
                SessionName.resolve(config, session_id: key)
-    end
-
-    test "a short key is returned untouched" do
-      config = %Config{session_strategy: :per_session}
-
-      assert SessionName.resolve(config, session_id: "sess_short") == "sess_short"
     end
   end
 end

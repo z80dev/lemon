@@ -127,12 +127,13 @@ defmodule LemonHoncho.Tools.Reasoning do
 
     with :ok <- Common.gate(config),
          {:ok, request} <- normalize(params, config),
-         scope = Common.scope(config, opts),
+         {:ok, scope} <- Common.scope(config, opts),
          {:ok, answer} <- ask(config, request, scope) do
       format(answer, request, scope)
     else
       {:error, :not_configured} -> not_configured()
       {:error, :context_only} -> context_only()
+      {:error, :unproven_context} -> Common.unproven_context(@tool_name)
       {:error, {:invalid_input, message}} -> failure(message)
       {:error, {:withheld, parameter}} -> withheld(parameter)
       {:error, {:unauthorized, _body}} -> failure(Common.unauthorized_message())

@@ -253,6 +253,9 @@ defmodule LemonHoncho.SessionManager do
   alias LemonHoncho.Egress
   alias LemonHoncho.SessionName
 
+  @typedoc "A tracked session: `{lemon session key, owner digest}` (`entry_key/2`)."
+  @type entry_key :: {String.t(), String.t()}
+
   @typedoc "One row of `sessions/0`, for operator-facing reporting."
   @type session_info :: %{
           session_key: String.t(),
@@ -493,9 +496,9 @@ defmodule LemonHoncho.SessionManager do
   reports **not** cold: there is no first-turn refresh for a caller to hold a
   turn open for, so the honest answer is the one that asks for less time.
   """
-  @spec cold?(String.t()) :: boolean()
-  def cold?(session_key) when is_binary(session_key) do
-    case safe_call({:cold?, session_key}, @call_timeout_ms) do
+  @spec cold?(entry_key()) :: boolean()
+  def cold?({state_key, _owner} = key) when is_binary(state_key) do
+    case safe_call({:cold?, key}, @call_timeout_ms) do
       {:ok, cold?} -> cold?
       _other -> false
     end
@@ -529,16 +532,16 @@ defmodule LemonHoncho.SessionManager do
   end
 
   @doc """
-  The Honcho session id a Lemon session key maps to, once it has been resolved.
+  The Honcho session id an entry key (`entry_key/2`) maps to, once resolved.
 
   Returns `{:error, :unknown_session}` for a key this manager has never served
   and `{:error, :not_initialized}` for one whose first refresh has not completed
   — resolution happens off the caller's path, so "not yet" is a normal answer
   rather than a failure.
   """
-  @spec honcho_session_id(String.t()) :: {:ok, String.t()} | {:error, term()}
-  def honcho_session_id(session_key) when is_binary(session_key) do
-    call_or_error({:honcho_session_id, session_key})
+  @spec honcho_session_id(entry_key()) :: {:ok, String.t()} | {:error, term()}
+  def honcho_session_id({state_key, _owner} = key) when is_binary(state_key) do
+    call_or_error({:honcho_session_id, key})
   end
 
   @doc """
@@ -547,10 +550,19 @@ defmodule LemonHoncho.SessionManager do
   Same "not yet" semantics as `honcho_session_id/1`: a key this manager has not
   served yields `{:error, :unknown_session}`.
   """
-  @spec peers(String.t()) :: {:ok, %{user: String.t(), ai: String.t()}} | {:error, term()}
-  def peers(session_key) when is_binary(session_key) do
-    call_or_error({:peers, session_key})
+  @spec peers(entry_key()) :: {:ok, %{user: String.t(), ai: String.t()}} | {:error, term()}
+  def peers({state_key, _owner} = key) when is_binary(state_key) do
+    call_or_error({:peers, key})
   end
+
+  @doc """
+  The key a session is tracked under: the Lemon session key (or session id, or
+  cwd) and the complete owner's digest, as a tuple, so no session key — however
+  it is spelled — can pose as another owner's entry.
+  """
+  @spec entry_key(String.t(), LemonHoncho.Owner.t()) :: entry_key()
+  def entry_key(state_key, %LemonHoncho.Owner{digest: digest}) when is_binary(state_key),
+    do: {state_key, digest}
 
   @doc """
   Every session this manager is tracking, for `mix lemon.honcho` and `status/0`.
@@ -739,11 +751,15 @@ defmodule LemonHoncho.SessionManager do
 
   ## Serving context
 
+  # A run without a proven owner (a partial or forged private context, or a
+  # channel conversation that does not name its sender) has no Honcho identity
+  # at all: it is served nothing rather than someone else's memory.
   defp gated?(%Config{} = config, request) do
     cond do
       not Config.configured?(config) -> true
       config.recall_mode == :tools -> true
       subagent?(request) and not config.inject_in_subagents? -> true
+      LemonHoncho.Owner.from_context(config, request) == :error -> true
       true -> false
     end
   end
@@ -751,8 +767,10 @@ defmodule LemonHoncho.SessionManager do
   defp subagent?(request), do: Map.get(request, :session_scope) == :subagent
 
   defp serve_context(request, config, state) do
-    key = cache_key(request, config)
-    entry = entry_for(state, key, request, config)
+    {:ok, owner} = LemonHoncho.Owner.from_context(config, request)
+    request = Map.put(request, :honcho_owner, owner)
+    key = entry_key(state_key(request), owner)
+    entry = entry_for(state, key, request)
     turn = entry.turns
     kind = turn_kind(entry, request)
 
@@ -1176,34 +1194,35 @@ defmodule LemonHoncho.SessionManager do
 
   ## Message upload
 
+  # The document's own provenance decides where it may go: its owner comes from
+  # the persisted ownership stamps and the transport identity, exactly as a live
+  # request's does. An unproven, shared or partial stamp, or a channel run that
+  # does not name its sender, is not uploaded at all.
   defp flush_document(document, config, state) do
-    identity =
-      LemonHoncho.UserPeer.identity(
-        document.session_key,
-        LemonCore.MapHelpers.get_key(document.meta || %{}, :channel_identity)
-      )
-
-    if LemonHoncho.UserPeer.bot?(identity) do
-      state
-    else
+    with {:ok, owner} <- LemonHoncho.Owner.from_document(config, document),
+         false <- bot_document?(document) do
       request = %{
         session_key: document.session_key || @default_key,
         cwd: document.workspace_key,
-        channel_identity: identity
+        honcho_owner: owner
       }
 
-      key = cache_key(request, config)
-      peer = LemonHoncho.UserPeer.resolve(config, identity)
-
-      case messages_for(document, %{config | user_peer: peer}) do
+      case messages_for(document, owner, config) do
         [] -> state
-        messages -> upload(key, messages, request, config, state)
+        messages -> upload(entry_key(state_key(request), owner), messages, request, config, state)
       end
+    else
+      _bot_or_unproven -> state
     end
   end
 
+  defp bot_document?(document) do
+    claimed = LemonCore.MapHelpers.get_key(document.meta || %{}, :channel_identity)
+    LemonHoncho.UserPeer.bot?(LemonHoncho.UserPeer.identity(document.session_key, claimed))
+  end
+
   defp upload(key, messages, request, config, state) do
-    entry = entry_for(state, key, request, config)
+    entry = entry_for(state, key, request)
 
     plan = %{
       config: config,
@@ -1247,11 +1266,16 @@ defmodule LemonHoncho.SessionManager do
     Logger.debug("honcho: messages not stored: #{inspect(reason)}")
   end
 
-  defp messages_for(document, %Config{} = config) do
-    [{document.prompt_summary, config.user_peer}, {document.answer_summary, config.ai_peer}]
+  # Both halves carry the owner tag and the owner's peers: the assistant's
+  # answer to this person is this person's memory, and an untagged message is
+  # invisible to every search.
+  defp messages_for(document, %LemonHoncho.Owner{} = owner, %Config{} = config) do
+    metadata = LemonHoncho.Owner.metadata(owner)
+
+    [{document.prompt_summary, owner.user_peer}, {document.answer_summary, owner.ai_peer}]
     |> Enum.map(fn {content, peer} -> {clip(content, config.message_max_chars), peer} end)
     |> Enum.reject(fn {content, _peer} -> content == "" end)
-    |> Enum.map(fn {content, peer} -> %{content: content, peer_id: peer} end)
+    |> Enum.map(fn {content, peer} -> %{content: content, peer_id: peer, metadata: metadata} end)
   end
 
   defp clip(content, max) when is_binary(content) do
@@ -1271,31 +1295,30 @@ defmodule LemonHoncho.SessionManager do
   end
 
   @doc false
+  # The key a live request is tracked under. A request without a proven owner
+  # gets a key no entry is ever created under (it is gated).
   def cache_key(request, config) do
-    LemonHoncho.UserPeer.cache_key(
-      state_key(request),
-      config,
-      channel_identity(request)
-    )
-  end
-
-  defp channel_identity(%{session_scope: :subagent}), do: nil
-
-  defp channel_identity(request) do
-    LemonHoncho.UserPeer.identity(
-      Map.get(request, :session_key),
-      Map.get(request, :channel_identity)
-    )
+    case LemonHoncho.Owner.from_context(config, request) do
+      {:ok, owner} -> entry_key(state_key(request), owner)
+      :error -> {state_key(request), "unproven"}
+    end
   end
 
   # Both writers go through here, and both count as touching the session: a key
   # that is only ever uploaded to is as alive as one that is served, and the
   # eviction policy has to see it that way or a busy `sync_document/1` deployment
   # would evict the very sessions it is writing for.
-  defp entry_for(state, key, request, config) do
-    state.sessions
-    |> Map.get_lazy(key, fn -> new_entry(config, request) end)
-    |> touch()
+  #
+  # The entry key already carries the owner digest; the stored owner is checked
+  # again before reuse so that no key construction, present or future, can hand
+  # one owner's cached context, session or peers to another.
+  defp entry_for(state, key, request) do
+    owner = Map.fetch!(request, :honcho_owner)
+
+    case Map.get(state.sessions, key) do
+      %{owner: ^owner} = entry -> touch(entry)
+      _missing_or_foreign -> new_entry(request)
+    end
   end
 
   defp touch(entry), do: %{entry | last_touched_ms: now_ms()}
@@ -1307,11 +1330,17 @@ defmodule LemonHoncho.SessionManager do
   # which is exactly why it is tracked and capped like any other — in
   # `recall_mode: :tools`, where context is never served at all, uploads are the
   # only thing creating entries and were the only thing growing the map.
-  defp new_entry(%Config{} = config, request) do
+  #
+  # `:honcho_owner` is always set by the two writers above — from the request's
+  # admitted proof, or from the document's provenance — never by a caller.
+  defp new_entry(request) do
+    owner = Map.fetch!(request, :honcho_owner)
+
     %{
+      owner: owner,
       honcho_session_id: nil,
-      user_peer: LemonHoncho.UserPeer.resolve(config, channel_identity(request)),
-      ai_peer: config.ai_peer,
+      user_peer: owner.user_peer,
+      ai_peer: owner.ai_peer,
       turns: 0,
       last_context: "",
       last_context_at_ms: nil,
@@ -1323,17 +1352,21 @@ defmodule LemonHoncho.SessionManager do
       init_failures: 0,
       pending_refresh: nil,
       waiters: [],
-      resolve_opts: resolve_opts(request),
+      resolve_opts: resolve_opts(request, owner),
       base: %{summary: nil, user_representation: nil, peer_card: nil, ai_representation: nil},
       dialectic: nil
     }
   end
 
-  defp resolve_opts(request) do
+  # The complete owner is part of the session's identity: two people, two
+  # profiles, or a private context and legacy memory never share a Honcho
+  # session, and so never share its summary (see `LemonHoncho.SessionName`).
+  defp resolve_opts(request, owner) do
     [
       cwd: Map.get(request, :cwd),
       session_key: Map.get(request, :session_key),
-      session_id: Map.get(request, :session_id)
+      session_id: Map.get(request, :session_id),
+      owner: owner
     ]
   end
 
@@ -1442,9 +1475,9 @@ defmodule LemonHoncho.SessionManager do
   defp session_id_reply(%{honcho_session_id: nil}), do: {:error, :not_initialized}
   defp session_id_reply(%{honcho_session_id: id}), do: {:ok, id}
 
-  defp session_info({key, entry}) do
+  defp session_info({{session_key, _owner}, entry}) do
     %{
-      session_key: key,
+      session_key: session_key,
       honcho_session_id: entry.honcho_session_id,
       turns: entry.turns,
       last_context_at_ms: entry.last_context_at_ms

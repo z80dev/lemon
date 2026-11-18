@@ -23,8 +23,9 @@ defmodule LemonHoncho.Tools.Profile do
 
   ## Which peer
 
-  The user peer of the current session, as the session manager recorded it,
-  falling back to `config.user_peer`. The assistant's own card is not writable
+  The current run's owner-scoped user peer (`LemonHoncho.Owner`): this agent's
+  view of this person in this memory, never another profile's, person's or
+  memory context's card. The assistant's own card is not writable
   here: an agent editing its own stored identity is a different operation with
   different consequences, and conflating the two behind one `target` parameter
   would make an accidental self-edit a one-word mistake.
@@ -125,12 +126,13 @@ defmodule LemonHoncho.Tools.Profile do
     with :ok <- Common.gate(config),
          {:ok, request} <- normalize(params),
          :ok <- writable(config, request),
-         scope = Common.scope(config, opts),
+         {:ok, scope} <- Common.scope(config, opts),
          {:ok, card} <- apply_card(config, request, scope) do
       format(card, request, scope)
     else
       {:error, :not_configured} -> not_configured()
       {:error, :context_only} -> context_only()
+      {:error, :unproven_context} -> Common.unproven_context(@tool_name)
       {:error, :uploads_disabled} -> uploads_disabled()
       {:error, {:withheld, parameter}} -> withheld(parameter)
       {:error, {:invalid_input, message}} -> failure(message)

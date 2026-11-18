@@ -90,12 +90,13 @@ defmodule LemonHoncho.Tools.Context do
 
     with :ok <- Common.gate(config),
          {:ok, request} <- normalize(params),
-         scope = Common.scope(config, opts),
+         {:ok, scope} <- Common.scope(config, opts),
          {:ok, parts} <- fetch(config, request, scope) do
       format(parts, scope)
     else
       {:error, :not_configured} -> not_configured()
       {:error, :context_only} -> context_only()
+      {:error, :unproven_context} -> Common.unproven_context(@tool_name)
       {:error, {:invalid_input, message}} -> failure(message)
       {:error, {:unauthorized, _body}} -> failure(Common.unauthorized_message())
       {:error, {:api_error, status, body}} -> failure(Common.api_message(status, body))

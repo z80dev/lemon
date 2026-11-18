@@ -70,9 +70,9 @@ defmodule LemonHoncho.ToolsTest.StubClient do
     {:ok, %{}}
   end
 
-  @spec delete_conclusion(term(), String.t()) :: {:ok, map()}
-  def delete_conclusion(_config, conclusion_id) do
-    record(:delete_conclusion, conclusion_id)
+  @spec delete_conclusion(term(), String.t(), map()) :: {:ok, map()}
+  def delete_conclusion(_config, conclusion_id, owner_peers) do
+    record(:delete_conclusion, {conclusion_id, owner_peers})
     {:ok, %{}}
   end
 
@@ -262,8 +262,9 @@ defmodule LemonHoncho.ToolsTest do
       assert text(result) =~ "They review diffs before prose."
       assert %{answer: "They review diffs before prose.", target: "user"} = result.details
 
-      assert_received {:honcho_call, :chat, {"lemon", "what do they care about?", opts}}
-      assert opts[:target] == "user"
+      ai = ai_peer()
+      assert_received {:honcho_call, :chat, {^ai, "what do they care about?", opts}}
+      assert opts[:target] == user_peer()
       assert opts[:reasoning_level] == :low
       assert is_binary(opts[:session_id])
     end
@@ -278,7 +279,8 @@ defmodule LemonHoncho.ToolsTest do
     test "asks the assistant peer about itself when target is ai" do
       execute(Reasoning, %{"query" => "how do I behave?", "target" => "ai"})
 
-      assert_received {:honcho_call, :chat, {"lemon", _query, opts}}
+      ai = ai_peer()
+      assert_received {:honcho_call, :chat, {^ai, _query, opts}}
       refute Keyword.has_key?(opts, :target)
     end
 
@@ -303,36 +305,39 @@ defmodule LemonHoncho.ToolsTest do
     end
 
     test "returns the matching excerpts verbatim" do
-      result = execute(Search, %{"query" => "cold cache"})
+      result = execute(Search, %{"query" => "cold cache", "scope" => "workspace"})
 
-      # No session is mapped here, so this is the workspace hit; what matters is
-      # that its text and peer label survive into the tool output unrewritten.
+      # What matters is that the hit's text and peer label survive into the tool
+      # output unrewritten.
       assert text(result) =~ "user\nworkspace-wide recollection"
       assert result.details.excerpts == ["user\nworkspace-wide recollection"]
       assert result.details.count == 1
     end
 
     test "caps the limit and passes it through" do
-      execute(Search, %{"query" => "cold cache", "limit" => 5_000})
+      execute(Search, %{"query" => "cold cache", "limit" => 5_000, "scope" => "workspace"})
 
       assert_received {:honcho_call, :workspace_search, {"cold cache", opts}}
       assert opts[:limit] == 100
     end
 
-    test "searches the workspace when asked to" do
+    test "searches only the requester's own sessions when asked for the workspace" do
       result = execute(Search, %{"query" => "cold cache", "scope" => "workspace"})
 
       assert text(result) =~ "workspace-wide recollection"
       assert result.details.searched_scope == :workspace
-      assert_received {:honcho_call, :workspace_search, _payload}
+      assert_received {:honcho_call, :workspace_search, {_query, opts}}
+
+      assert opts[:owner] == owner()
+      assert opts[:owner].agent_id == "tools"
     end
 
-    test "falls back to the workspace when the session is not mapped" do
+    test "an unmapped session is refused, never widened to the workspace" do
       result = execute(Search, %{"query" => "cold cache"})
 
-      assert result.details.requested_scope == "session"
-      assert result.details.searched_scope == :workspace
-      assert_received {:honcho_call, :workspace_search, _payload}
+      assert text(result) =~ "not mapped"
+      assert result.details.error == :not_mapped
+      refute_received {:honcho_call, _name, _payload}
     end
 
     test "rejects a missing query, a non-positive limit, and an unknown scope" do
@@ -378,16 +383,17 @@ defmodule LemonHoncho.ToolsTest do
       assert text(result) =~ "the cache was cold"
 
       assert_received {:honcho_call, :session_search, {session_id, "cold cache", opts}}
-      assert session_id == "lemon-honcho-tools-test"
+      assert {:ok, session_id} == SessionManager.honcho_session_id(entry_key())
       assert result.details.session_id == session_id
       assert opts[:limit] == 10
+      assert opts[:owner] == owner()
     end
 
     test "honcho_conclude tags the conclusion with that session" do
       execute(Conclude, %{"conclusion" => "Never deploys on Fridays."})
 
       assert_received {:honcho_call, :create_conclusions, [conclusion]}
-      assert conclusion.session_id == "lemon-honcho-tools-test"
+      assert {:ok, conclusion.session_id} == SessionManager.honcho_session_id(entry_key())
     end
   end
 
@@ -430,7 +436,8 @@ defmodule LemonHoncho.ToolsTest do
 
       assert text(result) =~ "Prefers terse answers."
       assert result.details.action == :read
-      assert_received {:honcho_call, :get_peer_card, {"user", _opts}}
+      user = user_peer()
+      assert_received {:honcho_call, :get_peer_card, {^user, _opts}}
     end
 
     test "replaces the card and echoes exactly what was written" do
@@ -440,7 +447,8 @@ defmodule LemonHoncho.ToolsTest do
       assert result.details.card == ["Ships on Mondays.", "Runs Arch."]
       assert text(result) =~ "Ships on Mondays."
       assert text(result) =~ "Runs Arch."
-      assert_received {:honcho_call, :set_peer_card, {"user", card, _opts}}
+      user = user_peer()
+      assert_received {:honcho_call, :set_peer_card, {^user, card, _opts}}
       assert card == ["Ships on Mondays.", "Runs Arch."]
     end
 
@@ -465,18 +473,19 @@ defmodule LemonHoncho.ToolsTest do
       assert text(result) =~ "Never deploys on Fridays."
       assert result.details.action == :create
       assert_received {:honcho_call, :create_conclusions, [conclusion]}
-      assert conclusion.observer_id == "lemon"
-      assert conclusion.observed_id == "user"
+      assert conclusion.observer_id == ai_peer()
+      assert conclusion.observed_id == user_peer()
       assert conclusion.content == "Never deploys on Fridays."
       assert is_binary(conclusion.session_id)
     end
 
-    test "deletes a conclusion by id" do
+    test "deletes a conclusion by id, bound to this owner's peers" do
       result = execute(Conclude, %{"delete_id" => "con_123"})
 
       assert text(result) =~ "con_123"
       assert result.details.action == :delete
-      assert_received {:honcho_call, :delete_conclusion, "con_123"}
+      assert_received {:honcho_call, :delete_conclusion, {"con_123", peers}}
+      assert peers == %{observer_id: ai_peer(), observed_id: user_peer()}
     end
 
     test "searches stored conclusions and renders each one with its id" do
@@ -490,8 +499,8 @@ defmodule LemonHoncho.ToolsTest do
       assert result.details.count == 1
 
       assert_received {:honcho_call, :query_conclusions, {"fridays", opts}}
-      assert opts[:observer_id] == "lemon"
-      assert opts[:observed_id] == "user"
+      assert opts[:observer_id] == ai_peer()
+      assert opts[:observed_id] == user_peer()
       assert opts[:top_k] == 10
     end
 
@@ -545,7 +554,7 @@ defmodule LemonHoncho.ToolsTest do
     end
 
     test "honcho_search clips a long query to 1,500 characters on the wire" do
-      execute(Search, %{"query" => long()})
+      execute(Search, %{"query" => long(), "scope" => "workspace"})
 
       assert_received {:honcho_call, :workspace_search, {query, _opts}}
       assert String.length(query) == 1_500
@@ -626,7 +635,8 @@ defmodule LemonHoncho.ToolsTest do
 
       execute(Profile, %{"card" => [line]})
 
-      assert_received {:honcho_call, :set_peer_card, {"user", [sent], _opts}}
+      user = user_peer()
+      assert_received {:honcho_call, :set_peer_card, {^user, [sent], _opts}}
       assert String.length(sent) == 500
 
       assert error(execute(Profile, %{"card" => [long()]})) =~ "at most 500 characters"
@@ -644,7 +654,7 @@ defmodule LemonHoncho.ToolsTest do
     end
 
     test "an ordinary input still reaches Honcho unmodified" do
-      execute(Search, %{"query" => "cold cache"})
+      execute(Search, %{"query" => "cold cache", "scope" => "workspace"})
       execute(Reasoning, %{"query" => "how do they like PRs described?"})
       execute(Conclude, %{"query" => "fridays"})
       execute(Conclude, %{"conclusion" => "Never deploys on Fridays."})
@@ -655,7 +665,8 @@ defmodule LemonHoncho.ToolsTest do
       assert_received {:honcho_call, :query_conclusions, {"fridays", _query_opts}}
       assert_received {:honcho_call, :create_conclusions, [conclusion]}
       assert conclusion.content == "Never deploys on Fridays."
-      assert_received {:honcho_call, :set_peer_card, {"user", ["Ships on Mondays."], _card_opts}}
+      user = user_peer()
+      assert_received {:honcho_call, :set_peer_card, {^user, ["Ships on Mondays."], _card_opts}}
     end
   end
 
@@ -669,7 +680,8 @@ defmodule LemonHoncho.ToolsTest do
 
       assert result.details.action == :read
       assert text(result) =~ "Prefers terse answers."
-      assert_received {:honcho_call, :get_peer_card, {"user", _opts}}
+      user = user_peer()
+      assert_received {:honcho_call, :get_peer_card, {^user, _opts}}
     end
 
     test "honcho_profile refuses to replace the card and calls nothing" do
@@ -715,13 +727,21 @@ defmodule LemonHoncho.ToolsTest do
       assert execute(Conclude, %{"conclusion" => "A fact."}).details.action == :create
       assert execute(Conclude, %{"delete_id" => "con_123"}).details.action == :delete
 
-      assert_received {:honcho_call, :set_peer_card, {"user", ["Ships on Mondays."], _opts}}
+      user = user_peer()
+      assert_received {:honcho_call, :set_peer_card, {^user, ["Ships on Mondays."], _opts}}
       assert_received {:honcho_call, :create_conclusions, [_conclusion]}
-      assert_received {:honcho_call, :delete_conclusion, "con_123"}
+      assert_received {:honcho_call, :delete_conclusion, {"con_123", _peers}}
     end
   end
 
   ## Helpers
+
+  # The owner every call in this suite runs as: `@opts`' session key, the
+  # configured human, legacy memory.
+  defp owner, do: LemonHoncho.Owner.new(Config.load(), @opts[:session_key], nil, "legacy")
+  defp user_peer, do: owner().user_peer
+  defp ai_peer, do: owner().ai_peer
+  defp entry_key, do: SessionManager.entry_key(@opts[:session_key], owner())
 
   # One assertion for all five schemas: the model is shown a JSON object schema
   # whose `required` names only properties that are actually declared. A

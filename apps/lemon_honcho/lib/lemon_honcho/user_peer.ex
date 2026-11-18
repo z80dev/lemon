@@ -1,5 +1,12 @@
 defmodule LemonHoncho.UserPeer do
-  @moduledoc "Resolves a turn's human peer from transport-owned channel identity."
+  @moduledoc """
+  Resolves a turn's human from transport-owned channel identity.
+
+  `resolve/2` names the *human* (the configured, pinned, aliased, operator or
+  platform-qualified sender). It is not a Honcho peer id on its own:
+  `LemonHoncho.Owner` combines it with the agent and memory ownership into the
+  owner-scoped `v2` peers every Honcho read and write uses.
+  """
 
   alias LemonHoncho.Config
 
@@ -84,19 +91,6 @@ defmodule LemonHoncho.UserPeer do
     if is_binary(peer) and Regex.match?(~r/^[A-Za-z0-9_-]{1,512}$/, peer),
       do: peer,
       else: fallback
-  end
-
-  @doc "Partitions volatile context by resolved peer, including multi-sender group chats."
-  def cache_key(key, %Config{} = config, identity) do
-    if runtime_id(identity) do
-      digest =
-        :crypto.hash(:sha256, resolve(config, identity))
-        |> Base.encode16(case: :lower)
-
-      key <> ":honcho-peer:" <> digest
-    else
-      key
-    end
   end
 
   # Keep a digest whenever normalization changes an id, avoiding collisions such

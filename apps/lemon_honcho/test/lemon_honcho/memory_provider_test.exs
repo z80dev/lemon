@@ -67,9 +67,8 @@ defmodule LemonHoncho.MemoryProviderTest do
 
   @cwd "/tmp/lemon-honcho-provider"
   @session_key "agent:demo:main"
-  @honcho_session "lemon-honcho-provider"
-  @env_keys [:enabled, :api_key, :base_url, :client]
-  @os_env_keys ["HONCHO_API_KEY", "HONCHO_BASE_URL", "LEMON_HONCHO_ENABLED"]
+  @env_keys [:enabled, :api_key, :base_url, :client, :user_peer]
+  @os_env_keys ["HONCHO_API_KEY", "HONCHO_BASE_URL", "LEMON_HONCHO_ENABLED", "HONCHO_PEER"]
 
   # The shape `LemonMemory.Safety.contains_secret?/1` actually matches: a
   # `name: value` pair whose name is one of its credential words.
@@ -116,27 +115,29 @@ defmodule LemonHoncho.MemoryProviderTest do
   describe "search/2 routing" do
     setup :configure_honcho
 
-    test "a session with a known Honcho mapping searches that session" do
-      map_session()
+    test "a session with a known Honcho mapping searches that session, as its owner" do
+      session = map_session()
 
       assert MemoryProvider.search("cache", scope: :session, scope_key: @session_key) == []
 
-      assert_receive {:honcho_call, :session_search, {@honcho_session, "cache", opts}}, 1_000
+      assert_receive {:honcho_call, :session_search, {^session, "cache", opts}}, 1_000
       assert opts[:limit] == 5
+      assert opts[:owner] == owner()
     end
 
-    test "a session with no mapping widens to the workspace rather than inventing one" do
+    test "a session with no mapping returns [] and never widens to the workspace" do
       assert MemoryProvider.search("cache", scope: :session, scope_key: "never-seen") == []
-
-      assert_receive {:honcho_call, :workspace_search, {"cache", _opts}}, 1_000
+      refute_receive {:honcho_call, _name, _payload}, 100
     end
 
-    test "agent, workspace and all scopes search the whole workspace" do
-      for scope <- [:agent, :workspace, :all] do
-        MemoryProvider.search("cache", scope: scope, scope_key: "demo")
+    test "agent, workspace, all and unknown scopes cannot be partitioned by person" do
+      map_session()
 
-        assert_receive {:honcho_call, :workspace_search, {"cache", _opts}}, 1_000
+      for scope <- [:agent, :workspace, :all, :galaxy] do
+        assert MemoryProvider.search("cache", scope: scope, scope_key: @session_key) == []
       end
+
+      refute_receive {:honcho_call, _name, _payload}, 100
     end
 
     test "a scoped search with no scope key returns [] and calls nothing" do
@@ -147,8 +148,22 @@ defmodule LemonHoncho.MemoryProviderTest do
       refute_receive {:honcho_call, _name, _payload}, 100
     end
 
+    test "an unproven memory claim returns [] and calls nothing" do
+      map_session()
+
+      assert MemoryProvider.search("cache",
+               scope: :session,
+               scope_key: @session_key,
+               memory_context_key: "actor-a",
+               memory_context_verified: true
+             ) == []
+
+      refute_receive {:honcho_call, _name, _payload}, 100
+    end
+
     test "a blank query returns [] and calls nothing" do
-      assert MemoryProvider.search("   ", scope: :all) == []
+      map_session()
+      assert MemoryProvider.search("   ", scope: :session, scope_key: @session_key) == []
       refute_receive {:honcho_call, _name, _payload}, 100
     end
 
@@ -156,60 +171,61 @@ defmodule LemonHoncho.MemoryProviderTest do
     # reported the way every other unsearchable state is: `[]`, never an error
     # tuple, which the registry would discard along with the whole result set.
     test "a query that looks like a credential returns [] and calls nothing" do
+      map_session()
+
       for query <- [@secret, @secret <> " " <> String.duplicate("a", 9_066)] do
-        assert MemoryProvider.search(query, scope: :all) == []
+        assert MemoryProvider.search(query, scope: :session, scope_key: @session_key) == []
       end
 
       refute_receive {:honcho_call, _name, _payload}, 100
     end
 
     test "a long query is clipped to 2,000 characters before it reaches Honcho" do
-      assert MemoryProvider.search(String.duplicate("a", 9_066), scope: :all) == []
+      map_session()
+      search(String.duplicate("a", 9_066))
 
-      assert_receive {:honcho_call, :workspace_search, {query, _opts}}, 1_000
+      assert_receive {:honcho_call, :session_search, {_session, query, _opts}}, 1_000
       assert String.length(query) == 2_000
     end
 
     test "the limit is honoured, capped and defaulted" do
-      assert MemoryProvider.search("cache", scope: :all, limit: 3) == []
-      assert_receive {:honcho_call, :workspace_search, {"cache", [limit: 3]}}, 1_000
+      map_session()
 
-      assert MemoryProvider.search("cache", scope: :all, limit: 10_000) == []
-      assert_receive {:honcho_call, :workspace_search, {"cache", [limit: 100]}}, 1_000
-
-      assert MemoryProvider.search("cache", scope: :all, limit: :lots) == []
-      assert_receive {:honcho_call, :workspace_search, {"cache", [limit: 5]}}, 1_000
+      for {limit, sent} <- [{3, 3}, {10_000, 100}, {:lots, 5}] do
+        search("cache", limit: limit)
+        assert_receive {:honcho_call, :session_search, {_session, "cache", opts}}, 1_000
+        assert opts[:limit] == sent
+      end
     end
 
     test "unknown options are ignored rather than rejected" do
-      assert MemoryProvider.search("cache",
-               scope: :all,
-               provider_id: "honcho",
-               some_future_option: :added_next_release
-             ) == []
+      map_session()
+      search("cache", provider_id: "honcho", some_future_option: :added_next_release)
 
-      assert_receive {:honcho_call, :workspace_search, {"cache", _opts}}, 1_000
+      assert_receive {:honcho_call, :session_search, {_session, "cache", _opts}}, 1_000
     end
   end
 
   describe "search/2 document mapping" do
     setup :configure_honcho
 
-    test "a Honcho message becomes a well-typed document" do
-      Stub.stub(:workspace_search, {:ok, [message()]})
+    setup do
+      %{session: map_session()}
+    end
 
-      assert [%Document{} = document] = MemoryProvider.search("cache", scope: :all)
+    test "an owned Honcho message becomes a well-typed session document", %{session: session} do
+      Stub.stub(:session_search, {:ok, [message(session)]})
 
-      assert is_binary(document.doc_id)
+      assert [%Document{} = document] = search("cache")
+
       assert document.doc_id == "hon_msg_1"
-      assert is_integer(document.ingested_at_ms)
       assert document.ingested_at_ms == DateTime.to_unix(~U[2026-08-11 10:30:00Z], :millisecond)
       assert document.started_at_ms == document.ingested_at_ms
       assert document.run_id == ""
-      assert document.session_key == @honcho_session
-      assert document.agent_id == ""
+      assert document.session_key == @session_key
+      assert document.agent_id == "demo"
       assert document.workspace_key == nil
-      assert document.scope == :global
+      assert document.scope == :session
       assert document.prompt_summary == ""
       assert document.answer_summary == "The cache was cold."
       assert document.tools_used == []
@@ -221,53 +237,53 @@ defmodule LemonHoncho.MemoryProviderTest do
                source: "honcho",
                peer_id: "lemon",
                message_id: "msg_1",
-               session_id: @honcho_session
+               session_id: session
              }
     end
 
-    test "a session-scoped hit is keyed by the Lemon session key, not Honcho's" do
-      map_session()
-      Stub.stub(:session_search, {:ok, [message()]})
+    test "a hit not tagged for exactly this owner is dropped", %{session: session} do
+      owned = message(session)
 
-      assert [%Document{} = document] =
-               MemoryProvider.search("cache", scope: :session, scope_key: @session_key)
+      foreign =
+        for {key, identity, memory} <- [
+              {"agent:demo:main", %{channel_id: "telegram", sender_id: "9"}, "legacy"},
+              {"agent:other:main", nil, "legacy"},
+              {"agent:demo:main", nil, "private:actor-a"}
+            ] do
+          other = LemonHoncho.Owner.new(manager_config(), key, identity, memory)
 
-      assert document.session_key == @session_key
-      assert document.scope == :session
+          %{owned | "id" => "msg_" <> other.digest}
+          |> Map.put("metadata", LemonHoncho.Owner.metadata(other))
+        end
+
+      untagged = Map.delete(%{owned | "id" => "msg_legacy"}, "metadata")
+      Stub.stub(:session_search, {:ok, [owned, untagged | foreign]})
+
+      assert [%Document{doc_id: "hon_msg_1"}] = search("cache")
     end
 
-    test "an agent-scoped hit carries the agent id the search was scoped to" do
-      Stub.stub(:workspace_search, {:ok, [message()]})
+    test "a message with no id keeps the same doc_id across searches", %{session: session} do
+      Stub.stub(:session_search, {:ok, [Map.delete(message(session), "id")]})
 
-      assert [%Document{} = document] =
-               MemoryProvider.search("cache", scope: :agent, scope_key: "demo")
-
-      assert document.agent_id == "demo"
-      assert document.scope == :agent
-    end
-
-    test "a message with no id keeps the same doc_id across searches" do
-      Stub.stub(:workspace_search, {:ok, [Map.delete(message(), "id")]})
-
-      assert [first] = MemoryProvider.search("cache", scope: :all)
-      assert [second] = MemoryProvider.search("cache", scope: :all)
+      assert [first] = search("cache")
+      assert [second] = search("cache")
 
       assert String.starts_with?(first.doc_id, "hon_")
       assert first.doc_id == second.doc_id
     end
 
-    test "an unparseable timestamp still yields a sortable document" do
-      Stub.stub(:workspace_search, {:ok, [%{message() | "created_at" => "whenever"}]})
+    test "an unparseable timestamp still yields a sortable document", %{session: session} do
+      Stub.stub(:session_search, {:ok, [%{message(session) | "created_at" => "whenever"}]})
 
-      assert [document] = MemoryProvider.search("cache", scope: :all)
+      assert [document] = search("cache")
       assert is_integer(document.ingested_at_ms)
     end
 
-    test "a long message is clipped to the document summary cap" do
+    test "a long message is clipped to the document summary cap", %{session: session} do
       long = String.duplicate("a", Document.max_summary_bytes() * 2)
-      Stub.stub(:workspace_search, {:ok, [%{message() | "content" => long}]})
+      Stub.stub(:session_search, {:ok, [%{message(session) | "content" => long}]})
 
-      assert [document] = MemoryProvider.search("cache", scope: :all)
+      assert [document] = search("cache")
       assert String.length(document.answer_summary) == Document.max_summary_bytes()
     end
   end
@@ -275,34 +291,39 @@ defmodule LemonHoncho.MemoryProviderTest do
   describe "search/2 failure modes" do
     setup :configure_honcho
 
-    test "a client error yields []" do
-      Stub.stub(:workspace_search, {:error, {:transport, :nxdomain}})
+    setup do
+      map_session()
+      :ok
+    end
 
-      assert MemoryProvider.search("cache", scope: :all) == []
+    test "a client error yields []" do
+      Stub.stub(:session_search, {:error, {:transport, :nxdomain}})
+
+      assert search("cache") == []
     end
 
     test "an API error yields []" do
-      Stub.stub(:workspace_search, {:error, {:api_error, 500, "boom"}})
+      Stub.stub(:session_search, {:error, {:api_error, 500, "boom"}})
 
-      assert MemoryProvider.search("cache", scope: :all) == []
+      assert search("cache") == []
     end
 
     test "a response that is not a list yields []" do
-      Stub.stub(:workspace_search, {:ok, %{"results" => "surprise"}})
+      Stub.stub(:session_search, {:ok, %{"results" => "surprise"}})
 
-      assert MemoryProvider.search("cache", scope: :all) == []
+      assert search("cache") == []
     end
 
     test "a result that is not a tuple at all yields []" do
-      Stub.stub(:workspace_search, :garbage)
+      Stub.stub(:session_search, :garbage)
 
-      assert MemoryProvider.search("cache", scope: :all) == []
+      assert search("cache") == []
     end
 
     test "entries with no usable content are dropped rather than returned empty" do
-      Stub.stub(:workspace_search, {:ok, ["a string", 42, %{"content" => nil}, %{}]})
+      Stub.stub(:session_search, {:ok, ["a string", 42, %{"content" => nil}, %{}]})
 
-      assert MemoryProvider.search("cache", scope: :all) == []
+      assert search("cache") == []
     end
   end
 
@@ -323,11 +344,14 @@ defmodule LemonHoncho.MemoryProviderTest do
 
       assert MemoryProvider.put(document(), provider_id: "honcho") == :ok
 
-      assert_receive {:honcho_call, :add_messages, {@honcho_session, messages}}, 1_000
+      session = honcho_session()
+      assert_receive {:honcho_call, :add_messages, {^session, messages}}, 1_000
+      owner = owner()
+      metadata = LemonHoncho.Owner.metadata(owner)
 
       assert messages == [
-               %{content: "why is the build slow?", peer_id: "user"},
-               %{content: "The cache was cold.", peer_id: "lemon"}
+               %{content: "why is the build slow?", peer_id: owner.user_peer, metadata: metadata},
+               %{content: "The cache was cold.", peer_id: owner.ai_peer, metadata: metadata}
              ]
     end
   end
@@ -339,6 +363,7 @@ defmodule LemonHoncho.MemoryProviderTest do
   defp configure_honcho(_context) do
     Application.put_env(:lemon_honcho, :enabled, true)
     Application.put_env(:lemon_honcho, :api_key, "sk-provider-test")
+    Application.put_env(:lemon_honcho, :user_peer, "user")
 
     :ok
   end
@@ -351,7 +376,35 @@ defmodule LemonHoncho.MemoryProviderTest do
 
     SessionManager.context_for(%{cwd: @cwd, session_key: @session_key, session_scope: :main})
 
-    assert SessionManager.honcho_session_id(@session_key) == {:ok, @honcho_session}
+    session = honcho_session()
+
+    assert SessionManager.honcho_session_id(SessionManager.entry_key(@session_key, owner())) ==
+             {:ok, session}
+
+    flush_calls()
+    session
+  end
+
+  defp honcho_session do
+    LemonHoncho.SessionName.resolve(manager_config(),
+      cwd: @cwd,
+      session_key: @session_key,
+      owner: owner()
+    )
+  end
+
+  defp owner, do: LemonHoncho.Owner.new(manager_config(), @session_key, nil, "legacy")
+
+  defp search(query, opts \\ []) do
+    MemoryProvider.search(query, [scope: :session, scope_key: @session_key] ++ opts)
+  end
+
+  defp flush_calls do
+    receive do
+      {:honcho_call, _name, _payload} -> flush_calls()
+    after
+      0 -> :ok
+    end
   end
 
   defp manager_config do
@@ -364,13 +417,14 @@ defmodule LemonHoncho.MemoryProviderTest do
     }
   end
 
-  defp message do
+  defp message(session) do
     %{
       "id" => "msg_1",
       "content" => "The cache was cold.",
       "peer_id" => "lemon",
-      "session_id" => @honcho_session,
-      "created_at" => "2026-08-11T10:30:00Z"
+      "session_id" => session,
+      "created_at" => "2026-08-11T10:30:00Z",
+      "metadata" => LemonHoncho.Owner.metadata(owner())
     }
   end
 
