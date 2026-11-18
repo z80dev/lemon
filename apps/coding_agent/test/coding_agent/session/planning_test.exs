@@ -753,6 +753,53 @@ defmodule CodingAgent.Session.PlanningTest do
     end
   end
 
+  test "plan-mode write and edit reach the private plan directory and nothing beside it", %{
+    root: root
+  } do
+    manager = SessionManager.new(root)
+    {:ok, _, manager} = Planning.transition(manager, :enter, [])
+    plan_dir = Planning.plan_dir(manager)
+    plan_file = Path.join(plan_dir, "operator-plan.md")
+
+    context = %{
+      gate: Planning.new_gate(),
+      cwd: root,
+      session_pid: self(),
+      tool_intent_recorder: intent_recorder(root),
+      session_id: manager.header.id,
+      run_id: "run",
+      session_key: "key",
+      agent_id: "default",
+      approval_request_fun: nil
+    }
+
+    tools = Map.new(Planning.tools([reader(), writer()], manager, context), &{&1.name, &1})
+
+    write = fn id, path, content ->
+      tools["write"].execute.(id, %{"path" => path, "content" => content}, nil, nil)
+    end
+
+    assert %AgentToolResult{is_error: false} = write.("w", plan_file, "# Plan\nstep one\n")
+
+    assert %AgentToolResult{is_error: false} =
+             tools["edit"].execute.(
+               "e",
+               %{"path" => plan_file, "old_text" => "step one", "new_text" => "step two"},
+               nil,
+               nil
+             )
+
+    assert File.read!(plan_file) == "# Plan\nstep two\n"
+
+    # A hard link in the plan directory still cannot alias another file.
+    victim = Path.join(root, "victim.md")
+    File.write!(victim, "keep\n")
+    File.ln!(victim, Path.join(plan_dir, "alias.md"))
+    assert {:error, message} = write.("a", Path.join(plan_dir, "alias.md"), "x")
+    assert message =~ "hard links"
+    assert File.read!(victim) == "keep\n"
+  end
+
   test "runtime fail-stop refuses plan-mode write/edit directly and through tool_invoke", %{
     root: root
   } do

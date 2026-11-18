@@ -12,6 +12,7 @@ defmodule CodingAgent.Checkpoint do
   checkpoints; they do not share the parent's.
   """
 
+  alias CodingAgent.Tools.OperatorState
   alias LemonCore.Checkpoint, as: CoreCheckpoint
 
   @type checkpoint :: CoreCheckpoint.checkpoint()
@@ -37,9 +38,40 @@ defmodule CodingAgent.Checkpoint do
   def diff_filesystem(checkpoint_id, owner, opts \\ []) when is_binary(checkpoint_id),
     do: CoreCheckpoint.diff_filesystem(checkpoint_id, owner, opts)
 
+  @doc """
+  Owner-scoped restore for the model-facing `fs_checkpoint` tool.
+
+  Checkpoint files live outside Lemon's control (the system temp directory by
+  default), so their recorded roots are untrusted: each selected root goes
+  through `CodingAgent.Tools.OperatorState.check_mutation/2` first, and only
+  the checked roots are handed to `LemonCore.Checkpoint.restore_filesystem/3`.
+  """
   @spec restore_filesystem(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def restore_filesystem(checkpoint_id, owner, opts \\ []) when is_binary(checkpoint_id),
-    do: CoreCheckpoint.restore_filesystem(checkpoint_id, owner, opts)
+  def restore_filesystem(checkpoint_id, owner, opts \\ []) when is_binary(checkpoint_id) do
+    with {:ok, paths} <- restorable_paths(checkpoint_id, owner, opts[:paths]) do
+      CoreCheckpoint.restore_filesystem(checkpoint_id, owner, Keyword.put(opts, :paths, paths))
+    end
+  end
+
+  # Ownership and snapshot errors come from the core restore itself.
+  defp restorable_paths(checkpoint_id, owner, selected) do
+    with {:ok, %{session_id: ^owner} = checkpoint} <- CoreCheckpoint.load(checkpoint_id),
+         {:ok, files} <- CoreCheckpoint.confined_filesystem_files(checkpoint) do
+      paths =
+        if is_list(selected),
+          do: selected |> Enum.map(&Path.expand/1) |> Enum.uniq(),
+          else: Enum.map(files, & &1.path)
+
+      Enum.reduce_while(paths, {:ok, paths}, fn path, acc ->
+        case OperatorState.check_mutation(path) do
+          :ok -> {:cont, acc}
+          {:error, reason} -> {:halt, {:error, {:operator_state, reason}}}
+        end
+      end)
+    else
+      _ -> {:ok, selected}
+    end
+  end
 
   @spec list(String.t()) :: [checkpoint()]
   def list(session_id) when is_binary(session_id), do: CoreCheckpoint.list(session_id)

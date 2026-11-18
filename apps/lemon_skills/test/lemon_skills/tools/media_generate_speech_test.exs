@@ -9,7 +9,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
 
   test "generates a supervised local WAV preview without leaking text", %{tmp_dir: tmp_dir} do
     text = "private spoken phrase 123"
-    tool = LemonSkills.Tools.MediaGenerateSpeech.tool(tmp_dir)
+    tool = LemonSkills.Tools.MediaGenerateSpeech.tool(tmp_dir, output_guard: :none)
 
     assert %AgentToolResult{} =
              result =
@@ -70,6 +70,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
 
     tool =
       MediaGenerateSpeech.tool(tmp_dir,
+        output_guard: :none,
         openai_tts_api_key: "sk-test-tts-key",
         openai_tts_base_url: "https://api.openai.test/v1/",
         media_speech_http_post: http_post
@@ -139,6 +140,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
 
     tool =
       MediaGenerateSpeech.tool(tmp_dir,
+        output_guard: :none,
         elevenlabs_tts_api_key: "el-test-tts-key",
         elevenlabs_tts_base_url: "https://api.elevenlabs.test/v1",
         media_speech_http_post: http_post
@@ -205,6 +207,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
 
     tool =
       MediaGenerateSpeech.tool(tmp_dir,
+        output_guard: :none,
         google_tts_access_token: "google-access-token",
         google_tts_base_url: "https://texttospeech.googleapis.test/v1",
         media_speech_http_post: http_post
@@ -274,6 +277,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
 
     tool =
       MediaGenerateSpeech.tool(tmp_dir,
+        output_guard: :none,
         openai_tts_api_key: "sk-test-tts-key",
         media_speech_http_post: http_post
       )
@@ -309,6 +313,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
 
     tool =
       MediaGenerateSpeech.tool(tmp_dir,
+        output_guard: :none,
         openai_tts_api_key: "sk-test-tts-key",
         media_speech_http_post: http_post
       )
@@ -340,6 +345,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
 
     tool =
       MediaGenerateSpeech.tool(tmp_dir,
+        output_guard: :none,
         elevenlabs_tts_api_key: "el-test-tts-key",
         media_speech_http_post: http_post
       )
@@ -376,6 +382,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
 
     tool =
       MediaGenerateSpeech.tool(tmp_dir,
+        output_guard: :none,
         google_tts_access_token: "google-access-token",
         media_speech_http_post: http_post
       )

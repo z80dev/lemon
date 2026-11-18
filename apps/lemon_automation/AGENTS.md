@@ -76,6 +76,9 @@ stores, not a second agent engine. See [README](README.md) and
   opened-handle inode check, re-`lstat` around each step, exclusive temporary
   file plus rename (never in place). The directory-swap window is shared
   finding NEW-6. Do not create a separate general-purpose memory service here.
+  Model file tools refuse `cron_memory` (Lemon operator state); only the run
+  whose `meta.cron_memory_file` names a job's file may write that one file
+  (`CodingAgent.Tools.OperatorState`'s `:operator_state_grant`).
 
 ## Heartbeats
 

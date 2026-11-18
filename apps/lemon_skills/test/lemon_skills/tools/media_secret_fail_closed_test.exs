@@ -46,6 +46,7 @@ defmodule LemonSkills.Tools.MediaSecretFailClosedTest do
 
     tool =
       MediaGenerateSpeech.tool(ctx.tmp_dir,
+        output_guard: :none,
         media_speech_config: %{gateway: %{voice: %{elevenlabs_api_key_secret: ctx.secret}}},
         elevenlabs_tts_base_url: "https://api.elevenlabs.test/v1",
         media_speech_http_post: ctx.http_post
@@ -69,6 +70,7 @@ defmodule LemonSkills.Tools.MediaSecretFailClosedTest do
 
     tool =
       MediaTranscribeAudio.tool(ctx.tmp_dir,
+        output_guard: :none,
         media_transcription_config: %{gateway: %{voice: %{deepgram_api_key_secret: ctx.secret}}},
         deepgram_transcription_base_url: "https://api.deepgram.test/v1",
         media_transcription_http_post: ctx.http_post

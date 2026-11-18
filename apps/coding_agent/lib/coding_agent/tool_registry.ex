@@ -22,6 +22,7 @@ defmodule CodingAgent.ToolRegistry do
   alias CodingAgent.ToolIntent
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools
+  alias CodingAgent.Tools.OperatorState
   alias CodingAgent.Wasm.Policy, as: WasmPolicy
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.Types.AgentTool
@@ -777,6 +778,10 @@ defmodule CodingAgent.ToolRegistry do
   # tool can survive the build's filters.
   defp builtin_tool_tuples(cwd, opts, browser?, resolution) do
     resolution = if browser?, do: resolution || LemonCore.BrowserProvider.resolve(opts)
+    # Media artifacts (media tools and browser_analyze's nested media call)
+    # must not land in operator state; LemonSkills cannot call coding_agent,
+    # so the guard travels as an option.
+    opts = Keyword.put(opts, :output_guard, &OperatorState.check_mutation/1)
     browser_opts = Keyword.put(opts, :browser_provider_resolution, resolution)
 
     code_tools =
@@ -806,6 +811,7 @@ defmodule CodingAgent.ToolRegistry do
     end)
     |> Enum.map(fn {name, module, ownership} ->
       tool_opts = if name in @browser_tool_names, do: browser_opts, else: opts
+
       if ownership == :unknown, do: LemonCore.NativeProcess.unsupported!()
       tool = module.tool(cwd, tool_opts)
       %AgentTool{} = tool = if ownership == :unknown, do: wrap_unmanaged_tool(tool), else: tool
@@ -1298,10 +1304,19 @@ defmodule CodingAgent.ToolRegistry do
             wasm_default_requires_approval?(tool_policy, name, source) or
             mcp_requires_approval?(source)
 
+        # Shell text naming Lemon operator state always needs a one-time human
+        # approval, whatever the policy (best effort; see OperatorState).
+        operator_state? =
+          source == :builtin and
+            OperatorState.shell_names_protected?(name, params, Map.get(approval_context, :cwd))
+
         # A folder read runs unreviewed only when the egress fence became
         # durable first; afterwards every web call in the session is reviewed.
         required =
           cond do
+            operator_state? ->
+              true
+
             name in ["webfetch", "websearch"] and WorkspaceReads.fenced?(approval_context) ->
               true
 
@@ -1319,7 +1334,9 @@ defmodule CodingAgent.ToolRegistry do
             name,
             params,
             fn -> original_execute.(tool_call_id, params, signal, on_update) end,
-            Map.put(approval_context, :tool_call_id, tool_call_id)
+            approval_context
+            |> Map.put(:tool_call_id, tool_call_id)
+            |> Map.put(:once_only, operator_state?)
           )
         else
           original_execute.(tool_call_id, params, signal, on_update)

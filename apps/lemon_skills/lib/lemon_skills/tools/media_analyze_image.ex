@@ -459,8 +459,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   defp content_text(content), do: to_string(content)
 
   defp write_analysis_artifact(artifact_path, content, analysis) when is_binary(content) do
-    with :ok <- File.mkdir_p(Path.dirname(artifact_path)),
-         :ok <- File.write(artifact_path, content),
+    with :ok <- MediaCommon.write_artifact(artifact_path, content),
          {:ok, stat} <- File.stat(artifact_path) do
       {:ok,
        %{

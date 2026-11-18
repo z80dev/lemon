@@ -1380,6 +1380,8 @@ write_approval = false # require human approval for skill_manage mutations when 
 ```
 
 Both switches default to `false` and use normal global/project config precedence.
+`skill_manage` with `scope = "global"` always needs approval regardless (global
+skills are Lemon operator state), and is refused without an interactive approver.
 Enabled writes use the existing execution approval UI with bounded, escaped,
 credential-redacted target/action/content previews and a digest binding the full
 mutation to its owner/workspace. `skill_manage report` remains read-only.

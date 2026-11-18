@@ -671,11 +671,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
     |> MediaCommon.maybe_auto_send(params, "generated video preview")
   end
 
-  defp write_file(path, bytes) when is_binary(bytes) do
-    with :ok <- File.mkdir_p(Path.dirname(path)) do
-      File.write(path, bytes)
-    end
-  end
+  defp write_file(path, bytes) when is_binary(bytes), do: MediaCommon.write_artifact(path, bytes)
 
   defp video_id(video) when is_map(video) do
     optional_string(video["id"]) || optional_string(video[:id])

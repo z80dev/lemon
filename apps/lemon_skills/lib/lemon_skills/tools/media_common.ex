@@ -79,6 +79,16 @@ defmodule LemonSkills.Tools.MediaCommon do
     end
   end
 
+  @doc """
+  The artifact path for a media output, inside the artifacts directory.
+
+  The host's `:output_guard` (the coding agent's tool registry and browser
+  tools pass `CodingAgent.Tools.OperatorState.check_mutation/1`) must accept
+  the path, so a default or configured artifacts directory that resolves into
+  Lemon operator state is refused. Without a guard the call fails closed; only
+  a trusted internal caller with no operator state to protect passes
+  `output_guard: :none`. Write the bytes with `write_artifact/2`.
+  """
   def artifact_path(params, cwd, opts, format, prefix) do
     artifacts_dir =
       opts
@@ -88,10 +98,43 @@ defmodule LemonSkills.Tools.MediaCommon do
     name = sanitize_filename(Map.get(params, "filename"), format, prefix)
     path = Path.join(artifacts_dir, name)
 
-    if String.starts_with?(Path.expand(path), artifacts_dir) do
-      {:ok, path}
-    else
-      {:error, "artifact path escaped media artifact directory"}
+    cond do
+      not String.starts_with?(Path.expand(path), artifacts_dir <> "/") ->
+        {:error, "artifact path escaped media artifact directory"}
+
+      (guarded = output_guard(opts, path)) != :ok ->
+        guarded
+
+      true ->
+        {:ok, path}
+    end
+  end
+
+  defp output_guard(opts, path) do
+    case Keyword.get(opts, :output_guard) do
+      guard when is_function(guard, 1) -> guard.(path)
+      :none -> :ok
+      _ -> {:error, "media output guard is not configured; refusing to write #{path}"}
+    end
+  end
+
+  @doc """
+  Writes an artifact through an exclusive temporary file renamed over `path`,
+  so an existing symlink or hard link at `path` is replaced, never written
+  through: the inode it aliases is not modified.
+  """
+  @spec write_artifact(String.t(), iodata()) :: :ok | {:error, term()}
+  def write_artifact(path, bytes) do
+    dir = Path.dirname(path)
+    suffix = Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
+    temp = Path.join(dir, ".#{Path.basename(path)}.tmp-#{suffix}")
+
+    with :ok <- File.mkdir_p(dir) do
+      try do
+        with :ok <- File.write(temp, bytes, [:exclusive]), do: File.rename(temp, path)
+      after
+        File.rm(temp)
+      end
     end
   end
 

@@ -14,7 +14,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudioTest do
     audio_bytes = wav_bytes()
     File.write!(audio_path, audio_bytes)
 
-    tool = LemonSkills.Tools.MediaTranscribeAudio.tool(tmp_dir)
+    tool = LemonSkills.Tools.MediaTranscribeAudio.tool(tmp_dir, output_guard: :none)
 
     assert %AgentToolResult{} =
              result =
@@ -82,6 +82,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudioTest do
 
     tool =
       MediaTranscribeAudio.tool(tmp_dir,
+        output_guard: :none,
         openai_transcription_api_key: "sk-test-stt-key",
         openai_transcription_base_url: "https://api.openai.test/v1/",
         media_transcription_http_post: http_post
@@ -162,6 +163,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudioTest do
 
     tool =
       MediaTranscribeAudio.tool(tmp_dir,
+        output_guard: :none,
         deepgram_transcription_api_key: "dg-test-key",
         deepgram_transcription_base_url: "https://api.deepgram.test/v1",
         media_transcription_http_post: http_post
@@ -226,6 +228,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudioTest do
 
     tool =
       MediaTranscribeAudio.tool(tmp_dir,
+        output_guard: :none,
         openai_transcription_api_key: "sk-test-stt-key",
         media_transcription_http_post: http_post
       )
@@ -263,6 +266,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudioTest do
 
     tool =
       MediaTranscribeAudio.tool(tmp_dir,
+        output_guard: :none,
         openai_transcription_api_key: "sk-test-stt-key",
         media_transcription_http_post: http_post
       )
@@ -282,7 +286,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudioTest do
   end
 
   test "rejects audio paths outside the project", %{tmp_dir: tmp_dir} do
-    tool = LemonSkills.Tools.MediaTranscribeAudio.tool(tmp_dir)
+    tool = LemonSkills.Tools.MediaTranscribeAudio.tool(tmp_dir, output_guard: :none)
 
     assert {:error, "audioPath must be under the current project"} =
              tool.execute.("call-1", %{"audioPath" => "/etc/passwd"}, nil, nil)

@@ -9,7 +9,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideoTest do
 
   test "generates a supervised local MP4 video without leaking the prompt", %{tmp_dir: tmp_dir} do
     prompt = "private video prompt 123"
-    tool = LemonSkills.Tools.MediaGenerateVideo.tool(tmp_dir)
+    tool = LemonSkills.Tools.MediaGenerateVideo.tool(tmp_dir, output_guard: :none)
 
     assert %AgentToolResult{} =
              result =
@@ -90,6 +90,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideoTest do
 
     tool =
       MediaGenerateVideo.tool(tmp_dir,
+        output_guard: :none,
         openai_video_api_key: "sk-test-video-key",
         openai_video_base_url: "https://api.openai.test/v1/",
         media_video_http_post: http_post,
@@ -191,6 +192,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideoTest do
 
     tool =
       MediaGenerateVideo.tool(tmp_dir,
+        output_guard: :none,
         vertex_veo_access_token: "vertex-test-token",
         vertex_veo_project: "test-project",
         vertex_veo_location: "us-central1",
@@ -274,6 +276,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideoTest do
 
     tool =
       MediaGenerateVideo.tool(tmp_dir,
+        output_guard: :none,
         openai_video_api_key: "sk-test-video-key",
         media_video_http_post: http_post,
         media_video_http_get: http_get
@@ -310,6 +313,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideoTest do
 
     tool =
       MediaGenerateVideo.tool(tmp_dir,
+        output_guard: :none,
         openai_video_api_key: "sk-test-video-key",
         media_video_http_post: http_post
       )
@@ -341,6 +345,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideoTest do
 
     tool =
       MediaGenerateVideo.tool(tmp_dir,
+        output_guard: :none,
         vertex_veo_access_token: "vertex-test-token",
         vertex_veo_project: "test-project",
         vertex_veo_location: "us-central1",
@@ -362,7 +367,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideoTest do
   end
 
   test "rejects unsupported providers", %{tmp_dir: tmp_dir} do
-    tool = LemonSkills.Tools.MediaGenerateVideo.tool(tmp_dir)
+    tool = LemonSkills.Tools.MediaGenerateVideo.tool(tmp_dir, output_guard: :none)
 
     assert {:error, "unsupported media video provider: remote"} =
              tool.execute.(

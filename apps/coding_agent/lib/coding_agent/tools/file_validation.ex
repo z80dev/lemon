@@ -6,6 +6,8 @@ defmodule CodingAgent.Tools.FileValidation do
   eliminate duplicated File.stat dispatch logic.
   """
 
+  alias CodingAgent.Tools.OperatorState
+
   @max_path_length 4096
 
   @doc """
@@ -110,6 +112,12 @@ defmodule CodingAgent.Tools.FileValidation do
   A session confined to a directory (`confine_mutations_to:`, e.g. a kanban
   worker's worktree) refuses every target outside it, absolute or relative, and
   checks every component below it for symlinks.
+
+  Lemon operator state and operator toolchain locations are refused
+  (`CodingAgent.Tools.OperatorState.check_mutation/2`, which honours Lemon's own
+  `:operator_state_grant`/`:operator_state_dir_grant`). Only a target Lemon
+  derives itself, never a model-supplied path, may pass `lemon_owned_target:
+  true`; it still gets the alias (hard-link) refusal.
   """
   @spec check_mutation_target(String.t(), keyword()) :: :ok | {:error, String.t()}
   def check_mutation_target(path, opts \\ [])
@@ -120,7 +128,8 @@ defmodule CodingAgent.Tools.FileValidation do
     boundary = mutation_boundary(path, root)
 
     with :ok <- validate_mutation_path(path),
-         :ok <- confined(path, opts) do
+         :ok <- confined(path, opts),
+         :ok <- operator_state(path, opts) do
       case File.lstat(path) do
         {:ok, %File.Stat{type: :regular}} ->
           with :ok <- validate_mutation_parent(Path.dirname(path), allow_symlinks, boundary) do
@@ -176,6 +185,12 @@ defmodule CodingAgent.Tools.FileValidation do
       _ ->
         {:error, "File changes are confined; refusing #{path}"}
     end
+  end
+
+  defp operator_state(path, opts) do
+    if Keyword.get(opts, :lemon_owned_target) == true,
+      do: OperatorState.check_aliases(path),
+      else: OperatorState.check_mutation(path, opts)
   end
 
   @doc "Pin a file's device/inode identity, rejecting symlinks unless explicitly trusted."

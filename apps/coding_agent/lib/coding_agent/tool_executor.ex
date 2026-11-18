@@ -25,6 +25,8 @@ defmodule CodingAgent.ToolExecutor do
   - `:agent_id` - The executing agent identity
   - `:invocation_context_key` - Trusted private grant namespace (optional)
   - `:timeout_ms` - Approval timeout in milliseconds (optional; default: no timeout)
+  - `:once_only` - When `true`, no stored or wildcard grant answers the request
+    and an approval covers this one call (`LemonCore.ExecApprovals.request/1`)
   """
 
   alias LemonAgent.Types.AgentTool
@@ -118,6 +120,7 @@ defmodule CodingAgent.ToolExecutor do
            args,
            timeout_ms,
            context[:tool_call_id],
+           context[:once_only] == true,
            approval_request_fun
          ) do
       {:ok, :approved, scope} when scope in @approval_scopes ->
@@ -155,6 +158,7 @@ defmodule CodingAgent.ToolExecutor do
          args,
          timeout_ms,
          tool_call_id,
+         once_only,
          request_fun
        ) do
     request_fun.(%{
@@ -167,6 +171,7 @@ defmodule CodingAgent.ToolExecutor do
       tool: tool_name,
       action: project_action(tool_name, args),
       rationale: LemonAgent.ToolIntent.current() || "Tool execution: #{tool_name}",
+      once_only: once_only,
       expires_in_ms: timeout_ms
     })
   catch

@@ -1203,11 +1203,14 @@ defmodule CodingAgent.Tools.Browser do
   # realpath of `cwd`. Symlinks anywhere on the path are followed before the
   # check, a dangling symlink is refused, and an existing file must be a
   # single-linked regular file (or a directory, for download dirs).
+  # The written path must also not be Lemon operator state
+  # (`CodingAgent.Tools.OperatorState`), e.g. `.lemon/config.toml` from `$HOME`.
   defp project_output_path(path, cwd) do
     with {:ok, root} <- TrustedRoot.realpath(cwd),
          {:ok, real} <- physical_output_path(PathHelpers.resolve_path(path, cwd)),
          true <- TrustedRoot.inside?(real, root),
-         true <- writable_entry?(real) do
+         true <- writable_entry?(real),
+         :ok <- CodingAgent.Tools.OperatorState.check_mutation(real) do
       {:ok, real}
     else
       _ -> :error
@@ -1296,7 +1299,14 @@ defmodule CodingAgent.Tools.Browser do
       |> Map.put("sendToChannel", request.send_to_channel)
       |> Map.put_new("prompt", "Summarize the current browser screenshot.")
 
-    tool = MediaAnalyzeImage.tool(cwd, Map.get(runtime, :tool_opts, []))
+    # The nested media write gets the operator-state guard even when the
+    # browser tool was built outside the registry.
+    tool_opts =
+      runtime
+      |> Map.get(:tool_opts, [])
+      |> Keyword.put_new(:output_guard, &CodingAgent.Tools.OperatorState.check_mutation/1)
+
+    tool = MediaAnalyzeImage.tool(cwd, tool_opts)
 
     case tool.execute.("browser-analyze", media_params, signal, nil) do
       %AgentToolResult{} = result -> {:ok, result.details}

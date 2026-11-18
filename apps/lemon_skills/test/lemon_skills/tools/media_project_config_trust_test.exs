@@ -61,6 +61,7 @@ defmodule LemonSkills.Tools.MediaProjectConfigTrustTest do
 
     tool =
       MediaGenerateImage.tool(ctx.project,
+        output_guard: :none,
         media_image_http_post: http_post(ctx, %{"data" => [%{"b64_json" => image}]})
       )
 
@@ -94,6 +95,7 @@ defmodule LemonSkills.Tools.MediaProjectConfigTrustTest do
 
     tool =
       MediaGenerateImage.tool(ctx.project,
+        output_guard: :none,
         vertex_imagen_access_token: "ya29.operator-token",
         media_image_http_post:
           http_post(ctx, %{

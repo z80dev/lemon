@@ -120,6 +120,8 @@ defmodule CodingAgent.Tools.Write do
       else: ProcessProtocol.write(path, params, signal, cwd, opts)
   end
 
+  # `local://` resolves one validated name to this session's own scratch
+  # directory, which lives in Lemon state (the session spill directory).
   def execute(id, %{"path" => "local://" <> _ = path} = params, signal, update, cwd, opts) do
     with {:ok, resolved} <- InternalUrls.resolve(path, Keyword.put(opts, :cwd, cwd)) do
       execute(
@@ -128,7 +130,7 @@ defmodule CodingAgent.Tools.Write do
         signal,
         update,
         cwd,
-        Keyword.put(opts, :acp_client_fs_write_text_file, false)
+        Keyword.merge(opts, acp_client_fs_write_text_file: false, lemon_owned_target: true)
       )
     end
   end
