@@ -462,7 +462,7 @@ defmodule LemonCli.CLI do
           print_report(report, opts[:verbose] || false)
         end
 
-        maybe_write_bundle(report, opts, positional)
+        maybe_write_bundle(report, opts, positional, runtime)
 
         if Report.ok?(report) do
           @exit_ok
@@ -494,12 +494,13 @@ defmodule LemonCli.CLI do
 
   defp valid_doctor_positionals?(_opts, _positional), do: false
 
-  defp maybe_write_bundle(report, opts, positional) do
+  defp maybe_write_bundle(report, opts, positional, runtime) do
     if opts[:bundle] do
       bundle_opts =
         opts
         |> Keyword.take([:project_dir, :bundle_path])
         |> maybe_default_bundle_path(positional)
+        |> maybe_put_daemon_sections(runtime)
 
       case SupportBundle.write(report, bundle_opts) do
         {:ok, path} ->
@@ -519,6 +520,31 @@ defmodule LemonCli.CLI do
     end
   end
 
+  # A running daemon owns the runtime state the bundle describes; this VM's
+  # own probes would report it as stopped. If the daemon cannot be asked, its
+  # sections are written as unreported rather than replaced by local ones.
+  defp maybe_put_daemon_sections(bundle_opts, :external) do
+    client = Application.get_env(:lemon_cli, :control_plane_client, LemonCli.ControlPlaneClient)
+
+    sections =
+      case client.request("doctor.bundle", %{}, timeout_ms: 30_000) do
+        {:ok, %{"entries" => entries}} when is_map(entries) ->
+          entries
+
+        _error ->
+          IO.puts(
+            :stderr,
+            "Could not collect diagnostics from the running Lemon daemon; its sections are marked unreported."
+          )
+
+          %{}
+      end
+
+    Keyword.put(bundle_opts, :daemon_sections, sections)
+  end
+
+  defp maybe_put_daemon_sections(bundle_opts, _runtime), do: bundle_opts
+
   defp maybe_default_bundle_path(keyword, [path | _]) when is_binary(path) and path != "",
     do: Keyword.put_new(keyword, :bundle_path, path)
 
@@ -531,7 +557,11 @@ defmodule LemonCli.CLI do
     IO.puts("Lemon Doctor")
     IO.puts("────────────")
 
-    Enum.each(report.checks, fn check ->
+    # Doctor output is pasted into issues; it gets the same sharing policy as
+    # `--json` and support bundles.
+    report.checks
+    |> Enum.map(&LemonCore.Doctor.Redaction.check/1)
+    |> Enum.each(fn check ->
       if verbose? or check.status in [:warn, :fail] or check.name == "browser.provider" do
         status_label = String.pad_trailing("[#{Check.label(check.status)}]", 7)
 

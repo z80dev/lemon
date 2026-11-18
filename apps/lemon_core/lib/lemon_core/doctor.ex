@@ -98,20 +98,20 @@ defmodule LemonCore.Doctor do
       do: module.run(opts),
       else: []
   rescue
-    _error ->
+    error ->
       [
         Check.fail(
           "doctor.check_failed",
-          "A diagnostic check could not complete.",
+          "A diagnostic check could not complete (#{inspect(error.__struct__)}).",
           "Run `lemon config validate --verbose`; for removed settings run `lemon config migrate`."
         )
       ]
   catch
-    _, _ ->
+    kind, _reason ->
       [
         Check.fail(
           "doctor.check_failed",
-          "A diagnostic check stopped unexpectedly.",
+          "A diagnostic check stopped unexpectedly (#{kind}).",
           "Run `lemon doctor --verbose` after checking the configuration."
         )
       ]

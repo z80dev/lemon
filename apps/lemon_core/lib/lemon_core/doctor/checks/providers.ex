@@ -42,7 +42,10 @@ defmodule LemonCore.Doctor.Checks.Providers do
         )
 
       provider ->
-        Check.pass("providers.default", "Default provider: #{provider}")
+        Check.pass(
+          "providers.default",
+          "Default provider: #{ProviderDiagnostics.public_provider(provider)}"
+        )
     end
   end
 
@@ -195,7 +198,8 @@ defmodule LemonCore.Doctor.Checks.Providers do
       true ->
         Check.pass(
           "providers.routing",
-          "Default provider is not credential-ready; fallback route has ready provider(s): #{Enum.join(ready_fallbacks, ", ")}"
+          "Default provider is not credential-ready; fallback route has ready provider(s): " <>
+            Enum.map_join(ready_fallbacks, ", ", &ProviderDiagnostics.public_provider/1)
         )
     end
   rescue
@@ -203,7 +207,7 @@ defmodule LemonCore.Doctor.Checks.Providers do
       Check.warn(
         "providers.routing",
         "Provider routing diagnostics are unavailable.",
-        Exception.message(error)
+        "Error class: #{inspect(error.__struct__)}. Run `lemon config validate --verbose`."
       )
   end
 

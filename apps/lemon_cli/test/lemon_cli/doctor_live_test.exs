@@ -308,13 +308,13 @@ defmodule LemonCli.DoctorLiveTest do
 
       opts = selection_opts(selection_config(), results, live_provider: "all")
 
-      assert ["providers.live.anthropic", "providers.live.my-gateway", "providers.live.openai"] =
-               opts |> Providers.live_checks() |> Enum.map(&elem(&1, 0))
+      assert Enum.sort(["providers.live.anthropic", live("my-gateway"), "providers.live.openai"]) ==
+               opts |> Providers.live_checks() |> Enum.map(&elem(&1, 0)) |> Enum.sort()
 
       checks = Map.new(run_live(opts), &{&1.name, &1})
 
       assert checks["providers.live.anthropic"].status == :pass
-      assert checks["providers.live.my-gateway"].status == :skip
+      assert checks[live("my-gateway")].status == :skip
       assert checks["providers.live.openai"].status == :fail
       assert checks["providers.live.openai"].message =~ "openai: "
       assert checks["providers.live.openai"].message =~ "rejected"
@@ -327,14 +327,15 @@ defmodule LemonCli.DoctorLiveTest do
       config = selection_config(%{"anthropic" => %{api_key: "fake-anthropic-key"}})
       opts = selection_opts(config, %{}, live_provider: "all")
 
-      assert ["providers.live.anthropic", "providers.live.my-gateway", "providers.live.openai"] =
-               opts |> Providers.live_checks() |> Enum.map(&elem(&1, 0))
+      assert Enum.sort(["providers.live.anthropic", live("my-gateway"), "providers.live.openai"]) ==
+               opts |> Providers.live_checks() |> Enum.map(&elem(&1, 0)) |> Enum.sort()
     end
 
     test "a named provider is matched by normalized id and is the only one probed" do
       opts = selection_opts(selection_config(), %{}, live_provider: "My_Gateway")
 
-      assert [%Check{name: "providers.live.my-gateway", status: :pass}] = run_live(opts)
+      name = live("my-gateway")
+      assert [%Check{name: ^name, status: :pass}] = run_live(opts)
       assert_received {:input, "my-gateway"}
       refute_received {:input, _}
     end
@@ -376,7 +377,33 @@ defmodule LemonCli.DoctorLiveTest do
       config = %{agent: %{}, providers: %{"bad name/with" => %{}}}
       opts = selection_opts(config, %{}, live_provider: "all")
 
-      assert [{"providers.live.bad_name_with", _}] = Providers.live_checks(opts)
+      assert [{name, _}] = Providers.live_checks(opts)
+      assert name == live("bad name/with")
+      assert name =~ ~r/\Aproviders\.live\.[A-Za-z0-9._-]+\z/
+    end
+
+    test "custom provider names never reach live-check names or messages" do
+      private = "customer.private.example"
+
+      config = %{
+        agent: %{default_provider: private, default_model: "m"},
+        providers: %{private => %{}}
+      }
+
+      opts = selection_opts(config, %{private => {:error, :unauthorized}}, live_provider: "all")
+
+      checks = run_live(opts)
+      assert [%Check{status: :fail} = check] = checks
+      assert check.name == live(private)
+      refute inspect(checks) =~ private
+      refute checks |> Report.from_checks() |> Report.to_json() =~ "private.example"
+      assert_received {:input, ^private}
+    end
+
+    # Live-check names show the public provider projection (custom names hashed).
+    defp live(key) do
+      public = LemonCore.Doctor.ProviderDiagnostics.public_provider(key)
+      "providers.live." <> String.replace(public, ~r/[^A-Za-z0-9._-]/u, "_")
     end
 
     for key <- [
@@ -424,12 +451,13 @@ defmodule LemonCli.DoctorLiveTest do
     test "a custom key containing a slash is probed under its original key" do
       opts = real_opts(%{"team/gateway" => custom("slash")}, live_provider: "all")
 
-      assert [{"providers.live.team_gateway", _}] = Providers.live_checks(opts)
-      assert [%Check{name: "providers.live.team_gateway", status: :pass}] = run_live(opts)
+      name = live("team/gateway")
+      assert [{^name, _}] = Providers.live_checks(opts)
+      assert [%Check{name: ^name, status: :pass}] = run_live(opts)
       assert_received {:probed, "https://slash.invalid/v1/models"}
 
       named = real_opts(%{"team/gateway" => custom("slash")}, live_provider: "team/gateway")
-      assert [%Check{name: "providers.live.team_gateway", status: :pass}] = run_live(named)
+      assert [%Check{name: ^name, status: :pass}] = run_live(named)
       assert_received {:probed, "https://slash.invalid/v1/models"}
     end
 
@@ -462,8 +490,12 @@ defmodule LemonCli.DoctorLiveTest do
           providers: providers
         })
 
-      assert [{"providers.live.my_gateway", _}, {"providers.live.my-gateway", _}] =
-               Providers.live_checks(opts)
+      # Both keys normalize to the same provider, so they share a public name and
+      # the second gets a key-derived suffix.
+      assert [{first, _}, {second, _}] = Providers.live_checks(opts)
+      assert first == live("my_gateway")
+      assert String.starts_with?(second, live("my-gateway"))
+      assert first != second
 
       assert [%Check{status: :pass}, %Check{status: :pass}] = run_live(opts)
       assert_received {:probed, "https://underscore.invalid/v1/models"}
@@ -476,7 +508,7 @@ defmodule LemonCli.DoctorLiveTest do
       opts = real_opts(%{key => custom("long")}, live_provider: "all")
 
       assert [{name, _}] = Providers.live_checks(opts)
-      assert name == "providers.live." <> String.duplicate("a", 48)
+      assert name == live(key)
       assert [%Check{status: :pass}] = run_live(opts)
       assert_received {:probed, "https://long.invalid/v1/models"}
 
@@ -496,7 +528,7 @@ defmodule LemonCli.DoctorLiveTest do
       names = opts |> Providers.live_checks() |> Enum.map(&elem(&1, 0))
 
       assert length(Enum.uniq(names)) == 3
-      assert Enum.all?(names, &String.starts_with?(&1, "providers.live.team_gateway"))
+      assert Enum.all?(names, &String.starts_with?(&1, "providers.live.custom_"))
 
       checks = run_live(opts)
       assert Enum.all?(checks, &(&1.status == :pass))
@@ -550,7 +582,7 @@ defmodule LemonCli.DoctorLiveTest do
       refute json =~ "sk-fake"
       refute json =~ "secret.invalid"
       assert json =~ "HTTP 500"
-      assert json =~ "providers.live.my-gateway"
+      assert json =~ live("my-gateway")
     end
 
     test "a resolver crash is a redacted failure for that provider only" do

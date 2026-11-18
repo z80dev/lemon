@@ -78,7 +78,9 @@ config :lemon_core, :doctor_runtime,
   browser_artifacts: LemonBrowser.Artifacts,
   browser_server: LemonBrowser.LocalServer,
   lsp_server_manager: LemonLsp.ServerManager,
-  channel_diagnostics: LemonChannels.Doctor.Diagnostics
+  channel_diagnostics: LemonChannels.Doctor.Diagnostics,
+  # `builtin?/1` decides which provider names doctor output may show verbatim.
+  provider_names: LemonAgent.ModelRuntime.CustomProviders
 
 # Diagnostics owned by apps that depend on lemon_core register themselves here.
 # Modules missing from a given build are skipped (see LemonCore.Doctor).

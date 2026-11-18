@@ -12,6 +12,22 @@ defmodule LemonChannels.Doctor.Checks.ChannelsTest do
       assert Enum.all?(checks, &match?(%Check{}, &1))
     end
 
+    test "an internal failure reports a fixed summary and the class, never the exception text" do
+      tmp_dir =
+        project_with_config("channels_raise", """
+        [gateway]
+        default_cwd = ["/Users/alice/private 987654321"]
+        """)
+
+      assert [check] = Channels.run(project_dir: tmp_dir)
+
+      assert check.name == "channels.diagnostics"
+      text = "#{check.message} #{check.remediation}"
+      assert text =~ "Error class:"
+      refute text =~ "alice"
+      refute text =~ "987654321"
+    end
+
     test "a configured Discord bot reports healthy from config alone, ignoring stale proof files" do
       tmp_dir =
         project_with_config("channels_discord", """

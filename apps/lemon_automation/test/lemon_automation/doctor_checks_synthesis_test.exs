@@ -147,6 +147,16 @@ defmodule LemonAutomation.DoctorChecksSynthesisTest do
     assert is_binary(check.remediation)
   end
 
+  test "an internal failure reports a fixed summary and the class, never the exception text" do
+    private = "/Users/alice/private-features 987654321"
+    assert [check] = Synthesis.run(features: private)
+
+    text = "#{check.message} #{check.remediation}"
+    assert text =~ "BadMapError"
+    refute text =~ "alice"
+    refute text =~ "987654321"
+  end
+
   test "run/1 with no opts does not raise" do
     assert [check] = Synthesis.run([])
     assert check.name == "automation.skill_synthesis"

@@ -107,8 +107,24 @@ defmodule LemonBrowser.LocalServerTest do
         assert message =~ "LEMON_BROWSER_DRIVER_PATH does not exist"
         status = LocalServer.status(server)
         assert status.failed_count == 0
-        assert status.last_error =~ "LEMON_BROWSER_DRIVER_PATH does not exist"
+        assert %{category: "driver", hash: hash} = status.last_error
+        assert is_binary(hash)
       end)
+    end
+
+    test "status reports a failure category and hash, never the driver's error text", %{
+      pid: pid,
+      server: server
+    } do
+      error =
+        "Navigation to https://api.telegram.org/bot123456:AAE-private-token/getMe failed " <>
+          "while waiting for #chat:987654321"
+
+      :sys.replace_state(pid, &%{&1 | last_error: error})
+
+      assert %{category: "navigation", hash: _} = LocalServer.status(server).last_error
+      refute inspect(LocalServer.status(server)) =~ "private-token"
+      refute inspect(LocalServer.status(server)) =~ "987654321"
     end
 
     @tag :tmp_dir

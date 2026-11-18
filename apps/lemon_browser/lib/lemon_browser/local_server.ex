@@ -532,7 +532,7 @@ defmodule LemonBrowser.LocalServer do
       driver_config: state.driver_config || status_config(state.driver_opts),
       started_at: state.started_at,
       last_request_at: state.last_request_at,
-      last_error: state.last_error,
+      last_error: error_summary(state.last_error),
       last_error_at: state.last_error_at
     }
   end
@@ -541,6 +541,28 @@ defmodule LemonBrowser.LocalServer do
     case Port.info(port, key) do
       {^key, value} -> value
       _ -> nil
+    end
+  end
+
+  # Status feeds support bundles, so the driver's error text (which can carry
+  # page URLs with tokens in their paths, selectors and ids) is reduced to a
+  # fixed category and a hash that still tells repeats apart.
+  defp error_summary(nil), do: nil
+
+  defp error_summary(error) do
+    %{
+      category: error_category(String.downcase(error)),
+      hash: LemonCore.Doctor.Redaction.hash(error)
+    }
+  end
+
+  defp error_category(error) do
+    cond do
+      error =~ "timed out" or error =~ "timeout" -> "timeout"
+      error =~ "driver_path" or error =~ "driver" -> "driver"
+      error =~ "selector" -> "selector"
+      error =~ "navigat" or error =~ "net::" -> "navigation"
+      true -> "other"
     end
   end
 

@@ -22,7 +22,9 @@ defmodule LemonSkills.Doctor.Checks.SkillsTest do
 
   test "skips when the global skills directory does not exist yet", %{skills_dir: dir} do
     assert [%Check{name: "skills.directory", status: :skip} = check] = Skills.run()
-    assert check.message =~ dir
+    # Doctor output is shared: the directory appears only as its label.
+    assert check.message =~ LemonCore.Doctor.Redaction.path_label(dir)
+    refute check.message =~ dir
   end
 
   test "counts installed skills in the global skills directory", %{skills_dir: dir} do
@@ -39,6 +41,7 @@ defmodule LemonSkills.Doctor.Checks.SkillsTest do
     File.write!(dir, "")
 
     assert [%Check{name: "skills.directory", status: :fail} = check] = Skills.run()
-    assert check.remediation =~ dir
+    assert check.remediation =~ LemonCore.Doctor.Redaction.path_label(dir)
+    refute check.remediation =~ dir
   end
 end

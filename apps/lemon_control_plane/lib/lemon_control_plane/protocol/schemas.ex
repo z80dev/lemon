@@ -26,6 +26,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "system.stop" => %{optional: %{}},
     "system.reload_code" => %{optional: %{"sessions" => :boolean}},
     "doctor.run" => %{optional: %{"botPublicUrl" => :string}},
+    "doctor.bundle" => %{optional: %{}},
     "setup.status" => %{optional: %{}},
     "logs.tail" => %{
       optional: %{

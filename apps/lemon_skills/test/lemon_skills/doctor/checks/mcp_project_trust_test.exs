@@ -58,7 +58,9 @@ defmodule LemonSkills.Doctor.Checks.McpProjectTrustTest do
     assert pending.message =~ "1 server(s) will not start"
     assert pending.remediation =~ "lemon mcp trust --cwd '#{project}'"
     assert %Check{name: "mcp.project_host_values", status: :warn} = host_values
-    assert host_values.message =~ "leak"
+    # Server names come from untrusted project files: only the count is shown.
+    assert host_values.message =~ "1 project MCP server(s) rejected"
+    refute host_values.message =~ "leak"
     refute host_values.message =~ System.user_home!()
 
     assert :ok = McpConfig.trust_project(project, McpDiscovery.project_status(project).digest)
