@@ -433,9 +433,70 @@ authorized by this documentation. No paired-runner refactor is included here.
 
 These opt-in lanes reuse the arena images, model routing and
 `kimi_auth_proxy.ts`; they never run in normal CI. They do **not** replace
-the arena or #107. No paid outcomes, container credential audit, or benchmark
-ranking has been recorded yet. Publishing a bounded run's sanitized reports
-and exact tested revisions on #544/#545 remains an operator action.
+the arena or #107. Recorded bounded runs are summarized below; live runs remain
+opt-in and outside normal CI.
+
+#### Recorded bounded runs
+
+The authorized reports on [#544](https://github.com/z80dev/lemon/issues/544)
+and [#545](https://github.com/z80dev/lemon/issues/545), dated 2026-11-16, used
+`gpt-6.1-terra`, high effort, a 180-second deadline, one repetition and serial
+trials. Lemon runtime/image was
+`f862485aa3e892f17c83dda95832bff8b1819a23`; omp was published `18.20.2`,
+with researched source `7c49c11aa5bbaf3f418406583096168ad5b8c6dc`.
+These small selected samples are not a benchmark ranking. Actual USD cost
+and cost per success are unknown: the subscription/proxy supplied no
+applicable USD tariff.
+
+**Terminal-Bench:** executed harness
+`f862485aa3e892f17c83dda95832bff8b1819a23`, Harbor
+`ec6aeab7fe0eb51df52b4e72c524daf5ea9cc5f4`, dataset `terminal-bench@2.0`
+at task source `69671fbaac6d67a7ef0dfec016cc38a64ef7a77c`.
+
+| Arm | Verified pass | 95% Wilson CI | Uncached input tokens | Cache-read tokens | Output tokens | Median agent wall seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Lemon | 6/10 (60%) | 31.3–83.2% | 135,687 | 1,021,952 | 17,813 | 66.72 |
+| omp | 7/10 (70%) | 39.7–89.2% | 82,236 | 443,136 | 14,703 | 48.90 |
+
+Exact two-sided McNemar p=1.0; there is no evidence of a reliable pass-rate
+difference. Wall/operational counters cover 9/10 trials per arm; token sums
+cover only complete wire counters (Lemon 9/10, omp 8/10), not complete-suite
+usage. Missing/interrupted usage remains unknown. `fix-git` failed to build
+because its upstream clone requested GitHub authentication; both arms count
+as failures. Four initial setup-only failures are additional infrastructure
+attempts, not paired outcomes; an omp agent error also left interrupted usage
+unknown.
+
+Terminal metrics were regenerated offline from retained stdout after a
+post-run-hook bug, fixed in `d051be30c`. Container retention was fixed in
+`3623b8a774378a36da2f4496eb9c8bf4f1b95bb7`; no paid tasks were rerun to test
+retention. A bounded live container credential audit found zero matches for
+the configured host credentials, but the original retention bug prevented a
+post-run audit of every arm. This was not an exhaustive secret scan.
+
+**Edit benchmark:** executed harness
+`aef0e15afffa040a005156e4a4f87cf22513fa78`; fixtures and upstream verifier
+were pinned to the omp source above. The minimum sample used
+`access-remove-optional-chain-001` and `call-swap-call-args-001`, with separate
+Lemon `edit` and `patch` treatments and an omp `read,edit` reference for each.
+
+| Arm | Upstream-verifier pass | Strict byte-exact pass | Uncached input tokens | Cache-read tokens | Output tokens | Median wall seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Lemon, scored sample | 4/4 | 4/4 | 25,376 | 13,440 | 492 | 7.43 |
+| omp, scored sample | 4/4 | 4/4 | 15,636 | 24,320 | 395 | 8.39 |
+
+Each treatment/arm passed 2/2; counters were complete for all eight scored
+sessions. No rejected calls were observed; omp retry rate remains unknown
+because target information was insufficient for its retry parser. An initial
+Lemon patch session under harness `d051be30c07de782041a6309cf3e0d5442dc3284`
+was harness-aborted and unscorable after a non-tool action parsing error.
+Its 3,533 uncached input / 5,248 cache-read / 125 output tokens are excluded
+from the scored table but included in all-attempt accounting. After the parser
+fix and explicit authorization, it was rerun: nine paid sessions were attempted,
+eight scored passes plus one unscorable attempt. Zero live errors do not
+validate every error-classification branch; this tiny Codex sample is not a
+Kimi edit-error-rate estimate or proof that #520 is eliminated. Private outputs
+and verification artifacts remain outside the checkout.
 
 The adapters were researched against
 [Harbor `ec6aeab7fe0e`](https://github.com/laude-institute/harbor/tree/ec6aeab7fe0eb51df52b4e72c524daf5ea9cc5f4)

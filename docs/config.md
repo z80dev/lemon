@@ -637,6 +637,20 @@ per_call_model_allow = ["anthropic/claude-sonnet-4-5", "@smol"] # optional allow
 reviewer = "@slow"         # model or @role per persona ID
 ```
 
+Task children with an `output_schema` default to `schema_mode = "strict"`.
+This adds a `submit_result` tool whose arguments must match the schema; prose,
+including JSON in a final response, does not submit a result. Invalid submissions
+return validation errors for correction in the same turn; the third invalid
+submission ends the turn with an error. If the child finishes without submitting,
+it receives up to two reminders to call `submit_result`, then fails with
+`Task ended without submit_result`. An accepted value ends the turn and is
+returned in `details.structured_output`. Request-budget exhaustion follows the
+partial-output decoding behavior below instead of sending further reminders.
+
+Set the task call's `schema_mode = "permissive"` to omit `submit_result` and
+validate the child's final JSON text instead, with up to two correction requests.
+Successfully decoded values also land in `details.structured_output`.
+
 - `max_depth`: nesting limit. The main session is depth 0 and each child is one
   deeper; a session may delegate only while its depth is below `max_depth`, and
   children created at the cap never receive the `task` tool.

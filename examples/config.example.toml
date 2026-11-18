@@ -162,7 +162,9 @@ enabled = true
 reserve_tokens = 16384
 keep_recent_tokens = 20000
 # Optional earlier trigger. threshold_tokens (fixed count) overrides threshold_percent
-# (1-100% of the model's context window); both are capped by window - reserve_tokens.
+# (1-100% of the model's context window); both are capped by
+# window - max(ceil(15% of window), reserve_tokens).
+# Automatic compaction must recover to at most 80% of the effective trigger.
 # threshold_percent = 80
 # threshold_tokens = 150000
 

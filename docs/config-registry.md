@@ -408,7 +408,7 @@ conversation population. See the [admission inventory](architecture/admission-ga
 | `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` | integer | `40000` |  | `lemon_core` | Estimated tool-schema token total above which long-tail tools are hidden behind tool_search/tool_invoke. |
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
 | `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate under the selected profile. |
-| `LEMON_TOOL_DISCLOSURE_PROFILE` | string | `auto` |  | `lemon_core` | Tool disclosure profile: auto selects coding for cwd-scoped sessions and legacy for chat; legacy defers the over-budget long tail; coding also defers optional built-ins. |
+| `LEMON_TOOL_DISCLOSURE_PROFILE` | string | `auto` |  | `lemon_core` | Tool disclosure profile: auto selects coding for cwd-scoped sessions and legacy for chat; legacy defers the over-budget long tail; coding also defers optional built-ins; code_mode is an opt-in experiment replacing eval with permissionless Deno cells and eval_wait. |
 
 ### Tools wasm
 

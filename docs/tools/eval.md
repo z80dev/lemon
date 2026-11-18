@@ -103,10 +103,26 @@ unavailable, not empty. No tool text is parsed to manufacture an exit code.
 
 ### Paired evaluation and decision
 
-**Decision: keep opt-in.** No success/token/cost improvement has been measured
-for #598, and no default or discovery-tool removal is justified. The
-orchestrator runs the paired evaluation separately; this change does not
-authorize paid model calls.
+**Decision: keep opt-in.** The authorized bounded paired run reported on
+[#598](https://github.com/z80dev/lemon/issues/598) on 2026-11-16 measured:
+
+| Requested arm | Hidden-verifier success | Uncached input tokens | Median wall seconds |
+| --- | ---: | ---: | ---: |
+| lemon-coding | 5/5 (100%) | 63,734 | 26.8 |
+| lemon-code-mode | 5/5 (100%) | 83,190 | 75.9 |
+
+Runtime/image source was `f862485aa3e892f17c83dda95832bff8b1819a23`;
+executed arena harness was `d051be30c07de782041a6309cf3e0d5442dc3284`.
+Both arms used `gpt-6.1-terra`, high thinking, one repetition and serial
+concurrency. All five pairs passed in both arms (exact two-sided McNemar
+p=1.0); wire counters were complete for all ten attempts, with no infrastructure
+failures or superseded attempts. This small selected sample shows no success
+gain and higher observed token/latency use for the requested code-mode arm.
+Applied-profile attribution remains unverified (`requested_only_not_observed`),
+so it cannot establish a causal code-mode effect or equivalence. Actual USD
+cost and cost per verified success remain unknown (`unknown_pricing`), not
+zero. No default change or discovery-tool removal is justified; this
+documentation does not authorize paid model calls.
 
 With Docker, matching rebuilt Lemon arena images containing Deno/Python 3,
 and the arena credential proxy already running, use a fresh output directory:

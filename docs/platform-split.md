@@ -122,7 +122,7 @@ tarballs so this class of break fails CI.
   `LemonSkills.Doctor.Checks.Skills` (both via `:doctor_checks`). Staying, with
   the consumer that blocks each move:
   - Router targets: `RunStore` (core `SessionLifecycle`/`SessionMetadataStore`,
-    gateway `Run`/`Scheduler`/`ThreadWorker`, channels Telegram transport,
+    gateway `Run` (execution permits are owned by `LemonGateway.Slots`), channels Telegram transport,
     `coding_agent` `SideQuery`/`ControlPlaneProvider`); `RunHistoryStore` (core
     `RunStore.history/2` and its supervision child); `ChatState`/`ChatStateStore`
     (core `SessionLifecycle`, channels Discord/Telegram transports,
