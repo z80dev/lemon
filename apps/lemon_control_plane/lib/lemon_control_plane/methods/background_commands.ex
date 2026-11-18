@@ -191,7 +191,7 @@ defmodule LemonControlPlane.Methods.BackgroundCommandSupport do
 end
 
 defmodule LemonControlPlane.Methods.BackgroundStart do
-  @moduledoc "Starts an isolated full-tool background Lemon session."
+  @moduledoc "Starts an isolated background Lemon session under the destination agent's policy floor."
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.BackgroundCommandSupport, as: Support

@@ -628,19 +628,11 @@ defmodule CodingAgent.Executor.SessionRunner do
       Enum.uniq([id, profile_id, LemonCore.SessionKey.agent_id(request.session_key || "")]) --
         [nil]
 
-    destination_policy =
-      Enum.reduce(ids, %{}, fn profile, policy ->
-        LemonCore.ToolPolicy.intersect(policy, get_in(config.agents, [profile, :tool_policy]))
-      end)
-
     floor =
-      Enum.reduce(ids, destination_policy, fn profile, policy ->
-        case LemonCore.ProfileStore.get(profile) do
-          {:ok, stored} -> LemonCore.ToolPolicy.intersect(policy, stored["toolPolicy"])
-          {:error, :not_found} -> policy
-          {:error, _} -> LemonCore.ToolPolicy.intersect(policy, %{allow: []})
-        end
-      end)
+      case destination_policy_floor(ids, config) do
+        {:ok, policy} -> policy
+        {:error, _} -> %{allow: []}
+      end
 
     floor
     |> LemonCore.ToolPolicy.intersect(
@@ -651,6 +643,33 @@ defmodule CodingAgent.Executor.SessionRunner do
       meta[:tool_policy] || meta["tool_policy"] || meta["toolPolicy"]
     )
     |> LemonCore.ToolPolicy.intersect(get_opt(run_opts, :tool_policy))
+  end
+
+  @doc """
+  Destination tool-policy floor for agent/profile `ids`: each id's
+  `config.agents[id].tool_policy` intersected with its `ProfileStore`
+  `toolPolicy`. A profile store read error is returned, never ignored.
+  """
+  @spec destination_policy_floor([String.t()], LemonCore.Config.t()) ::
+          {:ok, map()} | {:error, term()}
+  def destination_policy_floor(ids, config) when is_list(ids) do
+    config_floor =
+      Enum.reduce(ids, %{}, fn profile, policy ->
+        LemonCore.ToolPolicy.intersect(policy, get_in(config.agents, [profile, :tool_policy]))
+      end)
+
+    Enum.reduce_while(ids, {:ok, config_floor}, fn profile, {:ok, policy} ->
+      case LemonCore.ProfileStore.get(profile) do
+        {:ok, stored} ->
+          {:cont, {:ok, LemonCore.ToolPolicy.intersect(policy, stored["toolPolicy"])}}
+
+        {:error, :not_found} ->
+          {:cont, {:ok, policy}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:profile_store, reason}}}
+      end
+    end)
   end
 
   @doc false
