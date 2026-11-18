@@ -18,7 +18,7 @@ defmodule LemonAutomation.RunNotifications do
 
   def bind_kanban(task, params) do
     board = KanbanStore.get_board(task.board_id)
-    session = get_in(board, [:meta, "notificationSessionKey"]) || task.session_key
+    session = get_in(board, [:meta, "notificationSessionKey"])
     bind(target(board[:meta] || %{}, session), params)
   end
 
@@ -43,19 +43,21 @@ defmodule LemonAutomation.RunNotifications do
     cron_notice(route, job, run, notice, opts)
   end
 
+  # Destinations come only from the board's trusted creator context
+  # (`notificationSessionKey`, `deliverTo`); a card's session never selects one.
   def kanban_finished(task, lease_id) do
     board = KanbanStore.get_board(task.board_id)
     checkpoint = task.meta["codingWorkflow"] || %{}
+    session = KanbanStore.trusted_run_session(task)
+    run_id = if session, do: get_in(task.meta, ["kanbanRun", "runId"])
 
     session =
-      if checkpoint["reviewRunId"] == task.run_id,
-        do: checkpoint["reviewSessionKey"] || task.session_key,
-        else: task.session_key
+      if checkpoint["reviewRunId"] == run_id and is_binary(run_id),
+        do: checkpoint["reviewSessionKey"],
+        else: session
 
-    fallback =
-      target(board[:meta] || %{}, get_in(board, [:meta, "notificationSessionKey"]) || session)
-
-    route = bound_target(task.run_id, session, fallback)
+    fallback = target(board[:meta] || %{}, get_in(board, [:meta, "notificationSessionKey"]))
+    route = if session, do: bound_target(run_id, session, fallback), else: fallback
 
     status =
       if task.status == "done",
@@ -69,7 +71,7 @@ defmodule LemonAutomation.RunNotifications do
     notice = %{
       kind: :kanban,
       id: task.id,
-      run_id: task.run_id || "lease_#{lease_id}",
+      run_id: run_id || "lease_#{lease_id}",
       status: status,
       title: task.title,
       summary:

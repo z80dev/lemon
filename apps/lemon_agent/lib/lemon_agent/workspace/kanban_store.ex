@@ -1,11 +1,31 @@
 defmodule LemonAgent.Workspace.KanbanStore do
   @moduledoc """
   Durable BEAM-native kanban board state for multi-agent work.
+
+  Router run and session identity (`run_id`, `session_key`) are written only by
+  `track_leased_run/4` under the exact card lease; `update_task/3` rejects them,
+  rejects `meta`, and refuses any edit while a card is leased or tracking a run.
+
+  Board authority (`LemonAgent.Workspace.KanbanAuthority`) is supplied once, by
+  a trusted caller, through `create_board/2`'s `:authority` option. Afterwards
+  only `restrict_authority/2` (narrowing), `share_board/2` and
+  `reauthorize_board/1` (operator surfaces) change it. Card creators and editors
+  pass their policy as the trusted `:dispatch_policy` option; it is intersected
+  into the card's `meta["dispatchPolicy"]` and never widened. Supplied `meta`
+  never carries authority, lease, run, workflow or failure records.
   """
 
   require Logger
 
-  alias LemonCore.{Introspection, Store}
+  alias LemonAgent.Workspace.KanbanAuthority
+  alias LemonCore.{Introspection, Store, ToolPolicy}
+
+  @protected_task_attrs ~w(run_id runId session_key sessionKey meta)
+  # Board `codingWorkflow` is creator configuration; on a card it is the
+  # controller's lease-guarded checkpoint.
+  @reserved_board_meta ~w(kanbanAuthority)
+  @reserved_card_meta ~w(kanbanAuthority kanbanRun kanbanLease codingWorkflow dispatchPolicy lastFailure)
+  @run_provenance "kanban-dispatcher/v2"
 
   @boards_table :kanban_boards
   @tasks_table :kanban_tasks
@@ -16,31 +36,137 @@ defmodule LemonAgent.Workspace.KanbanStore do
   def create_board(name, opts \\ []) when is_binary(name) do
     name = String.trim(name)
 
-    cond do
-      name == "" ->
-        {:error, :empty_name}
+    with :ok <- if(name == "", do: {:error, :empty_name}, else: :ok),
+         {:ok, workspace, meta} <- board_authority(opts) do
+      now = now_ms()
+      columns = normalize_columns(opts[:columns])
 
-      true ->
-        now = now_ms()
-        columns = normalize_columns(opts[:columns])
+      board = %{
+        id: board_id(),
+        name: name,
+        status: "active",
+        workspace: workspace,
+        owner: string_opt(opts[:owner]),
+        columns: columns,
+        created_at_ms: now,
+        updated_at_ms: now,
+        archived_at_ms: nil,
+        meta: meta
+      }
 
-        board = %{
-          id: board_id(),
-          name: name,
-          status: "active",
-          workspace: string_opt(opts[:workspace]),
-          owner: string_opt(opts[:owner]),
-          columns: columns,
-          created_at_ms: now,
-          updated_at_ms: now,
-          archived_at_ms: nil,
-          meta: normalize_meta(opts[:meta])
-        }
+      with :ok <- Store.put(@boards_table, board.id, board) do
+        emit(:kanban_board_created, board, nil, opts)
+        {:ok, board}
+      end
+    end
+  end
 
-        with :ok <- Store.put(@boards_table, board.id, board) do
-          emit(:kanban_board_created, board, nil, opts)
-          {:ok, board}
+  # Authorized boards store the canonical workspace inside the recorded root.
+  defp board_authority(opts) do
+    meta = new_meta(opts[:meta], @reserved_board_meta)
+    workspace = string_opt(opts[:workspace])
+
+    case opts[:authority] do
+      nil ->
+        {:ok, workspace, meta}
+
+      authority ->
+        with {:ok, authority} <- KanbanAuthority.validate(authority),
+             {:ok, workspace} <- KanbanAuthority.canonical_directory(workspace || ""),
+             true <- KanbanAuthority.within?(workspace, authority["root"]) do
+          {:ok, workspace, Map.put(meta, KanbanAuthority.key(), authority)}
+        else
+          {:error, :kanban_authority_missing} -> {:error, :invalid_kanban_authority}
+          _ -> {:error, :workspace_outside_authorized_root}
         end
+    end
+  end
+
+  @doc "Durably narrows a board's authority with a dispatch starter's policy."
+  @spec restrict_authority(binary(), term()) :: {:ok, map()} | {:error, term()}
+  def restrict_authority(board_id, policy) when is_binary(board_id),
+    do: update_authority(board_id, &KanbanAuthority.restrict(&1, policy))
+
+  @doc "Operator path: share a board with another trusted session."
+  @spec share_board(binary(), binary()) :: {:ok, map()} | {:error, term()}
+  def share_board(board_id, session_key) when is_binary(board_id),
+    do: update_authority(board_id, &KanbanAuthority.share(&1, session_key))
+
+  @doc """
+  Operator path: (re)authorize a board with operator authority rooted at its
+  current canonical workspace. Publication is never granted here.
+  """
+  @spec reauthorize_board(binary()) :: {:ok, map()} | {:error, term()}
+  def reauthorize_board(board_id) when is_binary(board_id) do
+    with_board_lock(board_id, fn ->
+      with {:ok, board} <- fetch_board(board_id),
+           {:ok, authority} <-
+             KanbanAuthority.operator(board.workspace || "", board.meta[KanbanAuthority.key()]) do
+        put_board(%{
+          board
+          | workspace: authority["root"],
+            meta: Map.put(board.meta, KanbanAuthority.key(), authority)
+        })
+      end
+    end)
+  end
+
+  @doc """
+  Operator path: grant publication for the board's exact requested settings
+  and the `destinations` (push URLs, PR repository and base) resolved for this
+  confirmation. `digest` (`KanbanAuthority.publish_digest/2`) binds it to what
+  the operator previewed; any change of settings or destinations refuses with
+  `:stale`.
+  """
+  @spec grant_publication(binary(), binary(), map()) :: {:ok, map()} | {:error, term()}
+  def grant_publication(board_id, digest, destinations)
+      when is_binary(board_id) and is_binary(digest) do
+    update_board_authority(board_id, fn board, authority ->
+      settings = get_in(board.meta, ["codingWorkflow", "publish"])
+
+      cond do
+        not is_map(settings) -> {:error, :publication_not_requested}
+        KanbanAuthority.publish_digest(settings, destinations) != digest -> {:error, :stale}
+        true -> KanbanAuthority.grant_publication(authority, settings, destinations)
+      end
+    end)
+  end
+
+  @doc """
+  Operator path: allow workers to run in place in the board's workspace
+  (needed for non-Git workspaces or worktrees disabled). Refused with
+  `:workspace_changed` unless `workspace_digest` (see
+  `KanbanAuthority.workspace_digest/1`) still names the board's workspace.
+  """
+  @spec grant_in_place(binary(), binary()) :: {:ok, map()} | {:error, term()}
+  def grant_in_place(board_id, workspace_digest) when is_binary(board_id) do
+    update_board_authority(board_id, fn board, authority ->
+      if is_binary(workspace_digest) and
+           KanbanAuthority.workspace_digest(board.workspace) == workspace_digest,
+         do: KanbanAuthority.grant_in_place(authority, board.workspace),
+         else: {:error, :workspace_changed}
+    end)
+  end
+
+  defp update_authority(board_id, fun),
+    do: update_board_authority(board_id, fn _board, authority -> fun.(authority) end)
+
+  defp update_board_authority(board_id, fun) do
+    with_board_lock(board_id, fn ->
+      with {:ok, board} <- fetch_board(board_id),
+           {:ok, authority} <- KanbanAuthority.fetch(board),
+           {:ok, authority} <- fun.(board, authority) do
+        put_board(%{board | meta: Map.put(board.meta, KanbanAuthority.key(), authority)})
+      end
+    end)
+  end
+
+  defp put_board(board) do
+    board = %{board | updated_at_ms: now_ms()}
+
+    with :ok <- Store.put(@boards_table, board.id, board) do
+      emit(:kanban_board_updated, board, nil, [])
+      {:ok, board}
     end
   end
 
@@ -70,26 +196,32 @@ defmodule LemonAgent.Workspace.KanbanStore do
     list_records(@boards_table, opts, project)
   end
 
+  @doc """
+  Archive a board. The read-modify-write runs under the board lock so a
+  concurrent authority update (e.g. a starter narrowing it) is never undone.
+  """
   @spec archive_board(binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def archive_board(board_id, opts \\ []) when is_binary(board_id) do
-    case get_board(board_id) do
-      %{} = board when map_size(board) == 0 ->
-        {:error, :not_found}
+    with_board_lock(board_id, fn ->
+      case get_board(board_id) do
+        %{} = board when map_size(board) == 0 ->
+          {:error, :not_found}
 
-      board ->
-        now = now_ms()
+        board ->
+          now = now_ms()
 
-        updated =
-          board
-          |> Map.put(:status, "archived")
-          |> Map.put(:updated_at_ms, now)
-          |> Map.put(:archived_at_ms, now)
+          updated =
+            board
+            |> Map.put(:status, "archived")
+            |> Map.put(:updated_at_ms, now)
+            |> Map.put(:archived_at_ms, now)
 
-        with :ok <- Store.put(@boards_table, board.id, updated) do
-          emit(:kanban_board_archived, updated, nil, opts)
-          {:ok, updated}
-        end
-    end
+          with :ok <- Store.put(@boards_table, board.id, updated) do
+            emit(:kanban_board_archived, updated, nil, opts)
+            {:ok, updated}
+          end
+      end
+    end)
   end
 
   @spec create_task(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -99,7 +231,12 @@ defmodule LemonAgent.Workspace.KanbanStore do
     with {:ok, board} <- fetch_board(board_id),
          :ok <- validate_title(title),
          {:ok, status} <- normalize_task_status(opts[:status], board.columns),
-         :ok <- workflow_completion_allowed(%{meta: %{}}, board, status) do
+         :ok <- workflow_completion_allowed(%{meta: %{}}, board, status),
+         {:ok, meta} <-
+           restrict_dispatch_policy(
+             new_meta(opts[:meta], @reserved_card_meta),
+             opts[:dispatch_policy]
+           ) do
       now = now_ms()
 
       task = %{
@@ -111,14 +248,14 @@ defmodule LemonAgent.Workspace.KanbanStore do
         priority: string_opt(opts[:priority]) || "normal",
         assignee: string_opt(opts[:assignee]),
         worker_profile: string_opt(opts[:worker_profile]),
-        session_key: string_opt(opts[:session_key]),
-        run_id: string_opt(opts[:run_id]),
+        session_key: nil,
+        run_id: nil,
         depends_on: normalize_string_list(opts[:depends_on]),
         comments: [],
         created_at_ms: now,
         updated_at_ms: now,
         completed_at_ms: completed_at(status, now),
-        meta: normalize_meta(opts[:meta])
+        meta: meta
       }
 
       with :ok <- Store.put(@tasks_table, task.id, task) do
@@ -162,6 +299,13 @@ defmodule LemonAgent.Workspace.KanbanStore do
     end
   end
 
+  @doc """
+  Update an idle card's editable fields.
+
+  Router identity (`run_id`, `session_key`) and `meta` are never accepted, and
+  a card holding a lease or tracking a run cannot be edited: only the exact
+  lease owner changes it through the lease-guarded writers.
+  """
   @spec update_task(binary(), keyword() | map(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_task(task_id, attrs, opts \\ []) when is_binary(task_id) do
     with_task_board_lock(task_id, fn ->
@@ -170,10 +314,13 @@ defmodule LemonAgent.Workspace.KanbanStore do
           {:error, :not_found}
 
         task ->
-          with {:ok, board} <- fetch_board(task.board_id),
-               {:ok, updated} <- apply_task_attrs(task, board, attrs) do
+          with :ok <- editable(task),
+               {:ok, board} <- fetch_board(task.board_id),
+               {:ok, updated} <- apply_task_attrs(task, board, attrs),
+               {:ok, meta} <- restrict_dispatch_policy(updated.meta, opts[:dispatch_policy]) do
             updated =
               updated
+              |> Map.put(:meta, meta)
               |> Map.put(:updated_at_ms, now_ms())
               |> Map.put(:completed_at_ms, completed_at(updated.status, updated.completed_at_ms))
 
@@ -184,6 +331,12 @@ defmodule LemonAgent.Workspace.KanbanStore do
           end
       end
     end)
+  end
+
+  defp editable(task) do
+    if is_nil(active_lease(task)) and not tracked_run?(task),
+      do: :ok,
+      else: {:error, :task_leased}
   end
 
   @spec add_comment(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -354,12 +507,24 @@ defmodule LemonAgent.Workspace.KanbanStore do
   Persist a router invocation before submission, guarded by the exact task lease.
   Tracked invocations are not reclaimed on expiry or dispatcher restart: their
   outcome must be reconciled before another worker can edit the same checkout.
+
+  The run record is bound to the card and lease (`taskId`, `leaseId`,
+  `provenance`); only such a record is trusted for session reuse.
   """
   def track_leased_run(task_id, lease_id, run_id, attrs \\ %{}) do
     with_task_board_lock(task_id, fn ->
       with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
         {workflow, attrs} = attrs |> Map.new() |> Map.pop("codingWorkflow")
-        run = attrs |> Map.put_new("status", "running") |> Map.put("runId", run_id)
+
+        run =
+          attrs
+          |> Map.put_new("status", "running")
+          |> Map.merge(%{
+            "runId" => run_id,
+            "taskId" => task.id,
+            "leaseId" => lease_id,
+            "provenance" => @run_provenance
+          })
 
         meta =
           task.meta
@@ -597,7 +762,8 @@ defmodule LemonAgent.Workspace.KanbanStore do
   defp apply_task_attrs(task, board, attrs) when is_map(attrs) or is_list(attrs) do
     attrs = Map.new(attrs)
 
-    with {:ok, status} <- maybe_status(attrs, task.status, board.columns),
+    with :ok <- reject_protected_attrs(attrs),
+         {:ok, status} <- maybe_status(attrs, task.status, board.columns),
          :ok <- workflow_completion_allowed(task, board, status),
          {:ok, title} <- maybe_title(attrs, task.title) do
       {:ok,
@@ -608,15 +774,48 @@ defmodule LemonAgent.Workspace.KanbanStore do
        |> maybe_put(:priority, attr(attrs, :priority))
        |> maybe_put(:assignee, attr(attrs, :assignee))
        |> maybe_put(:worker_profile, attr(attrs, :worker_profile) || attr(attrs, :workerProfile))
-       |> maybe_put(:session_key, attr(attrs, :session_key) || attr(attrs, :sessionKey))
-       |> maybe_put(:run_id, attr(attrs, :run_id) || attr(attrs, :runId))
        |> maybe_put_list(:depends_on, attr(attrs, :depends_on) || attr(attrs, :dependsOn))
-       |> maybe_put_meta(attr(attrs, :meta))
        |> maybe_retry(attr(attrs, :status), List.first(board.columns))}
     end
   end
 
   defp apply_task_attrs(_task, _board, _attrs), do: {:error, :invalid_attrs}
+
+  defp reject_protected_attrs(attrs) do
+    case Enum.find(Map.keys(attrs), &(to_string(&1) in @protected_task_attrs)) do
+      nil -> :ok
+      key -> {:error, {:protected_field, to_string(key)}}
+    end
+  end
+
+  # The caller's validated tool policy, intersected with every earlier one.
+  defp restrict_dispatch_policy(meta, nil), do: {:ok, meta}
+
+  defp restrict_dispatch_policy(meta, policy) do
+    restricted =
+      case Map.fetch(meta, "dispatchPolicy") do
+        {:ok, current} -> ToolPolicy.restrict(current, policy)
+        :error -> ToolPolicy.parse(policy)
+      end
+
+    case restricted do
+      {:ok, policy} -> {:ok, Map.put(meta, "dispatchPolicy", ToolPolicy.to_map(policy))}
+      {:error, _reason} -> {:error, :invalid_dispatch_policy}
+    end
+  end
+
+  # Reserved records have one trusted writer each; supplied metadata never sets them.
+  defp new_meta(meta, reserved), do: meta |> normalize_meta() |> Map.drop(reserved)
+
+  @doc "The session a lease-guarded dispatcher run recorded for this exact card, if any."
+  @spec trusted_run_session(map()) :: binary() | nil
+  def trusted_run_session(%{id: task_id, meta: %{"kanbanRun" => run}}) when is_map(run) do
+    if run["provenance"] == @run_provenance and run["taskId"] == task_id and
+         is_binary(run["leaseId"]) and is_binary(run["sessionKey"]),
+       do: run["sessionKey"]
+  end
+
+  def trusted_run_session(_task), do: nil
 
   defp maybe_retry(task, status, first_column) do
     if status == first_column and not tracked_run?(task) do
@@ -852,9 +1051,6 @@ defmodule LemonAgent.Workspace.KanbanStore do
 
   defp maybe_put_list(map, _key, nil), do: map
   defp maybe_put_list(map, key, value), do: Map.put(map, key, normalize_string_list(value))
-
-  defp maybe_put_meta(map, nil), do: map
-  defp maybe_put_meta(map, meta), do: Map.put(map, :meta, normalize_meta(meta))
 
   defp attr(attrs, key) do
     Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key)) ||

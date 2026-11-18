@@ -788,8 +788,8 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
                )
              )
 
-    assert args ==
-             "task create board_1 --priority high --assignee alice --worker-profile builder ship Discord proof"
+    # Assignee and worker identity come from the channel, never from options.
+    assert args == "task create board_1 --priority high ship Discord proof"
 
     assert {:ok, %{command: "kanban", args: "dispatch start board_1 --max-concurrency 3"}} =
              Transport.slash_command_args_for_interaction(

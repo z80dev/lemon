@@ -615,6 +615,8 @@ defmodule LemonWeb.WorkManagementLive do
             <:item label="Target"><code class="font-mono text-xs">{@preview.row.id}</code></:item>
             <:item :if={@preview.run_id} label="Invocation"><code class="font-mono text-xs">{@preview.run_id}</code></:item>
             <:item :if={@preview.row.kind == :cron} label="Schedule">{@preview.row.schedule_text}</:item>
+            <:item :if={@preview.action == "grant-publish"} label="Publication">{@preview.row.publish_summary}</:item>
+            <:item :if={@preview.action == "allow-in-place"} label="Workspace fingerprint"><code class="font-mono text-xs">{String.slice(@preview.row.workspace_digest || "", 0, 12)}</code></:item>
           </.key_value>
           <p class="text-fg">{effect(@preview.row.kind, @preview.action)}</p>
           <p class="text-xs text-muted">
@@ -648,6 +650,7 @@ defmodule LemonWeb.WorkManagementLive do
           <code class="hidden truncate font-mono text-2xs font-normal text-subtle sm:inline">{@board.id}</code>
           <.runtime_badge status={@board.runtime} />
           <.badge :if={@board.status == "archived"} tone="neutral">archived</.badge>
+          <.badge :if={Map.get(@board, :authority) == "quarantined"} tone="warning">quarantined</.badge>
           <span class="text-xs font-normal text-muted">{@board.running_count} {if @board.running_count == 1, do: "worker", else: "workers"}</span>
         </div>
       </:header>
@@ -1388,9 +1391,15 @@ defmodule LemonWeb.WorkManagementLive do
   defp action_label("run"), do: "Run now"
   defp action_label("abort"), do: "Stop run"
   defp action_label("remove"), do: "Remove job"
+  defp action_label("reauthorize"), do: "Reauthorize"
+  defp action_label("grant-publish"), do: "Grant publication"
+  defp action_label("allow-in-place"), do: "Allow in-place execution"
 
   defp button_label(:boards, "start"), do: "Start board…"
   defp button_label(:boards, "stop"), do: "Stop dispatcher…"
+  defp button_label(:boards, "reauthorize"), do: "Reauthorize board…"
+  defp button_label(:boards, "grant-publish"), do: "Grant publication…"
+  defp button_label(:boards, "allow-in-place"), do: "Allow in-place…"
   defp button_label(:goals, "start"), do: "Start loop…"
   defp button_label(:goals, "stop"), do: "Stop loop…"
   defp button_label(_, action), do: action_label(action) <> "…"
@@ -1408,6 +1417,18 @@ defmodule LemonWeb.WorkManagementLive do
 
   defp effect(:boards, "start"),
     do: "Starts this board with one concurrent worker using the shared dispatcher."
+
+  defp effect(:boards, "reauthorize"),
+    do:
+      "Grants this board's existing cards full operator tool authority in its current workspace. Kanban, goal and cron stay blocked for workers; publication and in-place execution are not authorized."
+
+  defp effect(:boards, "grant-publish"),
+    do:
+      "Lets the controller push reviewed commits (and open the pull request) with the server's Git credentials using exactly the settings below. Each card's recorded tool policy must still allow those commands."
+
+  defp effect(:boards, "allow-in-place"),
+    do:
+      "Lets workers run directly in this board's current workspace (fingerprint below) instead of a Lemon-owned Git worktree. Needed only for non-Git workspaces or boards with worktrees off. Whoever can write that directory can change what workers act on. A workspace change voids this grant."
 
   defp effect(:goals, "start"),
     do: "Starts at most 3 loop ticks. Does not enable automatic restart."

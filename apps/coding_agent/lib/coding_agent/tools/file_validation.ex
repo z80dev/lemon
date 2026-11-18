@@ -106,15 +106,21 @@ defmodule CodingAgent.Tools.FileValidation do
 
   Resource operations may pass `allow_directories: true` to validate directories
   with the same parent/symlink rules without treating them as writable files.
+
+  A session confined to a directory (`confine_mutations_to:`, e.g. a kanban
+  worker's worktree) refuses every target outside it, absolute or relative, and
+  checks every component below it for symlinks.
   """
   @spec check_mutation_target(String.t(), keyword()) :: :ok | {:error, String.t()}
   def check_mutation_target(path, opts \\ [])
 
   def check_mutation_target(path, opts) when is_binary(path) do
     allow_symlinks = Keyword.get(opts, :allow_symlinks, false)
-    boundary = mutation_boundary(path, Keyword.get(opts, :mutation_root))
+    root = Keyword.get(opts, :confine_mutations_to) || Keyword.get(opts, :mutation_root)
+    boundary = mutation_boundary(path, root)
 
-    with :ok <- validate_mutation_path(path) do
+    with :ok <- validate_mutation_path(path),
+         :ok <- confined(path, opts) do
       case File.lstat(path) do
         {:ok, %File.Stat{type: :regular}} ->
           with :ok <- validate_mutation_parent(Path.dirname(path), allow_symlinks, boundary) do
@@ -147,6 +153,30 @@ defmodule CodingAgent.Tools.FileValidation do
   end
 
   def check_mutation_target(_path, _opts), do: {:error, "Path must be a string"}
+
+  @doc """
+  `:ok` unless the session confines file mutations (`confine_mutations_to:`)
+  and `path` (after `..` and `~` expansion) lies outside that directory.
+  Symlinks below the directory are refused separately by the mutation checks.
+  """
+  @spec confined(String.t(), keyword()) :: :ok | {:error, String.t()}
+  def confined(path, opts) do
+    case Keyword.get(opts, :confine_mutations_to) do
+      nil ->
+        :ok
+
+      root when is_binary(root) ->
+        expanded = Path.expand(path)
+        root = Path.expand(root)
+
+        if expanded == root or String.starts_with?(expanded, root <> "/"),
+          do: :ok,
+          else: {:error, "File changes are confined to #{root}; refusing #{expanded}"}
+
+      _ ->
+        {:error, "File changes are confined; refusing #{path}"}
+    end
+  end
 
   @doc "Pin a file's device/inode identity, rejecting symlinks unless explicitly trusted."
   def regular_file_identity(path, opts \\ []) do

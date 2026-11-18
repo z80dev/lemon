@@ -26,11 +26,23 @@ defmodule LemonAutomation.KanbanDispatcherLiveTest do
         {:ok, _apps} = Application.ensure_all_started(:lemon_router)
         {:ok, _apps} = Application.ensure_all_started(:lemon_gateway)
 
+        {:ok, authority} =
+          LemonAgent.Workspace.KanbanAuthority.new(
+            %{agent_id: "default", session_key: "agent:default:main"},
+            nil,
+            workspace
+          )
+
         assert {:ok, board} =
                  KanbanStore.create_board("Live dispatcher #{unique_id()}",
                    workspace: workspace,
-                   columns: ["todo", "doing", "done"]
+                   columns: ["todo", "doing", "done"],
+                   authority: authority
                  )
+
+        # Workers run in place (worktrees off) only with the operator grant.
+        digest = LemonAgent.Workspace.KanbanAuthority.workspace_digest(board.workspace)
+        assert {:ok, _} = KanbanStore.grant_in_place(board.id, digest)
 
         tasks =
           for label <- ["A", "B", "C"] do

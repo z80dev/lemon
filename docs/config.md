@@ -3144,7 +3144,7 @@ require token secret names (validated at load).
 | `reply_timeout_ms` | `300000` | Positive integer (`LEMON_A2A_REPLY_TIMEOUT_MS`). |
 | `rate_limit_per_minute` | `60` | Positive integer (`LEMON_A2A_RATE_LIMIT_PER_MINUTE`). |
 | `max_context_turns` | `100` | Positive integer (`LEMON_A2A_MAX_CONTEXT_TURNS`). |
-| `default_allow_tools` | `read read_skill recall grep find ls webfetch websearch kanban peer` | Tools inbound peer runs may use unless a peer overrides it. |
+| `default_allow_tools` | `read read_skill recall grep find ls webfetch websearch peer` | Tools inbound peer runs may use unless a peer overrides it. `kanban` and other work-starting tools need an explicit entry. |
 
 Each `[gateway.a2a.peers.<name>]` sets `url`, `token_secret` (or separate
 `inbound_token_secret` / `outbound_token_secret`), `agent_id`, `capabilities`,

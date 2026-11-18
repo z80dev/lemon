@@ -1410,8 +1410,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     if is_integer(chat_id) do
       scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
       args = Commands.telegram_command_args(inbound.message.text || "", "kanban")
-      agent_id = BindingResolver.resolve_agent_id(scope)
-      workspace = BindingResolver.resolve_cwd(scope)
+      session_key = build_session_key(state, inbound, scope)
 
       _ =
         send_system_message(
@@ -1420,14 +1419,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           thread_id,
           user_msg_id,
           LemonChannels.KanbanStatusMessage.handle(args,
-            owner: agent_id,
-            author: agent_id,
-            worker_id: agent_id,
-            workspace: workspace,
-            meta: %{
-              "notificationSessionKey" => build_session_key(state, inbound, scope),
-              transport: "telegram"
-            }
+            agent_id: BindingResolver.resolve_agent_id(scope),
+            session_key: session_key,
+            workspace: BindingResolver.resolve_cwd(scope),
+            # Only the transport's per-human attestation authorizes changes; an
+            # allowed group chat alone does not.
+            operator?: get_in(inbound, [Access.key(:sender), :owner?]) == true,
+            channel_context: %{
+              channel_id: inbound.channel_id,
+              account_id: inbound.account_id,
+              peer_kind: inbound.peer.kind,
+              peer_id: inbound.peer.id,
+              thread_id: inbound.peer.thread_id
+            },
+            meta: %{"notificationSessionKey" => session_key, transport: "telegram"}
           )
         )
     end

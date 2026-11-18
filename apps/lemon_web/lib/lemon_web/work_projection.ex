@@ -12,7 +12,7 @@ defmodule LemonWeb.WorkProjection do
   bound to the opaque revision the operator previewed and is refused when stale.
   """
 
-  alias LemonAgent.Workspace.{GoalStore, KanbanStore}
+  alias LemonAgent.Workspace.{GoalStore, KanbanAuthority, KanbanStore}
   alias LemonAutomation.{CronManager, CronSchedule, GoalLoopManager, KanbanDispatcher}
   alias LemonMemory.Safety
   alias LemonWeb.CronText
@@ -77,7 +77,14 @@ defmodule LemonWeb.WorkProjection do
     end
   end
 
-  def actions(%{kind: :boards, status: "active", runtime: "idle"}), do: ["start"]
+  def actions(%{kind: :boards, authority: "quarantined", runtime: "idle"}), do: ["reauthorize"]
+
+  def actions(%{kind: :boards, status: "active", runtime: "idle"} = row) do
+    publish = if Map.get(row, :publication) == "requested", do: ["grant-publish"], else: []
+    in_place = if Map.get(row, :in_place) == "granted", do: [], else: ["allow-in-place"]
+    ["start", "reauthorize"] ++ publish ++ in_place
+  end
+
   def actions(%{kind: :boards, runtime: "running"}), do: ["stop"]
   def actions(%{kind: :goals, runtime: "running"}), do: ["stop"]
   def actions(%{kind: :goals, runtime: "stopping"}), do: ["stop"]
@@ -135,6 +142,30 @@ defmodule LemonWeb.WorkProjection do
 
   defp mutate(%{kind: :boards} = row, "stop", _),
     do: call(KanbanDispatcher, :stop_board, [row.id, [expected_revision: row.revision]])
+
+  # Operator-only: the sole path that releases quarantined work or widens a
+  # board's recorded authority.
+  defp mutate(%{kind: :boards} = row, "reauthorize", _),
+    do: call(KanbanDispatcher, :reauthorize_board, [row.id, [expected_revision: row.revision]])
+
+  # Operator-only publication grant, bound to the previewed board revision and
+  # to the digest of the exact publish settings shown in the preview.
+  defp mutate(%{kind: :boards} = row, "grant-publish", _),
+    do:
+      call(KanbanDispatcher, :grant_publication, [
+        row.id,
+        [expected_revision: row.revision, publish_digest: row.publish_digest]
+      ])
+
+  # Operator-only: lets workers run directly in the board's workspace
+  # (non-Git workspaces), bound to the previewed board revision and to the
+  # digest of the workspace that was current when previewed.
+  defp mutate(%{kind: :boards} = row, "allow-in-place", _),
+    do:
+      call(KanbanDispatcher, :grant_in_place, [
+        row.id,
+        [expected_revision: row.revision, workspace_digest: row.workspace_digest]
+      ])
 
   defp mutate(%{kind: :goals} = row, "start", _),
     do:
@@ -380,12 +411,19 @@ defmodule LemonWeb.WorkProjection do
       |> strict_rows(@card_limit, &card/1)
 
     runtime = runtime(fn -> call(KanbanDispatcher, :status, [id]) end, :dispatcher)
+    preview = publication_preview(id, raw)
 
     %{
       kind: :boards,
       id: id,
       label: label(raw[:name]),
       status: enum(raw[:status], ~w(active archived)),
+      authority: authority(raw),
+      publication: publication(raw, preview),
+      publish_digest: preview && preview.digest,
+      publish_summary: publish_summary(publish_settings(raw), preview),
+      in_place: in_place(raw),
+      workspace_digest: KanbanAuthority.workspace_digest(raw[:workspace]),
       runtime: runtime.status,
       revision: runtime.revision,
       running_count: runtime.count,
@@ -393,6 +431,102 @@ defmodule LemonWeb.WorkProjection do
       columns:
         Enum.uniq(Enum.map(Enum.take(raw.columns, 30), &label/1) ++ Enum.map(tasks, & &1.status))
     }
+  end
+
+  # Boards without recorded authority are quarantined: never dispatched until an
+  # operator reauthorizes them here.
+  defp authority(raw) do
+    case KanbanAuthority.fetch(raw) do
+      {:ok, _} -> "authorized"
+      {:error, _} -> "quarantined"
+    end
+  end
+
+  defp in_place(raw) do
+    with {:ok, authority} <- KanbanAuthority.fetch(raw),
+         true <- KanbanAuthority.in_place_granted?(authority, raw[:workspace]) do
+      "granted"
+    else
+      _ -> "not_granted"
+    end
+  end
+
+  defp publish_settings(%{meta: %{"codingWorkflow" => %{"publish" => %{} = settings}}}),
+    do: settings
+
+  defp publish_settings(_raw), do: nil
+
+  # The destinations a grant would bind now, resolved by the dispatcher from
+  # the board workspace's remote configuration; nil when unavailable.
+  defp publication_preview(id, raw) do
+    if is_map(publish_settings(raw)) do
+      try do
+        case call(KanbanDispatcher, :publication_preview, [id, []]) do
+          {:ok, %{destinations: %{"push" => [_ | _]} = destinations, digest: digest}}
+          when is_binary(digest) ->
+            %{destinations: destinations, digest: digest}
+
+          _ ->
+            nil
+        end
+      rescue
+        _ -> nil
+      catch
+        _, _ -> nil
+      end
+    end
+  end
+
+  # "granted": the grant's pinned destinations are still what the workspace
+  # resolves to (or cannot be re-resolved); "requested": a (fresh) grant can
+  # be confirmed for the previewed destinations; "unresolved": neither.
+  defp publication(raw, preview) do
+    settings = publish_settings(raw)
+
+    with true <- is_map(settings),
+         {:ok, authority} <- KanbanAuthority.fetch(raw) do
+      granted = KanbanAuthority.granted_destinations(authority, settings)
+
+      cond do
+        preview && granted == {:ok, preview.destinations} -> "granted"
+        preview -> "requested"
+        match?({:ok, _}, granted) -> "granted"
+        true -> "unresolved"
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  # Bounded labels of the exact settings and destinations an operator grant
+  # would authorize.
+  defp publish_summary(settings, preview) when is_map(settings) do
+    push =
+      case preview do
+        %{destinations: %{"push" => urls}} -> "push to " <> Enum.map_join(urls, ", ", &push_url/1)
+        _ -> "push destination unresolved"
+      end
+
+    [
+      enum(settings["mode"], ~w(branch pull_request)),
+      is_binary(settings["remote"]) && "remote " <> label(settings["remote"]),
+      push,
+      is_binary(settings["repository"]) && "repository " <> label(settings["repository"]),
+      is_binary(settings["base"]) && "base " <> label(settings["base"]),
+      if(settings["draft"] == false, do: "ready for review", else: nil)
+    ]
+    |> Enum.reject(&(&1 in [nil, false]))
+    |> Enum.join(", ")
+  end
+
+  defp publish_summary(_settings, _preview), do: nil
+
+  # Remote URLs are shown exactly (the dispatcher already refused embedded
+  # credentials and control characters); a local path stays hidden.
+  defp push_url(url) do
+    if Regex.match?(~r/\A(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/|[^\/:@\s]+@[^\/:\s]+:)/, url),
+      do: String.slice(url, 0, 512),
+      else: LemonWeb.ManagementText.text(url, max_bytes: 512)
   end
 
   defp outcome(value) when value in ~w(running reconciling completed failed outcome_unknown),

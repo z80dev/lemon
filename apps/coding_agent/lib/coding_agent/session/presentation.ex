@@ -91,6 +91,8 @@ defmodule CodingAgent.Session.Presentation do
     )
     |> maybe_add_opt(:shared_memory_grant, Keyword.get(opts, :shared_memory_grant) == true)
     |> maybe_add_opt(:invocation_mcp_servers, Keyword.get(opts, :invocation_mcp_servers))
+    |> maybe_add_opt(:cwd_identity, Keyword.get(opts, :cwd_identity))
+    |> maybe_add_opt(:confine_mutations_to, Keyword.get(opts, :confine_mutations_to))
     |> Keyword.merge(
       Keyword.take(opts, [
         :native_lineage_handle,

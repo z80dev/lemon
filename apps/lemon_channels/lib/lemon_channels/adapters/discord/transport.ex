@@ -1747,15 +1747,18 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       topic_id: interaction_thread_id(interaction)
     }
 
-    agent_id = BindingResolver.resolve_agent_id(scope)
+    channel_id = map_get(interaction, :channel_id)
 
+    # Discord interactions carry no operator attestation, so kanban changes are
+    # refused here; reads stay scoped to this channel's own session principal.
     respond_ephemeral(
       interaction,
       LemonChannels.KanbanStatusMessage.handle(args,
-        owner: agent_id,
-        author: agent_id,
-        worker_id: agent_id,
+        agent_id: BindingResolver.resolve_agent_id(scope),
+        session_key: interaction_session_key(interaction, state),
         workspace: BindingResolver.resolve_cwd(scope),
+        operator?: false,
+        channel_context: %{channel_id: "discord", peer_id: channel_id},
         meta: %{
           "notificationSessionKey" => interaction_session_key(interaction, state),
           transport: "discord"
@@ -1800,13 +1803,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     case subcommand do
       "boards" ->
-        "boards" <> kanban_interaction_options(interaction, "boards", [:status, :owner, :limit])
+        "boards" <> kanban_interaction_options(interaction, "boards", [:status, :limit])
 
       "create" ->
-        name = nested_option_value(interaction, "create", "name")
-
-        "create" <>
-          kanban_interaction_options(interaction, "create", [:workspace]) <> value_arg(name)
+        "create" <> value_arg(nested_option_value(interaction, "create", "name"))
 
       "show" ->
         board_id = nested_option_value(interaction, "show", "board_id")
@@ -1823,23 +1823,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
         "task create" <>
           value_arg(board_id) <>
-          kanban_interaction_options(interaction, "task_create", [
-            :priority,
-            :assignee,
-            :worker_profile
-          ]) <> value_arg(title)
+          kanban_interaction_options(interaction, "task_create", [:priority]) <>
+          value_arg(title)
 
       "task_update" ->
         task_id = nested_option_value(interaction, "task_update", "task_id")
 
         "task update" <>
           value_arg(task_id) <>
-          kanban_interaction_options(interaction, "task_update", [
-            :status,
-            :priority,
-            :assignee,
-            :worker_profile
-          ])
+          kanban_interaction_options(interaction, "task_update", [:status, :priority])
 
       "comment" ->
         task_id = nested_option_value(interaction, "comment", "task_id")
@@ -1851,10 +1843,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
         "dispatch start" <>
           value_arg(board_id) <>
-          kanban_interaction_options(interaction, "dispatch_start", [
-            :max_concurrency,
-            :worker_profile
-          ])
+          kanban_interaction_options(interaction, "dispatch_start", [:max_concurrency])
 
       "dispatch_status" ->
         "dispatch status" <>

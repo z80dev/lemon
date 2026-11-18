@@ -136,10 +136,12 @@ Every task lookup/list/cancel operation is scoped to the authenticated peer.
 Inbound peer text is wrapped as external untrusted content before model use.
 Outbound responses are returned to the Lemon model with `trust: :untrusted`.
 Inbound runs use a conservative read/coordination tool allowlist: `read`,
-`read_skill`, `recall`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `kanban`
-and `peer`. Set `default_allow_tools` under `[gateway.a2a]` to change it for all
+`read_skill`, `recall`, `grep`, `find`, `ls`, `webfetch`, `websearch` and
+`peer`. Set `default_allow_tools` under `[gateway.a2a]` to change it for all
 peers, or `allow_tools` on one peer to replace it for that peer (a non-empty
-peer list takes precedence).
+peer list takes precedence). Tools that start local work, such as `kanban`, are
+never in the default list: name them explicitly for a peer you trust with them.
+A peer allowed `kanban` dispatches workers limited to its own allowlist.
 
 The inbound A2A `messageId` is also the durable replay key. Resending the same
 message for the same authenticated peer returns the original task, including

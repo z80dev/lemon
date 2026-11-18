@@ -538,6 +538,7 @@ defmodule CodingAgent.Tools.Patch do
     resolved_path = resolve_path(path, cwd)
 
     with :ok <- validate_containment(resolved_path, cwd, opts),
+         :ok <- FileValidation.confined(resolved_path, opts),
          :ok <- check_mutation_target(resolved_path, cwd, opts) do
       {:ok, resolved_path}
     end

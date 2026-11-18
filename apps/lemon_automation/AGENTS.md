@@ -78,8 +78,47 @@ and deliver. Suppressed runs remain in history.
   run is active. Restart reclaims only unsubmitted old leases; tracked router
   invocations must reconcile before re-leasing. Hard stop kills owned waiters,
   aborts claimed runs once, and retains ambiguous run ownership.
-- Git-backed board workers use isolated `.worktrees/kanban-<task_id>` checkouts
-  and `lemon-kanban/<task_id>` branches. Never run concurrent editors in one cwd.
+- Kanban work runs only under board authority recorded by a trusted creator
+  (`LemonAgent.Workspace.KanbanAuthority`: session principal, policy, canonical
+  root, operator publication grant). Missing authority is quarantined; only
+  operator surfaces reauthorize, share, grant publication or widen it. Card
+  creator/editor and dispatch starter policies only narrow it, durably. Board
+  writes (including archive) happen under the board lock. Workers and
+  reviewers block every delegation surface (`KanbanAuthority.delegation_tools/0`)
+  until it carries authority.
+- Routing identity (principal, assignee, session, run, workspace) comes from
+  trusted session context, never tool params or chat flags. Only
+  `track_leased_run/4` writes run/session identity; control paths read the
+  lease-recorded `meta.kanbanRun.runId`, and only provenance-bound runs are
+  reused for sessions or notifications.
+- Re-resolve the workspace against the authority root at every preparation
+  (dispatch and recovery); never promote a workspace to a parent repository.
+  Git workers run in controller-created worktrees under
+  `~/.lemon/kanban/worktrees` of the board's controller-owned repository
+  (`~/.lemon/kanban/repos/<board>.git`); every run request
+  carries `meta.cwd_identity`, which the session runner verifies at session
+  start and `CodingAgent.ToolRegistry` before every tool call, and
+  `meta.mutation_root`, which confines file-mutation tools to that directory
+  (`CodingAgent.Tools.FileValidation.confined/2`). Running in the
+  caller's directory (non-Git, or worktrees off) needs the operator's
+  workspace-bound in-place grant. Never run concurrent editors in one cwd.
+- Never run controller Git against the workspace repository beyond discovery
+  (`rev-parse`), the commit identity (`config --get user.*`), grant-time
+  `remote get-url` and the local `fetch` source: all
+  checkout, staging, commit and push go through
+  `KanbanGitWorkflow.controller_git/3` (`GIT_DIR`, `GIT_COMMON_DIR` and
+  `GIT_WORK_TREE` fixed; the Lemon-written config and the worktree's
+  administrative files verified by `KanbanGitSandbox` before each command). Never write keys
+  into a controller repository's config; never call `command/3` or
+  `System.cmd` directly. Side-effecting and network commands are built once as
+  `{exe, args}`, passed to the required `:authorize` callback, then run
+  unchanged; publication and reconciliation authorize the full set before any
+  network access.
+- Controller commits are authorized against the recorded policy's write,
+  command and approval rules; publication (including recovery and
+  cancellation reconciliation) additionally needs the operator's current
+  revision-, settings- and destination-bound grant and pushes only to its
+  pinned URLs. Workflow settings never authorize.
 
 ## Blueprints
 

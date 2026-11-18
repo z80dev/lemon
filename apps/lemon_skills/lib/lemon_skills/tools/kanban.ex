@@ -12,24 +12,42 @@ defmodule LemonSkills.Tools.Kanban do
   Workflow settings are validated by the optional automation service and stored
   unchanged as JSON-safe string-key settings under board metadata `codingWorkflow`;
   arbitrary metadata, force-push, and command options are not accepted.
+
+  Dispatched workers act for the calling session, never with more authority:
+
+    * Every action needs the invoking session's trusted identity (`:session_key`
+      and `:agent_id` opts). A board records that session as its principal
+      (`LemonAgent.Workspace.KanbanAuthority`); only it, and sessions an
+      operator shared the board with, can list, read, edit, start or stop it.
+      Missing, quarantined and other principals' boards look the same.
+    * `session_key`, `run_id`, `owner` and `worker_profile` params are rejected;
+      the card assignee is the calling agent. The workspace root is the
+      canonical session cwd; a board `workspace` must be an existing directory
+      inside it after symlinks are resolved.
+    * The caller's effective tool policy is recorded on the board and on every
+      card it creates or edits; `dispatch_start` durably narrows the board
+      authority with the starter's policy. Workers run with the intersection.
+    * `coding_workflow.publish` is recorded as a publication grant only when the
+      creator's policy allows shell and external access without approval.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonAgent.Workspace.KanbanStore
+  alias LemonAgent.Workspace.{KanbanAuthority, KanbanStore}
+  alias LemonCore.ToolPolicy
 
   @actions ~w(board_list board_create board_get task_list task_get task_create task_update task_comment dispatch_start dispatch_stop dispatch_status)
+  @caller_derived ~w(session_key run_id owner worker_profile)
 
   @doc """
   Returns the `LemonAgent.Types.AgentTool.t()` definition for the `"kanban"`
   tool, wired to `execute/6`.
 
-  `cwd` is the project directory; it is the fallback `:kanban_workspace` for
-  `board_create` when neither the `"workspace"` param nor the
-  `:kanban_workspace` opt is set. The `opts` keyword is read for two keys:
-  `:kanban_workspace` (board workspace for `board_create`) and `:agent_id`
-  (owner for `board_create` and author for `task_comment` when the
-  `"owner"`/`"author"` params are absent).
+  `cwd` is the session working directory: the default board workspace and the
+  boundary for an explicit `"workspace"`. The invoking session's `opts` supply
+  `:agent_id` (board owner, task assignee, default comment author and worker
+  agent), `:session_key` (board notifications) and `:tool_policy` /
+  `:execution_context` (the authority recorded for dispatched workers).
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
@@ -56,13 +74,14 @@ defmodule LemonSkills.Tools.Kanban do
           "priority" => %{"type" => "string", "description" => "Task priority."},
           "assignee" => %{
             "type" => "string",
-            "description" => "Task assignee or assignee filter."
+            "description" =>
+              "Assignee filter for task_list. Tasks are always assigned to the calling agent."
           },
-          "worker_profile" => %{"type" => "string", "description" => "Worker profile for a task."},
-          "session_key" => %{"type" => "string", "description" => "Session key linked to a task."},
-          "run_id" => %{"type" => "string", "description" => "Router run id linked to a task."},
-          "owner" => %{"type" => "string", "description" => "Board owner or owner filter."},
-          "workspace" => %{"type" => "string", "description" => "Board workspace path."},
+          "workspace" => %{
+            "type" => "string",
+            "description" =>
+              "Board workspace inside the session working directory (board_create), or a board_list filter."
+          },
           "author" => %{"type" => "string", "description" => "Comment author."},
           "coding_workflow" => coding_workflow_schema(),
           "deliver_to" => %{
@@ -113,16 +132,17 @@ defmodule LemonSkills.Tools.Kanban do
   Reads the required `"action"` param to dispatch to `board_list`,
   `board_create`, `board_get`, `task_list`, `task_get`, `task_create`,
   `task_update`, or `task_comment`. Per action: `board_list` reads `"status"`,
-  `"owner"`, `"workspace"`, `"limit"`; `board_create` requires `"name"` and
-  reads `"workspace"`, `"owner"`, `"columns"`, `"coding_workflow"`; `board_get` requires
+  `"workspace"`, `"limit"`; `board_create` requires `"name"` and
+  reads `"workspace"`, `"columns"`, `"coding_workflow"`; `board_get` requires
   `"board_id"` and reads `"include_tasks"` (defaults to `true`) and `"limit"`
   (defaults to `100`); `task_list` requires `"board_id"` and reads `"status"`,
   `"assignee"`, `"limit"`; `task_get` requires `"task_id"`; `task_create`
   requires `"board_id"` and `"title"` and reads `"description"`, `"status"`,
-  `"priority"`, `"assignee"`, `"worker_profile"`, `"session_key"`, `"run_id"`,
-  `"depends_on"`; `task_update` requires `"task_id"` and reads the same
-  optional fields; `task_comment` requires `"task_id"` and `"body"` and reads
-  `"author"`.
+  `"priority"`, `"assignee"` (only the calling agent) and `"depends_on"`;
+  `task_update` requires `"task_id"` and reads the same optional fields plus
+  `"title"`; `task_comment` requires `"task_id"` and `"body"` and reads
+  `"author"`. `session_key`, `run_id`, `owner` and `worker_profile` are
+  rejected for every action.
 
   `dispatch_start`, `dispatch_stop`, and `dispatch_status` require `"board_id"`
   and operate on the long-running automation dispatcher. Start accepts
@@ -136,26 +156,28 @@ defmodule LemonSkills.Tools.Kanban do
   is the pretty-printed JSON encoding of the details and whose `details` map
   holds the payload (board/task data) plus a `:title` summary string. Failures
   — a missing or unsupported `"action"`, a missing required param, a missing
-  board/task, or a `KanbanStore` error — return `{:error, message}` with a
-  string message (see `required_string/2`, `fetch_board/1`, `format_error/1`).
+  board/task, a board owned by another agent, or a `KanbanStore` error — return
+  `{:error, message}` with a string message.
   """
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t() | {:error, term()}
   def execute(_tool_call_id, params, _signal, _on_update, cwd, opts) do
-    case Map.get(params, "action") do
-      "board_list" -> board_list(params)
-      "board_create" -> board_create(params, cwd, opts)
-      "board_get" -> board_get(params)
-      "task_list" -> task_list(params)
-      "task_get" -> task_get(params)
-      "task_create" -> task_create(params)
-      "task_update" -> task_update(params)
-      "task_comment" -> task_comment(params, opts)
-      "dispatch_start" -> dispatch(:start_board, params)
-      "dispatch_stop" -> dispatch(:stop_board, params)
-      "dispatch_status" -> dispatch(:status, params)
-      nil -> {:error, "missing required parameter: action"}
-      action -> {:error, "unsupported kanban action: #{inspect(action)}"}
+    with :ok <- reject_caller_derived(params) do
+      case Map.get(params, "action") do
+        "board_list" -> board_list(params, opts)
+        "board_create" -> board_create(params, cwd, opts)
+        "board_get" -> board_get(params, opts)
+        "task_list" -> task_list(params, opts)
+        "task_get" -> task_get(params, opts)
+        "task_create" -> task_create(params, opts)
+        "task_update" -> task_update(params, opts)
+        "task_comment" -> task_comment(params, opts)
+        "dispatch_start" -> dispatch(:start_board, params, opts)
+        "dispatch_stop" -> dispatch(:stop_board, params, opts)
+        "dispatch_status" -> dispatch(:status, params, opts)
+        nil -> {:error, "missing required parameter: action"}
+        action -> {:error, "unsupported kanban action: #{inspect(action)}"}
+      end
     end
   end
 
@@ -220,16 +242,23 @@ defmodule LemonSkills.Tools.Kanban do
     }
   end
 
-  defp dispatch(operation, params) do
+  defp dispatch(operation, params, opts) do
     module = :"Elixir.LemonAutomation.KanbanDispatcher"
     concurrency = Map.get(params, "max_concurrency", 1)
 
     with {:ok, board_id} <- required_string(params, "board_id"),
+         {:ok, _board} <- authorized_board(board_id, opts),
          true <- is_integer(concurrency) and concurrency in 1..8,
-         true <- Code.ensure_loaded?(module) and function_exported?(module, operation, 2) do
+         true <- Code.ensure_loaded?(module) and function_exported?(module, operation, 2),
+         :ok <- record_starter(operation, board_id, opts) do
       opts =
         if operation == :start_board do
-          [max_concurrency: concurrency, worker_opts: put_opt([], :model, params["model"])]
+          worker_opts =
+            []
+            |> put_opt(:model, params["model"])
+            |> put_opt(:agent_id, caller_agent(opts))
+
+          [max_concurrency: concurrency, worker_opts: worker_opts]
         else
           []
         end
@@ -246,15 +275,33 @@ defmodule LemonSkills.Tools.Kanban do
     :exit, _ -> {:error, "kanban dispatcher unavailable"}
   end
 
-  defp board_list(params) do
-    opts =
-      []
-      |> put_opt(:status, params["status"])
-      |> put_opt(:owner, params["owner"])
-      |> put_opt(:workspace, params["workspace"])
-      |> put_opt(:limit, params["limit"])
+  # A starter durably narrows the board authority before any worker can run, so
+  # later restarts (including operator restarts) keep its restrictions.
+  defp record_starter(:start_board, board_id, opts) do
+    case KanbanStore.restrict_authority(board_id, caller_policy(opts)) do
+      {:ok, _board} -> :ok
+      {:error, reason} -> {:error, format_error(reason)}
+    end
+  end
 
-    result("kanban boards", %{boards: KanbanStore.list_boards(opts)})
+  defp record_starter(_operation, _board_id, _opts), do: :ok
+
+  defp board_list(params, opts) do
+    with {:ok, principal} <- principal(opts) do
+      filters =
+        []
+        |> put_opt(:status, params["status"])
+        |> put_opt(:workspace, params["workspace"])
+        |> Keyword.put(:limit, 10_000)
+
+      boards =
+        filters
+        |> KanbanStore.list_boards()
+        |> Enum.filter(&permitted?(&1, principal))
+        |> Enum.take(positive(params["limit"], 50))
+
+      result("kanban boards", %{boards: boards})
+    end
   end
 
   defp validate_delivery(nil), do: {:ok, nil}
@@ -268,22 +315,26 @@ defmodule LemonSkills.Tools.Kanban do
   end
 
   defp board_create(params, cwd, opts) do
-    with {:ok, name} <- required_string(params, "name"),
+    with {:ok, principal} <- principal(opts),
+         {:ok, name} <- required_string(params, "name"),
+         {:ok, root, workspace} <- board_workspace(params["workspace"], cwd),
          {:ok, meta} <- coding_workflow_meta(params),
-         {:ok, delivery} <- validate_delivery(params["deliver_to"]) do
+         {:ok, delivery} <- validate_delivery(params["deliver_to"]),
+         {:ok, authority} <- board_authority(principal, opts, root, meta) do
       meta =
         Map.merge(meta || %{}, %{
           "deliverTo" => delivery,
-          "notificationSessionKey" => Keyword.get(opts, :session_key)
+          "notificationSessionKey" => principal.session_key
         })
         |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
       create_opts =
         []
-        |> put_opt(:workspace, params["workspace"] || Keyword.get(opts, :kanban_workspace) || cwd)
-        |> put_opt(:owner, params["owner"] || Keyword.get(opts, :agent_id))
+        |> put_opt(:workspace, workspace)
+        |> put_opt(:owner, principal.agent_id)
         |> put_opt(:columns, params["columns"])
         |> put_opt(:meta, meta)
+        |> put_opt(:authority, authority)
 
       case KanbanStore.create_board(name, create_opts) do
         {:ok, board} -> result("created kanban board #{board.id}", %{board: board})
@@ -291,6 +342,53 @@ defmodule LemonSkills.Tools.Kanban do
       end
     end
   end
+
+  defp board_authority(principal, opts, root, meta) do
+    publish =
+      case meta do
+        %{"codingWorkflow" => %{"publish" => %{} = publish}} -> publish
+        _ -> nil
+      end
+
+    case KanbanAuthority.new(principal, caller_policy(opts), root, publish: publish) do
+      {:ok, authority} ->
+        {:ok, authority}
+
+      {:error, :publication_not_permitted} ->
+        {:error,
+         "coding_workflow publish is not permitted: this session's tool policy must allow bash and external access without approval"}
+
+      {:error, reason} ->
+        {:error, format_error(reason)}
+    end
+  end
+
+  # The authorized root is the session cwd; the board workspace is that root or
+  # an existing directory inside it, both canonical (symlinks resolved).
+  defp board_workspace(path, cwd) do
+    with {:ok, root} <- KanbanAuthority.canonical_directory(Path.expand(cwd)),
+         {:ok, workspace} <- workspace_in(path, root) do
+      {:ok, root, workspace}
+    else
+      _ ->
+        {:error, "workspace must be an existing directory within the session working directory"}
+    end
+  end
+
+  defp workspace_in(path, root) when path in [nil, ""], do: {:ok, root}
+
+  defp workspace_in(path, root) when is_binary(path) do
+    path = if Path.type(path) == :absolute, do: path, else: Path.join(root, path)
+
+    with {:ok, workspace} <- KanbanAuthority.canonical_directory(path),
+         true <- KanbanAuthority.within?(workspace, root) do
+      {:ok, workspace}
+    else
+      _ -> {:error, :outside}
+    end
+  end
+
+  defp workspace_in(_path, _root), do: {:error, :invalid}
 
   defp coding_workflow_meta(params) do
     case Map.fetch(params, "coding_workflow") do
@@ -325,9 +423,9 @@ defmodule LemonSkills.Tools.Kanban do
     end)
   end
 
-  defp board_get(params) do
+  defp board_get(params, opts) do
     with {:ok, board_id} <- required_string(params, "board_id"),
-         {:ok, board} <- fetch_board(board_id) do
+         {:ok, board} <- authorized_board(board_id, opts) do
       payload = %{board: board}
 
       payload =
@@ -345,61 +443,63 @@ defmodule LemonSkills.Tools.Kanban do
     end
   end
 
-  defp task_list(params) do
-    with {:ok, board_id} <- required_string(params, "board_id") do
-      opts =
+  defp task_list(params, opts) do
+    with {:ok, board_id} <- required_string(params, "board_id"),
+         {:ok, _board} <- authorized_board(board_id, opts) do
+      filters =
         []
         |> put_opt(:status, params["status"])
         |> put_opt(:assignee, params["assignee"])
         |> put_opt(:limit, params["limit"])
 
-      result("kanban tasks", %{tasks: KanbanStore.list_tasks(board_id, opts)})
+      result("kanban tasks", %{tasks: KanbanStore.list_tasks(board_id, filters)})
     end
   end
 
-  defp task_get(params) do
+  defp task_get(params, opts) do
     with {:ok, task_id} <- required_string(params, "task_id"),
-         {:ok, task} <- fetch_task(task_id) do
+         {:ok, task} <- authorized_task(task_id, opts) do
       result("kanban task #{task.id}", %{task: task})
     end
   end
 
-  defp task_create(params) do
+  defp task_create(params, opts) do
     with {:ok, board_id} <- required_string(params, "board_id"),
-         {:ok, title} <- required_string(params, "title") do
-      opts =
+         {:ok, title} <- required_string(params, "title"),
+         {:ok, _board} <- authorized_board(board_id, opts),
+         {:ok, assignee} <- caller_assignee(params, opts) do
+      create_opts =
         []
         |> put_opt(:description, params["description"])
         |> put_opt(:status, params["status"])
         |> put_opt(:priority, params["priority"])
-        |> put_opt(:assignee, params["assignee"])
-        |> put_opt(:worker_profile, params["worker_profile"])
-        |> put_opt(:session_key, params["session_key"])
-        |> put_opt(:run_id, params["run_id"])
+        |> put_opt(:assignee, assignee || caller_agent(opts))
         |> put_opt(:depends_on, params["depends_on"])
+        |> put_opt(:dispatch_policy, caller_policy(opts))
 
-      case KanbanStore.create_task(board_id, title, opts) do
+      case KanbanStore.create_task(board_id, title, create_opts) do
         {:ok, task} -> result("created kanban task #{task.id}", %{task: task})
         {:error, reason} -> {:error, format_error(reason)}
       end
     end
   end
 
-  defp task_update(params) do
-    with {:ok, task_id} <- required_string(params, "task_id") do
+  defp task_update(params, opts) do
+    with {:ok, task_id} <- required_string(params, "task_id"),
+         {:ok, _task} <- authorized_task(task_id, opts),
+         {:ok, assignee} <- caller_assignee(params, opts) do
       attrs =
         %{}
         |> put_attr(:title, params["title"])
         |> put_attr(:description, params["description"])
         |> put_attr(:status, params["status"])
         |> put_attr(:priority, params["priority"])
-        |> put_attr(:assignee, params["assignee"])
-        |> put_attr(:worker_profile, params["worker_profile"])
-        |> put_attr(:session_key, params["session_key"])
-        |> put_attr(:run_id, params["run_id"])
+        |> put_attr(:assignee, assignee)
         |> put_attr(:depends_on, params["depends_on"])
 
-      case KanbanStore.update_task(task_id, attrs) do
+      update_opts = put_opt([], :dispatch_policy, caller_policy(opts))
+
+      case KanbanStore.update_task(task_id, attrs, update_opts) do
         {:ok, task} -> result("updated kanban task #{task.id}", %{task: task})
         {:error, reason} -> {:error, format_error(reason)}
       end
@@ -408,10 +508,11 @@ defmodule LemonSkills.Tools.Kanban do
 
   defp task_comment(params, opts) do
     with {:ok, task_id} <- required_string(params, "task_id"),
-         {:ok, body} <- required_string(params, "body") do
+         {:ok, body} <- required_string(params, "body"),
+         {:ok, _task} <- authorized_task(task_id, opts) do
       comment_opts =
         []
-        |> put_opt(:author, params["author"] || Keyword.get(opts, :agent_id))
+        |> put_opt(:author, params["author"] || caller_agent(opts))
 
       case KanbanStore.add_comment(task_id, body, comment_opts) do
         {:ok, task} -> result("commented on kanban task #{task.id}", %{task: task})
@@ -420,19 +521,94 @@ defmodule LemonSkills.Tools.Kanban do
     end
   end
 
-  defp fetch_board(board_id) do
-    case KanbanStore.get_board(board_id) do
-      %{} = board when map_size(board) == 0 -> {:error, "board not found: #{board_id}"}
-      board -> {:ok, board}
+  # Routing identity comes from the invoking session, never from tool params.
+  defp reject_caller_derived(params) do
+    case Enum.find(@caller_derived, &(Map.get(params, &1) not in [nil, ""])) do
+      nil -> :ok
+      key -> {:error, "#{key} is derived from the calling session and cannot be set"}
     end
   end
 
-  defp fetch_task(task_id) do
-    case KanbanStore.get_task(task_id) do
-      %{} = task when map_size(task) == 0 -> {:error, "task not found: #{task_id}"}
-      task -> {:ok, task}
+  defp caller_agent(opts), do: Keyword.get(opts, :agent_id) || "default"
+
+  # The trusted session principal; without a session identity nothing is allowed.
+  defp principal(opts) do
+    case Keyword.get(opts, :session_key) do
+      session_key when is_binary(session_key) and session_key != "" ->
+        {:ok, %{agent_id: caller_agent(opts), session_key: session_key}}
+
+      _ ->
+        {:error, "kanban requires a trusted session identity"}
     end
   end
+
+  # The invoking session's effective tool policy; nil only for an unrestricted caller.
+  defp caller_policy(opts) do
+    context_policy =
+      case Keyword.get(opts, :execution_context) do
+        %{tool_policy: policy} -> policy
+        _ -> nil
+      end
+
+    case Enum.reject([Keyword.get(opts, :tool_policy), context_policy], &is_nil/1) do
+      [] ->
+        nil
+
+      [policy] ->
+        policy
+
+      [policy, context_policy] ->
+        case ToolPolicy.restrict(policy, context_policy) do
+          {:ok, restricted} -> restricted
+          {:error, _} -> ToolPolicy.deny_all()
+        end
+    end
+  end
+
+  defp caller_assignee(params, opts) do
+    case params["assignee"] do
+      value when value in [nil, ""] ->
+        {:ok, nil}
+
+      value ->
+        if value == caller_agent(opts),
+          do: {:ok, value},
+          else: {:error, "assignee must be the calling agent #{caller_agent(opts)}"}
+    end
+  end
+
+  # Missing, quarantined and other principals' boards are indistinguishable.
+  defp authorized_board(board_id, opts) do
+    with {:ok, principal} <- principal(opts) do
+      case KanbanStore.get_board(board_id) do
+        board when map_size(board) > 0 ->
+          if permitted?(board, principal), do: {:ok, board}, else: unauthorized(board_id)
+
+        _ ->
+          unauthorized(board_id)
+      end
+    end
+  end
+
+  defp authorized_task(task_id, opts) do
+    case KanbanStore.get_task(task_id) do
+      task when map_size(task) > 0 ->
+        with {:ok, _board} <- authorized_board(task.board_id, opts), do: {:ok, task}
+
+      _ ->
+        {:error, "kanban task #{task_id} is not available or not authorized for this session"}
+    end
+  end
+
+  defp permitted?(board, principal) do
+    case KanbanAuthority.fetch(board) do
+      {:ok, authority} -> KanbanAuthority.permits?(authority, principal)
+      {:error, _} -> false
+    end
+  end
+
+  defp unauthorized(board_id),
+    do: {:error, "kanban board #{board_id} is not available or not authorized for this session"}
 
   defp required_string(params, key) do
     case Map.get(params, key) do
@@ -452,6 +628,9 @@ defmodule LemonSkills.Tools.Kanban do
   defp put_attr(attrs, _key, nil), do: attrs
   defp put_attr(attrs, _key, ""), do: attrs
   defp put_attr(attrs, key, value), do: Map.put(attrs, key, value)
+
+  defp positive(value, _default) when is_integer(value) and value > 0, do: value
+  defp positive(_value, default), do: default
 
   defp result(title, details) do
     %AgentToolResult{
