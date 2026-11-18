@@ -339,7 +339,8 @@ defmodule LemonGateway.ConfigLoader do
       callback_backoff_max_ms: fetch(integration, :callback_backoff_max_ms),
       mode: parse_webhook_mode(fetch(integration, :mode)),
       timeout_ms: fetch(integration, :timeout_ms),
-      callback_wait_timeout_ms: fetch(integration, :callback_wait_timeout_ms)
+      callback_wait_timeout_ms: fetch(integration, :callback_wait_timeout_ms),
+      trusted_automation: fetch(integration, :trusted_automation)
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()

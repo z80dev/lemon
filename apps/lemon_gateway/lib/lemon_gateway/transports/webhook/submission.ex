@@ -78,6 +78,7 @@ defmodule LemonGateway.Transports.Webhook.Submission do
           cwd: Request.normalize_blank(Request.fetch(integration, :cwd)),
           meta: %{
             router_replay_identity: replay_identity,
+            channel_context: channel_context(integration_id, integration),
             webhook: %{
               integration_id: integration_id,
               metadata: normalized.metadata,
@@ -90,6 +91,27 @@ defmodule LemonGateway.Transports.Webhook.Submission do
 
       {:ok, %{run_request: run_request, run_ctx: run_ctx}}
     end
+  end
+
+  # Provenance derived from the token-authenticated integration, never from the
+  # payload: the router applies the `webhook` channel policy from it whatever
+  # the submission origin. A token authenticates the integration, not the
+  # content it relays, so the run gets the group approval floor (any peer kind
+  # but `:dm`) unless the operator's global config marks this integration
+  # `trusted_automation = true` (a literal boolean; gateway sections are
+  # operator-only, so a project config cannot set it).
+  defp channel_context(integration_id, integration) do
+    %{
+      channel_id: "webhook",
+      account_id: integration_id,
+      peer_kind:
+        if(Request.fetch(integration, :trusted_automation) == true,
+          do: :dm,
+          else: :automation
+        ),
+      peer_id: integration_id,
+      thread_id: nil
+    }
   end
 
   defp integration_metadata(integration, webhook_config) do

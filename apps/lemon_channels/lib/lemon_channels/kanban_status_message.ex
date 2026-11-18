@@ -135,7 +135,6 @@ defmodule LemonChannels.KanbanStatusMessage do
              %{
                agent_id: principal.agent_id,
                session_key: principal.session_key,
-               origin: :channel,
                channel_context: opts[:channel_context]
              }
            ]) do

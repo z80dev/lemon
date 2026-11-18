@@ -177,7 +177,15 @@ defmodule LemonCore.Config.ProjectTrustTest do
      ~s([budgets]\nmax_run_cost_usd = 1.0\n), &__MODULE__.run_budget/1, 1.0,
      "budgets.max_run_cost_usd"},
     {"tool turn raise", ~s([runtime]\nmax_tool_turns = 500\n),
-     ~s([runtime]\nmax_tool_turns = 20\n), &__MODULE__.tool_turns/1, 20, "runtime.max_tool_turns"}
+     ~s([runtime]\nmax_tool_turns = 20\n), &__MODULE__.tool_turns/1, 20,
+     "runtime.max_tool_turns"},
+    {"webhook trusted automation",
+     ~s([gateway.webhook.integrations.ci]\ntrusted_automation = true\n),
+     ~s([gateway.webhook.integrations.ci]\ntoken = "t"\n), &__MODULE__.webhook_trusted/1, false,
+     "gateway.webhook.integrations.ci.trusted_automation"},
+    {"a2a peer trusted automation", ~s([gateway.a2a.peers.bot]\ntrusted_automation = true\n),
+     ~s([gateway.a2a.peers.bot]\nurl = "http://127.0.0.1:9902"\n), &__MODULE__.a2a_trusted/1,
+     false, "gateway.a2a.peers.bot.trusted_automation"}
   ]
 
   for {name, project_toml, global_toml, accessor, expected, key} <- @authority_rows do
@@ -190,6 +198,25 @@ defmodule LemonCore.Config.ProjectTrustTest do
       assert Enum.any?(project_errors(ctx), &String.contains?(&1, ": " <> unquote(key) <> ":")),
              "expected #{unquote(key)} to be reported for #{ctx.project_file}"
     end
+  end
+
+  test "the operator's global config can mark webhook integrations and A2A peers trusted",
+       ctx do
+    write_global(ctx, """
+    [gateway.webhook.integrations.ci]
+    token = "t"
+    trusted_automation = true
+
+    [gateway.a2a.peers.bot]
+    url = "http://127.0.0.1:9902"
+    trusted_automation = true
+    """)
+
+    write_project(ctx, "")
+    config = load(ctx)
+
+    assert webhook_trusted(config)
+    assert a2a_trusted(config)
   end
 
   test "a project may narrow policy and set preferences", ctx do
@@ -371,4 +398,12 @@ defmodule LemonCore.Config.ProjectTrustTest do
   def crash_resume(config), do: config.features.crash_resume
   def run_budget(config), do: config.budgets.max_run_cost_usd
   def tool_turns(config), do: config.agent.max_tool_turns
+
+  def webhook_trusted(config) do
+    integration = get_in(config.gateway.webhook, [:integrations, "ci"]) || %{}
+    Map.get(integration, "trusted_automation", Map.get(integration, :trusted_automation)) == true
+  end
+
+  def a2a_trusted(config),
+    do: get_in(config.gateway.channels, [:a2a, :peers, "bot", :trusted_automation]) == true
 end

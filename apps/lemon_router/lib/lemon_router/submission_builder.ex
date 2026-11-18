@@ -54,7 +54,6 @@ defmodule LemonRouter.SubmissionBuilder do
            resolve_tool_policy(agent_profile, tool_policy_override, %{
              agent_id: agent_id,
              session_key: session_key,
-             origin: origin,
              channel_context: MapHelpers.get_key(meta, :channel_context)
            }),
          cwd <- resolve_effective_cwd(cwd_override, meta, origin),
@@ -202,7 +201,29 @@ defmodule LemonRouter.SubmissionBuilder do
     end
   end
 
-  defp require_channel_provenance(_origin, _meta), do: :ok
+  # Webhook and A2A ingress authenticate an integration or peer, not a channel
+  # sender. Their producers attach provenance naming the `webhook` or `a2a`
+  # channel, derived from that authenticated principal, so the channel's policy
+  # applies whatever the submission origin. A request without it, or naming
+  # another channel, is refused rather than run without those restrictions.
+  defp require_channel_provenance(:webhook, meta), do: require_ingress_context(meta, "webhook")
+
+  defp require_channel_provenance(_origin, meta) do
+    if MapHelpers.get_key(meta, :a2a) == true,
+      do: require_ingress_context(meta, "a2a"),
+      else: :ok
+  end
+
+  defp require_ingress_context(meta, channel) do
+    case MapHelpers.get_key(meta, :channel_context) do
+      %{channel_id: ^channel, account_id: account, peer_id: peer}
+      when is_binary(account) and account != "" and is_binary(peer) and peer != "" ->
+        :ok
+
+      _ ->
+        {:error, :missing_channel_provenance}
+    end
+  end
 
   @doc false
   def current_native_target_policy(profile_id, session_key, meta) do
@@ -211,7 +232,6 @@ defmodule LemonRouter.SubmissionBuilder do
            resolve_tool_policy(profile, nil, %{
              agent_id: profile_id,
              session_key: session_key,
-             origin: :node,
              channel_context: MapHelpers.get_key(meta || %{}, :channel_context)
            }) do
       LemonCore.ToolPolicy.normalize(policy)

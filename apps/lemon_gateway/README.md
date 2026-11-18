@@ -143,6 +143,23 @@ ambiguous fence after upgrade because its original acceptance outcome cannot be
 proven safely; retries receive a duplicate `200 legacy_outcome_unknown` receipt
 with `retry_safe: false` and never submit another run.
 
+Each authenticated webhook run carries `meta.channel_context` derived from the
+integration whose token matched (`channel_id: "webhook"`, the integration ID as
+account and peer), never from the payload. The router applies the
+`channel_policies["webhook"]` row from that provenance and refuses a `:webhook`
+request without it. A token authenticates the integration, not the content it
+relays, so by default the provenance is classified `peer_kind: :automation` and
+every `bash`, `write`, `edit`, `patch` and `hashline_edit` call needs approval
+(the group approval floor). An operator opts one integration out in the global
+config only; gateway sections are operator-only, so a project
+`.lemon/config.toml` cannot set it, and only a literal boolean `true` counts:
+
+```toml
+[gateway.webhook.integrations.ci]
+token = "..."
+trusted_automation = true   # no approval floor for this integration
+```
+
 The webhook idempotency sweep watermark is volatile ETS state owned by the
 supervised `Transports.Webhook.Idempotency` ingress child, not by an HTTP caller.
 Only successful cleanup advances it. Owner restart resets the schedule without
