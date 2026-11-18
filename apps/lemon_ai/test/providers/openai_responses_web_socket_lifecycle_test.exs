@@ -15,7 +15,7 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocketLifecycleTest do
     UserMessage
   }
 
-  @url "ws://localhost/responses"
+  @url "ws://127.0.0.1/responses"
   @headers [{"authorization", "Bearer test"}]
   @body %{"model" => "test-model", "input" => [%{"role" => "user", "content" => "first"}]}
 

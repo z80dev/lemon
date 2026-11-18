@@ -501,6 +501,43 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocketTest do
     refute_receive {:ws_request, _socket, _body}, 50
   end
 
+  test "remote plaintext endpoints are refused before any bearer token is sent", state do
+    body = %{"model" => "m", "input" => []}
+
+    for url <- [
+          "http://192.0.2.1:9/v1/responses",
+          "ws://api.example.com/v1/responses",
+          "http://x.localhost:9/v1/responses",
+          "http://127.0.0.1.evil:9/v1/responses"
+        ] do
+      assert {:error, "Refusing plaintext Responses WebSocket to a non-loopback host", nil} =
+               OpenAIResponsesWebSocket.request(
+                 state.transport,
+                 url,
+                 [{"authorization", "Bearer secret"}],
+                 body
+               )
+    end
+
+    refute_receive {:ws_connected, _, _}, 100
+  end
+
+  test "plaintext localhost is pinned to the loopback address", state do
+    port = String.split(state.base_url, ":") |> List.last()
+
+    assert {:ok, _events} =
+             OpenAIResponsesWebSocket.request(
+               state.transport,
+               "http://localhost:#{port}/v1/responses",
+               [{"authorization", "Bearer secret"}],
+               %{"model" => "m", "input" => []}
+             )
+
+    assert_receive {:ws_connected, _socket, headers}, 2_000
+    assert headers["authorization"] == "Bearer secret"
+    assert headers["host"] == "127.0.0.1:#{port}"
+  end
+
   test "disabled transport uses the unchanged SSE request path", state do
     previous = Req.default_options()
     Req.default_options(plug: {Req.Test, __MODULE__})

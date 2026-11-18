@@ -24,18 +24,22 @@ defmodule LemonGateway.Voice.DeepgramClient do
     call_sid = Keyword.fetch!(opts, :call_sid)
     session_pid = Keyword.fetch!(opts, :session_pid)
 
-    # Build Deepgram URL with parameters
-    url = build_deepgram_url()
+    with {:ok, url, ws_opts} <- connect_options(build_deepgram_url(), call_sid) do
+      WebSockex.start_link(
+        url,
+        __MODULE__,
+        %{call_sid: call_sid, session_pid: session_pid},
+        ws_opts
+      )
+    end
+  end
 
-    headers = [
-      {"Authorization", "Token #{Config.deepgram_api_key()}"}
-    ]
-
-    WebSockex.start_link(
-      url,
-      __MODULE__,
-      %{call_sid: call_sid, session_pid: session_pid},
-      extra_headers: headers,
+  @doc false
+  @spec connect_options(String.t(), String.t()) ::
+          {:ok, String.t(), keyword()} | {:error, term()}
+  def connect_options(url, call_sid) do
+    LemonCore.Net.web_socket_options(url,
+      extra_headers: [{"Authorization", "Token #{Config.deepgram_api_key()}"}],
       name: via_tuple(call_sid)
     )
   end

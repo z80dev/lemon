@@ -9,9 +9,7 @@ defmodule LemonCli.AcpCommand do
 
   def run([]) do
     with :ok <- LemonCli.LocalRuntime.ensure_running(),
-         {:ok, _apps} <- Application.ensure_all_started(:websockex),
-         {:ok, socket} <-
-           WebSockex.start(url(), __MODULE__, %{owner: self()}, extra_headers: headers()) do
+         {:ok, socket} <- connect(url(), headers()) do
       try do
         run_input(socket)
       after
@@ -31,6 +29,15 @@ defmodule LemonCli.AcpCommand do
   def run(_args) do
     IO.puts(:stderr, "usage: lemon acp")
     2
+  end
+
+  @doc false
+  @spec connect(String.t(), list()) :: {:ok, pid()} | {:error, term()}
+  def connect(url, headers) do
+    with {:ok, _apps} <- Application.ensure_all_started(:websockex),
+         {:ok, url, ws_opts} <- LemonCore.Net.web_socket_options(url, extra_headers: headers) do
+      WebSockex.start(url, __MODULE__, %{owner: self()}, ws_opts)
+    end
   end
 
   @impl true

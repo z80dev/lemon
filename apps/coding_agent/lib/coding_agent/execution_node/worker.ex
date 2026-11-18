@@ -236,7 +236,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
        invite_code: Keyword.get(opts, :invite_code),
        services: %{
          socket_module: Keyword.get(opts, :socket_module, Socket),
-         socket_opts: Keyword.get(opts, :socket_opts, []),
+         socket_opts:
+           opts
+           |> Keyword.get(:socket_opts, [])
+           |> Keyword.put(
+             :allow_insecure_ws,
+             Keyword.get(opts, :allow_insecure_controller, false) == true
+           ),
          executor_module: Keyword.get(opts, :executor_module, CodingAgent.Executor),
          mcp_discovery_module: Keyword.get(opts, :mcp_discovery_module, LemonSkills.McpDiscovery),
          profile_sync_module:
@@ -2182,22 +2188,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp controller_url(_url, _allow_insecure?), do: {:error, :invalid_controller_url}
 
+  # Mirrors LemonCore.Net: literal loopback IPs, or bare `localhost`, which the
+  # transport pins to 127.0.0.1 rather than resolving.
   defp loopback_host?(host) when is_binary(host) do
-    normalized = String.downcase(host)
-
-    normalized == "localhost" or String.ends_with?(normalized, ".localhost") or
-      parsed_loopback?(normalized)
+    String.downcase(host) == "localhost" or LemonCore.LoopbackListener.literal_loopback?(host)
   end
 
   defp loopback_host?(_host), do: false
-
-  defp parsed_loopback?(host) do
-    case :inet.parse_address(String.to_charlist(host)) do
-      {:ok, {127, _b, _c, _d}} -> true
-      {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
-      _ -> false
-    end
-  end
 
   defp nonempty(value, reason) when is_binary(value) do
     case String.trim(value) do

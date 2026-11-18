@@ -15,13 +15,11 @@ defmodule LemonCli.ControlPlaneClient do
   @doc "Opens an authenticated connection for a streaming one-shot client."
   def open(opts \\ []) do
     ref = make_ref()
+    url = Keyword.get(opts, :url) || default_url()
 
     with {:ok, _} <- Application.ensure_all_started(:websockex),
-         {:ok, pid} <-
-           WebSockex.start(Keyword.get(opts, :url) || default_url(), __MODULE__, %{
-             owner: self(),
-             ref: ref
-           }),
+         {:ok, url, ws_opts} <- LemonCore.Net.web_socket_options(url),
+         {:ok, pid} <- WebSockex.start(url, __MODULE__, %{owner: self(), ref: ref}, ws_opts),
          :ok <- send_connect(pid, token(opts)) do
       case receive_hello(ref, @default_timeout_ms) do
         :ok ->
@@ -72,7 +70,8 @@ defmodule LemonCli.ControlPlaneClient do
     ref = make_ref()
 
     with {:ok, _started} <- Application.ensure_all_started(:websockex),
-         {:ok, pid} <- WebSockex.start(url, __MODULE__, %{owner: self(), ref: ref}) do
+         {:ok, url, ws_opts} <- LemonCore.Net.web_socket_options(url),
+         {:ok, pid} <- WebSockex.start(url, __MODULE__, %{owner: self(), ref: ref}, ws_opts) do
       try do
         with :ok <- send_connect(pid, token(opts)),
              :ok <- receive_hello(ref, timeout_ms),

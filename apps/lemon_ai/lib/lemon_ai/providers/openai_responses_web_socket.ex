@@ -120,7 +120,11 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocket do
           {:reply, {:error, "Could not encode Responses WebSocket request"}, schedule_idle(state)}
       end
     else
-      _ -> {:reply, {:error, "Invalid Responses WebSocket request"}, state}
+      {:error, :insecure_url} ->
+        {:reply, {:error, "Refusing plaintext Responses WebSocket to a non-loopback host"}, state}
+
+      _ ->
+        {:reply, {:error, "Invalid Responses WebSocket request"}, state}
     end
   end
 
@@ -298,7 +302,10 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocket do
         end)
         |> Enum.sort()
 
-      {:ok, URI.to_string(%{uri | scheme: scheme}), headers}
+      case plaintext_target(scheme, uri) do
+        {:ok, uri} -> {:ok, URI.to_string(%{uri | scheme: scheme}), headers}
+        error -> error
+      end
     else
       {:error, :invalid_url}
     end
@@ -307,6 +314,30 @@ defmodule LemonAi.Providers.OpenAIResponsesWebSocket do
   end
 
   defp connection_options(_url, _headers), do: {:error, :invalid_url}
+
+  # Plaintext ws:// carries the bearer token unencrypted, so it is allowed only
+  # to a literal loopback IP; bare `localhost` is pinned to 127.0.0.1 instead of
+  # being resolved through DNS. Every other host requires wss://.
+  defp plaintext_target("wss", uri), do: {:ok, uri}
+
+  defp plaintext_target("ws", uri) do
+    cond do
+      literal_loopback?(uri.host) -> {:ok, uri}
+      String.downcase(uri.host) == "localhost" -> {:ok, %{uri | host: "127.0.0.1"}}
+      true -> {:error, :insecure_url}
+    end
+  end
+
+  defp literal_loopback?(host) do
+    host = host |> String.trim_leading("[") |> String.trim_trailing("]")
+
+    case :inet.parse_strict_address(String.to_charlist(host)) do
+      {:ok, {127, _, _, _}} -> true
+      {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
+      {:ok, {0, 0, 0, 0, 0, 0xFFFF, high, _}} -> div(high, 256) == 127
+      _ -> false
+    end
+  end
 
   defp encode_request(body) do
     body

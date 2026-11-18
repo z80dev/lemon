@@ -801,7 +801,13 @@ Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
 `--allow-insecure-controller` or
 `LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`, and that override is acceptable
 only for development or a verified authenticated and encrypted overlay such as
-Tailscale.
+Tailscale. Plaintext `ws://` without the override is accepted only for a
+literal loopback IP or bare `localhost`, which is pinned to `127.0.0.1` rather
+than resolved; `*.localhost` names are refused. A `wss://` controller must
+present a certificate that chains to the OS trust store and matches the URL
+host; there is no option to skip certificate verification. Install a private
+CA in the system trust store, then restart Lemon: OTP caches the CA roots on
+first use, so a running BEAM does not see trust-store changes.
 
 Provider credentials and default cwd are destination-local. If the `agent`
 tool omits `cwd`, the destination uses the directory passed to `node join`; an

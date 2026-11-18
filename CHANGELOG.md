@@ -204,6 +204,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- The execution node controller link, Deepgram voice, `lemon acp` and the CLI
+  control-plane client now build WebSocket options through
+  `LemonCore.Net.web_socket_options/2`: `wss://` verifies the peer certificate
+  against the OS trust store with hostname checking and SNI (WebSockex
+  previously defaulted to `verify_none`). Plaintext `ws://` is allowed only to a
+  literal loopback IP or to `localhost` pinned to `127.0.0.1` (never
+  `*.localhost`), unless the node's explicit `--allow-insecure-controller`
+  override is set. The OpenAI Responses WebSocket transport applies the same
+  plaintext rule, so remote `http://` provider endpoints no longer send bearer
+  tokens over plaintext `ws://`. Restart Lemon after changing system CA roots.
+
 - Updated the XMTP bridge's viem pin to 2.57.20, the browser driver's
   Playwright pin to 1.65.1, and patched documentation/browser development
   dependencies within their supported ranges. XMTP's npm audit is clean.

@@ -44,26 +44,32 @@ defmodule CodingAgent.ExecutionNode.Socket.Transport do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     owner = Keyword.fetch!(opts, :owner)
-    url = Keyword.fetch!(opts, :url)
     connect_params = Keyword.fetch!(opts, :connect_params)
 
-    state = %__MODULE__{
-      owner: owner,
-      url: url,
-      connect_params: connect_params,
-      reconnect_delay_ms: Keyword.get(opts, :reconnect_delay_ms, 500),
-      ping_interval_ms: Keyword.get(opts, :ping_interval_ms, 25_000),
-      reconnect_attempt: Keyword.get(opts, :reconnect_attempt, 0),
-      connect_failures: Keyword.get(opts, :connect_failures, 0),
-      peer_owner:
-        Keyword.get(opts, :peer_owner, &LemonCore.LoopbackListener.peer_owned_by_self?/2),
-      max_payload_bytes: LemonCore.JSONPayload.default_max_bytes()
-    }
+    with {:ok, url, ws_opts} <-
+           LemonCore.Net.web_socket_options(Keyword.fetch!(opts, :url),
+             async: true,
+             handle_initial_conn_failure: true,
+             allow_insecure_ws: Keyword.get(opts, :allow_insecure_ws, false),
+             extra_cacerts: Keyword.get(opts, :extra_cacerts, [])
+           ) do
+      # `url` is the pinned connect URL, so the loopback ownership guard checks
+      # the address actually dialled.
+      state = %__MODULE__{
+        owner: owner,
+        url: url,
+        connect_params: connect_params,
+        reconnect_delay_ms: Keyword.get(opts, :reconnect_delay_ms, 500),
+        ping_interval_ms: Keyword.get(opts, :ping_interval_ms, 25_000),
+        reconnect_attempt: Keyword.get(opts, :reconnect_attempt, 0),
+        connect_failures: Keyword.get(opts, :connect_failures, 0),
+        peer_owner:
+          Keyword.get(opts, :peer_owner, &LemonCore.LoopbackListener.peer_owned_by_self?/2),
+        max_payload_bytes: LemonCore.JSONPayload.default_max_bytes()
+      }
 
-    WebSockex.start_link(url, __MODULE__, state,
-      async: true,
-      handle_initial_conn_failure: true
-    )
+      WebSockex.start_link(url, __MODULE__, state, ws_opts)
+    end
   end
 
   @impl WebSockex
