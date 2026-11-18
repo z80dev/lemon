@@ -331,12 +331,16 @@ max_entries = 100
 `webfetch` enforces URL/network guardrails by default:
 
 - Only `http://` and `https://` URLs are allowed.
-- Blocks local/internal targets (`localhost`, `.localhost`, `.local`, `.internal`, and private/internal IP ranges).
-- Re-checks redirect targets on every hop.
+- Every host is classified by the shared `LemonCore.Net.Address` policy: IP
+  aliases (`2852039166`, `0xA9FEA9FE`, IPv4-mapped, NAT64 and 6to4 IPv6) are
+  classified as their embedded address, every DNS answer must be public, and a
+  DNS failure is a block, never a pass.
+- Requests go through one unpooled connection pinned to the validated IP
+  (`LemonCore.Net.HTTP`); redirect targets are re-checked on every hop.
 
 Config knobs:
 
-- `allow_private_network = true`: bypasses private-network blocking for most hosts. Cloud metadata endpoints (for example `metadata.google.internal` and `169.254.169.254`) remain blocked.
+- `allow_private_network = true`: bypasses private-network blocking. Cloud metadata and link-local destinations (for example `metadata.google.internal`, `169.254.169.254` and `fe80::/10`) remain blocked.
 - `allowed_hostnames = ["internal.example"]`: host allowlist override for specific names.
 
 ## Caching Behavior and Defaults

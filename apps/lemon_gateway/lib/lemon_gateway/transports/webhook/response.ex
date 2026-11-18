@@ -5,7 +5,8 @@ defmodule LemonGateway.Transports.Webhook.Response do
 
   require Logger
 
-  alias LemonCore.Httpc
+  # Callback responses are ignored beyond their status; bound what is read.
+  @callback_response_max_bytes 1_048_576
 
   @spec response_for_run(map(), keyword()) ::
           {:ok, integer(), map()} | {:error, :run_timeout | term()}
@@ -27,12 +28,7 @@ defmodule LemonGateway.Transports.Webhook.Response do
     with_sync_subscription(run_ctx, fn ->
       case wait_for_run_completion(run_ctx.run_id, run_ctx.timeout_ms, subscribe?: false) do
         {:ok, run_payload} ->
-          callback =
-            maybe_send_callback(
-              run_ctx.callback_url,
-              callback_payload(run_ctx, run_payload),
-              run_ctx.timeout_ms
-            )
+          callback = maybe_send_callback(run_ctx, callback_payload(run_ctx, run_payload))
 
           payload =
             %{
@@ -179,12 +175,7 @@ defmodule LemonGateway.Transports.Webhook.Response do
              subscribe?: false
            ),
          {:ok, _status} <-
-           send_callback_with_retry(
-             run_ctx.callback_url,
-             callback_payload(run_ctx, run_payload),
-             run_ctx.timeout_ms,
-             run_ctx.callback_retry
-           ) do
+           send_callback_with_retry(run_ctx, callback_payload(run_ctx, run_payload)) do
       :ok
     else
       {:error, :timeout} ->
@@ -213,36 +204,32 @@ defmodule LemonGateway.Transports.Webhook.Response do
 
   defp cleanup_unknown_sync_subscription(_run_ctx), do: :ok
 
-  defp maybe_send_callback(nil, _payload, _timeout_ms), do: nil
-  defp maybe_send_callback("", _payload, _timeout_ms), do: nil
-
-  defp maybe_send_callback(callback_url, payload, timeout_ms) do
-    case send_callback(callback_url, payload, timeout_ms) do
+  defp maybe_send_callback(%{callback_url: url} = run_ctx, payload)
+       when is_binary(url) and url != "" do
+    case send_callback(run_ctx, payload) do
       {:ok, status} -> %{status: "sent", http_status: status}
       {:error, reason} -> %{status: "failed", error: inspect(reason)}
     end
   end
 
-  defp send_callback(callback_url, payload, timeout_ms) when is_binary(callback_url) do
-    request_timeout = int_value(timeout_ms, 30_000)
-    body = Jason.encode!(payload)
+  defp maybe_send_callback(_run_ctx, _payload), do: nil
 
-    request =
-      {String.to_charlist(callback_url), [{~c"content-type", ~c"application/json"}],
-       ~c"application/json", body}
-
-    case Httpc.request(
-           :post,
-           request,
-           [timeout: request_timeout, connect_timeout: min(request_timeout, 5_000)],
-           []
+  # The destination is re-authorized and pinned on every attempt (DNS may have
+  # changed since submission), and a redirect is a failed delivery: the POST is
+  # never replayed to a location the operator did not approve.
+  defp send_callback(%{callback_url: callback_url} = run_ctx, payload)
+       when is_binary(callback_url) do
+    case LemonCore.Net.HTTP.request(:post, callback_url,
+           headers: [{"content-type", "application/json"}],
+           body: Jason.encode!(payload),
+           timeout_ms: int_value(run_ctx.timeout_ms, 30_000),
+           max_body_bytes: @callback_response_max_bytes,
+           allow_private: Map.get(run_ctx, :callback_allow_private, false) == true
          ) do
-      {:ok, {{_http_version, status, _reason_phrase}, _headers, _resp_body}} ->
-        if callback_success_status?(status) do
-          {:ok, status}
-        else
-          {:error, {:unexpected_status, status}}
-        end
+      {:ok, %{status: status}} ->
+        if callback_success_status?(status),
+          do: {:ok, status},
+          else: {:error, {:unexpected_status, status}}
 
       {:error, reason} ->
         {:error, reason}
@@ -252,14 +239,14 @@ defmodule LemonGateway.Transports.Webhook.Response do
       {:error, {:callback_failed, Exception.message(error)}}
   end
 
-  defp send_callback(_callback_url, _payload, _timeout_ms), do: {:error, :invalid_callback_url}
+  defp send_callback(_run_ctx, _payload), do: {:error, :invalid_callback_url}
 
-  defp send_callback_with_retry(callback_url, payload, timeout_ms, retry_config) do
-    send_callback_with_retry(callback_url, payload, timeout_ms, retry_config, 1)
+  defp send_callback_with_retry(run_ctx, payload) do
+    send_callback_with_retry(run_ctx, payload, run_ctx.callback_retry, 1)
   end
 
-  defp send_callback_with_retry(callback_url, payload, timeout_ms, retry_config, attempt) do
-    case send_callback(callback_url, payload, timeout_ms) do
+  defp send_callback_with_retry(run_ctx, payload, retry_config, attempt) do
+    case send_callback(run_ctx, payload) do
       {:ok, status} ->
         {:ok, status}
 
@@ -268,7 +255,7 @@ defmodule LemonGateway.Transports.Webhook.Response do
           error
         else
           Process.sleep(backoff_delay_ms(retry_config, attempt))
-          send_callback_with_retry(callback_url, payload, timeout_ms, retry_config, attempt + 1)
+          send_callback_with_retry(run_ctx, payload, retry_config, attempt + 1)
         end
     end
   end

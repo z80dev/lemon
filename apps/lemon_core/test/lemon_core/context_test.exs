@@ -91,10 +91,9 @@ defmodule LemonCore.ContextTest do
   end
 
   test "URL and session references reuse extract/redaction contracts", %{root: root} do
-    request = fn _url, _headers, _http, _max ->
+    send_fun = fn _request ->
       {:ok,
-       {{~c"HTTP/1.1", 200, ~c"OK"}, [{~c"content-type", ~c"text/plain"}],
-        "password=hunter2\nremote"}}
+       %{status: 200, headers: [{"content-type", "text/plain"}], body: "password=hunter2\nremote"}}
     end
 
     session_export = fn "agent:test:main", [format: :markdown] ->
@@ -105,7 +104,7 @@ defmodule LemonCore.ContextTest do
              Context.resolve(["@url:https://example.test/doc", "@session:agent:test:main"],
                root: root,
                resolve_fun: fn _ -> {:ok, [{93, 184, 216, 34}]} end,
-               request_fun: request,
+               send_fun: send_fun,
                session_export_fun: session_export
              )
 
@@ -155,10 +154,8 @@ defmodule LemonCore.ContextTest do
                root: root,
                timeout_ms: 10,
                resolve_fun: fn _ -> {:ok, [{93, 184, 216, 34}]} end,
-               # Never answers; the resolver must cut it off at timeout_ms
-               request_fun: fn _, _, _, _ ->
-                 Process.sleep(:infinity)
-               end
+               # Never answers; Context must cut it off at timeout_ms
+               send_fun: fn _request -> Process.sleep(:infinity) end
              )
   end
 

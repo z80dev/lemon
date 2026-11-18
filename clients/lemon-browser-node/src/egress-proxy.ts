@@ -1,18 +1,17 @@
-import { lookup } from 'node:dns/promises';
 import http from 'node:http';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 
-import { isBlockedAddress } from './destination-guard.js';
+import { authorize, type Resolver } from './destination-guard.js';
 
 /**
- * Egress policy for the managed Chrome proxy. `resolve` and `isBlocked` are
- * injection seams for tests; production uses the system resolver and the
- * shared metadata/link-local classifier.
+ * Egress policy for the managed Chrome proxy, test seams only: `resolve`
+ * replaces the system resolver and `isBlocked` refuses additional checked
+ * addresses. Metadata destinations are always refused by the shared classifier.
  */
 export type EgressPolicy = {
-  resolve?: (hostname: string) => Promise<string[]>;
+  resolve?: Resolver;
   isBlocked?: (address: string) => boolean;
 };
 
@@ -35,35 +34,19 @@ const HOP_BY_HOP = [
 
 /**
  * Starts a loopback forward proxy that every request of a Lemon-launched Chrome
- * goes through. Each destination is resolved here, every answer is classified,
- * and the upstream socket connects to the checked IP, so redirects,
- * subresources, workers, popups, WebSockets and DNS rebinding cannot reach a
- * blocked address. TLS is tunnelled via CONNECT without interception.
+ * goes through. Each destination is resolved here and authorized by the shared
+ * classifier (destination-guard.ts) on every answer, and the upstream socket
+ * connects to a checked IP, so redirects, subresources, workers, popups,
+ * WebSockets and DNS rebinding cannot reach a metadata address. Private
+ * destinations stay reachable; route choice is the navigation pre-check's job.
+ * TLS is tunnelled via CONNECT without interception.
  */
 export async function startEgressProxy(policy: EgressPolicy = {}): Promise<EgressProxy> {
-  const resolve =
-    policy.resolve ??
-    (async (hostname: string) =>
-      (await lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address));
-  const isBlocked = policy.isBlocked ?? isBlockedAddress;
-
   // Returns a checked IP to connect to, or null when the destination is refused.
   const checkedAddress = async (hostname: string): Promise<string | null> => {
-    const host = hostname.replace(/^\[|\]$/g, '');
-    let addresses: string[];
-    if (net.isIP(host)) {
-      addresses = [host];
-    } else {
-      try {
-        addresses = await resolve(host);
-      } catch {
-        return null;
-      }
-    }
-    if (addresses.length === 0 || addresses.some((address) => !net.isIP(address) || isBlocked(address))) {
-      return null;
-    }
-    return addresses[0];
+    const result = await authorize(hostname, { allowPrivate: true, resolve: policy.resolve });
+    if (!result.ok || result.addresses.some((address) => policy.isBlocked?.(address))) return null;
+    return result.addresses[0];
   };
 
   // WHATWG parsing canonicalizes numeric/hex/octal IPv4 hosts and IPv6 brackets.

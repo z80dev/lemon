@@ -171,7 +171,10 @@ defmodule CodingAgent.ToolApprovalTiersTest do
       WebFetch.tool("/tmp",
         settings_manager: %{tools: tools},
         cache_opts: %{"persistent" => false},
-        http_get: fn _, _ -> {:ok, Req.Response.new(body: "oversized")} end
+        fetch_send: fn request ->
+          assert request.max_body_bytes == 3
+          {:ok, %{status: 200, headers: [], body: "oversized"}}
+        end
       )
 
     result = tool.execute.("bodycap", %{"url" => "https://8.8.8.8/configured-cap"}, nil, nil)

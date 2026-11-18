@@ -1068,7 +1068,7 @@ defmodule LemonGateway.WebhookTransportTest do
   end
 
   test "callback URL validation enforces canonicalization, scheme, and private host policy" do
-    public_dns = fn _host -> [] end
+    public_dns = fn _host -> {:ok, [{93, 184, 216, 34}]} end
 
     assert {:ok, "https://example.test/callback"} =
              Request.validate_callback_url("https://EXAMPLE.TEST./callback", false,
@@ -1093,8 +1093,8 @@ defmodule LemonGateway.WebhookTransportTest do
              Request.validate_callback_url("http://127.0.0.1/callback", true)
 
     private_dns = fn
-      "internal.example" -> [{10, 1, 2, 3}, {93, 184, 216, 34}]
-      _ -> []
+      "internal.example" -> {:ok, [{10, 1, 2, 3}, {93, 184, 216, 34}]}
+      _ -> {:error, :nxdomain}
     end
 
     assert {:error, :invalid_callback_url} =

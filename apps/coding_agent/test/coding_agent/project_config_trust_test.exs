@@ -175,7 +175,10 @@ defmodule CodingAgent.ProjectConfigTrustTest do
     tool =
       WebFetch.tool(ctx.project,
         settings_manager: settings,
-        http_get: capture(parent, :fetch_get, {:error, :nxdomain}),
+        fetch_send: fn request ->
+          send(parent, {:fetch_get, request.host, request.headers})
+          {:error, :nxdomain}
+        end,
         http_post: capture(parent, :fetch_post, {:error, :nxdomain}),
         cache_opts: [persistent: false]
       )

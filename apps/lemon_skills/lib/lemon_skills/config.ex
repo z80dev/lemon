@@ -1102,7 +1102,8 @@ defmodule LemonSkills.Config do
         _ -> []
       end
 
-    header_opts ++ mcp_timeout_opts(config) ++ mcp_filter_opts(config)
+    header_opts ++
+      mcp_timeout_opts(config) ++ mcp_filter_opts(config) ++ http_origin_policy_opts(config)
   end
 
   defp oauth_config_opts(%{"oauth" => oauth}) when is_map(oauth) do

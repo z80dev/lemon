@@ -9,7 +9,7 @@ import tls from 'node:tls';
 import { WebSocketServer } from 'ws';
 
 import { ChromeSession } from './chrome.js';
-import { blockedDestination, isBlockedAddress } from './destination-guard.js';
+import { authorize, blockedDestination, classify, classifyHost, parseLiteral, type IpAddress } from './destination-guard.js';
 import { dispatchBrowserRequest } from './driver-dispatch.js';
 
 const publicResolver = async () => ['93.184.215.14'];
@@ -45,7 +45,159 @@ describe('blockedDestination', () => {
     expect(await blockedDestination('https://example.com/', publicResolver)).toBeNull();
     expect(await blockedDestination('http://127.0.0.1:4000/', publicResolver)).toBeNull();
     expect(await blockedDestination('data:text/plain,hi', publicResolver)).toBeNull();
-    expect(isBlockedAddress('10.0.0.1')).toBe(false);
+    expect(classify(parseLiteral('10.0.0.1')!)).toBe('private');
+  });
+
+  it.each(['http://[2002:a9fe:a9fe::]/', 'http://[64:ff9b::a9fe:a9fe]/', 'http://metadata.goog/'])(
+    'blocks %s',
+    async (url) => {
+      expect(await blockedDestination(url, publicResolver)).toMatch(/metadata endpoint/);
+    },
+  );
+
+  it('blocks hostnames whose DNS answers include a 6to4 metadata address', async () => {
+    const resolver = async () => ['93.184.215.14', '2002:a9fe:a9fe::'];
+    expect(await blockedDestination('http://rebind.example/', resolver)).toMatch(/metadata endpoint/);
+  });
+});
+
+// Mirrors apps/lemon_core/test/lemon_core/net/address_test.exs.
+describe('address classifier', () => {
+  const publicV4: IpAddress = [93, 184, 216, 34];
+  const publicV6: IpAddress = [0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111];
+  const classifyLiteral = (host: string) => {
+    const address = parseLiteral(host);
+    expect(address, host).not.toBeNull();
+    return classify(address!);
+  };
+  const noDns = async (): Promise<string[]> => {
+    throw new Error('resolved');
+  };
+
+  it.each([
+    '169.254.169.254',
+    '2852039166',
+    '0xA9FEA9FE',
+    '0xa9.0xfe.0xa9.0xfe',
+    '0251.0376.0251.0376',
+    '169.254.43518',
+    '[::ffff:169.254.169.254]',
+    '::ffff:a9fe:a9fe',
+    '64:ff9b::169.254.169.254',
+    '::169.254.169.254',
+    '2002:a9fe:a9fe::',
+    '100.100.100.200',
+    'fd00:ec2::254',
+    'fe80::1',
+  ])('metadata alias %s is metadata', (host) => {
+    expect(classifyLiteral(host)).toBe('metadata');
+  });
+
+  it.each([
+    '127.0.0.1',
+    '2130706433',
+    '0x7f000001',
+    '10.0.0.1',
+    '0x7f.0x0.0x0.0x1',
+    '0177.1',
+    '172.16.0.1',
+    '192.168.1.1',
+    '100.64.0.1',
+    '0.0.0.0',
+    '192.0.0.1',
+    '192.0.2.1',
+    '198.18.0.1',
+    '198.51.100.1',
+    '203.0.113.1',
+    '224.0.0.1',
+    '255.255.255.255',
+    '::',
+    '::1',
+    '::ffff:127.0.0.1',
+    '64:ff9b::10.0.0.1',
+    'fc00::1',
+    'fec0::1',
+    'ff02::1',
+    '2001:db8::1',
+    '2001::1',
+    '2002:0808:0808::1',
+    '2002:7f00:1::',
+  ])('non-global %s is private', (host) => {
+    expect(classifyLiteral(host)).toBe('private');
+  });
+
+  it('allocated global unicast is public', () => {
+    expect(classify(publicV4)).toBe('public');
+    expect(classify(publicV6)).toBe('public');
+    expect(classifyLiteral('::ffff:93.184.216.34')).toBe('public');
+    expect(classifyLiteral('2606:4700:4700::1111')).toBe('public');
+  });
+
+  it.each(['', '[]', '256.0.0.1', '1.2.3.4.5', '1.2.3.4.', '0x', '08.0.0.1', 'fe80::1%en0', '::ffff:010.0.0.1', 'example.com'])(
+    'rejects %j as an IP literal',
+    (host) => {
+      expect(parseLiteral(host)).toBeNull();
+    },
+  );
+
+  it('a host takes the strictest class of all answers', async () => {
+    expect(await classifyHost('rebind.example', async () => ['93.184.216.34', '2002:a9fe:a9fe::'])).toMatchObject({
+      ok: true,
+      class: 'metadata',
+    });
+    expect(await classifyHost('rebind.example', async () => ['2606:4700:4700::1111', '10.0.0.1'])).toMatchObject({
+      ok: true,
+      class: 'private',
+    });
+  });
+
+  it('names are classified without DNS where the name decides', async () => {
+    for (const name of ['metadata', 'metadata.goog', 'METADATA.google.internal.']) {
+      expect(await classifyHost(name, noDns)).toEqual({ ok: true, class: 'metadata', addresses: [] });
+    }
+    for (const name of ['localhost', 'LOCALHOST.', 'api.localhost', 'ip6-loopback']) {
+      expect(await classifyHost(name, noDns)).toEqual({ ok: true, class: 'private', addresses: [] });
+    }
+  });
+
+  it('DNS failure, empty, malformed or oversized answers fail closed', async () => {
+    for (const resolver of [
+      noDns,
+      async () => [],
+      async () => ['not-an-ip'],
+      async () => ['256.0.0.1'],
+      async () => ['2852039166'],
+      async () => 'garbage' as unknown as string[],
+    ]) {
+      expect(await authorize('callback.example', { resolve: resolver })).toEqual({
+        ok: false,
+        error: 'dns_resolution_failed',
+      });
+    }
+    const many = Array<string>(65).fill('93.184.216.34');
+    expect(await authorize('callback.example', { resolve: async () => many })).toEqual({
+      ok: false,
+      error: 'too_many_dns_addresses',
+    });
+  });
+
+  it('authorize refuses metadata even when private is allowed', async () => {
+    expect(await authorize('169.254.169.254', { allowPrivate: true })).toEqual({ ok: false, error: 'metadata_blocked' });
+    expect(await authorize('2852039166', { allowPrivate: true })).toEqual({ ok: false, error: 'metadata_blocked' });
+    expect(await authorize('127.0.0.1')).toEqual({ ok: false, error: 'destination_not_public' });
+    expect(await authorize('127.0.0.1', { allowPrivate: true })).toEqual({ ok: true, addresses: ['127.0.0.1'] });
+    expect(await authorize('localhost', { allowPrivate: true, resolve: noDns })).toEqual({
+      ok: true,
+      addresses: ['127.0.0.1'],
+    });
+    expect(await authorize('bad host')).toEqual({ ok: false, error: 'invalid_host' });
+  });
+
+  it('authorize returns canonical, ordered connection addresses', async () => {
+    expect(await authorize('[::FFFF:127.0.0.1]', { allowPrivate: true })).toEqual({ ok: true, addresses: ['::ffff:7f00:1'] });
+    expect(
+      await authorize('dual.example', { resolve: async () => ['2606:4700:4700:0:0:0:0:1111', '93.184.216.34'] }),
+    ).toEqual({ ok: true, addresses: ['93.184.216.34', '2606:4700:4700::1111'] });
   });
 });
 
@@ -182,7 +334,7 @@ describe.skipIf(!chromePath)('managed Chrome egress proxy', () => {
           if (host === 'rebind.test') return rebindLookups++ === 0 ? ['127.0.0.1'] : ['::1'];
           throw new Error(`ENOTFOUND ${host}`);
         },
-        isBlocked: (address) => address === '::1' || isBlockedAddress(address),
+        isBlocked: (address) => address === '::1',
       },
     });
     await session.start();

@@ -183,6 +183,25 @@ defmodule LemonSkills.McpSourceContractTest do
              McpSource.validate_config(invalid)
   end
 
+  test "SSE entries carry their destination policy to the client" do
+    origin = "https://example.test"
+
+    raw = %{
+      "type" => "sse",
+      "url" => origin <> "/sse",
+      "allowedOrigins" => [origin],
+      "approvedPrivateOrigins" => []
+    }
+
+    assert [{:sse, _, opts}] = Config.parse_mcp_server_config(raw)
+    assert opts[:origin_policy] == %{allowed_origins: [origin], approved_private_origins: []}
+
+    assert [{:sse, _}] =
+             Config.parse_mcp_server_config(
+               Map.drop(raw, ["allowedOrigins", "approvedPrivateOrigins"])
+             )
+  end
+
   test "utility selectors are distinct from similarly named remote tools" do
     opts = [
       approval: :always,

@@ -89,15 +89,17 @@ defmodule LemonCore.MixProject do
     ]
   end
 
-  # Only :jason, :toml and :telemetry are hard requirements. Everything else is
-  # optional so that a host application can depend on lemon_core without
-  # inheriting a SQLite NIF, an HTTP client and a pubsub server it may not use.
-  # Each optional dep degrades explicitly — see the module docs named below.
+  # Only :jason, :toml, :telemetry and :mint are hard requirements. Everything
+  # else is optional so that a host application can depend on lemon_core without
+  # inheriting a SQLite NIF, a pooled HTTP client and a pubsub server it may not
+  # use. Each optional dep degrades explicitly — see the module docs named below.
   defp deps do
     [
       {:jason, "~> 1.4"},
       {:toml, "~> 0.7"},
       {:telemetry, "~> 1.0"},
+      # LemonCore.Net.HTTP: the single pinned, unpooled outbound fetcher.
+      {:mint, "~> 1.8"},
       # LemonCore.Bus falls back to a local Registry when absent.
       {:phoenix_pubsub, "~> 2.1", optional: true},
       # Required by LemonCore.Store.SqliteBackend and RunHistoryStore; the ETS

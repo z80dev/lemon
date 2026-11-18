@@ -243,7 +243,8 @@ Notes:
 - `browser_navigate` route guard: `auto` (default) keeps local-first behavior;
   `public` rejects local, private, `data:`, and `file:` targets; `local` rejects
   public web targets. Hosts are classified after normalizing IP aliases
-  (decimal/hex/octal, IPv4-mapped IPv6, trailing dot) and resolving DNS, with
+  (decimal/hex/octal, IPv4-mapped, NAT64 and 6to4 IPv6, trailing dot) with the
+  shared `LemonCore.Net.Address` policy and resolving DNS, with
   every answer checked; cloud metadata and link-local addresses are blocked on
   every route, and unresolvable hosts are refused. The driver repeats the
   metadata check before `navigate` and `tabOpen`. See "Egress enforcement"
@@ -275,9 +276,12 @@ Notes:
   process itself in this session): the driver starts a loopback egress proxy
   first and launches Chrome with `--proxy-server` pointing at it and
   `--proxy-bypass-list=<-loopback>`, so loopback destinations are not silently
-  exempted. The proxy resolves each destination itself, refuses it if any
-  answer is a cloud metadata or link-local address, and connects to the IP it
-  checked. HTTPS and `wss:` are tunnelled with CONNECT and never decrypted.
+  exempted. The proxy resolves each destination itself, classifies it with a
+  port of the shared `LemonCore.Net.Address` policy (every IP alias form,
+  IPv4-mapped, IPv4-compatible, NAT64 and 6to4 IPv6), refuses it if any answer
+  is a cloud metadata or link-local address or resolution fails, and connects
+  to the IP it checked. HTTPS and `wss:` are tunnelled with CONNECT and never
+  decrypted.
   Regression tests with real Chrome cover these transports, with zero
   connections reaching the forbidden destination: plain HTTP navigation,
   redirect hops, iframes, `window.open` popups, `tabOpen`, `fetch` from the
