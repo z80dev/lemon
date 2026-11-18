@@ -56,19 +56,6 @@ defmodule LemonChannels.Adapters.Telegram.FileAccessTest do
 
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
-  @case_insensitive_fs (fn ->
-                          dir =
-                            Path.join(
-                              System.tmp_dir!(),
-                              "lemon-case-probe-#{System.unique_integer([:positive])}"
-                            )
-
-                          File.mkdir_p!(dir)
-                          File.write!(Path.join(dir, "Probe"), "")
-                          insensitive? = File.exists?(Path.join(dir, "PROBE"))
-                          File.rm_rf!(dir)
-                          insensitive?
-                        end).()
   @user_id 4_200_001
 
   setup do
@@ -223,7 +210,7 @@ defmodule LemonChannels.Adapters.Telegram.FileAccessTest do
   end
 
   describe "case-insensitive filesystem" do
-    @describetag skip: if(@case_insensitive_fs, do: false, else: "case-sensitive filesystem")
+    @describetag :case_insensitive_fs
 
     test "/file get of .ENV and .GiT/config is denied", %{root: root} do
       File.write!(Path.join(root, ".env"), "API_KEY=1")
