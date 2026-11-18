@@ -601,7 +601,7 @@ function currentPageUrl(page: Page): string | undefined {
 
 function assertLocalDocumentReadAllowed(page: Page, a: { allowLocalDocument?: unknown }): void {
   if (a.allowLocalDocument === true) return;
-  let scheme = '';
+  let scheme: string;
   try {
     scheme = new URL(currentPageUrl(page) ?? '').protocol;
   } catch {
