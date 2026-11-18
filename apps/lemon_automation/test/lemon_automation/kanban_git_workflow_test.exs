@@ -235,6 +235,7 @@ defmodule LemonAutomation.KanbanGitWorkflowTest do
                %{git_dir: git_dir, common_dir: git_dir, work_tree: nil},
                ["tag", "not-to-push", sha]
              )
+
     config = %{publish: %{mode: :branch, remote: "origin"}}
 
     assert {:ok, %{"published" => true, "prUrl" => nil}} =
@@ -509,7 +510,11 @@ defmodule LemonAutomation.KanbanGitWorkflowTest do
       git!(context.root, ["config", key, value])
     end
 
-    task = %{id: "sandbox-test-#{System.unique_integer([:positive])}", board_id: context.task.board_id}
+    task = %{
+      id: "sandbox-test-#{System.unique_integer([:positive])}",
+      board_id: context.task.board_id
+    }
+
     on_exit(fn -> File.rm_rf!(elem(KanbanWorktree.path_for(task), 1)) end)
     assert {:ok, workspace} = KanbanWorktree.prepare(task, board(context.root))
     assert {:ok, checkpoint} = KanbanGitWorkflow.prepare(workspace, task, context.config)
@@ -580,7 +585,12 @@ defmodule LemonAutomation.KanbanGitWorkflowTest do
     # A repository the worktree's `.git` file is redirected to.
     evil_repo = Path.join(context.root, "evil-repo")
     File.mkdir_p!(evil_repo)
-    task = %{id: "race-test-#{System.unique_integer([:positive])}", board_id: context.task.board_id}
+
+    task = %{
+      id: "race-test-#{System.unique_integer([:positive])}",
+      board_id: context.task.board_id
+    }
+
     {:ok, worktree} = KanbanWorktree.path_for(task)
     on_exit(fn -> File.rm_rf!(worktree) end)
     # It mimics the task's branch with a commit, so only the controller's own
@@ -670,7 +680,9 @@ defmodule LemonAutomation.KanbanGitWorkflowTest do
   test "worktree administrative metadata changed by other means is refused", context do
     alias LemonAutomation.KanbanGitSandbox
 
-    marker = Path.expand(Path.join(context.root, "../admin-#{System.unique_integer([:positive])}"))
+    marker =
+      Path.expand(Path.join(context.root, "../admin-#{System.unique_integer([:positive])}"))
+
     on_exit(fn -> File.rm_rf!(marker) end)
     script = Path.join(context.root, "evil.sh")
     File.write!(script, "#!/bin/sh\necho \"$0 $*\" >> '#{marker}'\ncat\n")

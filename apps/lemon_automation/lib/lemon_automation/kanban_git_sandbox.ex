@@ -153,7 +153,9 @@ defmodule LemonAutomation.KanbanGitSandbox do
          true <-
            Enum.all?(worktree_metadata(work_tree, branch), fn {name, content} ->
              path = Path.join(admin, name)
-             match?({:ok, %{type: :regular}}, File.lstat(path)) and File.read(path) == {:ok, content}
+
+             match?({:ok, %{type: :regular}}, File.lstat(path)) and
+               File.read(path) == {:ok, content}
            end) do
       :ok
     else

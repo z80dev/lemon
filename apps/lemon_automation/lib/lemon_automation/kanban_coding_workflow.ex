@@ -297,8 +297,8 @@ defmodule LemonAutomation.KanbanCodingWorkflow do
          true <- KanbanAuthority.publication_permitted?(policy, []) do
       authorize = fn command ->
         if KanbanAuthority.publication_permitted?(policy, [KanbanAuthority.command_text(command)]),
-          do: :ok,
-          else: {:error, :publication_not_authorized}
+           do: :ok,
+           else: {:error, :publication_not_authorized}
       end
 
       {:ok,
