@@ -12,7 +12,11 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
   test "terminal loop status retains the judge identity rather than a previous continuation", %{
     session_key: session_key
   } do
-    assert {:ok, _} = GoalStore.set(session_key, "Verify the completed change")
+    assert {:ok, _} =
+             GoalStore.set(session_key, "Verify the completed change",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
+
     assert {:ok, _} = GoalStore.record_continuation(session_key, "prior_continuation")
 
     assert {:ok, _} =
@@ -36,7 +40,8 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
     assert {:ok, goal} =
              GoalStore.set(session_key, "Ship Hermes parity",
                agent_id: "default",
-               run_id: "run_goal_test"
+               run_id: "run_goal_test",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     assert goal.session_key == session_key
@@ -116,7 +121,10 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
   end
 
   test "diagnostics redacts objectives and raw session ids", %{session_key: session_key} do
-    assert {:ok, _goal} = GoalStore.set(session_key, "private objective text")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "private objective text",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     diagnostics = GoalStore.diagnostics(limit: 10)
 
@@ -135,16 +143,30 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
   end
 
   test "persists cwd without inventing a nil agent id", %{session_key: session_key} do
-    assert {:ok, goal} = GoalStore.set(session_key, "Work here", cwd: ".")
+    assert {:ok, goal} =
+             GoalStore.set(session_key, "Work here",
+               cwd: ".",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
+
     assert goal.cwd == Path.expand(".")
     assert goal.agent_id == nil
-    assert {:ok, updated} = GoalStore.set(session_key, "Still here")
+
+    assert {:ok, updated} =
+             GoalStore.set(session_key, "Still here",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
+
     assert updated.cwd == goal.cwd
     assert GoalStore.get(session_key).cwd == goal.cwd
   end
 
   test "late completion preserves pause and records bounded result once", %{session_key: key} do
-    assert {:ok, _} = GoalStore.set(key, "Bound results")
+    assert {:ok, _} =
+             GoalStore.set(key, "Bound results",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
+
     assert {:ok, _} = GoalStore.record_continuation(key, "run_result")
     assert {:ok, _} = GoalStore.pause(key)
 
@@ -161,7 +183,10 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
   end
 
   test "new run clears prior abort intent", %{session_key: key} do
-    assert {:ok, _} = GoalStore.set(key, "Restart explicitly")
+    assert {:ok, _} =
+             GoalStore.set(key, "Restart explicitly",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     assert {:ok, _} =
              GoalStore.record_loop_status(key, :reconciling,
@@ -177,6 +202,194 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
   end
 
   test "rejects empty objectives", %{session_key: session_key} do
-    assert {:error, :empty_objective} = GoalStore.set(session_key, "  ")
+    assert {:error, :empty_objective} =
+             GoalStore.set(session_key, "  ",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
+  end
+
+  describe "goal authority" do
+    alias LemonAgent.Workspace.GoalAuthority
+
+    setup do
+      root = Path.join(System.tmp_dir!(), "goal-store-root-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(root, "inner"))
+      on_exit(fn -> File.rm_rf!(root) end)
+      {:ok, root} = LemonAgent.Workspace.KanbanAuthority.canonical_directory(root)
+      %{root: root}
+    end
+
+    test "set requires valid recorded authority", %{session_key: key} do
+      assert {:error, :goal_authority_missing} = GoalStore.set(key, "No authority")
+
+      assert {:error, :goal_authority_missing} =
+               GoalStore.set(key, "Forged", authority: %{"grantedBy" => "operator"})
+
+      assert GoalStore.get(key) == %{}
+    end
+
+    test "session authority binds the principal and confines the target", %{
+      session_key: key,
+      root: root
+    } do
+      {:ok, other} =
+        GoalAuthority.new(%{agent_id: "default", session_key: "other-session"}, nil, root)
+
+      assert {:error, :goal_authority_missing} = GoalStore.set(key, "Work", authority: other)
+
+      {:ok, authority} =
+        GoalAuthority.new(
+          %{agent_id: "default", session_key: key},
+          %{blocked_tools: ["bash"]},
+          root
+        )
+
+      assert {:error, :workspace_outside_root} =
+               GoalStore.set(key, "Work", authority: authority, cwd: Path.dirname(root))
+
+      assert {:error, :workspace_outside_root} =
+               GoalStore.set(key, "Work", authority: authority, cwd: "../")
+
+      assert {:ok, goal} =
+               GoalStore.set(key, "Work", authority: authority, cwd: "inner", agent_id: "other")
+
+      assert goal.cwd == Path.join(root, "inner")
+      assert goal.agent_id == "default"
+      assert GoalStore.get(key).authority == authority
+    end
+
+    test "restrict_authority narrows policy and root for the goal's own starter only", %{
+      session_key: key,
+      root: root
+    } do
+      assert {:ok, _} =
+               GoalStore.set(key, "Work",
+                 authority: GoalAuthority.operator(),
+                 cwd: Path.join(root, "inner")
+               )
+
+      # Another session, or the goal's session under another agent, cannot start it.
+      assert {:error, :starter_not_permitted} =
+               GoalStore.restrict_authority(key, starter("other-session", root, nil))
+
+      {:ok, other_agent} =
+        GoalAuthority.new(%{agent_id: "other", session_key: key}, nil, root)
+
+      assert {:error, :starter_not_permitted} = GoalStore.restrict_authority(key, other_agent)
+
+      # A starter whose root does not contain the target cannot start it.
+      sibling = Path.join(Path.dirname(root), "sibling-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(sibling)
+      on_exit(fn -> File.rm_rf!(sibling) end)
+
+      assert {:error, :workspace_outside_root} =
+               GoalStore.restrict_authority(key, starter(key, sibling, nil))
+
+      # The goal's own starter narrows the root and policy durably.
+      assert {:ok, narrowed} =
+               GoalStore.restrict_authority(key, starter(key, root, %{blocked_tools: ["bash"]}))
+
+      {:ok, canonical_root} = LemonAgent.Workspace.KanbanAuthority.canonical_directory(root)
+      assert narrowed.authority["root"] == canonical_root
+      refute narrowed.authority["unrestricted"]
+      refute LemonCore.ToolPolicy.allowed?(narrowed.authority["policy"], "bash")
+
+      # A later, stricter starter narrows the root further; a broader one cannot widen it.
+      assert {:ok, inner} =
+               GoalStore.restrict_authority(key, starter(key, Path.join(root, "inner"), nil))
+
+      assert inner.authority["root"] == Path.join(canonical_root, "inner")
+      assert {:ok, still} = GoalStore.restrict_authority(key, starter(key, root, nil))
+      assert still.authority["root"] == Path.join(canonical_root, "inner")
+      refute LemonCore.ToolPolicy.allowed?(still.authority["policy"], "bash")
+
+      assert {:error, :goal_authority_missing} =
+               GoalStore.restrict_authority(key, %{"policy" => %{}})
+    end
+
+    # Deterministic interleaving: with the Store suspended, both writers queue
+    # their read before either can write, so both compute from the same
+    # snapshot. A last-writer-wins store would drop one of the two updates.
+    for writer <- [:pause, :resume, :loop_status, :loop_auto, :continuation, :verdict] do
+      @tag writer: writer
+      test "a concurrent #{writer} never overwrites a narrowed authority", %{
+        session_key: key,
+        root: root,
+        writer: writer
+      } do
+        {:ok, authority} = GoalAuthority.new(%{agent_id: "default", session_key: key}, nil, root)
+        assert {:ok, _} = GoalStore.set(key, "Work", authority: authority)
+        if writer == :resume, do: assert({:ok, _} = GoalStore.pause(key))
+
+        assert [{:ok, _}, {:ok, _}] =
+                 race([
+                   fn -> write(writer, key) end,
+                   fn ->
+                     GoalStore.restrict_authority(
+                       key,
+                       starter(key, root, %{blocked_tools: ["bash"]})
+                     )
+                   end
+                 ])
+
+        goal = GoalStore.get(key)
+        assert written?(writer, goal)
+        refute LemonCore.ToolPolicy.allowed?(goal.authority["policy"], "bash")
+      end
+    end
+  end
+
+  defp starter(key, root, policy) do
+    {:ok, starter} =
+      LemonAgent.Workspace.GoalAuthority.new(
+        %{agent_id: "default", session_key: key},
+        policy,
+        root
+      )
+
+    starter
+  end
+
+  defp write(:pause, key), do: GoalStore.pause(key)
+  defp write(:resume, key), do: GoalStore.resume(key)
+  defp write(:loop_status, key), do: GoalStore.record_loop_status(key, :error, error: "x")
+  defp write(:loop_auto, key), do: GoalStore.configure_loop_auto(key, true)
+  defp write(:continuation, key), do: GoalStore.record_continuation(key, "run_race")
+  defp write(:verdict, key), do: GoalStore.record_loop_verdict(key, %{action: :continue})
+
+  defp written?(:pause, goal), do: goal.status == "paused"
+  defp written?(:resume, goal), do: goal.status == "active"
+  defp written?(:loop_status, goal), do: goal.meta["goalLoop"]["status"] == "error"
+  defp written?(:loop_auto, goal), do: goal.meta["goalLoop"]["auto"]["enabled"] == true
+  defp written?(:continuation, goal), do: goal.last_run_id == "run_race"
+  defp written?(:verdict, goal), do: goal.meta["goalLoop"]["verdictCount"] == 1
+
+  defp race(funs) do
+    store = Process.whereis(LemonCore.Store)
+    :ok = :sys.suspend(store)
+
+    tasks =
+      try do
+        tasks = Enum.map(funs, &Task.async/1)
+        wait_until(fn -> Enum.all?(tasks, &queued_call?(store, &1.pid)) end)
+        tasks
+      after
+        :ok = :sys.resume(store)
+      end
+
+    Enum.map(tasks, &Task.await(&1, 5_000))
+  end
+
+  defp queued_call?(store, pid) do
+    {:messages, messages} = Process.info(store, :messages)
+    Enum.any?(messages, &match?({:"$gen_call", {^pid, _}, _}, &1))
+  end
+
+  defp wait_until(fun, attempts \\ 500) do
+    cond do
+      fun.() -> :ok
+      attempts == 0 -> flunk("writers did not queue their reads")
+      true -> Process.sleep(2) && wait_until(fun, attempts - 1)
+    end
   end
 end

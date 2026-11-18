@@ -380,6 +380,14 @@ Discord while their coding sessions run elsewhere. Automation binds each run to
 its exact session and target before submission. Approval requests and successful
 resolution edits go through Outbox, as do completion/failure notices.
 
+`/goal set` records the chat as the goal principal, the chat's channel-run
+tool policy (resolved as the router resolves a run from that chat, including
+the group approval floor) and its bound project directory (or the assistant
+home) as the goal authority. `/goal continue`, `/goal loop once` and
+`/goal loop start` narrow it with the same chat policy. Later judge and
+continuation runs, including automatic restarts, run within that authority. A
+command without the transport's channel context cannot set or start goal work.
+
 Remote buttons offer only **Approve once** and **Deny**. They carry the full
 approval ID plus a fingerprint of the authoritative pending snapshot. Callback
 authorization preserves account/chat/topic, re-fetches the request, rejects

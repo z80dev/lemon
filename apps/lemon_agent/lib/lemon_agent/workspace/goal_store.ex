@@ -1,10 +1,15 @@
 defmodule LemonAgent.Workspace.GoalStore do
   @moduledoc """
   Durable user goal state keyed by session.
+
+  Every goal records the authority of the caller that set it
+  (`LemonAgent.Workspace.GoalAuthority`); `set/3` requires it and
+  `restrict_authority/2` narrows it for a starter.
   """
 
   require Logger
 
+  alias LemonAgent.Workspace.GoalAuthority
   alias LemonCore.{Bus, Event, Introspection, Store}
   alias LemonCore.Events.GoalChanged
 
@@ -13,7 +18,13 @@ defmodule LemonAgent.Workspace.GoalStore do
   @loop_actions ~w(continue done blocked needs_input)
   @loop_statuses ~w(running reconciling stopped finished limit_reached error)
   @loop_auto_policies ~w(pause continue_once needs_input)
+  @cas_attempts 32
 
+  @doc """
+  Sets (or replaces) the session goal. `:authority` is required: a
+  `GoalAuthority` record whose principal is this session (or an operator).
+  The target `:cwd` must lie within the authority root and defaults to it.
+  """
   @spec set(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def set(session_key, objective, opts \\ [])
       when is_binary(session_key) and is_binary(objective) do
@@ -27,35 +38,126 @@ defmodule LemonAgent.Workspace.GoalStore do
         {:error, :empty_objective}
 
       true ->
-        now = now_ms()
-        existing = get(session_key)
-
-        goal =
-          %{
-            id: existing[:id] || existing["id"] || goal_id(),
-            session_key: session_key,
-            agent_id: string_opt(opts[:agent_id]) || existing[:agent_id] || existing["agent_id"],
-            cwd: normalize_cwd(opts[:cwd]) || existing[:cwd],
-            objective: objective,
-            status: "active",
-            created_at_ms: existing[:created_at_ms] || existing["created_at_ms"] || now,
-            updated_at_ms: now,
-            paused_at_ms: nil,
-            completed_at_ms: nil,
-            last_run_id:
-              string_opt(opts[:run_id]) || existing[:last_run_id] || existing["last_run_id"],
-            continuation_count:
-              existing[:continuation_count] || existing["continuation_count"] || 0,
-            budget: normalize_budget(opts[:budget] || existing[:budget] || existing["budget"]),
-            meta: normalize_meta(opts[:meta] || existing[:meta] || existing["meta"])
-          }
-
-        with :ok <- Store.put(@table, session_key, goal) do
+        with {:ok, authority} <- GoalAuthority.validate(opts[:authority]),
+             {:ok, goal} <-
+               update(session_key, &replace_goal(&1, session_key, objective, authority, opts)) do
           emit(:goal_set, goal, opts)
           {:ok, goal}
         end
     end
   end
+
+  defp replace_goal(existing, session_key, objective, authority, opts) do
+    agent_id = goal_agent_id(authority, opts, existing)
+
+    # An operator replacing the objective without naming a target keeps the
+    # existing goal's (re-resolved); every other target is the caller's.
+    requested_cwd =
+      if is_nil(authority["root"]) and opts[:cwd] in [nil, ""],
+        do: existing[:cwd],
+        else: opts[:cwd]
+
+    with true <-
+           GoalAuthority.permits?(authority, session_key, agent_id) ||
+             {:error, :goal_authority_missing},
+         {:ok, cwd} <- GoalAuthority.target(authority, requested_cwd) do
+      now = now_ms()
+
+      {:ok,
+       %{
+         id: existing[:id] || goal_id(),
+         session_key: session_key,
+         agent_id: agent_id,
+         cwd: cwd,
+         objective: objective,
+         status: "active",
+         created_at_ms: existing[:created_at_ms] || now,
+         updated_at_ms: now,
+         paused_at_ms: nil,
+         completed_at_ms: nil,
+         last_run_id: string_opt(opts[:run_id]) || existing[:last_run_id],
+         continuation_count: existing[:continuation_count] || 0,
+         budget: normalize_budget(opts[:budget] || existing[:budget]),
+         meta: normalize_meta(opts[:meta] || existing[:meta]),
+         authority: authority
+       }}
+    end
+  end
+
+  @doc """
+  Durably narrows the goal's recorded authority for a trusted starter (a
+  `GoalAuthority.new/4` record; see `GoalAuthority.narrow/3`). A goal without
+  valid authority stays quarantined.
+  """
+  @spec restrict_authority(binary(), map()) :: {:ok, map()} | {:error, term()}
+  def restrict_authority(session_key, starter) when is_binary(session_key) do
+    update(session_key, fn
+      goal when map_size(goal) == 0 ->
+        {:error, :not_found}
+
+      goal ->
+        with {:ok, authority} <- GoalAuthority.fetch(goal),
+             {:ok, narrowed} <- GoalAuthority.narrow(authority, goal, starter) do
+          if narrowed == authority,
+            do: {:unchanged, goal},
+            else: {:ok, %{goal | authority: narrowed, updated_at_ms: now_ms()}}
+        end
+    end)
+  end
+
+  # Every goal rewrite is a compare-and-swap against the exact stored value it
+  # was computed from, recomputed on a concurrent change. No writer (pause,
+  # resume, loop status, continuation) can therefore overwrite a newer field,
+  # such as a narrowed authority, with its stale snapshot. `fun` receives the
+  # normalized goal (`%{}` when absent) and returns `{:ok, updated}`,
+  # `{:unchanged, goal}` (no write) or an error.
+  defp update(session_key, fun, attempts \\ @cas_attempts)
+
+  defp update(_session_key, _fun, 0), do: {:error, :conflict}
+
+  defp update(session_key, fun, attempts) do
+    with {:ok, stored} <- fetch_stored(session_key) do
+      case fun.(normalize_stored(stored)) do
+        {:ok, updated} ->
+          case Store.compare_and_swap(@table, session_key, stored, updated) do
+            :ok -> {:ok, updated}
+            {:error, :mismatch} -> update(session_key, fun, attempts - 1)
+            {:error, _reason} = error -> error
+          end
+
+        {:unchanged, goal} ->
+          {:ok, goal}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp fetch_stored(session_key) do
+    case Store.fetch(@table, session_key) do
+      {:ok, stored} -> {:ok, stored}
+      {:error, _reason} -> {:error, :store_unavailable}
+    end
+  end
+
+  defp normalize_stored(stored) when is_map(stored), do: normalize_goal(stored)
+  defp normalize_stored(_stored), do: %{}
+
+  # Applies `fun` to an existing goal; an absent goal is `:not_found`.
+  defp update_existing(session_key, fun) do
+    update(session_key, fn
+      goal when map_size(goal) == 0 -> {:error, :not_found}
+      goal -> {:ok, fun.(goal)}
+    end)
+  end
+
+  # Session and chat authority bind the goal to their own agent; operators
+  # may name one (or keep the existing goal's).
+  defp goal_agent_id(%{"principal" => %{"agentId" => agent_id}}, _opts, _existing), do: agent_id
+
+  defp goal_agent_id(_operator, opts, existing),
+    do: string_opt(opts[:agent_id]) || existing[:agent_id]
 
   @spec get(binary()) :: map()
   def get(session_key) when is_binary(session_key) do
@@ -104,27 +206,23 @@ defmodule LemonAgent.Workspace.GoalStore do
         {:error, :invalid_run_id}
 
       true ->
-        case get(session_key) do
-          %{} = goal when map_size(goal) == 0 ->
-            {:error, :not_found}
-
-          goal ->
+        result =
+          update_existing(session_key, fn goal ->
             now = now_ms()
 
-            updated =
-              goal
-              |> Map.put(:updated_at_ms, now)
-              |> Map.put(:last_run_id, run_id)
-              |> Map.put(
-                :continuation_count,
-                goal.continuation_count + if(goal.last_run_id == run_id, do: 0, else: 1)
-              )
-              |> put_completion(run_id, opts[:completion], now)
+            goal
+            |> Map.put(:updated_at_ms, now)
+            |> Map.put(:last_run_id, run_id)
+            |> Map.put(
+              :continuation_count,
+              goal.continuation_count + if(goal.last_run_id == run_id, do: 0, else: 1)
+            )
+            |> put_completion(run_id, opts[:completion], now)
+          end)
 
-            with :ok <- Store.put(@table, session_key, updated) do
-              emit(:goal_continuation_submitted, updated, Keyword.put(opts, :run_id, run_id))
-              {:ok, updated}
-            end
+        with {:ok, updated} <- result do
+          emit(:goal_continuation_submitted, updated, Keyword.put(opts, :run_id, run_id))
+          {:ok, updated}
         end
     end
   end
@@ -132,40 +230,30 @@ defmodule LemonAgent.Workspace.GoalStore do
   @spec record_loop_verdict(binary(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def record_loop_verdict(session_key, verdict, opts \\ [])
       when is_binary(session_key) and is_map(verdict) do
-    case normalize_loop_verdict(verdict) do
-      {:ok, normalized} ->
-        case get(session_key) do
-          %{} = goal when map_size(goal) == 0 ->
-            {:error, :not_found}
+    run_id = string_opt(opts[:run_id])
 
-          goal ->
-            now = now_ms()
-            run_id = string_opt(opts[:run_id])
+    with {:ok, normalized} <- normalize_loop_verdict(verdict),
+         {:ok, updated} <-
+           update_existing(session_key, fn goal ->
+             now = now_ms()
 
-            loop =
-              goal.meta
-              |> current_loop()
-              |> Map.put(
-                "lastVerdict",
-                normalized
-                |> Map.put("atMs", now)
-                |> maybe_put("runId", run_id)
-              )
-              |> Map.put("verdictCount", loop_verdict_count(goal.meta) + 1)
+             loop =
+               goal.meta
+               |> current_loop()
+               |> Map.put(
+                 "lastVerdict",
+                 normalized
+                 |> Map.put("atMs", now)
+                 |> maybe_put("runId", run_id)
+               )
+               |> Map.put("verdictCount", loop_verdict_count(goal.meta) + 1)
 
-            updated =
-              goal
-              |> Map.put(:updated_at_ms, now)
-              |> Map.put(:meta, Map.put(goal.meta, "goalLoop", loop))
-
-            with :ok <- Store.put(@table, session_key, updated) do
-              emit(:goal_loop_verdict, updated, Keyword.put(opts, :run_id, run_id))
-              {:ok, updated}
-            end
-        end
-
-      error ->
-        error
+             goal
+             |> Map.put(:updated_at_ms, now)
+             |> Map.put(:meta, Map.put(goal.meta, "goalLoop", loop))
+           end) do
+      emit(:goal_loop_verdict, updated, Keyword.put(opts, :run_id, run_id))
+      {:ok, updated}
     end
   end
 
@@ -179,11 +267,8 @@ defmodule LemonAgent.Workspace.GoalStore do
         {:error, :invalid_loop_status}
 
       true ->
-        case get(session_key) do
-          %{} = goal when map_size(goal) == 0 ->
-            {:error, :not_found}
-
-          goal ->
+        result =
+          update_existing(session_key, fn goal ->
             now = now_ms()
 
             loop =
@@ -203,15 +288,19 @@ defmodule LemonAgent.Workspace.GoalStore do
               |> maybe_started_at(status, now)
               |> maybe_stopped_at(status, now)
 
-            updated =
-              goal
-              |> Map.put(:updated_at_ms, now)
-              |> Map.put(:meta, Map.put(goal.meta, "goalLoop", loop))
+            goal
+            |> Map.put(:updated_at_ms, now)
+            |> Map.put(:meta, Map.put(goal.meta, "goalLoop", loop))
+          end)
 
-            with :ok <- Store.put(@table, session_key, updated) do
-              emit(:goal_loop_status, updated, Keyword.put(opts, :run_id, loop["lastRunId"]))
-              {:ok, updated}
-            end
+        with {:ok, updated} <- result do
+          emit(
+            :goal_loop_status,
+            updated,
+            Keyword.put(opts, :run_id, current_loop(updated.meta)["lastRunId"])
+          )
+
+          {:ok, updated}
         end
     end
   end
@@ -220,18 +309,16 @@ defmodule LemonAgent.Workspace.GoalStore do
           {:ok, map()} | {:error, term()}
   def configure_loop_auto(session_key, enabled, opts \\ [])
       when is_binary(session_key) and is_boolean(enabled) do
-    case get(session_key) do
-      %{} = goal when map_size(goal) == 0 ->
-        {:error, :not_found}
+    options = normalize_loop_auto_options(opts)
 
-      goal ->
+    result =
+      update_existing(session_key, fn goal ->
         now = now_ms()
         loop = current_loop(goal.meta)
-        existing_auto = current_loop_auto(loop)
-        options = normalize_loop_auto_options(opts)
 
         auto =
-          existing_auto
+          loop
+          |> current_loop_auto()
           |> Map.put("enabled", enabled)
           |> Map.put("updatedAtMs", now)
           |> maybe_put_auto_options(options)
@@ -241,28 +328,45 @@ defmodule LemonAgent.Workspace.GoalStore do
           |> Map.put("auto", auto)
           |> Map.put("updatedAtMs", now)
 
-        updated =
-          goal
-          |> Map.put(:updated_at_ms, now)
-          |> Map.put(:meta, Map.put(goal.meta, "goalLoop", loop))
+        goal
+        |> Map.put(:updated_at_ms, now)
+        |> Map.put(:meta, Map.put(goal.meta, "goalLoop", loop))
+      end)
 
-        with :ok <- Store.put(@table, session_key, updated) do
-          emit(:goal_loop_status, updated, opts)
-          {:ok, updated}
-        end
+    with {:ok, updated} <- result do
+      emit(:goal_loop_status, updated, opts)
+      {:ok, updated}
     end
   end
 
   @spec clear(binary(), keyword()) :: :ok | {:error, term()}
-  def clear(session_key, opts \\ []) when is_binary(session_key) do
-    goal = get(session_key)
+  def clear(session_key, opts \\ []) when is_binary(session_key),
+    do: clear(session_key, opts, @cas_attempts)
 
-    with :ok <- Store.delete(@table, session_key) do
-      if goal != %{} do
-        emit(:goal_cleared, goal, opts)
+  # Deletes exactly the goal that was read, so a concurrent `set` is never
+  # erased by a clear computed from the previous goal.
+  defp clear(_session_key, _opts, 0), do: {:error, :conflict}
+
+  defp clear(session_key, opts, attempts) do
+    with {:ok, stored} <- fetch_stored(session_key) do
+      case stored do
+        nil ->
+          :ok
+
+        stored ->
+          case Store.compare_and_delete(@table, session_key, stored) do
+            :ok ->
+              goal = normalize_stored(stored)
+              if goal != %{}, do: emit(:goal_cleared, goal, opts)
+              :ok
+
+            {:error, :mismatch} ->
+              clear(session_key, opts, attempts - 1)
+
+            {:error, _reason} = error ->
+              error
+          end
       end
-
-      :ok
     end
   end
 
@@ -300,24 +404,20 @@ defmodule LemonAgent.Workspace.GoalStore do
   end
 
   defp transition(session_key, status, event_type, opts) when status in @statuses do
-    case get(session_key) do
-      %{} = goal when map_size(goal) == 0 ->
-        {:error, :not_found}
-
-      goal ->
+    result =
+      update_existing(session_key, fn goal ->
         now = now_ms()
 
-        updated =
-          goal
-          |> Map.put(:status, status)
-          |> Map.put(:updated_at_ms, now)
-          |> Map.put(:paused_at_ms, paused_at(status, now))
-          |> Map.put(:completed_at_ms, completed_at(status, now))
+        goal
+        |> Map.put(:status, status)
+        |> Map.put(:updated_at_ms, now)
+        |> Map.put(:paused_at_ms, paused_at(status, now))
+        |> Map.put(:completed_at_ms, completed_at(status, now))
+      end)
 
-        with :ok <- Store.put(@table, session_key, updated) do
-          emit(event_type, updated, opts)
-          {:ok, updated}
-        end
+    with {:ok, updated} <- result do
+      emit(event_type, updated, opts)
+      {:ok, updated}
     end
   end
 
@@ -346,20 +446,12 @@ defmodule LemonAgent.Workspace.GoalStore do
       last_run_id: field(goal, :last_run_id),
       continuation_count: field(goal, :continuation_count) || 0,
       budget: field(goal, :budget) || %{},
-      meta: field(goal, :meta) || %{}
+      meta: field(goal, :meta) || %{},
+      authority: field(goal, :authority)
     }
   end
 
   defp normalize_goal(_), do: %{}
-
-  defp normalize_cwd(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      path -> Path.expand(path)
-    end
-  end
-
-  defp normalize_cwd(_), do: nil
 
   defp put_completion(goal, run_id, completion, now) do
     result =

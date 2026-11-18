@@ -83,7 +83,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
     on_exit(fn -> GoalStore.clear(session_key) end)
 
     set_text =
-      GoalStatusMessage.handle(session_key, "set #{private_objective}", agent_id: "agent-1")
+      GoalStatusMessage.handle(session_key, "set #{private_objective}", chat_opts())
 
     status_text = GoalStatusMessage.handle(session_key, "status")
 
@@ -102,7 +102,9 @@ defmodule LemonChannels.GoalStatusMessageTest do
     session_key = session_key()
     on_exit(fn -> GoalStore.clear(session_key) end)
 
-    set_text = GoalStatusMessage.handle(session_key, "set --max-continuations 3 ship it")
+    set_text =
+      GoalStatusMessage.handle(session_key, "set --max-continuations 3 ship it", chat_opts())
+
     status_text = GoalStatusMessage.handle(session_key, "status")
 
     assert set_text =~ "Goal Set"
@@ -112,7 +114,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
 
   test "cannot replace a goal while its run outcome is unresolved" do
     key = session_key()
-    assert GoalStatusMessage.handle(key, "set Original") =~ "Goal Set"
+    assert GoalStatusMessage.handle(key, "set Original", chat_opts()) =~ "Goal Set"
     run_id = "run_goal_channel_#{System.unique_integer([:positive])}"
 
     {:ok, _} =
@@ -124,7 +126,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
       GoalStore.clear(key)
     end)
 
-    text = GoalStatusMessage.handle(key, "set Replacement")
+    text = GoalStatusMessage.handle(key, "set Replacement", chat_opts())
     assert text =~ "active or unresolved work"
     assert GoalStore.get(key).objective == "Original"
   end
@@ -133,7 +135,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
     session_key = session_key()
     on_exit(fn -> GoalStore.clear(session_key) end)
 
-    assert GoalStatusMessage.handle(session_key, "set ship it") =~ "Goal Set"
+    assert GoalStatusMessage.handle(session_key, "set ship it", chat_opts()) =~ "Goal Set"
     assert GoalStatusMessage.handle(session_key, "clear") == "Goal cleared."
     assert GoalStatusMessage.handle(session_key, "") =~ "State: none"
   end
@@ -144,7 +146,8 @@ defmodule LemonChannels.GoalStatusMessageTest do
 
     on_exit(fn -> GoalStore.clear(session_key) end)
 
-    assert GoalStatusMessage.handle(session_key, "set #{private_objective}") =~ "Goal Set"
+    assert GoalStatusMessage.handle(session_key, "set #{private_objective}", chat_opts()) =~
+             "Goal Set"
 
     paused_text = GoalStatusMessage.handle(session_key, "pause")
     assert paused_text =~ "Goal Paused"
@@ -168,11 +171,18 @@ defmodule LemonChannels.GoalStatusMessageTest do
     session_key = session_key()
 
     text =
-      GoalStatusMessage.handle(session_key, "continue --max-continuations 4 --model worker-model",
-        continuation_module: FakeContinuation
+      GoalStatusMessage.handle(
+        session_key,
+        "continue --max-continuations 4 --model worker-model",
+        [continuation_module: FakeContinuation] ++ chat_opts()
       )
 
-    assert_receive {:continue_once, ^session_key, [max_continuations: 4, model: "worker-model"]}
+    assert_receive {:continue_once, ^session_key,
+                    [
+                      {:starter, %{"grantedBy" => "channel", "root" => _}},
+                      {:max_continuations, 4},
+                      {:model, "worker-model"}
+                    ]}
 
     assert text =~ "Goal Continuation Submitted"
     assert text =~ "Run id: run_channel_continue"
@@ -188,22 +198,35 @@ defmodule LemonChannels.GoalStatusMessageTest do
       GoalStatusMessage.handle(
         session_key,
         "loop once --judge-model judge-model --judge-failure-policy continueOnce",
-        loop_module: FakeLoop
+        [loop_module: FakeLoop] ++ chat_opts()
       )
 
     assert_receive {:loop_once, ^session_key,
-                    [judge_model: "judge-model", judge_failure_policy: :continue_once]}
+                    [
+                      {:starter, %{"grantedBy" => "channel", "root" => _}},
+                      {:judge_model, "judge-model"},
+                      {:judge_failure_policy, :continue_once}
+                    ]}
 
     assert once_text =~ "Goal Loop Tick"
     assert once_text =~ "Verdict: continue"
     assert once_text =~ "Reason: still open"
 
     start_text =
-      GoalStatusMessage.handle(session_key, "loop start --auto --max-ticks 5 --interval-ms 20",
-        loop_module: FakeLoop
+      GoalStatusMessage.handle(
+        session_key,
+        "loop start --auto --max-ticks 5 --interval-ms 20",
+        [loop_module: FakeLoop] ++ chat_opts()
       )
 
-    assert_receive {:loop_start, ^session_key, [auto: true, max_ticks: 5, interval_ms: 20]}
+    assert_receive {:loop_start, ^session_key,
+                    [
+                      {:starter, %{"grantedBy" => "channel", "root" => _}},
+                      {:auto, true},
+                      {:max_ticks, 5},
+                      {:interval_ms, 20}
+                    ]}
+
     assert start_text =~ "Goal Loop Started"
     assert start_text =~ "Loop status: running"
 
@@ -217,6 +240,22 @@ defmodule LemonChannels.GoalStatusMessageTest do
     assert stop_text =~ "Goal Loop Stopped"
   end
 
+  test "goal work is refused without trusted channel context" do
+    session_key = session_key()
+
+    for args <- ["continue", "loop once", "loop start"] do
+      assert GoalStatusMessage.handle(session_key, args,
+               agent_id: "agent-1",
+               continuation_module: FakeContinuation,
+               loop_module: FakeLoop
+             ) =~ "tool policy is unavailable"
+    end
+
+    refute_received {:continue_once, _, _}
+    refute_received {:loop_once, _, _}
+    refute_received {:loop_start, _, _}
+  end
+
   test "recognizes telegram goal command for bot" do
     assert Commands.goal_command?("/goal", "lemon_bot")
     assert Commands.goal_command?("/goal@lemon_bot", "lemon_bot")
@@ -225,5 +264,13 @@ defmodule LemonChannels.GoalStatusMessageTest do
 
   defp session_key do
     "goal-status-test:#{System.unique_integer([:positive])}"
+  end
+
+  defp chat_opts do
+    [
+      agent_id: "agent-1",
+      workspace: System.tmp_dir!(),
+      channel_context: %{channel_id: "telegram", peer_kind: :dm, peer_id: "42"}
+    ]
   end
 end

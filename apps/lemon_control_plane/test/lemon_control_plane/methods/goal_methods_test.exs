@@ -38,7 +38,10 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
     refute Map.has_key?(set, "objective")
     assert set["status"] == "active"
     assert set["budget"]["maxContinuations"] == 2
-    assert GoalStore.get(session_key).cwd == Path.expand(System.tmp_dir!())
+    # Goal targets are stored canonically (symlinks resolved).
+    assert {:ok, GoalStore.get(session_key).cwd} ==
+             LemonAgent.Workspace.KanbanAuthority.canonical_directory(System.tmp_dir!())
+
     assert set["summary"]["objectiveReturned"] == false
     assert set["summary"]["cleanup"]["includesObjectiveText"] == false
 
@@ -143,7 +146,11 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
   test "goal.status reports only known verdict sources", %{session_key: session_key} do
     secret = "PROMPT_SECRET_7Q2X9 merger closes Friday"
     read = %{auth: %{role: :operator, scopes: [:read]}}
-    assert {:ok, _} = GoalStore.set(session_key, "Finish parity")
+
+    assert {:ok, _} =
+             GoalStore.set(session_key, "Finish parity",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     # A stored verdict whose source is not a known provenance value (e.g. one a
     # judge model wrote before provenance was server-side) is omitted.

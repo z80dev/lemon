@@ -482,12 +482,22 @@ defmodule CodingAgent.Executor.SessionRunner do
   defp confinement(_root), do: :invalid
 
   # A request may bind its working directory to the `{dev, inode}` identity a
-  # trusted submitter checked (`meta.cwd_identity`, e.g. kanban workers); see
-  # `CodingAgent.CwdIdentity`. The session starts only in that exact directory
-  # object, and its tools re-verify it before every call.
+  # trusted submitter checked (`meta.cwd_identity`, e.g. kanban workers and goal
+  # runs); see `CodingAgent.CwdIdentity`. The session starts only in that exact
+  # directory object, and its tools re-verify it before every call. Goal judge
+  # and continuation runs must carry the binding.
   defp start_bound_session(cwd, resume, session_opts, state, meta) do
-    with :ok <- CodingAgent.CwdIdentity.verify(cwd, Map.get(meta, :cwd_identity)),
+    with :ok <- require_goal_binding(meta),
+         :ok <- CodingAgent.CwdIdentity.verify(cwd, Map.get(meta, :cwd_identity)),
          do: start_session(resume, session_opts, state, meta)
+  end
+
+  @goal_origins [:goal, :goal_judge, "goal", "goal_judge"]
+
+  defp require_goal_binding(meta) do
+    if Map.get(meta, :origin) in @goal_origins and is_nil(Map.get(meta, :cwd_identity)),
+      do: {:error, :cwd_identity_mismatch},
+      else: :ok
   end
 
   defp start_session(resume, session_opts, state, meta) do

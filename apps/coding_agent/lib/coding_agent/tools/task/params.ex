@@ -314,13 +314,24 @@ defmodule CodingAgent.Tools.Task.Params do
                origin: "task",
                delegated_by: LemonCore.ExecutionContext.identity(parent)
              }
-           ) do
+           ),
+         {:ok, child_cwd} <- canonical_child_cwd(child, validated[:cwd]) do
+      # The child runs in the resolved directory that was checked against the
+      # parent's canonical workspace, never the caller's spelling of it.
       {:ok,
-       validated |> Map.put(:tool_policy, child.tool_policy) |> Map.put(:execution_context, child)}
+       validated
+       |> Map.put(:cwd, child_cwd)
+       |> Map.put(:tool_policy, child.tool_policy)
+       |> Map.put(:execution_context, child)}
     else
       {:error, reason} -> {:error, "Task execution authority is invalid: #{inspect(reason)}"}
     end
   end
+
+  defp canonical_child_cwd(_child, nil), do: {:ok, nil}
+
+  defp canonical_child_cwd(child, cwd),
+    do: LemonCore.ExecutionContext.canonical_cwd(child, cwd)
 
   @doc """
   Resolves a child's model, thinking level, output schema, tool policy and spawn

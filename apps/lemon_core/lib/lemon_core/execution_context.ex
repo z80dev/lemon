@@ -138,7 +138,10 @@ defmodule LemonCore.ExecutionContext do
 
   @doc """
   Builds a child whose policy, capabilities, workspace, and limits are subsets
-  of the parent.
+  of the parent. Workspace containment is checked lexically and canonically
+  (`LemonCore.TrustedRoot.realpath/1` plus `inside?/2`): a child root that
+  resolves through a symlink outside the parent's resolved root is refused.
+  Local executors run the child in `canonical_cwd/2`.
   """
   @spec child(t(), keyword() | map()) :: {:ok, t()} | {:error, term()}
   def child(parent, attrs) when is_list(attrs) do
@@ -229,6 +232,27 @@ defmodule LemonCore.ExecutionContext do
   end
 
   def bind_workspace(_context, _cwd), do: {:error, :invalid_workspace_scope}
+
+  @doc """
+  Canonical form of `cwd` for local execution under `context`: every existing
+  component is resolved with `LemonCore.TrustedRoot.realpath/1` (a missing
+  tail is kept as written, an existing dangling link is refused), and the
+  result must lie inside the canonical workspace root. Task and agent
+  delegation run children only in this resolved directory.
+  """
+  @spec canonical_cwd(t(), String.t()) :: {:ok, String.t()} | {:error, term()}
+  def canonical_cwd(%__MODULE__{workspace_scope: %{root: root}}, cwd) when is_binary(cwd) do
+    with {:ok, cwd} <- expanded_path(cwd),
+         {:ok, real} <- canonical_path(cwd),
+         true <- canonical_subset?(real, root) do
+      {:ok, real}
+    else
+      false -> {:error, :workspace_scope_escalation}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def canonical_cwd(_context, _cwd), do: {:error, :invalid_workspace_root}
 
   @doc """
   Binds a context to a trusted, already-created owned worktree.
@@ -431,6 +455,9 @@ defmodule LemonCore.ExecutionContext do
           requested
       end
 
+    # Containment is canonical: a child root that is a lexical descendant but
+    # resolves (through a symlink) outside the parent's resolved root is an
+    # escalation, and a resolved spelling of a contained path is still inside.
     with {:ok, scope} <- parse_workspace_scope(requested, cwd),
          true <- workspace_subset?(scope, parent_scope) do
       {:ok, scope}
@@ -440,20 +467,52 @@ defmodule LemonCore.ExecutionContext do
     end
   end
 
+  defp canonical_subset?(_child, nil), do: true
+  defp canonical_subset?(nil, _parent), do: false
+
+  defp canonical_subset?(child, parent) do
+    with {:ok, child} <- canonical_path(child),
+         {:ok, parent} <- canonical_path(parent) do
+      LemonCore.TrustedRoot.inside?(child, parent)
+    else
+      _ -> false
+    end
+  end
+
+  # Realpath of every existing component. A path that does not exist yet keeps
+  # its missing tail as written below its resolved existing ancestor; an
+  # existing but unresolvable entry (dangling link, loop) fails closed.
+  defp canonical_path(path) do
+    case LemonCore.TrustedRoot.realpath(path) do
+      {:ok, real} ->
+        {:ok, real}
+
+      {:error, _reason} ->
+        parent = Path.dirname(path)
+
+        with {:error, :enoent} <- File.lstat(path),
+             false <- parent == path,
+             {:ok, real_parent} <- canonical_path(parent) do
+          {:ok, Path.join(real_parent, Path.basename(path))}
+        else
+          _ -> {:error, :invalid_workspace_root}
+        end
+    end
+  end
+
   defp workspace_subset?(%{root: child_root, mode: child_mode}, %{
          root: parent_root,
          mode: parent_mode
        }) do
-    mode_subset?(child_mode, parent_mode) and path_subset?(child_root, parent_root)
+    mode_subset?(child_mode, parent_mode) and canonical_subset?(child_root, parent_root)
   end
 
   defp mode_subset?(:read_only, _parent), do: true
   defp mode_subset?(:read_write, :read_write), do: true
   defp mode_subset?(_child, _parent), do: false
 
-  defp path_subset?(_child, nil), do: true
-  defp path_subset?(nil, _parent), do: false
-
+  # Remote destination binding (`bind_workspace/2`) names a path on another
+  # host, so it is compared lexically, never against this host's filesystem.
   defp path_subset?(child, parent) do
     relative = Path.relative_to(child, parent)
 

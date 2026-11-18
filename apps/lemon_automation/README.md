@@ -123,6 +123,29 @@ active session goal at a time and starts work through `TaskSupervisor` with
 continuations and the read-only judge use that directory rather than daemon cwd.
 The goal records the accepted router run ID and bounded completion result.
 
+Goal work runs only under the caller authority recorded on the goal
+(`LemonAgent.Workspace.GoalAuthority`): the setting session or chat as
+principal, its effective tool policy, and its canonical working directory as
+the root (operator surfaces — control plane `goal.set`, web — record operator
+authority with no root; their target defaults to the daemon's default cwd).
+The goal `cwd` is always an existing canonical directory inside that root. A
+session or chat starter (the `goal` tool, `/goal continue|loop once|loop
+start`) passes its full authority — session, agent, policy and canonical
+working directory. It must be the goal's own session and agent and contain the
+goal target; the recorded policy and root are durably narrowed to it before
+any work or auto restart, and it never joins a loop already running under
+broader authority. Judge and continuation runs (including auto restarts after
+a manager restart) intersect their own policy with the recorded one, never get
+a delegation tool (`cron`, `kanban`, `goal`, `task`, `agent`, `agent_message`,
+`peer`, `nodes`: none of them carries the goal authority), re-resolve the
+target inside the root, and carry its directory identity as
+`meta.cwd_identity`. The router refuses a goal run without it, and the session
+runner re-verifies it at session start and before every tool call, so a
+directory swapped after submission is refused. Goals without valid authority,
+including goals persisted before it existed, are quarantined: they never
+start, auto restart is disabled, and setting the goal again records fresh
+authority.
+
 **GoalLoopManager** runs conservative goal loops. `run_once/2` performs one
 judge tick. `start_loop/2` starts one bounded supervised loop per
 session, waits for each submitted continuation to emit `:run_completed`, and

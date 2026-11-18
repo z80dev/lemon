@@ -343,7 +343,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Keep going",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: "run_loop", goal: updated, verdict: verdict}} =
@@ -368,7 +369,10 @@ defmodule LemonAutomation.GoalLoopTest do
   end
 
   test "done verdict completes the goal without submitting", %{session_key: session_key} do
-    assert {:ok, _goal} = GoalStore.set(session_key, "Finish me")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Finish me",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
              GoalLoop.run_once(session_key, judge_mod: DoneJudge, router_mod: LoopRouterOk)
@@ -381,7 +385,10 @@ defmodule LemonAutomation.GoalLoopTest do
   end
 
   test "blocked verdict pauses the goal without submitting", %{session_key: session_key} do
-    assert {:ok, _goal} = GoalStore.set(session_key, "Blocked work")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Blocked work",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     assert {:ok, %{run_id: nil, goal: paused, verdict: verdict}} =
              GoalLoop.run_once(session_key, judge_mod: BlockedJudge, router_mod: LoopRouterOk)
@@ -397,7 +404,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Judge me",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
@@ -426,7 +434,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Judge me",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
@@ -445,7 +454,12 @@ defmodule LemonAutomation.GoalLoopTest do
     on_exit(fn -> restore_env(:goal_judge_model, previous_model) end)
     Application.put_env(:lemon_automation, :goal_judge_model, "configured-judge")
 
-    assert {:ok, _goal} = GoalStore.set(session_key, "Judge via router", agent_id: "agent_1")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Judge via router",
+               agent_id: "agent_1",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
+
     assert {:ok, _goal} = GoalStore.record_continuation(session_key, "previous_continuation")
 
     assert {:ok, _} =
@@ -464,7 +478,12 @@ defmodule LemonAutomation.GoalLoopTest do
   test "router judge runner submits a judge run and parses the JSON verdict", %{
     session_key: session_key
   } do
-    assert {:ok, _goal} = GoalStore.set(session_key, "Judge via router", agent_id: "agent_1")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Judge via router",
+               agent_id: "agent_1",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
+
     assert {:ok, _goal} = GoalStore.record_continuation(session_key, "previous_continuation")
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
@@ -509,7 +528,10 @@ defmodule LemonAutomation.GoalLoopTest do
     {:ok, _apps} = Application.ensure_all_started(:lemon_router)
 
     assert {:ok, _goal} =
-             GoalStore.set(session_key, "Judge through the live router path", agent_id: "default")
+             GoalStore.set(session_key, "Judge through the live router path",
+               agent_id: "default",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
              GoalLoop.run_once(session_key,
@@ -532,7 +554,10 @@ defmodule LemonAutomation.GoalLoopTest do
   test "judge failure pauses by default and can fail open for one continuation", %{
     session_key: session_key
   } do
-    assert {:ok, _goal} = GoalStore.set(session_key, "Fail closed")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Fail closed",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     assert {:error, {:judge_failed, :judge_unavailable}} =
              GoalLoop.run_once(session_key, judge_mod: FailingJudge)
@@ -544,7 +569,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Fail open",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     assert {:ok, %{run_id: "run_fail_open", verdict: verdict}} =
@@ -568,7 +594,8 @@ defmodule LemonAutomation.GoalLoopTest do
              GoalStore.set(session_key, "Budgeted",
                agent_id: "agent_1",
                budget: %{"max_continuations" => 0},
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     assert {:error, :budget_exhausted} =
@@ -582,7 +609,11 @@ defmodule LemonAutomation.GoalLoopTest do
   test "lifecycle blockers are returned before judging", %{session_key: session_key} do
     assert {:error, :not_found} = GoalLoop.run_once(session_key, judge_mod: ContinueJudge)
 
-    assert {:ok, _goal} = GoalStore.set(session_key, "Pause me")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Pause me",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
+
     assert {:ok, _paused} = GoalStore.pause(session_key)
     assert {:error, :paused} = GoalLoop.run_once(session_key, judge_mod: ContinueJudge)
 
@@ -597,7 +628,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Keep going autonomously",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     assert {:ok, result} =
@@ -626,7 +658,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Finish synchronously",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     assert {:ok, %{status: :limit_reached, tick_count: 1}} =
@@ -649,7 +682,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Timeout",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     assert {:error, {:completion_outcome_unknown, "run_timeout"}} =
@@ -669,7 +703,11 @@ defmodule LemonAutomation.GoalLoopTest do
     session_key: session_key
   } do
     register_manager_test_pid()
-    assert {:ok, _goal} = GoalStore.set(session_key, "Auto start me")
+
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Auto start me",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     manager =
       start_supervised!(
@@ -694,7 +732,10 @@ defmodule LemonAutomation.GoalLoopTest do
   test "manager retains ownership when its worker crashes after an accepted submission", %{
     session_key: session_key
   } do
-    assert {:ok, _goal} = GoalStore.set(session_key, "Retain accepted run after worker crash")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Retain accepted run after worker crash",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     manager =
       start_supervised!(
@@ -731,7 +772,11 @@ defmodule LemonAutomation.GoalLoopTest do
     session_key: session_key
   } do
     register_manager_test_pid()
-    assert {:ok, _goal} = GoalStore.set(session_key, "Scheduled")
+
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Scheduled",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     assert {:ok, _goal} =
              GoalStore.configure_loop_auto(session_key, true,
@@ -759,7 +804,10 @@ defmodule LemonAutomation.GoalLoopTest do
   test "manager refuses submit authorization when the durable run claim cannot be recorded", %{
     session_key: session_key
   } do
-    assert {:ok, _goal} = GoalStore.set(session_key, "Do not submit an unowned run")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Do not submit an unowned run",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     manager =
       start_supervised!(
@@ -789,7 +837,10 @@ defmodule LemonAutomation.GoalLoopTest do
   test "hard stop does not abort or kill work unless disabling auto is durable", %{
     session_key: session_key
   } do
-    assert {:ok, _goal} = GoalStore.set(session_key, "Keep ownership on storage failure")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Keep ownership on storage failure",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     manager =
       start_supervised!(
@@ -841,7 +892,10 @@ defmodule LemonAutomation.GoalLoopTest do
     {:ok, _apps} = Application.ensure_all_started(:lemon_router)
 
     assert {:ok, _goal} =
-             GoalStore.set(session_key, "Auto judge through router", agent_id: "default")
+             GoalStore.set(session_key, "Auto judge through router",
+               agent_id: "default",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     assert {:ok, _goal} =
              GoalStore.configure_loop_auto(session_key, true,
@@ -877,7 +931,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Stop after this run",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     manager =
@@ -946,7 +1001,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Persist abort intent before dispatch",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     opts = [
@@ -1025,7 +1081,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Stop with ambiguous abort",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     manager =
@@ -1082,7 +1139,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Stop inside the acceptance window",
                agent_id: "default",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     manager =
@@ -1159,7 +1217,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Retain uncertain work",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     manager =
@@ -1212,7 +1271,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Retain malformed waiter ownership",
                agent_id: "agent_1",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     manager =
@@ -1261,7 +1321,8 @@ defmodule LemonAutomation.GoalLoopTest do
 
     assert {:ok, _goal} =
              GoalStore.set(session_key, "Keep uncertain abort ownership",
-               meta: %{"testPid" => self()}
+               meta: %{"testPid" => self()},
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              )
 
     manager =
@@ -1345,7 +1406,11 @@ defmodule LemonAutomation.GoalLoopTest do
   } do
     run_id = "goal_claim_before_crash_#{System.unique_integer([:positive])}"
 
-    assert {:ok, _goal} = GoalStore.set(session_key, "Do not overlap restored work")
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Do not overlap restored work",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
+
     assert {:ok, _goal} = GoalStore.record_loop_status(session_key, :running, run_id: run_id)
 
     manager =
@@ -1364,7 +1429,10 @@ defmodule LemonAutomation.GoalLoopTest do
   end
 
   test "managed one-shot owns uncertain runs and blocks all restart paths", %{session_key: key} do
-    assert {:ok, _} = GoalStore.set(key, "One guarded continuation")
+    assert {:ok, _} =
+             GoalStore.set(key, "One guarded continuation",
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
+             )
 
     manager =
       start_supervised!(

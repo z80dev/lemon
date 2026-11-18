@@ -1,6 +1,10 @@
 defmodule LemonControlPlane.Methods.GoalSet do
   @moduledoc """
   Handler for `goal.set`.
+
+  The control plane is an operator surface: it records operator goal
+  authority (`LemonAgent.Workspace.GoalAuthority.operator/0`), which a later
+  policy-bound starter can only narrow.
   """
 
   @behaviour LemonControlPlane.Method
@@ -28,7 +32,8 @@ defmodule LemonControlPlane.Methods.GoalSet do
                agent_id: param(params, "agentId"),
                cwd: param(params, "cwd"),
                run_id: param(params, "runId"),
-               budget: budget(params)
+               budget: budget(params),
+               authority: LemonAgent.Workspace.GoalAuthority.operator()
              ) do
           {:ok, goal} ->
             {:ok, format_goal(goal)}

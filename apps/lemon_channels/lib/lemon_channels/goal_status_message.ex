@@ -1,5 +1,21 @@
 defmodule LemonChannels.GoalStatusMessage do
-  @moduledoc false
+  @moduledoc """
+  `/goal` chat commands.
+
+  The transport supplies trusted context only: the chat session (the
+  `session_key` argument), `:agent_id`, the bound workspace (`:workspace`) and
+  the channel context used to resolve the chat's run tool policy
+  (`:channel_context`). `set` records the chat as the goal principal, the
+  chat's effective channel-run policy (`LemonRouter.Policy`, including the
+  group approval floor) and the bound workspace (or the assistant home) as the
+  goal authority (`LemonAgent.Workspace.GoalAuthority`). `continue`,
+  `loop once` and `loop start` pass the same chat authority as the starter:
+  the goal must belong to this chat and agent and its target must lie inside
+  the chat's workspace, and the recorded authority is durably narrowed to it.
+  Without trusted channel context the chat cannot set or start goal work.
+  """
+
+  alias LemonAgent.Workspace.GoalAuthority
 
   @spec handle(binary(), binary() | nil, keyword()) :: String.t()
   def handle(session_key, args, opts \\ []) when is_binary(session_key) do
@@ -8,13 +24,19 @@ defmodule LemonChannels.GoalStatusMessage do
         set_text(session_key, objective, Keyword.put(opts, :budget, budget))
 
       {:continue, command_opts} ->
-        continue_text(session_key, Keyword.merge(opts, command_opts))
+        with_chat_starter(session_key, opts, fn opts ->
+          continue_text(session_key, Keyword.merge(opts, command_opts))
+        end)
 
       {:loop_once, command_opts} ->
-        loop_once_text(session_key, Keyword.merge(opts, command_opts))
+        with_chat_starter(session_key, opts, fn opts ->
+          loop_once_text(session_key, Keyword.merge(opts, command_opts))
+        end)
 
       {:loop_start, command_opts} ->
-        loop_start_text(session_key, Keyword.merge(opts, command_opts))
+        with_chat_starter(session_key, opts, fn opts ->
+          loop_start_text(session_key, Keyword.merge(opts, command_opts))
+        end)
 
       :loop_status ->
         loop_status_text(session_key, opts)
@@ -60,29 +82,95 @@ defmodule LemonChannels.GoalStatusMessage do
   @spec set_text(binary(), binary(), keyword()) :: String.t()
   def set_text(session_key, objective, opts \\ [])
       when is_binary(session_key) and is_binary(objective) do
-    case call_module(loop_module(opts), :set_goal, [session_key, objective, opts]) do
-      {:ok, goal} ->
-        Enum.join(
-          [
-            "Goal Set",
-            "Status: #{goal.status}",
-            "Goal id: #{goal.id}",
-            "Objective bytes: #{byte_size(goal.objective || "")}",
-            budget_line(goal),
-            "Use /goal continue or /goal loop once for supervised follow-up."
-          ]
-          |> Enum.reject(&is_nil/1),
-          "\n"
-        )
-
+    with {:ok, authority} <- chat_authority(session_key, opts),
+         {:ok, goal} <-
+           call_module(loop_module(opts), :set_goal, [
+             session_key,
+             objective,
+             opts
+             |> Keyword.take([:agent_id, :budget, :meta])
+             |> Keyword.put(:authority, authority)
+           ]) do
+      Enum.join(
+        [
+          "Goal Set",
+          "Status: #{goal.status}",
+          "Goal id: #{goal.id}",
+          "Objective bytes: #{byte_size(goal.objective || "")}",
+          budget_line(goal),
+          "Use /goal continue or /goal loop once for supervised follow-up."
+        ]
+        |> Enum.reject(&is_nil/1),
+        "\n"
+      )
+    else
       {:error, :empty_objective} ->
         "Goal objective is required. Use /goal set <objective>."
 
       {:error, :already_running} ->
         "Goal has active or unresolved work. Stop it with /goal loop stop before replacing it."
 
+      {:error, :policy_unavailable} ->
+        "Goal update failed: this chat's tool policy is unavailable."
+
+      {:error, :session_identity_required} ->
+        "Goal update failed: this chat has no trusted session identity."
+
+      {:error, reason}
+      when reason in [:enoent, :not_a_directory, :relative_path, :invalid_path] ->
+        "Goal update failed: this chat's working directory is unavailable."
+
       {:error, reason} ->
         "Goal update failed: #{inspect(reason)}"
+    end
+  end
+
+  # The chat's goal authority: this chat session and agent as principal, the
+  # chat's channel-run policy and its bound workspace (or the assistant home).
+  defp chat_authority(session_key, opts) do
+    with {:ok, policy} <- chat_policy(session_key, opts) do
+      GoalAuthority.new(
+        %{agent_id: opts[:agent_id], session_key: session_key},
+        policy,
+        opts[:workspace] || LemonCore.Cwd.channel_default_cwd(),
+        granted_by: "channel"
+      )
+    end
+  end
+
+  defp with_chat_starter(session_key, opts, fun) do
+    case chat_authority(session_key, opts) do
+      {:ok, starter} ->
+        fun.(Keyword.put(opts, :starter, starter))
+
+      {:error, :policy_unavailable} ->
+        "Goal work refused: this chat's tool policy is unavailable."
+
+      {:error, _reason} ->
+        "Goal work refused: this chat has no trusted session identity or working directory."
+    end
+  end
+
+  # The chat's effective channel-run policy, resolved exactly as the router
+  # resolves a run from this chat. Missing context or resolution fails closed.
+  defp chat_policy(session_key, opts) do
+    module = :"Elixir.LemonRouter.Policy"
+
+    with %{} = context <- opts[:channel_context],
+         true <- Code.ensure_loaded?(module),
+         true <- function_exported?(module, :resolve_validated_for_run, 1),
+         {:ok, policy} <-
+           apply(module, :resolve_validated_for_run, [
+             %{
+               agent_id: opts[:agent_id],
+               session_key: session_key,
+               origin: :channel,
+               channel_context: context
+             }
+           ]) do
+      {:ok, policy}
+    else
+      _ -> {:error, :policy_unavailable}
     end
   end
 
@@ -442,7 +530,8 @@ defmodule LemonChannels.GoalStatusMessage do
       :judge_model,
       :judge_failure_policy,
       :model,
-      :auto
+      :auto,
+      :starter
     ])
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end

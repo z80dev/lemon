@@ -71,6 +71,24 @@ and deliver. Suppressed runs remain in history.
 - Reconciliation survives manager restart. Confirmed terminal state releases the
   guard into an error state requiring explicit restart, not another automatic tick.
 - Judge failures pause by default; `continue_once` is an explicit policy choice.
+- Goal work runs only under authority recorded by a trusted setter
+  (`LemonAgent.Workspace.GoalAuthority`: session/chat principal, effective
+  policy, canonical root; operator surfaces record operator authority).
+  `GoalStore.set/3` requires it. Session and chat starters pass their full
+  starter authority (`starter:`: session, agent, policy, canonical root); it
+  must be the goal's own session and agent and contain the goal target, and it
+  narrows policy and root durably before work or auto restart; such starters
+  never join a running loop. Judge and continuation params come from
+  `GoalAuthority.run_scope/2` at every tick, including recovery: policy
+  intersected with the record and with every delegation tool blocked
+  (`GoalAuthority.delegation_tools/0`: cron, kanban, goal, task, agent,
+  agent_message, peer, nodes), the target re-resolved in the root, and
+  `meta.cwd_identity` bound to it (the router refuses goal runs without it; the
+  session runner verifies it at start and before every tool call). Missing
+  authority is quarantined, never run with ambient policy. Every `GoalStore`
+  rewrite is a compare-and-swap against the goal it read (recomputed on
+  conflict), so a concurrent pause, resume or loop update cannot restore a
+  wider authority.
 - Kanban task terminal writes require the exact lease ID. Stale results cannot
   overwrite a re-leased task. Lease renewal uses only monitored live in-VM
   workers and the exact lease ID. Persisted expiry still governs orphan recovery;

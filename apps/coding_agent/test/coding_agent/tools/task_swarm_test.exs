@@ -359,7 +359,9 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
       assert authority.provenance.delegated_by.run_id == receipt.details.run_id
       assert authority.provenance.delegated_by.principal == parent.principal
       assert authority.principal == parent.principal
-      assert authority.workspace_scope == %{root: cwd, mode: :read_write}
+      # Children run in the resolved directory (e.g. /private/tmp on macOS).
+      {:ok, resolved} = ExecutionContext.canonical_cwd(parent, cwd)
+      assert authority.workspace_scope == %{root: resolved, mode: :read_write}
       assert authority.capabilities == parent.capabilities
       assert authority.limits == parent.limits
       assert ExecutionContext.subset?(authority, parent)
