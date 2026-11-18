@@ -204,6 +204,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Channel ingress now applies per-channel tool policy and the group-chat
+  approval floor: `LemonChannels.RunRequestBuilder` derives `channel_context`
+  and sender `channel_identity` from the transport-normalized message, ignores
+  caller-supplied values, and also covers Telegram/Discord `/new` memory
+  reflection. Any peer kind other than a DM gets the approval floor. Senders
+  without a transport id, and all email senders, get unverified identities that
+  are never the owner and never map to a configured, pinned or aliased Honcho
+  peer. Channel session key components containing `:` are stored as reserved
+  `~sha256-` digests (existing keys are unchanged), and delivery restores such
+  ids only from matching run provenance. Channel requests without transport
+  provenance, including work persisted before this fix, are refused at
+  admission, carryover and crash recovery. The dead `Router.handle_inbound/1`
+  and `RouterBridge.handle_inbound/1` are removed.
+
 - The execution node controller link, Deepgram voice, `lemon acp` and the CLI
   control-plane client now build WebSocket options through
   `LemonCore.Net.web_socket_options/2`: `wss://` verifies the peer certificate
