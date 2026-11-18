@@ -27,9 +27,11 @@ Long-running implementation tasks can drift when the agent has no durable task m
   - Store filesystem snapshots for file-tool rollback
   - Preview diff and restore all or selected paths from filesystem checkpoints
 - `CodingAgent.BackgroundRun`
-  - Starts an isolated native full-tool session and immediately returns a durable id
+  - Starts an isolated native session, capped by the destination agent's
+    tool-policy floor, and immediately returns a durable id
   - Lists, inspects, retrieves, and cooperatively cancels background work
-  - Treats a parent session key strictly as lineage metadata
+  - Derives the destination agent from the parent session key; no transcript
+    is copied
 - `CodingAgent.SideQuery`
   - Answers a bounded no-tools question from an immutable live context snapshot,
     a durable channel session key, or an explicit transcript snapshot
@@ -41,8 +43,16 @@ Long-running implementation tasks can drift when the agent has no durable task m
 `{:ok, %{id: id, status: :queued}}`. Surfaces can use
 `BackgroundRun.list/1`, `status/1`, `result/1`, and `cancel/2` for the rest of
 the lifecycle. The worker runs through the native coding session and subagent
-lane with the default full toolset. Its session key is `background:<id>`;
-`opts[:session_key]`, when present, is stored only as parent lineage.
+lane. Its session key is `background:<id>`; `opts[:session_key]` is stored as
+parent lineage and also names the destination agent, so a channel `/bg` (which
+sends only the session key, cwd, model and thinking level) runs as that agent:
+its `agent_id` comes from the key, its tool policy is capped by
+`profiles.<agent>.tool_policy` intersected with the profile store
+`toolPolicy` (the same floor native runs use), and a profile-bound agent uses
+the profile workspace instead of the owner default. An unparseable key with no
+live parent, a requested parent that is not available, or a profile-store read
+error rejects the start before any task record is written; none of them falls
+back to full access.
 Runtime error terms are retained only in the internal task record. Public
 status/results expose stable classifications; control-plane projections use
 content-free `errorCode` values and discard arbitrary provider fields.

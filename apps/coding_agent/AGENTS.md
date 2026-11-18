@@ -63,8 +63,10 @@ history, compaction and supervised delegation. The loop/model runtime comes from
   not turn a completed task into a failed worker.
 - Delegated router watcher timeout is tracking loss, not proof that the remote
   run failed. Preserve fixed task/run identity for reconciliation.
-- `BackgroundRun` gives `/bg` its own full-tool session without appending to a
-  parent. Channel callers use scoped APIs and receive not-found for foreign IDs.
+- `BackgroundRun` gives `/bg` its own session without appending to a parent.
+  Its agent, tool-policy floor and profile workspace derive from the request
+  session key (`SessionRunner.destination_policy_floor/2`); unknown keys,
+  missing requested parents and profile-store errors fail closed. Channel callers use scoped APIs and receive not-found for foreign IDs.
   Unresumable queued/running work becomes lost on restart.
 - `SideQuery` uses an atomic frozen snapshot, no tools and a distinct ephemeral
   session. It never mutates/steers its source conversation. Public background/

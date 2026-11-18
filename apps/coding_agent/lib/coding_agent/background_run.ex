@@ -3,7 +3,8 @@ defmodule CodingAgent.BackgroundRun do
   Durable lifecycle API for Hermes-compatible `/bg` work.
 
   Every accepted prompt runs in a new supervised `CodingAgent.Session` with the
-  normal coding toolset. A parent session key is lineage metadata only: no
+  coding toolset capped by the destination agent's tool-policy floor. A parent
+  session key selects that destination but is otherwise lineage metadata: no
   transcript is copied and no completion is appended to the parent history.
   Status and terminal results are persisted through `CodingAgent.TaskStore`.
   """
@@ -18,10 +19,25 @@ defmodule CodingAgent.BackgroundRun do
 
   @type id :: String.t()
 
-  @doc "Start an isolated full-tool background session and return its durable id immediately."
+  @doc """
+  Start an isolated background session and return its durable id immediately.
+
+  The session runs as the agent named by the `:session_key` (else `:agent_id`,
+  the live parent's agent, or `"default"`), capped by that destination's
+  config and profile tool-policy floor and using a bound profile's workspace.
+  An unparseable key without a live parent, an unavailable requested parent
+  and a profile-store read error all fail before any run is recorded.
+  """
   @spec start(String.t(), keyword()) ::
           {:ok, %{id: id(), status: :queued}}
-          | {:error, :empty_prompt | :invalid_prompt | :start_failed}
+          | {:error,
+             :empty_prompt
+             | :invalid_prompt
+             | :start_failed
+             | :invalid_execution_context
+             | :invalid_session_key
+             | :parent_unavailable
+             | :policy_unavailable}
   def start(prompt, opts \\ [])
 
   def start(prompt, opts) when is_binary(prompt) and is_list(opts) do
@@ -157,7 +173,13 @@ defmodule CodingAgent.BackgroundRun do
   end
 
   defp do_start(prompt, opts) do
-    source = resolve_parent(Keyword.get(opts, :parent_session))
+    with {:ok, source} <- resolve_parent(Keyword.get(opts, :parent_session)),
+         {:ok, destination} <- resolve_destination(source, opts) do
+      start_resolved(prompt, opts, source, destination)
+    end
+  end
+
+  defp start_resolved(prompt, opts, source, destination) do
     session_id = generate_session_id()
     parent_session_key = normalize_string(Keyword.get(opts, :session_key))
 
@@ -172,7 +194,7 @@ defmodule CodingAgent.BackgroundRun do
 
     id = TaskStore.new_task(attrs)
 
-    case build_session_opts(id, session_id, source, opts) do
+    case build_session_opts(id, session_id, source, destination, opts) do
       {:ok, session_opts} ->
         worker_opts = [
           id: id,
@@ -201,15 +223,17 @@ defmodule CodingAgent.BackgroundRun do
     end
   end
 
-  defp build_session_opts(id, session_id, source, opts) do
-    cwd = Keyword.get(opts, :cwd) || source[:cwd] || LemonCore.Cwd.default_cwd()
+  defp build_session_opts(id, session_id, source, destination, opts) do
+    cwd = destination.cwd
     model = Keyword.get(opts, :model) || source[:model]
     thinking_level = Keyword.get(opts, :thinking_level) || source[:thinking_level]
     system_prompt = Keyword.get(opts, :system_prompt) || source[:explicit_system_prompt]
     inherited_context = CodingAgent.Tools.Task.Params.inherited_execution_context(opts)
-    parent_policy = Map.get(source, :tool_policy, inherited_context.tool_policy)
 
-    tool_policy = Keyword.get(opts, :tool_policy) || parent_policy
+    parent_policy =
+      apply_floor(destination.floor, Map.get(source, :tool_policy, inherited_context.tool_policy))
+
+    tool_policy = apply_floor(destination.floor, Keyword.get(opts, :tool_policy) || parent_policy)
 
     parent_context = source[:execution_context] || inherited_context.execution_context
 
@@ -238,7 +262,7 @@ defmodule CodingAgent.BackgroundRun do
         thinking_level: thinking_level,
         system_prompt: system_prompt,
         settings_manager: source[:settings_manager],
-        workspace_dir: source[:workspace_dir],
+        workspace_dir: source[:workspace_dir] || destination.workspace_dir,
         tool_policy: tool_policy,
         execution_context: context,
         invocation_context_key:
@@ -259,7 +283,7 @@ defmodule CodingAgent.BackgroundRun do
         get_api_key: Keyword.get(opts, :get_api_key),
         session_id: session_id,
         session_key: "background:#{id}",
-        agent_id: Keyword.get(opts, :agent_id) || source[:agent_id] || "default",
+        agent_id: destination.agent_id,
         run_id: id,
         session_scope: :main,
         register: true
@@ -277,16 +301,83 @@ defmodule CodingAgent.BackgroundRun do
     end
   end
 
+  # The destination is derived from the request session key (what a channel
+  # `/bg` sends), the explicit agent and any live parent: every id contributes
+  # its config and profile tool-policy floor, and a bound profile supplies the
+  # workspace. Unknown keys and profile-store errors fail closed.
+  defp resolve_destination(source, opts) do
+    cwd = Keyword.get(opts, :cwd) || source[:cwd] || LemonCore.Cwd.default_cwd()
+
+    with {:ok, key_agent} <- session_key_agent(Keyword.get(opts, :session_key), source) do
+      agent_id =
+        key_agent || normalize_string(Keyword.get(opts, :agent_id)) || source[:agent_id] ||
+          "default"
+
+      ids =
+        Enum.uniq([agent_id, normalize_string(Keyword.get(opts, :agent_id)), source[:agent_id]]) --
+          [nil]
+
+      with {:ok, floor} <- destination_floor(ids, cwd),
+           {:ok, workspace_dir} <- profile_workspace(agent_id) do
+        {:ok, %{cwd: cwd, agent_id: agent_id, floor: floor, workspace_dir: workspace_dir}}
+      end
+    end
+  end
+
+  # A parseable key names the destination agent. A non-key string is accepted
+  # only as lineage beside a resolved live parent (control-plane `sessionId`).
+  defp session_key_agent(session_key, source) do
+    case normalize_string(session_key) do
+      nil ->
+        {:ok, nil}
+
+      key ->
+        case LemonCore.SessionKey.agent_id(key) do
+          id when is_binary(id) -> {:ok, id}
+          nil when map_size(source) > 0 -> {:ok, nil}
+          nil -> {:error, :invalid_session_key}
+        end
+    end
+  end
+
+  defp destination_floor(ids, cwd) do
+    config = LemonCore.Config.load_base_from_disk(cwd)
+
+    case CodingAgent.Executor.SessionRunner.destination_policy_floor(ids, config) do
+      {:ok, floor} -> {:ok, floor}
+      {:error, _} -> {:error, :policy_unavailable}
+    end
+  rescue
+    _ -> {:error, :policy_unavailable}
+  end
+
+  defp profile_workspace(agent_id) do
+    case LemonCore.ProfileStore.get(agent_id) do
+      {:ok, _profile} ->
+        {:ok, CodingAgent.Executor.SessionRunner.profile_workspace(%{profile_id: agent_id})}
+
+      {:error, reason} when reason in [:not_found, :invalid_id] ->
+        {:ok, nil}
+
+      {:error, _} ->
+        {:error, :policy_unavailable}
+    end
+  end
+
+  defp apply_floor(floor, policy) when floor == %{}, do: policy
+  defp apply_floor(floor, policy), do: LemonCore.ToolPolicy.intersect(floor, policy)
+
+  defp resolve_parent(nil), do: {:ok, %{}}
   defp resolve_parent(pid) when is_pid(pid), do: snapshot_parent(pid)
 
   defp resolve_parent(session_id) when is_binary(session_id) do
     case SessionRegistry.lookup(session_id) do
       {:ok, pid} -> snapshot_parent(pid)
-      :error -> %{}
+      :error -> {:error, :parent_unavailable}
     end
   end
 
-  defp resolve_parent(_), do: %{}
+  defp resolve_parent(_), do: {:error, :parent_unavailable}
 
   defp snapshot_parent(pid) do
     state = Session.get_state(pid)
@@ -319,10 +410,11 @@ defmodule CodingAgent.BackgroundRun do
         CodingAgent.Tools.Task.Params.private_native_fields()
       )
     )
+    |> then(&{:ok, &1})
   rescue
-    _ -> %{}
+    _ -> {:error, :parent_unavailable}
   catch
-    :exit, _ -> %{}
+    :exit, _ -> {:error, :parent_unavailable}
   end
 
   defp get_record(id) do
