@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.ListenerSecurityTest do
   use ExUnit.Case, async: false
   import Plug.Conn
-  import Plug.Test
+  import Plug.Test, except: [conn: 2, conn: 3]
 
   alias LemonControlPlane.{ListenerPolicy, NodeGateway}
   alias LemonControlPlane.HTTP.{NodeRouter, Router}
@@ -292,6 +292,10 @@ defmodule LemonControlPlane.ListenerSecurityTest do
   end
 
   defp remote(method, path), do: %{conn(method, path) | remote_ip: {192, 168, 1, 9}}
+
+  # The router refuses non-loopback Host headers from loopback peers.
+  defp conn(method, path, body \\ nil),
+    do: %{Plug.Test.conn(method, path, body) | host: "localhost"}
 
   defp gateway_connection,
     do:

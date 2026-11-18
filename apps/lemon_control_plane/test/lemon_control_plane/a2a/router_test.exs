@@ -2,7 +2,7 @@ defmodule LemonControlPlane.A2A.RouterTest do
   use ExUnit.Case, async: false
 
   import Plug.Conn
-  import Plug.Test
+  import Plug.Test, except: [conn: 2, conn: 3]
 
   alias LemonControlPlane.A2A.{Router}
   alias LemonCore.RateLimiter
@@ -233,6 +233,94 @@ defmodule LemonControlPlane.A2A.RouterTest do
     assert response.status == 200
     Jason.decode!(response.resp_body)
   end
+
+  test "rebound Host cannot reach authenticated message/send over the real listener" do
+    bandit =
+      start_supervised!(
+        {Bandit, plug: Router, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(bandit)
+
+    body =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => "rebind",
+        "method" => "message/send",
+        "params" => %{
+          "message" => %{
+            "messageId" => LemonCore.Id.uuid7(),
+            "contextId" => "rebind-#{System.unique_integer([:positive])}",
+            "role" => "ROLE_USER",
+            "parts" => [%{"text" => "pwn", "mediaType" => "text/plain"}]
+          }
+        }
+      })
+
+    for host <- ["attacker.example:#{port}", "evil.localhost:#{port}"] do
+      assert raw_post(port, host, body) =~ "HTTP/1.1 403", host
+      refute_receive {:a2a_submitted, _}, 100
+    end
+
+    assert raw_post(port, "127.0.0.1:#{port}", body) =~ "HTTP/1.1 200"
+    assert_receive {:a2a_submitted, _}, 2_000
+  end
+
+  test "Host from a path-bearing public_url is trusted; unrelated hosts are not" do
+    config = Application.get_env(:lemon_control_plane, :a2a_config)
+
+    Application.put_env(
+      :lemon_control_plane,
+      :a2a_config,
+      Map.put(config, :public_url, "https://Agent.Example/a2a")
+    )
+
+    bandit =
+      start_supervised!(
+        {Bandit, plug: Router, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(bandit)
+    get = &"GET /healthz HTTP/1.1\r\nHost: #{&1}\r\nConnection: close\r\n\r\n"
+
+    assert raw(port, get.("agent.example")) =~ "HTTP/1.1 200"
+    assert raw(port, get.("agent.example:443")) =~ "HTTP/1.1 200"
+    assert raw(port, get.("other.example")) =~ "HTTP/1.1 403"
+  end
+
+  defp raw(port, request) do
+    {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 2_000)
+
+    try do
+      :ok = :gen_tcp.send(socket, request)
+      {:ok, response} = :gen_tcp.recv(socket, 0, 5_000)
+      response
+    after
+      :gen_tcp.close(socket)
+    end
+  end
+
+  defp raw_post(port, host, body) do
+    {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 2_000)
+
+    try do
+      :ok =
+        :gen_tcp.send(
+          socket,
+          "POST / HTTP/1.1\r\nHost: #{host}\r\nContent-Type: application/json\r\n" <>
+            "Content-Length: #{byte_size(body)}\r\nConnection: close\r\n\r\n#{body}"
+        )
+
+      {:ok, response} = :gen_tcp.recv(socket, 0, 5_000)
+      response
+    after
+      :gen_tcp.close(socket)
+    end
+  end
+
+  # The router refuses non-loopback Host headers from loopback peers.
+  defp conn(method, path, body \\ nil),
+    do: %{Plug.Test.conn(method, path, body) | host: "localhost"}
 
   defp restore_env(key, nil), do: Application.delete_env(:lemon_control_plane, key)
   defp restore_env(key, value), do: Application.put_env(:lemon_control_plane, key, value)

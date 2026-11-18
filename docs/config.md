@@ -61,6 +61,19 @@ Existing LAN clients must explicitly opt in and restart:
 | `LEMON_CONTROL_PLANE_NODE_BIND_IP` | `127.0.0.1` | Node-only gateway |
 | `LEMON_CONTROL_PLANE_NODE_PORT` | `4044` | Node-only port; `0` disables it |
 | `LEMON_CONTROL_PLANE_REMOTE_HTTP` | empty | Comma-separated subset of `openai,acp` |
+| `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` | empty | Comma-separated exact browser origins allowed on `/ws` and `/acp/ws` |
+
+Loopback peers of the main and A2A listeners must send a `Host` of `localhost`,
+a loopback IP, the listener's bind address, or (main) a host from
+`LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` / (A2A) the hostname of `public_url`
+(any path ignored); anything else, including `*.localhost`, is 403 before
+parsing, which defeats DNS rebinding. `/ws` and `/acp/ws` refuse a WebSocket
+upgrade whose `Origin` is not exactly (scheme, host, port) the control plane's
+own origin, a LemonWeb origin from its endpoint config, or a
+`LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` entry; other localhost ports are refused.
+Native clients that omit `Origin` (Lemon's CLI, TUI and ACP clients) are
+unaffected; a native client that does send `Origin` must send one of those
+exact accepted values, or add its origin to `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS`.
 
 Bind values must be literal IPv4 or IPv6 addresses. Non-loopback main and web
 binds require `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` and refuse

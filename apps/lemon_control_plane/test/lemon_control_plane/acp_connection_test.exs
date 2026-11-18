@@ -1,6 +1,6 @@
 defmodule LemonControlPlane.ACP.ConnectionTest do
   use ExUnit.Case, async: false
-  import Plug.Test
+  import Plug.Test, except: [conn: 2, conn: 3]
   import Plug.Conn
 
   alias LemonControlPlane.ACP.Connection
@@ -143,4 +143,8 @@ defmodule LemonControlPlane.ACP.ConnectionTest do
 
   defp restore(key, nil), do: Application.delete_env(:lemon_control_plane, key)
   defp restore(key, value), do: Application.put_env(:lemon_control_plane, key, value)
+
+  # The router refuses non-loopback Host headers from loopback peers.
+  defp conn(method, path, body \\ nil),
+    do: %{Plug.Test.conn(method, path, body) | host: "localhost"}
 end

@@ -11,9 +11,11 @@ defmodule LemonControlPlane.HTTP.Router do
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.ListenerPolicy
+  alias LemonControlPlane.HTTP.RequestOrigin
   alias LemonControlPlane.Protocol.Errors
 
   plug(Plug.Logger, log: :debug)
+  plug(:require_trusted_host)
   plug(:restrict_non_loopback)
   plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
   plug(:match)
@@ -111,6 +113,22 @@ defmodule LemonControlPlane.HTTP.Router do
   end
 
   get "/acp/ws" do
+    with_trusted_origin(conn, &upgrade_acp/1)
+  end
+
+  get "/ws" do
+    with_trusted_origin(conn, fn conn ->
+      conn
+      |> WebSockAdapter.upgrade(
+        LemonControlPlane.WS.Connection,
+        [peer: conn.remote_ip],
+        timeout: 60_000
+      )
+      |> halt()
+    end)
+  end
+
+  defp upgrade_acp(conn) do
     local? = Authorize.tokenless_loopback_allowed?(conn.remote_ip)
 
     params = %{"role" => "operator", "auth" => %{"token" => bearer_token(conn)}}
@@ -140,14 +158,28 @@ defmodule LemonControlPlane.HTTP.Router do
     end
   end
 
-  get "/ws" do
-    conn
-    |> WebSockAdapter.upgrade(
-      LemonControlPlane.WS.Connection,
-      [peer: conn.remote_ip],
-      timeout: 60_000
-    )
-    |> halt()
+  defp with_trusted_origin(conn, fun) do
+    if RequestOrigin.control_plane_origin_allowed?(conn) do
+      fun.(conn)
+    else
+      http_error(
+        conn,
+        403,
+        Errors.forbidden(
+          "WebSocket Origin is not allowed. Add it to LEMON_CONTROL_PLANE_ALLOWED_ORIGINS to permit a browser client."
+        )
+      )
+    end
+  end
+
+  defp require_trusted_host(conn, _opts) do
+    if RequestOrigin.control_plane_host_allowed?(conn) do
+      conn
+    else
+      conn
+      |> http_error(403, Errors.forbidden("Host header is not a loopback or configured host."))
+      |> halt()
+    end
   end
 
   match _ do

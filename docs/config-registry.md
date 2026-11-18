@@ -128,6 +128,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_A2A_REPLY_TIMEOUT_MS` | integer | _(none)_ |  | `lemon_control_plane` | Maximum synchronous wait for an A2A peer run. |
 | `LEMON_ACP_API_TOKEN` | string | _(none)_ | yes | `lemon_control_plane` | Bearer token for the ACP (agent control protocol) HTTP API; defaults to the operator token. |
 | `LEMON_AGENT_PROFILES_CWD` | string | _(none)_ |  | `lemon_router` | Working directory override used to resolve router agent profiles. |
+| `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` | list (comma-separated) | `[]` |  | `lemon_control_plane` | Extra exact browser origins (scheme://host[:port]) allowed to open /ws and /acp/ws besides the control plane's own and LemonWeb's; their hosts are also accepted as Host from loopback peers. |
 | `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` | boolean | `false` |  | `lemon_control_plane` | Explicitly allow legacy tokenless operator, OpenAI, ACP and A2A access from direct loopback peers. |
 | `LEMON_CONTROL_PLANE_BIND_IP` | string | `127.0.0.1` |  | `lemon_control_plane` | Control-plane bind address; non-loopback requires an operator token and disables tokenless compatibility. |
 | `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` | string | _(none)_ | yes | `lemon_control_plane` | Shared operator credential required by control-plane WebSocket operator connections. |
