@@ -287,6 +287,7 @@ describe("ApprovalRecordComponent", () => {
 			["expired", "approval expired for bash — the run ended"],
 			["timeout", "approval timed out for bash"],
 			["cancelled", "approval withdrawn for bash"],
+			["outcome_unknown", "approval outcome unknown for bash — the action did not run"],
 		];
 		for (const [decision, line] of cases) {
 			const record = new ApprovalRecordComponent("ap-3", "bash", decision);

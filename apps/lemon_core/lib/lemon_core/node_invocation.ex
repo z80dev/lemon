@@ -14,7 +14,9 @@ defmodule LemonCore.NodeInvocation do
   @max_control_text_bytes 16 * 1_024
   @max_event_bytes 64 * 1_024
   @event_types ~w(delta started action checkpoint_created checkpoint_restored checkpoint_deleted approval_requested)
-  @approval_decisions ~w(approve_once approve_session approve_agent approve_global deny)
+  # `outcome_unknown` relays a controller decision the store could not confirm;
+  # the worker settles its waiter as unknown, never approved or denied.
+  @approval_decisions ~w(approve_once approve_session approve_agent approve_global deny outcome_unknown)
 
   def start_link({node, method, args, opts}) do
     GenServer.start_link(__MODULE__, {node, method, args, opts})

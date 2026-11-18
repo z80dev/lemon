@@ -93,6 +93,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolve do
         :already_resolved -> {:conflict, "Approval already resolved; exact identities required"}
         :resolution_in_progress -> {:conflict, "Approval resolution is in progress"}
         :store_unavailable -> {:unavailable, "Approval resolution unavailable"}
+        :outcome_unknown -> {:unavailable, "Approval outcome unknown; the action did not run"}
         _ -> {:invalid_request, "Invalid approval resolution"}
       end
 

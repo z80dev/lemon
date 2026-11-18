@@ -8,9 +8,10 @@ defmodule LemonComputerUse.Config do
   then `config :lemon_computer_use`, then the built-in default. Nothing here
   raises: an unusable value falls back to the next source.
 
-    * `:enabled` / `LEMON_COMPUTER_USE_ENABLED` — the native-app opt-in switch
-      (default `false`). The bridge also starts when the unified browser provider
-      resolves to `lcu`; otherwise a disabled app starts no LCU runtime.
+    * `:enabled` / `LEMON_COMPUTER_USE_ENABLED` — the opt-in switch (default
+      `false`) and the only thing that enables computer use. The browser
+      provider never enables it: a resolved `lcu` provider only adds the Chrome
+      surface to a bridge this switch already started.
     * `:lcu_root` / `LEMON_COMPUTER_USE_LCU_ROOT` — the installed LCU release
       (default `~/.local/share/lcu/current`, or `/opt/lcu/current` when only that
       exists). Lemon runs `<root>/bin/lcu` as the computer-use MCP server and
@@ -30,15 +31,16 @@ defmodule LemonComputerUse.Config do
   @app :lemon_computer_use
   @default_connect_timeout_ms 30_000
 
-  @spec enabled?(keyword()) :: boolean()
-  def enabled?(opts \\ []) do
-    native_enabled =
-      case parse_bool(env("LEMON_COMPUTER_USE_ENABLED")) do
-        value when is_boolean(value) -> value
-        nil -> boolean(toml(:enabled), Application.get_env(@app, :enabled, false))
-      end
-
-    native_enabled or chrome?(opts)
+  @doc """
+  Resolve the opt-in switch. `LemonComputerUse.Application` calls this once at
+  boot; everything else reads that boot decision via `LemonComputerUse.enabled?/0`.
+  """
+  @spec enabled?() :: boolean()
+  def enabled? do
+    case parse_bool(env("LEMON_COMPUTER_USE_ENABLED")) do
+      value when is_boolean(value) -> value
+      nil -> boolean(toml(:enabled), Application.get_env(@app, :enabled, false))
+    end
   end
 
   @spec chrome?(keyword()) :: boolean()
@@ -96,15 +98,40 @@ defmodule LemonComputerUse.Config do
   end
 
   @doc """
-  Website origins computer use always declines, besides Lemon's local ports:
-  the Lemon Bot web client's origin (`LEMON_BOT_PUBLIC_URL`, which serves its
-  approvals surface) and any origins listed in
-  `LEMON_COMPUTER_USE_DECLINED_ORIGINS` (comma-separated), the config file's
-  `declined_origins` list, or `config :lemon_computer_use, declined_origins: [...]`. Each entry is reduced
-  to its `scheme://host[:port]` origin; unparseable entries are ignored.
+  Apps (bundle ids, case-insensitive) whose computer-use approvals may keep a
+  lasting grant: the config file's `lasting_grant_apps` list, or
+  `config :lemon_computer_use, lasting_grant_apps: [...]`. Empty by default,
+  so every app is once-only. Returned trimmed and downcased.
   """
-  @spec declined_origins() :: [String.t()]
-  def declined_origins do
+  @spec lasting_grant_apps() :: [String.t()]
+  def lasting_grant_apps do
+    case toml(:lasting_grant_apps) || Application.get_env(@app, :lasting_grant_apps, []) do
+      list when is_list(list) ->
+        for app <- list,
+            is_binary(app),
+            app = String.downcase(String.trim(app)),
+            app != "",
+            do: app
+
+      _ ->
+        []
+    end
+  end
+
+  @doc """
+  Website origins computer use always declines, besides every local origin
+  (see `LemonComputerUse.Approval`): the Lemon Bot web client's origin, which
+  serves its approvals surface — `LEMON_BOT_PUBLIC_URL` from this process and
+  from every installed Lemon Bot backend service unit (the backend owns that
+  value; the controller usually lacks it), plus that unit's
+  `LEMON_BOT_HOST`/`LEMON_BOT_PORT` address — and any origins listed in
+  `LEMON_COMPUTER_USE_DECLINED_ORIGINS` (comma-separated), the config file's
+  `declined_origins` list, or `config :lemon_computer_use, declined_origins: [...]`.
+  Each entry is reduced to its `scheme://host[:port]` origin; unparseable
+  entries are ignored. `opts` (`:home`, `:os`) locate service units in tests.
+  """
+  @spec declined_origins(keyword()) :: [String.t()]
+  def declined_origins(opts \\ []) do
     listed =
       case env("LEMON_COMPUTER_USE_DECLINED_ORIGINS") do
         nil -> []
@@ -123,10 +150,46 @@ defmodule LemonComputerUse.Config do
         _ -> []
       end
 
-    [env("LEMON_BOT_PUBLIC_URL") | listed ++ file ++ configured]
+    [env("LEMON_BOT_PUBLIC_URL") | installed_bot_urls(opts) ++ listed ++ file ++ configured]
     |> Enum.flat_map(&origin_of/1)
     |> Enum.uniq()
   end
+
+  # The Lemon Bot addresses saved in installed backend service units.
+  defp installed_bot_urls(opts) do
+    alias LemonCore.Service.{Role, Unit}
+
+    managers =
+      case Keyword.get(opts, :os, :os.type()) do
+        {:unix, :darwin} -> ["launchd", "none"]
+        {:unix, :linux} -> ["systemd", "none"]
+        _ -> ["none"]
+      end
+
+    for manager <- managers,
+        {"backend", unit_opts} <- LemonCore.Service.discover(manager, opts),
+        unit_opts = Keyword.merge(opts, unit_opts),
+        port = Role.port("backend", unit_opts),
+        path = Role.unit_path(Role.label("backend", manager, nil, port), manager, unit_opts),
+        {:ok, %{env: unit_env}} <- [Unit.read(path, manager)],
+        url <- [
+          unit_env["LEMON_BOT_PUBLIC_URL"],
+          bot_address(unit_env["LEMON_BOT_HOST"], unit_env["LEMON_BOT_PORT"] || port)
+        ],
+        is_binary(url),
+        do: url
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
+  end
+
+  defp bot_address(host, port) when is_binary(host) and host != "" do
+    host = if String.contains?(host, ":"), do: "[" <> host <> "]", else: host
+    "http://" <> host <> ":" <> to_string(port)
+  end
+
+  defp bot_address(_host, _port), do: nil
 
   @doc false
   @spec origin_of(term()) :: [String.t()]

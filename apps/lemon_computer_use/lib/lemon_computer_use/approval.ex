@@ -13,8 +13,14 @@ defmodule LemonComputerUse.Approval do
   global grants are remembered by `ExecApprovals` and answer later requests for
   the same app without asking.
 
-  The runtime asks again for every action under an "allow once" answer, so
-  the Lemon decision's scope decides the answer:
+  Every app is once-only by default: each action asks again, the runtime is
+  never told to persist, and the request is sent with
+  `LemonCore.ExecApprovals` `once_only: true`, so no stored or wildcard grant
+  answers it and no decision writes a policy. Any app can show Lemon approvals
+  (a browser with the Lemon Bot web client, a chat app, a terminal), so a
+  lasting grant is the operator's explicit choice: only apps listed in
+  `[runtime.tools.computer_use] lasting_grant_apps`
+  (`LemonComputerUse.Config.lasting_grant_apps/0`) honor the decision's scope:
 
     * once (`:approve_once`) — accept this action only; the next action asks
       again.
@@ -24,10 +30,12 @@ defmodule LemonComputerUse.Approval do
       first request of later sessions from its stored grant.
 
   With the Chrome surface enabled the runtime also asks before it first uses
-  each website. That becomes a request for the same tool with action
-  `%{"origin" => origin}`. Any approval scope accepts the site: the runtime
-  itself remembers a site decision for the rest of the LCU session, so even an
-  "approve once" covers that site for the session; a denial declines it.
+  each website. That becomes a once-only request (`once_only: true`) for the
+  same tool with action `%{"origin" => origin}`: no stored or wildcard grant
+  answers it and no decision writes a policy. LCU has no per-action website
+  authorization, so an accepted site stays usable for the rest of that LCU
+  session (the runtime remembers it); a denial declines it. The web clients of
+  every chat channel Lemon delivers approvals to are declined outright.
 
   LCU's own always-allowed list (`lcu apps`) is the operator's separate, Touch
   ID–gated store and is never written from here.
@@ -40,16 +48,36 @@ defmodule LemonComputerUse.Approval do
   expired — an orphaned request can never grant control of an app.
 
   Anything other than a well-formed native-app or website request is cancelled
-  (fail closed). Lemon's own apps and Lemon's own local web and control-plane
-  origins are always declined: operating the surface that shows Lemon's
-  approval prompts would let the agent approve itself.
+  (fail closed). Lemon's own apps and every local origin are always declined:
+  `localhost`, `*.localhost` and any literal loopback or unspecified address,
+  on any port (a loopback port may be Lemon's control plane, web UI, Lemon Bot
+  backend, or a tunnel to a remote one), plus the Lemon Bot public URL and
+  configured origins (`LemonComputerUse.Config.declined_origins/0`). Operating
+  the surface that shows Lemon's approval prompts would let the agent approve
+  itself.
   """
 
   require Logger
+  import Bitwise, only: [band: 2]
 
   @tool "computer_use"
   @max_rationale_bytes 500
   @lemon_hosts ["lemon bot", "lemonbot", "lemon"]
+  # Browser clients of the channels Lemon delivers approvals to (the
+  # lemon_channels adapters plus Slack). A domain matches itself and every
+  # subdomain; webmail hosts (the email adapter) match exactly. Generic or
+  # self-hosted channel UIs belong in `declined_origins`.
+  @approval_web_domains %{
+    "telegram" => ~w(telegram.org t.me),
+    "discord" => ~w(discord.com discordapp.com),
+    "slack" => ~w(slack.com),
+    "whatsapp" => ~w(whatsapp.com),
+    "xmtp" => ~w(xmtp.chat converse.xyz)
+  }
+  @approval_webmail_hosts ~w(
+    mail.google.com outlook.live.com outlook.office.com outlook.office365.com
+    mail.yahoo.com app.fastmail.com mail.proton.me
+  )
   @once_scopes [:once, :approve_once]
   @lasting_scopes [
     :session,
@@ -69,14 +97,26 @@ defmodule LemonComputerUse.Approval do
   def answer(params, context, approval_id) do
     case {native_app_request(params), browser_origin_request(params)} do
       {{:ok, app, message, offered}, _} ->
-        if lemon_host?(app),
-          do: %{action: "decline"},
-          else: %{"app" => app} |> ask(message, context, approval_id) |> app_response(offered)
+        cond do
+          lemon_host?(app) ->
+            %{action: "decline"}
+
+          normalize_app(app) in LemonComputerUse.Config.lasting_grant_apps() ->
+            %{"app" => app} |> ask(message, context, approval_id) |> app_response(offered)
+
+          true ->
+            %{"app" => app}
+            |> ask(message, context, approval_id, once_only: true)
+            |> app_response([])
+        end
 
       {_, {:ok, origin, message}} ->
         if lemon_origin?(origin),
           do: %{action: "decline"},
-          else: %{"origin" => origin} |> ask(message, context, approval_id) |> origin_response()
+          else:
+            %{"origin" => origin}
+            |> ask(message, context, approval_id, once_only: true)
+            |> origin_response()
 
       _ ->
         %{action: "cancel"}
@@ -153,19 +193,114 @@ defmodule LemonComputerUse.Approval do
   @doc false
   @spec lemon_origin?(String.t()) :: boolean()
   def lemon_origin?(origin) do
-    %URI{host: host, port: port} = URI.parse(origin)
+    case URI.parse(origin) do
+      %URI{host: host} when is_binary(host) and host != "" ->
+        local_host?(host) or approval_web_client?(host) or
+          origin in LemonComputerUse.Config.declined_origins()
 
-    (host in ["localhost", "127.0.0.1", "::1"] and port in lemon_ports()) or
-      origin in LemonComputerUse.Config.declined_origins()
+      # Fail closed: an origin without a host is never a safe target.
+      _ ->
+        true
+    end
   end
 
-  # Lemon's control plane and web UI, plus the Lemon Bot web client's
-  # development server (4081), on loopback.
-  defp lemon_ports do
-    env = LemonCore.Runtime.Env.resolve()
-    [env.control_port, env.web_port, 4081]
-  rescue
-    _ -> [4040, 4080, 4081]
+  # Every local spelling, on any port: Lemon's ports are configurable,
+  # persisted per install, and forwarded through tunnels, so no port list can
+  # be complete. A hostname is resolved and declined when any address it
+  # resolves to is local. DNS can change after this check (rebinding); the
+  # check narrows, not closes, that window.
+  defp local_host?(host) do
+    host = host |> String.downcase() |> String.trim_leading("[") |> String.trim_trailing("]")
+    host = String.trim_trailing(host, ".")
+
+    cond do
+      host == "localhost" or String.ends_with?(host, ".localhost") ->
+        true
+
+      LemonCore.LoopbackListener.literal_loopback?(host) ->
+        true
+
+      true ->
+        case :inet.parse_address(String.to_charlist(host)) do
+          {:ok, address} -> local_address?(address)
+          {:error, _} -> resolves_local?(host)
+        end
+    end
+  end
+
+  defp resolves_local?(host) do
+    case resolve(host) do
+      {:ok, addresses} -> Enum.any?(addresses, &local_address?/1)
+      # A resolver that cannot answer in time is not proof of safety.
+      :timeout -> true
+      :error -> false
+    end
+  end
+
+  @resolve_timeout_ms 2_000
+
+  defp resolve(host) do
+    resolver =
+      Application.get_env(:lemon_computer_use, :resolver, &default_resolve/1)
+
+    task =
+      Task.async(fn ->
+        try do
+          resolver.(host)
+        catch
+          _, _ -> :error
+        end
+      end)
+
+    case Task.yield(task, @resolve_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, addresses} when is_list(addresses) -> {:ok, addresses}
+      {:ok, _} -> :error
+      _ -> :timeout
+    end
+  end
+
+  defp default_resolve(host) do
+    charlist = String.to_charlist(host)
+
+    for family <- [:inet, :inet6],
+        {:ok, addresses} <- [:inet.getaddrs(charlist, family)],
+        address <- addresses,
+        do: address
+  end
+
+  # Loopback, unspecified, link-local, IPv4-mapped forms of those, and every
+  # address of this machine's interfaces (a LAN address reaches Lemon's
+  # listeners too).
+  defp local_address?({127, _, _, _}), do: true
+  defp local_address?({0, _, _, _}), do: true
+  defp local_address?({169, 254, _, _}), do: true
+  defp local_address?({0, 0, 0, 0, 0, 0, 0, n}) when n in [0, 1], do: true
+  defp local_address?({a, _, _, _, _, _, _, _}) when band(a, 0xFFC0) == 0xFE80, do: true
+
+  defp local_address?({0, 0, 0, 0, 0, 0xFFFF, high, low}),
+    do: local_address?({div(high, 256), rem(high, 256), div(low, 256), rem(low, 256)})
+
+  defp local_address?(address), do: address in interface_addresses()
+
+  defp interface_addresses do
+    case :inet.getifaddrs() do
+      {:ok, interfaces} ->
+        for {_name, opts} <- interfaces, {:addr, address} <- opts, do: address
+
+      _ ->
+        []
+    end
+  end
+
+  @doc false
+  @spec approval_web_client?(String.t()) :: boolean()
+  def approval_web_client?(host) do
+    host = host |> String.downcase() |> String.trim_trailing(".")
+
+    host in @approval_webmail_hosts or
+      Enum.any?(Map.values(@approval_web_domains), fn domains ->
+        Enum.any?(domains, &(host == &1 or String.ends_with?(host, "." <> &1)))
+      end)
   end
 
   @doc false
@@ -175,7 +310,9 @@ defmodule LemonComputerUse.Approval do
     String.starts_with?(normalized, "org.lemonbot.") or normalized in @lemon_hosts
   end
 
-  defp ask(action, message, context, approval_id) do
+  defp normalize_app(app), do: app |> String.trim() |> String.downcase()
+
+  defp ask(action, message, context, approval_id, opts \\ []) do
     request = Map.get(context, :approval_request_fun) || (&LemonCore.ExecApprovals.request/1)
 
     request.(%{
@@ -191,7 +328,8 @@ defmodule LemonComputerUse.Approval do
       rationale: bound(message),
       # No clock deadline: the owning run or session ending expires the request
       # (LemonCore.ExecApprovals.expire_owner/1), never an elapsed timer.
-      expires_in_ms: :infinity
+      expires_in_ms: :infinity,
+      once_only: Keyword.get(opts, :once_only, false)
     })
   catch
     kind, _reason ->

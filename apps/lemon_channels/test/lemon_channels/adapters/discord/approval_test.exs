@@ -297,6 +297,90 @@ defmodule LemonChannels.Adapters.Discord.ApprovalTest do
     assert pending == c.pending
   end
 
+  test "text approval reports an unconfirmed resolution as outcome unknown", c do
+    context = %{
+      surface: "discord",
+      account_id: "default",
+      approval_authorize: Approval.text_authorizer(c.state, Map.delete(c.interaction, :message)),
+      approval_opts: [resolve: fn _, _, _ -> {:error, :outcome_unknown} end]
+    }
+
+    assert {:error, message} =
+             LemonChannels.PortableCommand.handle("approve", c.pending.id, context)
+
+    assert message =~ "Approval outcome unknown"
+    refute message =~ "rejected"
+  end
+
+  test "transport reports a timed-out completion write as outcome unknown, not unavailable", c do
+    parent = self()
+    previous = Application.get_env(:lemon_channels, :discord_interaction_responder)
+
+    Application.put_env(:lemon_channels, :discord_interaction_responder, fn interaction,
+                                                                            payload ->
+      send(parent, {:response, interaction, payload})
+      :ok
+    end)
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:lemon_channels, :discord_interaction_responder),
+        else: Application.put_env(:lemon_channels, :discord_interaction_responder, previous)
+    end)
+
+    # Hold the real store on the resolver's completion CAS past the call timeout.
+    store = Process.whereis(LemonCore.Store)
+    ref = make_ref()
+
+    hook = fn
+      :armed,
+      {:in,
+       {:"$gen_call", _from,
+        {:generic_compare_and_swap, :exec_approvals_pending, _, %{resolution: _}, _}}},
+      _proc ->
+        send(parent, {ref, :stalled, self()})
+
+        receive do
+          {^ref, :release} -> :done
+        after
+          15_000 -> :done
+        end
+
+      state, _event, _proc ->
+        state
+    end
+
+    :ok = :sys.install(store, {hook, :armed})
+
+    on_exit(fn ->
+      try do
+        :sys.remove(store, hook, 20_000)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    interaction = Map.put(c.interaction, :type, 3)
+
+    task =
+      Task.async(fn ->
+        Transport.process_event(
+          {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
+          c.state
+        )
+      end)
+
+    assert_receive {^ref, :stalled, stalled}, 5_000
+    Process.sleep(5_300)
+    send(stalled, {ref, :release})
+
+    assert {:noreply, _} = Task.await(task, 10_000)
+    assert_receive {:response, ^interaction, %{type: 4, data: %{content: text, flags: 64}}}
+    assert text =~ "Approval outcome unknown"
+    refute text =~ "Try again"
+    refute_receive {:queued, _}
+  end
+
   defp expire(pending) do
     :ok = ExecApprovalStore.delete_pending(pending.id)
 

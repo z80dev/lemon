@@ -344,6 +344,19 @@ even *available* is a separate, earlier boundary — `CodingAgent.ToolPolicy`
 runtime profiles — and approvals are not a substitute for removing a tool from a
 restricted profile.
 
+A resolution commits its completion receipt (exact-record CAS) before writing
+any standing grant, so a losing transition, cancellation or crash installs no
+grant. A non-durable `LemonCore.Store` mutation whose call times out returns
+`{:error, :outcome_unknown}`, never a definite failure; approval resolution
+surfaces that as `:outcome_unknown` to the waiter, channels and the TUI.
+Every approval mutation (pending creation, claim, completion, cancellation,
+waiter timeout) and the remote node relay preserve that unknown outcome; the
+gated call does not run and nothing is replayed automatically. After the
+completion commits, a run that `LemonCore.Store` already finalized fences the
+approval to `:expired` before any grant is written. Remote nodes forward
+`onceOnly` (required on the wire), so a once-only request is never answered
+from, and never installs, a standing grant on the controller.
+
 Lemon Bot's **remembered approvals** are a separate product-level allowance
 over eligible native tool groups, not a global runtime grant and not an
 exact-command allowlist. Their scope, exclusions and revocation rules are in

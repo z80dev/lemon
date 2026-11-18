@@ -550,6 +550,11 @@ function recordLine(
 			return { text: `approval timed out for ${tool}`, tone: "warning" };
 		case "cancelled":
 			return { text: `approval withdrawn for ${tool}`, tone: "warning" };
+		case "outcome_unknown":
+			return {
+				text: `approval outcome unknown for ${tool} — the action did not run`,
+				tone: "warning",
+			};
 		default:
 			return { text: `approval closed for ${tool} (${decision})`, tone: "warning" };
 	}

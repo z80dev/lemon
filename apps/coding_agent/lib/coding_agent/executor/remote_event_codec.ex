@@ -59,7 +59,8 @@ defmodule CodingAgent.Executor.RemoteEventCodec do
       "tool" => pending.tool,
       "action" => pending.action,
       "rationale" => pending.rationale,
-      "expiresAtMs" => pending.expires_at_ms
+      "expiresAtMs" => pending.expires_at_ms,
+      "onceOnly" => Map.get(pending, :once_only) == true
     })
   end
 
@@ -112,8 +113,11 @@ defmodule CodingAgent.Executor.RemoteEventCodec do
        )
        when is_binary(id) and id != "" and is_binary(tool) and tool != "" and is_map(action) do
     expires = event["expiresAtMs"]
+    once_only = event["onceOnly"]
 
-    if is_nil(expires) or is_integer(expires) do
+    # `onceOnly` is required: a dropped flag would let the controller answer a
+    # once-only request from, or install, a standing grant.
+    if (is_nil(expires) or is_integer(expires)) and is_boolean(once_only) do
       {:ok,
        {:approval,
         %{
@@ -121,7 +125,8 @@ defmodule CodingAgent.Executor.RemoteEventCodec do
           tool: tool,
           action: action,
           rationale: event["rationale"],
-          expires_at_ms: expires
+          expires_at_ms: expires,
+          once_only: once_only
         }}}
     else
       {:error, :invalid_approval}

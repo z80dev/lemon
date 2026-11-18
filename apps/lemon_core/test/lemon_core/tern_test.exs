@@ -3,6 +3,9 @@ defmodule LemonCore.TernTest do
   alias LemonCore.Tern
 
   setup do
+    cu = LemonCore.BrowserProvider.computer_use_enabled?()
+    LemonCore.BrowserProvider.put_computer_use_enabled(true)
+    on_exit(fn -> LemonCore.BrowserProvider.put_computer_use_enabled(cu) end)
     path = Path.join(System.tmp_dir!(), "lt-#{System.unique_integer([:positive])}.sock")
     keys = ~w(TERN_PANE_SOCKET TERN_DAEMON_SOCKET TERN_CONFIG_DIR TERN_PANE LEMON_BROWSER_TERN)
     previous = Map.new(keys, &{&1, System.get_env(&1)})

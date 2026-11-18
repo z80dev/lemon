@@ -194,10 +194,10 @@ defmodule LemonComputerUse.ServerTest do
     js = Js.tool("/tmp", opts(approval_context: %{approval_request_fun: approve}))
 
     assert %AgentToolResult{content: [%TextContent{text: "approval:accept"}]} =
-             run(js, %{"code" => "origin:http://127.0.0.1:8765"})
+             run(js, %{"code" => "origin:https://example.com:8765"})
 
     assert_received {:approval,
-                     %{tool: "computer_use", action: %{"origin" => "http://127.0.0.1:8765"}}}
+                     %{tool: "computer_use", action: %{"origin" => "https://example.com:8765"}}}
 
     never = fn _request ->
       send(parent, :asked_for_lemon_web)

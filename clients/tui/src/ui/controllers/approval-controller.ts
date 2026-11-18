@@ -21,7 +21,7 @@
 
 import type { Component, Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import type { OverlayHost } from "../../commands/registry.ts";
-import { isExpiredApprovalError } from "../../protocol/errors.ts";
+import { isExpiredApprovalError, isOutcomeUnknownApprovalError } from "../../protocol/errors.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import { type ApprovalRequestedEvent, PROPOSE_PLAN_TOOL } from "../../protocol/types.ts";
 import type { AppStore, PendingApproval } from "../../store/app-store.ts";
@@ -214,6 +214,18 @@ export class ApprovalController {
 				// answered, so forget it instead of restoring a dead panel.
 				events.resolveApproval(approvalId, "expired");
 				notice(`approval for ${pending.event.tool ?? "tool"} expired — the run ended`, "warning");
+				refreshStatus();
+				this.present();
+				return;
+			}
+			if (isOutcomeUnknownApprovalError(error)) {
+				// The daemon did not confirm the write: neither approved nor denied,
+				// and never retried. Its `exec.approval.resolved` event closes the request.
+				events.resolveApproval(approvalId, "outcome_unknown");
+				notice(
+					`approval outcome unknown for ${pending.event.tool ?? "tool"} — the action did not run; check status before answering again`,
+					"warning",
+				);
 				refreshStatus();
 				this.present();
 				return;

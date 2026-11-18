@@ -994,6 +994,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
               "This approval cannot be used here; nothing changed. Open the approval in its original conversation."
             )
 
+          {:error, :outcome_unknown} ->
+            respond_ephemeral(
+              interaction,
+              "Approval outcome unknown: the store did not confirm it. The action did not run; check the approval status before answering again."
+            )
+
           error ->
             Logger.warning("Discord approval unavailable: #{inspect(error)}")
             respond_ephemeral(interaction, "Approval is unavailable right now. Try again.")

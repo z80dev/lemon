@@ -240,7 +240,8 @@ defmodule LemonCore.Config.ToolsTest do
                enabled: nil,
                lcu_root: nil,
                node: nil,
-               declined_origins: nil
+               declined_origins: nil,
+               lasting_grant_apps: nil
              }
 
       config =

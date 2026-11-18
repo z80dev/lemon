@@ -259,6 +259,16 @@ defmodule LemonChannels.Adapters.Telegram.ApprovalRequestTest do
     end
   end
 
+  test "an unconfirmed resolution answers outcome unknown, never rejected or recorded", c do
+    opts = Keyword.put(c.opts, :resolve, fn _, _, _ -> {:error, :outcome_unknown} end)
+
+    assert :ok = ApprovalRequest.handle_callback(c.state, c.cb, opts)
+    assert_receive {:answer, "callback", answer}
+    assert answer =~ "Approval outcome unknown"
+    assert answer =~ "did not run"
+    refute_receive {:queued, _}
+  end
+
   test "atomic resolver receives exact fetched snapshot and rejects a concurrent replacement",
        c do
     replacement = %{c.pending | action: %{command: "replacement"}}

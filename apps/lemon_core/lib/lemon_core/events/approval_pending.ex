@@ -23,7 +23,8 @@ defmodule LemonCore.Events.ApprovalPending do
       action: nil,
       rationale: nil,
       requested_at_ms: nil,
-      expires_at_ms: nil
+      expires_at_ms: nil,
+      once_only: false
     ]
 
   @type t :: %__MODULE__{
@@ -40,6 +41,7 @@ defmodule LemonCore.Events.ApprovalPending do
           action: map() | nil,
           rationale: String.t() | nil,
           requested_at_ms: non_neg_integer() | nil,
-          expires_at_ms: non_neg_integer() | nil
+          expires_at_ms: non_neg_integer() | nil,
+          once_only: boolean()
         }
 end

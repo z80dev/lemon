@@ -113,6 +113,69 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
              Errors.to_payload(error)
   end
 
+  test "a timed-out completion write is UNAVAILABLE outcome_unknown and the waiter does not run",
+       %{id: id} do
+    {task, pending} = request(id, :infinity)
+    store = Process.whereis(Store)
+    parent = self()
+    ref = make_ref()
+
+    # Hold the real store on the completion CAS past the call timeout.
+    hook = fn
+      :armed,
+      {:in,
+       {:"$gen_call", _from,
+        {:generic_compare_and_swap, :exec_approvals_pending, ^id, %{resolution: _}, _}}},
+      _proc ->
+        send(parent, {ref, :stalled, self()})
+
+        receive do
+          {^ref, :release} -> :done
+        after
+          15_000 -> :done
+        end
+
+      state, _event, _proc ->
+        state
+    end
+
+    :ok = :sys.install(store, {hook, :armed})
+
+    on_exit(fn ->
+      try do
+        :sys.remove(store, hook, 20_000)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    resolver =
+      Task.async(fn -> ExecApprovalResolve.handle(params(pending, "approve_session"), %{}) end)
+
+    assert_receive {^ref, :stalled, stalled}, 5_000
+    Process.sleep(5_300)
+    send(stalled, {ref, :release})
+
+    assert {:error, error} = Task.await(resolver, 10_000)
+
+    assert %{
+             "code" => "UNAVAILABLE",
+             "details" => %{"approvalId" => ^id, "reason" => "outcome_unknown"}
+           } = Errors.to_payload(error)
+
+    assert Task.await(task, 5_000) == {:error, :outcome_unknown}
+
+    assert_receive %LemonCore.Event{
+      type: :approval_resolved,
+      payload: %{approval_id: ^id, decision: :outcome_unknown}
+    }
+
+    assert Store.get(
+             :exec_approvals_policy_session,
+             {pending.session_key, pending.tool, ExecApprovals.hash_action(pending.action)}
+           ) == nil
+  end
+
   test "an ended run expires the approval: waiter denied, wire event, later resolve is expired",
        %{id: id} do
     {task, pending} = request(id, :infinity)

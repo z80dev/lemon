@@ -66,6 +66,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
           "text" => "Approval expired: the run ended; nothing was approved"
         })
 
+      {:error, :outcome_unknown} ->
+        state.api_mod.answer_callback_query(state.token, cb["id"], %{
+          "text" =>
+            "Approval outcome unknown: the store did not confirm it. The action did not run; check status before answering again"
+        })
+
       _ ->
         state.api_mod.answer_callback_query(state.token, cb["id"], %{
           "text" => "Approval rejected or unavailable; request unchanged"

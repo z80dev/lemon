@@ -628,18 +628,35 @@ defmodule LemonCore.Store do
     )
   end
 
+  # A mutation whose call exited after it may have reached the store (timeout or
+  # a crash mid-call) can still apply, so it is outcome-unknown, never a
+  # definite failure. `:noproc`/`:shutdown` stay definite.
+  @mutation_ops [
+    :put,
+    :put_new,
+    :compare_and_swap,
+    :compare_and_delete,
+    :compare_and_delete_many,
+    :delete,
+    :take
+  ]
+
   defp safe_store_call(server, request, fallback, context) do
     GenServer.call(server, request, @store_call_timeout_ms)
   catch
     :exit, reason ->
+      reason = store_call_exit_reason(reason)
+
       Logger.warning(
         "Store client call failed store=#{inspect(server)} op=#{inspect(context[:op])} " <>
           "table=#{inspect(context[:table])} " <>
           "key=#{inspect(safe_log_key(context[:table], context[:key]))} " <>
-          "reason=#{inspect(store_call_exit_reason(reason))}"
+          "reason=#{inspect(reason)}"
       )
 
-      fallback
+      if context[:op] in @mutation_ops and reason not in [:noproc, :shutdown],
+        do: {:error, :outcome_unknown},
+        else: fallback
   end
 
   defp store_call_exit_reason({:timeout, {GenServer, :call, _}}), do: :timeout

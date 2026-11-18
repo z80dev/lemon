@@ -6,7 +6,9 @@ defmodule LemonCore.Events.ApprovalResolved do
 
   `:timeout` is a clock deadline; `:expired` is owner end (no grace window).
   Like `:cancelled`, neither grants anything: the gated call does not run and
-  no policy is installed.
+  no policy is installed. `:outcome_unknown` means a store write timed out
+  during resolution: the gated call does not run, and it is neither a denial
+  nor a cancellation.
   """
 
   use LemonCore.Events.Payload,
@@ -24,7 +26,8 @@ defmodule LemonCore.Events.ApprovalResolved do
     :deny,
     :timeout,
     :cancelled,
-    :expired
+    :expired,
+    :outcome_unknown
   ]
 
   @type decision ::
@@ -36,6 +39,7 @@ defmodule LemonCore.Events.ApprovalResolved do
           | :timeout
           | :cancelled
           | :expired
+          | :outcome_unknown
   @type t :: %__MODULE__{
           approval_id: String.t(),
           decision: decision(),

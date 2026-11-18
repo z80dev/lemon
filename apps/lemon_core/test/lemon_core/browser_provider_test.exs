@@ -8,6 +8,10 @@ defmodule LemonCore.BrowserProviderTest do
   end
 
   setup do
+    # These tests cover LCU selection, which requires computer use at boot.
+    cu = LemonCore.BrowserProvider.computer_use_enabled?()
+    LemonCore.BrowserProvider.put_computer_use_enabled(true)
+    on_exit(fn -> LemonCore.BrowserProvider.put_computer_use_enabled(cu) end)
     keys = [:browser_provider_probe, :browser_provider_lcu_probe]
     previous = Map.new(keys, &{&1, Application.fetch_env(:lemon_core, &1)})
     tern_env = System.get_env("LEMON_BROWSER_TERN")

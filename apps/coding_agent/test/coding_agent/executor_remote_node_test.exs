@@ -282,7 +282,8 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
       "action" => %{"command_hash" => "safe-test"},
       "invocation_context_key" => "worker-forged-client",
       "agent_id" => "worker-forged-agent",
-      "expiresAtMs" => LemonCore.Clock.now_ms() + 10_000
+      "expiresAtMs" => LemonCore.Clock.now_ms() + 10_000,
+      "onceOnly" => false
     }
 
     assert {:ok, :accepted} =
@@ -349,7 +350,8 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
                "type" => "approval_requested",
                "approvalId" => "disconnect-approval",
                "tool" => "bash",
-               "action" => %{"command_hash" => "disconnect-test"}
+               "action" => %{"command_hash" => "disconnect-test"},
+               "onceOnly" => false
              })
 
     assert_receive %LemonCore.Event{
@@ -391,7 +393,8 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
                "approvalId" => "expired-approval",
                "tool" => "bash",
                "action" => %{"command_hash" => "expired-test"},
-               "expiresAtMs" => LemonCore.Clock.now_ms() - 1
+               "expiresAtMs" => LemonCore.Clock.now_ms() - 1,
+               "onceOnly" => false
              })
 
     assert_receive {:node_event, "node.invoke.approval",
@@ -401,6 +404,163 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
                       "decision" => "deny"
                     }}
 
+    :ok = Executor.cancel(ctx)
+  end
+
+  test "a once-only remote approval neither uses nor installs standing grants, on repeat too" do
+    :ok = LemonCore.Bus.subscribe("exec_approvals")
+    alias LemonCore.{ExecApprovals, ExecApprovalStore}
+
+    seeded = %{"command_hash" => "once-only-seeded"}
+    fresh = %{"command_hash" => "once-only-fresh-#{System.unique_integer([:positive])}"}
+    seeded_hash = ExecApprovals.hash_action(seeded)
+    fresh_hash = ExecApprovals.hash_action(fresh)
+    grant = %{tool: "computer", action_hash: seeded_hash, scope: :global, approved: true}
+    :ok = ExecApprovalStore.put_global_policy("computer", seeded_hash, grant)
+
+    on_exit(fn ->
+      LemonCore.Store.delete(:exec_approvals_policy, {"computer", seeded_hash})
+      LemonCore.Store.delete(:exec_approvals_policy, {"computer", fresh_hash})
+    end)
+
+    assert :ok =
+             NodeRegistry.register("node-once", "once-worker", self(), privacy_capabilities())
+
+    request = request(%{node: "node-once", agent_id: "oracle"})
+    assert {:ok, run_ref, _ctx} = Executor.start_run(request, %{}, self())
+    assert_receive {:node_event, "node.invoke.request", invocation}
+    invoke_id = invocation["invokeId"]
+
+    ask = fn seq, worker_id, action, decision ->
+      event = %{
+        "type" => "approval_requested",
+        "approvalId" => worker_id,
+        "tool" => "computer",
+        "action" => action,
+        "expiresAtMs" => LemonCore.Clock.now_ms() + 10_000,
+        "onceOnly" => true
+      }
+
+      assert {:ok, :accepted} =
+               NodeRegistry.event_session("node-once", self(), 0, invoke_id, seq, event)
+
+      # The controller must ask a human even when a standing grant matches.
+      assert_receive %LemonCore.Event{
+                       type: :approval_requested,
+                       payload: %{pending: %{id: controller_id, once_only: true}}
+                     },
+                     2_000
+
+      assert {:ok, %{decision: :approve_once, outcome: :approved}} =
+               ExecApprovals.resolve(controller_id, decision,
+                 expected_session_key: request.session_key,
+                 expected_run_id: request.run_id
+               )
+
+      assert_receive {:node_event, "node.invoke.approval",
+                      %{"approvalId" => ^worker_id, "decision" => "approve_once"}},
+                     2_000
+    end
+
+    ask.(1, "once-seeded", seeded, :approve_global)
+    ask.(2, "once-fresh-1", fresh, :approve_global)
+    ask.(3, "once-fresh-2", fresh, :approve_session)
+
+    assert ExecApprovalStore.get_global_policy("computer", fresh_hash) == nil
+
+    refute Enum.any?(
+             ExecApprovalStore.list_session_policies() ++ ExecApprovalStore.list_agent_policies(),
+             fn {{_scope, tool, hash}, _} -> tool == "computer" and hash == fresh_hash end
+           )
+
+    assert :ok =
+             NodeRegistry.complete("node-once", invoke_id, %{"ok" => true, "answer" => "done"})
+
+    assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: true}}
+  end
+
+  test "an unconfirmed controller decision is relayed as outcome_unknown, never deny" do
+    :ok = LemonCore.Bus.subscribe("exec_approvals")
+
+    assert :ok =
+             NodeRegistry.register(
+               "node-unknown",
+               "unknown-worker",
+               self(),
+               privacy_capabilities()
+             )
+
+    request = request(%{node: "node-unknown"})
+    assert {:ok, _run_ref, ctx} = Executor.start_run(request, %{}, self())
+    assert_receive {:node_event, "node.invoke.request", invocation}
+    invoke_id = invocation["invokeId"]
+
+    assert {:ok, :accepted} =
+             NodeRegistry.event_session("node-unknown", self(), 0, invoke_id, 1, %{
+               "type" => "approval_requested",
+               "approvalId" => "unknown-approval",
+               "tool" => "bash",
+               "action" => %{"command_hash" => "unknown-test"},
+               "expiresAtMs" => LemonCore.Clock.now_ms() + 60_000,
+               "onceOnly" => false
+             })
+
+    assert_receive %LemonCore.Event{
+      type: :approval_requested,
+      payload: %{pending: %{id: controller_id}}
+    }
+
+    # Hold the real store on the controller's completion CAS past the timeout.
+    store = Process.whereis(LemonCore.Store)
+    parent = self()
+    ref = make_ref()
+
+    hook = fn
+      :armed,
+      {:in,
+       {:"$gen_call", _from,
+        {:generic_compare_and_swap, :exec_approvals_pending, ^controller_id, %{resolution: _}, _}}},
+      _proc ->
+        send(parent, {ref, :stalled, self()})
+
+        receive do
+          {^ref, :release} -> :done
+        after
+          15_000 -> :done
+        end
+
+      state, _event, _proc ->
+        state
+    end
+
+    :ok = :sys.install(store, {hook, :armed})
+
+    on_exit(fn ->
+      try do
+        :sys.remove(store, hook, 20_000)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    resolver =
+      Task.async(fn ->
+        LemonCore.ExecApprovals.resolve(controller_id, :approve_once,
+          expected_session_key: request.session_key,
+          expected_run_id: request.run_id
+        )
+      end)
+
+    assert_receive {^ref, :stalled, stalled}, 5_000
+    Process.sleep(5_300)
+    send(stalled, {ref, :release})
+    assert {:error, :outcome_unknown} = Task.await(resolver, 10_000)
+
+    assert_receive {:node_event, "node.invoke.approval",
+                    %{"approvalId" => "unknown-approval", "decision" => decision}},
+                   2_000
+
+    assert decision == "outcome_unknown"
     :ok = Executor.cancel(ctx)
   end
 

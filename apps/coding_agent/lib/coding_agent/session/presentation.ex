@@ -686,7 +686,17 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   defp approval_decision_ok?(decision),
-    do: decision not in [:deny, :timeout, :expired, "deny", "timeout", "expired"]
+    do:
+      decision not in [
+        :deny,
+        :timeout,
+        :expired,
+        :outcome_unknown,
+        "deny",
+        "timeout",
+        "expired",
+        "outcome_unknown"
+      ]
 
   defp approval_decision_message(:approve_once), do: "approved once"
   defp approval_decision_message(:approve_session), do: "approved for session"
@@ -695,6 +705,7 @@ defmodule CodingAgent.Session.Presentation do
   defp approval_decision_message(:deny), do: "denied"
   defp approval_decision_message(:timeout), do: "timed out"
   defp approval_decision_message(:expired), do: "expired because its run ended"
+  defp approval_decision_message(:outcome_unknown), do: "outcome unknown; the action did not run"
   defp approval_decision_message("approve_once"), do: "approved once"
   defp approval_decision_message("approve_session"), do: "approved for session"
   defp approval_decision_message("approve_agent"), do: "approved for agent"
@@ -702,6 +713,10 @@ defmodule CodingAgent.Session.Presentation do
   defp approval_decision_message("deny"), do: "denied"
   defp approval_decision_message("timeout"), do: "timed out"
   defp approval_decision_message("expired"), do: "expired because its run ended"
+
+  defp approval_decision_message("outcome_unknown"),
+    do: "outcome unknown; the action did not run"
+
   defp approval_decision_message(other), do: to_string(other)
 
   def truncate_result(result) when is_binary(result) do

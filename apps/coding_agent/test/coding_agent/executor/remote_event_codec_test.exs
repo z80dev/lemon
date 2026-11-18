@@ -109,4 +109,27 @@ defmodule CodingAgent.Executor.RemoteEventCodecTest do
     assert {:error, {:max_depth, _}} =
              RemoteEventCodec.decode(%{"type" => "started", "title" => deep})
   end
+
+  test "approval requests carry a required boolean onceOnly flag" do
+    pending = %{
+      id: "approval-1",
+      tool: "computer",
+      action: %{"type" => "click"},
+      rationale: nil,
+      expires_at_ms: nil,
+      once_only: true
+    }
+
+    assert {:ok, wire} = RemoteEventCodec.encode_approval(pending)
+    assert wire["onceOnly"] == true
+    assert {:ok, {:approval, %{once_only: true}}} = RemoteEventCodec.decode(wire)
+
+    assert {:ok, wire} = RemoteEventCodec.encode_approval(%{pending | once_only: false})
+    assert {:ok, {:approval, %{once_only: false}}} = RemoteEventCodec.decode(wire)
+
+    # A dropped or forged flag is rejected, never read as "not once-only".
+    for bad <- [Map.delete(wire, "onceOnly"), Map.put(wire, "onceOnly", "true")] do
+      assert {:error, :invalid_approval} = RemoteEventCodec.decode(bad)
+    end
+  end
 end

@@ -154,3 +154,19 @@ export function isExpiredApprovalError(error: unknown): error is ControlPlaneErr
 		(details as { reason?: unknown }).reason === "expired"
 	);
 }
+
+/**
+ * The daemon could not confirm an approval write: `UNAVAILABLE` with
+ * `details.reason === "outcome_unknown"`. The action did not run, the decision
+ * is neither denied nor cancelled, and the client must not retry it.
+ */
+export function isOutcomeUnknownApprovalError(error: unknown): error is ControlPlaneError {
+	if (!ControlPlaneError.is(error, "UNAVAILABLE")) return false;
+	const details = error.details;
+	return (
+		typeof details === "object" &&
+		details !== null &&
+		"reason" in details &&
+		details.reason === "outcome_unknown"
+	);
+}

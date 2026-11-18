@@ -14,10 +14,12 @@ defmodule LemonComputerUse.Application do
 
   @impl true
   def start(_type, _args) do
+    # Resolved once per boot: the Server child, tool registration, the prompt
+    # section and `LemonComputerUse.enabled?/0` all read this one value. Only
+    # the explicit switch enables computer use; the browser provider never does.
     enabled? = Config.enabled?()
+    LemonCore.BrowserProvider.put_computer_use_enabled(enabled?)
 
-    # Native apps remain opt-in. A connected, selected LCU browser also needs
-    # this bridge; no Chrome surface is added for any other resolved provider.
     children =
       if enabled?, do: [{LemonComputerUse.Server, connect: true}], else: []
 
@@ -29,6 +31,22 @@ defmodule LemonComputerUse.Application do
       if enabled?, do: contribute()
       {:ok, pid}
     end
+  end
+
+  # A stopped app contributes nothing: the next boot decides afresh.
+  @impl true
+  def stop(_state) do
+    LemonCore.BrowserProvider.put_computer_use_enabled(false)
+
+    if Code.ensure_loaded?(LemonAgent.ToolRegistry),
+      do: Enum.each(@tools, fn {name, _} -> LemonAgent.ToolRegistry.unregister(name) end)
+
+    if Code.ensure_loaded?(LemonAgent.ContextRegistry),
+      do: LemonAgent.ContextRegistry.unregister(:computer_use)
+
+    :ok
+  catch
+    _, _ -> :ok
   end
 
   # The coding product must not name this app, so the tools and the prompt

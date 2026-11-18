@@ -281,6 +281,7 @@ export type ApprovalDecision =
 	| "expired"
 	| "timeout"
 	| "cancelled"
+	| "outcome_unknown"
 	| string;
 
 export interface ApprovalResolvedEvent {
