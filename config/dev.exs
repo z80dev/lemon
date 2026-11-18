@@ -13,17 +13,14 @@ config :lemon_core, LemonCore.Store,
 config :lemon_automation,
   goal_judge_runner: LemonAutomation.GoalJudge.RouterRunner
 
+# bin/lemon runs the daemon from this environment, so it gets the same endpoint
+# posture as a release: no code reloader or debug error pages, the socket's own
+# origin check, and a per-install secret from config/runtime.exs.
 config :lemon_web, LemonWeb.Endpoint,
   http: [
     ip: {127, 0, 0, 1},
     port: String.to_integer(System.get_env("LEMON_WEB_PORT") || "4080")
-  ],
-  check_origin: false,
-  code_reloader: true,
-  debug_errors: true,
-  secret_key_base:
-    "dev_secret_key_base_dev_secret_key_base_dev_secret_key_base_dev_secret_key_base",
-  watchers: []
+  ]
 
 # Voice transport configuration - zeebot phone integration
 config :lemon_gateway,

@@ -1343,13 +1343,30 @@ defmodule LemonCore.ProfileStore do
 
   defp ensure_export_destination(_destination, _opts), do: {:error, :invalid_destination}
 
+  # Every lifecycle write runs here. Whatever the outcome (a failed write may
+  # still have rolled back, or failed to), consumers of the profile config —
+  # LemonRouter.AgentProfiles — are told to re-read it, so no writer can leave
+  # them stale. The doorbell is published before this returns.
   defp locked(opts, fun) do
     key = {__MODULE__, config_path(opts)}
 
     case :global.trans({key, self()}, fun, [node()], 3) do
-      :aborted -> {:error, :profile_unavailable}
-      result -> result
+      :aborted ->
+        {:error, :profile_unavailable}
+
+      result ->
+        notify_changed()
+        result
     end
+  end
+
+  @doc "Bus topic carrying the `:profiles_changed` doorbell after every profile write."
+  @spec changed_topic() :: String.t()
+  def changed_topic, do: "profiles:changed"
+
+  defp notify_changed do
+    if LemonCore.Bus.running?(), do: LemonCore.Bus.broadcast(changed_topic(), :profiles_changed)
+    :ok
   end
 
   defp profile_table(id), do: "profiles.#{id}"

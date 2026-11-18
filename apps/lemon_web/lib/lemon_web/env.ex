@@ -47,6 +47,19 @@ defmodule LemonWeb.Env do
       apps: [:lemon_web]
     },
     %{
+      name: :lemon_web_secure_cookies,
+      env_var: "LEMON_WEB_SECURE_COOKIES",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc:
+        "Mark the LemonWeb session cookie Secure even over a plain-HTTP backend connection; set it when TLS terminates in front (forwarded headers are never trusted). Direct http:// access then cannot sign in.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_web]
+    },
+    %{
       name: :lemon_web_url_scheme,
       env_var: "LEMON_WEB_URL_SCHEME",
       aliases: [],
@@ -76,7 +89,8 @@ defmodule LemonWeb.Env do
       aliases: [],
       type: :string,
       default: nil,
-      doc: "Phoenix secret_key_base for the LemonWeb prod endpoint.",
+      doc:
+        "Per-install Phoenix secret_key_base for LemonWeb (also derives the LiveView signing salt); launchers generate and persist it.",
       secret?: true,
       required?: false,
       area: :endpoints,

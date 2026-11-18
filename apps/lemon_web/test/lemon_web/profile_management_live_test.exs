@@ -40,20 +40,19 @@ defmodule LemonWeb.ProfileManagementLiveTest do
                opts
              )
 
-    previous =
-      Map.new([:profile_store_opts, :profile_store_fun], fn key ->
-        {key, Application.get_env(:lemon_web, key)}
-      end)
-
-    Application.put_env(:lemon_web, :profile_store_opts, opts)
-    Application.delete_env(:lemon_web, :profile_store_fun)
+    # The page writes through profiles.* with the runtime's default store, so
+    # point the runtime paths (not a Web-only seam) at this test's store.
+    previous_paths = Application.fetch_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths, home_state_dir: state, global_config: config)
+    sync_router_profiles()
 
     on_exit(fn ->
-      Enum.each(previous, fn
-        {key, nil} -> Application.delete_env(:lemon_web, key)
-        {key, value} -> Application.put_env(:lemon_web, key, value)
-      end)
+      case previous_paths do
+        {:ok, value} -> Application.put_env(:lemon_core, :paths, value)
+        :error -> Application.delete_env(:lemon_core, :paths)
+      end
 
+      sync_router_profiles()
       File.rm_rf!(root)
     end)
 
@@ -233,10 +232,8 @@ defmodule LemonWeb.ProfileManagementLiveTest do
 
     secret = "#{ctx.marker}_RUNTIME_REASON"
 
-    Application.put_env(:lemon_web, :profile_store_fun, fn
-      :list, _args -> [{"not", "a profile"}]
-      _action, _args -> {:error, {:private, secret, ctx.root, "bearer credential prompt"}}
-    end)
+    # An unreadable store whose bytes carry private text.
+    File.write!(ctx.config, "[profiles.research\n#{secret} = \"#{ctx.root} bearer credential\"\n")
 
     {rendered, log} = with_log(fn -> render_click(view, "refresh") end)
 
@@ -247,6 +244,119 @@ defmodule LemonWeb.ProfileManagementLiveTest do
     refute rendered =~ ctx.root
     refute formatted_live_view_state(view) =~ secret
     refute formatted_live_view_state(view) =~ ctx.root
+  end
+
+  describe "router profile cache" do
+    alias LemonRouter.{AgentProfiles, SubmissionBuilder}
+
+    test "a Web delete reloads the cache and the profile is no longer routable", ctx do
+      assert AgentProfiles.exists?("research")
+      assert {:ok, _} = build_submission("research")
+
+      {:ok, view, _html} = live(ctx.conn, "/profiles")
+      render_click(view, "preview-delete", %{"id" => "research"})
+      deleted = render_submit(view, "apply-preview", %{"confirmation" => "research"})
+      assert deleted =~ "moved to Lemon trash"
+
+      refute AgentProfiles.exists?("research")
+      assert {:error, {:unknown_agent_id, "research"}} = build_submission("research")
+    end
+
+    test "Web create, clone and rename are visible to the router at once", ctx do
+      {:ok, view, _html} = live(ctx.conn, "/profiles")
+
+      render_submit(view, "preview-create", %{
+        "profile" => %{"id" => "builder", "name" => "Builder", "model" => "", "node" => "local"}
+      })
+
+      assert render_submit(view, "apply-preview", %{}) =~ "Profile builder created"
+      assert AgentProfiles.exists?("builder")
+
+      view |> element("#profile-research") |> render_click()
+
+      render_submit(view, "preview-clone", %{
+        "clone" => %{"id" => "research-copy", "name" => "Copy", "model" => "", "node" => "local"}
+      })
+
+      assert render_submit(view, "apply-preview", %{}) =~ "cloned"
+      assert AgentProfiles.exists?("research-copy")
+
+      view |> element("#profile-research") |> render_click()
+      render_submit(view, "preview-rename", %{"rename" => %{"name" => "Research Prime"}})
+      assert render_submit(view, "apply-preview", %{}) =~ "renamed"
+      assert AgentProfiles.get("research").name == "Research Prime"
+    end
+
+    test "a delete missed while the cache process was down is not resurrected on restart",
+         ctx do
+      # Prime both the registry and the config cache with the profile, with the
+      # production TTL (tests run with 0) so the cache entry is served unchecked.
+      key = {LemonCore.ConfigCache, :defaults}
+      previous = :persistent_term.get(key, nil)
+      :persistent_term.put(key, %{mtime_check_interval_ms: 60_000, call_timeout_ms: 5_000})
+
+      try do
+        assert AgentProfiles.exists?("research")
+        _ = LemonCore.Config.cached(File.cwd!())
+
+        :ok = Supervisor.terminate_child(LemonRouter.Supervisor, AgentProfiles)
+
+        try do
+          assert {:ok, _} =
+                   ProfileStore.delete("research", Keyword.put(ctx.opts, :confirm, "research"))
+        after
+          {:ok, _pid} = Supervisor.restart_child(LemonRouter.Supervisor, AgentProfiles)
+        end
+
+        refute AgentProfiles.exists?("research")
+        assert {:error, {:unknown_agent_id, "research"}} = build_submission("research")
+      after
+        if previous,
+          do: :persistent_term.put(key, previous),
+          else: :persistent_term.erase(key)
+      end
+    end
+
+    test "any ProfileStore writer reloads the cache, not only RPC callers", ctx do
+      assert AgentProfiles.exists?("research")
+
+      assert {:ok, _} =
+               ProfileStore.delete("research", Keyword.put(ctx.opts, :confirm, "research"))
+
+      refute AgentProfiles.exists?("research")
+      assert {:error, {:unknown_agent_id, "research"}} = build_submission("research")
+    end
+
+    test "the page and export make no direct ProfileStore calls" do
+      for file <- ["live/profile_management_live.ex", "controllers/profile_export_controller.ex"] do
+        source = File.read!(Path.expand("../../lib/lemon_web/" <> file, __DIR__))
+        refute source =~ "ProfileStore", file
+        refute source =~ ":profile_store_", file
+      end
+    end
+
+    defp build_submission(agent_id) do
+      SubmissionBuilder.build(
+        LemonCore.RunRequest.new(%{
+          origin: :control_plane,
+          session_key: "agent:#{agent_id}:main",
+          agent_id: agent_id,
+          prompt: "Hello",
+          run_id: "run_#{System.unique_integer([:positive])}"
+        }),
+        %{
+          run_supervisor: LemonRouter.RunSupervisor,
+          run_process_module: LemonRouter.RunProcess,
+          run_process_opts: %{notify_pid: self()}
+        }
+      )
+    end
+  end
+
+  defp sync_router_profiles do
+    LemonRouter.AgentProfiles.reload()
+    _ = LemonRouter.AgentProfiles.list()
+    :ok
   end
 
   defp formatted_live_view_state(view) do

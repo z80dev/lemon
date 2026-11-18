@@ -33,6 +33,18 @@ history before signing in. Otherwise paste the token on the login page.
 - Every page requires sign-in. Without a configured token the UI returns 503,
   unless `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true` is set and the
   browser connects directly from loopback.
+- A loopback connection must name a loopback `Host` (`localhost`, `127.0.0.1`,
+  `[::1]`), the bind address or `LEMON_WEB_HOST`; any other `Host` (DNS
+  rebinding) gets 421. The `/live` socket accepts only the exact origins
+  `http://localhost|127.0.0.1|[::1]:$LEMON_WEB_PORT`, the bind address and the
+  configured public origin (`LEMON_WEB_URL_SCHEME`/`HOST`/`URL_PORT`), so other
+  web pages cannot drive Lemon Web even in tokenless loopback mode.
+- Cookies and LiveView tokens are signed with a per-install
+  `LEMON_WEB_SECRET_KEY_BASE` (a source checkout keeps it in
+  `~/.lemon/web_secret_key_base`); no committed secret or signing salt is used.
+- Behind a TLS-terminating proxy set `LEMON_WEB_SECURE_COOKIES=true` so the
+  session cookie is marked Secure (Lemon never trusts forwarded headers to
+  decide this). Leave it unset for direct `http://127.0.0.1` access.
 - Repeated wrong tokens from one address are throttled for a minute.
 - Sign out from the bottom of the navigation rail or **Settings → Operator**.
 

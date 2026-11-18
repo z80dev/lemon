@@ -2,15 +2,15 @@ defmodule LemonWeb.ProfileExportController do
   @moduledoc """
   Downloads a profile's portable, credential-safe export.
 
-  `LemonCore.ProfileStore.export/3` writes to a destination file; the
-  controller exports into a private temporary file, streams it as an
+  The `profiles.export` method (`LemonWeb.Rpc`) writes to a destination file;
+  the controller exports into a private temporary file, streams it as an
   attachment and removes it. The managed home path and the temporary path
   never reach the response.
   """
 
   use LemonWeb, :controller
 
-  alias LemonCore.ProfileStore
+  alias LemonWeb.Rpc
 
   @id_regex ~r/^[a-z0-9][a-z0-9_-]{0,63}$/
 
@@ -25,14 +25,14 @@ defmodule LemonWeb.ProfileExportController do
     try do
       with :ok <- File.mkdir_p(dir),
            :ok <- File.chmod(dir, 0o700),
-           {:ok, _result} <- ProfileStore.export(id, destination, profile_opts()),
+           {:ok, _result} <- Rpc.call("profiles.export", %{"id" => id, "path" => destination}),
            {:ok, content} <- File.read(destination) do
         send_download(conn, {:binary, content},
           filename: "lemon-profile-#{id}.json",
           content_type: "application/json"
         )
       else
-        {:error, :not_found} -> not_found(conn)
+        {:error, %{code: :not_found}} -> not_found(conn)
         _ -> unavailable(conn)
       end
     rescue
@@ -46,8 +46,6 @@ defmodule LemonWeb.ProfileExportController do
 
   defp unavailable(conn),
     do: conn |> put_status(:service_unavailable) |> text("Profile export is unavailable")
-
-  defp profile_opts, do: Application.get_env(:lemon_web, :profile_store_opts, [])
 
   defp random_suffix, do: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
 end

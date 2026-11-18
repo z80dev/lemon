@@ -143,7 +143,8 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_WEB_BIND_IP` | string | `127.0.0.1` |  | `lemon_web` | LemonWeb bind address; non-loopback requires an operator token and TLS should terminate in front. |
 | `LEMON_WEB_HOST` | string | `localhost` |  | `lemon_web` | Public hostname for the LemonWeb prod endpoint. |
 | `LEMON_WEB_PORT` | integer | `4080` |  | `lemon_web` | Port LemonWeb listens on. |
-| `LEMON_WEB_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_web` | Phoenix secret_key_base for the LemonWeb prod endpoint. |
+| `LEMON_WEB_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_web` | Per-install Phoenix secret_key_base for LemonWeb (also derives the LiveView signing salt); launchers generate and persist it. |
+| `LEMON_WEB_SECURE_COOKIES` | boolean | `false` |  | `lemon_web` | Mark the LemonWeb session cookie Secure even over a plain-HTTP backend connection; set it when TLS terminates in front (forwarded headers are never trusted). Direct http:// access then cannot sign in. |
 | `LEMON_WEB_UPLOADS_DIR` | string | _(none)_ |  | `lemon_web` | Directory used for LemonWeb file uploads. |
 | `LEMON_WEB_URL_PORT` | integer | `443` |  | `lemon_web` | Public URL port for generated LemonWeb links. |
 | `LEMON_WEB_URL_SCHEME` | string | `https` |  | `lemon_web` | Public URL scheme for generated LemonWeb links (http or https). |

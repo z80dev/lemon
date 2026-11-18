@@ -332,6 +332,7 @@ topic subscriptions.
 | `parent_question:<request_id>` | `CodingAgent.ParentQuestions` → `Tools.AskParent` | the event is a doorbell; the consumer re-reads state from `ParentQuestions.get/1` |
 | `background_run:<id>` | `CodingAgent.BackgroundRun.Worker` | envelope events mirrored to the task store |
 | `sessions:lifecycle` | `LemonCore.RunStore.delete_history/1` → `CodingAgent.ToolResources` | tuple `{:session_history_deleted, session_key, cutoff}` |
+| `profiles:changed` | `LemonCore.ProfileStore` (every create/clone/update/rename/delete) → `LemonRouter.AgentProfiles` | bare atom `:profiles_changed` — a doorbell; the router re-reads the profile config so no writer leaves its cache stale |
 | `a2a:task:<id>` | `LemonControlPlane.A2A.Runner` → A2A runner/router | tuple `{:a2a_task_terminal, task_id}` |
 | `lemon_web:runs` | `LemonWeb.ShellLive.RunEvents` → `ShellLive` | tuple `{:lemon_web_run, phase, info}` |
 

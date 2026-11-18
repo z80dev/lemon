@@ -57,6 +57,8 @@ env:
   # Phoenix endpoints are opt-in in releases so eval/rpc commands do not bind
   # sockets. The full-runtime smoke explicitly exercises those endpoints.
   PHX_SERVER: "1"
+  # Web pages require operator access; the LiveView smoke signs in with this.
+  LEMON_CONTROL_PLANE_OPERATOR_TOKEN: "release-smoke-control-plane-operator-token"
 
 jobs:
   smoke-test:
@@ -197,6 +199,12 @@ jobs:
       - name: Verify Web health
         if: matrix.profile == 'lemon_runtime_full'
         run: curl --fail --silent --show-error "http://127.0.0.1:${LEMON_WEB_PORT}/healthz" | grep -Fx ok
+
+      - name: Verify Web LiveView socket
+        if: matrix.profile == 'lemon_runtime_full'
+        # Real /live/websocket upgrade with Origin http://127.0.0.1:$LEMON_WEB_PORT,
+        # a LiveView join reply, and a refused foreign Origin.
+        run: elixir scripts/web_liveview_smoke.exs
 
       - name: Install test deps
         run: mix deps.get

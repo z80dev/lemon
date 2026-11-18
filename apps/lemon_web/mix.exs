@@ -40,7 +40,6 @@ defmodule LemonWeb.MixProject do
       {:phoenix, "~> 1.8"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_view, "~> 1.0"},
-      {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:earmark_parser, "~> 1.4"},
       {:jason, "~> 1.4"},
       {:bandit, "~> 1.5"},

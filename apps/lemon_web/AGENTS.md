@@ -44,7 +44,13 @@ router, store or settings implementation. See [README](README.md) and
   is explicitly enabled and the actual socket peer (`conn.remote_ip` / LiveView
   `peer_data`) is loopback. Never consult forwarded headers. Failed logins are
   throttled per peer.
-- Production cookie signing/encryption needs the configured secret key base.
+- `LemonWeb.RequestGuard` refuses a foreign `Host` from loopback peers (421)
+  before any plug or the `/live` upgrade, and is the socket's fixed
+  `check_origin` (exact origins from `config :lemon_web, :trusted_origins`).
+  Never set `check_origin: false`, a code reloader or debug errors on the
+  endpoint: `bin/lemon` serves it from the dev config.
+- Cookie signing/encryption and LiveView tokens use the per-install secret key
+  base (`config/runtime.exs` derives the LiveView salt from it); never commit one.
   Avoid putting credentials, private paths or raw service failures into assigns,
   logs or HTML.
 
@@ -57,7 +63,9 @@ router, store or settings implementation. See [README](README.md) and
   precedes every write; apply checks a server-held revision, destructive actions
   require exact confirmation. Credentials use password fields and filtered logs;
   never retain secret values in socket drafts. Re-entry hashes bind preview.
-- Profiles use `ProfileStore` and sanitize before assignment. IDs, names, model/
+- Profiles use the `profiles.*` methods through `LemonWeb.Rpc` (never
+  `ProfileStore` directly, so writes reload the router cache) and sanitize before
+  assignment. IDs, names, model/
   node/status/availability and canonical keys are allowed; paths/system prompts
   are not. Clone/rename/delete recheck opaque revision; delete also confirms exact
   ID and inherits trash-first rollback. Refused/stale writes keep safe drafts.

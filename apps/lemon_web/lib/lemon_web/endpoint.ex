@@ -21,10 +21,23 @@ defmodule LemonWeb.Endpoint do
   @doc false
   def session_options, do: @session_options
 
+  # The origin check is part of the socket, not endpoint config, so no
+  # environment can turn it off (see LemonWeb.RequestGuard).
   socket("/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [:peer_data, session: @session_options]],
+    websocket: [
+      connect_info: [:peer_data, session: @session_options],
+      check_origin: {LemonWeb.RequestGuard, :origin_allowed?, []}
+    ],
     longpoll: false
   )
+
+  # Host validation runs before everything, including the /live upgrade that
+  # Phoenix dispatches ahead of the plug pipeline.
+  def call(conn, opts) do
+    if LemonWeb.RequestGuard.host_allowed?(conn),
+      do: super(conn, opts),
+      else: LemonWeb.RequestGuard.reject(conn)
+  end
 
   plug(Plug.Static,
     at: "/",
@@ -32,11 +45,6 @@ defmodule LemonWeb.Endpoint do
     gzip: false,
     only: LemonWeb.static_paths()
   )
-
-  if code_reloading? do
-    plug(Phoenix.CodeReloader)
-    plug(Phoenix.LiveReloader)
-  end
 
   plug(Plug.RequestId)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
@@ -52,9 +60,12 @@ defmodule LemonWeb.Endpoint do
   plug(:session)
   plug(LemonWeb.Router)
 
-  # Mark the cookie Secure whenever the request itself arrived over TLS.
-  defp session(%Plug.Conn{scheme: :https} = conn, _opts),
-    do: Plug.Session.call(conn, @secure_session)
-
-  defp session(conn, _opts), do: Plug.Session.call(conn, @plain_session)
+  # The cookie is Secure when the request itself arrived over TLS, or when the
+  # operator declared TLS terminates in front (LEMON_WEB_SECURE_COOKIES). The
+  # proxy's forwarded headers are never consulted.
+  defp session(conn, _opts) do
+    if conn.scheme == :https or Application.get_env(:lemon_web, :secure_cookies, false) == true,
+      do: Plug.Session.call(conn, @secure_session),
+      else: Plug.Session.call(conn, @plain_session)
+  end
 end

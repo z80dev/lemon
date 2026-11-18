@@ -194,8 +194,10 @@ config :lemon_web, LemonWeb.Endpoint,
     formats: [html: LemonWeb.ErrorHTML, json: LemonWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: LemonCore.PubSub,
-  live_view: [signing_salt: "lemonwebsigningsalt"]
+  pubsub_server: LemonCore.PubSub
+
+# secret_key_base and the LiveView signing salt are per install: see
+# config/runtime.exs (test values live in config/test.exs).
 
 config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads")
 
