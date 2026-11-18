@@ -9,7 +9,7 @@ defmodule LemonBrowser.CloudSession do
 
   use GenServer
 
-  alias LemonBrowser.LocalServer
+  alias LemonBrowser.{CredentialVault, LocalServer}
 
   @registry LemonBrowser.CloudSessionRegistry
   @supervisor LemonBrowser.CloudSessionSupervisor
@@ -31,8 +31,15 @@ defmodule LemonBrowser.CloudSession do
   def request(provider, method, args, timeout_ms, opts)
       when is_atom(provider) and is_binary(method) and is_map(args) do
     with {:ok, scope} <- exact_scope(opts),
+         :ok <- reject_url_credentials(opts),
          {:ok, pid} <- ensure_started(provider, scope, opts) do
-      GenServer.call(pid, {:request, method, args, timeout_ms}, timeout_ms + 35_000)
+      # Credential-bearing provider options travel with each call and are
+      # never retained by the session process.
+      GenServer.call(
+        pid,
+        {:request, method, args, timeout_ms, hosted_provider_opts(opts)},
+        timeout_ms + 35_000
+      )
     end
   end
 
@@ -52,6 +59,19 @@ defmodule LemonBrowser.CloudSession do
     end)
   end
 
+  # Provider credentials and request payloads never reach crash reports or
+  # `:sys.get_status/1`.
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, _} -> {:state, :redacted}
+      {:message, _} -> {:message, :redacted}
+      {:reason, _} -> {:reason, :redacted}
+      {:log, _} -> {:log, []}
+      pair -> pair
+    end)
+  end
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -65,7 +85,10 @@ defmodule LemonBrowser.CloudSession do
      %{
        provider: Keyword.fetch!(opts, :provider),
        scope: Keyword.fetch!(opts, :scope),
-       provider_opts: Keyword.get(opts, :provider_opts, []),
+       # Inline provider credentials are stripped; the ones that created the
+       # provider session live in the CredentialVault under `credential_ref`.
+       provider_opts: retained_provider_opts(Keyword.get(opts, :provider_opts, [])),
+       credential_ref: nil,
        driver: nil,
        session: nil,
        idle_timeout_ms: idle_timeout_ms,
@@ -81,10 +104,10 @@ defmodule LemonBrowser.CloudSession do
     {:reply, public_status(state), state}
   end
 
-  def handle_call({:request, method, args, timeout_ms}, _from, state) do
+  def handle_call({:request, method, args, timeout_ms, provider_opts}, _from, state) do
     state = reset_idle_timer(state)
 
-    case ensure_driver(state) do
+    case ensure_driver(state, provider_opts) do
       {:ok, state} ->
         result = LocalServer.request(state.driver, method, args, timeout_ms)
 
@@ -106,7 +129,7 @@ defmodule LemonBrowser.CloudSession do
   def handle_info(:idle_timeout, state), do: {:stop, :normal, state}
 
   def handle_info({:EXIT, pid, _reason}, %{driver: pid} = state) do
-    close_provider_session(state)
+    state = close_provider_session(state)
     {:noreply, %{state | driver: nil, session: nil, last_error: "browser driver exited"}}
   end
 
@@ -133,7 +156,8 @@ defmodule LemonBrowser.CloudSession do
           name: name,
           provider: provider,
           scope: scope,
-          provider_opts: hosted_provider_opts(opts),
+          # The supervisor keeps child start arguments; no credentials there.
+          provider_opts: opts |> hosted_provider_opts() |> retained_provider_opts(),
           idle_timeout_ms: Keyword.get(opts, :browser_idle_timeout_ms, @default_idle_timeout_ms)
         ]
 
@@ -145,19 +169,33 @@ defmodule LemonBrowser.CloudSession do
     end
   end
 
-  defp ensure_driver(%{driver: pid} = state) when is_pid(pid), do: {:ok, state}
+  defp ensure_driver(%{driver: pid} = state, _provider_opts) when is_pid(pid), do: {:ok, state}
 
-  defp ensure_driver(state) do
+  defp ensure_driver(state, provider_opts) do
     with {:ok, provider_module} <- fetch_provider(state.provider),
-         {:ok, session} <- provider_module.create_session(scope_id(state.scope), state.provider_opts),
-         {:ok, driver} <-
-           LocalServer.start_link(
+         {:ok, session} <- provider_module.create_session(scope_id(state.scope), provider_opts) do
+      # Cleanup must authenticate as the credentials that created the session.
+      CredentialVault.delete(state.credential_ref)
+
+      state = %{
+        state
+        | credential_ref: CredentialVault.put(self(), credential_fields(provider_opts))
+      }
+
+      # The endpoint authorizes the hosted browser: it goes straight to the
+      # driver process environment and is not kept in either process state.
+      case LocalServer.start_link(
              name: nil,
              cdp_endpoint: session.cdp_endpoint,
              attach_only: true,
-             driver_path: Keyword.get(state.provider_opts, :driver_path)
+             driver_path: Keyword.get(provider_opts, :driver_path)
            ) do
-      {:ok, %{state | driver: driver, session: session, last_error: nil}}
+        {:ok, driver} ->
+          {:ok, %{state | driver: driver, session: retained_session(session), last_error: nil}}
+
+        {:error, reason} ->
+          {:error, reason, close_provider_session(%{state | session: retained_session(session)})}
+      end
     else
       {:error, reason} -> {:error, reason, state}
     end
@@ -170,16 +208,38 @@ defmodule LemonBrowser.CloudSession do
     end
   end
 
+  # The provider result carries the CDP endpoint; only its id, features and
+  # expiry are ever kept in state.
+  defp retained_session(session), do: Map.take(session, [:id, :features, :expires_at])
+
+  # Returns the state with the provider session and its credential entry
+  # released, on every path including exceptions.
   defp close_provider_session(%{session: %{id: id}} = state) do
-    case fetch_provider(state.provider) do
-      {:ok, module} -> module.close_session(id, state.provider_opts)
-      _ -> :ok
+    with {:ok, module} <- fetch_provider(state.provider) do
+      credentials = CredentialVault.fetch(state.credential_ref)
+
+      opts =
+        Keyword.update(
+          state.provider_opts,
+          :provider_config,
+          credentials,
+          &Map.merge(&1, credentials)
+        )
+
+      module.close_session(id, opts)
     end
+
+    release_credentials(state)
   catch
-    _, _ -> :ok
+    _, _ -> release_credentials(state)
   end
 
-  defp close_provider_session(_state), do: :ok
+  defp close_provider_session(state), do: release_credentials(state)
+
+  defp release_credentials(state) do
+    CredentialVault.delete(state.credential_ref)
+    %{state | credential_ref: nil, session: nil}
+  end
 
   defp exact_scope(opts) do
     session_id = normalized_opt(opts, :session_id)
@@ -204,7 +264,8 @@ defmodule LemonBrowser.CloudSession do
           normalized -> normalized
         end
 
-      _ -> nil
+      _ ->
+        nil
     end
   end
 
@@ -257,7 +318,9 @@ defmodule LemonBrowser.CloudSession do
   defp error_text(_), do: nil
 
   defp safe_reason(reason) when is_binary(reason), do: String.slice(reason, 0, 300)
-  defp safe_reason(reason), do: reason |> inspect(limit: 8, printable_limit: 300) |> String.slice(0, 300)
+
+  defp safe_reason(reason),
+    do: reason |> inspect(limit: 8, printable_limit: 300) |> String.slice(0, 300)
 
   defp hash(nil), do: nil
 
@@ -266,6 +329,47 @@ defmodule LemonBrowser.CloudSession do
     |> Base.encode16(case: :lower)
     |> binary_part(0, 16)
   end
+
+  @credential_key ~r/api_?key|private_?key|token|secret|password|credential/i
+
+  defp retained_provider_opts(opts) do
+    Keyword.update(opts, :provider_config, %{}, fn
+      config when is_map(config) ->
+        Map.reject(config, fn {key, _value} -> Regex.match?(@credential_key, to_string(key)) end)
+
+      _ ->
+        %{}
+    end)
+  end
+
+  defp credential_fields(provider_opts) do
+    case Keyword.get(provider_opts, :provider_config) do
+      config when is_map(config) ->
+        Map.filter(config, fn {key, _value} -> Regex.match?(@credential_key, to_string(key)) end)
+
+      _ ->
+        %{}
+    end
+  end
+
+  # Provider URLs (e.g. `base_url`) with userinfo would be retained in state,
+  # child specs and request logs; pass keys through credential fields instead.
+  defp reject_url_credentials(opts) do
+    case Keyword.get(opts, :provider_config) do
+      config when is_map(config) ->
+        if Enum.any?(config, fn {_key, value} -> url_with_userinfo?(value) end),
+          do: {:error, "Hosted browser provider URLs must not embed credentials"},
+          else: :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp url_with_userinfo?(value) when is_binary(value),
+    do: String.contains?(value, "://") and not is_nil(URI.parse(value).userinfo)
+
+  defp url_with_userinfo?(_value), do: false
 
   defp now_iso8601, do: DateTime.utc_now() |> DateTime.to_iso8601()
 end

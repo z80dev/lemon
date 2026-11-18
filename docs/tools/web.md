@@ -135,9 +135,12 @@ falls back across identities.
 
 The `local` provider manages Chrome/Chromium over loopback CDP. To attach an
 existing CDP browser instead, set `LEMON_BROWSER_PROVIDER=cdp` and
-`LEMON_BROWSER_CDP_ENDPOINT` (or pass `--cdp-endpoint` when using the driver
-directly). CDP attachment never launches a replacement if the endpoint is
-unreachable, and connection errors redact endpoint credentials.
+`LEMON_BROWSER_CDP_ENDPOINT`. Lemon hands the endpoint (including relay and
+hosted-provider tokens) to the driver only through its environment, never its
+argv, and keeps it out of inspectable process state; `--cdp-endpoint` exists
+only for running the driver by hand and exposes the value to `ps`. CDP
+attachment never launches a replacement if the endpoint is unreachable, and
+connection errors redact endpoint credentials.
 
 Every page-scoped browser tool accepts optional `targetId`. When omitted it
 uses the session's active target; `browser_tab_activate` changes that active

@@ -268,6 +268,92 @@ defmodule LemonBrowser.CamofoxSessionTest do
     refute_received {:delete, _, _}
   end
 
+  test "process state and status never expose the Camofox API key", %{opts: opts} do
+    assert {:ok, _} = CamofoxSession.request("browser.tabs", %{}, 1_000, opts)
+
+    assert_received {:get, _url, get_opts}
+    assert {"authorization", "Bearer camofox-api-secret"} in get_opts[:headers]
+
+    [pid] = session_pids()
+    supervisor = Process.whereis(LemonBrowser.CamofoxSessionSupervisor)
+
+    for target <- [pid, supervisor] do
+      refute contains_secret?(:sys.get_state(target), "camofox-api-secret")
+      refute inspect(:sys.get_status(target), limit: :infinity) =~ "camofox-api-secret"
+    end
+  end
+
+  test "base URLs embedding credentials are rejected before any session starts", %{opts: opts} do
+    opts =
+      Keyword.update!(
+        opts,
+        :provider_config,
+        &Map.put(&1, :base_url, "http://camofox:userinfo-secret@camofox.test:9377")
+      )
+
+    assert {:error, reason} = CamofoxSession.request("browser.tabs", %{}, 1_000, opts)
+    assert reason =~ "must not embed credentials"
+    refute reason =~ "userinfo-secret"
+    refute CamofoxSession.available?(opts)
+    assert session_pids() == []
+    refute_received {:get, _, _}
+  end
+
+  for {label, global} <- [{"absent", nil}, {"different", "camofox-global-other"}] do
+    test "idle cleanup DELETE authenticates with the session's inline key (global #{label})", %{
+      opts: opts
+    } do
+      original = System.get_env("CAMOFOX_API_KEY")
+
+      if unquote(global),
+        do: System.put_env("CAMOFOX_API_KEY", unquote(global)),
+        else: System.delete_env("CAMOFOX_API_KEY")
+
+      try do
+        assert {:ok, _} =
+                 CamofoxSession.request(
+                   "browser.navigate",
+                   %{"url" => "https://example.com"},
+                   1_000,
+                   Keyword.put(opts, :browser_idle_timeout_ms, 5_000)
+                 )
+
+        [pid] = session_pids()
+
+        for target <- [pid, Process.whereis(LemonBrowser.CredentialVault)] do
+          refute contains_secret?(:sys.get_state(target), "camofox-api-secret")
+        end
+
+        send(pid, :idle_timeout)
+        assert_eventually(fn -> CamofoxSession.status() == [] end)
+        assert_received {:delete, _url, delete_opts}
+        assert {"authorization", "Bearer camofox-api-secret"} in delete_opts[:headers]
+      after
+        if original,
+          do: System.put_env("CAMOFOX_API_KEY", original),
+          else: System.delete_env("CAMOFOX_API_KEY")
+      end
+    end
+  end
+
+  defp contains_secret?(term, secret) when is_binary(term), do: String.contains?(term, secret)
+
+  defp contains_secret?(term, secret) when is_tuple(term),
+    do: contains_secret?(Tuple.to_list(term), secret)
+
+  defp contains_secret?(term, secret) when is_map(term),
+    do: contains_secret?(:maps.to_list(term), secret)
+
+  defp contains_secret?([head | tail], secret),
+    do: contains_secret?(head, secret) or contains_secret?(tail, secret)
+
+  defp contains_secret?(term, secret) when is_function(term) do
+    {:env, env} = :erlang.fun_info(term, :env)
+    contains_secret?(env, secret)
+  end
+
+  defp contains_secret?(_term, _secret), do: false
+
   defp response(status, body), do: {:ok, %Req.Response{status: status, headers: %{}, body: body}}
 
   defp stop_sessions do
