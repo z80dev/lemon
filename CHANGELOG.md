@@ -204,6 +204,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- In a cloned repository, Lemon no longer starts or connects project MCP
+  servers until the operator runs `lemon mcp trust` for that project's exact
+  content. This covers Lemon's own `.lemon/mcp.json` (including
+  `enabled_servers`/`disabled_servers`/`enabled` overrides of global servers)
+  and other tools' project files (`.mcp.json`, `.vscode/mcp.json`,
+  `.cursor/mcp.json`, `.claude/`, `.codex/config.toml`, `.gemini/`,
+  `opencode.json[c]`, `.windsurf/`, `.omp/`). Trust is stored in
+  `<agent_dir>/mcp_project_trust.json`, bound to a digest of every project file,
+  and re-checked before every spawn and reconnect. Project files never expand
+  `${VAR}`, `{env:}` or `{file:}`, Codex env keys, or OAuth secret references.
+  `lemon mcp list --all`, `lemon doctor`, `mcp.servers.list` and `/mcp` show
+  pending trust read-only.
+
 - Channel ingress now applies per-channel tool policy and the group-chat
   approval floor: `LemonChannels.RunRequestBuilder` derives `channel_context`
   and sender `channel_identity` from the transport-normalized message, ignores
