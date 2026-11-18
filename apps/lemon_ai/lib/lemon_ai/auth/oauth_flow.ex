@@ -15,6 +15,10 @@ defmodule LemonAi.Auth.OAuthFlow do
     refresh returns `:oauth_secret_changed`, never the stale refreshed token.
     Persistence failures are errors. `force_refresh: true` never falls back
     to a rejected token.
+  - `start_callback_listener/2`, `await_authorization_input/4`,
+    `parse_authorization_input/1` and `ensure_state_matches/2` run the
+    authorization-code redirect: the returned `state` must equal the one sent,
+    whether it arrives through the loopback listener or a paste.
   """
 
   require Logger
@@ -25,6 +29,7 @@ defmodule LemonAi.Auth.OAuthFlow do
   @default_expires_in_s 900
   @slow_down_increment_ms 5_000
   @request_timeout_ms 30_000
+  @default_callback_timeout_ms 120_000
   @oauth_error_codes ~w(invalid_request invalid_client invalid_grant unauthorized_client
                         unsupported_grant_type invalid_scope access_denied server_error
                         temporarily_unavailable authorization_pending slow_down expired_token)
@@ -462,6 +467,164 @@ defmodule LemonAi.Auth.OAuthFlow do
     LemonAi.Auth.OAuthSecretResolver.persist_secret(secret_name, spec.encode.(secret), opts)
   end
 
+  # ── Authorization-code redirect ────────────────────────────────────────────
+
+  @doc """
+  Start `opts[:local_callback_listener]` on `redirect_uri`, accepting only a
+  callback that carries `state`.
+
+  Returns `{module, listener}`, or `nil` when no listener is configured,
+  `listen_for_callback: false` is set, the URI is not local, or binding fails
+  (reported through `:on_progress`).
+  """
+  @spec start_callback_listener(String.t(), String.t(), keyword()) :: {module(), term()} | nil
+  def start_callback_listener(redirect_uri, state, opts) when is_binary(state) do
+    module = Keyword.get(opts, :local_callback_listener)
+
+    if module && Keyword.get(opts, :listen_for_callback, true) &&
+         module.local_redirect_uri?(redirect_uri) do
+      case module.start(redirect_uri, expected_state: state) do
+        {:ok, listener} ->
+          {module, listener}
+
+        {:error, reason} ->
+          notify_progress(
+            opts,
+            "Could not listen on #{redirect_uri} (#{format_listener_error(reason)}). " <>
+              "Falling back to manual paste."
+          )
+
+          nil
+      end
+    end
+  end
+
+  @doc "Stop a listener returned by `start_callback_listener/2`."
+  @spec stop_callback_listener({module(), term()} | nil) :: :ok
+  def stop_callback_listener(nil), do: :ok
+  def stop_callback_listener({module, listener}), do: module.stop(listener)
+
+  @doc """
+  Return the browser redirect captured by `listener`, or the user's answer to
+  `prompt` (`%{message:, placeholder:}`) when there is no listener or it does
+  not receive the redirect within `:callback_timeout_ms`.
+  """
+  @spec await_authorization_input(keyword(), String.t(), {module(), term()} | nil, map()) ::
+          {:ok, String.t()} | {:error, :login_cancelled | :prompt_callback_required}
+  def await_authorization_input(opts, _redirect_uri, nil, prompt), do: prompt_input(opts, prompt)
+
+  def await_authorization_input(opts, redirect_uri, {module, listener}, prompt) do
+    timeout_ms = Keyword.get(opts, :callback_timeout_ms, @default_callback_timeout_ms)
+    notify_progress(opts, "Waiting for the browser redirect to #{redirect_uri} ...")
+
+    case module.wait(listener, timeout_ms) do
+      {:ok, callback_url} ->
+        notify_progress(opts, "Received the browser redirect. Finishing sign-in...")
+        {:ok, callback_url}
+
+      {:error, reason} ->
+        notify_progress(
+          opts,
+          "The browser redirect did not arrive (#{format_listener_error(reason)}). " <>
+            "Paste it to continue."
+        )
+
+        prompt_input(opts, prompt)
+    end
+  end
+
+  @doc "Ask `:on_prompt` for input; an empty answer cancels sign-in."
+  @spec prompt_input(keyword(), map()) ::
+          {:ok, String.t()} | {:error, :login_cancelled | :prompt_callback_required}
+  def prompt_input(opts, prompt) do
+    answer =
+      case Keyword.get(opts, :on_prompt) do
+        callback when is_function(callback, 1) -> {:ok, callback.(prompt)}
+        callback when is_function(callback, 0) -> {:ok, callback.()}
+        _ -> {:error, :prompt_callback_required}
+      end
+
+    with {:ok, value} <- answer do
+      case normalize_prompt_input(value) do
+        "" -> {:error, :login_cancelled}
+        value -> {:ok, value}
+      end
+    end
+  end
+
+  @doc """
+  Parse a browser redirect or pasted answer: a callback URL, a query string
+  containing `code=`, `code#state`, or a bare code. A bare code carries no
+  state, so `ensure_state_matches/2` rejects it.
+  """
+  @spec parse_authorization_input(term()) ::
+          {:ok, %{code: String.t(), state: String.t() | nil}} | {:error, atom()}
+  def parse_authorization_input(input) when is_binary(input) do
+    value = String.trim(input)
+
+    {code, state} =
+      cond do
+        String.contains?(value, "://") ->
+          case parse_authorization_uri(value) do
+            {:ok, %URI{query: query}} when is_binary(query) ->
+              params = URI.decode_query(query)
+              {params["code"], params["state"]}
+
+            _ ->
+              {nil, nil}
+          end
+
+        String.contains?(value, "#") ->
+          [code, state] = String.split(value, "#", parts: 2)
+          {code, state}
+
+        String.contains?(value, "code=") ->
+          params = URI.decode_query(value)
+          {params["code"], params["state"]}
+
+        true ->
+          {value, nil}
+      end
+
+    # State is compared byte for byte: never trimmed or otherwise normalized.
+    state = if is_binary(state) and state != "", do: state
+
+    case non_empty_binary(code) do
+      nil -> {:error, :missing_authorization_code}
+      code -> {:ok, %{code: code, state: state}}
+    end
+  end
+
+  def parse_authorization_input(_), do: {:error, :invalid_authorization_input}
+
+  @doc """
+  Require the returned `state` to equal the one this flow sent. A missing
+  state fails like a wrong one: every supported redirect and manual page
+  carries it. Failures are logged without the code, verifier or state.
+  """
+  @spec ensure_state_matches(String.t(), String.t() | nil) ::
+          :ok | {:error, :missing_oauth_state | :oauth_state_mismatch}
+  def ensure_state_matches(expected, provided)
+      when is_binary(expected) and expected != "" and is_binary(provided) do
+    if byte_size(expected) == byte_size(provided) and :crypto.hash_equals(expected, provided) do
+      :ok
+    else
+      Logger.warning("OAuth state mismatch; authorization code discarded")
+      {:error, :oauth_state_mismatch}
+    end
+  end
+
+  def ensure_state_matches(_expected, _provided) do
+    Logger.warning("OAuth state missing; authorization code discarded")
+    {:error, :missing_oauth_state}
+  end
+
+  defp format_listener_error(:eaddrinuse), do: "port already in use"
+  defp format_listener_error(:timeout), do: "timed out"
+  defp format_listener_error(:unsupported_redirect_uri), do: "redirect URI is not local"
+  defp format_listener_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_listener_error(_reason), do: "listener failed"
+
   # ── Callbacks and helpers ──────────────────────────────────────────────────
   @doc """
   Parse a full authorization URI without discarding malformed authority suffixes.
@@ -528,8 +691,13 @@ defmodule LemonAi.Auth.OAuthFlow do
     _ -> {:error, :invalid_authorization_input}
   end
 
-  @doc "Invoke `:on_auth` with the URL and instructions; required for interactive flows."
-  @spec notify_auth(keyword(), String.t(), String.t()) :: :ok | {:error, :auth_callback_required}
+  @doc """
+  Invoke `:on_auth` with the URL and instructions; required for interactive
+  flows. A raising callback fails with `:auth_callback_failed` (logged without
+  its message, which may hold the URL); exits and throws propagate.
+  """
+  @spec notify_auth(keyword(), String.t(), String.t()) ::
+          :ok | {:error, :auth_callback_required | :auth_callback_failed}
   def notify_auth(opts, url, instructions) do
     case Keyword.get(opts, :on_auth) do
       callback when is_function(callback, 2) ->
@@ -543,9 +711,16 @@ defmodule LemonAi.Auth.OAuthFlow do
       _ ->
         {:error, :auth_callback_required}
     end
+  rescue
+    exception ->
+      Logger.warning("OAuth on_auth callback raised #{inspect(exception.__struct__)}")
+      {:error, :auth_callback_failed}
   end
 
-  @doc "Invoke `:on_progress` when present."
+  @doc """
+  Invoke `:on_progress` when present. A raising callback is logged (without its
+  message) and ignored; exits and throws propagate.
+  """
   @spec notify_progress(keyword(), String.t()) :: :ok
   def notify_progress(opts, message) do
     case Keyword.get(opts, :on_progress) do
@@ -554,6 +729,10 @@ defmodule LemonAi.Auth.OAuthFlow do
     end
 
     :ok
+  rescue
+    exception ->
+      Logger.warning("OAuth on_progress callback raised #{inspect(exception.__struct__)}")
+      :ok
   end
 
   @doc "Decode a JWT payload without verifying it; `nil` when malformed."

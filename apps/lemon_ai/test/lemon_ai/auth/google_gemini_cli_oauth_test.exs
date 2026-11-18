@@ -37,13 +37,6 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuthTest do
     :ok
   end
 
-  test "parse_authorization_input handles callback URL" do
-    input = "http://localhost:8085/oauth2callback?code=abc123&state=state456"
-
-    assert {:ok, %{code: "abc123", state: "state456"}} =
-             GoogleGeminiCliOAuth.parse_authorization_input(input)
-  end
-
   test "resolve_api_key_from_secret returns Gemini CLI JSON credentials" do
     payload =
       Jason.encode!(%{

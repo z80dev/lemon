@@ -126,11 +126,34 @@ defmodule LemonAi.Auth.ZaiOAuthTest do
     Req.Test.stub(__MODULE__, fn _ -> flunk("must not exchange without returned state") end)
 
     for input <- ["the-code", "zcode://zai-auth/callback?code=the-code", "code=the-code"] do
+      assert {:error, :missing_oauth_state} =
+               ZaiOAuth.login_device_flow(
+                 Keyword.merge(opts, on_auth: fn _, _ -> :ok end, on_prompt: fn _ -> input end)
+               )
+    end
+  end
+
+  test "returned state must match exactly, without whitespace normalization", %{opts: opts} do
+    Req.Test.stub(__MODULE__, fn _ -> flunk("must not exchange a modified state") end)
+
+    for input <- [
+          "zcode://zai-auth/callback?code=the-code&state=%20state-123%20",
+          "code=the-code&state=state-123%09",
+          "the-code# state-123"
+        ] do
       assert {:error, :oauth_state_mismatch} =
                ZaiOAuth.login_device_flow(
                  Keyword.merge(opts, on_auth: fn _, _ -> :ok end, on_prompt: fn _ -> input end)
                )
     end
+
+    assert {:error, :missing_oauth_state} =
+             ZaiOAuth.login_device_flow(
+               Keyword.merge(opts,
+                 on_auth: fn _, _ -> :ok end,
+                 on_prompt: fn _ -> "zcode://zai-auth/callback?code=the-code&state=" end
+               )
+             )
   end
 
   test "a matching state does not authorize a different redirect endpoint", %{opts: opts} do

@@ -7,6 +7,8 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   secret payloads, and API-key resolution for the `google_gemini_cli` provider.
   """
 
+  import LemonAi.Auth.OAuthFlow, only: [non_empty_binary: 1, notify_auth: 3, notify_progress: 2]
+
   alias LemonAi.Auth.{OAuthFlow, OAuthPKCE, OAuthSecret}
 
   @authorize_url "https://accounts.google.com/o/oauth2/v2/auth"
@@ -31,7 +33,6 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   ]
   @secret_type "google_gemini_cli_oauth"
   @near_expiry_ms 5 * 60 * 1000
-  @default_callback_timeout_ms 120_000
   @free_tier_id "free-tier"
   @legacy_tier_id "legacy-tier"
   @default_onboard_attempts 10
@@ -92,7 +93,7 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   @spec login_device_flow([login_opt()]) :: {:ok, oauth_secret()} | {:error, term()}
   def login_device_flow(opts \\ []) when is_list(opts) do
     with {:ok, auth} <- build_authorize_url(opts) do
-      listener = maybe_start_local_callback_listener(auth.redirect_uri, opts)
+      listener = OAuthFlow.start_callback_listener(auth.redirect_uri, auth.state, opts)
 
       try do
         with :ok <-
@@ -101,8 +102,13 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
                  auth.authorize_url,
                  auth_instructions(auth.redirect_uri, listener)
                ),
-             {:ok, %{code: code, state: state}} <- prompt_code(opts, auth.redirect_uri, listener),
-             :ok <- ensure_state_matches(auth.state, state),
+             {:ok, input} <-
+               OAuthFlow.await_authorization_input(opts, auth.redirect_uri, listener, %{
+                 message: "Paste the callback URL from the browser address bar:",
+                 placeholder: "http://localhost:8085/oauth2callback?code=...&state=..."
+               }),
+             {:ok, %{code: code, state: state}} <- OAuthFlow.parse_authorization_input(input),
+             :ok <- OAuthFlow.ensure_state_matches(auth.state, state),
              :ok <- notify_progress(opts, "Exchanging authorization code for Gemini tokens..."),
              {:ok, secret} <-
                exchange_code_for_secret(code, auth.code_verifier,
@@ -112,7 +118,7 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
           {:ok, secret}
         end
       after
-        stop_local_callback_listener(listener)
+        OAuthFlow.stop_callback_listener(listener)
       end
     end
   end
@@ -148,41 +154,6 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
        created_at_ms: System.system_time(:millisecond)
      }}
   end
-
-  @doc """
-  Parse callback/manual pasted OAuth input. Accepts:
-  - full callback URL
-  - query string containing `code=`
-  - plain code
-  """
-  @spec parse_authorization_input(String.t()) ::
-          {:ok, %{code: String.t(), state: String.t() | nil}} | {:error, term()}
-  def parse_authorization_input(input) when is_binary(input) do
-    value = String.trim(input)
-
-    parsed =
-      cond do
-        value == "" ->
-          %{code: nil, state: nil}
-
-        String.contains?(value, "://") ->
-          parse_authorization_url(value)
-
-        String.contains?(value, "code=") ->
-          params = URI.decode_query(value)
-          %{code: params["code"], state: params["state"]}
-
-        true ->
-          %{code: value, state: nil}
-      end
-
-    case non_empty_binary(parsed.code) do
-      nil -> {:error, :missing_authorization_code}
-      code -> {:ok, %{code: code, state: non_empty_binary(parsed.state)}}
-    end
-  end
-
-  def parse_authorization_input(_), do: {:error, :invalid_authorization_input}
 
   @doc """
   Exchange authorization code + PKCE verifier for an OAuth secret payload.
@@ -655,17 +626,6 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
       |> normalize_project_id()
   end
 
-  defp parse_authorization_url(value) do
-    case LemonAi.Auth.OAuthFlow.parse_authorization_uri(value) do
-      {:ok, %URI{query: query}} when is_binary(query) and query != "" ->
-        params = URI.decode_query(query)
-        %{code: params["code"], state: params["state"]}
-
-      _ ->
-        %{code: nil, state: nil}
-    end
-  end
-
   defp normalize_project_id(value) when is_binary(value) do
     trimmed = String.trim(value)
     if trimmed == "", do: nil, else: trimmed
@@ -692,161 +652,13 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
       default_value
   end
 
-  defp prompt_code(opts, redirect_uri, listener) do
-    case wait_for_local_callback(opts, redirect_uri, listener) do
-      {:ok, value} ->
-        parse_authorization_input(value)
-
-      :manual ->
-        prompt_code_manually(opts)
-    end
-  end
-
-  defp prompt_code_manually(opts) do
-    prompt_callback = Keyword.get(opts, :on_prompt)
-
-    value =
-      cond do
-        is_function(prompt_callback, 1) ->
-          prompt_callback.(%{
-            message: "Paste callback URL (or authorization code):",
-            placeholder: "http://localhost:8085/oauth2callback?code=..."
-          })
-
-        is_function(prompt_callback, 0) ->
-          prompt_callback.()
-
-        true ->
-          nil
-      end
-
-    if is_nil(value) do
-      {:error, :prompt_callback_required}
-    else
-      value
-      |> normalize_prompt_input()
-      |> parse_authorization_input()
-    end
-  end
-
-  defp maybe_start_local_callback_listener(redirect_uri, opts) do
-    listener_module = Keyword.get(opts, :local_callback_listener)
-
-    if (Keyword.get(opts, :listen_for_callback, true) and listener_module) &&
-         listener_module.local_redirect_uri?(redirect_uri) do
-      case listener_module.start(redirect_uri) do
-        {:ok, listener} ->
-          {listener_module, listener}
-
-        {:error, reason} ->
-          _ =
-            notify_progress(
-              opts,
-              "Could not start localhost OAuth callback listener: #{format_local_callback_error(reason)}. Falling back to manual paste."
-            )
-
-          nil
-      end
-    else
-      nil
-    end
-  end
-
-  defp wait_for_local_callback(_opts, _redirect_uri, nil), do: :manual
-
-  defp wait_for_local_callback(opts, redirect_uri, {listener_module, listener}) do
-    timeout_ms = Keyword.get(opts, :callback_timeout_ms, @default_callback_timeout_ms)
-
-    _ =
-      notify_progress(
-        opts,
-        "Waiting for browser callback on #{redirect_uri} ..."
-      )
-
-    case listener_module.wait(listener, timeout_ms) do
-      {:ok, callback_url} ->
-        _ = notify_progress(opts, "Received browser callback. Finishing sign-in...")
-        {:ok, callback_url}
-
-      {:error, :timeout} ->
-        _ =
-          notify_progress(
-            opts,
-            "Did not receive the browser callback automatically. Paste the callback URL or code to continue."
-          )
-
-        :manual
-
-      {:error, reason} ->
-        _ =
-          notify_progress(
-            opts,
-            "Automatic callback capture failed: #{format_local_callback_error(reason)}. Paste the callback URL or code to continue."
-          )
-
-        :manual
-    end
-  end
-
-  defp stop_local_callback_listener(nil), do: :ok
-
-  defp stop_local_callback_listener({listener_module, listener}),
-    do: listener_module.stop(listener)
-
   defp auth_instructions(_redirect_uri, nil) do
-    "Paste the callback URL (or authorization code) after browser sign-in."
+    "After browser sign-in, paste the callback URL from the address bar (it includes the state)."
   end
 
   defp auth_instructions(redirect_uri, _listener) do
     "After browser sign-in, the local callback listener will capture the redirect to #{redirect_uri} automatically."
   end
-
-  defp format_local_callback_error(:eaddrinuse), do: "port already in use"
-  defp format_local_callback_error(:unsupported_redirect_uri), do: "redirect URI is not local"
-  defp format_local_callback_error(reason), do: inspect(reason)
-
-  defp notify_auth(opts, url, instructions) do
-    auth_callback = Keyword.get(opts, :on_auth)
-
-    cond do
-      is_function(auth_callback, 2) ->
-        auth_callback.(url, instructions)
-        :ok
-
-      is_function(auth_callback, 1) ->
-        auth_callback.(url)
-        :ok
-
-      true ->
-        {:error, :auth_callback_required}
-    end
-  rescue
-    _ -> {:error, :auth_callback_failed}
-  end
-
-  defp notify_progress(opts, message) when is_binary(message) do
-    progress_callback = Keyword.get(opts, :on_progress)
-
-    cond do
-      is_function(progress_callback, 1) ->
-        progress_callback.(message)
-        :ok
-
-      true ->
-        :ok
-    end
-  rescue
-    _ -> :ok
-  end
-
-  defp ensure_state_matches(expected, nil) when is_binary(expected), do: :ok
-
-  defp ensure_state_matches(expected, provided)
-       when is_binary(expected) and is_binary(provided) do
-    if expected == provided, do: :ok, else: {:error, :oauth_state_mismatch}
-  end
-
-  defp ensure_state_matches(_, _), do: :ok
 
   defp project_required_message do
     "Google Gemini CLI requires a Google Cloud project. Enable the Gemini for Google Cloud API on a project you control, then rerun onboarding with --project-id <gcp-project-id>."
@@ -861,18 +673,4 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   defp truthy?("1"), do: true
   defp truthy?(1), do: true
   defp truthy?(_), do: false
-
-  defp non_empty_binary(value) when is_binary(value) do
-    trimmed = String.trim(value)
-    if trimmed == "", do: nil, else: trimmed
-  end
-
-  defp non_empty_binary(_), do: nil
-
-  defp normalize_prompt_input(value) when is_binary(value), do: String.trim(value)
-
-  defp normalize_prompt_input(value) when is_list(value),
-    do: value |> List.to_string() |> String.trim()
-
-  defp normalize_prompt_input(_), do: ""
 end

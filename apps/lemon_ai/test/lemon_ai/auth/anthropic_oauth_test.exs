@@ -9,7 +9,7 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
 
   defmodule BusyListener do
     def local_redirect_uri?(_uri), do: true
-    def start(_uri), do: {:error, :eaddrinuse}
+    def start(_uri, _opts), do: {:error, :eaddrinuse}
     def wait(_listener, _timeout), do: flunk_wait()
     def stop(_listener), do: :ok
     defp flunk_wait, do: raise("listener must not be waited on")
@@ -83,21 +83,6 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
       refute first.code_verifier == second.code_verifier
       refute first.state == second.state
       refute first.state == first.code_verifier
-    end
-
-    test "parses pasted codes, code#state and redirect URLs" do
-      assert {:ok, %{code: "abc", state: "xyz"}} =
-               AnthropicOAuth.parse_authorization_input(" abc#xyz ")
-
-      assert {:ok, %{code: "abc", state: "xyz"}} =
-               AnthropicOAuth.parse_authorization_input(
-                 "http://localhost:53692/callback?code=abc&state=xyz"
-               )
-
-      assert {:ok, %{code: "abc", state: nil}} = AnthropicOAuth.parse_authorization_input("abc")
-
-      assert {:error, :missing_authorization_code} =
-               AnthropicOAuth.parse_authorization_input("  ")
     end
   end
 

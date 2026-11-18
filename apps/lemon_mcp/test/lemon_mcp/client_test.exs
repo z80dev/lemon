@@ -1134,25 +1134,32 @@ defmodule LemonMCP.ClientTest do
       refute log =~ "auth-refresh"
     end
 
-    test "rejects OAuth authorization-code callback responses with mismatched state" do
+    test "rejects OAuth authorization-code callback responses without the request state" do
       {port, _store} = start_oauth_token_transport()
       previous_trap_exit = Process.flag(:trap_exit, true)
 
-      assert {:error, {:auth_required, metadata}} =
-               LemonMCP.Client.HTTP.start_link(
-                 url: "http://127.0.0.1:#{port}/mcp",
-                 oauth: [
-                   client_id: "lemon-public",
-                   redirect_uri: "http://127.0.0.1/callback",
-                   authorization_code_provider: fn _request ->
-                     {:ok, %{code: "operator-code", state: "wrong-state"}}
-                   end
-                 ],
-                 timeout_ms: 15_000
-               )
+      for result <- [
+            {:ok, %{code: "operator-code", state: "wrong-state"}},
+            {:ok, %{code: "operator-code", state: nil}},
+            {:ok, %{"code" => "operator-code", "state" => nil}},
+            {:ok, "operator-code"},
+            "operator-code"
+          ] do
+        assert {:error, {:auth_required, metadata}} =
+                 LemonMCP.Client.HTTP.start_link(
+                   url: "http://127.0.0.1:#{port}/mcp",
+                   oauth: [
+                     client_id: "lemon-public",
+                     redirect_uri: "http://127.0.0.1/callback",
+                     authorization_code_provider: fn _request -> result end
+                   ],
+                   timeout_ms: 15_000
+                 )
+
+        assert metadata["resource"] == "http://127.0.0.1:#{port}/mcp"
+      end
 
       Process.flag(:trap_exit, previous_trap_exit)
-      assert metadata["resource"] == "http://127.0.0.1:#{port}/mcp"
     end
   end
 
