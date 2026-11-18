@@ -101,13 +101,15 @@ defmodule CodingAgent.Rules do
   @spec discover(String.t()) :: [rule()]
   def discover(cwd) do
     home = Config.home_dir()
-    root = TrustedRoot.resolve(cwd)
 
     project =
-      cwd
-      |> TrustedRoot.ancestors(root)
-      |> project_rules(root, home)
-      |> gate_project_stream_rules(root)
+      case TrustedRoot.project(cwd) do
+        {root, ancestors} ->
+          ancestors |> project_rules(root, home) |> gate_project_stream_rules(root)
+
+        :none ->
+          []
+      end
 
     (project ++ global_rules(home))
     |> Enum.uniq_by(& &1.name)

@@ -24,6 +24,23 @@ defmodule LemonCore.TrustedRoot do
   reading. A concurrent writer inside the root that swaps a path component for
   an outward link during the read itself is not prevented here; that needs a
   descriptor-bound open.
+
+  ## Assistant homes are never projects
+
+  The assistant home (`LemonCore.Cwd.assistant_home/0`, the channel default
+  cwd) and every profile workspace (`<lemon home>/profiles/<id>/workspace`)
+  hold bootstrap and memory files (`AGENTS.md`, `MEMORY.md`, `USER.md`, ...)
+  that reach a prompt only through the persona/session-scope gated bootstrap
+  loader. `project_root/1` returns `:none` when the session directory or its
+  root lies in one of them, so project loaders (instructions, `@` imports,
+  rules, stream rules, prompt templates, commands, personas, and the project
+  config layer via `LemonCore.Config.Modular.project_layer_path/1`) read
+  nothing there. `file/2`, `dir/2` and `read/3` also refuse any path inside an
+  assistant home unless `root` itself lies in that home, so a repository that
+  contains the home (for example a dotfiles repository at `$HOME`) cannot
+  link to or name those files. Two sources keep their own operator gates
+  instead: LemonSkills (profile skills under `workspace/.lemon/skill`) and
+  project MCP discovery (operator project trust records).
   """
 
   @max_gitfile_bytes 4_096
@@ -74,11 +91,63 @@ defmodule LemonCore.TrustedRoot do
     end
   end
 
+  @doc """
+  The trusted project root for `cwd` (`resolve/1`), or `:none` when `cwd` or
+  that root lies inside an assistant home (see the module doc). Every project
+  resource loader except LemonSkills starts here.
+  """
+  @spec project_root(String.t()) :: {:ok, String.t()} | :none
+  def project_root(cwd) when is_binary(cwd) do
+    root = resolve(cwd)
+    real = real_or_expanded(cwd)
+
+    if Enum.any?(assistant_homes(), &(inside?(real, &1) or inside?(root, &1))),
+      do: :none,
+      else: {:ok, root}
+  end
+
+  @doc """
+  `project_root/1` with its ancestors: `{root, ancestors(cwd, root)}`, or
+  `:none` for an assistant home.
+  """
+  @spec project(String.t()) :: {String.t(), [String.t()]} | :none
+  def project(cwd) do
+    case project_root(cwd) do
+      {:ok, root} -> {root, ancestors(cwd, root)}
+      :none -> :none
+    end
+  end
+
+  @doc """
+  Realpaths of the existing assistant homes: the default assistant home and
+  every profile workspace.
+  """
+  @spec assistant_homes() :: [String.t()]
+  def assistant_homes do
+    profiles = LemonCore.Paths.home_path("profiles")
+
+    workspaces =
+      case File.ls(profiles) do
+        {:ok, ids} -> Enum.map(ids, &Path.join([profiles, &1, "workspace"]))
+        {:error, _} -> []
+      end
+
+    [LemonCore.Cwd.assistant_home() | workspaces]
+    |> Enum.flat_map(fn dir ->
+      case realpath(dir) do
+        {:ok, real} -> [real]
+        {:error, _} -> []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
   @doc "Realpath of a regular, single-linked file inside `root`."
   @spec file(String.t(), String.t()) :: {:ok, String.t()} | :error
   def file(path, root) do
     with {:ok, real} <- realpath(path),
          true <- inside?(real, root),
+         false <- shielded?(real, root),
          {:ok, %{type: :regular, links: 1}} <- File.lstat(real) do
       {:ok, real}
     else
@@ -91,6 +160,7 @@ defmodule LemonCore.TrustedRoot do
   def dir(path, root) do
     with {:ok, real} <- realpath(path),
          true <- inside?(real, root),
+         false <- shielded?(real, root),
          {:ok, %{type: :directory}} <- File.lstat(real) do
       {:ok, real}
     else
@@ -119,6 +189,11 @@ defmodule LemonCore.TrustedRoot do
   @doc "Whether the already-resolved `path` equals `root` or lies below it."
   @spec inside?(String.t(), String.t()) :: boolean()
   def inside?(path, root), do: path == root or String.starts_with?(path, slash(root))
+
+  # A path inside an assistant home that `root` does not itself lie in.
+  defp shielded?(real, root) do
+    Enum.any?(assistant_homes(), &(inside?(real, &1) and not inside?(root, &1)))
+  end
 
   defp same_file?(%File.Stat{} = a, %File.Stat{} = b) do
     a.type == :regular and b.type == :regular and b.links == 1 and a.inode == b.inode and

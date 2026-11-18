@@ -74,6 +74,14 @@ defmodule CodingAgent.Workspace do
   @spec workspace_dir() :: String.t()
   def workspace_dir, do: Config.workspace_dir()
 
+  @doc """
+  Paths of every bootstrap file this module may read from `dir`, whether or
+  not the current session's gating admits it. Other prompt sources exclude
+  them so the bootstrap gating stays the only way they reach a prompt.
+  """
+  @spec bootstrap_paths(String.t()) :: [String.t()]
+  def bootstrap_paths(dir), do: Enum.map([@memory_file | @required_files], &Path.join(dir, &1))
+
   @doc "Whether a native session is bound to its validated profile workspace."
   def profile_owned?(opts) do
     case LemonCore.ProfileStore.paths(scope_opt(opts, :agent_id)) do

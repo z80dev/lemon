@@ -296,6 +296,20 @@ defmodule LemonCore.Config.Modular do
   def project_path(dir), do: LemonCore.Paths.project_config(dir)
 
   @doc """
+  The project config file merged for `dir`, or `nil` when `dir` lies in an
+  assistant home or profile workspace (`LemonCore.TrustedRoot.project_root/1`
+  is `:none`): those directories are not projects, so their
+  `.lemon/config.toml` is never read and only the global config applies.
+  """
+  @spec project_layer_path(String.t()) :: String.t() | nil
+  def project_layer_path(dir) do
+    case LemonCore.TrustedRoot.project_root(dir) do
+      {:ok, _root} -> project_path(dir)
+      :none -> nil
+    end
+  end
+
+  @doc """
   Checks for removed TOML sections and engine-routing settings, raising
   `ValidationError` when found.
 
@@ -425,7 +439,7 @@ defmodule LemonCore.Config.Modular do
   # checks.
   defp load_merged_settings(project_dir) do
     [global | projects] =
-      [global_path(), project_path(project_dir)]
+      Enum.reject([global_path(), project_layer_path(project_dir)], &is_nil/1)
       |> Enum.map(&Path.expand/1)
       |> Enum.uniq()
 

@@ -33,6 +33,7 @@ defmodule CodingAgent.Tools.Task.Restore do
     :session_key,
     :agent_id,
     :session_mode,
+    :persona,
     :task_depth,
     :task_child,
     :task_allowed_agents,

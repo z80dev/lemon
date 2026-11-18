@@ -197,8 +197,12 @@ defmodule CodingAgent.Subagents do
   # single-linked files inside it; global and builtin roots are unconfined.
   defp roots(cwd) do
     home = System.get_env("HOME") || System.user_home!()
-    root = TrustedRoot.resolve(cwd)
-    ancestors = TrustedRoot.ancestors(cwd, root)
+    # An assistant home is never a project: only global and builtin personas.
+    {root, ancestors} =
+      case TrustedRoot.project(cwd) do
+        :none -> {nil, []}
+        project -> project
+      end
 
     globals = [
       {Path.join([home, ".lemon", "agents"]), :global, :native, :unconfined},

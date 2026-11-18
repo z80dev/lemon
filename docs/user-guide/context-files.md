@@ -83,6 +83,33 @@ The session's environment block lists their paths (including `GEMINI.md`,
 `CLAUDE.local.md` and `.github/copilot-instructions.md`) so the model reads them
 before editing there.
 
+### The assistant home is not a project
+
+The assistant home (`~/.lemon/agent/workspace`, the default working directory
+of channel runs) and every profile workspace
+(`~/.lemon/profiles/<id>/workspace`) hold bootstrap and memory files
+(`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`,
+`BOOTSTRAP.md`, `MEMORY.md`). These reach the prompt only through the bootstrap
+loader, which applies the persona flag and main/subagent gating; a delegated
+child inherits its parent's persona flag.
+
+When the working directory (or its trusted root) is inside an assistant home,
+Lemon does not treat it as a project: no project instruction files, `@`
+imports, rules, stream rules, prompt templates, slash commands, personas or
+project `.lemon/config.toml` layer are read from it, so a home `CLAUDE.md`,
+`.cursorrules`, `.lemon/commands/` or `.lemon/config.toml` has no effect (a
+malformed one is not even parsed) and only the global config applies. A
+repository that contains an assistant home (for example a dotfiles repository
+at `$HOME`) cannot reach its files either: links into the home are refused and
+imports of them stay literal.
+
+Two project sources are exceptions, each behind its own operator gate:
+
+- Skills: profile and home skills under `workspace/.lemon/skill` still load
+  through LemonSkills and its authorization gate.
+- MCP servers: project MCP definitions are still discovered there, but load
+  only when the operator's project trust records allow them.
+
 ### `@` imports
 
 An `@path` token inside an instruction file is replaced with the referenced
@@ -111,8 +138,13 @@ Read @docs/architecture.md before changing storage code.
   spans close only on the opening backtick-run length, including across lines.
 - Trailing `. , ; : ! ? ) ] } " '` is not part of the path, so
   `@docs/setup.md.` imports `docs/setup.md`.
-- Imports recurse up to five hops. A file already imported into the same
-  expansion is not imported again, so cycles stop silently.
+- Imports recurse up to five hops. A file's text enters the prompt at most
+  once: an import of another loaded instruction file (for example
+  `@AGENTS.md` in `CLAUDE.md`), of a file an earlier instruction file already
+  imported, or of a file already in the same expansion stays literal, so
+  cycles stop silently. Symlink and hard-link aliases count as the same file.
+- Assistant-home bootstrap files are never imported (see
+  [The assistant home is not a project](#the-assistant-home-is-not-a-project)).
 - A missing, unreadable or non-text target leaves the original `@path` text.
 - Imported text is wrapped as `<!-- @import /real/path -->…<!-- /@import -->`,
   so the prompt records where each span came from.

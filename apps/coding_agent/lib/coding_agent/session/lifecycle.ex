@@ -695,6 +695,7 @@ defmodule CodingAgent.Session.Lifecycle do
         acp_mcp_session_id: state.acp_mcp_session_id,
         session_scope: state.session_scope,
         session_mode: Keyword.get(state.tool_opts, :session_mode, :chat),
+        persona: Keyword.get(state.tool_opts, :persona),
         task_child: state.task_child,
         task_depth: state.task_depth,
         task_allowed_agents: state.task_allowed_agents,

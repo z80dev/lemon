@@ -253,12 +253,11 @@ defmodule LemonCore.ConfigCache do
   defp config_paths(cwd) do
     global = LemonCore.Config.global_path() |> Path.expand()
 
-    if is_binary(cwd) and cwd != "" do
-      project = LemonCore.Config.project_path(cwd) |> Path.expand()
-      [global, project]
-    else
-      [global]
-    end
+    # Same project-layer selection as `Config.Modular`: none for an assistant home.
+    project =
+      if is_binary(cwd) and cwd != "", do: LemonCore.Config.Modular.project_layer_path(cwd)
+
+    if project, do: [global, Path.expand(project)], else: [global]
   end
 
   defp fingerprint(paths) when is_list(paths) do
