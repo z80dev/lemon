@@ -310,7 +310,7 @@ defmodule CodingAgent.Session.Rewind do
   defp rollback_files(nil), do: {:error, :restore_failed}
 
   defp rollback_files(backup) do
-    case Checkpoint.restore_filesystem(backup) do
+    case Checkpoint.trusted_restore_filesystem(backup) do
       {:ok, _} -> {:error, :restore_failed}
       {:error, _} -> {:error, :restore_rollback_failed}
     end
@@ -318,7 +318,7 @@ defmodule CodingAgent.Session.Rewind do
 
   defp restore_plan(plan) do
     Enum.reduce_while(plan, :ok, fn item, :ok ->
-      case Checkpoint.restore_filesystem(item.checkpoint_id, paths: [item.path]) do
+      case Checkpoint.trusted_restore_filesystem(item.checkpoint_id, paths: [item.path]) do
         {:ok, _} -> {:cont, :ok}
         {:error, _} -> {:halt, {:error, :restore_failed}}
       end
@@ -578,10 +578,13 @@ defmodule CodingAgent.Session.Rewind do
 
   defp conversation_checkpoint?(_), do: false
 
+  # Pre-roots checkpoints (or ones whose snapshots leave their recorded roots)
+  # are reported as unavailable here so preview, not execution, surfaces them.
   defp checkpoint_files(id, cwd) when is_binary(id) do
     with {:ok, checkpoint} <- Checkpoint.load(id),
-         %{cwd: checkpoint_cwd, files: files} when is_binary(checkpoint_cwd) and is_list(files) <-
+         %{cwd: checkpoint_cwd} when is_binary(checkpoint_cwd) <-
            get_in(checkpoint, [:state, :filesystem]),
+         {:ok, files} <- Checkpoint.confined_filesystem_files(checkpoint),
          true <- Enum.all?(files, &(is_map(&1) and is_binary(Map.get(&1, :path)))),
          true <- Path.expand(checkpoint_cwd) == Path.expand(cwd) do
       {:ok, files}

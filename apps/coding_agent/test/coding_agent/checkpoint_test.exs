@@ -57,7 +57,10 @@ defmodule CodingAgent.CheckpointTest do
       File.write!(path, "after\n")
 
       {:ok, restored} =
-        Checkpoint.restore_filesystem(checkpoint.id, run_id: run_id, session_key: session_key)
+        Checkpoint.restore_filesystem(checkpoint.id, session_key,
+          run_id: run_id,
+          session_key: session_key
+        )
 
       assert restored.restored == [path]
 
@@ -68,7 +71,8 @@ defmodule CodingAgent.CheckpointTest do
                      },
                      1_000
 
-      :ok = Checkpoint.delete(checkpoint.id, run_id: run_id, session_key: session_key)
+      :ok =
+        Checkpoint.delete(checkpoint.id, session_key, run_id: run_id, session_key: session_key)
 
       assert_receive %LemonCore.Event{
                        type: :checkpoint_deleted,
@@ -142,12 +146,16 @@ defmodule CodingAgent.CheckpointTest do
       {:ok, checkpoint} = LemonCore.Checkpoint.create(session_id)
 
       assert LemonCore.Checkpoint.exists?(checkpoint.id)
-      assert :ok = Checkpoint.delete(checkpoint.id)
+      assert :ok = Checkpoint.delete(checkpoint.id, session_id)
       refute LemonCore.Checkpoint.exists?(checkpoint.id)
     end
 
-    test "returns ok for non-existent checkpoint" do
-      assert :ok = Checkpoint.delete("chk_nonexistent")
+    test "returns not_found for a well-formed non-existent checkpoint" do
+      assert {:error, :not_found} = Checkpoint.delete("chk_0000000000000000", "any-owner")
+    end
+
+    test "rejects malformed checkpoint ids" do
+      assert {:error, :not_found} = Checkpoint.delete("chk_nonexistent", "any-owner")
     end
   end
 
@@ -195,14 +203,14 @@ defmodule CodingAgent.CheckpointTest do
       File.write!(existing, "after\n")
       File.write!(created, "new\n")
 
-      {:ok, diff} = Checkpoint.diff_filesystem(checkpoint.id)
+      {:ok, diff} = Checkpoint.diff_filesystem(checkpoint.id, session_id)
 
       assert diff.changed == [existing, created]
       assert diff.output =~ "-before"
       assert diff.output =~ "+after"
       assert diff.output =~ "+new"
 
-      {:ok, restored} = Checkpoint.restore_filesystem(checkpoint.id)
+      {:ok, restored} = Checkpoint.restore_filesystem(checkpoint.id, session_id)
 
       assert restored.restored == [existing, created]
       assert File.read!(existing) == "before\n"
@@ -224,7 +232,7 @@ defmodule CodingAgent.CheckpointTest do
       File.write!(first, "changed one\n")
       File.write!(second, "changed two\n")
 
-      {:ok, restored} = Checkpoint.restore_filesystem(checkpoint.id, paths: [first])
+      {:ok, restored} = Checkpoint.restore_filesystem(checkpoint.id, session_id, paths: [first])
 
       assert restored.restored == [first]
       assert File.read!(first) == "one\n"

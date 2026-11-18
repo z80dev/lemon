@@ -67,7 +67,11 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
       })
     )
 
-    text = CheckpointStatusMessage.text(checkpoint_dir: tmp_dir)
+    text =
+      CheckpointStatusMessage.text(
+        checkpoint_dir: tmp_dir,
+        checkpoint_owner: "agent:private-session"
+      )
 
     assert text =~ "Checkpoint Status"
     assert text =~ "Total: 1"
@@ -101,12 +105,16 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
     File.write!(path, "secret-after\n")
 
     assert {:ok, _restored} =
-             Checkpoint.restore_filesystem(checkpoint.id,
+             Checkpoint.restore_filesystem(checkpoint.id, session_id,
                run_id: run_id,
                session_key: session_id
              )
 
-    text = CheckpointStatusMessage.text(event_filters: [run_id: run_id])
+    text =
+      CheckpointStatusMessage.text(
+        event_filters: [run_id: run_id],
+        checkpoint_owner: session_id
+      )
 
     assert text =~ "Events: created 1, restored 1, deleted 0"
     assert text =~ "restored #{checkpoint.id} (1 paths)"
@@ -116,7 +124,11 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
     refute text =~ "secret-after"
     refute text =~ session_id
 
-    events_text = CheckpointStatusMessage.handle("events 2", event_filters: [run_id: run_id])
+    events_text =
+      CheckpointStatusMessage.handle("events 2",
+        event_filters: [run_id: run_id],
+        checkpoint_owner: session_id
+      )
 
     assert events_text =~ "Checkpoint Events"
     assert events_text =~ "Limit: 2"
@@ -144,7 +156,8 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
 
     File.write!(path, "secret-after\n")
 
-    diff_text = CheckpointStatusMessage.handle("diff #{checkpoint.id}")
+    diff_text =
+      CheckpointStatusMessage.handle("diff #{checkpoint.id}", checkpoint_owner: session_id)
 
     assert diff_text =~ "Checkpoint Diff"
     assert diff_text =~ "Changed paths: 1"
@@ -153,12 +166,16 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
     refute diff_text =~ "secret-before"
     refute diff_text =~ "secret-after"
 
-    restore_prompt = CheckpointStatusMessage.handle("restore #{checkpoint.id}")
+    restore_prompt =
+      CheckpointStatusMessage.handle("restore #{checkpoint.id}", checkpoint_owner: session_id)
 
     assert restore_prompt =~ "requires confirmation"
     assert File.read!(path) == "secret-after\n"
 
-    restore_text = CheckpointStatusMessage.handle("restore #{checkpoint.id} confirm")
+    restore_text =
+      CheckpointStatusMessage.handle("restore #{checkpoint.id} confirm",
+        checkpoint_owner: session_id
+      )
 
     assert restore_text =~ "Checkpoint Restored"
     assert restore_text =~ "Restored paths: 1"
@@ -185,7 +202,10 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
 
     File.write!(path, "secret-after\n")
 
-    diff_text = CheckpointStatusMessage.handle_rollback("diff #{checkpoint.id}")
+    diff_text =
+      CheckpointStatusMessage.handle_rollback("diff #{checkpoint.id}",
+        checkpoint_owner: session_id
+      )
 
     assert diff_text =~ "Checkpoint Diff"
     assert diff_text =~ "Changed paths: 1"
@@ -193,12 +213,16 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
     refute diff_text =~ "secret-before"
     refute diff_text =~ "secret-after"
 
-    restore_prompt = CheckpointStatusMessage.handle_rollback(checkpoint.id)
+    restore_prompt =
+      CheckpointStatusMessage.handle_rollback(checkpoint.id, checkpoint_owner: session_id)
 
     assert restore_prompt =~ "Rollback requires confirmation"
     assert File.read!(path) == "secret-after\n"
 
-    restore_text = CheckpointStatusMessage.handle_rollback("#{checkpoint.id} confirm")
+    restore_text =
+      CheckpointStatusMessage.handle_rollback("#{checkpoint.id} confirm",
+        checkpoint_owner: session_id
+      )
 
     assert restore_text =~ "Checkpoint Restored"
     assert restore_text =~ "Restored paths: 1"

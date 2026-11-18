@@ -23,11 +23,34 @@ defmodule LemonCore.Checkpoint do
   resolve the trusted workspace before deriving capture paths, not resolve
   model-selected paths. The default `cwd` is the physical `File.cwd!()` path.
   Restore rechecks all selected parent paths before deleting any root.
+
+  Checkpoint ids must match `chk_` followed by 16 lowercase hex digits; any
+  other id is reported as `:not_found` before the filesystem is touched.
+
+  User-facing access is owner-scoped: `diff_filesystem/3`,
+  `restore_filesystem/3` and `delete/3` take the owning session id as a
+  required argument, and a checkpoint owned by another session (or a missing or
+  malformed owner) is reported as `:not_found` and left untouched.
+  `trusted_restore_filesystem/2` skips the owner check and is reserved for
+  rewind, which has already proven provenance from its own session journal.
+
+  Filesystem checkpoints record their captured roots; diff and restore reject
+  snapshots whose paths are not exactly those recorded roots, and checkpoints
+  captured before roots were recorded are refused. Diff refuses to read through
+  a symlinked ancestor or leaf and re-verifies the parent walk and file identity
+  after reading.
+
+  Remaining race (tracked with the descriptor-bound mutation work): parent
+  checks and the later pathname-based read, removal, write and chmod are
+  separate syscalls, so a concurrent writer that swaps a checked parent
+  directory for a symlink between the check and the operation can still
+  redirect it. Pre-existing substitutions are rejected.
   """
 
   require Logger
 
   @checkpoint_version "1.0"
+  @checkpoint_id_pattern ~r/\Achk_[0-9a-f]{16}\z/
 
   @type checkpoint :: %{
           id: String.t(),
@@ -96,6 +119,7 @@ defmodule LemonCore.Checkpoint do
           filesystem: %{
             cwd: Path.expand(cwd),
             files: snapshots,
+            roots: Enum.map(snapshots, & &1.path),
             capture_limits:
               Map.new(
                 Keyword.take(opts, [
@@ -137,9 +161,10 @@ defmodule LemonCore.Checkpoint do
     _ -> {:error, :fingerprint_failed}
   end
 
-  @spec diff_filesystem(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def diff_filesystem(checkpoint_id, opts \\ []) when is_binary(checkpoint_id) do
-    with {:ok, checkpoint} <- load(checkpoint_id),
+  @doc "Owner-scoped diff; another session's checkpoint is `:not_found`."
+  @spec diff_filesystem(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def diff_filesystem(checkpoint_id, owner, opts \\ []) when is_binary(checkpoint_id) do
+    with {:ok, checkpoint} <- load_owned(checkpoint_id, owner),
          {:ok, files} <- filesystem_files(checkpoint),
          {:ok, paths} <- selected_snapshot_paths(files, opts[:paths]) do
       diffs =
@@ -159,10 +184,27 @@ defmodule LemonCore.Checkpoint do
     end
   end
 
-  @spec restore_filesystem(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def restore_filesystem(checkpoint_id, opts \\ []) when is_binary(checkpoint_id) do
-    with {:ok, checkpoint} <- load(checkpoint_id),
-         {:ok, files} <- filesystem_files(checkpoint),
+  @doc "Owner-scoped restore; another session's checkpoint is `:not_found`."
+  @spec restore_filesystem(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def restore_filesystem(checkpoint_id, owner, opts \\ []) when is_binary(checkpoint_id) do
+    with {:ok, checkpoint} <- load_owned(checkpoint_id, owner) do
+      restore_loaded(checkpoint, opts)
+    end
+  end
+
+  @doc """
+  Restore without an owner check. Only for rewind, whose checkpoint ids come
+  from its own session journal; never pass user- or model-selected ids.
+  """
+  @spec trusted_restore_filesystem(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def trusted_restore_filesystem(checkpoint_id, opts \\ []) when is_binary(checkpoint_id) do
+    with {:ok, checkpoint} <- load(checkpoint_id) do
+      restore_loaded(checkpoint, opts)
+    end
+  end
+
+  defp restore_loaded(checkpoint, opts) do
+    with {:ok, files} <- filesystem_files(checkpoint),
          {:ok, paths} <- selected_snapshot_paths(files, opts[:paths]),
          {:ok, validation_opts} <- restore_limits(checkpoint, opts),
          :ok <- validate_restore(Enum.filter(files, &(&1.path in paths)), validation_opts) do
@@ -200,8 +242,19 @@ defmodule LemonCore.Checkpoint do
     end
   end
 
+  @doc "Whether `checkpoint_id` has the generated `chk_<16 hex>` shape."
+  @spec valid_id?(term()) :: boolean()
+  def valid_id?(checkpoint_id) when is_binary(checkpoint_id),
+    do: Regex.match?(@checkpoint_id_pattern, checkpoint_id)
+
+  def valid_id?(_checkpoint_id), do: false
+
   @spec load(String.t()) :: {:ok, checkpoint()} | {:error, term()}
   def load(checkpoint_id) when is_binary(checkpoint_id) do
+    if valid_id?(checkpoint_id), do: read_checkpoint(checkpoint_id), else: {:error, :not_found}
+  end
+
+  defp read_checkpoint(checkpoint_id) do
     path = checkpoint_path(checkpoint_id)
 
     case File.read(path) do
@@ -218,6 +271,25 @@ defmodule LemonCore.Checkpoint do
         {:error, reason}
     end
   end
+
+  # A mismatched or malformed owner is indistinguishable from a missing checkpoint.
+  defp load_owned(checkpoint_id, owner) when is_binary(owner) and owner != "" do
+    case load(checkpoint_id) do
+      {:ok, %{session_id: ^owner} = checkpoint} -> {:ok, checkpoint}
+      {:ok, _other_owner} -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp load_owned(_checkpoint_id, _owner), do: {:error, :not_found}
+
+  @doc """
+  Snapshot files of a filesystem checkpoint, confined to its recorded roots.
+  Returns `{:error, :invalid_or_unsafe_snapshot}` for checkpoints without
+  recorded roots (captured before they were recorded) or with other paths.
+  """
+  @spec confined_filesystem_files(checkpoint()) :: {:ok, list()} | {:error, term()}
+  def confined_filesystem_files(checkpoint), do: filesystem_files(checkpoint)
 
   @spec list(String.t()) :: [checkpoint()]
   def list(session_id) when is_binary(session_id) do
@@ -253,12 +325,24 @@ defmodule LemonCore.Checkpoint do
     end
   end
 
-  @spec delete(String.t(), keyword()) :: :ok | {:error, term()}
-  def delete(checkpoint_id, opts \\ []) when is_binary(checkpoint_id) do
-    path = checkpoint_path(checkpoint_id)
-    existing = load(checkpoint_id)
+  @doc "Owner-scoped delete; another session's checkpoint is `:not_found`."
+  @spec delete(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def delete(checkpoint_id, owner, opts \\ []) when is_binary(checkpoint_id) do
+    with {:ok, checkpoint} <- load_owned(checkpoint_id, owner) do
+      remove_checkpoint(checkpoint_id, {:ok, checkpoint}, opts)
+    end
+  end
 
-    case File.rm(path) do
+  # Shared deletion boundary: ids embedded in checkpoint JSON (delete_all/prune)
+  # are validated here too, so a forged `id` never reaches File.rm.
+  defp remove_checkpoint(checkpoint_id, existing, opts) do
+    if valid_id?(checkpoint_id),
+      do: rm_checkpoint(checkpoint_id, existing, opts),
+      else: {:error, :not_found}
+  end
+
+  defp rm_checkpoint(checkpoint_id, existing, opts) do
+    case File.rm(checkpoint_path(checkpoint_id)) do
       :ok ->
         Logger.debug("Deleted checkpoint #{checkpoint_id}")
         maybe_emit_checkpoint_deleted(existing, opts)
@@ -277,7 +361,7 @@ defmodule LemonCore.Checkpoint do
     checkpoints = list(session_id)
 
     Enum.each(checkpoints, fn checkpoint ->
-      delete(checkpoint.id)
+      remove_checkpoint(checkpoint.id, {:ok, checkpoint}, [])
     end)
 
     {:ok, length(checkpoints)}
@@ -305,8 +389,7 @@ defmodule LemonCore.Checkpoint do
 
   @spec exists?(String.t()) :: boolean()
   def exists?(checkpoint_id) when is_binary(checkpoint_id) do
-    checkpoint_path(checkpoint_id)
-    |> File.exists?()
+    valid_id?(checkpoint_id) and File.exists?(checkpoint_path(checkpoint_id))
   end
 
   @spec prune(String.t(), non_neg_integer()) :: {:ok, non_neg_integer()}
@@ -316,7 +399,7 @@ defmodule LemonCore.Checkpoint do
     to_delete = Enum.drop(checkpoints, keep)
 
     Enum.each(to_delete, fn checkpoint ->
-      delete(checkpoint.id)
+      remove_checkpoint(checkpoint.id, {:ok, checkpoint}, [])
     end)
 
     {:ok, length(to_delete)}
@@ -624,12 +707,33 @@ defmodule LemonCore.Checkpoint do
 
   defp filesystem_files(checkpoint) do
     if filesystem_checkpoint?(checkpoint) do
-      files = get_in(checkpoint, [:state, :filesystem, :files]) || []
-      {:ok, files}
+      filesystem = get_in(checkpoint, [:state, :filesystem]) || %{}
+      files = Map.get(filesystem, :files) || []
+      roots = Map.get(filesystem, :roots)
+
+      if confined_to_roots?(files, roots),
+        do: {:ok, files},
+        else: {:error, :invalid_or_unsafe_snapshot}
     else
       {:error, :not_filesystem_checkpoint}
     end
   end
+
+  # Every snapshot must be one recorded captured root (absolute, normalized,
+  # restored at most once); entry names below roots are validated separately.
+  defp confined_to_roots?(files, roots) when is_list(files) and is_list(roots) do
+    paths = Enum.map(files, &(is_map(&1) && Map.get(&1, :path)))
+
+    Enum.all?(roots, &absolute_root?/1) and Enum.all?(paths, &(&1 in roots)) and
+      length(Enum.uniq(paths)) == length(paths)
+  end
+
+  defp confined_to_roots?(_files, _roots), do: false
+
+  defp absolute_root?(path) when is_binary(path),
+    do: Path.type(path) == :absolute and Path.expand(path) == path and Path.dirname(path) != path
+
+  defp absolute_root?(_path), do: false
 
   defp selected_snapshot_paths(files, nil), do: {:ok, Enum.map(files, & &1.path)}
 
@@ -681,6 +785,24 @@ defmodule LemonCore.Checkpoint do
   defp hash_snapshot(node), do: node
 
   defp diff_snapshot(snapshot) do
+    case safe_parents(snapshot.path) do
+      :ok -> diff_confined_snapshot(snapshot)
+      {:error, _} -> unavailable_diff(snapshot)
+    end
+  end
+
+  # A symlinked ancestor would let the read escape the recorded root, so nothing
+  # below it is read or stat'ed.
+  defp unavailable_diff(snapshot) do
+    %{
+      path: snapshot.path,
+      before_exists: snapshot.exists,
+      after_exists: nil,
+      diff: "#{snapshot.path}: current path is unavailable (symlinked parent directory)"
+    }
+  end
+
+  defp diff_confined_snapshot(snapshot) do
     case {snapshot.type, File.lstat(snapshot.path)} do
       {type, _} when type in ["directory", "symlink"] ->
         resource_diff(snapshot)
@@ -692,16 +814,24 @@ defmodule LemonCore.Checkpoint do
         before_content = snapshot_content(snapshot)
         after_content = current_content(snapshot.path)
 
-        if before_content == after_content do
-          resource_diff(snapshot)
+        if after_content == :unavailable do
+          unavailable_diff(snapshot)
         else
-          %{
-            path: snapshot.path,
-            before_exists: snapshot.exists,
-            after_exists: not is_nil(after_content),
-            diff: unified_diff(snapshot.path, before_content, after_content)
-          }
+          content_diff(snapshot, before_content, after_content)
         end
+    end
+  end
+
+  defp content_diff(snapshot, before_content, after_content) do
+    if before_content == after_content do
+      resource_diff(snapshot)
+    else
+      %{
+        path: snapshot.path,
+        before_exists: snapshot.exists,
+        after_exists: not is_nil(after_content),
+        diff: unified_diff(snapshot.path, before_content, after_content)
+      }
     end
   end
 
@@ -711,10 +841,44 @@ defmodule LemonCore.Checkpoint do
     Base.decode64!(content_b64)
   end
 
+  # Reads only a regular file reached without symlinks. After opening, the
+  # handle's own file info must match the no-follow lstat identity of the
+  # walked leaf before any bytes are returned, so a leaf or parent swapped
+  # before the open is rejected; the parent walk is re-checked afterwards.
   defp current_content(path) do
-    case File.read(path) do
-      {:ok, content} -> content
-      {:error, _} -> nil
+    case File.lstat(path) do
+      {:error, :enoent} ->
+        nil
+
+      {:ok, %File.Stat{type: :regular} = leaf} ->
+        with {:ok, result} <- File.open(path, [:read, :binary], &read_bound(&1, leaf)),
+             {:ok, content} <- result,
+             :ok <- safe_parents(path) do
+          content
+        else
+          _ -> :unavailable
+        end
+
+      _ ->
+        :unavailable
+    end
+  end
+
+  defp read_bound(io, %File.Stat{inode: inode, major_device: device}) do
+    with {:ok, info} <- :file.read_file_info(io),
+         %File.Stat{type: :regular, inode: ^inode, major_device: ^device} <-
+           File.Stat.from_record(info) do
+      read_all(io, [])
+    else
+      _ -> {:error, :identity_mismatch}
+    end
+  end
+
+  defp read_all(io, acc) do
+    case :file.read(io, 65_536) do
+      {:ok, chunk} -> read_all(io, [acc | chunk])
+      :eof -> {:ok, IO.iodata_to_binary(acc)}
+      {:error, _} = error -> error
     end
   end
 

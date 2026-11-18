@@ -266,7 +266,10 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
     assert length(receipt.applied) == 1
     assert File.exists?(created)
     assert File.read!(existing) == "keep"
-    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(receipt.checkpoint.id)
+
+    assert {:ok, _} =
+             CodingAgent.Checkpoint.restore_filesystem(receipt.checkpoint.id, opts[:session_id])
+
     refute File.exists?(created)
     assert File.read!(existing) == "keep"
   end
@@ -357,6 +360,6 @@ defmodule CodingAgent.Tools.Lsp.WorkspaceEditTest do
     assert receipt.changed == []
     assert receipt.applied == []
     refute File.exists?(Path.join(tmp, "never.c"))
-    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id)
+    assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id, opts[:session_id])
   end
 end

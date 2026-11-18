@@ -141,7 +141,7 @@ defmodule LemonCore.Doctor.SupportBundle do
   end
 
   defp checkpoint_diagnostics(opts) do
-    LemonCore.Doctor.CheckpointDiagnostics.summary(
+    LemonCore.Doctor.CheckpointDiagnostics.summary(:operator,
       checkpoint_dir: Keyword.get(opts, :checkpoint_dir),
       limit: Keyword.get(opts, :checkpoint_limit, 20)
     )

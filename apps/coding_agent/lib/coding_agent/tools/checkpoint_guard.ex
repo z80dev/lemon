@@ -7,7 +7,7 @@ defmodule CodingAgent.Tools.CheckpointGuard do
           {:ok, map() | nil} | {:error, term()}
   def before_mutation(paths, cwd, opts, metadata) when is_list(paths) do
     if Keyword.get(opts, :filesystem_checkpoints, true) do
-      case session_id(opts) do
+      case Checkpoint.owner(opts) do
         nil ->
           {:ok, nil}
 
@@ -34,12 +34,5 @@ defmodule CodingAgent.Tools.CheckpointGuard do
     details
     |> Map.put(:checkpoint_id, checkpoint.id)
     |> Map.put(:checkpoint_kind, "filesystem")
-  end
-
-  defp session_id(opts) do
-    opts
-    |> Keyword.take([:session_id, :session_key, :run_id])
-    |> Keyword.values()
-    |> Enum.find(&(is_binary(&1) and &1 != ""))
   end
 end
