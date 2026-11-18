@@ -20,6 +20,8 @@ defmodule CodingAgent.ResourceLoader do
 
   Directories above the trusted root are never read. A directory file must
   resolve (after symlinks) to a regular, single-linked file inside the root.
+  An assistant home is never a project (`LemonCore.TrustedRoot.project_root/1`):
+  a session there reads only global instruction files and prompts.
 
   Global files come first: `~/.lemon/{CLAUDE,AGENTS}.md` and the agent
   directory's `{CLAUDE,AGENTS}.md`, preceded, only when `foreign_globals: true`
@@ -33,9 +35,11 @@ defmodule CodingAgent.ResourceLoader do
   the trusted root to cwd. Directory instructions apply to that directory's
   subtree (a config subdirectory such as `.github/` scopes to its parent);
   more specific instructions override broader ones. Each physical file is
-  loaded once, including symlink aliases. `@path` imports are expanded by
-  `CodingAgent.ResourceLoader.AtImports`: unconfined for global files,
-  confined to the trusted root for directory files.
+  loaded once, including symlink and hard-link aliases. `@path` imports are
+  expanded by `CodingAgent.ResourceLoader.AtImports`: unconfined for global
+  files, confined to the trusted root for directory files. An import never
+  re-inlines another loaded instruction file, a file an earlier instruction
+  file already imported, or an `:exclude`d file.
 
   ## Example
 
@@ -82,17 +86,26 @@ defmodule CodingAgent.ResourceLoader do
     * `:foreign_globals` - also read other coding tools' global instruction
       files (`~/.claude`, `~/.gemini`, `~/.codex`, ...). Default `false`;
       only coding sessions pass `true`.
+    * `:exclude` - paths of files owned by another prompt source (the
+      assistant-home bootstrap files, see `CodingAgent.Workspace`). They are
+      neither loaded as instruction files nor importable, so that source's
+      gating stays authoritative when cwd is the assistant home.
   """
   @spec instruction_sections(String.t(), keyword()) :: [
           %{category: atom(), label: String.t(), text: String.t()}
         ]
   def instruction_sections(cwd, opts \\ []) do
-    root = TrustedRoot.resolve(cwd)
-    dirs = TrustedRoot.ancestors(cwd, root)
+    {root, dirs} =
+      case TrustedRoot.project(cwd) do
+        :none -> {nil, []}
+        project -> project
+      end
+
+    excluded = opts |> Keyword.get(:exclude, []) |> MapSet.new(&AtImports.identity/1)
 
     dirs
-    |> find_instruction_files(root, Keyword.get(opts, :foreign_globals, false) == true)
-    |> combined_sections(List.first(dirs) || Path.expand(cwd))
+    |> find_instruction_files(root, Keyword.get(opts, :foreign_globals, false) == true, excluded)
+    |> combined_sections(List.first(dirs) || Path.expand(cwd), excluded)
   end
 
   @doc """
@@ -134,15 +147,21 @@ defmodule CodingAgent.ResourceLoader do
   """
   @spec load_prompt(String.t(), String.t()) :: {:ok, String.t()} | {:error, :not_found}
   def load_prompt(cwd, name) do
-    root = TrustedRoot.resolve(cwd)
-
     # Project prompts must stay inside the trusted root; the user-global
-    # prompts directory is home-owned.
-    prompt_dirs = [
-      {Path.join([cwd, ".lemon", "prompts"]), root},
-      {Path.join([cwd, ".claude", "prompts"]), root},
-      {Config.prompts_dir(), :unconfined}
-    ]
+    # prompts directory is home-owned. An assistant home has no project prompts.
+    project_dirs =
+      case TrustedRoot.project_root(cwd) do
+        {:ok, root} ->
+          [
+            {Path.join([cwd, ".lemon", "prompts"]), root},
+            {Path.join([cwd, ".claude", "prompts"]), root}
+          ]
+
+        :none ->
+          []
+      end
+
+    prompt_dirs = project_dirs ++ [{Config.prompts_dir(), :unconfined}]
 
     extensions = [".md", ".txt", ""]
 
@@ -174,7 +193,7 @@ defmodule CodingAgent.ResourceLoader do
   # cwd: its root files, then its config subdirectories. Directory files must
   # stay inside the root after symlink resolution. Returns `{path, read_path,
   # import_root}`: global files import unconfined, directory files inside root.
-  defp find_instruction_files(dirs, root, foreign_globals?) do
+  defp find_instruction_files(dirs, root, foreign_globals?, excluded) do
     global =
       Config.home_dir()
       |> global_instruction_sources(foreign_globals?)
@@ -200,7 +219,7 @@ defmodule CodingAgent.ResourceLoader do
         end
       end)
 
-    {files, _seen} = deduplicate_files(global ++ local)
+    {files, _seen} = deduplicate_files(global ++ local, excluded)
     files
   end
 
@@ -210,11 +229,12 @@ defmodule CodingAgent.ResourceLoader do
 
   # Keep the most specific spelling of a physical file, not an earlier global
   # alias that would change its precedence relative to other local guides.
-  defp deduplicate_files([]), do: {[], MapSet.new()}
+  # Files whose identity is in `excluded` are dropped.
+  defp deduplicate_files([], excluded), do: {[], excluded}
 
-  defp deduplicate_files([{_path, read_path, _root} = file | rest]) do
-    {files, seen} = deduplicate_files(rest)
-    identity = file_identity(read_path)
+  defp deduplicate_files([{_path, read_path, _root} = file | rest], excluded) do
+    {files, seen} = deduplicate_files(rest, excluded)
+    identity = AtImports.identity(read_path)
 
     if MapSet.member?(seen, identity) do
       {files, seen}
@@ -256,16 +276,6 @@ defmodule CodingAgent.ResourceLoader do
     end
   end
 
-  defp file_identity(path) do
-    case File.stat(path) do
-      {:ok, %{inode: inode, major_device: major, minor_device: minor}} when inode != 0 ->
-        {major, minor, inode}
-
-      _ ->
-        Path.expand(path)
-    end
-  end
-
   defp instruction_scope(path, global_dirs) do
     dir = Path.dirname(path)
 
@@ -279,27 +289,34 @@ defmodule CodingAgent.ResourceLoader do
 
   # Load files and split them into the header plus one labelled section per
   # file; joining the texts with blank lines gives the combined instructions.
-  defp combined_sections(files, cwd) do
+  # The import skip set starts with every loaded and excluded file and grows
+  # with each file's imports, so no physical file is inlined twice.
+  defp combined_sections(files, cwd, excluded) do
     home = Config.home_dir()
 
     global_dirs =
       home |> global_instruction_sources(true) |> Enum.map(&elem(&1, 0))
 
-    files =
-      Enum.flat_map(files, fn {path, read_path, import_root} ->
-        case read_instruction_file(read_path, home, import_root) do
-          "" ->
-            []
+    skip =
+      Enum.reduce(files, excluded, fn {_path, read_path, _root}, acc ->
+        MapSet.put(acc, AtImports.identity(read_path))
+      end)
 
-          content ->
-            [
-              %{
-                category: :context_files,
-                label: "#{Path.basename(path)} (#{scope_label(path, global_dirs, cwd)})",
-                text:
-                  "<!-- From: #{path} -->\nScope: #{instruction_scope(path, global_dirs)}\n\n#{content}"
-              }
-            ]
+    {files, _skip} =
+      Enum.flat_map_reduce(files, skip, fn {path, read_path, import_root}, skip ->
+        case read_instruction_file(read_path, home, import_root, skip) do
+          {"", skip} ->
+            {[], skip}
+
+          {content, skip} ->
+            {[
+               %{
+                 category: :context_files,
+                 label: "#{Path.basename(path)} (#{scope_label(path, global_dirs, cwd)})",
+                 text:
+                   "<!-- From: #{path} -->\nScope: #{instruction_scope(path, global_dirs)}\n\n#{content}"
+               }
+             ], skip}
         end
       end)
 
@@ -345,13 +362,14 @@ defmodule CodingAgent.ResourceLoader do
   end
 
   # Read an instruction file with its `@path` imports expanded.
-  defp read_instruction_file(path, home, import_root) do
+  defp read_instruction_file(path, home, import_root, skip) do
     case read_source(path, import_root) do
       {:ok, content} ->
-        content |> AtImports.expand(path, home: home, root: import_root) |> String.trim()
+        {text, skip} = AtImports.expand(content, path, home: home, root: import_root, skip: skip)
+        {String.trim(text), skip}
 
       _ ->
-        ""
+        {"", skip}
     end
   end
 

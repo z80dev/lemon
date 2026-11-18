@@ -154,6 +154,62 @@ defmodule CodingAgent.Session.PromptComposerContextFilesTest do
     refute prompt =~ "SSH-PRIVATE-KEY-BYTES"
   end
 
+  test "CLAUDE.md importing @AGENTS.md yields the AGENTS.md text once", %{tmp_dir: tmp_dir} do
+    repo = Path.join(tmp_dir, "dup-repo")
+    CodingAgent.TestGitRepo.init!(repo)
+    agents = "agents-body-marker " <> String.duplicate("x", 4_000)
+    write!(Path.join(repo, "AGENTS.md"), agents)
+
+    single = PromptComposer.compose_system_prompt(repo, nil, nil, tmp_dir, :main, "", %{})
+
+    write!(Path.join(repo, "CLAUDE.md"), "Follow @AGENTS.md")
+    prompt = PromptComposer.compose_system_prompt(repo, nil, nil, tmp_dir, :main, "", %{})
+
+    assert occurrences(prompt, "agents-body-marker") == 1
+    # Measurement: the CLAUDE.md wrapper adds a few hundred bytes, not a second copy.
+    assert byte_size(prompt) - byte_size(single) < 1_000
+  end
+
+  test "a channel session in the assistant home gets workspace AGENTS.md once, gated", %{
+    tmp_dir: tmp_dir
+  } do
+    workspace = Path.join(tmp_dir, "agent/workspace")
+    write!(Path.join(workspace, "AGENTS.md"), "ws-agents-marker\n@MEMORY.md\n@USER.md")
+    write!(Path.join(workspace, "MEMORY.md"), "ws-memory-secret")
+    write!(Path.join(workspace, "USER.md"), "ws-user-secret")
+    write!(Path.join(workspace, "CLAUDE.md"), "ws-claude @AGENTS.md @./MEMORY.md")
+
+    for scope <- [:main, :subagent] do
+      prompt =
+        PromptComposer.compose_system_prompt(workspace, nil, nil, workspace, scope, "", %{
+          session_mode: :chat,
+          session_key: "agent:default:telegram:bot:dm:42"
+        })
+
+      assert occurrences(prompt, "ws-agents-marker") == 1, inspect(scope)
+      # The assistant home is not a project: its CLAUDE.md never loads.
+      refute prompt =~ "ws-claude"
+
+      # Personal files arrive only through the gated bootstrap: once for a
+      # main session that admits them, never for a subagent.
+      for secret <- ["ws-user-secret", "ws-memory-secret"] do
+        expected = if scope == :main, do: [0, 1], else: [0]
+        assert occurrences(prompt, secret) in expected, "#{scope} #{secret}"
+      end
+    end
+
+    # Persona off: bootstrap gating keeps the assistant-home files out entirely.
+    prompt =
+      PromptComposer.compose_system_prompt(workspace, nil, nil, workspace, :main, "", %{
+        session_mode: :coding
+      })
+
+    refute prompt =~ "ws-agents-marker"
+    refute prompt =~ "ws-memory-secret"
+  end
+
+  defp occurrences(text, marker), do: length(:binary.matches(text, marker))
+
   defp write_all(root, files) do
     Enum.each(files, fn {rel, content} -> write!(Path.join(root, rel), content) end)
   end

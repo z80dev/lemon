@@ -12,7 +12,11 @@ defmodule CodingAgent.ResourceLoader.AtImports do
   - Trailing sentence punctuation (`. , ; : ! ? ) ] } " '`) is not part of the
     path, so `See @docs/setup.md.` imports `docs/setup.md`.
   - Imports recurse up to five hops. A file already pulled into the expansion
-    tree is not imported again, so cycles stop silently.
+    tree, or named in `:skip` (the other top-level instruction files and the
+    assistant-home bootstrap files), is not imported again, so cycles stop
+    silently and no file's text appears twice in the prompt. Files are
+    compared by physical identity (`identity/1`), so symlink and hard-link
+    aliases count as the same file.
   - A missing, unreadable, non-UTF-8 or non-regular target leaves the original
     `@token` text in place.
 
@@ -44,14 +48,19 @@ defmodule CodingAgent.ResourceLoader.AtImports do
 
   @doc """
   Expand `@path` imports in `content`, which was read from `file_path`.
+  Returns the expanded text and the identities of every file it now contains
+  (the source, the imports and the `:skip` set), so a caller expanding several
+  top-level files can pass it on as the next file's `:skip`.
 
   Options:
 
     * `:home` - directory used for `~` imports (required)
     * `:root` - the importing file's trusted root, or `:unconfined` for a
       home-owned global instruction file (required)
+    * `:skip` - enumerable of `identity/1` values of files that must never be
+      imported (default empty)
   """
-  @spec expand(String.t(), String.t(), keyword()) :: String.t()
+  @spec expand(String.t(), String.t(), keyword()) :: {String.t(), MapSet.t()}
   def expand(content, file_path, opts) when is_binary(content) do
     home = Keyword.fetch!(opts, :home)
     root = Keyword.fetch!(opts, :root)
@@ -67,12 +76,27 @@ defmodule CodingAgent.ResourceLoader.AtImports do
       home: home,
       root: root,
       source: source,
-      visited: MapSet.new([source]),
+      visited: MapSet.put(MapSet.new(Keyword.get(opts, :skip, [])), identity(source)),
       budget: @max_total_import_bytes
     }
 
-    {expanded, _state} = expand_content(content, Path.dirname(source), 0, state)
-    expanded
+    {expanded, state} = expand_content(content, Path.dirname(source), 0, state)
+    {expanded, state.visited}
+  end
+
+  @doc """
+  Physical identity of `path`: `{major, minor, inode}` when the file exists,
+  else its expanded path. Symlink and hard-link aliases share one identity.
+  """
+  @spec identity(String.t()) :: term()
+  def identity(path) do
+    case File.stat(path) do
+      {:ok, %{inode: inode, major_device: major, minor_device: minor}} when inode != 0 ->
+        {major, minor, inode}
+
+      _ ->
+        Path.expand(path)
+    end
   end
 
   defp expand_content(content, _base_dir, depth, state) when depth >= @max_depth,
@@ -182,11 +206,11 @@ defmodule CodingAgent.ResourceLoader.AtImports do
     resolved = resolve_path(import_path, base_dir, state.home)
 
     with {:ok, real} <- admit(import_path, resolved, state),
-         false <- MapSet.member?(state.visited, real),
+         false <- MapSet.member?(state.visited, identity(real)),
          true <- state.budget > 0,
          {:ok, content} <- read_import(real, state.root) do
       content = bound(content, min(@max_import_bytes, state.budget))
-      state = %{state | visited: MapSet.put(state.visited, real)}
+      state = %{state | visited: MapSet.put(state.visited, identity(real))}
       state = %{state | budget: state.budget - byte_size(content)}
       {expanded, state} = expand_content(content, Path.dirname(real), depth + 1, state)
       {"<!-- @import #{real} -->" <> String.trim_trailing(expanded) <> "<!-- /@import -->", state}

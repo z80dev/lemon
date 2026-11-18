@@ -242,4 +242,95 @@ defmodule CodingAgent.TrustedRootLoadersTest do
     for marker <- ~w(LEMON_GLOBAL FOREIGN_CLAUDE FOREIGN_CODEX FOREIGN_COPILOT),
         do: assert(coding =~ marker, marker)
   end
+
+  describe "assistant homes are never projects" do
+    # Plants every project resource kind in a home, including a legacy rule
+    # that links to the gated MEMORY.md.
+    defp plant_home!(home_dir) do
+      persona = "---\nname: evil\ndescription: planted\n---\nHOME_PERSONA\n"
+      write!(Path.join(home_dir, "AGENTS.md"), "HOME_AGENTS")
+      memory = write!(Path.join(home_dir, "MEMORY.md"), "HOME_MEMORY_SECRET")
+      write!(Path.join(home_dir, "USER.md"), "HOME_USER_SECRET")
+      write!(Path.join(home_dir, "CLAUDE.md"), "HOME_CLAUDE @MEMORY.md")
+      File.ln_s!(memory, Path.join(home_dir, ".cursorrules"))
+
+      write!(
+        Path.join(home_dir, ".lemon/rules/home.md"),
+        "---\nalwaysApply: true\n---\nHOME_RULE"
+      )
+
+      write!(Path.join(home_dir, ".lemon/commands/homecmd.md"), "HOME_COMMAND")
+      write!(Path.join(home_dir, ".lemon/agents/evil.md"), persona)
+      write!(Path.join(home_dir, ".lemon/prompts/tpl.md"), "HOME_TEMPLATE")
+      File.mkdir_p!(Path.join(home_dir, "sub"))
+    end
+
+    defp assert_no_home_project!(cwd, base) do
+      text = rendered(ResourceLoader.instruction_sections(cwd) ++ Rules.sections(cwd))
+
+      for marker <- ~w(HOME_CLAUDE HOME_MEMORY_SECRET HOME_RULE),
+          do: refute(text =~ marker, "#{cwd}: #{marker}")
+
+      assert Rules.discover(cwd) |> Enum.filter(&(&1.level == :project)) == []
+      refute "homecmd" in Enum.map(Commands.list(cwd, home: Path.join(base, "none")), & &1.name)
+      refute "evil" in Enum.map(CodingAgent.Subagents.list(cwd), & &1.id)
+      assert ResourceLoader.load_prompt(cwd, "tpl") == {:error, :not_found}
+    end
+
+    test "the assistant home and its subdirectories load no project resources", %{base: base} do
+      home_dir = LemonCore.Cwd.assistant_home()
+      plant_home!(home_dir)
+
+      for cwd <- [home_dir, Path.join(home_dir, "sub")] do
+        assert_no_home_project!(cwd, base)
+
+        for {scope, opts} <- [
+              {:subagent, %{session_mode: :chat}},
+              {:main, %{session_mode: :chat, persona: false}},
+              {:main, %{session_mode: :coding}}
+            ] do
+          prompt = PromptComposer.compose_system_prompt(cwd, nil, nil, home_dir, scope, "", opts)
+
+          for marker <- ~w(HOME_CLAUDE HOME_MEMORY_SECRET HOME_USER_SECRET HOME_RULE),
+              do: refute(prompt =~ marker, "#{scope} #{inspect(opts)}: #{marker}")
+        end
+
+        assert LemonCore.TrustedRoot.project_root(cwd) == :none
+      end
+    end
+
+    test "a profile workspace loads no project resources", %{base: base} do
+      home_dir = LemonCore.Paths.home_path(["profiles", "p1", "workspace"])
+      plant_home!(home_dir)
+
+      assert_no_home_project!(home_dir, base)
+      assert LemonCore.TrustedRoot.project_root(home_dir) == :none
+    end
+
+    test "a repository containing the home cannot link to or import its files", %{base: base} do
+      repo!(base)
+      home_dir = LemonCore.Cwd.assistant_home()
+      plant_home!(home_dir)
+      memory = Path.join(home_dir, "MEMORY.md")
+      File.ln_s!(memory, Path.join(base, ".cursorrules"))
+      File.mkdir_p!(Path.join(base, ".lemon"))
+      File.ln_s!(Path.join(home_dir, ".lemon/rules"), Path.join(base, ".lemon/rules"))
+      File.ln_s!(Path.join(home_dir, ".lemon/commands"), Path.join(base, ".lemon/commands"))
+      rel = Path.relative_to(memory, base)
+
+      write!(
+        Path.join(base, "AGENTS.md"),
+        "REPO_AGENTS @#{rel} @#{Path.relative_to(home_dir, base)}/USER.md"
+      )
+
+      text = rendered(ResourceLoader.instruction_sections(base) ++ Rules.sections(base))
+      assert text =~ "REPO_AGENTS @#{rel}"
+
+      for marker <- ~w(HOME_MEMORY_SECRET HOME_USER_SECRET HOME_RULE),
+          do: refute(text =~ marker, marker)
+
+      refute "homecmd" in Enum.map(Commands.list(base, home: Path.join(base, "none")), & &1.name)
+      assert {:ok, _root} = LemonCore.TrustedRoot.project_root(base)
+    end
+  end
 end

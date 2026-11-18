@@ -18,11 +18,15 @@ defmodule CodingAgent.ResourceLoader.AtImportsTest do
   # Project files import only inside their trusted root. Provenance markers are
   # stripped here so structural tests compare the spliced content; a dedicated
   # test asserts the markers.
-  defp expand(content, ctx),
-    do: content |> AtImports.expand(ctx.source, home: ctx.home, root: ctx.project) |> unmark()
+  defp expand(content, ctx, opts \\ []), do: content |> raw(ctx, opts) |> unmark()
 
-  defp expand_global(content, ctx),
-    do: content |> AtImports.expand(ctx.source, home: ctx.home, root: :unconfined) |> unmark()
+  defp expand_global(content, ctx), do: content |> raw(ctx, root: :unconfined) |> unmark()
+
+  defp raw(content, ctx, opts \\ []) do
+    opts = [home: ctx.home] ++ Keyword.put_new(opts, :root, ctx.project)
+    {text, _identities} = AtImports.expand(content, ctx.source, opts)
+    text
+  end
 
   defp unmark(text), do: Regex.replace(~r/<!-- (?:@import [^>]*|\/@import) -->/, text, "")
 
@@ -60,7 +64,7 @@ defmodule CodingAgent.ResourceLoader.AtImportsTest do
 
     log =
       capture_log(fn ->
-        assert AtImports.expand(text, ctx.source, home: ctx.home, root: ctx.project) == text
+        assert raw(text, ctx) == text
       end)
 
     for token <- ["~/.ssh/id_ed25519", passwd, "../outside/secret.md", outside],
@@ -77,7 +81,7 @@ defmodule CodingAgent.ResourceLoader.AtImportsTest do
 
     log =
       capture_log(fn ->
-        assert AtImports.expand(text, ctx.source, home: ctx.home, root: ctx.project) == text
+        assert raw(text, ctx) == text
       end)
 
     for token <- ["linked.md", "linkdir/id_rsa", "hard.md"],
@@ -93,8 +97,24 @@ defmodule CodingAgent.ResourceLoader.AtImportsTest do
     target = write!(Path.join(ctx.project, "docs/a.md"), "A BODY")
     {:ok, real} = LemonCore.TrustedRoot.realpath(target)
 
-    assert AtImports.expand("Read @docs/a.md now", ctx.source, home: ctx.home, root: ctx.project) ==
+    assert raw("Read @docs/a.md now", ctx) ==
              "Read <!-- @import #{real} -->A BODY<!-- /@import --> now"
+  end
+
+  test "files in :skip, including symlink aliases, stay literal", ctx do
+    agents = write!(Path.join(ctx.project, "AGENTS.md"), "AGENTS BODY")
+    File.ln_s!(agents, Path.join(ctx.project, "alias.md"))
+    doc = write!(Path.join(ctx.project, "docs/a.md"), "DOC BODY")
+    skip = [AtImports.identity(agents)]
+
+    assert expand("@AGENTS.md @alias.md @docs/a.md", ctx, skip: skip) ==
+             "@AGENTS.md @alias.md DOC BODY"
+
+    {_text, identities} =
+      AtImports.expand("@docs/a.md", ctx.source, home: ctx.home, root: ctx.project, skip: skip)
+
+    assert MapSet.subset?(MapSet.new([AtImports.identity(doc) | skip]), identities)
+    assert expand("@docs/a.md", ctx, skip: identities) == "@docs/a.md"
   end
 
   test "strips trailing punctuation from the path", ctx do

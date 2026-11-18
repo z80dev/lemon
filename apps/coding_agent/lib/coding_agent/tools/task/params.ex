@@ -916,6 +916,9 @@ defmodule CodingAgent.Tools.Task.Params do
         Keyword.get(opts, :session_mode) ||
           Keyword.get(Map.get(parent_state || %{}, :tool_opts, []), :session_mode)
       )
+      # The parent's effective bootstrap persona flag: a child never re-enables
+      # assistant-home bootstrap files its parent ran without.
+      |> maybe_put_kw(:persona, inherited_persona(opts, parent_state))
       |> Keyword.put(:memory_context_verified, inherited_context.memory_context_verified)
       |> Keyword.put(:shared_memory_grant, inherited_context.shared_memory_grant)
       |> Keyword.merge(Map.to_list(Map.take(inherited_context, private_native_fields())))
@@ -970,6 +973,19 @@ defmodule CodingAgent.Tools.Task.Params do
         case Keyword.get(opts, :model_explicit) do
           nil -> not is_nil(Keyword.get(opts, :model))
           explicit -> explicit == true
+        end
+    end
+  end
+
+  defp inherited_persona(opts, parent_state) do
+    case Keyword.get(opts, :persona) do
+      persona when is_boolean(persona) ->
+        persona
+
+      _ ->
+        case Keyword.get(Map.get(parent_state || %{}, :tool_opts, []), :persona) do
+          persona when is_boolean(persona) -> persona
+          _ -> nil
         end
     end
   end

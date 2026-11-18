@@ -343,9 +343,17 @@ defmodule CodingAgent.Commands do
       {Path.join(home, ".gemini/commands"), :gemini_toml, "gemini"}
     ]
 
-    root = TrustedRoot.resolve(cwd)
+    # An assistant home is never a project: only global commands load there.
+    project =
+      case TrustedRoot.project_root(cwd) do
+        {:ok, root} ->
+          for {dir, format, source} <- project_roots, do: {dir, format, source, :project, root}
 
-    for({dir, format, source} <- project_roots, do: {dir, format, source, :project, root}) ++
+        :none ->
+          []
+      end
+
+    project ++
       for(
         {dir, format, source} <- global_roots,
         do: {dir, format, source, :global, :unconfined}

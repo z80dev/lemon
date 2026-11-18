@@ -10,6 +10,7 @@ defmodule CodingAgent.Session.PromptComposer do
 
   alias CodingAgent.ResourceLoader
   alias CodingAgent.Rules
+  alias CodingAgent.Workspace
 
   # ============================================================================
   # System Prompt Composition
@@ -116,16 +117,25 @@ defmodule CodingAgent.Session.PromptComposer do
     {environment, build_opts} = Map.pop(build_opts, :environment)
 
     # Build Lemon base prompt (coding rules + skills + workspace context)
-    base_sections =
-      CodingAgent.SystemPrompt.build_sections(
-        cwd,
+    build_opts =
+      Map.merge(
         %{
           workspace_dir: workspace_dir,
           session_scope: session_scope,
           skill_context: skill_context
-        }
-        |> Map.merge(build_opts)
+        },
+        build_opts
       )
+
+    base_sections = CodingAgent.SystemPrompt.build_sections(cwd, build_opts)
+
+    # Assistant-home bootstrap files (this session's workspace and the default
+    # one, e.g. a channel run whose cwd is the assistant home) reach the prompt
+    # only through the gated bootstrap sections, never as instruction files.
+    bootstrap_paths =
+      [build_opts.workspace_dir || Workspace.workspace_dir(), Workspace.workspace_dir()]
+      |> Enum.uniq()
+      |> Enum.flat_map(&Workspace.bootstrap_paths/1)
 
     # Only these built-in sections are independent of cwd. Skill discovery,
     # contributed context, templates and bootstrap files can all depend on it.
@@ -157,7 +167,8 @@ defmodule CodingAgent.Session.PromptComposer do
         top_level(:system_prompt, "Prompt template", template_content),
         directory,
         ResourceLoader.instruction_sections(cwd,
-          foreign_globals: build_opts[:session_mode] in [:coding, "coding"]
+          foreign_globals: build_opts[:session_mode] in [:coding, "coding"],
+          exclude: bootstrap_paths
         ),
         Rules.sections(cwd),
         top_level(:system_prompt, "Environment", environment),
