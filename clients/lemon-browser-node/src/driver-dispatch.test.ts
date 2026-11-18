@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
+// Destination checks resolve hostnames; keep these unit tests off live DNS.
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn().mockResolvedValue([{ address: '93.184.215.14', family: 4 }]),
+}));
+
 import { dispatchBrowserRequest } from './driver-dispatch.js';
 
 describe('dispatchBrowserRequest', () => {
@@ -50,20 +55,35 @@ describe('dispatchBrowserRequest', () => {
 
   it('routes raw CDP commands with params and an optional target', async () => {
     const chrome = {
-      sendCdp: vi.fn().mockResolvedValue({ result: { value: 42 } }),
+      sendCdp: vi.fn().mockResolvedValue({ root: { nodeId: 1 } }),
     } as any;
 
     const result = await dispatchBrowserRequest(chrome, 'browser.cdp', {
-      method: 'Runtime.evaluate',
-      params: { expression: '6 * 7' },
+      method: 'DOM.getDocument',
+      params: { depth: 1 },
       targetId: 'tab-2',
     });
 
-    expect(chrome.sendCdp).toHaveBeenCalledWith(
-      'Runtime.evaluate',
-      { expression: '6 * 7' },
-      'tab-2',
+    expect(chrome.sendCdp).toHaveBeenCalledWith('DOM.getDocument', { depth: 1 }, 'tab-2');
+    expect(result).toEqual({ root: { nodeId: 1 } });
+  });
+
+  it.each(['Page.navigate', 'Runtime.evaluate', 'Target.createTarget', 'Fetch.enable', 'Network.loadNetworkResource'])(
+    'refuses network-capable raw CDP method %s',
+    async (method) => {
+      const chrome = { sendCdp: vi.fn() } as unknown as Parameters<typeof dispatchBrowserRequest>[0];
+      await expect(
+        dispatchBrowserRequest(chrome, 'browser.cdp', { method, params: { url: 'http://169.254.169.254/' } }),
+      ).rejects.toThrow(`CDP method ${method} is not allowed`);
+      expect(chrome.sendCdp).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses to open a tab on a metadata destination', async () => {
+    const chrome = { openTab: vi.fn() } as unknown as Parameters<typeof dispatchBrowserRequest>[0];
+    await expect(dispatchBrowserRequest(chrome, 'tabOpen', { url: 'http://2852039166/' })).rejects.toThrow(
+      /blocked metadata endpoint/,
     );
-    expect(result).toEqual({ result: { value: 42 } });
+    expect(chrome.openTab).not.toHaveBeenCalled();
   });
 });

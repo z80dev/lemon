@@ -3,6 +3,8 @@ import path from 'node:path';
 
 import type { ConsoleMessage, Dialog, Page } from 'playwright-core';
 
+import { blockedDestination } from './destination-guard.js';
+
 export async function handleBrowserMethod(page: Page, method: string, args: any): Promise<unknown> {
   const m = method.startsWith('browser.') ? method : `browser.${method}`;
   const a = args ?? {};
@@ -24,6 +26,9 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
     case 'browser.navigate': {
       const url = String(a.url ?? '');
       if (!url) throw new Error('navigate requires args.url');
+      // Pre-check for every browser; Lemon-launched Chrome is also bound to the egress proxy.
+      const blocked = await blockedDestination(url);
+      if (blocked) throw new Error(`browser navigation blocked ${blocked}`);
       const resp = await page.goto(url, { waitUntil: 'domcontentloaded' });
       return {
         url: page.url(),

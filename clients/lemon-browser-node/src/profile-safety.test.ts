@@ -67,7 +67,12 @@ describe('managed user profiles', () => {
     expect(defaultArgs.some((arg) => arg.startsWith('--profile-directory'))).toBe(false);
     await session('Profile 1').launchChrome();
     const selectedArgs = vi.mocked(spawn).mock.calls[1][1] as string[];
-    expect(selectedArgs.filter((arg) => !arg.startsWith('--profile-directory='))).toEqual(defaultArgs);
+    // Each launch gets its own egress proxy port.
+    const stable = (args: string[]) =>
+      args.filter((arg) => !arg.startsWith('--profile-directory=') && !arg.startsWith('--proxy-server='));
+    expect(stable(selectedArgs)).toEqual(stable(defaultArgs));
+    expect(defaultArgs).toContain('--proxy-bypass-list=<-loopback>');
+    expect(defaultArgs.some((arg) => /^--proxy-server=http:\/\/127\.0\.0\.1:\d+$/.test(arg))).toBe(true);
     expect(selectedArgs).toContain('--profile-directory=Profile 1');
   });
 

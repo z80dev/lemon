@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import { startEgressProxy, type EgressPolicy, type EgressProxy } from './egress-proxy.js';
 import { validateManagedProfile } from './profile-safety.js';
 
 export type BrowserTab = {
@@ -29,6 +30,8 @@ export type ChromeConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
+  /** Test seam for the managed-Chrome egress proxy; production uses the defaults. */
+  egressPolicy?: EgressPolicy;
 };
 
 export class ChromeSession {
@@ -37,6 +40,7 @@ export class ChromeSession {
   private browser: Browser | null = null;
   private activeTargetId: string | null = null;
   private ownedBrowser = false;
+  private egressProxy: EgressProxy | null = null;
 
   constructor(cfg: ChromeConfig) {
     this.cfg = {
@@ -111,6 +115,8 @@ export class ChromeSession {
       this.proc = null;
     }
 
+    await this.egressProxy?.close().catch(() => undefined);
+    this.egressProxy = null;
     this.ownedBrowser = false;
   }
 
@@ -266,7 +272,16 @@ export class ChromeSession {
 
     fs.mkdirSync(this.cfg.userDataDir, { recursive: true });
 
+    // Route a Lemon-launched Chrome through the driver's egress proxy, which
+    // refuses metadata/link-local destinations on the IP it actually connects to.
+    // `<-loopback>` removes Chrome's implicit loopback bypass. The WebRTC flag is
+    // best effort (unverified); see docs/tools/browser.md "Egress enforcement".
+    this.egressProxy ??= await startEgressProxy(this.cfg.egressPolicy);
+
     const args: string[] = [
+      `--proxy-server=http://127.0.0.1:${this.egressProxy.port}`,
+      '--proxy-bypass-list=<-loopback>',
+      '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
       `--remote-debugging-port=${this.cfg.cdpPort}`,
       '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${this.cfg.userDataDir}`,
