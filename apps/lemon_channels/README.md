@@ -955,6 +955,13 @@ authserv_id = "mx.your-provider.example"
 - Accepted mail reaches the agent as an unverified, non-owner identity, and its
   sender, subject, body and attachment lines are fenced as untrusted content
   (`LemonAgent.Security.ExternalContent`, source `Email`).
+- `lemon config validate` checks every `[gateway.email]` field the adapter
+  reads, nested (`inbound`, `outbound`) or flat (`smtp_*`, `webhook_*`).
+  Outbound `tls` / `auth` (and `smtp_tls` / `smtp_auth`) must be one of
+  `always`, `never`, `if_available`; any other value, including `true` or
+  `false`, is a config error because the adapter would otherwise fall back to
+  its default (opportunistic TLS). `ssl` must be a boolean and `tls_versions`
+  a non-empty list drawn from `tlsv1`, `tlsv1.1`, `tlsv1.2`, `tlsv1.3`.
 
 > [!WARNING]
 > **Unsafe opt-out for providers without verdicts.** If your provider supplies

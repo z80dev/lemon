@@ -118,6 +118,168 @@ defmodule LemonCore.Config.ModularTest do
     refute Enum.any?(errors, &String.contains?(&1, secret))
   end
 
+  describe "gateway.email validation from decoded TOML" do
+    test "nested and flat email fields with TOML string keys are validated" do
+      {:ok, settings} =
+        Toml.decode("""
+        [gateway.email]
+        smtp_tls = "opportunistic"
+        smtp_auth = "sometimes"
+        smtp_port = 0
+        smtp_ssl = "yes"
+        smtp_timeout = -1
+        smtp_tls_versions = ["sslv3"]
+        webhook_token = ""
+
+        [gateway.email.inbound]
+        port = 70000
+        token = ""
+        enabled = "yes"
+
+        [gateway.email.outbound]
+        relay = ""
+        port = 99999
+        tls = "requiered"
+        auth = "maybe"
+        ssl = "true"
+        from = ""
+        timeout = 0
+        tls_versions = ["tlsv1.4"]
+        """)
+
+      assert {:error, errors} = Modular.validate_settings(settings)
+
+      for path <- ~w(
+            gateway.email.smtp_tls gateway.email.smtp_auth gateway.email.smtp_port
+            gateway.email.smtp_ssl gateway.email.smtp_timeout gateway.email.smtp_tls_versions
+            gateway.email.webhook_token
+            gateway.email.inbound.port gateway.email.inbound.token
+            gateway.email.inbound.enabled
+            gateway.email.outbound.relay gateway.email.outbound.port gateway.email.outbound.tls
+            gateway.email.outbound.auth gateway.email.outbound.ssl gateway.email.outbound.from
+            gateway.email.outbound.timeout gateway.email.outbound.tls_versions
+          ) do
+        assert Enum.any?(errors, &String.starts_with?(&1, path <> ":")),
+               "expected an error for #{path}, got: #{inspect(errors)}"
+      end
+    end
+
+    test "values the email adapter does not honor are rejected rather than downgraded" do
+      # The SMTP adapter maps any tls/auth string other than always/never/if_available
+      # to its default (opportunistic TLS), so "true" must not validate.
+      for {key, value} <- [{"tls", "true"}, {"tls", true}, {"auth", "false"}] do
+        settings = %{"gateway" => %{"email" => %{"outbound" => %{key => value}}}}
+        assert {:error, errors} = Modular.validate_settings(settings)
+        assert Enum.any?(errors, &String.starts_with?(&1, "gateway.email.outbound.#{key}:"))
+      end
+    end
+
+    test "non-table email and webhook values are reported, not crashed on" do
+      for section <- ["email", "webhook"] do
+        assert {:error, errors} =
+                 Modular.validate_settings(%{"gateway" => %{section => "x"}})
+
+        assert "gateway.#{section}: must be a map" in errors
+      end
+    end
+
+    test "gateway.sms and gateway.voice fields from decoded TOML are validated" do
+      {:ok, settings} =
+        Toml.decode("""
+        [gateway.sms]
+        webhook_enabled = "yes"
+        webhook_port = 0
+        handoff_grace_ms = 0
+        webhook_url = "not a url"
+
+        [gateway.voice]
+        enabled = "yes"
+        public_url = "http://voice.example.com"
+        websocket_port = 70000
+        twilio_auth_token = 123
+        """)
+
+      assert {:error, errors} = Modular.validate_settings(settings)
+
+      for path <- ~w(
+            gateway.sms.webhook_enabled gateway.sms.webhook_port gateway.sms.handoff_grace_ms
+            gateway.sms.webhook_url gateway.voice.enabled gateway.voice.public_url
+            gateway.voice.websocket_port gateway.voice.twilio_auth_token
+          ) do
+        assert Enum.any?(errors, &String.starts_with?(&1, path <> ":")),
+               "expected an error for #{path}, got: #{inspect(errors)}"
+      end
+
+      for section <- ["sms", "voice"] do
+        assert {:error, errors} = Modular.validate_settings(%{"gateway" => %{section => "x"}})
+        assert "gateway.#{section}: must be a map" in errors
+      end
+    end
+
+    test "TOML booleans are rejected for free-form string fields" do
+      {:ok, settings} =
+        Toml.decode("""
+        [gateway.email]
+        smtp_password = true
+        webhook_token = false
+
+        [gateway.email.inbound]
+        token = true
+
+        [gateway.email.outbound]
+        username = true
+        password = false
+        relay = true
+        from = false
+
+        [gateway.sms]
+        auth_token = true
+        inbox_number = false
+
+        [gateway.voice]
+        twilio_auth_token = true
+        llm_model = false
+        """)
+
+      assert {:error, errors} = Modular.validate_settings(settings)
+
+      for path <- ~w(
+            gateway.email.smtp_password gateway.email.webhook_token gateway.email.inbound.token
+            gateway.email.outbound.username gateway.email.outbound.password
+            gateway.email.outbound.relay gateway.email.outbound.from
+            gateway.sms.auth_token gateway.sms.inbox_number
+            gateway.voice.twilio_auth_token gateway.voice.llm_model
+          ) do
+        assert "#{path}: must be a string" in errors,
+               "expected #{path} to be rejected, got: #{inspect(errors)}"
+      end
+    end
+
+    test "a valid TOML email block passes" do
+      {:ok, settings} =
+        Toml.decode("""
+        [gateway.email]
+        smtp_tls = "always"
+        attachment_max_bytes = 1000
+
+        [gateway.email.inbound]
+        token = "webhook-secret-token"
+        allowed_senders = ["a@example.com"]
+
+        [gateway.email.outbound]
+        relay = "smtp.example.com"
+        port = 587
+        tls = "always"
+        auth = "never"
+        ssl = false
+        from = "bot@example.com"
+        tls_versions = ["tlsv1.2", "tlsv1.3"]
+        """)
+
+      assert {:ok, _config} = Modular.validate_settings(settings)
+    end
+  end
+
   describe "load/1" do
     test "returns a Modular config struct" do
       config = Modular.load()

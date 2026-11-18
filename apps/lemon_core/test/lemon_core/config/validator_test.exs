@@ -881,93 +881,100 @@ defmodule LemonCore.Config.ValidatorTest do
     end
   end
 
-  describe "validate_web_dashboard_config/2" do
-    test "validates web dashboard port" do
-      errors = Validator.validate_web_dashboard_config([], %{port: 4080})
-      assert errors == []
+  describe "validate_sms_config/2" do
+    test "accepts the fields the SMS adapter reads, keyed as atoms or TOML strings" do
+      valid = %{
+        "webhook_enabled" => true,
+        "webhook_port" => 4041,
+        "webhook_bind" => "127.0.0.1",
+        "inbox_number" => "+15550001111",
+        "inbox_ttl_ms" => 86_400_000,
+        "handoff_grace_ms" => 600_000,
+        "auth_token_secret" => "twilio_auth_token",
+        "webhook_url" => "https://example.com/webhooks/twilio/sms"
+      }
 
-      errors = Validator.validate_web_dashboard_config([], %{port: 0})
-      assert Enum.any?(errors, &String.contains?(&1, "port"))
+      assert Validator.validate_sms_config([], valid) == []
 
-      errors = Validator.validate_web_dashboard_config([], %{port: 70_000})
-      assert Enum.any?(errors, &String.contains?(&1, "port"))
-
-      errors = Validator.validate_web_dashboard_config([], %{port: "not-an-integer"})
-      assert Enum.any?(errors, &String.contains?(&1, "port"))
+      assert Validator.validate_sms_config(
+               [],
+               Map.new(valid, fn {k, v} -> {String.to_atom(k), v} end)
+             ) == []
     end
 
-    test "validates web dashboard host" do
-      errors = Validator.validate_web_dashboard_config([], %{host: "localhost"})
-      assert errors == []
+    test "rejects wrongly typed string-keyed fields" do
+      for {key, value} <- [
+            {"webhook_enabled", "yes"},
+            {"webhook_port", 70_000},
+            {"webhook_bind", ""},
+            {"inbox_number", 15_550_001_111},
+            {"inbox_ttl_ms", 0},
+            {"handoff_grace_ms", 0},
+            {"auth_token", ""},
+            {"auth_token_secret", 7},
+            {"webhook_url", "example.com/sms"},
+            {"webhook_url", "ftp://example.com/sms"},
+            {"webhook_url", "https://user:pw@example.com/sms"}
+          ] do
+        errors = Validator.validate_sms_config([], %{key => value})
 
-      errors = Validator.validate_web_dashboard_config([], %{host: ""})
-      assert Enum.any?(errors, &String.contains?(&1, "host"))
+        assert Enum.any?(errors, &String.starts_with?(&1, "gateway.sms.#{key}:")),
+               "#{key}=#{inspect(value)}"
+      end
 
-      errors = Validator.validate_web_dashboard_config([], %{host: 123})
-      assert Enum.any?(errors, &String.contains?(&1, "host"))
+      assert Validator.validate_sms_config([], "x") == ["gateway.sms: must be a map"]
+    end
+  end
+
+  describe "validate_voice_config/2" do
+    test "accepts the fields the voice transport reads" do
+      assert Validator.validate_voice_config([], %{
+               enabled: true,
+               websocket_port: 4047,
+               public_url: "https://voice.example.com",
+               twilio_phone_number: "+15550001111",
+               elevenlabs_output_format: "ulaw_8000",
+               max_call_duration_seconds: 600,
+               silence_timeout_ms: 5000
+             }) == []
     end
 
-    test "validates web dashboard secret_key_base" do
-      # Valid secret key (64+ characters)
-      long_key = String.duplicate("a", 64)
-      errors = Validator.validate_web_dashboard_config([], %{secret_key_base: long_key})
-      assert errors == []
-
-      # Too short secret key
-      short_key = String.duplicate("a", 32)
-      errors = Validator.validate_web_dashboard_config([], %{secret_key_base: short_key})
-      assert Enum.any?(errors, &String.contains?(&1, "secret_key_base"))
-
-      # Env var reference is valid
-      errors =
-        Validator.validate_web_dashboard_config([], %{
-          secret_key_base: "${LEMON_WEB_SECRET_KEY_BASE}"
-        })
-
-      assert errors == []
+    test "requires an absolute https public_url" do
+      for url <- [
+            "http://voice.example.com",
+            "voice.example.com",
+            "wss://voice.example.com",
+            "https://",
+            " https://voice.example.com",
+            "https://voice.example.com ",
+            "HTTPS://voice.example.com",
+            "https://voice example.com"
+          ] do
+        assert "gateway.voice.public_url: must be an absolute https URL" in Validator.validate_voice_config(
+                 [],
+                 %{"public_url" => url}
+               ),
+               url
+      end
     end
 
-    test "validates web dashboard access_token" do
-      # Valid access token (16+ characters)
-      long_token = String.duplicate("a", 16)
-      errors = Validator.validate_web_dashboard_config([], %{access_token: long_token})
-      assert errors == []
+    test "rejects wrongly typed fields" do
+      for {key, value} <- [
+            {:enabled, "true"},
+            {:websocket_port, 0},
+            {:max_call_duration_seconds, -1},
+            {:silence_timeout_ms, "5000"},
+            {:twilio_auth_token, 123},
+            {:llm_model, ""},
+            {:public_url, 42}
+          ] do
+        errors = Validator.validate_voice_config([], %{key => value})
 
-      # Short access token (warning)
-      short_token = String.duplicate("a", 8)
-      errors = Validator.validate_web_dashboard_config([], %{access_token: short_token})
-      assert Enum.any?(errors, &String.contains?(&1, "access_token"))
+        assert Enum.any?(errors, &String.starts_with?(&1, "gateway.voice.#{key}:")),
+               "#{key}=#{inspect(value)}"
+      end
 
-      # Env var reference is valid
-      errors =
-        Validator.validate_web_dashboard_config([], %{access_token: "${LEMON_WEB_ACCESS_TOKEN}"})
-
-      assert errors == []
-    end
-
-    test "accepts nil web dashboard config" do
-      errors = Validator.validate_web_dashboard_config([], nil)
-      assert errors == []
-    end
-
-    test "validates complete web dashboard config" do
-      errors =
-        Validator.validate_web_dashboard_config([], %{
-          port: 4080,
-          host: "localhost",
-          secret_key_base: String.duplicate("a", 64),
-          access_token: String.duplicate("b", 16)
-        })
-
-      assert errors == []
-    end
-
-    test "validates enable_web_dashboard boolean" do
-      errors = Validator.validate_gateway(%{enable_web_dashboard: true}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "enable_web_dashboard"))
-
-      errors = Validator.validate_gateway(%{enable_web_dashboard: "yes"}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "enable_web_dashboard"))
+      assert Validator.validate_voice_config([], "x") == ["gateway.voice: must be a map"]
     end
   end
 
@@ -1030,30 +1037,67 @@ defmodule LemonCore.Config.ValidatorTest do
       errors =
         Validator.validate_email_config([], %{
           inbound: %{
-            bind_host: "0.0.0.0",
-            bind_port: 8080,
-            token: "webhook-secret-token",
-            max_body_bytes: 10_000_000
+            enabled: true,
+            bind: "0.0.0.0",
+            port: 8080,
+            path: "/email",
+            token: "webhook-secret-token"
           }
         })
 
       assert errors == []
 
       # Invalid port
+      errors = Validator.validate_email_config([], %{inbound: %{port: 70_000}})
+      assert "gateway.email.inbound.port: must be between 1 and 65535" in errors
+
+      # Empty bind
+      errors = Validator.validate_email_config([], %{inbound: %{bind: ""}})
+      assert "gateway.email.inbound.bind: cannot be empty" in errors
+    end
+
+    test "validates nested tables keyed as decoded TOML strings" do
       errors =
         Validator.validate_email_config([], %{
-          inbound: %{bind_port: 70_000}
+          "inbound" => %{"port" => 0, "token" => ""},
+          "outbound" => %{"tls" => "nope", "port" => 70_000, "ssl" => "true"}
         })
 
-      assert Enum.any?(errors, &String.contains?(&1, "bind_port"))
+      for path <- ~w(
+            gateway.email.inbound.port gateway.email.inbound.token gateway.email.outbound.tls
+            gateway.email.outbound.port gateway.email.outbound.ssl
+          ) do
+        assert Enum.any?(errors, &String.starts_with?(&1, path <> ":")), path
+      end
 
-      # Empty host
-      errors =
-        Validator.validate_email_config([], %{
-          inbound: %{bind_host: ""}
-        })
+      assert Validator.validate_email_config([], %{"inbound" => "x"}) == [
+               "gateway.email.inbound: must be a map"
+             ]
+    end
 
-      assert Enum.any?(errors, &String.contains?(&1, "bind_host"))
+    test "validates flat smtp_* aliases" do
+      assert Validator.validate_email_config([], %{
+               smtp_relay: "smtp.example.com",
+               smtp_port: 465,
+               smtp_ssl: true,
+               smtp_tls: "never",
+               smtp_auth: "always",
+               smtp_timeout: 30_000,
+               smtp_tls_versions: ["tlsv1.3"]
+             }) == []
+
+      for {key, value} <- [
+            smtp_relay: "",
+            smtp_port: 0,
+            smtp_ssl: "on",
+            smtp_tls: "required",
+            smtp_auth: true,
+            smtp_timeout: 0,
+            smtp_tls_versions: ["sslv3"]
+          ] do
+        errors = Validator.validate_email_config([], %{key => value})
+        assert Enum.any?(errors, &String.starts_with?(&1, "gateway.email.#{key}:")), "#{key}"
+      end
     end
 
     test "validates inbound sender authorization keys in atom and TOML string form" do
@@ -1093,10 +1137,10 @@ defmodule LemonCore.Config.ValidatorTest do
             port: 587,
             username: "user@example.com",
             password: "secret",
-            tls: true,
-            auth: true,
+            tls: "always",
+            auth: "if_available",
             hostname: "example.com",
-            from_address: "bot@example.com"
+            from: "bot@example.com"
           }
         })
 
@@ -1119,47 +1163,18 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "relay"))
     end
 
-    test "validates email tls config" do
-      # Boolean values
-      errors = Validator.validate_email_config([], %{outbound: %{tls: true}})
-      assert errors == []
+    test "validates email tls and auth modes the SMTP adapter honors" do
+      for key <- [:tls, :auth], mode <- ["always", "never", "if_available", " Always ", :never] do
+        assert Validator.validate_email_config([], %{outbound: %{key => mode}}) == []
+      end
 
-      errors = Validator.validate_email_config([], %{outbound: %{tls: false}})
-      assert errors == []
+      # Anything else would be silently replaced by the adapter's default mode.
+      for key <- [:tls, :auth], mode <- [true, false, "true", "false", "invalid"] do
+        errors = Validator.validate_email_config([], %{outbound: %{key => mode}})
 
-      # String values
-      errors = Validator.validate_email_config([], %{outbound: %{tls: "always"}})
-      assert errors == []
-
-      errors = Validator.validate_email_config([], %{outbound: %{tls: "never"}})
-      assert errors == []
-
-      errors = Validator.validate_email_config([], %{outbound: %{tls: "if_available"}})
-      assert errors == []
-
-      # Invalid value
-      errors = Validator.validate_email_config([], %{outbound: %{tls: "invalid"}})
-      assert Enum.any?(errors, &String.contains?(&1, "tls"))
-    end
-
-    test "validates email auth config" do
-      # Boolean values
-      errors = Validator.validate_email_config([], %{outbound: %{auth: true}})
-      assert errors == []
-
-      errors = Validator.validate_email_config([], %{outbound: %{auth: false}})
-      assert errors == []
-
-      # String values
-      errors = Validator.validate_email_config([], %{outbound: %{auth: "always"}})
-      assert errors == []
-
-      errors = Validator.validate_email_config([], %{outbound: %{auth: "if_available"}})
-      assert errors == []
-
-      # Invalid value
-      errors = Validator.validate_email_config([], %{outbound: %{auth: "invalid"}})
-      assert Enum.any?(errors, &String.contains?(&1, "auth"))
+        assert Enum.any?(errors, &String.starts_with?(&1, "gateway.email.outbound.#{key}:")),
+               "#{key}=#{inspect(mode)}"
+      end
     end
 
     test "validates email attachment_max_bytes" do
@@ -1198,20 +1213,20 @@ defmodule LemonCore.Config.ValidatorTest do
       errors =
         Validator.validate_email_config([], %{
           inbound: %{
-            bind_host: "0.0.0.0",
-            bind_port: 8080,
+            bind: "0.0.0.0",
+            port: 8080,
             token: "webhook-secret",
-            max_body_bytes: 10_000_000
+            allowed_senders: ["owner@example.com"]
           },
           outbound: %{
             relay: "smtp.gmail.com",
             port: 587,
             username: "user@example.com",
             password: "secret",
-            tls: true,
-            auth: true,
+            tls: "always",
+            auth: "always",
             hostname: "example.com",
-            from_address: "bot@example.com"
+            from: "bot@example.com"
           },
           attachment_max_bytes: 10_000_000,
           inbound_enabled: true,
