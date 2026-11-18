@@ -179,6 +179,9 @@ defmodule LemonCore.Service.Unit do
               Path.join(Role.home(opts), ".lemon/lemon_bot/versions") <> "/"
             )
 
+        {"omp-broker", [_program, "auth-broker", "serve" | _]} ->
+          parsed.env["LEMON_SERVICE_ROLE"] == "omp-broker"
+
         {_, [program | _]} ->
           String.ends_with?(program, "/bin/lemon")
 

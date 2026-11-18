@@ -25,7 +25,9 @@ was found and its version.
 Separately from delegation, Lemon's own model requests can use omp's
 credentials: `auth_source = "omp_broker"` reads a provider's credential from
 omp's auth broker, and the `omp_gateway` provider sends requests through omp's
-auth gateway. See [omp auth broker and auth gateway](../config.md#omp-auth-broker-and-auth-gateway).
+auth gateway. `lemon setup omp` sets up the broker path end to end (see
+[Use omp's logins](setup.md#use-the-providers-youre-signed-in-to-in-omp)); the
+details are in [omp auth broker and auth gateway](../config.md#omp-auth-broker-and-auth-gateway).
 
 ## From chat
 

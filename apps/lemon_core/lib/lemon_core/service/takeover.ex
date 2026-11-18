@@ -52,7 +52,7 @@ defmodule LemonCore.Service.Takeover do
     end
   end
 
-  def prepare(%{role: "tunnel"}, _, _), do: {:ok, false}
+  def prepare(%{role: role}, _, _) when role in ["tunnel", "omp-broker"], do: {:ok, false}
 
   def controller_snapshot(spec, manager, opts) do
     if manager.pid && manager.pid == Readiness.controller_pid(spec.port, opts) do

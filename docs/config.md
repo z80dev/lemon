@@ -1855,6 +1855,11 @@ optional `base_url`.
 | Models | Lemon's catalog for that provider | everything the gateway serves (`GET /v1/models`) |
 | Refresh | performed by the broker | performed by the broker, behind the gateway |
 
+`lemon setup omp` does the broker setup below for you: it starts the broker as
+the `omp-broker` service when needed, writes `auth_source = "omp_broker"` for
+the providers you pick and verifies them (see
+[Use omp's logins](user-guide/setup.md#use-the-providers-youre-signed-in-to-in-omp)).
+
 ### Broker-backed credentials
 
 Set `auth_source = "omp_broker"` on any provider, built-in or custom:

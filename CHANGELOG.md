@@ -10,6 +10,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `lemon setup omp` reuses the provider logins and API keys omp already holds:
+  it starts omp's auth broker as the new `omp-broker` service
+  (`lemon service install omp-broker`) when none is running, lists omp's
+  credentials, checks the ones you pick through the broker and sets
+  `auth_source = "omp_broker"` and the default model without hand-editing
+  config. `lemon setup` offers it when omp is installed; `lemon setup omp
+  status` and `disconnect` inspect and undo it.
 - Epic #543 wave 3 (additive, unless marked **Breaking**):
   - Providers preconnect and offer opt-in request hedging, with
     `hedge_started`/`hedge_skipped` dispatcher telemetry (#567); OpenAI

@@ -89,6 +89,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonCore.Service` supervises an `omp-broker` role: `omp auth-broker serve
+  --bind 127.0.0.1:8765` with omp's config-root selectors forwarded and broker
+  client settings never forwarded, ready when the broker's health probe answers
+  under the supervised process.
 - New public `LemonCore.Supervision` (supervision subtrees, caps, no
   unsupervised fallbacks) and `LemonCore.TaskSupervisor` (bounded task
   admission) (#585).

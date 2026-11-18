@@ -24,7 +24,7 @@ defmodule LemonCore.Service do
     Unit
   }
 
-  @order %{"controller" => 0, "backend" => 1, "worker" => 2, "tunnel" => 3}
+  @order %{"controller" => 0, "backend" => 1, "worker" => 2, "tunnel" => 3, "omp-broker" => 4}
 
   def install(roles, opts \\ []), do: perform(:install, roles, opts)
   def status(roles \\ [], opts \\ []), do: perform(:status, roles, opts)

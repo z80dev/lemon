@@ -160,12 +160,17 @@ defmodule LemonCli.CommandRegistry do
     %{
       name: "setup",
       summary: "Run first-time setup and configuration",
-      usage: "lemon setup [provider|model|runtime|gateway|doctor] [options]",
+      usage:
+        "lemon setup [provider|model|runtime|gateway|doctor] [options]\nlemon setup omp [status|disconnect] [options]",
       subcommands: [
         %{name: "provider", summary: "Configure an AI provider"},
         %{name: "model", summary: "Connect a model or report readiness"},
         %{name: "runtime", summary: "Configure runtime profile and port bindings"},
         %{name: "gateway", summary: "Configure gateway adapters"},
+        %{
+          name: "omp",
+          summary: "Use the provider logins omp already has (starts omp's auth broker)"
+        },
         %{name: "doctor", summary: "Run diagnostics or write a support bundle (alias for doctor)"}
       ],
       options: [
@@ -215,7 +220,21 @@ defmodule LemonCli.CommandRegistry do
           "--offline",
           ["--offline"],
           "Report static readiness without live connectivity check"
+        ),
+        option(
+          "--all",
+          ["--all"],
+          "setup omp: use (or disconnect) every omp credential Lemon supports"
+        ),
+        option(
+          "--no-service",
+          ["--no-service"],
+          "setup omp: never install the omp-broker background service"
         )
+      ],
+      details: [
+        "`lemon setup omp` finds omp's auth broker (installing the omp-broker service when it is not running), lists the providers omp holds credentials for, checks them, and sets auth_source = \"omp_broker\" on the ones you pick. Non-interactive: `lemon setup omp -n --all --model anthropic:MODEL`; repeat --provider NAME to pick providers.",
+        "`lemon setup omp status [--json]` reports the broker, its service and each provider; `lemon setup omp disconnect --all|--provider NAME` switches providers back to Lemon's own credentials."
       ]
     },
     %{
@@ -837,6 +856,11 @@ defmodule LemonCli.CommandRegistry do
         ),
         option("--bot PATH", ["--bot"], "Executable path for the backend service"),
         option(
+          "--omp-bin PATH",
+          ["--omp-bin"],
+          "omp executable for the omp-broker service (default LEMON_OMP_BIN, then PATH)"
+        ),
+        option(
           "--restart-backend",
           ["--restart-backend"],
           "Reload a changed controller choice during install without restarting a backend twice"
@@ -864,7 +888,8 @@ defmodule LemonCli.CommandRegistry do
         option("--json", ["--json"], "Emit one sanitized schema 1 JSON document")
       ],
       details: [
-        "Roles include controller, backend, worker, and tunnel. Install and uninstall require at least one role.",
+        "Roles include controller, backend, worker, tunnel, and omp-broker. Install and uninstall require at least one role.",
+        "omp-broker runs `omp auth-broker serve` on 127.0.0.1:8765 so providers with auth_source = \"omp_broker\" reuse omp's logins; `lemon setup omp` installs it for you.",
         "Status and repair without roles inspect or reconcile all installed Lemon service units.",
         "Output emits schema 1 JSON on stdout with --json; all progress and diagnostics go to stderr."
       ]

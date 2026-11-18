@@ -60,13 +60,19 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
   @doc "The broker endpoint (`%{url, token}`) from environment, secrets and omp's token file."
   @spec endpoint() :: {:ok, OmpAuthBroker.endpoint()} | {:error, atom()}
   def endpoint do
-    url = secret_env("OMP_AUTH_BROKER_URL") || @default_url
-
     case secret_env("OMP_AUTH_BROKER_TOKEN") || OmpConfig.read_token(:broker) do
       nil -> {:error, :missing_broker_token}
-      token -> {:ok, %{url: url, token: token}}
+      token -> {:ok, %{url: url(), token: token}}
     end
   end
+
+  @doc "The broker base URL: `OMP_AUTH_BROKER_URL` (environment, else a Lemon secret), else `default_url/0`."
+  @spec url() :: String.t()
+  def url, do: secret_env("OMP_AUTH_BROKER_URL") || @default_url
+
+  @doc "`omp auth-broker serve`'s default loopback URL."
+  @spec default_url() :: String.t()
+  def default_url, do: @default_url
 
   @doc "The omp provider id for a Lemon provider and its config, or `nil`."
   @spec omp_provider(atom() | String.t(), map() | nil) :: String.t() | nil

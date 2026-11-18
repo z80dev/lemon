@@ -451,6 +451,64 @@ defmodule LemonCore.ServiceTest do
     assert File.read!(saved) == "credential fixture"
   end
 
+  test "omp-broker serves omp's own store on loopback and round-trips repair and uninstall", %{
+    opts: opts
+  } do
+    omp = Path.join(opts[:home], "tools/bin/omp")
+    File.mkdir_p!(Path.dirname(omp))
+    File.write!(omp, "#!/bin/sh\nexit 0\n")
+    File.chmod!(omp, 0o700)
+
+    opts =
+      Keyword.merge(opts,
+        omp_bin: omp,
+        port: 8799,
+        env: %{"PI_CONFIG_DIR" => ".omp-test", "OMP_AUTH_BROKER_URL" => "http://elsewhere:1"},
+        http_get: fn "http://127.0.0.1:8799/v1/healthz" -> {:ok, %{"ok" => true}} end
+      )
+
+    assert {:ok,
+            %{
+              units: [
+                %{role: "omp-broker", label: "org.lemon.omp-broker", state: "ready"} = unit
+              ]
+            }} = Service.install(["omp-broker"], opts)
+
+    assert unit.action == "created"
+
+    {:ok, parsed} =
+      Unit.read(
+        Path.join(opts[:home], "Library/LaunchAgents/org.lemon.omp-broker.plist"),
+        "launchd"
+      )
+
+    assert parsed.argv == [omp, "auth-broker", "serve", "--bind", "127.0.0.1:8799"]
+    assert parsed.env["PI_CONFIG_DIR"] == ".omp-test"
+    # The broker is the credential vault, never a client of another broker.
+    refute Map.has_key?(parsed.env, "OMP_AUTH_BROKER_URL")
+    assert String.starts_with?(parsed.env["PATH"], Path.dirname(omp) <> ":")
+
+    # Status, repair and uninstall recover the executable and port from the unit.
+    without_bin = Keyword.drop(opts, [:omp_bin, :port])
+
+    assert {:ok, %{units: [%{role: "omp-broker", state: "ready"}]}} =
+             Service.status([], without_bin)
+
+    assert {:ok, %{units: [%{state: "ready", action: "unchanged"}]}} =
+             Service.repair(["omp-broker"], without_bin)
+
+    assert {:ok, %{units: [%{action: "removed"}]}} =
+             Service.uninstall(["omp-broker"], without_bin)
+  end
+
+  test "omp-broker install fails closed without an omp executable", %{opts: opts} do
+    opts = Keyword.merge(opts, omp_bin: Path.join(opts[:home], "missing/omp"))
+
+    assert {:ok,
+            %{units: [%{role: "omp-broker", state: "blocked", detail: "omp_executable_missing"}]}} =
+             Service.install(["omp-broker"], opts)
+  end
+
   test "enrollment sends code once through stdin, not argv or environment", %{opts: opts} do
     parent = self()
     original = opts[:command_runner]

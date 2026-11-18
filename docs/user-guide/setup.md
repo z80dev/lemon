@@ -249,6 +249,41 @@ rather than resolving credentials to disambiguate dynamic preset caches.
 A local ready state or skipped live check alone is not proof that a
 runtime-qualified selector or effective override passed live setup verification.
 
+### Use the providers you're signed in to in omp
+
+If you use [omp](omp.md), Lemon can use the logins and API keys omp already
+holds instead of signing in again. The full wizard offers **Use your omp logins**
+when it finds omp on this machine; run it directly with:
+
+```bash
+lemon setup omp
+```
+
+It finds omp's auth broker and, when none is running, offers to install the
+`omp-broker` background service (`omp auth-broker serve` on 127.0.0.1:8765,
+started at login). It lists the providers omp holds credentials for, checks
+each one through the broker, sets `auth_source = "omp_broker"` on the providers
+you pick, and can set the default model. Logins stay in omp: signing in or out
+there takes effect in Lemon, and the broker performs every token refresh.
+
+```bash
+# Scripted: every supported omp credential, with a default model
+lemon setup omp -n --all --model anthropic:claude-sonnet-4-5
+# Only some providers (repeat --provider), never installing the service
+lemon setup omp -n --provider anthropic --provider openai-codex --no-service
+# Broker, service and per-provider state (--json for one document)
+lemon setup omp status
+# Switch providers back to Lemon's own credentials
+lemon setup omp disconnect --all
+lemon service uninstall omp-broker
+```
+
+A provider omp holds but Lemon has no provider for is listed and skipped, as is
+omp's GitHub Copilot sign-in. When `OMP_AUTH_BROKER_URL` points at another
+host, setup uses that broker and never installs a local service. See
+[omp auth broker and auth gateway](../config.md#omp-auth-broker-and-auth-gateway)
+for how broker credentials are selected and rotated.
+
 ### Local servers and custom endpoints
 
 `lemon setup` and `lemon setup provider` include **local server** entries for

@@ -92,8 +92,13 @@ lemon service repair [ROLE...] [--name NAME] [--enable-linger] [--wait SECS] [--
 lemon service uninstall ROLE... [--name NAME] [--json]
 ```
 
-Roles are `controller`, `backend`, `worker`, and `tunnel`. Install requires a
-role; status/repair without roles select all Lemon-owned units for this user.
+Roles are `controller`, `backend`, `worker`, `tunnel`, and `omp-broker`. Install
+requires a role; status/repair without roles select all Lemon-owned units for
+this user. `omp-broker` runs omp's credential broker (`omp auth-broker serve
+--bind 127.0.0.1:8765`) against omp's own credential store; `--omp-bin PATH`
+selects the executable (default `LEMON_OMP_BIN`, then `omp` on `PATH`).
+`lemon setup omp` installs it for you; see
+[Use omp's logins](setup.md#use-the-providers-youre-signed-in-to-in-omp).
 For a complete local Bot, prefer the resumable `lemon-bot` bootstrap in
 [Lemon Bot in 3 minutes](../getting-started/lemon-bot.md), which also enrolls
 the local machine and signs in the browser.

@@ -78,6 +78,23 @@ defmodule LemonCore.Service.Readiness do
     end
   end
 
+  # omp's broker exposes only an unauthenticated liveness probe; a healthy
+  # answer without a supervised process is someone else's broker on the port.
+  def probe(%{role: "omp-broker", argv: argv}, manager, opts) do
+    healthy =
+      match?(
+        {:ok, %{"ok" => true}},
+        http_json("http://127.0.0.1:#{Role.omp_broker_port(argv)}/v1/healthz", opts)
+      )
+
+    cond do
+      healthy and is_integer(manager.pid) -> {"ready", nil}
+      healthy -> {"unsupervised", nil}
+      manager.pid -> {"starting", nil}
+      true -> {stopped_state(manager), nil}
+    end
+  end
+
   def http_json(url, opts) do
     case Keyword.get(opts, :http_get) do
       fun when is_function(fun, 1) ->

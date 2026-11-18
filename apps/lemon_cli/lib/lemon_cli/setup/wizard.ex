@@ -18,7 +18,7 @@ defmodule LemonCli.Setup.Wizard do
 
   alias LemonCli.Onboarding.{PromptUI, Providers, Runner}
   alias LemonCli.ServiceCommand
-  alias LemonCli.Setup.{Gateway, ModelReadiness, Ports, Provider, Scaffold, Verification}
+  alias LemonCli.Setup.{Gateway, ModelReadiness, Omp, Ports, Provider, Scaffold, Verification}
   alias LemonCore.Config.Modular
   alias LemonCore.Runtime.{Env, Health, Profile}
   alias LemonCore.Secrets
@@ -87,6 +87,9 @@ defmodule LemonCli.Setup.Wizard do
         {[], ["gateway" | gateway_args]} ->
           Gateway.run(gateway_args, io)
 
+        {[], ["omp" | omp_args]} ->
+          Omp.run(omp_args, io, Keyword.take(opts, [:verifier]))
+
         {[], ["doctor" | doctor_args]} ->
           case LemonCli.CLI.doctor(doctor_args) do
             0 -> :ok
@@ -102,7 +105,11 @@ defmodule LemonCli.Setup.Wizard do
           )
 
           io.info.("")
-          io.info.("Usage: #{usage_command} [provider|model|runtime|gateway|doctor] [options]")
+
+          io.info.(
+            "Usage: #{usage_command} [provider|model|runtime|gateway|omp|doctor] [options]"
+          )
+
           print_help_hint(io, usage_command)
           {:error, :unknown_subcommand}
       end
@@ -564,6 +571,12 @@ defmodule LemonCli.Setup.Wizard do
 
         options = build_connect_model_options(detected_logins, opts)
 
+        if Enum.any?(options, &(&1.value == :omp)) do
+          io.info.(
+            "omp is set up on this machine: Lemon can use the providers you are signed in to there."
+          )
+        end
+
         if Enum.any?(detected_logins, &(&1.source == :codex_cli)) do
           io.info.(
             "Lemon and the Codex CLI will share this login; if either refreshes it, " <>
@@ -622,6 +635,14 @@ defmodule LemonCli.Setup.Wizard do
               io,
               non_interactive?,
               Keyword.merge(opts, provider: "openai-codex", auth: "oauth")
+            )
+
+          {:ok, :omp} ->
+            Omp.run(
+              ["--config-path", config_path] ++
+                if(Keyword.get(opts, :skip_verify, false), do: ["--skip-verify"], else: []),
+              io,
+              Keyword.take(opts, [:verifier])
             )
 
           {:ok, :choose_provider} ->
@@ -684,7 +705,13 @@ defmodule LemonCli.Setup.Wizard do
         "Skip — finish later with `lemon setup model`"
       end
 
+    omp_option =
+      if Omp.detected?(Keyword.take(opts, [:omp_bin])),
+        do: [%{label: "Use your omp logins (omp auth broker)", value: :omp}],
+        else: []
+
     detected_options ++
+      omp_option ++
       [
         %{label: "Sign in with ChatGPT (browser)", value: :chatgpt},
         %{label: "Choose a provider…", value: :choose_provider},

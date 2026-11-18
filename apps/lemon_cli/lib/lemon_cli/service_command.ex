@@ -3,7 +3,7 @@ defmodule LemonCli.ServiceCommand do
   CLI adapter for Lemon background system service management (`lemon service`).
 
   Supports `install`, `status`, `repair`, and `uninstall` subcommands across
-  `controller`, `backend`, and `worker` roles (with `tunnel` reserved).
+  `controller`, `backend`, `worker` and `omp-broker` roles (with `tunnel` reserved).
 
   ## Exit codes
 
@@ -21,7 +21,7 @@ defmodule LemonCli.ServiceCommand do
 
   alias LemonCli.CommandRegistry
 
-  @allowed_roles ~w(controller backend worker tunnel)
+  @allowed_roles ~w(controller backend worker tunnel omp-broker)
 
   @install_switches [
     name: :string,
@@ -31,6 +31,7 @@ defmodule LemonCli.ServiceCommand do
     invite_code_stdin: :boolean,
     exec_wrapper: :string,
     bot: :string,
+    omp_bin: :string,
     restart_backend: :boolean,
     ssh: :string,
     node_port: :integer,

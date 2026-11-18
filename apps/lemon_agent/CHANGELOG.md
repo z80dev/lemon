@@ -10,6 +10,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonAgent.ModelRuntime.OmpBroker.url/0` and `default_url/0` expose the
+  broker URL resolution without requiring a token.
 - `submit_result` structured subagent results (#602); task-tool action
   telemetry only (#604); optional advisor reviewing each turn (#600);
   experimental opt-in `code_mode` profile (#598).

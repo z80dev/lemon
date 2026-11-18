@@ -6,6 +6,10 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Added
 
+- `lemon setup omp [status|disconnect]` connects Lemon providers to omp's auth
+  broker (`auth_source = "omp_broker"`), installing the `omp-broker` service
+  when the local broker is not running; the full setup wizard offers it when
+  omp is detected. `lemon service` accepts the `omp-broker` role and `--omp-bin`.
 - Source-only `lemon reload [--no-sessions] [--json]` loads compiled code changes
   into an existing development runtime and reports idle-session refreshes,
   busy sessions, failures, and modules requiring a restart without starting a daemon.

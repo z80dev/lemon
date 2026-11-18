@@ -114,6 +114,7 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Background runtime | `lemon daemon` | `./bin/lemon daemon` |
 | First-time setup | `lemon setup` | `./bin/lemon setup` |
 | Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` |
+| Use omp's provider logins (starts omp's auth broker) | `lemon setup omp` | `./bin/lemon setup omp` |
 | Configure Telegram or Discord | `lemon gateway setup` | `./bin/lemon gateway setup` |
 | Diagnostics | `lemon doctor` | `./bin/lemon doctor` |
 | Open the local Web UI | `lemon web` | `./bin/lemon web` |

@@ -1,10 +1,40 @@
 defmodule LemonCore.Service.Role do
-  @moduledoc "Service role definitions. Units always execute the machine's stable launchers."
+  @moduledoc """
+  Service role definitions. Lemon roles execute the machine's stable launchers;
+  `backend` runs the installed Lemon Bot executable and `omp-broker` runs omp's
+  credential broker (`omp auth-broker serve`) on a loopback port (`:port`,
+  default omp's 8765), recovered from the unit's own arguments on repair.
+  """
 
   alias LemonCore.Service.Command
 
-  @roles ~w(controller backend worker tunnel)
+  @roles ~w(controller backend worker tunnel omp-broker)
   @backend_env ~w(LEMON_BOT_PORT LEMON_BOT_HOST LEMON_BOT_DATA_DIR LEMON_BOT_CONFIG_FILE LEMON_BOT_CONTROL_URL LEMON_BOT_PUBLIC_URL LEMON_BOT_TRUSTED_OVERLAY)
+  # omp's config root and agent directory selectors: the broker must open the
+  # same credential store as the operator's own omp. Broker *client* settings
+  # (`OMP_AUTH_BROKER_*`) are never forwarded.
+  @omp_env ~w(PI_CONFIG_DIR PI_CODING_AGENT_DIR OMP_PROFILE PI_PROFILE)
+  @omp_broker_port 8765
+
+  @doc "omp's default broker port."
+  def omp_broker_port, do: @omp_broker_port
+
+  @doc """
+  The loopback port an `omp-broker` unit's arguments bind, or the default when
+  they name none.
+  """
+  def omp_broker_port(argv) when is_list(argv) do
+    case Enum.drop_while(argv, &(&1 != "--bind")) do
+      ["--bind", "127.0.0.1:" <> port | _] ->
+        case Integer.parse(port) do
+          {value, ""} when value in 1..65_535 -> value
+          _ -> @omp_broker_port
+        end
+
+      _ ->
+        @omp_broker_port
+    end
+  end
 
   def roles, do: @roles
   def fetch(role) when role in @roles, do: {:ok, role}
@@ -88,6 +118,7 @@ defmodule LemonCore.Service.Role do
       "backend" -> "org.lemon.bot" <> suffix(port, 4100)
       "worker" -> "org.lemon.node." <> to_string(name)
       "tunnel" -> "org.lemon.tunnel." <> to_string(name)
+      "omp-broker" -> "org.lemon.omp-broker"
     end
   end
 
@@ -98,6 +129,7 @@ defmodule LemonCore.Service.Role do
         "backend" -> "bot" <> suffix(port, 4100, "-")
         "worker" -> "node-" <> to_string(name)
         "tunnel" -> "tunnel-" <> to_string(name)
+        "omp-broker" -> "omp-broker"
       end
 
     "lemon-" <> middle <> ".service"
@@ -126,7 +158,15 @@ defmodule LemonCore.Service.Role do
         [_] -> {role, [port: default]}
         _ -> nil
       end
-    end) || named_identity(filename)
+    end) || omp_broker_identity(filename) || named_identity(filename)
+  end
+
+  defp omp_broker_identity(filename) do
+    if Regex.match?(
+         ~r/^(?:org\.lemon\.omp-broker\.plist|lemon-omp-broker\.service(?:\.json)?)$/,
+         filename
+       ),
+       do: {"omp-broker", []}
   end
 
   defp named_identity(filename) do
@@ -148,6 +188,9 @@ defmodule LemonCore.Service.Role do
 
   def options_from_argv([wrapper, "--" | argv]),
     do: [{:exec_wrapper, wrapper} | options_from_argv(argv)]
+
+  def options_from_argv([omp, "auth-broker", "serve" | _] = argv),
+    do: [omp_bin: omp, port: omp_broker_port(argv)]
 
   def options_from_argv([_launcher, "node", "join" | args]), do: parse_args(args)
   def options_from_argv([_launcher, "tunnel", "run" | args]), do: parse_args(args)
@@ -228,6 +271,22 @@ defmodule LemonCore.Service.Role do
       else: {:error, :bot_executable_missing}
   end
 
+  defp arguments("omp-broker", opts) do
+    omp = omp_executable(opts)
+    port = Keyword.get(opts, :port, @omp_broker_port)
+
+    cond do
+      not (is_integer(port) and port in 1..65_535) ->
+        {:error, :invalid_port}
+
+      absolute_safe?(omp) and executable?(omp) ->
+        {:ok, [omp, "auth-broker", "serve", "--bind", "127.0.0.1:#{port}"]}
+
+      true ->
+        {:error, :omp_executable_missing}
+    end
+  end
+
   defp arguments("worker", opts) do
     controller = Keyword.get(opts, :controller)
     cwd = Keyword.get(opts, :cwd, home(opts))
@@ -284,6 +343,24 @@ defmodule LemonCore.Service.Role do
     end
   end
 
+  @doc """
+  The `omp` executable for the `omp-broker` unit: `:omp_bin`, else
+  `LEMON_OMP_BIN`, else the first `omp` on `PATH`; `nil` when none is found.
+  """
+  def omp_executable(opts) do
+    env = Keyword.get(opts, :env, System.get_env())
+
+    case Keyword.get(opts, :omp_bin) || present(env["LEMON_OMP_BIN"]) do
+      nil -> System.find_executable("omp")
+      path -> Path.expand(path)
+    end
+  end
+
+  defp present(value) when is_binary(value),
+    do: if(String.trim(value) == "", do: nil, else: value)
+
+  defp present(_), do: nil
+
   defp environment(role, manager, opts) do
     source = Keyword.get(opts, :env, System.get_env())
 
@@ -325,6 +402,21 @@ defmodule LemonCore.Service.Role do
       "tunnel" ->
         Map.take(Map.merge(source, base), ~w(HOME PATH SSH_AUTH_SOCK))
         |> tunnel_agent(manager, opts)
+
+      "omp-broker" ->
+        base
+        |> Map.merge(Map.take(source, @omp_env))
+        # omp's own directory first (a Bun-installed omp may need its siblings);
+        # deduplicated so repair renders the same unit again.
+        |> Map.update!("PATH", fn path ->
+          case omp_executable(opts) do
+            omp when is_binary(omp) ->
+              [Path.dirname(omp) | String.split(path, ":")] |> Enum.uniq() |> Enum.join(":")
+
+            _ ->
+              path
+          end
+        end)
     end
   end
 
