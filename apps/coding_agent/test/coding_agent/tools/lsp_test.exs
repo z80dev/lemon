@@ -697,6 +697,60 @@ defmodule CodingAgent.Tools.LspTest do
     assert response["options"] == %{"custom" => true}
   end
 
+  describe "Lemon credential files" do
+    setup ctx do
+      cookie = LemonCore.Paths.home_path("cookie")
+      File.mkdir_p!(Path.dirname(cookie))
+      secret = "lsp-cookie-secret-#{System.unique_integer([:positive])}"
+      File.write!(cookie, "int #{secret} = 1;\n")
+      on_exit(fn -> File.rm(cookie) end)
+      Map.merge(ctx, %{cookie: cookie, secret: secret})
+    end
+
+    test "a model-selected alias of a credential is never synchronized", ctx do
+      File.ln_s!(ctx.cookie, Path.join(ctx.tmp, "src/cookie.c"))
+      File.ln!(ctx.cookie, Path.join(ctx.tmp, "src/hard.c"))
+
+      for file <- ["src/cookie.c", "src/hard.c"] do
+        result =
+          run(ctx, %{"action" => "definition", "file" => file, "line" => 1, "symbol" => "int"})
+
+        output = Enum.map_join(result_content(result), "", & &1.text)
+        refute output =~ ctx.secret
+        assert output =~ "credential", "#{file}: #{output}"
+      end
+
+      assert Client.list(ctx.session_id) == []
+    end
+
+    test "a server-returned credential location renders no excerpt", ctx do
+      previous = System.get_env("FAKE_LSP_EXTRA_URI")
+      System.put_env("FAKE_LSP_EXTRA_URI", "file://" <> ctx.cookie)
+
+      on_exit(fn ->
+        if previous,
+          do: System.put_env("FAKE_LSP_EXTRA_URI", previous),
+          else: System.delete_env("FAKE_LSP_EXTRA_URI")
+      end)
+
+      definition =
+        run(ctx, %{
+          "action" => "definition",
+          "file" => "src/main.c",
+          "line" => 2,
+          "symbol" => "value"
+        })
+
+      output = text!(definition)
+      assert output =~ "int value = 1;"
+      assert output =~ "cookie"
+      refute output =~ ctx.secret
+    end
+  end
+
+  defp result_content(%AgentToolResult{content: content}), do: content
+  defp result_content({:error, message}), do: [%{text: message}]
+
   defp fake_server_script do
     ~S"""
     #!/usr/bin/env elixir
@@ -818,7 +872,9 @@ defmodule CodingAgent.Tools.LspTest do
         link = %{"targetRange" => range(0, 0, 20), "targetSelectionRange" => range(0, 13, 18)}
         # The same target under a non-canonical path must be reported once.
         alias_uri = String.replace(uri, "/src/", "/src/../src/")
-        reply(id, [Map.put(link, "targetUri", uri), Map.put(link, "targetUri", alias_uri)])
+        # FAKE_LSP_EXTRA_URI adds an arbitrary (untrusted) location.
+        extra = for u <- List.wrap(System.get_env("FAKE_LSP_EXTRA_URI")), do: Map.put(link, "targetUri", u)
+        reply(id, [Map.put(link, "targetUri", uri), Map.put(link, "targetUri", alias_uri)] ++ extra)
         state
       end
 

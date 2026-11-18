@@ -200,9 +200,14 @@ export async function handleBrowserMethod(page: Page, method: string, args: any)
     case 'browser.evaluate': {
       const expression = String(a.expression ?? a.script ?? '');
       if (!expression) throw new Error('evaluate requires args.expression');
-      // Evaluate as an expression (not a function body).
-      // Caller can pass e.g. "document.title" or "(() => window.location.href)()".
-      const result = await page.evaluate(expression);
+      // Evaluation runs only on http:, https: and about: pages, whatever
+      // allowLocalDocument says: the page URL is checked now, and again by the
+      // trusted page function before it evaluates the expression (passed as
+      // data), so a page replaced after Lemon's probe still refuses. The
+      // expression runs as a script and yields its last value, e.g. "document.title".
+      assertEvaluableDocument(page);
+      const result = await page.evaluate(guardedEvaluate, expression);
+      if (isEvaluateRefusal(result)) throw new Error(EVALUATE_REFUSAL);
       return { result };
     }
     case 'browser.waitForSelector': {
@@ -612,6 +617,51 @@ function assertLocalDocumentReadAllowed(page: Page, a: { allowLocalDocument?: un
       'browser content read refused: the current page is a file:, data: or blob: document; pass allowLocalDocument: true (approval-gated)',
     );
   }
+}
+
+const EVALUATE_REFUSAL =
+  'browser.evaluate refused: JavaScript evaluation runs only on http:, https: and about: pages';
+
+// Fails closed: a page whose URL cannot be read or parsed, or whose scheme is
+// not allow-listed, is not evaluated.
+function assertEvaluableDocument(page: Page): void {
+  let scheme: string;
+  try {
+    scheme = new URL(currentPageUrl(page) ?? '').protocol;
+  } catch {
+    throw new Error('browser.evaluate refused: the current page URL is unavailable');
+  }
+  if (scheme !== 'http:' && scheme !== 'https:' && scheme !== 'about:') throw new Error(EVALUATE_REFUSAL);
+}
+
+// The page's `location` global (the document's own Location). It is declared
+// here only for the page function below.
+declare const location: { readonly protocol: string };
+
+/**
+ * Trusted page function; the model's expression arrives as the `src` argument
+ * and is never part of this function's source, so it cannot hoist declarations
+ * into it. `location` is the global binding (a non-configurable, unforgeable
+ * window property) and `protocol` an unforgeable accessor of the document's own
+ * Location; only http:, https: and about: pass. The guard body touches nothing
+ * page-mutable: a refusal is a plain object literal.
+ *
+ * Scope: Playwright compiles and calls this function through the page's own
+ * `eval` and iterator machinery, so the guarantee covers documents that run no
+ * page script, which includes every rendered Lemon credential file. A local
+ * document that runs its own script could interfere before the guard runs, but
+ * that script already has the same reach as the expression.
+ */
+export function guardedEvaluate(src: string): unknown {
+  const scheme = location.protocol;
+  if (scheme !== 'http:' && scheme !== 'https:' && scheme !== 'about:') return { __lemon_refused: true };
+  return (0, eval)(src);
+}
+
+export function isEvaluateRefusal(value: unknown): boolean {
+  return (
+    typeof value === 'object' && value !== null && (value as Record<string, unknown>).__lemon_refused === true
+  );
 }
 
 // Picks a free name in `dir` and creates it exclusively (O_CREAT|O_EXCL), so an

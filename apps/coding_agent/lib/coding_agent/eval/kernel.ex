@@ -569,13 +569,22 @@ defmodule CodingAgent.Eval.Kernel do
     state = %{state | display_path: display_path}
 
     env = [
-      {~c"LEMON_EVAL_TOKEN", String.to_charlist(token)},
       {~c"LEMON_EVAL_DISPLAY_PATH", String.to_charlist(display_path)},
       {~c"LEMON_EVAL_PIP_COMMAND", String.to_charlist(Jason.encode!(state.pip_command))},
       {~c"PYTHONUNBUFFERED", ~c"1"},
       {~c"PYTHONDONTWRITEBYTECODE", ~c"1"},
       {~c"NO_COLOR", ~c"1"}
     ]
+
+    # The output-framing marker is not a Lemon credential, but its name matches
+    # the `ChildEnv` scrub, so it is added after the scrubbed environment.
+    framing = {~c"LEMON_EVAL_TOKEN", String.to_charlist(token)}
+
+    child_env =
+      env
+      |> LemonCore.ChildEnv.port_env()
+      |> List.keydelete(~c"LEMON_EVAL_TOKEN", 0)
+      |> Kernel.++([framing])
 
     port_opts = [
       :binary,
@@ -585,7 +594,7 @@ defmodule CodingAgent.Eval.Kernel do
       :hide,
       {:args, [driver_path(state.language)]},
       {:cd, state.cwd},
-      {:env, LemonCore.ChildEnv.port_env(env)}
+      {:env, child_env}
     ]
 
     try do

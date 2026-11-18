@@ -248,7 +248,7 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
        :exit_status,
        :stderr_to_stdout,
        args: args,
-       env: [{~c"PYTHONIOENCODING", ~c"utf-8"}]
+       env: LemonCore.ChildEnv.port_env([{"PYTHONIOENCODING", "utf-8"}])
      ])}
   rescue
     error -> {:error, "Cannot start document backend: #{Exception.message(error)}"}

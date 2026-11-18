@@ -311,7 +311,9 @@ defmodule LemonLsp.Session do
   end
 
   defp session_call({:sync_file, session_id, path, language_id}, {owner, _}, state) do
+    # Document text goes to a project-run server: never a Lemon credential.
     with {:ok, session} <- fetch_session(state, session_id),
+         {:credential, :ok} <- {:credential, LemonCore.CredentialPaths.check_read(path)},
          {:ok, text} <- File.read(path) do
       uri = "file://" <> URI.encode(Path.expand(path), &(URI.char_unreserved?(&1) or &1 == ?/))
       seq = session.diagnostic_seq
@@ -319,6 +321,7 @@ defmodule LemonLsp.Session do
       info = Map.merge(document_info(session, uri), %{synced: synced, diagnostics_seq: seq})
       {:reply, {:ok, info}, put_in(state.sessions[session_id], session)}
     else
+      {:credential, {:error, _message}} -> {:reply, {:error, :credential_path}, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
@@ -640,7 +643,7 @@ defmodule LemonLsp.Session do
 
     port_opts =
       [:binary, :exit_status, :stderr_to_stdout, {:args, args}]
-      |> maybe_env(command.env)
+      |> put_env(command.env)
       |> maybe_cd(cwd)
 
     port = LemonCore.NativeProcess.open({:spawn_executable, executable}, port_opts)
@@ -798,14 +801,9 @@ defmodule LemonLsp.Session do
 
   defp maybe_cd(opts, cwd), do: [{:cd, cwd} | opts]
 
-  defp maybe_env(opts, env) when env == %{}, do: opts
-
-  defp maybe_env(opts, env) when is_map(env) do
-    port_env =
-      Enum.map(env, fn {key, value} -> {String.to_charlist(key), String.to_charlist(value)} end)
-
-    [{:env, port_env} | opts]
-  end
+  # Language servers run project toolchains: never hand them Lemon's secrets,
+  # whether or not the server config adds variables of its own.
+  defp put_env(opts, env) when is_map(env), do: [{:env, LemonCore.ChildEnv.port_env(env)} | opts]
 
   defp port_os_pid(port) do
     case Port.info(port, :os_pid) do

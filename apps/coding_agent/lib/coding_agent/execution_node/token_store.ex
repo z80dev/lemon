@@ -9,6 +9,12 @@ defmodule CodingAgent.ExecutionNode.TokenStore do
 
   Writes report file write and close failures before replacing the credential;
   a failed write is not treated as a successful atomic replacement.
+
+  The store lives in `nodes/execution` under the Lemon home state directory
+  (`~/.lemon`). Model-directed tools on the node treat that directory as
+  off limits (`LemonCore.CredentialPaths`): file tools cannot read or
+  modify it and bash refuses commands that name it. Tools run as the node's
+  OS user, so this is not an OS boundary; see the execution-node docs.
   """
 
   @dir_mode 0o700
@@ -83,10 +89,10 @@ defmodule CodingAgent.ExecutionNode.TokenStore do
     end
   end
 
-  defp root(opts) do
-    Keyword.get_lazy(opts, :root, fn ->
-      Path.join([System.user_home!(), ".lemon", "nodes", "execution"])
-    end)
+  @doc "The credential directory: `:root`, else `LemonCore.CredentialPaths.node_token_dir/0`."
+  @spec root(keyword()) :: Path.t()
+  def root(opts \\ []) do
+    Keyword.get_lazy(opts, :root, &LemonCore.CredentialPaths.node_token_dir/0)
   end
 
   defp build_record(node_name, attrs) do

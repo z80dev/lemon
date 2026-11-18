@@ -231,7 +231,7 @@ defaults to 30000 and is capped at 120000 on every action.
 | `browser_scroll` | Scroll the page or bring a selector into view. | `selector`, `x`, `y`, `deltaX`, `deltaY`, `absolute` |
 | `browser_back` | Go back in history. | none |
 | `browser_wait_for_selector` | Wait until a selector appears. | `selector` (required) |
-| `browser_evaluate` | Evaluate a JavaScript expression; output is untrusted JSON. | `expression` (required) |
+| `browser_evaluate` | Evaluate a JavaScript expression; output is untrusted JSON. Available only on `http:`, `https:` and `about:` pages. | `expression` (required) |
 | `browser_events` | Read buffered console, dialog, page error, and request failure events. | `limit`, `clear` |
 | `browser_get_cookies` | Read cookies. Values are redacted unless requested. | `url`, `includeValues` |
 | `browser_set_cookies` | Set Playwright cookie objects. | `cookies` (required) |
@@ -260,6 +260,36 @@ Notes:
   content, image or artifact reaches the model or a vision provider.
   The flag makes these calls exec tier in tool policy, so they go through
   approval under the `ask` and `write` approval modes.
+- Lemon credential files (see [execution-node credentials](../config.md#named-execution-nodes))
+  are refused for navigation, content reads, captures and uploads even with
+  `allowLocalDocument: true`.
+- `browser_evaluate` runs only on `http:`, `https:` and `about:` pages,
+  whatever `allowLocalDocument` says; every other scheme (`file:`, `data:`,
+  `blob:`, extension, `view-source:`, `devtools:` and unknown ones) is refused.
+  Before any JavaScript runs, Lemon asks the backend for its tabs, refuses if
+  the target page is outside that list or its URL is unknown (including
+  backends or controllers that cannot list tabs), and pins the call to that
+  tab. The Node driver checks the page URL again. On both Node and Tern the
+  expression is then passed as data to a fixed page function that reads the
+  document's own `location.protocol` first and only evaluates the expression
+  (through the page's `eval`, as a script yielding its last value) on an
+  allowed page; otherwise it returns a refusal value that the driver turns into
+  an error. The expression is never part of that function's source, so it
+  cannot hoist declarations into the check, and a page replaced after Lemon's
+  probe still refuses.
+
+  Scope: the guard function itself is compiled and called through the page's
+  own `eval` (Playwright does this; Tern's compile path is assumed to match),
+  so the guarantee covers documents that run no page script, which includes
+  every rendered Lemon credential file. A local document that runs its own
+  script could interfere before the guard runs, but such a script already has
+  the same reach as the expression.
+
+  On Tern, the expression now runs through the page's `eval`, so a page whose
+  Content-Security-Policy forbids `eval` (no `unsafe-eval`, or Trusted Types)
+  may refuse `browser_evaluate`. That fails closed: the call returns an error
+  and runs nothing. Node is unaffected, since Playwright already evaluated
+  through the page's `eval`.
 - `browser_screenshot` returns redacted metadata and the artifact path by
   default. `includeImage: true` adds a model-visible image block; `sendToChannel:
   true` marks the artifact for delivery through the Telegram/Discord final-answer

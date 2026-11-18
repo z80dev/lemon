@@ -988,12 +988,13 @@ defmodule LemonOmp.Session do
   defp add_flag(args, _flag, nil), do: args
   defp add_flag(args, flag, value), do: args ++ [flag, value]
 
-  # Lemon's own credentials (operator/node tokens and other LEMON_* settings)
-  # never reach a delegate that runs model-directed shell commands.
+  # Lemon's own credentials (operator/node tokens, other LEMON_* settings and
+  # the distribution cookie) never reach a delegate that runs model-directed
+  # shell commands.
   defp scrubbed_env do
     System.get_env()
     |> Map.keys()
-    |> Enum.filter(&String.starts_with?(&1, "LEMON_"))
+    |> Enum.filter(&(String.starts_with?(&1, "LEMON_") or LemonCore.ChildEnv.credential?(&1)))
     |> Enum.map(&{String.to_charlist(&1), false})
   end
 

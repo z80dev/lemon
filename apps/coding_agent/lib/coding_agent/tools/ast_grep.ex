@@ -59,7 +59,10 @@ defmodule CodingAgent.Tools.AstGrep do
   alias CodingAgent.{FileReadTracker, MutationLock}
   alias LemonCore.ConfinedFS
   alias CodingAgent.Tools.AstGrep.{Backend, Scope}
+
   alias CodingAgent.Tools.{CheckpointGuard, FileValidation, PathHelpers, ReadFormatCommand}
+  alias LemonCore.CredentialPaths
+
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -186,6 +189,7 @@ defmodule CodingAgent.Tools.AstGrep do
            {:ok, request} <- validate(params),
            {:ok, paths} <- resolve_paths(request.paths, cwd),
            {:ok, paths} <- Scope.files(paths, request.max_files, signal),
+           paths = CredentialPaths.reject(paths),
            {:ok, executable} <- availability(cwd, opts),
            {:ok, matches, errors} <- scan_files(executable, request, paths, signal, cwd, opts),
            matches <- normalize_matches(matches, cwd),

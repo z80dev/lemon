@@ -127,7 +127,9 @@ defmodule CodingAgent.Tools.Eval do
   end
 
   defp execute_allowed(tool_call_id, params, signal, on_update, cwd, opts, started) do
-    with {:ok, request} <- validate(params) do
+    # Best effort, like bash: cell code naming a Lemon credential file is refused.
+    with {:ok, request} <- validate(params),
+         :ok <- LemonCore.CredentialPaths.check_command(request.code) do
       if AbortSignal.aborted?(signal) do
         finish(request, :not_started, Output.new(), nil, started)
       else

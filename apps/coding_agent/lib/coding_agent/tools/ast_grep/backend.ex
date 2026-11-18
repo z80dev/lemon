@@ -17,7 +17,7 @@ defmodule CodingAgent.Tools.AstGrep.Backend do
         :stderr_to_stdout,
         {:args, Enum.map(args, &String.to_charlist/1)},
         {:cd, String.to_charlist(cwd)},
-        {:env, [{~c"NO_COLOR", ~c"1"}]}
+        {:env, LemonCore.ChildEnv.port_env([{"NO_COLOR", "1"}])}
       ])
 
     try do

@@ -798,7 +798,9 @@ defmodule LemonCore.Checkpoint do
     with {:ok, budget} <- consume_budget(budget, 0, depth) do
       case if(fs, do: ConfinedFS.stat(fs, dir, name), else: {:error, :enoent}) do
         {:ok, %ConfinedFS.Stat{type: :regular, size: size} = stat} ->
-          with :ok <- check_file_size(path, size, budget.max_bytes),
+          # A checkpoint never copies (or fingerprints) a Lemon credential file.
+          with :ok <- credential_check(path),
+               :ok <- check_file_size(path, size, budget.max_bytes),
                {:ok, budget} <- reserve_bytes(budget, size),
                {:ok, content, current} <- read_snapshot_content(fs, dir, name, path, stat) do
             node = %{exists: true, type: "regular", size: size, mode: lstat_mode(current)}
@@ -844,6 +846,13 @@ defmodule LemonCore.Checkpoint do
 
   defp check_file_size(_path, size, max) when size <= max, do: :ok
   defp check_file_size(path, size, max), do: {:error, {:file_too_large, path, size, max}}
+
+  defp credential_check(path) do
+    case LemonCore.CredentialPaths.check_read(path) do
+      :ok -> :ok
+      {:error, _message} -> {:error, {:protected_credential, path}}
+    end
+  end
 
   # Reads exactly the stat'ed file; growth, replacement or a mode or size
   # change in between is a capture failure.

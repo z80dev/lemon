@@ -57,6 +57,9 @@ defmodule CodingAgent.Tools.FileValidation do
   @doc """
   Checks that `path` exists and is one of the `allowed_types`.
 
+  Lemon credential files (`LemonCore.CredentialPaths`) are refused before
+  anything is stat'ed.
+
   Returns `{:ok, stat}` on success or `{:error, message}` with a human-readable
   error string. The `context` parameter (e.g. "file", "directory", "path") is
   used to make error messages specific to the caller.
@@ -72,16 +75,18 @@ defmodule CodingAgent.Tools.FileValidation do
   def check_path_access(path, allowed_types \\ [:regular], context \\ nil) do
     context = context || context_from_types(allowed_types)
 
-    case File.stat(path) do
-      {:ok, %File.Stat{type: type} = stat} ->
-        if type in allowed_types do
-          {:ok, stat}
-        else
-          {:error, format_type_mismatch(type, path, context)}
-        end
+    with :ok <- LemonCore.CredentialPaths.check_read(path) do
+      case File.stat(path) do
+        {:ok, %File.Stat{type: type} = stat} ->
+          if type in allowed_types do
+            {:ok, stat}
+          else
+            {:error, format_type_mismatch(type, path, context)}
+          end
 
-      {:error, reason} ->
-        {:error, format_file_error(reason, path, context)}
+        {:error, reason} ->
+          {:error, format_file_error(reason, path, context)}
+      end
     end
   end
 
@@ -141,6 +146,7 @@ defmodule CodingAgent.Tools.FileValidation do
     boundary = mutation_boundary(path, root)
 
     with :ok <- validate_mutation_path(path),
+         :ok <- LemonCore.CredentialPaths.check_mutation(path),
          :ok <- confined(path, opts),
          :ok <- operator_state(path, opts) do
       case File.lstat(path) do

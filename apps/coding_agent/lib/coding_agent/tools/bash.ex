@@ -51,6 +51,7 @@ defmodule CodingAgent.Tools.Bash do
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias LemonCore.CredentialPaths
 
   @default_timeout_ms 120_000
   @max_timeout_ms 600_000
@@ -227,6 +228,7 @@ defmodule CodingAgent.Tools.Bash do
              env = Map.merge(state.env, call_env),
              {:ok, command} <- InternalUrlExpansion.expand(command, Keyword.put(opts, :cwd, cwd)),
              :ok <- CommandPolicy.check(command, Keyword.get(opts, :tool_policy)),
+             :ok <- credential_guard(command, run_cwd, call_env),
              :ok <- Interceptor.check(command, opts),
              :ok <- GitGuard.check(command, run_cwd, Keyword.put(opts, :command_env, env)) do
           cond do
@@ -268,6 +270,18 @@ defmodule CodingAgent.Tools.Bash do
           error ->
             error
         end
+    end
+  end
+
+  # Best effort: refuse shell text, cwd or env naming a Lemon credential file.
+  defp credential_guard(command, run_cwd, call_env) do
+    text = Enum.join([command | Map.values(call_env || %{})], "\n")
+
+    with :ok <- CredentialPaths.check_read(run_cwd),
+         :ok <- CredentialPaths.check_command(text) do
+      :ok
+    else
+      {:error, message} -> {:blocked, message}
     end
   end
 

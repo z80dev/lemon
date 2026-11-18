@@ -191,7 +191,9 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   end
 
   defp image_file(%{"imagePath" => path}, cwd) when is_binary(path) do
+    # Lexical confinement follows symlinks on read; the credential check does not.
     with {:ok, resolved} <- resolve_image_path(path, cwd),
+         :ok <- LemonCore.CredentialPaths.check_read(resolved),
          {:ok, stat} <- File.stat(resolved),
          :ok <- regular_image_file(stat),
          :ok <- image_size(stat),
