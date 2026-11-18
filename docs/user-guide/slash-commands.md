@@ -12,8 +12,13 @@ unknown `/name` is sent unchanged, exactly as before.
 
 ## Where commands live
 
-Project roots are relative to the session working directory (not walked up to
-ancestors). User roots live under your home directory. Project commands win
+Project roots are relative to the session's trusted directory (not walked up to
+ancestors): the working directory, or for a Bot whose working directory is its
+Bot folder, the node's configured directory; Bot-folder files never define
+commands. Project command files and directories must resolve, after symlinks,
+inside the trusted root (the Git repository root, or that directory when there
+is none) and be single-linked; links leaving it are ignored. User roots live
+under your home directory. Project commands win
 over user commands, Lemon-native roots win over other tools within the same
 scope, and the first command with a given name wins in this order:
 

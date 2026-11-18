@@ -150,7 +150,9 @@ defmodule CodingAgent.Session.PromptComposer do
       [
         top_level(:system_prompt, "Prompt template", template_content),
         directory,
-        ResourceLoader.instruction_sections(cwd),
+        ResourceLoader.instruction_sections(cwd,
+          foreign_globals: build_opts[:session_mode] in [:coding, "coding"]
+        ),
         Rules.sections(cwd),
         top_level(:system_prompt, "Environment", environment)
       ]

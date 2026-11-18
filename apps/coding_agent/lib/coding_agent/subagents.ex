@@ -60,7 +60,7 @@ defmodule CodingAgent.Subagents do
 
   alias CodingAgent.{Config, ToolPolicy}
   alias CodingAgent.Tools.Task.StructuredOutput
-  alias LemonSkills.Config, as: SkillConfig
+  alias LemonCore.TrustedRoot
 
   @thinking_keys ~w(thinkingLevel thinking-level thinking_level thinking)
   @fields ~w(name description model role tools read_only spawns output) ++ @thinking_keys
@@ -192,46 +192,60 @@ defmodule CodingAgent.Subagents do
 
   # Discovery
 
+  # Each root is `{dir, source, kind, confine}`: project roots are realpaths
+  # inside the trusted root (`confine`), whose definitions must be regular,
+  # single-linked files inside it; global and builtin roots are unconfined.
   defp roots(cwd) do
     home = System.get_env("HOME") || System.user_home!()
-    ancestors = project_ancestors(cwd)
+    root = TrustedRoot.resolve(cwd)
+    ancestors = TrustedRoot.ancestors(cwd, root)
 
     globals = [
-      {Path.join([home, ".lemon", "agents"]), :global, :native},
-      {Path.join([home, ".omp", "agent", "agents"]), :global, :omp},
-      {Path.join([home, ".claude", "agents"]), :global, :claude},
-      {Path.join(to_string(:code.priv_dir(:coding_agent)), "agents"), :builtin, :native}
+      {Path.join([home, ".lemon", "agents"]), :global, :native, :unconfined},
+      {Path.join([home, ".omp", "agent", "agents"]), :global, :omp, :unconfined},
+      {Path.join([home, ".claude", "agents"]), :global, :claude, :unconfined},
+      {Path.join(to_string(:code.priv_dir(:coding_agent)), "agents"), :builtin, :native,
+       :unconfined}
     ]
 
-    global_dirs = MapSet.new(globals, fn {dir, _source, _kind} -> Path.expand(dir) end)
+    global_dirs = MapSet.new(globals, fn {dir, _source, _kind, _} -> real_or_expanded(dir) end)
 
-    ([{Path.join(Config.project_config_dir(cwd), "agents"), :project, :native}] ++
-       Enum.map(ancestors, &{Path.join([&1, ".omp", "agents"]), :project, :omp}) ++
-       Enum.map(ancestors, &{Path.join([&1, ".claude", "agents"]), :project, :claude}) ++ globals)
-    |> Enum.reject(fn {dir, source, _kind} ->
-      source == :project and MapSet.member?(global_dirs, Path.expand(dir))
-    end)
-    |> Enum.uniq_by(fn {dir, _source, _kind} -> dir end)
+    project =
+      Enum.map(
+        Enum.take(ancestors, 1),
+        &{Path.join(Config.project_config_dir(&1), "agents"), :native}
+      ) ++
+        Enum.map(ancestors, &{Path.join([&1, ".omp", "agents"]), :omp}) ++
+        Enum.map(ancestors, &{Path.join([&1, ".claude", "agents"]), :claude})
+
+    project_roots =
+      Enum.flat_map(project, fn {dir, kind} ->
+        case TrustedRoot.dir(dir, root) do
+          {:ok, real} ->
+            if MapSet.member?(global_dirs, real), do: [], else: [{real, :project, kind, root}]
+
+          :error ->
+            []
+        end
+      end)
+
+    Enum.uniq_by(project_roots ++ globals, fn {dir, _source, _kind, _} -> dir end)
   end
 
-  # cwd first, then each ancestor up to the Git root (or filesystem root).
-  defp project_ancestors(cwd) do
-    cwd = Path.expand(cwd)
-    ancestors(cwd, SkillConfig.find_git_repo_root(cwd))
+  defp real_or_expanded(dir) do
+    case TrustedRoot.realpath(dir) do
+      {:ok, real} -> real
+      {:error, _} -> Path.expand(dir)
+    end
   end
 
-  defp ancestors(dir, stop) do
-    parent = Path.dirname(dir)
-    if dir == stop or parent == dir, do: [dir], else: [dir | ancestors(parent, stop)]
-  end
-
-  defp index_root({dir, source, kind}) when kind != :native,
-    do: {:indexed, foreign_index(dir, source, kind)}
+  defp index_root({dir, source, kind, confine}) when kind != :native,
+    do: {:indexed, foreign_index(dir, source, kind, confine)}
 
   defp index_root(root), do: root
 
   defp root_ids({:indexed, index}), do: Map.keys(index)
-  defp root_ids({dir, _source, :native}), do: definition_ids(dir)
+  defp root_ids({dir, _source, :native, _confine}), do: definition_ids(dir)
 
   defp resolve(roots, id) do
     Enum.reduce_while(roots, {:error, "Unknown subagent: #{id}"}, fn root, missing ->
@@ -249,7 +263,7 @@ defmodule CodingAgent.Subagents do
     end
   end
 
-  defp lookup({dir, source, :native}, id) do
+  defp lookup({dir, source, :native, confine}, id) do
     path = Path.join(dir, id <> ".md")
 
     case File.lstat(path) do
@@ -257,7 +271,7 @@ defmodule CodingAgent.Subagents do
         :none
 
       {:ok, _} ->
-        with {:ok, content} <- read_definition(path),
+        with {:ok, content} <- read_definition(path, confine),
              {:ok, persona} <- parse_definition(content, id, source, :native) do
           {:ok, persona}
         else
@@ -269,8 +283,8 @@ defmodule CodingAgent.Subagents do
     end
   end
 
-  defp lookup({dir, source, kind}, id),
-    do: lookup({:indexed, foreign_index(dir, source, kind)}, id)
+  defp lookup({dir, source, kind, confine}, id),
+    do: lookup({:indexed, foreign_index(dir, source, kind, confine)}, id)
 
   defp definition_ids(dir) do
     case File.ls(dir) do
@@ -287,7 +301,7 @@ defmodule CodingAgent.Subagents do
   end
 
   # Foreign IDs may differ from filenames, so the directory is parsed up front.
-  defp foreign_index(dir, source, kind) do
+  defp foreign_index(dir, source, kind, confine) do
     case File.ls(dir) do
       {:ok, names} ->
         names
@@ -297,7 +311,7 @@ defmodule CodingAgent.Subagents do
         |> Enum.reduce(%{}, fn name, index ->
           path = Path.join(dir, name)
 
-          with {:ok, content} <- read_definition(path),
+          with {:ok, content} <- read_definition(path, confine),
                {:ok, persona} <-
                  parse_definition(content, Path.rootname(name, ".md"), source, kind) do
             Map.put_new(index, persona.id, persona)
@@ -313,26 +327,41 @@ defmodule CodingAgent.Subagents do
     end
   end
 
-  defp read_definition(path) do
+  # Project definitions are read through `TrustedRoot.read/3`: the realpath
+  # must stay inside the trusted root and be a single-linked regular file.
+  defp read_definition(path, :unconfined) do
     case File.stat(path) do
       {:ok, %File.Stat{type: :regular}} ->
         case File.open(path, [:read, :binary], &IO.binread(&1, @max_file_bytes + 1)) do
-          {:ok, content} when is_binary(content) and byte_size(content) <= @max_file_bytes ->
-            if String.valid?(content), do: {:ok, content}, else: {:error, "expected UTF-8 text"}
-
-          {:ok, content} when is_binary(content) ->
-            {:error, "definition exceeds 128 KiB"}
-
-          {:ok, :eof} ->
-            {:error, "definition is empty"}
-
-          _ ->
-            {:error, "definition could not be read"}
+          {:ok, content} when is_binary(content) -> check_definition(content)
+          {:ok, :eof} -> {:error, "definition is empty"}
+          _ -> {:error, "definition could not be read"}
         end
 
       _ ->
         {:error, "definition must be a readable regular file"}
     end
+  end
+
+  defp read_definition(path, root) do
+    case TrustedRoot.read(path, root, max_bytes: @max_file_bytes + 1) do
+      {:ok, "", _real} ->
+        {:error, "definition is empty"}
+
+      {:ok, content, _real} ->
+        check_definition(content)
+
+      :error ->
+        {:error,
+         "project definition must be a single-linked regular file inside the trusted root"}
+    end
+  end
+
+  defp check_definition(content) when byte_size(content) > @max_file_bytes,
+    do: {:error, "definition exceeds 128 KiB"}
+
+  defp check_definition(content) do
+    if String.valid?(content), do: {:ok, content}, else: {:error, "expected UTF-8 text"}
   end
 
   # Parsing

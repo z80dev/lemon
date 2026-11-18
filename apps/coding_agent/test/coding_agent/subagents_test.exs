@@ -17,7 +17,7 @@ defmodule CodingAgent.SubagentsTest do
     File.mkdir_p!(global)
     File.mkdir_p!(project)
     # Bound the ancestor walk so the enclosing checkout's .omp/.claude dirs are never read.
-    File.mkdir_p!(Path.join(tmp_dir, ".git"))
+    CodingAgent.TestGitRepo.init!(tmp_dir)
     System.put_env("HOME", home)
 
     on_exit(fn ->
@@ -330,7 +330,7 @@ defmodule CodingAgent.SubagentsTest do
     test "walks project ancestors nearest first and stops at the git root", %{root: root} do
       repo = Path.join(root, "repo")
       cwd = Path.join([repo, "pkg", "app"])
-      File.mkdir_p!(Path.join(repo, ".git"))
+      CodingAgent.TestGitRepo.init!(repo)
 
       write_agent(Path.join(cwd, ".omp/agents"), "near", "description: Nearest")
       write_agent(Path.join(repo, ".omp/agents"), "near", "description: Repo root")

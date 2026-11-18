@@ -310,7 +310,12 @@ defmodule CodingAgent.Executor.SessionRunner do
               })
 
           _ ->
-            prompt = CodingAgent.Commands.prepare_prompt(cwd, prompt, request.meta || %{})
+            # File commands come from the trusted config directory, never a
+            # Bot folder used as the execution cwd.
+            command_cwd = get_opt(run_opts, :config_cwd) || cwd
+
+            prompt =
+              CodingAgent.Commands.prepare_prompt(command_cwd, prompt, request.meta || %{})
 
             {:ok, _unsubscribe} =
               CodingAgent.Session.subscribe_prompt(session, prompt, images: request.images)

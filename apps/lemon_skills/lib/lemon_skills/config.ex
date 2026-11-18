@@ -67,6 +67,8 @@ defmodule LemonSkills.Config do
   share a single on-disk location by default.
   """
 
+  alias LemonCore.TrustedRoot
+
   @skills_config_filename "skills.json"
   @skills_usage_filename "skills.usage.json"
   @skills_curator_filename "skills.curator.json"
@@ -217,128 +219,51 @@ defmodule LemonSkills.Config do
   Get all project skills directories.
 
   Discovers `.agents/skills`, `.omp/skills`, `.claude/skills`, `.codex/skills`
-  and `.github/skills` from cwd up to
-  the git repo root (or filesystem root when outside a git repository).
+  and `.github/skills` from cwd up to its `LemonCore.TrustedRoot`: the
+  validated Git repository root, or cwd itself outside a repository. Nothing
+  above the root is searched. Each directory must resolve, after symlinks,
+  inside the root; links leaving it are ignored. Paths are realpaths.
 
   Directories are returned in precedence order (first wins on key collisions):
   1. Project `.lemon/skill` (highest precedence)
   2. At each ancestor, closest first: `.agents/skills`, `.omp/skills`,
      `.claude/skills`, `.codex/skills`, `.github/skills`
-
-  ## Parameters
-
-  - `cwd` - The project working directory
-
-  ## Examples
-
-      # In a git repo at /home/user/myrepo with cwd at /home/user/myrepo/packages/feature
-      # and skills in:
-      #   - /home/user/myrepo/packages/.agents/skills/nested-skill
-      #   - /home/user/myrepo/.agents/skills/repo-skill
-      # Returns: ["/home/user/myrepo/packages/.lemon/skill",
-      #           "/home/user/myrepo/packages/.agents/skills",
-      #           "/home/user/myrepo/.agents/skills"]
-
-      # Outside a git repo at /home/user/project with cwd at /home/user/project/a/b
-      # Returns: ["/home/user/project/a/b/.lemon/skill",
-      #           "/home/user/project/a/b/.agents/skills",
-      #           "/home/user/project/a/.agents/skills",
-      #           "/home/user/project/.agents/skills"]
   """
   @spec project_skills_dirs(String.t()) :: [String.t()]
   def project_skills_dirs(cwd) do
-    cwd = Path.expand(cwd)
-    git_root = find_git_repo_root(cwd)
+    root = TrustedRoot.resolve(cwd)
+    ancestors = TrustedRoot.ancestors(cwd, root)
 
     ancestor_dirs =
-      cwd
-      |> collect_ancestors(git_root)
-      |> Enum.flat_map(fn dir ->
-        Enum.map(
-          [".agents", ".omp", ".claude", ".codex", ".github"],
-          &Path.join([dir, &1, "skills"])
-        )
-      end)
+      for dir <- ancestors,
+          sub <- [".agents", ".omp", ".claude", ".codex", ".github"],
+          do: Path.join([dir, sub, "skills"])
 
-    [project_skills_dir(cwd) | ancestor_dirs]
+    Enum.map(Enum.take(ancestors, 1), &project_skills_dir/1)
+    |> Enum.concat(ancestor_dirs)
+    |> Enum.flat_map(fn dir ->
+      case TrustedRoot.dir(dir, root) do
+        {:ok, real} -> [real]
+        :error -> []
+      end
+    end)
     |> Enum.uniq()
-    |> Enum.filter(&File.dir?/1)
   end
 
-  # ============================================================================
-  # Private Functions - Ancestor Skills Discovery
-  # ============================================================================
-
   @doc """
-  Find the git repository root from a starting directory.
-
-  Returns the absolute path to the nearest ancestor containing `.git`, or `nil`
-  when no git repository root is found.
-  """
-  @spec find_git_repo_root(String.t()) :: String.t() | nil
-  def find_git_repo_root(start_dir) when is_binary(start_dir) do
-    start_dir
-    |> Path.expand()
-    |> find_git_root_recursive()
-  end
-
-  def find_git_repo_root(_), do: nil
-
-  @doc """
-  Collect `.agents/skills` directories from the given directory up to git root.
-
-  If no git repo root is found, it walks to filesystem root.
-  Returns paths in precedence order (closest first).
+  `.agents/skills` directories from `start_dir` up to its trusted root,
+  closest first, as realpaths (see `project_skills_dirs/1`).
   """
   @spec collect_ancestor_agents_skill_dirs(String.t()) :: [String.t()]
   def collect_ancestor_agents_skill_dirs(start_dir) when is_binary(start_dir) do
-    resolved_start = Path.expand(start_dir)
-    git_root = find_git_repo_root(resolved_start)
+    root = TrustedRoot.resolve(start_dir)
 
-    resolved_start
-    |> collect_ancestors(git_root)
-    |> Enum.map(fn dir -> Path.join([dir, ".agents", "skills"]) end)
+    start_dir
+    |> TrustedRoot.ancestors(root)
+    |> Enum.map(&Path.join([&1, ".agents", "skills"]))
   end
 
   def collect_ancestor_agents_skill_dirs(_), do: []
-
-  defp find_git_root_recursive(dir) do
-    git_dir = Path.join(dir, ".git")
-
-    cond do
-      File.dir?(git_dir) or File.regular?(git_dir) ->
-        dir
-
-      Path.dirname(dir) == dir ->
-        nil
-
-      true ->
-        find_git_root_recursive(Path.dirname(dir))
-    end
-  end
-
-  # Collect ancestor directories from start_dir up to git_root or filesystem root.
-  defp collect_ancestors(start_dir, git_root) do
-    collect_ancestors_recursive(Path.expand(start_dir), git_root, [])
-  end
-
-  defp collect_ancestors_recursive(dir, git_root, acc) do
-    new_acc = [dir | acc]
-
-    cond do
-      # Stop if we've reached the git repo root
-      git_root && dir == git_root ->
-        Enum.reverse(new_acc)
-
-      # Stop if we've reached the filesystem root
-      Path.dirname(dir) == dir ->
-        Enum.reverse(new_acc)
-
-      # Continue to parent
-      true ->
-        collect_ancestors_recursive(Path.dirname(dir), git_root, new_acc)
-    end
-  end
 
   @doc """
   Get the global skills configuration file path.

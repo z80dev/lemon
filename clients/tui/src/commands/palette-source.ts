@@ -5,9 +5,10 @@
  * file command roots mirror CodingAgent.Commands.
  * Files are local to the TUI, not an assertion about a remote daemon's readiness.
  */
-import { readdir, readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fuzzyRank } from "@oh-my-pi/pi-tui/fuzzy";
 import { inertComposerText } from "../shell.ts";
 import type { PickerItem } from "../ui/components/pickers.ts";
@@ -101,14 +102,20 @@ export async function discoverPaletteResources(
 	const env = options.env ?? process.env;
 	const agentDir = options.agentDir ?? env.LEMON_AGENT_DIR ?? join(home, ".lemon", "agent");
 	const result: PaletteDiscovery = { entries: [], issues: [] };
-	const promptRoots = [
-		join(cwd, ".lemon", "prompts"),
-		join(cwd, ".claude", "prompts"),
-		join(agentDir, "prompts"),
+	const trusted = await trustedRoot(cwd, result);
+	// Project sources are confined to the trusted root; user-global ones are not.
+	const promptRoots: Array<[string, string | undefined]> = [
+		...(trusted
+			? ([
+					[join(cwd, ".lemon", "prompts"), trusted],
+					[join(cwd, ".claude", "prompts"), trusted],
+				] as Array<[string, string]>)
+			: []),
+		[join(agentDir, "prompts"), undefined],
 	];
 	const names = new Set<string>();
-	for (const root of new Set(promptRoots)) {
-		const files = await list(root, result);
+	for (const [root, confine] of promptRoots) {
+		const files = await list(root, result, confine);
 		// ResourceLoader searches Markdown before text and keeps first found.
 		files.sort(
 			(a, b) => Number(extname(a) === ".txt") - Number(extname(b) === ".txt") || a.localeCompare(b),
@@ -117,7 +124,7 @@ export async function discoverPaletteResources(
 			if (file.startsWith(".") || ![".md", ".txt"].includes(extname(file))) continue;
 			const name = basename(file, extname(file));
 			if (names.has(name)) continue;
-			const content = await readResource(join(root, file), result);
+			const content = await readResource(join(root, file), result, confine);
 			if (content === undefined) continue;
 			names.add(name);
 			result.entries.push({
@@ -134,22 +141,22 @@ export async function discoverPaletteResources(
 		}
 	}
 
-	const roots = [join(cwd, ".lemon", "skill")];
-	for (let ancestor = cwd; ; ancestor = dirname(ancestor)) {
-		for (const dir of [".agents", ".omp", ".claude", ".codex", ".github"])
-			roots.push(join(ancestor, dir, "skills"));
-		try {
-			await stat(join(ancestor, ".git"));
-			break;
-		} catch (error) {
-			if (!missing(error))
-				result.issues.push(`Cannot inspect skill repository boundary (${errorCode(error)})`);
+	const roots: Array<[string, string | undefined]> = [];
+	if (trusted) {
+		const realCwd = await realpath(cwd).catch(() => undefined);
+		if (realCwd && inside(trusted, realCwd)) {
+			roots.push([join(realCwd, ".lemon", "skill"), trusted]);
+			// Nearest ancestor first, never above the trusted root.
+			for (let ancestor = realCwd; ; ancestor = dirname(ancestor)) {
+				for (const dir of [".agents", ".omp", ".claude", ".codex", ".github"])
+					roots.push([join(ancestor, dir, "skills"), trusted]);
+				if (ancestor === trusted || dirname(ancestor) === ancestor) break;
+			}
 		}
-		if (dirname(ancestor) === ancestor) break;
 	}
 	roots.push(
-		join(agentDir, "skill"),
-		env.LEMON_HARNESS_SKILLS_DIR ?? join(home, ".agents", "skills"),
+		[join(agentDir, "skill"), undefined],
+		[env.LEMON_HARNESS_SKILLS_DIR ?? join(home, ".agents", "skills"), undefined],
 	);
 	const isolated =
 		options.agentDir !== undefined || Boolean(env.LEMON_AGENT_DIR || env.LEMON_HARNESS_SKILLS_DIR);
@@ -158,13 +165,16 @@ export async function discoverPaletteResources(
 		[env.LEMON_CLAUDE_SKILLS_DIR, join(home, ".claude", "skills")],
 		[env.LEMON_CODEX_SKILLS_DIR, join(home, ".codex", "skills")],
 	] as const) {
-		if (override || !isolated) roots.push(override ?? fallback);
+		if (override || !isolated) roots.push([override ?? fallback, undefined]);
 	}
 	names.clear();
-	for (const root of new Set(roots)) {
-		for (const name of (await list(root, result)).sort()) {
+	const visited = new Set<string>();
+	for (const [root, confine] of roots) {
+		if (visited.has(root)) continue;
+		visited.add(root);
+		for (const name of (await list(root, result, confine)).sort()) {
 			if (name.startsWith(".") || names.has(name)) continue;
-			const content = await readResource(join(root, name, "SKILL.md"), result);
+			const content = await readResource(join(root, name, "SKILL.md"), result, confine);
 			if (content === undefined) continue;
 			names.add(name);
 			result.entries.push({
@@ -215,17 +225,24 @@ export async function discoverFileCommands(
 	const home = options.home ?? homedir();
 	const env = options.env ?? process.env;
 	const agentDir = options.agentDir ?? env.LEMON_AGENT_DIR ?? join(home, ".lemon", "agent");
+	const result: FileCommandDiscovery = { commands: [], issues: [] };
+	const trusted = await trustedRoot(cwd, result);
+	const project: Array<[string, CommandFormat, string, FileCommand["scope"]]> = trusted
+		? [
+				[join(cwd, ".lemon", "command"), "markdown", "lemon", "project"],
+				[join(cwd, ".lemon", "commands"), "markdown", "lemon", "project"],
+				[join(cwd, ".omp", "commands"), "markdown", "omp", "project"],
+				[join(cwd, ".agents", "commands"), "markdown", "agents", "project"],
+				[join(cwd, ".agent", "commands"), "markdown", "agents", "project"],
+				[join(cwd, ".claude", "commands"), "nested", "claude", "project"],
+				[join(cwd, ".codex", "prompts"), "markdown", "codex", "project"],
+				[join(cwd, ".codex", "commands"), "markdown", "codex", "project"],
+				[join(cwd, ".github", "prompts"), "github", "github", "project"],
+				[join(cwd, ".gemini", "commands"), "gemini", "gemini", "project"],
+			]
+		: [];
 	const roots: Array<[string, CommandFormat, string, FileCommand["scope"]]> = [
-		[join(cwd, ".lemon", "command"), "markdown", "lemon", "project"],
-		[join(cwd, ".lemon", "commands"), "markdown", "lemon", "project"],
-		[join(cwd, ".omp", "commands"), "markdown", "omp", "project"],
-		[join(cwd, ".agents", "commands"), "markdown", "agents", "project"],
-		[join(cwd, ".agent", "commands"), "markdown", "agents", "project"],
-		[join(cwd, ".claude", "commands"), "nested", "claude", "project"],
-		[join(cwd, ".codex", "prompts"), "markdown", "codex", "project"],
-		[join(cwd, ".codex", "commands"), "markdown", "codex", "project"],
-		[join(cwd, ".github", "prompts"), "github", "github", "project"],
-		[join(cwd, ".gemini", "commands"), "gemini", "gemini", "project"],
+		...project,
 		[join(agentDir, "command"), "markdown", "lemon", "global"],
 		[join(agentDir, "commands"), "markdown", "lemon", "global"],
 		[join(home, ".omp", "agent", "commands"), "markdown", "omp", "global"],
@@ -236,18 +253,18 @@ export async function discoverFileCommands(
 		[join(home, ".codex", "commands"), "markdown", "codex", "global"],
 		[join(home, ".gemini", "commands"), "gemini", "gemini", "global"],
 	];
-	const result: FileCommandDiscovery = { commands: [], issues: [] };
 	const seen = new Set<string>();
 	for (const [root, format, source, scope] of roots) {
+		const confine = scope === "project" ? trusted : undefined;
 		const ext = format === "gemini" ? ".toml" : ".md";
 		const suffix = format === "github" ? ".prompt.md" : ext;
 		const files: Array<{ segments: string[]; path: string; size: number }> = [];
 		const walk = async (dir: string, segments: string[], depth: number): Promise<void> => {
-			for (const entry of (await list(dir, result)).sort()) {
+			for (const entry of (await list(dir, result, confine)).sort()) {
 				if (files.length >= MAX_COMMANDS_PER_ROOT) return;
 				if (entry.startsWith(".")) continue;
 				const path = join(dir, entry);
-				const info = await stat(path).catch(() => undefined);
+				const info = await confinedStat(path, confine);
 				if (info?.isFile() && entry.endsWith(ext)) {
 					files.push({ segments: [...segments, entry], path, size: info.size });
 				} else if (info?.isDirectory() && depth > 0) {
@@ -261,7 +278,7 @@ export async function discoverFileCommands(
 			const base = file.endsWith(suffix) ? file.slice(0, -suffix.length) : "";
 			const name = [...segments.slice(0, -1), base].join(":");
 			if (!base || /\s/u.test(name) || seen.has(name) || size > MAX_COMMAND_BYTES) continue;
-			const content = (await readResource(path, result))?.replace(/\r\n/g, "\n");
+			const content = (await readResource(path, result, confine))?.replace(/\r\n/g, "\n");
 			if (content === undefined) continue;
 			const fields = format === "gemini" ? geminiFields(content) : frontmatterFields(content);
 			if (!fields) continue;
@@ -330,9 +347,111 @@ function frontmatterFields(content: string): Record<string, string> {
 	return fields;
 }
 
-async function list(path: string, result: { issues: string[] }): Promise<string[]> {
+/**
+ * The daemon's trusted root (`LemonCore.TrustedRoot.resolve/1`): realpath of
+ * the nearest enclosing genuine Git repository whose directory and `.git`
+ * marker have the same owner as cwd, else realpath(cwd). Undefined (no
+ * project sources) on failure.
+ */
+async function trustedRoot(cwd: string, result: { issues: string[] }): Promise<string | undefined> {
+	let real: string;
+	let uid: number;
 	try {
-		return await readdir(path);
+		real = await realpath(cwd);
+		uid = (await stat(real)).uid;
+	} catch (error) {
+		result.issues.push(`Cannot resolve project directory (${errorCode(error)})`);
+		return undefined;
+	}
+	for (let dir = real; ; dir = dirname(dir)) {
+		if (await isGitRepo(join(dir, ".git"))) {
+			const owned = await Promise.all([lstat(dir), lstat(join(dir, ".git"))]).then(
+				(infos) => infos.every((info) => info.uid === uid),
+				() => false,
+			);
+			if (!owned) return real;
+			try {
+				return await realpath(dir);
+			} catch {
+				return real;
+			}
+		}
+		if (dirname(dir) === dir) return real;
+	}
+}
+
+/** A `.git` directory or gitfile (never a symlink) naming a valid git directory. */
+async function isGitRepo(dotGit: string): Promise<boolean> {
+	try {
+		const info = await lstat(dotGit);
+		if (info.isDirectory()) return await isGitDir(dotGit);
+		if (!info.isFile() || info.size > 4096) return false;
+		const target = (await readFile(dotGit, "utf8")).match(
+			/^gitdir:[ \t]*(\S[^\r\n]*?)[ \t]*\r?\n?$/,
+		)?.[1];
+		if (!target) return false;
+		const gitdir = resolve(dirname(dotGit), target);
+		return (await stat(gitdir)).isDirectory() && (await isGitDir(gitdir));
+	} catch {
+		return false;
+	}
+}
+
+/** HEAD file plus objects/ and refs/ dirs, itself or in the store a `commondir` names. */
+async function isGitDir(dir: string): Promise<boolean> {
+	try {
+		if (!(await stat(join(dir, "HEAD"))).isFile()) return false;
+		if (await isStore(dir)) return true;
+		const commondir = (await readFile(join(dir, "commondir"), "utf8")).trim();
+		return await isStore(resolve(dir, commondir));
+	} catch {
+		return false;
+	}
+}
+
+async function isStore(dir: string): Promise<boolean> {
+	try {
+		return (
+			(await stat(join(dir, "objects"))).isDirectory() &&
+			(await stat(join(dir, "refs"))).isDirectory()
+		);
+	} catch {
+		return false;
+	}
+}
+
+function inside(root: string, path: string): boolean {
+	const rel = relative(root, path);
+	return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+class OutsideRoot extends Error {
+	code = "EOUTSIDEROOT";
+}
+
+/** Realpath of `path`, which must stay inside `confine` when one is given. */
+async function confinedPath(path: string, confine: string | undefined): Promise<string> {
+	if (!confine) return path;
+	const real = await realpath(path);
+	if (!inside(confine, real)) throw new OutsideRoot(`${path} resolves outside ${confine}`);
+	return real;
+}
+
+async function confinedStat(path: string, confine: string | undefined) {
+	try {
+		return await stat(await confinedPath(path, confine));
+	} catch {
+		return undefined;
+	}
+}
+
+async function list(
+	path: string,
+	result: { issues: string[] },
+	confine?: string,
+): Promise<string[]> {
+	try {
+		return await readdir(await confinedPath(path, confine));
 	} catch (error) {
 		if (errorCode(error) !== "ENOENT")
 			result.issues.push(`Cannot discover resources in ${path} (${errorCode(error)})`);
@@ -340,13 +459,32 @@ async function list(path: string, result: { issues: string[] }): Promise<string[
 	}
 }
 
+/** Project files must resolve inside the root, be regular, and not be hard-linked. */
 async function readResource(
 	path: string,
 	result: { issues: string[] },
+	confine?: string,
 ): Promise<string | undefined> {
 	try {
-		if (!(await stat(path)).isFile()) return undefined;
-		return await readFile(path, "utf8");
+		if (!confine) {
+			if (!(await stat(path)).isFile()) return undefined;
+			return await readFile(path, "utf8");
+		}
+		const handle = await open(
+			await confinedPath(path, confine),
+			constants.O_RDONLY | constants.O_NOFOLLOW,
+		);
+		try {
+			const info = await handle.stat();
+			if (!info.isFile()) return undefined;
+			if (info.nlink !== 1) {
+				result.issues.push(`Ignoring hard-linked resource ${path}`);
+				return undefined;
+			}
+			return await handle.readFile("utf8");
+		} finally {
+			await handle.close();
+		}
 	} catch (error) {
 		if (!missing(error)) result.issues.push(`Cannot read resource ${path} (${errorCode(error)})`);
 		return undefined;

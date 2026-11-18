@@ -16,10 +16,24 @@ defmodule CodingAgent.ResourceLoader.AtImports do
   - A missing, unreadable, non-UTF-8 or non-regular target leaves the original
     `@token` text in place.
 
+  Containment follows file ownership (`:root`). Home-owned global instruction
+  files pass `:unconfined` and may import any regular file. Project and
+  ancestor files pass their `LemonCore.TrustedRoot`: every import, nested
+  ones included, must resolve (after symlinks) to a regular, single-linked
+  file inside that root. A refused import stays literal and logs a warning
+  naming the token, never the target's content.
+
+  Each imported span is wrapped as `<!-- @import <realpath> -->…<!-- /@import -->`
+  so the prompt records where the text came from.
+
   Imported content is bounded: each imported file contributes at most 64 KiB
   and one top-level file at most 256 KiB of imported content in total; beyond
   that, further tokens stay literal.
   """
+
+  require Logger
+
+  alias LemonCore.TrustedRoot
 
   @max_depth 5
   @max_import_bytes 65_536
@@ -34,14 +48,25 @@ defmodule CodingAgent.ResourceLoader.AtImports do
   Options:
 
     * `:home` - directory used for `~` imports (required)
+    * `:root` - the importing file's trusted root, or `:unconfined` for a
+      home-owned global instruction file (required)
   """
   @spec expand(String.t(), String.t(), keyword()) :: String.t()
   def expand(content, file_path, opts) when is_binary(content) do
     home = Keyword.fetch!(opts, :home)
-    source = Path.expand(file_path)
+    root = Keyword.fetch!(opts, :root)
+    true = root == :unconfined or is_binary(root)
+
+    source =
+      case TrustedRoot.realpath(file_path) do
+        {:ok, real} -> real
+        {:error, _} -> Path.expand(file_path)
+      end
 
     state = %{
       home: home,
+      root: root,
+      source: source,
       visited: MapSet.new([source]),
       budget: @max_total_import_bytes
     }
@@ -156,14 +181,15 @@ defmodule CodingAgent.ResourceLoader.AtImports do
   defp resolve_and_expand(import_path, base_dir, depth, state) do
     resolved = resolve_path(import_path, base_dir, state.home)
 
-    with false <- MapSet.member?(state.visited, resolved),
+    with {:ok, real} <- admit(import_path, resolved, state),
+         false <- MapSet.member?(state.visited, real),
          true <- state.budget > 0,
-         {:ok, content} <- read_import(resolved) do
+         {:ok, content} <- read_import(real, state.root) do
       content = bound(content, min(@max_import_bytes, state.budget))
-      state = %{state | visited: MapSet.put(state.visited, resolved)}
+      state = %{state | visited: MapSet.put(state.visited, real)}
       state = %{state | budget: state.budget - byte_size(content)}
-      {expanded, state} = expand_content(content, Path.dirname(resolved), depth + 1, state)
-      {String.trim_trailing(expanded), state}
+      {expanded, state} = expand_content(content, Path.dirname(real), depth + 1, state)
+      {"<!-- @import #{real} -->" <> String.trim_trailing(expanded) <> "<!-- /@import -->", state}
     else
       _ -> {nil, state}
     end
@@ -173,13 +199,50 @@ defmodule CodingAgent.ResourceLoader.AtImports do
   defp resolve_path("~/" <> rest, _base_dir, home), do: Path.expand(rest, home)
   defp resolve_path(path, base_dir, _home), do: Path.expand(path, base_dir)
 
-  defp read_import(path) do
-    with true <- File.regular?(path),
-         {:ok, content} <- File.read(path),
+  # A missing target stays literal silently; an existing target outside the
+  # trusted root (directly, through a symlink or as a hard link) is refused
+  # and logged without its content.
+  defp admit(import_path, resolved, state) do
+    case TrustedRoot.realpath(resolved) do
+      {:ok, real} when state.root == :unconfined ->
+        {:ok, real}
+
+      {:ok, _real} ->
+        case TrustedRoot.file(resolved, state.root) do
+          {:ok, real} ->
+            {:ok, real}
+
+          :error ->
+            Logger.warning(
+              "Refused @import #{import_path} in #{state.source}: target is outside the " <>
+                "trusted root #{state.root}, not a regular file, or hard-linked"
+            )
+
+            :error
+        end
+
+      {:error, _} ->
+        :error
+    end
+  end
+
+  defp read_import(path, root) do
+    with {:ok, content} <- read_target(path, root),
          true <- String.valid?(content) do
       {:ok, content}
     else
       _ -> :error
+    end
+  end
+
+  defp read_target(path, :unconfined) do
+    if File.regular?(path), do: File.read(path), else: :error
+  end
+
+  defp read_target(path, root) do
+    case TrustedRoot.read(path, root) do
+      {:ok, content, _real} -> {:ok, content}
+      :error -> :error
     end
   end
 

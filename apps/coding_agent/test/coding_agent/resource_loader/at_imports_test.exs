@@ -13,7 +13,18 @@ defmodule CodingAgent.ResourceLoader.AtImportsTest do
     {:ok, home: home, project: project, source: Path.join(project, "AGENTS.md")}
   end
 
-  defp expand(content, ctx), do: AtImports.expand(content, ctx.source, home: ctx.home)
+  import ExUnit.CaptureLog
+
+  # Project files import only inside their trusted root. Provenance markers are
+  # stripped here so structural tests compare the spliced content; a dedicated
+  # test asserts the markers.
+  defp expand(content, ctx),
+    do: content |> AtImports.expand(ctx.source, home: ctx.home, root: ctx.project) |> unmark()
+
+  defp expand_global(content, ctx),
+    do: content |> AtImports.expand(ctx.source, home: ctx.home, root: :unconfined) |> unmark()
+
+  defp unmark(text), do: Regex.replace(~r/<!-- (?:@import [^>]*|\/@import) -->/, text, "")
 
   defp write!(path, content) do
     File.mkdir_p!(Path.dirname(path))
@@ -30,12 +41,60 @@ defmodule CodingAgent.ResourceLoader.AtImportsTest do
              "A then B BODY\nRead NOTES BODY now"
   end
 
-  test "imports ~/ paths from home and absolute paths", ctx do
+  test "home-owned global files import ~/ paths from home and absolute paths", ctx do
     write!(Path.join(ctx.home, ".notes/aliases.md"), "HOME ALIASES")
     absolute = write!(Path.join(ctx.project, "abs/target.md"), "ABSOLUTE BODY")
 
-    assert expand("@~/.notes/aliases.md and @#{absolute}", ctx) ==
+    assert expand_global("@~/.notes/aliases.md and @#{absolute}", ctx) ==
              "HOME ALIASES and ABSOLUTE BODY"
+  end
+
+  test "project files never import home, absolute or traversal targets", ctx do
+    write!(Path.join(ctx.home, ".ssh/id_ed25519"), "PRIVATE-KEY-BYTES")
+    outside = write!(Path.join(Path.dirname(ctx.project), "outside/secret.md"), "OUTSIDE-BYTES")
+    passwd = if File.regular?("/etc/passwd"), do: "/etc/passwd", else: outside
+
+    text =
+      "See @~/.ssh/id_ed25519 and @#{passwd} and @../../../etc/passwd and " <>
+        "@../outside/secret.md and @#{outside}"
+
+    log =
+      capture_log(fn ->
+        assert AtImports.expand(text, ctx.source, home: ctx.home, root: ctx.project) == text
+      end)
+
+    for token <- ["~/.ssh/id_ed25519", passwd, "../outside/secret.md", outside],
+        do: assert(log =~ "Refused @import #{token}", token)
+  end
+
+  test "symlinks and hard links leading outside the trusted root are refused", ctx do
+    secret = write!(Path.join(ctx.home, ".ssh/id_rsa"), "PRIVATE-KEY-BYTES")
+    File.ln_s!(secret, Path.join(ctx.project, "linked.md"))
+    File.ln_s!(Path.dirname(secret), Path.join(ctx.project, "linkdir"))
+    File.ln!(secret, Path.join(ctx.project, "hard.md"))
+
+    text = "@linked.md @linkdir/id_rsa @hard.md"
+
+    log =
+      capture_log(fn ->
+        assert AtImports.expand(text, ctx.source, home: ctx.home, root: ctx.project) == text
+      end)
+
+    for token <- ["linked.md", "linkdir/id_rsa", "hard.md"],
+        do: assert(log =~ "Refused @import #{token}", token)
+
+    # A symlink that stays inside the root still imports.
+    inside = write!(Path.join(ctx.project, "docs/real.md"), "INSIDE")
+    File.ln_s!(inside, Path.join(ctx.project, "alias.md"))
+    assert expand("@alias.md", ctx) == "INSIDE"
+  end
+
+  test "imported spans are labelled with their resolved source path", ctx do
+    target = write!(Path.join(ctx.project, "docs/a.md"), "A BODY")
+    {:ok, real} = LemonCore.TrustedRoot.realpath(target)
+
+    assert AtImports.expand("Read @docs/a.md now", ctx.source, home: ctx.home, root: ctx.project) ==
+             "Read <!-- @import #{real} -->A BODY<!-- /@import --> now"
   end
 
   test "strips trailing punctuation from the path", ctx do

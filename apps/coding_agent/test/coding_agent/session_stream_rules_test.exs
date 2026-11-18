@@ -1,5 +1,6 @@
 defmodule CodingAgent.SessionStreamRules599Test do
-  use ExUnit.Case, async: true
+  # Writes an operator config under a temporary HOME for project stream rules.
+  use ExUnit.Case, async: false
 
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
@@ -44,6 +45,8 @@ defmodule CodingAgent.SessionStreamRules599Test do
     tmp_dir: cwd
   } do
     File.mkdir_p!(Path.join(cwd, ".lemon/rules"))
+    CodingAgent.TestGitRepo.init!(cwd)
+    CodingAgent.TestGitRepo.allow_project_stream_rules!(Path.join(cwd, "home"), cwd)
 
     File.write!(Path.join(cwd, ".lemon/rules/no-bad.md"), """
     ---

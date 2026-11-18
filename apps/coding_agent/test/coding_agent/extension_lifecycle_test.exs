@@ -100,6 +100,102 @@ defmodule CodingAgent.ExtensionLifecycleTest do
     assert CodingAgent.Workspace.skill_cwd(bot, config_cwd: trusted) == trusted
   end
 
+  test "stream rules and file commands come from the trusted project, never the Bot folder", %{
+    tmp_dir: tmp
+  } do
+    trusted = Path.join(tmp, "project")
+    bot = Path.join(tmp, "bot-session")
+    CodingAgent.TestGitRepo.init!(trusted)
+    CodingAgent.TestGitRepo.allow_project_stream_rules!(Path.join(tmp, "home"), trusted)
+
+    rule = fn name, pattern, body ->
+      "---\nstreamPattern: #{pattern}\ninjectionLimit: 1\n---\n#{body} (#{name})\n"
+    end
+
+    files = %{
+      Path.join(trusted, ".lemon/rules/trusted.md") =>
+        rule.("trusted", "TRUSTED_TOKEN", "TRUSTED_RULE_BODY"),
+      Path.join(trusted, ".claude/commands/hello.md") => "TRUSTED_COMMAND $ARGUMENTS",
+      Path.join(bot, ".lemon/rules/abot.md") => rule.("abot", "BOT_TOKEN", "BOT_RULE_BODY"),
+      Path.join(bot, ".claude/commands/pwn.md") => "BOT_COMMAND_TEMPLATE"
+    }
+
+    for {path, content} <- files do
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, content)
+    end
+
+    parent = self()
+    counter = :counters.new(1, [:atomics])
+
+    provider = fn _model, context, _options ->
+      :counters.add(counter, 1, 1)
+      call = :counters.get(counter, 1)
+      text = if call == 1, do: "BOT_TOKEN TRUSTED_TOKEN", else: "fine"
+
+      response = %LemonAi.Types.AssistantMessage{
+        role: :assistant,
+        content: [%LemonAi.Types.TextContent{type: :text, text: text}],
+        stop_reason: :stop,
+        api: :mock,
+        provider: :mock_provider,
+        model: "trust-test"
+      }
+
+      {:ok, stream} = LemonAi.EventStream.start_link()
+      send(parent, {:provider_call, call, inspect(context)})
+      :ok = LemonAi.EventStream.push(stream, {:start, %{response | content: []}})
+      :ok = LemonAi.EventStream.push(stream, {:text_delta, 0, text})
+
+      if call != 1 do
+        :ok = LemonAi.EventStream.push(stream, {:done, :stop, response})
+        LemonAi.EventStream.complete(stream, response)
+      end
+
+      {:ok, stream}
+    end
+
+    model = %LemonAi.Types.Model{
+      id: "trust-test",
+      name: "Trust test",
+      api: :mock,
+      provider: :mock_provider,
+      base_url: "https://invalid.test",
+      reasoning: false,
+      input: [:text],
+      cost: %LemonAi.Types.ModelCost{},
+      context_window: 128_000,
+      max_tokens: 4096
+    }
+
+    session =
+      start_supervised!(
+        {CodingAgent.Session,
+         [
+           cwd: bot,
+           config_cwd: trusted,
+           model: model,
+           stream_fn: provider,
+           settings_manager: CodingAgent.SettingsManager.load(trusted),
+           tools: []
+         ]}
+      )
+
+    :ok = CodingAgent.Session.prompt(session, "Answer")
+    assert_receive {:provider_call, 1, _initial}, 5_000
+    assert_receive {:provider_call, 2, corrected}, 5_000
+    assert corrected =~ "TRUSTED_RULE_BODY"
+    refute corrected =~ "BOT_RULE_BODY"
+
+    # Control-plane steering expands file commands from config_cwd only.
+    CodingAgent.Session.steer(session, "/pwn", origin: :control_plane)
+    CodingAgent.Session.steer(session, "/hello steer", origin: :control_plane)
+    assert_receive {:provider_call, _, steered}, 5_000
+    steered = steered <> inspect(CodingAgent.Session.get_state(session))
+    refute steered =~ "BOT_COMMAND_TEMPLATE"
+    assert steered =~ "TRUSTED_COMMAND steer"
+  end
+
   describe "extension_paths/2" do
     test "uses explicit settings paths without auto-loading default directories", %{
       tmp_dir: tmp_dir

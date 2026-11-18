@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -18,13 +18,20 @@ beforeEach(async () => {
 	root = await mkdtemp(join(tmpdir(), "lemon-palette-"));
 	cwd = join(root, "project");
 	home = join(root, "home");
-	await mkdir(join(cwd, ".git"), { recursive: true });
+	await gitRepo(cwd);
 	await mkdir(home);
 });
 
 afterEach(async () => {
 	await rm(root, { recursive: true, force: true });
 });
+
+/** A genuine repository layout: HEAD file plus objects/ and refs/. */
+async function gitRepo(dir: string): Promise<void> {
+	await mkdir(join(dir, ".git/objects"), { recursive: true });
+	await mkdir(join(dir, ".git/refs"), { recursive: true });
+	await writeFile(join(dir, ".git/HEAD"), "ref: refs/heads/main\n");
+}
 
 async function fixture(path: string, content: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
@@ -217,5 +224,107 @@ describe("file commands", () => {
 		await fixture(join(cwd, ".lemon/commands/ship.md"), "---\ndescription: Lemon ship\n---\nbody");
 		const lemon = await discoverFileCommands({ cwd, home, env: {} });
 		expect(lemon.commands).toMatchObject([{ name: "ship", source: "lemon", scope: "project" }]);
+	});
+});
+
+describe("trusted-root confinement", () => {
+	const secret = "PRIVATE KEY MATERIAL";
+
+	test("a template symlinked outside the repo is neither listed nor read", async () => {
+		await fixture(join(root, "outside/id_ed25519"), secret);
+		await mkdir(join(cwd, ".lemon/prompts"), { recursive: true });
+		await symlink(join(root, "outside/id_ed25519"), join(cwd, ".lemon/prompts/review.md"));
+		const result = await discoverPaletteResources({ cwd, home, env: {} });
+		expect(result.entries.map((item) => item.name)).not.toContain("review");
+		expect(JSON.stringify(result.entries)).not.toContain(secret);
+	});
+
+	test("a hard-linked template is rejected", async () => {
+		await fixture(join(cwd, "secret.txt"), secret);
+		await mkdir(join(cwd, ".lemon/prompts"), { recursive: true });
+		await link(join(cwd, "secret.txt"), join(cwd, ".lemon/prompts/review.md"));
+		const result = await discoverPaletteResources({ cwd, home, env: {} });
+		expect(result.entries).toEqual([]);
+		expect(result.issues.join(" ")).toContain("hard-linked");
+	});
+
+	test("a commands dir symlinked to / is not traversed", async () => {
+		await mkdir(join(cwd, ".claude"), { recursive: true });
+		await symlink("/", join(cwd, ".claude/commands"));
+		await fixture(join(root, "outside/cmds/leak.md"), "---\ndescription: leaked\n---\nx");
+		await mkdir(join(cwd, ".gemini"), { recursive: true });
+		await symlink(join(root, "outside/cmds"), join(cwd, ".gemini/commands"));
+		await mkdir(join(cwd, ".lemon/commands"), { recursive: true });
+		await symlink(join(root, "outside/cmds/leak.md"), join(cwd, ".lemon/commands/leak.md"));
+		const result = await discoverFileCommands({ cwd, home, env: {} });
+		expect(result.commands).toEqual([]);
+		expect(result.issues.join(" ")).toContain("EOUTSIDEROOT");
+	});
+
+	test("a skill dir symlinked outside the repo is ignored", async () => {
+		await fixture(join(root, "outside/evil/SKILL.md"), secret);
+		await mkdir(join(cwd, ".agents/skills"), { recursive: true });
+		await symlink(join(root, "outside/evil"), join(cwd, ".agents/skills/evil"));
+		await symlink(join(root, "outside"), join(cwd, ".omp"));
+		const result = await discoverPaletteResources({ cwd, home, env: {} });
+		expect(result.entries).toEqual([]);
+	});
+
+	test("an empty fake .git in a parent does not widen the root", async () => {
+		const parent = join(root, "fake");
+		const work = join(parent, "work");
+		await mkdir(join(parent, ".git"), { recursive: true });
+		await mkdir(work, { recursive: true });
+		await fixture(join(parent, ".agents/skills/above/SKILL.md"), "Above the root");
+		await fixture(join(work, ".agents/skills/here/SKILL.md"), "Here");
+		const result = await discoverPaletteResources({ cwd: work, home, env: {} });
+		expect(result.entries.map((item) => item.name)).toEqual(["here"]);
+	});
+
+	// Parity with LemonCore.TrustedRoot.resolve/1: a symlinked `.git`, a gitfile
+	// naming a non-repository, or one with trailing junk never widens the root.
+	test("symlinked or malformed .git markers in a parent do not widen the root", async () => {
+		const real = join(root, "realrepo");
+		await gitRepo(real);
+		const markers: Array<[string, (dotGit: string) => Promise<void>]> = [
+			["linked", (dotGit) => symlink(join(real, ".git"), dotGit)],
+			["bad-gitdir", (dotGit) => writeFile(dotGit, `gitdir: ${join(root, "nowhere")}\n`)],
+			["junk", (dotGit) => writeFile(dotGit, `gitdir: ${join(real, ".git")}\nextra\n`)],
+		];
+		for (const [name, plant] of markers) {
+			const parent = join(root, name);
+			const work = join(parent, "work");
+			await mkdir(work, { recursive: true });
+			await plant(join(parent, ".git"));
+			await fixture(join(parent, ".agents/skills/above/SKILL.md"), "Above the root");
+			await fixture(join(work, ".agents/skills/here/SKILL.md"), "Here");
+			const result = await discoverPaletteResources({ cwd: work, home, env: {} });
+			expect(result.entries.map((item) => item.name)).toEqual(["here"]);
+		}
+	});
+
+	test("a gitfile naming a real git directory widens the root, like the daemon", async () => {
+		const real = join(root, "realrepo");
+		await gitRepo(real);
+		const parent = join(root, "sub");
+		const work = join(parent, "work");
+		await mkdir(work, { recursive: true });
+		await writeFile(join(parent, ".git"), `gitdir: ${join(real, ".git")}\n`);
+		await fixture(join(parent, ".agents/skills/above/SKILL.md"), "In the root");
+		const result = await discoverPaletteResources({ cwd: work, home, env: {} });
+		expect(result.entries.map((item) => item.name)).toEqual(["above"]);
+	});
+
+	test("in-root symlinks still work", async () => {
+		await fixture(join(cwd, "docs/review.md"), "Review in repo");
+		await mkdir(join(cwd, ".lemon/prompts"), { recursive: true });
+		await symlink(join(cwd, "docs/review.md"), join(cwd, ".lemon/prompts/review.md"));
+		await fixture(join(cwd, "shared/cmds/ship.md"), "---\ndescription: Ship\n---\nx");
+		await mkdir(join(cwd, ".lemon"), { recursive: true });
+		await symlink(join(cwd, "shared/cmds"), join(cwd, ".lemon/commands"));
+		const prompts = await discoverPaletteResources({ cwd, home, env: {} });
+		expect(prompts.entries.map((item) => item.insertText)).toEqual(["Review in repo"]);
+		const commands = await discoverFileCommands({ cwd, home, env: {} });
+		expect(commands.commands.map((command) => command.name)).toEqual(["ship"]);
 	});
 });

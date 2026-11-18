@@ -507,7 +507,9 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     retry_settings = SettingsManager.get_retry_settings(settings_manager)
-    stream_rules = CodingAgent.Rules.stream_rules(cwd)
+    # Stream rules are repository data: load them from the trusted config
+    # directory, like the prompt, never from a Bot folder execution cwd.
+    stream_rules = CodingAgent.Rules.stream_rules(config_cwd)
 
     {:ok, agent} =
       LemonAgent.Agent.start_link(

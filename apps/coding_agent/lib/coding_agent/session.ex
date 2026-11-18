@@ -1307,7 +1307,10 @@ defmodule CodingAgent.Session do
       :ok ->
         text =
           if opts[:origin] == :control_plane,
-            do: CodingAgent.Commands.prepare_prompt(state.cwd, text, %{origin: :control_plane}),
+            do:
+              CodingAgent.Commands.prepare_prompt(state.config_cwd || state.cwd, text, %{
+                origin: :control_plane
+              }),
             else: text
 
         accept_input(state, :steer, State.build_prompt_message(text), opts)

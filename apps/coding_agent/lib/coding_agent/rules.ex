@@ -6,15 +6,21 @@ defmodule CodingAgent.Rules do
 
   ## Sources
 
-  Project rules, in precedence order:
+  Project rules, in precedence order. `cwd` is the session's trusted directory
+  (`config_cwd`, never a Bot folder); walks stop at its `LemonCore.TrustedRoot`
+  (the Git root, else cwd itself):
 
   - `.lemon/rules/*.{md,mdc}`, then `.agent/rules/*.{md,mdc}` and
-    `.agents/rules/*.{md,mdc}`, each walking from cwd up to the Git root
-    (or the home directory, which itself is skipped); nearer directories first
+    `.agents/rules/*.{md,mdc}`, each walking from cwd up to the trusted root
+    (the home directory itself is skipped); nearer directories first
   - `.cursor/rules/**/*.{mdc,md}` and legacy `.cursorrules` in cwd
   - `.windsurf/rules/*.md` and legacy `.windsurfrules` in cwd
   - the nearest `.clinerules` on the same walk: a file, or a directory of `*.md`
   - `.github/instructions/**/*.instructions.md` in cwd
+
+  Every project rule file and rules directory must resolve (after symlinks)
+  inside the trusted root, and files must be regular and single-linked; a
+  symlink such as `.cursorrules -> ~/.ssh/id_ed25519` is ignored.
 
   Global rules: `<agent_dir>/rules/*.{md,mdc}`, `~/.agent/rules` and
   `~/.agents/rules`, and `~/.codeium/windsurf/memories/global_rules.md`.
@@ -41,6 +47,17 @@ defmodule CodingAgent.Rules do
   rule with the same name. `stream_rules/1` returns these rules for the bounded
   runtime matcher; no matching or injection accounting happens here.
 
+  A matching stream rule injects its body as a `<system-interrupt>`, which is
+  operator authority. Global rules may declare `streamPattern`; a project rule
+  may only when the operator lists the project's trusted root in the global
+  config file (`~/.lemon/config.toml`; a project `.lemon/config.toml` cannot
+  grant it):
+
+      [rules]
+      allow_project_stream_rules = ["/path/to/project"]
+
+  Unapproved project stream rules are dropped with a warning naming them.
+
   ## Prompt
 
   Always-apply rules are injected in full. Other rules with a description or
@@ -50,7 +67,10 @@ defmodule CodingAgent.Rules do
   `AGENTS.md`. Output is sorted by name, so prompt bytes are stable.
   """
 
+  require Logger
+
   alias CodingAgent.Config
+  alias LemonCore.TrustedRoot
 
   @type rule :: %{
           name: String.t(),
@@ -75,16 +95,66 @@ defmodule CodingAgent.Rules do
   @doc """
   Discover enabled, valid rules for `cwd`: project rules first, deduplicated
   by name, sorted by name. Invalid stream declarations still shadow namesakes.
+  Project stream rules are dropped unless the operator allows them for this
+  trusted root.
   """
   @spec discover(String.t()) :: [rule()]
   def discover(cwd) do
-    cwd = Path.expand(cwd)
     home = Config.home_dir()
+    root = TrustedRoot.resolve(cwd)
 
-    (project_rules(cwd, home) ++ global_rules(home))
+    project =
+      cwd
+      |> TrustedRoot.ancestors(root)
+      |> project_rules(root, home)
+      |> gate_project_stream_rules(root)
+
+    (project ++ global_rules(home))
     |> Enum.uniq_by(& &1.name)
     |> Enum.reject(&(&1.stream_pattern == :invalid or &1.injection_limit == :invalid))
     |> Enum.sort_by(& &1.name)
+  end
+
+  defp gate_project_stream_rules(rules, root) do
+    {stream, prompt} = Enum.split_with(rules, &(&1.stream_pattern != nil))
+
+    cond do
+      stream == [] ->
+        rules
+
+      project_stream_rules_allowed?(root) ->
+        rules
+
+      true ->
+        Logger.warning(
+          "Ignored project stream rules #{Enum.map_join(stream, ", ", & &1.name)} under " <>
+            "#{root}: add the root to [rules] allow_project_stream_rules in the global config"
+        )
+
+        prompt
+    end
+  end
+
+  # Operator-only: read the global config file directly so a project
+  # `.lemon/config.toml` can never grant itself interrupt authority.
+  defp project_stream_rules_allowed?(root) do
+    allowed =
+      try do
+        LemonCore.Config.global_path()
+        |> LemonCore.Config.load_file()
+        |> get_in(["rules", "allow_project_stream_rules"])
+      rescue
+        _ -> nil
+      end
+
+    is_list(allowed) and
+      Enum.any?(allowed, fn
+        entry when is_binary(entry) and entry != "" ->
+          match?({:ok, ^root}, TrustedRoot.realpath(Path.expand(entry)))
+
+        _ ->
+          false
+      end)
   end
 
   @doc """
@@ -188,97 +258,129 @@ defmodule CodingAgent.Rules do
   # Discovery
   # ============================================================================
 
-  defp project_rules(cwd, home) do
-    dirs = project_dirs(cwd, home)
+  # `ancestors` is cwd and its ancestors up to the trusted root (realpaths,
+  # nearest first); empty when cwd does not resolve inside the root.
+  defp project_rules([], _root, _home), do: []
+
+  defp project_rules([cwd | _] = ancestors, root, home) do
+    dirs = project_dirs(ancestors, home)
 
     Enum.concat([
-      Enum.flat_map(dirs, &rule_dir(Path.join([&1, ".lemon", "rules"]), :project)),
+      Enum.flat_map(dirs, &rule_dir(Path.join([&1, ".lemon", "rules"]), :project, root)),
       Enum.flat_map(dirs, fn dir ->
-        Enum.flat_map(@agent_dirs, &rule_dir(Path.join([dir, &1, "rules"]), :project))
+        Enum.flat_map(@agent_dirs, &rule_dir(Path.join([dir, &1, "rules"]), :project, root))
       end),
-      rule_dir(Path.join([cwd, ".cursor", "rules"]), :project, recursive: true),
-      legacy_rule(Path.join(cwd, ".cursorrules"), "cursorrules", :project),
-      rule_dir(Path.join([cwd, ".windsurf", "rules"]), :project, exts: [".md"]),
-      legacy_rule(Path.join(cwd, ".windsurfrules"), "windsurfrules", :project),
-      clinerules(dirs),
-      github_instructions(Path.join([cwd, ".github", "instructions"]))
+      rule_dir(Path.join([cwd, ".cursor", "rules"]), :project, root, recursive: true),
+      legacy_rule(Path.join(cwd, ".cursorrules"), "cursorrules", :project, root),
+      rule_dir(Path.join([cwd, ".windsurf", "rules"]), :project, root, exts: [".md"]),
+      legacy_rule(Path.join(cwd, ".windsurfrules"), "windsurfrules", :project, root),
+      clinerules(dirs, root),
+      github_instructions(Path.join([cwd, ".github", "instructions"]), root)
     ])
   end
 
   defp global_rules(home) do
     Enum.concat([
-      rule_dir(Path.join(Path.expand(Config.agent_dir()), "rules"), :global),
-      Enum.flat_map(@agent_dirs, &rule_dir(Path.join([home, &1, "rules"]), :global)),
+      rule_dir(Path.join(Path.expand(Config.agent_dir()), "rules"), :global, :unconfined),
+      Enum.flat_map(
+        @agent_dirs,
+        &rule_dir(Path.join([home, &1, "rules"]), :global, :unconfined)
+      ),
       legacy_rule(
         Path.join([home, ".codeium", "windsurf", "memories", "global_rules.md"]),
         "global_rules",
-        :global
+        :global,
+        :unconfined
       )
     ])
   end
 
-  # cwd and its ancestors up to and including the Git root, or the home
-  # directory when no Git root is closer. The home directory itself holds
-  # global (not project) configuration and is skipped.
-  defp project_dirs(cwd, home) do
-    {inside, rest} =
-      cwd
-      |> ancestors([])
-      |> Enum.split_while(&(&1 != home and not File.exists?(Path.join(&1, ".git"))))
+  # The home directory itself holds global (not project) configuration and is
+  # skipped even when it lies inside the trusted root.
+  defp project_dirs(ancestors, home) do
+    real_home =
+      case TrustedRoot.realpath(home) do
+        {:ok, real} -> real
+        {:error, _} -> Path.expand(home)
+      end
 
-    Enum.reject(inside ++ Enum.take(rest, 1), &(&1 == home))
+    Enum.reject(ancestors, &(&1 == real_home))
   end
 
-  defp ancestors(dir, acc) do
-    parent = Path.dirname(dir)
-    if parent == dir, do: Enum.reverse([dir | acc]), else: ancestors(parent, [dir | acc])
-  end
-
-  defp clinerules(dirs) do
+  defp clinerules(dirs, root) do
     dirs
     |> Enum.map(&Path.join(&1, ".clinerules"))
-    |> Enum.find(&File.exists?/1)
+    |> Enum.find(&match?({:ok, _}, File.lstat(&1)))
     |> case do
       nil ->
         []
 
       path ->
         if File.dir?(path),
-          do: rule_dir(path, :project, exts: [".md"]),
-          else: legacy_rule(path, "clinerules", :project)
+          do: rule_dir(path, :project, root, exts: [".md"]),
+          else: legacy_rule(path, "clinerules", :project, root)
     end
   end
 
-  defp github_instructions(dir) do
-    dir
-    |> list_files([".md"], true, 0)
-    |> Enum.filter(&String.ends_with?(&1, ".instructions.md"))
-    |> Enum.flat_map(fn path ->
-      name = path |> Path.relative_to(dir) |> String.replace_suffix(".instructions.md", "")
-      load_rule(path, name, :project, :github)
-    end)
+  defp github_instructions(dir, root) do
+    if admit_dir?(dir, root) do
+      dir
+      |> list_files([".md"], true, 0, root)
+      |> Enum.filter(&String.ends_with?(&1, ".instructions.md"))
+      |> Enum.flat_map(fn path ->
+        name = path |> Path.relative_to(dir) |> String.replace_suffix(".instructions.md", "")
+        load_rule(path, name, :project, :github, root)
+      end)
+    else
+      []
+    end
   end
 
-  defp rule_dir(dir, level, opts \\ []) do
+  defp rule_dir(dir, level, root, opts \\ []) do
     exts = Keyword.get(opts, :exts, @rule_exts)
 
-    dir
-    |> list_files(exts, Keyword.get(opts, :recursive, false), 0)
-    |> Enum.flat_map(fn path ->
-      name = path |> Path.relative_to(dir) |> Path.rootname()
-      load_rule(path, name, level, :standard)
-    end)
+    if admit_dir?(dir, root) do
+      dir
+      |> list_files(exts, Keyword.get(opts, :recursive, false), 0, root)
+      |> Enum.flat_map(fn path ->
+        name = path |> Path.relative_to(dir) |> Path.rootname()
+        load_rule(path, name, level, :standard, root)
+      end)
+    else
+      []
+    end
   end
 
-  defp legacy_rule(path, name, level) do
-    if File.regular?(path), do: load_rule(path, name, level, :legacy), else: []
+  defp legacy_rule(path, name, level, root) do
+    if admit_file?(path, root), do: load_rule(path, name, level, :legacy, root), else: []
   end
 
-  # Sorted regular files with one of `exts`; hidden entries and symlinked
+  # Project rules are read from the validated realpath, never the original
+  # spelling, so a link swapped in after discovery is re-checked.
+  defp read_rule(path, :unconfined), do: File.read(path)
+
+  defp read_rule(path, root) do
+    case TrustedRoot.read(path, root) do
+      {:ok, content, _real} -> {:ok, content}
+      :error -> :error
+    end
+  end
+
+  # Project files and directories must resolve inside the trusted root (a
+  # symlink pointing out of it is ignored) and files must be single-linked.
+  # Global rule locations are home-owned.
+  defp admit_file?(path, :unconfined), do: File.regular?(path)
+  defp admit_file?(path, root), do: match?({:ok, _}, TrustedRoot.file(path, root))
+
+  defp admit_dir?(_dir, :unconfined), do: true
+  defp admit_dir?(dir, root), do: match?({:ok, _}, TrustedRoot.dir(dir, root))
+
+  # Sorted admitted files with one of `exts`; hidden entries and symlinked
   # directories are skipped.
-  defp list_files(_dir, _exts, _recursive, depth) when depth > @max_rule_dir_depth, do: []
+  defp list_files(_dir, _exts, _recursive, depth, _root) when depth > @max_rule_dir_depth,
+    do: []
 
-  defp list_files(dir, exts, recursive, depth) do
+  defp list_files(dir, exts, recursive, depth, root) do
     case File.ls(dir) do
       {:ok, names} ->
         names
@@ -289,10 +391,10 @@ defmodule CodingAgent.Rules do
 
           case File.lstat(path) do
             {:ok, %{type: :directory}} when recursive ->
-              list_files(path, exts, true, depth + 1)
+              list_files(path, exts, true, depth + 1, root)
 
             {:ok, %{type: type}} when type in [:regular, :symlink] ->
-              if Path.extname(name) in exts and File.regular?(path), do: [path], else: []
+              if Path.extname(name) in exts and admit_file?(path, root), do: [path], else: []
 
             _ ->
               []
@@ -308,8 +410,8 @@ defmodule CodingAgent.Rules do
   # Parsing
   # ============================================================================
 
-  defp load_rule(path, name, level, kind) do
-    with {:ok, content} <- File.read(path),
+  defp load_rule(path, name, level, kind, root) do
+    with {:ok, content} <- read_rule(path, root),
          true <- String.valid?(content),
          {frontmatter, body} = parse_frontmatter(content),
          true <- parse_boolean(frontmatter["enabled"]) != false,

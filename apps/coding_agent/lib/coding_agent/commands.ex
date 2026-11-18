@@ -10,9 +10,12 @@ defmodule CodingAgent.Commands do
 
   ## Roots
 
-  Project roots (relative to the session cwd) are searched before user-global
-  roots. Within one scope, Lemon-native roots win over other tools' roots, and
-  the first command with a given name wins:
+  Project roots (relative to the session's trusted directory, `config_cwd`, never
+  a Bot folder) are searched before user-global roots. Project command files and
+  directories must resolve, after symlinks, inside the trusted root
+  (`LemonCore.TrustedRoot`: the Git root, else that directory); links leaving
+  it are ignored. Within one scope, Lemon-native roots win over other tools'
+  roots, and the first command with a given name wins:
 
   | Scope | Root | Format |
   | --- | --- | --- |
@@ -69,6 +72,7 @@ defmodule CodingAgent.Commands do
 
   require Logger
   alias CodingAgent.Config
+  alias LemonCore.TrustedRoot
 
   @max_file_bytes 64 * 1024
   @max_expanded_bytes 256 * 1024
@@ -103,9 +107,9 @@ defmodule CodingAgent.Commands do
   def list(cwd, opts \\ []) do
     cwd
     |> roots(opts)
-    |> Enum.reduce({%{}, []}, fn {dir, format, source, scope}, acc ->
+    |> Enum.reduce({%{}, []}, fn {dir, format, source, scope, root}, acc ->
       dir
-      |> load_root(format, source, scope)
+      |> load_root(format, source, scope, root)
       |> Enum.reduce(acc, fn command, {seen, commands} ->
         if Map.has_key?(seen, command.name) do
           {seen, commands}
@@ -339,19 +343,24 @@ defmodule CodingAgent.Commands do
       {Path.join(home, ".gemini/commands"), :gemini_toml, "gemini"}
     ]
 
-    for({dir, format, source} <- project_roots, do: {dir, format, source, :project}) ++
-      for({dir, format, source} <- global_roots, do: {dir, format, source, :global})
+    root = TrustedRoot.resolve(cwd)
+
+    for({dir, format, source} <- project_roots, do: {dir, format, source, :project, root}) ++
+      for(
+        {dir, format, source} <- global_roots,
+        do: {dir, format, source, :global, :unconfined}
+      )
   end
 
   defp default_home, do: System.get_env("HOME") || System.user_home!()
 
-  defp load_root(dir, format, source, scope) do
+  defp load_root(dir, format, source, scope, root) do
     dir
-    |> command_files(format)
+    |> command_files(format, root)
     |> Enum.sort()
     |> Enum.flat_map(fn {relative, path} ->
       with name when is_binary(name) <- command_name(relative, format),
-           {:ok, content} <- read_bounded(path),
+           {:ok, content} <- read_bounded(path, root),
            %{} = command <- parse_command(content, format) do
         [Map.merge(command, %{name: name, path: path, source: source, scope: scope})]
       else
@@ -360,16 +369,20 @@ defmodule CodingAgent.Commands do
     end)
   end
 
-  defp command_files(dir, format) do
+  defp command_files(dir, format, root) do
     depth = if format in [:markdown_nested, :gemini_toml], do: @max_depth, else: 0
     ext = if format == :gemini_toml, do: ".toml", else: ".md"
 
-    dir
-    |> walk([], depth, ext)
-    |> Enum.take(@max_files_per_root)
+    if admit_dir?(dir, root) do
+      dir
+      |> walk([], depth, ext, root)
+      |> Enum.take(@max_files_per_root)
+    else
+      []
+    end
   end
 
-  defp walk(dir, segments, depth, ext) do
+  defp walk(dir, segments, depth, ext, root) do
     case File.ls(dir) do
       {:ok, entries} ->
         entries
@@ -379,11 +392,11 @@ defmodule CodingAgent.Commands do
           path = Path.join(dir, entry)
 
           cond do
-            File.regular?(path) and String.ends_with?(entry, ext) ->
+            String.ends_with?(entry, ext) and admit_file?(path, root) ->
               [{Enum.reverse([entry | segments]), path}]
 
-            depth > 0 and File.dir?(path) ->
-              walk(path, [entry | segments], depth - 1, ext)
+            depth > 0 and File.dir?(path) and admit_dir?(path, root) ->
+              walk(path, [entry | segments], depth - 1, ext, root)
 
             true ->
               []
@@ -394,6 +407,15 @@ defmodule CodingAgent.Commands do
         []
     end
   end
+
+  # Project command files and directories must resolve (after symlinks) inside
+  # the trusted root, and files must be single-linked. User-global roots are
+  # home-owned.
+  defp admit_file?(path, :unconfined), do: File.regular?(path)
+  defp admit_file?(path, root), do: match?({:ok, _}, TrustedRoot.file(path, root))
+
+  defp admit_dir?(_dir, :unconfined), do: true
+  defp admit_dir?(dir, root), do: match?({:ok, _}, TrustedRoot.dir(dir, root))
 
   defp command_name(segments, format) do
     {dirs, [file]} = Enum.split(segments, -1)
@@ -414,14 +436,28 @@ defmodule CodingAgent.Commands do
     if String.ends_with?(file, suffix), do: String.replace_suffix(file, suffix, "")
   end
 
-  defp read_bounded(path) do
+  # Project commands are read from the validated realpath (`TrustedRoot.read/3`),
+  # never by reopening the discovered spelling.
+  defp read_bounded(path, :unconfined) do
     with {:ok, %File.Stat{size: size}} when size <= @max_file_bytes <- File.stat(path),
-         {:ok, content} <- File.read(path),
-         true <- String.valid?(content) do
-      {:ok, String.replace(content, "\r\n", "\n")}
+         {:ok, content} <- File.read(path) do
+      normalize_command(content)
     else
       _ -> :error
     end
+  end
+
+  defp read_bounded(path, root) do
+    case TrustedRoot.read(path, root, max_bytes: @max_file_bytes) do
+      {:ok, content, _real} -> normalize_command(content)
+      :error -> :error
+    end
+  end
+
+  defp normalize_command(content) do
+    if String.valid?(content),
+      do: {:ok, String.replace(content, "\r\n", "\n")},
+      else: :error
   end
 
   defp parse_command(content, :gemini_toml) do
