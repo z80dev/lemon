@@ -116,11 +116,34 @@ defmodule LemonCore.Config.Modular do
       config = LemonCore.Config.Modular.load(validate: true)
   """
   @spec load(keyword()) :: t()
-  def load(opts \\ []) do
+  def load(opts \\ []), do: load_with_layers(opts).config
+
+  @doc """
+  `load/1` plus the layers it was merged from, all taken from one read of the
+  config files:
+
+    * `:config` - the merged, validated configuration (`load/1`)
+    * `:merged` - the merged decoded settings (`merged_settings/1`)
+    * `:operator` / `:operator_settings` - the operator's global file and
+      environment alone, resolved and decoded
+    * `:project` - the admitted project layer (after legacy `[agent]` mapping
+      and the `ProjectLayer` trust filter), `%{}` without a project file
+
+  Callers that must tell project-origin values from operator ones keep the
+  three together, so provenance always describes the values in use.
+  """
+  @spec load_with_layers(keyword()) :: %{
+          config: t(),
+          merged: map(),
+          operator: t(),
+          operator_settings: map(),
+          project: map()
+        }
+  def load_with_layers(opts \\ []) do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     validate? = Keyword.get(opts, :validate, true)
 
-    {settings, sources, rejected} = load_merged_settings(project_dir)
+    {settings, sources, rejected, operator, project} = load_layers(project_dir)
     warn_deprecated(sources)
     warn_rejected(rejected)
     check_removed_sources!(sources)
@@ -138,16 +161,22 @@ defmodule LemonCore.Config.Modular do
     if validate? do
       case Validator.validate(config) do
         :ok ->
-          config
+          :ok
 
         {:error, errors} ->
           raise ValidationError,
             message: "Configuration validation failed",
             errors: qualify_errors(errors, sources)
       end
-    else
-      config
     end
+
+    %{
+      config: config,
+      merged: settings,
+      operator: resolve_settings(operator),
+      operator_settings: operator,
+      project: project
+    }
   end
 
   @doc """
@@ -441,40 +470,52 @@ defmodule LemonCore.Config.Modular do
   # `sources` keep the raw decoded files for removed-setting and deprecation
   # checks.
   defp load_merged_settings(project_dir) do
+    {settings, sources, rejected, _operator, _project} = load_layers(project_dir)
+    {settings, sources, rejected}
+  end
+
+  # Also returns the operator's settings alone and the admitted project layer,
+  # decoded from the same file reads as the merged settings.
+  defp load_layers(project_dir) do
     [global | projects] =
       Enum.reject([global_path(), project_layer_path(project_dir)], &is_nil/1)
       |> Enum.map(&Path.expand/1)
       |> Enum.uniq()
 
     sources = Enum.map([global | projects], &{&1, load_toml_file(&1)})
-    [{_global, operator} | project_sources] = sources
+    [{_global, operator} = global_source | project_sources] = sources
     operator = LegacyAgentMigration.migrate_settings(operator)
 
-    {settings, rejected} =
-      Enum.reduce(project_sources, {operator, []}, fn {path, raw}, {merged, rejected} ->
-        {merged, ignored} =
-          ProjectLayer.merge(merged, LegacyAgentMigration.migrate_settings(raw))
+    {settings, rejected, project} =
+      Enum.reduce(project_sources, {operator, [], %{}}, fn {path, raw},
+                                                          {merged, rejected, project} ->
+        raw = LegacyAgentMigration.migrate_settings(raw)
+        {merged, ignored} = ProjectLayer.merge(merged, raw)
+        {admitted, _ignored} = ProjectLayer.merge(%{}, raw)
 
-        {merged, rejected ++ Enum.map(ignored, &ProjectLayer.format(path, &1))}
+        {merged, rejected ++ Enum.map(ignored, &ProjectLayer.format(path, &1)),
+         LemonCore.MapHelpers.deep_merge(project, admitted)}
       end)
 
-    settings =
-      Enum.reduce(sources, settings, fn {_path, raw}, merged ->
-        defaults = ensure_table(LegacyAgentMigration.migrate_settings(raw)["defaults"])
+    {put_provider_source(settings, sources), sources, rejected,
+     put_provider_source(operator, [global_source]), project}
+  end
 
-        cond do
-          defaults["provider"] not in [nil, ""] ->
-            Map.put(merged, :default_provider_source, :explicit)
+  defp put_provider_source(settings, sources) do
+    Enum.reduce(sources, settings, fn {_path, raw}, merged ->
+      defaults = ensure_table(LegacyAgentMigration.migrate_settings(raw)["defaults"])
 
-          defaults["model"] not in [nil, ""] ->
-            Map.put(merged, :default_provider_source, :inherited)
+      cond do
+        defaults["provider"] not in [nil, ""] ->
+          Map.put(merged, :default_provider_source, :explicit)
 
-          true ->
-            merged
-        end
-      end)
+        defaults["model"] not in [nil, ""] ->
+          Map.put(merged, :default_provider_source, :inherited)
 
-    {settings, sources, rejected}
+        true ->
+          merged
+      end
+    end)
   end
 
   defp warn_rejected([]), do: :ok

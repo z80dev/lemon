@@ -12,7 +12,7 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
   def status(opts \\ []) do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     config = Config.load(project_dir, cache: false)
-    paths = extension_paths(config, project_dir)
+    paths = extension_paths(config)
     directories = Enum.map(paths, &directory_status/1)
     manifests = Enum.flat_map(directories, & &1.manifests)
     host_type_counts = count_manifest_values(manifests, & &1.host_types)
@@ -90,26 +90,28 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
     if Map.get(host_type_counts, host, 0) > 0, do: "manifest_only", else: "not_configured"
   end
 
-  defp extension_paths(config, project_dir) do
-    [
-      LemonCore.Paths.home_path(["agent", "extensions"]),
-      LemonCore.Paths.project_path(project_dir, "extensions")
-      | configured_extension_paths(config, project_dir)
-    ]
+  # Mirrors the coding agent's runtime extension paths: the global extensions
+  # directory plus operator `extension_paths`, relative entries anchored at the
+  # global config directory. A project's `.lemon/extensions` is never loaded,
+  # so it is not reported either.
+  defp extension_paths(config) do
+    [LemonCore.Paths.home_path(["agent", "extensions"]) | configured_extension_paths(config)]
     |> Enum.filter(&is_binary/1)
     |> Enum.map(&Path.expand/1)
     |> Enum.uniq()
   end
 
-  defp configured_extension_paths(%Config{agent: agent}, project_dir) when is_map(agent) do
+  defp configured_extension_paths(%Config{agent: agent}) when is_map(agent) do
+    operator_root = Path.dirname(LemonCore.Paths.global_config())
+
     agent
     |> map_value(:extension_paths)
     |> List.wrap()
     |> Enum.filter(&is_binary/1)
-    |> Enum.map(&expand_path(&1, project_dir))
+    |> Enum.map(&Path.expand(&1, operator_root))
   end
 
-  defp configured_extension_paths(_, _), do: []
+  defp configured_extension_paths(_), do: []
 
   defp configured_extension_path_count(%Config{agent: agent}) when is_map(agent) do
     agent
@@ -126,7 +128,7 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
     %{
       enabled: extensions_enabled?(config),
       configured_extension_path_count: configured_extension_path_count(config),
-      default_directory_count: 2,
+      default_directory_count: 1,
       auto_load_default_paths: auto_load?,
       default_directories_diagnostics_only: not auto_load?,
       diagnostics_loads_extension_code: false
@@ -208,14 +210,6 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
     |> Enum.flat_map(fun)
     |> Enum.frequencies()
     |> Map.new(fn {key, count} -> {key, count} end)
-  end
-
-  defp expand_path(path, project_dir) do
-    cond do
-      String.starts_with?(path, "~/") -> Path.expand(path)
-      Path.type(path) == :absolute -> Path.expand(path)
-      true -> Path.expand(path, project_dir)
-    end
   end
 
   defp map_value(map, key) when is_map(map) do

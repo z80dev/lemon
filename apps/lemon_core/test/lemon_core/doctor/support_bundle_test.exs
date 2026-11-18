@@ -532,8 +532,8 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     extensions = extension_json |> IO.iodata_to_binary() |> Jason.decode!()
 
     assert extensions["directory_count"] >= 2
-    assert extensions["existing_directory_count"] >= 2
-    assert extensions["extension_file_count"] >= 2
+    assert extensions["existing_directory_count"] >= 1
+    assert extensions["extension_file_count"] >= 1
     assert extensions["manifest_count"] >= 1
     assert extensions["valid_manifest_count"] >= 1
     assert extensions["invalid_manifest_count"] == 0
@@ -547,7 +547,7 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert extensions["distribution_source_counts"]["git"] >= 1
     assert extensions["audit_status_counts"]["pending"] >= 1
     assert extensions["execution"]["configured_extension_path_count"] == 1
-    assert extensions["execution"]["default_directory_count"] == 2
+    assert extensions["execution"]["default_directory_count"] == 1
     assert extensions["execution"]["auto_load_default_paths"] == false
     assert extensions["execution"]["default_directories_diagnostics_only"] == true
     assert extensions["execution"]["diagnostics_loads_extension_code"] == false

@@ -42,53 +42,58 @@ defmodule LemonSkills.ConfigTest do
   end
 
   describe "load_config/1" do
-    test "deep merges global and project configs with project precedence", %{tmp_dir: tmp_dir} do
-      agent_dir = Path.join(tmp_dir, "agent")
+    test "a project skills.json can disable and slow the learning nudge", %{tmp_dir: tmp_dir} do
       project_dir = Path.join(tmp_dir, "project")
-
-      System.put_env("LEMON_AGENT_DIR", agent_dir)
+      System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "agent"))
       File.mkdir_p!(project_dir)
 
-      global_config = %{
-        "disabled" => ["global-disabled"],
-        "mode" => "global",
-        "skills" => %{
-          "global-only" => %{"level" => "global"},
-          "shared" => %{
-            "global_only" => true,
-            "nested" => %{"keep" => 1, "override" => "global"}
-          }
+      write_json!(Config.project_config_file(project_dir), %{
+        "disabled" => ["project-disabled", 7],
+        "learning_nudge" => %{
+          "enabled" => false,
+          "memory_turn_interval" => 40,
+          "skill_tool_threshold" => "99",
+          "background_review" => %{"enabled" => true}
         }
-      }
-
-      project_config = %{
-        "disabled" => ["project-disabled"],
-        "mode" => "project",
-        "skills" => %{
-          "project-only" => %{"level" => "project"},
-          "shared" => %{
-            "nested" => %{"override" => "project", "project_only" => 2},
-            "project_only" => true
-          }
-        }
-      }
-
-      write_json!(Config.global_config_file(), global_config)
-      write_json!(Config.project_config_file(project_dir), project_config)
+      })
 
       assert Config.load_config(project_dir) == %{
                "disabled" => ["project-disabled"],
-               "mode" => "project",
-               "skills" => %{
-                 "global-only" => %{"level" => "global"},
-                 "project-only" => %{"level" => "project"},
-                 "shared" => %{
-                   "global_only" => true,
-                   "nested" => %{"keep" => 1, "override" => "project", "project_only" => 2},
-                   "project_only" => true
-                 }
-               }
+               "learning_nudge" => %{"enabled" => false, "memory_turn_interval" => 40}
              }
+
+      assert Config.load_config() == %{}
+    end
+
+    test "a project skills.json can only narrow the operator config", %{tmp_dir: tmp_dir} do
+      project_dir = Path.join(tmp_dir, "project")
+      System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "agent"))
+      File.mkdir_p!(project_dir)
+
+      write_json!(Config.global_config_file(), %{
+        "disabled" => ["operator-disabled"],
+        "learning_nudge" => %{"enabled" => false, "memory_turn_interval" => 20},
+        "skills" => %{"lint" => %{"endpoint" => "https://operator.example"}}
+      })
+
+      write_json!(Config.project_config_file(project_dir), %{
+        "disabled" => ["project-disabled"],
+        "learning_nudge" => %{
+          "enabled" => true,
+          "memory_turn_interval" => 1,
+          "skill_tool_threshold" => 1
+        },
+        "skills" => %{"lint" => %{"endpoint" => "https://attacker.example"}},
+        "mode" => "project"
+      })
+
+      config = Config.load_config(project_dir)
+
+      assert Enum.sort(config["disabled"]) == ["operator-disabled", "project-disabled"]
+      assert Config.skill_disabled?("operator-disabled", project_dir)
+      assert config["learning_nudge"] == %{"enabled" => false, "memory_turn_interval" => 20}
+      assert config["skills"] == %{"lint" => %{"endpoint" => "https://operator.example"}}
+      refute Map.has_key?(config, "mode")
     end
   end
 
@@ -129,52 +134,15 @@ defmodule LemonSkills.ConfigTest do
     end
   end
 
-  describe "set_skill_config/3 and get_skill_config/2" do
-    test "sets and reads project skill config when global: false", %{tmp_dir: tmp_dir} do
-      agent_dir = Path.join(tmp_dir, "agent")
-      project_dir = Path.join(tmp_dir, "project")
+  describe "set_skill_config/2 and get_skill_config/1" do
+    test "per-skill configuration is operator-only", %{tmp_dir: tmp_dir} do
+      System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "agent"))
+      skill_config = %{"timeout" => 10, "nested" => %{"a" => 1}}
 
-      System.put_env("LEMON_AGENT_DIR", agent_dir)
-      File.mkdir_p!(project_dir)
-
-      global_skill_config = %{
-        "timeout" => 10,
-        "nested" => %{"a" => 1, "b" => 2},
-        "global_only" => true
-      }
-
-      write_json!(Config.global_config_file(), %{
-        "skills" => %{
-          "lint" => global_skill_config
-        }
-      })
-
-      project_skill_config = %{
-        "timeout" => 30,
-        "nested" => %{"b" => 99},
-        "project_only" => true
-      }
-
-      assert :ok =
-               Config.set_skill_config("lint", project_skill_config,
-                 global: false,
-                 cwd: project_dir
-               )
-
-      assert Config.get_skill_config("lint", project_dir) == %{
-               "timeout" => 30,
-               "nested" => %{"a" => 1, "b" => 99},
-               "global_only" => true,
-               "project_only" => true
-             }
-
-      assert Config.get_skill_config("lint") == global_skill_config
-
-      assert read_json!(Config.project_config_file(project_dir)) == %{
-               "skills" => %{
-                 "lint" => project_skill_config
-               }
-             }
+      assert :ok = Config.set_skill_config("lint", skill_config)
+      assert Config.get_skill_config("lint") == skill_config
+      assert read_json!(Config.global_config_file()) == %{"skills" => %{"lint" => skill_config}}
+      assert Config.get_skill_config("other") == %{}
     end
   end
 

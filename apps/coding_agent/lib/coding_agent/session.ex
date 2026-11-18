@@ -165,6 +165,7 @@ defmodule CodingAgent.Session do
     :cwd,
     :tools,
     :model,
+    :model_origin,
     :thinking_level,
     :system_prompt,
     :base_system_prompt,
@@ -254,6 +255,8 @@ defmodule CodingAgent.Session do
           cwd: String.t(),
           tools: [AgentTool.t()],
           model: LemonAi.Types.Model.t(),
+          # Where `model` came from (`CodingAgent.ModelProvenance`); updated with it.
+          model_origin: CodingAgent.ModelProvenance.t(),
           thinking_level: LemonAgent.Types.thinking_level(),
           system_prompt: String.t(),
           base_system_prompt: String.t(),
@@ -1500,17 +1503,25 @@ defmodule CodingAgent.Session do
     # lead the next turn with a provider pinned for the old model.
     SessionPins.clear(state.session_manager.header.id)
 
-    # Record model change in session
+    # Record model change in session: an explicit user choice is the operator's.
     entry =
       SessionEntry.model_change(
         model.provider,
         model.id,
-        explicit: true
+        explicit: true,
+        origin: :operator
       )
 
     session_manager = SessionManager.append_entry(state.session_manager, entry)
 
-    next_state = Planning.refresh(%{state | model: model, session_manager: session_manager})
+    next_state =
+      Planning.refresh(%{
+        state
+        | model: model,
+          model_origin: :operator,
+          session_manager: session_manager
+      })
+
     {:reply, :ok, next_state}
   end
 
@@ -3248,14 +3259,17 @@ defmodule CodingAgent.Session do
 
     model = ModelResolver.resolve_session_model(model_spec, state.settings_manager)
 
-    model_routing =
-      unless context.model_explicit do
-        LemonAgent.ModelRuntime.ModelRouting.prepare(
-          state.settings_manager.model_routing,
-          &ModelResolver.resolve_session_model(&1, state.settings_manager),
-          state.settings_manager.providers
-        )
+    model_origin =
+      cond do
+        is_nil(context.model) -> state.model_origin
+        context.model_origin -> context.model_origin
+        model_spec == state.model -> state.model_origin
+        true -> CodingAgent.ModelProvenance.restored(context, state.settings_manager)
       end
+
+    model_routing =
+      unless context.model_explicit,
+        do: CodingAgent.ModelProvenance.prepare_routing(state.settings_manager)
 
     :ok = LemonAgent.Agent.set_model(state.agent, model, model_routing: model_routing)
     :ok = LemonAgent.Agent.set_thinking_level(state.agent, context.thinking_level)
@@ -3270,6 +3284,7 @@ defmodule CodingAgent.Session do
       state
       | session_manager: session_manager,
         model: model,
+        model_origin: model_origin,
         thinking_level: context.thinking_level
     }
     |> CodingAgent.Session.PromptJournal.restore_state()

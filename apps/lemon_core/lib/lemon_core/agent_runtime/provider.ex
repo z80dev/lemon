@@ -286,9 +286,6 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc "Tool-name conflict report for a working directory."
   @callback tool_conflicts(Path.t(), keyword()) :: map()
 
-  @doc "Default extension directories: global first, then project-local."
-  @callback extension_dirs(Path.t()) :: [Path.t()]
-
   @doc "Whether the WASM sidecar supervisor is running."
   @callback wasm_sidecar_running?() :: boolean()
 
@@ -356,6 +353,5 @@ defmodule LemonCore.AgentRuntime.Provider do
                       extension_providers: 1,
                       extension_info: 1,
                       tool_conflicts: 2,
-                      extension_dirs: 1,
                       wasm_sidecar_running?: 0
 end

@@ -110,17 +110,17 @@ defmodule LemonRouter.SubmissionBuilder do
 
       history_model = resolve_history_model(prompt, cwd, explicit_model, meta)
 
-      selection =
-        ModelSelection.resolve(%{
-          explicit_model: request_model,
-          model_explicit: params.model_explicit,
-          meta_model: MapHelpers.get_key(meta, :model),
-          session_model: session_model,
-          profile_model: profile_model,
-          history_model: history_model,
-          default_model: default_model
-        })
+      selection_input = %{
+        explicit_model: request_model,
+        model_explicit: params.model_explicit,
+        meta_model: MapHelpers.get_key(meta, :model),
+        session_model: session_model,
+        profile_model: profile_model,
+        history_model: history_model,
+        default_model: default_model
+      }
 
+      selection = ModelSelection.resolve(selection_input)
       resolved_model = selection.model
 
       resolved_thinking_level =
@@ -143,6 +143,19 @@ defmodule LemonRouter.SubmissionBuilder do
           thinking_level: resolved_thinking_level,
           model: resolved_model,
           model_explicit: selection.model_explicit,
+          # A profile or router-default selector is operator configuration: the
+          # session resolves it (roles included) against operator settings only.
+          # Always set here, so a caller's meta cannot claim it.
+          model_source:
+            if(ModelSelection.operator_source?(selection_input), do: :operator),
+          # A delegating session's admitted request model carries its project
+          # origin; only that tightening claim survives, never an operator one.
+          model_origin:
+            if(
+              not is_nil(request_model) and
+                MapHelpers.get_key(meta, :model_origin) in [:project, "project"],
+              do: :project
+            ),
           resume_source: resume_source
         })
         |> maybe_put(:system_prompt, resolved_system_prompt)
@@ -437,8 +450,15 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp normalize_cwd(_), do: nil
 
+  # The router default is operator configuration: the global layer, never a
+  # project file under the router's working directory.
   defp default_model_from_config do
-    LemonCore.Config.cached().agent.default_model
+    config = LemonCore.Config.cached()
+
+    case config.provenance do
+      %{operator: operator} -> operator.agent.default_model
+      _ -> config.agent.default_model
+    end
   end
 
   defp maybe_put(map, _key, nil), do: map

@@ -12,6 +12,16 @@ defmodule LemonSkills.BackgroundReviewTest do
     target = self()
     supervisor = start_supervised!(LemonCore.TaskSupervisor.child_spec(max_children: 1))
 
+    # Review settings are operator skills.json settings; isolate the global file.
+    previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", Path.join(cwd, "agent"))
+
+    on_exit(fn ->
+      if previous_agent_dir,
+        do: System.put_env("LEMON_AGENT_DIR", previous_agent_dir),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+
     server =
       start_supervised!(
         {LearningNudge,
@@ -524,8 +534,8 @@ defmodule LemonSkills.BackgroundReviewTest do
     end
   end
 
-  defp configure(ctx, settings),
-    do: Config.save_config(%{"learning_nudge" => settings}, false, ctx.request.cwd)
+  defp configure(_ctx, settings),
+    do: Config.save_config(%{"learning_nudge" => settings})
 
   defp turn(ctx), do: LearningNudge.contribute(ctx.request, server: ctx.server)
 

@@ -10,10 +10,10 @@ defmodule CodingAgent.Extensions do
 
   ## Loading Extensions
 
-  Extensions can be loaded from multiple locations:
-  - Global extensions directory (`~/.lemon/agent/extensions/`)
-  - Project-local extensions (`.lemon/extensions/`)
-  - Explicit paths
+  Sessions load the operator's global extensions directory
+  (`~/.lemon/agent/extensions/`, when auto-loading is enabled) and operator
+  `extension_paths`; a project's `.lemon/extensions/` is never loaded (see
+  `CodingAgent.ExtensionLifecycle.extension_paths/1`).
 
   Concurrent loads wait for the node-local reload lock with a finite retry limit.
   Exhausted lock acquisition is reported as a load error (and logged by
@@ -29,10 +29,9 @@ defmodule CodingAgent.Extensions do
 
   ## Example
 
-      # Load extensions from default paths
+      # Load extensions from operator paths
       {:ok, extensions} = CodingAgent.Extensions.load_extensions([
-        CodingAgent.Config.extensions_dir(),
-        CodingAgent.Config.project_extensions_dir(cwd)
+        CodingAgent.Config.extensions_dir()
       ])
 
       # Get all tools from loaded extensions
@@ -182,8 +181,7 @@ defmodule CodingAgent.Extensions do
   ## Examples
 
       {:ok, extensions} = CodingAgent.Extensions.load_extensions([
-        "~/.lemon/agent/extensions",
-        "/path/to/project/.lemon/extensions"
+        "~/.lemon/agent/extensions"
       ])
   """
   @spec load_extensions([String.t()]) :: {:ok, loaded_extensions()} | {:error, term()}
@@ -221,8 +219,7 @@ defmodule CodingAgent.Extensions do
   ## Examples
 
       {:ok, extensions, load_errors, validation_errors} = CodingAgent.Extensions.load_extensions_with_errors([
-        "~/.lemon/agent/extensions",
-        "/path/to/project/.lemon/extensions"
+        "~/.lemon/agent/extensions"
       ])
 
       if load_errors != [] do

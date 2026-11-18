@@ -300,6 +300,24 @@ defmodule LemonCore.Config.ProjectTrustTest do
     assert Enum.any?(errors, &String.contains?(&1, ": profiles.attacker.tool_policy.profile:"))
   end
 
+  test "a project cannot choose an operator profile's model", ctx do
+    write_global(ctx, """
+    [profiles.default]
+    model = "openai:gpt-4o"
+    """)
+
+    write_project(ctx, """
+    [profiles.default]
+    model = "anthropic:claude-sonnet-4-20250514"
+    name = "Project name"
+    """)
+
+    config = Config.load(ctx.project, cache: false)
+    assert config.agents["default"].model == "openai:gpt-4o"
+    assert config.agents["default"].name == "Project name"
+    assert Enum.any?(project_errors(ctx), &String.contains?(&1, ": profiles.default.model:"))
+  end
+
   test "a project profile policy cannot weaken the inherited global approval mode", ctx do
     write_global(ctx, "[runtime.tools]\napproval_mode = \"ask\"\n")
 

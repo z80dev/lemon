@@ -89,7 +89,12 @@ defmodule CodingAgent.SettingsManager do
           extension_auto_load_default_paths: boolean(),
 
           # Secret obfuscation ([runtime.secret_obfuscation])
-          secret_obfuscation_enabled: boolean()
+          secret_obfuscation_enabled: boolean(),
+
+          # Layers these settings were merged from, from the same config load:
+          # the operator's settings alone and the admitted project layer. nil
+          # for settings not loaded from disk (they are operator-owned).
+          provenance: %{operator: t(), project: map()} | nil
         }
 
   defstruct [
@@ -134,6 +139,9 @@ defmodule CodingAgent.SettingsManager do
 
     # Secret obfuscation: opt-in
     secret_obfuscation_enabled: false,
+
+    # Config-load provenance (see `t:t/0`)
+    provenance: nil,
 
     # Native task subagent settings
     task: %{
@@ -223,7 +231,15 @@ defmodule CodingAgent.SettingsManager do
       extension_auto_load_default_paths: Map.get(extensions, :auto_load_default_paths, false),
       secret_obfuscation_enabled:
         Map.get(Map.get(agent, :secret_obfuscation) || %{}, :enabled, false) == true,
-      task: task_settings(Map.get(agent, :task))
+      task: task_settings(Map.get(agent, :task)),
+      provenance:
+        case config.provenance do
+          %{operator: operator, project: project} ->
+            %{operator: from_config(operator), project: project}
+
+          nil ->
+            nil
+        end
     }
   end
 

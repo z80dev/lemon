@@ -935,10 +935,6 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   def tool_conflicts(cwd, opts), do: CodingAgent.ToolRegistry.tool_conflict_report(cwd, opts)
 
-  def extension_dirs(cwd) do
-    [CodingAgent.Config.extensions_dir(), CodingAgent.Config.project_extensions_dir(cwd)]
-  end
-
   def wasm_sidecar_running? do
     is_pid(Process.whereis(CodingAgent.Wasm.SidecarSupervisor))
   end

@@ -7,7 +7,8 @@ defmodule LemonSkills.LearningNudge do
   completion; no transcript, arguments, results or personal memory are retained.
   Session death removes its counters, and a runtime restart starts fresh.
 
-  Configuration uses `learning_nudge` in the existing global/project skills.json:
+  Configuration uses `learning_nudge` in the global skills.json (a project
+  skills.json can only narrow it; see `LemonSkills.Config.load_config/1`):
   `enabled` (true), `memory_turn_interval` (10), `skill_tool_threshold` (15),
   and opt-in `background_review` (disabled). Only bounded finished-run summaries
   enter supervised reviews; the live conversation is never modified.

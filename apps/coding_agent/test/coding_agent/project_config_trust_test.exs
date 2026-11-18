@@ -63,13 +63,23 @@ defmodule CodingAgent.ProjectConfigTrustTest do
       previous = Req.default_options()
       Req.default_options(plug: {Req.Test, __MODULE__})
       Req.Test.set_req_test_to_shared(%{})
+      # Provider health is node-global: failures other tests record can leave
+      # a provider's circuit open, short-circuiting a request before it reaches
+      # the plug. Start every test closed and leave none of ours behind.
+      reset_provider_health()
 
       on_exit(fn ->
+        reset_provider_health()
         Req.default_options(previous)
         Req.Test.set_req_test_to_private(%{})
       end)
 
       :ok
+    end
+
+    defp reset_provider_health do
+      for provider <- [:openai, :anthropic], do: LemonAi.CircuitBreaker.reset(provider)
+      LemonAgent.ModelRuntime.CredentialHealth.reset()
     end
 
     test "the operator key only reaches the operator base_url", ctx do
@@ -110,6 +120,122 @@ defmodule CodingAgent.ProjectConfigTrustTest do
       assert host == "operator.example"
       assert auth == ["Bearer sk-operator-model-key"]
       refute_received {:model_request, @attacker, _}
+    end
+
+    test "a rebuilt task tool keeps the parent's project-role provenance", ctx do
+      settings =
+        configure(
+          ctx,
+          """
+          [defaults]
+          model = "@coding"
+
+          [model_roles]
+          coding = "openai:gpt-4o-mini"
+
+          [providers.openai]
+          api_key = "operator-openai-key"
+
+          [providers.anthropic]
+          api_key = "operator-anthropic-key"
+          """,
+          """
+          [model_roles]
+          coding = "anthropic:claude-sonnet-4-20250514"
+          """
+        )
+
+      session = start_parent(ctx, settings)
+      state = CodingAgent.Session.get_state(session)
+      assert state.model.id == "claude-sonnet-4-20250514"
+      assert state.model_origin == :project
+      assert {:ok, _} = CodingAgent.Session.reload_extensions(session)
+      task = Enum.find(CodingAgent.Session.get_state(session).tools, &(&1.name == "task"))
+      assert child_request(task) == "gpt-4o-mini"
+    end
+
+    test "a project @plan model keeps its origin through reload", ctx do
+      settings =
+        configure(
+          ctx,
+          """
+          [defaults]
+          provider = "openai"
+          model = "openai:gpt-4o"
+
+          [providers.openai]
+          api_key = "operator-openai-key"
+
+          [providers.anthropic]
+          api_key = "operator-anthropic-key"
+          """,
+          """
+          [model_roles]
+          plan = "anthropic:claude-sonnet-4-20250514"
+          """
+        )
+
+      session = start_parent(ctx, settings)
+      assert CodingAgent.Session.get_state(session).model_origin == :operator
+      assert {:ok, %{"mode" => "plan"}} = CodingAgent.Session.plan(session, :enter)
+      state = CodingAgent.Session.get_state(session)
+      assert state.model.id == "claude-sonnet-4-20250514"
+      assert state.model_origin == :project
+
+      assert {:ok, _} = CodingAgent.Session.reload_extensions(session)
+      task = Enum.find(CodingAgent.Session.get_state(session).tools, &(&1.name == "task"))
+      assert child_request(task) == "gpt-4o"
+    end
+
+    defp start_parent(ctx, settings) do
+      file = Path.join(ctx.tmp, "parent-#{System.unique_integer([:positive])}.jsonl")
+      ctx.project |> CodingAgent.SessionManager.new() |> CodingAgent.SessionManager.persist(file)
+
+      start_supervised!(
+        {CodingAgent.Session,
+         [
+           cwd: ctx.project,
+           workspace_dir: Path.join(ctx.tmp, "workspace"),
+           session_file: file,
+           settings_manager: settings,
+           system_prompt: "parent",
+           register: false
+         ]}
+      )
+    end
+
+    # Launches a synchronous child through `task` and returns the model of its
+    # one provider request. A synchronous launch returns only after the child's
+    # run (and so its request) has finished, so no time budget is involved. The
+    # request is captured by a plain function plug, not a `Req.Test` stub: a
+    # stub is found through NimbleOwnership, whose global shared/private mode
+    # other test modules switch, which made this child's lookup fail at random.
+    defp child_request(task) do
+      parent = self()
+
+      Req.default_options(
+        plug: fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          send(parent, {:model_request, (Jason.decode!(body) || %{})["model"]})
+          Plug.Conn.send_resp(conn, 400, "bad request")
+        end
+      )
+
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          task.execute.(
+            "call-#{System.unique_integer([:positive])}",
+            %{"prompt" => "Work.", "async" => false, "auto_followup" => false},
+            nil,
+            nil
+          )
+        end)
+
+      assert_received {:model_request, model},
+                      "no provider request; task result: #{inspect(result)}\n#{log}"
+
+      refute_received {:model_request, _}
+      model
     end
   end
 
@@ -334,5 +460,337 @@ defmodule CodingAgent.ProjectConfigTrustTest do
 
     assert %{max_cost_usd: 0.01} =
              LemonAgent.ModelRuntime.ModelRouting.prepare(raw, fn _ -> flunk("no rules") end)
+  end
+
+  @routing_keys """
+  [providers.openai]
+  api_key = "operator-openai-key"
+
+  [providers.anthropic]
+  api_key = "operator-anthropic-key"
+  """
+
+  test "project model_routing rules never choose the request model", ctx do
+    settings =
+      configure(
+        ctx,
+        """
+        [defaults]
+        provider = "openai"
+        model = "openai:gpt-4o"
+
+        #{@routing_keys}
+        """,
+        """
+        [model_routing]
+        enabled = true
+        max_cost_usd = 100.0
+
+        [[model_routing.rules]]
+        model = "anthropic:claude-sonnet-4-20250514"
+        """
+      )
+
+    assert routed_call(ctx, settings) == {"openai", "gpt-4o"}
+  end
+
+  test "operator routing roles resolve against operator model_roles, keeping the cap", ctx do
+    settings =
+      configure(
+        ctx,
+        """
+        [defaults]
+        provider = "openai"
+        model = "openai:gpt-4o"
+
+        [model_roles]
+        fast = "openai:gpt-4o-mini"
+
+        [model_routing]
+        enabled = true
+        max_cost_usd = 100.0
+
+        [[model_routing.rules]]
+        model = "@fast"
+
+        #{@routing_keys}
+        """,
+        """
+        [model_roles]
+        fast = "anthropic:claude-sonnet-4-20250514"
+
+        [model_routing]
+        max_cost_usd = 50.0
+        """
+      )
+
+    assert settings.model_routing["max_cost_usd"] == 50.0
+    assert routed_call(ctx, settings) == {"openai", "gpt-4o-mini"}
+  end
+
+  test "routing stays on the operator layer after the project override leaves disk", ctx do
+    settings =
+      configure(
+        ctx,
+        """
+        [defaults]
+        provider = "openai"
+        model = "openai:gpt-4o"
+
+        [model_roles]
+        fast = "openai:gpt-4o-mini"
+
+        [model_routing]
+        enabled = true
+        max_cost_usd = 100.0
+
+        [[model_routing.rules]]
+        model = "@fast"
+
+        #{@routing_keys}
+        """,
+        """
+        [model_roles]
+        fast = "anthropic:claude-sonnet-4-20250514"
+        """
+      )
+
+    # The loaded settings keep the override; the repository then drops it
+    # (for example on checkout) before routing is prepared.
+    File.write!(Path.join(ctx.project, ".lemon/config.toml"), "")
+    LemonCore.ConfigCache.invalidate(ctx.project)
+
+    assert settings.model_roles["fast"] == "anthropic:claude-sonnet-4-20250514"
+    assert routed_call(ctx, settings) == {"openai", "gpt-4o-mini"}
+  end
+
+  defmodule CapturingRouter do
+    @moduledoc false
+    # Stands in for the run orchestrator: hands the agent tool's request to the test.
+    def submit(%LemonCore.RunRequest{} = request) do
+      send(:project_trust_router_owner, {:router_submit, request})
+      {:ok, "provenance-run-#{System.unique_integer([:positive])}"}
+    end
+  end
+
+  test "a delegated operator profile role never resolves through a project override", ctx do
+    settings =
+      configure(
+        ctx,
+        """
+        [defaults]
+        provider = "openai"
+        model = "openai:gpt-4o"
+
+        [model_roles]
+        coding = "openai:gpt-4o-mini"
+
+        [profiles.oracle]
+        name = "Oracle"
+        model = "@coding"
+
+        #{@routing_keys}
+        """,
+        """
+        [model_roles]
+        coding = "anthropic:claude-sonnet-4-20250514"
+        """
+      )
+
+    assert settings.task.per_call_model == "off"
+    use_agent_profiles_from(ctx.project)
+    assert eventually(fn -> LemonRouter.AgentProfiles.get("oracle")[:model] == "@coding" end)
+
+    # The parent delegates to `oracle` without a model; the router fills in the
+    # operator profile's `@coding` and marks it operator-sourced.
+    {request, command, call} = delegate_and_run(ctx.project, settings, %{"agent_id" => "oracle"})
+
+    assert request.model == nil
+    assert command.meta.model == "@coding"
+    assert command.meta.model_source == :operator
+    assert call == {"openai", "gpt-4o-mini"}
+  end
+
+  test "a delegated persona alias is resolved where it was admitted, not in the child cwd",
+       ctx do
+    settings =
+      configure(
+        ctx,
+        """
+        [defaults]
+        provider = "openai"
+        model = "openai:gpt-4o"
+
+        [model_roles]
+        coding = "openai:gpt-4o-mini"
+
+        [runtime.task]
+        per_call_model = "on"
+        per_call_model_allow = ["openai/gpt-4o-mini", "@coding"]
+
+        [profiles.oracle]
+        name = "Oracle"
+
+        #{@routing_keys}
+        """,
+        ""
+      )
+
+    # The child's cwd is a workspace subdirectory with its own project config
+    # redefining the role the persona names, and the persona itself.
+    child_cwd = Path.join(ctx.project, "sub")
+    File.mkdir_p!(Path.join(child_cwd, ".lemon/agents"))
+
+    File.write!(
+      Path.join(child_cwd, ".lemon/config.toml"),
+      "[model_roles]\ncoding = \"anthropic:claude-sonnet-4-20250514\"\n"
+    )
+
+    File.write!(
+      Path.join(child_cwd, ".lemon/agents/coder.md"),
+      "---\ndescription: Coder\nmodel: \"@coding\"\n---\nCode."
+    )
+
+    LemonCore.ConfigCache.invalidate(child_cwd)
+    use_agent_profiles_from(ctx.project)
+    assert eventually(fn -> LemonRouter.AgentProfiles.exists?("oracle") end)
+
+    for params <- [
+          %{"agent_id" => "oracle", "role" => "coder", "cwd" => child_cwd},
+          %{"agent_id" => "oracle", "model" => "@coding", "cwd" => child_cwd}
+        ] do
+      {request, _command, call} = delegate_and_run(ctx.project, settings, params)
+      assert call == {"openai", "gpt-4o-mini"}, inspect(params)
+      assert request.model == "openai:gpt-4o-mini"
+    end
+  end
+
+  defp use_agent_profiles_from(cwd) do
+    previous_cwd = Application.get_env(:lemon_router, :agent_profiles_cwd)
+    Application.put_env(:lemon_router, :agent_profiles_cwd, cwd)
+    LemonRouter.AgentProfiles.reload()
+
+    on_exit(fn ->
+      if previous_cwd,
+        do: Application.put_env(:lemon_router, :agent_profiles_cwd, previous_cwd),
+        else: Application.delete_env(:lemon_router, :agent_profiles_cwd)
+
+      LemonRouter.AgentProfiles.reload()
+    end)
+  end
+
+  # The parent's agent tool submits a delegated run; the real router builds it
+  # and the real executor starts the destination session. Returns the agent
+  # tool's request, the router's execution command and the {provider, model}
+  # of the destination's provider request.
+  defp delegate_and_run(parent_cwd, settings, params) do
+    unless Process.whereis(:project_trust_router_owner),
+      do: Process.register(self(), :project_trust_router_owner)
+
+    result =
+      CodingAgent.Tools.Agent.execute(
+        "delegate-#{System.unique_integer([:positive])}",
+        Map.merge(%{"prompt" => "Inspect", "auto_followup" => false}, params),
+        nil,
+        nil,
+        parent_cwd,
+        run_orchestrator: CapturingRouter,
+        settings_manager: settings,
+        session_key: "agent:main:main"
+      )
+
+    assert_receive {:router_submit, %LemonCore.RunRequest{} = request},
+                   5_000,
+                   "agent tool result: #{inspect(result)}"
+
+    assert {:ok, submission} =
+             LemonRouter.SubmissionBuilder.build(request, %{
+               run_supervisor: LemonRouter.RunSupervisor,
+               run_process_module: LemonRouter.RunProcess,
+               run_process_opts: %{}
+             })
+
+    command = submission.execution_request
+    parent = self()
+
+    stream_fn = fn model, _context, _options ->
+      send(parent, {:provider_call, to_string(model.provider), model.id})
+
+      response = %LemonAi.Types.AssistantMessage{
+        content: [%LemonAi.Types.TextContent{text: "done"}],
+        stop_reason: :stop,
+        model: model.id,
+        provider: model.provider
+      }
+
+      {:ok, stream} = LemonAi.EventStream.start_link()
+      LemonAi.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:done, :stop, response})
+      LemonAi.EventStream.complete(stream, response)
+      {:ok, stream}
+    end
+
+    assert {:ok, _run_ref, %{runner_pid: runner}} =
+             command
+             |> LemonGateway.ExecutionRequest.from_command()
+             |> CodingAgent.Executor.start_run(%{stream_fn: stream_fn}, self())
+
+    on_exit(fn -> CodingAgent.Session.Presentation.safe_stop_session(runner) end)
+    assert_receive {:provider_call, provider, model}, 10_000
+    {request, command, {provider, model}}
+  end
+
+  defp eventually(fun, attempts \\ 100) do
+    cond do
+      fun.() -> true
+      attempts == 0 -> false
+      true -> Process.sleep(20) && eventually(fun, attempts - 1)
+    end
+  end
+
+  # Runs one prompt in a real session and returns the {provider, model} the
+  # stream callback received.
+  defp routed_call(ctx, settings) do
+    test_pid = self()
+
+    stream_fn = fn model, _context, _options ->
+      send(test_pid, {:provider_call, to_string(model.provider), model.id})
+
+      response = %LemonAi.Types.AssistantMessage{
+        content: [%LemonAi.Types.TextContent{text: "done"}],
+        stop_reason: :stop,
+        model: model.id,
+        provider: model.provider
+      }
+
+      {:ok, stream} = LemonAi.EventStream.start_link()
+      LemonAi.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:done, :stop, response})
+      LemonAi.EventStream.complete(stream, response)
+      {:ok, stream}
+    end
+
+    file = Path.join(ctx.tmp, "routing-#{System.unique_integer([:positive])}.jsonl")
+    ctx.project |> CodingAgent.SessionManager.new() |> CodingAgent.SessionManager.persist(file)
+
+    session =
+      start_supervised!(
+        {CodingAgent.Session,
+         [
+           cwd: ctx.project,
+           workspace_dir: Path.join(ctx.tmp, "workspace"),
+           session_file: file,
+           settings_manager: settings,
+           system_prompt: "routing trust",
+           tools: [],
+           stream_fn: stream_fn,
+           register: false
+         ]}
+      )
+
+    CodingAgent.Session.subscribe(session)
+    assert :ok = CodingAgent.Session.prompt(session, "hello")
+    assert_receive {:provider_call, provider, model}, 5_000
+    {provider, model}
   end
 end

@@ -73,7 +73,8 @@ defmodule LemonRouter.AgentProfilesTest do
     assert AgentProfiles.exists?("shared")
 
     assert AgentProfiles.get("global_only").model == "global-model"
-    assert AgentProfiles.get("shared").model == "shared-project-model"
+    # A profile's model is operator-only; the project may rename it.
+    assert AgentProfiles.get("shared").model == "shared-global-model"
     assert AgentProfiles.get("shared").name == "Shared Project"
   end
 

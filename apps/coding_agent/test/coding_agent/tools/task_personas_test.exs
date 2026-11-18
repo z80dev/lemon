@@ -95,12 +95,15 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
     assert explicit.model == "@review"
     assert explicit.model_explicit
 
+    # A project persona's role applies once the operator turns per-call
+    # selection on (see ModelProvenanceTest for the gate itself).
     settings = %CodingAgent.SettingsManager{
       model_roles: %{
         "task" => "openai:gpt-4",
         "coding" => "openai:gpt-4o-mini",
         "review" => "openai:gpt-4o"
-      }
+      },
+      task: %{%CodingAgent.SettingsManager{}.task | per_call_model: "on"}
     }
 
     assert Params.build_session_opts(cwd, [settings_manager: settings], persona)[:model].id ==
@@ -114,6 +117,64 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
 
     assert {:error, _} =
              Params.validate_run_params(%{"prompt" => "Inspect", "role" => "architect"}, cwd)
+  end
+
+  @tag :tmp_dir
+  test "persona spawns never widen the parent's spawns list", %{tmp_dir: cwd} do
+    for {dir, id, spawns} <- [
+          {".lemon/agents", "lead", "\"*\""},
+          {".claude/agents", "planner", "[lead, helper]"},
+          {".omp/agents", "helper", "[planner, helper]"}
+        ] do
+      File.mkdir_p!(Path.join(cwd, dir))
+
+      File.write!(Path.join([cwd, dir, "#{id}.md"]), """
+      ---
+      name: #{id}
+      description: #{id}
+      tools: [read, task]
+      spawns: #{spawns}
+      ---
+      Delegate.
+      """)
+    end
+
+    launch = fn id, allowed ->
+      assert {:ok, launch} =
+               Params.validate_run_params(%{"prompt" => "Go", "agent" => id}, cwd,
+                 task_allowed_agents: allowed
+               )
+
+      launch.task_allowed_agents
+    end
+
+    assert launch.("lead", ["lead"]) == ["lead"]
+    assert launch.("planner", ["planner", "helper"]) == ["helper"]
+    assert launch.("helper", ["helper"]) == ["helper"]
+    # Without a parent list the persona's own list applies.
+    assert launch.("lead", nil) == :all
+    assert launch.("planner", :all) == ["lead", "helper"]
+
+    # Delegation granted by tool_policy instead of persona spawns inherits the list.
+    assert {:ok, granted} =
+             Params.validate_run_params(
+               %{
+                 "prompt" => "Go",
+                 "agent" => "helper",
+                 "tool_policy" => %{"allow" => ["read", "task"]}
+               },
+               cwd,
+               task_allowed_agents: ["helper"]
+             )
+
+    assert granted.task_allowed_agents == ["helper"]
+
+    assert {:error, "agent is required" <> _} =
+             Params.validate_run_params(
+               %{"prompt" => "Go", "tool_policy" => %{"allow" => ["read", "task"]}},
+               cwd,
+               task_allowed_agents: ["helper"]
+             )
   end
 
   test "schema output is validated before completion and preserved through get and join" do

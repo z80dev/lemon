@@ -23,15 +23,27 @@ file set only these keys; every other project key keeps the global value.
 Preferences (the project value wins):
 
 - `defaults.provider`, `defaults.model`, `defaults.thinking_level`
-- `[model_roles]`; `[model_routing]` (`max_cost_usd` may only be lowered, and
-  routing the global file enables cannot be disabled); `[tui]` (`prompt_history`
-  may only be turned off; the terminal client applies the same rule)
+- `[model_roles]`; `[tui]` (`prompt_history` may only be turned off; the
+  terminal client applies the same rule)
+- `[model_routing]`: only `max_cost_usd`, and only lowered. `enabled` and
+  `rules` are operator-only, because routing picks the model each request is
+  sent to; a project routing table is ignored and reported. Move routing rules
+  you relied on in a project file to the global config. A routing rule's
+  `@role` (and the default-model fallback) resolves against the global
+  `[model_roles]` and `[defaults]`, never a project override of that role.
 - `[runtime.compaction]`, `[runtime.task.agent_models]`
 - `runtime.tools.auto_resize_images`, `runtime.tools.edit.enforce_seen_lines`,
   `[runtime.tools.bash.interceptor]`
 - `[runtime.tools.disclosure]` (`profile` limited to `auto`, `coding`, `legacy`)
-- `name`, `description`, `avatar`, `model` of a profile the global file already
-  defines (`profiles.default` always exists)
+- `name`, `description`, `avatar` of a profile the global file already defines
+  (`profiles.default` always exists); a profile's `model` is global-only and
+  is ignored and reported in a project file. When a delegated run takes its
+  model from the profile or the router default, the session resolves that
+  selector (an `@role` included) against the global config only, never a
+  project `[model_roles]` override. A delegated persona model or explicit
+  `@role` is resolved in the delegating session, which passes the concrete
+  `provider:model` it admitted (and a project origin, when it has one), so the
+  delegated run's own working directory cannot redefine it
 
 Policy that may only be narrowed:
 
@@ -807,6 +819,35 @@ These two keys are operator authority. A project `.lemon/config.toml` may lower
 global list (a project list alone narrows an unrestricted global `on`), but it
 can never turn the gate on or add a model. Invalid values fail configuration
 validation.
+
+The same gate applies to child selections that come from the repository rather
+than the operator: a project persona's `model`, `role` or thinking level
+(`.lemon/agents`, `.omp/agents`, `.claude/agents`), a project
+`runtime.task.agent_models` entry, any `@role` that resolves through a project
+`model_roles` entry (a literal `@role` allowlist entry does not match it), and a
+project `defaults.model` that a child would inherit. With `per_call_model = "off"`, or a
+model outside `per_call_model_allow` (a different provider included), the
+selection is logged and the child uses the operator's configuration instead:
+operator `model_roles.task`, else the parent model, else the operator default.
+A project persona's thinking level and a project `defaults.thinking_level` a
+child would inherit apply only with `per_call_model = "on"`; otherwise the
+operator's level is used (logged). Global and bundled personas and global
+`agent_models` are operator settings and are not gated.
+
+Provenance is decided from the global and project layers of the same config
+load as the session's settings, never from the files as they are later, and
+each session records whether its current model came from the project (a
+project role or default, including plan mode's `@plan`) or the operator (an
+explicit choice or operator configuration). The record follows every model
+change (plan mode, branch navigation, an explicit switch) and is journaled, so
+a child inheriting the parent's model is gated whenever that model came from
+the project. A `@role` is judged by where it actually resolves: through
+operator aliases, project-defined roles, and the fallback of an unconfigured
+built-in role (`@default`, `@smol`, `@slow`, `@plan`, `@commit`), which uses
+the parent model and its origin, else the default. A bundled persona such as
+`sonic` (`@smol`) is therefore gated when `smol` is unconfigured and the parent
+runs on a project-origin model, and a literal `@role` allowlist entry only
+matches a role that resolves to an operator-origin model.
 
 ### Automatic Thinking
 
@@ -3742,7 +3783,10 @@ Forum topic management:
 
 Learning reminder settings use the existing skills configuration, **not**
 `config.toml`: global `~/.lemon/agent/skills.json` (or `LEMON_AGENT_DIR/skills.json`)
-and project `<cwd>/.lemon/skills.json`. Project keys override global keys.
+and project `<cwd>/.lemon/skills.json`. A project file can only narrow the
+global one: `enabled = false`, or a larger `memory_turn_interval` /
+`skill_tool_threshold`; every other project `learning_nudge` key (including
+`background_review`) is ignored.
 
 ```json
 {

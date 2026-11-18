@@ -490,9 +490,10 @@ defmodule CodingAgent.Tools.AgentTest do
     agents_dir = Path.join([cwd, ".lemon", "agents"])
     File.mkdir_p!(agents_dir)
 
+    # Aliases arrive resolved against the parent's settings as `provider:id`.
     for {persona_id, model_field, default_model} <- [
           {"model-default", "model: persona-model", "persona-model"},
-          {"role-default", "role: fast", "@fast"}
+          {"role-default", "role: fast", "openai:gpt-4o-mini"}
         ] do
       File.write!(
         Path.join(agents_dir, "#{persona_id}.md"),
@@ -503,7 +504,7 @@ defmodule CodingAgent.Tools.AgentTest do
             {nil, false, default_model, false},
             {"  ", false, default_model, false},
             {"explicit-model", false, "explicit-model", true},
-            {"@preferred", false, "@preferred", true},
+            {"@preferred", false, "anthropic:claude-sonnet-4-5", true},
             {nil, true, default_model, true}
           ] do
         result =
@@ -520,7 +521,13 @@ defmodule CodingAgent.Tools.AgentTest do
             nil,
             cwd,
             run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
-            settings_manager: per_call_model_settings(),
+            settings_manager: %{
+              per_call_model_settings()
+              | model_roles: %{
+                  "fast" => "openai:gpt-4o-mini",
+                  "preferred" => "anthropic:claude-sonnet-4-5"
+                }
+            },
             session_key: "agent:main:main",
             model_explicit: inherited_explicit
           )
@@ -540,6 +547,67 @@ defmodule CodingAgent.Tools.AgentTest do
 
         assert wait_for_completed(result.details.task_id).details.status == "completed"
       end
+    end
+  end
+
+  @tag :tmp_dir
+  test "a project persona's model reaches a delegated run only through the per-call gate", %{
+    tmp_dir: cwd
+  } do
+    for dir <- [".lemon/agents", ".claude/agents"] do
+      File.mkdir_p!(Path.join(cwd, dir))
+    end
+
+    File.write!(
+      Path.join([cwd, ".lemon/agents", "switcher.md"]),
+      "---\ndescription: Test persona\nmodel: anthropic:claude-sonnet-4-5\n---\nWork."
+    )
+
+    File.write!(
+      Path.join([cwd, ".claude/agents", "roled.md"]),
+      "---\nname: roled\ndescription: Test persona\nmodel: anthropic:claude-sonnet-4-5\n---\nWork."
+    )
+
+    off = %CodingAgent.SettingsManager{}
+
+    allow_other =
+      %{off | task: %{off.task | per_call_model: "on", per_call_model_allow: ["openai/gpt-4o"]}}
+
+    for persona_id <- ["switcher", "roled"], settings <- [off, allow_other] do
+      ExUnit.CaptureLog.capture_log(fn ->
+        result =
+          AgentTool.execute(
+            "project_persona_gate",
+            %{
+              "agent_id" => "oracle",
+              "prompt" => "Inspect",
+              "role" => persona_id,
+              "auto_followup" => false
+            },
+            nil,
+            nil,
+            cwd,
+            run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+            settings_manager: settings,
+            session_key: "agent:main:main"
+          )
+
+        send(self(), {:result, result})
+      end)
+
+      assert_received {:result, %LemonAgent.Types.AgentToolResult{} = result}
+      assert_receive {:router_submit, %RunRequest{} = request, _count}
+      # Refused: the delegated run uses the operator's profile/default model.
+      assert request.model == nil
+      refute request.model_explicit
+
+      :ok =
+        Bus.broadcast(
+          Bus.run_topic(result.details.run_id),
+          Event.new(:run_completed, EventsFixtures.run_completed(answer: "done"))
+        )
+
+      assert wait_for_completed(result.details.task_id).details.status == "completed"
     end
   end
 

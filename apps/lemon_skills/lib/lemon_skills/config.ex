@@ -38,7 +38,7 @@ defmodule LemonSkills.Config do
       ├── skill/              # Project-specific skills
       │   └── my-custom-skill/
       │       └── SKILL.md
-      └── skills.json         # Project skill configuration
+      └── skills.json         # Project skill config (narrow-only; see load_config/1)
 
       <project>/.agents/skills/  # Harness-compatible project skills (optional)
       └── another-skill/
@@ -361,7 +361,17 @@ defmodule LemonSkills.Config do
   @doc """
   Load the skills configuration.
 
-  Merges global and project configuration, with project taking precedence.
+  The operator's global `skills.json` is authoritative. A project
+  `<cwd>/.lemon/skills.json` arrives with the repository, so it can only
+  narrow it:
+
+    * `disabled`: string keys are added to the operator list
+    * `learning_nudge.enabled`: only `false`
+    * `learning_nudge.memory_turn_interval` and `skill_tool_threshold`: only a
+      positive integer above the effective operator value (less frequent)
+
+  Every other project key (per-skill `skills`, `learning_nudge.background_review`,
+  re-enabling an operator-disabled skill) is ignored.
 
   ## Parameters
 
@@ -373,11 +383,51 @@ defmodule LemonSkills.Config do
 
     if cwd do
       project_config = load_config_file(project_config_file(cwd))
-      deep_merge(global_config, project_config)
+
+      global_config
+      |> narrow_disabled(project_config["disabled"])
+      |> narrow_learning_nudge(project_config["learning_nudge"])
     else
       global_config
     end
   end
+
+  @nudge_intervals %{"memory_turn_interval" => 10, "skill_tool_threshold" => 15}
+
+  defp narrow_disabled(config, project) when is_list(project) do
+    operator = Enum.filter(List.wrap(config["disabled"]), &is_binary/1)
+    Map.put(config, "disabled", Enum.uniq(operator ++ Enum.filter(project, &is_binary/1)))
+  end
+
+  defp narrow_disabled(config, _project), do: config
+
+  defp narrow_learning_nudge(config, %{} = project) do
+    operator =
+      case config["learning_nudge"] do
+        %{} = nudge -> nudge
+        _ -> %{}
+      end
+
+    nudge =
+      Enum.reduce(@nudge_intervals, operator, fn {key, default}, acc ->
+        current =
+          case acc[key] do
+            n when is_integer(n) and n > 0 -> n
+            _ -> default
+          end
+
+        case project[key] do
+          n when is_integer(n) and n > current -> Map.put(acc, key, n)
+          _ -> acc
+        end
+      end)
+
+    nudge = if project["enabled"] == false, do: Map.put(nudge, "enabled", false), else: nudge
+
+    if nudge == operator, do: config, else: Map.put(config, "learning_nudge", nudge)
+  end
+
+  defp narrow_learning_nudge(config, _project), do: config
 
   @doc """
   Save skill configuration.
@@ -479,45 +529,20 @@ defmodule LemonSkills.Config do
   end
 
   @doc """
-  Get skill-specific configuration.
-
-  ## Parameters
-
-  - `key` - The skill key
-  - `cwd` - Project directory (optional)
+  Get the operator's skill-specific configuration from the global
+  `skills.json`. A project `skills.json` cannot set it.
   """
-  @spec get_skill_config(String.t(), String.t() | nil) :: map()
-  def get_skill_config(key, cwd \\ nil) do
-    config = load_config(cwd)
-    get_in(config, ["skills", key]) || %{}
+  @spec get_skill_config(String.t()) :: map()
+  def get_skill_config(key) do
+    get_in(load_config(), ["skills", key]) || %{}
   end
 
-  @doc """
-  Set skill-specific configuration.
-
-  ## Parameters
-
-  - `key` - The skill key
-  - `skill_config` - The configuration to set
-
-  ## Options
-
-  - `:cwd` - Project directory (optional)
-  - `:global` - Whether to modify global config (default: true)
-  """
-  @spec set_skill_config(String.t(), map(), keyword()) :: :ok | {:error, term()}
-  def set_skill_config(key, skill_config, opts \\ []) do
-    cwd = Keyword.get(opts, :cwd)
-    global = Keyword.get(opts, :global, true)
-
-    config_path = if global, do: global_config_file(), else: project_config_file(cwd)
-    config = load_config_file(config_path)
-
-    skills = Map.get(config, "skills", %{})
-    skills = Map.put(skills, key, skill_config)
-
-    config = Map.put(config, "skills", skills)
-    save_config(config, global, cwd)
+  @doc "Set skill-specific configuration in the operator's global `skills.json`."
+  @spec set_skill_config(String.t(), map()) :: :ok | {:error, term()}
+  def set_skill_config(key, skill_config) do
+    config = load_config_file(global_config_file())
+    skills = Map.put(Map.get(config, "skills", %{}), key, skill_config)
+    save_config(Map.put(config, "skills", skills))
   end
 
   @doc """
@@ -957,13 +982,6 @@ defmodule LemonSkills.Config do
       {:error, _} ->
         %{}
     end
-  end
-
-  defp deep_merge(base, override) when is_map(base) and is_map(override) do
-    Map.merge(base, override, fn
-      _key, v1, v2 when is_map(v1) and is_map(v2) -> deep_merge(v1, v2)
-      _key, _v1, v2 -> v2
-    end)
   end
 
   # ============================================================================

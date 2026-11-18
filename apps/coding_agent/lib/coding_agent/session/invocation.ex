@@ -152,10 +152,13 @@ defmodule CodingAgent.Session.Invocation do
       manager =
         SessionManager.append_entry(
           state.session_manager,
-          SessionManager.SessionEntry.model_change(model.provider, model.id, explicit: true)
+          SessionManager.SessionEntry.model_change(model.provider, model.id,
+            explicit: true,
+            origin: :operator
+          )
         )
 
-      %{state | model: model, session_manager: manager}
+      %{state | model: model, model_origin: :operator, session_manager: manager}
     else
       state
     end

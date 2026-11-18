@@ -690,7 +690,11 @@ Skills configuration is stored in JSON files:
 - **Global**: `~/.lemon/agent/skills.json`
 - **Project**: `<cwd>/.lemon/skills.json`
 
-Project configuration is deep-merged on top of global configuration.
+The global file is authoritative. A project file arrives with the repository,
+so it can only narrow it: its `disabled` keys are added to the global list,
+`learning_nudge.enabled` may only be `false`, and the nudge intervals may only
+grow. Per-skill `skills` settings, `learning_nudge.background_review` and every
+other project key are ignored (see `LemonSkills.Config.load_config/1`).
 
 ```json
 {

@@ -237,6 +237,8 @@ defmodule CodingAgent.Executor.SessionRunner do
       [
         model: get_in(meta, [:model]),
         model_explicit: model_explicit_from_meta(meta),
+        model_source: model_source_from_meta(meta),
+        model_origin: model_origin_from_meta(meta),
         thinking_level: get_in(meta, [:thinking_level]),
         system_prompt: get_in(meta, [:system_prompt]),
         profile_instructions: get_in(meta, [:profile_instructions]),
@@ -701,5 +703,18 @@ defmodule CodingAgent.Executor.SessionRunner do
       value when is_boolean(value) -> value
       _ -> nil
     end
+  end
+
+  # The router marks a profile or router-default model as operator-sourced.
+  defp model_source_from_meta(meta) do
+    if Map.get(meta, :model_source, Map.get(meta, "model_source")) in [:operator, "operator"],
+      do: :operator
+  end
+
+  # A delegating session's admitted model may carry its project origin (only
+  # that tightening value is honored).
+  defp model_origin_from_meta(meta) do
+    if Map.get(meta, :model_origin, Map.get(meta, "model_origin")) in [:project, "project"],
+      do: :project
   end
 end

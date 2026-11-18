@@ -74,13 +74,13 @@ Values that differ only in casing get unrelated bases.
 
 ## secrets.yml
 
-| Level | Path |
-| ----- | ---- |
-| Global | `<agent_dir>/secrets.yml` (default `~/.lemon/agent/secrets.yml`) |
-| Project | `<project>/.lemon/secrets.yml` |
+Secrets are read only from `<agent_dir>/secrets.yml` (default
+`~/.lemon/agent/secrets.yml`). A repository's `.lemon/secrets.yml` is never
+read: secret sources are operator authority, and an entry shipped with a
+repository could downgrade an operator entry or probe a secret through
+placeholder labels.
 
-The file is a YAML list. A project entry replaces a global entry with the same
-`content`.
+The file is a YAML list.
 
 | Field | Type | Required | Description |
 | ----- | ---- | -------- | ----------- |
