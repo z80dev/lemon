@@ -215,6 +215,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   plaintext rule, so remote `http://` provider endpoints no longer send bearer
   tokens over plaintext `ws://`. Restart Lemon after changing system CA roots.
 
+- XMTP now authorizes inbound senders and fails closed: only inbox ids in
+  `gateway.xmtp.allowed_inboxes` can start runs, and the policy is re-read for
+  every message, so a reload that revokes an inbox or turns `allow_all` off
+  applies to the next message. With no allowlist every inbound message is
+  dropped unless `allow_all = true` is set explicitly. Group messages must
+  mention the bot (`@<inbox id>` or `@<wallet>`). Rejected messages are not
+  deduped, replied to or submitted, and their log lines carry no content. The
+  bridge no longer syncs, lists or streams `DENIED` conversations and re-checks
+  consent before every send. **Upgrade:** add senders' inbox ids to
+  `allowed_inboxes` (shown in the `reason=unpaired` warning); messages dropped
+  before a sender is authorized are not replayed.
+
 - Updated the XMTP bridge's viem pin to 2.57.20, the browser driver's
   Playwright pin to 1.65.1, and patched documentation/browser development
   dependencies within their supported ranges. XMTP's npm audit is clean.
