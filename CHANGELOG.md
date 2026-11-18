@@ -211,6 +211,34 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- A project `.lemon/config.toml` is untrusted: it may set only an allowlist of
+  preferences (default provider/model/thinking, model roles and routing, TUI
+  presentation, compaction, persona models, disclosure profile) and may only
+  narrow policy (stricter `approval_mode`, lower budgets and caps, enable guards,
+  disable features or LSP servers, intersect profile tool policy against the
+  effective operator policy). Provider `base_url`/`location`/credentials, secret
+  sources, web hosts and SSRF switches, executables, extension paths, routing
+  pools, logging and update settings are operator-only; ignored keys are
+  reported by `lemon config validate` and `lemon doctor`. The terminal client
+  applies the same allowlist. `.env` autoload no longer reads the launch
+  directory: only `~/.lemon/.env` or an explicit `LEMON_DOTENV_DIR`.
+  **Upgrade:** move project-only operator settings and a launch-directory `.env`
+  to the global config.
+- Secrets: the master key is never replaced or silently forked. Init, setup,
+  rotation and credential restore serialize on a cross-process key lock and
+  publish keys without replacing existing ones; the store records an HMAC key
+  verifier, and writes or rotation under another key are refused
+  (`:master_key_mismatch`) and never answered from env or external fallbacks.
+  Every entry point resolves the same provider chain and different keys in two
+  providers fail with `:conflicting_master_keys`. An unconfirmed rotation stays
+  pending until `lemon secrets rotate-key --resume` or `--abandon
+  --confirm-abandon`.
+- Honcho memory is partitioned by owner (agent profile, person, and legacy or
+  verified-private memory) in a clean `v2` namespace: peers, assistant peers,
+  sessions and message tags never cross people, profiles or private contexts;
+  searches require and filter by owner; unmapped sessions refuse; conclusion
+  deletes are ownership-checked. Honcho memory written before this release is
+  not read, so every owner starts empty.
 - Checkpoints: IDs are validated as `chk_<16 hex>` at every filesystem
   boundary; ownership is the trusted session id for capture and access (never a
   model-supplied session key); user-facing diff/restore/delete require an
