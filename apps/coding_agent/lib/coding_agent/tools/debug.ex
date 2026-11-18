@@ -14,6 +14,7 @@ defmodule CodingAgent.Tools.Debug do
   alias CodingAgent.Artifacts
   alias CodingAgent.Debug.{Adapters, SessionServer}
   alias CodingAgent.Tools.PathHelpers
+  alias CodingAgent.WorkspaceReads
   alias LemonAgent.AbortSignal
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -232,6 +233,7 @@ defmodule CodingAgent.Tools.Debug do
          {:ok, pid} <- optional_integer(params, "pid"),
          {:ok, port} <- optional_integer(params, "port"),
          {:ok, host} <- optional_string(params, "host"),
+         :ok <- attach_host_allowed(host, opts),
          :ok <- require_attach_target(pid, port, adapter_name),
          {:ok, adapter} <- Adapters.select_attach(adapter_name, port, adapter_opts(opts)) do
       adapter =
@@ -445,6 +447,30 @@ defmodule CodingAgent.Tools.Debug do
   end
 
   defp adapter_opts(opts), do: Keyword.take(opts, [:debug_adapters])
+
+  # A non-loopback DAP endpoint can drive Lemon's debug session (and see its
+  # breakpoints), so connecting to one needs the tool's explicit opt-in.
+  defp attach_host_allowed(nil, _opts), do: :ok
+
+  defp attach_host_allowed(host, opts) do
+    if Keyword.get(opts, :debug_allow_remote_attach, false) == true or loopback_host?(host) do
+      :ok
+    else
+      {:error,
+       "attach host #{host} is not loopback; remote debug endpoints require the " <>
+         "debug_allow_remote_attach tool option"}
+    end
+  end
+
+  defp loopback_host?("localhost"), do: true
+
+  defp loopback_host?(host) do
+    case :inet.parse_strict_address(String.to_charlist(host)) do
+      {:ok, {127, _, _, _}} -> true
+      {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
+      _ -> false
+    end
+  end
 
   defp required_string(params, key, action) do
     case Map.get(params, key) do
@@ -745,9 +771,9 @@ defmodule CodingAgent.Tools.Debug do
 
         {notice, details} =
           case spill_output(output, cwd, opts) do
-            {:ok, path} ->
-              {"[Showing the last #{byte_size(tail)} of #{size} buffered bytes; full buffer saved to #{path}]",
-               Map.merge(details, %{truncated: true, full_output_path: path})}
+            {:ok, uri} ->
+              {"[Showing the last #{byte_size(tail)} of #{size} buffered bytes; full buffer saved to #{uri}]",
+               Map.merge(details, %{truncated: true, artifact_uri: uri})}
 
             :error ->
               {"[Showing the last #{byte_size(tail)} of #{size} buffered bytes]",
@@ -944,9 +970,7 @@ defmodule CodingAgent.Tools.Debug do
   end
 
   defp excerpt(path, line, cwd) when is_binary(path) and is_integer(line) and line > 0 do
-    with {:ok, %File.Stat{type: :regular, size: size}} <- File.stat(path),
-         true <- size <= @max_excerpt_file_bytes,
-         {:ok, content} <- File.read(path) do
+    with {:ok, content} <- read_workspace_file(path, cwd) do
       lines = String.split(content, ~r/\r?\n/)
       first = max(line - @excerpt_radius, 1)
       last = min(line + @excerpt_radius, length(lines))
@@ -967,24 +991,57 @@ defmodule CodingAgent.Tools.Debug do
 
   defp excerpt(_path, _line, _cwd), do: nil
 
-  defp spill_output(output, cwd, opts) do
-    directory =
-      case Artifacts.spill_dir(cwd, opts) do
-        {:ok, dir} -> dir
-        {:error, _} -> Path.join(System.tmp_dir!(), "lemon-debug")
+  @doc false
+  # Adapter-reported source paths are untrusted. OTP has no openat/O_NOFOLLOW,
+  # so `priv/debug_source_read.py` opens the canonical workspace root and
+  # walks every component relative to its parent's descriptor with
+  # O_NOFOLLOW, then fstat-checks (regular, one link, size bound) and reads the
+  # leaf from that descriptor. Without python3 or the helper there is no
+  # excerpt. `opts[:sync_dir]` is a test seam (see the helper).
+  @spec read_workspace_file(String.t(), String.t(), keyword()) :: {:ok, binary()} | :error
+  def read_workspace_file(path, cwd, opts \\ []) do
+    helper = Path.join(to_string(:code.priv_dir(:coding_agent)), "debug_source_read.py")
+
+    with {:ok, root} <- WorkspaceReads.realpath(Path.expand(cwd)),
+         {:ok, parts} <- workspace_parts(Path.expand(path, cwd), [Path.expand(cwd), root]),
+         {:ok, python} <- CodingAgent.ExecutionNode.Python.executable(),
+         true <- File.regular?(helper) do
+      args =
+        [helper, root, Enum.join(parts, "/"), Integer.to_string(@max_excerpt_file_bytes)] ++
+          List.wrap(opts[:sync_dir])
+
+      task = Task.async(fn -> System.cmd(python, args) end)
+
+      case Task.yield(task, Keyword.get(opts, :timeout_ms, 5_000)) ||
+             Task.shutdown(task, :brutal_kill) do
+        {:ok, {data, 0}} -> {:ok, data}
+        _ -> :error
       end
-
-    name = "debug-output-#{System.unique_integer([:positive])}.log"
-    path = Path.join(directory, name)
-
-    with :ok <- File.mkdir_p(directory),
-         :ok <- File.write(path, output) do
-      {:ok, path}
     else
       _ -> :error
     end
-  rescue
-    _ -> :error
+  end
+
+  defp workspace_parts(target, bases) do
+    Enum.find_value(bases, :error, fn base ->
+      prefix = String.trim_trailing(base, "/") <> "/"
+
+      if String.starts_with?(target, prefix) and byte_size(target) > byte_size(prefix) do
+        {:ok,
+         target
+         |> binary_part(byte_size(prefix), byte_size(target) - byte_size(prefix))
+         |> Path.split()}
+      end
+    end)
+  end
+
+  # Session artifact storage only: random name, exclusive create, no
+  # shared-tmp fallback when the session has no spill directory.
+  defp spill_output(output, cwd, opts) do
+    case Artifacts.spill(output, cwd, opts) do
+      {:ok, uri} -> {:ok, uri}
+      {:error, _} -> :error
+    end
   end
 
   defp text_result(text, details) do

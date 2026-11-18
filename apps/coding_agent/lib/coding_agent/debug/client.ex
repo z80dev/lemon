@@ -251,6 +251,7 @@ defmodule CodingAgent.Debug.Client do
 
         Map.merge(state.adapter, %{
           connect_mode: :remote,
+          via_local_server: true,
           host: List.to_string(:inet.ntoa(host)),
           port: port
         })
