@@ -4,7 +4,16 @@ defmodule LemonOmp.Worktree do
 
   Validation is read-only. Each invocation branches from the validated HEAD;
   cleanup is conservative, bounded to two seconds, and never uses force.
+
+  Every read (validation, the session-discovery inventory and its reflog
+  lookups, and cleanup's dirty and commit counts) runs through
+  `LemonCore.SafeGit`, so a repository's configuration (signature display and
+  `gpg.program`, fsmonitor, filter drivers, includes) cannot make listing or
+  cleaning up omp sessions run a program. Only the explicit isolation writes
+  (`branch`, `worktree add/remove`, `update-ref`) use the repository as is.
   """
+
+  alias LemonCore.SafeGit
 
   @command_timeout 5_000
   @cleanup_timeout 2_000
@@ -14,13 +23,12 @@ defmodule LemonOmp.Worktree do
   def validate(cwd, true) do
     deadline = deadline(@command_timeout)
 
-    with {:ok, "true"} <- git(cwd, ["rev-parse", "--is-inside-work-tree"], deadline),
-         {:ok, common} <-
-           git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"], deadline),
-         {:ok, listing} <- git(cwd, ["worktree", "list", "--porcelain", "-z"], deadline),
-         {:ok, base} <- git(cwd, ["rev-parse", "HEAD"], deadline),
-         ["worktree " <> repo | _] <- String.split(listing, <<0>>, trim: true) do
-      {:ok, %{common: common, repo: repo, base: base}}
+    with {:ok, safe} <- SafeGit.repository(cwd),
+         {:ok, real} <- LemonCore.TrustedRoot.realpath(cwd),
+         false <- metadata?(real, safe),
+         {:ok, repo} <- main_worktree(safe),
+         {:ok, base} <- read(safe, ["rev-parse", "--verify", "HEAD"], deadline) do
+      {:ok, %{common: safe.common_dir, repo: repo, base: base}}
     else
       _ -> {:error, :not_a_git_repo}
     end
@@ -28,13 +36,31 @@ defmodule LemonOmp.Worktree do
 
   def validate(_cwd, _isolate), do: {:error, :invalid_params}
 
+  # `cwd` inside Git metadata rather than in a work tree (Lemon's own worktrees
+  # live under the common directory, so the root decides).
+  defp metadata?(cwd, %{root: root, git_dir: git_dir, common_dir: common}) do
+    in_metadata? = fn path ->
+      LemonCore.TrustedRoot.inside?(path, git_dir) or LemonCore.TrustedRoot.inside?(path, common)
+    end
+
+    in_metadata?.(cwd) and not in_metadata?.(root)
+  end
+
+  # The main worktree: the validated root when `cwd` is in it, else the
+  # directory holding the common `.git` directory.
+  defp main_worktree(%{git_dir: same, common_dir: same, root: root}), do: {:ok, root}
+
+  defp main_worktree(%{common_dir: common}) do
+    if Path.basename(common) == ".git", do: {:ok, Path.dirname(common)}, else: :error
+  end
+
   @doc "Read-only inventory of existing, registered Lemon worktrees (at most 32)."
   def kept(cwd) do
     deadline = deadline(@command_timeout)
 
     with {:ok, repo} <- validate(cwd, true),
-         {:ok, listing} <-
-           git(cwd, ["worktree", "list", "--porcelain", "-z"], deadline) do
+         {:ok, safe} <- SafeGit.repository(cwd),
+         {:ok, listing} <- read(safe, ["worktree", "list", "--porcelain", "-z"], deadline) do
       listing
       |> String.split(<<0, 0>>, trim: true)
       |> Enum.take(256)
@@ -68,8 +94,8 @@ defmodule LemonOmp.Worktree do
       end)
       |> Enum.take(32)
       |> Enum.flat_map(fn worktree ->
-        case git(
-               cwd,
+        case read(
+               safe,
                ["reflog", "show", "--format=%H%x00%gs", "--max-count=1000", worktree.branch],
                deadline
              ) do
@@ -154,17 +180,17 @@ defmodule LemonOmp.Worktree do
   end
 
   defp dirty_count(worktree, deadline) do
-    if File.dir?(worktree.path) do
-      case git(
-             worktree.path,
-             ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-             deadline
+    with true <- File.dir?(worktree.path),
+         {:ok, safe} <- SafeGit.repository(worktree.path) do
+      case read(safe, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], deadline,
+             cd: worktree.path
            ) do
         {:ok, output} -> count_status(String.split(output, <<0>>, trim: true), 0)
         _ -> nil
       end
     else
-      0
+      false -> 0
+      _ -> nil
     end
   end
 
@@ -179,19 +205,17 @@ defmodule LemonOmp.Worktree do
   defp commit_count(%{base: nil}, _deadline), do: nil
 
   defp commit_count(worktree, deadline) do
-    case git(
-           worktree.repo,
-           ["rev-list", "--count", worktree.base <> ".." <> worktree.branch, "--"],
-           deadline
-         ) do
-      {:ok, count} ->
-        case Integer.parse(count) do
-          {count, ""} -> count
-          _ -> nil
-        end
-
-      _ ->
-        nil
+    with {:ok, safe} <- SafeGit.repository(worktree.repo),
+         {:ok, count} <-
+           read(
+             safe,
+             ["rev-list", "--count", worktree.base <> ".." <> worktree.branch, "--"],
+             deadline
+           ),
+         {count, ""} <- Integer.parse(count) do
+      count
+    else
+      _ -> nil
     end
   end
 
@@ -213,6 +237,17 @@ defmodule LemonOmp.Worktree do
       )
   end
 
+  # Reads through SafeGit, bounded by the caller's deadline.
+  defp read(safe, args, deadline, opts \\ []) do
+    timeout = max(deadline - System.monotonic_time(:millisecond), 1)
+
+    case SafeGit.run(safe, args, [timeout_ms: timeout, max_bytes: 4_000_000] ++ opts) do
+      {:ok, output, 0} -> {:ok, String.trim_trailing(output, "\n")}
+      _ -> {:error, :git_failed}
+    end
+  end
+
+  # Isolation writes: the operator-trusted executable, never one from PATH.
   defp git(cwd, args, deadline) do
     timeout = max(deadline - System.monotonic_time(:millisecond), 0)
     env = for {key, _} <- System.get_env(), String.starts_with?(key, "LEMON_"), do: {key, nil}
@@ -220,10 +255,14 @@ defmodule LemonOmp.Worktree do
     task =
       Task.async(fn ->
         try do
-          LemonCore.NativeProcess.cmd("git", ["-C", cwd | args],
-            stderr_to_stdout: true,
-            env: [{"GIT_TERMINAL_PROMPT", "0"} | env]
-          )
+          with {:ok, git} <- SafeGit.executable() do
+            LemonCore.NativeProcess.cmd(git, ["-C", cwd | args],
+              stderr_to_stdout: true,
+              env: [{"GIT_TERMINAL_PROMPT", "0"} | env]
+            )
+          else
+            _ -> {"", 1}
+          end
         rescue
           _ -> {"", 1}
         end

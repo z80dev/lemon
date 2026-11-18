@@ -113,68 +113,58 @@ defmodule LemonHoncho.SessionNameTest do
     end
   end
 
-  describe "per_repo native-process provenance" do
+  describe "per_repo repository lookup" do
     @describetag :tmp_dir
 
     setup %{tmp_dir: tmp_dir} do
-      original_ledger = Application.fetch_env(:lemon_core, :native_process_ledger)
       original_path = System.get_env("PATH")
       bin = Path.join(tmp_dir, "bin")
-      cwd = Path.join(tmp_dir, "fallback-directory")
       File.mkdir_p!(bin)
-      File.mkdir_p!(cwd)
-
+      marker = Path.join(tmp_dir, "git-ran")
       git = Path.join(bin, "git")
-
-      File.write!(git, """
-      #!/bin/sh
-      printf '%s\\n' "$@" > git-ran
-      printf '/repo/provenance-root\\n'
-      """)
-
+      File.write!(git, "#!/bin/sh\n: > '#{marker}'\nprintf '/elsewhere\\n'\n")
       File.chmod!(git, 0o755)
       System.put_env("PATH", bin <> ":" <> (original_path || ""))
 
       on_exit(fn ->
-        if pid = Process.whereis(LemonCore.NativeProcess), do: GenServer.stop(pid)
-
-        if :dets.info(:lemon_native_processes_dets) != :undefined,
-          do: :dets.close(:lemon_native_processes_dets)
-
-        case original_ledger do
-          {:ok, value} -> Application.put_env(:lemon_core, :native_process_ledger, value)
-          :error -> Application.delete_env(:lemon_core, :native_process_ledger)
-        end
-
         if original_path,
           do: System.put_env("PATH", original_path),
           else: System.delete_env("PATH")
       end)
 
-      %{cwd: cwd, ledger: Path.join(tmp_dir, "native-processes.dets")}
+      %{marker: marker}
     end
 
-    test "records the git lookup before returning the repository name", context do
-      :ok = LemonCore.NativeProcess.configure!(context.ledger)
+    # A repository's configuration (core.fsmonitor, a .git redirect) must not
+    # run programs when a turn merely names its Honcho session.
+    test "reads the repository root from the filesystem and runs no Git", %{
+      tmp_dir: tmp_dir,
+      marker: marker
+    } do
+      repo = Path.join(tmp_dir, "checkout")
+      nested = Path.join(repo, "apps/deep")
+      File.mkdir_p!(nested)
+      File.mkdir_p!(Path.join(repo, ".git/objects"))
+      File.mkdir_p!(Path.join(repo, ".git/refs"))
+      File.write!(Path.join(repo, ".git/HEAD"), "ref: refs/heads/main\n")
       config = %Config{session_strategy: :per_repo}
 
-      assert label!(SessionName.resolve(config, cwd: context.cwd)) == "provenance-root"
-      assert File.read!(Path.join(context.cwd, "git-ran")) == "rev-parse\n--show-toplevel\n"
-
-      assert [{_id, %{backend: :local, workload_identity: identity}, %{}}] =
-               LemonCore.NativeProcess.snapshot()
-
-      assert LemonCore.ProcessGroup.valid_identity?(identity)
+      assert label!(SessionName.resolve(config, cwd: nested)) == "checkout"
+      refute File.exists?(marker)
     end
 
-    test "an unavailable ledger prevents git execution but allows directory fallback", context do
-      Application.put_env(:lemon_core, :native_process_ledger, context.ledger)
-      refute Process.whereis(LemonCore.NativeProcess)
+    test "an empty .git marker is not a repository", %{marker: marker} do
+      # Outside this checkout, so no enclosing repository is found either.
+      cwd =
+        Path.join(System.tmp_dir!(), "lemon-honcho-plain-#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(cwd)
+      on_exit(fn -> File.rm_rf(cwd) end)
+      File.write!(Path.join(cwd, ".git"), "")
       config = %Config{session_strategy: :per_repo}
 
-      assert label!(SessionName.resolve(config, cwd: context.cwd)) == "fallback-directory"
-      refute File.exists?(Path.join(context.cwd, "git-ran"))
-      refute File.exists?(context.ledger)
+      assert label!(SessionName.resolve(config, cwd: cwd)) == Path.basename(cwd)
+      refute File.exists?(marker)
     end
   end
 

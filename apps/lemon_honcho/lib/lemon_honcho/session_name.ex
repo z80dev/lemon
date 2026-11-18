@@ -14,7 +14,10 @@ defmodule LemonHoncho.SessionName do
     * `:per_session` — the Lemon session id (or, without one, the session key).
     * `:per_directory` — the full, expanded working directory (the default).
     * `:per_repo` — the full path of the git repository root, so the
-      subdirectories of one checkout share memory.
+      subdirectories of one checkout share memory. The root is found with file
+      reads (`LemonCore.SafeGit.repository/1`), never by running Git in the
+      working directory; a repository failing its ownership checks counts as
+      no repository.
     * `:global` — the Honcho workspace.
 
   Every strategy is then partitioned by *who* the run is:
@@ -50,7 +53,7 @@ defmodule LemonHoncho.SessionName do
 
   @max_length 100
   @digest_hex 32
-  @git_timeout_ms 5_000
+  @repo_lookup_timeout_ms 5_000
   @last_resort "honcho"
 
   @doc """
@@ -154,46 +157,26 @@ defmodule LemonHoncho.SessionName do
     end
   end
 
-  # `git` is shelled out to rather than parsed out of `.git`, because worktrees
-  # and submodules make the on-disk layout a poor proxy for "which repository
-  # is this". It is also the one call here that can hang — a network-backed
-  # filesystem, a credential prompt — so it runs in a task with a deadline and
-  # the caller degrades to the directory instead of blocking a turn.
+  # The lookup reads the filesystem only, but a network-backed filesystem can
+  # still hang, so it runs in a task with a deadline and the caller degrades to
+  # the directory instead of blocking a turn.
   defp repo_root(cwd) do
-    task = Task.async(fn -> git_toplevel(cwd) end)
+    task = Task.async(fn -> repository_root(cwd) end)
 
-    case Task.yield(task, @git_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+    case Task.yield(task, @repo_lookup_timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, root} ->
         root
 
       other ->
-        Logger.debug("honcho: git repo lookup did not complete: #{inspect(other)}")
+        Logger.debug("honcho: repository lookup did not complete: #{inspect(other)}")
         nil
     end
   end
 
-  defp git_toplevel(cwd) do
-    case LemonCore.NativeProcess.cmd("git", ["rev-parse", "--show-toplevel"],
-           cd: cwd,
-           stderr_to_stdout: true
-         ) do
-      {output, 0} -> toplevel(output)
-      {_output, _status} -> nil
-    end
-  rescue
-    error ->
-      Logger.debug("honcho: git repo lookup failed: #{inspect(error)}")
-      nil
-  catch
-    :exit, reason ->
-      Logger.debug("honcho: git repo lookup exited: #{inspect(reason)}")
-      nil
-  end
-
-  defp toplevel(output) do
-    case String.trim(output) do
-      "" -> nil
-      path -> path
+  defp repository_root(cwd) do
+    case LemonCore.SafeGit.repository(cwd) do
+      {:ok, %{root: root}} -> root
+      _ -> nil
     end
   end
 end

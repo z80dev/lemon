@@ -47,6 +47,11 @@ root, `..` traversal, symlinks at any selected component, special files, and
 symlinked folder entries are rejected or recorded as omissions. Folder walks
 never follow symlinks.
 
+`@git-diff` runs Git through `LemonCore.SafeGit`: the repository must be owned
+by the user running Lemon, and its configuration cannot make the diff run a
+program (external diff and textconv drivers, filters, fsmonitor and hooks are
+disabled; submodule checkouts are not inspected).
+
 ## Budget and output contract
 
 Every response is version `1` and contains:

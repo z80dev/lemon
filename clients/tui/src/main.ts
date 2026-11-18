@@ -292,6 +292,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 			notifications: config?.tui?.notifications,
 			vimMode: resolveVimMode(config?.tui?.vim_mode),
 			keybindings: config?.tui?.keys,
+			gitPath: config?.runtime?.git_path,
 			onExit: (code) => resolve(code),
 		});
 		const shutdown = () => {

@@ -14,11 +14,18 @@ defmodule CodingAgent.SystemPrompt.Environment do
   failures are distinct from a confirmed non-repository. Truncation and read
   failures are explicit, never an assertion that discovery was exhaustive.
 
+  The repository is located with file reads and every Git command runs through
+  `LemonCore.SafeGit`, so a repository's configuration, attributes or a `.git`
+  redirect cannot make this context run a program. A repository failing
+  SafeGit's ownership checks is reported unavailable and its work tree is
+  traversed without Git.
+
   `turn_section/2` supplies the current date and Git status with ContextRegistry's
   `:user_message` placement, never in the cached system prefix.
   """
 
   alias CodingAgent.ResourceLoader
+  alias LemonCore.SafeGit
 
   @git_timeout_ms 2_000
   @max_git_bytes 262_144
@@ -43,7 +50,8 @@ defmodule CodingAgent.SystemPrompt.Environment do
 
     * `:date` - used only by `turn_section/2` (default: today, UTC)
     * `:shell` - shell used by the bash tool (default: its configured shell)
-    * `:git_executable` - Git executable path (default: resolve `git` on PATH);
+    * `:git_executable` - Git executable path (default: `LemonCore.SafeGit.executable/0`,
+      the operator-configured or fixed system `git`, never one found on `PATH`);
       explicit `nil` reports Git unavailable and uses filesystem discovery
     * `:git_timeout_ms` - deadline per Git command (default: 2,000 milliseconds)
     * `:filesystem_probe` - executes a zero-arity filesystem scan and returns
@@ -58,7 +66,7 @@ defmodule CodingAgent.SystemPrompt.Environment do
   def capture(cwd, opts \\ []) when is_binary(cwd) do
     cwd = Path.expand(cwd)
     shell = Keyword.get(opts, :shell) || default_shell()
-    git = Keyword.get_lazy(opts, :git_executable, fn -> System.find_executable("git") end)
+    git = Keyword.get_lazy(opts, :git_executable, &default_git/0)
     timeout = Keyword.get(opts, :git_timeout_ms, @git_timeout_ms)
     filesystem_probe = Keyword.get(opts, :filesystem_probe, &bounded_filesystem_probe/1)
     {git_lines, root, snapshot} = repository_snapshot(cwd, git, timeout, filesystem_probe)
@@ -78,22 +86,15 @@ defmodule CodingAgent.SystemPrompt.Environment do
   def turn_section(cwd, opts \\ []) do
     cwd = Path.expand(cwd)
     date = Keyword.get(opts, :date) || Date.utc_today()
-    git = Keyword.get_lazy(opts, :git_executable, fn -> System.find_executable("git") end)
+    git = Keyword.get_lazy(opts, :git_executable, &default_git/0)
     timeout = Keyword.get(opts, :git_timeout_ms, @git_timeout_ms)
 
     lines =
       if git do
-        case git_command(git, cwd, ["rev-parse", "--show-toplevel"], timeout) do
-          {:ok, root, 0} ->
-            repository_lines(cwd, String.trim(root), git, timeout)
-
-          {:ok, output, _} ->
-            if String.contains?(output, "not a git repository"),
-              do: ["Git repository: no"],
-              else: ["Git repository: unavailable"]
-
-          _ ->
-            ["Git repository: unavailable"]
+        case SafeGit.repository(cwd) do
+          {:ok, repo} -> repository_lines(repo, git, timeout)
+          :not_repository -> ["Git repository: no"]
+          {:error, reason} -> ["Git repository: unavailable (#{reason})"]
         end
       else
         ["Git repository: unavailable (Git executable not found)"]
@@ -105,6 +106,13 @@ defmodule CodingAgent.SystemPrompt.Environment do
       body: Enum.join(["Today's date: #{Date.to_iso8601(date)}" | lines], "\n"),
       placement: :user_message
     }
+  end
+
+  defp default_git do
+    case SafeGit.executable() do
+      {:ok, git} -> git
+      {:error, _} -> nil
+    end
   end
 
   defp default_shell do
@@ -128,25 +136,12 @@ defmodule CodingAgent.SystemPrompt.Environment do
   end
 
   defp repository_snapshot(cwd, git, timeout, probe) do
-    case git_command(git, cwd, ["rev-parse", "--show-toplevel"], timeout) do
-      {:ok, output, 0} ->
-        root = String.trim(output)
+    case SafeGit.repository(cwd) do
+      {:ok, repo} ->
+        {["Git worktree root: #{repo.root}"], repo.root, git_snapshot(repo, git, timeout)}
 
-        if root != "" and File.dir?(root) do
-          {["Git worktree root: #{root}"], root, git_snapshot(root, git, timeout)}
-        else
-          unavailable_snapshot(cwd, :invalid_root, probe)
-        end
-
-      {:ok, output, _status} ->
-        if String.contains?(output, "not a git repository") do
-          {["Git repository: no"], cwd, filesystem_snapshot(cwd, "non-Git traversal", probe)}
-        else
-          unavailable_snapshot(cwd, :command_failed, probe)
-        end
-
-      {:truncated, _output, :unknown} ->
-        unavailable_snapshot(cwd, :output_limit, probe)
+      :not_repository ->
+        {["Git repository: no"], cwd, filesystem_snapshot(cwd, "non-Git traversal", probe)}
 
       {:error, reason} ->
         unavailable_snapshot(cwd, reason, probe)
@@ -158,10 +153,10 @@ defmodule CodingAgent.SystemPrompt.Environment do
      filesystem_snapshot(cwd, "Git ignore rules unavailable", probe)}
   end
 
-  defp repository_lines(cwd, root, git, timeout) do
-    root_line = "Git worktree root: #{root}"
+  defp repository_lines(repo, git, timeout) do
+    root_line = "Git worktree root: #{repo.root}"
 
-    case git_command(git, cwd, ["status", "--porcelain=v1", "--branch"], timeout) do
+    case git_command(repo, git, ["status", "--porcelain=v1", "--branch"], timeout) do
       {result, output, status}
       when (result == :ok and status == 0) or result == :truncated ->
         case complete_lines(output, result, "\n") do
@@ -189,10 +184,10 @@ defmodule CodingAgent.SystemPrompt.Environment do
       more
   end
 
-  defp git_snapshot(root, git, timeout) do
+  defp git_snapshot(repo, git, timeout) do
     case git_command(
+           repo,
            git,
-           root,
            ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
            timeout
          ) do
@@ -204,7 +199,7 @@ defmodule CodingAgent.SystemPrompt.Environment do
         guides =
           Enum.filter(paths, fn path ->
             Path.dirname(path) != "." and ResourceLoader.instruction_guide?(path) and
-              regular_file?(Path.join(root, path))
+              regular_file?(Path.join(repo.root, path))
           end)
 
         entries =
@@ -224,16 +219,19 @@ defmodule CodingAgent.SystemPrompt.Environment do
           unavailable: false
         }
 
-      _ ->
+      failure ->
         %{
           guides: [],
           entries: [],
           truncated: false,
-          source: "Git discovery unavailable",
+          source: "Git discovery unavailable" <> failure_reason(failure),
           unavailable: true
         }
     end
   end
+
+  defp failure_reason({:error, reason}), do: " (#{reason})"
+  defp failure_reason({:ok, _output, status}), do: " (exit status #{status})"
 
   defp complete_lines(output, result, separator) do
     parts = String.split(output, separator)
@@ -360,51 +358,8 @@ defmodule CodingAgent.SystemPrompt.Environment do
   defp truncation_lines(true, false, label), do: ["... #{label} truncated"]
   defp truncation_lines(false, false, _label), do: []
 
-  # Use a port rather than System.cmd/3 so output is bounded while it is read,
-  # and close the command on timeout or output overflow instead of retaining an
-  # unbounded ls-files/status result. No shell is involved.
-  defp git_command(git, cwd, args, timeout) do
-    port =
-      LemonCore.NativeProcess.open({:spawn_executable, String.to_charlist(git)}, [
-        :binary,
-        :exit_status,
-        :use_stdio,
-        :stderr_to_stdout,
-        args: Enum.map(["-C", cwd | args], &String.to_charlist/1),
-        env: [{~c"GIT_OPTIONAL_LOCKS", ~c"0"}, {~c"LC_ALL", ~c"C"}]
-      ])
-
-    deadline = System.monotonic_time(:millisecond) + timeout
-    collect_git(port, deadline, [], 0)
-  rescue
-    _ -> {:error, :command_unavailable}
-  end
-
-  defp collect_git(port, deadline, chunks, size) do
-    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
-
-    receive do
-      {^port, {:data, data}} ->
-        if size + byte_size(data) > @max_git_bytes do
-          part = binary_part(data, 0, @max_git_bytes - size)
-          close_port(port)
-          {:truncated, IO.iodata_to_binary(Enum.reverse([part | chunks])), :unknown}
-        else
-          collect_git(port, deadline, [data | chunks], size + byte_size(data))
-        end
-
-      {^port, {:exit_status, status}} ->
-        {:ok, IO.iodata_to_binary(Enum.reverse(chunks)), status}
-    after
-      remaining ->
-        close_port(port)
-        {:error, :timeout}
-    end
-  end
-
-  defp close_port(port) do
-    Port.close(port)
-  rescue
-    ArgumentError -> :ok
-  end
+  # SafeGit bounds output while it is read and kills the command on timeout or
+  # output overflow instead of retaining an unbounded ls-files/status result.
+  defp git_command(repo, git, args, timeout),
+    do: SafeGit.run(repo, args, git: git, timeout_ms: timeout, max_bytes: @max_git_bytes)
 end

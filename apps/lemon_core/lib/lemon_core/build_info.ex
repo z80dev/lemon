@@ -70,13 +70,19 @@ defmodule LemonCore.BuildInfo do
         describe: nil
       }
     else
+      repo =
+        case LemonCore.SafeGit.repository(cwd) do
+          {:ok, repo} -> repo
+          _ -> nil
+        end
+
       %{
         commit:
-          first_env(@env_commit_keys) || git_value(cwd, ["rev-parse", "--short=12", "HEAD"]),
+          first_env(@env_commit_keys) || git_value(repo, ["rev-parse", "--short=12", "HEAD"]),
         branch:
-          first_env(@env_branch_keys) || git_value(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]),
-        dirty?: git_dirty?(cwd),
-        describe: git_value(cwd, ["describe", "--tags", "--always", "--dirty"])
+          first_env(@env_branch_keys) || git_value(repo, ["rev-parse", "--abbrev-ref", "HEAD"]),
+        dirty?: git_dirty?(repo, ["status", "--porcelain"]),
+        describe: describe(repo)
       }
     end
   end
@@ -85,26 +91,37 @@ defmodule LemonCore.BuildInfo do
     Enum.find_value(keys, &blank_to_nil(System.get_env(&1)))
   end
 
-  defp git_value(cwd, args) do
-    with git when is_binary(git) <- System.find_executable("git"),
-         {value, 0} <- System.cmd(git, args, cd: cwd, stderr_to_stdout: true) do
-      blank_to_nil(String.trim(value))
-    else
-      _ -> nil
+  # The checkout is read through LemonCore.SafeGit (support bundles inspect a
+  # project directory). `describe --dirty` would inspect submodule checkouts,
+  # so the suffix is added here from a tracked-files status instead.
+  defp describe(repo) do
+    case git_value(repo, ["describe", "--tags", "--always"]) do
+      nil ->
+        nil
+
+      describe ->
+        if git_dirty?(repo, ["status", "--porcelain", "--untracked-files=no"]),
+          do: describe <> "-dirty",
+          else: describe
     end
-  rescue
-    _ -> nil
   end
 
-  defp git_dirty?(cwd) do
-    with git when is_binary(git) <- System.find_executable("git"),
-         {value, 0} <- System.cmd(git, ["status", "--porcelain"], cd: cwd, stderr_to_stdout: true) do
-      String.trim(value) != ""
-    else
+  defp git_value(nil, _args), do: nil
+
+  defp git_value(repo, args) do
+    case LemonCore.SafeGit.run(repo, args) do
+      {:ok, value, 0} -> blank_to_nil(value)
       _ -> nil
     end
-  rescue
-    _ -> nil
+  end
+
+  defp git_dirty?(nil, _args), do: nil
+
+  defp git_dirty?(repo, args) do
+    case LemonCore.SafeGit.run(repo, args) do
+      {:ok, value, 0} -> String.trim(value) != ""
+      _ -> nil
+    end
   end
 
   defp blank_to_nil(nil), do: nil

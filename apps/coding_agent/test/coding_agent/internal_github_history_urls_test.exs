@@ -18,12 +18,18 @@ defmodule CodingAgent.InternalGitHubHistoryUrlsTest do
       "user" => %{"login" => "author"}
     }
 
-  test "uses authenticated gh and resolves SSH origin without public HTTP", %{tmp_dir: cwd} do
-    cmd = fn
-      "git", ["remote", "get-url", "origin"], options ->
-        assert options[:cd] == cwd
-        {"git@github.com:owner/project.git\n", 0}
+  # The origin is read from a real repository through LemonCore.SafeGit, never
+  # through the injectable command runner.
+  defp repo_with_origin!(cwd, origin) do
+    {_, 0} = System.cmd("git", ["init", "-q", cwd])
+    if origin, do: {_, 0} = System.cmd("git", ["-C", cwd, "remote", "add", "origin", origin])
+    cwd
+  end
 
+  test "uses authenticated gh and resolves SSH origin without public HTTP", %{tmp_dir: cwd} do
+    repo_with_origin!(cwd, "git@github.com:owner/project.git")
+
+    cmd = fn
       "gh-test", ["api", "--hostname", "github.com", "repos/owner/project/issues/42"], _ ->
         {Jason.encode!(issue()), 0}
 
@@ -194,10 +200,42 @@ defmodule CodingAgent.InternalGitHubHistoryUrlsTest do
     refute body =~ "never expose"
   end
 
-  test "rejects missing and non-GitHub origins", %{tmp_dir: cwd} do
-    for remote <- [{"", 1}, {"https://example.org/a/b.git", 0}] do
-      assert {:error, _} = read("issue://42", cwd, github_command_fn: fn _, _, _ -> remote end)
+  test "rejects missing and non-GitHub origins", %{tmp_dir: tmp_dir} do
+    for {name, origin} <- [{"none", nil}, {"other", "https://example.org/a/b.git"}] do
+      cwd = repo_with_origin!(Path.join(tmp_dir, name), origin)
+
+      assert {:error, _} =
+               read("issue://42", cwd,
+                 github_command_fn: fn _, _, _ -> flunk("unexpected command") end
+               )
     end
+  end
+
+  test "a repository's configuration runs no program while resolving its origin", %{
+    tmp_dir: cwd
+  } do
+    repo_with_origin!(cwd, "https://github.com/owner/project.git")
+    marker = Path.join(cwd, "fsmonitor-ran")
+    hook = Path.join(cwd, "hook")
+    File.write!(hook, "#!/bin/sh\n: > '#{marker}'\nexit 1\n")
+    File.chmod!(hook, 0o755)
+    {_, 0} = System.cmd("git", ["-C", cwd, "config", "core.fsmonitor", hook])
+
+    result =
+      read("issue://42", cwd,
+        github_gh: "gh-test",
+        github_command_fn: fn
+          "gh-test", ["api", "--hostname", "github.com", "repos/owner/project/issues/42"], _ ->
+            {Jason.encode!(issue()), 0}
+
+          "gh-test", _, _ ->
+            {"[]", 0}
+        end,
+        github_http_fn: fn _ -> flunk("unexpected HTTP") end
+      )
+
+    assert text(result) =~ "Example (#42)"
+    refute File.exists?(marker)
   end
 
   test "history exposes only owned visible updates and result", %{tmp_dir: cwd} do

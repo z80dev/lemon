@@ -414,6 +414,55 @@ makes provenance explicit; it does not make the model immune. Treat any action
 an agent takes *because of* external content as untrusted until an approval gate
 or a human confirms it.
 
+### Repositories Lemon reads on its own
+
+A repository's configuration and attributes are untrusted content too: a
+working directory may be an unpacked archive, a shared checkout or a tree an
+agent wrote into, and `core.fsmonitor`, hooks, filter, textconv and external
+diff drivers, signature display with a chosen `gpg.program`, or a `.git` file
+redirect would otherwise make an ordinary `git status` run their programs, and
+a workspace `bin/` on `PATH` would substitute `git` itself. Every Git command
+Lemon starts without an explicit request (session-start and per-turn
+environment context, ignore filtering for `find`/`grep`, the `issue://` origin
+lookup, `@git-diff`, `sessions.changes`, omp session discovery and worktree
+cleanup checks, support-bundle build info and the source version) runs through
+`LemonCore.SafeGit`:
+
+- `git` is `[runtime] git_path` from the global configuration (a project file
+  cannot set it) or the first `git` in `/usr/bin`, `/usr/local/bin`,
+  `/opt/homebrew/bin`, `/bin`; the inherited `PATH` is never searched, an
+  executable inside the repository is refused, Git older than 2.31 is refused,
+  and the child's `PATH` is that fixed list;
+- the repository is located with file reads under a deadline; metadata files
+  (`.git` files, `commondir`, `HEAD`) must be regular and are read by a killable
+  child, so a FIFO or device cannot block discovery. The work tree, `.git`, Git
+  directory, common directory and `config` must be owned by the Lemon user;
+- Git never reads the live repository configuration: `GIT_DIR` is a private,
+  freshly created directory with a Lemon-written `config` (format, a few
+  comparison settings, the excludes file and remote/upstream data, read with
+  `git config --file … --no-includes`), a copy of `HEAD` and links to the
+  validated common directory's stores, with `GIT_INDEX_FILE` and
+  `GIT_WORK_TREE` fixed. Attributes (including `info/attributes`, which
+  `--attr-source` does not disable) can name drivers, but none is defined, and
+  an include or `commondir` replaced after validation is never consulted;
+- Git runs without a shell, with no system or global configuration
+  (`safe.directory` exceptions are never honoured), no transports and no lazy
+  fetches; fsmonitor, hooks, pagers, editors, askpass, SSH/proxy commands,
+  external diff, credential helpers, signature display and signing programs,
+  maintenance and submodule recursion are disabled on the command line;
+- only a fixed set of read-only subcommands runs, each with a deadline and an
+  output cap, and the process is killed on either.
+
+The Honcho `per_repo` session name reads the repository root without running
+Git. The terminal client's status-line branch read uses the same executable
+rule, environment, private Git directory and settings, relying on Git's own
+ownership check for discovery plus an ownership check of the result. Git
+commands an agent runs through its tools, the writes of explicit worktree
+isolation (`task`, `omp`; both use the operator-trusted executable), skill
+installation and Kanban's controller repositories
+(`LemonAutomation.KanbanGitSandbox`) are not automatic reads and keep their own
+policies.
+
 ## 6. The boundary guarantee (blast radius)
 
 Lemon's package graph is enforced, not merely documented. The architecture

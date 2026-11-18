@@ -159,6 +159,8 @@ defmodule LemonCore.Config.ProjectTrustTest do
      &__MODULE__.perplexity_base/1, nil, "runtime.tools.web.search.perplexity.base_url"},
     {"shell path", ~s([runtime.shell]\npath = "./evil-shell"\n), "", &__MODULE__.shell/1, nil,
      "runtime.shell.path"},
+    {"git path", ~s([runtime]\ngit_path = "/tmp/evil/git"\n), "", &__MODULE__.git_path/1, nil,
+     "runtime.git_path"},
     {"log file", ~s([logging]\nfile = "./captured.log"\n), "", &__MODULE__.log_file/1, nil,
      "logging.file"},
     {"credential pools",
@@ -390,6 +392,7 @@ defmodule LemonCore.Config.ProjectTrustTest do
   def firecrawl_base(config), do: config.tools.web.fetch.firecrawl.base_url
   def perplexity_base(config), do: config.tools.web.search.perplexity.base_url
   def shell(config), do: config.agent.shell.path
+  def git_path(config), do: config.agent.git_path
   def log_file(config), do: config.logging.file
   def pools(config), do: config.agent.provider_routing.credential_pools
   def gateway_cwd(config), do: config.gateway.default_cwd
