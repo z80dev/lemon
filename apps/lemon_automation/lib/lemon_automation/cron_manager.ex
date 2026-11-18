@@ -125,6 +125,7 @@ defmodule LemonAutomation.CronManager do
   @vsn 3
 
   alias LemonAutomation.{
+    CronAuthority,
     CronCommandRunner,
     CronDelivery,
     CronJob,
@@ -197,6 +198,9 @@ defmodule LemonAutomation.CronManager do
     / `"discord:<id>[:<thread>]"`
   - `:once` - One-shot job (default: false)
   - `:meta` - Additional metadata (`heartbeat: true` marks a heartbeat)
+  - `:authority` - Launcher authority of a prompt job created from an agent
+    session (`LemonAutomation.CronAuthority.from_session/2`); immutable after
+    creation except through `update_from_session/3`
   """
   @spec add(map()) :: {:ok, CronJob.t()} | {:error, term()}
   def add(params) do
@@ -217,12 +221,30 @@ defmodule LemonAutomation.CronManager do
   end
 
   @doc """
-  Update an existing cron job.
+  Update an existing cron job. `:authority` cannot be patched.
   """
   @spec update(binary(), map()) ::
           {:ok, CronJob.t()} | {:error, :not_found} | {:error, {:immutable_fields, [atom()]}}
   def update(job_id, params) do
     GenServer.call(__MODULE__, {:update, job_id, params}, @call_timeout_ms)
+  end
+
+  @doc """
+  Update a prompt job on behalf of the agent session principal
+  `session_opts[:session_key]`. Only a job that principal owns
+  (`CronAuthority.owned_by?/2`) is reachable; any other job, including every
+  operator and command job, is `{:error, :not_found}`. The job's launcher
+  authority is atomically intersected with the session's effective tool policy
+  (`:tool_policy`, `:execution_context`), so the job never runs with more
+  authority than the session that rewrote it.
+  """
+  @spec update_from_session(binary(), map(), keyword()) :: {:ok, CronJob.t()} | {:error, term()}
+  def update_from_session(job_id, params, session_opts) when is_list(session_opts) do
+    GenServer.call(
+      __MODULE__,
+      {:update_from_session, job_id, params, session_opts},
+      @call_timeout_ms
+    )
   end
 
   @doc "Update only the exact job revision inspected by an operator."
@@ -274,6 +296,19 @@ defmodule LemonAutomation.CronManager do
   @doc "Run only the exact job revision inspected by an operator."
   def run_now(job_id, expected_revision) do
     GenServer.call(__MODULE__, {:run_now, job_id, expected_revision}, @call_timeout_ms)
+  end
+
+  @doc """
+  Trigger a job on behalf of the agent session principal
+  `session_opts[:session_key]`. Only a job that principal owns is reachable
+  (others are `{:error, :not_found}`), and the run also executes within the
+  triggering session's effective tool policy (`:tool_policy`,
+  `:execution_context`), recorded as the run's `meta.trigger_policy`.
+  """
+  @spec run_now_from_session(binary(), keyword()) ::
+          {:ok, CronRun.t()} | {:error, :not_found | :outcome_unknown}
+  def run_now_from_session(job_id, session_opts) when is_list(session_opts) do
+    GenServer.call(__MODULE__, {:run_now_from_session, job_id, session_opts}, @call_timeout_ms)
   end
 
   @doc false
@@ -562,53 +597,11 @@ defmodule LemonAutomation.CronManager do
   end
 
   @impl true
-  def handle_call({:update, job_id, params}, _from, state) do
-    case Map.fetch(state.jobs, job_id) do
-      {:ok, job} ->
-        case immutable_patch_fields(params) do
-          [] ->
-            case prepare_update_patch(job, params) do
-              {:ok, params} ->
-                updated = job |> CronJob.update(params) |> recapture_on_unpin(job)
+  def handle_call({:update, job_id, params}, _from, state),
+    do: update_job(job_id, params, nil, state)
 
-                # Both schedule and timezone determine the next wall-clock slot.
-                updated =
-                  if has_any_key?(params, [:schedule, "schedule", :timezone, "timezone"]) do
-                    next_run = next_run(updated, state)
-                    CronJob.set_next_run(updated, next_run)
-                  else
-                    updated
-                  end
-
-                CronStore.put_job(updated)
-
-                CronStore.record_audit(cron_update_action(job, updated, params), %{
-                  job_id: updated.id,
-                  source: :cron_manager,
-                  status: if(updated.enabled, do: :enabled, else: :disabled),
-                  changed_fields: mutable_patch_fields(params)
-                })
-
-                Events.emit_job_updated(updated)
-
-                Logger.info("[CronManager] Updated job: #{job_id}")
-                {:reply, {:ok, updated}, schedule_next_run(put_in(state.jobs[job_id], updated))}
-
-              {:error, reason} ->
-                {:reply, {:error, {:invalid_schedule, reason}}, state}
-
-              {:invalid_target, reason} ->
-                {:reply, {:error, {:invalid_target, reason}}, state}
-            end
-
-          fields ->
-            {:reply, {:error, {:immutable_fields, fields}}, state}
-        end
-
-      :error ->
-        {:reply, {:error, :not_found}, state}
-    end
-  end
+  def handle_call({:update_from_session, job_id, params, session_opts}, _from, state),
+    do: update_job(job_id, params, session_opts, state)
 
   @impl true
   def handle_call({:refresh_captured_model, job_id}, _from, state) do
@@ -677,22 +670,17 @@ defmodule LemonAutomation.CronManager do
   @impl true
   def handle_call({:run_now, job_id}, _from, state) do
     case Map.fetch(state.jobs, job_id) do
-      {:ok, job} ->
-        CronStore.record_audit(:manual_run_requested, %{
-          job_id: job.id,
-          source: :cron_manager,
-          triggered_by: :manual
-        })
+      {:ok, job} -> run_now_job(job, [], state)
+      :error -> {:reply, {:error, :not_found}, state}
+    end
+  end
 
-        if unknown_run_locked?(job) do
-          {:reply, {:error, :outcome_unknown}, state}
-        else
-          {run, state} = execute_job(job, :manual, [], state)
-          {:reply, {:ok, run}, state}
-        end
-
-      :error ->
-        {:reply, {:error, :not_found}, state}
+  def handle_call({:run_now_from_session, job_id, session_opts}, _from, state) do
+    with {:ok, job} <- Map.fetch(state.jobs, job_id),
+         true <- CronAuthority.owned_by?(job.authority, Keyword.get(session_opts, :session_key)) do
+      run_now_job(job, [trigger_policy: CronAuthority.trigger_policy(session_opts)], state)
+    else
+      _ -> {:reply, {:error, :not_found}, state}
     end
   end
 
@@ -1602,6 +1590,7 @@ defmodule LemonAutomation.CronManager do
             retry_attempt: retry_attempt,
             retry_root_id: retry_root_id
           })
+          |> maybe_put_retry_meta(:trigger_policy, Keyword.get(opts, :trigger_policy))
     }
 
     run = CronRun.start(run, router_run_id)
@@ -2401,6 +2390,91 @@ defmodule LemonAutomation.CronManager do
   defp present?(nil), do: false
   defp present?(_), do: true
 
+  defp run_now_job(job, opts, state) do
+    CronStore.record_audit(:manual_run_requested, %{
+      job_id: job.id,
+      source: :cron_manager,
+      triggered_by: :manual
+    })
+
+    if unknown_run_locked?(job) do
+      {:reply, {:error, :outcome_unknown}, state}
+    else
+      {run, state} = execute_job(job, :manual, opts, state)
+      {:reply, {:ok, run}, state}
+    end
+  end
+
+  # `session_opts` is nil for operator updates (authority unchanged) or the
+  # updating agent session's principal and tool options (owned jobs only;
+  # authority narrowed atomically). A job the session does not own is
+  # `:not_found` before any other validation, so nothing about it leaks.
+  defp update_job(job_id, params, session_opts, state) do
+    case Map.fetch(state.jobs, job_id) do
+      {:ok, job} ->
+        case {immutable_patch_fields(params), session_authority(job, session_opts)} do
+          {[], {:ok, authority}} ->
+            case prepare_update_patch(job, params) do
+              {:ok, params} ->
+                updated =
+                  %{CronJob.update(job, params) | authority: authority}
+                  |> recapture_on_unpin(job)
+
+                # Both schedule and timezone determine the next wall-clock slot.
+                updated =
+                  if has_any_key?(params, [:schedule, "schedule", :timezone, "timezone"]) do
+                    next_run = next_run(updated, state)
+                    CronJob.set_next_run(updated, next_run)
+                  else
+                    updated
+                  end
+
+                CronStore.put_job(updated)
+
+                CronStore.record_audit(cron_update_action(job, updated, params), %{
+                  job_id: updated.id,
+                  source: :cron_manager,
+                  status: if(updated.enabled, do: :enabled, else: :disabled),
+                  changed_fields: changed_fields(params, job.authority != authority)
+                })
+
+                Events.emit_job_updated(updated)
+
+                Logger.info("[CronManager] Updated job: #{job_id}")
+                {:reply, {:ok, updated}, schedule_next_run(put_in(state.jobs[job_id], updated))}
+
+              {:error, reason} ->
+                {:reply, {:error, {:invalid_schedule, reason}}, state}
+
+              {:invalid_target, reason} ->
+                {:reply, {:error, {:invalid_target, reason}}, state}
+            end
+
+          {_fields, {:error, reason}} ->
+            {:reply, {:error, reason}, state}
+
+          {fields, {:ok, _authority}} ->
+            {:reply, {:error, {:immutable_fields, fields}}, state}
+        end
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  defp session_authority(job, nil), do: {:ok, job.authority}
+
+  defp session_authority(job, session_opts) do
+    if CronAuthority.owned_by?(job.authority, Keyword.get(session_opts, :session_key)),
+      do: CronAuthority.restrict(job.authority, session_opts),
+      else: {:error, :not_found}
+  end
+
+  defp changed_fields(params, false), do: mutable_patch_fields(params)
+
+  defp changed_fields(params, true),
+    do: Enum.sort(Enum.uniq([:authority | mutable_patch_fields(params)]))
+
   defp prepare_update_patch(%CronJob{} = job, params) do
     with {:ok, params} <- validate_patch_target(job, params),
          {:ok, params} <-
@@ -2431,10 +2505,35 @@ defmodule LemonAutomation.CronManager do
     job_id = params[:id] || params["id"]
 
     with {:ok, params} <- validate_feature_fields(params, mode, job_id),
-         {:ok, params} <- validate_admission_field(params, mode, nil, nil) do
+         {:ok, params} <- validate_admission_field(params, mode, nil, nil),
+         {:ok, params} <- validate_authority_field(params, mode) do
       {:ok, params}
     else
       {:invalid_target, reason} -> {:error, {:invalid_target, reason}}
+    end
+  end
+
+  # Launcher authority bounds prompt jobs only. A malformed record is refused,
+  # never stored as an unrestricted job.
+  defp validate_authority_field(params, mode) do
+    case fetch_param(params, :authority) do
+      :error ->
+        {:ok, params}
+
+      {:ok, value} ->
+        case {CronAuthority.validate(value), mode} do
+          {{:ok, nil}, _mode} ->
+            {:ok, params}
+
+          {{:ok, authority}, :agent} ->
+            {:ok, params |> Map.delete("authority") |> Map.put(:authority, authority)}
+
+          {{:ok, _authority}, :command} ->
+            {:invalid_target, "Launcher authority requires a prompt job"}
+
+          {{:error, _reason}, _mode} ->
+            {:invalid_target, "Invalid launcher authority"}
+        end
     end
   end
 
@@ -2727,6 +2826,7 @@ defmodule LemonAutomation.CronManager do
       [:captured_default_model, "captured_default_model", "capturedDefaultModel"],
       params
     )
+    |> maybe_add_immutable(:authority, [:authority, "authority"], params)
   end
 
   defp immutable_patch_fields(_), do: []

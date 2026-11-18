@@ -65,7 +65,6 @@ defmodule LemonAutomation.CronJobTest do
       assert job.agent_id == "agent_mixed"
       assert job.session_key == "agent:agent_mixed:main"
       assert job.prompt == "ping"
-      assert job.memory_file == nil
       assert job.timezone == "America/New_York"
       assert job.jitter_sec == 9
       assert job.timeout_ms == 120_000

@@ -24,8 +24,26 @@ stores, not a second agent engine. See [README](README.md) and
 - `CronManager` owns scheduling and terminalization; `CronStore` owns durable
   jobs, runs and audits. Scheduled slots use deterministic IDs and atomic
   create-once claims so competing managers cannot execute one slot twice.
-- Prompt jobs run in isolated sub-sessions and block the `cron` tool to prevent
-  recursive scheduling. Preserve the base session for summary forwarding.
+- Prompt jobs run in isolated sub-sessions and block `cron`, `goal`, `kanban`,
+  `agent_message` and `peer` (`RunSubmitter`): recursive scheduling and work
+  that would not carry the run's authority. Unblock one only once it carries
+  cron authority. Preserve the base session for summary forwarding.
+- Prompt jobs never run with more authority than their launcher
+  (`CronAuthority`). Agent-session `add` records the session's principal
+  (owner) and effective tool policy on the job; agent-session `update`
+  intersects the policy atomically (`CronManager.update_from_session/3`).
+  Generic updates cannot set or clear `authority`. Every run also intersects,
+  for a channel peer base session, that chat's live channel policy, group
+  approval floor and session policy. A malformed record or unreadable layer
+  fails the run, never runs it unrestricted.
+- The `cron` tool reaches only jobs its session principal owns; operator and
+  other principals' jobs read as not found. The principal is exactly the
+  trusted session key, or `legacy:<sha256(id)>` for a non-canonical id; it is
+  never promoted to the agent's main session (only delivery falls back there).
+  Ownership is immutable, so the tool's check before a mutation stays valid.
+  `run` records the triggering session's policy on the run
+  (`meta.trigger_policy`). The global `pause_all`/`resume_all` hold is
+  operator-only and refused by the tool.
 - Command jobs are explicit operator-owned local shell work, not router runs.
   They deliver only to an explicit target. Do not silently turn a prompt job into
   a shell command or infer command delivery from the owner chat.
@@ -51,8 +69,13 @@ stores, not a second agent engine. See [README](README.md) and
 - Abort by cron run ID persists terminal state and ignores late completions.
 - `CronDelivery` handles explicit none/target, originating channel and owner
   fallback; notifications use a stable per-run idempotency key.
-- `CronMemory` is job-local markdown, bounded on injection and compacted as it
-  grows. Do not create a separate general-purpose memory service here.
+- `CronMemory` is job-local markdown at the Lemon-owned
+  `cron_memory/<job id>.md` (digest name for unsafe ids), bounded on injection
+  and compacted as it grows. No caller chooses the path. I/O goes through
+  `read_confined`/`replace_confined`: real directory, regular single-link file,
+  opened-handle inode check, re-`lstat` around each step, exclusive temporary
+  file plus rename (never in place). The directory-swap window is shared
+  finding NEW-6. Do not create a separate general-purpose memory service here.
 
 ## Heartbeats
 

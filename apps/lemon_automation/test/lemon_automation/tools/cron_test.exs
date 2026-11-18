@@ -177,31 +177,6 @@ defmodule LemonAutomation.Tools.CronTest do
     assert String.ends_with?(result.details["memoryFile"], "#{result.details["id"]}.md")
   end
 
-  test "add accepts memoryFile and list returns it" do
-    tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
-    memory_file = Path.join(System.tmp_dir!(), "cron_tool_memory_test.md")
-
-    add_result =
-      call_tool(tool, %{
-        "action" => "add",
-        "name" => "Memory job",
-        "schedule" => "*/15 * * * *",
-        "prompt" => "remember progress",
-        "memoryFile" => memory_file
-      })
-
-    assert add_result.details["memoryFile"] == Path.expand(memory_file)
-
-    list_result = call_tool(tool, %{"action" => "list"})
-
-    listed =
-      Enum.find(list_result.details["jobs"], fn job ->
-        job["id"] == add_result.details["id"]
-      end)
-
-    assert listed["memoryFile"] == Path.expand(memory_file)
-  end
-
   test "returns an error when required add fields are missing" do
     tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
 
@@ -231,13 +206,13 @@ defmodule LemonAutomation.Tools.CronTest do
     assert tool.parameters["required"] == ["action"]
   end
 
-  test "registered cron run persists intent and witness before command effects" do
+  test "operator cron command run persists intent and witness before command effects" do
     alias LemonCore.{NativeProcess, ProcessGroup}
 
     %{directory: directory, ledger: ledger} = native_ledger_context()
     assert :ok = NativeProcess.configure!(ledger)
     marker = Path.join(directory, "started")
-    {tool, job} = registered_command_job(directory)
+    job = operator_command_job(directory)
     test = self()
     capture_gate = :atomics.new(1, [])
 
@@ -270,7 +245,7 @@ defmodule LemonAutomation.Tools.CronTest do
       end
     end)
 
-    refute call_tool(tool, %{"action" => "run", "id" => job.id}).details[:error]
+    assert {:ok, _run} = LemonAutomation.CronManager.run_now(job.id)
     assert_receive {:cron_capture, server, caller, id, identity}, 5_000
 
     try do
@@ -307,13 +282,13 @@ defmodule LemonAutomation.Tools.CronTest do
     assert run.output == "cron-env"
   end
 
-  test "registered cron run has no command effects when its configured ledger is unavailable" do
+  test "operator cron command run has no command effects when its configured ledger is unavailable" do
     %{directory: directory, ledger: ledger} = native_ledger_context()
     Application.put_env(:lemon_core, :native_process_ledger, ledger)
     refute Process.whereis(LemonCore.NativeProcess)
-    {tool, job} = registered_command_job(directory)
+    job = operator_command_job(directory)
 
-    refute call_tool(tool, %{"action" => "run", "id" => job.id}).details[:error]
+    assert {:ok, _run} = LemonAutomation.CronManager.run_now(job.id)
     await_command_run(job.id, :failed)
     refute File.exists?(Path.join(directory, "started"))
     refute File.exists?(ledger)
@@ -652,12 +627,9 @@ defmodule LemonAutomation.Tools.CronTest do
     %{directory: directory, ledger: Path.join(directory, "processes.dets")}
   end
 
-  defp registered_command_job(directory) do
-    assert {:cron, module, :managed} =
-             Enum.find(LemonAgent.ToolRegistry.all(), &(elem(&1, 0) == :cron))
-
-    tool = module.tool(directory, session_key: LemonCore.SessionKey.main("default"))
-
+  # Command jobs are operator-owned: created and run through `CronManager`, never
+  # reachable from the agent `cron` tool.
+  defp operator_command_job(directory) do
     {:ok, job} =
       LemonAutomation.CronManager.add(%{
         name: "native command",
@@ -669,7 +641,9 @@ defmodule LemonAutomation.Tools.CronTest do
         timeout_ms: 5_000
       })
 
-    {tool, job}
+    tool = Cron.tool(directory, session_key: LemonCore.SessionKey.main("default"))
+    assert call_tool(tool, %{"action" => "run", "id" => job.id}).details[:message] =~ "not found"
+    job
   end
 
   defp persisted_native_rows(directory, ledger, id, suffix) do

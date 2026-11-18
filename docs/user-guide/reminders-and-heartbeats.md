@@ -109,9 +109,10 @@ lemon cron status          # prints "All cron jobs are PAUSED" while it is on
 lemon cron resume --all    # release them
 ```
 
-You can also ask the agent to pause or resume all cron jobs (the `cron` tool's
-`pause_all` and `resume_all` actions). Operators using the control plane send
-`cron.pause` or `cron.resume` with `{"all": true}` (admin scope).
+The global pause is operator-only: the agent's `cron` tool refuses
+`pause_all` and `resume_all`, because the hold affects every conversation's
+jobs. Operators using the control plane send `cron.pause` or `cron.resume` with
+`{"all": true}` (admin scope).
 
 - **The pause persists.** It is stored with the rest of cron state, so
   `lemon restart`, a crash, or a reboot does not lift it. While paused, a
@@ -225,7 +226,35 @@ uses its `cron` tool, which supports:
   `"discord:<channel_id>"`, or `"auto"` to restore the default).
 
 Jobs created from the TUI or browser are delivered to your paired owner chat.
-Ask the agent to list, pause, or remove its scheduled jobs the same way.
+Ask the agent to list, pause, or remove its scheduled jobs the same way. The
+agent only sees and controls jobs its own conversation scheduled; each
+conversation, including each older TUI session, is its own owner, and the main
+conversation does not inherit their jobs. Other conversations' jobs and jobs
+created with the CLI, control plane or blueprints are managed from those
+operator surfaces.
+
+Scheduled jobs never run with more authority than the conversation that set
+them up. A job the agent adds records that session's tool policy (its channel
+policy, group approval floor and session restrictions such as `no_external`),
+a later agent update narrows it to the updating session's policy, and a run the
+agent triggers also runs within the triggering session's policy. Every run
+of a job whose session is a Telegram or Discord chat (including `/remind`
+reminders) also gets that chat's current channel policy, group approval floor
+and session policy, so an approval-gated shell or file edit in a group still
+needs an approval when it runs from a schedule. Scheduled runs cannot start
+goals, kanban work, or messages to other sessions and A2A peers, because that
+work would not carry the run's restrictions. A job whose recorded authority or
+policy cannot be read fails instead of running unrestricted.
+
+Each job's cross-run memory is Lemon-managed:
+`~/.lemon/cron_memory/<job id>.md`. The agent cannot point a job at another
+file (`memoryFile` is refused), and a memory path stored by an older version is
+ignored; the job continues with a fresh file in that directory. A memory file
+that is a symlink or hard link, or a memory directory replaced by a symlink, is
+neither read nor written, and updates replace the file through a temporary file
+rather than writing in place. A process that can modify `~/.lemon` while a run
+is writing can still redirect that one write; treat the Lemon state directory
+as private.
 
 Pause, resume, run, remove, and update accept an `id`/`jobId`, or a `name` when
 no id is supplied. Names match exactly, ignoring case. Unknown or duplicate

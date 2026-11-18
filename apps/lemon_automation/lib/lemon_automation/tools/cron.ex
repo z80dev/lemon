@@ -3,9 +3,10 @@ defmodule LemonAutomation.Tools.Cron do
   LemonAgent tool for managing Lemon internal cron/scheduled jobs.
 
   Supports actions to list, add, update, pause, resume, abort, remove, and trigger cron
-  jobs, as well as viewing run history. `pause_all`/`resume_all` hold back every
-  job at once, durably; resuming skips the runs missed meanwhile. Delegates to
-  `LemonAutomation.CronManager` for persistence and scheduling.
+  jobs, as well as viewing run history. Delegates to
+  `LemonAutomation.CronManager` for persistence and scheduling. The global
+  `pause_all`/`resume_all` hold is operator-only (CLI, control plane) and is
+  refused here.
 
   Results are delivered to the originating Telegram/Discord chat or, for jobs
   created from any other session (TUI, web, CLI), to the paired owner chat.
@@ -18,40 +19,68 @@ defmodule LemonAutomation.Tools.Cron do
   `LemonAgent.ToolRegistry` once the cron scheduler is up, so the coding agent
   offers it to every session without the platform naming this app. Like any
   registered tool it goes through the session's tool policy and approval
-  wrapping. `tool/2` reads `:session_key` and `:agent_id` from the session's
-  tool options; calls return an error result, never raise, while
-  `LemonAutomation.CronManager` is not running.
+  wrapping. `tool/2` reads `:session_key`, `:agent_id`, `:tool_policy` and
+  `:execution_context` from the session's tool options; calls return an error
+  result, never raise, while `LemonAutomation.CronManager` is not running.
+
+  ## Ownership and launcher authority
+
+  `add` records the calling session's principal (exactly its trusted session
+  key; a collision-free `legacy:<sha256>` of the exact id for clients whose ids
+  are not canonical Lemon session keys, never the agent's main session) and
+  effective tool policy on the job (`LemonAutomation.CronAuthority`). Every
+  other action reaches only jobs that principal owns: other sessions' jobs and
+  operator-created jobs read as not found. `update` intersects the job's
+  recorded policy with the caller's, and `run` executes within the triggering
+  session's policy as well, so a job scheduled, rewritten or triggered from a
+  chat never runs with more authority than that chat: its channel policy,
+  group approval floor and session denials still apply at run time. A session
+  without an identity reaches nothing. Delivery routing for non-canonical ids
+  still falls back to the agent's main session; that never grants ownership.
+
+  A job's cross-run memory is the Lemon-managed file
+  `LemonAutomation.CronMemory.memory_file/1`; `memoryFile` is refused.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonAutomation.{CronJob, CronManager, CronMemory}
+  alias LemonAutomation.{CronAuthority, CronJob, CronManager, CronMemory, CronStore}
 
-  @actions ~w(status list add update pause resume pause_all resume_all abort remove run runs)
+  @actions ~w(status list add update pause resume abort remove run runs)
   @default_timeout_ms 300_000
   @default_limit 100
+  @memory_file_keys ~w(memoryFile memory_file)
+  @memory_file_refusal "memoryFile cannot be set: each job's cross-run memory is the " <>
+                         "Lemon-managed file cron_memory/<job id>.md in the Lemon state directory."
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
     session_key = normalize_string(Keyword.get(opts, :session_key))
     agent_id = normalize_string(Keyword.get(opts, :agent_id))
 
+    caller = %{
+      session_key: session_key,
+      agent_id: agent_id,
+      principal: principal(session_key),
+      authority_opts: Keyword.take(opts, [:tool_policy, :execution_context])
+    }
+
     %AgentTool{
       name: "cron",
       label: "Cron",
       description:
-        "Manage Lemon internal cron jobs: status, list, add, update, pause, resume, pause_all, resume_all, abort, remove, run, and runs. Prompt jobs run native coding sessions in cwd (defaults to the current repository). Pause disables future runs of one job; pause_all holds back every job until resume_all, survives restarts, and resume_all skips the runs missed meanwhile. Abort stops a specific active cron run. Add/update accepts 5-field cron, recurring shorthands like 'every 30m', and one-shots like 'in 30m' or '2027-01-15T09:00' in the job timezone. Lifecycle actions accept an id or an unambiguous case-insensitive exact name. Results reach the user's paired chat automatically; deliverTo='none' opts out of ordinary results, not rate-limited failure/recovery alerts.",
+        "Manage the Lemon cron jobs this conversation scheduled: status, list, add, update, pause, resume, abort, remove, run, and runs. Prompt jobs run native coding sessions in cwd (defaults to the current repository) with at most this conversation's tool authority. Pause disables future runs of one job. Abort stops a specific active cron run. Add/update accepts 5-field cron, recurring shorthands like 'every 30m', and one-shots like 'in 30m' or '2027-01-15T09:00' in the job timezone. Lifecycle actions accept an id or an unambiguous case-insensitive exact name. Each job keeps a Lemon-managed memory file. Results reach the user's paired chat automatically; deliverTo='none' opts out of ordinary results, not rate-limited failure/recovery alerts.",
       parameters: tool_schema(),
-      execute: &execute(&1, inherit_cwd(&2, cwd), &3, &4, session_key, agent_id)
+      execute: &execute(&1, inherit_cwd(&2, cwd), &3, &4, caller)
     }
   end
 
-  def execute(_tool_call_id, params, _signal, _on_update, session_key, default_agent_id)
-      when is_map(params) do
+  def execute(_tool_call_id, params, _signal, _on_update, caller) when is_map(params) do
     action = normalize_string(fetch_param(params, "action"))
 
     with :ok <- ensure_scheduler_started(),
-         {:ok, {title, payload}} <- dispatch(action, params, session_key, default_agent_id) do
+         :ok <- require_principal(caller),
+         {:ok, {title, payload}} <- dispatch(action, params, caller) do
       success_result(title, payload)
     else
       {:error, message} ->
@@ -59,9 +88,28 @@ defmodule LemonAutomation.Tools.Cron do
     end
   end
 
-  def execute(_tool_call_id, _params, _signal, _on_update, _session_key, _default_agent_id) do
+  def execute(_tool_call_id, _params, _signal, _on_update, _caller) do
     error_result("Invalid parameters (expected object).")
   end
+
+  # The principal that owns jobs this session adds and the only one whose jobs
+  # it reaches: exactly its trusted session key. A session id that is not a
+  # canonical Lemon session key (e.g. a legacy TUI `tui-<timestamp>`) owns a
+  # collision-free `legacy:<sha256>` principal of that exact id; it is never
+  # promoted to the agent's main session (only delivery falls back there, see
+  # `resolve_session_key/3`). A session without any identity reaches nothing.
+  defp principal(nil), do: nil
+
+  defp principal(session_key) do
+    if valid_session_key?(session_key),
+      do: session_key,
+      else: "legacy:" <> Base.encode16(:crypto.hash(:sha256, session_key), case: :lower)
+  end
+
+  defp session_opts(caller), do: [session_key: caller.principal] ++ caller.authority_opts
+
+  defp require_principal(%{principal: principal}) when is_binary(principal), do: :ok
+  defp require_principal(_caller), do: {:error, "cron requires a trusted session identity"}
 
   defp inherit_cwd(params, cwd) when is_map(params) do
     if fetch_param(params, "action") == "add" do
@@ -88,7 +136,7 @@ defmodule LemonAutomation.Tools.Cron do
           "type" => "string",
           "enum" => @actions,
           "description" =>
-            "Cron action: status, list, add, update, pause, resume, pause_all, resume_all, abort, remove, run, or runs. pause_all/resume_all take no other parameters."
+            "Cron action: status, list, add, update, pause, resume, abort, remove, run, or runs."
         },
         "includeDisabled" => %{
           "type" => "boolean",
@@ -134,11 +182,6 @@ defmodule LemonAutomation.Tools.Cron do
           "type" => "string",
           "description" =>
             "Optional provider:model pin for the native coding session (add/update)."
-        },
-        "memoryFile" => %{
-          "type" => "string",
-          "description" =>
-            "Optional markdown file path used as cross-run memory for cron continuity."
         },
         "enabled" => %{
           "type" => "boolean",
@@ -210,8 +253,8 @@ defmodule LemonAutomation.Tools.Cron do
     }
   end
 
-  defp dispatch("status", _params, _session_key, _default_agent_id) do
-    with {:ok, jobs} <- cron_call(:list, []),
+  defp dispatch("status", _params, caller) do
+    with {:ok, jobs} <- owned_jobs(caller),
          {:ok, pause} <- cron_call(:pause_status, []) do
       payload =
         %{
@@ -227,11 +270,11 @@ defmodule LemonAutomation.Tools.Cron do
     end
   end
 
-  defp dispatch("list", params, _session_key, _default_agent_id) do
+  defp dispatch("list", params, caller) do
     include_disabled = parse_bool(fetch_param(params, "includeDisabled"), true)
     agent_id = normalize_string(fetch_param(params, "agentId") || fetch_param(params, "agent_id"))
 
-    with {:ok, jobs} <- cron_call(:list, []) do
+    with {:ok, jobs} <- owned_jobs(caller) do
       payload =
         jobs
         |> maybe_filter_enabled(include_disabled)
@@ -244,7 +287,7 @@ defmodule LemonAutomation.Tools.Cron do
     end
   end
 
-  defp dispatch("add", params, session_key, default_agent_id) do
+  defp dispatch("add", params, %{session_key: session_key, agent_id: default_agent_id} = caller) do
     source = nested_map(params, "job") || params
 
     schedule = normalize_string(fetch_param(source, "schedule"))
@@ -254,6 +297,9 @@ defmodule LemonAutomation.Tools.Cron do
     target_session_key = resolve_session_key(source, session_key, agent_id)
 
     cond do
+      memory_file_param?([source]) ->
+        {:error, @memory_file_refusal}
+
       is_nil(schedule) ->
         {:error, "schedule is required for action=add"}
 
@@ -275,10 +321,6 @@ defmodule LemonAutomation.Tools.Cron do
             prompt: prompt,
             cwd: normalize_string(fetch_param(source, "cwd")),
             model: normalize_string(fetch_param(source, "model")),
-            memory_file:
-              normalize_string(
-                fetch_param(source, "memoryFile") || fetch_param(source, "memory_file")
-              ),
             deliver_to: fetch_param(source, "deliverTo") || fetch_param(source, "deliver_to"),
             once: parse_bool(fetch_param(source, "once"), false),
             enabled: parse_bool(fetch_param(source, "enabled"), true),
@@ -305,6 +347,10 @@ defmodule LemonAutomation.Tools.Cron do
               )
           }
           |> maybe_put(:meta, if(is_map(meta), do: meta, else: nil))
+          |> Map.put(
+            :authority,
+            CronAuthority.from_session(caller.principal, caller.authority_opts)
+          )
 
         case cron_call(:add, [add_params]) do
           {:ok, {:ok, job}} ->
@@ -329,7 +375,7 @@ defmodule LemonAutomation.Tools.Cron do
     end
   end
 
-  defp dispatch("update", params, _session_key, _default_agent_id) do
+  defp dispatch("update", params, caller) do
     patch_source =
       nested_map(params, "patch") ||
         if(resolve_job_id(params),
@@ -347,12 +393,6 @@ defmodule LemonAutomation.Tools.Cron do
         :prompt,
         normalize_string(
           fetch_param(patch_source, "prompt") || fetch_param(patch_source, "message")
-        )
-      )
-      |> maybe_put(
-        :memory_file,
-        normalize_string(
-          fetch_param(patch_source, "memoryFile") || fetch_param(patch_source, "memory_file")
         )
       )
       |> maybe_put(:timezone, normalize_string(fetch_param(patch_source, "timezone")))
@@ -397,9 +437,10 @@ defmodule LemonAutomation.Tools.Cron do
         )
       )
 
-    with {:ok, job_id} <- require_job_id(params),
+    with false <- memory_file_param?([params, patch_source]),
+         {:ok, job_id} <- require_job_id(params, caller),
          true <- map_size(patch) > 0 do
-      case cron_call(:update, [job_id, patch]) do
+      case cron_call(:update_from_session, [job_id, patch, session_opts(caller)]) do
         {:ok, {:ok, job}} ->
           payload = %{
             "id" => Map.get(job, :id),
@@ -422,13 +463,14 @@ defmodule LemonAutomation.Tools.Cron do
           error
       end
     else
+      true -> {:error, @memory_file_refusal}
       false -> {:error, "No update fields were provided"}
       error -> error
     end
   end
 
-  defp dispatch("remove", params, _session_key, _default_agent_id) do
-    with {:ok, job_id} <- require_job_id(params) do
+  defp dispatch("remove", params, caller) do
+    with {:ok, job_id} <- require_job_id(params, caller) do
       case cron_call(:remove, [job_id]) do
         {:ok, :ok} ->
           {:ok, {"Cron job removed", %{"removed" => true, "id" => job_id}}}
@@ -445,52 +487,25 @@ defmodule LemonAutomation.Tools.Cron do
     end
   end
 
-  defp dispatch("pause", params, _session_key, _default_agent_id) do
-    update_enabled(params, false, "paused", "Cron job paused")
+  defp dispatch("pause", params, caller) do
+    update_enabled(params, caller, false, "paused", "Cron job paused")
   end
 
-  defp dispatch("resume", params, _session_key, _default_agent_id) do
-    update_enabled(params, true, "resumed", "Cron job resumed")
+  defp dispatch("resume", params, caller) do
+    update_enabled(params, caller, true, "resumed", "Cron job resumed")
   end
 
-  defp dispatch("pause_all", _params, _session_key, _default_agent_id) do
-    case cron_call(:pause_all, []) do
-      {:ok, {:ok, status}} ->
-        {:ok, {"All cron jobs paused", pause_payload({:ok, status})}}
-
-      {:ok, {:error, _reason}} ->
-        {:error, "Could not pause cron jobs: the cron store is unavailable."}
-
-      {:error, _} = error ->
-        error
-    end
+  # The global pause holds back every principal's jobs, and resume skips their
+  # missed runs: operator surfaces only.
+  defp dispatch(action, _params, _caller) when action in ["pause_all", "resume_all"] do
+    {:error,
+     "#{action} is operator-only: use `lemon cron pause --all` / `lemon cron resume --all` " <>
+       "or the control plane's cron.pause / cron.resume with all: true."}
   end
 
-  defp dispatch("resume_all", _params, _session_key, _default_agent_id) do
-    case cron_call(:resume_all, []) do
-      {:ok, {:ok, result}} ->
-        title =
-          if result.resumed, do: "All cron jobs resumed", else: "Cron jobs were not paused"
-
-        payload = %{
-          "paused" => false,
-          "resumed" => result.resumed,
-          "skippedJobCount" => result.skipped_job_count,
-          "skippedRetryCount" => result.skipped_retry_count
-        }
-
-        {:ok, {title, payload}}
-
-      {:ok, {:error, _reason}} ->
-        {:error, "Could not resume cron jobs: the cron store is unavailable."}
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp dispatch("abort", params, _session_key, _default_agent_id) do
-    with {:ok, run_id} <- require_run_id(params) do
+  defp dispatch("abort", params, caller) do
+    with {:ok, run_id} <- require_run_id(params),
+         :ok <- require_owned_run(run_id, caller) do
       case cron_call(:abort_run, [run_id]) do
         {:ok, {:ok, run}} ->
           payload = %{
@@ -528,9 +543,9 @@ defmodule LemonAutomation.Tools.Cron do
     end
   end
 
-  defp dispatch("run", params, _session_key, _default_agent_id) do
-    with {:ok, job_id} <- require_job_id(params) do
-      case cron_call(:run_now, [job_id]) do
+  defp dispatch("run", params, caller) do
+    with {:ok, job_id} <- require_job_id(params, caller) do
+      case cron_call(:run_now_from_session, [job_id, session_opts(caller)]) do
         {:ok, {:ok, run}} ->
           payload = %{"triggered" => true, "jobId" => job_id, "runId" => Map.get(run, :id)}
           {:ok, {"Cron job triggered", payload}}
@@ -547,8 +562,8 @@ defmodule LemonAutomation.Tools.Cron do
     end
   end
 
-  defp dispatch("runs", params, _session_key, _default_agent_id) do
-    with {:ok, job_id} <- require_job_id(params) do
+  defp dispatch("runs", params, caller) do
+    with {:ok, job_id} <- require_job_id(params, caller) do
       limit = parse_positive_integer(fetch_param(params, "limit"), @default_limit)
 
       case cron_call(:runs, [job_id, [limit: limit]]) do
@@ -565,14 +580,14 @@ defmodule LemonAutomation.Tools.Cron do
     end
   end
 
-  defp dispatch(nil, _params, _session_key, _default_agent_id),
+  defp dispatch(nil, _params, _caller),
     do: {:error, "action is required"}
 
-  defp dispatch(action, _params, _session_key, _default_agent_id),
+  defp dispatch(action, _params, _caller),
     do: {:error, "Unknown action '#{action}'. Supported: #{Enum.join(@actions, ", ")}"}
 
-  defp update_enabled(params, enabled, result_key, title) do
-    with {:ok, job_id} <- require_job_id(params) do
+  defp update_enabled(params, caller, enabled, result_key, title) do
+    with {:ok, job_id} <- require_job_id(params, caller) do
       case cron_call(:update, [job_id, %{enabled: enabled}]) do
         {:ok, {:ok, job}} ->
           payload = %{
@@ -614,10 +629,38 @@ defmodule LemonAutomation.Tools.Cron do
       {:error, "Cron scheduler call failed: #{inspect(reason)}"}
   end
 
-  defp require_job_id(params) do
-    case resolve_job_id(params) do
-      nil -> resolve_job_name(normalize_string(fetch_param(params, "name")))
-      job_id -> {:ok, job_id}
+  # Jobs whose recorded owner is this session's principal; every other job,
+  # including operator-created ones, is invisible to the session.
+  defp owned_jobs(caller) do
+    with {:ok, jobs} when is_list(jobs) <- cron_call(:list, []) do
+      {:ok,
+       Enum.filter(jobs, &CronAuthority.owned_by?(Map.get(&1, :authority), caller.principal))}
+    end
+  end
+
+  # Owner is immutable once recorded, so a check here cannot be invalidated
+  # before the mutation that follows it.
+  defp require_job_id(params, caller) do
+    with {:ok, jobs} <- owned_jobs(caller) do
+      case resolve_job_id(params) do
+        nil ->
+          resolve_job_name(normalize_string(fetch_param(params, "name")), jobs)
+
+        job_id ->
+          if Enum.any?(jobs, &(&1.id == job_id)),
+            do: {:ok, job_id},
+            else: {:error, "Cron job not found: #{job_id}"}
+      end
+    end
+  end
+
+  defp require_owned_run(run_id, caller) do
+    with {:ok, jobs} <- owned_jobs(caller) do
+      job_id = Map.get(CronStore.get_run(run_id) || %{}, :job_id)
+
+      if is_binary(job_id) and Enum.any?(jobs, &(&1.id == job_id)),
+        do: :ok,
+        else: {:error, "Cron run not found: #{run_id}"}
     end
   end
 
@@ -632,24 +675,22 @@ defmodule LemonAutomation.Tools.Cron do
     normalize_string(fetch_param(params, "id")) || normalize_string(fetch_param(params, "jobId"))
   end
 
-  defp resolve_job_name(nil), do: {:error, "id (or jobId) is required"}
+  defp resolve_job_name(nil, _jobs), do: {:error, "id (or jobId) is required"}
 
-  defp resolve_job_name(name) do
-    with {:ok, jobs} when is_list(jobs) <- cron_call(:list, []) do
-      normalized_name = String.downcase(name)
-      matches = Enum.filter(jobs, &(String.downcase(&1.name) == normalized_name))
+  defp resolve_job_name(name, jobs) do
+    normalized_name = String.downcase(name)
+    matches = Enum.filter(jobs, &(String.downcase(&1.name) == normalized_name))
 
-      case matches do
-        [job] ->
-          {:ok, job.id}
+    case matches do
+      [job] ->
+        {:ok, job.id}
 
-        [] ->
-          {:error, "Cron job not found: #{name}. Candidates: #{job_candidates(jobs)}"}
+      [] ->
+        {:error, "Cron job not found: #{name}. Candidates: #{job_candidates(jobs)}"}
 
-        matches ->
-          {:error,
-           "Ambiguous cron job name #{inspect(name)}. Candidates: #{job_candidates(matches)}"}
-      end
+      matches ->
+        {:error,
+         "Ambiguous cron job name #{inspect(name)}. Candidates: #{job_candidates(matches)}"}
     end
   end
 
@@ -743,7 +784,7 @@ defmodule LemonAutomation.Tools.Cron do
       "prompt" => Map.get(job, :prompt),
       "cwd" => Map.get(job, :cwd),
       "model" => Map.get(job, :model),
-      "memoryFile" => resolved_memory_file(job),
+      "memoryFile" => CronMemory.memory_file(job),
       "deliverTo" => Map.get(job, :deliver_to),
       "once" => Map.get(job, :once) == true,
       "timezone" => Map.get(job, :timezone) || "UTC",
@@ -918,8 +959,10 @@ defmodule LemonAutomation.Tools.Cron do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  defp resolved_memory_file(%CronJob{} = job), do: CronMemory.memory_file(job)
-  defp resolved_memory_file(job), do: Map.get(job, :memory_file)
+  defp memory_file_param?(sources),
+    do: Enum.any?(sources, fn source -> Enum.any?(@memory_file_keys, &has_param?(source, &1)) end)
+
+  defp has_param?(source, key), do: not is_nil(fetch_param(source, key))
 
   defp invalid_target_message({:callback_origin_not_allowed, origin}),
     do: "callback_origin_not_allowed: " <> origin

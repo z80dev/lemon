@@ -13,12 +13,15 @@ defmodule LemonAutomation.CronJob do
   - `:admission` - Optional private admission callback configuration.
     Tokens live in the encrypted controller secret store; callback configuration
     is never returned in public job projections. See `LemonAutomation.CronAdmission`.
+  - `:authority` - Launcher authority of a job created from an agent session
+    (`LemonAutomation.CronAuthority`): the creating session's effective tool
+    policy, narrowed by every tool-session update, never replaced. `nil` for
+    operator-created jobs. Kept out of public job projections.
   - `:session_key` - Session key for prompt-job routing
   - `:prompt` - The prompt to send to the agent
   - `:command` - Optional operator-owned shell command for no-agent jobs
   - `:cwd` - Optional target working directory for prompt or command jobs
   - `:env` - Optional command environment overrides
-  - `:memory_file` - Optional markdown file used as persistent cross-run memory
   - `:deliver_to` - Where the completed run's result is sent (see
     `LemonAutomation.CronDelivery`): `nil` (default: the originating chat when
     the job was created from a Telegram/Discord conversation, otherwise the
@@ -87,12 +90,12 @@ defmodule LemonAutomation.CronJob do
     :agent_id,
     :profile_id,
     :admission,
+    :authority,
     :session_key,
     :prompt,
     :command,
     :cwd,
     :env,
-    :memory_file,
     :deliver_to,
     :context_from,
     :model,
@@ -122,12 +125,12 @@ defmodule LemonAutomation.CronJob do
           agent_id: binary() | nil,
           profile_id: binary() | nil,
           admission: map() | nil,
+          authority: map() | nil,
           session_key: binary() | nil,
           prompt: binary() | nil,
           command: binary() | nil,
           cwd: binary() | nil,
           env: map() | nil,
-          memory_file: binary() | nil,
           deliver_to: binary() | nil,
           once: boolean(),
           monitor: boolean(),
@@ -163,12 +166,12 @@ defmodule LemonAutomation.CronJob do
       agent_id: get_attr(attrs, :agent_id),
       profile_id: get_attr(attrs, :profile_id),
       admission: get_attr(attrs, :admission),
+      authority: get_attr(attrs, :authority),
       session_key: get_attr(attrs, :session_key),
       prompt: get_attr(attrs, :prompt),
       command: get_attr(attrs, :command),
       cwd: get_attr(attrs, :cwd),
       env: get_attr(attrs, :env),
-      memory_file: get_attr(attrs, :memory_file),
       deliver_to: get_attr(attrs, :deliver_to),
       once: get_attr(attrs, :once, false) == true,
       monitor: get_attr(attrs, :monitor, false),
@@ -207,7 +210,6 @@ defmodule LemonAutomation.CronJob do
         command: get_attr(attrs, :command, job.command),
         cwd: get_attr(attrs, :cwd, job.cwd),
         env: get_attr(attrs, :env, job.env),
-        memory_file: get_attr(attrs, :memory_file, job.memory_file),
         deliver_to: get_attr(attrs, :deliver_to, job.deliver_to),
         once: get_attr(attrs, :once, job.once) == true,
         monitor: get_attr(attrs, :monitor, job.monitor),
@@ -292,7 +294,6 @@ defmodule LemonAutomation.CronJob do
       command: job.command,
       cwd: job.cwd,
       env: job.env,
-      memory_file: job.memory_file,
       deliver_to: job.deliver_to,
       once: job.once,
       monitor: job.monitor,
@@ -317,7 +318,7 @@ defmodule LemonAutomation.CronJob do
   @doc false
   @spec to_storage_map(t()) :: map()
   def to_storage_map(%__MODULE__{} = job) do
-    Map.put(to_map(job), :admission, job.admission)
+    to_map(job) |> Map.put(:admission, job.admission) |> Map.put(:authority, job.authority)
   end
 
   @doc """
@@ -334,11 +335,11 @@ defmodule LemonAutomation.CronJob do
       profile_id: get_attr(map, :profile_id),
       session_key: get_attr(map, :session_key),
       admission: get_attr(map, :admission),
+      authority: get_attr(map, :authority),
       prompt: get_attr(map, :prompt),
       command: get_attr(map, :command),
       cwd: get_attr(map, :cwd),
       env: get_attr(map, :env),
-      memory_file: get_attr(map, :memory_file),
       deliver_to: get_attr(map, :deliver_to),
       once: get_attr(map, :once, false) == true,
       monitor: get_attr(map, :monitor, false),

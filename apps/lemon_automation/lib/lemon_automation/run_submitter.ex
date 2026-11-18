@@ -3,6 +3,7 @@ defmodule LemonAutomation.RunSubmitter do
 
   alias LemonAutomation.{
     CronAdmission,
+    CronAuthority,
     CronContext,
     CronJob,
     CronMemory,
@@ -13,7 +14,13 @@ defmodule LemonAutomation.RunSubmitter do
   alias LemonCore.{InvocationProof, SessionKey, ToolPolicy}
 
   @default_timeout_ms 300_000
-  @cron_blocked_tools ["cron"]
+  # Tools that start durable or remote work which does not carry the cron
+  # run's authority: recursive scheduling (`cron`), goal loops and their
+  # continuations (`goal`), kanban dispatch (`kanban`), and delegation to
+  # existing sessions or A2A peers that run under their own policy
+  # (`agent_message`, `peer`). `task`/`agent` children inherit the run's policy
+  # through `ExecutionContext.child`, so the block also reaches descendants.
+  @cron_blocked_tools ~w(cron goal kanban agent_message peer)
 
   @spec submit(CronJob.t(), CronRun.t(), keyword()) ::
           {:ok, binary()} | {:error, term()} | :timeout
@@ -84,12 +91,13 @@ defmodule LemonAutomation.RunSubmitter do
   @spec build_params(CronJob.t(), CronRun.t(), binary() | nil, keyword()) ::
           map() | {:error, term()}
   def build_params(%CronJob{} = job, %CronRun{} = run, run_id \\ nil, opts \\ []) do
-    with {:ok, invocation} <- admission_invocation(job, run_id, opts) do
-      do_build_params(job, run, run_id, opts, invocation)
+    with {:ok, invocation} <- admission_invocation(job, run_id, opts),
+         {:ok, launcher_policy} <- CronAuthority.run_policy(job, run) do
+      do_build_params(job, run, run_id, opts, invocation, launcher_policy)
     end
   end
 
-  defp do_build_params(job, run, run_id, opts, invocation) do
+  defp do_build_params(job, run, run_id, opts, invocation, launcher_policy) do
     memory_mod = Keyword.get(opts, :memory_mod, CronMemory)
     context_mod = Keyword.get(opts, :context_mod, CronContext)
     session_key = fork_session_key(job.session_key, job.agent_id)
@@ -103,7 +111,7 @@ defmodule LemonAutomation.RunSubmitter do
       prompt: prompt,
       agent_id: job.agent_id,
       cwd: job.cwd,
-      tool_policy: cron_tool_policy(),
+      tool_policy: cron_tool_policy(launcher_policy),
       meta: %{
         cron_job_id: job.id,
         cron_run_id: run.id,
@@ -294,11 +302,12 @@ defmodule LemonAutomation.RunSubmitter do
     _ -> prompt
   end
 
-  defp cron_tool_policy do
-    %{
-      blocked_tools: @cron_blocked_tools
-    }
-  end
+  # Every cron run blocks the tools above and runs within its launcher's and
+  # trigger's authority (`CronAuthority.run_policy/2`).
+  defp cron_tool_policy(nil), do: %{blocked_tools: @cron_blocked_tools}
+
+  defp cron_tool_policy(launcher_policy),
+    do: ToolPolicy.intersect(cron_tool_policy(nil), launcher_policy)
 
   defp append_memory(_memory_mod, _job, _run, _params, {:error, {:outcome_unknown, _}}),
     do: :ok

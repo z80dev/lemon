@@ -375,7 +375,8 @@ and the harmless disabled example under
 | `LemonAutomation.CronSchedule` | `lib/lemon_automation/cron_schedule.ex` | Cron expression parser and next-run time computation |
 | `LemonAutomation.CronStore` | `lib/lemon_automation/cron_store.ex` | Persistence layer using `LemonCore.Store` (tables: `:cron_jobs`, `:cron_runs`, plus `:cron_settings` for the durable global pause marker) |
 | `LemonAutomation.CronMemory` | `lib/lemon_automation/cron_memory.ex` | Persistent markdown-based cross-run memory for cron jobs |
-| `LemonAutomation.Tools.Cron` | `lib/lemon_automation/tools/cron.ex` | The agent `cron` tool (status/list/add/update/pause/resume/pause_all/resume_all/abort/remove/run/runs); registered with `LemonAgent.ToolRegistry` by `LemonAutomation.Application`, so sessions are offered it through the platform tool registry; non-Lemon session ids (e.g. TUI `tui-…`) fall back to `agent:<id>:main` |
+| `LemonAutomation.Tools.Cron` | `lib/lemon_automation/tools/cron.ex` | The agent `cron` tool (status/list/add/update/pause/resume/abort/remove/run/runs over jobs the calling session's principal owns; `pause_all`/`resume_all` are refused as operator-only); registered with `LemonAgent.ToolRegistry` by `LemonAutomation.Application`, so sessions are offered it through the platform tool registry. The owner is the exact trusted session key (`legacy:<sha256>` for non-canonical ids such as TUI `tui-…`); only delivery for such ids falls back to `agent:<id>:main` |
+| `LemonAutomation.CronAuthority` | `lib/lemon_automation/cron_authority.ex` | Owner principal and launcher tool policy recorded on agent-created jobs, and the per-run policy floor (recorded policy plus the live policy of a chat base session) |
 | `LemonAutomation.CronCommandRunner` | `lib/lemon_automation/cron_command_runner.ex` | Supervised no-agent local shell command runner for operator-created command cron jobs |
 | `LemonCore.Doctor.CronDiagnostics` | `apps/lemon_core/lib/lemon_core/doctor/cron_diagnostics.ex` | Core-owned redacted support-bundle diagnostics for cron jobs and runs |
 | `LemonAutomation.Heartbeat` | `lib/lemon_automation/heartbeat.ex` | Heartbeat policy (`meta.heartbeat` jobs; `HEARTBEAT_OK` suppression) applied during CronManager terminalization |
@@ -405,7 +406,8 @@ LemonAutomation behavior is controlled through cron job fields plus a small appl
 - **Retry policy**: `max_retries` defaults to `0`; `retry_backoff_ms` defaults to `30_000` and applies to scheduled failure/timeout retries
 - **Output truncation**: Run output capped at 1,000 characters in CronStore; forwarded summaries capped at 12,000 bytes
 - **Memory file limits**: 24,000 chars max per memory file, 8,000 chars injected into prompts, 2,000 chars per run result entry
-- **Memory file location**: Defaults to `~/.lemon/cron_memory/{job_id}.md`, overridable via `memory_file` field on the job or in `meta`
+- **Memory file location**: Always `~/.lemon/cron_memory/{job_id}.md` (Lemon state directory); not configurable per job. Symlinked or hard-linked entries are neither read nor written; writes go through an exclusive temporary file and a rename (residual directory-swap window: shared finding NEW-6)
+- **Cron run tool block**: every cron run blocks `cron`, `goal`, `kanban`, `agent_message` and `peer`, which start work that does not carry the run's authority
 - **Goal judge runner**: dev/prod default to `LemonAutomation.GoalJudge.RouterRunner`; set `LEMON_GOAL_JUDGE_MODEL` or pass `judge_model` from the control plane/TUI to choose a specific judge model
 - **Goal loop scheduler**: automatic per-goal scheduling persists across restarts; `:goal_loop_scheduler_interval_ms` defaults to 30,000 and `:goal_loop_scan_limit` defaults to 50.
 - **Skill curator**: `config :lemon_automation, :skill_curator, enabled: true, agent_id: "default", interval_hours: 168, min_idle_hours: 2, tool_policy: %{allow: ["read_skill", "skill_manage", "remember", "recall"]}`
@@ -518,7 +520,6 @@ immutable.
 | `retry_backoff_ms` | `30_000` | Delay before retry runs |
 | `cwd` | current runtime cwd | Working directory for command jobs |
 | `env` | `%{}` | Environment overrides for command jobs |
-| `memory_file` | auto-generated | Path to persistent cross-run memory file |
 | `meta` | `nil` | Arbitrary metadata map |
 
 ### Cron Expression Format

@@ -2,6 +2,34 @@ defmodule LemonAutomation.CronMemory do
   @moduledoc """
   Per-job markdown memory that carries context across cron runs.
 
+  The memory file is always Lemon-owned:
+  `<home state dir>/cron_memory/<job id>.md` (`~/.lemon/cron_memory` by
+  default). No caller chooses its path; a job id that is not a plain file name
+  maps to a digest-named file in the same directory.
+
+  Memory I/O is bound to checked filesystem objects (`read_confined/2`,
+  `replace_confined/4`):
+
+    * the directory must be a real directory (not a symlink) and the file a
+      regular file with exactly one link (a hard link to another file is
+      refused); both are re-checked with `lstat` before and after each
+      operation;
+    * a read compares the opened handle's inode with the checked entry, so a
+      file swapped for a symlink or another inode after the check is not read;
+    * a write goes to an exclusively created temporary file in the same
+      directory and is renamed over the entry, never truncating or writing
+      through an existing inode; the entry must still be the inode that was
+      read (or still absent) right before the rename.
+
+  Known gap (shared finding NEW-6): OTP has no `openat`/`O_NOFOLLOW`, so the
+  checks and the path-based open/rename are separate syscalls. A local writer
+  who swaps the memory directory for a symlink in the window between the last
+  check and the open, exclusive create or rename can redirect that one
+  operation (or block a read on a substituted FIFO); the following re-check
+  reports the swap but cannot undo it. Do not rely on this module for
+  containment against a concurrent local writer inside the Lemon state
+  directory.
+
   Each run appends a `## Run <id>` entry. When the file outgrows 24,000
   characters it is compacted deterministically (no model call):
   the header and the most recent whole run entries are kept, and every older
@@ -12,9 +40,12 @@ defmodule LemonAutomation.CronMemory do
 
   alias LemonAutomation.{CronJob, CronRun}
 
-  @default_memory_dir ".lemon/cron_memory"
+  @memory_dir "cron_memory"
+  @job_file_name ~r/\A[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\z/
   @max_prompt_chars 8_000
   @max_file_chars 24_000
+  # Compaction keeps a memory file far below this; anything larger is not ours.
+  @max_file_bytes 1_048_576
   @recent_entries_chars 14_000
   @max_header_chars 2_000
   @max_summary_lines 40
@@ -22,20 +53,16 @@ defmodule LemonAutomation.CronMemory do
   @max_result_chars 2_000
   @summary_heading "## Earlier Runs"
 
+  @doc "The job's Lemon-owned memory file path."
   @spec memory_file(CronJob.t()) :: binary()
-  def memory_file(%CronJob{} = job) do
-    configured =
-      normalize_string(job.memory_file) ||
-        normalize_string(map_get(job.meta, :memory_file)) ||
-        normalize_string(map_get(job.meta, :memoryFile))
+  def memory_file(%CronJob{id: id}) do
+    name =
+      if is_binary(id) and Regex.match?(@job_file_name, id),
+        do: id,
+        else:
+          "job-" <> Base.encode16(:crypto.hash(:sha256, :erlang.term_to_binary(id)), case: :lower)
 
-    case configured do
-      nil ->
-        default_memory_file(job.id)
-
-      path ->
-        expand_path(path)
-    end
+    Path.join(memory_dir(), name <> ".md")
   end
 
   @spec read_for_prompt(CronJob.t()) :: {binary(), binary() | nil}
@@ -43,9 +70,9 @@ defmodule LemonAutomation.CronMemory do
     path = memory_file(job)
 
     text =
-      case File.read(path) do
-        {:ok, content} -> prompt_slice(content)
-        {:error, _} -> nil
+      case read_confined(path) do
+        {:ok, content, _stat} -> prompt_slice(content)
+        _ -> nil
       end
 
     {path, text}
@@ -92,37 +119,41 @@ defmodule LemonAutomation.CronMemory do
   def append_run(%CronJob{} = job, %CronRun{} = run, session_key, result)
       when is_binary(session_key) do
     path = memory_file(job)
-    existing = load_existing(path, job)
-    entry = render_entry(job, run, session_key, result)
-    updated = compact_if_needed(existing <> "\n\n" <> entry)
 
-    with :ok <- ensure_parent_dir(path),
-         :ok <- File.write(path, updated) do
-      :ok
-    else
-      _ -> :ok
+    with :ok <- File.mkdir_p(memory_dir()),
+         {:ok, existing, expected} <- existing_memory(path, job) do
+      entry = render_entry(job, run, session_key, result)
+      _ = replace_confined(path, compact_if_needed(existing <> "\n\n" <> entry), expected)
     end
+
+    :ok
   rescue
     _ -> :ok
   end
 
   def append_run(_job, _run, _session_key, _result), do: :ok
 
-  defp load_existing(path, %CronJob{} = job) do
-    case File.read(path) do
-      {:ok, content} when is_binary(content) and content != "" ->
-        content
-
-      _ ->
-        """
-        # Cron Memory: #{job.name}
-
-        - Job ID: #{job.id}
-        - Agent ID: #{job.agent_id}
-        - Base Session Key: #{job.session_key}
-        - Memory file created at: #{DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()}
-        """
+  # The current memory and the entry state the replacement must still find.
+  # An unsafe existing entry (symlink, hard link, special file) is never read
+  # or replaced.
+  defp existing_memory(path, %CronJob{} = job) do
+    case read_confined(path) do
+      {:ok, content, stat} when content != "" -> {:ok, content, stat}
+      {:ok, _empty, stat} -> {:ok, memory_header(job), stat}
+      {:error, :enoent} -> {:ok, memory_header(job), :absent}
+      {:error, _} = error -> error
     end
+  end
+
+  defp memory_header(job) do
+    """
+    # Cron Memory: #{job.name}
+
+    - Job ID: #{job.id}
+    - Agent ID: #{job.agent_id}
+    - Base Session Key: #{job.session_key}
+    - Memory file created at: #{DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()}
+    """
   end
 
   defp render_entry(%CronJob{} = job, %CronRun{} = run, session_key, result) do
@@ -323,27 +354,161 @@ defmodule LemonAutomation.CronMemory do
     end
   end
 
-  defp ensure_parent_dir(path) do
-    path
-    |> Path.dirname()
-    |> File.mkdir_p()
+  defp memory_dir, do: LemonCore.Paths.home_path([@memory_dir])
+
+  @doc false
+  # Reads `path` bound to the checked entry (see the moduledoc).
+  # `opts[:before_open]` is a test seam run between the checks and the open.
+  @spec read_confined(binary(), keyword()) :: {:ok, binary(), File.Stat.t()} | {:error, term()}
+  def read_confined(path, opts \\ []) do
+    dir = Path.dirname(path)
+
+    with {:ok, dir_stat} <- checked_dir(dir),
+         {:ok, file_stat} <- checked_file(path),
+         :ok <- run_hook(opts, :before_open),
+         {:ok, result} <- File.open(path, [:read, :binary], &read_bound(&1, file_stat)),
+         {:ok, bytes} <- result,
+         :ok <- unchanged(dir, dir_stat),
+         :ok <- unchanged(path, file_stat) do
+      {:ok, bytes, file_stat}
+    end
   end
 
-  defp default_memory_file(job_id) when is_binary(job_id) do
-    root =
-      case System.user_home() do
-        home when is_binary(home) and home != "" -> Path.join(home, @default_memory_dir)
-        _ -> Path.expand(@default_memory_dir)
+  @doc false
+  # Replaces `path` with `content` through an exclusive temporary file in the
+  # checked directory and a rename, only while the entry is still `expected`
+  # (`:absent` or the stat returned by `read_confined/2`).
+  # `opts[:before_rename]` is a test seam run after the temporary file is
+  # written.
+  @spec replace_confined(binary(), binary(), :absent | File.Stat.t(), keyword()) ::
+          :ok | {:error, term()}
+  def replace_confined(path, content, expected, opts \\ []) do
+    dir = Path.dirname(path)
+    tmp = Path.join(dir, ".#{Path.basename(path)}.#{temp_suffix()}.tmp")
+
+    with {:ok, dir_stat} <- checked_dir(dir),
+         :ok <- entry_is(path, expected),
+         {:ok, tmp_stat} <- write_exclusive(tmp, content) do
+      result =
+        with :ok <- run_hook(opts, :before_rename),
+             :ok <- unchanged(dir, dir_stat),
+             :ok <- entry_is(path, expected),
+             :ok <- unchanged(tmp, tmp_stat),
+             :ok <- File.rename(tmp, path),
+             :ok <- unchanged(dir, dir_stat) do
+          unchanged(path, tmp_stat)
+        end
+
+      if result != :ok, do: discard_temp(tmp, tmp_stat)
+      result
+    end
+  end
+
+  defp checked_dir(dir) do
+    case File.lstat(dir) do
+      {:ok, %File.Stat{type: :directory} = stat} -> {:ok, stat}
+      _ -> {:error, :unsafe_memory_dir}
+    end
+  end
+
+  defp checked_file(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :regular, links: 1, size: size} = stat}
+      when size <= @max_file_bytes ->
+        {:ok, stat}
+
+      {:error, :enoent} ->
+        {:error, :enoent}
+
+      _ ->
+        {:error, :unsafe_memory_file}
+    end
+  end
+
+  defp entry_is(path, :absent) do
+    case File.lstat(path) do
+      {:error, :enoent} -> :ok
+      _ -> {:error, :memory_changed}
+    end
+  end
+
+  defp entry_is(path, %File.Stat{} = expected), do: unchanged(path, expected)
+
+  # Same object (device and inode), same type, and a regular file still has
+  # exactly one link.
+  defp unchanged(path, %File.Stat{} = expected) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{} = stat} ->
+        if same_object?(stat, expected) and (stat.type != :regular or stat.links == 1),
+          do: :ok,
+          else: {:error, :memory_changed}
+
+      _ ->
+        {:error, :memory_changed}
+    end
+  end
+
+  defp same_object?(a, b) do
+    a.type == b.type and a.inode == b.inode and a.major_device == b.major_device and
+      a.minor_device == b.minor_device
+  end
+
+  defp read_bound(io, %File.Stat{size: size} = expected) do
+    with {:ok, info} <- :file.read_file_info(io),
+         %File.Stat{type: :regular, links: 1} = opened <- File.Stat.from_record(info),
+         true <- same_object?(opened, expected) do
+      case IO.binread(io, size + 1) do
+        :eof when size == 0 -> {:ok, ""}
+        bytes when is_binary(bytes) and byte_size(bytes) == size -> {:ok, bytes}
+        _ -> {:error, :memory_changed}
       end
-
-    Path.join(root, "#{job_id}.md")
+    else
+      _ -> {:error, :memory_changed}
+    end
   end
 
-  defp expand_path(path) when is_binary(path) do
-    if Path.type(path) == :absolute do
-      path
-    else
-      Path.expand(path)
+  defp write_exclusive(tmp, content) do
+    result =
+      File.open(tmp, [:write, :exclusive, :binary], fn io ->
+        with {:ok, info} <- :file.read_file_info(io),
+             %File.Stat{type: :regular, links: 1} = stat <- File.Stat.from_record(info),
+             :ok <- IO.binwrite(io, content) do
+          {:ok, stat}
+        else
+          _ -> {:error, :memory_changed}
+        end
+      end)
+
+    case result do
+      {:ok, {:ok, stat}} ->
+        {:ok, stat}
+
+      {:ok, error} ->
+        _ = discard_temp(tmp, nil)
+        error
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  # Removes only the temporary file this process created.
+  defp discard_temp(tmp, nil), do: File.rm(tmp)
+
+  defp discard_temp(tmp, %File.Stat{} = stat) do
+    if unchanged(tmp, stat) == :ok, do: File.rm(tmp), else: :ok
+  end
+
+  defp temp_suffix, do: Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
+
+  defp run_hook(opts, key) do
+    case Keyword.get(opts, key) do
+      nil ->
+        :ok
+
+      hook when is_function(hook, 0) ->
+        _ = hook.()
+        :ok
     end
   end
 
@@ -353,10 +518,4 @@ defmodule LemonAutomation.CronMemory do
   end
 
   defp normalize_string(_), do: nil
-
-  defp map_get(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp map_get(_map, _key), do: nil
 end
