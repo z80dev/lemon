@@ -211,6 +211,53 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Kanban dispatch uses Lemon-owned controller repositories under
+  `~/.lemon/kanban/repos/<board>.git`; publishing needs an operator grant pinned
+  to exact URLs, worker mutations are confined, and Discord `/kanban` is read-only.
+- MCP OAuth binds discovery, endpoints and credentials to the configured server
+  and an exact issuer. A configured refresh token requires `oauth.issuer`, and
+  cached grants are reused only for the recorded issuer and client id.
+- Computer use is off unless `[runtime.tools.computer_use] enabled`. Native-app
+  and website approvals are once-only (lasting grants only for
+  `lasting_grant_apps`), and local, interface-resolving, Lemon Bot and
+  approval-channel web origins are declined.
+- Exec approvals commit their receipt before any grant, and timed-out Store
+  mutations report `:outcome_unknown` end to end, including execution-node relays,
+  without automatic retry.
+- `peer`, `task` and `agent` take identity only from the launching session;
+  model-supplied `session_key`/`agent_id` and `interrupt` queue modes are
+  rejected, and inbound A2A serves inbound records only.
+- LemonWeb accepts exact trusted origins on `/live`, refuses foreign `Host`
+  headers (421), drops dev reloaders and committed secrets (per-install secret in
+  `~/.lemon/web_secret_key_base`), adds `LEMON_WEB_SECURE_COOKIES`, and reloads
+  router profiles after every profile write.
+- Tool results are untrusted unless an in-memory struct carries exactly
+  `:trusted`; a final fence runs before every provider request, persisted results
+  load untrusted, and memory files, contributed sections, child completions and
+  branch summaries are fenced.
+- Instruction files, `@` imports, rules, commands, personas and project skills
+  load only from a validated trusted root (a real same-owner Git repository, else
+  the working directory). Project stream rules need
+  `[rules] allow_project_stream_rules`.
+- Skills: one bundle layout policy, an audited set equal to the activated set,
+  operator-side verdicts and exact-hash load grants (`lemon skill audit <key>
+  [--approve]`), confined mutations, and a Hermes import through the audit.
+  Upgrading: unchanged agent-directory installs are re-audited once in the
+  background; edited, project and imported skills need `lemon skill audit`.
+- TUI: untrusted text is sanitized on ingestion, and control, bidi and format
+  characters are shown as markers (pi-tui's entity decoder is patched). `/reset`
+  and switcher close preview and require `--confirm <exact key>`.
+- SMS: webhook signatures are always validated. Inbox reservations are
+  exclusive and released only explicitly or by operator `sms.inbox.clear`.
+  Ingestion is atomic per MessageSid. Webhook per-integration `false` flags
+  override global `true`, and media sends require physical containment.
+- Admission, resume, prune and patch fail closed on unreadable policy, history
+  or metadata. Idempotency claims keep their run id until reconciled; usage replay
+  never double counts.
+- Native sessions are bound to their creating chat. Checkpoint restores need
+  durable single-use tokens, `/file` and `send_file` use physical containment with
+  case-insensitive denies, `adminOnly` commands are enforced, and chat `/reload`
+  is removed.
 - A project `.lemon/config.toml` is untrusted: it may set only an allowlist of
   preferences (default provider/model/thinking, model roles and routing, TUI
   presentation, compaction, persona models, disclosure profile) and may only
