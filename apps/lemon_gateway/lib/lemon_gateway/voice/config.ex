@@ -163,12 +163,13 @@ defmodule LemonGateway.Voice.Config do
     gateway = LemonCore.GatewayConfig.load()
     voice = LemonCore.GatewayConfig.fetch(gateway, :voice, %{})
 
-    cond do
-      is_map(voice) and is_atom(key) ->
-        LemonCore.GatewayConfig.fetch(voice, key, nil) || default
-
-      true ->
-        default
+    # Fall back only when the key is missing or nil: an explicit `false`
+    # (e.g. `enabled = false`) must not be overridden by a legacy default.
+    with true <- is_map(voice) and is_atom(key),
+         value when not is_nil(value) <- LemonCore.GatewayConfig.fetch(voice, key, nil) do
+      value
+    else
+      _ -> default
     end
   rescue
     _ -> default

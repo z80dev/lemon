@@ -385,14 +385,20 @@ defmodule LemonCore.Config.Validator do
       "gateway.max_concurrent_runs"
     )
     |> validate_boolean(Map.get(gateway, :auto_resume), "gateway.auto_resume")
-    |> validate_boolean(Map.get(gateway, :enable_web_dashboard), "gateway.enable_web_dashboard")
     |> validate_boolean(Map.get(gateway, :enable_webhook), "gateway.enable_webhook")
     |> validate_channel_flags(gateway)
     |> validate_channel_sections(gateway)
-    |> validate_web_dashboard_config(Map.get(gateway, :web_dashboard))
     |> validate_email_config(Map.get(gateway, :email))
+    |> validate_sms_config(Map.get(gateway, :sms))
+    |> validate_voice_config(Map.get(gateway, :voice))
     |> validate_queue_config(Map.get(gateway, :queue))
+    |> validate_webhook_section(Map.get(gateway, :webhook))
   end
+
+  defp validate_webhook_section(errors, webhook) when is_nil(webhook) or is_map(webhook),
+    do: errors
+
+  defp validate_webhook_section(errors, _webhook), do: ["gateway.webhook: must be a map" | errors]
 
   # `Modular` keeps the flags in `enabled_channels`; the legacy map flattens
   # them to `enable_<id>`. Both shapes are validated by asking the registered
@@ -456,106 +462,168 @@ defmodule LemonCore.Config.Validator do
   defp section_value(_sections, gateway, id), do: Map.get(gateway, id)
 
   @doc """
-  Validates Web Dashboard configuration.
+  Validates `[gateway.sms]`: the fields `LemonGateway.Sms.Config` reads.
+
+  The section keeps TOML's string keys, so each field is read as an atom key
+  first and then as its string form.
   """
-  @spec validate_web_dashboard_config([String.t()], map() | nil) :: [String.t()]
-  def validate_web_dashboard_config(errors, nil), do: errors
+  @spec validate_sms_config([String.t()], map() | nil) :: [String.t()]
+  def validate_sms_config(errors, nil), do: errors
 
-  def validate_web_dashboard_config(errors, web_dashboard) when is_map(web_dashboard) do
-    errors
-    |> validate_web_dashboard_port(Map.get(web_dashboard, :port))
-    |> validate_web_dashboard_host(Map.get(web_dashboard, :host))
-    |> validate_web_dashboard_secret_key_base(Map.get(web_dashboard, :secret_key_base))
-    |> validate_web_dashboard_access_token(Map.get(web_dashboard, :access_token))
-  end
-
-  def validate_web_dashboard_config(errors, _),
-    do: ["gateway.web_dashboard: must be a map" | errors]
-
-  defp validate_web_dashboard_port(errors, nil), do: errors
-
-  defp validate_web_dashboard_port(errors, port) when is_integer(port) do
-    if port > 0 and port <= 65_535 do
+  def validate_sms_config(errors, sms) when is_map(sms) do
+    errors =
       errors
-    else
-      ["gateway.web_dashboard.port: must be between 1 and 65535" | errors]
-    end
+      |> validate_boolean(toml_value(sms, :webhook_enabled), "gateway.sms.webhook_enabled")
+      |> validate_port(toml_value(sms, :webhook_port), "gateway.sms.webhook_port")
+      |> validate_positive_integer(toml_value(sms, :inbox_ttl_ms), "gateway.sms.inbox_ttl_ms")
+      |> validate_positive_integer(
+        toml_value(sms, :handoff_grace_ms),
+        "gateway.sms.handoff_grace_ms"
+      )
+      |> validate_absolute_url(toml_value(sms, :webhook_url), "gateway.sms.webhook_url", [
+        "http",
+        "https"
+      ])
+
+    Enum.reduce(
+      [:webhook_bind, :inbox_number, :auth_token, :auth_token_secret],
+      errors,
+      &validate_optional_string(&2, toml_value(sms, &1), "gateway.sms.#{&1}")
+    )
   end
 
-  defp validate_web_dashboard_port(errors, _),
-    do: ["gateway.web_dashboard.port: must be an integer" | errors]
+  def validate_sms_config(errors, _), do: ["gateway.sms: must be a map" | errors]
 
-  defp validate_web_dashboard_host(errors, nil), do: errors
+  @voice_string_fields [
+    :twilio_account_sid,
+    :twilio_account_sid_secret,
+    :twilio_auth_token,
+    :twilio_auth_token_secret,
+    :twilio_phone_number,
+    :deepgram_api_key,
+    :deepgram_api_key_secret,
+    :elevenlabs_api_key,
+    :elevenlabs_api_key_secret,
+    :elevenlabs_voice_id,
+    :elevenlabs_output_format,
+    :llm_model,
+    :system_prompt
+  ]
 
-  defp validate_web_dashboard_host(errors, host) when is_binary(host) do
-    if String.trim(host) == "" do
-      ["gateway.web_dashboard.host: cannot be empty" | errors]
-    else
+  @doc """
+  Validates `[gateway.voice]`: the fields `LemonGateway.Voice.Config` reads.
+
+  `public_url` is where Twilio is told to open the call's media stream, so it
+  must be an absolute `https` URL.
+  """
+  @spec validate_voice_config([String.t()], map() | nil) :: [String.t()]
+  def validate_voice_config(errors, nil), do: errors
+
+  def validate_voice_config(errors, voice) when is_map(voice) do
+    errors =
       errors
+      |> validate_boolean(toml_value(voice, :enabled), "gateway.voice.enabled")
+      |> validate_port(toml_value(voice, :websocket_port), "gateway.voice.websocket_port")
+      |> validate_absolute_url(toml_value(voice, :public_url), "gateway.voice.public_url", [
+        "https"
+      ])
+      |> validate_positive_integer(
+        toml_value(voice, :max_call_duration_seconds),
+        "gateway.voice.max_call_duration_seconds"
+      )
+      |> validate_positive_integer(
+        toml_value(voice, :silence_timeout_ms),
+        "gateway.voice.silence_timeout_ms"
+      )
+
+    Enum.reduce(
+      @voice_string_fields,
+      errors,
+      &validate_optional_string(&2, toml_value(voice, &1), "gateway.voice.#{&1}")
+    )
+  end
+
+  def validate_voice_config(errors, _), do: ["gateway.voice: must be a map" | errors]
+
+  # Validates the exact value the consumer receives: no trimming, and the
+  # scheme must appear literally (lowercase) because consumers build URLs from
+  # the raw string.
+  defp validate_absolute_url(errors, nil, _path, _schemes), do: errors
+
+  defp validate_absolute_url(errors, value, path, schemes) when is_binary(value) do
+    literal_scheme? = Enum.any?(schemes, &String.starts_with?(value, &1 <> "://"))
+
+    case literal_scheme? && URI.new(value) do
+      {:ok, %URI{host: host, userinfo: nil}} when is_binary(host) and host != "" ->
+        errors
+
+      _ ->
+        ["#{path}: must be an absolute #{Enum.join(schemes, " or ")} URL" | errors]
     end
   end
 
-  defp validate_web_dashboard_host(errors, _),
-    do: ["gateway.web_dashboard.host: must be a string" | errors]
+  defp validate_absolute_url(errors, _value, path, _schemes),
+    do: ["#{path}: must be a string" | errors]
 
-  defp validate_web_dashboard_secret_key_base(errors, nil), do: errors
+  # Optional free-form string field: nil, or a non-blank binary. Unlike
+  # `validate_non_empty_string/3` it does not accept atoms (TOML booleans).
+  defp validate_optional_string(errors, nil, _path), do: errors
 
-  defp validate_web_dashboard_secret_key_base(errors, key) when is_binary(key) do
-    cond do
-      env_var_reference?(key) ->
-        errors
-
-      String.length(key) >= 64 ->
-        errors
-
-      true ->
-        [
-          "gateway.web_dashboard.secret_key_base: must be at least 64 characters (use LEMON_WEB_SECRET_KEY_BASE env var)"
-          | errors
-        ]
-    end
+  defp validate_optional_string(errors, value, path) when is_binary(value) do
+    if String.trim(value) == "", do: ["#{path}: cannot be empty" | errors], else: errors
   end
 
-  defp validate_web_dashboard_secret_key_base(errors, _),
-    do: ["gateway.web_dashboard.secret_key_base: must be a string" | errors]
-
-  defp validate_web_dashboard_access_token(errors, nil), do: errors
-
-  defp validate_web_dashboard_access_token(errors, token) when is_binary(token) do
-    cond do
-      env_var_reference?(token) ->
-        errors
-
-      String.length(token) >= 16 ->
-        errors
-
-      true ->
-        [
-          "gateway.web_dashboard.access_token: should be at least 16 characters for security"
-          | errors
-        ]
-    end
-  end
-
-  defp validate_web_dashboard_access_token(errors, _),
-    do: ["gateway.web_dashboard.access_token: must be a string" | errors]
+  defp validate_optional_string(errors, _value, path),
+    do: ["#{path}: must be a string" | errors]
 
   @doc """
   Validates Email configuration.
+
+  The `email` section is resolved as a passthrough, so its nested `inbound`
+  and `outbound` tables keep TOML's string keys while hand-built maps use
+  atoms. Every lookup here reads both forms (atom first, as the email adapter
+  does), so no field escapes validation because of how it was keyed.
+
+  The fields checked are the ones `LemonChannels.Adapters.Email` reads,
+  including the flat `smtp_*` aliases it falls back to. `tls` and `auth`
+  accept only the modes the adapter honors; any other string would be
+  silently replaced by the adapter's default (opportunistic TLS).
   """
   @spec validate_email_config([String.t()], map() | nil) :: [String.t()]
   def validate_email_config(errors, nil), do: errors
 
   def validate_email_config(errors, email) when is_map(email) do
     errors
-    |> validate_email_inbound_config(Map.get(email, :inbound))
-    |> validate_email_outbound_config(Map.get(email, :outbound))
+    |> validate_email_inbound_config(toml_value(email, :inbound))
+    |> validate_email_outbound_config(toml_value(email, :outbound))
     |> validate_positive_integer(
-      Map.get(email, :attachment_max_bytes),
+      toml_value(email, :attachment_max_bytes),
       "gateway.email.attachment_max_bytes"
     )
-    |> validate_boolean(Map.get(email, :inbound_enabled), "gateway.email.inbound_enabled")
-    |> validate_boolean(Map.get(email, :webhook_enabled), "gateway.email.webhook_enabled")
+    |> validate_boolean(toml_value(email, :inbound_enabled), "gateway.email.inbound_enabled")
+    |> validate_boolean(toml_value(email, :webhook_enabled), "gateway.email.webhook_enabled")
+    |> validate_port(toml_value(email, :webhook_port), "gateway.email.webhook_port")
+    |> validate_optional_string(toml_value(email, :webhook_bind), "gateway.email.webhook_bind")
+    |> validate_optional_string(toml_value(email, :webhook_path), "gateway.email.webhook_path")
+    |> validate_optional_string(
+      toml_value(email, :webhook_token),
+      "gateway.email.webhook_token"
+    )
+    |> validate_email_smtp_fields(email, "gateway.email", %{
+      relay: :smtp_relay,
+      port: :smtp_port,
+      username: :smtp_username,
+      password: :smtp_password,
+      tls: :smtp_tls,
+      auth: :smtp_auth,
+      ssl: :smtp_ssl,
+      hostname: :smtp_hostname,
+      timeout: :smtp_timeout,
+      tls_versions: :smtp_tls_versions
+    })
+    |> validate_optional_string(toml_value(email, :relay), "gateway.email.relay")
+    |> validate_optional_string(toml_value(email, :from), "gateway.email.from")
+    |> validate_optional_string(toml_value(email, :reply_to), "gateway.email.reply_to")
   end
 
   def validate_email_config(errors, _),
@@ -565,16 +633,14 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_email_inbound_config(errors, inbound) when is_map(inbound) do
     errors
-    |> validate_non_empty_string(Map.get(inbound, :bind_host), "gateway.email.inbound.bind_host")
-    |> validate_port(Map.get(inbound, :bind_port), "gateway.email.inbound.bind_port")
-    |> validate_non_empty_string(Map.get(inbound, :token), "gateway.email.inbound.token")
-    |> validate_positive_integer(
-      Map.get(inbound, :max_body_bytes),
-      "gateway.email.inbound.max_body_bytes"
-    )
-    |> validate_email_allowed_senders(email_inbound_value(inbound, :allowed_senders))
-    |> validate_email_authserv_id(email_inbound_value(inbound, :authserv_id))
-    |> validate_email_sender_auth(email_inbound_value(inbound, :sender_auth))
+    |> validate_boolean(toml_value(inbound, :enabled), "gateway.email.inbound.enabled")
+    |> validate_optional_string(toml_value(inbound, :bind), "gateway.email.inbound.bind")
+    |> validate_port(toml_value(inbound, :port), "gateway.email.inbound.port")
+    |> validate_optional_string(toml_value(inbound, :path), "gateway.email.inbound.path")
+    |> validate_optional_string(toml_value(inbound, :token), "gateway.email.inbound.token")
+    |> validate_email_allowed_senders(toml_value(inbound, :allowed_senders))
+    |> validate_email_authserv_id(toml_value(inbound, :authserv_id))
+    |> validate_email_sender_auth(toml_value(inbound, :sender_auth))
   end
 
   defp validate_email_inbound_config(errors, _),
@@ -590,10 +656,8 @@ defmodule LemonCore.Config.Validator do
       | errors
     ]
 
-  # The `email` section is a passthrough whose nested maps keep TOML's string
-  # keys, so the sender-authorization keys are read in both forms.
-  defp email_inbound_value(inbound, key),
-    do: Map.get(inbound, key, Map.get(inbound, Atom.to_string(key)))
+  defp toml_value(map, key),
+    do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
 
   defp validate_email_allowed_senders(errors, nil), do: errors
 
@@ -633,57 +697,84 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_email_outbound_config(errors, outbound) when is_map(outbound) do
     errors
-    |> validate_non_empty_string(Map.get(outbound, :relay), "gateway.email.outbound.relay")
-    |> validate_port(Map.get(outbound, :port), "gateway.email.outbound.port")
-    |> validate_non_empty_string(Map.get(outbound, :username), "gateway.email.outbound.username")
-    |> validate_non_empty_string(Map.get(outbound, :password), "gateway.email.outbound.password")
-    |> validate_email_tls_config(Map.get(outbound, :tls))
-    |> validate_email_auth_config(Map.get(outbound, :auth))
-    |> validate_non_empty_string(Map.get(outbound, :hostname), "gateway.email.outbound.hostname")
-    |> validate_non_empty_string(
-      Map.get(outbound, :from_address),
-      "gateway.email.outbound.from_address"
+    |> validate_email_smtp_fields(outbound, "gateway.email.outbound", %{
+      relay: :relay,
+      port: :port,
+      username: :username,
+      password: :password,
+      tls: :tls,
+      auth: :auth,
+      ssl: :ssl,
+      hostname: :hostname,
+      timeout: :timeout,
+      tls_versions: :tls_versions
+    })
+    |> validate_optional_string(toml_value(outbound, :from), "gateway.email.outbound.from")
+    |> validate_optional_string(
+      toml_value(outbound, :reply_to),
+      "gateway.email.outbound.reply_to"
     )
   end
 
   defp validate_email_outbound_config(errors, _),
     do: ["gateway.email.outbound: must be a map" | errors]
 
-  defp validate_email_tls_config(errors, nil), do: errors
+  # The SMTP settings exist both nested under `outbound` and as flat `smtp_*`
+  # aliases on the email table; `keys` maps each setting to its key in `map`.
+  defp validate_email_smtp_fields(errors, map, prefix, keys) do
+    value = fn name -> toml_value(map, Map.fetch!(keys, name)) end
+    path = fn name -> "#{prefix}.#{Map.fetch!(keys, name)}" end
 
-  defp validate_email_tls_config(errors, tls) when is_boolean(tls), do: errors
+    errors
+    |> validate_optional_string(value.(:relay), path.(:relay))
+    |> validate_port(value.(:port), path.(:port))
+    |> validate_optional_string(value.(:username), path.(:username))
+    |> validate_optional_string(value.(:password), path.(:password))
+    |> validate_email_smtp_mode(value.(:tls), path.(:tls))
+    |> validate_email_smtp_mode(value.(:auth), path.(:auth))
+    |> validate_boolean(value.(:ssl), path.(:ssl))
+    |> validate_optional_string(value.(:hostname), path.(:hostname))
+    |> validate_positive_integer(value.(:timeout), path.(:timeout))
+    |> validate_email_tls_versions(value.(:tls_versions), path.(:tls_versions))
+  end
 
-  defp validate_email_tls_config(errors, tls) when is_binary(tls) do
-    if tls in ["true", "false", "always", "never", "if_available"] do
+  @email_smtp_modes ["always", "never", "if_available"]
+
+  defp validate_email_smtp_mode(errors, nil, _path), do: errors
+
+  defp validate_email_smtp_mode(errors, mode, _path)
+       when mode in [:always, :never, :if_available],
+       do: errors
+
+  defp validate_email_smtp_mode(errors, mode, path) when is_binary(mode) do
+    if String.downcase(String.trim(mode)) in @email_smtp_modes do
       errors
     else
-      [
-        "gateway.email.outbound.tls: invalid value '#{tls}'. Valid: true, false, always, never, if_available"
-        | errors
-      ]
+      ["#{path}: invalid value '#{mode}'. Valid: #{Enum.join(@email_smtp_modes, ", ")}" | errors]
     end
   end
 
-  defp validate_email_tls_config(errors, _),
-    do: ["gateway.email.outbound.tls: must be a boolean or string" | errors]
+  defp validate_email_smtp_mode(errors, _mode, path),
+    do: ["#{path}: must be one of: #{Enum.join(@email_smtp_modes, ", ")}" | errors]
 
-  defp validate_email_auth_config(errors, nil), do: errors
+  @email_tls_versions ["tlsv1", "tlsv1.1", "tlsv1.2", "tlsv1.3"]
 
-  defp validate_email_auth_config(errors, auth) when is_boolean(auth), do: errors
+  defp validate_email_tls_versions(errors, nil, _path), do: errors
 
-  defp validate_email_auth_config(errors, auth) when is_binary(auth) do
-    if auth in ["true", "false", "always", "if_available"] do
+  defp validate_email_tls_versions(errors, versions, path)
+       when is_list(versions) and versions != [] do
+    if Enum.all?(
+         versions,
+         &(is_binary(&1) and String.downcase(String.trim(&1)) in @email_tls_versions)
+       ) do
       errors
     else
-      [
-        "gateway.email.outbound.auth: invalid value '#{auth}'. Valid: true, false, always, if_available"
-        | errors
-      ]
+      ["#{path}: must list only #{Enum.join(@email_tls_versions, ", ")}" | errors]
     end
   end
 
-  defp validate_email_auth_config(errors, _),
-    do: ["gateway.email.outbound.auth: must be a boolean or string" | errors]
+  defp validate_email_tls_versions(errors, _versions, path),
+    do: ["#{path}: must be a non-empty list of TLS versions" | errors]
 
   defp validate_port(errors, nil, _path), do: errors
 

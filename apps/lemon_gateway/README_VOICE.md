@@ -51,6 +51,12 @@ elevenlabs_api_key_secret = "elevenlabs_api_key"
 elevenlabs_output_format = "ulaw_8000"
 ```
 
+`lemon config validate` rejects a `[gateway.voice]` (or `[gateway.sms]`) field
+of the wrong type: `public_url` must be an absolute `https` URL, ports must be
+1–65535, `enabled` a boolean, durations positive integers, and credential and
+model fields non-empty strings. `[gateway.sms] webhook_url` must be an absolute
+`http`/`https` URL.
+
 ### 3. Configure Twilio Webhook
 
 In your Twilio console:

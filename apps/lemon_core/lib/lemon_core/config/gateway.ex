@@ -226,20 +226,24 @@ defmodule LemonCore.Config.Gateway do
   end
 
   defp resolve_sms(settings) do
-    sms = settings["sms"] || %{}
+    case settings["sms"] || %{} do
+      sms when is_map(sms) ->
+        auth_token_secret = normalize_optional_string(sms["auth_token_secret"])
 
-    auth_token_secret = normalize_optional_string(sms["auth_token_secret"])
+        base =
+          if auth_token_secret do
+            Map.put(sms, "auth_token_secret", auth_token_secret)
+          else
+            sms
+          end
 
-    base =
-      if auth_token_secret do
-        Map.put(sms, "auth_token_secret", auth_token_secret)
-      else
-        sms
-      end
+        base
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Enum.into(%{})
 
-    base
-    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-    |> Enum.into(%{})
+      other ->
+        other
+    end
   end
 
   defp resolve_queue(settings) do
@@ -252,39 +256,51 @@ defmodule LemonCore.Config.Gateway do
     }
   end
 
+  # Wrongly typed values are kept (only blank strings become nil) so
+  # `Validator.validate_voice_config/2` reports them instead of the field
+  # silently falling back to its default.
   defp resolve_voice(settings) do
-    voice = settings["voice"] || %{}
+    case settings["voice"] || %{} do
+      voice when is_map(voice) ->
+        %{
+          enabled: resolve_bool_field(voice["enabled"], false),
+          twilio_account_sid: blank_to_nil(voice["twilio_account_sid"]),
+          twilio_account_sid_secret: blank_to_nil(voice["twilio_account_sid_secret"]),
+          twilio_auth_token: blank_to_nil(voice["twilio_auth_token"]),
+          twilio_auth_token_secret: blank_to_nil(voice["twilio_auth_token_secret"]),
+          twilio_phone_number: blank_to_nil(voice["twilio_phone_number"]),
+          deepgram_api_key: blank_to_nil(voice["deepgram_api_key"]),
+          deepgram_api_key_secret: blank_to_nil(voice["deepgram_api_key_secret"]),
+          elevenlabs_api_key: blank_to_nil(voice["elevenlabs_api_key"]),
+          elevenlabs_api_key_secret: blank_to_nil(voice["elevenlabs_api_key_secret"]),
+          elevenlabs_voice_id: blank_to_nil(voice["elevenlabs_voice_id"]),
+          elevenlabs_output_format: blank_to_nil(voice["elevenlabs_output_format"]),
+          websocket_port: voice["websocket_port"],
+          public_url: blank_to_nil(voice["public_url"]),
+          llm_model: blank_to_nil(voice["llm_model"]),
+          system_prompt: blank_to_nil(voice["system_prompt"]),
+          max_call_duration_seconds: voice["max_call_duration_seconds"],
+          silence_timeout_ms: voice["silence_timeout_ms"]
+        }
+        |> reject_nil_values()
 
-    %{
-      enabled: resolve_bool_field(voice["enabled"], false),
-      twilio_account_sid: normalize_optional_string(voice["twilio_account_sid"]),
-      twilio_account_sid_secret: normalize_optional_string(voice["twilio_account_sid_secret"]),
-      twilio_auth_token: normalize_optional_string(voice["twilio_auth_token"]),
-      twilio_auth_token_secret: normalize_optional_string(voice["twilio_auth_token_secret"]),
-      twilio_phone_number: normalize_optional_string(voice["twilio_phone_number"]),
-      deepgram_api_key: normalize_optional_string(voice["deepgram_api_key"]),
-      deepgram_api_key_secret: normalize_optional_string(voice["deepgram_api_key_secret"]),
-      elevenlabs_api_key: normalize_optional_string(voice["elevenlabs_api_key"]),
-      elevenlabs_api_key_secret: normalize_optional_string(voice["elevenlabs_api_key_secret"]),
-      elevenlabs_voice_id: normalize_optional_string(voice["elevenlabs_voice_id"]),
-      elevenlabs_output_format: normalize_optional_string(voice["elevenlabs_output_format"]),
-      websocket_port: voice["websocket_port"],
-      public_url: normalize_optional_string(voice["public_url"]),
-      llm_model: normalize_optional_string(voice["llm_model"]),
-      system_prompt: normalize_optional_string(voice["system_prompt"]),
-      max_call_duration_seconds: voice["max_call_duration_seconds"],
-      silence_timeout_ms: voice["silence_timeout_ms"]
-    }
-    |> reject_nil_values()
+      other ->
+        other
+    end
   end
 
-  defp resolve_passthrough(settings, section) do
-    map = settings[section] || %{}
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 
-    map
-    |> Enum.reduce(%{}, fn {k, v}, acc ->
-      Map.put(acc, safe_to_atom(k), v)
-    end)
+  # Only the top level is atomized; nested tables keep TOML's string keys, so
+  # validators and consumers read both forms. A non-table value is kept as is
+  # for the validator to reject instead of crashing resolution.
+  defp resolve_passthrough(settings, section) do
+    case settings[section] do
+      nil -> %{}
+      map when is_map(map) -> Map.new(map, fn {k, v} -> {safe_to_atom(k), v} end)
+      other -> other
+    end
   end
 
   defp resolve_bool_field(nil, default), do: default
