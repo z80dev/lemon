@@ -113,7 +113,7 @@ Environment variables read by `lemon_browser` (from
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | unset | Browserbase hosted sessions. |
 | `BROWSER_USE_API_KEY` | unset | Browser Use Cloud hosted sessions. |
 | `FIRECRAWL_API_KEY` | unset | Firecrawl hosted browser sessions. |
-| `CAMOFOX_URL` / `CAMOFOX_API_KEY` | unset | Camofox REST/Firefox server and optional bearer key. |
+| `CAMOFOX_URL` / `CAMOFOX_API_KEY` | unset | Camofox REST/Firefox server and optional bearer key. A URL with embedded `user:password@` credentials is rejected; use `CAMOFOX_API_KEY`. |
 | `LEMON_BROWSER_EXECUTABLE` | unset | Chrome/Chromium executable for the local driver, if it is not discovered automatically. |
 
 The legacy backend can also be selected with the application environment key
@@ -293,6 +293,19 @@ Notes:
   the token on every connection, hides restricted Chrome pages, and ignores
   `Browser.close`. See the
   [browser node README](../../clients/lemon-browser-node/README.md).
+- CDP endpoints (relay token, hosted-provider session URLs) reach the driver
+  only through its environment, never its argv, and no Lemon process keeps them
+  in its state: a hosted session's driver is started with its endpoint and is
+  not restarted with it later. Inline hosted-provider and Camofox API keys are
+  held for the session's lifetime in a private credential store (so close,
+  delete and idle cleanup authenticate as the session that created the remote
+  state), configured keys are resolved from secrets when needed, and neither
+  is kept in session or supervisor state. Provider URLs with embedded
+  `user:password@` credentials are rejected. Driver errors and status remove
+  userinfo and query values from URLs, and CDP connection failures name only
+  the endpoint's scheme and host. The driver and any Chrome it launches do not
+  inherit `LEMON_*` settings it does not use, relay/operator tokens, provider
+  keys, or other `*TOKEN`/`*SECRET`/`*API_KEY` variables.
 
 ## Troubleshooting
 

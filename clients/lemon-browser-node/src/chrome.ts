@@ -55,16 +55,20 @@ export class ChromeSession {
     }
     if (!reachable) {
       if (this.cfg.attachOnly || this.cfg.cdpEndpoint) {
-        throw new Error(`CDP not reachable at ${redactEndpoint(endpoint)} (attachOnly=true)`);
+        throw new Error(`CDP not reachable at ${describeEndpoint(endpoint)} (attachOnly=true)`);
       }
       await this.launchChrome();
       await waitForCdp(endpoint, 15_000);
       this.ownedBrowser = true;
     }
 
-    this.browser = await chromium.connectOverCDP(normalizeCdpEndpoint(endpoint), {
-      timeout: 15_000,
-    });
+    try {
+      this.browser = await chromium.connectOverCDP(normalizeCdpEndpoint(endpoint), {
+        timeout: 15_000,
+      });
+    } catch (err) {
+      throw cdpAttachError(endpoint, err);
+    }
     const page = await ensurePage(this.browser);
     this.activeTargetId = await targetIdForPage(page);
   }
@@ -300,10 +304,7 @@ export class ChromeSession {
 
     this.proc = spawn(exe, args, {
       stdio: 'pipe',
-      env: {
-        ...process.env,
-        HOME: os.homedir(),
-      },
+      env: { ...browserChildEnv(process.env), HOME: os.homedir() },
     });
   }
 
@@ -461,23 +462,76 @@ async function waitForCdp(endpoint: string, timeoutMs: number): Promise<void> {
     if (await isCdpReachable(endpoint, 500)) return;
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`Timed out waiting for CDP at ${redactEndpoint(endpoint)}`);
+  throw new Error(`Timed out waiting for CDP at ${describeEndpoint(endpoint)}`);
 }
 
-function redactEndpoint(endpoint: string): string {
+/** Credential-free endpoint description: scheme and host only. Paths, query
+ * strings and userinfo can all carry provider or relay tokens. */
+export function describeEndpoint(endpoint: string): string {
   try {
     const url = new URL(endpoint);
-    if (url.username || url.password) {
-      url.username = url.username ? '[redacted]' : '';
-      url.password = url.password ? '[redacted]' : '';
-    }
-    for (const key of ['token', 'ticket', 'key', 'api_key', 'access_token']) {
-      if (url.searchParams.has(key)) url.searchParams.set(key, '[redacted]');
-    }
-    return url.toString();
+    return `${url.protocol}//${url.host}`;
   } catch {
-    return endpoint.replace(/(wss?:\/\/[^:/\s]+:)[^@\s]+@/i, '$1[redacted]@');
+    return '[unparseable CDP endpoint]';
   }
+}
+
+/** Removes userinfo, fragments and every query value from each URL in text. */
+export function redactUrlCredentials(text: string): string {
+  return text.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (match) => {
+    try {
+      const url = new URL(match);
+      url.username = '';
+      url.password = '';
+      url.hash = '';
+      for (const key of [...new Set(url.searchParams.keys())]) {
+        url.searchParams.set(key, 'redacted');
+      }
+      return url.toString();
+    } catch {
+      return '[redacted URL]';
+    }
+  });
+}
+
+/** Wraps a connection-library failure so neither the endpoint nor any of its
+ * parts (path, userinfo, query values) survive into the message. */
+export function cdpAttachError(endpoint: string, err: unknown): Error {
+  let message = err instanceof Error ? err.message : String(err);
+  for (const part of endpointParts(endpoint)) {
+    message = message.split(part).join('[redacted]');
+  }
+  message = redactUrlCredentials(message).slice(0, 500);
+  return new Error(`CDP attach failed at ${describeEndpoint(endpoint)}: ${message}`);
+}
+
+function endpointParts(endpoint: string): string[] {
+  const parts = [endpoint, normalizeCdpEndpoint(endpoint)];
+  try {
+    const url = new URL(endpoint);
+    parts.push(url.username, url.password, url.pathname, url.hash.slice(1));
+    for (const value of url.searchParams.values()) parts.push(value, encodeURIComponent(value));
+  } catch {
+    // The whole endpoint string is already listed.
+  }
+  return [...new Set(parts)]
+    .filter((part) => part.length >= 4)
+    .sort((a, b) => b.length - a.length);
+}
+
+const SECRET_ENV = /TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|CREDENTIAL/i;
+const PROVIDER_ENV = /^(BROWSERBASE|BROWSER_USE|FIRECRAWL|CAMOFOX)_/i;
+
+/** Environment for a locally launched Chrome: Lemon settings, relay/operator
+ * tokens and hosted-provider credentials are never inherited. */
+export function browserChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined) continue;
+    if (name.startsWith('LEMON_') || SECRET_ENV.test(name) || PROVIDER_ENV.test(name)) continue;
+    out[name] = value;
+  }
+  return out;
 }
 
 export function defaultChromeExecutable(): string | null {

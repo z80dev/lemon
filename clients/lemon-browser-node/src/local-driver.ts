@@ -2,7 +2,7 @@
 import { pathToFileURL } from 'node:url';
 
 import { asBool, asInt, asString, parseCliArgs, type CliArgs } from './cli-args.js';
-import { ChromeSession } from './chrome.js';
+import { ChromeSession, redactUrlCredentials } from './chrome.js';
 import { dispatchBrowserRequest } from './driver-dispatch.js';
 import { resolveOpenClawUserDataDir } from './openclaw-profile.js';
 
@@ -103,7 +103,8 @@ export async function executeLocalDriverRequest(params: {
     return {
       id,
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      // Errors can echo a CDP or page URL; never serialize its credentials.
+      error: redactUrlCredentials(err instanceof Error ? err.message : String(err)),
     };
   }
 }
