@@ -8,7 +8,7 @@ defmodule CodingAgent.ToolPolicyFloorTest do
 
   @moduletag :tmp_dir
 
-  @channel_names ~w(sms_get_inbox_number sms_wait_for_code sms_list_messages sms_claim_message telegram_send_image discord_send_file)
+  @channel_names ~w(sms_get_inbox_number sms_wait_for_code sms_list_messages sms_claim_message sms_release_inbox send_file)
   @extension_tool "floor_extension_tool"
   @mcp_tool "floor_mcp_tool"
 
@@ -58,12 +58,12 @@ defmodule CodingAgent.ToolPolicyFloorTest do
     key = "agent:floor:telegram:dm:1"
 
     [
-      LemonGateway.Tools.TelegramSendImage.tool(cwd, session_key: key, workspace_dir: cwd),
-      LemonGateway.Tools.DiscordSendFile.tool(cwd, session_key: key, workspace_dir: cwd),
-      LemonGateway.Tools.SmsGetInboxNumber.tool(cwd),
+      CodingAgent.Tools.SendFile.tool(cwd, session_key: key, workspace_dir: cwd),
+      LemonGateway.Tools.SmsGetInboxNumber.tool(cwd, session_key: key),
       LemonGateway.Tools.SmsWaitForCode.tool(cwd, session_key: key),
       LemonGateway.Tools.SmsListMessages.tool(cwd, session_key: key),
-      LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: key)
+      LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: key),
+      LemonGateway.Tools.SmsReleaseInbox.tool(cwd, session_key: key)
     ]
   end
 

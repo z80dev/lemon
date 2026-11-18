@@ -606,7 +606,7 @@ defmodule LemonWeb.OmpLiveTest do
       |> render_submit()
 
       html = render_async(view, @async_timeout)
-      assert html =~ "cwd must be an existing directory."
+      assert html =~ "cwd must be an existing directory"
       assert has_element?(view, "#omp-start-dialog")
       assert LemonOmp.list(include_ended: false) == []
     end

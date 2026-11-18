@@ -457,8 +457,8 @@ that asked, never with more authority:
   The preview shows, and the confirmation binds, the exact push URL(s) the
   configured remote resolves to at that moment plus the pull request
   repository and base; a change between preview and confirmation refuses the
-  confirmation. Lemon then pushes only to those URLs (`git push -- <url>
-  <commit>:<branch>`): changing the remote later never redirects publication,
+  confirmation. Lemon then pushes only to those URLs
+  (`git push -- <url> <commit>:<branch>`): changing the remote later never redirects publication,
   and publishing somewhere else needs a fresh confirmation. Before anything
   reaches the network, every push, every `git ls-remote` check and every
   `gh pr` call, with all of its arguments, must be allowed by the card's
