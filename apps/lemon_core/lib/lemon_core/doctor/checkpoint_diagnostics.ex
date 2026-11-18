@@ -25,7 +25,7 @@ defmodule LemonCore.Doctor.CheckpointDiagnostics do
     valid = Enum.flat_map(entries, &valid_entry/1)
 
     %{
-      store_dir: dir,
+      store: LemonCore.Doctor.Redaction.path_ref(dir),
       exists: File.dir?(dir),
       count: length(valid),
       filesystem_count: Enum.count(valid, &(&1.kind == "filesystem")),

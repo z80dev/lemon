@@ -39,10 +39,10 @@ defmodule LemonCore.UsageDiagnostics do
     }
   rescue
     error ->
-      unavailable(Exception.message(error))
+      unavailable("usage diagnostics failed (#{inspect(error.__struct__)})")
   catch
-    kind, reason ->
-      unavailable(inspect({kind, reason}))
+    kind, _reason ->
+      unavailable("usage diagnostics stopped (#{kind})")
   end
 
   # `LemonCore.UsageLedger` dates the `:current` summary and restarts it each

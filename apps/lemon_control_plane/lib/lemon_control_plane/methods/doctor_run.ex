@@ -10,8 +10,8 @@ defmodule LemonControlPlane.Methods.DoctorRun do
 
   The projection is bounded and redacted: at most 64 checks, each with
   `name`, `status` (`pass | warn | fail | skip`), `message` and `remediation`
-  truncated to 480 bytes after secret redaction and with filesystem paths
-  replaced by `[path]`.
+  truncated to 480 bytes after `LemonCore.Doctor.Redaction.text/1` (secrets
+  masked, filesystem paths replaced by `[path]`).
 
   ## Response
 
@@ -30,7 +30,6 @@ defmodule LemonControlPlane.Methods.DoctorRun do
 
   @max_checks 64
   @max_text_bytes 480
-  @path_token ~r/(?<![\w~.-])(?:~|\.{1,2})?\/[^\s"'`<>()\[\],;]+/u
 
   @impl true
   def name, do: "doctor.run"
@@ -101,8 +100,7 @@ defmodule LemonControlPlane.Methods.DoctorRun do
 
   def safe_text(text) when is_binary(text) do
     text
-    |> then(&Regex.replace(@path_token, &1, "[path]"))
-    |> LemonCore.Redact.text()
+    |> LemonCore.Doctor.Redaction.text()
     |> truncate()
   end
 

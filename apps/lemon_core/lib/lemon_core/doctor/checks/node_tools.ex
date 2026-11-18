@@ -40,7 +40,7 @@ defmodule LemonCore.Doctor.Checks.NodeTools do
         )
 
       path ->
-        Check.pass(name, "#{binary} found: #{path}")
+        Check.pass(name, "#{binary} found: #{LemonCore.Doctor.Redaction.path_label(path)}")
     end
   end
 end

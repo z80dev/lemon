@@ -619,19 +619,49 @@ Review the zip before sharing it. The bundle is designed to exclude secrets and
 private data, but users remain responsible for checking attachments before
 posting them publicly.
 
+When `lemon doctor --bundle` finds a running daemon, the diagnostic sections
+come from that daemon through the admin-scoped `doctor.bundle` control-plane
+method (the CLI's operator token is required), so they describe the daemon's
+browser, LSP, media, memory and channel state rather than the one-shot CLI VM.
+The manifest records `runtime_source: "daemon"` or `"local"`; if the daemon
+cannot be asked, its sections are marked unreported. `mix lemon.doctor --bundle`
+always describes the VM it runs in.
+
+Every entry passes one redaction pass (`LemonCore.Doctor.Redaction`), which
+also applies to `lemon doctor` and `mix lemon.doctor` output (text and
+`--json`): directories and files appear only as a `path_hash` plus `exists`
+flag or as `[path]` in text (single-component and quoted paths included),
+chat/guild/channel/user/session id fields such as `allowed_chat_ids` are
+removed, owners, columns, accounts, names, emails, phone numbers, senders and
+hosts become hashes or counts, free text has every URL collapsed to its
+scheme and a host hash and has emails, `+` phone numbers and long digit runs
+(also after a colon) replaced, credential fields read `[redacted]`, browser
+driver errors appear only as a failure category and hash, and failed checks
+report a fixed message with the error class, never the exception text. Checks
+show known paths only as `[path:<hash>]`. The Lemon config files are included
+as a settings projection in `config/global_config.json` and
+`config/project_config.json`: booleans and small numbers keep their value;
+strings keep it only when it belongs to that field's enum set; built-in
+provider ids are kept and custom provider names become `custom:<hash>`;
+profile, MCP server, binding and pool names and their references become
+`label:<hash>`; other strings show only whether they are set, lists their
+count, and credential fields and header/env tables presence and count. The
+archive's `README.txt` lists every entry.
+
 The bundle manifest includes the Lemon app version, release name/version,
 release channel when available, source/release runtime mode, git commit/branch
-state, Elixir/OTP versions, OS, and CPU architecture.
+state, Elixir/OTP versions, OS, CPU architecture and `runtime_source`. It does
+not include the project or working directory.
 
 For browser automation bugs, the bundle also includes
 `browser_diagnostics.json` with local driver lifecycle counters, the browser
-artifact directory, artifact count/byte totals, oldest/newest artifact
+artifact directory's hash and existence, artifact count/byte totals, oldest/newest artifact
 timestamps, managed cleanup policy, and recent screenshot artifact metadata. It
 does not include screenshot bytes, page HTML, page text, cookies, private
 prompts, or tool outputs.
 
 For generated-media bugs, the bundle includes `media_diagnostics.json` with the
-media job metadata directory, artifact directory, redacted job counts, type and
+media job and artifact directories' hashes and existence, redacted job counts, type and
 status counts, artifact count/byte totals, cleanup policy, and recent job
 metadata. The bundle does not include prompts, raw artifact paths, generated
 bytes, provider responses, channel message bodies, or API credentials.

@@ -417,8 +417,8 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert "provider_diagnostics.json" in names
     assert "terminal_diagnostics.json" in names
     assert "usage_diagnostics.json" in names
-    assert "config/global_config.toml" in names
-    assert "config/project_config.toml" in names
+    assert "config/global_config.json" in names
+    assert "config/project_config.json" in names
 
     {_, readme_text} = Enum.find(entries, fn {name, _content} -> name == ~c"README.txt" end)
     readme = IO.iodata_to_binary(readme_text)
@@ -446,7 +446,7 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert is_binary(browser["local_server"]["driver_config"]["cdp_endpoint_hash"])
     refute String.contains?(browser_text, endpoint)
     refute String.contains?(browser_text, "secret")
-    assert is_binary(browser["artifacts_dir"])
+    assert %{"path_hash" => _, "exists" => _} = browser["artifacts_dir"]
     assert is_map(browser["artifact_summary"])
     assert browser["artifact_summary"]["cleanup"]["managed"] == true
     assert browser["artifact_summary"]["cleanup"]["policy"] == "managed: 14d or 100 files"
@@ -621,8 +621,8 @@ defmodule LemonCore.Doctor.SupportBundleTest do
 
     media = media_json |> IO.iodata_to_binary() |> Jason.decode!()
 
-    assert is_binary(media["jobs_dir"])
-    assert is_binary(media["artifacts_dir"])
+    assert %{"path_hash" => _, "exists" => _} = media["jobs_dir"]
+    assert %{"path_hash" => _, "exists" => _} = media["artifacts_dir"]
     assert media["worker_status"]["supervised"] == true
     assert media["worker_status"]["running"] == true
     assert is_integer(media["worker_status"]["active_jobs"])

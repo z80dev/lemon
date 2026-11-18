@@ -150,7 +150,8 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 
 | Module | Purpose |
 |--------|---------|
-| `LemonCore.Doctor.SupportBundle` | Redacted doctor report, runtime metadata, config, and diagnostics ZIP writer |
+| `LemonCore.Doctor.SupportBundle` | Doctor report, build metadata, parsed config and diagnostics ZIP writer; `collect/1` builds the sections in the runtime they describe (the daemon serves them as `doctor.bundle`) |
+| `LemonCore.Doctor.Redaction` | The one redaction pass for everything doctor shares (bundle entries, `doctor --json`, `doctor.run`): paths become a hash and existence flag or `[path]`, chat/guild/channel/user/session id fields are dropped, credential fields and non-JSON terms are masked |
 | `LemonCore.Doctor.ProviderDiagnostics` | Provider setup/routing diagnostics for support bundles without raw API keys, secret names, base URLs, env var names, prompts, or provider responses |
 | `LemonCore.Doctor.Checks.Usage` | Usage aggregate and quota-pressure check backed by redacted shared usage diagnostics |
 

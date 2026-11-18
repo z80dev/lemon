@@ -72,13 +72,17 @@ defmodule LemonCore.Doctor.Checks.Runtime do
     Check.skip("runtime.lemon_root", "LEMON_PATH is not set.")
   end
 
+  # Doctor output is shared, so the path is shown as a label (it may contain
+  # spaces that text redaction cannot delimit).
   defp check_lemon_root(root) do
+    label = LemonCore.Doctor.Redaction.path_label(root)
+
     if File.dir?(root) do
-      Check.pass("runtime.lemon_root", "Lemon root directory exists: #{root}")
+      Check.pass("runtime.lemon_root", "Lemon root directory exists: #{label}")
     else
       Check.warn(
         "runtime.lemon_root",
-        "LEMON_PATH points to a non-existent directory: #{root}",
+        "LEMON_PATH points to a non-existent directory: #{label}",
         "Fix LEMON_PATH or unset it."
       )
     end

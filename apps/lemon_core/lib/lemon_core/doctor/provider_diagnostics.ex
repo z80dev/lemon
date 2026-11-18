@@ -321,6 +321,87 @@ defmodule LemonCore.Doctor.ProviderDiagnostics do
 
   defp hash_name(name), do: hash_name(to_string(name))
 
+  @public_providers @known_providers ++ ~w(omp omp-gateway omp-auth-gateway)
+
+  @doc """
+  The shareable form of a provider name: a built-in provider id as is, any
+  other (custom) name as `"custom:<hash>"`. Built-in means one of this
+  module's known providers or a name the runtime's registered `:provider_names`
+  module (`LemonCore.Doctor.RuntimeModules`) reports as `builtin?/1`. Apply it
+  only when rendering output; comparisons use raw normalized names.
+  """
+  @spec public_provider(term()) :: String.t() | nil
+  def public_provider(nil), do: nil
+  def public_provider(""), do: nil
+
+  def public_provider(name) do
+    normalized = normalize_provider(name)
+
+    if normalized in @public_providers or runtime_builtin?(name),
+      do: normalized,
+      else: "custom:" <> hash_name(normalized)
+  end
+
+  defp runtime_builtin?(name) do
+    mod = LemonCore.Doctor.RuntimeModules.fetch(:provider_names)
+
+    mod != nil and Code.ensure_loaded?(mod) and function_exported?(mod, :builtin?, 1) and
+      mod.builtin?(to_string(name)) == true
+  rescue
+    _ -> false
+  end
+
+  @doc """
+  The shareable projection of `status/1`, applied only at output boundaries
+  (support bundles): every provider name goes through `public_provider/1` and
+  pool strategies outside the known set read `"other"`. `status/1` itself
+  keeps raw normalized names so comparisons and counts stay correct.
+  """
+  @spec public_status(map()) :: map()
+  def public_status(status) do
+    routing = Map.get(status, :routing, %{})
+
+    status
+    |> Map.update(:default_provider, nil, &public_provider/1)
+    |> Map.update(:providers, [], fn providers ->
+      Enum.map(providers, fn provider ->
+        %{
+          provider
+          | provider: public_provider(provider.provider),
+            config_name: public_provider(provider.config_name)
+        }
+      end)
+    end)
+    |> Map.put(:routing, public_routing(routing))
+  end
+
+  defp public_routing(routing) do
+    routing
+    |> Map.update(:fallback_providers, [], &Enum.map(&1, fn p -> public_provider(p) end))
+    |> Map.update(:credential_pools, [], fn pools ->
+      Enum.map(pools, fn pool ->
+        %{
+          pool
+          | providers: Enum.map(pool.providers, &public_provider/1),
+            strategy: public_strategy(pool.strategy)
+        }
+      end)
+    end)
+    |> Map.update(:profiles, [], fn profiles ->
+      Enum.map(profiles, fn profile ->
+        %{
+          profile
+          | fallback_providers: Enum.map(profile.fallback_providers, &public_provider/1),
+            distribution:
+              Enum.map(profile.distribution, &%{&1 | provider: public_provider(&1.provider)})
+        }
+      end)
+    end)
+  end
+
+  defp public_strategy(strategy) when strategy in ["priority", "round_robin"], do: strategy
+  defp public_strategy(_strategy), do: "other"
+
   defp normalize_provider(value) when is_atom(value),
     do: value |> Atom.to_string() |> normalize_provider()
 

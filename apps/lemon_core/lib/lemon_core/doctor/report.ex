@@ -13,7 +13,7 @@ defmodule LemonCore.Doctor.Report do
       Report.ok?(report)                       # true if no failures
   """
 
-  alias LemonCore.Doctor.Check
+  alias LemonCore.Doctor.{Check, Redaction}
 
   defstruct [:checks, :pass, :warn, :fail, :skip]
 
@@ -92,6 +92,8 @@ defmodule LemonCore.Doctor.Report do
       },
       "checks" =>
         Enum.map(report.checks, fn c ->
+          c = Redaction.check(c)
+
           %{
             "name" => c.name,
             "status" => Atom.to_string(c.status),
@@ -108,7 +110,10 @@ defmodule LemonCore.Doctor.Report do
   # Private helpers
   # ──────────────────────────────────────────────────────────────────────────
 
+  # Text output is pasted into issues too, so it shares the JSON policy.
   defp print_check(shell, %Check{} = check, verbose?) do
+    check = Redaction.check(check)
+
     status_label = String.pad_trailing("[#{Check.label(check.status)}]", 7)
     color = Check.color(check.status)
 

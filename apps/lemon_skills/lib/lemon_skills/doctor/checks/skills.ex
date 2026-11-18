@@ -18,19 +18,22 @@ defmodule LemonSkills.Doctor.Checks.Skills do
     ]
   end
 
+  # Doctor output is shared, so the directory is shown as a path label.
   defp check_skills_dir(path) do
+    label = LemonCore.Doctor.Redaction.path_label(path)
+
     cond do
       not File.exists?(path) ->
         Check.skip(
           "skills.directory",
-          "Skills directory does not exist yet: #{path} (created on first install)."
+          "Skills directory does not exist yet: #{label} (created on first install)."
         )
 
       not File.dir?(path) ->
         Check.fail(
           "skills.directory",
-          "Expected a directory at #{path} but found a file.",
-          "Remove or rename #{path} so Lemon can create the skills directory."
+          "Expected a directory at #{label} but found a file.",
+          "Remove or rename #{label} so Lemon can create the skills directory."
         )
 
       true ->
@@ -46,7 +49,7 @@ defmodule LemonSkills.Doctor.Checks.Skills do
           {:error, reason} ->
             Check.warn(
               "skills.directory",
-              "Could not list skills directory #{path}: #{inspect(reason)}.",
+              "Could not list skills directory #{label}: #{inspect(reason)}.",
               "Check directory permissions."
             )
         end

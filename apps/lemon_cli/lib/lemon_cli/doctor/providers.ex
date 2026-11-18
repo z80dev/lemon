@@ -185,9 +185,14 @@ defmodule LemonCli.Doctor.Providers do
 
   defp raw_key(_), do: nil
 
-  # Display ids become check names: keep a conservative, bounded alphabet.
+  # Display ids become check names and message prefixes in shared doctor
+  # output: custom provider names are shown as their public projection
+  # (`custom:<hash>`), then kept to a conservative, bounded alphabet. The
+  # configured key itself is still what the resolver receives.
   defp clean_id(value) when is_binary(value) do
     case value
+         |> LemonCore.Doctor.ProviderDiagnostics.public_provider()
+         |> to_string()
          |> LemonCore.Redact.text()
          |> String.trim()
          |> String.replace(~r/[^A-Za-z0-9._-]/u, "_") do

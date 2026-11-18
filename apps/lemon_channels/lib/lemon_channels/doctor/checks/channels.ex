@@ -24,7 +24,7 @@ defmodule LemonChannels.Doctor.Checks.Channels do
         Check.warn(
           "channels.diagnostics",
           "Channel diagnostics are unavailable.",
-          Exception.message(error)
+          "Error class: #{inspect(error.__struct__)}. Run `lemon config validate --verbose`."
         )
       ]
   end

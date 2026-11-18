@@ -69,8 +69,10 @@ defmodule LemonSkills.Doctor.Checks.McpProjectTrust do
         trust_check,
         Check.warn(
           "mcp.project_host_values",
-          "Project MCP servers rejected for referencing host environment, files or secrets: " <>
-            Enum.join(rejected, ", ") <> ".",
+          # Server names come from untrusted project files, so only the count
+          # is reported; `lemon mcp trust` lists them locally.
+          "#{length(rejected)} project MCP server(s) rejected for referencing host " <>
+            "environment, files or secrets; run `lemon mcp trust` to see which.",
           "Project MCP files cannot use ${VAR}, {env:}, {file:}, env_vars, env_http_headers, " <>
             "bearer_token_env_var or OAuth client_secret_secret/token_secret; configure " <>
             "credentials in the global Lemon MCP config instead."

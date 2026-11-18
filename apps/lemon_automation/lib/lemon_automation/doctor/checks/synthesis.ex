@@ -30,7 +30,13 @@ defmodule LemonAutomation.Doctor.Checks.Synthesis do
     [check(state, cfg, opts)]
   rescue
     e ->
-      [Check.warn(@name, "synthesis diagnostics unavailable.", Exception.message(e))]
+      [
+        Check.warn(
+          @name,
+          "synthesis diagnostics unavailable.",
+          "Error class: #{inspect(e.__struct__)}. Check the [features] config and SynthesisRunnerManager logs."
+        )
+      ]
   end
 
   # ── Private helpers ─────────────────────────────────────────────────────────
