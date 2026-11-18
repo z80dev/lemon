@@ -229,7 +229,7 @@ defmodule LemonCore.Doctor.ProviderDiagnostics do
   end
 
   defp secret_present?(name) when is_binary(name) do
-    Secrets.exists?(name, prefer_env: false, env_fallback: false)
+    Secrets.exists?(name, prefer_env: false, env_fallback: false, external_fallback: false)
   rescue
     _ -> false
   end

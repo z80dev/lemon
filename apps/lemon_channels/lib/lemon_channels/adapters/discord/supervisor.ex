@@ -10,6 +10,8 @@ defmodule LemonChannels.Adapters.Discord.Supervisor do
 
   use Supervisor
 
+  require Logger
+
   alias LemonCore.Secrets
 
   def start_link(opts \\ []) do
@@ -22,9 +24,7 @@ defmodule LemonChannels.Adapters.Discord.Supervisor do
     base = LemonChannels.GatewayConfig.get(:discord, %{}) || %{}
     config = merge_config(base, explicit)
 
-    token =
-      config[:bot_token] || config["bot_token"] || resolve_bot_token_secret(config) ||
-        resolve_token()
+    token = config[:bot_token] || config["bot_token"] || secret_or_ambient_token(config)
 
     children =
       if is_binary(token) and String.trim(token) != "" do
@@ -57,18 +57,43 @@ defmodule LemonChannels.Adapters.Discord.Supervisor do
 
   defp merge_config(base, opts), do: LemonCore.MapHelpers.merge_config(base, opts)
 
+  # Only a definite miss (or no configured secret) may fall through to the
+  # ambient DISCORD_BOT_TOKEN; any other resolution failure yields no token.
+  defp secret_or_ambient_token(config) do
+    case resolve_bot_token_secret(config) do
+      {:ok, token} ->
+        token
+
+      :not_found ->
+        resolve_token()
+
+      {:error, reason} ->
+        Logger.error("discord bot_token_secret could not be resolved: #{inspect(reason)}")
+        nil
+    end
+  end
+
   defp resolve_bot_token_secret(config) do
     secret_name = config[:bot_token_secret] || config["bot_token_secret"]
 
     if is_binary(secret_name) and secret_name != "" do
-      Secrets.fetch_value(secret_name)
+      case Secrets.resolve(secret_name) do
+        {:ok, value, _source} -> {:ok, value}
+        {:error, :not_found} -> :not_found
+        {:error, reason} -> {:error, reason}
+      end
     else
-      nil
+      :not_found
     end
+  rescue
+    error -> {:error, {:exception, error.__struct__}}
+  catch
+    :exit, _ -> {:error, :resolution_exit}
   end
 
   defp resolve_token do
-    # Try secrets store first, then fall back to environment variable
-    Secrets.fetch_value("DISCORD_BOT_TOKEN") || System.get_env("DISCORD_BOT_TOKEN")
+    # Store, then external sources, then the DISCORD_BOT_TOKEN env var; a
+    # store or source failure yields no token rather than the env value.
+    Secrets.fetch_value("DISCORD_BOT_TOKEN")
   end
 end

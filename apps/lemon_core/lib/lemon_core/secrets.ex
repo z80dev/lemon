@@ -564,7 +564,9 @@ defmodule LemonCore.Secrets do
   Convenience wrapper around `resolve/2` that returns just the value or `nil`.
 
   Drop-in replacement for `System.get_env/1` — tries the encrypted store first,
-  then falls back to the environment variable of the same name.
+  then enabled external sources, then the environment variable of the same
+  name. Any failure, including a store or source error, returns `nil`; callers
+  must not substitute an environment read of their own.
 
       iex> LemonCore.Secrets.fetch_value("ANTHROPIC_API_KEY")
       "sk-ant-..."
@@ -580,12 +582,32 @@ defmodule LemonCore.Secrets do
     end
   end
 
+  @doc """
+  Resolves a secret: encrypted store, then enabled external sources, then the
+  same-name environment variable.
+
+  Only a definite store miss (`:not_found`) continues past the store. Every
+  other store failure — an undecryptable or malformed record, a store,
+  master-key or lock outage — is returned as `{:error, reason}`; an external
+  source failure or an invalid `[secrets]` table is returned as
+  `{:error, {:external_source, reason}}`. Neither ever falls back to the
+  environment.
+
+  ## Options
+
+    * `:prefer_env` - read the environment before the store (default `false`)
+    * `:env_fallback` - read the environment after a miss (default `true`)
+    * `:external_fallback` - consult enabled external sources after a store
+      miss (default `true`, independent of `:env_fallback`)
+    * `:expired_fallback` - treat an expired store record as a miss instead
+      of returning `{:error, :expired}` (default `false`)
+  """
   @spec resolve(name(), keyword()) ::
           {:ok, String.t(), :store | :env | String.t()} | {:error, error_reason()}
   def resolve(name, opts \\ []) do
     prefer_env = Keyword.get(opts, :prefer_env, false)
     env_fallback = Keyword.get(opts, :env_fallback, true)
-    external_fallback = Keyword.get(opts, :external_fallback, env_fallback)
+    external_fallback = Keyword.get(opts, :external_fallback, true)
 
     if prefer_env do
       case fetch_env(name, opts) do
@@ -601,7 +623,8 @@ defmodule LemonCore.Secrets do
   Resolves only the encrypted store and same-name environment fallback.
 
   External-source implementations use this for bootstrap credentials so a
-  source can never recurse through itself or another external source.
+  source can never recurse through itself or another external source. Store
+  errors other than a definite miss fail closed exactly as in `resolve/2`.
   """
   @spec resolve_local(name(), keyword()) ::
           {:ok, String.t(), :store | :env} | {:error, error_reason()}
@@ -627,12 +650,7 @@ defmodule LemonCore.Secrets do
   @doc "Checks only the encrypted store and same-name environment fallback."
   @spec exists_local?(name(), keyword()) :: boolean()
   def exists_local?(name, opts \\ []) do
-    prefer_env = Keyword.get(opts, :prefer_env, false)
-    env_fallback = Keyword.get(opts, :env_fallback, true)
-
-    (prefer_env and match?({:ok, _}, fetch_env(name, opts))) or
-      store_exists?(name, opts) or
-      (env_fallback and match?({:ok, _}, fetch_env(name, opts)))
+    match?({:ok, _value, _source}, resolve_local(name, opts))
   end
 
   @doc """
@@ -825,25 +843,20 @@ defmodule LemonCore.Secrets do
         {:ok, value, :store}
 
       {:error, reason} ->
-        if master_key_failure?(reason),
-          do: {:error, reason},
-          else: resolve_after_store(name, reason, external_fallback, env_fallback, opts)
+        if store_miss?(reason, opts),
+          do: resolve_after_store(name, reason, external_fallback, env_fallback, opts),
+          else: {:error, reason}
     end
   end
 
-  # A stored credential exists but its master key cannot be established: the
-  # store's key was rejected, providers disagree, a provider failed or holds
-  # unusable material. Answering with an external or environment credential
-  # instead would hide a key outage behind a different identity. Only a
-  # definitive "no key configured" (`:missing_master_key`) may fall back.
-  defp master_key_failure?(reason)
-       when reason in [:master_key_mismatch, :invalid_master_key, :weak_master_key, :lock_timeout],
-       do: true
-
-  defp master_key_failure?({:conflicting_master_keys, _sources}), do: true
-  defp master_key_failure?({:keychain_failed, _reason}), do: true
-  defp master_key_failure?({:key_provider_failed, _provider, _reason}), do: true
-  defp master_key_failure?(_reason), do: false
+  # Only a definite absence may defer to an external source or the
+  # environment. Any other failure (unreadable or undecryptable record, store
+  # or master-key outage, lock timeout) means a stored credential may exist,
+  # and answering with a different identity would hide that failure.
+  # An expired record defers only when the caller opts in.
+  defp store_miss?(:not_found, _opts), do: true
+  defp store_miss?(:expired, opts), do: Keyword.get(opts, :expired_fallback, false) === true
+  defp store_miss?(_reason, _opts), do: false
 
   defp resolve_after_store(name, store_reason, true, env_fallback, opts) do
     case External.resolve(name, opts) do
@@ -863,9 +876,9 @@ defmodule LemonCore.Secrets do
         {:ok, value, :store}
 
       {:error, reason} ->
-        if master_key_failure?(reason),
-          do: {:error, reason},
-          else: maybe_resolve_env(name, reason, env_fallback, opts)
+        if store_miss?(reason, opts),
+          do: maybe_resolve_env(name, reason, env_fallback, opts),
+          else: {:error, reason}
     end
   end
 
@@ -877,17 +890,6 @@ defmodule LemonCore.Secrets do
   end
 
   defp maybe_resolve_env(_name, reason, false, _opts), do: {:error, reason}
-
-  defp store_exists?(name, opts) do
-    with {:ok, normalized_name} <- normalize_name(name),
-         {:ok, owner} <- normalize_owner(opts),
-         {:ok, server} <- storage_owner(opts),
-         {:ok, _entry} <- fetch_active_entry(server, owner, normalized_name) do
-      true
-    else
-      _ -> false
-    end
-  end
 
   # An unchanged record that does not open under a key the store's verifier
   # rejects is the wrong key (`:master_key_mismatch`), not one damaged record.

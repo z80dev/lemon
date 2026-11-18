@@ -1527,6 +1527,9 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
   defp normalize_map(_), do: %{}
 
+  # Only a definite miss may keep the alternate configured wallet keys; any
+  # other resolution failure drops them so no ${ENV}/plaintext key reaches the
+  # bridge, and records the error instead.
   defp resolve_secret_refs(config) when is_map(config) do
     case fetch_meta(config, :wallet_key_secret) do
       secret_name when is_binary(secret_name) and secret_name != "" ->
@@ -1534,17 +1537,31 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
           {:ok, wallet_key, _source} when is_binary(wallet_key) and wallet_key != "" ->
             Map.put(config, :wallet_key, wallet_key)
 
-          _ ->
+          {:ok, _blank, _source} ->
             config
+
+          {:error, :not_found} ->
+            config
+
+          {:error, reason} ->
+            drop_wallet_keys(config, reason)
         end
 
       _ ->
         config
     end
   rescue
-    _ -> config
+    error -> drop_wallet_keys(config, {:exception, error.__struct__})
   catch
-    :exit, _ -> config
+    :exit, _ -> drop_wallet_keys(config, :resolution_exit)
+  end
+
+  defp drop_wallet_keys(config, reason) do
+    Logger.error("xmtp wallet_key_secret could not be resolved: #{inspect(reason)}")
+
+    config
+    |> Map.drop([:wallet_key, "wallet_key", :private_key, "private_key"])
+    |> Map.put(:wallet_key_error, reason)
   end
 
   defp resolve_env_refs(config) when is_map(config) do

@@ -9,6 +9,8 @@ defmodule LemonGateway.Voice.Config do
   only where needed while tests and deployments finish migrating.
   """
 
+  require Logger
+
   @doc """
   Returns whether the voice transport is enabled.
   """
@@ -198,30 +200,43 @@ defmodule LemonGateway.Voice.Config do
   defp to_bool(_, default), do: default
 
   # Resolve a secret-ref field, falling back to a named secret, plain value, then env var.
+  # Only a definite miss advances to the next candidate: an unreadable secret
+  # (decrypt failure, corrupt record, store/external error) yields nil so callers
+  # never silently authenticate with a plaintext/env credential instead.
   defp resolve_secret(secret_ref, secret_name, plain_value, env_var) do
-    # 1. Try explicit secret ref from config (e.g. twilio_account_sid_secret = "my_secret")
-    resolved_ref =
-      if is_binary(secret_ref) and secret_ref != "" do
-        resolve_via_secrets(secret_ref)
-      else
-        nil
-      end
+    candidates =
+      if is_binary(secret_ref) and secret_ref != "",
+        do: [secret_ref, secret_name],
+        else: [secret_name]
 
-    # 2. Try named secret (legacy pattern)
-    resolved_named = resolved_ref || resolve_via_secrets(secret_name)
-
-    # 3. Fall back to plain config value or env var
-    resolved_named || plain_value || System.get_env(env_var)
+    case resolve_first_secret(candidates) do
+      {:ok, value} -> value
+      :not_found -> plain_value || System.get_env(env_var)
+      :error -> nil
+    end
   end
 
-  defp resolve_via_secrets(name) when is_binary(name) do
-    case LemonCore.Secrets.resolve(name) do
-      {:ok, value, _source} -> value
-      _ -> nil
+  defp resolve_first_secret([]), do: :not_found
+
+  defp resolve_first_secret([name | rest]) do
+    case resolve_via_secrets(name) do
+      {:ok, value, _source} ->
+        {:ok, value}
+
+      {:error, :not_found} ->
+        resolve_first_secret(rest)
+
+      {:error, reason} ->
+        Logger.warning("Voice secret #{inspect(name)} is unreadable: #{inspect(reason)}")
+        :error
     end
+  end
+
+  defp resolve_via_secrets(name) do
+    LemonCore.Secrets.resolve(name)
   rescue
-    _ -> nil
+    e -> {:error, {:exception, e.__struct__}}
   catch
-    :exit, _ -> nil
+    :exit, reason -> {:error, {:exit, reason}}
   end
 end

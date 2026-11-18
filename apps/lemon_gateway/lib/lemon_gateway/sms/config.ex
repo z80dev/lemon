@@ -73,20 +73,52 @@ defmodule LemonGateway.Sms.Config do
     end
   end
 
+  # Configured secret -> TWILIO_AUTH_TOKEN secret (with env fallback) -> plaintext
+  # config. Only a definite miss advances: an unreadable secret yields nil so the
+  # webhook signature check fails closed instead of trusting a later credential.
   def auth_token do
-    resolve_auth_token_secret() ||
-      normalize_blank(LemonCore.Secrets.fetch_value("TWILIO_AUTH_TOKEN")) ||
+    with :not_found <- resolve_auth_token_secret(),
+         :not_found <- resolve_secret("TWILIO_AUTH_TOKEN") do
       normalize_blank(sms_cfg(:auth_token))
+    else
+      {:ok, value} -> value
+      :error -> nil
+    end
   end
 
   defp resolve_auth_token_secret do
     secret_name = sms_cfg(:auth_token_secret)
 
     if is_binary(secret_name) and String.trim(secret_name) != "" do
-      normalize_blank(LemonCore.Secrets.fetch_value(secret_name))
+      resolve_secret(secret_name)
     else
-      nil
+      :not_found
     end
+  end
+
+  defp resolve_secret(name) do
+    case LemonCore.Secrets.resolve(name) do
+      {:ok, value, _source} ->
+        case normalize_blank(value) do
+          nil -> :not_found
+          value -> {:ok, value}
+        end
+
+      {:error, :not_found} ->
+        :not_found
+
+      {:error, reason} ->
+        Logger.warning("SMS secret #{inspect(name)} is unreadable: #{inspect(reason)}")
+        :error
+    end
+  rescue
+    e ->
+      Logger.warning("SMS secret #{inspect(name)} lookup raised: #{inspect(e.__struct__)}")
+      :error
+  catch
+    :exit, _reason ->
+      Logger.warning("SMS secret #{inspect(name)} lookup exited")
+      :error
   end
 
   def webhook_url_override, do: env_string(:twilio_webhook_url, sms_cfg(:webhook_url))

@@ -254,6 +254,11 @@ defmodule CodingAgent.Tools.WebSearch do
 
           json_result(payload)
 
+        # An unreadable credential secret is an error for this provider, not a
+        # reason to fail over to another provider.
+        {:setup_error, %{"error" => "secret_unavailable"}} = failure ->
+          render_chain_failure(all_providers, Enum.reverse([{provider, failure} | failures]))
+
         failure ->
           run_provider_chain(
             rest,
@@ -448,27 +453,31 @@ defmodule CodingAgent.Tools.WebSearch do
   defp resolve_api_config("exa", runtime) do
     config = provider_config(runtime, "exa")
 
-    api_key =
-      normalize_optional_string(get_map_value(config, :api_key, nil)) ||
-        resolve_secret_ref(get_map_value(config, :api_key_secret, nil)) ||
-        env_optional("EXA_API_KEY")
+    case resolve_api_key("exa", [
+           {:configured, {:value, get_map_value(config, :api_key, nil)}},
+           {:configured, {:secret, get_map_value(config, :api_key_secret, nil)}},
+           {:env, {:secret, "EXA_API_KEY"}}
+         ]) do
+      {:ok, api_key, _source} ->
+        {:ok,
+         %{
+           api_key: api_key,
+           base_url:
+             normalize_optional_string(get_map_value(config, :base_url, nil)) ||
+               "https://api.exa.ai"
+         }}
 
-    if api_key do
-      {:ok,
-       %{
-         api_key: api_key,
-         base_url:
-           normalize_optional_string(get_map_value(config, :base_url, nil)) ||
-             "https://api.exa.ai"
-       }}
-    else
-      {:error,
-       %{
-         "error" => "missing_exa_api_key",
-         "message" =>
-           "websearch (exa) needs an API key. Set EXA_API_KEY or configure runtime.tools.web.search.providers.exa.api_key.",
-         "docs" => "docs/tools/web.md"
-       }}
+      {:error, payload} ->
+        {:error, payload}
+
+      :none ->
+        {:error,
+         %{
+           "error" => "missing_exa_api_key",
+           "message" =>
+             "websearch (exa) needs an API key. Set EXA_API_KEY or configure runtime.tools.web.search.providers.exa.api_key.",
+           "docs" => "docs/tools/web.md"
+         }}
     end
   end
 
@@ -476,41 +485,48 @@ defmodule CodingAgent.Tools.WebSearch do
     config = provider_config(runtime, "searxng")
     base_url = normalize_optional_string(get_map_value(config, :base_url, nil))
 
-    if base_url do
-      {:ok,
-       %{
-         base_url: base_url,
-         api_key:
-           normalize_optional_string(get_map_value(config, :api_key, nil)) ||
-             resolve_secret_ref(get_map_value(config, :api_key_secret, nil))
-       }}
+    with {:base_url, base_url} when is_binary(base_url) <- {:base_url, base_url},
+         {:ok, api_key} <-
+           optional_api_key("searxng", [
+             {:configured, {:value, get_map_value(config, :api_key, nil)}},
+             {:configured, {:secret, get_map_value(config, :api_key_secret, nil)}}
+           ]) do
+      {:ok, %{base_url: base_url, api_key: api_key}}
     else
-      {:error,
-       %{
-         "error" => "missing_searxng_base_url",
-         "message" =>
-           "websearch (searxng) needs agent.tools.web.search.providers.searxng.base_url.",
-         "docs" => "docs/tools/web.md"
-       }}
+      {:error, payload} ->
+        {:error, payload}
+
+      {:base_url, nil} ->
+        {:error,
+         %{
+           "error" => "missing_searxng_base_url",
+           "message" =>
+             "websearch (searxng) needs agent.tools.web.search.providers.searxng.base_url.",
+           "docs" => "docs/tools/web.md"
+         }}
     end
   end
 
   defp resolve_api_config("brave", runtime) do
-    api_key =
-      normalize_optional_string(runtime.api_key) ||
-        resolve_secret_ref(runtime.api_key_secret) ||
-        env_optional("BRAVE_API_KEY")
+    case resolve_api_key("brave", [
+           {:configured, {:value, runtime.api_key}},
+           {:configured, {:secret, runtime.api_key_secret}},
+           {:env, {:secret, "BRAVE_API_KEY"}}
+         ]) do
+      {:ok, api_key, _source} ->
+        {:ok, %{api_key: api_key}}
 
-    if is_nil(api_key) do
-      {:error,
-       %{
-         "error" => "missing_brave_api_key",
-         "message" =>
-           "websearch needs a Brave Search API key. Set BRAVE_API_KEY or configure agent.tools.web.search.api_key.",
-         "docs" => "docs/tools/web.md"
-       }}
-    else
-      {:ok, %{api_key: api_key}}
+      {:error, payload} ->
+        {:error, payload}
+
+      :none ->
+        {:error,
+         %{
+           "error" => "missing_brave_api_key",
+           "message" =>
+             "websearch needs a Brave Search API key. Set BRAVE_API_KEY or configure agent.tools.web.search.api_key.",
+           "docs" => "docs/tools/web.md"
+         }}
     end
   end
 
@@ -518,21 +534,25 @@ defmodule CodingAgent.Tools.WebSearch do
     config = provider_config(runtime, provider)
     env = Map.fetch!(@keyed_providers, provider)
 
-    api_key =
-      normalize_optional_string(get_map_value(config, :api_key, nil)) ||
-        resolve_secret_ref(get_map_value(config, :api_key_secret, nil)) ||
-        env_optional(env)
+    case resolve_api_key(provider, [
+           {:configured, {:value, get_map_value(config, :api_key, nil)}},
+           {:configured, {:secret, get_map_value(config, :api_key_secret, nil)}},
+           {:env, {:secret, env}}
+         ]) do
+      {:ok, api_key, _source} ->
+        {:ok, %{api_key: api_key}}
 
-    if api_key do
-      {:ok, %{api_key: api_key}}
-    else
-      {:error,
-       %{
-         "error" => "missing_#{provider}_api_key",
-         "message" =>
-           "websearch (#{provider}) needs an API key. Set #{env} or configure runtime.tools.web.search.providers.#{provider}.api_key.",
-         "docs" => "docs/tools/web.md"
-       }}
+      {:error, payload} ->
+        {:error, payload}
+
+      :none ->
+        {:error,
+         %{
+           "error" => "missing_#{provider}_api_key",
+           "message" =>
+             "websearch (#{provider}) needs an API key. Set #{env} or configure runtime.tools.web.search.providers.#{provider}.api_key.",
+           "docs" => "docs/tools/web.md"
+         }}
     end
   end
 
@@ -552,21 +572,19 @@ defmodule CodingAgent.Tools.WebSearch do
   # (inline or `api_key_secret`) carry no provider identity of their own, so
   # their host comes from an explicit `base_url` or an unambiguous key prefix.
   defp resolve_perplexity_credential(perplexity_cfg) do
-    configured =
-      normalize_optional_string(perplexity_cfg.api_key) ||
-        resolve_secret_ref(Map.get(perplexity_cfg, :api_key_secret))
+    case resolve_api_key("perplexity", [
+           {:configured, {:value, perplexity_cfg.api_key}},
+           {:configured, {:secret, Map.get(perplexity_cfg, :api_key_secret)}},
+           {:perplexity_env, {:secret, "PERPLEXITY_API_KEY"}},
+           {:openrouter_env, {:secret, "OPENROUTER_API_KEY"}}
+         ]) do
+      {:ok, key, source} ->
+        {:ok, key, source}
 
-    cond do
-      configured ->
-        {:ok, configured, :configured}
+      {:error, payload} ->
+        {:error, payload}
 
-      key = env_optional("PERPLEXITY_API_KEY") ->
-        {:ok, key, :perplexity_env}
-
-      key = env_optional("OPENROUTER_API_KEY") ->
-        {:ok, key, :openrouter_env}
-
-      true ->
+      :none ->
         {:error,
          %{
            "error" => "missing_perplexity_api_key",
@@ -575,6 +593,66 @@ defmodule CodingAgent.Tools.WebSearch do
            "docs" => "docs/tools/web.md"
          }}
     end
+  end
+
+  # Walks a credential chain in order. Only a definite miss advances to the next
+  # candidate; any other secret-store failure stops the chain so an ambient env
+  # key or alias is never used in place of an unreadable configured secret.
+  defp resolve_api_key(provider, candidates) do
+    Enum.reduce_while(candidates, :none, fn {source, candidate}, :none ->
+      case read_candidate(candidate) do
+        {:ok, key} -> {:halt, {:ok, key, source}}
+        :not_found -> {:cont, :none}
+        {:error, name, reason} -> {:halt, {:error, secret_unavailable(provider, name, reason)}}
+      end
+    end)
+  end
+
+  defp optional_api_key(provider, candidates) do
+    case resolve_api_key(provider, candidates) do
+      {:ok, key, _source} -> {:ok, key}
+      :none -> {:ok, nil}
+      {:error, payload} -> {:error, payload}
+    end
+  end
+
+  defp read_candidate({:value, value}) do
+    case normalize_optional_string(value) do
+      nil -> :not_found
+      key -> {:ok, key}
+    end
+  end
+
+  defp read_candidate({:secret, name}) when is_binary(name) and name != "" do
+    case Secrets.resolve(name) do
+      {:ok, value, _source} ->
+        case normalize_optional_string(value) do
+          nil -> :not_found
+          key -> {:ok, key}
+        end
+
+      {:error, :not_found} ->
+        :not_found
+
+      {:error, reason} ->
+        {:error, name, reason}
+    end
+  rescue
+    error -> {:error, name, {:exception, error.__struct__}}
+  catch
+    kind, _reason -> {:error, name, kind}
+  end
+
+  defp read_candidate({:secret, _name}), do: :not_found
+
+  defp secret_unavailable(provider, name, reason) do
+    %{
+      "error" => "secret_unavailable",
+      "message" =>
+        "websearch (#{provider}) could not read credential secret #{name} (#{inspect(reason)}). " <>
+          "Fix or remove the stored secret; other credentials and providers are not used in its place.",
+      "docs" => "docs/tools/web.md"
+    }
   end
 
   defp resolve_perplexity_base_url(perplexity_cfg, source, api_key) do
@@ -918,15 +996,6 @@ defmodule CodingAgent.Tools.WebSearch do
     if candidate == primary, do: nil, else: candidate
   end
 
-  defp resolve_secret_ref(nil), do: nil
-  defp resolve_secret_ref(""), do: nil
-
-  defp resolve_secret_ref(secret_name) when is_binary(secret_name) do
-    normalize_optional_string(Secrets.fetch_value(secret_name))
-  end
-
-  defp resolve_secret_ref(_), do: nil
-
   defp apply_provider_overrides(runtime, params) do
     requested = normalize_optional_string(Map.get(params, "provider"))
 
@@ -981,8 +1050,6 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp validate_fallback_providers(_),
     do: {:error, "fallbackProviders must be an array of provider ids"}
-
-  defp env_optional(name), do: normalize_optional_string(Secrets.fetch_value(name))
 
   defp present?(value), do: not is_nil(normalize_optional_string(value))
 

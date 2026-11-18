@@ -156,7 +156,8 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
         |> put_provider_options(:google_vertex, %{
           project: resolved[:project],
           location: resolved[:location],
-          service_account_json: resolved[:service_account_json]
+          service_account_json: resolved[:service_account_json],
+          credential_error: resolved[:credential_error]
         })
 
       %{api: :azure_openai_responses} ->
@@ -282,37 +283,18 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     stream_options_to_map(base_opts)
     |> Map.put(:azure, azure_opts)
     |> Map.put(:provider_config, provider_cfg)
-    |> maybe_put(:api_key, configured_api_key(base_opts, provider_cfg))
+    |> put_configured_api_key(base_opts, provider_cfg)
   end
 
+  # The resolver reads the configured AWS secrets itself, stopping at an
+  # unreadable one instead of continuing to the ambient AWS_* credentials.
   defp bedrock_input(base_opts, provider_cfg) do
     headers =
-      base_opts.headers
-      |> maybe_put("aws_region", provider_config_value(provider_cfg, :region))
-      |> maybe_put(
-        "aws_access_key_id",
-        Credentials.resolve_secret_api_key(
-          provider_config_value(provider_cfg, :access_key_id_secret),
-          env_fallback: true
-        )
-      )
-      |> maybe_put(
-        "aws_secret_access_key",
-        Credentials.resolve_secret_api_key(
-          provider_config_value(provider_cfg, :secret_access_key_secret),
-          env_fallback: true
-        )
-      )
-      |> maybe_put(
-        "aws_session_token",
-        Credentials.resolve_secret_api_key(
-          provider_config_value(provider_cfg, :session_token_secret),
-          env_fallback: true
-        )
-      )
+      maybe_put(base_opts.headers, "aws_region", provider_config_value(provider_cfg, :region))
 
     stream_options_to_map(base_opts)
     |> Map.put(:headers, headers)
+    |> Map.put(:provider_config, provider_cfg)
   end
 
   defp google_gemini_cli_input(base_opts, provider_cfg) do
@@ -326,7 +308,8 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
   defp openai_compatible_input(base_opts, provider_cfg) do
     stream_options_to_map(base_opts)
     |> Map.put(:provider_config, provider_cfg)
-    |> Map.put(:api_key, configured_api_key(base_opts, provider_cfg))
+    |> Map.put(:api_key, nil)
+    |> put_configured_api_key(base_opts, provider_cfg)
     |> maybe_put(:base_url, provider_config_value(provider_cfg, :base_url))
   end
 
@@ -335,18 +318,38 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
 
   defp apply_resolved_authority(opts, _resolved), do: opts
 
-  defp configured_api_key(%StreamOptions{api_key_authoritative: true} = opts, _provider_cfg),
-    do: opts.api_key
+  # Caller key, then the configured secret, then the inline key. An unreadable
+  # configured secret is an authoritative refusal (no key), never the inline key.
+  defp put_configured_api_key(input, %StreamOptions{api_key_authoritative: true} = opts, _cfg),
+    do: Map.put(input, :api_key, opts.api_key)
 
-  defp configured_api_key(base_opts, provider_cfg) do
-    first_non_empty_binary([
-      base_opts.api_key,
-      Credentials.resolve_secret_api_key(provider_config_value(provider_cfg, :api_key_secret),
-        env_fallback: true
-      ),
-      provider_config_value(provider_cfg, :api_key)
-    ])
+  defp put_configured_api_key(input, base_opts, provider_cfg) do
+    candidate =
+      if present_binary?(base_opts.api_key) do
+        {:ok, base_opts.api_key}
+      else
+        case Credentials.fetch_secret_api_key(
+               provider_config_value(provider_cfg, :api_key_secret),
+               env_fallback: true
+             ) do
+          :miss -> inline_api_key(provider_cfg)
+          other -> other
+        end
+      end
+
+    case candidate do
+      {:ok, api_key} -> Map.put(input, :api_key, api_key)
+      :miss -> input
+      :error -> input |> Map.put(:api_key, nil) |> Map.put(:api_key_authoritative, true)
+    end
   end
+
+  defp inline_api_key(provider_cfg) do
+    api_key = provider_config_value(provider_cfg, :api_key)
+    if present_binary?(api_key), do: {:ok, api_key}, else: :miss
+  end
+
+  defp present_binary?(value), do: is_binary(value) and String.trim(value) != ""
 
   defp put_provider_options(%StreamOptions{} = opts, provider_key, values) do
     filtered_values = reject_nil_values(values)

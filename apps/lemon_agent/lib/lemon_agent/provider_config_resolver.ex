@@ -27,29 +27,38 @@ defmodule LemonAgent.ProviderConfigResolver do
     config = get_provider_config("google_vertex", opts)
 
     project =
-      Map.get(opts, :project) ||
-        resolve_secret(config[:project_secret]) ||
-        config[:project] ||
-        config[:project_id] ||
-        System.get_env("GOOGLE_CLOUD_PROJECT") ||
-        System.get_env("GCLOUD_PROJECT")
+      first_credential([
+        {:value, Map.get(opts, :project)},
+        {:secret, config[:project_secret]},
+        {:value, config[:project]},
+        {:value, config[:project_id]},
+        {:env, "GOOGLE_CLOUD_PROJECT"},
+        {:env, "GCLOUD_PROJECT"}
+      ])
 
     location =
-      Map.get(opts, :location) ||
-        resolve_secret(config[:location_secret]) ||
-        config[:location] ||
-        System.get_env("GOOGLE_CLOUD_LOCATION")
+      first_credential([
+        {:value, Map.get(opts, :location)},
+        {:secret, config[:location_secret]},
+        {:value, config[:location]},
+        {:env, "GOOGLE_CLOUD_LOCATION"}
+      ])
 
-    service_account_json =
-      Map.get(opts, :service_account_json) ||
-        resolve_secret(config[:service_account_json_secret]) ||
-        config[:service_account_json] ||
-        System.get_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    service_account =
+      walk_credentials([
+        {:value, Map.get(opts, :service_account_json)},
+        {:secret, config[:service_account_json_secret]},
+        {:value, config[:service_account_json]},
+        {:env, "GOOGLE_APPLICATION_CREDENTIALS_JSON"}
+      ])
 
+    # An unreadable configured service account is an authoritative refusal:
+    # the provider must not continue to GOOGLE_APPLICATION_CREDENTIALS or gcloud.
     %{
       project: project,
       location: location,
-      service_account_json: service_account_json,
+      service_account_json: credential_value(service_account),
+      credential_error: if(service_account == :error, do: :service_account_unavailable),
       api_key: config[:api_key]
     }
     |> reject_nil_values()
@@ -59,20 +68,20 @@ defmodule LemonAgent.ProviderConfigResolver do
     config = get_provider_config("google_gemini_cli", opts)
 
     project =
-      first_non_empty_binary([
-        Map.get(opts, :project),
-        Map.get(opts, :project_id),
-        Map.get(opts, "project_id"),
-        Map.get(opts, :projectId),
-        Map.get(opts, "projectId"),
-        resolve_secret(Map.get(opts, :project_secret) || Map.get(opts, "project_secret")),
-        config[:project],
-        config[:project_id],
-        resolve_secret(config[:project_secret]),
-        System.get_env("LEMON_GEMINI_PROJECT_ID"),
-        System.get_env("GOOGLE_CLOUD_PROJECT"),
-        System.get_env("GOOGLE_CLOUD_PROJECT_ID"),
-        System.get_env("GCLOUD_PROJECT")
+      first_credential([
+        {:value, Map.get(opts, :project)},
+        {:value, Map.get(opts, :project_id)},
+        {:value, Map.get(opts, "project_id")},
+        {:value, Map.get(opts, :projectId)},
+        {:value, Map.get(opts, "projectId")},
+        {:secret, Map.get(opts, :project_secret) || Map.get(opts, "project_secret")},
+        {:value, config[:project]},
+        {:value, config[:project_id]},
+        {:secret, config[:project_secret]},
+        {:env, "LEMON_GEMINI_PROJECT_ID"},
+        {:env, "GOOGLE_CLOUD_PROJECT"},
+        {:env, "GOOGLE_CLOUD_PROJECT_ID"},
+        {:env, "GCLOUD_PROJECT"}
       ])
 
     %{project: project}
@@ -150,19 +159,25 @@ defmodule LemonAgent.ProviderConfigResolver do
         "us-east-1"
 
     access_key_id =
-      get_in_headers(opts, "aws_access_key_id") ||
-        resolve_secret(config[:access_key_id_secret]) ||
-        fetch_secret_value("AWS_ACCESS_KEY_ID")
+      first_credential([
+        {:value, get_in_headers(opts, "aws_access_key_id")},
+        {:secret, config[:access_key_id_secret]},
+        {:secret, "AWS_ACCESS_KEY_ID"}
+      ])
 
     secret_access_key =
-      get_in_headers(opts, "aws_secret_access_key") ||
-        resolve_secret(config[:secret_access_key_secret]) ||
-        fetch_secret_value("AWS_SECRET_ACCESS_KEY")
+      first_credential([
+        {:value, get_in_headers(opts, "aws_secret_access_key")},
+        {:secret, config[:secret_access_key_secret]},
+        {:secret, "AWS_SECRET_ACCESS_KEY"}
+      ])
 
     session_token =
-      get_in_headers(opts, "aws_session_token") ||
-        resolve_secret(config[:session_token_secret]) ||
-        fetch_secret_value("AWS_SESSION_TOKEN")
+      first_credential([
+        {:value, get_in_headers(opts, "aws_session_token")},
+        {:secret, config[:session_token_secret]},
+        {:secret, "AWS_SESSION_TOKEN"}
+      ])
 
     %{
       headers: %{
@@ -205,16 +220,18 @@ defmodule LemonAgent.ProviderConfigResolver do
         Credentials.resolve_provider_api_key(provider, config, provider_cfg: true)
 
       provider == :azure_openai_responses ->
-        Map.get(opts, :api_key) ||
-          Credentials.resolve_secret_api_key(config[:api_key_secret]) ||
-          config[:api_key] ||
-          fetch_secret_value("AZURE_OPENAI_API_KEY")
+        first_credential([
+          {:value, Map.get(opts, :api_key)},
+          {:api_key_secret, config[:api_key_secret]},
+          {:value, config[:api_key]},
+          {:secret, "AZURE_OPENAI_API_KEY"}
+        ])
 
       true ->
-        first_non_empty_binary([
-          Map.get(opts, :api_key),
-          config[:api_key],
-          Credentials.resolve_secret_api_key(config[:api_key_secret])
+        first_credential([
+          {:value, Map.get(opts, :api_key)},
+          {:value, config[:api_key]},
+          {:api_key_secret, config[:api_key_secret]}
         ])
     end
   end
@@ -281,36 +298,50 @@ defmodule LemonAgent.ProviderConfigResolver do
 
   defp normalize_provider_config(_), do: %{}
 
-  defp resolve_secret(nil), do: nil
+  # Walks candidates in precedence order. A configured secret that cannot be
+  # read (any error but a definite miss, or a crash) stops the walk with no
+  # value, so a later inline, alias or environment credential never replaces
+  # it. `Secrets.resolve/2` itself still falls back to the same-name
+  # environment variable after a definite miss.
+  defp first_credential(candidates), do: candidates |> walk_credentials() |> credential_value()
 
-  defp resolve_secret(secret_name) when is_binary(secret_name) do
-    if Code.ensure_loaded?(LemonCore.Secrets) and
-         function_exported?(LemonCore.Secrets, :resolve, 2) do
-      case LemonCore.Secrets.resolve(secret_name, env_fallback: true) do
-        {:ok, value, _source} -> value
-        _ -> nil
+  defp walk_credentials(candidates) do
+    Enum.reduce_while(candidates, :miss, fn candidate, :miss ->
+      case credential(candidate) do
+        {:ok, _value} = found -> {:halt, found}
+        :miss -> {:cont, :miss}
+        :error -> {:halt, :error}
       end
-    else
-      System.get_env(secret_name)
-    end
-  rescue
-    _ -> nil
-  catch
-    :exit, _ -> nil
+    end)
   end
 
-  defp fetch_secret_value(name) do
-    if Code.ensure_loaded?(LemonCore.Secrets) and
-         function_exported?(LemonCore.Secrets, :fetch_value, 1) do
-      LemonCore.Secrets.fetch_value(name)
-    else
-      System.get_env(name)
+  defp credential_value({:ok, value}), do: value
+  defp credential_value(_miss_or_error), do: nil
+
+  defp credential({:value, value}), do: present(value)
+  defp credential({:env, name}), do: present(System.get_env(name))
+  defp credential({:api_key_secret, name}), do: Credentials.fetch_secret_api_key(name)
+
+  defp credential({:secret, name}) when is_binary(name) and name != "" do
+    case LemonCore.Secrets.resolve(name, env_fallback: true) do
+      {:ok, value, _source} -> present(value)
+      {:error, :not_found} -> :miss
+      {:error, _reason} -> :error
     end
   rescue
-    _ -> System.get_env(name)
+    _ -> :error
   catch
-    :exit, _ -> System.get_env(name)
+    :exit, _ -> :error
   end
+
+  defp credential({:secret, _name}), do: :miss
+
+  defp present(value) when is_binary(value) do
+    if String.trim(value) == "", do: :miss, else: {:ok, value}
+  end
+
+  defp present(nil), do: :miss
+  defp present(value), do: {:ok, value}
 
   defp get_in_headers(%{headers: headers}, key) when is_map(headers) do
     Map.get(headers, key)

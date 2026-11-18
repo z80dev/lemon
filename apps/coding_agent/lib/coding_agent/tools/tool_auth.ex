@@ -186,7 +186,11 @@ defmodule CodingAgent.Tools.ToolAuth do
   end
 
   defp secret_exists?(secret_name) do
-    LemonCore.Secrets.exists?(secret_name, prefer_env: false, env_fallback: false)
+    LemonCore.Secrets.exists?(secret_name,
+      prefer_env: false,
+      env_fallback: false,
+      external_fallback: false
+    )
   end
 
   defp awaiting_token_result(name, auth, secret_name, display_name) do

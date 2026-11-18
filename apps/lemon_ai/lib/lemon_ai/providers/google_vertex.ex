@@ -135,6 +135,11 @@ defmodule LemonAi.Providers.GoogleVertex do
       credentials_path = System.get_env("GOOGLE_APPLICATION_CREDENTIALS")
 
       cond do
+        # A configured service-account secret that could not be read refuses
+        # the request; ambient credentials must not stand in for it.
+        credential_error?(resolved) ->
+          raise "Vertex AI configured service account secret could not be read; refusing GOOGLE_APPLICATION_CREDENTIALS and gcloud fallback."
+
         service_account_json && service_account_json != "" ->
           get_access_token_from_service_account(service_account_json)
 
@@ -148,6 +153,9 @@ defmodule LemonAi.Providers.GoogleVertex do
       end
     end
   end
+
+  defp credential_error?(resolved),
+    do: not is_nil(Map.get(resolved, :credential_error) || Map.get(resolved, "credential_error"))
 
   defp get_access_token_from_gcloud do
     case System.cmd("gcloud", ["auth", "print-access-token"], stderr_to_stdout: true) do

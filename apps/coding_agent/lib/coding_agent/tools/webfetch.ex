@@ -1052,14 +1052,47 @@ defmodule CodingAgent.Tools.WebFetch do
 
   defp normalize_optional_string(_), do: nil
 
-  defp resolve_secret_ref(nil), do: nil
-  defp resolve_secret_ref(""), do: nil
-
-  defp resolve_secret_ref(secret_name) when is_binary(secret_name) do
-    normalize_optional_string(Secrets.fetch_value(secret_name))
+  # Walks a credential chain in order. Only a definite miss advances to the next
+  # candidate; any other secret-store failure yields no credential at all so an
+  # ambient env key is never used in place of an unreadable configured secret.
+  defp resolve_api_key(candidates) do
+    Enum.reduce_while(candidates, nil, fn candidate, nil ->
+      case read_candidate(candidate) do
+        {:ok, key} -> {:halt, key}
+        :not_found -> {:cont, nil}
+        :error -> {:halt, nil}
+      end
+    end)
   end
 
-  defp resolve_secret_ref(_), do: nil
+  defp read_candidate({:value, value}) do
+    case normalize_optional_string(value) do
+      nil -> :not_found
+      key -> {:ok, key}
+    end
+  end
+
+  defp read_candidate({:secret, name}) when is_binary(name) and name != "" do
+    case Secrets.resolve(name) do
+      {:ok, value, _source} ->
+        case normalize_optional_string(value) do
+          nil -> :not_found
+          key -> {:ok, key}
+        end
+
+      {:error, :not_found} ->
+        :not_found
+
+      {:error, _reason} ->
+        :error
+    end
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  defp read_candidate({:secret, _name}), do: :not_found
 
   defp present?(value), do: not is_nil(normalize_optional_string(value))
 
@@ -1145,13 +1178,12 @@ defmodule CodingAgent.Tools.WebFetch do
         _ -> nil
       end
 
-    firecrawl_api_key_secret =
-      normalize_optional_string(get_map_value(firecrawl_cfg, :api_key_secret, nil))
-
     firecrawl_api_key =
-      normalize_optional_string(get_map_value(firecrawl_cfg, :api_key, nil)) ||
-        resolve_secret_ref(firecrawl_api_key_secret) ||
-        normalize_optional_string(Secrets.fetch_value("FIRECRAWL_API_KEY"))
+      resolve_api_key([
+        {:value, get_map_value(firecrawl_cfg, :api_key, nil)},
+        {:secret, get_map_value(firecrawl_cfg, :api_key_secret, nil)},
+        {:secret, "FIRECRAWL_API_KEY"}
+      ])
 
     firecrawl_timeout =
       WebCache.resolve_timeout_seconds(
@@ -1214,9 +1246,11 @@ defmodule CodingAgent.Tools.WebFetch do
       },
       exa: %{
         api_key:
-          normalize_optional_string(get_map_value(exa_cfg, :api_key, nil)) ||
-            resolve_secret_ref(get_map_value(exa_cfg, :api_key_secret, nil)) ||
-            normalize_optional_string(Secrets.fetch_value("EXA_API_KEY")),
+          resolve_api_key([
+            {:value, get_map_value(exa_cfg, :api_key, nil)},
+            {:secret, get_map_value(exa_cfg, :api_key_secret, nil)},
+            {:secret, "EXA_API_KEY"}
+          ]),
         base_url:
           normalize_optional_string(get_map_value(exa_cfg, :base_url, nil)) ||
             "https://api.exa.ai"

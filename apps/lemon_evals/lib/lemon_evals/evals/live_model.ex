@@ -1510,10 +1510,13 @@ defmodule LemonEvals.Evals.LiveModel do
   defp resolve_live_secret(nil), do: nil
   defp resolve_live_secret(""), do: nil
 
+  # `Secrets.resolve/2` already consults the same-name env var on a definite
+  # miss; any other failure (unreadable store record, missing master key, ...)
+  # must not be papered over with the ambient env value.
   defp resolve_live_secret(secret_name) do
     case LemonCore.Secrets.resolve(secret_name, env_fallback: true) do
       {:ok, value, _source} -> value
-      _ -> Env.string(secret_name)
+      {:error, _reason} -> nil
     end
   end
 

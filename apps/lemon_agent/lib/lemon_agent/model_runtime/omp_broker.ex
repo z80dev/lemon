@@ -301,9 +301,9 @@ defmodule LemonAgent.ModelRuntime.OmpBroker do
       _ -> nil
     end
   rescue
-    _ -> non_empty(System.get_env(name))
+    _ -> nil
   catch
-    :exit, _ -> non_empty(System.get_env(name))
+    :exit, _ -> nil
   end
 
   defp config_value(cfg, key) when is_map(cfg),

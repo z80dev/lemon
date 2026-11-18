@@ -170,13 +170,30 @@ defmodule LemonGateway.AI do
     end
   end
 
-  defp resolve_from_secrets(secret_names) when is_list(secret_names) do
-    Enum.find_value(secret_names, fn secret_name ->
-      case LemonCore.Secrets.resolve(secret_name) do
-        {:ok, value, _source} -> present_or_nil(value)
-        _ -> nil
-      end
-    end)
+  # Only a definite miss advances to the next alias: an unreadable secret stops
+  # the search so a different stored credential never replaces it.
+  defp resolve_from_secrets([]), do: nil
+
+  defp resolve_from_secrets([secret_name | rest]) do
+    case resolve_secret(secret_name) do
+      {:ok, value, _source} ->
+        present_or_nil(value) || resolve_from_secrets(rest)
+
+      {:error, :not_found} ->
+        resolve_from_secrets(rest)
+
+      {:error, reason} ->
+        Logger.warning("AI secret #{inspect(secret_name)} is unreadable: #{inspect(reason)}")
+        nil
+    end
+  end
+
+  defp resolve_secret(secret_name) do
+    LemonCore.Secrets.resolve(secret_name)
+  rescue
+    e -> {:error, {:exception, e.__struct__}}
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
   end
 
   defp present_or_nil(value) when is_binary(value) do

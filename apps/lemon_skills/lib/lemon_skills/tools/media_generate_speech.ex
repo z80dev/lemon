@@ -668,26 +668,42 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   defp generic_api_key(%{api_key: key}, _missing) when is_binary(key) and key != "",
     do: {:ok, key}
 
+  # Candidates are tried in order and only a definite miss advances: an
+  # unreadable secret must never be replaced by a weaker alias or env key.
   defp generic_api_key(runtime, missing) do
-    keys =
+    candidates =
       [
-        System.get_env(runtime.env_var),
-        runtime.config_api_key,
-        secret_api_key(runtime.api_key_secret)
-        | Enum.map(runtime.default_secret_names, &secret_api_key/1)
-      ]
+        {:value, System.get_env(runtime.env_var)},
+        {:value, runtime.config_api_key},
+        {:secret, runtime.api_key_secret}
+      ] ++ Enum.map(runtime.default_secret_names, &{:secret, &1})
 
-    case Enum.find(keys, &(is_binary(&1) and &1 != "")) do
-      key when is_binary(key) -> {:ok, key}
-      _ -> {:error, missing}
+    Enum.reduce_while(candidates, {:error, missing}, fn candidate, acc ->
+      case api_key_candidate(candidate) do
+        {:ok, key} -> {:halt, {:ok, key}}
+        :miss -> {:cont, acc}
+        :error -> {:halt, {:error, :api_key_secret_unreadable}}
+      end
+    end)
+  end
+
+  defp api_key_candidate({:value, key}) when is_binary(key) and key != "", do: {:ok, key}
+  defp api_key_candidate({:value, _}), do: :miss
+
+  defp api_key_candidate({:secret, name}) when is_binary(name) and name != "" do
+    case Credentials.fetch_secret_api_key(name) do
+      {:ok, key} when is_binary(key) and key != "" -> {:ok, key}
+      {:ok, _blank} -> :miss
+      :miss -> :miss
+      _ -> :error
     end
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
   end
 
-  defp secret_api_key(secret_name) when is_binary(secret_name) and secret_name != "" do
-    Credentials.resolve_secret_api_key(secret_name)
-  end
-
-  defp secret_api_key(_), do: nil
+  defp api_key_candidate({:secret, _}), do: :miss
 
   defp mime_type_from_path(path) do
     case String.downcase(Path.extname(path)) do

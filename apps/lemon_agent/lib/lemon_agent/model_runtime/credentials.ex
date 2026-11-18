@@ -220,7 +220,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
         oauth? = normalize_auth_source(provider_cfg) == :oauth
 
         cond do
-          not oauth? and present_value?(env_first(ProviderNames.env_vars(canonical))) ->
+          # Resolution answers from (or stops at) an env-named credential.
+          not oauth? and env_first(ProviderNames.env_vars(canonical)) != :miss ->
             {:error, :not_refreshable}
 
           not oauth? and present_value?(provider_config_value(provider_cfg, :api_key)) ->
@@ -394,9 +395,20 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   @spec resolve_secret_api_key(String.t(), keyword()) :: String.t() | nil
-  def resolve_secret_api_key(secret_name, opts \\ [])
+  def resolve_secret_api_key(secret_name, opts \\ []) do
+    secret_name |> fetch_secret_api_key(opts) |> credential_value()
+  end
 
-  def resolve_secret_api_key(secret_name, opts) when is_binary(secret_name) do
+  @doc """
+  Tagged form of `resolve_secret_api_key/2`: `{:ok, api_key}`, `:miss` when
+  the secret definitely does not exist (or no name is given), or `:error` when
+  it exists but cannot be read or used. Callers that try another credential
+  next must stop on `:error`.
+  """
+  @spec fetch_secret_api_key(String.t() | nil, keyword()) :: {:ok, String.t()} | :miss | :error
+  def fetch_secret_api_key(secret_name, opts \\ [])
+
+  def fetch_secret_api_key(secret_name, opts) when is_binary(secret_name) and secret_name != "" do
     env_fallback = Keyword.get(opts, :env_fallback, true)
 
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: env_fallback) do
@@ -406,10 +418,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
                reload_secret: &reload_secret/1
              ) do
           {:ok, resolved_api_key} ->
-            resolved_api_key
+            present_or_error(resolved_api_key)
 
           :ignore ->
-            non_empty_binary(value)
+            present_or_error(value)
 
           {:error, reason} ->
             # The value is a recognised OAuth payload that could not be used
@@ -418,15 +430,15 @@ defmodule LemonAgent.ModelRuntime.Credentials do
               "Failed to resolve OAuth secret #{secret_name}: #{inspect(safe_reason(reason))}"
             )
 
-            nil
+            :error
         end
 
-      _ ->
-        nil
+      result ->
+        secret_miss_or_error(result)
     end
   end
 
-  def resolve_secret_api_key(_, _), do: nil
+  def fetch_secret_api_key(_, _), do: :miss
 
   @doc """
   Whether a provider has any usable credential.
@@ -674,27 +686,17 @@ defmodule LemonAgent.ModelRuntime.Credentials do
           ""
       end
     else
-      env_key =
-        provider
-        |> ProviderNames.env_vars()
-        |> env_first()
-
-      cond do
-        present_value?(env_key) ->
-          env_key
-
-        present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
-          plain_api_key
-
-        present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
-          resolve_secret_api_key(api_key_secret)
-
-        present_value?(default_secret = ProviderNames.default_secret_name(provider)) ->
-          resolve_secret_api_key(default_secret)
-
-        true ->
-          nil
-      end
+      first_credential([
+        fn -> provider |> ProviderNames.env_vars() |> env_first() end,
+        fn -> present(provider_config_value(provider_cfg, :api_key)) end,
+        fn ->
+          case provider_config_value(provider_cfg, :api_key_secret) do
+            name when is_binary(name) and name != "" -> fetch_secret_api_key(name)
+            _ -> fetch_secret_api_key(ProviderNames.default_secret_name(provider))
+          end
+        end
+      ])
+      |> credential_value()
     end
   end
 
@@ -712,19 +714,12 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   # `auth = "none"` providers are ready without any key (see
   # `single_provider_has_credentials?/3`).
   defp resolve_custom_api_key(provider_cfg) do
-    cond do
-      present_value?(env_key = provider_env_value(provider_cfg, :api_key_env)) ->
-        env_key
-
-      present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
-        plain_api_key
-
-      present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
-        resolve_secret_api_key(api_key_secret)
-
-      true ->
-        nil
-    end
+    first_credential([
+      fn -> present(provider_env_value(provider_cfg, :api_key_env)) end,
+      fn -> present(provider_config_value(provider_cfg, :api_key)) end,
+      fn -> fetch_secret_api_key(provider_config_value(provider_cfg, :api_key_secret)) end
+    ])
+    |> credential_value()
   end
 
   defp provider_env_value(provider_cfg, key) do
@@ -804,24 +799,12 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   defp resolve_openai_codex_raw_api_key(provider_cfg) do
-    env_key =
-      "openai_codex"
-      |> ProviderNames.env_vars()
-      |> env_first()
-
-    cond do
-      present_value?(env_key) ->
-        env_key
-
-      present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
-        plain_api_key
-
-      present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
-        resolve_raw_secret_api_key(api_key_secret)
-
-      true ->
-        nil
-    end
+    first_credential([
+      fn -> "openai_codex" |> ProviderNames.env_vars() |> env_first() end,
+      fn -> present(provider_config_value(provider_cfg, :api_key)) end,
+      fn -> fetch_raw_secret_api_key(provider_config_value(provider_cfg, :api_key_secret)) end
+    ])
+    |> credential_value()
   end
 
   defp resolve_anthropic_api_key(provider_cfg) do
@@ -829,15 +812,13 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       :oauth ->
         resolve_anthropic_oauth_key(provider_cfg) || ""
 
-      :api_key ->
-        resolve_anthropic_raw_api_key(provider_cfg) ||
-          resolve_raw_secret_api_key(@raw_anthropic_secret) ||
-          ""
-
-      :missing ->
-        resolve_anthropic_raw_api_key(provider_cfg) ||
-          resolve_raw_secret_api_key(@raw_anthropic_secret) ||
-          ""
+      source when source in [:api_key, :missing] ->
+        first_credential([
+          fn -> anthropic_raw_api_key(provider_cfg) end,
+          fn -> fetch_raw_secret_api_key(@raw_anthropic_secret) end
+        ])
+        |> credential_value()
+        |> Kernel.||("")
 
       {:invalid, value} ->
         Logger.warning(
@@ -919,8 +900,13 @@ defmodule LemonAgent.ModelRuntime.Credentials do
             :error
         end
 
-      _ ->
+      {:error, :not_found} ->
         :missing
+
+      # An unreadable stored login is not an absent one: never continue to
+      # ambient Claude credentials.
+      _ ->
+        :error
     end
   end
 
@@ -930,58 +916,43 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     Secrets.get_with_revision(secret_name)
   end
 
-  defp resolve_anthropic_raw_api_key(provider_cfg) do
-    env_key =
-      "anthropic"
-      |> ProviderNames.env_vars()
-      |> env_first()
-
-    cond do
-      present_value?(env_key) ->
-        env_key
-
-      present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
-        plain_api_key
-
-      present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
-        resolve_anthropic_raw_secret_api_key(api_key_secret)
-
-      true ->
-        nil
-    end
+  defp anthropic_raw_api_key(provider_cfg) do
+    first_credential([
+      fn -> "anthropic" |> ProviderNames.env_vars() |> env_first() end,
+      fn -> present(provider_config_value(provider_cfg, :api_key)) end,
+      fn -> fetch_anthropic_raw_secret(provider_config_value(provider_cfg, :api_key_secret)) end
+    ])
   end
 
-  defp resolve_raw_secret_api_key(secret_name) when is_binary(secret_name) do
+  defp fetch_raw_secret_api_key(secret_name) when is_binary(secret_name) and secret_name != "" do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
-      {:ok, value, _source} when is_binary(value) and value != "" -> value
-      _ -> nil
+      {:ok, value, _source} -> present_or_error(value)
+      result -> secret_miss_or_error(result)
     end
   end
 
-  defp resolve_anthropic_raw_secret_api_key(secret_name) when is_binary(secret_name) do
-    case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
-      {:ok, value, _source} when is_binary(value) and value != "" ->
-        case Jason.decode(value) do
-          {:ok, %{} = decoded} ->
-            if decoded["type"] in ["anthropic_oauth", "onboarding_anthropic_oauth"] and
-                 present_value?(decoded["access_token"]) do
-              Logger.warning(
-                "Anthropic OAuth payload secret #{secret_name} cannot be used as a raw API key; configure an Anthropic API key instead"
-              )
+  defp fetch_raw_secret_api_key(_), do: :miss
 
-              nil
-            else
-              value
-            end
+  defp fetch_anthropic_raw_secret(secret_name)
+       when is_binary(secret_name) and secret_name != "" do
+    with {:ok, value} <- fetch_raw_secret_api_key(secret_name) do
+      case Jason.decode(value) do
+        {:ok, %{"type" => type, "access_token" => token}}
+        when type in ["anthropic_oauth", "onboarding_anthropic_oauth"] and is_binary(token) and
+               token != "" ->
+          Logger.warning(
+            "Anthropic OAuth payload secret #{secret_name} cannot be used as a raw API key; configure an Anthropic API key instead"
+          )
 
-          _ ->
-            value
-        end
+          :error
 
-      _ ->
-        nil
+        _ ->
+          {:ok, value}
+      end
     end
   end
+
+  defp fetch_anthropic_raw_secret(_), do: :miss
 
   defp resolve_openai_codex_onboarding_access_token(secret_name, secret_value)
        when is_binary(secret_name) and is_binary(secret_value) do
@@ -1072,37 +1043,49 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     end
   end
 
+  # `Secrets.resolve/2` owns store, external-source and environment order and
+  # fails closed; a crash here is a failure too, never a reason to read env.
   defp resolve_secret_value(secret_name, opts) when is_binary(secret_name) do
     Secrets.resolve(secret_name, opts)
   rescue
-    _ ->
-      fallback_secret_value(secret_name, opts)
+    _ -> {:error, :secret_resolution_failed}
   catch
-    :exit, _ ->
-      fallback_secret_value(secret_name, opts)
+    :exit, _ -> {:error, :secret_resolution_failed}
   end
 
   defp resolve_secret_value(_, _), do: {:error, :invalid_secret_name}
 
-  defp fallback_secret_value(secret_name, opts) do
-    cond do
-      Keyword.get(opts, :prefer_env, false) and present_value?(System.get_env(secret_name)) ->
-        {:ok, System.get_env(secret_name), :env}
+  defp resolve_secret_env(name), do: name |> secret_env_credential() |> credential_value()
 
-      Keyword.get(opts, :env_fallback, false) and present_value?(System.get_env(secret_name)) ->
-        {:ok, System.get_env(secret_name), :env}
-
-      true ->
-        {:error, :not_found}
-    end
-  end
-
-  defp resolve_secret_env(name) do
+  defp secret_env_credential(name) do
     case resolve_secret_value(name, prefer_env: true, env_fallback: true) do
-      {:ok, value, _source} -> value
-      _ -> nil
+      {:ok, value, _source} -> present(value)
+      result -> secret_miss_or_error(result)
     end
   end
+
+  # Credential candidates in precedence order, each returning `{:ok, value}`,
+  # `:miss` (definitely absent) or `:error` (configured but unreadable). An
+  # error stops the walk: a later env, inline or alias credential never
+  # replaces an unreadable one.
+  defp first_credential(candidates) do
+    Enum.reduce_while(candidates, :miss, fn candidate, :miss ->
+      case candidate.() do
+        {:ok, _value} = found -> {:halt, found}
+        :miss -> {:cont, :miss}
+        :error -> {:halt, :error}
+      end
+    end)
+  end
+
+  defp credential_value({:ok, value}), do: value
+  defp credential_value(_miss_or_error), do: nil
+
+  defp present(value), do: if(present_value?(value), do: {:ok, value}, else: :miss)
+  defp present_or_error(value), do: if(present_value?(value), do: {:ok, value}, else: :error)
+
+  defp secret_miss_or_error({:error, :not_found}), do: :miss
+  defp secret_miss_or_error(_error), do: :error
 
   defp provider_config(providers_or_cfg, provider, opts) do
     if Keyword.get(opts, :provider_cfg, false) do
@@ -1140,18 +1123,11 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   end
 
   defp env_first(names) when is_list(names) do
-    Enum.find_value(names, fn name ->
-      value = resolve_secret_env(name)
-      if present_value?(value), do: value, else: nil
-    end)
+    first_credential(Enum.map(names, fn name -> fn -> secret_env_credential(name) end end))
   end
 
   defp first_non_empty_binary(list) when is_list(list) do
     Enum.find(list, &present_value?/1)
-  end
-
-  defp non_empty_binary(value) when is_binary(value) do
-    if String.trim(value) == "", do: nil, else: value
   end
 
   defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
@@ -1161,19 +1137,29 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp resolve_openai_codex_access_token do
-    resolve_secret_api_key("OPENAI_CODEX_API_KEY", env_fallback: true) ||
-      resolve_secret_api_key("CHATGPT_TOKEN", env_fallback: true) ||
-      resolve_secret_api_key(ProviderNames.default_secret_name("openai_codex"),
-        env_fallback: false
-      ) ||
-      LemonAi.Auth.OpenAICodexOAuth.resolve_access_token()
+    first_credential([
+      fn -> fetch_secret_api_key("OPENAI_CODEX_API_KEY", env_fallback: true) end,
+      fn -> fetch_secret_api_key("CHATGPT_TOKEN", env_fallback: true) end,
+      fn ->
+        fetch_secret_api_key(ProviderNames.default_secret_name("openai_codex"),
+          env_fallback: false
+        )
+      end,
+      fn -> present(LemonAi.Auth.OpenAICodexOAuth.resolve_access_token()) end
+    ])
+    |> credential_value()
   end
 
   defp resolve_anthropic_access_token do
-    LemonAi.Auth.AnthropicOAuth.resolve_access_token() ||
-      resolve_secret_api_key(ProviderNames.oauth_default_secret_name("anthropic"),
-        env_fallback: false
-      )
+    first_credential([
+      fn -> present(LemonAi.Auth.AnthropicOAuth.resolve_access_token()) end,
+      fn ->
+        fetch_secret_api_key(ProviderNames.oauth_default_secret_name("anthropic"),
+          env_fallback: false
+        )
+      end
+    ])
+    |> credential_value()
   end
 
   # Persistence results are returned, not swallowed: a refreshed OAuth secret

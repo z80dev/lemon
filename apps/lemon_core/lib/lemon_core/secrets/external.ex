@@ -13,6 +13,9 @@ defmodule LemonCore.Secrets.External do
   alias LemonCore.Secrets.SourceRunner
 
   @task_supervisor LemonCore.Secrets.SourceTaskSupervisor
+  # Headroom over the summed per-run helper timeouts for bootstrap reads and
+  # task start-up; each helper run is still cut off at its own timeout.
+  @fetch_grace_ms 1_000
   @source_modules %{
     onepassword: LemonCore.Secrets.Source.OnePassword,
     bitwarden: LemonCore.Secrets.Source.Bitwarden,
@@ -27,12 +30,14 @@ defmodule LemonCore.Secrets.External do
     config = source_config(opts)
     enabled = enabled_sources(config)
 
+    # An invalid `[secrets]` table (including one that could not be loaded)
+    # may hide enabled sources, so it is an error rather than a miss.
     cond do
-      enabled == [] ->
-        {:error, :not_found}
-
       config.errors != [] or Enum.any?(enabled, &(not &1.valid?)) ->
         {:error, :invalid_config}
+
+      enabled == [] ->
+        {:error, :not_found}
 
       true ->
         resolve_from_sources(name, enabled, opts)
@@ -129,7 +134,9 @@ defmodule LemonCore.Secrets.External do
   end
 
   defp resolve_from_sources(name, sources, opts) do
-    Enum.reduce_while(sources, {:error, :not_found}, fn source, _acc ->
+    sources
+    |> Enum.flat_map(&scope_to_name(&1, name))
+    |> Enum.reduce_while({:error, :not_found}, fn source, _acc ->
       case fetch_source(source, opts) do
         {:ok, %{values: values}} ->
           case Map.fetch(values, name) do
@@ -145,6 +152,17 @@ defmodule LemonCore.Secrets.External do
       end
     end)
   end
+
+  # A 1Password source maps each name to its own ref: it cannot answer any
+  # other name, and answering one needs only that ref's `op read`.
+  defp scope_to_name(%SourceConfig{type: :onepassword, refs: refs} = source, name) do
+    case Map.fetch(refs, name) do
+      {:ok, ref} -> [%{source | refs: %{name => ref}}]
+      :error -> []
+    end
+  end
+
+  defp scope_to_name(source, _name), do: [source]
 
   defp fetch_source(%SourceConfig{} = source, opts) do
     module = Map.fetch!(@source_modules, source.type)
@@ -172,7 +190,7 @@ defmodule LemonCore.Secrets.External do
         {:error, :spawn_failed}
 
       {:ok, task} ->
-        case Task.yield(task, source.timeout_ms) do
+        case Task.yield(task, fetch_budget_ms(source)) do
           {:ok, {:ok, %{values: values, byte_count: byte_count}} = result}
           when is_map(values) and is_integer(byte_count) and byte_count >= 0 ->
             result
@@ -192,6 +210,14 @@ defmodule LemonCore.Secrets.External do
         end
     end
   end
+
+  # The supervising task waits for every helper run the source makes: one per
+  # 1Password ref, one for any other source type.
+  defp fetch_budget_ms(%SourceConfig{type: :onepassword, refs: refs, timeout_ms: timeout_ms}),
+    do: timeout_ms * max(map_size(refs), 1) + @fetch_grace_ms
+
+  defp fetch_budget_ms(%SourceConfig{timeout_ms: timeout_ms}),
+    do: timeout_ms + @fetch_grace_ms
 
   defp cache_get(source, key, opts) when is_list(opts) do
     if Keyword.get(opts, :force, false) do

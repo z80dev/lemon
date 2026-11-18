@@ -29,8 +29,14 @@ defmodule LemonChannels.Doctor.LiveChecks do
 
     if Map.get(gateway, enabled_key(channel)) == true do
       case token(settings, channel) do
-        token when is_binary(token) and token != "" -> probe(channel, token, name, opts)
-        _ -> Check.skip(name, "Skipped (no usable bot credential).")
+        token when is_binary(token) and token != "" ->
+          probe(channel, token, name, opts)
+
+        {:error, _reason} ->
+          Check.fail(name, "The configured bot_token_secret could not be resolved.")
+
+        _ ->
+          Check.skip(name, "Skipped (no usable bot credential).")
       end
     else
       Check.skip(name, "Skipped (channel is disabled).")
@@ -42,13 +48,28 @@ defmodule LemonChannels.Doctor.LiveChecks do
   defp enabled_key(:telegram), do: :enable_telegram
   defp enabled_key(:discord), do: :enable_discord
 
+  # Only a definite miss (or no configured secret) may fall through to the
+  # ambient token; any other secret failure is reported, never bypassed.
   defp token(settings, channel) do
-    settings[:bot_token] || settings[:token] ||
-      secret(settings[:bot_token_secret]) || ambient_token(channel)
+    with nil <- settings[:bot_token] || settings[:token],
+         :not_found <- secret(settings[:bot_token_secret]) do
+      ambient_token(channel)
+    else
+      {:ok, token} -> token
+      {:error, reason} -> {:error, reason}
+      token -> token
+    end
   end
 
-  defp secret(name) when is_binary(name) and name != "", do: Secrets.fetch_value(name)
-  defp secret(_), do: nil
+  defp secret(name) when is_binary(name) and name != "" do
+    case Secrets.resolve(name) do
+      {:ok, value, _source} -> {:ok, value}
+      {:error, :not_found} -> :not_found
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp secret(_), do: :not_found
   defp ambient_token(:discord), do: Secrets.fetch_value("DISCORD_BOT_TOKEN")
   defp ambient_token(:telegram), do: nil
 
