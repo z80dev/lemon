@@ -211,6 +211,34 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Cron jobs created by an agent record the creating session's effective
+  policy; runs intersect it with the live chat policy, group floor and
+  triggering policy. The cron tool reaches only jobs its session owns,
+  `pause_all`/`resume_all` are operator-only, cron memory lives in
+  `~/.lemon/cron_memory`, and cron runs cannot start goals, kanban work or
+  peer messages.
+- Goals record the setter's principal, policy and canonical root; judge and
+  continuation runs stay inside them, block delegation tools, and are bound to
+  the checked directory identity. Goals saved before this release must be set
+  again.
+- Webhook and A2A runs take channel policy from authenticated provenance and
+  get the approval floor unless the integration or peer sets
+  `trusted_automation = true` in the global config.
+- `write`/`edit`/`patch` that run project diagnostics or formatters need exec
+  approval; checkers run as managed, cancellable process groups, and
+  repo-local tools need `runtime.tools.edit.repo_local_tools = true`.
+- Automatic git commands use `LemonCore.SafeGit`: an operator-trusted binary
+  (`[runtime] git_path` or system paths, Git ≥ 2.31) against a private Git
+  directory with Lemon-written configuration.
+- Remaining outbound clients (skill git and marketplace, Discord/Telegram/
+  Twilio downloads, the updater) use pinned, capped, deadline-bound fetches;
+  private git hosts need `[skills] allowed_private_git_hosts` and private
+  update mirrors `[update] private_mirror = true`. These clients do not use an
+  HTTP proxy.
+- The raw operator `node.invoke` RPC is removed; remote runs keep their session
+  busy until the node proves they stopped.
+- `gateway.email`, `gateway.sms` and `gateway.voice` settings are fully
+  validated; `tls`/`auth` must be `always`, `never` or `if_available`.
 - Extensions and WASM tools load only from operator paths (relative entries
   resolve against `~/.lemon`; project `.lemon/extensions` and `.lemon/wasm-tools`
   never load). Sources are hashed and compiled from the same bytes, modules are
