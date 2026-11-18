@@ -647,8 +647,7 @@ defmodule CodingAgent.Tools.PatchTest do
       assert msg =~ "cannot be empty"
     end
 
-    test "allows absolute paths (they bypass cwd check)", %{tmp_dir: tmp_dir} do
-      # Absolute paths are allowed by design - they don't go through traversal check
+    test "allows absolute paths inside cwd", %{tmp_dir: tmp_dir} do
       abs_file = Path.join(tmp_dir, "absolute_test.txt")
 
       patch_text = """
@@ -779,6 +778,137 @@ defmodule CodingAgent.Tools.PatchTest do
 
       # Should fail - either as device or file not found
       assert {:error, _msg} = result
+    end
+  end
+
+  describe "security - workspace confinement (T02-11)" do
+    setup %{tmp_dir: tmp_dir} do
+      cwd = Path.join(tmp_dir, "workspace")
+      outside = Path.join(tmp_dir, "outside")
+      File.mkdir_p!(Path.join(cwd, "real"))
+      File.mkdir_p!(Path.join(outside, "sub"))
+      File.write!(Path.join(outside, "sub/victim.txt"), "secret\n")
+      File.write!(Path.join(outside, "victim.txt"), "secret\n")
+      File.write!(Path.join(cwd, "real/inside.txt"), "inside\n")
+      :ok = File.ln_s(outside, Path.join(cwd, "link"))
+      %{cwd: cwd, outside: outside}
+    end
+
+    defp run_patch(text, cwd, opts \\ []),
+      do: Patch.execute("call_1", %{"patch_text" => text}, nil, nil, cwd, opts)
+
+    test "rejects Add through a symlinked grandparent", %{cwd: cwd, outside: outside} do
+      assert {:error, msg} = run_patch("*** Add File: link/sub/new.txt\n+evil\n", cwd)
+      assert msg =~ "symlink"
+      refute File.exists?(Path.join(outside, "sub/new.txt"))
+    end
+
+    test "rejects Add through a symlinked ancestor whose leaf parent is missing", %{
+      cwd: cwd,
+      outside: outside
+    } do
+      assert {:error, _} = run_patch("*** Add File: link/new/deep/x.txt\n+evil\n", cwd)
+      refute File.exists?(Path.join(outside, "new"))
+    end
+
+    test "rejects Update through a symlinked ancestor", %{cwd: cwd, outside: outside} do
+      patch = "*** Update File: link/sub/victim.txt\n@@\n-secret\n+pwned\n"
+      assert {:error, msg} = run_patch(patch, cwd)
+      assert msg =~ "symlink"
+      assert File.read!(Path.join(outside, "sub/victim.txt")) == "secret\n"
+    end
+
+    test "rejects Delete through a symlinked ancestor", %{cwd: cwd, outside: outside} do
+      assert {:error, _} = run_patch("*** Delete File: link/sub/victim.txt\n", cwd)
+      assert File.exists?(Path.join(outside, "sub/victim.txt"))
+    end
+
+    test "rejects Move destination through a symlinked ancestor", %{cwd: cwd, outside: outside} do
+      patch =
+        "*** Update File: real/inside.txt\n*** Move to: link/sub/moved.txt\n@@\n-inside\n+moved\n"
+
+      assert {:error, _} = run_patch(patch, cwd)
+      refute File.exists?(Path.join(outside, "sub/moved.txt"))
+      assert File.read!(Path.join(cwd, "real/inside.txt")) == "inside\n"
+    end
+
+    test "rejects unified-diff target through a symlinked ancestor", %{
+      cwd: cwd,
+      outside: outside
+    } do
+      patch = """
+      --- a/link/sub/victim.txt
+      +++ b/link/sub/victim.txt
+      @@ -1 +1 @@
+      -secret
+      +pwned
+      """
+
+      assert {:error, _} = run_patch(patch, cwd)
+      assert File.read!(Path.join(outside, "sub/victim.txt")) == "secret\n"
+    end
+
+    test "rejects absolute Add outside cwd", %{cwd: cwd, outside: outside} do
+      target = Path.join(outside, "abs_new.txt")
+      assert {:error, msg} = run_patch("*** Add File: #{target}\n+evil\n", cwd)
+      assert msg =~ "outside working directory"
+      refute File.exists?(target)
+    end
+
+    test "rejects absolute Update and Delete outside cwd", %{cwd: cwd, outside: outside} do
+      target = Path.join(outside, "victim.txt")
+
+      assert {:error, _} =
+               run_patch("*** Update File: #{target}\n@@\n-secret\n+pwned\n", cwd)
+
+      assert {:error, _} = run_patch("*** Delete File: #{target}\n", cwd)
+      assert File.read!(target) == "secret\n"
+    end
+
+    test "rejects absolute Move destination outside cwd", %{cwd: cwd, outside: outside} do
+      target = Path.join(outside, "moved.txt")
+
+      patch =
+        "*** Update File: real/inside.txt\n*** Move to: #{target}\n@@\n-inside\n+moved\n"
+
+      assert {:error, _} = run_patch(patch, cwd)
+      refute File.exists?(target)
+    end
+
+    test "rejects absolute path that lexically re-enters then escapes cwd", %{
+      cwd: cwd,
+      outside: outside
+    } do
+      target = Path.join(cwd, "../outside/dotdot.txt")
+      assert {:error, _} = run_patch("*** Add File: #{target}\n+evil\n", cwd)
+      refute File.exists?(Path.join(outside, "dotdot.txt"))
+    end
+
+    test "still allows absolute paths inside cwd", %{cwd: cwd} do
+      target = Path.join(cwd, "real/abs_ok.txt")
+      assert %AgentToolResult{} = run_patch("*** Add File: #{target}\n+ok\n", cwd)
+      assert File.read!(target) == "ok"
+    end
+
+    test "ACP dialect rejects absolute paths outside cwd before any client request", %{
+      cwd: cwd,
+      outside: outside
+    } do
+      target = Path.join(outside, "acp.txt")
+      opts = [acp_client_fs_read_text_file: true, acp_client_fs_write_text_file: true]
+
+      assert {:error, msg} = run_patch("*** Add File: #{target}\n+evil\n", cwd, opts)
+      assert msg =~ "outside working directory"
+    end
+
+    test "preserves a UTF-8 BOM while patching the first line", %{cwd: cwd} do
+      path = Path.join(cwd, "real/bom.txt")
+      File.write!(path, <<0xEF, 0xBB, 0xBF>> <> "first\r\nsecond\r\n")
+
+      assert %AgentToolResult{} =
+               run_patch("*** Update File: real/bom.txt\n@@\n-first\n+FIRST\n", cwd)
+
+      assert File.read!(path) == <<0xEF, 0xBB, 0xBF>> <> "FIRST\r\nsecond\r\n"
     end
   end
 
