@@ -637,6 +637,28 @@ start_runtime() {
       -r "$LEMON_ROOT/apps/lemon_cli/lib/lemon_cli/distribution.ex"
       -e 'LemonCli.Distribution.boot()' -S "${cmd[@]}")
   fi
+  # LemonWeb signs its session cookie and LiveView tokens with a per-install
+  # secret (config/runtime.exs derives the LiveView salt from it); never a
+  # committed value. Launches on different ports share it, so it is published
+  # atomically: a complete private temp file is hard-linked into place, which
+  # fails rather than clobbers if another launcher won; everyone reads the winner.
+  if [ -z "${LEMON_WEB_SECRET_KEY_BASE:-}" ]; then
+    local web_secret="$LEMON_HOME_DIR/web_secret_key_base"
+    (
+      umask 077
+      mkdir -p "$LEMON_HOME_DIR"
+      [ ! -e "$web_secret" ] || exit 0
+      tmp="$(mktemp "$LEMON_HOME_DIR/.web_secret_key_base.XXXXXX")" || exit 1
+      if openssl rand -hex 64 > "$tmp" && chmod 600 "$tmp"; then
+        ln "$tmp" "$web_secret" 2>/dev/null || [ -e "$web_secret" ] || { rm -f "$tmp"; exit 1; }
+      fi
+      rm -f "$tmp"
+    ) || exit 1
+    LEMON_WEB_SECRET_KEY_BASE="$(cat "$web_secret" 2>/dev/null || true)"
+    [[ "$LEMON_WEB_SECRET_KEY_BASE" =~ ^[0-9a-f]{128}$ ]] ||
+      { error "$web_secret is not a valid web secret; remove it and retry"; exit 1; }
+    export LEMON_WEB_SECRET_KEY_BASE
+  fi
   ensure_managed_token || exit 1
   export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}" LEMON_CONTROL_PLANE_PORT="$PORT"
   export LEMON_WEB_PORT="$WEB_PORT"

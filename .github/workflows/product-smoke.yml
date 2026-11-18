@@ -401,6 +401,10 @@ jobs:
           echo "web healthz: $RESPONSE"
           test "$RESPONSE" = "ok"
 
+      - name: Check web LiveView socket for full profile
+        if: matrix.profile == 'lemon_runtime_full'
+        run: elixir scripts/web_liveview_smoke.exs
+
       # ── Release supportability ────────────────────────────────────────────────
 
       - name: Stop release before Mix checks

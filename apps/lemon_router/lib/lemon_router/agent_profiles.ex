@@ -48,7 +48,13 @@ defmodule LemonRouter.AgentProfiles do
 
   @impl true
   def init(_opts) do
-    profiles = load_profiles(:cached)
+    # Every LemonCore.ProfileStore write rings this doorbell, so profiles
+    # created, renamed or deleted by any writer (Web, TUI, CLI) reload here.
+    # Subscribe before the first load so no write can fall between them, and
+    # load durably (not from the TTL config cache): a write made while this
+    # process was down must not be masked by a cached pre-write entry.
+    :ok = LemonCore.Bus.subscribe(LemonCore.ProfileStore.changed_topic())
+    profiles = load_profiles(:reload)
     {:ok, %{profiles: profiles}}
   end
 
@@ -72,6 +78,13 @@ defmodule LemonRouter.AgentProfiles do
     profiles = load_profiles(:reload)
     {:noreply, %{state | profiles: profiles}}
   end
+
+  @impl true
+  def handle_info(:profiles_changed, state) do
+    {:noreply, %{state | profiles: load_profiles(:reload)}}
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
 
   defp load_profiles(mode) do
     cwd = resolve_config_cwd()

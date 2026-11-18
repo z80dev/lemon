@@ -210,10 +210,13 @@ config :lemon_gateway, :executor, CodingAgent.Executor
 
 config :lemon_gateway, :telegram, nil
 
+# ConnTest requests name www.example.com, so the endpoint names it as its host.
 config :lemon_web, LemonWeb.Endpoint,
+  url: [host: "www.example.com"],
   http: [ip: {127, 0, 0, 1}, port: 4082],
   secret_key_base:
     "test_secret_key_base_test_secret_key_base_test_secret_key_base_test_secret_key_base",
+  live_view: [signing_salt: "lemonwebtestsalt"],
   server: false
 
 # Tests stub the omp auth broker; opt in to the snapshot long-poll per call.

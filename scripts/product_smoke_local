@@ -512,4 +512,7 @@ if [ "$WEB_RESPONSE" != "ok" ]; then
   exit 1
 fi
 
+echo "[smoke] Checking web LiveView socket..."
+LEMON_WEB_PORT="$WEB_PORT" elixir "$REPO_ROOT/scripts/web_liveview_smoke.exs"
+
 PASSED=1

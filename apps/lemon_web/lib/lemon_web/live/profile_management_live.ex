@@ -1,17 +1,20 @@
 defmodule LemonWeb.ProfileManagementLive do
   @moduledoc """
-  Authenticated profile lifecycle management over `LemonCore.ProfileStore`.
+  Authenticated profile lifecycle management over the control plane's
+  `profiles.*` methods (`LemonWeb.Rpc`), the same surface the TUI uses, so every
+  write also reloads the router's profile cache.
 
   The LiveView keeps only operator-facing profile metadata in socket state.
   Derived paths and system prompts are intentionally excluded. Every mutation
   begins with a read-only preview; stale-sensitive actions bind an opaque hash
   of the current canonical profile and recheck it in constant time immediately
-  before delegating the write to `ProfileStore`.
+  before submitting the write.
   """
 
   use LemonWeb, :live_view
 
-  alias LemonCore.{NodeRegistry, ProfileStore}
+  alias LemonCore.NodeRegistry
+  alias LemonWeb.Rpc
 
   @id_regex ~r/^[a-z0-9][a-z0-9_-]{0,63}$/
   @node_regex ~r/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
@@ -93,7 +96,7 @@ defmodule LemonWeb.ProfileManagementLive do
     socket = assign(socket, :create_draft, draft)
 
     with :ok <- validate_new_profile(draft),
-         {:error, :not_found} <- profile_call(:get, [draft["id"]]) do
+         {:error, :not_found} <- profile_get(draft["id"]) do
       pending = %{
         action: :create,
         label: "Create profile #{draft["id"]}",
@@ -131,8 +134,8 @@ defmodule LemonWeb.ProfileManagementLive do
     source_id = socket.assigns.selected.id
 
     with :ok <- validate_new_profile(draft),
-         {:error, :not_found} <- profile_call(:get, [draft["id"]]),
-         {:ok, source} <- profile_call(:get, [source_id]) do
+         {:error, :not_found} <- profile_get(draft["id"]),
+         {:ok, source} <- profile_get(source_id) do
       pending = %{
         action: :clone,
         label: "Clone #{source_id} as #{draft["id"]}",
@@ -170,7 +173,7 @@ defmodule LemonWeb.ProfileManagementLive do
     id = socket.assigns.selected.id
 
     with :ok <- validate_name(draft["name"]),
-         {:ok, current} <- profile_call(:get, [id]) do
+         {:ok, current} <- profile_get(id) do
       pending = %{
         action: :rename,
         label: "Rename profile #{id}",
@@ -193,7 +196,7 @@ defmodule LemonWeb.ProfileManagementLive do
     id = normalize_id(id)
 
     with %{} <- Enum.find(socket.assigns.profiles, &(&1.id == id)),
-         {:ok, current} <- profile_call(:get, [id]) do
+         {:ok, current} <- profile_get(id) do
       pending = %{
         action: :delete,
         label: "Delete profile #{id}",
@@ -623,17 +626,22 @@ defmodule LemonWeb.ProfileManagementLive do
   end
 
   defp apply_pending(socket, %{action: :create} = pending) do
-    case profile_call(:get, [pending.target_id]) do
-      {:error, :not_found} -> apply_write(socket, pending, :create, [pending.attrs])
+    case profile_get(pending.target_id) do
+      {:error, :not_found} -> apply_write(socket, pending, "profiles.create", pending.attrs)
       _ -> stale(socket, "That profile ID is no longer available. Refresh and choose another ID.")
     end
   end
 
   defp apply_pending(socket, %{action: :clone} = pending) do
-    with {:ok, source} <- profile_call(:get, [pending.source_id]),
+    with {:ok, source} <- profile_get(pending.source_id),
          true <- secure_equal?(pending.expected_revision, profile_revision(source)),
-         {:error, :not_found} <- profile_call(:get, [pending.target_id]) do
-      apply_write(socket, pending, :clone, [pending.source_id, pending.attrs])
+         {:error, :not_found} <- profile_get(pending.target_id) do
+      apply_write(
+        socket,
+        pending,
+        "profiles.clone",
+        Map.put(pending.attrs, "sourceId", pending.source_id)
+      )
     else
       _ ->
         stale(socket, "The source or destination changed. Refresh and preview the clone again.")
@@ -641,31 +649,37 @@ defmodule LemonWeb.ProfileManagementLive do
   end
 
   defp apply_pending(socket, %{action: :rename} = pending) do
-    with {:ok, current} <- profile_call(:get, [pending.target_id]),
+    with {:ok, current} <- profile_get(pending.target_id),
          true <- secure_equal?(pending.expected_revision, profile_revision(current)) do
-      apply_write(socket, pending, :rename, [pending.target_id, pending.attrs["name"]])
+      apply_write(socket, pending, "profiles.rename", %{
+        "id" => pending.target_id,
+        "name" => pending.attrs["name"]
+      })
     else
       _ -> stale(socket, "That profile changed. Refresh and preview the rename again.")
     end
   end
 
   defp apply_pending(socket, %{action: :delete} = pending) do
-    with {:ok, current} <- profile_call(:get, [pending.target_id]),
+    with {:ok, current} <- profile_get(pending.target_id),
          true <- secure_equal?(pending.expected_revision, profile_revision(current)) do
-      apply_write(socket, pending, :delete, [pending.target_id, [confirm: pending.target_id]])
+      apply_write(socket, pending, "profiles.delete", %{
+        "id" => pending.target_id,
+        "confirm" => pending.target_id
+      })
     else
       _ -> stale(socket, "That profile changed. Refresh and preview deletion again.")
     end
   end
 
-  defp apply_write(socket, pending, action, args) do
-    case profile_call(action, args) do
-      {:ok, result} ->
-        selected_id = selected_after(action, pending, result)
+  defp apply_write(socket, pending, method, params) do
+    case Rpc.call(method, params) do
+      {:ok, _result} ->
+        action = pending.action
 
         socket =
           socket
-          |> assign(:selected_id, selected_id)
+          |> assign(:selected_id, selected_after(action, pending))
           |> assign(:pending_change, nil)
           |> assign(:notice, success_notice(action, pending))
           |> assign(:error, nil)
@@ -675,18 +689,15 @@ defmodule LemonWeb.ProfileManagementLive do
 
         {:noreply, socket}
 
-      {:error, reason} ->
-        {:noreply, assign(socket, :error, friendly_error(action, reason))}
-
-      _ ->
-        {:noreply, assign(socket, :error, "Profile service is unavailable. Nothing changed.")}
+      {:error, error} ->
+        {:noreply, assign(socket, :error, friendly_error(error))}
     end
   end
 
   defp refresh_profiles(socket) do
     profiles =
-      case profile_call(:list, []) do
-        list when is_list(list) ->
+      case Rpc.call("profiles.list") do
+        {:ok, %{"profiles" => list}} when is_list(list) ->
           list |> Enum.take(@max_profiles) |> Enum.flat_map(&sanitize_profile/1)
 
         _ ->
@@ -749,27 +760,13 @@ defmodule LemonWeb.ProfileManagementLive do
     |> Base.encode16(case: :lower)
   end
 
-  defp profile_call(:delete, [id, delete_opts]) do
-    call_profile_store(:delete, [id, Keyword.merge(profile_opts(), delete_opts)])
-  end
-
-  defp profile_call(action, args) do
-    call_profile_store(action, args ++ [profile_opts()])
-  end
-
-  defp call_profile_store(action, args) do
-    case Application.get_env(:lemon_web, :profile_store_fun) do
-      fun when is_function(fun, 2) -> fun.(action, args)
-      _ -> apply(ProfileStore, action, args)
+  # The method's projection carries the same revision fields as the store record.
+  defp profile_get(id) do
+    case Rpc.call("profiles.get", %{"id" => id}) do
+      {:ok, %{"profile" => profile}} when is_map(profile) -> {:ok, profile}
+      {:error, %{code: :not_found}} -> {:error, :not_found}
+      _ -> {:error, :unavailable}
     end
-  rescue
-    _ -> {:error, :unavailable}
-  catch
-    :exit, _ -> {:error, :unavailable}
-  end
-
-  defp profile_opts do
-    Application.get_env(:lemon_web, :profile_store_opts, [])
   end
 
   defp preview_ready(socket, pending) do
@@ -924,8 +921,8 @@ defmodule LemonWeb.ProfileManagementLive do
   defp reset_successful_draft(socket, :clone), do: assign(socket, :clone_draft, @empty_clone)
   defp reset_successful_draft(socket, _action), do: socket
 
-  defp selected_after(:delete, _pending, _result), do: nil
-  defp selected_after(_action, pending, _result), do: pending.target_id
+  defp selected_after(:delete, _pending), do: nil
+  defp selected_after(_action, pending), do: pending.target_id
 
   defp success_notice(:create, pending),
     do: "Profile #{pending.target_id} created with an isolated home and stable chat."
@@ -939,18 +936,17 @@ defmodule LemonWeb.ProfileManagementLive do
   defp success_notice(:delete, pending),
     do: "Profile #{pending.target_id} deleted; its managed home was moved to Lemon trash."
 
-  defp friendly_error(_action, :already_exists),
+  # Only the method's fixed error code is interpreted; its text never reaches the page.
+  defp friendly_error(%{code: :conflict}),
     do: "That profile ID already exists. Refresh and choose another ID."
 
-  defp friendly_error(_action, :not_found),
+  defp friendly_error(%{code: :not_found}),
     do: "That profile is no longer available. Refresh and try again."
 
-  defp friendly_error(_action, :reserved_profile), do: "The default profile is reserved."
+  defp friendly_error(%{code: :unavailable}),
+    do: "Profile service is unavailable. Nothing changed."
 
-  defp friendly_error(_action, :confirmation_required),
-    do: "Exact profile ID confirmation is required."
-
-  defp friendly_error(_action, _reason), do: "The profile change was refused. Nothing changed."
+  defp friendly_error(_error), do: "The profile change was refused. Nothing changed."
 
   defp preview_sentence(%{action: :create}),
     do: "Create one canonical profile, isolated workspace, and stable main chat."

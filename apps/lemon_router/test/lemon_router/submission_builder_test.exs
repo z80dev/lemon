@@ -362,6 +362,12 @@ defmodule LemonRouter.SubmissionBuilderTest do
                session_key: "agent:new-managed-profile:task-example"
              )
 
+    # ProfileStore writes reload the registry; force it stale to prove admission
+    # reads the durable store rather than the cache.
+    :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
+      %{state | profiles: Map.delete(state.profiles, "new-managed-profile")}
+    end)
+
     refute LemonRouter.AgentProfiles.exists?("new-managed-profile")
     assert {:ok, submission} = SubmissionBuilder.build(request, orchestrator_state())
     assert submission.execution_request.meta.node == "worker-new"

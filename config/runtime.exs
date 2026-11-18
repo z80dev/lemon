@@ -263,14 +263,54 @@ web_public_origins =
       ["#{scheme}://#{host}:#{url_port}"]
   end
 
-config :lemon_control_plane,
-       :web_origins,
-       Enum.uniq(
-         for(
-           host <- ["localhost", "127.0.0.1", "[::1]" | web_bind_hosts],
-           do: "http://#{host}:#{web_port}"
-         ) ++ web_public_origins
-       )
+web_origins =
+  Enum.uniq(
+    for(
+      host <- ["localhost", "127.0.0.1", "[::1]" | web_bind_hosts],
+      do: "http://#{host}:#{web_port}"
+    ) ++ web_public_origins
+  )
+
+config :lemon_control_plane, :web_origins, web_origins
+
+# LemonWeb's own /live Origin allowlist and Host allowlist (LemonWeb.RequestGuard).
+config :lemon_web, :trusted_origins, web_origins
+
+# Secure session cookies behind a TLS-terminating proxy; explicit, never
+# inferred from forwarded headers. Off keeps direct http://127.0.0.1 sign-in working.
+config :lemon_web,
+       :secure_cookies,
+       (case normalized_env.("LEMON_WEB_SECURE_COOKIES") do
+          nil ->
+            false
+
+          value ->
+            case String.downcase(value) do
+              enabled when enabled in ["1", "true"] -> true
+              disabled when disabled in ["0", "false"] -> false
+              _ -> raise "LEMON_WEB_SECURE_COOKIES must be true/false or 1/0"
+            end
+        end)
+
+# The LiveView signing salt is derived from the per-install secret_key_base, so
+# no committed value signs LiveView tokens.
+live_view_signing_salt = fn secret_key_base ->
+  :crypto.mac(:hmac, :sha256, secret_key_base, "lemon_web live_view signing salt")
+  |> Base.url_encode64(padding: false)
+  |> binary_part(0, 32)
+end
+
+# The source runtime (bin/lemon, MIX_ENV=dev) uses the launcher's persisted
+# per-install secret; without one (e.g. `iex -S mix`) each boot gets a fresh one.
+if config_env() == :dev do
+  secret_key_base =
+    normalized_env.("LEMON_WEB_SECRET_KEY_BASE") ||
+      Base.url_encode64(:crypto.strong_rand_bytes(64), padding: false)
+
+  config :lemon_web, LemonWeb.Endpoint,
+    secret_key_base: secret_key_base,
+    live_view: [signing_salt: live_view_signing_salt.(secret_key_base)]
+end
 
 if config_env() == :prod do
   release_name = System.get_env("RELEASE_NAME")
@@ -303,10 +343,14 @@ if config_env() == :prod do
           1..65_535
         )
 
+      secret_key_base =
+        secret_key_base || System.fetch_env!("#{env_prefix}_SECRET_KEY_BASE")
+
       endpoint_config = [
         url: [host: host, port: url_port, scheme: url_scheme],
         http: [ip: bind_ip.("#{env_prefix}_BIND_IP", "127.0.0.1"), port: port],
-        secret_key_base: secret_key_base || System.fetch_env!("#{env_prefix}_SECRET_KEY_BASE")
+        secret_key_base: secret_key_base,
+        live_view: [signing_salt: live_view_signing_salt.(secret_key_base)]
       ]
 
       endpoint_config =
