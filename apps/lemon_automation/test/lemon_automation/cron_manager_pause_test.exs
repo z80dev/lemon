@@ -362,24 +362,19 @@ defmodule LemonAutomation.CronManagerPauseTest do
 
     refute pause_check(CronCheck.run([]))
 
-    paused = call_tool(tool, %{"action" => "pause_all"})
-    assert %{"paused" => true, "pausedAtMs" => paused_at} = paused.details
+    # The global hold is operator-only; the agent tool only reports it.
+    assert {:ok, %{paused: true, paused_at_ms: paused_at}} = CronManager.pause_all()
     assert is_integer(paused_at)
 
     assert %{"paused" => true, "pausedAtMs" => ^paused_at} =
              call_tool(tool, %{"action" => "status"}).details
 
-    assert {:ok, %{paused: true, paused_at_ms: ^paused_at}} = CronManager.pause_status()
-
     assert %{status: :warn} = check = pause_check(CronCheck.run([]))
     assert check.remediation =~ "lemon cron resume --all"
 
-    resumed = call_tool(tool, %{"action" => "resume_all"})
-    assert %{"paused" => false, "resumed" => true, "skippedJobCount" => _} = resumed.details
+    assert {:ok, %{resumed: true}} = CronManager.resume_all()
     assert %{"paused" => false} = call_tool(tool, %{"action" => "status"}).details
     refute pause_check(CronCheck.run([]))
-
-    assert %{"resumed" => false} = call_tool(tool, %{"action" => "resume_all"}).details
   end
 
   test "the store marker is write-once and keeps its original time" do

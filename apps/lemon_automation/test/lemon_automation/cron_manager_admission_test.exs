@@ -778,7 +778,6 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
           profile_id: ctx.profile_id,
           prompt: "do admission-controlled work",
           admission: ctx.admission,
-          memory_file: Path.join(ctx.root, "cron-memory.md"),
           deliver_to: "none"
         },
         Map.new(extra)

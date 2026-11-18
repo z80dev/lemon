@@ -1,7 +1,7 @@
 defmodule LemonAutomation.RunSubmitterTest do
   use ExUnit.Case, async: false
 
-  alias LemonAutomation.{CronJob, CronRun, RunSubmitter}
+  alias LemonAutomation.{CronJob, CronMemory, CronRun, RunSubmitter}
   alias LemonCore.SessionKey
 
   @moduletag :tmp_dir
@@ -86,20 +86,14 @@ defmodule LemonAutomation.RunSubmitterTest do
   end
 
   defp sample_job(attrs \\ %{}) do
-    memory_file =
-      LemonCore.Paths.home_path([
-        "lemon_cron_memory_run_submitter_#{System.unique_integer([:positive])}.md"
-      ])
-
     base = %{
-      id: "cron_1",
+      id: "cron_#{System.unique_integer([:positive])}",
       name: "Test job",
       schedule: "* * * * *",
       agent_id: "agent_1",
       session_key: "agent:agent_1:main",
       prompt: "hello",
-      timeout_ms: 42_000,
-      memory_file: memory_file
+      timeout_ms: 42_000
     }
 
     CronJob.new(Map.merge(base, attrs))
@@ -124,7 +118,7 @@ defmodule LemonAutomation.RunSubmitterTest do
              origin: :cron,
              prompt: _prompt,
              agent_id: "agent_build",
-             tool_policy: %{blocked_tools: ["cron"]},
+             tool_policy: %{blocked_tools: ~w(cron goal kanban agent_message peer)},
              meta: %{
                cron_job_id: "cron_build",
                cron_run_id: "run_build",
@@ -134,7 +128,8 @@ defmodule LemonAutomation.RunSubmitterTest do
              }
            } = RunSubmitter.build_params(job, run)
 
-    assert memory_file == job.memory_file
+    assert memory_file == CronMemory.memory_file(job)
+    assert memory_file == LemonCore.Paths.home_path(["cron_memory", "cron_build.md"])
   end
 
   test "build_params/2 forks the session key for each run" do
@@ -169,7 +164,7 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert SessionKey.valid?(params.session_key)
     assert_receive {:wait_called, ^submitted_run_id, 42_000}
 
-    assert {:ok, memory_text} = File.read(job.memory_file)
+    assert {:ok, memory_text} = File.read(CronMemory.memory_file(job))
     assert memory_text =~ "## Run run_submit"
     assert memory_text =~ "done"
   end
@@ -181,7 +176,7 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert {:error, ":busy"} =
              RunSubmitter.submit(job, run, router_mod: RouterError, waiter_mod: Waiter)
 
-    assert {:ok, memory_text} = File.read(job.memory_file)
+    assert {:ok, memory_text} = File.read(CronMemory.memory_file(job))
     assert memory_text =~ "status: failed"
   end
 
@@ -192,7 +187,7 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert {:error, {:outcome_unknown, "fixed_unexpected"}} =
              RunSubmitter.submit(job, run, router_mod: RouterUnexpected, waiter_mod: Waiter)
 
-    refute File.exists?(job.memory_file)
+    refute File.exists?(CronMemory.memory_file(job))
   end
 
   test "submit/3 reconciles an exception from the router as outcome unknown" do
@@ -228,7 +223,7 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert {:error, {:outcome_unknown, "fixed_timeout"}} =
              RunSubmitter.submit(job, run, router_mod: RouterOk, waiter_mod: TimeoutWaiter)
 
-    refute File.exists?(job.memory_file)
+    refute File.exists?(CronMemory.memory_file(job))
   end
 
   test "ambiguous router submission retains ownership when no completion arrives" do
@@ -238,7 +233,7 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert {:error, {:outcome_unknown, "fixed_ambiguous"}} =
              RunSubmitter.submit(job, run, router_mod: RouterExit, waiter_mod: TimeoutWaiter)
 
-    refute File.exists?(job.memory_file)
+    refute File.exists?(CronMemory.memory_file(job))
   end
 
   test "rejected ownership claim prevents router submission" do
@@ -314,7 +309,10 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert params.meta.cron_session_key == params.session_key
     assert params.meta.remote_cwd_explicit == false
     assert params.cwd == nil
-    assert params.tool_policy.blocked_tools == ["cron"]
+
+    assert Enum.sort(params.tool_policy.blocked_tools) ==
+             Enum.sort(~w(cron goal kanban agent_message peer))
+
     assert params.tool_policy.deny == ["bash"]
     assert params.tool_policy.require_approval == ["write"]
     assert params.tool_policy.approvals["write"] == :always

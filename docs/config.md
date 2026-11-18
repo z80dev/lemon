@@ -3605,7 +3605,9 @@ an enabled, unpaired Telegram adapter as a failure (`channels.telegram.allowlist
 
 In group chats (`group`, `supergroup`, `channel` peers) the router requires an approval
 for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call,
-because any member can prompt the agent.
+because any member can prompt the agent. Cron runs in a chat's session (`/remind`
+reminders and jobs the agent schedules there) keep this floor and the chat's channel
+and session policy.
 
 ## Telegram and Discord DM pairing codes
 
