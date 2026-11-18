@@ -11,10 +11,36 @@ ast_grep_opts =
   end
 
 exclude_tags =
-  case CodingAgent.Tools.AstGrep.availability(ast_grep_opts) do
+  case CodingAgent.Tools.AstGrep.availability(File.cwd!(), ast_grep_opts) do
     {:ok, _} -> [:integration]
     {:error, _} -> [:integration, :ast_grep]
   end
+
+defmodule CodingAgent.TestPdfPython do
+  @moduledoc false
+  # Operator-selected Python with a real PDF library: LEMON_PDF_PYTHON, else PATH python3.
+  def executable do
+    System.get_env("LEMON_PDF_PYTHON") || System.find_executable("python3")
+  end
+
+  def available? do
+    case executable() do
+      nil ->
+        false
+
+      python ->
+        probe =
+          "import importlib.util as u, sys; sys.exit(0 if u.find_spec('pypdf') or u.find_spec('fitz') else 1)"
+
+        match?({_, 0}, System.cmd(python, ["-I", "-c", probe], stderr_to_stdout: true))
+    end
+  end
+end
+
+exclude_tags =
+  if CodingAgent.TestPdfPython.available?(),
+    do: exclude_tags,
+    else: [:pdf_python_library | exclude_tags]
 
 exclude_tags =
   if System.find_executable("python3"), do: exclude_tags, else: [:python3 | exclude_tags]

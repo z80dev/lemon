@@ -19,11 +19,12 @@ defmodule CodingAgent.Tools.ReadFormats do
   * `.pdf` extracts actual page text. Optional `page` and `page_limit` select
     1-based pages; omitted values read all pages. Scanned pages need OCR, which
     is not performed here. `pdf_backend/2` reports availability. Backends are
-    discovered in order: pdftotext, mutool, Python pypdf/PyMuPDF. `:pdf_python`
-    selects a Python interpreter; otherwise a `.lemon/read-formats-venv` in
-    cwd or an ancestor is considered before PATH's python3. An isolated backend
-    can be installed with `python3 -m venv .lemon/read-formats-venv` followed by
-    `.lemon/read-formats-venv/bin/python3 -m pip install pypdf`.
+    discovered in order: pdftotext, mutool, Python pypdf/PyMuPDF, using only
+    absolute operator PATH entries outside the project and ancestor `.lemon`
+    trees (see `ReadFormatCommand.system_executable/2`). `:pdf_python` is an
+    explicit operator (constructor) trust grant for a Python interpreter;
+    project `.lemon/read-formats-venv` interpreters are never auto-discovered.
+    Python always runs isolated (`-I`).
   * `.ipynb` renders indexed markdown/code/raw cells, execution counts, textual
     outputs and errors. `cell` and `cell_limit` select 1-based cells. Binary MIME
     outputs are summarized by MIME type, not embedded as base64 text.
@@ -31,7 +32,7 @@ defmodule CodingAgent.Tools.ReadFormats do
     `app.db:table:key`, `app.db:table?limit=&offset=&where=&order=` and
     `app.db?q=SELECT ...` give read-only views (see `ReadSqlite`).
   * Raster images use real dimension inspection/downscaling when `sips` is
-    available; `image_backend/0` reports preview availability. Small originals
+    available; `image_backend/1` reports preview availability. Small originals
     fall through to the ordinary reader if no preview backend is available.
   `offset` and `limit` always address lines in the rendered selected source.
   Results include numbered text, continuation metadata and `full_source` pointing
@@ -95,7 +96,7 @@ defmodule CodingAgent.Tools.ReadFormats do
   defdelegate pdf_backend(cwd, opts \\ []), to: ReadPdf, as: :backend
 
   @doc "Reports availability of actual image dimension inspection/downscaling."
-  defdelegate image_backend(), to: ReadImage, as: :backend
+  defdelegate image_backend(cwd), to: ReadImage, as: :backend
 
   @doc false
   def check_input(path, opts) do
@@ -132,7 +133,7 @@ defmodule CodingAgent.Tools.ReadFormats do
         ReadSvg.text(path, params, signal, opts)
 
       ReadImage.supported?(path) ->
-        ReadImage.read(path, params, signal, opts)
+        ReadImage.read(path, params, signal, cwd, opts)
 
       ReadSqlite.database?(path) ->
         ReadSqlite.read(path, "", "", params, signal, opts)

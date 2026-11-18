@@ -121,7 +121,7 @@ defmodule CodingAgent.Tools.ReadFormatsTest do
     original = png(2048, 4)
     File.write!(path, original)
 
-    case ReadFormats.image_backend() do
+    case ReadFormats.image_backend(cwd) do
       {:ok, %{name: :sips}} ->
         assert {:ok,
                 %AgentToolResult{
@@ -149,7 +149,7 @@ defmodule CodingAgent.Tools.ReadFormatsTest do
     path = Path.join(cwd, "pixels.png")
     File.write!(path, png(256, 256))
 
-    case ReadFormats.image_backend() do
+    case ReadFormats.image_backend(cwd) do
       {:ok, _} ->
         assert {:ok,
                 %AgentToolResult{
