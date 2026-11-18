@@ -13,6 +13,7 @@ import type {
 	SessionRewindTarget,
 	SessionTreeEntry,
 } from "../protocol/session-tree.ts";
+import { inertComposerText } from "../shell.ts";
 import type { Block } from "../store/transcript-model.ts";
 import {
 	asArray,
@@ -339,8 +340,9 @@ export const retryCommand: SlashCommand = {
 		);
 		const disposition = await ctx.ui.deliverPrompt(preview.prompt, "queue");
 		if (disposition === "accepted") {
-			if (ctx.store.drafts.get(key) === preview.prompt) ctx.store.setDraft(key, "");
-			if (ctx.store.focusedKey === key && ctx.ui.getDraft() === preview.prompt) {
+			const staged = inertComposerText(preview.prompt);
+			if (ctx.store.drafts.get(key) === staged) ctx.store.setDraft(key, "");
+			if (ctx.store.focusedKey === key && ctx.ui.getDraft() === staged) {
 				ctx.ui.setDraft("");
 			}
 		}
@@ -360,10 +362,14 @@ function normalize(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
-/** Park `text` as the session's draft, and in the editor when it is on screen. */
+/**
+ * Park `text` as the session's draft, and in the editor when it is on screen.
+ * It is a stored prompt, not typing: its shell syntax is escaped.
+ */
 function stageDraft(ctx: CommandContext, key: string, text: string): void {
-	ctx.store.setDraft(key, text);
-	if (ctx.store.focusedKey === key) ctx.ui.setDraft(text);
+	const draft = inertComposerText(text);
+	ctx.store.setDraft(key, draft);
+	if (ctx.store.focusedKey === key) ctx.ui.setDraft(draft);
 }
 
 /**
