@@ -14,6 +14,7 @@ Mix.CLI.main(
     """
     Process.group_leader(self(), Process.delete(:lemon_cli_group_leader))
     File.cd!(System.fetch_env!("LEMON_NODE_LAUNCH_CWD"))
+    LemonCore.NodeCredentials.consume_handoff()
     LemonCli.CLI.main(System.argv())
     """,
     "--"

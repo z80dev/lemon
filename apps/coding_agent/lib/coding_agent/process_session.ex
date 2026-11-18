@@ -985,17 +985,9 @@ defmodule CodingAgent.ProcessSession do
       ]
       |> maybe_stderr_to_stdout(stderr_to_stdout?)
 
-    env_list =
-      Enum.map(env, fn {k, v} ->
-        {String.to_charlist(k), String.to_charlist(v)}
-      end)
-
-    port_opts =
-      if backend not in [:docker, :ssh] and env_list != [] do
-        [{:env, env_list} | port_opts]
-      else
-        port_opts
-      end
+    # Docker/SSH apply `env` remotely; the local client still gets the scrub.
+    local_env = if backend in [:docker, :ssh], do: [], else: env
+    port_opts = [{:env, LemonCore.ChildEnv.port_env(local_env)} | port_opts]
 
     # A FIFO permits stdin EOF without closing stdout or losing exit status.
     # Opening its writer after activation synchronizes with the shell's reader,

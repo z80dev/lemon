@@ -29,7 +29,8 @@ defmodule CodingAgent.ExecutionNode.PTY do
           :binary,
           :exit_status,
           {:packet, 4},
-          {:args, [helper, cwd, shell, Integer.to_string(cols), Integer.to_string(rows)]}
+          {:args, [helper, cwd, shell, Integer.to_string(cols), Integer.to_string(rows)]},
+          {:env, LemonCore.ChildEnv.port_env()}
         ])
 
       policy = CodingAgent.ExecutionNode.FileService.path_policy(opts)

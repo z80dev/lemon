@@ -381,7 +381,8 @@ defmodule CodingAgent.ExecutionNode.ProcessService do
              :binary,
              :exit_status,
              {:packet, 4},
-             {:args, [helper]}
+             {:args, [helper]},
+             {:env, LemonCore.ChildEnv.port_env()}
            ])}
         rescue
           _ -> {:error, :process_unavailable}

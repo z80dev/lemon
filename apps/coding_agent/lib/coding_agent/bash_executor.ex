@@ -350,11 +350,7 @@ defmodule CodingAgent.BashExecutor do
     "'" <> String.replace(path, "'", "'\"'\"'") <> "'"
   end
 
-  defp port_env(env) when map_size(env) == 0, do: []
-
-  defp port_env(env) do
-    [{:env, Enum.map(env, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)}]
-  end
+  defp port_env(env), do: [{:env, LemonCore.ChildEnv.port_env(env)}]
 
   defp finalize_result(state) do
     state = if state.utf8_tail == "", do: state, else: buffer_chunk(%{state | utf8_tail: ""}, "�")

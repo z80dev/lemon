@@ -918,7 +918,13 @@ defmodule CodingAgent.Tools.Task.Worktree do
     # Do not run repository hooks that might copy local state into the child.
     # Git itself populates the checkout solely from the committed tree.
     options = ["-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false"] ++ config
-    {:ok, LemonCore.NativeProcess.cmd(git, options ++ args, cd: cwd, stderr_to_stdout: true)}
+    # Git filters configured in the workspace run with this environment.
+    {:ok,
+     LemonCore.NativeProcess.cmd(git, options ++ args,
+       cd: cwd,
+       stderr_to_stdout: true,
+       env: LemonCore.ChildEnv.cmd_env()
+     )}
   rescue
     _ in [ErlangError, ArgumentError] ->
       {:error, "Could not execute Git for the task worktree"}

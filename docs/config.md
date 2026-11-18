@@ -794,7 +794,25 @@ without recovery credentials use the explicit operator-authorized
 pairing. `LEMON_NODE_TOKEN` supplies an existing session token. Prefer these
 environment variables to `--operator-token` / `--token` so credentials do not
 enter shell history. These values are runtime CLI inputs, not `config.toml`
-keys.
+keys. The `lemon` launchers (source and release) remove both variables at
+startup and hand them to `lemon node` only on an anonymous pipe (fd 3) that
+the VM drains before any application starts; nothing is written to disk, and
+an unreadable handoff refuses to start. They never appear in the VM's initial
+environment (`/proc/<pid>/environ`, `ps -E`) or in any child process.
+Node child processes (bash, PTY, process, eval, debug,
+host commands, task-worktree Git and stdio MCP servers) never inherit
+`LEMON_NODE_*TOKEN*`, `LEMON_SECRETS_*` or `LEMON_*_API_KEY` variables;
+ordinary provider keys such as `OPENAI_API_KEY` are still inherited.
+
+These protections keep credentials out of child environments only. Node
+tools run as the same OS user as the node, so they can still read anything
+that user can: the stored node session and recovery tokens under
+`~/.lemon/nodes/execution/`, and the memory of the node process. Running the
+node under a dedicated account does not change this, because its tools still
+share that account. Keeping these credentials from the node's own tools needs
+an enforced OS boundary between the credential owner and the execution
+children (for example, tools sandboxed or run as a different user); Lemon does
+not provide one yet.
 
 `LEMON_NODE_CAPABILITIES` (or `--capabilities`) sets the destination-local tool
 ceiling to `all` or a comma-separated list such as `read,write,bash`. Every
