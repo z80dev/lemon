@@ -2,33 +2,30 @@ defmodule LemonGateway.Sms.WebhookRouterTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.Sms.Inbox
+  alias LemonGateway.Sms.TwilioSignature
   alias LemonGateway.Sms.WebhookRouter
 
   @table :sms_inbox
+  @token "router-test-token"
 
   setup do
-    # Keep this test deterministic even if the developer environment has Twilio webhook
-    # validation enabled.
-    _ = Application.stop(:lemon_gateway)
+    saved = Map.new(~w(TWILIO_AUTH_TOKEN TWILIO_WEBHOOK_URL), &{&1, System.get_env(&1)})
+    System.put_env("TWILIO_AUTH_TOKEN", @token)
+    System.delete_env("TWILIO_WEBHOOK_URL")
 
-    orig_validate = System.get_env("TWILIO_VALIDATE_WEBHOOK")
-    System.put_env("TWILIO_VALIDATE_WEBHOOK", "0")
-
-    Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
     for {k, _v} <- LemonCore.Store.list(@table) do
       _ = LemonCore.Store.delete(@table, k)
     end
 
-    on_exit(fn ->
-      Application.stop(:lemon_gateway)
-      Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
+    start_supervised!(Inbox)
 
-      case orig_validate do
-        nil -> System.delete_env("TWILIO_VALIDATE_WEBHOOK")
-        v -> System.put_env("TWILIO_VALIDATE_WEBHOOK", v)
-      end
+    on_exit(fn ->
+      Enum.each(saved, fn
+        {k, nil} -> System.delete_env(k)
+        {k, v} -> System.put_env(k, v)
+      end)
 
       for {k, _v} <- LemonCore.Store.list(@table) do
         _ = LemonCore.Store.delete(@table, k)
@@ -38,16 +35,22 @@ defmodule LemonGateway.Sms.WebhookRouterTest do
     :ok
   end
 
-  test "POST /webhooks/twilio/sms stores message and returns empty TwiML" do
+  test "signed POST /webhooks/twilio/sms stores message and returns empty TwiML" do
     sid = "SM#{System.unique_integer([:positive])}"
 
+    params = %{
+      "MessageSid" => sid,
+      "From" => "+15551230100",
+      "To" => "+15551239999",
+      "Body" => "Your code is 999999"
+    }
+
+    signature =
+      TwilioSignature.signature(@token, "http://www.example.com/webhooks/twilio/sms", params)
+
     conn =
-      Plug.Test.conn(:post, "/webhooks/twilio/sms", %{
-        "MessageSid" => sid,
-        "From" => "+15551230100",
-        "To" => "+15551239999",
-        "Body" => "Your code is 999999"
-      })
+      Plug.Test.conn(:post, "/webhooks/twilio/sms", params)
+      |> Plug.Conn.put_req_header("x-twilio-signature", signature)
       |> WebhookRouter.call([])
 
     assert conn.status == 200

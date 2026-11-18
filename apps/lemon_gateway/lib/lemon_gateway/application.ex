@@ -35,7 +35,8 @@ defmodule LemonGateway.Application do
       # than reaching into this app; register ourselves as the implementation.
       LemonCore.EngineInfoBridge.configure(
         transport_registry: LemonGateway.TransportRegistry,
-        gateway_config: LemonGateway.Config
+        gateway_config: LemonGateway.Config,
+        sms_inbox: LemonGateway.Sms.Inbox
       )
 
       # Gateway owns the progress-message index; the store does not know it

@@ -3,8 +3,9 @@ defmodule LemonGateway.Sms.WebhookServer do
   Starts a Bandit HTTP server to host the SMS webhook endpoint.
 
   Reads the port and bind IP from `LemonGateway.Sms.Config` and serves
-  `LemonGateway.Sms.WebhookRouter`. The server is only started when the
-  webhook is enabled via configuration.
+  `LemonGateway.Sms.WebhookRouter`. The server starts only when the webhook is
+  enabled and a Twilio auth token is configured; without a token it logs an
+  error and does not listen, because no request could pass signature checks.
   """
 
   require Logger
@@ -12,20 +13,35 @@ defmodule LemonGateway.Sms.WebhookServer do
   alias LemonGateway.Sms.Config
 
   def start_link(_opts \\ []) do
-    if Config.webhook_enabled?() do
-      port = Config.webhook_port()
-      ip = Config.webhook_ip()
+    cond do
+      not Config.webhook_enabled?() ->
+        :ignore
 
-      Logger.info("Starting SMS webhook server on #{inspect(ip)}:#{port}")
+      is_nil(Config.auth_token()) ->
+        Logger.error(
+          "SMS webhook is enabled but no Twilio auth token is configured " <>
+            "(TWILIO_AUTH_TOKEN or [gateway.sms] auth_token_secret); not starting the listener"
+        )
 
-      Bandit.start_link(
-        plug: LemonGateway.Sms.WebhookRouter,
-        port: port,
-        ip: ip,
-        scheme: :http
-      )
-    else
-      :ignore
+        :ignore
+
+      true ->
+        port = Config.webhook_port()
+        ip = Config.webhook_ip()
+
+        Logger.info("Starting SMS webhook server on #{inspect(ip)}:#{port}")
+
+        with {:ok, pid} <-
+               Bandit.start_link(
+                 plug: LemonGateway.Sms.WebhookRouter,
+                 port: port,
+                 ip: ip,
+                 scheme: :http
+               ) do
+          # Registered so tool injection can confirm the listener is live.
+          true = Process.register(pid, __MODULE__)
+          {:ok, pid}
+        end
     end
   end
 

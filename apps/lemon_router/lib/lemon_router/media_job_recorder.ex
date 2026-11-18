@@ -5,7 +5,6 @@ defmodule LemonRouter.MediaJobRecorder do
 
   alias LemonCore.MapHelpers
 
-  @image_extensions MapSet.new(~w(.png .jpg .jpeg .gif .webp .bmp .svg .tif .tiff .heic .heif))
   @audio_extensions MapSet.new(~w(.mp3 .wav .ogg .flac .m4a .aac .opus))
   @video_extensions MapSet.new(~w(.mp4 .mov .webm .mkv .avi))
 
@@ -94,7 +93,7 @@ defmodule LemonRouter.MediaJobRecorder do
     ext = path |> Path.extname() |> String.downcase()
 
     cond do
-      MapSet.member?(@image_extensions, ext) -> :image
+      LemonCore.MediaFiles.image_path?(path) -> :image
       MapSet.member?(@audio_extensions, ext) -> :audio
       MapSet.member?(@video_extensions, ext) -> :video
       true -> :media

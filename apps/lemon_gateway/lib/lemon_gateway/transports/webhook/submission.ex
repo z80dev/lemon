@@ -197,29 +197,19 @@ defmodule LemonGateway.Transports.Webhook.Submission do
   end
 
   defp allow_callback_override?(integration, webhook_config),
-    do: resolve_flag(integration, webhook_config, :allow_callback_override)
+    do: Request.resolve_flag(integration, webhook_config, :allow_callback_override)
 
   defp allow_private_callback_hosts?(integration, webhook_config),
-    do: resolve_flag(integration, webhook_config, :allow_private_callback_hosts)
+    do: Request.resolve_flag(integration, webhook_config, :allow_private_callback_hosts)
 
   defp allow_query_token?(integration, webhook_config),
-    do: resolve_flag(integration, webhook_config, :allow_query_token)
+    do: Request.resolve_flag(integration, webhook_config, :allow_query_token)
 
   defp allow_payload_token?(integration, webhook_config),
-    do: resolve_flag(integration, webhook_config, :allow_payload_token)
+    do: Request.resolve_flag(integration, webhook_config, :allow_payload_token)
 
   defp allow_payload_idempotency_key?(integration, webhook_config),
-    do: resolve_flag(integration, webhook_config, :allow_payload_idempotency_key)
-
-  defp resolve_flag(integration, webhook_config, key) do
-    [Request.fetch(integration, key), Request.fetch(webhook_config, key)]
-    |> Enum.find_value(false, &bool_value/1)
-  end
-
-  defp bool_value(value) when is_boolean(value), do: value
-  defp bool_value(value) when value in [1, "1", "true", "TRUE", "yes", "YES"], do: true
-  defp bool_value(value) when value in [0, "0", "false", "FALSE", "no", "NO"], do: false
-  defp bool_value(_value), do: nil
+    do: Request.resolve_flag(integration, webhook_config, :allow_payload_idempotency_key)
 
   defp first_non_blank(values) when is_list(values) do
     Enum.find_value(values, fn value ->

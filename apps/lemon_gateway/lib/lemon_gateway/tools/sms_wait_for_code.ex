@@ -5,8 +5,13 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
   Waits up to a configurable timeout for a new SMS containing a numeric code
   (default 4-8 digits, or a custom regex). Automatically claims the matched
   message for the current session to prevent duplicate consumption.
+
+  Takes or renews the session's exclusive inbox reservation for the whole wait
+  (see `LemonGateway.Sms.Inbox`) and only returns messages that arrived while
+  this session held it. Results are marked untrusted.
   """
 
+  alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonGateway.Sms.Inbox
@@ -20,14 +25,15 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
       timeout_ms: :infinity,
       description:
         "Wait for an incoming SMS and extract a verification code (default: 4-8 digits). " <>
-          "Useful for website registration/verification flows using the shared inbox number.",
+          "Reserves the shared inbox number for this session; call sms_get_inbox_number " <>
+          "before triggering the SMS so it is routed here.",
       label: "Wait For SMS Code",
       parameters: %{
         "type" => "object",
         "properties" => %{
           "timeout_ms" => %{
             "type" => "integer",
-            "description" => "How long to wait (milliseconds). Default: 60000."
+            "description" => "How long to wait (milliseconds). Default: 60000, max: 600000."
           },
           "since_ms" => %{
             "type" => "integer",
@@ -62,31 +68,35 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
     }
   end
 
-  def execute(_tool_call_id, params, _signal, _on_update, session_key) when is_map(params) do
-    timeout_ms = parse_int(Map.get(params, "timeout_ms"), 60_000)
-    since_ms = parse_int(Map.get(params, "since_ms"), nil)
-    to = normalize_string(Map.get(params, "to"))
-    from_contains = normalize_string(Map.get(params, "from_contains"))
-    body_contains = normalize_string(Map.get(params, "body_contains"))
-    regex = normalize_string(Map.get(params, "regex"))
-    claim = parse_bool(Map.get(params, "claim"), true)
+  def execute(_tool_call_id, params, _signal, _on_update, session_key) do
+    params
+    |> wait(session_key)
+    |> ToolResultTrust.untrusted(:webhook)
+  end
 
+  defp wait(params, _session_key) when not is_map(params),
+    do: error_result("Invalid parameters (expected object).")
+
+  defp wait(_params, session_key) when not is_binary(session_key) or session_key == "",
+    do: error_result("sms_wait_for_code requires a session key (internal).")
+
+  defp wait(params, session_key) do
     opts =
       []
-      |> maybe_put(:timeout_ms, timeout_ms)
-      |> maybe_put(:since_ms, since_ms)
-      |> maybe_put(:to, to)
-      |> maybe_put(:from_contains, from_contains)
-      |> maybe_put(:body_contains, body_contains)
-      |> maybe_put(:regex, regex)
-      |> maybe_put(:claim, claim)
+      |> maybe_put(:since_ms, parse_int(Map.get(params, "since_ms"), nil))
+      |> maybe_put(:timeout_ms, parse_int(Map.get(params, "timeout_ms"), 60_000))
+      |> maybe_put(:to, normalize_string(Map.get(params, "to")))
+      |> maybe_put(:from_contains, normalize_string(Map.get(params, "from_contains")))
+      |> maybe_put(:body_contains, normalize_string(Map.get(params, "body_contains")))
+      |> maybe_put(:regex, normalize_string(Map.get(params, "regex")))
+      |> maybe_put(:claim, parse_bool(Map.get(params, "claim"), true))
 
     case Inbox.wait_for_code(session_key, opts) do
       {:ok, %{code: code, message: msg}} ->
-        from = msg["from"] || msg[:from]
-        to = msg["to"] || msg[:to]
-        sid = msg["message_sid"] || msg[:message_sid]
-        ts = msg["received_at_ms"] || msg[:received_at_ms]
+        from = msg["from"]
+        to = msg["to"]
+        sid = msg["message_sid"]
+        ts = msg["received_at_ms"]
 
         %AgentToolResult{
           content: [
@@ -96,7 +106,7 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
                 "Code: #{code}\nFrom: #{from}\nTo: #{to}\nMessageSid: #{sid}\nReceivedAtMs: #{ts}"
             }
           ],
-          details: %{code: code, message: msg}
+          details: %{code: code, message_sid: sid}
         }
 
       {:error, :timeout} ->
@@ -107,20 +117,15 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
 
       {:error, reason} ->
         %AgentToolResult{
-          content: [
-            %TextContent{
-              type: :text,
-              text: "Failed waiting for an SMS code: #{inspect(reason)}"
-            }
-          ],
+          content: [%TextContent{type: :text, text: Inbox.error_text(reason)}],
           details: %{error: true, reason: reason}
         }
     end
   end
 
-  def execute(_tool_call_id, _params, _signal, _on_update, _session_key) do
+  defp error_result(text) do
     %AgentToolResult{
-      content: [%TextContent{type: :text, text: "Invalid parameters (expected object)."}],
+      content: [%TextContent{type: :text, text: text}],
       details: %{error: true}
     }
   end

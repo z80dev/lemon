@@ -52,6 +52,7 @@ defmodule LemonGateway.Transports.Webhook do
   def start_link(_opts) do
     if Config.enabled?() do
       cfg = Config.config()
+      :ok = Config.warn_unsafe_integration_flags(cfg)
       ip = Config.bind_ip(cfg)
       port = Config.port(cfg)
 

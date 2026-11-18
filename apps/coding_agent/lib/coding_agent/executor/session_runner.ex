@@ -13,14 +13,14 @@ defmodule CodingAgent.Executor.SessionRunner do
   alias CodingAgent.Executor.RemoteRequestCodec
   alias CodingAgent.Session.Presentation
   alias CodingAgent.Session.RunTranslator
+  alias CodingAgent.Tools.SendFile
   alias CodingAgent.Tools.Task.Params
   alias LemonGateway.ExecutionRequest
-  alias LemonGateway.Tools.DiscordSendFile
   alias LemonGateway.Tools.SmsClaimMessage
   alias LemonGateway.Tools.SmsGetInboxNumber
   alias LemonGateway.Tools.SmsListMessages
+  alias LemonGateway.Tools.SmsReleaseInbox
   alias LemonGateway.Tools.SmsWaitForCode
-  alias LemonGateway.Tools.TelegramSendImage
 
   require Logger
 
@@ -559,58 +559,39 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   defp extra_tools(%ExecutionRequest{} = request, opts) do
     cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
+    send_file_tools(request, opts) ++ sms_tools(cwd, request.session_key)
+  end
 
-    sms_tools = [
-      SmsGetInboxNumber.tool(cwd),
-      SmsWaitForCode.tool(cwd, session_key: request.session_key),
-      SmsListMessages.tool(cwd, session_key: request.session_key),
-      SmsClaimMessage.tool(cwd, session_key: request.session_key)
-    ]
-
-    workspace_dir = profile_workspace(request.meta || %{})
-
-    cond do
-      telegram_session?(request) ->
-        [
-          TelegramSendImage.tool(
-            cwd,
-            session_key: request.session_key,
-            workspace_dir: workspace_dir
-          )
-          | sms_tools
-        ]
-
-      discord_session?(request) ->
-        [
-          DiscordSendFile.tool(
-            cwd,
-            session_key: request.session_key,
-            workspace_dir: workspace_dir
-          )
-          | sms_tools
-        ]
-
-      true ->
-        sms_tools
+  # Only an explicit run cwd (or profile workspace) is a send root; the process
+  # cwd fallback is never one, so a cwd-less run cannot attach host files.
+  defp send_file_tools(%ExecutionRequest{} = request, opts) do
+    if SendFile.channel(request.session_key) do
+      [
+        SendFile.tool(request.cwd || get_opt(opts, :cwd),
+          session_key: request.session_key,
+          workspace_dir: profile_workspace(request.meta || %{})
+        )
+      ]
+    else
+      []
     end
   end
 
-  defp telegram_session?(request) do
-    case LemonCore.SessionKey.parse(request.session_key || "") do
-      %{kind: :channel_peer, channel_id: "telegram"} -> true
-      _ -> false
+  # SMS tools are offered only when SMS ingress is usable (webhook enabled with
+  # an auth token) and both the inbox and its listener are running; otherwise
+  # their schemas are not offered to the model at all.
+  defp sms_tools(cwd, session_key) do
+    if LemonGateway.Sms.Inbox.available?() do
+      [
+        SmsGetInboxNumber.tool(cwd, session_key: session_key),
+        SmsWaitForCode.tool(cwd, session_key: session_key),
+        SmsListMessages.tool(cwd, session_key: session_key),
+        SmsClaimMessage.tool(cwd, session_key: session_key),
+        SmsReleaseInbox.tool(cwd, session_key: session_key)
+      ]
+    else
+      []
     end
-  rescue
-    _ -> false
-  end
-
-  defp discord_session?(request) do
-    case LemonCore.SessionKey.parse(request.session_key || "") do
-      %{kind: :channel_peer, channel_id: "discord"} -> true
-      _ -> false
-    end
-  rescue
-    _ -> false
   end
 
   defp request_agent_id(request) do

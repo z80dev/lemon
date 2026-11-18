@@ -6,11 +6,17 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
   completion-time file metadata enrichment. It does not emit channel payloads
   or dispatch directly; channels receive file semantics through answer metadata
   such as `:auto_send_files`.
+
+  Only existing regular files whose real path lies under the run's cwd are
+  attachable. A run without a cwd (for example a remote-node run whose files
+  live on another host) attaches nothing; dropped paths are logged.
   """
+
+  require Logger
 
   alias LemonCore.MapHelpers
 
-  @image_extensions MapSet.new(~w(.png .jpg .jpeg .gif .webp .bmp .svg .tif .tiff .heic .heif))
+  @logged_dropped_paths 5
 
   @spec track_generated_images(map(), map()) :: map()
   def track_generated_images(state, action_event) do
@@ -47,9 +53,13 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
 
   @spec finalize_meta(map(), binary() | nil) :: map()
   def finalize_meta(state, answer) do
-    cwd = request_cwd(state)
-    root = normalize_root(cwd)
+    case normalize_root(request_cwd(state)) do
+      nil -> drop_rootless_files(state, answer)
+      root -> finalize_files(state, answer, root)
+    end
+  end
 
+  defp finalize_files(state, answer, root) do
     files =
       merge_files(
         merge_files(
@@ -65,6 +75,26 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
       %{auto_send_files: files}
     end
   end
+
+  defp drop_rootless_files(state, answer) do
+    dropped =
+      (Enum.map(requested_send_files(state) ++ media_directive_files(answer), &file_path/1) ++
+         generated_image_paths(state))
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+
+    if dropped != [] do
+      Logger.warning(
+        "Dropping #{length(dropped)} attachment(s) for a run with no working directory: " <>
+          inspect(Enum.take(dropped, @logged_dropped_paths))
+      )
+    end
+
+    %{}
+  end
+
+  defp file_path(file) when is_map(file), do: MapHelpers.get_key(file, :path)
+  defp file_path(_file), do: nil
 
   @spec strip_media_directives(term()) :: term()
   def strip_media_directives(answer) when is_binary(answer) do
@@ -123,7 +153,7 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
       deleted_change_kind?(kind) ->
         nil
 
-      not image_path?(path) ->
+      not LemonCore.MediaFiles.image_path?(path) ->
         nil
 
       true ->
@@ -262,7 +292,7 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
     mime_type = MapHelpers.get_key(file, :mime_type)
 
     with path when is_binary(path) and path != "" <- path,
-         resolved when is_binary(resolved) <- resolve_explicit_path(path, root),
+         resolved when is_binary(resolved) <- resolve_generated_path(path, root),
          {:ok, %{path: valid_path}} <- existing_file(resolved, root) do
       %{
         path: valid_path,
@@ -277,14 +307,6 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
   end
 
   defp resolve_explicit_send_file(_, _), do: nil
-
-  defp resolve_explicit_path(path, root) when is_binary(root) and root != "" do
-    resolve_generated_path(path, root)
-  end
-
-  defp resolve_explicit_path(path, _cwd) do
-    if is_binary(path) and Path.type(path) == :absolute, do: Path.expand(path)
-  end
 
   defp resolve_generated_path(path, _cwd) when not is_binary(path), do: nil
 
@@ -314,7 +336,7 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
   defp existing_file(path, root) when is_binary(path) do
     with {:ok, %File.Stat{type: :regular}} <- File.stat(path),
          {:ok, real_path} <- real_path(path),
-         true <- path_allowed?(real_path, root) do
+         true <- path_within_root?(real_path, root) do
       {:ok, %{path: real_path, filename: Path.basename(real_path), caption: nil}}
     else
       _ -> :error
@@ -365,13 +387,6 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  defp image_path?(path) when is_binary(path) do
-    path
-    |> Path.extname()
-    |> String.downcase()
-    |> then(&MapSet.member?(@image_extensions, &1))
-  end
-
   defp generated_image_paths(state) when is_map(state) do
     case Map.get(state, :generated_image_paths) do
       paths when is_list(paths) -> paths
@@ -406,28 +421,27 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
 
   defp path_within_root?(_, _), do: false
 
-  defp path_allowed?(path, root) when is_binary(root), do: path_within_root?(path, root)
-  defp path_allowed?(path, nil), do: is_binary(path) and Path.type(path) == :absolute
-  defp path_allowed?(_, _), do: false
+  # Symlink hops before giving up, matching the usual POSIX MAXSYMLINKS bound.
+  @max_symlink_hops 40
 
   defp real_path(path) when is_binary(path) do
     path
     |> Path.expand()
-    |> resolve_absolute_path()
+    |> resolve_absolute_path(0)
   end
 
-  defp resolve_absolute_path(path) when is_binary(path) do
+  defp resolve_absolute_path(_path, hops) when hops > @max_symlink_hops, do: :error
+
+  defp resolve_absolute_path(path, hops) when is_binary(path) do
     case Path.split(path) do
-      [root | segments] -> resolve_absolute_segments(root, segments)
+      [root | segments] -> resolve_absolute_segments(root, segments, hops)
       _ -> :error
     end
   end
 
-  defp resolve_absolute_path(_), do: :error
+  defp resolve_absolute_segments(current, [], _hops), do: {:ok, current}
 
-  defp resolve_absolute_segments(current, []), do: {:ok, current}
-
-  defp resolve_absolute_segments(current, [segment | rest]) do
+  defp resolve_absolute_segments(current, [segment | rest], hops) do
     next = Path.join(current, segment)
 
     case File.lstat(next) do
@@ -447,14 +461,14 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
                 _ -> Path.join([target_path | rest])
               end
 
-            resolve_absolute_path(combined)
+            resolve_absolute_path(combined, hops + 1)
 
           _ ->
             :error
         end
 
       {:ok, _stat} ->
-        resolve_absolute_segments(next, rest)
+        resolve_absolute_segments(next, rest, hops)
 
       _ ->
         :error

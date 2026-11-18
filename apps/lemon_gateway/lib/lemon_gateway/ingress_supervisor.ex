@@ -30,16 +30,24 @@ defmodule LemonGateway.IngressSupervisor do
         LemonGateway.TransportRegistry,
         LemonGateway.Transports.Webhook.Idempotency,
         LemonGateway.TransportSupervisor,
-        LemonGateway.Sms.Inbox,
-        LemonGateway.Sms.WebhookServer,
         {Registry, keys: :unique, name: LemonGateway.Voice.CallRegistry},
         {Registry, keys: :unique, name: LemonGateway.Voice.DeepgramRegistry},
         {DynamicSupervisor,
          name: LemonGateway.Voice.CallSessionSupervisor, strategy: :one_for_one},
         {DynamicSupervisor, name: LemonGateway.Voice.DeepgramSupervisor, strategy: :one_for_one}
-      ] ++ maybe_voice_server_child()
+      ] ++ sms_children() ++ maybe_voice_server_child()
 
     Supervisor.init(children, strategy: :one_for_one)
+  end
+
+  # The SMS inbox (and with it the agent SMS tools) exists only when the SMS
+  # webhook is enabled and has an auth token to verify Twilio signatures.
+  defp sms_children do
+    if LemonGateway.Sms.Config.usable?() do
+      [LemonGateway.Sms.Inbox, LemonGateway.Sms.WebhookServer]
+    else
+      []
+    end
   end
 
   defp maybe_voice_server_child do

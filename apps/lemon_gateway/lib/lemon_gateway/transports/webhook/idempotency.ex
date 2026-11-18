@@ -836,18 +836,8 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   defp store_key(idempotency_digest), do: {:v1, idempotency_digest}
   defp legacy_store_key(integration_id, idempotency_key), do: {integration_id, idempotency_key}
 
-  defp allow_payload_idempotency_key?(integration, webhook_config) do
-    [
-      Request.fetch(integration, :allow_payload_idempotency_key),
-      Request.fetch(webhook_config, :allow_payload_idempotency_key)
-    ]
-    |> Enum.find_value(false, &bool_value/1)
-  end
-
-  defp bool_value(value) when is_boolean(value), do: value
-  defp bool_value(value) when value in [1, "1", "true", "TRUE", "yes", "YES"], do: true
-  defp bool_value(value) when value in [0, "0", "false", "FALSE", "no", "NO"], do: false
-  defp bool_value(_), do: nil
+  defp allow_payload_idempotency_key?(integration, webhook_config),
+    do: Request.resolve_flag(integration, webhook_config, :allow_payload_idempotency_key)
 
   defp normalize_mode(mode) when mode in [:sync, :async], do: Atom.to_string(mode)
   defp normalize_mode(mode) when mode in ["sync", "async"], do: mode

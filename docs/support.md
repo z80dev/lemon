@@ -355,7 +355,8 @@ Initial stable 1.0 support targets:
   the existing `auto_send_files` delivery path only when the target is an
   existing regular file inside the run working directory; symlink escapes,
   missing files, and out-of-project paths are ignored, and the directive line is
-  stripped from the channel-facing text.
+  stripped from the channel-facing text. A run without a working directory (for
+  example a remote-node run) attaches nothing.
 - preview durable goal status, one-shot continuation, one supervised judge tick,
   max-continuation budgets, and persisted auto-loop scheduling exposed through
   TUI `/goal` and Telegram/Discord `/goal` controls, goal lifecycle events, and
@@ -499,8 +500,8 @@ Stable 1.0 behavior includes:
   concise run-failure messages
 - `/file put` and `/file get` when Telegram file transfer is enabled
 - document upload auto-save when enabled by config
-- `telegram_send_image` for image files that already exist inside the active
-  project or workspace roots
+- `send_file` (Telegram: images only) for files that already exist inside the
+  active project or workspace roots
 - optional generated-file auto-send, bounded by configured file count and size
   limits
 - image batches through Telegram media groups when the Bot API accepts them,
@@ -521,7 +522,7 @@ Not stable for 1.0:
 For Telegram or Discord media bugs, include the interface, command or tool
 used, file type, file size, relevant `[gateway.telegram.files]` or
 `[gateway.discord.files]` config, and whether the issue was manual file
-transfer, generated-file auto-send, or `telegram_send_image`.
+transfer, generated-file auto-send, or `send_file`.
 
 The detailed support matrix lives in
 [Release Checklist and Support Policy](release/release_checklist_and_support_policy.md).

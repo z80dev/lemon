@@ -212,6 +212,14 @@ startup/config-registration operations (`init`, `reset`, `register`,
 | Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md), `kanban` |
 | System | `tool_auth`, `extensions_status`, [`report_issue`](../../docs/tools/report-issue.md) (bounded local tool-misbehavior notes) |
 
+Telegram and Discord channel sessions also get `send_file`
+(`CodingAgent.Tools.SendFile`), which queues an existing file for delivery to
+the active chat. The channel comes from the session key; Telegram accepts images
+only. The lexical path and its real path must both lie inside the run cwd or
+profile workspace, so `..` traversal and escaping symlinks are policy errors, and
+a run without a cwd can send nothing. Size limits come from
+`[gateway.<channel>.files] max_download_bytes`.
+
 [`ask`](../../docs/tools/ask.md) is available while a session has a bound user
 prompt surface (the TUI), or an ACP client has negotiated form elicitation.
 Questions can offer single/multiple choices or free text. Decline, cancellation,

@@ -528,6 +528,13 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "confirmToken" => :string
       }
     },
+    "sms.inbox.clear" => %{
+      optional: %{
+        "dryRun" => :boolean,
+        "holder" => :string,
+        "confirmToken" => :string
+      }
+    },
     "sessions.reset" => %{
       required: %{
         "sessionKey" => :string

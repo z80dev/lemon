@@ -2,11 +2,13 @@ defmodule LemonGateway.Tools.SmsClaimMessage do
   @moduledoc """
   LemonAgent tool for claiming an inbound SMS message by its Twilio MessageSid.
 
-  Marks a message in the inbox as owned by the current session, preventing other
-  sessions from consuming it. Typically used when `sms_wait_for_code` auto-claim
-  is disabled.
+  Marks a message as consumed by the current session. Typically used when
+  `sms_wait_for_code` auto-claim is disabled. Only messages bound to this
+  session by its inbox reservation can be claimed; the call takes or renews the
+  reservation. Results are marked untrusted.
   """
 
+  alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
@@ -34,7 +36,16 @@ defmodule LemonGateway.Tools.SmsClaimMessage do
     }
   end
 
-  def execute(_tool_call_id, params, _signal, _on_update, session_key) when is_map(params) do
+  def execute(_tool_call_id, params, _signal, _on_update, session_key) do
+    params
+    |> claim(session_key)
+    |> ToolResultTrust.untrusted(:webhook)
+  end
+
+  defp claim(params, _session_key) when not is_map(params),
+    do: error_result("Invalid parameters (expected object).")
+
+  defp claim(params, session_key) do
     message_sid = normalize_string(Map.get(params, "message_sid"))
 
     cond do
@@ -55,17 +66,10 @@ defmodule LemonGateway.Tools.SmsClaimMessage do
           {:error, :not_found} ->
             error_result("Message not found: #{message_sid}")
 
-          {:error, :already_claimed} ->
-            error_result("Message is already claimed: #{message_sid}")
-
           {:error, reason} ->
-            error_result("Failed to claim message: #{inspect(reason)}")
+            error_result(LemonGateway.Sms.Inbox.error_text(reason))
         end
     end
-  end
-
-  def execute(_tool_call_id, _params, _signal, _on_update, _session_key) do
-    error_result("Invalid parameters (expected object).")
   end
 
   defp error_result(text) do

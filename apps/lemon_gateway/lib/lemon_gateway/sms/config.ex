@@ -4,27 +4,35 @@ defmodule LemonGateway.Sms.Config do
   @moduledoc """
   Configuration reader for SMS webhook settings.
 
-  Reads values from the encrypted secrets store (preferred) or environment
-  variables (e.g. `LEMON_SMS_WEBHOOK_PORT`, `TWILIO_AUTH_TOKEN`) with fallback
-  to the application `:sms` config map.
+  Declared environment overrides (`LemonCore.Env`, e.g. `LEMON_SMS_WEBHOOK_PORT`)
+  take precedence over the `[gateway.sms]` config map. The Twilio auth token
+  comes from the encrypted secrets store (`auth_token_secret`, then
+  `TWILIO_AUTH_TOKEN` with its environment fallback) or the config map.
 
-  Provides accessors for webhook port, bind IP, auth token, inbox number, and TTL.
+  Inbound webhooks are always signature-checked; there is no opt-out. Without an
+  auth token the webhook listener does not start and the router rejects every
+  request.
   """
 
   @default_port 4041
+  @default_inbox_ttl_ms 24 * 60 * 60 * 1000
+  @default_handoff_grace_ms 10 * 60 * 1000
 
   def webhook_enabled? do
-    case normalize_blank(System.get_env("LEMON_SMS_WEBHOOK_ENABLED")) do
-      nil -> truthy_value?(sms_cfg(:webhook_enabled), false)
-      v -> truthy_value?(v, false)
-    end
+    LemonCore.Env.get(:lemon_sms_webhook_enabled,
+      default: truthy_value?(sms_cfg(:webhook_enabled), false)
+    ) == true
   end
 
+  @doc "The SMS webhook is enabled and has an auth token to verify signatures with."
+  @spec usable?() :: boolean()
+  def usable?, do: webhook_enabled?() and is_binary(auth_token())
+
   def webhook_port do
-    case normalize_blank(System.get_env("LEMON_SMS_WEBHOOK_PORT")) do
-      nil -> int_value(sms_cfg(:webhook_port), @default_port)
-      v -> int_value(v, @default_port)
-    end
+    LemonCore.Env.get(:lemon_sms_webhook_port,
+      default: int_value(sms_cfg(:webhook_port), @default_port)
+    )
+    |> int_value(@default_port)
   end
 
   @doc """
@@ -36,29 +44,32 @@ defmodule LemonGateway.Sms.Config do
   - explicit IPv4/IPv6 tuple strings => parsed tuple
   """
   def webhook_ip do
-    bind =
-      normalize_blank(System.get_env("LEMON_SMS_WEBHOOK_BIND")) ||
-        normalize_blank(sms_cfg(:webhook_bind))
-
-    LemonGateway.BindAddress.parse(bind)
+    :lemon_sms_webhook_bind
+    |> env_string(sms_cfg(:webhook_bind))
+    |> LemonGateway.BindAddress.parse()
   end
 
-  def inbox_number do
-    normalize_blank(System.get_env("TWILIO_INBOX_NUMBER")) ||
-      normalize_blank(sms_cfg(:inbox_number))
-  end
+  def inbox_number, do: env_string(:twilio_inbox_number, sms_cfg(:inbox_number))
 
   def inbox_ttl_ms do
-    case normalize_blank(System.get_env("LEMON_SMS_INBOX_TTL_MS")) do
-      nil -> int_value(sms_cfg(:inbox_ttl_ms), 24 * 60 * 60 * 1000)
-      v -> int_value(v, 24 * 60 * 60 * 1000)
-    end
+    LemonCore.Env.get(:lemon_sms_inbox_ttl_ms,
+      default: int_value(sms_cfg(:inbox_ttl_ms), @default_inbox_ttl_ms)
+    )
+    |> int_value(@default_inbox_ttl_ms)
   end
 
-  def validate_webhook? do
-    case normalize_blank(System.get_env("TWILIO_VALIDATE_WEBHOOK")) do
-      nil -> truthy_value?(sms_cfg(:validate_webhook), false)
-      v -> truthy_value?(v, false)
+  @doc """
+  How long the inbox number stays bound to a session after it releases its
+  reservation (`[gateway.sms] handoff_grace_ms`, default ten minutes). Late
+  texts in this window go to the releasing session and no other session may
+  reserve. Must be a positive integer: zero or invalid values are rejected at
+  config load and fall back to the default here.
+  """
+  @spec handoff_grace_ms() :: pos_integer()
+  def handoff_grace_ms do
+    case int_value(sms_cfg(:handoff_grace_ms), @default_handoff_grace_ms) do
+      ms when ms > 0 -> ms
+      _ -> @default_handoff_grace_ms
     end
   end
 
@@ -78,9 +89,10 @@ defmodule LemonGateway.Sms.Config do
     end
   end
 
-  def webhook_url_override do
-    normalize_blank(System.get_env("TWILIO_WEBHOOK_URL")) ||
-      normalize_blank(sms_cfg(:webhook_url))
+  def webhook_url_override, do: env_string(:twilio_webhook_url, sms_cfg(:webhook_url))
+
+  defp env_string(name, config_value) do
+    normalize_blank(LemonCore.Env.get(name)) || normalize_blank(config_value)
   end
 
   defp sms_cfg(key) when is_atom(key) do

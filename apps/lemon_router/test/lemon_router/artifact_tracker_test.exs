@@ -255,6 +255,40 @@ defmodule LemonRouter.RunProcess.ArtifactTrackerTest do
     assert ArtifactTracker.finalize_meta(state) == %{}
   end
 
+  describe "runs without a cwd (remote-node runs)" do
+    import ExUnit.CaptureLog
+
+    test "a MEDIA directive naming a controller file sends nothing and logs the rejection" do
+      state = %{execution_request: request(nil)}
+      answer = "Here you go\nMEDIA: /etc/passwd"
+
+      log = capture_log(fn -> assert ArtifactTracker.finalize_meta(state, answer) == %{} end)
+
+      assert log =~ "no working directory"
+      assert log =~ "/etc/passwd"
+    end
+
+    test "tool-requested and generated absolute files are dropped" do
+      outside = write_file!(tmp_dir!("artifact-tracker-nil-cwd"), "secrets_master_key", "k")
+      image = write_file!(tmp_dir!("artifact-tracker-nil-cwd-img"), "chart.png", "png")
+
+      state = %{
+        execution_request: request(nil),
+        requested_send_files: [%{path: outside, filename: "key"}],
+        generated_image_paths: [image]
+      }
+
+      log = capture_log(fn -> assert ArtifactTracker.finalize_meta(state, nil) == %{} end)
+      assert log =~ "secrets_master_key"
+    end
+
+    test "an empty-string cwd is treated as no cwd" do
+      state = %{execution_request: request(""), requested_send_files: [%{path: "/etc/hosts"}]}
+
+      capture_log(fn -> assert ArtifactTracker.finalize_meta(state, nil) == %{} end)
+    end
+  end
+
   defp tmp_dir!(suffix) do
     path = Path.join(System.tmp_dir!(), "#{suffix}-#{System.unique_integer([:positive])}")
     File.mkdir_p!(path)

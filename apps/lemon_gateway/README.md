@@ -252,8 +252,10 @@ in-process subagents.
 | `LemonGateway.Tools.SmsWaitForCode` | `tools/sms_wait_for_code.ex` | Block until a matching SMS verification code arrives |
 | `LemonGateway.Tools.SmsListMessages` | `tools/sms_list_messages.ex` | List recent SMS messages |
 | `LemonGateway.Tools.SmsClaimMessage` | `tools/sms_claim_message.ex` | Mark an SMS as claimed by the current session |
-| `LemonGateway.Tools.TelegramSendImage` | `tools/telegram_send_image.ex` | Queue an image for Telegram delivery (Telegram sessions only) |
-| `LemonGateway.Tools.DiscordSendFile` | `tools/discord_send_file.ex` | Queue a file for Discord delivery (Discord sessions only) |
+| `LemonGateway.Tools.SmsReleaseInbox` | `tools/sms_release_inbox.ex` | Release the session's exclusive inbox reservation |
+
+File delivery to Telegram and Discord chats is the channel-keyed `send_file`
+tool (`CodingAgent.Tools.SendFile` in `coding_agent`), not a gateway tool.
 
 ### Health
 
@@ -333,10 +335,49 @@ Incoming Call -> Twilio -> Voice.WebhookRouter -> CallSession state machine
 
 ## SMS Inbox
 
-1. Twilio sends SMS webhooks to `Sms.WebhookServer` (validates signatures via `TwilioSignature`).
-2. `Sms.Inbox` stores messages with extracted verification codes (4-8 digit sequences).
-3. Native executor runs can use injected tools (`sms_wait_for_code`, `sms_list_messages`, `sms_claim_message`) to interact with the inbox.
-4. Messages can be "claimed" to prevent cross-session conflicts.
+1. Twilio sends SMS webhooks to `Sms.WebhookServer`. Every request must carry a
+   valid `X-Twilio-Signature` (`TwilioSignature`); there is no opt-out. A missing
+   auth token (`TWILIO_AUTH_TOKEN` or `[gateway.sms] auth_token_secret`) keeps
+   the listener from starting, and missing or bad signatures get 403 with
+   nothing stored.
+2. `Sms.Inbox` and the listener start only when SMS ingress is usable: gateway
+   ingress enabled, `[gateway.sms] webhook_enabled`, and an auth token.
+   Webhook-only or voice-only deployments run no inbox. The inbox stores
+   messages with extracted verification codes (4-8 digit sequences).
+3. Native executor runs get the SMS tools (`sms_get_inbox_number`,
+   `sms_wait_for_code`, `sms_list_messages`, `sms_claim_message`,
+   `sms_release_inbox`) only while SMS ingress is usable and both the inbox and
+   listener are running. Their results are untrusted tool output, fenced before
+   the model sees them, because SMS bodies are attacker-controlled.
+4. The shared number is reserved by one session at a time. Any SMS tool call
+   takes the reservation (or reuses the caller's own); other sessions get
+   "reserved by another session" with no number or content. Reservations are
+   persisted and never expire: the number stays bound to its holder, across runs
+   and restarts, until the holder calls `sms_release_inbox` or an operator clears
+   it. A text is bound to the session the number is bound to when it arrives,
+   and only that session can list, wait for or claim it. Texts arriving while
+   the number is unbound are visible to no session. `include_claimed` is not
+   available to agents.
+5. After an explicit release the number stays bound to the releasing session
+   for a handoff grace period (`[gateway.sms] handoff_grace_ms`, default 10
+   minutes; zero or invalid values are rejected at config load). Late texts in
+   that window go to the releaser, which may re-reserve at any time; every other
+   session is refused. Releasing gives up later codes.
+6. Operators can force-clear a stuck reservation with the admin control-plane
+   method `sms.inbox.clear`: call it without `confirmToken` to preview the
+   holder and get a single-use token, then call it with that `holder` and
+   `confirmToken`. The clear is bound to that exact holder and reservation and
+   frees the number at once, so a late text for the previous holder that arrives
+   after another session reserves goes to that session. This is an accepted cost
+   of a forced clear.
+
+   A shared number gives ownership only through explicit release; it cannot
+   prove which flow a text belongs to. Session-specific numbers are needed for
+   stronger isolation.
+7. Ingestion is an atomic insert-if-absent keyed by MessageSid: a replayed
+   delivery never overwrites the stored message or its claim and is not offered
+   again. A store failure answers 503 so Twilio can retry; lease reads are strict,
+   so a store failure refuses the lease instead of granting it.
 
 ## Binding System
 

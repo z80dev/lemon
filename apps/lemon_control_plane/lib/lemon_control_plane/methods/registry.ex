@@ -57,6 +57,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.GoalPause,
     LemonControlPlane.Methods.GoalResume,
     LemonControlPlane.Methods.GoalClear,
+    # SMS inbox
+    LemonControlPlane.Methods.SmsInboxClear,
     # Logs
     LemonControlPlane.Methods.LogsTail,
     # Channels

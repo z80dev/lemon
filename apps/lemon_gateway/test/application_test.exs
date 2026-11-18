@@ -20,8 +20,7 @@ defmodule LemonGateway.ApplicationTest do
   @gateway_ingress_children [
     Elixir.LemonGateway.TransportRegistry,
     Elixir.LemonGateway.TransportSupervisor,
-    Elixir.LemonGateway.Sms.Inbox,
-    Elixir.LemonGateway.Sms.WebhookServer,
+    # SMS children start only with usable SMS config; see Sms.AvailabilityTest.
     Elixir.LemonGateway.Voice.CallRegistry,
     Elixir.LemonGateway.Voice.DeepgramRegistry,
     Elixir.LemonGateway.Voice.CallSessionSupervisor,
