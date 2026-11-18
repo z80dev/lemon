@@ -218,6 +218,51 @@ parse_runtime_integer = fn name, value, range ->
   end
 end
 
+# Exact browser origins of LemonWeb, trusted by the control plane's /ws and
+# /acp/ws Origin check. Computed here so lemon_control_plane never reads
+# lemon_web's endpoint config. The port mirrors LemonCore.Runtime.Env.web_port/0.
+web_port =
+  parse_runtime_integer.(
+    "LEMON_WEB_PORT",
+    normalized_env.("LEMON_WEB_PORT") || "4080",
+    1..65_535
+  )
+
+web_bind_hosts =
+  case bind_ip.("LEMON_WEB_BIND_IP", "127.0.0.1") do
+    wildcard when wildcard in [{0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0}] -> []
+    {_, _, _, _} = ip -> [ip |> :inet.ntoa() |> to_string()]
+    ip -> ["[#{ip |> :inet.ntoa() |> to_string()}]"]
+  end
+
+web_public_origins =
+  case normalized_env.("LEMON_WEB_HOST") do
+    nil ->
+      []
+
+    host ->
+      scheme = normalized_env.("LEMON_WEB_URL_SCHEME") || "https"
+      default_url_port = if scheme == "https", do: "443", else: "80"
+
+      url_port =
+        parse_runtime_integer.(
+          "LEMON_WEB_URL_PORT",
+          normalized_env.("LEMON_WEB_URL_PORT") || default_url_port,
+          1..65_535
+        )
+
+      ["#{scheme}://#{host}:#{url_port}"]
+  end
+
+config :lemon_control_plane,
+       :web_origins,
+       Enum.uniq(
+         for(
+           host <- ["localhost", "127.0.0.1", "[::1]" | web_bind_hosts],
+           do: "http://#{host}:#{web_port}"
+         ) ++ web_public_origins
+       )
+
 if config_env() == :prod do
   release_name = System.get_env("RELEASE_NAME")
 

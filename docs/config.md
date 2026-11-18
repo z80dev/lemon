@@ -69,7 +69,8 @@ a loopback IP, the listener's bind address, or (main) a host from
 (any path ignored); anything else, including `*.localhost`, is 403 before
 parsing, which defeats DNS rebinding. `/ws` and `/acp/ws` refuse a WebSocket
 upgrade whose `Origin` is not exactly (scheme, host, port) the control plane's
-own origin, a LemonWeb origin from its endpoint config, or a
+own origin, LemonWeb's origin (`http://` + `localhost`/loopback/bind IP +
+`LEMON_WEB_PORT`, plus `LEMON_WEB_HOST` with its URL scheme and port), or a
 `LEMON_CONTROL_PLANE_ALLOWED_ORIGINS` entry; other localhost ports are refused.
 Native clients that omit `Origin` (Lemon's CLI, TUI and ACP clients) are
 unaffected; a native client that does send `Origin` must send one of those

@@ -118,31 +118,9 @@ defmodule LemonControlPlane.HTTP.RequestOrigin do
 
   ## Helpers
 
-  defp lemon_web_origins do
-    endpoint = Application.get_env(:lemon_web, LemonWeb.Endpoint, [])
-    http = Keyword.get(endpoint, :http, [])
-    url = Keyword.get(endpoint, :url, [])
-    port = Keyword.get(http, :port)
-
-    listener =
-      if is_integer(port) and port > 0 do
-        loopback_origins("http", port) ++
-          Enum.map(bind_hosts(Keyword.get(http, :ip)), &"http://#{&1}:#{port}")
-      else
-        []
-      end
-
-    public =
-      case {Keyword.get(url, :host), Keyword.get(url, :port, port)} do
-        {host, url_port} when is_binary(host) and is_integer(url_port) ->
-          ["#{Keyword.get(url, :scheme, "http")}://#{host}:#{url_port}"]
-
-        _ ->
-          []
-      end
-
-    listener ++ public
-  end
+  # Set by config/runtime.exs from LemonWeb's listener settings; the control
+  # plane never reads lemon_web's own config.
+  defp lemon_web_origins, do: Application.get_env(:lemon_control_plane, :web_origins, [])
 
   defp allowed_origins, do: Application.get_env(:lemon_control_plane, :allowed_origins, [])
 
