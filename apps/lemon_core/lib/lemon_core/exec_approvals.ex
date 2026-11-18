@@ -222,52 +222,56 @@ defmodule LemonCore.ExecApprovals do
   @spec cancel(approval_id(), binary() | nil) ::
           :ok | {:error, :not_pending | :store_unavailable | :outcome_unknown}
   def cancel(approval_id, reason \\ nil) when is_binary(approval_id) do
-    with {:ok, pending} when not is_nil(pending) <- ExecApprovalStore.fetch_pending(approval_id) do
-      case retain_terminal(approval_id, pending, :cancelled, :cancelled) do
-        :ok ->
-          record_approval_event(:approval_cancelled, pending, %{
-            approval_id: approval_id,
-            tool: pending.tool,
-            reason: reason
-          })
+    case ExecApprovalStore.fetch_pending(approval_id) do
+      {:ok, pending} when not is_nil(pending) ->
+        case retain_terminal(approval_id, pending, :cancelled, :cancelled) do
+          :ok ->
+            record_approval_event(:approval_cancelled, pending, %{
+              approval_id: approval_id,
+              tool: pending.tool,
+              reason: reason
+            })
 
-          LemonCore.Telemetry.approval_resolved(approval_id, :cancelled, %{
-            tool: pending.tool,
-            run_id: pending.run_id
-          })
+            LemonCore.Telemetry.approval_resolved(approval_id, :cancelled, %{
+              tool: pending.tool,
+              run_id: pending.run_id
+            })
 
-          LemonCore.Bus.broadcast(
-            "exec_approvals",
-            LemonCore.Event.new(
-              :approval_resolved,
-              ApprovalResolved.new(%{
-                approval_id: approval_id,
-                decision: :cancelled,
-                pending: pending
-              }),
-              %{
-                run_id: pending.run_id,
-                session_id: Map.get(pending, :session_id),
-                session_key: pending.session_key
-              }
+            LemonCore.Bus.broadcast(
+              "exec_approvals",
+              LemonCore.Event.new(
+                :approval_resolved,
+                ApprovalResolved.new(%{
+                  approval_id: approval_id,
+                  decision: :cancelled,
+                  pending: pending
+                }),
+                %{
+                  run_id: pending.run_id,
+                  session_id: Map.get(pending, :session_id),
+                  session_key: pending.session_key
+                }
+              )
             )
-          )
 
-          :ok
+            :ok
 
-        {:error, :mismatch} ->
-          {:error, :not_pending}
+          {:error, :mismatch} ->
+            {:error, :not_pending}
 
-        {:error, :outcome_unknown} = error ->
-          emit_resolution(approval_id, pending, :outcome_unknown)
-          error
+          {:error, :outcome_unknown} = error ->
+            emit_resolution(approval_id, pending, :outcome_unknown)
+            error
 
-        {:error, _} ->
-          {:error, :store_unavailable}
-      end
-    else
-      {:ok, nil} -> {:error, :not_pending}
-      {:error, _} -> {:error, :store_unavailable}
+          {:error, _} ->
+            {:error, :store_unavailable}
+        end
+
+      {:ok, nil} ->
+        {:error, :not_pending}
+
+      {:error, _} ->
+        {:error, :store_unavailable}
     end
   end
 

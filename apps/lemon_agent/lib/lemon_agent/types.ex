@@ -559,6 +559,7 @@ defmodule LemonAgent.Types do
             stream_fn: stream_fn() | nil,
             hooks: hooks()
           }
+    # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
     defstruct model: nil,
               convert_to_llm: nil,
               transform_context: nil,

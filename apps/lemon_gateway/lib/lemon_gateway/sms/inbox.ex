@@ -236,19 +236,21 @@ defmodule LemonGateway.Sms.Inbox do
   def handle_call({:release, session_key}, _from, state) do
     now = now_ms()
 
-    with {:ok, lease} <- InboxStore.fetch_reservation() do
-      case lease do
-        %{"session_key" => ^session_key, "released_at_ms" => nil} ->
-          :ok = InboxStore.put_reservation(%{lease | "released_at_ms" => now})
-          {:reply, :ok, state}
+    case InboxStore.fetch_reservation() do
+      {:ok, lease} ->
+        case lease do
+          %{"session_key" => ^session_key, "released_at_ms" => nil} ->
+            :ok = InboxStore.put_reservation(%{lease | "released_at_ms" => now})
+            {:reply, :ok, state}
 
-        _ ->
-          if lease_owner(lease, now) in [nil, session_key],
-            do: {:reply, :ok, state},
-            else: {:reply, {:error, :inbox_reserved}, state}
-      end
-    else
-      error -> {:reply, error, state}
+          _ ->
+            if lease_owner(lease, now) in [nil, session_key],
+              do: {:reply, :ok, state},
+              else: {:reply, {:error, :inbox_reserved}, state}
+        end
+
+      error ->
+        {:reply, error, state}
     end
   end
 
@@ -256,30 +258,32 @@ defmodule LemonGateway.Sms.Inbox do
     now = now_ms()
     state = prune_clear_tokens(state, now)
 
-    with {:ok, lease} <- InboxStore.fetch_reservation() do
-      case lease do
-        %{"session_key" => holder} when is_binary(holder) ->
-          token = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
+    case InboxStore.fetch_reservation() do
+      {:ok, lease} ->
+        case lease do
+          %{"session_key" => holder} when is_binary(holder) ->
+            token = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
 
-          entry = %{
-            holder: holder,
-            lease_id: lease["lease_id"],
-            expires_at_ms: now + @clear_token_ttl_ms
-          }
-
-          {:reply,
-           {:ok,
-            %{
+            entry = %{
               holder: holder,
-              released: is_integer(lease["released_at_ms"]),
-              confirm_token: token
-            }}, %{state | clear_tokens: Map.put(state.clear_tokens, token, entry)}}
+              lease_id: lease["lease_id"],
+              expires_at_ms: now + @clear_token_ttl_ms
+            }
 
-        _ ->
-          {:reply, {:ok, %{holder: nil, released: false, confirm_token: nil}}, state}
-      end
-    else
-      error -> {:reply, error, state}
+            {:reply,
+             {:ok,
+              %{
+                holder: holder,
+                released: is_integer(lease["released_at_ms"]),
+                confirm_token: token
+              }}, %{state | clear_tokens: Map.put(state.clear_tokens, token, entry)}}
+
+          _ ->
+            {:reply, {:ok, %{holder: nil, released: false, confirm_token: nil}}, state}
+        end
+
+      error ->
+        {:reply, error, state}
     end
   end
 
@@ -303,32 +307,36 @@ defmodule LemonGateway.Sms.Inbox do
   end
 
   def handle_call({:list_session_messages, session_key, opts}, _from, state) do
-    with :ok <- take_lease(session_key) do
-      opts = Keyword.put(opts, :include_claimed, true)
-      {:reply, {:ok, filter_messages(read_all_messages(), opts, session_key)}, state}
-    else
-      error -> {:reply, error, state}
+    case take_lease(session_key) do
+      :ok ->
+        opts = Keyword.put(opts, :include_claimed, true)
+        {:reply, {:ok, filter_messages(read_all_messages(), opts, session_key)}, state}
+
+      error ->
+        {:reply, error, state}
     end
   end
 
   def handle_call({:claim_message, session_key, message_sid}, _from, state) do
-    with :ok <- take_lease(session_key) do
-      case InboxStore.fetch(message_sid) do
-        {:error, _} = error ->
-          {:reply, error, state}
+    case take_lease(session_key) do
+      :ok ->
+        case InboxStore.fetch(message_sid) do
+          {:error, _} = error ->
+            {:reply, error, state}
 
-        {:ok, %{"reserved_for" => ^session_key} = msg} ->
-          if msg["claimed_by"] != session_key do
-            :ok = InboxStore.put(message_sid, mark_claimed(msg, session_key))
-          end
+          {:ok, %{"reserved_for" => ^session_key} = msg} ->
+            if msg["claimed_by"] != session_key do
+              :ok = InboxStore.put(message_sid, mark_claimed(msg, session_key))
+            end
 
-          {:reply, :ok, state}
+            {:reply, :ok, state}
 
-        {:ok, _} ->
-          {:reply, {:error, :not_found}, state}
-      end
-    else
-      error -> {:reply, error, state}
+          {:ok, _} ->
+            {:reply, {:error, :not_found}, state}
+        end
+
+      error ->
+        {:reply, error, state}
     end
   rescue
     _ -> {:reply, {:error, :claim_failed}, state}
@@ -337,22 +345,24 @@ defmodule LemonGateway.Sms.Inbox do
   def handle_call({:wait_for_code, session_key, opts}, from, state) do
     opts = normalize_wait_opts(opts)
 
-    with :ok <- take_lease(session_key) do
-      opts = Keyword.put(opts, :regex, compile_code_regex(opts[:regex]))
+    case take_lease(session_key) do
+      :ok ->
+        opts = Keyword.put(opts, :regex, compile_code_regex(opts[:regex]))
 
-      case find_matching_code_message(session_key, opts) do
-        {:ok, %{code: code, message: msg}} ->
-          msg = maybe_claim_and_persist(msg, session_key, opts)
-          {:reply, {:ok, %{code: code, message: msg}}, state}
+        case find_matching_code_message(session_key, opts) do
+          {:ok, %{code: code, message: msg}} ->
+            msg = maybe_claim_and_persist(msg, session_key, opts)
+            {:reply, {:ok, %{code: code, message: msg}}, state}
 
-        {:error, _} = error ->
-          {:reply, error, state}
+          {:error, _} = error ->
+            {:reply, error, state}
 
-        :miss ->
-          {:noreply, add_waiter(state, from, session_key, opts)}
-      end
-    else
-      error -> {:reply, error, state}
+          :miss ->
+            {:noreply, add_waiter(state, from, session_key, opts)}
+        end
+
+      error ->
+        {:reply, error, state}
     end
   rescue
     Regex.CompileError -> {:reply, {:error, :invalid_regex}, state}

@@ -456,28 +456,30 @@ defmodule LemonCore.SessionLifecycle do
   # Destructive callers read the index and every row's metadata strictly: an
   # unreadable pin is never an unpinned session.
   defp strict_sessions do
-    with {:ok, entries} <- RunStore.fetch_sessions() do
-      Enum.reduce_while(entries, {:ok, []}, fn
-        {_key, session}, {:ok, rows} when is_map(session) ->
-          case read(session, :session_key) do
-            session_key when is_binary(session_key) and session_key != "" ->
-              case SessionMetadataStore.fetch(session_key) do
-                {:ok, metadata} ->
-                  {:cont, {:ok, [session_row(session, metadata || @unannotated) | rows]}}
+    case RunStore.fetch_sessions() do
+      {:ok, entries} ->
+        Enum.reduce_while(entries, {:ok, []}, fn
+          {_key, session}, {:ok, rows} when is_map(session) ->
+            case read(session, :session_key) do
+              session_key when is_binary(session_key) and session_key != "" ->
+                case SessionMetadataStore.fetch(session_key) do
+                  {:ok, metadata} ->
+                    {:cont, {:ok, [session_row(session, metadata || @unannotated) | rows]}}
 
-                {:error, _reason} ->
-                  {:halt, {:error, :session_store_unavailable}}
-              end
+                  {:error, _reason} ->
+                    {:halt, {:error, :session_store_unavailable}}
+                end
 
-            _invalid_or_legacy_row ->
-              {:cont, {:ok, rows}}
-          end
+              _invalid_or_legacy_row ->
+                {:cont, {:ok, rows}}
+            end
 
-        _other, acc ->
-          {:cont, acc}
-      end)
-    else
-      {:error, _reason} -> {:error, :session_store_unavailable}
+          _other, acc ->
+            {:cont, acc}
+        end)
+
+      {:error, _reason} ->
+        {:error, :session_store_unavailable}
     end
   end
 

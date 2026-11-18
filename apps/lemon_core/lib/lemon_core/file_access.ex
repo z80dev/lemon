@@ -434,26 +434,28 @@ defmodule LemonCore.FileAccess do
   # normalization-insensitive filesystems accept other spellings, so a
   # non-exact spelling is mapped to the listed entry with the same inode.
   defp entry_name(dir, part, %File.Stat{inode: inode, major_device: device}) do
-    with {:ok, names} <- File.ls(dir) do
-      if part in names do
-        {:ok, part}
-      else
-        folded = fold(part)
-        {likely, rest} = Enum.split_with(names, &(fold(&1) == folded))
+    case File.ls(dir) do
+      {:ok, names} ->
+        if part in names do
+          {:ok, part}
+        else
+          folded = fold(part)
+          {likely, rest} = Enum.split_with(names, &(fold(&1) == folded))
 
-        Enum.find(likely ++ rest, fn name ->
-          match?(
-            {:ok, %File.Stat{inode: ^inode, major_device: ^device}},
-            File.lstat(Path.join(dir, name))
-          )
-        end)
-        |> case do
-          nil -> :error
-          name -> {:ok, name}
+          Enum.find(likely ++ rest, fn name ->
+            match?(
+              {:ok, %File.Stat{inode: ^inode, major_device: ^device}},
+              File.lstat(Path.join(dir, name))
+            )
+          end)
+          |> case do
+            nil -> :error
+            name -> {:ok, name}
+          end
         end
-      end
-    else
-      _ -> :error
+
+      _ ->
+        :error
     end
   end
 
@@ -672,12 +674,14 @@ defmodule LemonCore.FileAccess do
 
     case File.lstat(path) do
       {:ok, %File.Stat{type: :symlink}} ->
-        with {:ok, target} <- File.read_link(path) do
-          target = Path.expand(target, current)
-          ["/" | target_parts] = Path.split(target)
-          resolve_parts("/", target_parts ++ rest, hops - 1)
-        else
-          _ -> :error
+        case File.read_link(path) do
+          {:ok, target} ->
+            target = Path.expand(target, current)
+            ["/" | target_parts] = Path.split(target)
+            resolve_parts("/", target_parts ++ rest, hops - 1)
+
+          _ ->
+            :error
         end
 
       {:ok, _} ->
