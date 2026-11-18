@@ -140,9 +140,11 @@ defmodule LemonRouter do
   The fence is a durable `LemonCore.LifecycleFenceStore` row taken through the
   serialized orchestrator admission boundary, so every admission that preceded
   it is visible to the idle proof. Until the operation ends, router admission
-  (any client or mode), idle native follow-ups, direct `node.invoke` runs and
-  direct gateway submissions for the session are refused with
+  (any client or mode), idle native follow-ups, remote `coding_agent.run`
+  dispatch and direct gateway submissions for the session are refused with
   `:session_lifecycle_in_progress`. The fence survives orchestrator restarts.
+  A remote run stays present after its router run is terminal until the node
+  proves it stopped (`LemonCore.NodeInvocation`).
 
   The fence owner is a process scoped to this one operation, never the
   caller: it acquires, runs `fun`, marks the row finished and releases. An

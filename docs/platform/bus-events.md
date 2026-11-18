@@ -324,7 +324,7 @@ topic subscriptions.
 
 | Topic | Publisher → subscriber | Notes |
 |---|---|---|
-| `nodes` | control-plane `node.*` methods → `EventBridge`, `LemonWeb.NodesLive` | `:node_pair_requested`, `:node_pair_resolved`, `:node_invoke_completed` |
+| `nodes` | control-plane `node.*` methods → `EventBridge`, `LemonWeb.NodesLive` | `:node_pair_requested`, `:node_pair_resolved` |
 | `presence` | `LemonControlPlane.Connections` → `EventBridge` | `:presence_changed`; Registry-owned connection membership |
 | `user_prompts` | `CodingAgent.Session.UserPrompt` → `LemonChannels.UserPromptSurface`, `EventBridge` | `:user_prompt_requested`, `:user_prompt_resolved` (public projection, string keys) |
 | `omp` | `LemonOmp.Manager` → `EventBridge`, `LemonWeb.OmpLive` | `:omp_session` snapshots (`LemonOmp.bus_topic/0`) |

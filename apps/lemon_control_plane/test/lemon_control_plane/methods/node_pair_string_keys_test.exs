@@ -7,18 +7,12 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Methods.{
-    NodePairRequest,
-    NodePairApprove,
-    NodeInvoke,
-    NodeInvokeResult
-  }
+  alias LemonControlPlane.Methods.{NodePairRequest, NodePairApprove}
 
   @admin_ctx %{
     conn_id: "test-conn",
     auth: %{role: :operator, scopes: [:admin, :pairing, :read, :write]}
   }
-  @node_ctx %{conn_id: "test-conn", auth: %{role: :node, client_id: "test-node-id"}}
 
   setup do
     # Clean up stores after each test
@@ -45,11 +39,6 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
         LemonCore.Store.list(:node_challenges)
         |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:node_challenges, k)
-        end)
-
-        LemonCore.Store.list(:node_invocations)
-        |> Enum.each(fn {k, _} ->
-          LemonCore.Store.delete(:node_invocations, k)
         end)
       rescue
         _ -> :ok
@@ -302,118 +291,6 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
       assert node[:type] == "browser"
       assert node[:capabilities] == %{"screenshot" => true, "navigate" => true}
     end
-  end
-
-  describe "NodeInvoke with string keys" do
-    test "invokes method on node with string-keyed map (JSONL reload)" do
-      node_id = "invoke-node-#{System.unique_integer([:positive])}"
-
-      # Store node with STRING keys (simulates JSONL reload)
-      LemonCore.Store.put(:nodes_registry, node_id, %{
-        "id" => node_id,
-        "name" => "Invoke Node",
-        "type" => "agent",
-        "status" => "online"
-      })
-
-      register_live_node(node_id, "Invoke Node")
-
-      {:ok, result} =
-        NodeInvoke.handle(
-          %{
-            "nodeId" => node_id,
-            "method" => "test.method",
-            "args" => %{"foo" => "bar"}
-          },
-          @admin_ctx
-        )
-
-      assert result["status"] == "pending"
-      assert result["nodeId"] == node_id
-      assert result["method"] == "test.method"
-      assert is_binary(result["invokeId"])
-      assert result["summary"]["nodeId"] == node_id
-      assert result["summary"]["method"] == "test.method"
-      assert result["summary"]["status"] == "pending"
-      assert result["summary"]["argKeyCount"] == 1
-      assert result["summary"]["cleanup"]["includesArgs"] == false
-      assert result["summary"]["cleanup"]["includesResult"] == false
-      assert result["summary"]["cleanup"]["includesSecretValues"] == false
-
-      assert_receive {:node_event, "node.invoke.request", payload}
-      assert payload["invokeId"] == result["invokeId"]
-      assert payload["nodeId"] == node_id
-    end
-
-    test "returns unavailable for offline node with string keys" do
-      node_id = "offline-invoke-#{System.unique_integer([:positive])}"
-
-      LemonCore.Store.put(:nodes_registry, node_id, %{
-        "id" => node_id,
-        "name" => "Offline Node",
-        "type" => "agent",
-        # String status
-        "status" => "offline"
-      })
-
-      {:error, error} =
-        NodeInvoke.handle(
-          %{
-            "nodeId" => node_id,
-            "method" => "test.method"
-          },
-          @admin_ctx
-        )
-
-      error_str = inspect(error)
-
-      assert String.contains?(String.downcase(error_str), "online") or
-               String.contains?(String.downcase(error_str), "unavailable")
-    end
-  end
-
-  describe "NodeInvokeResult with string keys" do
-    test "processes result with string-keyed invocation (JSONL reload)" do
-      invoke_id = "invoke-result-#{System.unique_integer([:positive])}"
-
-      # Store invocation with STRING keys (simulates JSONL reload)
-      LemonCore.Store.put(:node_invocations, invoke_id, %{
-        "node_id" => "test-node-id",
-        "method" => "test.method",
-        "status" => "pending",
-        "created_at_ms" => System.system_time(:millisecond)
-      })
-
-      {:ok, result} =
-        NodeInvokeResult.handle(
-          %{
-            "invokeId" => invoke_id,
-            "result" => %{"data" => "success"}
-          },
-          Map.put(@node_ctx, :conn_pid, self())
-        )
-
-      assert result["invokeId"] == invoke_id
-      assert result["received"] == true
-      assert result["summary"]["invokeId"] == invoke_id
-      assert result["summary"]["nodeId"] == "test-node-id"
-      assert result["summary"]["status"] == "completed"
-      assert result["summary"]["ok"] == true
-      assert result["summary"]["hasResult"] == true
-      assert result["summary"]["hasError"] == false
-      assert result["summary"]["cleanup"]["includesResult"] == false
-      assert result["summary"]["cleanup"]["includesError"] == false
-      assert result["summary"]["cleanup"]["includesSecretValues"] == false
-    end
-  end
-
-  defp register_live_node(node_id, name) do
-    owner = self()
-    :ok = LemonCore.NodeRegistry.register(node_id, name, owner)
-
-    on_exit(fn ->
-      LemonCore.NodeRegistry.unregister(node_id, owner)
-    end)
   end
 
   defp sha256(value), do: :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)

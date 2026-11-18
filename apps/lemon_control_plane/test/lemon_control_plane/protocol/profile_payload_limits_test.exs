@@ -20,19 +20,15 @@ defmodule LemonControlPlane.Protocol.ProfilePayloadLimitsTest do
       assert {:ok, %{params: ^params}} =
                Frames.parse(frame(method, params), max_payload: 16_777_216)
     end
-
-    params = %{"method" => "coding_agent.run", "args" => %{"toolPolicy" => policy}}
-
-    assert {:ok, %{params: ^params}} =
-             Frames.parse(frame("node.invoke", params), max_payload: 16_777_216)
   end
 
   test "unrelated methods and explicit smaller budgets retain their ceilings" do
     params = %{"values" => Enum.to_list(1..16_384)}
     assert {:error, _} = Frames.parse(frame("health", params), max_payload: 16_777_216)
 
+    # The removed raw `node.invoke` RPC no longer earns the execution budget.
     assert {:error, _} =
-             Frames.parse(frame("node.invoke", Map.put(params, "method", "other.run")),
+             Frames.parse(frame("node.invoke", Map.put(params, "method", "coding_agent.run")),
                max_payload: 16_777_216
              )
 

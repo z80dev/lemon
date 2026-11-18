@@ -237,7 +237,6 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodeShellResize,
     LemonControlPlane.Methods.NodeShellClose,
     LemonControlPlane.Methods.NodeShellEvent,
-    LemonControlPlane.Methods.NodeInvoke,
     LemonControlPlane.Methods.NodeMcpDiscover,
     LemonControlPlane.Methods.NodeProfilePaths,
     LemonControlPlane.Methods.NodeInvokeResult,

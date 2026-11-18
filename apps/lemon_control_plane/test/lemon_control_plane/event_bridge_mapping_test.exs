@@ -38,7 +38,7 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       assert "node.pair.requested" in events
       assert "node.pair.resolved" in events
       assert "node.invoke.request" in events
-      assert "node.invoke.completed" in events
+      refute "node.invoke.completed" in events
 
       # Approval events
       assert "exec.approval.requested" in events

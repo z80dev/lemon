@@ -302,8 +302,6 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                timeout_ms: 3_000
              )
 
-    assert NodeStore.get_invocation(invoke_id) == nil
-
     assert_receive {:fake_executor_started, request, run_opts, ^worker, run_ref, context}, 3_000
     assert request.prompt == "cross the wire"
     assert request.cwd == tmp_dir
@@ -365,7 +363,6 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert_receive {:lemon_node_result, ^invoke_id, {:ok, result}}, 3_000
     assert get_in(result, ["completed", "answer"]) == "wire complete"
     assert get_in(result, ["completed", "usage", "input_tokens"]) == 3
-    assert NodeStore.get_invocation(invoke_id) == nil
 
     assert {:error, :terminal} =
              LemonCore.NodeRegistry.control(invoke_id, :steer, "too late")

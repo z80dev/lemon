@@ -190,10 +190,8 @@ defmodule LemonControlPlane.WS.OperatorAuthTest do
                %{"nodeId" => node_id, "method" => "coding_agent.run", "args" => %{}}
              )
 
-    assert %{
-             "ok" => false,
-             "error" => %{"code" => "UNAVAILABLE", "message" => "Node is not online"}
-           } = Jason.decode!(invoke_frame)
+    assert %{"ok" => false, "error" => %{"code" => "METHOD_NOT_FOUND"}} =
+             Jason.decode!(invoke_frame)
   end
 
   defp connect(state, params, id) do
@@ -228,7 +226,6 @@ defmodule LemonControlPlane.WS.OperatorAuthTest do
         :nodes_registry,
         :nodes_by_name,
         :node_challenges,
-        :node_invocations,
         :session_tokens
       ],
       fn table ->

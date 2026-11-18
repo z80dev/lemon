@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.NodeStore do
   @moduledoc """
-  Typed wrapper for node pairing, durable metadata, name reservations,
-  challenges, and invocations.
+  Typed wrapper for node pairing, durable metadata, name reservations and
+  challenges. Invocation state is live-only (`LemonCore.NodeRegistry`).
   """
 
   alias LemonCore.Store
@@ -11,7 +11,6 @@ defmodule LemonControlPlane.NodeStore do
   @registry_table :nodes_registry
   @name_table :nodes_by_name
   @challenge_table :node_challenges
-  @invocation_table :node_invocations
   @invite_table :node_pair_invites
 
   @doc "Stores an enrollment invite keyed by its credential digest, never its plaintext code."
@@ -211,14 +210,6 @@ defmodule LemonControlPlane.NodeStore do
 
   @spec delete_challenge(binary()) :: :ok
   def delete_challenge(token) when is_binary(token), do: Store.delete(@challenge_table, token)
-
-  @spec put_invocation(binary(), map()) :: :ok
-  def put_invocation(invoke_id, value) when is_binary(invoke_id) and is_map(value),
-    do: Store.put(@invocation_table, invoke_id, value)
-
-  @spec get_invocation(binary()) :: map() | nil
-  def get_invocation(invoke_id) when is_binary(invoke_id),
-    do: Store.get(@invocation_table, invoke_id)
 
   defp durable_name_taken?(name, node_id) do
     Enum.any?(list_nodes(), fn {existing_id, node} ->

@@ -183,10 +183,11 @@ defmodule LemonCore.NodeRegistry do
   `expected_pid` and `expected_generation` pin prior inspection to the dispatch
   session. `required_native_privacy_context: 1` requires its privacy descriptor;
   `required_process_execution: 1` requires the real run/get/cancel protocol.
-  `session_lifecycle_admission: true` makes an unadmitted `coding_agent.run`
-  register as its session's activity for the invocation's lifetime, and refuses
-  it with `{:error, :session_lifecycle_in_progress}` while a reset or delete
-  holds the session. Admission errors are definite pre-dispatch failures.
+  `session_lifecycle_admission: true` makes a `coding_agent.run` register as
+  the activity of its payload `sessionKey` until the node proves the run
+  stopped (see `LemonCore.NodeInvocation`), and refuses it with
+  `{:error, :session_lifecycle_in_progress}` while a reset or delete holds the
+  session. Admission errors are definite pre-dispatch failures.
   """
   def invoke_node(node_id, method, args, opts \\ [])
       when is_binary(node_id) and is_binary(method) and is_map(args),

@@ -23,15 +23,17 @@ defmodule LemonRouter.RunPresence do
          true <- before == after_snapshot,
          true <- Process.whereis(LemonRouter.RunRegistry) == registry,
          true <- Process.whereis(RunOrchestrator) == owner do
-      # Unadmitted entries are native follow-up turns, direct node invocations
-      # and direct gateway runs registered for their execution lifetime (active),
-      # plus remote invocations whose stop is unproven (unknown). Their presence
-      # identities never collide with router run ids.
+      # Unadmitted entries are native follow-up turns, direct gateway runs and
+      # remote `coding_agent.run` invocations registered for their execution
+      # lifetime (active), plus remote invocations whose stop is unproven
+      # (unknown). Their presence identities never collide with router run ids.
       entries =
         durable ++
           coordinated ++ Enum.map(active, &Map.put(&1, :status, :active)) ++ unadmitted
 
-      entries = Enum.reduce(entries, %{}, &merge_entry/2) |> Map.values()
+      entries =
+        Enum.reduce(entries, %{}, &merge_entry/2) |> Map.values() |> drop_shadowed_activity()
+
       scoped = Enum.flat_map(entries, &scope_entry(&1, filters))
       counts = Enum.frequencies_by(scoped, & &1.status)
 
@@ -74,6 +76,25 @@ defmodule LemonRouter.RunPresence do
 
   defp display_run_id(%{run_id: {:unresolved, id}}), do: "node-invocation:#{id}"
   defp display_run_id(%{run_id: run_id}), do: run_id
+
+  # While the router still tracks a remote run, its invocation's activity
+  # registration is the same work in the same session: count and list it once.
+  # After the router run is terminal, the registration alone keeps it present.
+  defp drop_shadowed_activity(entries) do
+    tracked =
+      for %{run_id: id} = entry when is_binary(id) <- entries,
+          into: MapSet.new(),
+          do: {id, Map.get(entry, :session_key)}
+
+    Enum.reject(entries, fn
+      %{run_id: {:session_activity, _}, caller_run_id: id, session_key: key}
+      when is_binary(id) ->
+        MapSet.member?(tracked, {id, key})
+
+      _entry ->
+        false
+    end)
+  end
 
   defp durable_entries(%{admissions: admissions, receipts: receipts}) do
     ids = Map.keys(admissions) ++ Map.keys(receipts)

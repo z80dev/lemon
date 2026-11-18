@@ -311,9 +311,8 @@ encrypted secret store immediately before MCP attachment—not by the controller
 No environment or external-source fallback/expansion occurs. Missing, malformed
 or failing references fail closed with `secret_resolution_failed`; resolved
 values never replace the stored/reference-bearing execution definition.
-General `node.invoke.request` events contain only
-`{invokeId,nodeId,method,timeoutMs,cleanup:{includesArgs:false}}`. Invocation
-arguments are sent only on the targeted destination node connection.
+Invocation arguments are sent only on the targeted destination node connection;
+operators receive no general per-invocation events.
 
 Names accept at most 120 Unicode scalar values (defensive 512-byte UTF-8 cap).
 `systemPrompt` preserves exact UTF-8, including whitespace, through 131,072
@@ -1210,10 +1209,15 @@ semantics.
 
 Machine operations target the **durable `nodeId`**, not a node name or connection
 ID. They execute through the authenticated invocation channel on the destination.
-Slow calls dispatch asynchronously, preserving event traffic. Raw file content,
-terminal input/output and secret values are never written to invocation records
-or general events; audit lines contain only operation and outcome classifications.
-`node.invoke` cannot bypass the admin-scoped file, secret or terminal methods.
+Slow calls dispatch asynchronously, preserving event traffic. Invocation records
+are live-only (only unproven-stop session presence is durable); raw file content,
+terminal input/output and secret values never appear in general events, and audit
+lines contain only operation and outcome classifications. No generic operator
+RPC forwards an arbitrary method to a node: each node method is reachable only
+through its own scoped RPC,
+so a `write` credential cannot reach the admin-scoped file, secret, terminal,
+memory-mutation, memory-transfer, MCP-discovery or profile-sync operations, nor
+`coding_agent.tool`/`coding_agent.run`, which have no operator RPC.
 
 Internal callers inspecting a node before dispatch can pin that live connection
 with `NodeRegistry.invoke_node(..., expected_pid: inspected.pid,
@@ -1279,7 +1283,7 @@ post-response privacy check.
 Provider management is an owner-authorized, write-only credential surface. Product
 callers must establish workspace ownership and actual machine ownership before
 using its admin RPCs; ordinary machine access is not ownership. A node credential
-cannot call these methods, and generic `node.invoke` cannot bypass their scope.
+cannot call these methods, and no generic operator RPC can bypass their scope.
 List first and bind every write to the returned exact `target.id`. The controller
 has a durable target identity; destination targets bind the authenticated durable
 node ID. A mismatch fails before the provider service mutates anything.
@@ -1462,7 +1466,7 @@ query failure never fall back to root provisioning. Both paths require privacy
 protocol v1 and pin PID/generation atomically in dispatch before sending the proof
 value. Names are inspected after the same trim normalization used by the vault,
 so decorated names cannot bypass this guard. No caller-supplied flag grants this
-authority; raw `node.invoke` remains forbidden for secret methods. Ordinary
+authority, and no generic operator RPC reaches secret methods. Ordinary
 secret operations and read-only reconciliation retain their original behavior.
 
 After a successful awaited vault reply, the wrapper rechecks the owning lineage
@@ -1521,7 +1525,7 @@ allows another 1000 ms. Get/cancel use the normal 30-second broker budget.
 The method resolves the actual durable `nodeId` and internally pins its PID
 and generation. Registry admission requires `required_process_execution: 1`
 and actual version-1 descriptors for all three process methods before delivery;
-caller-supplied options and generic `node.invoke` cannot bypass this boundary.
+caller-supplied options cannot bypass this boundary.
 The broker supplies authenticated `nodeGeneration`, never a caller generation.
 
 The frozen seven-field receipt has state `running|completed|cancelled|outcome_unknown`

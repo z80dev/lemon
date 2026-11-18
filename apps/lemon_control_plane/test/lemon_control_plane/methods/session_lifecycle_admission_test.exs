@@ -412,160 +412,149 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     end)
   end
 
-  test "node.invoke coding_agent.run is fenced and present until the node stops it",
+  describe "remote router runs stay present until the node proves the run stopped" do
+    test "cancellation", %{key: key} do
+      {command, remote} = start_remote_router_run(key)
+      run_id = command.run_id
+
+      # While the router still tracks the run, its invocation presence is the same work.
+      assert {:ok, %{runs: [%{run_id: ^run_id}], presence: %{active: 1}}} =
+               LemonRouter.run_presence(%{session_key: key})
+
+      assert :ok = CodingAgent.Executor.cancel(remote.context)
+      invoke_id = remote.invoke_id
+      assert_receive {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}, 2_000
+      # A cancelled runner stops without a sink event; the gateway completes the run.
+      finish(command)
+
+      assert_busy(key)
+
+      # The worker's terminal result for this invocation is the stop evidence.
+      assert :ok = LemonCore.NodeRegistry.complete(remote.node_id, invoke_id, nil, "cancelled")
+      assert_idle_then_reset(key)
+    end
+
+    test "timeout", %{key: key} do
+      {command, remote} = start_remote_router_run(key, %{remote_timeout_ms: 50})
+      invoke_id = remote.invoke_id
+      assert_receive {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}, 2_000
+      settle_router_run(command, remote)
+
+      assert_busy(key)
+      assert :ok = LemonCore.NodeRegistry.complete(remote.node_id, invoke_id, nil, "cancelled")
+      assert_idle_then_reset(key)
+    end
+
+    test "disconnect leaves durable unresolved presence until a later report omits it",
+         %{key: key} do
+      {command, remote} = start_remote_router_run(key)
+      invoke_id = remote.invoke_id
+      Process.exit(remote.node_pid, :kill)
+      settle_router_run(command, remote)
+
+      await(fn -> match?({:ok, %{}}, Store.fetch(:session_activity_unresolved, invoke_id)) end)
+      on_exit(fn -> Store.delete(:session_activity_unresolved, invoke_id) end)
+      assert_busy(key)
+
+      # A reconnect alone proves nothing about the earlier execution.
+      LemonCore.NodeRegistry.unregister(remote.node_id, remote.node_pid)
+      test = self()
+      reconnected = spawn(fn -> forward_node_events(test) end)
+      on_exit(fn -> Process.exit(reconnected, :kill) end)
+
+      :ok =
+        LemonCore.NodeRegistry.register(
+          remote.node_id,
+          remote.node_name,
+          reconnected,
+          privacy_capabilities()
+        )
+
+      assert_busy(key)
+
+      # Nor does a report from a connection that is not the node's live one.
+      assert {:error, :stale_session} =
+               LemonCore.NodeRegistry.report_active(remote.node_id, remote.node_pid, 0, [])
+
+      # The worker still stopping the invocation reports it as active.
+      assert :ok =
+               LemonCore.NodeRegistry.report_active(remote.node_id, reconnected, 0, [invoke_id])
+
+      assert_busy(key)
+
+      assert :ok = LemonCore.NodeRegistry.report_active(remote.node_id, reconnected, 0, [])
+      assert_idle_then_reset(key)
+    end
+
+    test "a worker that never acknowledges keeps the session busy", %{key: key} do
+      {command, remote} = start_remote_router_run(key)
+      invoke_id = remote.invoke_id
+      assert :ok = CodingAgent.Executor.cancel(remote.context)
+      assert_receive {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}, 2_000
+      finish(command)
+
+      Process.sleep(200)
+      assert_busy(key)
+
+      assert {:error, {:conflict, _message, %{"reason" => "session_busy"}}} =
+               SessionsDelete.handle(%{"sessionKey" => key}, %{})
+
+      # Another node's result is not evidence for this invocation.
+      assert {:error, :wrong_node} =
+               LemonCore.NodeRegistry.complete("other-node", invoke_id, nil, "cancelled")
+
+      assert_busy(key)
+      assert :ok = LemonCore.NodeRegistry.complete(remote.node_id, invoke_id, nil, "cancelled")
+      assert_idle_then_reset(key)
+    end
+  end
+
+  test "unresolved rows written before the upgrade keep the session busy until stop evidence",
        %{key: key} do
-    node_id = start_test_node(self())
+    old_connection = spawn(fn -> Process.sleep(:infinity) end)
+    node_id = "legacy-node-#{System.unique_integer([:positive])}"
+    ids = for n <- 1..2, do: "legacy-invoke-#{n}-#{System.unique_integer([:positive])}"
 
-    params = %{
-      "nodeId" => node_id,
-      "method" => "coding_agent.run",
-      "args" => %{"version" => 2, "prompt" => "direct work", "sessionKey" => key}
-    }
+    on_exit(fn ->
+      Process.exit(old_connection, :kill)
+      Enum.each(ids, &Store.delete(:session_activity_unresolved, &1))
+    end)
 
-    ctx = %{conn_pid: self(), auth: %{role: :operator, scopes: [:write]}}
-    holder = hold_fence(key)
+    for id <- ids do
+      :ok =
+        Store.put(
+          Store,
+          :session_activity_unresolved,
+          id,
+          %{
+            node_id: node_id,
+            node_pid: old_connection,
+            session_key: key,
+            recorded_at_ms: System.system_time(:millisecond)
+          },
+          durable: true
+        )
+    end
 
-    assert {:error, {:conflict, _message, %{"reason" => "lifecycle_in_progress"}}} =
-             LemonControlPlane.Methods.NodeInvoke.handle(params, ctx)
-
-    refute_receive {:node_event, "node.invoke.request", _}, 100
-    release_fence(holder)
-
-    assert {:ok, %{"invokeId" => invoke_id}} =
-             LemonControlPlane.Methods.NodeInvoke.handle(params, ctx)
-
-    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}, 2_000
-    assert {:ok, %{presence: %{idle: false}}} = LemonRouter.run_presence(%{session_key: key})
+    assert_busy(key)
 
     assert {:error, {:conflict, _message, %{"reason" => "session_busy"}}} =
              SessionsDelete.handle(%{"sessionKey" => key}, %{})
 
-    # A cancellation request is not proof that the remote run stopped.
-    LemonCore.NodeRegistry.cancel(invoke_id)
-    assert_receive {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}, 2_000
-    assert {:ok, %{presence: %{idle: false}}} = LemonRouter.run_presence(%{session_key: key})
+    # A terminal result for one invocation clears only that one.
+    [first, second] = ids
+    assert :ok = LemonCore.NodeRegistry.complete(node_id, first, nil, "cancelled")
+    assert_busy(key)
 
-    assert {:error, {:conflict, _message, %{"reason" => "session_busy"}}} =
-             SessionsReset.handle(%{"sessionKey" => key}, %{})
-
-    # The node's terminal acknowledgement is.
-    LemonCore.NodeRegistry.complete(node_id, invoke_id, nil, "cancelled")
-
-    await(fn ->
-      match?({:ok, %{presence: %{idle: true}}}, LemonRouter.run_presence(%{session_key: key}))
-    end)
-  end
-
-  test "a disconnected node's invocation stays present until its worker reports it stopped",
-       %{key: key} do
-    test = self()
-    node_id = start_test_node(test)
-    {:ok, %{pid: node_pid}} = LemonCore.NodeRegistry.resolve_id(node_id)
-
-    params = %{
-      "nodeId" => node_id,
-      "method" => "coding_agent.run",
-      "args" => %{"version" => 2, "prompt" => "direct work", "sessionKey" => key}
-    }
-
-    ctx = %{conn_pid: self(), auth: %{role: :operator, scopes: [:write]}}
-
-    assert {:ok, %{"invokeId" => invoke_id}} =
-             LemonControlPlane.Methods.NodeInvoke.handle(params, ctx)
-
-    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}, 2_000
-    Process.exit(node_pid, :kill)
-    assert_receive {:lemon_node_result, ^invoke_id, {:error, {:node_disconnected, _}}}, 2_000
-
-    assert {:ok, %{presence: %{idle: false}}} = LemonRouter.run_presence(%{session_key: key})
-
-    assert {:error, {:conflict, _message, %{"reason" => "session_busy"}}} =
-             SessionsReset.handle(%{"sessionKey" => key}, %{})
-
-    await(fn -> match?({:ok, %{}}, Store.fetch(:session_activity_unresolved, invoke_id)) end)
-
-    # A reconnect alone proves nothing about the earlier execution.
-    LemonCore.NodeRegistry.unregister(node_id, node_pid)
-    reconnected = spawn(fn -> forward_node_events(test) end)
-    :ok = LemonCore.NodeRegistry.register(node_id, "Lifecycle Node", reconnected)
-    on_exit(fn -> Process.exit(reconnected, :kill) end)
-    assert {:ok, %{presence: %{idle: false}}} = LemonRouter.run_presence(%{session_key: key})
-
-    # Nor does a report from a connection that is not the node's live one.
-    assert {:error, :stale_session} =
-             LemonCore.NodeRegistry.report_active(node_id, node_pid, 0, [])
-
-    # The worker still stopping the invocation reports it as active.
-    assert :ok = LemonCore.NodeRegistry.report_active(node_id, reconnected, 0, [invoke_id])
-    assert {:ok, %{presence: %{idle: false}}} = LemonRouter.run_presence(%{session_key: key})
-
-    # Once its cancellation barrier proved the run stopped, its report omits it.
-    assert :ok = LemonCore.NodeRegistry.report_active(node_id, reconnected, 0, [])
-    assert {:ok, %{presence: %{idle: true}}} = LemonRouter.run_presence(%{session_key: key})
-  end
-
-  test "a direct invocation reusing another session's run id leaves both sessions busy",
-       %{key: key} do
-    other = key <> "-direct"
-    assert {:ok, run_id} = LemonRouter.submit(request(key, "active work"))
-    assert_receive {:execution, %ExecutionCommand{run_id: ^run_id} = active}, 2_000
-    node_id = start_test_node(self())
-
-    params = %{
-      "nodeId" => node_id,
-      "method" => "coding_agent.run",
-      "args" => %{"version" => 2, "prompt" => "x", "sessionKey" => other, "runId" => run_id}
-    }
-
-    ctx = %{conn_pid: self(), auth: %{role: :operator, scopes: [:write]}}
-
-    assert {:ok, %{"invokeId" => invoke_id}} =
-             LemonControlPlane.Methods.NodeInvoke.handle(params, ctx)
-
-    for session <- [key, other] do
-      assert {:ok, %{presence: %{idle: false}}} =
-               LemonRouter.run_presence(%{session_key: session})
-
-      assert {:error, {:conflict, _message, %{"reason" => "session_busy"}}} =
-               SessionsReset.handle(%{"sessionKey" => session}, %{})
-    end
-
-    LemonCore.NodeRegistry.complete(node_id, invoke_id, %{"ok" => true}, nil)
-    finish(active)
-  end
-
-  test "node.invoke sends the worker exactly the session key it admitted", %{key: _key} do
-    node_id = start_test_node(self())
-
-    params = %{
-      "nodeId" => node_id,
-      "method" => "coding_agent.run",
-      "args" => %{"version" => 2, "prompt" => "x", "runId" => " padded-run "}
-    }
-
-    ctx = %{conn_pid: self(), auth: %{role: :operator, scopes: [:write]}}
-
-    assert {:ok, %{"invokeId" => invoke_id}} =
-             LemonControlPlane.Methods.NodeInvoke.handle(params, ctx)
-
-    assert_receive {:node_event, "node.invoke.request",
-                    %{"invokeId" => ^invoke_id, "args" => args}},
-                   2_000
-
-    assert args["runId"] == "padded-run"
-    assert is_binary(args["sessionKey"])
-
-    assert {:ok, %{presence: %{idle: false}}} =
-             LemonRouter.run_presence(%{session_key: args["sessionKey"]})
-
-    LemonCore.NodeRegistry.complete(node_id, invoke_id, %{"ok" => true}, nil)
-
-    await(fn ->
-      match?(
-        {:ok, %{presence: %{idle: true}}},
-        LemonRouter.run_presence(%{session_key: args["sessionKey"]})
-      )
-    end)
+    # The node's later connection reports the other one stopped.
+    connection = spawn(fn -> Process.sleep(:infinity) end)
+    on_exit(fn -> Process.exit(connection, :kill) end)
+    :ok = LemonCore.NodeRegistry.register(node_id, node_id, connection)
+    on_exit(fn -> LemonCore.NodeRegistry.unregister(node_id, connection) end)
+    assert :ok = LemonCore.NodeRegistry.report_active(node_id, connection, 0, [second])
+    assert_busy(key)
+    assert :ok = LemonCore.NodeRegistry.report_active(node_id, connection, 0, [])
+    assert_idle_then_reset(key)
   end
 
   test "prune refuses a session with active work and changes nothing", %{key: key} do
@@ -837,29 +826,75 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     end
   end
 
-  defp start_test_node(test) do
+  # The router dispatches to the controlled runtime; the test then executes
+  # that command on a live named node through the real remote executor, as the
+  # gateway would, with itself as the gateway sink.
+  defp start_remote_router_run(key, opts \\ %{}) do
+    assert {:ok, run_id} = LemonRouter.submit(request(key, "remote work"))
+    assert_receive {:execution, %ExecutionCommand{run_id: ^run_id} = command}, 2_000
+
     suffix = System.unique_integer([:positive])
-    node_id = "lifecycle-node-#{suffix}"
+    node_id = "remote-node-#{suffix}"
+    node_name = "remote-#{suffix}"
+    test = self()
     node_pid = spawn(fn -> forward_node_events(test) end)
 
     :ok =
-      LemonControlPlane.NodeStore.put_node(node_id, %{
-        id: node_id,
-        name: "Lifecycle Node #{suffix}",
-        type: "worker",
-        capabilities: %{},
-        status: :offline
-      })
-
-    :ok = LemonCore.NodeRegistry.register(node_id, "Lifecycle Node #{suffix}", node_pid)
+      LemonCore.NodeRegistry.register(node_id, node_name, node_pid, privacy_capabilities())
 
     on_exit(fn ->
       LemonCore.NodeRegistry.unregister(node_id, node_pid)
-      Store.delete(:nodes_registry, node_id)
       Process.exit(node_pid, :kill)
     end)
 
-    node_id
+    execution = %LemonGateway.ExecutionRequest{
+      run_id: run_id,
+      session_key: key,
+      prompt: "remote work",
+      cwd: File.cwd!(),
+      tool_policy: %{allow: :all, deny: ["agent"]},
+      conversation_key: {:session, key},
+      meta: %{node: node_name}
+    }
+
+    assert {:ok, run_ref, context} = CodingAgent.Executor.start_run(execution, opts, self())
+
+    assert_receive {:node_event, "node.invoke.request",
+                    %{"invokeId" => invoke_id, "args" => %{"sessionKey" => ^key}}},
+                   2_000
+
+    {command,
+     %{
+       run_ref: run_ref,
+       context: context,
+       invoke_id: invoke_id,
+       node_id: node_id,
+       node_name: node_name,
+       node_pid: node_pid
+     }}
+  end
+
+  # The runner reports a terminal outcome to its sink and the gateway completes
+  # the router run: client-visible completion, not proof the node stopped.
+  defp settle_router_run(command, %{run_ref: run_ref}) do
+    assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: false}}, 2_000
+    finish(command)
+  end
+
+  defp assert_busy(key) do
+    assert {:ok, %{presence: %{idle: false}}} = LemonRouter.run_presence(%{session_key: key})
+
+    assert {:error, {:conflict, _message, %{"reason" => "session_busy"}}} =
+             SessionsReset.handle(%{"sessionKey" => key}, %{})
+  end
+
+  defp assert_idle_then_reset(key) do
+    await(fn ->
+      match?({:ok, %{presence: %{idle: true}}}, LemonRouter.run_presence(%{session_key: key}))
+    end)
+
+    assert {:ok, %{"summary" => %{"verified" => true}}} =
+             SessionsReset.handle(%{"sessionKey" => key}, %{})
   end
 
   defp forward_node_events(test) do
@@ -869,6 +904,17 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
         forward_node_events(test)
     end
   end
+
+  defp privacy_capabilities,
+    do: %{
+      capabilities: %{
+        "coding_agent.run" => %{
+          "version" => 2,
+          "executionContext" => %{"version" => 1},
+          "nativePrivacyContext" => %{"version" => 1}
+        }
+      }
+    }
 
   defp policy(key) do
     {:ok, policy} = PolicyStore.fetch_session(key)

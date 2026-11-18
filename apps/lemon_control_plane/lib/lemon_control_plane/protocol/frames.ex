@@ -125,13 +125,6 @@ defmodule LemonControlPlane.Protocol.Frames do
             ],
        do: LemonCore.ToolPolicy.execution_max_items()
 
-  defp payload_item_limit(%{
-         "type" => "req",
-         "method" => "node.invoke",
-         "params" => %{"method" => "coding_agent.run"}
-       }),
-       do: LemonCore.ToolPolicy.execution_max_items()
-
   defp payload_item_limit(_), do: LemonCore.JSONPayload.default_max_items()
 
   defp validate_request(%{"type" => "req", "id" => id, "method" => method} = frame)
@@ -293,7 +286,6 @@ defmodule LemonControlPlane.Protocol.Frames do
       "node.pair.requested",
       "node.pair.resolved",
       "node.invoke.request",
-      "node.invoke.completed",
       "node.invoke.approval",
       "node.shell.output",
       "node.shell.exit",

@@ -30,86 +30,51 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
       assert {:error, {:not_found, _message}} = NodeInvokeResult.handle(params, ctx)
     end
 
-    test "processes result when invocation exists" do
-      invoke_id = "invoke-#{System.unique_integer()}"
-      :ok = LemonCore.Bus.subscribe("nodes")
-
-      # Store a mock invocation
-      invocation = %{
-        node_id: "node-1",
-        method: "test",
-        args: %{"private" => "legacy durable args"},
-        status: :pending,
-        created_at_ms: System.system_time(:millisecond)
-      }
-
-      LemonCore.Store.put(:node_invocations, invoke_id, invocation)
+    test "a legacy durable invocation row is neither settled nor rewritten" do
+      invoke_id = "invoke-#{System.unique_integer([:positive])}"
+      legacy = %{node_id: "node-1", method: "test", status: :pending}
+      :ok = LemonCore.Store.put(:node_invocations, invoke_id, legacy)
+      on_exit(fn -> LemonCore.Store.delete(:node_invocations, invoke_id) end)
 
       ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
       params = %{"invokeId" => invoke_id, "result" => %{"data" => "test"}}
 
-      {:ok, result} = NodeInvokeResult.handle(params, ctx)
-      assert result["invokeId"] == invoke_id
-      assert result["received"] == true
-      assert result["summary"]["invokeId"] == invoke_id
-      assert result["summary"]["nodeId"] == "node-1"
-      assert result["summary"]["status"] == "completed"
-      assert result["summary"]["ok"] == true
-      assert result["summary"]["hasResult"] == true
-      assert result["summary"]["hasError"] == false
-      assert result["summary"]["cleanup"]["includesResult"] == false
-      assert result["summary"]["cleanup"]["includesArgs"] == false
-      assert result["summary"]["cleanup"]["includesSecretValues"] == false
-
-      # Verify invocation was updated
-      updated = LemonCore.Store.get(:node_invocations, invoke_id)
-      assert updated.status == :completed
-      refute Map.has_key?(updated, :args)
-      refute Map.has_key?(updated, :result)
-      assert updated.result_summary.present == true
-      assert updated.result_summary.kind == :object
-
-      assert_receive %LemonCore.Event{type: :node_invoke_completed, payload: event_payload}
-      refute Map.has_key?(event_payload, :result)
-      refute Map.has_key?(event_payload, :error)
-      assert event_payload.result_summary.kind == :object
-
-      # Cleanup
-      LemonCore.Store.delete(:node_invocations, invoke_id)
+      assert {:error, {:not_found, _message}} = NodeInvokeResult.handle(params, ctx)
+      assert LemonCore.Store.get(:node_invocations, invoke_id) == legacy
     end
 
-    test "sets error status when error is provided" do
-      invoke_id = "invoke-#{System.unique_integer()}"
+    test "delivers a live result to the recipient without persisting it" do
+      node_id = "node-result-#{System.unique_integer([:positive])}"
+      :ok = LemonCore.NodeRegistry.register(node_id, node_id, self())
+      on_exit(fn -> LemonCore.NodeRegistry.unregister(node_id, self()) end)
+      ctx = %{auth: %{role: :node, client_id: node_id}, conn_pid: self()}
 
-      invocation = %{
-        node_id: "node-1",
-        method: "test",
-        status: :pending,
-        created_at_ms: System.system_time(:millisecond)
-      }
+      for {params, expected} <- [
+            {%{"result" => %{"data" => "test"}}, {:ok, %{"data" => "test"}}},
+            {%{"error" => "Something went wrong"}, {:error, {:remote, "Something went wrong"}}}
+          ] do
+        assert {:ok, invoke_id} =
+                 LemonCore.NodeRegistry.invoke_node(node_id, "test", %{}, recipient: self())
 
-      LemonCore.Store.put(:node_invocations, invoke_id, invocation)
+        assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
 
-      ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
-      params = %{"invokeId" => invoke_id, "error" => "Something went wrong"}
+        assert {:ok, result} =
+                 NodeInvokeResult.handle(Map.put(params, "invokeId", invoke_id), ctx)
 
-      {:ok, result} = NodeInvokeResult.handle(params, ctx)
-      assert result["invokeId"] == invoke_id
-      assert result["summary"]["status"] == "error"
-      assert result["summary"]["ok"] == false
-      assert result["summary"]["hasResult"] == false
-      assert result["summary"]["hasError"] == true
-      assert result["summary"]["cleanup"]["includesError"] == false
+        assert result["invokeId"] == invoke_id
+        assert result["received"] == true
+        assert result["summary"]["nodeId"] == node_id
+        assert result["summary"]["ok"] == match?({:ok, _}, expected)
+        assert result["summary"]["hasError"] == Map.has_key?(params, "error")
+        assert result["summary"]["cleanup"]["includesResult"] == false
+        assert result["summary"]["cleanup"]["includesError"] == false
+        assert result["summary"]["cleanup"]["includesArgs"] == false
+        assert_receive {:lemon_node_result, ^invoke_id, ^expected}
+        assert LemonCore.Store.get(:node_invocations, invoke_id) == nil
 
-      # Verify invocation was updated with error
-      updated = LemonCore.Store.get(:node_invocations, invoke_id)
-      assert updated.status == :error
-      refute Map.has_key?(updated, :error)
-      assert updated.error_summary.present == true
-      assert updated.error_summary.kind == :string
-
-      # Cleanup
-      LemonCore.Store.delete(:node_invocations, invoke_id)
+        assert {:error, {:not_found, _}} =
+                 NodeInvokeResult.handle(Map.put(params, "invokeId", invoke_id), ctx)
+      end
     end
   end
 end

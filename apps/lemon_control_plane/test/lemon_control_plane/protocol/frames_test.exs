@@ -58,7 +58,7 @@ defmodule LemonControlPlane.Protocol.FramesTest do
         Jason.encode!(%{
           "type" => "req",
           "id" => "req-large",
-          "method" => "node.invoke",
+          "method" => "health",
           "params" => %{"value" => String.duplicate("x", 128)}
         })
 
@@ -66,7 +66,7 @@ defmodule LemonControlPlane.Protocol.FramesTest do
 
       deeply_nested =
         Enum.reduce(1..40, true, fn index, acc -> %{"level-#{index}" => acc} end)
-        |> then(&%{"type" => "req", "id" => "deep", "method" => "node.invoke", "params" => &1})
+        |> then(&%{"type" => "req", "id" => "deep", "method" => "health", "params" => &1})
         |> Jason.encode!()
 
       assert {:error, {:max_depth, 32}} = Frames.parse(deeply_nested)
