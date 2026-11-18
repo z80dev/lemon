@@ -34,6 +34,7 @@ defmodule CodingAgent.Tools.Read do
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{ImageContent, TextContent}
+  alias LemonCore.CredentialPaths
 
   import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
@@ -851,11 +852,15 @@ defmodule CodingAgent.Tools.Read do
   end
 
   defp resolve_path(path, cwd, opts) do
-    if InternalUrls.internal_url?(path) do
-      InternalUrls.resolve(path, Keyword.put(opts, :cwd, cwd))
-    else
-      {:ok, PathHelpers.resolve_path(path, cwd, opts)}
-    end
+    resolved =
+      if InternalUrls.internal_url?(path),
+        do: InternalUrls.resolve(path, Keyword.put(opts, :cwd, cwd)),
+        else: {:ok, PathHelpers.resolve_path(path, cwd, opts)}
+
+    # Every read view (rich formats, tail, windows, images) resolves here first.
+    with {:ok, resolved} when is_binary(resolved) <- resolved,
+         :ok <- CredentialPaths.check_read(resolved),
+         do: {:ok, resolved}
   end
 
   # ============================================================================

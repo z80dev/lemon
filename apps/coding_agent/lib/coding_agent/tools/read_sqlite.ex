@@ -71,7 +71,8 @@ defmodule CodingAgent.Tools.ReadSqlite do
   @spec read(String.t(), String.t(), String.t(), map(), reference() | nil, keyword()) ::
           {:ok, LemonAgent.Types.AgentToolResult.t()} | {:error, String.t()}
   def read(db_path, sub_path, query, params, signal, opts) do
-    with {:ok, selector} <- parse_selector(sub_path, URI.decode_query(query)),
+    with :ok <- LemonCore.CredentialPaths.check_read(db_path),
+         {:ok, selector} <- parse_selector(sub_path, URI.decode_query(query)),
          {:ok, text} <- with_connection(db_path, &render(&1, selector)) do
       ReadFormatText.result(text, db_path, params, signal, opts, %{
         format: :sqlite,

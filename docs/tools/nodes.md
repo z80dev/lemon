@@ -104,6 +104,15 @@ while it is live; an interrupted parent reports all nested effects as unknown.
 - Results are marked untrusted on the controller; tool-supplied trust metadata
   from the node is dropped.
 - No provider credentials or controller secrets are sent to the node.
+- Routed tools cannot reach the node's own credentials through Lemon: shell,
+  eval and process children inherit no Lemon secrets, file tools refuse the
+  node's Lemon credential files (node tokens, secrets master key and store,
+  cookie, `env`/`.env`, control-plane tokens), and bash/eval text naming them
+  is refused. Tools run
+  as the node's OS user, so code they run is not sandboxed from that user's
+  files; withhold `bash`, `eval` and process tools with the node's capability
+  ceiling when that matters. See
+  [execution-node credentials](../config.md#named-execution-nodes).
 
 ## Attaching machines
 

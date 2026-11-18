@@ -78,7 +78,8 @@ defmodule CodingAgent.Tools.SemanticFind.Candidates do
         {kept ++ acc, truncated? or more?}
       end)
 
-    {files |> Enum.uniq() |> Enum.sort(), truncated?}
+    # Lemon credential files never reach scoring or the model, whatever the root.
+    {files |> Enum.uniq() |> LemonCore.CredentialPaths.reject() |> Enum.sort(), truncated?}
   end
 
   defp base_dir(root), do: if(File.dir?(root), do: root, else: Path.dirname(root))

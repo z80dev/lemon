@@ -186,12 +186,24 @@ defmodule LemonBrowser.TernBackendTest do
     assert {:ok, %{"result" => "Title"}} =
              request("evaluate", %{"expression" => "document.title"}, opts)
 
+    # The trusted guard function is the whole source; the expression is data.
+    script = TernSession.evaluate_script()
+
     assert_received {:tern,
                      %{
                        "op" => "eval",
                        "world" => "page",
-                       "function" => "function () { return (document.title\n); }"
+                       "function" => ^script,
+                       "args" => ["document.title"]
                      }}
+
+    refute script =~ "document.title"
+
+    # The guard's sentinel becomes an error; nothing is returned as a result.
+    assert {:error, {:invalid, message}} =
+             request("evaluate", %{"expression" => "lemon-refuse"}, opts)
+
+    assert message =~ "only on http:, https: and about:"
 
     assert {:ok, %{"scrolled" => true}} = request("scroll", %{"deltaY" => 123}, opts)
     assert_received {:tern, %{"op" => "input", "events" => [%{"type" => "wheel", "dy" => 123}]}}
@@ -538,11 +550,14 @@ defmodule LemonBrowser.TernBackendTest do
   defp answer(%{"op" => "eval", "function" => source, "args" => args} = payload, state) do
     value =
       cond do
+        source == TernSession.evaluate_script() and args == ["lemon-refuse"] ->
+          %{"__lemon_refused" => true}
+
+        source == TernSession.evaluate_script() and args == ["document.title"] ->
+          "Title"
+
         String.contains?(source, "return location.href") ->
           get_in(state.blocks, [payload["block"], :url])
-
-        String.contains?(source, "return (document.title") ->
-          "Title"
 
         String.contains?(source, "elementFromPoint") ->
           %{"x" => 10, "y" => 20}

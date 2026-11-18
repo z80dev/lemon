@@ -25,6 +25,7 @@ defmodule CodingAgent.Tools.Lsp do
   alias LemonAgent.Tools.AbortHelpers
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias LemonCore.CredentialPaths
   alias LemonLsp.ServerManager
 
   @actions ~w(diagnostics definition type_definition implementation references hover symbols rename rename_file reload capabilities code_actions status request)
@@ -1444,7 +1445,9 @@ defmodule CodingAgent.Tools.Lsp do
   defp with_file(ctx, fun) do
     path = PathHelpers.resolve_path(ctx.req.file, ctx.cwd)
 
-    with :ok <- regular_file(path),
+    # The model-selected file is sent to the server (didOpen): never a credential.
+    with :ok <- CredentialPaths.check_read(path),
+         :ok <- regular_file(path),
          {:ok, server} <- server_for(path, ctx.cwd) do
       root = workspace_root(path, ctx.cwd, server.root_markers)
       attempt(ctx, server, root, path, fun, 1)
@@ -1593,9 +1596,11 @@ defmodule CodingAgent.Tools.Lsp do
   end
 
   defp read_file(path) do
-    case File.read(path) do
-      {:ok, content} -> {:ok, content}
-      {:error, reason} -> {:error, "Cannot read #{path}: #{reason}"}
+    with :ok <- CredentialPaths.check_read(path) do
+      case File.read(path) do
+        {:ok, content} -> {:ok, content}
+        {:error, reason} -> {:error, "Cannot read #{path}: #{reason}"}
+      end
     end
   end
 
@@ -1801,10 +1806,13 @@ defmodule CodingAgent.Tools.Lsp do
     end
   end
 
+  # Server-returned locations are untrusted: a credential path renders no excerpt.
   defp file_lines(path) do
-    case File.read(path) do
-      {:ok, content} -> content |> Text.lines() |> List.to_tuple()
-      {:error, _} -> nil
+    with :ok <- CredentialPaths.check_read(path),
+         {:ok, content} <- File.read(path) do
+      content |> Text.lines() |> List.to_tuple()
+    else
+      _ -> nil
     end
   end
 

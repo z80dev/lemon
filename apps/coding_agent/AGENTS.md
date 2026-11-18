@@ -88,16 +88,26 @@ history, compaction and supervised delegation. The loop/model runtime comes from
   isolation switches.
 
 - Pairing stores session/recovery credentials in private node-ID-keyed records
-  (0700 directory, 0600 files) bound to the exact controller URL. ID lookup without
+  (0700 directory, 0600 files) under `TokenStore.root/0` (`nodes/execution` in
+  the Lemon home) bound to the exact controller URL. ID lookup without
   that URL returns no credentials. Re-pair renews the same identity; legacy repair
   requires explicit operator authorization.
+- Model-directed tools never touch Lemon credential files (that directory, the
+  secrets master key and store, cookie, `env`/`.env`, web key base, `run/*.token`,
+  bot `master.key`/`local-access.key`; list in `LemonCore.CredentialPaths`).
+  Every model-reachable byte reader calls `CredentialPaths.check_read/1` (or
+  `check_read!/1`) on the file it opens, after any selector parsing; scanners
+  use `reject/1`; mutations use `check_mutation/1` (via `FileValidation`), which
+  also refuses directories that contain credentials. bash/eval text naming them
+  is refused best effort. New readers, scanners or uploaders must use the same
+  checks. Tools share the node's OS user, so this is not an OS boundary.
 - Prefer `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` to flags. Off-loopback
   uses `wss://`; plaintext requires explicit opt-in over a verified secure overlay.
   The launchers unset both and hand them to the VM only on an fd-3 pipe
   (`LemonCore.NodeCredentials`), drained before any app starts; `CLI.run/2`
   takes them from there. Every child launcher (bash, PTY, process, eval, debug,
   host command, task Git, stdio MCP) builds its env with `LemonCore.ChildEnv`,
-  which unsets `LEMON_NODE_*TOKEN*`, `LEMON_SECRETS_*` and `LEMON_*_API_KEY`.
+  which unsets every secret-named `LEMON_*` variable and `RELEASE_COOKIE`.
 - The worker accepts the native run method, validates local cwd and strips routing
   `meta.node`. Only JSON-safe execution data crosses the wire; source callbacks,
   executor options, provider credentials and BEAM state never do.

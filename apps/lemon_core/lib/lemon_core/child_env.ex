@@ -5,16 +5,26 @@ defmodule LemonCore.ChildEnv do
   Erlang ports and `System.cmd/3` inherit the BEAM's OS environment.
   `port_env/1` (port `{:env, _}` form) and `cmd_env/1` (`System.cmd/3` `:env`
   form) return the caller's extra variables plus an explicit unset for every
-  controller credential currently present, so a shell, process, PTY, eval
-  kernel, Git filter or MCP server cannot read Lemon's own credentials:
+  Lemon credential currently present, so a shell, process, PTY, eval kernel,
+  Git filter, MCP server or browser command cannot read Lemon's own secrets:
 
-    * `LEMON_NODE_*TOKEN*` — execution-node pairing/session tokens
-    * `LEMON_SECRETS_*` — secret-store master keys and settings
-    * `LEMON_*_API_KEY` — provider/API keys
+    * every `LEMON_*` variable with a `_`-separated word naming a secret
+      (`TOKEN`, `SECRET`, `SECRETS`, `KEY`, `COOKIE`, `PASSWORD`, `PASSPHRASE`,
+      `PASS`, `AUTH`, `CREDENTIAL`, `CREDENTIALS`), e.g. node pairing/session
+      tokens, operator and WebSocket tokens, secret-store master keys, web
+      signing keys, bot tokens and `LEMON_*_API_KEY` provider keys
+    * `LEMON_NODE_*` variables containing `TOKEN` anywhere
+    * `RELEASE_COOKIE`, the Erlang distribution cookie
 
   Caller-supplied entries with a credential name are dropped as well. Ordinary
   variables such as `OPENAI_API_KEY` are inherited unchanged.
+
+  This scrubs inheritance only. A child running as the same OS user can still
+  read the parent's initial environment (`/proc/<pid>/environ`, `ps -E`), which
+  is why the launchers never put node tokens there.
   """
+
+  @secret_words ~w(TOKEN SECRET SECRETS KEY COOKIE PASSWORD PASSPHRASE PASS AUTH CREDENTIAL CREDENTIALS)
 
   @spec cmd_env(Enumerable.t()) :: [{String.t(), String.t() | nil}]
   def cmd_env(extra \\ []) do
@@ -35,8 +45,12 @@ defmodule LemonCore.ChildEnv do
   end
 
   @spec credential?(String.t()) :: boolean()
-  def credential?("LEMON_NODE_" <> rest), do: String.contains?(rest, "TOKEN")
-  def credential?("LEMON_SECRETS_" <> _), do: true
-  def credential?("LEMON_" <> rest), do: String.ends_with?(rest, "_API_KEY")
+  def credential?("RELEASE_COOKIE"), do: true
+
+  def credential?("LEMON_" <> rest = name) do
+    (String.starts_with?(name, "LEMON_NODE_") and String.contains?(rest, "TOKEN")) or
+      rest |> String.upcase() |> String.split("_") |> Enum.any?(&(&1 in @secret_words))
+  end
+
   def credential?(_name), do: false
 end

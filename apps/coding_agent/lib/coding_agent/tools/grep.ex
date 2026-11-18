@@ -14,6 +14,7 @@ defmodule CodingAgent.Tools.Grep do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
+  alias LemonCore.CredentialPaths
   alias CodingAgent.Tools.IgnoreFilter
   alias CodingAgent.Tools.PathHelpers
 
@@ -449,7 +450,17 @@ defmodule CodingAgent.Tools.Grep do
       |> Enum.uniq_by(&{&1.file_path, &1.line_number})
       |> Enum.sort_by(&{&1.file_path, &1.line_number})
 
-    build_result_from_match_refs(matches, opts)
+    # A search scope that contains Lemon credential files never reports them.
+    allowed =
+      matches
+      |> Enum.map(& &1.file_path)
+      |> Enum.uniq()
+      |> CredentialPaths.reject()
+      |> MapSet.new()
+
+    matches
+    |> Enum.filter(&MapSet.member?(allowed, &1.file_path))
+    |> build_result_from_match_refs(opts)
   end
 
   defp search_with_elixir(opts) do
@@ -493,6 +504,7 @@ defmodule CodingAgent.Tools.Grep do
         opts.paths
         |> Enum.flat_map(&opts.fallback_files_fun.(&1, opts))
         |> Enum.uniq()
+        |> CredentialPaths.reject()
         |> Enum.sort()
         |> Enum.reduce_while({[], 0, 0, false}, fn file, {refs, count, oversized, _} ->
           if aborted?(opts.signal) do

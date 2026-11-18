@@ -341,9 +341,17 @@ defmodule CodingAgent.Tools.BrowserTest do
   test "browser_evaluate forwards expression and keeps progress redacted" do
     parent = self()
 
-    request = fn method, args, timeout_ms ->
-      send(parent, {:browser_request, method, args, timeout_ms})
-      {:ok, %{"result" => %{"title" => "Example", "ready" => true}}}
+    request = fn
+      "browser.tabs", _args, _timeout_ms ->
+        {:ok,
+         %{
+           "tabs" => [%{"targetId" => "t1", "url" => @page_url, "active" => true}],
+           "activeTargetId" => "t1"
+         }}
+
+      method, args, timeout_ms ->
+        send(parent, {:browser_request, method, args, timeout_ms})
+        {:ok, %{"result" => %{"title" => "Example", "ready" => true}}}
     end
 
     on_update = fn update ->
@@ -363,7 +371,9 @@ defmodule CodingAgent.Tools.BrowserTest do
         on_update
       )
 
-    assert_received {:browser_request, "browser.evaluate", %{"expression" => ^expression}, 500}
+    # Pinned to the probed target, so a later tab switch cannot redirect it.
+    assert_received {:browser_request, "browser.evaluate",
+                     %{"expression" => ^expression, "targetId" => "t1"}, 500}
 
     assert result.trust == :untrusted
     assert result.details["result"]["ready"] == true
@@ -371,6 +381,110 @@ defmodule CodingAgent.Tools.BrowserTest do
     assert started.details["browser"]["sensitiveArgumentCount"] == 1
     refute inspect(started) =~ "secretReady"
     refute inspect(started) =~ "document.title"
+  end
+
+  test "browser_evaluate runs only on http:, https: and about: pages" do
+    cookie = LemonCore.Paths.home_path("cookie")
+    File.mkdir_p!(Path.dirname(cookie))
+    File.write!(cookie, "evaluate-cookie-secret\n")
+    on_exit(fn -> File.rm(cookie) end)
+    credential_url = "file://" <> URI.encode(cookie)
+    parent = self()
+
+    tabs = fn listing ->
+      fn
+        "browser.tabs", _args, _timeout ->
+          listing
+
+        method, _args, _timeout ->
+          send(parent, {:executed, method})
+          {:ok, %{"result" => "x"}}
+      end
+    end
+
+    active = fn url ->
+      {:ok,
+       %{
+         "tabs" => [%{"targetId" => "a", "url" => url, "active" => true}],
+         "activeTargetId" => "a"
+       }}
+    end
+
+    # Any page outside the allow-list (the active tab or a named target, local
+    # or extension or view-source), approved or not, or a backend that cannot
+    # say which page it would run in.
+    for {listing, params} <- [
+          {{:ok,
+            %{
+              "tabs" => [
+                %{"targetId" => "a", "url" => @page_url, "active" => false},
+                %{"targetId" => "b", "url" => credential_url, "active" => true}
+              ],
+              "activeTargetId" => "b"
+            }}, %{}},
+          {{:ok,
+            %{
+              "tabs" => [
+                %{"targetId" => "a", "url" => @page_url, "active" => true},
+                %{"targetId" => "b", "url" => "FILE://" <> cookie}
+              ],
+              "activeTargetId" => "a"
+            }}, %{"targetId" => "b"}},
+          {active.("file:///tmp/ordinary.html"), %{"allowLocalDocument" => true}},
+          {active.("data:text/html,<p>x</p>"), %{}},
+          {active.("blob:https://example.com/123"), %{}},
+          {active.("chrome-extension://abc/page.html"), %{}},
+          {active.("view-source:https://example.com/"), %{}},
+          {active.("devtools://devtools/bundled/inspector.html"), %{}},
+          {active.("not a url"), %{}},
+          {{:ok, %{"tabs" => [%{"targetId" => "a", "active" => true}]}}, %{}},
+          {{:ok, %{"tabs" => [%{"targetId" => "a", "url" => @page_url}]}}, %{"targetId" => "z"}},
+          {{:error, {:unsupported_camofox_method, "browser.tabs"}}, %{}}
+        ] do
+      tool = browser_tool("browser_evaluate", "/tmp", browser_request: tabs.(listing))
+      params = Map.put(params, "expression", "document.body.innerText")
+
+      assert {:error, message} = tool.execute.("call-1", params, nil, nil)
+      assert message =~ "browser_evaluate refused"
+      assert message =~ "http:, https:"
+      refute_received {:executed, _}
+    end
+  end
+
+  test "browser_evaluate allows http:, https: and about: pages" do
+    for url <- ["http://example.com/", "HTTPS://example.com/", "about:blank"] do
+      parent = self()
+
+      request = fn
+        "browser.tabs", _args, _timeout ->
+          {:ok,
+           %{
+             "tabs" => [%{"targetId" => 7, "url" => url, "active" => true}],
+             "activeTargetId" => 7
+           }}
+
+        method, args, _timeout ->
+          send(parent, {:executed, method, args})
+          {:ok, %{"result" => 1}}
+      end
+
+      tool = browser_tool("browser_evaluate", "/tmp", browser_request: request)
+      refute match?({:error, _}, tool.execute.("call-1", %{"expression" => "1"}, nil, nil))
+      assert_received {:executed, "browser.evaluate", %{"targetId" => "7"}}
+    end
+
+    # A backend guard's refusal sentinel is an error, never a result.
+    sentinel = fn
+      "browser.tabs", _args, _timeout ->
+        {:ok, %{"tabs" => [%{"targetId" => "a", "url" => @page_url, "active" => true}]}}
+
+      _method, _args, _timeout ->
+        {:ok, %{"result" => %{"__lemon_refused" => true}}}
+    end
+
+    tool = browser_tool("browser_evaluate", "/tmp", browser_request: sentinel)
+    assert {:error, message} = tool.execute.("call-1", %{"expression" => "1"}, nil, nil)
+    assert message =~ "only on http:, https: and about:"
   end
 
   test "browser_hover forwards selector and keeps progress redacted" do
@@ -868,6 +982,58 @@ defmodule CodingAgent.Tools.BrowserTest do
         refute match?({:error, _}, result)
         assert_received {:args, %{"allowLocalDocument" => true}}
       end
+    end
+
+    test "Lemon credential documents are refused even with allowLocalDocument" do
+      cookie = LemonCore.Paths.home_path("cookie")
+      File.mkdir_p!(Path.dirname(cookie))
+      File.write!(cookie, "browser-cookie-secret\n")
+      on_exit(fn -> File.rm(cookie) end)
+      url = "file://" <> URI.encode(cookie)
+      approved = %{"allowLocalDocument" => true}
+
+      for name <- ["browser_navigate", "browser_tab_open"] do
+        tool =
+          browser_tool(name, "/tmp",
+            browser_request: fn _, _, _ -> flunk("navigation reached the backend") end
+          )
+
+        assert {:error, message} =
+                 tool.execute.("call-1", Map.put(approved, "url", url), nil, nil)
+
+        assert message =~ "credential"
+      end
+
+      # An attached tab (or back-navigation) already showing the credential.
+      for {name, payload} <- [
+            {"browser_get_content", %{"url" => url, "text" => "browser-cookie-secret"}},
+            {"browser_snapshot", %{"snapshot" => "URL: #{url}\n\nbrowser-cookie-secret"}},
+            {"browser_screenshot",
+             %{"url" => url, "contentType" => "image/png", "base64" => Base.encode64("png")}}
+          ] do
+        tool = browser_tool(name, "/tmp", browser_request: fn _, _, _ -> {:ok, payload} end)
+        assert {:error, message} = tool.execute.("call-1", approved, nil, nil)
+        assert message =~ "credential"
+        refute message =~ "browser-cookie-secret"
+      end
+
+      # A project that encloses the Lemon home cannot upload its credentials.
+      home = LemonCore.Paths.home_dir()
+
+      upload =
+        browser_tool("browser_upload_file", home,
+          browser_request: fn _, _, _ -> flunk("upload reached the backend") end
+        )
+
+      assert {:error, message} =
+               upload.execute.(
+                 "call-1",
+                 %{"selector" => "#f", "path" => ".lemon/cookie"},
+                 nil,
+                 nil
+               )
+
+      assert message =~ "credential"
     end
   end
 

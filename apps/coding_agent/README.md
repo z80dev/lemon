@@ -188,7 +188,8 @@ startup/config-registration operations (`init`, `reset`, `register`,
 | `CodingAgent.ExecutionNode.Worker` | Authenticates to a controller, maintains the connection with application-level health keepalives, and executes targeted, versioned `coding_agent.run` requests through `CodingAgent.Executor` |
 | `CodingAgent.ExecutionNode.Socket` | Stable WebSocket owner with timer-driven reconnects and interruptible backoff |
 | `CodingAgent.ExecutionNode.Socket.Transport` | One authenticated WebSocket connection, handshakes, requests, responses, and node events |
-| `CodingAgent.ExecutionNode.TokenStore` | Stores durable-node-ID-keyed session and recovery credentials under `~/.lemon/nodes/execution/` with a mode-0700 directory and mode-0600 files; migrates compatible legacy name-keyed records |
+| `CodingAgent.ExecutionNode.TokenStore` | Stores durable-node-ID-keyed session and recovery credentials under `~/.lemon/nodes/execution/` (the Lemon home's `nodes/execution`) with a mode-0700 directory and mode-0600 files; migrates compatible legacy name-keyed records |
+| `LemonCore.CredentialPaths` | Single choke point keeping model-directed tools out of Lemon credential files (node tokens, secrets master key and store, cookie, `env`/`.env`, web key base, control-plane tokens, bot keys): every reader checks the file it opens (symlink-, case- and hard-link-aware, after selector parsing), scanners skip them, directory mutations containing them are refused, and bash/eval text naming them is refused best effort. Not an OS boundary: tools run as Lemon's OS user |
 | `CodingAgent.Executor.RemoteRequestCodec` | Restricts the cross-node boundary to JSON-safe execution request/result fields and destination-cwd intent |
 
 ### Tool System

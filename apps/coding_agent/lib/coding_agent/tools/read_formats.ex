@@ -57,6 +57,8 @@ defmodule CodingAgent.Tools.ReadFormats do
     ReadSvg
   }
 
+  alias LemonCore.CredentialPaths
+
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -68,6 +70,8 @@ defmodule CodingAgent.Tools.ReadFormats do
          :ok <- validate_params(path, params) do
       resolved = PathHelpers.resolve_path(path, cwd, opts)
 
+      # Selector suffixes (`?q=`, `:table`, `:member`) hide the backing file's
+      # identity from the whole-path check, so the parsed file is checked again.
       cond do
         File.dir?(resolved) ->
           read_directory(resolved, params, signal, cwd, opts)
@@ -77,16 +81,24 @@ defmodule CodingAgent.Tools.ReadFormats do
 
         json = ReadJson.split_path(resolved) ->
           {file, query} = json
-          ReadJson.read(file, query, resolved, params, signal, opts)
+
+          with :ok <- CredentialPaths.check_read(file),
+               do: ReadJson.read(file, query, resolved, params, signal, opts)
 
         sqlite = ReadSqlite.split_path(resolved) ->
           {db, sub_path, query} = sqlite
-          ReadSqlite.read(db, sub_path, query, params, signal, opts)
+
+          with :ok <- CredentialPaths.check_read(db),
+               do: ReadSqlite.read(db, sub_path, query, params, signal, opts)
 
         true ->
           case ReadArchive.split_path(resolved) do
-            {archive, member} -> ReadArchive.read(archive, member, params, signal, opts)
-            nil -> :not_supported
+            {archive, member} ->
+              with :ok <- CredentialPaths.check_read(archive),
+                   do: ReadArchive.read(archive, member, params, signal, opts)
+
+            nil ->
+              :not_supported
           end
       end
     end
@@ -99,9 +111,16 @@ defmodule CodingAgent.Tools.ReadFormats do
   defdelegate image_backend(cwd), to: ReadImage, as: :backend
 
   @doc false
+  # Every rich reader opens its source after this check.
   def check_input(path, opts) do
     max_bytes = Keyword.get(opts, :format_max_input_bytes, 128 * 1024 * 1024)
 
+    with :ok <- CredentialPaths.check_read(path) do
+      check_input_stat(path, max_bytes)
+    end
+  end
+
+  defp check_input_stat(path, max_bytes) do
     case File.stat(path) do
       {:ok, %{type: :regular, size: size}} when size <= max_bytes ->
         :ok

@@ -758,7 +758,9 @@ defmodule LemonCore.Checkpoint do
     with {:ok, budget} <- consume_budget(budget, 0, depth) do
       case File.lstat(path) do
         {:ok, %File.Stat{type: :regular, size: size, mode: mode} = stat} ->
-          with :ok <- check_file_size(path, size, budget.max_bytes),
+          # A checkpoint never copies (or fingerprints) a Lemon credential file.
+          with :ok <- credential_check(path),
+               :ok <- check_file_size(path, size, budget.max_bytes),
                {:ok, budget} <- reserve_bytes(budget, size),
                {:ok, content} <- read_snapshot_content(path, fingerprint?, size),
                {:ok, current} <- File.lstat(path),
@@ -810,6 +812,13 @@ defmodule LemonCore.Checkpoint do
 
   defp check_file_size(_path, size, max) when size <= max, do: :ok
   defp check_file_size(path, size, max), do: {:error, {:file_too_large, path, size, max}}
+
+  defp credential_check(path) do
+    case LemonCore.CredentialPaths.check_read(path) do
+      :ok -> :ok
+      {:error, _message} -> {:error, {:protected_credential, path}}
+    end
+  end
 
   defp read_snapshot_content(path, fingerprint?, size) do
     case File.open(path, [:read, :binary], fn io ->

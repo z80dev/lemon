@@ -9,7 +9,7 @@ defmodule CodingAgent.Tools.Browser do
   alias LemonAi.Types.{ImageContent, TextContent}
   alias LemonBrowser.Artifacts
   alias LemonBrowser.RoutePolicy
-  alias LemonCore.TrustedRoot
+  alias LemonCore.{CredentialPaths, TrustedRoot}
   alias LemonSkills.Tools.MediaAnalyzeImage
 
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -199,7 +199,58 @@ defmodule CodingAgent.Tools.Browser do
     end
   end
 
+  # JavaScript can read and transmit the document it runs in, so the target
+  # page is checked before anything executes: a fresh tab listing from the
+  # backend (Node, Tern and Camofox all report tab URLs) names the page. Only
+  # http:, https: and about: pages are allowed, whatever allowLocalDocument
+  # says; every other scheme (file:, data:, blob:, extension, view-source,
+  # devtools, unknown) fails closed. The request is pinned to the probed target,
+  # and the backends re-check the scheme in the evaluation itself. No URL, no
+  # evaluation.
+  @evaluable_schemes ["http", "https", "about"]
+
+  defp prepare_browser_request(%{method: "browser.evaluate"} = request, _cwd, runtime) do
+    refusal =
+      "browser_evaluate refused: the backend did not report the target page URL, so an " <>
+        "http:, https: or about: page cannot be confirmed"
+
+    with {:ok, %{"tabs" => tabs} = listing} when is_list(tabs) <-
+           runtime.browser_request.("browser.tabs", %{}, request.timeout_ms),
+         %{"url" => url, "targetId" => target} when is_binary(url) and not is_nil(target) <-
+           evaluate_target(tabs, request.args["targetId"] || listing["activeTargetId"]) do
+      if evaluable_url?(url) do
+        {:ok, %{request | args: Map.put(request.args, "targetId", to_string(target))}}
+      else
+        {:error,
+         "browser_evaluate refused: JavaScript evaluation runs only on http:, https: and " <>
+           "about: pages (allowLocalDocument does not apply)"}
+      end
+    else
+      _ -> {:error, refusal}
+    end
+  end
+
   defp prepare_browser_request(request, _cwd, _runtime), do: {:ok, request}
+
+  defp evaluable_url?(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{scheme: scheme} when is_binary(scheme) -> String.downcase(scheme) in @evaluable_schemes
+      _ -> false
+    end
+  end
+
+  defp evaluate_target(tabs, target) when is_binary(target) or is_integer(target) do
+    Enum.find(tabs, &(is_map(&1) and to_string(&1["targetId"]) == to_string(target)))
+  end
+
+  defp evaluate_target(tabs, nil) do
+    case Enum.filter(tabs, &(is_map(&1) and &1["active"] == true)) do
+      [tab] -> tab
+      _ -> nil
+    end
+  end
+
+  defp evaluate_target(_tabs, _target), do: nil
 
   defp execute_browser_analyze(request, signal, on_update, cwd, runtime, tool_name) do
     with {:ok, request} <- resolve_analyze_path(request, cwd, runtime),
@@ -263,7 +314,7 @@ defmodule CodingAgent.Tools.Browser do
         with {:ok, url} <- required_string(params, ["url"]),
              {:ok, network_policy} <-
                RoutePolicy.validate_navigation(url, optional_string(params, ["route"])),
-             :ok <- check_local_navigation(network_policy, params) do
+             :ok <- check_local_navigation(url, network_policy, params) do
           {:ok,
            %{
              method: "browser.navigate",
@@ -322,7 +373,7 @@ defmodule CodingAgent.Tools.Browser do
 
         with {:ok, network_policy} <-
                RoutePolicy.validate_navigation(url, optional_string(params, ["route"])),
-             :ok <- check_local_navigation(network_policy, params) do
+             :ok <- check_local_navigation(url, network_policy, params) do
           {:ok,
            %{
              method: "browser.tabOpen",
@@ -777,7 +828,7 @@ defmodule CodingAgent.Tools.Browser do
       name: "browser_evaluate",
       label: "Browser Evaluate",
       description:
-        "Evaluate a JavaScript expression in the current page context and return untrusted JSON-serializable output.",
+        "Evaluate a JavaScript expression in the current page context and return untrusted JSON-serializable output. Available only on http:, https: and about: pages.",
       parameters: %{
         "type" => "object",
         "properties" => %{
@@ -1141,7 +1192,8 @@ defmodule CodingAgent.Tools.Browser do
   defp validate_upload_file_path(path, cwd) do
     expanded = PathHelpers.resolve_path(path, cwd)
 
-    with {:ok, root} <- TrustedRoot.realpath(cwd),
+    with :ok <- CredentialPaths.check_read(expanded),
+         {:ok, root} <- TrustedRoot.realpath(cwd),
          {:ok, real} <- TrustedRoot.realpath(expanded) do
       cond do
         not TrustedRoot.inside?(real, root) ->
@@ -1158,6 +1210,7 @@ defmodule CodingAgent.Tools.Browser do
           {:error, "browser_upload_file path must be an existing file"}
       end
     else
+      {:error, message} when is_binary(message) -> {:error, message}
       _ -> {:error, "browser_upload_file path must be an existing file"}
     end
   end
@@ -1780,20 +1833,84 @@ defmodule CodingAgent.Tools.Browser do
     if local_document_approved?(params), do: Map.put(args, "allowLocalDocument", true), else: args
   end
 
-  defp check_local_navigation(%{scheme: scheme}, params) when scheme in @local_document_schemes do
-    if local_document_approved?(params),
-      do: :ok,
-      else:
+  # Lemon credential files are refused whatever the approval: allowLocalDocument
+  # covers ordinary local documents only.
+  defp check_local_navigation(url, %{scheme: scheme}, params)
+       when scheme in @local_document_schemes do
+    cond do
+      match?({:error, _}, check_credential_document(url)) ->
+        check_credential_document(url)
+
+      local_document_approved?(params) ->
+        :ok
+
+      true ->
         {:error,
          "browser navigation to a #{scheme}: document requires allowLocalDocument: true (approval-gated)"}
+    end
   end
 
-  defp check_local_navigation(_policy, _params), do: :ok
+  defp check_local_navigation(_url, _policy, _params), do: :ok
 
-  defp check_local_document_read(_result, %{local_document_approved: true}), do: :ok
+  # Applies to every content read, approved or not, so an attached tab or a
+  # back-navigation that already shows a credential file is refused too.
+  defp check_local_document_read(result, request) do
+    with :ok <- check_credential_read(result, request) do
+      check_local_document_approval(result, request)
+    end
+  end
+
+  defp check_credential_read(result, %{method: "browser.screenshot"}) when is_map(result) do
+    case result_page_url(result) do
+      nil ->
+        {:error,
+         "browser capture refused: the backend did not report the page URL, so a Lemon credential document cannot be ruled out"}
+
+      url ->
+        check_credential_document(url)
+    end
+  end
+
+  defp check_credential_read(result, %{method: method})
+       when method in ["browser.snapshot", "browser.getContent"] and is_map(result),
+       do: check_credential_document(result_page_url(result))
+
+  # A backend's in-document guard refuses with a plain sentinel value rather
+  # than an exception built from page-mutable constructors.
+  defp check_credential_read(%{"result" => %{"__lemon_refused" => true}}, %{
+         method: "browser.evaluate"
+       }),
+       do:
+         {:error,
+          "browser_evaluate refused: JavaScript evaluation runs only on http:, https: and " <>
+            "about: pages"}
+
+  defp check_credential_read(_result, _request), do: :ok
+
+  defp check_credential_document(url) when is_binary(url) do
+    case URI.parse(String.trim(url)) do
+      %URI{scheme: scheme, path: path} when is_binary(scheme) and is_binary(path) ->
+        if String.downcase(scheme) == "file" do
+          case CredentialPaths.check_read(URI.decode(path)) do
+            :ok -> :ok
+            {:error, _} -> {:error, "browser refused: the document is a Lemon credential file"}
+          end
+        else
+          :ok
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp check_credential_document(_url), do: :ok
+
+  defp check_local_document_approval(_result, %{local_document_approved: true}), do: :ok
 
   # A capture must say which document it shows; every backend reports `url`.
-  defp check_local_document_read(result, %{method: "browser.screenshot"}) when is_map(result) do
+  defp check_local_document_approval(result, %{method: "browser.screenshot"})
+       when is_map(result) do
     case result_page_url(result) do
       nil ->
         {:error,
@@ -1804,11 +1921,11 @@ defmodule CodingAgent.Tools.Browser do
     end
   end
 
-  defp check_local_document_read(result, %{method: method})
+  defp check_local_document_approval(result, %{method: method})
        when method in ["browser.snapshot", "browser.getContent"] and is_map(result),
        do: refuse_local_document(result_page_url(result))
 
-  defp check_local_document_read(_result, _request), do: :ok
+  defp check_local_document_approval(_result, _request), do: :ok
 
   defp refuse_local_document(url) do
     if local_document_url?(url) do

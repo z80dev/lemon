@@ -528,11 +528,41 @@ defmodule LemonBrowser.TernSession do
     end
   end
 
+  # Evaluation runs only on http:, https: and about: pages. This trusted
+  # function is the whole source sent to Tern; the model's expression is its
+  # argument (data), so it cannot hoist declarations into the guard. `location`
+  # is the global binding (a non-configurable, unforgeable window property) and
+  # `protocol` an unforgeable accessor of the document's own Location, so a page
+  # replaced after the caller's probe still refuses. The guard body touches
+  # nothing page-mutable: the refusal is a plain object literal.
+  #
+  # Scope: the function is compiled in the page (Tern's compile path is not in
+  # this repo; Playwright's goes through the page's own `eval`), so the
+  # guarantee covers documents that run no page script, which includes every
+  # rendered Lemon credential file. The expression runs through the page's
+  # `eval` as a script and yields its last value; a page whose CSP forbids
+  # `eval` (no `unsafe-eval`, Trusted Types) may refuse evaluation, which fails
+  # closed.
+  @evaluate_script """
+  function (src) {
+    var scheme = location.protocol;
+    if (scheme !== 'http:' && scheme !== 'https:' && scheme !== 'about:') { return {__lemon_refused: true}; }
+    return (0, eval)(src);
+  }
+  """
+
   defp page_request("browser.evaluate", args, state) do
     with {:ok, expression} <- required_string(args["expression"] || args["script"], "expression"),
-         {:ok, value} <-
-           evaluate(state, "function () { return (" <> expression <> "\n); }", [], "page") do
-      {:ok, %{"result" => value}}
+         {:ok, value} <- evaluate(state, @evaluate_script, [expression], "page") do
+      case value do
+        %{"__lemon_refused" => true} ->
+          {:error,
+           {:invalid,
+            "browser.evaluate refused: JavaScript evaluation runs only on http:, https: and about: pages"}}
+
+        value ->
+          {:ok, %{"result" => value}}
+      end
     end
   end
 
@@ -1016,6 +1046,9 @@ defmodule LemonBrowser.TernSession do
       :ok
     end
   end
+
+  @doc false
+  def evaluate_script, do: @evaluate_script
 
   defp evaluate(state, source, args, world) do
     case op(state, "eval", %{"function" => source, "args" => args, "world" => world}) do

@@ -5,6 +5,7 @@ defmodule CodingAgent.Tools.Conflicts do
   alias CodingAgent.Tools.{ACPFileBridge, FileValidation, PathHelpers}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
+  alias LemonCore.CredentialPaths
 
   @max_bytes 4 * 1024 * 1024
 
@@ -13,6 +14,7 @@ defmodule CodingAgent.Tools.Conflicts do
 
     with {:ok, scope} <- scope(opts),
          :ok <- local_only(opts),
+         :ok <- CredentialPaths.check_read(path),
          {:ok, content} <- read_content(path),
          {:ok, regions} <- scan(content) do
       FileReadTracker.record(opts, path, content)

@@ -880,20 +880,77 @@ startup and hand them to `lemon node` only on an anonymous pipe (fd 3) that
 the VM drains before any application starts; nothing is written to disk, and
 an unreadable handoff refuses to start. They never appear in the VM's initial
 environment (`/proc/<pid>/environ`, `ps -E`) or in any child process.
-Node child processes (bash, PTY, process, eval, debug,
-host commands, task-worktree Git and stdio MCP servers) never inherit
-`LEMON_NODE_*TOKEN*`, `LEMON_SECRETS_*` or `LEMON_*_API_KEY` variables;
-ordinary provider keys such as `OPENAI_API_KEY` are still inherited.
+Node child processes (bash, PTY, process, eval, debug, language servers,
+host commands, task-worktree Git and stdio MCP servers) never inherit Lemon
+secrets: every `LEMON_*` variable with a `_`-separated word `TOKEN`, `SECRET`,
+`SECRETS`, `KEY`, `COOKIE`, `PASSWORD`, `PASSPHRASE`, `PASS`, `AUTH`,
+`CREDENTIAL` or `CREDENTIALS` (node, operator, WebSocket and bot tokens,
+secret-store master keys, web signing keys, `LEMON_*_API_KEY`), any
+`LEMON_NODE_*TOKEN*` variable, and the `RELEASE_COOKIE` distribution cookie.
+Ordinary provider keys such as `OPENAI_API_KEY` are still inherited.
 
-These protections keep credentials out of child environments only. Node
-tools run as the same OS user as the node, so they can still read anything
-that user can: the stored node session and recovery tokens under
-`~/.lemon/nodes/execution/`, and the memory of the node process. Running the
+The credential store directory `~/.lemon/nodes/execution/` (under the Lemon
+home, `$HOME/.lemon`) is mode 0700 with mode-0600 files. Model-directed tools
+treat it, and every other Lemon credential file, as off limits:
+
+- `nodes/execution/` (node session and recovery tokens);
+- the secrets master key (`secrets_master_key`, or the configured `key_file`);
+- the encrypted secrets store: `store/` and the configured store database with
+  its `-wal`, `-shm` and `-journal` files;
+- `cookie` (Erlang distribution cookie) and `web_secret_key_base`;
+- `env` and the runtime `.env` (`LEMON_DOTENV_DIR/.env` when set);
+- control-plane operator tokens: `run/*.token` and the launcher's
+  `run/.control-plane-*` temporaries (logs and pid files in `run/` stay
+  readable);
+- the bot backend's `master.key`, `local-access.key` and its
+  `.local-access.key.*` temporaries, in `lemon_bot/` and in
+  `$LEMON_BOT_DATA_DIR`.
+
+Lemon keeps no MCP OAuth token cache on disk. `LemonCore.CredentialPaths` is
+the single check every model-reachable reader consults before it opens a file:
+file tools (`read`, including JSON, SQLite and archive selectors, `write`,
+`edit`, `patch`, `ls`, `grep`, `find`, `ast_grep`), `semantic_find`, LSP
+document synchronization and location excerpts, media analysis and
+transcription inputs, and browser `file:` navigation, content reads, captures
+and uploads (`allowLocalDocument` does not override it, including for tabs that
+already show such a document). Paths are compared after resolving symlinks and
+`..` the way the kernel does, also catching case-folded spellings and hard
+links; searches over a parent directory skip them. Creating, renaming or
+deleting a directory that contains a credential path is refused, and
+filesystem checkpoints never copy a credential file. `bash` (command text,
+`cwd` and `env`) and `eval` (cell code) refuse text that names them; that check
+is best effort, because a shell can build the path at run time.
+
+None of this is an OS boundary. Node tools run as the same OS user as the
+node, so code they run (bash, eval, process, PTY) can still read anything that
+user can: the stored session and recovery tokens and the other files above,
+the node VM's initial environment (`/proc/<pid>/environ`, `ps -E`), and, where
+the OS allows same-user debugging, the memory of the node process. Running the
 node under a dedicated account does not change this, because its tools still
-share that account. Keeping these credentials from the node's own tools needs
-an enforced OS boundary between the credential owner and the execution
-children (for example, tools sandboxed or run as a different user); Lemon does
-not provide one yet.
+share that account; Lemon does not run tools as a separate user. When a node's
+credentials must stay out of reach of its tools:
+
+- withhold code execution with `LEMON_NODE_CAPABILITIES`, for example
+  `read,write,edit,ls,grep,find`, so the only tools that reach the node are the
+  ones that enforce the credential deny-list;
+- run the node under a dedicated OS account that holds nothing else of value;
+- if a node may have been compromised, re-pair it with `--pair` (which rotates
+  the session and revokes older tokens and live sockets) or remove it on the
+  controller.
+
+Design notes for a separate tool user (not implemented). Prefixing tool
+commands with `sudo -u TOOLUSER` is not enough: the node user cannot signal
+processes owned by another user, so process-group teardown, timeouts and
+liveness checks fail with `EPERM`, and a `SIGKILL` to `sudo` orphans the
+command. A correct design needs a runner process that runs as the tool user
+(started by root or the service manager, not setuid) and listens on a Unix
+socket only the node user can reach. The node sends it spawn requests (argv,
+cwd, scrubbed env, stdio passed as file descriptors) and it owns the resulting
+process groups: it delivers signals, enforces deadlines and reports exit and
+group status. `LemonCore.NativeProcess` and `LemonCore.ProcessGroup` route
+every tool launch and teardown through it. The credential files stay owned by
+the node user (mode 0700/0600) and the workspace is shared through a group, so
+tools keep their files and lose the credentials.
 
 `LEMON_NODE_CAPABILITIES` (or `--capabilities`) sets the destination-local tool
 ceiling to `all` or a comma-separated list such as `read,write,bash`. Every

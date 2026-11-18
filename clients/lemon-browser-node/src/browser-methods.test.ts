@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import type { Page } from 'playwright-core';
 
-import { handleBrowserMethod } from './browser-methods.js';
+import { guardedEvaluate, handleBrowserMethod, isEvaluateRefusal } from './browser-methods.js';
 
 type Listener = (payload: unknown) => void;
 
@@ -191,18 +192,117 @@ describe('handleBrowserMethod extra controls', () => {
     expect(calls).toEqual([{ selector: '#ready', opts: { timeout: 250 } }]);
   });
 
-  it('evaluates a page expression', async () => {
-    const page = {
-      evaluate: async (expression: string) => {
-        return { expression, ready: true };
+  // Runs the page function the way Playwright does: its own source is compiled
+  // in the document's global scope and called with the expression as argument.
+  // `protocolAtRun` is the document that actually executes it.
+  function documentPage(urlAtCheck: string, protocolAtRun: string, leaked: string[], globals = {}) {
+    return {
+      url: () => urlAtCheck,
+      evaluate: async (fn: (src: string) => unknown, src: string) =>
+        vm.runInNewContext(`(${fn.toString()})(lemonArgument)`, {
+          location: { protocol: protocolAtRun },
+          leak: (value: string) => leaked.push(value),
+          window: { ready: true },
+          document: { body: { innerText: 'credential bytes' } },
+          lemonArgument: src,
+          ...globals,
+        }),
+    } as unknown as Page;
+  }
+
+  it('evaluates a page expression after the in-document guard', async () => {
+    for (const [url, protocol] of [
+      ['https://example.com/', 'https:'],
+      ['http://example.com/', 'http:'],
+      ['about:blank', 'about:'],
+    ]) {
+      const page = documentPage(url, protocol, []);
+      expect(
+        await handleBrowserMethod(page, 'browser.evaluate', { expression: '(() => window.ready)()' }),
+      ).toEqual({ result: true });
+      // Statement-form scripts keep their completion value.
+      expect(await handleBrowserMethod(page, 'browser.evaluate', { expression: 'const x = 2; x * 3' })).toEqual({
+        result: 6,
+      });
+    }
+  });
+
+  it('evaluates only on http:, https: and about: pages, whatever allowLocalDocument says', async () => {
+    for (const url of [
+      'file:///home/u/.lemon/cookie',
+      'data:text/html,x',
+      'blob:https://e.com/1',
+      'chrome-extension://abc/page.html',
+      'view-source:https://example.com/',
+      'devtools://devtools/bundled/inspector.html',
+      'not a url',
+    ]) {
+      let evaluated = 0;
+      const page = {
+        url: () => url,
+        evaluate: async () => {
+          evaluated += 1;
+          return 'secret';
+        },
+      } as unknown as Page;
+
+      await expect(
+        handleBrowserMethod(page, 'browser.evaluate', { expression: 'document.body.innerText', allowLocalDocument: true }),
+      ).rejects.toThrow(/browser\.evaluate refused/);
+      expect(evaluated).toBe(0);
+    }
+  });
+
+  it('refuses when the page navigates to another scheme between authorization and execution', async () => {
+    for (const protocol of ['file:', 'data:', 'blob:', 'chrome-extension:', 'view-source:']) {
+      const leaked: string[] = [];
+      // Lemon's probe and the driver check both saw https; the document that
+      // actually runs the guard is the replacement.
+      const page = documentPage('https://example.com/', protocol, leaked);
+
+      await expect(
+        handleBrowserMethod(page, 'browser.evaluate', { expression: 'leak(document.body.innerText), 1' }),
+      ).rejects.toThrow(/only on http:, https: and about:/);
+      expect(leaked).toEqual([]);
+    }
+  });
+
+  it('hoisted declarations in the expression cannot reach the guard', async () => {
+    const hostile = [
+      'leak(document.body.innerText); function location() {}',
+      'function Error() { leak("error constructor"); } leak(document.body.innerText)',
+      'leak(document.body.innerText); var location = { protocol: "https:" }',
+    ];
+
+    for (const expression of hostile) {
+      const leaked: string[] = [];
+      const page = documentPage('https://example.com/', 'file:', leaked);
+      await expect(handleBrowserMethod(page, 'browser.evaluate', { expression })).rejects.toThrow(
+        /only on http:, https: and about:/,
+      );
+      expect(leaked).toEqual([]);
+    }
+
+    // Guard body only: this harness compiles the guard directly, so it shows
+    // the body itself never calls a page-replaced eval or Error. Playwright
+    // compiles the guard through the page's own eval, so a document running
+    // its own script is out of scope (credential files run none).
+    const leaked: string[] = [];
+    const page = documentPage('https://example.com/', 'file:', leaked, {
+      eval: () => leaked.push('replaced eval'),
+      Error: function () {
+        leaked.push('replaced Error');
       },
-    } as any;
-
-    const result = await handleBrowserMethod(page, 'browser.evaluate', {
-      expression: '(() => window.ready)()',
     });
+    await expect(handleBrowserMethod(page, 'browser.evaluate', { expression: '1' })).rejects.toThrow(
+      /only on http:, https: and about:/,
+    );
+    expect(leaked).toEqual([]);
 
-    expect(result).toEqual({ result: { expression: '(() => window.ready)()', ready: true } });
+    // The refusal path constructs nothing through page globals.
+    expect(guardedEvaluate.toString()).not.toMatch(/\bnew\b|Error|globalThis/);
+    expect(isEvaluateRefusal({ __lemon_refused: true })).toBe(true);
+    expect(isEvaluateRefusal({ result: 1 })).toBe(false);
   });
 
   it('hovers a selector', async () => {

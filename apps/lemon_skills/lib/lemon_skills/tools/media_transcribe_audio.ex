@@ -205,7 +205,9 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   end
 
   defp audio_file(%{"audioPath" => path}, cwd) when is_binary(path) do
+    # Lexical confinement follows symlinks on read; the credential check does not.
     with {:ok, resolved} <- resolve_audio_path(path, cwd),
+         :ok <- LemonCore.CredentialPaths.check_read(resolved),
          {:ok, stat} <- File.stat(resolved),
          :ok <- regular_audio_file(stat),
          :ok <- audio_size(stat),
