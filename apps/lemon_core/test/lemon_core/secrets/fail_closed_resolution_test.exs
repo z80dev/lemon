@@ -143,6 +143,42 @@ defmodule LemonCore.Secrets.FailClosedResolutionTest do
     assert Secrets.fetch_value(@name, project_dir: project) == nil
   end
 
+  test "an invalid config elsewhere still honours a valid [secrets] table", ctx do
+    global = Path.join(ctx.tmp_dir, "global.toml")
+    project = Path.join(ctx.tmp_dir, "project")
+    File.mkdir_p!(project)
+    Application.put_env(:lemon_core, :paths, global_config: global)
+
+    # A provider table that fails runtime validation is unrelated to secrets:
+    # a definite store miss still reaches env when no source is enabled ...
+    File.write!(global, ~s([providers.openai-codex]\napi_key = "inline"\n))
+    assert_raise LemonCore.Config.ValidationError, fn -> LemonCore.Config.cached(project) end
+    assert {:ok, @ambient, :env} = Secrets.resolve(@name, project_dir: project)
+
+    # ... and an enabled source in the same file is still consulted first.
+    File.write!(global, """
+    [providers.openai-codex]
+    api_key = "inline"
+
+    [secrets.sources.stub]
+    type = "command"
+    enabled = true
+    argv = ["#{ctx.stub}", "value", "#{ctx.marker}"]
+    """)
+
+    LemonCore.ConfigCache.invalidate(project)
+
+    assert {:ok, @external, "external:command:stub"} =
+             Secrets.resolve(@name, project_dir: project)
+
+    # Unreadable TOML leaves the source configuration unknown: fail closed.
+    File.write!(global, "[secrets\n")
+    LemonCore.ConfigCache.invalidate(project)
+
+    assert {:error, {:external_source, :invalid_config}} =
+             Secrets.resolve(@name, project_dir: project)
+  end
+
   test "a two-ref 1Password source asked for one name runs one op read", ctx do
     source = op_source(ctx.stub, ctx.marker, timeout_ms: 5_000)
 

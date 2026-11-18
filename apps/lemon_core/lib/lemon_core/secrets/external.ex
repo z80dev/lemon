@@ -123,10 +123,26 @@ defmodule LemonCore.Secrets.External do
 
       _ ->
         project_dir = Keyword.get(opts, :project_dir) || Keyword.get(opts, :cwd) || File.cwd!()
-        LemonCore.Config.cached(project_dir).secrets
+        runtime_secrets_config(project_dir)
     end
+  end
+
+  # The cached runtime config refuses to load when any section fails
+  # validation. A problem elsewhere (say a provider table) says nothing about
+  # `[secrets]`, so re-read just that table from the same trust-filtered
+  # merge. Only when that also fails (unreadable or invalid TOML) is the
+  # source configuration unknown, which fails closed as `:invalid_config`.
+  defp runtime_secrets_config(project_dir) do
+    LemonCore.Config.cached(project_dir).secrets
   rescue
-    _ -> %SecretsConfig{errors: ["secrets: configuration could not be loaded"]}
+    _ ->
+      try do
+        project_dir
+        |> LemonCore.Config.Modular.merged_settings()
+        |> SecretsConfig.resolve()
+      rescue
+        _ -> %SecretsConfig{errors: ["secrets: configuration could not be loaded"]}
+      end
   end
 
   defp enabled_sources(%SecretsConfig{sources: sources}) do
