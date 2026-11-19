@@ -211,6 +211,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Model file tools, browser and media outputs and checkpoint restore refuse
+  Lemon operator state (`~/.lemon`, the agent directory, configured
+  config/key/store/checkpoint/bot paths, extension roots) and the toolchain
+  locations Lemon executes; global `skill_manage` changes always need approval.
+- `LemonCore.CredentialPaths` keeps Lemon credentials (node tokens, secrets
+  key and store, cookie, `env`, web secret, control-plane tokens, bot keys) out
+  of every model-directed reader, including rich-read selectors, search, LSP,
+  media inputs and browser `file:` pages; child processes and language servers
+  get a scrubbed environment; `browser_evaluate` runs only on `http:`, `https:`
+  and `about:` pages.
+- Confined file I/O is bound to directory descriptors through a new C helper,
+  `LemonCore.ConfinedFS`, built by `mix compile` (optional for Hex consumers,
+  which then fail closed), so a directory swapped for a symlink after
+  validation is refused.
+- LSP workspace edits recheck every operation and refuse targets outside the
+  workspace; renames never replace an existing file unless `overwrite` is set.
+- A repository can no longer set `model_routing`, profile models or
+  `secrets.yml`, and `.lemon/skills.json` can only narrow; project-chosen
+  models, roles and thinking levels (including through personas and inherited
+  parents) pass the operator's `[runtime.task]` per-call gate.
 - Secret resolution fails closed: only a definite store miss continues to
   external sources or the environment. Undecryptable, malformed or expired
   records and store, master-key or lock failures return their error, and every
