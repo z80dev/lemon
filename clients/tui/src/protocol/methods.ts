@@ -125,6 +125,7 @@ import type {
 	SessionsPreviewResult,
 	SessionsPruneParams,
 	SessionsPruneResult,
+	SessionsResetParams,
 	SessionsResetResult,
 	SessionsSnapshotParams,
 	SessionsSnapshotResult,
@@ -643,7 +644,7 @@ export class ControlPlaneMethods {
 
 	/** Destructive: never queued while offline, so it cannot run after the user stopped watching. */
 	sessionsReset(
-		params: { sessionKey: string },
+		params: SessionsResetParams,
 		options?: RequestOptions,
 	): Promise<SessionsResetResult> {
 		return this.#call<SessionsResetResult>(METHOD.sessionsReset, params, {

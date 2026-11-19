@@ -15,11 +15,16 @@ defmodule LemonCore.TestSupport.SessionCleanup do
   end
 
   def reset(session_key, opts \\ []) when is_binary(session_key) do
-    fenced(
-      session_key,
-      :reset,
-      &SessionLifecycle.reset(session_key, opts ++ [fence_generation: &1])
-    )
+    with {:ok, %{confirm_token: token}} <- SessionLifecycle.reset(session_key, dry_run: true) do
+      fenced(
+        session_key,
+        :reset,
+        &SessionLifecycle.reset(
+          session_key,
+          opts ++ [dry_run: false, confirm_token: token, fence_generation: &1]
+        )
+      )
+    end
   end
 
   defp fenced(session_key, operation, fun) do

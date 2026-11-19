@@ -64,6 +64,43 @@ defmodule LemonCore.SessionMetadataStoreTest do
     assert SessionMetadataStore.get(session_key).title == nil
   end
 
+  test "stores ACP metadata on the canonical session key, drops legacy fields, and preserves it across patches" do
+    session_key = unique_session_key()
+
+    assert :ok =
+             SessionMetadataStore.put_acp(session_key, %{
+               session_id: "acp_123",
+               session_key: session_key,
+               cwd: "/tmp/project",
+               last_run_id: "run_1",
+               cancelled_run_id: "run_0",
+               mode: "plan",
+               native_resume: "legacy-token"
+             })
+
+    assert {:ok, acp} = SessionMetadataStore.fetch_acp(session_key)
+    assert acp.session_id == "acp_123"
+    assert acp.last_run_id == "run_1"
+    refute Map.has_key?(acp, :mode)
+    refute Map.has_key?(acp, :native_resume)
+
+    assert {:ok, ^acp} = SessionMetadataStore.fetch_acp_by_id("acp_123")
+    assert [{"acp_123", ^acp}] = SessionMetadataStore.list_acp()
+
+    assert {:ok, patched} =
+             SessionMetadataStore.patch(session_key, %{title: "ACP work", pinned: true})
+
+    assert patched.title == "ACP work"
+    assert patched.pinned == true
+    assert {:ok, ^acp} = SessionMetadataStore.fetch_acp(session_key)
+
+    assert :ok = SessionMetadataStore.clear_acp_run_state(session_key)
+    assert {:ok, cleared} = SessionMetadataStore.fetch_acp(session_key)
+    assert cleared.last_run_id == nil
+    refute Map.has_key?(cleared, :cancelled_run_id)
+    assert cleared.cwd == "/tmp/project"
+  end
+
   defp clear_metadata do
     LemonCore.Store.list(:session_metadata_v1)
     |> Enum.each(fn {key, _value} -> LemonCore.Store.delete(:session_metadata_v1, key) end)

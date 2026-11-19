@@ -94,6 +94,10 @@ defmodule LemonCore.RunStore do
   @spec fetch_history(term(), keyword()) :: {:ok, list()} | {:error, term()}
   def fetch_history(session_key, opts \\ []), do: RunHistoryStore.fetch(session_key, opts)
 
+  @doc "Count retained run-history rows for a session, failing closed on owner error."
+  @spec fetch_history_count(term()) :: {:ok, non_neg_integer()} | {:error, atom()}
+  def fetch_history_count(session_key), do: RunHistoryStore.fetch_count(session_key)
+
   @doc "Session index rows for display; `[]` when the Store cannot answer."
   @spec list_sessions(Store.server()) :: [{term(), map()}]
   def list_sessions(server \\ Store) do
