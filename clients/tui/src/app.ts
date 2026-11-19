@@ -100,7 +100,7 @@ import { Banner } from "./ui/components/banner.ts";
 import { ContextPanelComponent } from "./ui/components/context-panel.ts";
 import { CustomEditor } from "./ui/components/custom-editor.ts";
 import { ModelPicker } from "./ui/components/model-picker.ts";
-import { confirmAction, PickerOverlay } from "./ui/components/pickers.ts";
+import { confirmAction, isPrintable, PickerOverlay } from "./ui/components/pickers.ts";
 import { QueuePanelComponent } from "./ui/components/queue-panel.ts";
 import { ReadinessCard } from "./ui/components/readiness-card.ts";
 import { SessionSwitcher } from "./ui/components/session-switcher.ts";
@@ -1925,6 +1925,7 @@ export class AppShell {
 					})),
 					footer: spec.footer,
 					detail: () => spec.detail,
+					onKey: spec.filterable === false ? (data) => isPrintable(data) : undefined,
 					onSelect: (item) => {
 						this.selectors.close();
 						void spec.onSelect(item);

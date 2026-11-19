@@ -978,7 +978,7 @@ defmodule LemonControlPlane.ACPTest do
       )
 
     id = created["sessionId"]
-    session = Store.get(:acp_sessions, id)
+    session = get_acp_session!(id)
     refute Map.has_key?(created, "modes")
     assert Enum.map(created["configOptions"], & &1["id"]) == ["model", "thinking", "approval"]
 
@@ -1019,7 +1019,7 @@ defmodule LemonControlPlane.ACPTest do
     assert off =~ "Plan mode off. Nothing was approved"
     assert {:ok, %{"mode" => "code"}} = plan_status(session)
 
-    persisted = Store.get(:acp_sessions, id)
+    persisted = get_acp_session!(id)
     refute Map.has_key?(persisted, :mode)
     refute Map.has_key?(persisted, :plan)
 
@@ -1044,7 +1044,7 @@ defmodule LemonControlPlane.ACPTest do
     end)
 
     id = new_session()
-    session = Store.get(:acp_sessions, id)
+    session = get_acp_session!(id)
 
     assert {:ok, _} = plan_prompt(id, "/plan  add retries to the fetcher", &send(parent, &1))
     assert_receive %{"params" => %{"update" => %{"content" => %{"text" => "Plan mode on" <> _}}}}
@@ -1070,7 +1070,7 @@ defmodule LemonControlPlane.ACPTest do
     end)
 
     session_id = new_session()
-    session = Store.get(:acp_sessions, session_id)
+    session = get_acp_session!(session_id)
     continuation = make_ref()
     handler = {__MODULE__, :permission_resolution, continuation}
 
@@ -1183,12 +1183,13 @@ defmodule LemonControlPlane.ACPTest do
   test "legacy ACP mode metadata loads without exposing or entering plan mode" do
     start_plan_runtime()
     id = new_session()
-    session = Store.get(:acp_sessions, id)
+    session = get_acp_session!(id)
 
-    Store.put(:acp_sessions, id, Map.put(session, :mode, "plan"))
+    {:ok, raw} = Store.fetch(:session_metadata_v1, session.session_key)
+    :ok = Store.put(:session_metadata_v1, session.session_key, put_in(raw, [:acp, :mode], "plan"))
     assert {:ok, result} = ACP.resume_session(%{"sessionId" => id, "cwd" => session.cwd})
     refute Map.has_key?(result, "modes")
-    refute Map.has_key?(Store.get(:acp_sessions, id), :mode)
+    refute Map.has_key?(get_acp_session!(id), :mode)
     assert {:ok, %{"mode" => "code"}} = plan_status(session)
   end
 
@@ -1283,7 +1284,7 @@ defmodule LemonControlPlane.ACPTest do
     assert %{"description" => "Show context-window usage by category"} =
              Enum.find(commands, &(&1["name"] == "context"))
 
-    session = Store.get(:acp_sessions, id)
+    session = get_acp_session!(id)
 
     assert {:ok, %{"stopReason" => "end_turn"}} =
              ACP.prompt(
@@ -1461,7 +1462,7 @@ defmodule LemonControlPlane.ACPTest do
 
   test "load replays durable conversation via notifications" do
     id = new_session()
-    session = Store.get(:acp_sessions, id)
+    session = get_acp_session!(id)
     run_id = "replay-" <> LemonCore.Id.uuid()
 
     :ok =
@@ -1513,7 +1514,7 @@ defmodule LemonControlPlane.ACPTest do
   test "replay reconciles interrupted tools only from finalized durable runs" do
     :ok = LemonCore.AgentRuntime.register(InterruptedHistory)
     id = new_session()
-    session = Store.get(:acp_sessions, id)
+    session = get_acp_session!(id)
     run_id = LemonCore.Id.run_id()
     parent = self()
     on_exit(fn -> LemonCore.RunStore.delete_session(session.session_key) end)
@@ -1600,7 +1601,7 @@ defmodule LemonControlPlane.ACPTest do
 
     assert is_binary(run_id) and run_id != ""
     assert_receive {:uncertain_run, ^run_id}
-    assert Store.get(:acp_sessions, id).last_run_id == run_id
+    assert get_acp_session!(id).last_run_id == run_id
   end
 
   defp rpc(method, params),
@@ -1668,9 +1669,14 @@ defmodule LemonControlPlane.ACPTest do
     |> put_req_header("content-type", "application/json")
   end
 
+  defp get_acp_session!(session_id) do
+    {:ok, session} = LemonCore.SessionMetadataStore.fetch_acp_by_id(session_id)
+    session
+  end
+
   defp clear_acp_session_store do
-    for {session_id, _session} <- Store.list(:acp_sessions) do
-      Store.delete(:acp_sessions, session_id)
+    for {_session_id, session} <- LemonCore.SessionMetadataStore.list_acp() do
+      LemonCore.SessionMetadataStore.delete(session.session_key)
     end
   end
 

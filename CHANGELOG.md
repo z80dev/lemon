@@ -200,6 +200,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- `sessions.reset` is preview-first and confirmation-bound: calling it without a
+  `confirmToken` (or with `dryRun: true`) mutates nothing and returns a redacted
+  state digest plus a single-use server-side `confirmToken`; confirmed resets
+  (`dryRun: false` + `confirmToken`) re-verify the live digest under the session
+  lifecycle fence and clear transient ACP run state. TUI `/reset` and
+  `/session reset` fetch the daemon preview and prompt with an interactive
+  confirmation modal defaulting to Cancel (#615).
+- Removed the shadow ACP session table and `restore_native_resume`
+  resurrection path from ACP: ACP session metadata now lives on the canonical
+  `SessionMetadataStore` record so `SessionLifecycle.delete/2` removes it,
+  post-reset ACP touches never recreate `ChatState`, and store write failures
+  after prompt submission return the run ID with `retrySafe: false` instead of
+  raising (#652).
 
 ### Removed
 

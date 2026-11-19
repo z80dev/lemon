@@ -983,13 +983,36 @@ export interface SessionsDeleteResult {
 	};
 }
 
+/** `sessions.reset` previews (`dryRun: true`) or executes a verified reset (`dryRun: false` + `confirmToken`). */
+export interface SessionsResetParams {
+	sessionKey: string;
+	dryRun?: boolean;
+	confirmToken?: string;
+}
+
+export interface SessionsResetPreview {
+	sessionKey?: string;
+	digest?: string;
+	runHistoryCount?: number;
+	hasChatState?: boolean;
+	hasSessionPolicy?: boolean;
+	hasAcpMetadata?: boolean;
+	hasAcpRunState?: boolean;
+}
+
 /** `sessions.reset` deletes the session's run history, chat state and session policy. */
 export interface SessionsResetResult {
+	dryRun?: boolean;
 	success: boolean;
 	sessionKey: string;
+	confirmToken?: string;
+	digest?: string;
+	preview?: SessionsResetPreview;
 	summary?: {
 		sessionKey?: string;
 		reset?: boolean;
+		verified?: boolean;
+		requiresConfirmation?: boolean;
 		cleanup?: Record<string, unknown>;
 	};
 }

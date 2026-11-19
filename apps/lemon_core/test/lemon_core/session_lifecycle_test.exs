@@ -669,6 +669,57 @@ defmodule LemonCore.SessionLifecycleTest do
     end
   end
 
+  test "reset previews by default without mutating and requires a matching single-use token" do
+    key = "agent:reset_unit_#{unique_suffix()}:main"
+    seed_session(key, "run-reset-1", "hello", "world")
+    :ok = ChatStateStore.put(key, %{last_engine: "lemon", last_resume_token: "tok-1"})
+    :ok = PolicyStore.put_session(key, %{model: "test-model"})
+    on_exit(fn -> cleanup_sessions([key]) end)
+
+    assert {:ok, 1} = RunStore.fetch_history_count(key)
+
+    assert {:ok, preview} = SessionLifecycle.reset(key)
+    assert preview.dry_run == true
+    assert preview.verified == false
+    assert preview.run_history_count == 1
+    assert preview.has_chat_state == true
+    assert preview.has_session_policy == true
+    assert is_binary(preview.confirm_token) and preview.confirm_token != ""
+    assert is_binary(preview.digest) and preview.digest != ""
+
+    # Preview mutates nothing.
+    assert {:ok, 1} = RunStore.fetch_history_count(key)
+    assert ChatStateStore.get(key) != nil
+    assert {:ok, %{model: "test-model"}} = PolicyStore.fetch_session(key)
+
+    # Confirming without a token is refused.
+    assert {:error, :confirmation_required} =
+             SessionLifecycle.reset(key, dry_run: false, fence_generation: "unused")
+
+    # Confirming with a valid token under a fence resets and consumes the token.
+    assert {:ok, %{verified: true, dry_run: false}} =
+             LemonCore.TestSupport.SessionCleanup.reset(key)
+
+    assert {:ok, 0} = RunStore.fetch_history_count(key)
+    assert ChatStateStore.get(key) == nil
+    assert {:ok, nil} = PolicyStore.fetch_session(key)
+
+    # Replaying the earlier preview token fails with :confirmation_mismatch.
+    assert {:ok, %{generation: gen}} =
+             LemonCore.LifecycleFenceStore.acquire(key, self(), :reset, "replay-check")
+
+    try do
+      assert {:error, :confirmation_mismatch} =
+               SessionLifecycle.reset(key,
+                 dry_run: false,
+                 confirm_token: preview.confirm_token,
+                 fence_generation: gen
+               )
+    after
+      LemonCore.LifecycleFenceStore.release(key, gen)
+    end
+  end
+
   defp seed_session(session_key, run_id, prompt, answer, events \\ [], updated_at_ms \\ nil) do
     Enum.each(events, &RunStore.append_event(run_id, &1))
 
