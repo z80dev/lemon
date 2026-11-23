@@ -171,6 +171,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- An interrupted `lemon update` (killed, crashed, or halted mid-download) no
+  longer leaves `~/.lemon/updates/.operation.lock` behind and every later update
+  failing with "Another update operation is active". Update operations use the
+  shared owner-recording lock, so the next command recovers a dead holder's lock
+  (and logs it) and removes stranded `.partial` staging directories; a live
+  holder still blocks (#683).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

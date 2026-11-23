@@ -210,6 +210,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `LemonCore.Update.ReceiptStore.with_lock/2` uses `LemonCore.Service.Lock`:
+  a holder killed without cleanup is recovered by the next operation instead of
+  returning `{:error, :update_locked}` forever, stale `.partial` staging is
+  removed on acquire, and `Service.Lock` logs every stale-owner recovery (#683).
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
   (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase

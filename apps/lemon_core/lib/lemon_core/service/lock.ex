@@ -29,6 +29,8 @@ defmodule LemonCore.Service.Lock do
   across hosts. Callbacks run once and are never retried.
   """
 
+  require Logger
+
   alias LemonCore.Service.{Identity, Role, Unit}
 
   @retry_interval_ms 10
@@ -154,6 +156,7 @@ defmodule LemonCore.Service.Lock do
          true <- owner == "owner.json" or String.match?(owner, ~r/^owner\.[0-9a-f]{32}\.json$/),
          {:ok, record} <- Identity.read_json(Path.join(path, owner)),
          true <- dead_owner?(record, identity, opts) do
+      Logger.warning("Recovered a stale lock left by a dead holder: #{Path.basename(path)}")
       release(path, owner)
     else
       _ -> :locked
