@@ -489,6 +489,91 @@ defmodule LemonHoncho.ClientTest do
     end
   end
 
+  describe "retry policy" do
+    test "a 500 to a mutating POST is sent once and returns one error" do
+      for call <- mutating_calls() do
+        counter = stub_with_retries(fn conn -> Plug.Conn.send_resp(conn, 500, "boom") end)
+
+        assert {:error, {:api_error, 500, _body}} = call.()
+        assert requests(counter) == 1
+      end
+    end
+
+    test "a timeout on a mutating POST is :outcome_unknown and is not resent" do
+      for call <- mutating_calls() do
+        counter = stub_with_retries(fn conn -> Req.Test.transport_error(conn, :timeout) end)
+
+        assert {:error, :outcome_unknown} = call.()
+        assert requests(counter) == 1
+      end
+    end
+
+    test "a dropped connection on a conclusion delete is :outcome_unknown" do
+      counter =
+        stub_with_retries(fn
+          %{method: "GET"} = conn ->
+            Req.Test.json(conn, %{"observer_id" => "a", "observed_id" => "b"})
+
+          conn ->
+            Req.Test.transport_error(conn, :closed)
+        end)
+
+      assert {:error, :outcome_unknown} =
+               Client.delete_conclusion(config(), "c1", %{observer_id: "a", observed_id: "b"})
+
+      assert requests(counter) == 2
+    end
+
+    test "a refused connection proves a mutating POST was never sent" do
+      counter = stub_with_retries(fn conn -> Req.Test.transport_error(conn, :econnrefused) end)
+
+      assert {:error, {:transport, _reason}} = Client.chat(config(), "lemon", "anything?")
+      assert requests(counter) == 1
+    end
+
+    test "GET reads retry up to the bound with Retry-After capped" do
+      counter =
+        stub_with_retries(fn conn ->
+          conn
+          |> Plug.Conn.put_resp_header("retry-after", "3600")
+          |> Plug.Conn.send_resp(503, "busy")
+        end)
+
+      {elapsed_us, result} =
+        :timer.tc(fn -> Client.peer_context(config(), "z80") end)
+
+      assert {:error, {:api_error, 503, _body}} = result
+      assert requests(counter) == 3
+      # Two pauses of at most one second each, never the hour asked for.
+      assert elapsed_us < 3_000_000
+    end
+
+    test "idempotent POSTs (get-or-create, search) still retry" do
+      counter = stub_with_retries(fn conn -> Req.Test.transport_error(conn, :closed) end)
+
+      assert {:error, {:transport, _reason}} = Client.ensure_peer(config(), "z80")
+      assert requests(counter) == 3
+    end
+
+    test "a bounded diagnostic call does not pause between attempts" do
+      counter =
+        stub_with_retries(fn conn ->
+          conn
+          |> Plug.Conn.put_resp_header("retry-after", "3600")
+          |> Plug.Conn.send_resp(503, "busy")
+        end)
+
+      {elapsed_us, result} =
+        :timer.tc(fn ->
+          Client.ensure_workspace(config(), max_retries: 1, total_timeout: 1_000)
+        end)
+
+      assert {:error, {:api_error, 503, _body}} = result
+      assert requests(counter) == 2
+      assert elapsed_us < 1_000_000
+    end
+  end
+
   ## Helpers
 
   defp config(overrides \\ []) do
@@ -521,6 +606,34 @@ defmodule LemonHoncho.ClientTest do
 
   defp stub(plug) do
     Application.put_env(:lemon_honcho, :req_options, plug: plug, retry: false)
+  end
+
+  # Like `stub/1` but leaves the client's own retry policy in force, and counts
+  # the requests that reached the plug.
+  defp stub_with_retries(respond) do
+    counter = :counters.new(1, [])
+
+    plug = fn conn ->
+      :counters.add(counter, 1, 1)
+      respond.(conn)
+    end
+
+    Application.put_env(:lemon_honcho, :req_options, plug: plug)
+    counter
+  end
+
+  defp requests(counter), do: :counters.get(counter, 1)
+
+  defp mutating_calls do
+    [
+      fn -> Client.chat(config(), "lemon", "anything?") end,
+      fn -> Client.add_messages(config(), "s1", [%{content: "hi", peer_id: "z80"}]) end,
+      fn ->
+        Client.create_conclusions(config(), [
+          %{observer_id: "a", observed_id: "b", content: "likes tea"}
+        ])
+      end
+    ]
   end
 
   defp snapshot(conn, raw) do

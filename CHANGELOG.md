@@ -171,6 +171,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Honcho no longer auto-retries calls that change remote state: a slow
+  dialectic question (`honcho_reasoning`, the dialectic cadence) is billed once,
+  and a timed-out message upload or conclusion write is never duplicated. Such a
+  call that got no answer reports that its outcome is unknown. Reads still retry
+  transient failures, with a server's `Retry-After` capped at one second per
+  pause and two seconds per call (#622).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

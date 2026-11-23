@@ -582,7 +582,7 @@ scrubbed of it before being shown.
 | `LEMON_HONCHO_PIN_USER_PEER` | `false` | Pin every channel turn to `user_peer`; see [Gateway identity mapping](#gateway-identity-mapping) |
 | `LEMON_HONCHO_USER_PEER_ALIASES` | `{}` | JSON object mapping channel-qualified sender ids (`telegram_123`) to peer ids |
 | `LEMON_HONCHO_RUNTIME_PEER_PREFIX` | empty | Prefix for non-owner channel sender peers |
-| `HONCHO_TIMEOUT_MS` | `30000` | Timeout for one attempt at a request; a turn-path call may retry a transient failure twice, `mix lemon.honcho ping` never does |
+| `HONCHO_TIMEOUT_MS` | `30000` | Timeout for one attempt at a request; a turn-path read may retry a transient failure twice, a call that changes Honcho (upload, dialectic question, conclusion) is never retried, and `mix lemon.honcho ping` never retries |
 | `LEMON_HONCHO_ENABLED` | `true` | Master switch; still inert without a key or base URL. Set `false` to ignore a key that stays exported |
 | `LEMON_HONCHO_RECALL_MODE` | `hybrid` | `hybrid` (inject + tools), `context` (inject only), `tools` (tools only) |
 | `LEMON_HONCHO_SESSION_STRATEGY` | `per-directory` | `per-session`, `per-directory`, `per-repo`, `global` |
