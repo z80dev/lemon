@@ -171,6 +171,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- The assistant workspace is seeded from its templates once, by the first
+  chat/persona session (marked by `.lemon-workspace-seeded`), instead of on
+  every session start: a deleted `BOOTSTRAP.md` (whose template asks to be
+  deleted when done), `HEARTBEAT.md` or `memory/topics/TEMPLATE.md` is no longer
+  re-created. Templates are copied via a temporary file and rename, so a failed
+  copy leaves no partial file; coding sessions no longer write the workspace, and
+  an unwritable assistant home no longer fails session start (#672).
 - Rule frontmatter (`.cursor/rules/*.mdc` and the other rule sources) is parsed
   without `YamlElixir.read_from_string`, which called
   `Application.start(:yamerl)` on every read and could deadlock session start

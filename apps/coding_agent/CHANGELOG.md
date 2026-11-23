@@ -9,6 +9,12 @@
 
 ### Fixed
 
+- `Workspace.seed_workspace/1` seeds a workspace once (marker
+  `.lemon-workspace-seeded`); sessions call it only when they read bootstrap
+  files and never raise on an unwritable workspace. Deleted templates such as
+  `BOOTSTRAP.md` are not re-created; `ensure_workspace/1` (`mix lemon.workspace
+  init`) still restores missing templates explicitly. Templates are written via
+  temp file and rename (#672).
 - `CodingAgent.Rules` parses frontmatter through `LemonSkills.Frontmatter`
   instead of `YamlElixir.read_from_string`, which started `:yamerl` on every read
   inside session init. Repeated keys (also kebab/camel spellings of one key) and
