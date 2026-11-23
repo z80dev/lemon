@@ -171,6 +171,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Two follow-ups merged inside the router's 500 ms debounce window (or two
+  steers falling back together) now run: the merged run keeps the newest
+  message's execution context instead of the earlier one's, which the native
+  executor rejected as a run-ID mismatch, and a restart replays the merged
+  prompt instead of only the first message (#642).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

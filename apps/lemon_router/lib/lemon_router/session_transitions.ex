@@ -8,7 +8,7 @@ defmodule LemonRouter.SessionTransitions do
   it cannot mutate the active executor.
   """
 
-  alias LemonCore.MapHelpers
+  alias LemonCore.{MapHelpers, RunRequest}
   alias LemonRouter.{QueueEffect, SessionState, Submission}
 
   @followup_debounce_ms 500
@@ -499,33 +499,52 @@ defmodule LemonRouter.SessionTransitions do
     %SessionState{state | queue: queue, merged_run_ids: merged_run_ids}
   end
 
+  # The newest follow-up owns the merged run: its execution context, policy and
+  # identities are the ones admitted for `current.run_id`, so the merge starts
+  # from `current` and only prepends the earlier prompt. The carried
+  # `RunRequest` receives the same merged prompt so a restart replays both
+  # messages.
   defp merge_followup_submission(previous, current) do
-    merged_prompt =
-      merge_prompt(previous.execution_request.prompt, current.execution_request.prompt)
-
-    previous_request = previous.execution_request
-    meta = merge_user_message_meta(previous.meta || %{}, current.meta || %{})
+    current_request = current.execution_request
 
     %{
-      previous
-      | run_id: current.run_id,
-        session_key: current.session_key,
-        conversation_key: current.conversation_key,
-        meta: meta,
+      current
+      | meta: merge_user_message_meta(previous.meta || %{}, current.meta || %{}),
         current_phase: nil,
         execution_request: %{
-          previous_request
-          | run_id: current.run_id,
-            conversation_key: current.execution_request.conversation_key,
-            prompt: merged_prompt,
+          current_request
+          | prompt: merge_prompt(previous.execution_request.prompt, current_request.prompt),
             meta:
               merge_user_message_meta(
-                previous_request.meta || %{},
-                current.execution_request.meta || %{}
+                previous.execution_request.meta || %{},
+                current_request.meta || %{}
               )
-        }
+        },
+        request: merge_run_request(previous, current)
     }
   end
+
+  defp merge_run_request(previous, %{request: %RunRequest{} = current_request}) do
+    previous_prompt =
+      case previous.request do
+        %RunRequest{prompt: prompt} -> prompt
+        _ -> previous.execution_request.prompt
+      end
+
+    previous_meta =
+      case previous.request do
+        %RunRequest{meta: meta} when is_map(meta) -> meta
+        _ -> %{}
+      end
+
+    %RunRequest{
+      current_request
+      | prompt: merge_prompt(previous_prompt, current_request.prompt),
+        meta: merge_user_message_meta(previous_meta, current_request.meta || %{})
+    }
+  end
+
+  defp merge_run_request(_previous, current), do: current.request
 
   defp flush_pending_steers_for_active(
          %SessionState{active: %{run_id: active_run_id}} = state,
