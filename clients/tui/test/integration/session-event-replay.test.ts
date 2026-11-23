@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { AppShell } from "../../src/app.ts";
-import { DEFAULT_METHODS, FakeControlPlane } from "../../src/dev/fake-server.ts";
+import {
+	DEFAULT_METHODS,
+	FakeControlPlane,
+	sessionsSnapshotResult,
+} from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import { METHOD } from "../../src/protocol/methods.ts";
 import type {
@@ -27,14 +31,13 @@ function cursor(seq: number, streamId = "owner-1"): SessionEventCursor {
 	return { version: 1, sessionId: "native-1", streamId, seq };
 }
 
+/** The daemon's production snapshot layout (pinned by the shared ExUnit fixture). */
 function snapshot(
 	seq = 0,
 	text = "A",
 	streamId = "owner-1",
 ): Extract<SessionsSnapshotResult, { status: "ok" }> {
-	return {
-		status: "ok",
-		sessionKey: KEY,
+	return sessionsSnapshotResult({
 		identity: {
 			sessionKey: KEY,
 			sessionId: "native-1",
@@ -44,20 +47,9 @@ function snapshot(
 			attempt: "run-1",
 		},
 		eventCursor: cursor(seq, streamId),
-		consistency: { boundary: "stable_owner_reads", atomic: false, eventCursor: null },
-		snapshot: {
-			phase: "running",
-			terminal: false,
-			answer: { text, canonical: false, truncated: false },
-			messages: [],
-			actions: [],
-			approvals: { status: "ok", items: [] },
-			children: { status: "ok", items: [] },
-			processes: { status: "ok", items: [] },
-			todos: { status: "ok", items: [] },
-			plan: { status: "ok", value: { mode: "code" } },
-		},
-	};
+		phase: "running",
+		answer: text,
+	});
 }
 
 function delta(seq: number, text: string): SessionEventBatch {
@@ -256,10 +248,9 @@ describe("session cursor replay through the real client and controllers", () => 
 	test("an unsupported snapshot cursor never installs transcript or cursor", async () => {
 		const { app, server } = await boot();
 		server.respondWith(METHOD.sessionsEvents, { status: "cursor_expired", sessionKey: KEY });
-		server.respondWith(METHOD.sessionsSnapshot, {
-			...snapshot(9, "unsafe"),
-			eventCursor: { ...cursor(9), version: 2 },
-		});
+		const unsafe = snapshot(9, "unsafe");
+		unsafe.consistency.eventCursor = { ...cursor(9), version: 2 } as unknown as SessionEventCursor;
+		server.respondWith(METHOD.sessionsSnapshot, unsafe);
 		await app.sessions.resync();
 		expect(app.store.focused.eventCursor).toEqual(cursor(0));
 		expect(app.store.focused.bufferFor("run-1")).toBe("A");
@@ -268,7 +259,8 @@ describe("session cursor replay through the real client and controllers", () => 
 
 	test("another owner incarnation forces a snapshot regardless of its seq", async () => {
 		const { app, server } = await boot();
-		server.respondWith(METHOD.sessionsSnapshot, snapshot(0, "new owner", "owner-2"));
+		// The owner already folded the batch that exposed it into the snapshot.
+		server.respondWith(METHOD.sessionsSnapshot, snapshot(1, "new owner", "owner-2"));
 		await push(app, server, { ...delta(1, "unsafe"), cursor: cursor(1, "owner-2") });
 		await waitFor(() => app.store.focused.eventCursor?.streamId === "owner-2");
 		expect(app.store.focused.bufferFor("run-1")).toBe("new owner");
@@ -299,7 +291,11 @@ describe("session cursor replay through the real client and controllers", () => 
 			sessionId: "native-2",
 			runId: "other-run",
 		};
-		other.eventCursor = { ...cursor(0), sessionId: "native-2", streamId: "other-owner" };
+		other.consistency.eventCursor = {
+			...cursor(0),
+			sessionId: "native-2",
+			streamId: "other-owner",
+		};
 		server.respondWith(METHOD.sessionsSnapshot, other);
 		await app.sessions.switch("tui-other");
 		app.editor.setText("other session draft");
@@ -360,5 +356,51 @@ describe("session cursor replay through the real client and controllers", () => 
 		expect(app.store.focused.activeRunId).toBe("run-2");
 		expect(server.requestsFor(METHOD.chatSend)).toHaveLength(0);
 		expect(app.store.queue.items(KEY)).toHaveLength(1);
+	});
+
+	test("the production snapshot shape arms the cursor: the first live batch applies with no snapshot", async () => {
+		const { app, server } = await boot();
+		const snapshots = server.requestsFor(METHOD.sessionsSnapshot).length;
+		await push(app, server, delta(1, "B"));
+		await push(app, server, delta(2, "C"));
+		expect(app.store.focused.eventCursor).toEqual(cursor(2));
+		expect(app.store.focused.bufferFor("run-1")).toBe("ABC");
+		expect(app.store.focused.eventRecovery).toBe(false);
+		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(snapshots);
+		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(0);
+	});
+
+	test("batches racing a snapshot apply past its cursor and later batches keep scrollback", async () => {
+		const { app, server } = await boot();
+		const release = deferred<SessionsSnapshotResult>();
+		const entered = deferred<void>();
+		server.onMethod(METHOD.sessionsSnapshot, () => {
+			entered.resolve();
+			return release.promise;
+		});
+		const next = (seq: number, text: string): SessionEventBatch => ({
+			...delta(seq, text),
+			cursor: cursor(seq, "owner-2"),
+		});
+		await push(app, server, next(1, "B"));
+		await entered.promise;
+		await push(app, server, next(2, "C"));
+		await push(app, server, next(3, "D"));
+		release.resolve(snapshot(2, "new BC", "owner-2"));
+		await waitFor(
+			() => app.store.focused.eventCursor?.seq === 3 && !app.store.focused.eventRecovery,
+		);
+		expect(app.store.focused.bufferFor("run-1")).toBe("new BCD");
+		const cleared: boolean[] = [];
+		const requestRender = app.tui.requestRender.bind(app.tui);
+		app.tui.requestRender = (force = false, options?: { clearScrollback?: boolean }) => {
+			if (options?.clearScrollback) cleared.push(true);
+			requestRender(force, options);
+		};
+		await push(app, server, next(4, "E"));
+		await push(app, server, next(5, "F"));
+		expect(app.store.focused.bufferFor("run-1")).toBe("new BCDEF");
+		expect(cleared).toEqual([]);
+		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(2);
 	});
 });

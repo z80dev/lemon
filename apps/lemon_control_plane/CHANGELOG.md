@@ -55,6 +55,10 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Fixed
 
+- `sessions.snapshot` compares its two owner collections without
+  `consistency.eventCursor`: a live event between them returns the newer
+  collection and its cursor (read in one owner call) instead of
+  `snapshot_raced` (#628).
 - Timeouts, closed openers and unclassified failures of passive node inspections
   (`node.capabilities.get`, `node.runtime.features`, `node.host.info`) are
   retry-safe unavailable reads, not uncertain mutations.

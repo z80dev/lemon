@@ -278,7 +278,11 @@ on reconnect and when opening or changing models. Older daemons without
   Cold sessions, expired cursors, incompatible versions and changed streams use the
   bounded [`sessions.snapshot`](../../apps/lemon_control_plane/README.md#session-snapshot-and-reconciliation)
   authority to replace history, approvals, child/process state and todo/plan projection,
-  and install its `eventCursor`. Replay errors remain visible failures, not successful
+  and install its `consistency.eventCursor` (a validated result; an unreadable cursor
+  keeps the session waiting for a snapshot rather than rebuilding without one). Live
+  batches that arrive while the snapshot is read are buffered and applied past its
+  cursor; snapshot reads of one session are spaced at least 250 ms apart. Replay errors
+  remain visible failures, not successful
   snapshot recovery. Rewind explicitly refreshes the snapshot; older daemons without
   cursors retain snapshot-only recovery. Recovery rejects stale/raced reads and never
   replays an offline mutation. Unknown owner state and omitted previews stay explicit.

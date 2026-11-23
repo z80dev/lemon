@@ -91,6 +91,7 @@ export class EventController {
 	#renderScheduled = false;
 	#attached = false;
 	readonly #recoveryScheduled = new Set<SessionStore>();
+	#approvalResolutions = 0;
 
 	constructor(options: EventControllerOptions) {
 		this.#client = options.client;
@@ -141,6 +142,7 @@ export class EventController {
 			const pending = this.#store.approvals.get(event.approvalId);
 			if (pending?.event.sessionKey && event.sessionKey !== pending.event.sessionKey) return;
 			this.#sessionFor(event.sessionKey).recoveryEventVersion += 1;
+			this.#approvalResolutions += 1;
 			this.resolveApproval(event.approvalId, event.decision);
 		});
 		on("shutdown", () => this.notice("daemon is shutting down", "warning"));
@@ -308,10 +310,17 @@ export class EventController {
 		}
 		const current = session.eventCursor;
 		if (!current || !sameSessionEventStream(current, batch.cursor)) {
-			// A sequence from another incarnation is never comparable, even if lower.
-			session.pendingSessionEvents.clear();
+			// Keep the tail of the newest stream while the snapshot is read: the ones
+			// past its cursor are applied after it, not dropped. A sequence from
+			// another incarnation is never comparable, even if lower.
+			const buffered = session.pendingSessionEvents.values().next().value;
+			if (
+				(buffered && !sameSessionEventStream(buffered.cursor, batch.cursor)) ||
+				session.pendingSessionEvents.size >= MAX_PENDING_SESSION_EVENTS
+			)
+				session.pendingSessionEvents.clear();
+			session.pendingSessionEvents.set(batch.cursor.seq, batch);
 			session.eventRecovery = true;
-			session.recoveryEventVersion += 1;
 			this.#requestRecovery(session, true);
 			return;
 		}
@@ -333,6 +342,11 @@ export class EventController {
 		}
 		session.pendingSessionEvents.set(batch.cursor.seq, batch);
 		if (!recovering) this.#requestRecovery(session);
+	}
+
+	/** Bumped by every resolved approval; a snapshot read that raced one is stale. */
+	get approvalResolutions(): number {
+		return this.#approvalResolutions;
 	}
 
 	/** Replay and live events share the same contiguous, exactly-once application path. */

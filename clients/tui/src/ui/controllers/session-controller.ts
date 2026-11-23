@@ -30,7 +30,7 @@ import {
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import { METHOD } from "../../protocol/methods.ts";
 import {
-	parseSessionEventCursor,
+	parseSessionsSnapshot,
 	SessionEventCursorError,
 	sameSessionEventStream,
 } from "../../protocol/session-events.ts";
@@ -38,7 +38,6 @@ import type {
 	ApprovalRequestedEvent,
 	ChatHistoryMessage,
 	ExecPendingApproval,
-	SessionEventCursor,
 	SessionSummary,
 	SessionsSnapshotResult,
 } from "../../protocol/types.ts";
@@ -54,6 +53,9 @@ export const HYDRATE_LIMIT = 100;
 
 /** Owner/event races get at most three read-only attempts per recovery. */
 export const SNAPSHOT_RETRY_LIMIT = 3;
+
+/** Minimum spacing between owner snapshot reads of one session, so a streaming session cannot loop them. */
+export const SNAPSHOT_COOLDOWN_MS = 250;
 
 /** Client paging policy, independent of the server's retained ring size. */
 export const EVENT_REPLAY_LIMIT = 100;
@@ -109,6 +111,8 @@ export class SessionController {
 
 	/** Sessions whose stored history has been pulled (or never needed pulling). */
 	readonly #hydrated = new Set<string>();
+	/** When each session last started an owner snapshot read, for {@link SNAPSHOT_COOLDOWN_MS}. */
+	readonly #snapshotStartedAt = new Map<string, number>();
 	/** Sessions whose gauge `sessions.context` already answered for (success or a definite no). */
 	readonly #contextSeeded = new Set<string>();
 
@@ -518,14 +522,22 @@ export class SessionController {
 		}
 		if (!this.#methods.supports(METHOD.sessionsSnapshot)) return;
 		for (let attempt = 0; attempt < SNAPSHOT_RETRY_LIMIT; attempt++) {
+			const wait =
+				(this.#snapshotStartedAt.get(session.key) ?? 0) + SNAPSHOT_COOLDOWN_MS - Date.now();
+			if (wait > 0) {
+				await Bun.sleep(wait);
+				if (!this.#isCurrentRecovery(session, selection, generation)) return;
+			}
+			this.#snapshotStartedAt.set(session.key, Date.now());
 			const eventVersion = session.recoveryEventVersion;
+			const approvalVersion = this.#events.approvalResolutions;
 			const previousIdentity = session.snapshotIdentity;
 			const previousRunId = session.activeRunId;
 			const previousBusy = session.busy;
 			const previousUnread = session.unread;
-			let result: SessionsSnapshotResult;
+			let wire: unknown;
 			try {
-				result = await this.#methods.sessionsSnapshot({
+				wire = await this.#methods.sessionsSnapshot({
 					sessionKey: session.key,
 					cwd: this.#cwd,
 					limit: HYDRATE_LIMIT,
@@ -561,20 +573,12 @@ export class SessionController {
 				);
 				return;
 			}
-			if (
-				!this.#isCurrentRecovery(session, selection, generation) ||
-				result.sessionKey !== session.key ||
-				result.identity.sessionKey !== session.key
-			)
-				return;
-			if (result.status === "retry" || eventVersion !== session.recoveryEventVersion) continue;
-			let eventCursor: SessionEventCursor | undefined;
+			let result: SessionsSnapshotResult;
 			try {
-				eventCursor =
-					result.eventCursor == null ? undefined : parseSessionEventCursor(result.eventCursor);
-				if (eventCursor && eventCursor.sessionId !== result.identity.sessionId)
-					throw new SessionEventCursorError("snapshot event cursor belongs to another session");
+				result = parseSessionsSnapshot(wire);
 			} catch (error) {
+				// Fail closed: an unreadable cursor never means "no cursor, rebuild".
+				if (!this.#isCurrentRecovery(session, selection, generation)) return;
 				session.eventSnapshotRequired = true;
 				session.eventRecovery = true;
 				this.#notice(
@@ -584,6 +588,18 @@ export class SessionController {
 				);
 				return;
 			}
+			if (
+				!this.#isCurrentRecovery(session, selection, generation) ||
+				result.sessionKey !== session.key ||
+				result.identity.sessionKey !== session.key
+			)
+				return;
+			if (result.status === "retry" || approvalVersion !== this.#events.approvalResolutions)
+				continue;
+			const eventCursor = result.consistency.eventCursor ?? undefined;
+			// Live batches racing a cursor-bearing read are buffered and applied past
+			// that cursor below; only a cursor-less read must be fenced by them.
+			if (!eventCursor && eventVersion !== session.recoveryEventVersion) continue;
 			// A send receipt can move the active run without a protocol event.
 			// Fence that local projection just as strictly as events and selection.
 			if (
