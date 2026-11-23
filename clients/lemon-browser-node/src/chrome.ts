@@ -7,6 +7,11 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 import { startEgressProxy, type EgressPolicy, type EgressProxy } from './egress-proxy.js';
 import { validateManagedProfile } from './profile-safety.js';
 
+/** A side-effecting action whose completion cannot be confirmed. Never retried. */
+export class OutcomeUnknownError extends Error {
+  readonly code = 'outcome_unknown';
+}
+
 export type BrowserTab = {
   targetId: string;
   active: boolean;
@@ -89,9 +94,16 @@ export class ChromeSession {
     this.activeTargetId = await targetIdForPage(page);
   }
 
+  /**
+   * Runs one page operation. After a closed-target error the operation is
+   * reconnected and re-run only when `retryOnClosedTarget` says it is
+   * read-only; any other operation may already have taken effect, so it
+   * fails with an unknown outcome instead of running twice.
+   */
   async withPage<T>(
     operation: (page: Page) => Promise<T>,
     targetId?: string,
+    options: { retryOnClosedTarget?: boolean } = {},
   ): Promise<T> {
     const page = await this.getPage(targetId);
 
@@ -100,6 +112,11 @@ export class ChromeSession {
     } catch (err) {
       if (!isClosedTargetError(err)) {
         throw err;
+      }
+      if (options.retryOnClosedTarget !== true) {
+        throw new OutcomeUnknownError(
+          'the browser target closed while the action ran; it may have taken effect',
+        );
       }
 
       await this.reconnect();

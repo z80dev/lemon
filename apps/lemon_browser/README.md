@@ -50,9 +50,23 @@ not a fabricated permission grant.
 
 `request/3` takes a method name, a map of arguments and an optional timeout in
 milliseconds (default `30_000`), and answers `{:ok, result}` or
-`{:error, reason}`. Requests are multiplexed over one helper process: each one
-carries an id, and a request that outlives its timeout answers
-`{:error, "Browser request timed out"}` without disturbing the others.
+`{:error, reason}`. One helper process runs the requests one at a time, in
+arrival order, across all sessions; the next request starts only after the
+previous one has actually finished, so a slow request delays the ones queued
+behind it. Each request carries an absolute deadline (its timeout from when it
+was sent), and the helper never starts a request after that deadline: a request
+still queued answers `{:error, "Browser request timed out before it started"}`
+and never ran. A request that started but did not finish answers
+`{:error, "Browser request timed out"}` when it only reads (tabs, snapshot,
+content, screenshot, cookies, events, wait-for-selector, allowlisted CDP) and
+`{:error, :outcome_unknown}` for anything else (click, type, press, navigate,
+select, upload, download, evaluate, cookie writes, tab changes, ...). The same
+holds when the helper exits or stops answering mid-request. An
+`:outcome_unknown` action may already have taken effect: inspect the page
+before acting again; Lemon never retries it. After a closed tab or lost
+connection the helper reconnects and re-runs read-only requests only. A request
+still unsettled 10 seconds after its deadline makes the helper stop itself and
+the Chrome it launched; the next request starts a fresh one.
 
 `LemonBrowser.LocalServer.status/0` reports whether the driver is available and
 running, the pending/completed/failed counts, the last error, and the resolved

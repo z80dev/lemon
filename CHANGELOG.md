@@ -200,6 +200,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- The local browser driver never starts a request after its deadline, never
+  overlaps an abandoned one and re-runs only read-only methods after a closed
+  tab. A side-effecting browser action (click, type, navigate, upload, ...)
+  that did not confirm is reported to the model as an unknown outcome and is
+  never retried (#625).
 
 ### Removed
 

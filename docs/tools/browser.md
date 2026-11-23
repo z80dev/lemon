@@ -443,7 +443,14 @@ Notes:
 - `browser_download output path must be under the current project` /
   `must be a file path`: pass a file path inside the project, or omit `path`.
 - `Browser request timed out`: raise `timeoutMs` (max 120000) or check that the
-  page is reachable.
+  page is reachable. `... before it started` means the request waited behind
+  another one past its deadline and never ran: the local driver runs one request
+  at a time and never starts one after its deadline.
+- `:outcome_unknown`: a click, type, press, navigation, upload or other
+  side-effecting action did not confirm before its deadline, or its tab or driver
+  went away mid-action. It may have taken effect; Lemon never retries it. Take a
+  snapshot or screenshot before acting again. Read-only actions are the only ones
+  re-run after a lost tab.
 - Attach mode fails: confirm `LEMON_BROWSER_CDP_ENDPOINT` is reachable. Attach-only
   mode will not launch a replacement browser.
 - Hybrid requests fail: set `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` to a configured

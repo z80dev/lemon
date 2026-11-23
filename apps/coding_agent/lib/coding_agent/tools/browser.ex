@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.Browser do
   """
 
   alias CodingAgent.Tools.PathHelpers
+  alias LemonAgent.InterruptedToolResult
   alias LemonAgent.Security.ExternalContent
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{ImageContent, TextContent}
@@ -124,7 +125,11 @@ defmodule CodingAgent.Tools.Browser do
               "errorKind" => safe_error_kind(reason)
             })
 
-            error
+            # The action may already have taken effect; the model is told not
+            # to repeat it blindly, and nothing here retries it.
+            if reason == :outcome_unknown,
+              do: InterruptedToolResult.build(:timeout, details: %{tool: tool_name}),
+              else: error
         end
 
       {:error, reason} = error ->
