@@ -174,6 +174,8 @@ python3 -m unittest discover -s apps/lemon_evals/priv \
   -p test_paired_native_cleanup.py -v
 python3 -m unittest discover -s apps/lemon_evals/priv \
   -p test_paired_compiled_runtime.py -v
+python3 -m unittest discover -s apps/lemon_evals/priv \
+  -p test_coding_arena_offline.py -v
 scripts/test path apps/lemon_evals/test/lemon_evals/coding_benchmark_test.exs --seed 1
 scripts/test path apps/lemon_evals/test/lemon_evals/paired_cleanup_test.exs --seed 1
 ```
@@ -314,8 +316,8 @@ paid row and prevents `--resume` from admitting more work into that campaign.
 Interrupted attempts also persist their teardown outcome and any already observed
 paid counters before returning exit status 130; incomplete finalization blocks resume.
 Retained private evidence must be resolved independently; do not bypass the stop
-by editing recorded rows. No campaign result is recorded by this change; the
-rollout decision stays pending its sanitized report.
+by editing recorded rows. No campaign result is recorded yet; the current rollout
+decision rests on the coding arena evidence above.
 
 ## Pairing and isolation
 
@@ -563,14 +565,21 @@ secrets or imply a plan-only artifact is a live result.
 
 ## Rollout and rollback
 
-Until that evidence is reviewed, the recorded decision remains
-`keep-current-defaults` / `keep-opt-in`; no profile is promoted.
-After an authorized run, retain the defaults for negative/inconclusive evidence,
-or name the exact proposed profile and its success/security checks,
-measured task-level benefit, uncertainty and cache/pricing caveats. Do not
-promote solely because schema-token estimates declined.
+The recorded decision (see [Decision and evidence status](#decision-and-evidence-status))
+is **promote `coding` for cwd-scoped coding sessions and `lemon -p`**, shipped by
+[#518](https://github.com/z80dev/lemon/issues/518) as `profile = "auto"`, with
+`legacy` retained for chat and as the rollback. Evidence: the isolated coding
+arena ([#526](https://github.com/z80dev/lemon/issues/526)), 216 same-model paired
+groups, 206/216 vs 204/216 verified passes, McNemar p = 0.73, 32–41% lower median
+input tokens. Caveats: near-ceiling pass rates on Kimi and Codex (the benefit is
+efficiency, not success rate); arena arms request the profile through the
+environment without observing it per trial; subscription credentials give no
+dollar price; most failures in both arms were the 300 s per-response deadline
+([#516](https://github.com/z80dev/lemon/issues/516)). Any later profile or threshold
+change needs new paired evidence; never promote solely because schema-token
+estimates declined.
 
-To revert an operator's opt-in profile to the existing disclosure behavior:
+To restore the previous coding inventory (rollback):
 
 ```toml
 [runtime.tools.disclosure]
