@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** `LemonBrowser.Backends.Controller`, `LemonBrowser.ControllerBroker`,
+  `LemonBrowser.Backends.Hybrid`, `LemonBrowser.HybridRouter` and the
+  `LEMON_BROWSER_HYBRID_*` settings; neither backend was selectable (#702).
+
 ### Added
 
 - Opt-in durable tracking for local browser-driver launches, with external-work

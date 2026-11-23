@@ -12,14 +12,12 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 | Module | Purpose |
 |---|---|
 | `LemonBrowser` | Backend-neutral request/status facade |
-| `LemonBrowser.Backend` | Contract for local, paired-node, and controller backends |
+| `LemonBrowser.Backend` | Contract for local, Tern, and hosted backends |
 | `LemonBrowser.BackendRegistry` | Built-in-safe runtime backend registry |
 | `LemonBrowser.CloudSession` | Exact-session hosted CDP lifecycle and attach-only driver ownership |
 | `LemonBrowser.CamofoxSession` | Exact-session Camofox REST/Firefox adapter |
 | `LemonBrowser.TernSession` | Exact-session/run/pane native PiP ownership, adoption, and bounded cleanup |
-| `LemonBrowser.HybridRouter` | Per-session local/private versus public-provider route memory |
 | `LemonBrowser.LocalServer` | Supervised driver process: `request/3`, `status/0`, `stop/1` |
-| `LemonBrowser.ControllerBroker` | Single-use controller tickets, exact identity binding, capability checks, timeouts |
 | `LemonBrowser.RoutePolicy` | Navigation classification and guardrails: `validate_navigation/2`, `safe/1` |
 | `LemonBrowser.Artifacts` | Metadata over saved artifacts: `recent/1`, `summary/1`, `cleanup/1` |
 | `LemonBrowser.Env` | The app's environment-variable registry, aggregated by `LemonCore.Env` |
@@ -66,12 +64,10 @@ facade. See [Choosing a browser provider](../../docs/tools/browser.md#choosing-a
 Runtime packages can implement `LemonBrowser.Backend` and register it with
 `LemonBrowser.BackendRegistry`; built-in backend IDs cannot be replaced.
 
-Built-ins are `local`, `tern`, `controller`, `hybrid`, `browserbase`, `browser_use`,
-`firecrawl`, and `camofox`. Hosted CDP sessions are created lazily, attached by
+Built-ins are `local`, `tern`, `browserbase`, `browser_use`, `firecrawl`, and
+`camofox`. Hosted CDP sessions are created lazily, attached by
 the Node/Playwright driver in attach-only mode, scoped to the exact Lemon
-session/profile/run, and explicitly released after bounded idle time. The
-hybrid backend requires an explicit public backend and never treats a hosted
-failure as permission to fall back to a different local identity.
+session/profile/run, and explicitly released after bounded idle time.
 
 When evaluation enables the core native-process ledger, the local driver is
 tracked before execution. Browser dispatch is separately recorded as uncertain:
@@ -172,8 +168,6 @@ the requests in flight fail; the next request starts a fresh one.
 | `LEMON_BROWSER_RELAY_TOKEN` | — | Required shared secret for the loopback MV3 extension/CDP relay |
 | `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |
 | `LEMON_BROWSER_BACKEND` | `local` | Built-in browser backend id |
-| `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Hybrid route for local/private targets |
-| `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | — | Required hybrid route for public targets |
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | — | Browserbase hosted sessions |
 | `BROWSER_USE_API_KEY` | — | Browser Use Cloud hosted sessions |
 | `FIRECRAWL_API_KEY` | — | Firecrawl hosted browser sessions |

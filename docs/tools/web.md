@@ -123,15 +123,12 @@ npm --prefix clients/lemon-browser-node run build
 ```
 
 Additional built-ins cover Browserbase (`browserbase`), Browser Use Cloud
-(`browser_use`), Firecrawl hosted browser sessions (`firecrawl`), Camofox
-REST/Firefox (`camofox`), and explicit local/public routing (`hybrid`). Hosted
+(`browser_use`), Firecrawl hosted browser sessions (`firecrawl`), and Camofox
+REST/Firefox (`camofox`). Hosted
 backends require an exact Lemon `session_id`, create one provider session per
 session/profile/run scope, attach the Node driver without launching a browser,
 redact CDP authority from status, and release provider state on idle. Camofox
-uses snapshot refs such as `@e5` as selectors. Hybrid requires
-`LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`; local/private URLs stay on its local
-backend, public URLs use that configured backend, and provider failure never
-falls back across identities.
+uses snapshot refs such as `@e5` as selectors.
 
 The `local` provider manages Chrome/Chromium over loopback CDP. To attach an
 existing CDP browser instead, set `LEMON_BROWSER_PROVIDER=cdp` and

@@ -203,6 +203,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** the unreachable `controller` and `hybrid` browser backends,
+  `ControllerBroker`, `HybridRouter`, their provider ids/status strings and the
+  `LEMON_BROWSER_HYBRID_LOCAL_BACKEND`/`LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`
+  settings. Configs naming them now fail validation instead of reporting a
+  backend that could never serve a request (#702).
 - The unenforced `sandbox` tool-policy field; legacy input is ignored with a
   warning and never changes authority (#605).
 - `LemonCore.Store.JsonlBackend` (lemon_core 0.3.0). Run

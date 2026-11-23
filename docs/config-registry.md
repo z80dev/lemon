@@ -96,12 +96,10 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `CAMOFOX_URL` | string | _(none)_ |  | `lemon_browser` | Base URL for a Camofox REST/Firefox browser server. |
 | `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS` | boolean | `false` |  | `lemon_browser` | Allow the browser driver to attach to a browser Lemon did not launch (CDP endpoint, relay, attach-only). Such a browser bypasses the driver's egress proxy, so metadata/link-local egress is not enforced at connection time. |
 | `LEMON_BROWSER_ATTACH_ONLY` | boolean | `false` |  | `lemon_browser` | Whether the browser tool only attaches to an existing browser instead of launching one. |
-| `LEMON_BROWSER_BACKEND` | string | `local` |  | `lemon_browser` | Browser backend id: local, controller, hybrid, browserbase, browser_use, firecrawl, or camofox. |
+| `LEMON_BROWSER_BACKEND` | string | `local` |  | `lemon_browser` | Browser backend id: local, tern, browserbase, browser_use, firecrawl, or camofox. |
 | `LEMON_BROWSER_CDP_ENDPOINT` | string | _(none)_ |  | `lemon_browser` | Chrome DevTools Protocol websocket endpoint to attach to instead of launching a browser. |
 | `LEMON_BROWSER_CDP_PORT` | integer | `18800` |  | `lemon_browser` | Local CDP port used when launching a managed browser instance. Only positive integers are accepted (0/negative/unparseable fall back to the default); resolved with a bespoke parser in LemonBrowser.LocalServer, not the standard :integer cast. |
 | `LEMON_BROWSER_DRIVER_PATH` | string | _(none)_ |  | `lemon_browser` | Path to the browser automation driver binary. |
-| `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | string | `local` |  | `lemon_browser` | Local/private backend selected by the hybrid browser router. |
-| `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | string | _(none)_ |  | `lemon_browser` | Explicit hosted backend selected by the hybrid router for public URLs. |
 | `LEMON_BROWSER_PROFILE_DIRECTORY` | string | _(none)_ |  | `lemon_browser` | Chrome profile directory within the managed user-data directory, such as Default or Profile 1. |
 | `LEMON_BROWSER_RELAY_PORT` | integer | `9224` |  | `lemon_browser` | Loopback port for the Manifest V3 existing-Chrome relay. |
 | `LEMON_BROWSER_RELAY_TOKEN` | string | _(none)_ | yes | `lemon_browser` | Required shared secret for the loopback extension and CDP relay. |
@@ -181,9 +179,6 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_NODE_SOURCE_CHECKOUT` | string | _(none)_ |  | `lemon_control_plane` | Absolute destination-local integrated source checkout used by node invite commands. |
 
 ### Gateway
-
-`LEMON_GATEWAY_MAX_CONCURRENT_RUNS` controls execution permits, not waiter or
-conversation population. See the [admission inventory](architecture/admission-gates.md).
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
@@ -410,7 +405,7 @@ conversation population. See the [admission inventory](architecture/admission-ga
 | `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` | integer | `40000` |  | `lemon_core` | Estimated tool-schema token total above which long-tail tools are hidden behind tool_search/tool_invoke. |
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
 | `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate under the selected profile. |
-| `LEMON_TOOL_DISCLOSURE_PROFILE` | string | `auto` |  | `lemon_core` | Tool disclosure profile: auto selects coding for cwd-scoped sessions and legacy for chat; legacy defers the over-budget long tail; coding also defers optional built-ins; code_mode is an opt-in experiment replacing eval with permissionless Deno cells and eval_wait. |
+| `LEMON_TOOL_DISCLOSURE_PROFILE` | string | `auto` |  | `lemon_core` | Tool disclosure profile: auto selects coding for cwd-scoped sessions and legacy for chat; legacy defers the over-budget long tail; coding also defers optional built-ins. |
 
 ### Tools wasm
 

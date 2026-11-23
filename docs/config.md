@@ -2940,7 +2940,7 @@ for the auto order, fail-closed behavior, LCU prerequisites and connector rollba
 ```toml
 [runtime.tools.browser]
 provider = "auto" # tern, lcu, relay, local, cdp, browserbase, browser_use,
-                  # firecrawl, camofox, controller, hybrid
+                  # firecrawl, camofox
 tern = true # false disables native Tern browser integration
 ```
 
@@ -2965,9 +2965,7 @@ The following environment variables configure individual backends:
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Managed local Chrome CDP port |
 | `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |
 | `LEMON_BROWSER_RELAY_TOKEN` | none | Required relay shared secret |
-| `LEMON_BROWSER_BACKEND` | `local` | `local`, `tern`, `controller`, `hybrid`, `browserbase`, `browser_use`, `firecrawl`, or `camofox` |
-| `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Local/private route used by `hybrid` |
-| `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | none | Required public route used by `hybrid` |
+| `LEMON_BROWSER_BACKEND` | `local` | `local`, `tern`, `browserbase`, `browser_use`, `firecrawl`, or `camofox` |
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | none | Browserbase hosted sessions |
 | `BROWSER_USE_API_KEY` | none | Browser Use Cloud hosted sessions |
 | `CAMOFOX_URL` / `CAMOFOX_API_KEY` | none | Camofox REST/Firefox server |
