@@ -37,8 +37,11 @@ defmodule CodingAgent.Rules do
   `always_on` applies always, `manual` keeps the rule out of the prompt, and
   `glob`/`model_decision` use `globs`/`description`. GitHub `applyTo` becomes
   `globs`; `*`, `**` and `**/*` make the rule always apply. Legacy single
-  files always apply. Invalid YAML falls back to plain `key: value` lines, so
-  Cursor's unquoted `globs: *.ts` parses.
+  files always apply. Frontmatter is parsed by `LemonSkills.Frontmatter`;
+  invalid YAML falls back to plain `key: value` lines, so Cursor's unquoted
+  `globs: *.ts` parses. A repeated key (also `always-apply` next to
+  `alwaysApply`) or frontmatter over 16 KiB rejects the rule with a warning;
+  it still shadows lower-priority rules of the same name.
 
   `streamPattern` is a non-empty, byte-oriented regex source (no UTF mode).
   `injectionLimit` is a positive integer, defaulting to 1. A stream rule is
@@ -71,6 +74,7 @@ defmodule CodingAgent.Rules do
 
   alias CodingAgent.Config
   alias LemonCore.TrustedRoot
+  alias LemonSkills.Frontmatter
 
   @type rule :: %{
           name: String.t(),
@@ -91,6 +95,7 @@ defmodule CodingAgent.Rules do
   @agent_dirs [".agent", ".agents"]
   @github_always_globs ["*", "**", "**/*"]
   @max_rule_dir_depth 8
+  @max_frontmatter_bytes 16 * 1024
 
   @doc """
   Discover enabled, valid rules for `cwd`: project rules first, deduplicated
@@ -113,7 +118,10 @@ defmodule CodingAgent.Rules do
 
     (project ++ global_rules(home))
     |> Enum.uniq_by(& &1.name)
-    |> Enum.reject(&(&1.stream_pattern == :invalid or &1.injection_limit == :invalid))
+    |> Enum.reject(
+      &(Map.has_key?(&1, :rejected) or &1.stream_pattern == :invalid or
+          &1.injection_limit == :invalid)
+    )
     |> Enum.sort_by(& &1.name)
   end
 
@@ -414,15 +422,42 @@ defmodule CodingAgent.Rules do
 
   defp load_rule(path, name, level, kind, root) do
     with {:ok, content} <- read_rule(path, root),
-         true <- String.valid?(content),
-         {frontmatter, body} = parse_frontmatter(content),
-         true <- parse_boolean(frontmatter["enabled"]) != false,
-         body when body != "" <- String.trim(body) do
-      [build_rule(kind, frontmatter, %{name: name, path: path, content: body, level: level})]
+         true <- String.valid?(content) do
+      case parse_frontmatter(content) do
+        {:ok, frontmatter, body} ->
+          build_enabled_rule(kind, frontmatter, %{name: name, path: path, level: level}, body)
+
+        {:error, reason} ->
+          Logger.warning("Ignored rule #{name}: #{rejection_reason(reason)}")
+          [rejected_rule(%{name: name, path: path, level: level}, reason)]
+      end
     else
       _ -> []
     end
   end
+
+  defp build_enabled_rule(kind, frontmatter, base, body) do
+    with true <- parse_boolean(frontmatter["enabled"]) != false,
+         body when body != "" <- String.trim(body) do
+      [build_rule(kind, frontmatter, Map.put(base, :content, body))]
+    else
+      _ -> []
+    end
+  end
+
+  # A rule whose frontmatter is refused still shadows lower-priority rules of
+  # the same name; `discover/1` drops it after deduplication.
+  defp rejected_rule(base, reason) do
+    %{}
+    |> standard_fields()
+    |> Map.merge(base)
+    |> Map.merge(%{content: "", rejected: reason})
+  end
+
+  defp rejection_reason(:too_large),
+    do: "frontmatter exceeds #{div(@max_frontmatter_bytes, 1024)} KiB"
+
+  defp rejection_reason(reason), do: Frontmatter.describe_error(reason)
 
   defp build_rule(:legacy, frontmatter, base) do
     frontmatter
@@ -560,30 +595,34 @@ defmodule CodingAgent.Rules do
     content = String.replace(content, "\r\n", "\n")
 
     case Regex.run(~r/\A---[ \t]*\n(?:(.*?)\n)?---[ \t]*(?:\n|\z)(.*)\z/s, content) do
-      [_, meta, body] -> {parse_metadata(meta), body}
-      nil -> {%{}, content}
+      [_, meta, body] ->
+        with {:ok, frontmatter} <- parse_metadata(meta), do: {:ok, frontmatter, body}
+
+      nil ->
+        {:ok, %{}, content}
     end
   end
 
-  defp parse_metadata(""), do: %{}
+  defp parse_metadata(""), do: {:ok, %{}}
 
   defp parse_metadata(meta) do
-    case YamlElixir.read_from_string(meta) do
-      {:ok, map} when is_map(map) -> normalize_keys(map)
-      {:ok, _other} -> %{}
-      {:error, _reason} -> fallback_metadata(meta)
+    case Frontmatter.parse_yaml(meta, max_bytes: @max_frontmatter_bytes) do
+      {:ok, map} -> map |> Enum.to_list() |> normalize_pairs()
+      {:error, :malformed} -> meta |> fallback_pairs() |> normalize_pairs()
+      {:error, :not_a_mapping} -> {:ok, %{}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
   # Line-by-line `key: value` parse for frontmatter that is not valid YAML.
   # Each value is parsed on its own and kept as the raw string when that fails.
-  defp fallback_metadata(meta) do
+  defp fallback_pairs(meta) do
     meta
     |> String.split("\n")
-    |> Enum.reduce(%{}, fn line, acc ->
+    |> Enum.flat_map(fn line ->
       case Regex.run(~r/^([\w-]+):\s*(.*)$/, line) do
-        [_, key, raw] -> Map.put(acc, normalize_key(key), fallback_value(String.trim(raw)))
-        nil -> acc
+        [_, key, raw] -> [{key, fallback_value(String.trim(raw))}]
+        nil -> []
       end
     end)
   end
@@ -591,21 +630,27 @@ defmodule CodingAgent.Rules do
   defp fallback_value(""), do: nil
 
   defp fallback_value(raw) do
-    case YamlElixir.read_from_string(raw) do
-      {:ok, value} when is_binary(value) or is_boolean(value) or is_number(value) -> value
-      {:ok, value} when is_list(value) -> value
-      _ -> raw
+    case Frontmatter.parse_yaml("value: " <> raw) do
+      {:ok, %{"value" => value}}
+      when is_binary(value) or is_boolean(value) or is_number(value) or is_list(value) ->
+        value
+
+      _ ->
+        raw
     end
   end
 
-  defp normalize_keys(map) do
-    Map.new(map, fn
-      {key, value} when is_binary(key) -> {normalize_key(key), value}
-      pair -> pair
-    end)
+  # Kebab-case keys (`always-apply`) are read as camelCase (`alwaysApply`).
+  # Keys that repeat, also after that normalization, are refused as in
+  # subagent definitions.
+  defp normalize_pairs(pairs) do
+    pairs = Enum.map(pairs, fn {key, value} -> {normalize_key(key), value} end)
+
+    if length(Enum.uniq_by(pairs, &elem(&1, 0))) == length(pairs),
+      do: {:ok, Map.new(pairs)},
+      else: {:error, :duplicate_key}
   end
 
-  # Kebab-case keys (`always-apply`) are read as camelCase (`alwaysApply`).
   defp normalize_key(key) do
     Regex.replace(~r/-([a-z])/, key, fn _, char -> String.upcase(char) end)
   end

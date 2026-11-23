@@ -171,6 +171,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Rule frontmatter (`.cursor/rules/*.mdc` and the other rule sources) is parsed
+  without `YamlElixir.read_from_string`, which called
+  `Application.start(:yamerl)` on every read and could deadlock session start
+  against a stopping application. Skills, subagents and rules now share one
+  parser (`LemonSkills.Frontmatter`); a rule or skill manifest that repeats a
+  frontmatter key, or a rule whose frontmatter exceeds 16 KiB (skills: 64 KiB),
+  is rejected with a warning instead of resolving last-wins (#671).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

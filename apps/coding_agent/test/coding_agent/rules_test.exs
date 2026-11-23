@@ -2,6 +2,7 @@ defmodule CodingAgent.RulesTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Rules
+  import ExUnit.CaptureLog
 
   @moduletag :tmp_dir
 
@@ -439,6 +440,73 @@ defmodule CodingAgent.RulesTest do
 
       refute rulebook.text =~ "db body"
       refute Enum.any?(sections, &(&1.text =~ "orphan"))
+    end
+  end
+
+  describe "frontmatter parsing" do
+    # YamlElixir.read_from_string/1 calls Application.start(:yamerl) on every
+    # read; inside Session init that deadlocked against the application
+    # controller. With yamerl (and yaml_elixir) stopped, parsing must work and
+    # leave them stopped, proving no Application.start/1 is in the path.
+    test "parses .mdc frontmatter without starting yamerl", %{repo: repo} do
+      on_exit(fn -> {:ok, _} = Application.ensure_all_started(:yaml_elixir) end)
+      :ok = Application.stop(:yaml_elixir)
+      :ok = Application.stop(:yamerl)
+
+      write!(
+        Path.join(repo, ".cursor/rules/ts.mdc"),
+        "---\ndescription: TypeScript\nglobs: [\"*.ts\"]\nalwaysApply: false\n---\nts body"
+      )
+
+      write!(Path.join(repo, ".cursor/rules/loose.mdc"), "---\nglobs: *.ex\n---\nex body")
+
+      rules = by_name(Rules.discover(repo))
+
+      assert rules["ts"].description == "TypeScript"
+      assert rules["ts"].globs == ["*.ts"]
+      assert rules["loose"].globs == ["*.ex"]
+      refute List.keymember?(Application.started_applications(), :yamerl, 0)
+      refute List.keymember?(Application.started_applications(), :yaml_elixir, 0)
+    end
+
+    test "duplicate keys reject the rule, which still shadows its namesake", %{
+      repo: repo,
+      agent_dir: agent_dir
+    } do
+      write!(Path.join(agent_dir, "rules/dup.md"), "---\nalwaysApply: true\n---\nglobal body")
+
+      write!(
+        Path.join(repo, ".lemon/rules/dup.md"),
+        "---\nalwaysApply: false\nalwaysApply: true\n---\nproject body"
+      )
+
+      write!(
+        Path.join(repo, ".lemon/rules/kebab.md"),
+        "---\nalways-apply: false\nalwaysApply: true\n---\nkebab body"
+      )
+
+      write!(
+        Path.join(repo, ".lemon/rules/loose.md"),
+        "---\nglobs: *.ts\nglobs: *.js\n---\nloose body"
+      )
+
+      log = capture_log(fn -> assert Rules.discover(repo) == [] end)
+
+      assert log =~ "Ignored rule dup: duplicate frontmatter fields"
+      assert log =~ "Ignored rule kebab: duplicate frontmatter fields"
+      assert log =~ "Ignored rule loose: duplicate frontmatter fields"
+    end
+
+    test "oversized frontmatter is refused with a bounded error", %{repo: repo} do
+      write!(
+        Path.join(repo, ".lemon/rules/big.md"),
+        "---\nalwaysApply: true\n# " <> String.duplicate("x", 16_384) <> "\n---\nbig body"
+      )
+
+      log = capture_log(fn -> assert Rules.discover(repo) == [] end)
+
+      assert log =~ "Ignored rule big: frontmatter exceeds 16 KiB"
+      refute log =~ "xxxx"
     end
   end
 

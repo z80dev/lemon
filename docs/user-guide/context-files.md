@@ -217,6 +217,11 @@ file and Windsurf `global_rules.md`) always apply unless they have a
 `always-apply`, `stream-pattern` and `injection-limit` are accepted. Files with
 an empty body are ignored.
 
+A rule whose frontmatter repeats a key (including `always-apply` next to
+`alwaysApply`) or exceeds 16 KiB is ignored with a warning naming the rule. Like
+an invalid stream declaration, it still shadows lower-priority rules of the same
+name, so a malformed project rule cannot expose a global one.
+
 An invalid `streamPattern` (including an empty string, non-string value or
 unsupported UTF mode), or a supplied `injectionLimit` that is not a positive
 integer, disables that declaration. It never becomes an ordinary prompt rule.
