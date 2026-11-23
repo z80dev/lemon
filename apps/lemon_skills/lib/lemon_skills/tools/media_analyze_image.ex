@@ -13,20 +13,18 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   alias LemonAi.Types.TextContent
   alias LemonCore.Config
   alias LemonSkills.Tools.MediaCommon
-  alias LemonMedia.MediaJobSupervisor
 
   import LemonSkills.Tools.MediaCommon,
     only: [
       bounded_integer: 3,
       optional_string: 1,
       provider_error_kind: 1,
-      transient_status?: 1,
-      wait_for_job: 3
+      transient_status?: 1
     ]
 
-  @topic "media_jobs"
-  @default_timeout_ms 15_000
-  @max_timeout_ms 120_000
+  @local_timeout_ms 15_000
+  @provider_timeout_ms 120_000
+  @max_timeout_ms 300_000
   @max_image_bytes 20 * 1024 * 1024
   @local_provider "local_vision"
   @openai_provider "openai_vision"
@@ -118,7 +116,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
             "description" => "Maximum time to wait for the supervised media worker."
           }
         },
-        "required" => ["imagePath"]
+        "required" => ["imagePath", "provider"]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -130,14 +128,14 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
 
   Reads `"imagePath"` (required; must be a regular file of 20MB or less under
   the project), `"prompt"` (defaults to `"Describe the image and note any
-  visible text."`), `"provider"` (defaults to `"local_vision"`; the only other
-  accepted value is `"openai_vision"`), `"model"` (defaults to
+  visible text."`), `"provider"` (required: `"local_vision"` or
+  `"openai_vision"`), `"model"` (defaults to
   `"local_vision_preview"` for local jobs and `"gpt-4o-mini"` for OpenAI),
   `"detail"` (defaults to `"auto"`), `"filename"`,
   `"responseFormat"`/`"response_format"` (defaults to `"json"`; `"text"` is
   the other accepted value), `"maxRetries"` (defaults to `1`, clamped 0-3),
   `"sendToChannel"` (defaults to `false`), and `"timeoutMs"` (defaults to
-  `15_000`, clamped 100-120_000).
+  `15_000` local or `120_000` provider-backed, clamped 100-300_000).
 
   On success returns a `%LemonAgent.Types.AgentToolResult{}` marked
   `trust: :untrusted`, with `content` the pretty-printed JSON payload and
@@ -157,12 +155,12 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
          {:ok, provider} <- provider(params),
          {:ok, generation} <- generation(provider, params, image),
          {:ok, runtime} <- runtime(cwd, opts, generation),
-         {:ok, timeout_ms} <- MediaCommon.timeout_ms(params, @default_timeout_ms, @max_timeout_ms),
+         {:ok, timeout_ms} <-
+           MediaCommon.timeout_ms(params, default_timeout_ms(provider), @max_timeout_ms),
          {:ok, artifact_path} <-
            MediaCommon.artifact_path(params, cwd, opts, generation.format, "media-analysis"),
-         :ok <- Phoenix.PubSub.subscribe(LemonCore.PubSub, @topic),
-         {:ok, _pid, queued_job} <-
-           MediaJobSupervisor.start_job(
+         {:ok, completed_job} <-
+           MediaCommon.run_job(
              %{
                type: :vision,
                provider: provider,
@@ -176,10 +174,10 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
                opts,
                artifact_path,
                runner(artifact_path, image, prompt, generation, runtime)
-             )
-           ),
-         :ok <- AbortHelpers.check_abort(signal),
-         {:ok, completed_job} <- wait_for_job(queued_job.job_id, timeout_ms, signal) do
+             ),
+             timeout_ms,
+             signal
+           ) do
       payload = payload(completed_job, artifact_path, params)
 
       %AgentToolResult{
@@ -239,13 +237,17 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   defp prompt(params), do: {:ok, optional_string(params["prompt"]) || @default_prompt}
 
   defp provider(params) do
-    case Map.get(params, "provider", @local_provider) do
+    case Map.get(params, "provider") do
       @local_provider -> {:ok, @local_provider}
       @openai_provider -> {:ok, @openai_provider}
+      nil -> {:error, "provider is required"}
       other when is_binary(other) -> {:error, "unsupported media vision provider: #{other}"}
       _other -> {:error, "provider must be a string"}
     end
   end
+
+  defp default_timeout_ms(@local_provider), do: @local_timeout_ms
+  defp default_timeout_ms(_provider), do: @provider_timeout_ms
 
   defp generation(@local_provider, params, _image) do
     with {:ok, format} <- analysis_format(params) do

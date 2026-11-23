@@ -5,7 +5,7 @@ defmodule LemonSkills.Tools.MediaCommon do
 
   alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
   alias LemonAgent.Tools.AbortHelpers
-  alias LemonMedia.MediaJobs
+  alias LemonMedia.{MediaJobSupervisor, MediaJobs}
 
   @default_openai_base_url "https://api.openai.com/v1"
 
@@ -189,24 +189,40 @@ defmodule LemonSkills.Tools.MediaCommon do
   def transient_status?(status) when is_integer(status) and status >= 500, do: true
   def transient_status?(_status), do: false
 
-  def wait_for_job(job_id, timeout_ms, signal) do
-    receive do
-      {:media_job, :completed, %{job_id: ^job_id} = job} ->
+  @doc """
+  Runs one media job under `LemonMedia.MediaJobSupervisor` and waits for it
+  against a single `timeout_ms` deadline, polling `signal` for abort.
+
+  A timed-out or aborted job is killed (cancelling its provider request) and
+  recorded `:cancelled`; the timeout error names the job id so the record
+  stays observable through `media_status`.
+  """
+  def run_job(attrs, job_opts, timeout_ms, signal) do
+    job_opts =
+      Keyword.merge(job_opts,
+        timeout_ms: timeout_ms,
+        aborted?: fn -> AbortHelpers.aborted?(signal) end
+      )
+
+    case MediaJobSupervisor.run_job(attrs, job_opts) do
+      {:ok, job} ->
         {:ok, job}
 
-      {:media_job, :failed, %{job_id: ^job_id} = job} ->
+      {:error, {:failed, job}} ->
         {:error, "media job failed: #{Map.get(job, :error_kind, "unknown")}"}
 
-      {:media_job, _event, %{job_id: ^job_id}} ->
-        case AbortHelpers.check_abort(signal) do
-          :ok -> wait_for_job(job_id, timeout_ms, signal)
-          {:error, reason} -> {:error, reason}
-        end
+      {:error, {:cancelled, :timeout, job}} ->
+        {:error,
+         "media job #{job.job_id} timed out after #{timeout_ms}ms and was cancelled; see media_status"}
 
-      _other ->
-        wait_for_job(job_id, timeout_ms, signal)
-    after
-      timeout_ms -> {:error, "media job timed out after #{timeout_ms}ms"}
+      {:error, {:cancelled, :aborted, _job}} ->
+        {:error, "Operation aborted"}
+
+      {:error, reason} when is_atom(reason) ->
+        {:error, "media job could not start: #{reason}"}
+
+      {:error, _reason} ->
+        {:error, "media job could not be recorded"}
     end
   end
 

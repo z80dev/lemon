@@ -91,6 +91,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Breaking:** media tools (`media_generate_image`, `media_generate_speech`,
+  `media_transcribe_audio`, `media_analyze_image`, `media_generate_video`) now
+  require `provider`; omitting it returns `provider is required` instead of a
+  fabricated local preview. Provider-backed calls get provider-sized default
+  timeouts (2–15 minutes) instead of the local-preview defaults (#664).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -171,6 +176,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Media jobs never outlive their tool call: a timeout, abort or caller exit kills
+  the job (cancelling its provider request) and records it `cancelled` instead
+  of leaving it `running` and billing after the tool reported failure; the wait
+  uses one fixed deadline that unrelated messages cannot extend, and the
+  timeout error names the job id (#664).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

@@ -10,6 +10,9 @@
 
 ### Changed
 
+- **Breaking:** media tools require `provider`, use provider-specific default
+  timeouts, and run jobs through `LemonMedia.MediaJobSupervisor.run_job/2`, which
+  cancels timed-out or aborted jobs (#664).
 - Share media-tool job, artifact, credential, and response helpers, including
   recursive atom conversion inside lists in redacted job metadata.
 - Share skill-state file locking while preserving each store's retry budget.

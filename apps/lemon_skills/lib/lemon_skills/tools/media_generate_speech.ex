@@ -14,7 +14,6 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   alias LemonAi.Types.TextContent
   alias LemonCore.Config
   alias LemonSkills.Tools.MediaCommon
-  alias LemonMedia.MediaJobSupervisor
 
   import LemonSkills.Tools.MediaCommon,
     only: [
@@ -23,13 +22,12 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
       provider_config_value: 2,
       provider_error_kind: 1,
       reject_blank_values: 1,
-      transient_status?: 1,
-      wait_for_job: 3
+      transient_status?: 1
     ]
 
-  @topic "media_jobs"
-  @default_timeout_ms 10_000
-  @max_timeout_ms 120_000
+  @local_timeout_ms 10_000
+  @provider_timeout_ms 120_000
+  @max_timeout_ms 300_000
   @local_provider "local_wav"
   @openai_provider "openai_tts"
   @elevenlabs_provider "elevenlabs_tts"
@@ -133,7 +131,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
             "description" => "Maximum time to wait for the supervised media worker."
           }
         },
-        "required" => ["text"]
+        "required" => ["text", "provider"]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -144,8 +142,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   `params` map, `signal`, `on_update` callback, `cwd`, and `opts`.
 
   Reads `"text"` (required, non-empty after trimming, at most 4096
-  characters), `"provider"` (defaults to `"local_wav"`; the other accepted
-  values are `"openai_tts"`, `"elevenlabs_tts"`, and `"google_tts"`),
+  characters), `"provider"` (required: `"local_wav"`, `"openai_tts"`, `"elevenlabs_tts"`, and `"google_tts"`),
   `"model"` (defaults to `"local_wav_preview"`, `"gpt-4o-mini-tts"`,
   `"eleven_turbo_v2_5"`, or `"cloud_tts_v1"` per provider), `"voice"`
   (defaults to `"alloy"` for OpenAI, the configured ElevenLabs voice id, or
@@ -155,7 +152,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   `google_tts` only supports `"mp3"`), `"speed"` (OpenAI only, clamped
   0.25-4.0), `"maxRetries"` (defaults to `1`, clamped 0-3),
   `"sendToChannel"` (defaults to `false`), and `"timeoutMs"` (defaults to
-  `10_000`, clamped 100-120_000).
+  `10_000` local or `120_000` provider-backed, clamped 100-300_000).
 
   On success returns a `%LemonAgent.Types.AgentToolResult{}` with `content`
   the pretty-printed JSON payload and `details` the payload map (`job_id`,
@@ -172,12 +169,12 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
          {:ok, text} <- required_text(params),
          {:ok, provider} <- provider(params),
          {:ok, generation} <- generation(provider, params),
-         {:ok, timeout_ms} <- MediaCommon.timeout_ms(params, @default_timeout_ms, @max_timeout_ms),
+         {:ok, timeout_ms} <-
+           MediaCommon.timeout_ms(params, default_timeout_ms(provider), @max_timeout_ms),
          {:ok, artifact_path} <-
            MediaCommon.artifact_path(params, cwd, opts, generation.format, "media-speech"),
-         :ok <- Phoenix.PubSub.subscribe(LemonCore.PubSub, @topic),
-         {:ok, _pid, queued_job} <-
-           MediaJobSupervisor.start_job(
+         {:ok, completed_job} <-
+           MediaCommon.run_job(
              %{
                type: :tts,
                provider: provider,
@@ -191,10 +188,10 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
                opts,
                artifact_path,
                runner(cwd, opts, artifact_path, generation)
-             )
-           ),
-         :ok <- AbortHelpers.check_abort(signal),
-         {:ok, completed_job} <- wait_for_job(queued_job.job_id, timeout_ms, signal) do
+             ),
+             timeout_ms,
+             signal
+           ) do
       payload = payload(completed_job, artifact_path, params)
 
       %AgentToolResult{
@@ -217,15 +214,19 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   defp required_text(_params), do: {:error, "text is required"}
 
   defp provider(params) do
-    case Map.get(params, "provider", @local_provider) do
+    case Map.get(params, "provider") do
       @local_provider -> {:ok, @local_provider}
       @openai_provider -> {:ok, @openai_provider}
       @elevenlabs_provider -> {:ok, @elevenlabs_provider}
       @google_provider -> {:ok, @google_provider}
+      nil -> {:error, "provider is required"}
       other when is_binary(other) -> {:error, "unsupported media speech provider: #{other}"}
       _other -> {:error, "provider must be a string"}
     end
   end
+
+  defp default_timeout_ms(@local_provider), do: @local_timeout_ms
+  defp default_timeout_ms(_provider), do: @provider_timeout_ms
 
   defp generation(@local_provider, _params) do
     {:ok,

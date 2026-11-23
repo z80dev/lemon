@@ -14,7 +14,6 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   alias LemonAi.Types.TextContent
   alias LemonCore.Config
   alias LemonSkills.Tools.MediaCommon
-  alias LemonMedia.MediaJobSupervisor
 
   import LemonSkills.Tools.MediaCommon,
     only: [
@@ -22,13 +21,12 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
       optional_string: 1,
       provider_error_kind: 1,
       reject_blank_values: 1,
-      transient_status?: 1,
-      wait_for_job: 3
+      transient_status?: 1
     ]
 
-  @topic "media_jobs"
-  @default_timeout_ms 5_000
-  @max_timeout_ms 30_000
+  @local_timeout_ms 5_000
+  @provider_timeout_ms 180_000
+  @max_timeout_ms 600_000
   @local_provider "local_svg"
   @openai_provider "openai_image"
   @vertex_provider "vertex_imagen"
@@ -114,7 +112,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
             "description" => "Maximum time to wait for the supervised media worker."
           }
         },
-        "required" => ["prompt"]
+        "required" => ["prompt", "provider"]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -125,14 +123,14 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   `params` map, `signal`, `on_update` callback, `cwd`, and `opts`.
 
   Reads `"prompt"` (required, non-empty after trimming), `"provider"`
-  (defaults to `"local_svg"`; the other accepted values are `"openai_image"`
-  and `"vertex_imagen"`), `"model"` (defaults to `"local_svg_preview"`,
+  (required: `"local_svg"`, `"openai_image"`, or
+  `"vertex_imagen"`), `"model"` (defaults to `"local_svg_preview"`,
   `"gpt-image-1"`, or `"imagen-4.0-generate-001"` per provider), `"filename"`,
   `"size"` (for Vertex, `"1024x1024"` maps to aspect ratio `"1:1"`),
   `"quality"` (OpenAI only), `"outputFormat"`/`"output_format"` (defaults to
   `"png"`; `"jpg"` maps to `"jpeg"`), `"maxRetries"` (defaults to `1`, clamped
   0-3), `"sendToChannel"` (defaults to `false`), and `"timeoutMs"` (defaults
-  to `5_000`, clamped 100-30_000).
+  to `5_000` local or `180_000` provider-backed, clamped 100-600_000).
 
   On success returns a `%LemonAgent.Types.AgentToolResult{}` with `content`
   the pretty-printed JSON payload and `details` the payload map (`job_id`,
@@ -149,12 +147,12 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
          {:ok, prompt} <- required_prompt(params),
          {:ok, provider} <- provider(params),
          {:ok, generation} <- generation(provider, params),
-         {:ok, timeout_ms} <- MediaCommon.timeout_ms(params, @default_timeout_ms, @max_timeout_ms),
+         {:ok, timeout_ms} <-
+           MediaCommon.timeout_ms(params, default_timeout_ms(provider), @max_timeout_ms),
          {:ok, artifact_path} <-
            MediaCommon.artifact_path(params, cwd, opts, generation.format, "media-preview"),
-         :ok <- Phoenix.PubSub.subscribe(LemonCore.PubSub, @topic),
-         {:ok, _pid, queued_job} <-
-           MediaJobSupervisor.start_job(
+         {:ok, completed_job} <-
+           MediaCommon.run_job(
              %{
                type: :image,
                provider: provider,
@@ -168,10 +166,10 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
                opts,
                artifact_path,
                runner(cwd, opts, artifact_path, generation)
-             )
-           ),
-         :ok <- AbortHelpers.check_abort(signal),
-         {:ok, completed_job} <- wait_for_job(queued_job.job_id, timeout_ms, signal) do
+             ),
+             timeout_ms,
+             signal
+           ) do
       payload = payload(completed_job, artifact_path, params)
 
       %AgentToolResult{
@@ -189,14 +187,18 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   defp required_prompt(_params), do: {:error, "prompt is required"}
 
   defp provider(params) do
-    case Map.get(params, "provider", @local_provider) do
+    case Map.get(params, "provider") do
       @local_provider -> {:ok, @local_provider}
       @openai_provider -> {:ok, @openai_provider}
       @vertex_provider -> {:ok, @vertex_provider}
+      nil -> {:error, "provider is required"}
       other when is_binary(other) -> {:error, "unsupported media provider: #{other}"}
       _other -> {:error, "provider must be a string"}
     end
   end
+
+  defp default_timeout_ms(@local_provider), do: @local_timeout_ms
+  defp default_timeout_ms(_provider), do: @provider_timeout_ms
 
   defp generation(@local_provider, _params) do
     {:ok,

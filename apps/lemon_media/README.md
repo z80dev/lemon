@@ -11,8 +11,8 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 | Module | Purpose |
 |---|---|
 | `LemonMedia.MediaJobs` | The job record store: `record/2`, `recent/1`, `summary/1`, `cleanup/1` |
-| `LemonMedia.MediaJobSupervisor` | `Task.Supervisor` facade for one-shot jobs, with `start_job/2` and `status/0` |
-| `LemonMedia.MediaJobWorker` | Stateless job runner that records `queued → running → completed`/`failed` |
+| `LemonMedia.MediaJobSupervisor` | Bounded task supervisor; `run_job/2` runs one job synchronously against a deadline, `status/0` reports activity |
+| `LemonMedia.MediaJobWorker` | Job body that records `queued → running → completed`/`failed` |
 
 `mix lemon.media` inspects jobs and artifacts from the command line.
 
@@ -32,31 +32,33 @@ LemonMedia.MediaJobs.record(
 )
 ```
 
-Or let a supervised task run it and record each transition:
+Or run it under the job supervisor and wait for the outcome:
 
 ```elixir
-{:ok, _pid, job} =
-  LemonMedia.MediaJobSupervisor.start_job(
+{:ok, job} =
+  LemonMedia.MediaJobSupervisor.run_job(
     %{type: :video, provider: "runway"},
-    runner: fn attrs -> {:ok, %{artifact: "/path/to/out.mp4"}} end
+    runner: fn attrs -> {:ok, %{artifact_path: "/path/to/out.mp4"}} end,
+    timeout_ms: 600_000,
+    aborted?: fn -> false end
   )
 ```
 
-Each lifecycle transition is broadcast on the `"media_jobs"` topic of
-`LemonCore.PubSub` as `{:media_job, event, job}`.
-
-Jobs are temporary supervised tasks: a crash or cancellation is not restarted.
-The returned PID remains the cancellation handle. As before, terminating it
-does not invent a terminal transition; the last durable record remains
-`:running` unless the runner itself returns or raises and the job records a
-normal completion or failure.
+`run_job/2` waits against one monotonic deadline; unrelated mailbox messages
+are neither consumed nor extend it. A job never outlives its caller: on
+timeout (`{:error, {:cancelled, :timeout, job}}`), abort
+(`{:error, {:cancelled, :aborted, job}}`) or caller exit the job process is
+killed, which cancels any in-flight provider request, and the record ends
+`:cancelled`. A job that crashes or is killed by someone else ends `:failed`
+(`{:error, {:failed, job}}`); runner errors also end `:failed`. Jobs are never
+restarted or retried.
 
 Admission is bounded to 1024 concurrent jobs by default. Configure
 `:lemon_core, :task_supervisor_max_children` with a map entry keyed by
-`LemonMedia.MediaJobSupervisor` to change that cap. `start_job/2` returns
+`LemonMedia.MediaJobSupervisor` to change that cap. `run_job/2` returns
 `{:error, :task_capacity_reached}` or `{:error, :task_supervisor_unavailable}`
-without running the job when admission is rejected. Its already-created queued
-record is marked failed and a failed event is published; no retry is scheduled.
+without running the job when admission is rejected, after marking the queued
+record failed.
 
 Job types are `:media`, `:image`, `:video`, `:audio`, `:tts`, `:stt`, `:vision`
 and `:browser`; statuses are `:queued`, `:running`, `:completed`, `:failed` and

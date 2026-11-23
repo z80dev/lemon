@@ -27,8 +27,7 @@ defmodule LemonMedia.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
-      {:jason, "~> 1.4"},
-      {:phoenix_pubsub, "~> 2.1"}
+      {:jason, "~> 1.4"}
     ]
   end
 end

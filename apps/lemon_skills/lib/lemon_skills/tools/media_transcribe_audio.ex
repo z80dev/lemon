@@ -15,7 +15,6 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   alias LemonAi.Types.TextContent
   alias LemonCore.Config
   alias LemonSkills.Tools.MediaCommon
-  alias LemonMedia.MediaJobSupervisor
 
   import LemonSkills.Tools.MediaCommon,
     only: [
@@ -25,13 +24,12 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
       provider_error_kind: 1,
       reject_blank_values: 1,
       stringify_atoms: 1,
-      transient_status?: 1,
-      wait_for_job: 3
+      transient_status?: 1
     ]
 
-  @topic "media_jobs"
-  @default_timeout_ms 15_000
-  @max_timeout_ms 120_000
+  @local_timeout_ms 15_000
+  @provider_timeout_ms 180_000
+  @max_timeout_ms 600_000
   @max_audio_bytes 25 * 1024 * 1024
   @local_provider "local_transcript"
   @openai_provider "openai_transcribe"
@@ -133,7 +131,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
             "description" => "Maximum time to wait for the supervised media worker."
           }
         },
-        "required" => ["audioPath"]
+        "required" => ["audioPath", "provider"]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -146,7 +144,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   Reads from `params`:
 
   - `"audioPath"` (required) - local audio file path under `cwd`
-  - `"provider"` (default `"local_transcript"`) - `"local_transcript"`,
+  - `"provider"` (required) - `"local_transcript"`,
     `"openai_transcribe"`, or `"deepgram_transcribe"`
   - `"model"` (optional) - provider model override
   - `"language"` (optional) - input language hint
@@ -156,7 +154,8 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
     `"json"` or `"text"`
   - `"maxRetries"` (default `1`, clamped to 0-3) - transient provider retries
   - `"sendToChannel"` (default `false`) - request final Telegram/Discord delivery
-  - `"timeoutMs"` (default `15_000`, clamped to 100-120_000) - media worker wait
+  - `"timeoutMs"` (default `15_000` local or `180_000` provider-backed,
+    clamped to 100-600_000) - media worker wait
 
   Returns `%LemonAgent.Types.AgentToolResult{}` on success with `content` holding
   the pretty-printed JSON payload and `details` the payload map (job id/status/type,
@@ -171,12 +170,12 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
          {:ok, audio} <- audio_file(params, cwd),
          {:ok, provider} <- provider(params),
          {:ok, generation} <- generation(provider, params),
-         {:ok, timeout_ms} <- MediaCommon.timeout_ms(params, @default_timeout_ms, @max_timeout_ms),
+         {:ok, timeout_ms} <-
+           MediaCommon.timeout_ms(params, default_timeout_ms(provider), @max_timeout_ms),
          {:ok, artifact_path} <-
            MediaCommon.artifact_path(params, cwd, opts, generation.format, "media-transcript"),
-         :ok <- Phoenix.PubSub.subscribe(LemonCore.PubSub, @topic),
-         {:ok, _pid, queued_job} <-
-           MediaJobSupervisor.start_job(
+         {:ok, completed_job} <-
+           MediaCommon.run_job(
              %{
                type: :stt,
                provider: provider,
@@ -190,10 +189,10 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
                opts,
                artifact_path,
                runner(cwd, opts, artifact_path, audio, generation)
-             )
-           ),
-         :ok <- AbortHelpers.check_abort(signal),
-         {:ok, completed_job} <- wait_for_job(queued_job.job_id, timeout_ms, signal) do
+             ),
+             timeout_ms,
+             signal
+           ) do
       payload = payload(completed_job, artifact_path, params)
 
       %AgentToolResult{
@@ -251,7 +250,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   defp audio_size(_stat), do: {:error, "audio file must be 25MB or smaller"}
 
   defp provider(params) do
-    case Map.get(params, "provider", @local_provider) do
+    case Map.get(params, "provider") do
       @local_provider ->
         {:ok, @local_provider}
 
@@ -261,6 +260,9 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
       @deepgram_provider ->
         {:ok, @deepgram_provider}
 
+      nil ->
+        {:error, "provider is required"}
+
       other when is_binary(other) ->
         {:error, "unsupported media transcription provider: #{other}"}
 
@@ -268,6 +270,9 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
         {:error, "provider must be a string"}
     end
   end
+
+  defp default_timeout_ms(@local_provider), do: @local_timeout_ms
+  defp default_timeout_ms(_provider), do: @provider_timeout_ms
 
   defp generation(@local_provider, _params) do
     {:ok,
