@@ -171,6 +171,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Channel replies that hit a sentence end near the chunk limit no longer crash
+  or hang the outbox: the chunker counts sentence breaks in graphemes, always
+  makes progress and rejects a non-positive chunk size, and the outbox splits
+  replies in the enqueueing process instead of its queue owner (#627).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
