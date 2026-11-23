@@ -171,6 +171,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Exec approvals are indexed by run and session, so run and session end read
+  only that owner's approvals instead of the whole approval table. Terminal
+  approval receipts are swept after 24 hours
+  (`:exec_approval_receipt_retention_ms`); resolving a swept ID returns
+  `not_found`. Approval recovery at boot no longer stops `:lemon_core` when the
+  store is unavailable (it retries with backoff and refuses resolution
+  meanwhile), and native session start gets an error instead of a crash when
+  the approval worker does not answer within 2 seconds (#694).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

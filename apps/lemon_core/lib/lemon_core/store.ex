@@ -46,8 +46,9 @@ defmodule LemonCore.Store do
 
   ## Expiring entries
 
-  Values in `:chat` and `:openai_compat_run_owners` that carry an integer
-  `:expires_at` (epoch milliseconds)
+  Values in `:chat`, `:openai_compat_run_owners` and `:exec_approvals_pending`
+  (terminal approval receipts) that carry an integer `:expires_at` (epoch
+  milliseconds)
   are removed by the periodic sweep once that time passes. Owners stamp the
   field; the store only enforces it.
 
@@ -82,7 +83,7 @@ defmodule LemonCore.Store do
   # Sweep interval: 5 minutes in milliseconds
   @sweep_interval_ms 5 * 60 * 1000
   # Tables whose values may carry an `:expires_at` stamp for the periodic sweep.
-  @expiring_tables [:chat, :openai_compat_run_owners]
+  @expiring_tables [:chat, :openai_compat_run_owners, :exec_approvals_pending]
   @default_introspection_retention_days 7
   @default_introspection_retention_ms @default_introspection_retention_days * 24 * 60 * 60 * 1000
   @default_introspection_query_limit 100

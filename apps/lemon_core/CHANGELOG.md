@@ -210,6 +210,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `LemonCore.ExecApprovals.expire_owner/1` reads only the owner's approvals
+  through a new run/session owner index (`ExecApprovalStore.index_owner/2`,
+  `fetch_owner_index/1`, `unindex_owner/2`). Terminal records carry an
+  `:expires_at` stamp (`ExecApprovalStore.terminal_record/1`,
+  `receipt_retention_ms/0`, default 24 hours) and are removed by the Store sweep;
+  recovery stamps older terminal records. `LemonCore.ExecApprovalExpiry`
+  recovers in `handle_continue/2` with backoff instead of stopping on a store
+  error, and `watch_session/3` takes a timeout (default 2 s) and returns
+  `{:error, :timeout}` instead of exiting (#694).
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
   (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase

@@ -8,8 +8,11 @@ defmodule LemonCore.ExecApprovalExpiry do
   transition and cannot overwrite a resolution.
 
   Pending records carry a private VM incarnation and native owner PID. Startup
-  reconciles retained records before this worker accepts calls: owners from an
-  earlier runtime cannot still exist. An expiry-worker restart keeps the same
+  reconciles retained records (in `handle_continue/2`, before any call is
+  served): owners from an earlier runtime cannot still exist. A store that is
+  unavailable at startup never stops the worker or `:lemon_core`; reconciliation
+  is retried with exponential backoff, and until it succeeds `ensure_ready/0`
+  returns `{:error, :store_unavailable}`, so no approval can be resolved. An expiry-worker restart keeps the same
   incarnation, preserves live approvals and restores their session monitors.
   Resolution also checks this evidence, closing the startup/monitor-delivery race.
   Session ownership is retained separately in Store from session initialization,
@@ -24,6 +27,11 @@ defmodule LemonCore.ExecApprovalExpiry do
   alias LemonCore.{ExecApprovals, ExecApprovalStore}
 
   @runtime_key {__MODULE__, :runtime_id}
+  # Shorter than the Store call timeout, so a slow store fails session start
+  # with an error instead of the caller's exit.
+  @watch_timeout_ms 2_000
+  @retry_initial_ms 100
+  @retry_max_ms 30_000
 
   @doc false
   def start_link(opts \\ []) do
@@ -48,9 +56,21 @@ defmodule LemonCore.ExecApprovalExpiry do
     end
   end
 
-  @doc "Register a native session's ownership before it can request approval."
-  def watch_session(session_id, pid) when is_binary(session_id) and is_pid(pid) do
-    GenServer.call(__MODULE__, {:watch_session, session_id, pid})
+  @doc """
+  Register a native session's ownership before it can request approval.
+
+  Returns `{:error, :timeout}` when the worker does not answer within
+  `timeout_ms` (default #{@watch_timeout_ms} ms), and the store's error when
+  ownership could not be recorded. A late registration of a session that has
+  already stopped is cleaned up by its monitor.
+  """
+  @spec watch_session(binary(), pid(), timeout()) :: :ok | {:error, term()}
+  def watch_session(session_id, pid, timeout_ms \\ @watch_timeout_ms)
+      when is_binary(session_id) and is_pid(pid) do
+    GenServer.call(__MODULE__, {:watch_session, session_id, pid}, timeout_ms)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+    :exit, _ -> {:error, :unavailable}
   end
 
   @doc false
@@ -81,47 +101,81 @@ defmodule LemonCore.ExecApprovalExpiry do
 
   @impl true
   def init(_opts) do
-    with {:ok, _count} <- ExecApprovals.reconcile_runtime(),
-         {:ok, owners} <- ExecApprovalStore.fetch_session_owners(),
-         {:ok, rows} <- ExecApprovalStore.fetch_pending_list() do
-      runtime = runtime_id()
+    {:ok, %{sessions: %{}, monitors: %{}, ready: false, retry_ms: @retry_initial_ms},
+     {:continue, :reconcile}}
+  end
 
-      state =
-        Enum.reduce(owners, %{sessions: %{}, monitors: %{}}, fn
-          {id, %{runtime_id: ^runtime, pid: pid}}, state when is_pid(pid) ->
-            monitor_session(state, id, pid)
+  @impl true
+  def handle_continue(:reconcile, state), do: reconcile(state)
 
-          {id, _owner}, state ->
-            :ok = ExecApprovalStore.delete_session_owner(id)
-            state
-        end)
+  defp reconcile(state) do
+    case recover(state) do
+      {:ok, state} ->
+        {:noreply, %{state | ready: true, retry_ms: @retry_initial_ms}}
 
-      state =
-        Enum.reduce(rows, state, fn {_id, pending}, state ->
-          case pending do
-            %{session_id: id, owner_session_pid: pid} when is_binary(id) and is_pid(pid) ->
-              monitor_session(state, id, pid)
+      {:error, reason} ->
+        Logger.warning(
+          "exec approval recovery failed (#{inspect(reason)}); retrying in #{state.retry_ms} ms"
+        )
 
-            _ ->
-              state
-          end
-        end)
-
-      {:ok, state}
-    else
-      {:error, reason} -> {:stop, reason}
+        Process.send_after(self(), :reconcile, state.retry_ms)
+        {:noreply, %{state | retry_ms: min(state.retry_ms * 2, @retry_max_ms)}}
     end
+  end
+
+  defp recover(state) do
+    with {:ok, _count} <- safely(&ExecApprovals.reconcile_runtime/0),
+         {:ok, owners} <- safely(&ExecApprovalStore.fetch_session_owners/0),
+         {:ok, state} <- restore_owners(owners, state),
+         {:ok, rows} <- safely(&ExecApprovalStore.fetch_pending_list/0) do
+      {:ok, Enum.reduce(rows, state, &restore_pending/2)}
+    end
+  end
+
+  defp restore_owners(owners, state) do
+    runtime = runtime_id()
+
+    Enum.reduce_while(owners, {:ok, state}, fn
+      {id, %{runtime_id: ^runtime, pid: pid}}, {:ok, state} when is_pid(pid) ->
+        {:cont, {:ok, monitor_session(state, id, pid)}}
+
+      {id, _owner}, {:ok, state} ->
+        case ExecApprovalStore.delete_session_owner(id) do
+          :ok -> {:cont, {:ok, state}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+    end)
+  end
+
+  defp restore_pending({_id, %{session_id: id, owner_session_pid: pid}}, state)
+       when is_binary(id) and is_pid(pid),
+       do: monitor_session(state, id, pid)
+
+  defp restore_pending(_row, state), do: state
+
+  defp safely(fun) do
+    fun.()
+  catch
+    _kind, _reason -> {:error, :store_unavailable}
   end
 
   @impl true
   def handle_call({:watch_session, id, pid}, _from, state) do
     case ExecApprovalStore.put_session_owner(id, %{runtime_id: runtime_id(), pid: pid}) do
-      :ok -> {:reply, :ok, monitor_session(state, id, pid)}
-      {:error, _} = error -> {:reply, error, state}
+      :ok ->
+        {:reply, :ok, monitor_session(state, id, pid)}
+
+      # The owner row may exist; the monitor removes it when the session stops.
+      {:error, :outcome_unknown} = error ->
+        {:reply, error, monitor_session(state, id, pid)}
+
+      {:error, _} = error ->
+        {:reply, error, state}
     end
   end
 
-  def handle_call(:ready, _from, state), do: {:reply, :ok, state}
+  def handle_call(:ready, _from, %{ready: true} = state), do: {:reply, :ok, state}
+  def handle_call(:ready, _from, state), do: {:reply, {:error, :store_unavailable}, state}
 
   def handle_call({:session_owner, id}, _from, state) do
     pid = Map.get(state.sessions, id) || registered_session(id)
@@ -136,6 +190,8 @@ defmodule LemonCore.ExecApprovalExpiry do
   end
 
   @impl true
+  def handle_info(:reconcile, state), do: reconcile(state)
+
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     case Map.pop(state.monitors, ref) do
       {nil, _monitors} ->

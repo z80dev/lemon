@@ -143,6 +143,60 @@ defmodule LemonCore.ExecApprovalExpiryTest do
     assert_expired(id)
   end
 
+  test "startup with an unavailable store retries instead of stopping lemon_core" do
+    {task, id} = request("store-outage")
+    stop_child(ExecApprovalExpiry)
+    stop_child(Store)
+
+    assert {:ok, worker} = Supervisor.restart_child(LemonCore.Supervisor, ExecApprovalExpiry)
+    # Up, but refusing resolution until recovery has run.
+    assert {:error, :store_unavailable} = ExecApprovalExpiry.ensure_ready()
+    assert {:error, :store_unavailable} = ExecApprovals.resolve(id, :approve_once)
+    assert Process.alive?(worker)
+    assert List.keymember?(Application.started_applications(), :lemon_core, 0)
+
+    restart_child(Store)
+
+    LemonCore.Testing.AsyncHelpers.assert_eventually(
+      fn -> ExecApprovalExpiry.ensure_ready() == :ok end,
+      timeout: 5_000
+    )
+
+    assert Process.whereis(ExecApprovalExpiry) == worker
+    # Same runtime, so the approval survived recovery and resolves normally.
+    assert {:ok, %{outcome: :approved}} = ExecApprovals.resolve(id, :approve_once)
+    assert {:ok, :approved, _scope} = Task.await(task)
+  end
+
+  test "a store slower than the watch timeout returns an error instead of crashing" do
+    store = Process.whereis(Store)
+    worker = Process.whereis(ExecApprovalExpiry)
+    owner = spawn(fn -> receive do: (:stop -> :ok) end)
+    :ok = :sys.suspend(store)
+
+    try do
+      assert {:error, :timeout} = ExecApprovalExpiry.watch_session("slow-store", owner, 50)
+    after
+      :ok = :sys.resume(store)
+    end
+
+    # The worker finishes the late registration and still monitors the owner.
+    assert :ok = ExecApprovalExpiry.ensure_ready()
+    assert Process.whereis(ExecApprovalExpiry) == worker
+    assert {:ok, owners} = ExecApprovalStore.fetch_session_owners()
+    assert List.keymember?(owners, "slow-store", 0)
+
+    Process.exit(owner, :kill)
+
+    LemonCore.Testing.AsyncHelpers.assert_eventually(
+      fn ->
+        {:ok, owners} = ExecApprovalStore.fetch_session_owners()
+        not List.keymember?(owners, "slow-store", 0)
+      end,
+      timeout: 2_000
+    )
+  end
+
   defp request(suffix, opts \\ []) do
     id = "approval-#{suffix}"
 
@@ -188,6 +242,12 @@ defmodule LemonCore.ExecApprovalExpiryTest do
   end
 
   defp stop_child(child), do: :ok = Supervisor.terminate_child(LemonCore.Supervisor, child)
+
+  defp restart_child(ExecApprovalExpiry = child) do
+    {:ok, _pid} = Supervisor.restart_child(LemonCore.Supervisor, child)
+    # Recovery runs in handle_continue, before the worker serves this call.
+    :ok = ExecApprovalExpiry.ensure_ready()
+  end
 
   defp restart_child(child),
     do: {:ok, _pid} = Supervisor.restart_child(LemonCore.Supervisor, child)
