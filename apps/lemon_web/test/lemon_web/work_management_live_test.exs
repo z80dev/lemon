@@ -658,6 +658,93 @@ defmodule LemonWeb.WorkManagementLiveTest do
     KanbanDispatcher.stop_board(board.id, name: dispatcher)
   end
 
+  defmodule BlockingKanbanWorker do
+    @moduledoc false
+    def run(task, _opts) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:worker_ready, task.id})
+
+      receive do
+        :finish -> :ok
+      after
+        10_000 -> {:error, :worker_timeout}
+      end
+    end
+  end
+
+  test "stop confirms across dispatcher ticks that renew a live worker's lease", %{conn: conn} do
+    workspace =
+      Path.join(System.tmp_dir!(), "web-stop-tick-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(workspace)
+
+    {:ok, authority} =
+      LemonAgent.Workspace.KanbanAuthority.new(
+        %{agent_id: "default", session_key: "agent:default:main"},
+        nil,
+        workspace
+      )
+
+    {:ok, board} =
+      KanbanStore.create_board("Web stop across tick", workspace: workspace, authority: authority)
+
+    {:ok, task} = KanbanStore.create_task(board.id, "Long card")
+    :persistent_term.put({BlockingKanbanWorker, :test_pid}, self())
+
+    dispatcher =
+      start_supervised!(
+        {KanbanDispatcher, name: __MODULE__.TickDispatcher, worker_mod: BlockingKanbanWorker}
+      )
+
+    on_exit(fn ->
+      :persistent_term.erase({BlockingKanbanWorker, :test_pid})
+      KanbanStore.clear_board(board.id)
+      File.rm_rf!(workspace)
+    end)
+
+    Application.put_env(:lemon_web, :work_service_fun, fn
+      KanbanStore, :list_boards, _ ->
+        {:ok, [KanbanStore.get_board(board.id)]}
+
+      KanbanStore, :list_tasks, args ->
+        apply(KanbanStore, :list_tasks, args)
+
+      GoalStore, :list, _ ->
+        {:ok, []}
+
+      CronManager, :list, _ ->
+        []
+
+      KanbanDispatcher, :status, [id] ->
+        KanbanDispatcher.status(id, name: dispatcher)
+
+      KanbanDispatcher, fun, [id, opts] ->
+        apply(KanbanDispatcher, fun, [id, Keyword.put(opts, :name, dispatcher)])
+    end)
+
+    {:ok, _} =
+      KanbanDispatcher.start_board(board.id, name: dispatcher, interval_ms: 10, lease_ms: 60_000)
+
+    task_id = task.id
+    assert_receive {:worker_ready, ^task_id}, 5_000
+    _ = :sys.get_state(dispatcher)
+
+    {:ok, view, _} = live(conn, "/automation")
+    preview(view, "boards", board.id, "stop")
+    expires = KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"]
+
+    Enum.reduce_while(1..200, nil, fn _, _ ->
+      Process.sleep(10)
+      renewed = KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"]
+      if renewed > expires, do: {:halt, :ok}, else: {:cont, nil}
+    end)
+
+    assert KanbanStore.get_task(task.id).meta["kanbanLease"]["expiresAtMs"] > expires
+
+    html = render_click(view, "confirm")
+    refute html =~ "State changed since preview"
+    assert {:ok, %{running: false}} = KanbanDispatcher.status(board.id, name: dispatcher)
+  end
+
   test "work without recorded authority is quarantined until an operator reauthorizes it", %{
     conn: conn
   } do

@@ -662,17 +662,40 @@ defmodule LemonAutomation.KanbanDispatcher do
     end
   end
 
-  # Bind operator confirmation to the exact dispatcher and durable leases/runs.
+  # Bind operator confirmation to the exact dispatcher and the operator-visible
+  # board/task state. Heartbeat-only data (lease expiry renewed every tick,
+  # `updated_at_ms`) is excluded so the revision only moves on real transitions.
+  # One task scan per call.
   defp control_revision(board_id, state) do
     dispatcher = Map.get(state.boards, board_id)
 
     invocation =
-      dispatcher && {dispatcher.invocation_id, dispatcher.started_at_ms, dispatcher.running}
+      dispatcher &&
+        {dispatcher.invocation_id, dispatcher.started_at_ms,
+         dispatcher.running |> Map.values() |> Enum.map(& &1.task_id) |> Enum.sort()}
 
-    {KanbanStore.get_board(board_id), KanbanStore.list_tasks(board_id, limit: 10_000), invocation}
+    board = KanbanStore.get_board(board_id) |> Map.delete(:updated_at_ms)
+
+    tasks =
+      board_id
+      |> KanbanStore.list_tasks(limit: 10_000)
+      |> Enum.map(&revision_task/1)
+      |> Enum.sort()
+
+    {board, tasks, invocation}
     |> :erlang.term_to_binary([:deterministic])
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
+  end
+
+  defp revision_task(task) do
+    lease = task.meta["kanbanLease"] || %{}
+    run = task.meta["kanbanRun"] || %{}
+    workflow = task.meta["codingWorkflow"] || %{}
+
+    {task.id, task.status, task.run_id, task.assignee, task.session_key, lease["id"],
+     lease["workerId"], run["runId"], run["status"], run["abortRequested"], workflow["phase"],
+     workflow["cancelRequested"]}
   end
 
   defp public_dispatcher(dispatcher) do
