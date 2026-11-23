@@ -171,6 +171,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- A Tern browser pane reconnects to the daemon after its client dies (daemon
+  restart or socket error) instead of failing every later request with
+  `:closed`; an unopened pane whose daemon is gone falls back like any other
+  unavailable Tern connection (#661).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

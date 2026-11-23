@@ -65,6 +65,37 @@ defmodule LemonBrowser.TernFallbackTest do
     LemonBrowser.TernSession.close(opts)
   end
 
+  test "an unopened pane whose daemon went away falls back instead of failing closed",
+       %{path: path, opts: opts} do
+    daemon(path, "no_window")
+    assert {:error, {:no_window, _}} = LemonBrowser.request("browser.tabs", %{}, 1_000, opts)
+
+    [{session, _}] =
+      Registry.lookup(LemonBrowser.TernSessionRegistry, %{
+        session_id: opts[:session_id],
+        run_id: "run",
+        pane: 123
+      })
+
+    client = :sys.get_state(session).client
+    ref = Process.monitor(client)
+    File.rm!(path)
+    Process.exit(client, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^client, :killed}
+
+    assert {:ok, result} =
+             LemonBrowser.request(
+               "browser.navigate",
+               %{"url" => "https://example.com"},
+               1_000,
+               opts
+             )
+
+    assert result["providerNote"] =~ "local"
+    assert_receive {:local, "browser.navigate", _}
+    LemonBrowser.TernSession.close(opts)
+  end
+
   test "explicit Tern never switches providers", %{path: path, opts: opts} do
     daemon(path, "unsupported")
 

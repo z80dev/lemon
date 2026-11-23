@@ -179,6 +179,7 @@ defmodule LemonBrowser.TernSession do
      %{
        scope: scope,
        client: nil,
+       client_ref: nil,
        block: nil,
        adopted: false,
        cursor: 0,
@@ -248,7 +249,12 @@ defmodule LemonBrowser.TernSession do
     do: {:stop, :normal, state}
 
   def handle_info(%LemonCore.Event{type: :run_completed}, state), do: {:stop, :normal, state}
-  def handle_info({:EXIT, pid, _reason}, %{client: pid} = state), do: {:stop, :normal, state}
+
+  # The client is unlinked and stops :normal when the daemon socket closes.
+  # Forget it but keep the block: the next request reconnects to the daemon.
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{client_ref: ref} = state),
+    do: {:noreply, %{state | client: nil, client_ref: nil}}
+
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
@@ -295,17 +301,43 @@ defmodule LemonBrowser.TernSession do
     end
   end
 
-  defp ensure_client(%{client: client} = state) when is_pid(client), do: {:ok, state}
+  defp ensure_client(%{client: client} = state) when is_pid(client) do
+    if Process.alive?(client) do
+      {:ok, state}
+    else
+      Process.demonitor(state.client_ref, [:flush])
+      ensure_client(%{state | client: nil, client_ref: nil})
+    end
+  end
 
+  # A failed (re)connect is reported as :connect, the retryable kind LemonBrowser
+  # may fall back on; a request interrupted mid-flight stays :closed (never retried).
   defp ensure_client(state) do
-    with {:ok, client} <- Tern.connect() do
-      if Tern.supports?(client, "browser") do
-        {:ok, %{state | client: client}}
+    with {:ok, client} <- connect() do
+      ref = Process.monitor(client)
+
+      if supports_browser?(client) do
+        {:ok, %{state | client: client, client_ref: ref}}
       else
+        Process.demonitor(ref, [:flush])
         Tern.close(client)
         {:error, {:unsupported, "Tern daemon does not advertise browser automation"}}
       end
     end
+  end
+
+  defp connect do
+    case Tern.connect() do
+      {:ok, client} -> {:ok, client}
+      {:error, {:connect, _}} = error -> error
+      {:error, _} -> {:error, {:connect, "Tern daemon connection failed"}}
+    end
+  end
+
+  defp supports_browser?(client) do
+    Tern.supports?(client, "browser")
+  catch
+    :exit, _ -> false
   end
 
   defp dispatch("browser.tabs", _args, state) do
