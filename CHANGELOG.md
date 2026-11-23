@@ -211,6 +211,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Archive reads and in-place archive writes (`read`/`write` on `x.zip:member`,
+  `.tar`, `.tar.gz`, `.tgz`) and SVGZ decoding now inflate through one
+  streaming, abort-aware bound: members are rejected as soon as decoded bytes
+  pass their declared size or `:format_max_member_bytes`, compressed TARs and
+  write-side rebuilds stop at `:format_max_decoded_bytes` (256 MiB), and
+  archives over `:format_max_archive_entries` are refused, so a zip/gzip bomb
+  can no longer exhaust node memory (#678).
 - Model file tools, browser and media outputs and checkpoint restore refuse
   Lemon operator state (`~/.lemon`, the agent directory, configured
   config/key/store/checkpoint/bot paths, extension roots) and the toolchain

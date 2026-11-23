@@ -9,6 +9,10 @@
 
 ### Fixed
 
+- Archive member reads and in-place archive writes bound decompression while
+  inflating (declared size, `:format_max_member_bytes`,
+  `:format_max_decoded_bytes`, `:format_max_archive_entries`) instead of
+  checking sizes after whole-archive extraction (#678).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller
