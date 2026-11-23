@@ -171,6 +171,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Discord boots again: `lemon_channels` now starts `:gun`, which Nostrum needs
+  for its gateway and REST connections; previously a configured bot token
+  failed with `:noproc` and no Discord service started (#670).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
