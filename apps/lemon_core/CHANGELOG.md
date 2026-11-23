@@ -8,6 +8,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- The `LemonCore.Store` expiry sweep no longer deletes `:cron_runs` rows by
+  age; `LemonAutomation.CronStore` owns cron retention (#675).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,

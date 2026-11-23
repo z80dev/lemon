@@ -4,6 +4,10 @@
 
 ### Changed
 
+- `CronStore` is the sole owner of cron retention: `cleanup_old_runs/1` keeps
+  active and outcome-unknown runs, new `cleanup_audit_events/1` caps the audit
+  log (default `audit_retention_max/0`, 10,000 events) on the hourly tick, and
+  `list_audit_events/1` accepts a `:before_ts_ms` page cursor (#675).
 - Curator and synthesis schedulers share interval execution and runner config
   handling. A missing task supervisor defers a pass instead of crashing the manager.
 - Cron admission rejects invalid callback URLs, remote HTTP callbacks and

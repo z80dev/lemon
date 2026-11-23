@@ -171,6 +171,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Cron history: the core store sweep no longer deletes cron runs after 48 hours,
+  so running and outcome-unknown runs and pending retries survive;
+  `automation.run_retention_per_job` is now the only run-history limit. The
+  cron audit log is capped at the newest 10,000 events, pruned hourly, and
+  `cron.audit` pages with `beforeMs`/`nextBeforeMs` (#675).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

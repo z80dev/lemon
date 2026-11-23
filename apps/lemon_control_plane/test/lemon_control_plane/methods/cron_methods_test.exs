@@ -651,4 +651,20 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
     assert summary["cleanup"]["includesOutputText"] == false
     assert summary["cleanup"]["includesErrorText"] == false
   end
+
+  test "cron.audit pages with beforeMs and nextBeforeMs", %{job: job} do
+    for ts <- [100, 200, 300] do
+      event = CronStore.record_audit(:page_probe, %{job_id: job.id})
+      :ok = LemonCore.Store.put(:cron_audit_events, event.id, %{event | ts_ms: ts})
+    end
+
+    params = %{"jobId" => job.id, "action" => "page_probe", "limit" => 2}
+    assert {:ok, first} = CronAudit.handle(params, %{})
+    assert Enum.map(first["events"], & &1["tsMs"]) == [300, 200]
+    assert first["nextBeforeMs"] == 200
+
+    assert {:ok, second} = CronAudit.handle(Map.put(params, "beforeMs", 200), %{})
+    assert Enum.map(second["events"], & &1["tsMs"]) == [100]
+    assert second["nextBeforeMs"] == nil
+  end
 end

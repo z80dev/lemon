@@ -416,6 +416,7 @@ defmodule LemonAutomation.CronManager do
       catch_up_slots: %{},
       last_cleanup_at_ms: clock.now_ms(),
       run_retention_per_job: 100,
+      audit_retention_max: CronStore.audit_retention_max(),
       task_supervisor:
         Keyword.get(
           opts,
@@ -1443,6 +1444,11 @@ defmodule LemonAutomation.CronManager do
     state =
       if now - Map.get(state, :last_cleanup_at_ms, 0) >= 3_600_000 do
         CronStore.cleanup_old_runs(Map.get(state, :run_retention_per_job, 100))
+
+        CronStore.cleanup_audit_events(
+          Map.get(state, :audit_retention_max, CronStore.audit_retention_max())
+        )
+
         Map.put(state, :last_cleanup_at_ms, now)
       else
         state

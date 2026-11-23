@@ -29,9 +29,11 @@ before dispatch is allowed. A confirmed durable pause instead preserves stored
 schedules until explicit resume.
 
 A paired chat is needed only for chat delivery. Run history retains the latest
-100 terminal runs per job, cleaned up hourly; active attempts and pending
-retries are never pruned. Configure `automation.run_retention_per_job` to change
-that limit.
+100 terminal runs per job, cleaned up hourly; active attempts, runs whose
+outcome is unknown and pending retries are never pruned, however old. Configure
+`automation.run_retention_per_job` to change that limit. The cron audit log
+keeps the newest 10,000 events; `cron.audit` returns `nextBeforeMs` when more
+events exist, which you pass back as `beforeMs` to read the next page.
 
 ---
 

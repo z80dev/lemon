@@ -135,6 +135,43 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
     assert CronStore.get_run(run.id) == nil
   end
 
+  test "configured run_retention_per_job bounds terminal rows and the tick prunes audit", %{
+    id: id
+  } do
+    {:ok, state} = initialized_manager()
+
+    for offset <- 1..5 do
+      run = id |> CronRun.new(:schedule) |> CronRun.complete("ok")
+      CronStore.put_run(%{run | started_at_ms: offset})
+    end
+
+    ancient = LemonCore.Clock.now_ms() - 72 * 60 * 60 * 1000
+
+    unknown = %{
+      CronRun.new(id, :schedule)
+      | started_at_ms: ancient,
+        meta: %{outcome_unknown: true}
+    }
+
+    CronStore.put_run(unknown)
+    for _ <- 1..3, do: CronStore.record_audit(:retention_probe, %{job_id: id})
+
+    state = %{
+      state
+      | jobs: %{},
+        run_retention_per_job: 2,
+        audit_retention_max: 1,
+        last_cleanup_at_ms: 0
+    }
+
+    assert {:noreply, _} = CronManager.handle_cast(:tick, state)
+    assert {:ok, runs} = CronStore.list_runs(id, limit: 100, strict: true)
+    assert length(Enum.filter(runs, &CronRun.finished?/1)) == 2
+    assert CronStore.get_run(unknown.id)
+    assert {:ok, audit} = LemonCore.Store.fetch_all(:cron_audit_events)
+    assert length(audit) <= 1
+  end
+
   test "retention is per job and keeps active attempts and pending retries", %{id: id} do
     other = id <> "_other"
 
