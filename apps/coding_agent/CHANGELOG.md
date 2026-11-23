@@ -9,6 +9,9 @@
 
 ### Fixed
 
+- `bash` uses the code-mode stream relay only when `CodeMode.enabled?/1`
+  holds; `BashExecutor` returns `{:error, :python3_unavailable}` instead of
+  raising when the relay lacks `python3` (#674).
 - Archive member reads and in-place archive writes bound decompression while
   inflating (declared size, `:format_max_member_bytes`,
   `:format_max_decoded_bytes`, `:format_max_archive_entries`) instead of

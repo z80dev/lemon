@@ -171,6 +171,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- `bash` selects the code-mode Python stream relay only when code-mode is
+  actually enabled (`enabled: true` and the `code_mode` profile, via
+  `CodeMode.enabled?/1`); a disabled `code_mode` profile stays on managed bash,
+  and a missing `python3` returns a clear error instead of crashing the call.
+  Code-mode remains opt-in per the #598 evaluation (#674).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
