@@ -21,7 +21,7 @@ defmodule LemonChannels.Adapters.Discord.Supervisor do
   @impl true
   def init(opts) do
     explicit = Keyword.get(opts, :config)
-    base = LemonChannels.GatewayConfig.get(:discord, %{}) || %{}
+    base = LemonCore.GatewayConfig.get(:discord, %{}) || %{}
     config = merge_config(base, explicit)
 
     token = config[:bot_token] || config["bot_token"] || secret_or_ambient_token(config)

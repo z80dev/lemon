@@ -306,6 +306,67 @@ defmodule LemonCore.Config.Validator do
     |> validate_task_config(Map.get(agent, :task))
     |> validate_compaction_thresholds(Map.get(agent, :compaction))
     |> validate_git_path(Map.get(agent, :git_path))
+    |> validate_max_tool_turns(Map.get(agent, :max_tool_turns, :infinity))
+  end
+
+  defp validate_max_tool_turns(errors, :infinity), do: errors
+  defp validate_max_tool_turns(errors, turns) when is_integer(turns) and turns > 0, do: errors
+
+  defp validate_max_tool_turns(errors, _turns) do
+    ["runtime.max_tool_turns: must be a non-negative integer (0 or unset = unlimited)" | errors]
+  end
+
+  @doc """
+  Validates the raw `[profiles.<id>]` tables: a `tool_policy` or
+  `tool_policy_json` that does not parse is an error rather than a silent
+  `deny_all` policy. Returns the error list (empty when valid).
+  """
+  @spec profile_errors(map()) :: [String.t()]
+  def profile_errors(settings) when is_map(settings) do
+    case settings["profiles"] do
+      nil ->
+        []
+
+      profiles when is_map(profiles) ->
+        profiles
+        |> Enum.sort_by(fn {id, _cfg} -> to_string(id) end)
+        |> Enum.flat_map(fn {id, cfg} -> profile_policy_errors(to_string(id), cfg) end)
+
+      _ ->
+        ["profiles: must be a table"]
+    end
+  end
+
+  defp profile_policy_errors(id, cfg) when is_map(cfg) do
+    cond do
+      Map.has_key?(cfg, "tool_policy_json") ->
+        tool_policy_json_errors(id, cfg["tool_policy_json"])
+
+      is_nil(cfg["tool_policy"]) ->
+        []
+
+      true ->
+        tool_policy_errors(id, "tool_policy", cfg["tool_policy"])
+    end
+  end
+
+  defp profile_policy_errors(id, _cfg), do: ["profiles.#{id}: must be a table"]
+
+  defp tool_policy_json_errors(id, json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, policy} when is_map(policy) -> tool_policy_errors(id, "tool_policy_json", policy)
+      _ -> ["profiles.#{id}.tool_policy_json: must be a JSON tool policy object"]
+    end
+  end
+
+  defp tool_policy_json_errors(id, _json),
+    do: ["profiles.#{id}.tool_policy_json: must be a JSON tool policy object"]
+
+  defp tool_policy_errors(id, key, policy) do
+    case LemonCore.ToolPolicy.parse(policy) do
+      {:ok, _policy} -> []
+      {:error, reason} -> ["profiles.#{id}.#{key}: invalid tool policy (#{inspect(reason)})"]
+    end
   end
 
   defp validate_git_path(errors, nil), do: errors

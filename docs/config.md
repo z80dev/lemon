@@ -1625,6 +1625,15 @@ failure. Fix syntax errors in the named file, then run
 `lemon config migrate`. Doctor records invalid configuration as failing checks
 and continues with the remaining diagnostics.
 
+A running Lemon keeps serving its last good configuration when an edit makes
+the file invalid: the failure is logged once (`Config reload failed …; serving
+the last good config`) and no further load is attempted until the file changes
+again, so fixing the file is picked up on the next check. Only a start with no
+previously loaded config fails. Invalid values are reported, never replaced by
+a default: a misspelled `[features]` state, a `[runtime] max_tool_turns` that is
+not a non-negative integer (`0` or unset means unlimited) and a profile
+`tool_policy`/`tool_policy_json` that does not parse are validation errors.
+
 Normal configuration loads, including `lemon config show` and
 `mix lemon.config show`, also validate and reject invalid resolved values rather
 than quietly running with them. `LemonCore.Config.Modular.load(validate: false)`

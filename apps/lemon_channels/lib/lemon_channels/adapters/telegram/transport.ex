@@ -57,7 +57,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   @impl true
   def handle_continue(:start, opts) do
-    base = LemonChannels.GatewayConfig.get(:telegram, %{})
+    base = LemonCore.GatewayConfig.get(:telegram, %{})
 
     config =
       base

@@ -171,6 +171,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Config: after an invalid edit a running Lemon serves the last good config,
+  logs the failure once and stops re-reading the file until it changes, instead
+  of re-parsing and raising on every config read. Invalid `[features]` states,
+  `[runtime] max_tool_turns` values and profile tool policies are validation
+  errors instead of silently becoming `off`, unlimited or deny-all. An
+  unloadable config fails gateway and channel startup instead of starting with
+  every channel disabled (#617).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

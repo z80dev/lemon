@@ -105,5 +105,86 @@ defmodule LemonCore.ConfigCacheValidationTest do
       File.write!(path, "[defaults]\nmodel = \"corrected-model\"\n")
       assert ConfigCache.get().agent.default_model == "corrected-model"
     end
+
+    # #617: an invalid edit must not make every read re-parse and raise.
+    test "invalid edit serves the last good config, reports once and stops reloading", %{
+      global_config: global_config
+    } do
+      path = Path.join(global_config, "config.toml")
+      File.write!(path, "[defaults]\nmodel = \"last-good-model\"\n")
+      assert ConfigCache.reload().agent.default_model == "last-good-model"
+
+      counter = :counters.new(2, [])
+      handler = "config-cache-617-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach_many(
+          handler,
+          [[:lemon, :config_cache, :load], [:lemon, :config_cache, :reload_failed]],
+          fn
+            [:lemon, :config_cache, :load], _, _, _ -> :counters.add(counter, 1, 1)
+            [:lemon, :config_cache, :reload_failed], _, _, _ -> :counters.add(counter, 2, 1)
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      write_changed!(path, "[defaults]\nmodel = \"\"\n")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          for _ <- 1..5 do
+            assert ConfigCache.get(nil, mtime_check_interval_ms: 0).agent.default_model ==
+                     "last-good-model"
+
+            assert LemonCore.Config.cached(nil, mtime_check_interval_ms: 0).agent.default_model ==
+                     "last-good-model"
+          end
+        end)
+
+      assert :counters.get(counter, 1) == 1
+      assert :counters.get(counter, 2) == 1
+      assert length(String.split(log, "Config reload failed")) == 2
+      refute log =~ path
+
+      assert %{error_class: LemonCore.Config.ValidationError, fingerprint: [_ | _]} =
+               ConfigCache.last_error()
+
+      # The validation command still surfaces the error.
+      assert {:error, [_ | _]} = LemonCore.Config.Modular.load_with_validation()
+      assert_raise LemonCore.Config.ValidationError, fn -> ConfigCache.reload() end
+
+      # Fixing the file is picked up on the next check.
+      write_changed!(path, "[defaults]\nmodel = \"fixed-model\"\n")
+      assert ConfigCache.get(nil, mtime_check_interval_ms: 0).agent.default_model == "fixed-model"
+      assert ConfigCache.last_error() == nil
+    end
+
+    test "invalid TOML edit serves the last good config", %{global_config: global_config} do
+      path = Path.join(global_config, "config.toml")
+      File.write!(path, "[defaults]\nmodel = \"last-good-model\"\n")
+      assert ConfigCache.reload().agent.default_model == "last-good-model"
+
+      write_changed!(path, "[defaults\nmodel = \n")
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert ConfigCache.get(nil, mtime_check_interval_ms: 0).agent.default_model ==
+                 "last-good-model"
+      end)
+
+      assert %{error_class: class} = ConfigCache.last_error()
+      refute class == nil
+    end
+  end
+
+  # Size changes so the (mtime, size) fingerprint moves even within one second.
+  defp write_changed!(path, content) do
+    previous = File.stat!(path)
+    File.write!(path, content)
+
+    if File.stat!(path).size == previous.size do
+      File.write!(path, content <> "\n")
+    end
   end
 end

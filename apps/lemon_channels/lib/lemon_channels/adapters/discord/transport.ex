@@ -103,7 +103,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   @impl true
   def init(opts) do
     LemonChannels.Registry.record_status("discord", :configured)
-    base = LemonChannels.GatewayConfig.get(:discord, %{}) || %{}
+    base = LemonCore.GatewayConfig.get(:discord, %{}) || %{}
 
     config =
       base
@@ -419,7 +419,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp maybe_reply_pairing(inbound, %{unauthorized_dm_behavior: "pair"}) do
     with {:ok, text} <- LemonChannels.Pairing.reply("discord", inbound) do
-      api = cfg_get(LemonChannels.GatewayConfig.get(:discord, %{}), :api_mod, Message)
+      api = cfg_get(LemonCore.GatewayConfig.get(:discord, %{}), :api_mod, Message)
 
       api.create(
         inbound.meta[:channel_id],

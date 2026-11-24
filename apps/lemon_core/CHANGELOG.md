@@ -210,6 +210,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `LemonCore.ConfigCache.get/2` serves the last good config when an implicit
+  reload fails, records the failure (`last_error/1`), reports it once
+  (`[:lemon, :config_cache, :reload_failed]`) and does not reload again until
+  the file fingerprint changes. `reload/2` still raises (#617).
+- `LemonCore.GatewayConfig.get/2` and `LemonCore.Cwd` no longer turn a config
+  load failure into defaults; `LemonCore.Config.ValidationError` propagates (#617).
+- Invalid `[features]` states, `[runtime] max_tool_turns` and profile tool
+  policies are kept raw and reported by validation (`Validator.profile_errors/1`)
+  instead of becoming `:off`, `:infinity` or deny-all (#617).
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
   (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase

@@ -1236,4 +1236,25 @@ defmodule LemonCore.Config.ValidatorTest do
       assert errors == []
     end
   end
+
+  # #617: an invalid profile policy is reported, not silently read as deny_all.
+  describe "profile_errors/1" do
+    test "reports an invalid tool_policy and tool_policy_json" do
+      settings = %{
+        "profiles" => %{
+          "coder" => %{"tool_policy" => "no-such-profile"},
+          "ops" => %{"tool_policy_json" => "{not json"},
+          "ok" => %{"tool_policy" => %{}}
+        }
+      }
+
+      errors = Validator.profile_errors(settings)
+      assert Enum.any?(errors, &String.starts_with?(&1, "profiles.coder.tool_policy:"))
+      assert Enum.any?(errors, &String.starts_with?(&1, "profiles.ops.tool_policy_json:"))
+      refute Enum.any?(errors, &String.starts_with?(&1, "profiles.ok"))
+
+      assert {:error, modular_errors} = Modular.validate_settings(settings)
+      assert Enum.any?(modular_errors, &String.starts_with?(&1, "profiles.coder.tool_policy:"))
+    end
+  end
 end
