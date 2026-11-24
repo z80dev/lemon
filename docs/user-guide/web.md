@@ -107,7 +107,11 @@ A session opens at `/chat/<session-key>`:
   **Steer** (guidance for the current run; ⌘Enter) or **Redirect** (new direction,
   finished tool work kept), or **Stop**.
 - **Approvals** appear in the conversation: Approve once, for the session,
-  always, or Deny. Answers given in the TUI or another tab clear the card.
+  always, or Deny. Each card shows the command, target path and arguments it
+  authorizes, including after a reconnect. Answers given in the TUI or another
+  tab clear the card. If only part of a request (or of a long plan) could be
+  loaded, the card says so and approval stays disabled until **Load the full
+  request** succeeds; Deny is always available.
 - **Plan mode** (⌘⇧P) keeps the agent read-only. Its proposal appears as a plan
   card: **Approve & execute** runs it, **Refine** sends it back and focuses the
   composer for your feedback. Leaving plan mode never approves a plan.
@@ -117,21 +121,25 @@ A session opens at `/chat/<session-key>`:
 - **Split view:** ⌘\\ or "Open in split" shows two sessions side by side
   (`/chat/<key>?split=<other-key>`); each pane runs independently.
 
-After reconnecting, the page uses the same bounded `sessions.snapshot` authority
-as the TUI. It replaces the selected branch's transcript, tool states, current
-approvals, todo/plan projection, and owned child/process status rather than
-replaying missed mutations. An approval answered elsewhere does not remain
-actionable. Unknown process/tool outcomes stay unknown; recovery never reruns them.
+The transcript has one source: the session's full-text history, read once when
+the chat opens, followed by the native session's sequenced events. Each event
+batch must continue the last one the page applied; a gap (for example after the
+page's event queue overflowed) is replayed from that position, so rendered text
+is never replaced while a reply streams. Only a changed branch or a replay
+position the session no longer retains reloads history. Long answers and edit
+diffs therefore stay complete after reloads, recovery and reconnects.
 
-If the event queue overflows, live delivery is fenced until reconciliation
-succeeds. Events racing a snapshot cause a bounded retry; a failed owner read
-shows recovery as unavailable, not as proof that a run finished. Recovered active
-answers are refreshed as replacement snapshots (on the existing status cadence)
-rather than appended to uncertain old deltas. Terminal state comes from the same
-authority, so the final answer is shown once. Recovery responses are bounded and
-credential-redacted; an omitted tail is not proof of a complete transcript.
-Controls that change state remain disabled while disconnected; nothing is
-queued offline. See the [delivery boundary](../platform/bus-events.md#current-delivery-and-recovery-boundary)
+The shared `sessions.snapshot` authority supplies session state only: the active
+run, current approvals, todos, owned child/process status and the event
+position. It is read when the chat opens and once at the end of each run, never
+for streamed text, and it updates the run through the same rules as live
+events, so **Stopping** and the end of queued follow-ups survive it. An
+approval answered elsewhere does not remain actionable. Unknown process/tool
+outcomes stay unknown; recovery never reruns them. A session with no state yet
+is shown as idle; an unknown run state is shown as unavailable until you choose
+**Check status**; a failed read retries with increasing delays instead of
+polling. Controls that change state remain disabled while disconnected; nothing
+is queued offline. See the [delivery boundary](../platform/bus-events.md#current-delivery-and-recovery-boundary)
 for paths that remain best effort.
 
 ## Sessions and profiles

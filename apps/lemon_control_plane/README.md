@@ -627,9 +627,18 @@ outcome-unknown classification, never confirmed launch admission. Todo and
 process projections require the corresponding domain-owner read APIs; their
 absence is explicit `unavailable`.
 
+Each pending approval carries its `exec.approvals.get` identity, `rationale`
+and an `action` reduced to display fields (`title`, `plan`, `command`/`cmd`,
+`path`/`file_path` and the review hashes), an `argumentsPreview` of the other
+arguments (2,048 bytes; private keys such as `cwd` dropped), `truncated` when any
+of these was clipped and `planTruncated` when the plan was. A client must not
+offer approval of a truncated item; it reads the full record from
+`exec.approvals.get` first.
+
 The encoded response is capped at 131,072 bytes. Message rows use a 40,960-byte
-collection budget, actions 16,384, answer text 16,384, each other collection
-8,192, and plan text 8,192. Nested values and item counts have additional caps.
+collection budget, actions 16,384, answer text 16,384, approvals 16,384, each
+other collection 8,192, and plan text 8,192. Nested values and item counts have
+additional caps.
 These are credential-redacted recovery previews, not private full exports.
 Clients must display omission/unavailability rather than treating a bounded
 preview as a complete answer or proof that a process stopped.

@@ -67,6 +67,10 @@ All notable changes to `lemon_control_plane` are documented here.
   `consistency.eventCursor`: a live event between them returns the newer
   collection and its cursor (read in one owner call) instead of
   `snapshot_raced` (#628).
+- `sessions.snapshot` approvals carry `command`, `path`, `plan`, a bounded
+  `argumentsPreview` and per-item `truncated`/`planTruncated` flags, so a
+  recovered approval never renders as hashes only and a clipped plan is never
+  presented as complete; the approvals budget is 16,384 bytes (#654).
 - Timeouts, closed openers and unclassified failures of passive node inspections
   (`node.capabilities.get`, `node.runtime.features`, `node.host.info`) are
   retry-safe unavailable reads, not uncertain mutations.

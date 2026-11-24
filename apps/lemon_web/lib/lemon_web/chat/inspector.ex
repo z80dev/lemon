@@ -164,7 +164,8 @@ defmodule LemonWeb.Chat.Inspector do
       </p>
       <section :if={is_map(@todos)} id={"todo-recovery-#{@dom_key}"} aria-label="Current branch todos" class="space-y-2">
         <h3 class="text-2xs font-semibold uppercase tracking-wide text-subtle">Current branch todos</h3>
-        <p :if={@todos["status"] != "ok"} class="text-xs text-warning">Todo status is unavailable.</p>
+        <p :if={@todos["status"] == "not_found"} class="text-xs text-muted">This session has not started yet, so it has no todos.</p>
+        <p :if={@todos["status"] not in ["ok", "not_found"]} class="text-xs text-warning">Todo status is unavailable.</p>
         <p :if={@todos["truncated"] == true} class="text-xs text-warning">Todo snapshot truncated; some owned state is omitted.</p>
         <ul :if={@todos["status"] == "ok"} class="space-y-1 text-xs">
           <li :for={todo <- @todos["items"] || []} data-todo-id={todo["id"]}>
@@ -214,12 +215,6 @@ defmodule LemonWeb.Chat.Inspector do
             <span class="min-w-0 flex-1 truncate font-mono text-2xs text-subtle">{node.id}</span>
             <.badge tone={node_tone(node.status)}>{node.status}</.badge>
           </div>
-          <div :if={node.tools != [] or node.session_path} class="mt-1 flex flex-wrap items-center gap-1.5 text-2xs text-muted">
-            <span :for={tool <- node.tools} class="rounded bg-surface-2 px-1 font-mono">{tool}</span>
-            <.link :if={node.session_path} navigate={node.session_path} class="ml-auto inline-flex items-center gap-1 text-info hover:underline">
-              Open child session <.icon name="arrow-right" class="h-3 w-3" />
-            </.link>
-          </div>
         </li>
       </ul>
       <p :if={@subagents.truncated?} id={"subagent-tree-truncated-#{@dom_key}"} class="text-2xs text-subtle">
@@ -243,7 +238,8 @@ defmodule LemonWeb.Chat.Inspector do
       <.detail_row :if={@last_run_id} id={"detail-last-run-#{@dom_key}"} label="Last run" value={@last_run_id} />
       <section :if={is_map(@processes)} id={"process-recovery-#{@dom_key}"} aria-label="Owned background processes" class="space-y-2 border-t border-line pt-3">
         <h3 class="text-2xs font-semibold uppercase tracking-wide text-subtle">Owned background processes</h3>
-        <p :if={@processes["status"] != "ok"} class="text-xs text-warning">Process status is unavailable.</p>
+        <p :if={@processes["status"] == "not_found"} class="text-xs text-muted">This session has not started yet, so it owns no processes.</p>
+        <p :if={@processes["status"] not in ["ok", "not_found"]} class="text-xs text-warning">Process status is unavailable.</p>
         <p :if={@processes["truncated"] == true} class="text-xs text-warning">Process snapshot truncated; some owned state is omitted.</p>
         <ul :if={@processes["status"] == "ok"} class="space-y-1">
           <li :for={process <- @processes["items"] || []} class="break-all">

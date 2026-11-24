@@ -12,15 +12,24 @@ defmodule LemonWeb.Chat.PaneLive do
 
     * subscribe only when connected; events are scoped to the session topic and
       approvals to the session key;
-    * history comes from `chat.history` with full text (private chat);
+    * one transcript pipeline: `chat.history` (full text, private chat) is read
+      once per mount, then sequenced `session.event` batches after the
+      `sessions.snapshot` event cursor append live text, tools and completion.
+      Each batch must continue the pane's cursor exactly; a gap is replayed
+      with `sessions.events`, and only an expired cursor or a changed stream
+      reloads history. Unsequenced text deltas are never rendered;
+    * the snapshot supplies state only (identity, phase, approvals, todos,
+      processes, children) and goes through the same run reducer as live
+      events, so a stopping run, queued follow-ups and terminal runs survive
+      it. Live text never triggers a snapshot: at most one is read per run, at
+      its end; `not_found` is an empty idle session, `unknown` an explicit
+      unavailable state, and failures back off instead of polling;
     * the active run is reconciled on mount and before every active control;
       only an explicit "no run" answer means idle, lookup failures keep the
       last known running/stopping state and the draft;
     * deltas are coalesced (~40 ms) and only the streaming message is
       re-inserted; a run's final answer is appended only when nothing was
       streamed for it, so completion never duplicates the reply;
-    * owner recovery replaces the entire projection, including buffered deltas;
-      pending coalescer text must never be flushed into the replacement stream;
     * setup readiness is checked before uploads are consumed or any call is made.
   """
 
@@ -76,8 +85,10 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   @flush_ms 40
-  @subagent_refresh_ms 2_000
   @terminal_run_limit 128
+  @pending_batch_limit 512
+  @snapshot_backoff_ms [1_000, 2_000, 5_000, 10_000, 30_000, 60_000]
+  @session_events_topic "session_events"
   @live_answer_bytes 65_536
   @control_modes [:followup, :steer, :redirect]
   @thinking_levels ~w(off minimal low medium high xhigh auto)
@@ -118,20 +129,16 @@ defmodule LemonWeb.Chat.PaneLive do
     setup = Setup.status()
     {cwd, cwd_recorded?} = resolve_cwd(key)
 
-    history =
-      if is_binary(cwd) do
-        case Backend.history(key, cwd) do
-          {:ok, rows} -> {:ok, Transcript.from_history(rows)}
-          {:error, error} -> {:error, Rpc.message(error)}
+    # History is read once per open, on the connected mount: the static render
+    # only reserves the transcript.
+    {items, history_error} =
+      if connected? do
+        case load_history(key, cwd) do
+          {:ok, items} -> {with_intro(items, session["intro"]), nil}
+          {:error, message} -> {with_intro([], session["intro"]), message}
         end
       else
-        {:error, "Session workspace is unavailable"}
-      end
-
-    {items, history_error} =
-      case history do
-        {:ok, items} -> {with_intro(items, session["intro"]), nil}
-        {:error, message} -> {with_intro([], session["intro"]), message}
+        {with_intro([], session["intro"]), nil}
       end
 
     run =
@@ -162,21 +169,26 @@ defmodule LemonWeb.Chat.PaneLive do
       dirty: MapSet.new(),
       flush_timer: nil,
       streamed_runs: MapSet.new(),
+      sequenced_runs: MapSet.new(),
+      clipped_runs: MapSet.new(),
       terminal_runs: [],
       bus_delivery: delivery,
+      events: new_event_stream(),
       recovery: %{
         identity: nil,
         generation: 0,
-        event_revision: 0,
-        inflight: false,
-        retries: 0,
-        needed: true,
-        recovered_run: nil
+        inflight: nil,
+        queued: nil,
+        status: :loading,
+        failures: 0,
+        timer: nil,
+        refreshed_runs: []
       },
+      state_notice: nil,
       processes: %{"status" => "unavailable", "items" => []},
       todos: %{"status" => "unavailable", "items" => []},
-      last_seq: %{},
       tools: Map.new(for(%{kind: :tool} = tool <- items, do: {tool.id, tool})),
+      history_loaded?: connected?,
       history_error: history_error,
       transcript_empty?: items == [],
       approvals: load_approvals(key),
@@ -207,9 +219,7 @@ defmodule LemonWeb.Chat.PaneLive do
         socket
         |> load_plan()
         |> load_context()
-        |> refresh_subagents()
-        |> schedule_subagent_refresh()
-        |> start_recovery()
+        |> request_snapshot(:state)
       else
         socket
       end
@@ -244,6 +254,25 @@ defmodule LemonWeb.Chat.PaneLive do
     end
   end
 
+  defp load_history(_key, nil), do: {:error, "Session workspace is unavailable"}
+
+  defp load_history(key, cwd) do
+    case Backend.history(key, cwd) do
+      {:ok, rows} -> {:ok, Transcript.from_history(rows)}
+      {:error, error} -> {:error, Rpc.message(error)}
+    end
+  end
+
+  # `cursor` is the last applied sequenced batch. Without one, `adopt` decides
+  # how a batch may start the pipeline: `:wait` buffers until the snapshot
+  # reports the owner's cursor; `:from_start` (no live owner when state was
+  # read) accepts a stream's first event or replays that stream from its
+  # start; `:first_seen` (the owner could not report a cursor) starts at the
+  # first batch delivered since this subscription. `replay` is the reference
+  # of the in-flight `sessions.events` read; batches arriving meanwhile wait in
+  # `pending`.
+  defp new_event_stream, do: %{cursor: nil, adopt: :wait, pending: %{}, replay: nil}
+
   defp load_meta(key) do
     case Backend.session_meta(key) do
       {:ok, meta} -> meta
@@ -267,14 +296,72 @@ defmodule LemonWeb.Chat.PaneLive do
 
   defp load_approvals(key) do
     case Backend.pending_approvals(key) do
+      {:ok, pending} -> full_approvals(pending)
+      {:error, _} -> []
+    end
+  end
+
+  defp full_approvals(pending) do
+    pending
+    |> Enum.map(&Components.approval_view/1)
+    |> Enum.filter(&is_binary(&1.id))
+    |> Enum.sort_by(& &1.requested_at_ms)
+  end
+
+  @approvals_unavailable "Approval status is unavailable."
+
+  # The snapshot decides which approvals are pending (session, run lineage,
+  # expiry); each card keeps the full event or `exec.approvals.get` record with
+  # its command, path, arguments and plan. The snapshot's own projection is
+  # bounded, so an id without a full record, or a cut collection, rereads the
+  # full records; a card left with a truncated projection cannot be approved.
+  defp install_approvals(socket, %{"status" => "ok", "items" => items} = collection)
+       when is_list(items) do
+    full =
+      for %{partial?: false} = card <- socket.assigns.approvals, into: %{}, do: {card.id, card}
+
+    cards =
+      items
+      |> Enum.map(&Map.put(Components.approval_view(&1), :partial?, true))
+      |> Enum.filter(&is_binary(&1.id))
+      |> Enum.map(&Map.get(full, &1.id, &1))
+
+    notice = socket.assigns.approval_notice
+
+    socket =
+      assign(socket,
+        approvals: cards,
+        approval_notice: if(notice != @approvals_unavailable, do: notice)
+      )
+
+    if collection["truncated"] == true or Enum.any?(cards, & &1.partial?),
+      do: complete_approvals(socket, collection["truncated"] == true),
+      else: socket
+  end
+
+  # An unavailable approval owner must never preserve actionable cards.
+  defp install_approvals(socket, _collection),
+    do: assign(socket, approvals: [], approval_notice: @approvals_unavailable)
+
+  # Replaces bounded cards with their full records. `unlisted?` also adds
+  # pending approvals a cut snapshot collection could not list.
+  defp complete_approvals(socket, unlisted? \\ false) do
+    case Backend.pending_approvals(socket.assigns.session_key) do
       {:ok, pending} ->
-        pending
-        |> Enum.map(&Components.approval_view/1)
-        |> Enum.filter(&is_binary(&1.id))
-        |> Enum.sort_by(& &1.requested_at_ms)
+        full = Map.new(full_approvals(pending), &{&1.id, &1})
+        cards = socket.assigns.approvals
+        shown = MapSet.new(cards, & &1.id)
+
+        extra =
+          if unlisted?,
+            do: full |> Map.values() |> Enum.reject(&MapSet.member?(shown, &1.id)),
+            else: []
+
+        cards = Enum.map(cards, &Map.get(full, &1.id, &1)) ++ extra
+        assign(socket, :approvals, Enum.sort_by(cards, & &1.requested_at_ms))
 
       {:error, _} ->
-        []
+        socket
     end
   end
 
@@ -334,8 +421,10 @@ defmodule LemonWeb.Chat.PaneLive do
     end
   end
 
+  # An explicit check also rereads session state: it is how an operator
+  # leaves an "unknown" snapshot, which is never polled automatically.
   def handle_event("refresh-run-status", _params, socket) do
-    case reconcile(socket) do
+    case socket |> request_snapshot(:state) |> reconcile() do
       {:ok, socket, _run_id} ->
         {:noreply, notice(socket, :info, "The run is still active.")}
 
@@ -399,14 +488,34 @@ defmodule LemonWeb.Chat.PaneLive do
 
   # ── Events: approvals & plan ────────────────────────────────────────────
 
+  # Approving what the operator could not see in full is refused here too,
+  # not only by the disabled control; denying stays available.
   def handle_event("resolve-approval", %{"id" => id, "decision" => decision}, socket)
       when decision in ~w(approve_once approve_session approve_global deny) do
-    plan? = Enum.any?(socket.assigns.approvals, &(&1.id == id and &1.plan?))
-    text = if plan? and decision != "deny", do: "Plan approved. Lemon is implementing it."
-    {:noreply, resolve_approval(socket, id, decision, text)}
+    approval = Enum.find(socket.assigns.approvals, &(&1.id == id))
+
+    if decision != "deny" and match?(%{truncated?: true}, approval) do
+      {:noreply, assign(socket, :approval_notice, "Load the full request before approving it.")}
+    else
+      text =
+        if match?(%{plan?: true}, approval) and decision != "deny",
+          do: "Plan approved. Lemon is implementing it."
+
+      {:noreply, resolve_approval(socket, id, decision, text)}
+    end
   end
 
   def handle_event("resolve-approval", _params, socket), do: {:noreply, socket}
+
+  def handle_event("reload-approvals", _params, socket) do
+    socket = complete_approvals(socket)
+
+    if Enum.any?(socket.assigns.approvals, & &1.truncated?),
+      do:
+        {:noreply,
+         assign(socket, :approval_notice, "Lemon could not load the full request. Try again.")},
+      else: {:noreply, socket}
+  end
 
   def handle_event("refine-plan", %{"id" => id}, socket) do
     socket =
@@ -683,27 +792,16 @@ defmodule LemonWeb.Chat.PaneLive do
       {:noreply,
        assign(socket, :context, %{socket.assigns.context | status: :unavailable, error: nil})}
 
-  def handle_async(:plan, {:ok, {identity, result}}, socket) do
-    if identity == socket.assigns.recovery.identity do
-      case result do
-        {:ok, plan} ->
-          {:noreply, assign(socket, :plan, Map.put(plan, :error, nil))}
+  def handle_async(:plan, {:ok, {:ok, plan}}, socket),
+    do: {:noreply, assign(socket, :plan, Map.put(plan, :error, nil))}
 
-        {:error, error} ->
-          {:noreply, assign(socket, :plan, %{socket.assigns.plan | error: Rpc.message(error)})}
-      end
-    else
-      {:noreply, socket}
-    end
-  end
+  def handle_async(:plan, {:ok, {:error, error}}, socket),
+    do: {:noreply, assign(socket, :plan, %{socket.assigns.plan | error: Rpc.message(error)})}
 
-  def handle_async(:plan, {:exit, _}, socket) do
-    if socket.assigns.recovery.identity,
-      do: {:noreply, socket},
-      else:
-        {:noreply,
-         assign(socket, :plan, %{socket.assigns.plan | error: "Plan status is unavailable."})}
-  end
+  def handle_async(:plan, {:exit, _}, socket),
+    do:
+      {:noreply,
+       assign(socket, :plan, %{socket.assigns.plan | error: "Plan status is unavailable."})}
 
   def handle_async(:compact, {:ok, :ok}, socket) do
     {:noreply,
@@ -731,29 +829,48 @@ defmodule LemonWeb.Chat.PaneLive do
      |> toast(:danger, "Compaction did not complete. Try again, or check /diagnostics.")}
   end
 
-  def handle_async(:recovery, {:ok, {key, generation, revision, result}}, socket) do
+  def handle_async(:recovery, {:ok, {generation, mode, history, result}}, socket) do
     recovery = socket.assigns.recovery
 
-    cond do
-      key != socket.assigns.session_key or generation != recovery.generation ->
-        {:noreply, socket}
+    if generation == recovery.generation do
+      socket =
+        socket
+        |> assign(:recovery, %{recovery | inflight: nil})
+        |> then(&if(mode == :full, do: install_history(&1, history), else: &1))
+        |> install_snapshot(result)
+        |> drain_pending()
 
-      revision != recovery.event_revision ->
-        {:noreply, retry_recovery(socket)}
-
-      true ->
-        socket = assign(socket, :recovery, %{recovery | inflight: false})
-
-        case result do
-          {:ok, snapshot} -> {:noreply, apply_recovery(socket, snapshot)}
-          :retry -> {:noreply, retry_recovery(socket)}
-          {:error, _} -> {:noreply, recovery_unavailable(socket)}
-        end
+      {:noreply, run_queued_snapshot(socket)}
+    else
+      {:noreply, socket}
     end
   end
 
-  def handle_async(:recovery, {:exit, _}, socket),
-    do: {:noreply, recovery_unavailable(socket)}
+  def handle_async(:recovery, {:exit, _}, socket) do
+    recovery = socket.assigns.recovery
+    history = {:error, "Session history could not be reloaded. Reopen the chat to retry."}
+
+    socket =
+      socket
+      |> assign(:recovery, %{recovery | inflight: nil})
+      |> then(&if(recovery.inflight == :full, do: install_history(&1, history), else: &1))
+      |> install_snapshot({:error, :exit})
+      |> drain_pending()
+
+    {:noreply, run_queued_snapshot(socket)}
+  end
+
+  def handle_async(:replay, {:ok, {ref, from, result}}, socket) do
+    if socket.assigns.events.replay == ref,
+      do: {:noreply, install_replay(socket, from, result)},
+      else: {:noreply, socket}
+  end
+
+  def handle_async(:replay, {:exit, _}, socket) do
+    if socket.assigns.events.replay,
+      do: {:noreply, full_resync(socket)},
+      else: {:noreply, socket}
+  end
 
   # ── Bus events ──────────────────────────────────────────────────────────
 
@@ -766,57 +883,56 @@ defmodule LemonWeb.Chat.PaneLive do
 
   def handle_info(:flush, socket), do: {:noreply, socket |> assign(:flush_timer, nil) |> flush()}
 
-  def handle_info(:refresh_subagents, socket) do
-    socket = socket |> maybe_refresh_subagents() |> schedule_subagent_refresh()
+  def handle_info({:snapshot_retry, ref}, socket) do
     recovery = socket.assigns.recovery
 
-    socket =
-      if recovery.needed or recovery.recovered_run,
-        do: start_recovery(socket),
-        else: socket
-
-    {:noreply, socket}
+    if recovery.timer == ref,
+      do: {:noreply, socket |> assign(:recovery, %{recovery | timer: nil}) |> request_snapshot()},
+      else: {:noreply, socket}
   end
 
+  # Delivery fenced itself. Missed sequenced batches are replayed from the
+  # cursor; approvals are reread because their events may be among the lost.
+  # Without a cursor there is nothing to continue from, so reread everything.
   def handle_info({:stream_resync, :overflow}, socket) do
-    {:noreply,
-     socket
-     |> assign(:recovery, %{
-       socket.assigns.recovery
-       | needed: true,
-         event_revision: socket.assigns.recovery.event_revision + 1
-     })
-     |> start_recovery()}
+    socket = replace_delivery(socket)
+    cursor = socket.assigns.events.cursor
+
+    if is_map(cursor) do
+      {:noreply,
+       socket
+       |> assign(:approvals, load_approvals(socket.assigns.session_key))
+       |> start_replay(cursor)}
+    else
+      {:noreply, full_resync(socket)}
+    end
+  end
+
+  def handle_info(%LemonCore.Event{type: :session_event, meta: meta} = event, socket) do
+    if is_map(meta) and meta[:session_key] == socket.assigns.session_key do
+      case live_batch(event) do
+        {:ok, batch} -> {:noreply, on_batch(socket, batch)}
+        :error -> {:noreply, full_resync(socket)}
+      end
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info(%LemonCore.Event{type: type}, socket)
       when type in [:config_reloaded, :secret_changed],
       do: {:noreply, refresh_setup(socket)}
 
+  # Session-topic run events are unsequenced: their text and tools arrive as
+  # sequenced batches. They only reveal subagent lifecycle and runs that ended
+  # before reaching the native session.
   def handle_info(%LemonCore.Event{} = event, socket) do
-    socket =
-      assign(socket, :recovery, %{
-        socket.assigns.recovery
-        | event_revision: socket.assigns.recovery.event_revision + 1
-      })
-
     case safe_project(event) do
-      {"stream.resync", payload} ->
-        if mine?(socket, payload),
-          do: handle_info({:stream_resync, :overflow}, socket),
-          else: {:noreply, socket}
-
-      {"chat", %{"type" => "delta"} = payload} ->
-        {:noreply, on_delta(socket, payload)}
-
       {"agent", %{"type" => "started"} = payload} ->
-        {:noreply, on_started(socket, payload)}
-
-      {"agent", %{"type" => "tool_use"} = payload} ->
-        {:noreply, on_tool(socket, payload)}
+        {:noreply, on_unsequenced_started(socket, payload)}
 
       {"agent", %{"type" => "completed"} = payload} ->
-        {:noreply, on_completed(socket, payload, event)}
+        {:noreply, on_unsequenced_completed(socket, payload, event)}
 
       {"exec.approval.requested", payload} ->
         {:noreply, on_approval_requested(socket, payload)}
@@ -831,249 +947,427 @@ defmodule LemonWeb.Chat.PaneLive do
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
-  # Recovery reads the same authority as remote/TUI clients. There is no
-  # durable delta cursor: events observed during a read invalidate it, and a
-  # recovered active answer stays replacement-only until terminal truth.
-  defp start_recovery(socket, retries \\ 0) do
-    socket = ensure_cwd(socket)
+  # ── Session state (sessions.snapshot) ───────────────────────────────────
+
+  # `:state` reads the owner snapshot; `:full` also reloads `chat.history`
+  # and replaces the transcript (only after a stream change or an expired
+  # cursor). A `:full` request supersedes an in-flight `:state` read; any other
+  # request made while one is in flight runs once after it.
+  defp request_snapshot(socket, mode \\ :state) do
     recovery = socket.assigns.recovery
 
-    if recovery.inflight do
-      socket
-    else
-      key = socket.assigns.session_key
-      cwd = socket.assigns.cwd
-      generation = recovery.generation + 1
-      revision = recovery.event_revision
-
-      socket
-      |> assign(:recovery, %{
-        recovery
-        | generation: generation,
-          inflight: true,
-          retries: retries,
-          needed: true
-      })
-      |> start_async(:recovery, fn ->
-        result = if is_binary(cwd), do: Backend.snapshot(key, cwd), else: @workspace_unavailable
-        {key, generation, revision, result}
-      end)
-    end
-  end
-
-  defp retry_recovery(socket) do
-    recovery = socket.assigns.recovery
-    socket = assign(socket, :recovery, %{recovery | inflight: false})
-
-    if recovery.retries < 2,
-      do: start_recovery(socket, recovery.retries + 1),
-      else: recovery_unavailable(socket)
-  end
-
-  defp recovery_unavailable(socket) do
-    message =
-      if is_binary(socket.assigns.cwd),
-        do: "Current session recovery is unavailable. Lemon will retry.",
-        else: "Session workspace is unavailable"
-
-    socket
-    |> assign(:recovery, %{socket.assigns.recovery | inflight: false, needed: true})
-    |> assign(:history_error, message)
-  end
-
-  defp apply_recovery(socket, %{"identity" => identity, "snapshot" => snapshot} = result) do
-    previous = socket.assigns.recovery.identity
-    attempt_fields = ["sessionId", "branchId", "runId", "attempt"]
-
-    regressed? =
-      is_map(previous) and
-        Map.take(previous, attempt_fields) == Map.take(identity, attempt_fields) and
-        identity["runId"] in socket.assigns.terminal_runs and snapshot["phase"] == "running"
-
-    if regressed?, do: recovery_unavailable(socket), else: install_recovery(socket, result)
-  end
-
-  defp install_recovery(socket, %{"identity" => identity, "snapshot" => snapshot}) do
-    run_id = identity["runId"]
-
-    items =
-      snapshot
-      |> recovery_rows(run_id)
-      |> Transcript.from_history()
-      |> recovery_terminal_notice(snapshot["phase"])
-
-    active? = snapshot["phase"] == "running"
-    previous = socket.assigns.recovery.identity
-    previous_run = previous && previous["runId"]
-
-    terminal_runs =
-      [
-        if(snapshot["terminal"], do: run_id),
-        if(previous_run != run_id and snapshot["phase"] != "unknown", do: previous_run)
-      ]
-      |> Enum.filter(&is_binary/1)
-      |> Kernel.++(socket.assigns.terminal_runs)
-      |> Enum.uniq()
-      |> Enum.take(@terminal_run_limit)
-
-    run =
-      cond do
-        active? and is_binary(run_id) ->
-          %{socket.assigns.run | status: :running, run_id: run_id}
-
-        snapshot["phase"] == "unknown" ->
-          if socket.assigns.run.status in [:running, :stopping],
-            do: socket.assigns.run,
-            else: %{idle_run() | status: :unavailable}
-
-        true ->
-          idle_run()
-      end
-
-    approvals =
-      case snapshot["approvals"] do
-        %{"status" => "ok", "items" => pending} when is_list(pending) ->
-          pending |> Enum.map(&Components.approval_view/1) |> Enum.filter(&is_binary(&1.id))
-
-        _ ->
-          # An unavailable approval owner must never preserve actionable cards.
-          []
-      end
-
-    # A stream reset retains inserts already queued in this render. Publishing
-    # the dirty tail here would therefore reinsert abandoned text alongside the
-    # recovered rows, even though the segment indexes below are cleared.
-    _ = if socket.assigns.flush_timer, do: Process.cancel_timer(socket.assigns.flush_timer)
-
-    socket =
-      socket
-      |> assign(:flush_timer, nil)
-      |> assign(
-        run: run,
-        last_run_id: run_id,
-        terminal_runs: terminal_runs,
-        segments: %{},
-        dirty: MapSet.new(),
-        streamed_runs: MapSet.new(),
-        resumed_runs: MapSet.new(),
-        last_seq: %{},
-        tools: Map.new(for(%{kind: :tool} = tool <- items, do: {tool.id, tool})),
-        transcript_empty?: items == [],
-        approvals: approvals,
-        approval_notice:
-          if(snapshot["approvals"]["status"] != "ok",
-            do: "Approval status is unavailable.",
-            else: nil
-          ),
-        todos: snapshot["todos"],
-        processes: snapshot["processes"],
-        subagents: Subagents.from_recovery(snapshot["children"]),
-        history_error: recovery_preview_notice(snapshot),
-        recovery: %{
-          socket.assigns.recovery
-          | identity: identity,
-            inflight: false,
-            retries: 0,
-            needed: snapshot["phase"] == "unknown",
-            recovered_run: if(active?, do: run_id)
-        }
-      )
-      |> stream(:items, items, reset: true, limit: -Transcript.max_items())
-      |> apply_recovery_plan(snapshot["plan"])
-      |> replace_delivery()
-
-    notify_parent(socket, :sessions_changed)
-    socket
-  end
-
-  defp recovery_rows(snapshot, run_id) do
-    rows = (snapshot["messages"] || []) ++ (snapshot["actions"] || [])
-
-    case snapshot["answer"] do
-      %{"canonical" => true, "text" => answer}
-      when is_binary(run_id) and is_binary(answer) and answer != "" ->
-        # Canonical completion replaces all current-turn text segments. It is
-        # not another message appended beside a partial or mismatching answer.
-        rows =
-          Enum.reject(rows, &(&1["role"] == "assistant" and &1["runId"] == run_id))
-
-        timestamp = Enum.reduce(rows, 0, &max(&1["timestampMs"] || 0, &2))
-
-        rows ++
-          [
-            %{
-              "id" => "recovery:#{run_id}:answer",
-              "role" => "assistant",
-              "runId" => run_id,
-              "content" => answer,
-              "timestampMs" => timestamp + 1
-            }
-          ]
-
-      _ ->
-        rows
-    end
-  end
-
-  defp recovery_preview_notice(snapshot) do
     cond do
-      snapshot["phase"] == "unknown" ->
-        "Current run state is unavailable."
+      not connected?(socket) ->
+        socket
 
-      snapshot["messagesTruncated"] == true or snapshot["actionsTruncated"] == true or
-          snapshot["answer"]["truncated"] == true ->
-        "Recovery preview is bounded; some transcript or answer text is omitted."
+      recovery.inflight == :full or (recovery.inflight == :state and mode == :state) ->
+        assign(socket, :recovery, %{recovery | queued: queued_mode(recovery.queued, mode)})
 
       true ->
-        nil
+        start_snapshot(socket, mode)
     end
   end
 
-  defp recovery_terminal_notice(items, "cancelled"),
-    do: items ++ [Transcript.notice_item("info", "Run stopped.")]
+  defp queued_mode(:full, _mode), do: :full
+  defp queued_mode(_queued, mode), do: mode
 
-  defp recovery_terminal_notice(items, "failed"),
-    do: items ++ [Transcript.notice_item("danger", "The run did not finish successfully.")]
+  defp start_snapshot(socket, mode) do
+    socket = ensure_cwd(socket)
+    recovery = socket.assigns.recovery
+    key = socket.assigns.session_key
+    cwd = socket.assigns.cwd
+    generation = recovery.generation + 1
 
-  defp recovery_terminal_notice(items, _), do: items
-
-  defp apply_recovery_plan(socket, %{"status" => "ok", "value" => value})
-       when is_map(value) do
-    assign(socket, :plan, %{
-      mode: value["mode"],
-      content: value["content"],
-      path: nil,
-      error: if(value["truncated"] == true, do: "Plan preview is truncated.")
-    })
+    socket
+    |> assign(:recovery, %{recovery | generation: generation, inflight: mode, timer: nil})
+    |> start_async(:recovery, fn ->
+      history = if mode == :full, do: load_history(key, cwd)
+      result = if is_binary(cwd), do: Backend.snapshot(key, cwd), else: @workspace_unavailable
+      {generation, mode, history, result}
+    end)
   end
 
-  defp apply_recovery_plan(socket, _),
-    do:
-      assign(socket, :plan, %{
-        mode: nil,
-        content: nil,
-        path: nil,
-        error: "Plan status is unavailable."
-      })
+  defp run_queued_snapshot(%{assigns: %{recovery: %{queued: nil}}} = socket), do: socket
 
-  defp current_recovery_run?(socket, run_id) do
-    case socket.assigns.recovery.identity do
-      nil ->
-        true
+  defp run_queued_snapshot(socket) do
+    recovery = socket.assigns.recovery
 
-      identity ->
-        identity["runId"] == run_id and socket.assigns.run.status in [:running, :stopping]
+    socket
+    |> assign(:recovery, %{recovery | queued: nil})
+    |> request_snapshot(recovery.queued)
+  end
+
+  # One state read per run, after it ends: the transcript already has the
+  # run's text, the snapshot refreshes approvals, todos, processes and children.
+  defp request_terminal_snapshot(socket, run_id) do
+    recovery = socket.assigns.recovery
+
+    if run_id in recovery.refreshed_runs do
+      socket
+    else
+      refreshed = Enum.take([run_id | recovery.refreshed_runs], @terminal_run_limit)
+
+      socket
+      |> assign(:recovery, %{recovery | refreshed_runs: refreshed})
+      |> request_snapshot()
     end
   end
 
-  defp delivery_topics(key), do: [Bus.session_topic(key), "exec_approvals", "system"]
+  defp schedule_snapshot_retry(socket) do
+    recovery = socket.assigns.recovery
+    ref = make_ref()
+    delay = Enum.at(@snapshot_backoff_ms, recovery.failures, List.last(@snapshot_backoff_ms))
+    Process.send_after(self(), {:snapshot_retry, ref}, delay)
+    assign(socket, :recovery, %{recovery | failures: recovery.failures + 1, timer: ref})
+  end
 
+  defp install_history(socket, {:ok, items}) do
+    _ = if socket.assigns.flush_timer, do: Process.cancel_timer(socket.assigns.flush_timer)
+    run_id = socket.assigns.run.run_id
+
+    socket
+    |> assign(
+      flush_timer: nil,
+      segments: %{},
+      dirty: MapSet.new(),
+      streamed_runs: MapSet.new(),
+      clipped_runs: MapSet.new(),
+      resumed_runs: if(run_id, do: MapSet.new([run_id]), else: MapSet.new()),
+      tools: Map.new(for(%{kind: :tool} = tool <- items, do: {tool.id, tool})),
+      transcript_empty?: items == [],
+      history_error: nil
+    )
+    |> stream(:items, items, reset: true, limit: -Transcript.max_items())
+  end
+
+  defp install_history(socket, {:error, message}), do: assign(socket, :history_error, message)
+
+  defp install_snapshot(socket, {:ok, %{"identity" => identity, "snapshot" => snapshot} = result}) do
+    unknown? = not known_phase?(snapshot["phase"], identity["runId"])
+
+    socket
+    |> reduce_snapshot_run(snapshot["phase"], identity["runId"])
+    |> install_approvals(snapshot["approvals"])
+    |> assign(
+      todos: snapshot["todos"],
+      processes: snapshot["processes"],
+      subagents: Subagents.from_recovery(snapshot["children"]),
+      state_notice: if(unknown?, do: "Current run state is unavailable."),
+      recovery: %{
+        socket.assigns.recovery
+        | identity: identity,
+          status: if(unknown?, do: :unknown, else: :ok),
+          failures: 0
+      }
+    )
+    |> adopt_cursor(get_in(result, ["consistency", "eventCursor"]))
+  end
+
+  # Live output races the owner's two reads. During a run the run's own end
+  # reads state again; otherwise retry after a backoff, silently.
+  defp install_snapshot(socket, :retry) do
+    socket = adopt_without_cursor(socket, :first_seen)
+
+    if socket.assigns.run.status in [:running, :stopping],
+      do: socket,
+      else: schedule_snapshot_retry(socket)
+  end
+
+  # No owner and no lifecycle record: a session that has not started yet.
+  defp install_snapshot(socket, {:error, %{code: :not_found}}) do
+    run = socket.assigns.run
+
+    socket
+    |> assign(
+      run: if(run.status == :unavailable, do: idle_run(), else: run),
+      todos: %{"status" => "not_found"},
+      processes: %{"status" => "not_found"},
+      subagents: Subagents.from_recovery(%{"status" => "ok", "items" => []}),
+      state_notice: nil,
+      recovery: %{socket.assigns.recovery | identity: nil, status: :not_found, failures: 0}
+    )
+    |> adopt_without_cursor(:from_start)
+  end
+
+  defp install_snapshot(socket, {:error, _}) do
+    socket
+    |> assign(
+      state_notice: "Session state is unavailable. Lemon will try again shortly.",
+      recovery: %{socket.assigns.recovery | status: :unavailable}
+    )
+    |> adopt_without_cursor(:first_seen)
+    |> schedule_snapshot_retry()
+  end
+
+  defp known_phase?("running", run_id), do: is_binary(run_id)
+  defp known_phase?(phase, _run_id), do: phase in ~w(idle completed cancelled failed)
+
+  # Snapshot phases go through the live run reducer: a stop request on the
+  # same run survives, a newer local run is kept, and only a non-running
+  # phase clears queued follow-ups. Transcript text never comes from here.
+  defp reduce_snapshot_run(socket, "running", run_id) when is_binary(run_id) do
+    cond do
+      run_id in socket.assigns.terminal_runs ->
+        socket
+
+      socket.assigns.run.run_id == run_id ->
+        run_started(socket, run_id, nil)
+
+      true ->
+        socket
+        |> run_started(run_id, nil)
+        |> assign(:resumed_runs, MapSet.put(socket.assigns.resumed_runs, run_id))
+    end
+  end
+
+  # A finished run ends only that run. The active-run lookup, not a native
+  # phase, decides whether an unconfirmed status becomes idle.
+  defp reduce_snapshot_run(socket, phase, run_id)
+       when phase in ~w(completed cancelled failed) and is_binary(run_id) do
+    run = socket.assigns.run
+
+    cond do
+      run.status in [:running, :stopping] and run.run_id != run_id -> socket
+      run.status in [:running, :stopping] -> assign(socket, run: idle_run(), queued: [])
+      true -> assign(socket, :queued, [])
+    end
+  end
+
+  defp reduce_snapshot_run(socket, phase, _run_id) do
+    run = socket.assigns.run
+
+    cond do
+      run.status in [:running, :stopping] -> socket
+      phase == "idle" -> assign(socket, :queued, [])
+      true -> assign(socket, run: %{idle_run() | status: :unavailable}, queued: [])
+    end
+  end
+
+  # ── Sequenced session events ────────────────────────────────────────────
+
+  defp adopt_cursor(socket, cursor) do
+    events = socket.assigns.events
+
+    cond do
+      is_map(events.cursor) -> socket
+      cursor?(cursor) -> assign(socket, :events, %{events | cursor: cursor})
+      true -> adopt_without_cursor(socket, :from_start)
+    end
+  end
+
+  defp adopt_without_cursor(socket, adopt) do
+    events = socket.assigns.events
+
+    if is_nil(events.cursor) and events.adopt == :wait,
+      do: assign(socket, :events, %{events | adopt: adopt}),
+      else: socket
+  end
+
+  defp cursor?(%{"version" => 1, "sessionId" => id, "streamId" => stream, "seq" => seq} = cursor)
+       when map_size(cursor) == 4 and is_binary(id) and is_binary(stream) and is_integer(seq) and
+              seq >= 0,
+       do: true
+
+  defp cursor?(_), do: false
+
+  defp same_stream?(a, b),
+    do: a["sessionId"] == b["sessionId"] and a["streamId"] == b["streamId"]
+
+  defp live_batch(%LemonCore.Event{payload: %{cursor: cursor, events: events}})
+       when is_list(events) do
+    if cursor?(cursor) do
+      inner =
+        Enum.flat_map(events, fn event ->
+          case safe_project(event) do
+            {name, payload} when is_map(payload) -> [{name, payload, event}]
+            _ -> []
+          end
+        end)
+
+      {:ok, %{cursor: cursor, events: inner}}
+    else
+      :error
+    end
+  end
+
+  defp live_batch(_event), do: :error
+
+  defp replay_batches(entries) do
+    entries
+    |> Enum.reduce_while({:ok, []}, fn
+      %{"cursor" => cursor, "events" => events}, {:ok, acc} when is_list(events) ->
+        if cursor?(cursor) do
+          inner =
+            for %{"event" => name, "payload" => payload} when is_map(payload) <- events,
+                do: {name, payload, nil}
+
+          {:cont, {:ok, [%{cursor: cursor, events: inner} | acc]}}
+        else
+          {:halt, :error}
+        end
+
+      _entry, _acc ->
+        {:halt, :error}
+    end)
+    |> case do
+      {:ok, batches} -> {:ok, Enum.reverse(batches)}
+      :error -> :error
+    end
+  end
+
+  defp on_batch(socket, batch) do
+    events = socket.assigns.events
+    cursor = events.cursor
+    seq = batch.cursor["seq"]
+
+    cond do
+      events.replay != nil ->
+        buffer_batch(socket, batch)
+
+      is_map(cursor) and same_stream?(cursor, batch.cursor) ->
+        cond do
+          seq <= cursor["seq"] -> socket
+          seq == cursor["seq"] + 1 -> apply_batch(socket, batch)
+          true -> socket |> buffer_batch(batch) |> start_replay(cursor)
+        end
+
+      # A new owner process starts its own stream at 1. Any other stream
+      # change (a rewound or switched branch) invalidates the transcript.
+      is_map(cursor) ->
+        if seq == 1, do: apply_batch(socket, batch), else: full_resync(socket)
+
+      events.adopt == :wait ->
+        buffer_batch(socket, batch)
+
+      events.adopt == :from_start and seq > 1 ->
+        socket |> buffer_batch(batch) |> start_replay(Map.put(batch.cursor, "seq", 0))
+
+      true ->
+        apply_batch(socket, batch)
+    end
+  end
+
+  defp buffer_batch(socket, batch) do
+    events = socket.assigns.events
+    pending = Map.put(events.pending, {batch.cursor["streamId"], batch.cursor["seq"]}, batch)
+
+    cond do
+      map_size(pending) <= @pending_batch_limit ->
+        assign(socket, :events, %{events | pending: pending})
+
+      # Everything buffered follows the cursor; the replay rereads it.
+      is_map(events.cursor) ->
+        assign(socket, :events, %{events | pending: %{}})
+
+      true ->
+        full_resync(socket)
+    end
+  end
+
+  defp drain_pending(socket) do
+    events = socket.assigns.events
+
+    if events.replay != nil or events.pending == %{} or
+         (is_nil(events.cursor) and events.adopt == :wait) do
+      socket
+    else
+      events.pending
+      |> Map.values()
+      |> Enum.sort_by(& &1.cursor["seq"])
+      |> Enum.reduce(assign(socket, :events, %{events | pending: %{}}), &on_batch(&2, &1))
+    end
+  end
+
+  defp apply_batch(socket, batch) do
+    key = socket.assigns.session_key
+    socket = assign(socket, :events, %{socket.assigns.events | cursor: batch.cursor})
+
+    Enum.reduce(batch.events, socket, fn {name, payload, raw}, socket ->
+      apply_session_event(socket, name, Map.put(payload, "sessionKey", key), raw)
+    end)
+  end
+
+  defp apply_session_event(socket, "chat", %{"type" => "delta"} = payload, _raw),
+    do: socket |> sequenced(payload) |> on_delta(payload)
+
+  defp apply_session_event(socket, "agent", %{"type" => "started"} = payload, _raw),
+    do: socket |> sequenced(payload) |> on_started(payload)
+
+  defp apply_session_event(socket, "agent", %{"type" => "tool_use"} = payload, _raw),
+    do: socket |> sequenced(payload) |> on_tool(payload)
+
+  defp apply_session_event(socket, "agent", %{"type" => "completed"} = payload, raw),
+    do: apply_completed(socket, payload, raw)
+
+  defp apply_session_event(socket, _name, _payload, _raw), do: socket
+
+  defp sequenced(socket, %{"runId" => run_id}) when is_binary(run_id) do
+    if run_id in socket.assigns.terminal_runs,
+      do: socket,
+      else: assign(socket, :sequenced_runs, MapSet.put(socket.assigns.sequenced_runs, run_id))
+  end
+
+  defp sequenced(socket, _payload), do: socket
+
+  defp start_replay(socket, from) do
+    events = socket.assigns.events
+
+    if events.replay do
+      socket
+    else
+      ref = make_ref()
+      key = socket.assigns.session_key
+
+      socket
+      |> assign(:events, %{events | replay: ref})
+      |> start_async(:replay, fn -> {ref, from, Backend.events(key, from)} end)
+    end
+  end
+
+  defp install_replay(socket, from, {:ok, %{entries: entries, cursor: last, more?: more?}}) do
+    socket = assign(socket, :events, %{socket.assigns.events | cursor: from, replay: nil})
+
+    with {:ok, batches} <- replay_batches(entries),
+         %Phoenix.LiveView.Socket{} = socket <- apply_replayed(socket, batches),
+         ^last <- socket.assigns.events.cursor do
+      if more?, do: start_replay(socket, last), else: drain_pending(socket)
+    else
+      _ -> full_resync(socket)
+    end
+  end
+
+  defp install_replay(socket, _from, _result), do: full_resync(socket)
+
+  defp apply_replayed(socket, batches) do
+    Enum.reduce_while(batches, socket, fn batch, socket ->
+      cursor = socket.assigns.events.cursor
+
+      if same_stream?(cursor, batch.cursor) and batch.cursor["seq"] == cursor["seq"] + 1,
+        do: {:cont, apply_batch(socket, batch)},
+        else: {:halt, :gap}
+    end)
+  end
+
+  # The stream cannot be continued (changed branch, expired cursor, failed
+  # replay): reload history and state together, then follow the new cursor.
+  defp full_resync(socket) do
+    socket
+    |> assign(:events, new_event_stream())
+    |> request_snapshot(:full)
+  end
+
+  defp delivery_topics(key),
+    do: [Bus.session_topic(key), @session_events_topic, "exec_approvals", "system"]
+
+  # One handle bounds every topic. `session_events` carries all sessions'
+  # sequenced batches (filtered here by key); 1 MiB matches the owner's
+  # per-event replay budget, so a large tool result does not fence delivery.
   defp subscribe_delivery(key) do
     delivery =
       Delivery.new(self(),
         tagged: true,
         max_queue: 256,
-        max_bytes: 65_536,
+        max_bytes: 1_048_576,
         overflow_message: {:stream_resync, :overflow}
       )
 
@@ -1103,45 +1397,67 @@ defmodule LemonWeb.Chat.PaneLive do
     end
   end
 
+  defp on_unsequenced_started(socket, payload) do
+    if mine?(socket, payload) and payload["parentRunId"] not in [nil, ""],
+      do: request_snapshot(socket),
+      else: socket
+  end
+
+  # A run that never reached the native session (for example a runtime
+  # failure) has no sequenced completion. Every other unsequenced completion
+  # is either already applied, still on its way as a batch, or a child run
+  # whose state the snapshot reports.
+  defp on_unsequenced_completed(socket, payload, event) do
+    run_id = payload["runId"]
+    events = socket.assigns.events
+
+    cond do
+      not mine?(socket, payload) or not is_binary(run_id) ->
+        socket
+
+      run_id in socket.assigns.terminal_runs or
+          MapSet.member?(socket.assigns.sequenced_runs, run_id) ->
+        socket
+
+      run_id != socket.assigns.run.run_id or events.replay != nil or events.pending != %{} or
+          (is_nil(events.cursor) and events.adopt == :wait) ->
+        request_snapshot(socket)
+
+      true ->
+        apply_completed(socket, payload, event)
+    end
+  end
+
   defp on_delta(socket, payload) do
     run_id = payload["runId"] || socket.assigns.run.run_id || "run"
     text = payload["text"]
-    seq = payload["seq"]
-    last = Map.get(socket.assigns.last_seq, run_id)
 
     cond do
-      run_id in socket.assigns.terminal_runs ->
+      run_id in socket.assigns.terminal_runs or
+          MapSet.member?(socket.assigns.clipped_runs, run_id) ->
         socket
 
       not mine?(socket, payload) or not is_binary(text) or text == "" ->
         socket
 
-      socket.assigns.recovery.recovered_run == run_id ->
-        # There is no durable token cursor. A recovered partial answer is a
-        # replacement snapshot, never a prefix to append uncertain deltas to.
-        socket
-
-      not current_recovery_run?(socket, run_id) ->
-        start_recovery(socket)
-
-      is_integer(seq) and is_integer(last) and seq > last + 1 ->
-        start_recovery(socket)
-
-      is_integer(seq) and is_integer(last) and seq <= last ->
-        socket
-
       true ->
-        append_live_delta(socket, run_id, seq, text)
+        append_live_delta(socket, run_id, text)
     end
   end
 
-  defp append_live_delta(socket, run_id, seq, text) do
+  # The live segment is bounded; past the bound the run's full text is
+  # reloaded from history when it ends.
+  defp append_live_delta(socket, run_id, text) do
     segment = socket.assigns.segments[run_id] || Transcript.assistant_item(run_id, "", true)
 
     if byte_size(segment.text) + byte_size(text) > @live_answer_bytes do
       socket
-      |> assign(:recovery, %{socket.assigns.recovery | recovered_run: run_id})
-      |> start_recovery()
+      |> close_segment(run_id)
+      |> assign(:clipped_runs, MapSet.put(socket.assigns.clipped_runs, run_id))
+      |> notice_item(
+        "info",
+        "This reply is too long to stream here. Its full text appears when the run finishes."
+      )
     else
       segment = %{segment | text: segment.text <> text}
 
@@ -1149,12 +1465,7 @@ defmodule LemonWeb.Chat.PaneLive do
       |> assign(
         segments: Map.put(socket.assigns.segments, run_id, segment),
         dirty: MapSet.put(socket.assigns.dirty, run_id),
-        streamed_runs: MapSet.put(socket.assigns.streamed_runs, run_id),
-        last_seq:
-          if(is_integer(seq),
-            do: Map.put(socket.assigns.last_seq, run_id, seq),
-            else: socket.assigns.last_seq
-          )
+        streamed_runs: MapSet.put(socket.assigns.streamed_runs, run_id)
       )
       |> mark_running(run_id)
       |> schedule_flush()
@@ -1172,27 +1483,35 @@ defmodule LemonWeb.Chat.PaneLive do
         socket
 
       payload["parentRunId"] not in [nil, ""] ->
-        refresh_subagents(socket)
-
-      socket.assigns.recovery.identity != nil ->
-        start_recovery(socket)
+        request_snapshot(socket)
 
       true ->
-        queued =
-          if run_id != socket.assigns.run.run_id,
-            do: Enum.drop(socket.assigns.queued, 1),
-            else: socket.assigns.queued
-
         socket
-        |> assign(
-          run: %{status: :running, run_id: run_id, started_at_ms: now(), model: payload["model"]},
-          last_run_id: run_id,
-          queued: queued,
-          control_notice: nil,
-          approval_notice: nil
-        )
+        |> run_started(run_id, payload["model"])
+        |> assign(control_notice: nil, approval_notice: nil)
         |> ensure_cwd()
-        |> refresh_subagents()
+    end
+  end
+
+  # The one run-state reducer shared by live events and snapshots. The same
+  # run keeps its status, so a requested stop survives; a different run
+  # consumes the oldest queued follow-up.
+  defp run_started(socket, run_id, model) do
+    run = socket.assigns.run
+
+    if run.run_id == run_id and run.status in [:running, :stopping] do
+      assign(socket, :run, %{run | model: model || run.model})
+    else
+      queued =
+        if run.run_id != run_id,
+          do: Enum.drop(socket.assigns.queued, 1),
+          else: socket.assigns.queued
+
+      assign(socket,
+        run: %{status: :running, run_id: run_id, started_at_ms: now(), model: model},
+        last_run_id: run_id,
+        queued: queued
+      )
     end
   end
 
@@ -1221,9 +1540,6 @@ defmodule LemonWeb.Chat.PaneLive do
 
       not mine?(socket, payload) ->
         socket
-
-      socket.assigns.recovery.identity != nil ->
-        start_recovery(socket)
 
       kind == "approval" ->
         socket
@@ -1276,25 +1592,27 @@ defmodule LemonWeb.Chat.PaneLive do
     end
   end
 
-  defp on_completed(socket, payload, event) do
-    if socket.assigns.recovery.identity do
-      # Untagged events cannot prove membership in a selected branch/attempt.
-      if mine?(socket, payload), do: start_recovery(socket), else: socket
-    else
-      apply_completed(socket, payload, event)
-    end
-  end
-
+  # `event` is the raw completion for live batches and nil for replayed ones,
+  # whose projected answer is a bounded preview. A preview or a clipped live
+  # segment is never shown as the answer: history supplies the full text.
   defp apply_completed(socket, payload, event) do
     run_id = payload["runId"] || socket.assigns.run.run_id || "run"
 
     if mine?(socket, payload) and run_id not in socket.assigns.terminal_runs do
-      answer = full_answer(event) || payload["answer"]
+      full = full_answer(event)
+      answer = full || payload["answer"]
       streamed? = MapSet.member?(socket.assigns.streamed_runs, run_id)
       segment = socket.assigns.segments[run_id]
 
+      reload? =
+        MapSet.member?(socket.assigns.clipped_runs, run_id) or
+          (not streamed? and is_nil(full) and is_binary(answer) and byte_size(answer) > 500)
+
       socket =
         cond do
+          reload? ->
+            close_segment(socket, run_id)
+
           # Joined mid-run (mount/reconnect): replace the partial tail with the
           # whole answer instead of appending it a second time.
           segment && MapSet.member?(socket.assigns.resumed_runs, run_id) && is_binary(answer) &&
@@ -1334,9 +1652,10 @@ defmodule LemonWeb.Chat.PaneLive do
         )
         |> assign(
           streamed_runs: MapSet.delete(socket.assigns.streamed_runs, run_id),
+          sequenced_runs: MapSet.delete(socket.assigns.sequenced_runs, run_id),
+          clipped_runs: MapSet.delete(socket.assigns.clipped_runs, run_id),
           terminal_runs: Enum.take([run_id | socket.assigns.terminal_runs], @terminal_run_limit),
-          resumed_runs: MapSet.delete(socket.assigns.resumed_runs, run_id),
-          last_seq: Map.delete(socket.assigns.last_seq, run_id)
+          resumed_runs: MapSet.delete(socket.assigns.resumed_runs, run_id)
         )
 
       socket =
@@ -1348,9 +1667,12 @@ defmodule LemonWeb.Chat.PaneLive do
 
       socket
       |> ensure_cwd()
-      |> refresh_subagents()
       |> then(fn socket ->
-        if connected?(socket), do: socket |> load_context() |> load_plan(), else: socket
+        cond do
+          not connected?(socket) -> socket
+          reload? -> socket |> load_context() |> load_plan() |> request_snapshot(:full)
+          true -> socket |> load_context() |> load_plan() |> request_terminal_snapshot(run_id)
+        end
       end)
     else
       socket
@@ -1367,6 +1689,8 @@ defmodule LemonWeb.Chat.PaneLive do
   rescue
     _ -> nil
   end
+
+  defp full_answer(_event), do: nil
 
   defp maybe_failure_notice(socket, true, _payload, _event), do: socket
 
@@ -1436,16 +1760,14 @@ defmodule LemonWeb.Chat.PaneLive do
     _ -> :other
   end
 
+  defp failure_reason(_event), do: :other
+
   defp on_approval_requested(socket, payload) do
     approval = Components.approval_view(payload)
 
     cond do
       payload["sessionKey"] != socket.assigns.session_key ->
         socket
-
-      socket.assigns.recovery.identity != nil ->
-        # Pending owner state wins over a delayed request/resolution event.
-        start_recovery(socket)
 
       not is_binary(approval.id) ->
         socket
@@ -1459,12 +1781,6 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   defp on_approval_resolved(socket, payload) do
-    if socket.assigns.recovery.identity,
-      do: start_recovery(socket),
-      else: apply_approval_resolved(socket, payload)
-  end
-
-  defp apply_approval_resolved(socket, payload) do
     id = payload["approvalId"]
 
     if Enum.any?(socket.assigns.approvals, &(&1.id == id)) do
@@ -1779,22 +2095,17 @@ defmodule LemonWeb.Chat.PaneLive do
 
   # ── Plan / context / subagents ──────────────────────────────────────────
 
+  # The full plan comes from `sessions.plan`, never the snapshot's bounded
+  # preview.
   defp load_plan(socket) do
     socket = ensure_cwd(socket)
     key = socket.assigns.session_key
     cwd = socket.assigns.cwd
-    identity = socket.assigns.recovery.identity
 
-    cond do
-      not is_binary(cwd) ->
+    if is_binary(cwd),
+      do: start_async(socket, :plan, fn -> Backend.plan(key, cwd, "status") end),
+      else:
         assign(socket, :plan, %{socket.assigns.plan | error: "Session workspace is unavailable"})
-
-      identity ->
-        start_recovery(socket)
-
-      true ->
-        start_async(socket, :plan, fn -> {identity, Backend.plan(key, cwd, "status")} end)
-    end
   end
 
   defp change_plan(socket, action) do
@@ -1834,7 +2145,9 @@ defmodule LemonWeb.Chat.PaneLive do
     end)
   end
 
-  defp on_tab_open(socket, "subagents"), do: refresh_subagents(socket)
+  # The subagent tree is the snapshot's children projection; opening the tab
+  # reads it again.
+  defp on_tab_open(socket, "subagents"), do: request_snapshot(socket)
   defp on_tab_open(socket, "plan"), do: load_plan(socket)
 
   defp on_tab_open(socket, "context") do
@@ -1842,30 +2155,6 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   defp on_tab_open(socket, _tab), do: socket
-
-  defp refresh_subagents(socket) do
-    if socket.assigns.recovery.identity do
-      start_recovery(socket)
-    else
-      run_id = socket.assigns.run.run_id || socket.assigns.last_run_id
-      assign(socket, :subagents, Subagents.snapshot(socket.assigns.session_key, run_id))
-    end
-  end
-
-  defp maybe_refresh_subagents(socket) do
-    if socket.assigns.run.status in [:running, :stopping] or
-         (socket.assigns.inspector_open and socket.assigns.inspector_tab == "subagents"),
-       do: refresh_subagents(socket),
-       else: socket
-  end
-
-  defp schedule_subagent_refresh(socket) do
-    _ =
-      if connected?(socket),
-        do: Process.send_after(self(), :refresh_subagents, @subagent_refresh_ms)
-
-    socket
-  end
 
   # ── Routing settings ────────────────────────────────────────────────────
 
@@ -2298,7 +2587,10 @@ defmodule LemonWeb.Chat.PaneLive do
             <.callout :if={@history_error} tone="warning" title="History unavailable" class="mb-3">
               {@history_error}
             </.callout>
-            <div :if={@transcript_empty? && @approvals == []} class="py-10">
+            <.callout :if={@state_notice} id={"state-notice-#{@dom_key}"} tone="warning" title="Session state unavailable" class="mb-3">
+              {@state_notice}
+            </.callout>
+            <div :if={@history_loaded? && @transcript_empty? && @approvals == []} class="py-10">
               <.empty_state icon="message-square" title="Start the conversation" description="Ask Lemon to read, change or run something in this workspace. Use Plan mode to get a reviewed plan first." />
             </div>
             <div id={"transcript-#{@dom_key}"} class="transcript space-y-3" phx-update="stream" role="log" aria-live="polite" aria-relevant="additions">

@@ -429,6 +429,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   65,536-byte ingress message budget instead of 100,000 bytes. 500 sequential
   runs in one conversation previously left 502 coalescer processes
   (≈7.1 MB); they now return to zero (#685).
+- Web chat has one transcript pipeline: full-text `chat.history` once per open,
+  then sequenced `session.event` batches after the `sessions.snapshot` event
+  cursor, with `sessions.events` replay for gaps. Streaming no longer stops at
+  the first snapshot or resets every 2 s, long answers and edit diffs stay
+  complete after recovery, and the snapshot is state only (at most one read per
+  run) through the live run reducer, so **Stopping** and queued follow-ups
+  survive it. `not_found`/`unknown` snapshots are explicit and never polled;
+  failed reads back off. The Subagents tab shows the snapshot's child runs
+  (#653).
+- Web chat approval cards keep their command, path, arguments and plan after
+  recovery: the snapshot decides which approvals are pending and each card keeps
+  (or rereads) the full `exec.approvals.get` record. `sessions.snapshot`
+  approvals now carry `command`, `path`, `plan` and an argument preview with
+  `truncated`/`planTruncated` flags; a truncated card or plan cannot be approved
+  until the full request loads (#654).
 
 ### Removed
 
