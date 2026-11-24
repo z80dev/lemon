@@ -1,8 +1,8 @@
 defmodule LemonRouter.RunOrchestratorAdmissionTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.RunRequest
-  alias LemonRouter.RunOrchestrator
+  alias LemonCore.{RunRequest, Store}
+  alias LemonRouter.{RunOrchestrator, Submission}
 
   # Stands in for the orchestrator process: replies after a delay, echoes the
   # request's run ID, or dies while handling the call.
@@ -68,5 +68,74 @@ defmodule LemonRouter.RunOrchestratorAdmissionTest do
       assert RunOrchestrator.submit(server, request(%{run_id: "run_slow_admission"})) ==
                {:ok, "run_slow_admission"}
     end
+  end
+
+  # These use the application's registered orchestrator: the one whose crash
+  # would restart the conversation supervisor.
+  describe "invalid submissions (#646)" do
+    setup do
+      orchestrator = Process.whereis(RunOrchestrator)
+      assert is_pid(orchestrator)
+      %{orchestrator: orchestrator}
+    end
+
+    test "a malformed request is refused before the durable claim; the orchestrator survives",
+         %{orchestrator: orchestrator} do
+      monitor = Process.monitor(orchestrator)
+
+      for {field, value} <- [
+            session_key: "",
+            session_key: nil,
+            session_key: <<0xFF>>,
+            queue_mode: :bogus,
+            origin: "control_plane"
+          ] do
+        run_id = "run_invalid_#{field}_#{System.unique_integer([:positive])}"
+        invalid = Map.put(request(%{run_id: run_id}), field, value)
+
+        assert RunOrchestrator.submit(invalid) == {:error, :invalid_submission}
+        assert Store.get(RunOrchestrator.admission_table(), run_id) == nil
+      end
+
+      refute_received {:DOWN, ^monitor, :process, _, _}
+      assert Process.whereis(RunOrchestrator) == orchestrator
+    end
+
+    @tag :tmp_dir
+    test "an unreadable config is a definite refusal in the caller, never inside admission",
+         %{orchestrator: orchestrator, tmp_dir: dir} do
+      path = Path.join(dir, "config.toml")
+      File.write!(path, "[agent\ndefault_model = ")
+      previous = Application.get_env(:lemon_core, :paths, [])
+      Application.put_env(:lemon_core, :paths, Keyword.put(previous, :global_config, path))
+
+      on_exit(fn ->
+        Application.put_env(:lemon_core, :paths, previous)
+        LemonCore.ConfigCache.invalidate()
+      end)
+
+      monitor = Process.monitor(orchestrator)
+      run_id = "run_invalid_config_#{System.unique_integer([:positive])}"
+
+      assert RunOrchestrator.submit(request(%{run_id: run_id})) == {:error, :config_unavailable}
+
+      Application.put_env(:lemon_core, :paths, previous)
+      assert Store.get(RunOrchestrator.admission_table(), run_id) == nil
+      refute_received {:DOWN, ^monitor, :process, _, _}
+      assert Process.whereis(RunOrchestrator) == orchestrator
+    end
+  end
+
+  test "Submission.new/1 rejects a submission admission cannot own" do
+    assert Submission.new(%{}) == {:error, :invalid_submission}
+
+    command = %LemonCore.ExecutionCommand{
+      run_id: "run_new",
+      session_key: "",
+      prompt: "never admitted",
+      conversation_key: {:session, "default"}
+    }
+
+    assert Submission.new(%{execution_request: command}) == {:error, :invalid_submission}
   end
 end

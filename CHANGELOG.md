@@ -206,6 +206,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   routing-feedback config reads use the config cache instead of parsing TOML.
   Callers fix run IDs before the call, and submit uses the same 20 s window as
   abort, so a timed-out submit is outcome-unknown for that request only (#645).
+- A malformed run submission (empty or missing session key, unknown queue mode,
+  non-atom origin) or an unreadable config is refused with a definite
+  `:invalid_submission` / `:config_unavailable` before the durable admission
+  claim, instead of crashing the run orchestrator and restarting every queue.
+  The control-plane `agent` method rejects an empty or malformed `session_key`
+  as invalid params (#646).
 
 ### Removed
 

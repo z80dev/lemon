@@ -123,7 +123,9 @@ defmodule LemonRouter.RunOrchestrator do
   @spec submit(GenServer.server(), RunRequest.t() | map() | keyword()) ::
           {:ok, binary()} | {:error, term()}
   def submit(server, request) when is_map(request) or is_list(request) do
-    call_admission(server, {:submit, fix_run_id(request)})
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      call_admission(server, {:submit, fix_run_id(request), settings})
+    end
   end
 
   @doc "Admit a fixed-ID fresh native execution from immutable local tool provenance."
@@ -132,7 +134,9 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   def submit_native_followup(server, source, %RunRequest{} = request) do
-    call_admission(server, {:native_followup, source, request, :local})
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      call_admission(server, {:native_followup, source, request, :local, settings})
+    end
   end
 
   @doc false
@@ -147,7 +151,9 @@ defmodule LemonRouter.RunOrchestrator do
         %RunRequest{} = request,
         authenticated_session
       ) do
-    call_admission(server, {:native_followup, source, request, authenticated_session})
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      call_admission(server, {:native_followup, source, request, authenticated_session, settings})
+    end
   end
 
   @doc "Seal immutable executing-host native startup policy before native execution begins."
@@ -163,16 +169,24 @@ defmodule LemonRouter.RunOrchestrator do
 
   @doc false
   def recover_orphan(server, run_id, admission) do
-    GenServer.call(server, {:recover_orphan, run_id, admission}, @serialized_mutation_timeout_ms)
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      GenServer.call(
+        server,
+        {:recover_orphan, run_id, admission, nil, settings},
+        @serialized_mutation_timeout_ms
+      )
+    end
   end
 
   @doc false
   def abandon_orphan(run_id, admission, :graceful_carryover) do
-    GenServer.call(
-      __MODULE__,
-      {:recover_orphan, run_id, admission, :graceful_carryover},
-      @serialized_mutation_timeout_ms
-    )
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      GenServer.call(
+        __MODULE__,
+        {:recover_orphan, run_id, admission, :graceful_carryover, settings},
+        @serialized_mutation_timeout_ms
+      )
+    end
   end
 
   @doc false
@@ -184,7 +198,9 @@ defmodule LemonRouter.RunOrchestrator do
   def submit_with_receipt(request), do: submit_with_receipt(__MODULE__, request)
 
   def submit_with_receipt(server, request) when is_map(request) or is_list(request) do
-    call_admission(server, {:submit_with_receipt, fix_run_id(request)})
+    with {:ok, settings} <- SubmissionBuilder.admission_settings() do
+      call_admission(server, {:submit_with_receipt, fix_run_id(request), settings})
+    end
   end
 
   # Only a call that never reached a live orchestrator is a definite
@@ -407,6 +423,7 @@ defmodule LemonRouter.RunOrchestrator do
         ),
       receipt_compaction: nil,
       native_checks: %{},
+      admission_settings: nil,
       abort_tombstones: %{},
       lifecycle_watches: %{},
       restart_boot_id: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
@@ -434,18 +451,16 @@ defmodule LemonRouter.RunOrchestrator do
   @impl true
   def handle_call(:presence_barrier, _from, state), do: {:reply, :ok, state}
 
-  def handle_call({:recover_orphan, run_id, admission}, _from, state) do
-    {result, state} = recover_crashed_admission(run_id, admission, state)
-    {:reply, result, state}
-  end
-
-  def handle_call({:recover_orphan, run_id, admission, reason}, _from, state) do
+  # Each admission message carries the config snapshot its caller read; it is
+  # the state's `admission_settings` for that message only.
+  def handle_call({:recover_orphan, run_id, admission, reason, settings}, _from, state) do
+    state = %{state | admission_settings: settings}
     {result, state} = recover_crashed_admission(run_id, admission, state, reason)
     {:reply, result, state}
   end
 
-  def handle_call({:submit_with_receipt, %RunRequest{} = params}, from, state) do
-    {:reply, result, next_state} = handle_call({:submit, params}, from, state)
+  def handle_call({:submit_with_receipt, %RunRequest{} = params, settings}, from, state) do
+    {:reply, result, next_state} = handle_call({:submit, params, settings}, from, state)
 
     receipt_result =
       case result do
@@ -462,13 +477,26 @@ defmodule LemonRouter.RunOrchestrator do
     {:reply, receipt_result, next_state}
   end
 
-  def handle_call({:submit, %RunRequest{run_id: run_id} = params}, _from, state)
-      when is_binary(run_id) and run_id != "" do
-    {result, state} = submit_idempotently(params, state)
-    {:reply, result, state}
+  def handle_call({:submit, %RunRequest{} = params, settings}, _from, state) do
+    # A malformed request is refused before the durable claim, never raised
+    # inside admission.
+    case SubmissionBuilder.validate_request(params) do
+      :ok ->
+        {result, state} = submit_idempotently(params, %{state | admission_settings: settings})
+        {:reply, result, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
   end
 
-  def handle_call({:native_followup, captured, %RunRequest{} = request, transport}, from, state) do
+  def handle_call(
+        {:native_followup, captured, %RunRequest{} = request, transport, settings},
+        from,
+        state
+      ) do
+    state = %{state | admission_settings: settings}
+
     with :ok <- RunRequest.validate_invocation_context_key(request.run_id),
          {:ok, source} <- LemonRouter.NativeLineage.authenticate(captured, transport) do
       identity =
@@ -555,7 +583,7 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
-  def handle_call({:submit, _invalid}, _from, state) do
+  def handle_call({:submit, _invalid, _settings}, _from, state) do
     {:reply, {:error, :invalid_submission}, state}
   end
 
@@ -847,7 +875,7 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
-  defp recover_crashed_admission(run_id, expected, state, disposition \\ nil) do
+  defp recover_crashed_admission(run_id, expected, state, disposition) do
     with {:ok, tombstone} <- Store.fetch(@abort_tombstone_table, run_id),
          {:ok, current} <- Store.fetch(@run_admission_table, run_id),
          {:ok, run} <- RunStore.fetch(run_id),
@@ -879,7 +907,7 @@ defmodule LemonRouter.RunOrchestrator do
         MapHelpers.get_key(current, :state) == "claimed" ->
           abandon_crashed_admission(run_id, current, :not_started, state)
 
-        not CrashRecovery.enabled?() ->
+        not state.admission_settings.crash_resume ->
           abandon_crashed_admission(run_id, current, :disabled, state)
 
         Map.get(current, :restart_attempt, 0) >= CrashRecovery.max_attempts() ->
@@ -1008,7 +1036,7 @@ defmodule LemonRouter.RunOrchestrator do
   defp build_native_submission(request, state) do
     with {:ok, submission} <- SubmissionBuilder.build(request, state),
          {:ok, submission} <- LemonRouter.NativeLineage.capture_submission(submission),
-         :ok <- CrashRecovery.capture(submission) do
+         :ok <- CrashRecovery.capture(submission, state.admission_settings.crash_resume) do
       {:ok, submission}
     end
   end
@@ -1107,7 +1135,8 @@ defmodule LemonRouter.RunOrchestrator do
           source: source,
           entry: entry,
           destination: destination,
-          waiters: [from]
+          waiters: [from],
+          settings: state.admission_settings
         }
 
         {:noreply, put_in(state.native_checks[ref], check)}
@@ -1123,7 +1152,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp finish_native_check(ref, admitted, state) do
     {check, checks} = Map.pop(state.native_checks, ref)
-    state = %{state | native_checks: checks}
+    state = %{state | native_checks: checks, admission_settings: check.settings}
     result = record_native_outcome(check.run_id, commit_native_followup(check, admitted, state))
     Enum.each(check.waiters, &GenServer.reply(&1, result))
     state
@@ -1426,7 +1455,9 @@ defmodule LemonRouter.RunOrchestrator do
                    durable: true
                  ) do
               :ok ->
-                if CrashRecovery.enabled?(), do: CrashRecovery.settle(Store, params.run_id)
+                if state.admission_settings.crash_resume,
+                  do: CrashRecovery.settle(Store, params.run_id)
+
                 {error, state}
 
               {:error, :mismatch} ->
