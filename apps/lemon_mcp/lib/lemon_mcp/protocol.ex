@@ -467,6 +467,31 @@ defmodule LemonMCP.Protocol do
 
   def dispatch_notification(_message, _handler, _supervisor), do: :ok
 
+  @doc false
+  # The client reply for a decoded response to a request of `kind`. Shared by
+  # the HTTP and legacy SSE clients; stdio maps responses in `LemonMCP.Client`.
+  def result(:initialize, %InitializeResponse{result: result, error: nil}), do: {:ok, result}
+  def result(:list_tools, %ToolListResponse{result: result, error: nil}), do: {:ok, result.tools}
+
+  def result(:call_tool, %ToolCallResponse{result: result, error: nil}) do
+    if result.isError,
+      do: {:error, {:tool_error, result.content}},
+      else: {:ok, result.content}
+  end
+
+  def result(:list_resources, %ResourceListResponse{result: result, error: nil}),
+    do: {:ok, result.resources}
+
+  def result(:read_resource, %ResourceReadResponse{result: result, error: nil}),
+    do: {:ok, result.contents}
+
+  def result(:list_prompts, %PromptListResponse{result: result, error: nil}),
+    do: {:ok, result.prompts}
+
+  def result(:get_prompt, %PromptGetResponse{result: result, error: nil}), do: {:ok, result}
+  def result(_kind, %{error: error}) when not is_nil(error), do: {:error, {:rpc_error, error}}
+  def result(_kind, response), do: {:ok, response}
+
   # ============================================================================
   # Encoding / Decoding
   # ============================================================================

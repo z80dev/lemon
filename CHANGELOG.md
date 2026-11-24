@@ -200,6 +200,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- MCP Streamable HTTP and legacy SSE clients run each request in a supervised
+  worker: a slow tool call no longer blocks `state/1`, status probes or other
+  calls (so the MCP source stops killing busy clients), a deadline returns
+  `:outcome_unknown` after the request worker is stopped, and a 401 refreshes
+  the grant once in the background instead of freezing the client. OAuth moved
+  to `LemonMCP.HTTP.OAuth` (#662).
 
 ### Removed
 

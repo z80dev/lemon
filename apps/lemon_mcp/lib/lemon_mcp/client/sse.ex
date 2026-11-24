@@ -27,6 +27,14 @@ defmodule LemonMCP.Client.SSE do
   most #{@max_sse_bytes} bytes (`:sse_line_too_long`) and one event's field
   lines at most #{@max_sse_bytes} bytes (`:sse_event_too_large`). Overflow
   closes the stream and fails with `{:sse_stream_failed, reason}`.
+
+  The handshake runs in `init/1`. After that each request's POST runs in a
+  supervised worker and its response is matched by id as the stream delivers
+  it, so `state/1` and concurrent requests never wait for a slow server. A
+  request's deadline is the smaller of the caller's timeout and `:timeout_ms`;
+  when it expires (or the stream is lost) after the request was sent, the
+  caller receives `{:error, :outcome_unknown}` and the request is never
+  replayed. A caller that exits also stops its pending POST.
   """
 
   use GenServer
@@ -35,6 +43,10 @@ defmodule LemonMCP.Client.SSE do
   alias LemonCore.Net.HTTP
   alias LemonMCP.HTTP.OriginPolicy
   alias LemonMCP.Protocol
+
+  # Local margin for a POST worker's transport deadline so the request
+  # deadline, which classifies the outcome, always fires first.
+  @transport_margin_ms 1_000
 
   @type client_state :: :disconnected | :initializing | :ready
 
@@ -49,31 +61,42 @@ defmodule LemonMCP.Client.SSE do
 
   @spec list_tools(GenServer.server(), timeout()) ::
           {:ok, [Protocol.tool()]} | {:error, term()}
-  def list_tools(server, timeout \\ 30_000), do: GenServer.call(server, :list_tools, timeout)
+  def list_tools(server, timeout \\ 30_000),
+    do: request(server, :list_tools, Protocol.tool_list_request(), timeout)
 
   @spec call_tool(GenServer.server(), String.t(), map(), timeout()) ::
           {:ok, [Protocol.content_item()]} | {:error, term()}
   def call_tool(server, tool_name, arguments \\ %{}, timeout \\ 30_000) do
-    GenServer.call(server, {:call_tool, tool_name, arguments}, timeout)
+    request(
+      server,
+      :call_tool,
+      Protocol.tool_call_request(name: tool_name, arguments: arguments),
+      timeout
+    )
   end
 
   @spec list_resources(GenServer.server(), timeout()) :: {:ok, [map()]} | {:error, term()}
   def list_resources(server, timeout \\ 30_000),
-    do: GenServer.call(server, :list_resources, timeout)
+    do: request(server, :list_resources, Protocol.resource_list_request(), timeout)
 
   @spec read_resource(GenServer.server(), String.t(), timeout()) ::
           {:ok, [map()]} | {:error, term()}
-  def read_resource(server, uri, timeout \\ 30_000) do
-    GenServer.call(server, {:read_resource, uri}, timeout)
-  end
+  def read_resource(server, uri, timeout \\ 30_000),
+    do: request(server, :read_resource, Protocol.resource_read_request(uri: uri), timeout)
 
   @spec list_prompts(GenServer.server(), timeout()) :: {:ok, [map()]} | {:error, term()}
-  def list_prompts(server, timeout \\ 30_000), do: GenServer.call(server, :list_prompts, timeout)
+  def list_prompts(server, timeout \\ 30_000),
+    do: request(server, :list_prompts, Protocol.prompt_list_request(), timeout)
 
   @spec get_prompt(GenServer.server(), String.t(), map(), timeout()) ::
           {:ok, map()} | {:error, term()}
   def get_prompt(server, prompt_name, arguments \\ %{}, timeout \\ 30_000) do
-    GenServer.call(server, {:get_prompt, prompt_name, arguments}, timeout)
+    request(
+      server,
+      :get_prompt,
+      Protocol.prompt_get_request(name: prompt_name, arguments: arguments),
+      timeout
+    )
   end
 
   @spec close(GenServer.server()) :: :ok
@@ -84,6 +107,11 @@ defmodule LemonMCP.Client.SSE do
 
   @spec server_capabilities(GenServer.server()) :: {:ok, map()} | {:error, :not_connected}
   def server_capabilities(server), do: GenServer.call(server, :server_capabilities)
+
+  # The client always answers at the request deadline, so the caller waits on
+  # the reply (or the client's exit) rather than a second local timer.
+  defp request(server, kind, request, timeout),
+    do: GenServer.call(server, {:request, kind, request, timeout}, :infinity)
 
   @impl true
   def init(opts) do
@@ -105,6 +133,7 @@ defmodule LemonMCP.Client.SSE do
     state = %{
       state: :initializing,
       task_supervisor: task_supervisor,
+      request_supervisor: nil,
       config: config,
       stream_reader: nil,
       post_url: nil,
@@ -112,7 +141,9 @@ defmodule LemonMCP.Client.SSE do
       sse_event_bytes: 0,
       sse_event: LemonMCP.Client.SSE.Stream.new_event(),
       server_info: nil,
-      server_capabilities: nil
+      server_capabilities: nil,
+      pending: %{},
+      tasks: %{}
     }
 
     with :ok <- ensure_http_apps(),
@@ -128,8 +159,9 @@ defmodule LemonMCP.Client.SSE do
   defp initialize_stream(state) do
     with {:ok, state} <- await_endpoint(state),
          {:ok, state} <- initialize(state),
-         {:ok, state} <- send_initialized_notification(state) do
-      {:ok, %{state | state: :ready}}
+         {:ok, state} <- send_initialized_notification(state),
+         {:ok, request_supervisor} <- Task.Supervisor.start_link() do
+      {:ok, %{state | state: :ready, request_supervisor: request_supervisor}}
     else
       {:error, reason} ->
         close_stream(state)
@@ -139,162 +171,114 @@ defmodule LemonMCP.Client.SSE do
   end
 
   @impl true
-  def handle_call(:get_state, _from, state) do
-    {:reply, state.state, state}
-  end
+  def handle_call(:get_state, _from, state), do: {:reply, state.state, state}
 
-  @impl true
-  def handle_call(:list_tools, _from, %{state: :ready} = state) do
-    {reply, state} =
-      request_response(state, Protocol.tool_list_request(), fn
-        %Protocol.ToolListResponse{result: result, error: nil} -> {:ok, result.tools}
-        other -> normalize_reply({:ok, other})
+  def handle_call({:request, kind, request, timeout}, {pid, _} = from, %{state: :ready} = state) do
+    budget = min(timeout, state.config.timeout_ms)
+    id = request.id
+
+    entry = %{
+      kind: kind,
+      from: from,
+      caller_ref: Process.monitor(pid),
+      timer: Process.send_after(self(), {:request_deadline, id}, budget),
+      task: nil
+    }
+
+    # The POST worker is bound by the same deadline (plus local margin).
+    config = %{state.config | timeout_ms: budget + @transport_margin_ms}
+    post_url = state.post_url
+
+    task =
+      Task.Supervisor.async_nolink(state.request_supervisor, fn ->
+        post_raw(request, config, post_url)
       end)
 
-    {:reply, reply, state}
+    {:noreply,
+     %{
+       state
+       | pending: Map.put(state.pending, id, %{entry | task: {task.ref, task.pid}}),
+         tasks: Map.put(state.tasks, task.ref, id)
+     }}
   end
 
-  @impl true
-  def handle_call(:list_tools, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
+  def handle_call({:request, _kind, _request, _timeout}, _from, state),
+    do: {:reply, {:error, {:not_ready, state.state}}, state}
 
-  @impl true
-  def handle_call({:call_tool, tool_name, arguments}, _from, %{state: :ready} = state) do
-    request = Protocol.tool_call_request(name: tool_name, arguments: arguments)
-
-    {reply, state} =
-      request_response(state, request, fn
-        %Protocol.ToolCallResponse{result: result, error: nil} ->
-          if result.isError do
-            {:error, {:tool_error, result.content}}
-          else
-            {:ok, result.content}
-          end
-
-        other ->
-          normalize_reply({:ok, other})
-      end)
-
-    {:reply, reply, state}
-  end
-
-  @impl true
-  def handle_call({:call_tool, _tool_name, _arguments}, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call(:list_resources, _from, %{state: :ready} = state) do
-    {reply, state} =
-      request_response(state, Protocol.resource_list_request(), fn
-        %Protocol.ResourceListResponse{result: result, error: nil} -> {:ok, result.resources}
-        other -> normalize_reply({:ok, other})
-      end)
-
-    {:reply, reply, state}
-  end
-
-  @impl true
-  def handle_call(:list_resources, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call({:read_resource, uri}, _from, %{state: :ready} = state) do
-    request = Protocol.resource_read_request(uri: uri)
-
-    {reply, state} =
-      request_response(state, request, fn
-        %Protocol.ResourceReadResponse{result: result, error: nil} -> {:ok, result.contents}
-        other -> normalize_reply({:ok, other})
-      end)
-
-    {:reply, reply, state}
-  end
-
-  @impl true
-  def handle_call({:read_resource, _uri}, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call(:list_prompts, _from, %{state: :ready} = state) do
-    {reply, state} =
-      request_response(state, Protocol.prompt_list_request(), fn
-        %Protocol.PromptListResponse{result: result, error: nil} -> {:ok, result.prompts}
-        other -> normalize_reply({:ok, other})
-      end)
-
-    {:reply, reply, state}
-  end
-
-  @impl true
-  def handle_call(:list_prompts, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call({:get_prompt, prompt_name, arguments}, _from, %{state: :ready} = state) do
-    request = Protocol.prompt_get_request(name: prompt_name, arguments: arguments)
-
-    {reply, state} =
-      request_response(state, request, fn
-        %Protocol.PromptGetResponse{result: result, error: nil} -> {:ok, result}
-        other -> normalize_reply({:ok, other})
-      end)
-
-    {:reply, reply, state}
-  end
-
-  @impl true
-  def handle_call({:get_prompt, _prompt_name, _arguments}, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
   def handle_call(:close, _from, state) do
     close_stream(state)
+    state = fail_pending(state)
     {:stop, :normal, :ok, %{state | state: :disconnected, stream_reader: nil}}
   end
 
-  @impl true
-  def handle_call(:server_info, _from, %{state: :ready, server_info: info} = state) do
-    {:reply, {:ok, info}, state}
-  end
+  def handle_call(:server_info, _from, %{state: :ready, server_info: info} = state),
+    do: {:reply, {:ok, info}, state}
 
-  @impl true
-  def handle_call(:server_info, _from, state) do
-    {:reply, {:error, :not_connected}, state}
-  end
+  def handle_call(:server_info, _from, state), do: {:reply, {:error, :not_connected}, state}
 
-  @impl true
-  def handle_call(
-        :server_capabilities,
-        _from,
-        %{state: :ready, server_capabilities: caps} = state
-      ) do
-    {:reply, {:ok, caps || %{}}, state}
-  end
+  def handle_call(:server_capabilities, _from, %{state: :ready} = state),
+    do: {:reply, {:ok, state.server_capabilities || %{}}, state}
 
-  @impl true
-  def handle_call(:server_capabilities, _from, state) do
-    {:reply, {:error, :not_connected}, state}
-  end
+  def handle_call(:server_capabilities, _from, state),
+    do: {:reply, {:error, :not_connected}, state}
 
   @impl true
   def handle_info({:mcp_sse, reader, message}, %{stream_reader: reader} = state) do
     case stream_events(message, state) do
-      {:ok, _events, state} ->
-        {:noreply, state}
+      {:ok, events, state} ->
+        {:noreply, Enum.reduce(events, state, &answer_event/2)}
 
       {:error, _reason, state} ->
+        state = fail_pending(state)
         {:stop, :normal, %{state | state: :disconnected, stream_reader: nil}}
     end
   end
 
   def handle_info({:mcp_stream_closed, reader}, %{stream_reader: reader} = state) do
+    state = fail_pending(state)
     {:stop, :normal, %{state | state: :disconnected, stream_reader: nil}}
+  end
+
+  # A POST worker finished. A sent request waits for its stream response.
+  def handle_info({ref, result}, %{tasks: tasks} = state) when is_map_key(tasks, ref) do
+    Process.demonitor(ref, [:flush])
+    {id, tasks} = Map.pop(tasks, ref)
+    state = %{state | tasks: tasks}
+
+    case {result, state.pending} do
+      {:ok, %{^id => entry}} ->
+        {:noreply, %{state | pending: Map.put(state.pending, id, %{entry | task: nil})}}
+
+      {{:error, reason}, _pending} ->
+        {:noreply, finish(state, id, {:error, reason})}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{tasks: tasks} = state)
+      when is_map_key(tasks, ref) do
+    {id, tasks} = Map.pop(tasks, ref)
+    {:noreply, finish(%{state | tasks: tasks}, id, {:error, :outcome_unknown})}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{pending: pending} = state) do
+    case Enum.find(pending, fn {_id, entry} -> entry.caller_ref == ref end) do
+      {id, entry} ->
+        Process.cancel_timer(entry.timer)
+        state = stop_task(state, entry)
+        {:noreply, %{state | pending: Map.delete(state.pending, id)}}
+
+      nil ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:request_deadline, id}, %{pending: pending} = state)
+      when is_map_key(pending, id) do
+    state = stop_task(state, pending[id])
+    {:noreply, finish(state, id, {:error, :outcome_unknown})}
   end
 
   def handle_info(_message, state) do
@@ -305,8 +289,54 @@ defmodule LemonMCP.Client.SSE do
   @impl true
   def terminate(_reason, state) do
     close_stream(state)
+    fail_pending(state)
     Protocol.stop_notification_supervisor(state.task_supervisor)
   end
+
+  # A stream response answers the pending request with the same id.
+  defp answer_event(%{event: "message", data: data}, %{pending: pending} = state)
+       when map_size(pending) > 0 do
+    with {:ok, decoded} <- Protocol.decode(data),
+         id when is_map_key(pending, id) <- response_id(decoded) do
+      finish(state, id, Protocol.result(pending[id].kind, decoded))
+    else
+      _ -> state
+    end
+  end
+
+  defp answer_event(_event, state), do: state
+
+  defp finish(state, id, reply) do
+    case Map.pop(state.pending, id) do
+      {nil, _pending} ->
+        state
+
+      {entry, pending} ->
+        Process.cancel_timer(entry.timer)
+        Process.demonitor(entry.caller_ref, [:flush])
+        GenServer.reply(entry.from, reply)
+        %{state | pending: pending}
+    end
+  end
+
+  # The worker is killed before its caller is answered, so its POST cannot be
+  # sent after the reply.
+  defp stop_task(state, %{task: {ref, pid}}) do
+    Process.exit(pid, :kill)
+    Process.demonitor(ref, [:flush])
+    %{state | tasks: Map.delete(state.tasks, ref)}
+  end
+
+  defp stop_task(state, _entry), do: state
+
+  # Every pending request was sent, or may have been: none can be replayed.
+  defp fail_pending(%{pending: pending} = state) do
+    Enum.reduce(pending, state, fn {id, entry}, state ->
+      state |> stop_task(entry) |> finish(id, {:error, :outcome_unknown})
+    end)
+  end
+
+  defp fail_pending(state), do: state
 
   defp open_stream(state) do
     url = state.config.url
@@ -318,7 +348,7 @@ defmodule LemonMCP.Client.SSE do
 
     with {:ok, pin} <- OriginPolicy.pin(url, state.config.origin_policy),
          {:ok, stream} <-
-           HTTP.open_stream(:get, url, [headers: headers] ++ request_opts(url, pin, state)) do
+           HTTP.open_stream(:get, url, [headers: headers] ++ request_opts(url, pin, state.config)) do
       if stream.status == 200 do
         {:ok, %{state | stream_reader: start_reader(stream)}}
       else
@@ -389,6 +419,10 @@ defmodule LemonMCP.Client.SSE do
     end
   end
 
+  # ============================================================================
+  # Handshake (runs in init/1)
+  # ============================================================================
+
   defp await_endpoint(state) do
     deadline = deadline(state.config.timeout_ms)
 
@@ -418,37 +452,20 @@ defmodule LemonMCP.Client.SSE do
         capabilities: state.config.capabilities
       )
 
-    {reply, state} =
-      request_response(state, request, fn
-        %Protocol.InitializeResponse{result: result, error: nil} -> {:ok, result}
-        other -> normalize_reply({:ok, other})
-      end)
-
-    case reply do
-      {:ok, result} ->
-        {:ok, %{state | server_info: result.serverInfo, server_capabilities: result.capabilities}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp send_initialized_notification(state) do
-    case post_raw(Protocol.initialized_notification(), state) do
-      :ok -> {:ok, state}
+    with :ok <- post_raw(request, state.config, state.post_url),
+         {{:ok, response}, state} <- receive_response(state, request.id),
+         {:ok, result} <- Protocol.result(:initialize, response) do
+      {:ok, %{state | server_info: result.serverInfo, server_capabilities: result.capabilities}}
+    else
+      {{:error, reason}, _state} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp request_response(state, request, mapper) do
-    with :ok <- post_raw(request, state),
-         {:ok, id} <- message_id(request) do
-      case receive_response(state, id) do
-        {{:ok, response}, state} -> {mapper.(response), state}
-        {{:error, reason}, state} -> {{:error, reason}, state}
-      end
-    else
-      {:error, reason} -> {{:error, reason}, state}
+  defp send_initialized_notification(state) do
+    case post_raw(Protocol.initialized_notification(), state.config, state.post_url) do
+      :ok -> {:ok, state}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -495,6 +512,28 @@ defmodule LemonMCP.Client.SSE do
     end
   end
 
+  defp match_events([], state, deadline, matcher), do: receive_sse_until(state, deadline, matcher)
+
+  defp match_events([event | rest], state, deadline, matcher) do
+    case matcher.(event, state) do
+      {:matched_state, matched_state} ->
+        {:ok, matched_state}
+
+      {:matched, {:ok, value}} ->
+        {:ok, value, state}
+
+      {:matched, {:error, reason}} ->
+        {:error, reason, state}
+
+      :cont ->
+        match_events(rest, state, deadline, matcher)
+    end
+  end
+
+  # ============================================================================
+  # Stream parsing
+  # ============================================================================
+
   defp stream_events({:chunks, chunks}, state) do
     send(state.stream_reader, :mcp_sse_ack)
 
@@ -525,27 +564,6 @@ defmodule LemonMCP.Client.SSE do
   defp stream_events({:error, reason}, state) do
     send(self(), {:mcp_stream_closed, state.stream_reader})
     {:error, {:sse_stream_failed, reason}, state}
-  end
-
-  defp match_events([], state, deadline, matcher), do: receive_sse_until(state, deadline, matcher)
-
-  defp match_events([event | rest], state, deadline, matcher) do
-    case matcher.(event, state) do
-      {:matched_state, matched_state} ->
-        {:ok, matched_state}
-
-      {:matched, {:ok, value}} ->
-        {:ok, value, state}
-
-      {:matched, {:error, reason}} ->
-        {:error, reason, state}
-
-      {:matched, value} ->
-        {:ok, value, state}
-
-      :cont ->
-        match_events(rest, state, deadline, matcher)
-    end
   end
 
   # Only the new chunk is split; the pending partial line is completed by its
@@ -611,18 +629,22 @@ defmodule LemonMCP.Client.SSE do
 
   defp dispatch_event(_event, _state), do: :ok
 
-  defp post_raw(message, state) do
+  # ============================================================================
+  # POST
+  # ============================================================================
+
+  defp post_raw(message, config, post_url) do
     with {:ok, body} <- Protocol.encode(message),
-         {:ok, post_url} <- require_post_url(state),
-         {:ok, pin} <- OriginPolicy.pin(post_url, state.config.origin_policy) do
+         {:ok, post_url} <- require_post_url(post_url),
+         {:ok, pin} <- OriginPolicy.pin(post_url, config.origin_policy) do
       headers =
         [{"content-type", "application/json"}] ++
-          Enum.reject(state.config.headers, fn {key, _} ->
+          Enum.reject(config.headers, fn {key, _} ->
             String.downcase(to_string(key)) == "content-type"
           end)
 
       opts =
-        [headers: headers, body: body, max_redirects: 0] ++ request_opts(post_url, pin, state)
+        [headers: headers, body: body, max_redirects: 0] ++ request_opts(post_url, pin, config)
 
       case HTTP.request(:post, post_url, opts) do
         {:ok, %{status: status}} when status in 200..299 ->
@@ -640,13 +662,13 @@ defmodule LemonMCP.Client.SSE do
   # A policy pin carries the authorized address. Without a policy the shared
   # address policy resolves each connection; only the configured host (the
   # endpoint is bound to its origin) may be private, never metadata.
-  defp request_opts(_url, %{address: address} = pin, state) do
-    peer_check = if OriginPolicy.ownership_required?(pin), do: state.config.peer_owner
-    [address: address, peer_check: peer_check, timeout_ms: state.config.timeout_ms]
+  defp request_opts(_url, %{address: address} = pin, config) do
+    peer_check = if OriginPolicy.ownership_required?(pin), do: config.peer_owner
+    [address: address, peer_check: peer_check, timeout_ms: config.timeout_ms]
   end
 
-  defp request_opts(url, nil, state) do
-    [allow_private_hosts: [URI.parse(url).host], timeout_ms: state.config.timeout_ms]
+  defp request_opts(url, nil, config) do
+    [allow_private_hosts: [URI.parse(url).host], timeout_ms: config.timeout_ms]
   end
 
   defp normalize_reply({:ok, %{error: error}}) when not is_nil(error),
@@ -657,11 +679,8 @@ defmodule LemonMCP.Client.SSE do
   defp response_id(%{id: id}), do: id
   defp response_id(_), do: nil
 
-  defp message_id(%{id: id}) when not is_nil(id), do: {:ok, id}
-  defp message_id(_), do: {:error, :missing_request_id}
-
-  defp require_post_url(%{post_url: url}) when is_binary(url), do: {:ok, url}
-  defp require_post_url(_state), do: {:error, :missing_sse_endpoint}
+  defp require_post_url(url) when is_binary(url), do: {:ok, url}
+  defp require_post_url(_url), do: {:error, :missing_sse_endpoint}
 
   # Relative endpoints resolve against the stream URL; the result must keep the
   # configured server's exact origin, or credentials could be sent elsewhere.

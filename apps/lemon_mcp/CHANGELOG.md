@@ -14,5 +14,6 @@
 ### Fixed
 
 - Reject out-of-range HTTP destination ports that Elixir 1.20's URI parser discards instead of authorizing the default origin.
+- Run Streamable HTTP and legacy SSE requests in supervised workers answered with `GenServer.reply/2`: `state/1` and concurrent requests no longer wait for a slow server, a deadline (the shorter of the call timeout and `:timeout_ms`) kills the worker before returning `{:error, :outcome_unknown}`, a caller exit stops its request, and the no-policy `httpc` path gives each request its own connection under one total deadline instead of separate connect and response timeouts. A 401 refreshes the grant once for every affected request and retries each once; interactive re-authorization runs in the background while the request fails fast with the auth-required error. OAuth moved to `LemonMCP.HTTP.OAuth` and the HTTP exchange to `LemonMCP.HTTP.Transport`.
 - Deliver legacy SSE endpoint events immediately even when the HTTP headers and first chunk arrive together, avoiding an intermittent handshake deadlock in OTP's `httpc` streaming. Preserve SSE fields split across chunks and restore the legacy SSE tests to the gating suite.
 - Preserve legacy SSE disconnect handling with Mint socket events, and log and ignore stray client messages without exposing their contents.

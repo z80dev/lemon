@@ -35,7 +35,8 @@ end
 - `LemonMCP.Sampling` - Redacted policy wrapper for reviewed model-backed stdio sampling callbacks
 - `LemonMCP.Transport.Stdio` - Raw-byte stdio transport and subprocess owner implementing `LemonCore.Rpc.Transport`
 - `LemonMCP.Framing.Stdio` - Bounded JSON-line framing that tolerates merged stderr log lines
-- `LemonMCP.Client.HTTP` - Streamable HTTP client for external MCP servers, including JSON responses, per-request SSE responses, session/protocol headers, OAuth protected-resource / authorization-server metadata discovery, optional OAuth client-credentials token acquisition with form-post or HTTP Basic client authentication, refresh-token grant retry when a token response supplies a refresh token, authorization-code PKCE callback/token exchange for public clients, injectable token-cache load/save hooks, and one-shot bearer reacquisition after later 401 challenges
+- `LemonMCP.Client.HTTP` - Streamable HTTP client for external MCP servers, including JSON responses, per-request SSE responses, session/protocol headers and supervised per-request workers; OAuth comes from `LemonMCP.HTTP.OAuth`
+- `LemonMCP.HTTP.OAuth` - OAuth protected-resource / authorization-server metadata discovery, client-credentials token acquisition with form-post or HTTP Basic client authentication, refresh-token grant retry when a token response supplies a refresh token, authorization-code PKCE callback/token exchange for public clients, and injectable token-cache load/save hooks
 - `LemonMCP.Client.SSE` - legacy HTTP+SSE client for external MCP servers
 
 `lemon_mcp` is a library application: it has no application callback and starts
@@ -225,13 +226,28 @@ any token request. Without it, a client secret is sent only to an issuer on the
 configured server's own origin (`:oauth_issuer_required` otherwise), and a
 configured `refresh_token` is refused at startup with `:oauth_issuer_required`.
 
+After the handshake, HTTP and legacy SSE clients keep only session, grant and
+capability state in the client process; every request runs in a supervised
+worker answered with `GenServer.reply/2`, so `state/1` and concurrent requests
+never wait for a slow server. A request's deadline is the shorter of its public
+timeout argument and `:timeout_ms`: when it expires (or the SSE stream is lost)
+the worker is killed first and the caller receives `{:error, :outcome_unknown}`.
+The request may have executed; never replay it. A caller that exits also stops
+its request. Without an origin policy each request uses its own `httpc`
+connection, so one slow response cannot queue another behind it.
 
 When the server later rejects that bearer token with another 401 challenge,
-the client reuses the discovered OAuth metadata and retries that MCP request
-once. If the previous token response included a refresh token, Lemon first
-requests `grant_type=refresh_token` and rotates the stored refresh token when
-the token endpoint returns a replacement. If no refresh token is available or
-refresh fails, Lemon falls back to a fresh client-credentials bearer.
+one background grant refresh serves every request that saw the 401, and each of
+those requests is retried once with the new token. If the previous token
+response included a refresh token, Lemon first requests
+`grant_type=refresh_token` and rotates the stored refresh token when the token
+endpoint returns a replacement. If no refresh token is available or refresh
+fails, Lemon falls back to a fresh client-credentials bearer. When only the
+interactive authorization-code provider could issue a new grant, the request
+fails fast with the auth-required error while authorization runs in the
+background; later requests use the new grant. A request whose deadline passes
+while its refresh is pending is answered with the auth-required error and never
+sent again.
 The default token endpoint auth method is `:client_secret_post`; use
 `:client_secret_basic` for servers that require HTTP Basic client
 authentication at the token endpoint.
