@@ -1,8 +1,14 @@
 # Subagent Parent Questions
 
+> **Design record.** This proposal is implemented: children use the `ask_parent`
+> tool (`CodingAgent.Tools.AskParent`), parents answer with `parent_question`
+> (`CodingAgent.Tools.ParentQuestion`), and `CodingAgent.ParentQuestions` owns the
+> request store and lifecycle. The sections below are the original design
+> (last reviewed 2026-05-15); where they differ from those modules and their
+> tests, the code is authoritative.
+
 Design note for adding a structured child-to-parent clarification path for Lemon subagents.
 
-Last reviewed: 2026-05-15
 Owner: @z80
 
 ---
