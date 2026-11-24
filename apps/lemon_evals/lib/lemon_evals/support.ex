@@ -397,8 +397,39 @@ defmodule LemonEvals.Support do
   end
 
   @doc """
-  A canonical owned legacy history document for scripted `recall` search
-  functions, indexed like real ingest so recall's ownership filter admits it.
+  A `recall` tool over a private memory Store seeded with `docs`, plus an Agent
+  recording every recall query as `{query, [scope: scope]}`.
+
+  Recall searches only the owned local index, so evals seed real documents
+  rather than scripting search results. The Store lives in a fresh temporary
+  directory and is linked to the caller.
+  """
+  def eval_recall_tool(cwd, docs, tool_opts) do
+    unique = System.unique_integer([:positive])
+    dir = Path.join(System.tmp_dir!(), "lemon_eval_memory_#{unique}")
+    {:ok, store} = LemonMemory.Store.start_link(name: :"lemon_eval_memory_#{unique}", path: dir)
+    Enum.each(docs, &(:ok = LemonMemory.Store.put_sync(store, &1)))
+    {:ok, calls} = Agent.start_link(fn -> [] end)
+    tool = LemonSkills.Tools.Recall.tool(cwd, Keyword.put(tool_opts, :store, store))
+
+    recording =
+      Map.put(tool, :execute, fn id, params, signal, update ->
+        if is_binary(params["query"]) do
+          Agent.update(
+            calls,
+            &[{params["query"], [scope: Map.get(params, "scope", "agent")]} | &1]
+          )
+        end
+
+        tool.execute.(id, params, signal, update)
+      end)
+
+    {recording, calls}
+  end
+
+  @doc """
+  A canonical owned legacy history document for seeding `eval_recall_tool/3`,
+  indexed like real ingest so recall's ownership filter admits it.
   `doc_id` is also the prompt text, so it shows up in the tool's rendered result.
   """
   def eval_memory_doc(doc_id, cwd, workspace_dir, agent_id \\ "eval") do

@@ -28,3 +28,14 @@
 - Skill lockfile and audit-state writes wait up to ten seconds (was one) for
   the metadata lock, so a burst of concurrent writers in one VM no longer gets
   spurious `{:error, :lock_timeout}` refusals (#499).
+
+### Fixed
+
+- `recall` filters ownership before its result limit for legacy sessions (via `Project.search_history/4`) and no longer searches memory providers; the `:search_fn` option is removed (**Breaking** for callers that injected it) (#656).
+- `ProfileMemoryTransfer.apply_transfer/2` passes definite failures
+  (`:stale_destination`, `:destination_conflict`, `:transfer_conflict`, lock
+  abort, verified rollback) through instead of collapsing them to
+  `:transfer_pending`, removes the `.memory-transfer-*` staging directory and
+  frees the mutation id. The receipt commit releases the frozen source snapshot
+  and previews held in the destination Store, and the new `release/5` releases a
+  source snapshot held elsewhere (#623).

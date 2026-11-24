@@ -1,59 +1,13 @@
 defmodule LemonMemory.SessionSearch do
   @moduledoc """
-  Public search API over durable memory documents.
+  Owned session history: browse recent sessions, scroll one session's runs, and
+  render documents for an agent's context.
 
-  All calls are feature-flagged behind `session_search`. Returns `[]` when
-  the flag is off so callers never need to check.
-
-  ## Scope controls
-
-  | scope       | scope_key required? | Searches by          |
-  |-------------|---------------------|----------------------|
-  | `:session`  | yes                 | session_key          |
-  | `:agent`    | yes                 | agent_id             |
-  | `:workspace`| yes                 | workspace_key        |
-  | `:all`      | no                  | all stored documents |
-
-  ## Example
-
-      LemonMemory.SessionSearch.search("fix the login bug",
-        scope: :session,
-        scope_key: "agent:my_agent:main",
-        limit: 5
-      )
+  Reads require a proven private memory context and are feature-flagged behind
+  `session_search` (`{:ok, []}` when the flag is off). Free-text history search
+  is `LemonMemory.Project.search_history/4`, which filters ownership before the
+  result limit.
   """
-
-  alias LemonMemory.Providers
-
-  @default_limit 5
-  @max_limit 20
-
-  @doc """
-  Search memory documents by free-text query.
-
-  Returns a list of `LemonMemory.Document` structs, ordered by relevance.
-  Returns `[]` when `session_search` is disabled or the query is blank.
-
-  ## Options
-
-  - `:scope` - `:session` (default), `:agent`, `:workspace`, `:all`
-  - `:scope_key` - required for scope `:session`/`:agent`/`:workspace`
-  - `:limit` - max results, capped at #{@max_limit} (default: #{@default_limit})
-  """
-  @spec search(binary(), keyword()) :: [LemonMemory.Document.t()]
-  def search(query, opts \\ []) when is_binary(query) do
-    cond do
-      String.trim(query) == "" ->
-        []
-
-      not enabled?() ->
-        []
-
-      true ->
-        limit = min(Keyword.get(opts, :limit, @default_limit), @max_limit)
-        Providers.search(query, Keyword.put(opts, :limit, limit))
-    end
-  end
 
   @doc "Chronological owned run summaries around a document/run ID, or the latest window."
   def session(context, session, opts \\ []) when is_binary(session) and session != "" do
@@ -132,8 +86,8 @@ defmodule LemonMemory.SessionSearch do
   end
 
   @doc """
-  Same as `search/2` but returns results formatted as a human-readable string
-  suitable for injection into an agent's context.
+  Format memory documents as a human-readable string suitable for injection into
+  an agent's context.
   """
   @spec format_results([LemonMemory.Document.t()]) :: String.t()
   def format_results([]), do: "No matching memory documents found."

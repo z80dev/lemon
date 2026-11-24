@@ -111,12 +111,19 @@ defmodule LemonMemory.SessionScrollTest do
     partial = Map.delete(context, :invocation_context_key)
 
     for rejected <- [legacy, unproven, partial] do
-      assert {:error, :unproven_context} =
-               Project.search_history(rejected, "prompt", :agent, store: store)
-
       assert {:error, :unproven_context} = SessionSearch.session(rejected, "mine", store: store)
       assert {:error, :unproven_context} = SessionSearch.recent_sessions(rejected, store: store)
     end
+
+    # History search also refuses unproven or partial claims; a context with no
+    # ownership claim at all searches legacy history, never this private owner's.
+    for rejected <- [unproven, partial] do
+      assert {:error, :unproven_context} =
+               Project.search_history(rejected, "prompt", :agent, store: store)
+    end
+
+    assert {:ok, legacy_docs} = Project.search_history(legacy, "prompt", :agent, store: store)
+    assert Enum.all?(legacy_docs, &(LemonMemory.Store.document_ownership(&1) == :legacy))
   end
 
   test "public scroll refuses subagents", %{context: context} do

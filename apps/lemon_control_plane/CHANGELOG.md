@@ -76,6 +76,8 @@ All notable changes to `lemon_control_plane` are documented here.
   `unavailable` section list and `enabled: null` for an unreadable job list; a
   node whose registry read fails gets a retryable `UNAVAILABLE` at `connect`.
   `ConfigStore` and `LogRing` reads return tagged results (#619).
+- `memory.transfer` releases a local source's frozen memory snapshot as soon
+  as the destination receipt is recorded instead of keeping it indefinitely (#623).
 - Timeouts, closed openers and unclassified failures of passive node inspections
   (`node.capabilities.get`, `node.runtime.features`, `node.host.info`) are
   retry-safe unavailable reads, not uncertain mutations.

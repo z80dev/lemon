@@ -361,6 +361,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   4096-unit limit and get rejected. Splitting never cuts a code fence or a
   table row: oversized fences become several closed fences and oversized
   tables repeat their header in every message (#651).
+- Honcho no longer auto-retries calls that change remote state: a slow
+  dialectic question (`honcho_reasoning`, the dialectic cadence) is billed once,
+  and a timed-out message upload or conclusion write is never duplicated. Such a
+  call that got no answer reports that its outcome is unknown. Reads still retry
+  transient failures, with a server's `Retry-After` capped at one second per
+  pause and two seconds per call (#622).
+- A memory transfer whose apply fails definitely (the destination changed after
+  the preview, an identity conflict, the destination's preference lock was busy,
+  or any verified rollback) now reports that reason instead of
+  `transfer_pending`, removes its `.memory-transfer-*` staging directory from the
+  agent workspace and frees the mutation id, so the same transfer can be
+  previewed and applied again; only genuinely uncertain outcomes stay pending.
+  The transfer journal no longer keeps memory after it is gone: a frozen source
+  snapshot (summaries, preference facts, `USER.md`/`MEMORY.md` bytes) is deleted
+  once the receipt is recorded, when any document it captured is deleted, erased
+  by scope or aged out, and after the new `transfer_ttl_ms` Store setting
+  (default 24 hours, capped at `retention_ms`) (#623).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
@@ -513,6 +530,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
+  `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
+  recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.
+  Memory providers are write targets only (`put/2`). `recall` now filters ownership
+  in SQL before its result limit for legacy sessions too, so `scope: project` no
+  longer comes back empty when matches exist, and it never pays for a remote
+  provider search whose results it discarded (#656).
 - The unenforced `sandbox` tool-policy field; legacy input is ignored with a
   warning and never changes authority (#605).
 - `[:lemon, :control_plane, :event_bridge, :dropped]` and

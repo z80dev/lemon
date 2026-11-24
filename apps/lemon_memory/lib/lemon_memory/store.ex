@@ -15,7 +15,20 @@ defmodule LemonMemory.Store do
       config :lemon_memory, LemonMemory.Store,
         path: "~/.lemon/store",          # directory — memory.sqlite3 created inside
         retention_ms: 30 * 24 * 3600_000, # 30 days (default)
-        max_per_scope: 500               # max documents per scope key
+        max_per_scope: 500,              # max documents per scope key
+        transfer_ttl_ms: 24 * 3600_000   # frozen transfer snapshots/previews (default)
+
+  ## Transfer journal
+
+  `memory_transfer_journal` holds profile memory transfer state. Frozen source
+  snapshots carry memory content (summaries, preference facts, USER.md and
+  MEMORY.md bytes), so they never outlive that content: a snapshot is deleted
+  when any document it captured is deleted (single deletes, scope erasure,
+  retention and per-scope pruning), when its agent is erased, when the transfer
+  is released after a receipt, and after `transfer_ttl_ms` (never longer than
+  `retention_ms`). Previews expire with the same TTL. Destination intents and
+  receipts carry only identifiers and digests and are kept, so status stays
+  answerable and a mutation id is never replayed.
 
   ## Schema
 
@@ -45,6 +58,7 @@ defmodule LemonMemory.Store do
   @default_max_per_scope 500
   @sweep_interval_ms 15 * 60 * 1000
   @transfer_timeout_ms 5_000
+  @default_transfer_ttl_ms 24 * 60 * 60 * 1000
   @filename "memory.sqlite3"
 
   @schema_sql """
@@ -321,6 +335,39 @@ defmodule LemonMemory.Store do
 
   @fts_sweep_sql """
   DELETE FROM memory_fts WHERE doc_id NOT IN (SELECT doc_id FROM memory_documents)
+  """
+
+  # Transfer journal pruning. Only frozen source snapshots (a top-level
+  # `snapshot`) carry memory content; previews (`preview`) carry counts and a
+  # confirmation token. Destination intents and receipts are never pruned here.
+  @transfer_purge_document_sql """
+  DELETE FROM memory_transfer_journal
+  WHERE EXISTS (
+    SELECT 1 FROM json_each(memory_transfer_journal.payload, '$.snapshot.documents') AS d
+    WHERE json_extract(d.value, '$.id') = ?1
+  )
+  """
+
+  @transfer_purge_orphans_sql """
+  DELETE FROM memory_transfer_journal
+  WHERE EXISTS (
+    SELECT 1 FROM json_each(memory_transfer_journal.payload, '$.snapshot.documents') AS d
+    WHERE NOT EXISTS (
+      SELECT 1 FROM memory_documents m WHERE m.doc_id = json_extract(d.value, '$.id')
+    )
+  )
+  """
+
+  @transfer_purge_agent_sql """
+  DELETE FROM memory_transfer_journal
+  WHERE json_type(payload, '$.snapshot') IS NOT NULL
+    AND json_extract(payload, '$.profileId') = ?1
+  """
+
+  @transfer_expire_sql """
+  DELETE FROM memory_transfer_journal
+  WHERE created_at_ms < ?1
+    AND (json_type(payload, '$.snapshot') IS NOT NULL OR json_type(payload, '$.preview') IS NOT NULL)
   """
 
   @search_session_sql """
@@ -667,13 +714,33 @@ defmodule LemonMemory.Store do
     do: transfer_call(server, {:transfer_put_new, key, value})
 
   @doc """
+  Delete private transfer journal entries that are no longer needed.
+
+  `entries` names exact keys (`{:key, key}`) and key prefixes
+  (`{:prefix, prefix}`). Used to drop a frozen source snapshot and its previews
+  once the destination receipt exists, so their memory content does not wait
+  for the TTL. Deleting an absent entry succeeds.
+  """
+  def transfer_release(server, entries) when is_list(entries),
+    do: transfer_call(server, {:transfer_release, entries})
+
+  @doc """
   Replace exact selected profile rows and commit their receipt in one transaction.
   Local `:boundary` and `:rollback` callbacks run on the Store process; the
   boundary owns filesystem locks across publication, commit and known rollback.
-  A failed/uncertain commit leaves the prior durable intent pending, never replayed.
-  A five-second call timeout returns `{:error, :transfer_pending}`: publication
-  or commit may still complete, so callers must reconcile the durable receipt
-  rather than infer rollback or replay the import.
+  `:release` names journal entries (see `transfer_release/2`) deleted in the
+  same transaction as the receipt.
+
+  A definite failure — the boundary refused to run (lock abort), or the
+  transaction and any publication were verifiably rolled back — returns its
+  reason unchanged and deletes the operation's pending intent (only when it is
+  still exactly the pending form of `receipt`), so the same mutation id can be
+  applied again. An uncertain publication, commit, rollback or intent cleanup
+  returns `{:error, :transfer_pending}` and leaves the intent pending, never
+  replayed. A five-second call timeout also returns `{:error,
+  :transfer_pending}`: publication or commit may still complete, so callers
+  must reconcile the durable receipt rather than infer rollback or replay the
+  import.
   """
   def transfer_import(server, agent, home, revisions, docs, key, receipt, publish, opts \\ []) do
     GenServer.call(
@@ -883,6 +950,9 @@ defmodule LemonMemory.Store do
     retention_ms = Keyword.get(config, :retention_ms, @default_retention_ms)
     max_per_scope = Keyword.get(config, :max_per_scope, @default_max_per_scope)
 
+    transfer_ttl_ms =
+      config |> Keyword.get(:transfer_ttl_ms, @default_transfer_ttl_ms) |> min(retention_ms)
+
     with :ok <- File.mkdir_p(Path.dirname(path)),
          {:ok, conn} <- Sqlite3.open(path),
          :ok <- File.chmod(path, 0o600),
@@ -897,6 +967,7 @@ defmodule LemonMemory.Store do
          stmts: stmts,
          path: path,
          retention_ms: retention_ms,
+         transfer_ttl_ms: transfer_ttl_ms,
          snapshot_task: nil,
          snapshot_from: nil,
          deferred: :queue.new(),
@@ -936,12 +1007,20 @@ defmodule LemonMemory.Store do
     )
 
     run_delete(state.conn, state.stmts.delete_by_session, [session_key], "delete_by_session")
+    prune_transfer_journal(state)
     {:noreply, state}
   end
 
   def handle_cast({:delete_by_agent, agent_id}, state) do
     run_delete(state.conn, state.stmts.fts_delete_by_agent, [agent_id], "fts_delete_by_agent")
     run_delete(state.conn, state.stmts.delete_by_agent, [agent_id], "delete_by_agent")
+
+    case transfer_statement(state, @transfer_purge_agent_sql, [agent_id]) do
+      :ok -> :ok
+      error -> Logger.warning("[Store] transfer journal agent purge failed: #{inspect(error)}")
+    end
+
+    prune_transfer_journal(state)
     {:noreply, state}
   end
 
@@ -960,6 +1039,7 @@ defmodule LemonMemory.Store do
       "delete_by_workspace"
     )
 
+    prune_transfer_journal(state)
     {:noreply, state}
   end
 
@@ -1048,13 +1128,25 @@ defmodule LemonMemory.Store do
       with :ok <-
              transfer_statement(
                state,
-               "INSERT INTO memory_transfer_journal (operation_key, payload) VALUES (?1, ?2) ON CONFLICT(operation_key) DO NOTHING",
-               [key, Jason.encode!(value)]
+               "INSERT INTO memory_transfer_journal (operation_key, payload, created_at_ms) VALUES (?1, ?2, ?3) ON CONFLICT(operation_key) DO NOTHING",
+               [key, Jason.encode!(value), System.system_time(:millisecond)]
              ),
            {:ok, current} <- transfer_journal_get(state, key),
            do: {:ok, current}
 
     {:reply, result, state}
+  end
+
+  def handle_call({:transfer_release, entries}, _from, state) do
+    result =
+      transfer_transaction(state, fn ->
+        with :ok <- transfer_release_entries(state, entries), do: {:ok, :released}
+      end)
+
+    case result do
+      {:ok, :released} -> {:reply, :ok, state}
+      _ -> {:reply, {:error, :memory_unavailable}, state}
+    end
   end
 
   def handle_call({:transfer_snapshot, agent, home, fun}, from, state) do
@@ -1082,6 +1174,7 @@ defmodule LemonMemory.Store do
       ) do
     boundary = Keyword.get(opts, :boundary, fn run -> run.() end)
     rollback = Keyword.get(opts, :rollback, fn -> :ok end)
+    release = Keyword.get(opts, :release, [])
 
     result =
       boundary.(fn ->
@@ -1098,7 +1191,8 @@ defmodule LemonMemory.Store do
                      state,
                      "UPDATE memory_transfer_journal SET payload = ?2 WHERE operation_key = ?1",
                      [key, Jason.encode!(receipt)]
-                   ) do
+                   ),
+                 :ok <- transfer_release_entries(state, release) do
               {:ok, receipt}
             else
               false -> {:error, :stale_destination}
@@ -1122,7 +1216,7 @@ defmodule LemonMemory.Store do
         end
       end)
 
-    {:reply, result, state}
+    {:reply, settle_transfer_import(state, key, receipt, result), state}
   end
 
   @impl true
@@ -1381,6 +1475,100 @@ defmodule LemonMemory.Store do
     end
   end
 
+  # A definite failure (verified rollback, or a boundary that never ran) frees
+  # the mutation id by deleting the intent this import wrote — and only that
+  # intent: an entry that is not exactly its pending form belongs to another
+  # operation, or already carries a receipt, and is left alone.
+  defp settle_transfer_import(_state, _key, _receipt, {:ok, _} = result), do: result
+
+  defp settle_transfer_import(_state, _key, _receipt, {:error, :transfer_pending} = result),
+    do: result
+
+  defp settle_transfer_import(state, key, receipt, {:error, _reason} = result) do
+    pending = receipt |> Map.delete("receipt") |> Map.put("state", "pending")
+
+    case abandon_transfer_intent(state, key, pending) do
+      {:ok, _} -> result
+      _ -> {:error, :transfer_pending}
+    end
+  end
+
+  defp settle_transfer_import(_state, _key, _receipt, _unexpected),
+    do: {:error, :transfer_pending}
+
+  defp abandon_transfer_intent(state, key, pending) do
+    transfer_transaction(state, fn ->
+      case transfer_journal_get(state, key) do
+        {:ok, ^pending} ->
+          with :ok <-
+                 transfer_statement(
+                   state,
+                   "DELETE FROM memory_transfer_journal WHERE operation_key = ?1",
+                   [key]
+                 ),
+               do: {:ok, :abandoned}
+
+        {:ok, _other_operation} ->
+          {:ok, :not_ours}
+
+        {:error, :not_found} ->
+          {:ok, :not_ours}
+
+        error ->
+          error
+      end
+    end)
+  end
+
+  defp transfer_release_entries(state, entries) do
+    Enum.reduce_while(entries, :ok, fn entry, :ok ->
+      case transfer_release_entry(state, entry) do
+        :ok -> {:cont, :ok}
+        _ -> {:halt, {:error, :memory_unavailable}}
+      end
+    end)
+  end
+
+  defp transfer_release_entry(state, {:key, key}) when is_binary(key) and key != "" do
+    transfer_statement(state, "DELETE FROM memory_transfer_journal WHERE operation_key = ?1", [
+      key
+    ])
+  end
+
+  # `substr` rather than LIKE: a key may contain `%` or `_`.
+  defp transfer_release_entry(state, {:prefix, prefix})
+       when is_binary(prefix) and prefix != "" do
+    transfer_statement(
+      state,
+      "DELETE FROM memory_transfer_journal WHERE substr(operation_key, 1, length(?1)) = ?1",
+      [prefix]
+    )
+  end
+
+  defp transfer_release_entry(_state, _entry), do: {:error, :invalid_release}
+
+  # Frozen snapshots that captured a document no longer present (a scope
+  # erasure, retention sweep or per-scope prune just deleted it), plus expired
+  # snapshots and previews. Runs outside a transaction, after the deletion it
+  # follows; a failure is logged and the next sweep retries it.
+  defp prune_transfer_journal(state) do
+    cutoff = System.system_time(:millisecond) - state.transfer_ttl_ms
+
+    for {sql, params, op} <- [
+          {@transfer_purge_orphans_sql, [], "transfer journal orphan purge"},
+          {@transfer_expire_sql, [cutoff], "transfer journal expiry"}
+        ] do
+      case transfer_statement(state, sql, params) do
+        :ok -> :ok
+        error -> Logger.warning("[Store] #{op} failed: #{inspect(error)}")
+      end
+    end
+
+    :ok
+  rescue
+    e -> Logger.warning("[Store] transfer journal prune exception: #{Exception.message(e)}")
+  end
+
   defp transfer_transaction(state, fun) do
     with :ok <- Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
       finish_transfer_transaction(state, fun.())
@@ -1484,8 +1672,9 @@ defmodule LemonMemory.Store do
          :ok <-
            Sqlite3.execute(
              conn,
-             "CREATE TABLE IF NOT EXISTS memory_transfer_journal (operation_key TEXT PRIMARY KEY, payload TEXT NOT NULL)"
+             "CREATE TABLE IF NOT EXISTS memory_transfer_journal (operation_key TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at_ms INTEGER)"
            ),
+         :ok <- migrate_transfer_journal(conn),
          :ok <- Sqlite3.execute(conn, @fts_schema_sql) do
       Enum.reduce_while(@index_sqls, :ok, fn sql, :ok ->
         case Sqlite3.execute(conn, sql) do
@@ -1524,6 +1713,35 @@ defmodule LemonMemory.Store do
         Sqlite3.release(conn, stmt)
       end
     end
+  end
+
+  # Journals written before entries were timestamped get their age from the
+  # first start that knows about it, so the TTL counts from the upgrade rather
+  # than deleting in-flight transfer snapshots at once.
+  defp migrate_transfer_journal(conn) do
+    with {:ok, stmt} <- Sqlite3.prepare(conn, "PRAGMA table_info(memory_transfer_journal)") do
+      try do
+        with {:ok, rows} <- Sqlite3.fetch_all(conn, stmt),
+             :ok <- add_transfer_created_at(conn, Enum.map(rows, &Enum.at(&1, 1))) do
+          Sqlite3.execute(
+            conn,
+            "UPDATE memory_transfer_journal SET created_at_ms = #{System.system_time(:millisecond)} WHERE created_at_ms IS NULL"
+          )
+        end
+      after
+        Sqlite3.release(conn, stmt)
+      end
+    end
+  end
+
+  defp add_transfer_created_at(conn, names) do
+    if "created_at_ms" in names,
+      do: :ok,
+      else:
+        Sqlite3.execute(
+          conn,
+          "ALTER TABLE memory_transfer_journal ADD COLUMN created_at_ms INTEGER"
+        )
   end
 
   defp prepare_statements(conn) do
@@ -1697,22 +1915,11 @@ defmodule LemonMemory.Store do
   defp do_delete_document(state, doc_id) do
     :ok = Sqlite3.execute(state.conn, "BEGIN")
 
-    with :ok <- Sqlite3.reset(state.stmts.fts_delete_document),
-         :ok <- Sqlite3.bind(state.stmts.fts_delete_document, [doc_id]),
-         :done <- Sqlite3.step(state.conn, state.stmts.fts_delete_document),
-         :ok <- Sqlite3.reset(state.stmts.delete_document),
-         :ok <- Sqlite3.bind(state.stmts.delete_document, [doc_id]),
-         :done <- Sqlite3.step(state.conn, state.stmts.delete_document) do
-      result =
-        case Sqlite3.changes(state.conn) do
-          {:ok, 0} -> :not_found
-          {:ok, _} -> :deleted
-          _ -> :deleted
-        end
+    case delete_document_in_transaction(state, doc_id) do
+      {:ok, _status} = result ->
+        :ok = Sqlite3.execute(state.conn, "COMMIT")
+        result
 
-      :ok = Sqlite3.execute(state.conn, "COMMIT")
-      {:ok, result}
-    else
       error ->
         _ = Sqlite3.execute(state.conn, "ROLLBACK")
         {:error, error}
@@ -1759,18 +1966,19 @@ defmodule LemonMemory.Store do
       {:error, {:exception, Exception.message(error)}}
   end
 
+  # Every frozen transfer snapshot that captured the document is deleted with
+  # it, in the same transaction: a deleted memory must not survive in the
+  # journal.
   defp delete_document_in_transaction(state, doc_id) do
     with :ok <- Sqlite3.reset(state.stmts.fts_delete_document),
          :ok <- Sqlite3.bind(state.stmts.fts_delete_document, [doc_id]),
          :done <- Sqlite3.step(state.conn, state.stmts.fts_delete_document),
          :ok <- Sqlite3.reset(state.stmts.delete_document),
          :ok <- Sqlite3.bind(state.stmts.delete_document, [doc_id]),
-         :done <- Sqlite3.step(state.conn, state.stmts.delete_document) do
-      case Sqlite3.changes(state.conn) do
-        {:ok, 0} -> {:ok, :not_found}
-        {:ok, _} -> {:ok, :deleted}
-        error -> {:error, error}
-      end
+         :done <- Sqlite3.step(state.conn, state.stmts.delete_document),
+         {:ok, changes} <- Sqlite3.changes(state.conn),
+         :ok <- transfer_statement(state, @transfer_purge_document_sql, [doc_id]) do
+      if changes == 0, do: {:ok, :not_found}, else: {:ok, :deleted}
     end
   end
 
@@ -1887,6 +2095,9 @@ defmodule LemonMemory.Store do
     # Step 2: max_per_scope enforcement — prune oldest per session_key
     pruned = do_max_per_scope_prune(state)
 
+    # Step 3: frozen transfer snapshots of what was just deleted, and expired ones
+    prune_transfer_journal(state)
+
     {:ok, %{swept: swept, pruned: pruned}}
   rescue
     e -> {:error, Exception.message(e)}
@@ -1967,7 +2178,7 @@ defmodule LemonMemory.Store do
          :done <- Sqlite3.step(state.conn, state.stmts.sweep),
          :ok <- Sqlite3.reset(state.stmts.fts_sweep),
          :done <- Sqlite3.step(state.conn, state.stmts.fts_sweep) do
-      :ok
+      prune_transfer_journal(state)
     else
       err -> Logger.warning("[Store] sweep failed: #{inspect(err)}")
     end

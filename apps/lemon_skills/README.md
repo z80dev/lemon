@@ -131,7 +131,13 @@ rollback, so killing the requesting worker does not release its filesystem lock.
 Snapshot callbacks follow the same Store-to-workspace lock order; callers never
 hold a workspace lock while awaiting Store. Any uncertain apply returns
 `:transfer_pending` and keeps private backups; callers must use status, never
-automatically replay. Runtime provider/model/session/tool labels retain bounded
+automatically replay. A definite failure (`:stale_destination`,
+`:destination_conflict`, `:transfer_conflict`, a lock abort or another verified
+rollback) returns that reason, removes the staging directory and frees the
+mutation id, so the same mutation can be applied again. The frozen source
+snapshot is released with the receipt when it shares the destination Store, and
+by `release/5` (the controller calls it for a local source) otherwise; the Store
+TTL, scope erasure and retention bound it in every case. Runtime provider/model/session/tool labels retain bounded
 noncontrol UTF-8 namespaces, including slash names. Allowed learned provenance
 atom keys/type labels are normalized to JSON strings without changing summaries.
 

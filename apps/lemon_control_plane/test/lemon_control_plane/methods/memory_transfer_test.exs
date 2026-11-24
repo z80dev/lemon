@@ -252,10 +252,19 @@ defmodule LemonControlPlane.Methods.MemoryTransferTest do
       |> Map.take(~w(profileId mutationId sourceNodeId nodeId snapshotDigest))
       |> Map.put("copied", true)
 
+    source_key =
+      "source:" <>
+        (:crypto.hash(:sha256, "transfer-local\0" <> params["mutationId"])
+         |> Base.encode16(case: :lower))
+
+    assert {:ok, %{"snapshot" => _}} = LemonMemory.Store.transfer_get(store, source_key)
     reply(apply, receipt)
     assert Task.await(task) == {:ok, receipt}
     assert {:ok, %{"node" => "local"}} = ProfileStore.get("transfer-local")
     refute inspect(Store.get(:control_memory_transfers, params["mutationId"])) =~ "complete-tail"
+
+    # The frozen local source snapshot is released once the receipt is recorded.
+    assert {:error, :not_found} = LemonMemory.Store.transfer_get(store, source_key)
   end
 
   test "explicit read-only status without controller intent never starts a transfer", ctx do
