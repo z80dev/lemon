@@ -17,9 +17,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   import LemonSkills.Tools.MediaCommon,
     only: [
       bounded_integer: 3,
-      optional_string: 1,
-      provider_error_kind: 1,
-      transient_status?: 1
+      optional_string: 1
     ]
 
   @local_timeout_ms 15_000
@@ -173,7 +171,10 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
                cwd,
                opts,
                artifact_path,
-               runner(artifact_path, image, prompt, generation, runtime)
+               MediaCommon.runner(generation, artifact_path, runtime, %{
+                 image: image,
+                 prompt: prompt
+               })
              ),
              timeout_ms,
              signal
@@ -296,34 +297,6 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
     end
   end
 
-  defp runner(artifact_path, image, _prompt, %{provider: @local_provider}, _runtime) do
-    &run_local_analysis(&1, artifact_path, image)
-  end
-
-  defp runner(artifact_path, image, prompt, %{provider: @openai_provider} = generation, runtime) do
-    &run_openai_analysis(&1, artifact_path, image, prompt, generation, runtime)
-  end
-
-  defp run_local_analysis(_attrs, artifact_path, image) do
-    analysis =
-      "local image analysis preview for #{image.mime_type} image #{String.slice(image.hash, 0, 12)}"
-
-    write_analysis_artifact(
-      artifact_path,
-      Jason.encode!(%{"text" => analysis}, pretty: true),
-      analysis
-    )
-  end
-
-  defp run_openai_analysis(_attrs, artifact_path, image, prompt, generation, runtime) do
-    with {:ok, api_key} <-
-           MediaCommon.provider_api_key(runtime, :missing_openai_vision_api_key, runtime.provider),
-         {:ok, response} <- post_openai_analysis(image, prompt, generation, runtime, api_key),
-         {:ok, analysis, content} <- normalize_analysis_response(response, generation.format) do
-      write_analysis_artifact(artifact_path, content, analysis)
-    end
-  end
-
   defp runtime(_cwd, _opts, %{provider: @local_provider}), do: {:ok, nil}
 
   defp runtime(cwd, opts, %{provider: @openai_provider} = generation) do
@@ -340,8 +313,10 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
            ) do
       {:ok,
        Map.merge(endpoint, %{
+         credential:
+           MediaCommon.credential(endpoint, :missing_openai_vision_api_key, endpoint.provider),
          api_model: api_model,
-         http_post: Keyword.get(opts, :media_vision_http_post, &Req.post/2)
+         http_post: Keyword.get(opts, :media_vision_http_post)
        })}
     end
   end
@@ -360,121 +335,6 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   end
 
   defp openai_compatible_provider_and_model(_model), do: {:openai, @default_openai_model}
-
-  defp post_openai_analysis(image, prompt, generation, runtime, api_key) do
-    url = String.trim_trailing(runtime.base_url, "/") <> "/chat/completions"
-
-    body = %{
-      "model" => runtime.api_model,
-      "messages" => [
-        %{
-          "role" => "user",
-          "content" => [
-            %{"type" => "text", "text" => prompt},
-            %{
-              "type" => "image_url",
-              "image_url" => %{
-                "url" => "data:#{image.mime_type};base64,#{Base.encode64(image.bytes)}",
-                "detail" => generation.detail
-              }
-            }
-          ]
-        }
-      ]
-    }
-
-    request_opts = [
-      headers: [{"authorization", "Bearer #{api_key}"}],
-      json: body,
-      receive_timeout: 300_000
-    ]
-
-    do_post_openai_analysis(runtime, url, request_opts, generation.max_retries)
-  end
-
-  defp do_post_openai_analysis(runtime, url, request_opts, remaining_retries) do
-    case runtime.http_post.(url, request_opts) do
-      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
-      {:ok, %{status: status, body: response_body}} ->
-        if transient_status?(status) and remaining_retries > 0 do
-          do_post_openai_analysis(runtime, url, request_opts, remaining_retries - 1)
-        else
-          {:error, {:openai_vision_http_error, status, provider_error_kind(response_body)}}
-        end
-
-      {:error, _reason} when remaining_retries > 0 ->
-        do_post_openai_analysis(runtime, url, request_opts, remaining_retries - 1)
-
-      {:error, reason} ->
-        {:error, {:openai_vision_request_failed, provider_error_kind(reason)}}
-    end
-  end
-
-  defp normalize_analysis_response(response, "json") when is_map(response) do
-    text = response_text(response)
-    content = Jason.encode!(%{"text" => text}, pretty: true)
-    {:ok, text, content}
-  end
-
-  defp normalize_analysis_response(response, "json") when is_binary(response) do
-    case Jason.decode(response) do
-      {:ok, decoded} when is_map(decoded) -> normalize_analysis_response(decoded, "json")
-      _ -> {:ok, response, Jason.encode!(%{"text" => response}, pretty: true)}
-    end
-  end
-
-  defp normalize_analysis_response(response, "text") when is_binary(response) do
-    {:ok, response, response}
-  end
-
-  defp normalize_analysis_response(response, "text") when is_map(response) do
-    text = response_text(response)
-    {:ok, text, text}
-  end
-
-  defp response_text(%{"choices" => [%{"message" => %{"content" => content}} | _]}) do
-    content_text(content)
-  end
-
-  defp response_text(%{choices: [%{message: %{content: content}} | _]}) do
-    content_text(content)
-  end
-
-  defp response_text(%{"output_text" => text}) when is_binary(text), do: text
-  defp response_text(%{output_text: text}) when is_binary(text), do: text
-  defp response_text(%{"text" => text}) when is_binary(text), do: text
-  defp response_text(%{text: text}) when is_binary(text), do: text
-  defp response_text(response), do: Jason.encode!(response)
-
-  defp content_text(content) when is_binary(content), do: content
-
-  defp content_text(content) when is_list(content) do
-    content
-    |> Enum.flat_map(fn
-      %{"text" => text} when is_binary(text) -> [text]
-      %{text: text} when is_binary(text) -> [text]
-      _other -> []
-    end)
-    |> Enum.join("\n")
-  end
-
-  defp content_text(content), do: to_string(content)
-
-  defp write_analysis_artifact(artifact_path, content, analysis) when is_binary(content) do
-    with :ok <- MediaCommon.write_artifact(artifact_path, content),
-         {:ok, stat} <- File.stat(artifact_path) do
-      {:ok,
-       %{
-         artifact_path: artifact_path,
-         artifact_name: Path.basename(artifact_path),
-         mime_type: mime_type_from_path(artifact_path),
-         bytes: stat.size,
-         analysis: analysis
-       }}
-    end
-  end
 
   defp payload(job, artifact_path, params) do
     job

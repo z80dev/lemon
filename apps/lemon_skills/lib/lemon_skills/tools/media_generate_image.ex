@@ -18,10 +18,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   import LemonSkills.Tools.MediaCommon,
     only: [
       bounded_integer: 3,
-      optional_string: 1,
-      provider_error_kind: 1,
-      reject_blank_values: 1,
-      transient_status?: 1
+      optional_string: 1
     ]
 
   @local_timeout_ms 5_000
@@ -165,7 +162,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
                cwd,
                opts,
                artifact_path,
-               runner(cwd, opts, artifact_path, generation)
+               MediaCommon.runner(generation, artifact_path, runtime(cwd, opts, generation))
              ),
              timeout_ms,
              signal
@@ -239,51 +236,9 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
     end
   end
 
-  defp runner(_cwd, _opts, artifact_path, %{provider: @local_provider}) do
-    &run_local_svg(&1, artifact_path)
-  end
-
-  defp runner(cwd, opts, artifact_path, %{provider: @openai_provider} = generation) do
-    runtime = openai_runtime(cwd, opts)
-    &run_openai_image(&1, artifact_path, generation, runtime)
-  end
-
-  defp runner(cwd, opts, artifact_path, %{provider: @vertex_provider} = generation) do
-    runtime = vertex_runtime(cwd, opts)
-    &run_vertex_image(&1, artifact_path, generation, runtime)
-  end
-
-  defp run_local_svg(attrs, artifact_path) do
-    prompt_hash = prompt_hash(Map.get(attrs, :prompt) || Map.get(attrs, "prompt"))
-    content = svg(prompt_hash)
-
-    with :ok <- MediaCommon.write_artifact(artifact_path, content),
-         {:ok, stat} <- File.stat(artifact_path) do
-      {:ok,
-       %{
-         artifact_path: artifact_path,
-         artifact_name: Path.basename(artifact_path),
-         mime_type: "image/svg+xml",
-         bytes: stat.size
-       }}
-    end
-  end
-
-  defp run_openai_image(attrs, artifact_path, generation, runtime) do
-    with {:ok, api_key} <- MediaCommon.provider_api_key(runtime, :missing_openai_image_api_key),
-         {:ok, response} <- post_openai_image(attrs, generation, runtime, api_key),
-         {:ok, bytes} <- decode_image_response(response) do
-      write_artifact(artifact_path, bytes, generation.mime_type)
-    end
-  end
-
-  defp run_vertex_image(attrs, artifact_path, generation, runtime) do
-    with {:ok, access_token} <- vertex_access_token(runtime),
-         {:ok, response} <- post_vertex_image(attrs, generation, runtime, access_token),
-         {:ok, {bytes, mime_type}} <- decode_vertex_image_response(response, generation.mime_type) do
-      write_artifact(artifact_path, bytes, mime_type)
-    end
-  end
+  defp runtime(_cwd, _opts, %{provider: @local_provider}), do: nil
+  defp runtime(cwd, opts, %{provider: @openai_provider}), do: openai_runtime(cwd, opts)
+  defp runtime(cwd, opts, %{provider: @vertex_provider}), do: vertex_runtime(cwd, opts)
 
   defp openai_runtime(cwd, opts) do
     config = Keyword.get_lazy(opts, :media_image_config, fn -> Config.load(cwd) end)
@@ -297,7 +252,10 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
         Keyword.get(opts, :openai_image_base_url)
       )
 
-    Map.put(endpoint, :http_post, Keyword.get(opts, :media_image_http_post, &Req.post/2))
+    Map.merge(endpoint, %{
+      credential: MediaCommon.credential(endpoint, :missing_openai_image_api_key),
+      http_post: Keyword.get(opts, :media_image_http_post)
+    })
   end
 
   defp vertex_runtime(cwd, opts) do
@@ -320,258 +278,15 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
       service_account_json:
         Keyword.get(opts, :vertex_imagen_service_account_json) ||
           resolved[:service_account_json],
-      http_post: Keyword.get(opts, :media_image_http_post, &Req.post/2),
-      token_http_post: Keyword.get(opts, :vertex_token_http_post, &Req.post/2)
+      http_post: Keyword.get(opts, :media_image_http_post),
+      token_http_post: Keyword.get(opts, :vertex_token_http_post)
     }
-  end
-
-  defp vertex_access_token(%{access_token: token}) when is_binary(token) and token != "",
-    do: {:ok, token}
-
-  defp vertex_access_token(%{service_account_json: json} = runtime)
-       when is_binary(json) and json != "" do
-    with {:ok, credentials} <- Jason.decode(json),
-         {:ok, jwt, token_uri} <- vertex_service_account_jwt(credentials),
-         {:ok, token} <- exchange_vertex_jwt(jwt, token_uri, runtime) do
-      {:ok, token}
-    else
-      {:error, reason} -> {:error, reason}
-      _ -> {:error, :invalid_vertex_service_account_json}
-    end
-  end
-
-  defp vertex_access_token(_runtime), do: {:error, :missing_vertex_imagen_credentials}
-
-  defp vertex_service_account_jwt(credentials) do
-    client_email = credentials["client_email"]
-    private_key = credentials["private_key"]
-    token_uri = credentials["token_uri"] || "https://oauth2.googleapis.com/token"
-
-    if is_binary(client_email) and client_email != "" and is_binary(private_key) and
-         private_key != "" do
-      now = System.system_time(:second)
-
-      header = %{"alg" => "RS256", "typ" => "JWT"}
-
-      claims = %{
-        "iss" => client_email,
-        "sub" => client_email,
-        "scope" => "https://www.googleapis.com/auth/cloud-platform",
-        "aud" => token_uri,
-        "iat" => now,
-        "exp" => now + 3600
-      }
-
-      signing_input =
-        Base.url_encode64(Jason.encode!(header), padding: false) <>
-          "." <> Base.url_encode64(Jason.encode!(claims), padding: false)
-
-      with [pem_entry | _] <- :public_key.pem_decode(private_key),
-           private_key <- :public_key.pem_entry_decode(pem_entry) do
-        signature = :public_key.sign(signing_input, :sha256, private_key)
-        jwt = signing_input <> "." <> Base.url_encode64(signature, padding: false)
-        {:ok, jwt, token_uri}
-      else
-        _ -> {:error, :invalid_vertex_service_account_private_key}
-      end
-    else
-      {:error, :invalid_vertex_service_account_json}
-    end
-  end
-
-  defp exchange_vertex_jwt(jwt, token_uri, runtime) do
-    body =
-      URI.encode_query(%{
-        "grant_type" => "urn:ietf:params:oauth:grant-type:jwt-bearer",
-        "assertion" => jwt
-      })
-
-    request_opts = [
-      headers: [{"content-type", "application/x-www-form-urlencoded"}],
-      body: body,
-      receive_timeout: 60_000
-    ]
-
-    case runtime.token_http_post.(token_uri, request_opts) do
-      {:ok, %{status: status, body: %{"access_token" => token}}}
-      when status in 200..299 and is_binary(token) and token != "" ->
-        {:ok, token}
-
-      {:ok, %{status: status, body: response_body}} ->
-        {:error, {:vertex_imagen_token_http_error, status, provider_error_kind(response_body)}}
-
-      {:error, reason} ->
-        {:error, {:vertex_imagen_token_request_failed, provider_error_kind(reason)}}
-    end
-  end
-
-  defp post_openai_image(attrs, generation, runtime, api_key) do
-    prompt = Map.get(attrs, :prompt) || Map.get(attrs, "prompt")
-    url = String.trim_trailing(runtime.base_url, "/") <> "/images/generations"
-
-    body =
-      %{
-        "model" => generation.model,
-        "prompt" => prompt,
-        "n" => 1,
-        "size" => generation.size,
-        "quality" => generation.quality,
-        "output_format" => generation.format
-      }
-      |> reject_blank_values()
-
-    request_opts = [
-      headers: [{"authorization", "Bearer #{api_key}"}],
-      json: body,
-      receive_timeout: 300_000
-    ]
-
-    do_post_openai_image(runtime, url, request_opts, generation.max_retries)
-  end
-
-  defp post_vertex_image(attrs, generation, runtime, access_token) do
-    with {:ok, project} <- required_vertex_value(runtime.project, :missing_vertex_imagen_project),
-         {:ok, location} <-
-           required_vertex_value(runtime.location, :missing_vertex_imagen_location) do
-      prompt = Map.get(attrs, :prompt) || Map.get(attrs, "prompt")
-
-      url =
-        "https://#{location}-aiplatform.googleapis.com/v1/projects/#{project}/locations/#{location}/publishers/google/models/#{generation.model}:predict"
-
-      parameters =
-        %{
-          "sampleCount" => 1,
-          "outputOptions" => %{"mimeType" => generation.mime_type},
-          "aspectRatio" => generation.aspect_ratio
-        }
-        |> reject_blank_values()
-
-      body = %{
-        "instances" => [%{"prompt" => prompt}],
-        "parameters" => parameters
-      }
-
-      request_opts = [
-        headers: [{"authorization", "Bearer #{access_token}"}],
-        json: body,
-        receive_timeout: 300_000
-      ]
-
-      do_post_vertex_image(runtime, url, request_opts, generation.max_retries)
-    end
-  end
-
-  defp required_vertex_value(value, _reason) when is_binary(value) and value != "",
-    do: {:ok, value}
-
-  defp required_vertex_value(_value, reason), do: {:error, reason}
-
-  defp do_post_vertex_image(runtime, url, request_opts, remaining_retries) do
-    case runtime.http_post.(url, request_opts) do
-      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
-      {:ok, %{status: status, body: response_body}} ->
-        if transient_status?(status) and remaining_retries > 0 do
-          do_post_vertex_image(runtime, url, request_opts, remaining_retries - 1)
-        else
-          {:error, {:vertex_imagen_http_error, status, provider_error_kind(response_body)}}
-        end
-
-      {:error, _reason} when remaining_retries > 0 ->
-        do_post_vertex_image(runtime, url, request_opts, remaining_retries - 1)
-
-      {:error, reason} ->
-        {:error, {:vertex_imagen_request_failed, provider_error_kind(reason)}}
-    end
-  end
-
-  defp do_post_openai_image(runtime, url, request_opts, remaining_retries) do
-    case runtime.http_post.(url, request_opts) do
-      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
-      {:ok, %{status: status, body: response_body}} ->
-        if transient_status?(status) and remaining_retries > 0 do
-          do_post_openai_image(runtime, url, request_opts, remaining_retries - 1)
-        else
-          {:error, {:openai_image_http_error, status, provider_error_kind(response_body)}}
-        end
-
-      {:error, _reason} when remaining_retries > 0 ->
-        do_post_openai_image(runtime, url, request_opts, remaining_retries - 1)
-
-      {:error, reason} ->
-        {:error, {:openai_image_request_failed, provider_error_kind(reason)}}
-    end
-  end
-
-  defp decode_image_response(%{"data" => [%{"b64_json" => encoded} | _]})
-       when is_binary(encoded) do
-    case Base.decode64(encoded) do
-      {:ok, bytes} -> {:ok, bytes}
-      :error -> {:error, :invalid_openai_image_base64}
-    end
-  end
-
-  defp decode_image_response(%{data: [%{b64_json: encoded} | _]}) when is_binary(encoded) do
-    decode_image_response(%{"data" => [%{"b64_json" => encoded}]})
-  end
-
-  defp decode_image_response(%{"data" => [%{"url" => _url} | _]}) do
-    {:error, :openai_image_url_response_unsupported}
-  end
-
-  defp decode_image_response(_response), do: {:error, :missing_openai_image_data}
-
-  defp decode_vertex_image_response(
-         %{"predictions" => [%{"bytesBase64Encoded" => encoded} = row | _]},
-         default_mime
-       )
-       when is_binary(encoded) do
-    case Base.decode64(encoded) do
-      {:ok, bytes} -> {:ok, {bytes, optional_string(row["mimeType"]) || default_mime}}
-      :error -> {:error, :invalid_vertex_imagen_base64}
-    end
-  end
-
-  defp decode_vertex_image_response(
-         %{predictions: [%{bytesBase64Encoded: encoded} = row | _]},
-         default_mime
-       )
-       when is_binary(encoded) do
-    decode_vertex_image_response(
-      %{"predictions" => [%{"bytesBase64Encoded" => encoded, "mimeType" => row[:mimeType]}]},
-      default_mime
-    )
-  end
-
-  defp decode_vertex_image_response(_response, _default_mime),
-    do: {:error, :missing_vertex_imagen_prediction}
-
-  defp write_artifact(artifact_path, bytes, mime_type) when is_binary(bytes) do
-    with :ok <- MediaCommon.write_artifact(artifact_path, bytes),
-         {:ok, stat} <- File.stat(artifact_path) do
-      {:ok,
-       %{
-         artifact_path: artifact_path,
-         artifact_name: Path.basename(artifact_path),
-         mime_type: mime_type,
-         bytes: stat.size
-       }}
-    end
   end
 
   defp payload(job, artifact_path, params) do
     job
     |> MediaCommon.payload(artifact_path, mime_type_from_path(artifact_path), "prompt")
     |> MediaCommon.maybe_auto_send(params, "generated image preview")
-  end
-
-  defp prompt_hash(prompt) do
-    :crypto.hash(:sha256, to_string(prompt))
-    |> Base.encode16(case: :lower)
-    |> String.slice(0, 16)
   end
 
   defp image_format(params) do
@@ -608,25 +323,5 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
       ".webp" -> "image/webp"
       _ -> "application/octet-stream"
     end
-  end
-
-  defp svg(prompt_hash) do
-    """
-    <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-      <defs>
-        <linearGradient id="lemon-media-bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#f7d154"/>
-          <stop offset="48%" stop-color="#40b6a6"/>
-          <stop offset="100%" stop-color="#22314f"/>
-        </linearGradient>
-      </defs>
-      <rect width="1024" height="1024" fill="url(#lemon-media-bg)"/>
-      <circle cx="318" cy="342" r="188" fill="#fff7cf" fill-opacity="0.88"/>
-      <circle cx="688" cy="628" r="246" fill="#102033" fill-opacity="0.28"/>
-      <path d="M265 704 C386 548 571 508 770 604" fill="none" stroke="#fff7cf" stroke-width="46" stroke-linecap="round"/>
-      <text x="512" y="498" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="54" font-weight="700" fill="#102033">Lemon media preview</text>
-      <text x="512" y="576" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="28" fill="#102033">job prompt hash #{prompt_hash}</text>
-    </svg>
-    """
   end
 end

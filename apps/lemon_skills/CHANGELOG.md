@@ -10,6 +10,11 @@
 
 ### Changed
 
+- **Breaking:** media provider HTTP clients, the Google JWT exchange and the
+  artifact writer moved to `lemon_media` (`LemonMedia.Providers`,
+  `LemonMedia.GoogleAuth`, `LemonMedia.Artifact`); `MediaCommon.write_artifact/2`,
+  `transient_status?/1`, `provider_error_kind/1` and `reject_blank_values/1`
+  were removed. The media tools keep their schemas and result shapes (#722).
 - **Breaking:** media tools require `provider`, use provider-specific default
   timeouts, and run jobs through `LemonMedia.MediaJobSupervisor.run_job/2`, which
   cancels timed-out or aborted jobs (#664).

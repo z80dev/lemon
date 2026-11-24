@@ -14,7 +14,7 @@ defmodule LemonCore.Quality.ArchitectureDocsTest do
                "| `lemon_core` | *(none)* | *(none)* | *(none)* |"
 
       assert ArchitectureDocs.render_dependency_policy_markdown(@repo_root) =~
-               "| `lemon_gateway` | `lemon_agent`, `lemon_core` | `lemon_agent`, `lemon_core` | `lemon_ai` |"
+               "| `lemon_gateway` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_ai` |"
     end
 
     test "renders rows in sorted app order" do

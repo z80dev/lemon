@@ -22,7 +22,7 @@ silent permissions.
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_media`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_media`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_core` | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* |
-| `lemon_gateway` | `lemon_agent`, `lemon_core` | `lemon_agent`, `lemon_core` | `lemon_ai` |
+| `lemon_gateway` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_ai` |
 | `lemon_honcho` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_platform_test` | *(none)* |
 | `lemon_lsp` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_mcp` | `lemon_core`, `lemon_skills` | `lemon_core`, `lemon_skills` | *(none)* |
@@ -145,7 +145,7 @@ These rules complement the dependency policy table above. They must be respected
 | Durable memory documents, scoped search/recall, context scopes and lifecycle | `lemon_memory` | `lemon_core` (generic Store only), any other app |
 | Browser capability driver | `lemon_browser` | `lemon_core`, `coding_agent`, `lemon_control_plane` |
 | Agent runtime and channel supervision capability contracts/registries | `lemon_core` | Consumer apps (provider implementations remain in their owning products) |
-| Media job driver | `lemon_media` | `lemon_core`, `lemon_skills`, `lemon_router`, `lemon_control_plane` |
+| Media job driver and media provider drivers (OpenAI, Google, ElevenLabs and Deepgram HTTP clients, Google service-account token cache) | `lemon_media` | `lemon_core`, `lemon_skills`, `lemon_channels`, `lemon_gateway`, `lemon_router`, `lemon_control_plane` |
 | LSP server driver | `lemon_lsp` | `lemon_core`, `coding_agent`, `lemon_control_plane` |
 | Debug adapter (DAP) client | `coding_agent` | `lemon_core`, `lemon_control_plane` |
 | omp delegate driver (RPC protocol, session processes, discovery, `omp` tool) | `lemon_omp` | `lemon_core`, `coding_agent`, `lemon_gateway`, `lemon_control_plane` |

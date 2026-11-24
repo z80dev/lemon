@@ -91,6 +91,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Media provider drivers (OpenAI image/TTS/STT/vision/video, Vertex Imagen/Veo,
+  Google TTS, ElevenLabs, Deepgram) moved from `lemon_skills` into `lemon_media`
+  behind `LemonMedia.Providers.run/1` with one shared retry helper; Google
+  service-account tokens are cached until expiry instead of re-signed per job.
+  Channel voice-note transcription and voice replies and the gateway voice
+  call's ElevenLabs synthesis now call the `lemon_media` clients;
+  transcription errors shown in chat carry a redacted provider error label
+  instead of the raw provider message (#722).
 - **Breaking:** media tools (`media_generate_image`, `media_generate_speech`,
   `media_transcribe_audio`, `media_analyze_image`, `media_generate_video`) now
   require `provider`; omitting it returns `provider is required` instead of a

@@ -1,6 +1,7 @@
 # LemonMedia
 
-Media job tracking for agents: what your agent generated, recorded without
+Media jobs for agents: the provider drivers that generate, transcribe and
+analyze media, and a record of what your agent generated kept without
 recording anything you would not want on disk.
 
 `lemon_media` is one of the packages that make up the [Lemon](https://github.com/z80dev/lemon)
@@ -13,6 +14,11 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 | `LemonMedia.MediaJobs` | The job record store: `record/2`, `recent/1`, `summary/1`, `cleanup/1` |
 | `LemonMedia.MediaJobSupervisor` | Bounded task supervisor; `run_job/2` runs one job synchronously against a deadline, `status/0` reports activity |
 | `LemonMedia.MediaJobWorker` | Job body that records `queued → running → completed`/`failed` |
+| `LemonMedia.Providers` | `run/1`: the single entry point to every provider driver (image, speech, video, vision, transcription) |
+| `LemonMedia.Providers.Http` | The one retry/timeout/redacted-error helper the drivers share |
+| `LemonMedia.Providers.SpeechStream` | Streaming OpenAI speech client used by channel voice replies |
+| `LemonMedia.GoogleAuth` | Google service-account access tokens, cached until shortly before expiry |
+| `LemonMedia.Artifact` | Alias-safe artifact writes |
 
 `mix lemon.media` inspects jobs and artifacts from the command line.
 

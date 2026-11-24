@@ -6,6 +6,7 @@ defmodule LemonMedia.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      LemonMedia.GoogleAuth,
       LemonMedia.MediaJobSupervisor
     ]
 

@@ -1,7 +1,12 @@
 # Media Tools
 
 Lemon's media tools are preview surfaces built around BEAM supervision,
-redacted metadata, and managed local artifacts.
+redacted metadata, and managed local artifacts. The tools in `lemon_skills`
+only validate parameters and resolve credentials; every provider HTTP client
+(OpenAI, Google, ElevenLabs, Deepgram) lives in `lemon_media` behind
+`LemonMedia.Providers.run/1`, and channel and gateway voice paths call the
+same clients. Google service-account access tokens are cached until shortly
+before expiry, so consecutive Vertex or Google TTS jobs reuse one token.
 
 - `media_status`: model-facing read-only status for generated-media jobs,
   recent artifacts, cleanup policy, and worker supervisor state.
