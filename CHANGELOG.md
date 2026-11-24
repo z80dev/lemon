@@ -212,6 +212,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   claim, instead of crashing the run orchestrator and restarting every queue.
   The control-plane `agent` method rejects an empty or malformed `session_key`
   as invalid params (#646).
+- `cron.run` and `cron.abort` report an unknown outcome (an unresolved earlier
+  run, or a scheduler call that timed out or exited) as `UNAVAILABLE` with
+  `RUN_OUTCOME_UNKNOWN`/`ABORT_OUTCOME_UNKNOWN`, the job or run ID and
+  `retrySafe: false`, instead of a retryable internal error, and log only a
+  bounded failure label (#620).
 
 ### Removed
 
