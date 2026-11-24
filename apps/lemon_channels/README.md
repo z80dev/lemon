@@ -236,22 +236,27 @@ LemonChannels.Application
 +-- WhatsApp.ModelPolicyAdapter           (GenServer - session-override ETS owner)
 +-- LemonChannels.InboundHttp             (Supervisor - optional HTTP listener)
 |   +-- InboundHttp.Routes                (GenServer - config registration only)
-+-- LemonChannels.AdapterSupervisor       (DynamicSupervisor)
-    +-- Telegram.Supervisor               (if configured)
-    |   +-- Telegram.AsyncSupervisor      (Task.Supervisor)
-    |   +-- Telegram.Transport            (GenServer - long-polling)
-    +-- Discord.Supervisor                (if configured)
-    |   +-- Nostrum.Supervisor             (included application)
-    |   +-- Discord.AsyncSupervisor       (Task.Supervisor)
-    |   +-- Discord.Transport             (GenServer - event lifecycle)
-    |   +-- Discord.Transport.Consumer    (Nostrum consumer)
-    +-- XMTP.Transport                    (if configured, GenServer + Port)
-    +-- WhatsApp.Supervisor               (if configured)
-        +-- WhatsApp.AsyncSupervisor      (Task.Supervisor)
-        +-- WhatsApp.Transport            (GenServer + Port)
++-- LemonChannels.AdapterSupervision      (Supervisor - rest_for_one)
+    +-- LemonChannels.AdapterSupervisor   (DynamicSupervisor)
+    |   +-- AdapterKeeper per adapter     (restarts its adapter with backoff)
+    |       +-- Telegram.Supervisor               (if configured)
+    |       |   +-- Telegram.AsyncSupervisor      (Task.Supervisor)
+    |       |   +-- Telegram.Transport            (GenServer - long-polling)
+    |       +-- Discord.Supervisor                (if configured)
+    |       |   +-- Nostrum.Supervisor             (included application)
+    |       |   +-- Discord.AsyncSupervisor       (Task.Supervisor)
+    |       |   +-- Discord.Transport             (GenServer - event lifecycle)
+    |       |   +-- Discord.Transport.Consumer    (Nostrum consumer)
+    |       +-- XMTP.Transport                    (if configured, GenServer + Port)
+    |       +-- WhatsApp.Supervisor               (if configured)
+    |           +-- WhatsApp.AsyncSupervisor      (Task.Supervisor)
+    |           +-- WhatsApp.Transport            (GenServer + Port)
+    +-- AdapterSupervision.Starter        (starts configured adapters)
 ```
 
-Adapters are selected from `config :lemon_channels, :adapters` during application boot. Each adapter runs under the `AdapterSupervisor` DynamicSupervisor; adapter modules may still no-op internally when credentials or transport-specific enablement are absent.
+Adapters are selected from `config :lemon_channels, :adapters`. `AdapterSupervision.Starter` starts them at boot and again whenever `AdapterSupervisor` restarts (`rest_for_one`), so a restart never leaves it empty. Each adapter runs behind an `AdapterKeeper`, which restarts that adapter with capped exponential backoff (`config :lemon_channels, :adapter_restart_backoff, base_backoff_ms: 1_000, max_backoff_ms: 60_000`), so one adapter's crash loop cannot exhaust the shared supervisor. Adapters registered at runtime with `register_and_start_adapter/2` get the same keeper but are not restarted by the starter. Adapter modules may still no-op internally when credentials or transport-specific enablement are absent.
+
+When another runtime holds a Telegram bot's poller lock, the Telegram transport stays alive, reports `error` health, and retries the lock with backoff (`poller_lock_retry_ms`, default 5 s, capped at 30x).
 
 Named volatile dedupe tables belong to `LemonCore.Dedupe.Owner` workers under
 the core dynamic supervisor, not short-lived callers or channel transports.
@@ -1103,7 +1108,7 @@ LemonChannels.Application.start_adapter(MyAdapter)
 LemonChannels.Application.stop_adapter(MyAdapter)
 ```
 
-Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
+Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor), each behind a `LemonChannels.AdapterKeeper`.
 
 ### Inbound HTTP registration
 

@@ -171,6 +171,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Channels: a second runtime holding a Telegram bot's poller lock, or one
+  adapter's crash loop, no longer stops Discord, XMTP and Email until restart.
+  Telegram stays alive and retries the lock with backoff, each adapter restarts
+  behind its own keeper with backoff, and configured adapters are started again
+  whenever `AdapterSupervisor` restarts (#686).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

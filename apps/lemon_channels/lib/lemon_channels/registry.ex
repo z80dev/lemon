@@ -316,6 +316,9 @@ defmodule LemonChannels.Registry do
   defp error_message({:http_error, 409, _}),
     do: "Channel connection conflicts with another poller or webhook."
 
+  defp error_message(:poller_locked),
+    do: "Another Lemon runtime is polling this bot; retrying until it stops."
+
   defp error_message(:timeout), do: "Channel connection timed out."
   defp error_message(:disconnected), do: "Channel disconnected. Check the Lemon host."
 
