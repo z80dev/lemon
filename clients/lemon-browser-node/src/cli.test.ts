@@ -16,6 +16,16 @@ describe('resolveCliConfig', () => {
     expect(config.operatorToken).toBeNull();
   });
 
+  it('defaults the managed profile to ~/.lemon/browser, never another product', () => {
+    const env = { HOME: '/home/u', OPENCLAW_STATE_DIR: '/home/u/.openclaw' } as NodeJS.ProcessEnv;
+    expect(resolveCliConfig({ args: parseCliArgs([]), env }).userDataDir).toBe(
+      '/home/u/.lemon/browser/default/user-data',
+    );
+    expect(resolveCliConfig({ args: parseCliArgs(['--browser-profile', 'work']), env }).userDataDir).toBe(
+      '/home/u/.lemon/browser/work/user-data',
+    );
+  });
+
   it('prefers explicit args over env and stored token', () => {
     const env = {
       LEMON_CHROME_EXECUTABLE: '/env/chrome',

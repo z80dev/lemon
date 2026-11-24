@@ -178,10 +178,11 @@ defmodule LemonBrowser.Env do
       type: :integer,
       default: 18_800,
       doc:
-        "Local CDP port used when launching a managed browser instance. Only positive " <>
-          "integers are accepted (0/negative/unparseable fall back to the default); " <>
-          "resolved with a bespoke parser in LemonBrowser.LocalServer, not the standard " <>
-          ":integer cast.",
+        "Local CDP port the driver attaches to in attach-only mode without an endpoint. " <>
+          "A managed (launched) browser always uses a free port it reports itself, never " <>
+          "this one. Only positive integers are accepted (0/negative/unparseable fall back " <>
+          "to the default); resolved with a bespoke parser in LemonBrowser.LocalServer, " <>
+          "not the standard :integer cast.",
       secret?: false,
       required?: false,
       area: :browser,

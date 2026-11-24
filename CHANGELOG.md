@@ -212,6 +212,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   idle (instead of failing with `Browser identity changed`), and the `local`
   provider honours `LEMON_BROWSER_ATTACH_ONLY`: it is unavailable rather than
   launching Chrome (#660).
+- **Breaking:** the managed local Chrome now uses Lemon's own profile,
+  `~/.lemon/browser/default/user-data`, instead of `~/.openclaw/browser/openclaw/user-data`
+  (`OPENCLAW_STATE_DIR`/`CLAWDBOT_STATE_DIR` and `--openclaw-profile` are no
+  longer read; the driver takes `--browser-profile NAME`). Sign-ins made in
+  the old profile do not carry over; point `LEMON_BROWSER_USER_DATA_DIR` at a
+  copy to keep them. Lemon launches it on a free DevTools port read from
+  `DevToolsActivePort` and never adopts a browser listening on
+  `LEMON_BROWSER_CDP_PORT`; the driver stops that Chrome when its runtime goes
+  away (stdin EOF, stdout EPIPE), and an invalid executable fails the request
+  instead of killing the driver (#689).
 
 ### Removed
 

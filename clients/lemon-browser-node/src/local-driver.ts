@@ -1,10 +1,10 @@
 #!/usr/bin/env node
+import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 
 import { asBool, asInt, asString, parseCliArgs, type CliArgs } from './cli-args.js';
-import { ChromeSession, OutcomeUnknownError, redactUrlCredentials } from './chrome.js';
+import { ChromeSession, OutcomeUnknownError, defaultUserDataDir, redactUrlCredentials } from './chrome.js';
 import { dispatchBrowserRequest, isReadOnlyBrowserMethod } from './driver-dispatch.js';
-import { resolveOpenClawUserDataDir } from './openclaw-profile.js';
 
 export type RequestMsg = {
   id: string;
@@ -23,10 +23,9 @@ export type LocalDriverConfig = {
   attachOnly: boolean;
   allowUnenforcedEgress: boolean;
   executablePath: string | null;
-  openclawProfile: string;
+  browserProfile: string;
   userDataDir: string;
   profileDirectory?: string;
-  userProvidedProfile: boolean;
 };
 
 /**
@@ -77,11 +76,11 @@ export function resolveLocalDriverConfig(params: {
   const executablePath =
     asString(params.args['executable-path']) ?? asString(env.LEMON_BROWSER_EXECUTABLE);
 
-  const openclawProfile = asString(params.args['openclaw-profile']) ?? 'openclaw';
+  const browserProfile = asString(params.args['browser-profile']) ?? 'default';
   const userDataDir =
     asString(params.args['user-data-dir']) ??
     asString(env.LEMON_BROWSER_USER_DATA_DIR) ??
-    resolveOpenClawUserDataDir(openclawProfile);
+    defaultUserDataDir(browserProfile, env.HOME || os.homedir());
 
   return {
     cdpPort,
@@ -91,10 +90,9 @@ export function resolveLocalDriverConfig(params: {
     attachOnly,
     allowUnenforcedEgress,
     executablePath,
-    openclawProfile,
+    browserProfile,
     userDataDir,
     profileDirectory: asString(params.args['profile-directory']) ?? asString(env.LEMON_BROWSER_PROFILE_DIRECTORY) ?? undefined,
-    userProvidedProfile: !!(asString(params.args['user-data-dir']) ?? asString(env.LEMON_BROWSER_USER_DATA_DIR)),
   };
 }
 
@@ -268,12 +266,18 @@ async function main() {
     cdpEndpoint: config.cdpEndpoint ?? undefined,
     userDataDir: config.userDataDir,
     profileDirectory: config.profileDirectory,
-    userProvidedProfile: config.userProvidedProfile,
     executablePath: config.executablePath ?? undefined,
     headless: config.headless,
     noSandbox: config.noSandbox,
     attachOnly: config.attachOnly,
     allowUnenforcedEgress: config.allowUnenforcedEgress,
+  });
+  const shutdown = bindDriverLifecycle({
+    stdin: process.stdin,
+    stdout: process.stdout,
+    process,
+    chrome,
+    exit: (code) => process.exit(code),
   });
   const ensureStarted = startOnceRetryingFailures(() => chrome.start());
 
@@ -305,16 +309,36 @@ async function main() {
       queue.submit(line);
     }
   });
+}
 
-  async function shutdown(code: number): Promise<void> {
-    try {
-      await chrome.stop();
-    } finally {
-      process.exit(code);
-    }
-  }
-  process.on('SIGINT', () => void shutdown(0));
-  process.on('SIGTERM', () => void shutdown(0));
+/**
+ * Ties the driver's lifetime, and the Chrome it launched, to its owner. EOF
+ * on stdin (the owner exited, even by SIGKILL), an error on stdout (EPIPE to
+ * a gone owner), SIGINT and SIGTERM all stop Chrome and exit once. Process
+ * exit signals a still-running Chrome as a last resort. Returns the shutdown.
+ */
+export function bindDriverLifecycle(params: {
+  stdin: NodeJS.EventEmitter;
+  stdout: NodeJS.EventEmitter;
+  process: NodeJS.EventEmitter;
+  chrome: Pick<ChromeSession, 'stop' | 'killChrome'>;
+  exit: (code: number) => void;
+}): (code: number) => Promise<void> {
+  let stopping: Promise<void> | undefined;
+  const shutdown = (code: number) => {
+    stopping ??= params.chrome
+      .stop()
+      .catch(() => undefined)
+      .then(() => params.exit(code));
+    return stopping;
+  };
+
+  params.stdin.on('end', () => void shutdown(0));
+  params.stdout.on('error', () => void shutdown(0));
+  params.process.on('SIGINT', () => void shutdown(0));
+  params.process.on('SIGTERM', () => void shutdown(0));
+  params.process.on('exit', () => params.chrome.killChrome());
+  return shutdown;
 }
 
 function isMainModule(): boolean {

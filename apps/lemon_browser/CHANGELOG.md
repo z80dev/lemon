@@ -35,3 +35,9 @@
   flight. `ProviderProbe.driver_options("local")` no longer forces
   `attach_only: false`, and `available?("local")` returns `:attach_only` when
   `LEMON_BROWSER_ATTACH_ONLY` is set, so Lemon never launches Chrome then (#660).
+- **Breaking:** the bundled driver's default managed profile is
+  `~/.lemon/browser/default/user-data` (no longer `~/.openclaw/...`). Managed
+  Chrome runs on a free DevTools port and is never adopted from
+  `LEMON_BROWSER_CDP_PORT`, which now only applies to attach-only mode. The
+  driver stops its Chrome when stdin closes or stdout breaks, and reports a
+  Chrome that cannot start as a request error (#689).
