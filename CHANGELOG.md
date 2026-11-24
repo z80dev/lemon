@@ -215,6 +215,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   approvals now carry `command`, `path`, `plan` and an argument preview with
   `truncated`/`planTruncated` flags; a truncated card or plan cannot be approved
   until the full request loads (#654).
+- Web blueprint activation that raises, times out or returns an unparseable
+  reply no longer says "Nothing changed": a failed call shows an unknown
+  outcome (may have been applied, not retried) and locks that bundle/profile
+  until a fresh preview reads it; an unparseable success reports "applied;
+  details unavailable"; both refresh the catalog. Inspect, validate and preview
+  report unconfirmed results as such (#621).
 
 ### Removed
 
