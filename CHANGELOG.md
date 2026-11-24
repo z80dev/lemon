@@ -200,6 +200,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- A slow native follow-up issuer callback no longer stalls every router
+  submission and abort: the callback, durable-receipt compaction and presence
+  table reads run outside the run orchestrator's mailbox, and per-submission
+  routing-feedback config reads use the config cache instead of parsing TOML.
+  Callers fix run IDs before the call, and submit uses the same 20 s window as
+  abort, so a timed-out submit is outcome-unknown for that request only (#645).
 
 ### Removed
 

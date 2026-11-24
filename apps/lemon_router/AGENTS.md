@@ -10,6 +10,12 @@ See [README](README.md) and [architecture](../../docs/architecture/overview.md).
 - `RunOrchestrator` builds router `Submission` values wrapping core
   `ExecutionCommand`; submit through configured `LemonCore.EngineRuntime`, not
   `LemonGateway.Runtime` or gateway-private request structs.
+- The orchestrator mailbox serializes admission state only. Callers fix the run
+  ID before calling; the server never allocates one. Submit, abort, native
+  follow-up, lifecycle-fence and presence calls share one 20 s window, longer
+  than coordinator admission; a call that outlasts it is outcome-unknown for that
+  request only. Issuer callbacks (network), receipt compaction and presence
+  table scans run in other processes, never in orchestrator callbacks.
 - `SessionCoordinator` owns one active pointer/backlog per conversation key,
   follow-up debounce/merge, steering fallback and interrupt semantics. A key is
   `{:resume, engine, token}` for an explicit shared token, otherwise

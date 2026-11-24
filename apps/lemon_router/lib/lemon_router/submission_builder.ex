@@ -476,7 +476,7 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp resolve_history_model(prompt, cwd, _explicit_model, _meta) do
     try do
-      config = LemonCore.Config.Modular.load()
+      config = LemonCore.Config.cached()
 
       if LemonCore.Config.Features.enabled?(config.features, :routing_feedback) do
         fp = %TaskFingerprint{
