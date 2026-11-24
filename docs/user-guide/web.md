@@ -197,7 +197,9 @@ changed. Prompts and objectives are write-only in the browser. An unknown
 outcome is never retried automatically.
 
 **Blueprints** (`/blueprints`) shows the catalog with validate and preview;
-activation requires retyping the fresh digest.
+activation requires retyping the fresh digest. If Lemon cannot confirm an
+activation's outcome, it says the blueprint may have been applied, does not
+retry, and requires a fresh preview of that target before activating again.
 
 ## Knowledge
 
