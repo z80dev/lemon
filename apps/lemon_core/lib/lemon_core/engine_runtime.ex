@@ -33,15 +33,16 @@ defmodule LemonCore.EngineRuntime do
   unavailability is a normal `false` or `{:error, reason}` return. An
   implementation exception is isolated at the owning process boundary and
   converted to that operation's documented error or degraded result. A
-  non-local exit is converted into a submit error by `c:submit_execution/1`'s
+  non-local exit from `c:submit_execution/1` is an unknown outcome for its
   caller, but exits from the other callbacks can escape; implementations must
   not exit their callers.
 
-    * **No callback should raise or exit.** `c:submit_execution/1` exceptions
-      and exits are surfaced as submit errors. Liveness, lookup and
-      cancellation exceptions are isolated by the owning process and degrade
-      according to the callback documentation below; exits from those three
-      callbacks violate the owning-process boundary and can terminate it.
+    * **No callback should raise or exit.** A `c:submit_execution/1` exit or
+      malformed acknowledgement is treated as `{:error, :outcome_unknown}`.
+      Liveness, lookup and cancellation exceptions are isolated by the owning
+      process and degrade according to the callback documentation below; exits
+      from those three callbacks violate the owning-process boundary and can
+      terminate it.
     * **`c:submit_execution/1` is asynchronous.** `:ok` means *accepted*, not
       *finished*. Progress, output and completion travel back over the bus as
       run events keyed by the command's `run_id`; the return value carries no
@@ -53,8 +54,9 @@ defmodule LemonCore.EngineRuntime do
       that already completed, runs that were never submitted, and runs whose
       process has died. Unknown run id is `:ok`, not an error.
     * **`c:run_pid/1` returns `nil` for anything it does not know about.** The
-      router monitors the returned pid, so returning a pid for a run the
-      runtime is not really executing produces a spurious `:DOWN`.
+      router monitors the returned pid from acceptance onward, so returning a
+      pid for a run the runtime is not really executing produces a spurious
+      `:DOWN`.
 
   ## Degradation
 
@@ -65,11 +67,12 @@ defmodule LemonCore.EngineRuntime do
   Persistent unavailability is bounded by the run's pre-start admission
   deadline and then surfaced through its structured completion path.
 
-  The same backoff handles `{:error, reason}` from `c:submit_execution/1`, and
-  is bounded by that same deadline. Return `{:error, reason}` for a rejection
-  the runtime expects to outlive (a full queue, a locked engine); reject a
-  permanently invalid command by completing the run with an error event
-  instead of relying on retries.
+  The same backoff handles `{:error, :runtime_unavailable}` from
+  `c:submit_execution/1`, bounded by that same deadline. Any other
+  `{:error, reason}` is a definite rejection that completes the run once.
+  `{:error, :outcome_unknown}` means the run may have been accepted: the router
+  keeps waiting for its events under the same fixed run ID, never resubmits it,
+  and completes it as missing only if no run appears within a short grace.
 
   A runtime missing `c:available?/0` or any other required callback fails
   startup validation. Missing callbacks are configuration errors, not a
@@ -149,9 +152,10 @@ defmodule LemonCore.EngineRuntime do
   Accept a command for execution.
 
   `:ok` (or `{:ok, term}`, which the router treats identically) means the
-  command has been accepted; anything else is a rejection that will be retried
-  with backoff. Results are not returned here — publish them as bus events
-  under the command's `run_id`.
+  command has been accepted. `{:error, :runtime_unavailable}` is retried with
+  backoff, `{:error, :outcome_unknown}` is adopted without resubmission, and
+  any other error completes the run once (see Degradation). Results are not
+  returned here — publish them as bus events under the command's `run_id`.
 
   The command arrives fully resolved: session key, conversation key, engine id,
   model and prompt are already decided by the router. A runtime that needs a
@@ -178,15 +182,18 @@ defmodule LemonCore.EngineRuntime do
   @callback cancel_by_run_id(binary(), term()) :: :ok
 
   @doc """
-  The process executing this run, or `nil`.
+  The process that owns this run, or `nil`.
 
   Used by the router to decide whether cancelling is worth attempting and to
-  monitor the executing process so a runtime crash is noticed promptly. Return
-  `nil` for unknown, finished or queued-but-not-started runs; a pid the router
-  monitors should be one whose death really means the run is over. An
-  implementation exception violates the contract; the owning process isolates
-  it and treats the lookup as unknown (`nil`). An exit can escape that boundary
-  and must not be used to report an unknown run.
+  monitor the owning process from acceptance onward, so a run that dies before
+  emitting a completion is noticed promptly. Return the owner as soon as
+  `c:submit_execution/1` accepts the command, including while the run waits for
+  capacity; `nil` for unknown or finished runs. A queued run reported as `nil`
+  is only monitored once it starts. A pid the router monitors should be one
+  whose death really means the run is over. An implementation exception
+  violates the contract; the owning process isolates it and treats the lookup
+  as unknown (`nil`). An exit can escape that boundary and must not be used to
+  report an unknown run.
   """
   @callback run_pid(binary()) :: pid() | nil
 

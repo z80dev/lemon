@@ -747,6 +747,15 @@ defmodule LemonRouter.RunOrchestrator do
               {:error, _} -> {:error, :outcome_unknown}
             end
 
+          {:error, :outcome_unknown} ->
+            # The coordinator may have enqueued the run, which then starts and
+            # completes under this fixed ID: keep its event subscription.
+            Logger.warning(
+              "Session coordinator submission outcome unknown run_id=#{inspect(run_id)}"
+            )
+
+            {:error, :outcome_unknown}
+
           {:error, reason} ->
             LemonCore.EventBridge.unsubscribe_run(run_id)
 

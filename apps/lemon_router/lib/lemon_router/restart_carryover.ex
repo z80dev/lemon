@@ -526,9 +526,17 @@ defmodule LemonRouter.RestartCarryover do
       end)
 
     case preflight do
-      :ok -> submit.(item.request)
+      :ok -> submit_fixed_id(submit, item.request)
       error -> error
     end
+  end
+
+  # An exited submit may still have admitted the item under its fixed run ID;
+  # it stays pending so a later replay settles it idempotently.
+  defp submit_fixed_id(submit, request) do
+    submit.(request)
+  catch
+    :exit, _reason -> {:error, :outcome_unknown}
   end
 
   defp now, do: System.monotonic_time(:millisecond)

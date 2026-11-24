@@ -202,7 +202,12 @@ by dropping complete oldest run entries rather than slicing through role data.
 `RunProcess` retries runtime unavailability only, until its pre-start deadline;
 definite gateway rejection terminalizes immediately rather than retrying admission.
 Persistent unavailability emits one structured synthetic `:run_completed` event
-so the active conversation is released. If a queued child
+so the active conversation is released. From acceptance onward, including while
+the gateway run waits for an execution permit, `RunProcess` monitors it: a run
+that exits without a completion is terminalized once after a short grace for a
+late real completion, and the next queued message starts. An unknown submit
+outcome (an exit or malformed acknowledgement) adopts the run under its fixed ID
+and never resubmits it. If a queued child
 cannot start later, `SessionCoordinator` emits the corresponding structured
 start-failure completion before cleaning up its event-bridge subscription and
 continues with the next queued submission. A child already registered after an

@@ -27,9 +27,11 @@ defmodule LemonRouter.RunProcess do
   | State | Event | Next state / timeout |
   | --- | --- | --- |
   | submitting | runtime unavailable | submitting / named retry; deadline unchanged |
-  | submitting | submission accepted | awaiting start / submission timers cancelled |
+  | submitting | submission accepted | awaiting start / submission timers cancelled, gateway run monitored |
+  | submitting | outcome unknown | awaiting start / gateway run adopted, bind grace if it is not found |
   | submitting | deadline, definite rejection or activation refusal | completing / one synthetic completion |
   | awaiting start | run started | running / idle state timeout |
+  | awaiting start | gateway run DOWN | completion grace / named timeout |
   | running or confirming idle | output, action, keepalive | running / fresh idle timeout |
   | running | idle expiry | confirming idle, or completing if no prompt can be delivered |
   | confirming idle | confirmation expiry or cancel | completing / synthetic completion |
@@ -41,7 +43,9 @@ defmodule LemonRouter.RunProcess do
   Metadata calls and unrelated events never restart them or the idle deadline.
   `:completing` prevents duplicate synthetic publication while the retained
   terminal event travels through the bus. No timer references or lifecycle
-  booleans are retained in process data.
+  booleans are retained in process data. Terminal evidence retention follows
+  answer delivery and is best-effort: the durable run summary stays the
+  authority, and boot reconciliation re-derives the evidence.
   """
 
   @behaviour :gen_statem
@@ -219,7 +223,8 @@ defmodule LemonRouter.RunProcess do
         task_status_refs: %{},
         artifact_tracker: opts[:artifact_tracker] || ArtifactTracker,
         effectful_actions: %{},
-        restart_suspend: nil
+        restart_suspend: nil,
+        receipt_store: opts[:receipt_store] || LemonCore.Store
       }
 
       Logger.debug(
@@ -289,11 +294,17 @@ defmodule LemonRouter.RunProcess do
                   "session_key=#{inspect(state.session_key)}"
               )
 
-              {:next_state, :awaiting_start, %{state | gateway_submit_attempt: 0},
-               [{{:timeout, :submission_retry}, :cancel}]}
+              # The runtime registers the run before acknowledging it, so a
+              # run that exits without a completion is noticed even while it
+              # waits for execution capacity.
+              state = maybe_monitor_gateway_run(%{state | gateway_submit_attempt: 0})
+              {:next_state, :awaiting_start, state, [{{:timeout, :submission_retry}, :cancel}]}
 
             {:error, :runtime_unavailable} ->
               retry_runtime_submission(state, :runtime_unavailable, "Engine runtime unavailable")
+
+            {:error, :outcome_unknown} ->
+              adopt_ambiguous_submission(state)
 
             {:error, reason} ->
               terminalize_gateway_submission(%{state | gateway_submit_last_error: reason})
@@ -339,7 +350,6 @@ defmodule LemonRouter.RunProcess do
   end
 
   def handle_event(:info, %LemonCore.Event{type: :run_completed} = event, _phase, state) do
-    :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(state.run_id)
     {ok?, err} = CompactionTrigger.extract_completed_ok_and_error(event)
     usage = CompactionTrigger.extract_completed_usage(event)
 
@@ -436,6 +446,14 @@ defmodule LemonRouter.RunProcess do
       # Optional fanout: forward the final answer text to additional destinations.
       SurfaceManager.fanout_final_answer(state, event)
     end
+
+    # Deliver first: terminal evidence is best-effort bookkeeping (see
+    # `RunReceiptStore.retain_terminal_evidence_best_effort/2`).
+    _ =
+      LemonRouter.RunReceiptStore.retain_terminal_evidence_best_effort(
+        state.receipt_store,
+        state.run_id
+      )
 
     {:stop, :normal, state}
   end
@@ -954,13 +972,14 @@ defmodule LemonRouter.RunProcess do
         :ok -> :ok
         {:ok, _} -> :ok
         {:error, reason} -> {:error, reason}
-        other -> {:error, {:unexpected_submit_result, other}}
+        # The runtime may have started the run without acknowledging it.
+        _malformed_acknowledgement -> {:error, :outcome_unknown}
       end
     else
       :ok
     end
   catch
-    :exit, reason -> {:error, {:exit, reason}}
+    :exit, _reason -> {:error, :outcome_unknown}
   end
 
   defp normalize_execution_request(
@@ -1074,6 +1093,26 @@ defmodule LemonRouter.RunProcess do
            gateway_submit_last_error: reason
        }, [{{:timeout, :submission_retry}, min(delay_ms, remaining_ms), :submit_to_gateway}]}
     end
+  end
+
+  # The runtime may have started the run before failing to acknowledge it, and
+  # its fixed run ID must never be resubmitted. Adopt a live run; when none is
+  # found, the bind grace lets a real completion win before one is synthesized.
+  defp adopt_ambiguous_submission(state) do
+    Logger.warning(
+      "RunProcess runtime submission outcome unknown; adopting run_id=#{inspect(state.run_id)} " <>
+        "session_key=#{inspect(state.session_key)}"
+    )
+
+    state = maybe_monitor_gateway_run(%{state | gateway_submit_attempt: 0})
+
+    bind_actions =
+      if is_nil(state.gateway_run_pid),
+        do: [{{:timeout, :gateway_bind}, @gateway_bind_grace_ms, :ensure_bound}],
+        else: []
+
+    {:next_state, :awaiting_start, state,
+     [{{:timeout, :submission_retry}, :cancel} | bind_actions]}
   end
 
   defp terminalize_gateway_submission(state) do
