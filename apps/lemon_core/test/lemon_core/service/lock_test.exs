@@ -117,18 +117,11 @@ defmodule LemonCore.Service.LockTest do
     assert Bitwise.band(File.stat!(home).mode, 0o777) == 0o755
   end
 
-  test "reports filesystem and identity failures without entering", %{tmp_dir: home} do
+  test "reports filesystem failures without entering", %{tmp_dir: home} do
     path = Path.join([home, "missing", "state.lock"])
 
     assert {:error, {:lock_failed, :enoent}} =
              Lock.with_lock_path(path, lock_options(), fn -> flunk("missing parent") end)
-
-    opts = Keyword.put(lock_options(), :command_runner, fn _, _, _ -> {"unavailable", 1} end)
-
-    assert {:error, {:lock_failed, :process_identity_unverified}} =
-             Lock.with_lock_path(Path.join(home, "state.lock"), opts, fn ->
-               flunk("no identity")
-             end)
 
     assert File.ls!(home) == []
   end

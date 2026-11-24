@@ -14,11 +14,13 @@ defmodule LemonCore.Service.Lock do
   the lock path. A contender cannot replace a populated directory. Death before
   publication may leave staging files, but never an ownerless held lock.
 
-  Owners record the OS PID/start time and the BEAM PID/node. Only a matching
-  current OS identity permits local BEAM liveness checks: a killed holder can
-  be reclaimed without waiting for its VM to exit. Other VMs (including reused
-  OS PIDs) are checked through `LemonCore.Service.Identity`; unreadable records
-  and failed identity probes never prove death.
+  Owners record the OS PID/start time and the BEAM PID/node. The own OS
+  identity is captured once per VM (`Identity.self_identity/0`), so an
+  uncontended acquisition forks no `ps`/`id`. Only a matching current OS
+  identity permits local BEAM liveness checks: a killed holder can be
+  reclaimed without waiting for its VM to exit. Other VMs (including reused OS
+  PIDs) are checked through `LemonCore.Service.Identity`; unreadable records
+  and failed identity probes never prove death. Every reclaim is logged.
 
   Owner filenames contain a unique acquisition token. Release and stale
   recovery remove only that file, then attempt to remove the empty directory.
@@ -90,7 +92,7 @@ defmodule LemonCore.Service.Lock do
     owner = "owner.#{token}.json"
     staging = path <> ".tmp." <> token
 
-    with {:ok, identity} <- Identity.capture(String.to_integer(System.pid()), opts),
+    with {:ok, identity} <- Identity.self_identity(),
          :ok <- File.mkdir(staging) do
       try do
         record =
