@@ -229,8 +229,12 @@ defmodule CodingAgent.Session.MessageSerialization do
   def deserialize_content(content) when is_binary(content), do: content
   def deserialize_content(content) when is_list(content), do: deserialize_content_blocks(content)
 
-  @spec deserialize_content_blocks(list() | nil) :: list()
+  @spec deserialize_content_blocks(list() | String.t() | nil) :: list()
   def deserialize_content_blocks(nil), do: []
+
+  # Hand-written and older journals may store block content as plain text.
+  def deserialize_content_blocks(text) when is_binary(text),
+    do: [%LemonAi.Types.TextContent{type: :text, text: text}]
 
   def deserialize_content_blocks(blocks) when is_list(blocks) do
     Enum.map(blocks, &deserialize_content_block/1)
