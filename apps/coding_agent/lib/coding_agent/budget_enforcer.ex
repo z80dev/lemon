@@ -128,6 +128,62 @@ defmodule CodingAgent.BudgetEnforcer do
   end
 
   # ============================================================================
+  # Delegated Run Limits
+  # ============================================================================
+
+  @delegated_caps [max_tokens: :max_run_tokens, max_cost: :max_run_cost_usd]
+
+  @doc """
+  Run caps for a delegated (`agent`) child, from the budget reserved for it by
+  `on_run_start/2` and `on_subagent_spawn/3`. They are plain numbers, so they
+  travel with the delegated request to the session that runs the child.
+  Returns nil when the child has no token or cost limit.
+  """
+  @spec delegated_limits(String.t()) :: map() | nil
+  def delegated_limits(run_id) do
+    case BudgetTracker.get_budget(run_id) do
+      %{} = budget ->
+        limits =
+          for {source, cap} <- @delegated_caps,
+              value = Map.get(budget, source),
+              is_number(value) and value >= 0,
+              into: %{},
+              do: {cap, value}
+
+        if limits == %{}, do: nil, else: limits
+
+      nil ->
+        nil
+    end
+  end
+
+  @doc """
+  Apply a delegated child's run caps to a session's configured caps. Each cap
+  takes the lower value; unknown keys and non-numeric values are ignored, so a
+  delegated request can only tighten the configured budget.
+  """
+  @spec apply_delegated_limits(map() | nil, term()) :: map() | nil
+  def apply_delegated_limits(limits, delegated) when is_map(delegated) do
+    Enum.reduce(Keyword.values(@delegated_caps), limits || %{}, fn cap, acc ->
+      case delegated_value(delegated, cap) do
+        value when is_number(value) and value >= 0 ->
+          Map.update(acc, cap, value, fn
+            current when is_number(current) -> min(current, value)
+            _ -> value
+          end)
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  def apply_delegated_limits(limits, _delegated), do: limits
+
+  defp delegated_value(delegated, cap),
+    do: Map.get(delegated, cap, Map.get(delegated, Atom.to_string(cap)))
+
+  # ============================================================================
   # Budget Exceeded Handling
   # ============================================================================
 

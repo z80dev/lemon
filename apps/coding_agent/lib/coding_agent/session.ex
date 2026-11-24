@@ -352,6 +352,8 @@ defmodule CodingAgent.Session do
       resource-ownership bindings remain independently enforced.
 
     * `:budget_limits` - Cumulative run/session caps, overriding SettingsManager.budgets.
+    * `:delegated_budget` - Run caps (`max_run_tokens`, `max_run_cost_usd`) a
+      delegating `agent` call reserved for this run; they only tighten the caps.
     * `:model` - The AI model to use (`LemonAi.Types.Model.t()`). If not provided,
       uses `default_model` from SettingsManager.
     * `:system_prompt` - Explicit system prompt text. Takes highest precedence

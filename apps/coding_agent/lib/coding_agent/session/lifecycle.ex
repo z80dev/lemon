@@ -118,7 +118,12 @@ defmodule CodingAgent.Session.Lifecycle do
 
     config_cwd = Keyword.get(opts, :config_cwd) || cwd
     settings_manager = Keyword.get(opts, :settings_manager) || SettingsManager.load(config_cwd)
-    budget_limits = Keyword.get(opts, :budget_limits, settings_manager.budgets)
+    # A delegated `agent` run can only tighten the configured caps.
+    budget_limits =
+      opts
+      |> Keyword.get(:budget_limits, settings_manager.budgets)
+      |> CodingAgent.BudgetEnforcer.apply_delegated_limits(Keyword.get(opts, :delegated_budget))
+
     {session_manager, budget_usage} = BudgetLedger.initialize(session_manager)
 
     {:ok, budget_scope} =

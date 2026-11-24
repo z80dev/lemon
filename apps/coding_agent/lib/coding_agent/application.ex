@@ -60,10 +60,12 @@ defmodule CodingAgent.Application do
       {CodingAgent.TaskProgressBindingServer, name: CodingAgent.TaskProgressBindingServer},
       {CodingAgent.ParentQuestionStoreServer, name: CodingAgent.ParentQuestionStoreServer},
       {CodingAgent.RunGraphServer, name: CodingAgent.RunGraphServer},
+      # rest_for_one: ProcessManager (and its sessions) precede the store, so
+      # a store restart never stops a running command's process group.
       LemonCore.Supervision.subtree(CodingAgent.ProcessSupervisor, [
         {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
-        {CodingAgent.ProcessStoreServer, name: CodingAgent.ProcessStoreServer},
         {CodingAgent.ProcessManager, name: CodingAgent.ProcessManager},
+        {CodingAgent.ProcessStoreServer, name: CodingAgent.ProcessStoreServer},
         {CodingAgent.LaneQueue,
          name: CodingAgent.LaneQueue, caps: lane_caps, task_supervisor: CodingAgent.TaskSupervisor}
       ]),

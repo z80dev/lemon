@@ -10,6 +10,10 @@ defmodule CodingAgent.RuntimeTables do
   not the owner; concurrent misses may probe more than once, but publication is
   first-writer-wins and every caller receives the published value. Owner restart
   discards volatile entries, including the fallback secret-placeholder key.
+
+  It is also the ETS heir of every `CodingAgent.DurableTable` mirror. A crashed
+  durable owner's live table transfers here and `reclaim/1` hands it to the
+  restarted owner, so a store restart does not lose in-flight state.
   """
 
   use GenServer
@@ -54,6 +58,19 @@ defmodule CodingAgent.RuntimeTables do
   @doc false
   def delete(key), do: GenServer.call(__MODULE__, {:delete, key})
 
+  @doc """
+  Give an inherited durable mirror back to the calling owner. Returns `:none`
+  when this process does not hold `table` (first boot, clean stop or a table
+  owned by another live process).
+  """
+  @spec reclaim(atom()) :: :ok | :none
+  def reclaim(table) when is_atom(table) do
+    case Process.whereis(__MODULE__) do
+      pid when is_pid(pid) and pid != self() -> GenServer.call(pid, {:reclaim, table})
+      _ -> :none
+    end
+  end
+
   @impl true
   def init(opts) do
     Enum.each(Keyword.get(opts, :tables, @tables), &new_table/1)
@@ -82,6 +99,36 @@ defmodule CodingAgent.RuntimeTables do
   def handle_call({:delete, key}, _from, cache_table) do
     :ets.delete(cache_table, key)
     {:reply, :ok, cache_table}
+  end
+
+  def handle_call({:reclaim, table}, {owner, _tag}, cache_table) do
+    {:reply, give_back(table, owner, 50), cache_table}
+  end
+
+  @impl true
+  def handle_info({:"ETS-TRANSFER", _tid, _from, _data}, cache_table), do: {:noreply, cache_table}
+  def handle_info(_message, cache_table), do: {:noreply, cache_table}
+
+  # A dead owner's table reaches the heir as part of its exit; a restarted
+  # owner can ask before that transfer has completed.
+  defp give_back(table, owner, attempts) do
+    with tid when tid != :undefined <- :ets.whereis(table),
+         current when is_pid(current) <- :ets.info(tid, :owner) do
+      cond do
+        current == self() ->
+          :ets.give_away(tid, owner, :reclaimed)
+          :ok
+
+        attempts > 0 and not Process.alive?(current) ->
+          Process.sleep(2)
+          give_back(table, owner, attempts - 1)
+
+        true ->
+          :none
+      end
+    else
+      _ -> :none
+    end
   end
 
   defp new_table(table) do

@@ -227,6 +227,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   connection), and an unconfirmed steer the daemon no longer holds can be
   dismissed with `d`. A crashed non-read control-plane method now answers
   `INTERNAL_ERROR` with `retrySafe: false` (#616).
+- `agent` delegation is bounded: a synchronous run or join lends the calling
+  run's gateway permit while it waits (`LemonGateway.Slots.suspend/2`,
+  `resume/3`), so parents waiting on children and delegation chains no longer
+  stall admission under `[gateway].max_concurrent_runs`. Joins honour
+  `timeout_ms` (default 120000) instead of waiting forever. `BudgetEnforcer`
+  refuses delegations from an exhausted parent, reserves each child, sends its
+  token/cost limits with the request (the child session stops when it would
+  exceed them) and charges its usage back. Aborting the delegating run or a
+  synchronous timeout aborts the child through `RouterBridge.abort_run/2`. (#668)
+- Coding-agent durable stores (tasks, run graph, parent questions, processes)
+  keep their live table when their owner crashes: `CodingAgent.RuntimeTables`
+  is the ETS heir and the restarted owner reclaims it, so in-flight tasks stay
+  running and their later finishes are accepted. Restart normalization now
+  applies only at boot (first start, application restart or clean stop). The
+  run graph also marks `:queued` runs `:lost` at boot and persists it, so a join
+  returns instead of hanging, and marks queued/running runs idle for
+  `:run_graph_stale_ttl_seconds` (default 7 days) `:lost`. `ProcessStoreServer`
+  no longer runs caller closures, replies `{:error, :store_unavailable}` instead
+  of exiting on storage failure, and starts after `ProcessManager`, so a store
+  restart no longer kills running (including foreground) commands. (#677)
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

@@ -102,8 +102,9 @@ CodingAgent.Supervisor (one_for_one)
   +-- TaskProgressBindingServer, ParentQuestionStoreServer, RunGraphServer
   +-- ProcessSupervisor (rest_for_one)
   |     +-- ProcessRegistry
+  |     +-- ProcessManager (DynamicSupervisor; before the store, so a store
+  |     |   restart never stops running commands)
   |     +-- ProcessStoreServer
-  |     +-- ProcessManager (DynamicSupervisor)
   |     +-- LaneQueue (background process launch FIFO)
   +-- SessionTree (rest_for_one)
   |     +-- SessionRegistry
@@ -505,6 +506,15 @@ Task, process, run-graph and parent-question stores share
 `CodingAgent.DurableTable`: each domain server remains the serialized owner,
 loads its existing DETS tuples before readiness, and normalizes interrupted work
 through a domain callback. File names and tuple layouts are unchanged.
+`CodingAgent.RuntimeTables` is the ETS heir of every DETS-backed mirror: an
+owner that crashes is restarted with its live table, so queued and running
+tasks/runs keep their state and their workers' later finishes are accepted.
+Restart normalization (queued/running work becomes `:lost`, persisted) applies
+only at boot: first start, application restart or a clean owner stop. The run
+graph marks queued or running runs idle for `:run_graph_stale_ttl_seconds`
+(default 7 days) `:lost` with `:stale` instead of keeping them forever.
+`ProcessStoreServer` accepts data-only requests (no caller closures) and replies
+`{:error, :store_unavailable}` when its storage fails rather than exiting.
 Task-progress bindings use the same lifecycle with no DETS backing and remain
 transient. Expiration uses a private timestamp/key index rather than folding
 every retained record or log buffer; sweeps run in the owner mailbox, not an
@@ -741,7 +751,9 @@ is retried. `LaneQueue` reports the mapped reason inside `task_start_failed`;
 delegated runs already submitted retain their tracking-error receipt instead of
 claiming that the remote work was never started.
 
-The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
+The delegated `agent` tool registers every delegated run (sync or async) in `RunGraph` before submitting it, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
+
+Delegation is bounded. A synchronous `agent` run or an `agent action=join` lends the calling run's gateway permit (`LemonGateway.Slots.suspend/2`) while it waits and takes it back at the front of the queue afterwards, so parents blocked on children and delegation chains cannot stall admission under `[gateway].max_concurrent_runs`; only the calling run's own permit is lent (an `agent` call inside an in-process `task` child lends nothing). Both waits are limited by `timeout_ms` (default 120000); a synchronous run that times out is aborted. `CodingAgent.BudgetEnforcer` refuses a delegation when the parent session's budget or the parent run's budget is exhausted or its `max_children` are active, reserves the child against the parent, and sends the child's token/cost limits as `meta.delegated_budget`; the child session applies them as `max_run_tokens`/`max_run_cost_usd` (they can only tighten its configured caps) and stops when it would exceed them. Model-supplied metadata cannot set that field. The child's reported usage is charged to the parent run and the parent session's budget scope on completion. Aborting the run that delegated (or a synchronous timeout) aborts its sync and async children through the run orchestrator (`RouterBridge.abort_run/2`); each child then emits its own terminal event.
 
 `agent action=poll` and `action=join` are scoped like `task`: each delegated task record stores the submitting session and agent as its owner, and `Control.authorize/2` makes a foreign `task_id` indistinguishable from a missing one, so another session can neither read its status nor consume its join followup. Poll and join reuse `CodingAgent.Tools.Task.Result`: join content carries each child's answer and poll returns bounded, structured details rather than raw child events. When router submission returns `:outcome_unknown`, the tool records a `tracking_lost` task under the request's fixed run id and starts the normal completion watcher; it never resubmits automatically.
 
