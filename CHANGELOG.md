@@ -247,6 +247,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   no longer runs caller closures, replies `{:error, :store_unavailable}` instead
   of exiting on storage failure, and starts after `ProcessManager`, so a store
   restart no longer kills running (including foreground) commands. (#677)
+- An interrupted `lemon update` (killed, crashed, or halted mid-download) no
+  longer leaves `~/.lemon/updates/.operation.lock` behind and every later update
+  failing with "Another update operation is active". Update operations use the
+  shared owner-recording lock, so the next command recovers a dead holder's lock
+  (and logs it) and removes stranded `.partial` staging directories; a live
+  holder still blocks (#683).
+- The Docker runtime image ships `procps`, so cross-process locks (Telegram
+  polling, skills metadata, updates, usage state) can verify holders inside the
+  container; boot logs an error when `ps` is missing, and the image smoke test
+  takes a lock. A lock acquisition no longer forks `ps`/`id`: the process's own
+  identity and uid are captured once at boot (from `/proc/self` on Linux) (#684).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

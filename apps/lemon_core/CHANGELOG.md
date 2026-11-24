@@ -218,6 +218,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `LemonCore.Update.ReceiptStore.with_lock/2` uses `LemonCore.Service.Lock`:
+  a holder killed without cleanup is recovered by the next operation instead of
+  returning `{:error, :update_locked}` forever, stale `.partial` staging is
+  removed on acquire, and `Service.Lock` logs every stale-owner recovery (#683).
+- `LemonCore.Service.Lock` acquisitions no longer fork `ps`/`id`: the new
+  `LemonCore.Service.Identity.self_identity/0` and `current_uid/0` capture this
+  OS process's identity and effective uid once (Linux: `/proc/self`, `ps`/`id`
+  fallback; failures are not cached), `Identity.uid/1` and
+  `LemonCore.LoopbackListener` share the cached uid, and
+  `Identity.boot_check/0` (run at application start) logs an error when `ps`
+  is unavailable (#684).
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
   (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase
