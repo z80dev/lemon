@@ -103,22 +103,29 @@ defmodule LemonRouter.SubmissionBuilder do
       request_thinking_level = MapHelpers.get_key(meta, :thinking_level)
       profile_model = MapHelpers.get_key(agent_profile, :model)
       profile_system_prompt = MapHelpers.get_key(agent_profile, :system_prompt)
-      default_model = default_model_from_config()
+      operator_config = operator_config()
+      default_model = operator_config.agent.default_model
 
-      explicit_model = request_model || MapHelpers.get_key(meta, :model)
       explicit_system_prompt = MapHelpers.get_key(meta, :system_prompt)
 
-      history_model = resolve_history_model(prompt, cwd, explicit_model, meta)
-
-      selection_input = %{
+      configured_selection = %{
         explicit_model: request_model,
         model_explicit: params.model_explicit,
         meta_model: MapHelpers.get_key(meta, :model),
         session_model: session_model,
         profile_model: profile_model,
-        history_model: history_model,
         default_model: default_model
       }
+
+      # History is consulted only when the router default would otherwise win.
+      history_model =
+        if ModelSelection.resolve(%{configured_selection | default_model: nil}).model do
+          nil
+        else
+          resolve_history_model(prompt, cwd, default_model, operator_config.features)
+        end
+
+      selection_input = Map.put(configured_selection, :history_model, history_model)
 
       selection = ModelSelection.resolve(selection_input)
       resolved_model = selection.model
@@ -449,14 +456,13 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp normalize_cwd(_), do: nil
 
-  # The router default is operator configuration: the global layer, never a
-  # project file under the router's working directory.
-  defp default_model_from_config do
-    config = LemonCore.Config.cached()
-
-    case config.provenance do
-      %{operator: operator} -> operator.agent.default_model
-      _ -> config.agent.default_model
+  # The router default and feature flags are operator configuration: the global
+  # layer, never a project file under the router's working directory. Read from
+  # the config cache, never a TOML parse per submission.
+  defp operator_config do
+    case LemonCore.Config.cached() do
+      %{provenance: %{operator: operator}} -> operator
+      config -> config
     end
   end
 
@@ -468,33 +474,20 @@ defmodule LemonRouter.SubmissionBuilder do
   defp normalize_thinking_level(level) when is_binary(level), do: ThinkingLevel.normalize(level)
   defp normalize_thinking_level(_), do: nil
 
-  defp resolve_history_model(prompt, cwd, explicit_model, _meta)
-       when is_binary(explicit_model) and byte_size(explicit_model) > 0 do
-    _ = {prompt, cwd}
-    nil
-  end
-
-  defp resolve_history_model(prompt, cwd, _explicit_model, _meta) do
-    try do
-      config = LemonCore.Config.Modular.load()
-
-      if LemonCore.Config.Features.enabled?(config.features, :routing_feedback) do
-        fp = %TaskFingerprint{
+  # Routing feedback is opt-in and advisory: the store suggests a model only
+  # when the configured default has itself been measured here and done worse.
+  defp resolve_history_model(prompt, cwd, default_model, features) do
+    if LemonCore.Config.Features.enabled?(features, :routing_feedback) do
+      context_key =
+        TaskFingerprint.context_key(%TaskFingerprint{
           task_family: TaskFingerprint.classify_prompt(prompt),
           workspace_key: cwd
-        }
+        })
 
-        context_key = TaskFingerprint.context_key(fp)
-
-        case RoutingFeedbackStore.best_model_for_context(context_key) do
-          {:ok, model} -> model
-          _ -> nil
-        end
-      else
-        nil
+      case RoutingFeedbackStore.best_model_for_context(context_key, default_model) do
+        {:ok, model} -> model
+        :keep_default -> nil
       end
-    catch
-      :exit, _ -> nil
     end
   end
 end

@@ -112,7 +112,7 @@ defmodule LemonRouter.RoutingFingerprintMismatchTest do
     lookup_context = TaskFingerprint.context_key(lookup_fp)
 
     assert {:ok, "claude-sonnet"} =
-             GenServer.call(feedback_pid, {:best_model_for_context, lookup_context})
+             GenServer.call(feedback_pid, {:best_model_for_context, lookup_context, nil})
   end
 
   test "keys written WITH real toolset are not found by empty-toolset lookup (pre-fix bug)", %{
@@ -135,8 +135,8 @@ defmodule LemonRouter.RoutingFingerprintMismatchTest do
 
     lookup_context = TaskFingerprint.context_key(lookup_fp)
 
-    # LIKE prefix mismatch: stored key has real toolset, lookup context has "-" toolset
-    assert {:insufficient_data, 0} =
-             GenServer.call(feedback_pid, {:best_model_for_context, lookup_context})
+    # Prefix mismatch: stored key has real toolset, lookup context has "-" toolset
+    assert :keep_default =
+             GenServer.call(feedback_pid, {:best_model_for_context, lookup_context, nil})
   end
 end

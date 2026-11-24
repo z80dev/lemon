@@ -91,6 +91,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Breaking:** `[features] routing_feedback` now defaults to `"off"`; set it to
+  `"on"` in the global config to record and use routing history. When enabled,
+  history no longer outranks `[defaults] model`: it is consulted only for
+  un-pinned runs, suggests only models with at least a 75% success rate, and
+  replaces the default only where the default itself was measured (5+ samples)
+  and did worse, so a changed default takes effect immediately. The router reads
+  the flag from the config cache instead of parsing TOML per submission, and
+  the history lookup is an index range scan (#647).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
