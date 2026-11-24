@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Journal format: assistant entries' `system-prompt-digest` is now version 2, a
+  `{digest, plan_revision}` reference to a `lemon.prompt_snapshot` custom entry
+  written once per digest on the branch (`base_prompt` only when a plan overlay
+  makes it distinct). `PromptJournal.attach/2` is replaced by
+  `PromptJournal.append_reply/3`; version 1 inline snapshots are still read (#676).
+
 ### Removed
 
 - Removed the unused `CodingAgent.Coordinator` and `ProcessManager.exec_sync/1`

@@ -91,6 +91,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Native session journals store the system prompt once per digest on a branch,
+  as a `lemon.prompt_snapshot` entry, instead of twice in every assistant entry;
+  assistant entries reference it by digest and plan revision. With a 56 KiB
+  prompt, 100 assistant messages now take 121 KB of journal instead of 11.5 MB.
+  Older journals with inline snapshots still resume unchanged (#676).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
