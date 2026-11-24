@@ -49,42 +49,63 @@ defmodule CodingAgent.SessionMaintenance do
     end
   end
 
+  # A dry run takes no root admission: it must never stall session startup,
+  # artifact spill or guardrails. It binds every journal and spill file to a
+  # stat fingerprint and hashes only the candidates it would mutate.
   def plan(cutoff) when is_integer(cutoff) and cutoff > 0 do
-    guarded(fn -> with_root_lock(fn -> snapshot(root(), cutoff) end, :exclusive) end)
+    guarded(fn -> snapshot(root(), cutoff, true) end)
   end
 
+  # Re-hash candidates before admission, then compare stat fingerprints (no
+  # file content) while holding the exclusive root lock for the mutation.
   def execute(%{root: root, older_than_ms: cutoff} = expected, opts \\ []) do
     guarded(fn ->
-      with_root_lock(
-        fn ->
-          if root == root() do
-            with {:ok, initial} <- snapshot(root, cutoff) do
-              paths = Enum.map(initial.journals, & &1.path)
-
-              with_files(Enum.sort(paths), fn ->
-                with_directories(initial.directories, fn ->
-                  with {:ok, current} <- snapshot(root, cutoff),
-                       true <- current == expected do
-                    execute_candidates(
-                      current,
-                      Keyword.get(opts, :remove_index, &SessionIndex.remove/1)
-                    )
-                  else
-                    _ -> {:error, :confirmation_mismatch}
-                  end
-                end)
-              end)
-            end
-          else
-            {:error, :confirmation_mismatch}
-          end
-        end,
-        :exclusive
-      )
+      with true <- root == root(),
+           {:ok, hashed} <- snapshot(root, cutoff, true),
+           true <- hashed == expected do
+        with_root_lock(fn -> execute_locked(root, cutoff, expected, opts) end, :exclusive)
+      else
+        {:error, _} = error -> error
+        _ -> {:error, :confirmation_mismatch}
+      end
     end)
   end
 
-  defp snapshot(root, cutoff) do
+  defp execute_locked(root, cutoff, expected, opts) do
+    with {:ok, initial} <- snapshot(root, cutoff, false) do
+      paths = Enum.map(initial.journals, & &1.path)
+
+      with_files(Enum.sort(paths), fn ->
+        with_directories(initial.directories, fn ->
+          with {:ok, current} <- snapshot(root, cutoff, false),
+               true <- current == without_digests(expected) do
+            execute_candidates(
+              current,
+              Keyword.get(opts, :remove_index, &SessionIndex.remove/1)
+            )
+          else
+            _ -> {:error, :confirmation_mismatch}
+          end
+        end)
+      end)
+    end
+  end
+
+  defp without_digests(plan) do
+    Map.update!(plan, :candidates, fn candidates ->
+      Enum.map(candidates, fn
+        %{kind: :archive} = candidate ->
+          Map.update!(candidate, :revision, &Map.delete(&1, :digest))
+
+        %{kind: :orphan_artifact} = candidate ->
+          Map.update!(candidate, :entries, fn entries ->
+            Enum.map(entries, &Map.update!(&1, :revision, fn r -> Map.delete(r, :digest) end))
+          end)
+      end)
+    end)
+  end
+
+  defp snapshot(root, cutoff, hash?) do
     with :ok <- directory_or_missing(Path.dirname(root)),
          {:ok, names} <- children(root) do
       directories =
@@ -93,7 +114,10 @@ defmodule CodingAgent.SessionMaintenance do
         |> Enum.map(&Path.join(root, &1))
         |> Enum.sort()
 
-      with {:ok, workspaces} <- collect(directories, &workspace(root, &1, cutoff)) do
+      with {:ok, workspaces} <- collect(directories, &workspace(root, &1, cutoff)),
+           candidates = Enum.flat_map(workspaces, & &1.candidates),
+           {:ok, candidates} <-
+             if(hash?, do: collect(candidates, &digest/1), else: {:ok, candidates}) do
         {:ok,
          %{
            root: root,
@@ -101,9 +125,31 @@ defmodule CodingAgent.SessionMaintenance do
            directories: directories,
            journals: Enum.flat_map(workspaces, & &1.journals),
            inventory: Enum.map(workspaces, & &1.inventory),
-           candidates: Enum.flat_map(workspaces, & &1.candidates)
+           candidates: candidates
          }}
       end
+    end
+  end
+
+  # Content digests bind the files a confirmed run may archive or delete.
+  defp digest(%{kind: :archive, path: path, revision: revision} = candidate) do
+    with {:ok, revision} <- digest_file(path, revision),
+         do: {:ok, %{candidate | revision: revision}}
+  end
+
+  defp digest(%{kind: :orphan_artifact, entries: entries} = candidate) do
+    entries
+    |> collect(fn
+      %{type: :regular, path: path, revision: revision} = entry ->
+        with {:ok, revision} <- digest_file(path, revision),
+             do: {:ok, %{entry | revision: revision}}
+
+      entry ->
+        {:ok, entry}
+    end)
+    |> case do
+      {:ok, entries} -> {:ok, %{candidate | entries: entries}}
+      error -> error
     end
   end
 
@@ -275,15 +321,19 @@ defmodule CodingAgent.SessionMaintenance do
   end
 
   defp revision(path) do
-    with {:ok, before} <- File.lstat(path, time: :posix),
-         true <- before.type == :regular,
-         digest <-
+    case File.lstat(path, time: :posix) do
+      {:ok, %File.Stat{type: :regular} = stat} -> {:ok, file_identity(stat)}
+      _ -> {:error, :maintenance_unavailable}
+    end
+  end
+
+  defp digest_file(path, revision) do
+    with digest <-
            File.stream!(path, @hash_chunk_bytes, [:raw, :binary])
            |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
            |> :crypto.hash_final(),
-         {:ok, after_stat} <- File.lstat(path, time: :posix),
-         true <- file_identity(before) == file_identity(after_stat) do
-      {:ok, Map.put(file_identity(before), :digest, digest)}
+         {:ok, ^revision} <- revision(path) do
+      {:ok, Map.put(revision, :digest, digest)}
     else
       _ -> {:error, :maintenance_unavailable}
     end
@@ -401,7 +451,8 @@ defmodule CodingAgent.SessionMaintenance do
           with :ok <- remove_index.(candidate.path),
                {:error, :enoent} <- File.lstat(candidate.path),
                {:ok, archived} <- revision(candidate.destination),
-               true <- archived.digest == revision.digest and archived.size == revision.size do
+               # rename(2) keeps the inode and content; only ctime may move.
+               true <- Map.delete(archived, :ctime) == Map.delete(revision, :ctime) do
             :ok
           end
         end)

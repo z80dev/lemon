@@ -9,6 +9,13 @@
 
 ### Fixed
 
+- `CodingAgent.SessionSupervisor.start_session/1` validates options and loads
+  the journal in the caller; `CodingAgent.Session.init/1` only admits journal
+  ownership and the rest of initialization (settings, extensions, WASM, profile
+  MCP) runs in `handle_continue/2`. `start_link/1` and `start_session/1` still
+  return after initialization, with `{:error, reason}` and no linked exit on
+  failure. `RootLifecycle` no longer calls a session while holding its lock,
+  and `SessionMaintenance.plan/1` takes no root lock (#632).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

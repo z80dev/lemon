@@ -200,6 +200,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- A native session that is slow to start (for example while connecting its
+  profile MCP servers) no longer blocks other session starts, stops or listing:
+  the session supervisor only admits journal ownership and the session finishes
+  initializing in its own process. Root checkout locks only the registry lookup
+  and idle-cap decision, so a slow `prepare_root_turn` no longer times out other
+  conversations, and `lemon sessions maintain` previews take no lock; confirmed
+  runs hash candidates before taking the session-root lock (#632).
 
 ### Removed
 
