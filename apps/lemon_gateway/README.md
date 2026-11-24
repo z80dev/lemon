@@ -177,14 +177,10 @@ named stats table is likewise created and owned by its existing supervised child
 | `LemonGateway.Application` | `application.ex` | Execution runtime supervision tree with optional health and explicit legacy ingress children |
 | `LemonGateway.IngressSupervisor` | `ingress_supervisor.ex` | Supervisor for gateway-owned transport, SMS, and voice startup |
 | `LemonGateway.Runtime` | `runtime.ex` | Execution submission and cancellation API |
-| `LemonGateway.Config` | `config.ex` | TOML-backed runtime configuration GenServer |
-| `LemonGateway.ConfigLoader` | `config_loader.ex` | Loads and parses TOML config into typed structs |
 | `LemonGateway.ExecutionRequest` | `execution_request.ex` | Gateway-private execution adapter with no queue semantics |
 | `LemonGateway.Types` | `types.ex` | Shared gateway lane type |
 | `LemonGateway.Event` | `event.ex` | Run lifecycle events (plain tagged maps with guards) and `Delta` struct |
 | `LemonCore.ChatState` | `../lemon_core/lib/lemon_core/chat_state.ex` | Session state struct for auto-resume tracking |
-| `LemonGateway.Cwd` | `cwd.ex` | Default working directory resolver |
-| `LemonGateway.Project` | `project.ex` | Project configuration struct (`id`, `root`) |
 | `LemonGateway.AI` | `ai.ex` | Direct HTTP chat completions for OpenAI and Anthropic APIs |
 
 ### Scheduling and Run Execution
@@ -229,13 +225,10 @@ in-process subagents.
 | `LemonGateway.TransportSupervisor` | `transport_supervisor.ex` | Supervisor for enabled transports |
 | `LemonGateway.Transports.Webhook` | `transports/webhook.ex` | HTTP webhook transport (sync/async) |
 
-### Binding and Legacy Rendering Helpers
+### Legacy Rendering Helpers
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Binding` | `binding_resolver.ex` | Struct mapping transport/chat/topic to project, agent, and queue mode |
-| `LemonGateway.BindingResolver` | `binding_resolver.ex` | Resolves cwd, agent_id, and queue_mode from `ChatScope` |
-
 | `LemonGateway.Renderers.Basic` | `renderers/basic.ex` | Plain-text renderer with action lists and resume info |
 
 ### SMS
@@ -410,7 +403,7 @@ agent_id = "coder"
 queue_mode = "steer"
 ```
 
-`BindingResolver` delegates to `LemonCore.BindingResolver` and provides:
+`LemonChannels.BindingResolver` (over `LemonCore.BindingResolver`) provides:
 - `resolve_binding/1` -- most specific matching binding
 - `resolve_cwd/1` -- project root directory
 - `resolve_agent_id/1` -- agent identifier
@@ -418,7 +411,7 @@ queue_mode = "steer"
 
 ## Configuration
 
-Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `LemonCore.GatewayConfig.load/0` and `LemonGateway.ConfigLoader`.
+Configuration is the `[gateway]` section of `~/.lemon/config.toml`, read live through `LemonCore.GatewayConfig` (an ETS-cached read of `LemonCore.Config`). There is no gateway config process: a config reload reaches every reader without a restart, and `LemonGateway.Slots` re-reads `max_concurrent_runs` on each `:config_reloaded` event. A config that cannot be loaded at boot fails startup instead of starting with channels disabled.
 
 ### Core Options
 
@@ -452,25 +445,12 @@ Discord and email are not gateway transports. If a `discord` or `email` module i
 `:transports`, `TransportRegistry` ignores it and logs a warning; ownership lives in
 `lemon_channels`.
 
-### Legacy Queue Options (`[gateway.queue]`)
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `mode` | `nil` | Legacy default queue mode used only while building router-facing submissions from old transport/binding config |
-| `cap` | `nil` | Legacy queue cap for compatibility paths that still rely on transport-level queue config |
-| `drop` | `nil` | Legacy drop policy when that compatibility queue cap is exceeded |
-
 ### TOML Example
 
 ```toml
 [gateway]
 max_concurrent_runs = 2
 auto_resume = true
-
-[gateway.queue]
-mode = "followup"
-cap = 50
-drop = "oldest"
 
 [gateway.telegram]
 bot_token = "your-token"

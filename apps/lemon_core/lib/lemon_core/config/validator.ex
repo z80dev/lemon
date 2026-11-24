@@ -186,15 +186,25 @@ defmodule LemonCore.Config.Validator do
   """
   @spec deprecation_warnings(map()) :: [String.t()]
   def deprecation_warnings(settings) when is_map(settings) do
-    if LegacyAgentMigration.legacy?(settings) do
-      [
-        "[agent] is deprecated and is read as [defaults], [runtime] and [tui]. " <>
-          "Run `lemon config migrate` to rewrite it (the original is kept as a backup)."
-      ]
-    else
-      []
-    end
+    legacy_agent =
+      if LegacyAgentMigration.legacy?(settings) do
+        [
+          "[agent] is deprecated and is read as [defaults], [runtime] and [tui]. " <>
+            "Run `lemon config migrate` to rewrite it (the original is kept as a backup)."
+        ]
+      else
+        []
+      end
+
+    legacy_agent ++ removed_gateway_queue_warnings(settings)
   end
+
+  # Nothing ever read `[gateway.queue]`; it is ignored rather than rejected so
+  # existing configs keep loading.
+  defp removed_gateway_queue_warnings(%{"gateway" => %{"queue" => _}}),
+    do: ["[gateway.queue] has no effect and was removed; delete the section."]
+
+  defp removed_gateway_queue_warnings(_settings), do: []
 
   @removed_engine_keys ~w(
     engine
@@ -468,7 +478,6 @@ defmodule LemonCore.Config.Validator do
     |> validate_email_config(Map.get(gateway, :email))
     |> validate_sms_config(Map.get(gateway, :sms))
     |> validate_voice_config(Map.get(gateway, :voice))
-    |> validate_queue_config(Map.get(gateway, :queue))
     |> validate_webhook_section(Map.get(gateway, :webhook))
   end
 
@@ -868,55 +877,6 @@ defmodule LemonCore.Config.Validator do
   end
 
   @doc """
-  Validates queue configuration.
-  """
-  @spec validate_queue_config([String.t()], map() | nil) :: [String.t()]
-  def validate_queue_config(errors, nil), do: errors
-
-  def validate_queue_config(errors, queue) when is_map(queue) do
-    errors
-    |> validate_queue_mode(Map.get(queue, :mode))
-    |> validate_optional_positive_integer(Map.get(queue, :cap), "gateway.queue.cap")
-    |> validate_queue_drop(Map.get(queue, :drop))
-  end
-
-  def validate_queue_config(errors, _), do: ["gateway.queue: must be a map" | errors]
-
-  defp validate_queue_mode(errors, nil), do: errors
-
-  defp validate_queue_mode(errors, mode) when is_binary(mode) do
-    valid_modes = ["fifo", "lifo", "priority", "collect"]
-
-    if mode in valid_modes do
-      errors
-    else
-      [
-        "gateway.queue.mode: invalid mode. Valid: #{Enum.join(valid_modes, ", ")}"
-        | errors
-      ]
-    end
-  end
-
-  defp validate_queue_mode(errors, _), do: ["gateway.queue.mode: must be a string" | errors]
-
-  defp validate_queue_drop(errors, nil), do: errors
-
-  defp validate_queue_drop(errors, drop) when is_binary(drop) do
-    valid_drops = ["oldest", "newest", "reject"]
-
-    if drop in valid_drops do
-      errors
-    else
-      [
-        "gateway.queue.drop: invalid drop policy. Valid: #{Enum.join(valid_drops, ", ")}"
-        | errors
-      ]
-    end
-  end
-
-  defp validate_queue_drop(errors, _), do: ["gateway.queue.drop: must be a string" | errors]
-
-  @doc """
   Validates logging configuration.
   """
   @spec validate_logging(map(), [String.t()]) :: [String.t()]
@@ -1252,20 +1212,6 @@ defmodule LemonCore.Config.Validator do
 
   def validate_non_negative_integer(errors, _value, path) do
     ["#{path}: must be a non-negative integer" | errors]
-  end
-
-  defp validate_optional_positive_integer(errors, nil, _path), do: errors
-
-  defp validate_optional_positive_integer(errors, value, path) when is_integer(value) do
-    if value > 0 do
-      errors
-    else
-      ["#{path}: must be a positive integer" | errors]
-    end
-  end
-
-  defp validate_optional_positive_integer(errors, _value, path) do
-    ["#{path}: must be a positive integer" | errors]
   end
 
   @doc "Prepends an error unless `value` is `nil` or a number in `0.0..1.0`."

@@ -178,6 +178,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   errors instead of silently becoming `off`, unlimited or deny-all. An
   unloadable config fails gateway and channel startup instead of starting with
   every channel disabled (#617).
+- Gateway: `[gateway]` is read live from the canonical config, so a reload
+  reaches every gateway reader (including `max_concurrent_runs` for the running
+  gateway) without a restart. `[gateway.queue] mode = "fifo"` (or any other
+  value `lemon config validate` accepted) no longer crashes boot: the section
+  was never read and is now ignored with a warning. Binding transports from
+  config no longer create atoms, and TOML project roots resolve for channel
+  bindings (#697).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
@@ -215,6 +222,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `LemonCore.Store.JsonlBackend` (lemon_core 0.3.0). Run
   `mix lemon.store.migrate_jsonl_to_sqlite` before upgrading a JSONL store (#608).
 - Obsolete Telegram `outbound_send_delay_ms` and poller stale-time settings (#580).
+- **Breaking:** `[gateway.queue]` (never read; now ignored with a warning) and the gateway's
+  second config plane: `LemonGateway.Config`, `LemonGateway.ConfigLoader`,
+  `LemonGateway.Cwd`, `LemonGateway.BindingResolver`/`Binding`,
+  `LemonGateway.Project`, `LemonChannels.GatewayConfig` and
+  `LemonCore.EngineInfoBridge.gateway_config/0`. Read `LemonCore.GatewayConfig`
+  and `LemonCore.Cwd`. The voice config no longer falls back to
+  `:lemon_gateway` application env keys (#617, #697).
 
 ### Security
 

@@ -252,11 +252,11 @@ defmodule LemonCore.Config.GatewayTest do
       assert length(config.bindings) == 2
 
       [first, second] = config.bindings
-      assert first.transport == :demo
+      assert first.transport == "demo"
       assert first.chat_id == 123_456_789
       assert first.agent_id == "default"
 
-      assert second.transport == :demo
+      assert second.transport == "demo"
       assert second.chat_id == 987_654_321
       assert second.agent_id == "assistant"
     end
@@ -264,34 +264,6 @@ defmodule LemonCore.Config.GatewayTest do
     test "returns empty list when no bindings" do
       config = Gateway.resolve(%{})
       assert config.bindings == []
-    end
-  end
-
-  describe "queue configuration" do
-    test "uses default queue settings" do
-      config = Gateway.resolve(%{})
-
-      assert config.queue.mode == nil
-      assert config.queue.cap == nil
-      assert config.queue.drop == nil
-    end
-
-    test "uses queue settings from config" do
-      settings = %{
-        "gateway" => %{
-          "queue" => %{
-            "mode" => "fifo",
-            "cap" => 100,
-            "drop" => "oldest"
-          }
-        }
-      }
-
-      config = Gateway.resolve(settings)
-
-      assert config.queue.mode == "fifo"
-      assert config.queue.cap == 100
-      assert config.queue.drop == "oldest"
     end
   end
 
@@ -423,7 +395,6 @@ defmodule LemonCore.Config.GatewayTest do
       assert is_map(config.projects)
       assert is_list(config.bindings)
       assert is_map(config.sms)
-      assert is_map(config.queue)
       assert is_map(config.channels)
       refute Map.has_key?(config, :default_engine)
       refute Map.has_key?(config, :engines)

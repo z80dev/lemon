@@ -3294,7 +3294,7 @@ suppresses bootstrap even when resuming an assistant session.
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `runtime.secret_obfuscation`: opt-in placeholder obfuscation of secrets in provider-visible text ([details](security/secret-obfuscation.md)).
 - `tui`: terminal UI settings.
-- `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
+- `gateway`: Lemon gateway settings, including `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
 - `automation`: cron catch-up and run-history retention.
 - `cron`: cron failure-alert cooldown settings.
@@ -3353,6 +3353,14 @@ Top-level `[gateway]` keys (defaults from `LemonCore.Config.Gateway`):
 `enable_webhook` is validated as a boolean. Invalid execution capacity fails
 startup; there is no fallback to 10. Engine-session ownership is always a
 fail-fast claim, not a configurable lock or timeout.
+
+The gateway reads `[gateway]` live from the canonical config; there is no
+second, boot-time copy. A config reload applies `max_concurrent_runs` to the
+running gateway (a lower limit stops new grants until running work drains) and
+is visible to every gateway and channel reader without a restart. A config that
+cannot be loaded at startup fails startup instead of starting with every
+channel disabled. `[gateway.queue]` was never read and has been removed: it is
+ignored with a warning (`lemon config validate`, `lemon doctor`).
 
 This execution cap does not bound queued Runs or coordinator population.
 Router's `config :lemon_router, run_process_limit: 500` bounds live router

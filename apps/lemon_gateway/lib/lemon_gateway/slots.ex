@@ -5,8 +5,19 @@ defmodule LemonGateway.Slots do
   Acquisition is asynchronous: the owner receives `{:slot_granted, permit_ref}`.
   Cancellation removes waiting admission, but a running owner retains its permit
   until release or death so cancellation cannot oversubscribe the executor.
+
+  The limit is `[gateway] max_concurrent_runs`, re-read on every
+  `:config_reloaded` event: a raised limit grants waiting runs at once, a lowered
+  one stops new grants until running permits drain below it. A start-time `:max`
+  option pins the limit and disables reloading.
   """
   use GenServer
+
+  require Logger
+
+  # `LemonCore.Config.Gateway`'s default, for a test replacement config that
+  # omits the key.
+  @default_max 2
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -37,10 +48,16 @@ defmodule LemonGateway.Slots do
 
   @impl true
   def init({name, opts}) do
-    max = Keyword.get_lazy(opts, :max, fn -> LemonGateway.Config.get(:max_concurrent_runs) end)
+    pinned? = Keyword.has_key?(opts, :max)
 
-    if is_integer(max) and max > 0 do
+    max =
+      Keyword.get_lazy(opts, :max, fn ->
+        LemonCore.GatewayConfig.get(:max_concurrent_runs, @default_max)
+      end)
+
+    if valid_max?(max) do
       :ets.new(name, [:named_table, :protected, read_concurrency: true])
+      unless pinned?, do: :ok = LemonCore.Bus.subscribe("system")
 
       state = %{
         table: name,
@@ -102,6 +119,23 @@ defmodule LemonGateway.Slots do
   end
 
   @impl true
+  def handle_info(%LemonCore.Event{type: :config_reloaded}, state) do
+    max = LemonCore.GatewayConfig.get(:max_concurrent_runs, @default_max)
+
+    state =
+      if valid_max?(max) do
+        %{state | max: max}
+      else
+        Logger.error(
+          "gateway.max_concurrent_runs must be a positive integer; keeping #{state.max}"
+        )
+
+        state
+      end
+
+    {:noreply, state |> grant() |> publish()}
+  end
+
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do
     state =
       case Map.get(state.monitors, monitor) do
@@ -111,6 +145,11 @@ defmodule LemonGateway.Slots do
 
     {:noreply, state |> grant() |> publish()}
   end
+
+  # Other `system` bus traffic.
+  def handle_info(_message, state), do: {:noreply, state}
+
+  defp valid_max?(max), do: is_integer(max) and max > 0
 
   defp grant(state) when map_size(state.permits) >= state.max, do: state
 

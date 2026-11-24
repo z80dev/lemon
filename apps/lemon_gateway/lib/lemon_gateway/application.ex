@@ -2,8 +2,9 @@ defmodule LemonGateway.Application do
   @moduledoc """
   OTP application for LemonGateway.
 
-  Starts the execution supervision tree: configuration, the singleton executor,
-  execution permits, run supervisors, and the health check server.
+  Starts the execution supervision tree: the singleton executor, execution
+  permits, run supervisors, and the health check server. Gateway settings are
+  read live from `LemonCore.GatewayConfig`; there is no config process.
 
   Gateway-owned ingress (transport, SMS, voice) is off by default and
   starts only when `:gateway_ingress_enabled` is set for `:lemon_gateway`. See
@@ -17,7 +18,6 @@ defmodule LemonGateway.Application do
     with :ok <- validate_configured_executor() do
       children =
         [
-          LemonGateway.Config,
           # A lost permit authority or registry must stop its Runs before admitting
           # new work; otherwise a restarted counter could oversubscribe execution.
           LemonCore.Supervision.subtree(LemonGateway.ExecutionSupervisor, [
@@ -35,7 +35,6 @@ defmodule LemonGateway.Application do
       # than reaching into this app; register ourselves as the implementation.
       LemonCore.EngineInfoBridge.configure(
         transport_registry: LemonGateway.TransportRegistry,
-        gateway_config: LemonGateway.Config,
         sms_inbox: LemonGateway.Sms.Inbox
       )
 

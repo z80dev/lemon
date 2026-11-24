@@ -219,6 +219,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - Invalid `[features]` states, `[runtime] max_tool_turns` and profile tool
   policies are kept raw and reported by validation (`Validator.profile_errors/1`)
   instead of becoming `:off`, `:infinity` or deny-all (#617).
+- `LemonCore.BindingResolver` matches string binding transports by name and
+  reads string-keyed project roots; `[[gateway.bindings]] transport` no longer
+  creates atoms (#697).
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
   (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase
@@ -319,6 +322,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- **Breaking (0.3.0):** `[gateway.queue]` (`Config.Gateway` `:queue`,
+  `Validator.validate_queue_config/2`); the section is ignored with a
+  deprecation warning (#697).
+- **Breaking (0.3.0):** `LemonCore.EngineInfoBridge.gateway_config/0` and the
+  `:gateway_config` capability (#697).
 - **Breaking (0.3.0):** `LemonCore.Store.JsonlBackend`. The
   `mix lemon.store.migrate_jsonl_to_sqlite` task keeps a private legacy reader;
   run it before upgrading a JSONL store (#608).

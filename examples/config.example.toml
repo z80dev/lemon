@@ -214,11 +214,6 @@ enable_webhook = false
 enable_xmtp = false
 enable_a2a = false
 
-[gateway.queue]
-mode = "collect"
-cap = 50
-drop = "oldest"
-
 # [gateway.telegram]
 # bot_token_secret = "TELEGRAM_BOT_TOKEN"
 # allowed_chat_ids = [12345678]

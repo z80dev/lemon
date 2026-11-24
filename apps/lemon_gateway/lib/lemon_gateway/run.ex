@@ -48,7 +48,8 @@ defmodule LemonGateway.Run do
   }
 
   alias LemonCore.Events
-  alias LemonGateway.{Cwd, Event, ExecutionRequest, Executor, ProgressStore}
+  alias LemonCore.Cwd
+  alias LemonGateway.{Event, ExecutionRequest, Executor, ProgressStore}
   alias LemonCore.ResumeToken
 
   @engine_provenance "lemon"

@@ -825,59 +825,17 @@ defmodule LemonCore.Config.ValidatorTest do
     end
   end
 
-  describe "validate_queue_config/2" do
-    test "validates queue mode" do
-      errors = Validator.validate_queue_config([], %{mode: "fifo"})
-      assert errors == []
+  # #697: [gateway.queue] was never read; every value it used to accept loads
+  # and is reported as having no effect instead of crashing gateway boot.
+  describe "removed [gateway.queue]" do
+    test "every previously accepted value validates and is dropped with a warning" do
+      for mode <- ~w(fifo lifo priority collect), drop <- ~w(oldest newest reject) do
+        settings = %{"gateway" => %{"queue" => %{"mode" => mode, "cap" => 50, "drop" => drop}}}
 
-      errors = Validator.validate_queue_config([], %{mode: "lifo"})
-      assert errors == []
-
-      errors = Validator.validate_queue_config([], %{mode: "priority"})
-      assert errors == []
-
-      errors = Validator.validate_queue_config([], %{mode: "collect"})
-      assert errors == []
-
-      errors = Validator.validate_queue_config([], %{mode: "invalid"})
-      assert Enum.any?(errors, &String.contains?(&1, "mode"))
-    end
-
-    test "validates queue drop policy" do
-      errors = Validator.validate_queue_config([], %{drop: "oldest"})
-      assert errors == []
-
-      errors = Validator.validate_queue_config([], %{drop: "newest"})
-      assert errors == []
-
-      errors = Validator.validate_queue_config([], %{drop: "reject"})
-      assert errors == []
-
-      errors = Validator.validate_queue_config([], %{drop: "invalid"})
-      assert Enum.any?(errors, &String.contains?(&1, "drop"))
-    end
-
-    test "validates queue cap" do
-      errors = Validator.validate_queue_config([], %{cap: 100})
-      assert errors == []
-
-      errors = Validator.validate_queue_config([], %{cap: 0})
-      assert Enum.any?(errors, &String.contains?(&1, "cap"))
-
-      errors = Validator.validate_queue_config([], %{cap: nil})
-      assert errors == []
-    end
-
-    test "accepts nil queue config" do
-      errors = Validator.validate_queue_config([], nil)
-      assert errors == []
-    end
-
-    test "example config queue section passes validation" do
-      # Regression: config.example.toml uses mode = "collect" which was previously rejected
-      example_queue = %{mode: "collect", cap: 50, drop: "oldest"}
-      errors = Validator.validate_queue_config([], example_queue)
-      assert errors == []
+        assert {:ok, config} = Modular.validate_settings(settings)
+        refute Map.has_key?(config.gateway, :queue)
+        assert Enum.any?(Validator.deprecation_warnings(settings), &(&1 =~ "[gateway.queue]"))
+      end
     end
   end
 

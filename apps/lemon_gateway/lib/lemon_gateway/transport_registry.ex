@@ -106,10 +106,8 @@ defmodule LemonGateway.TransportRegistry do
 
   defp maybe_warn_dual_gate(_), do: :ok
 
-  # Primary source of truth: LemonGateway.Config (TOML-backed GenServer).
-  # Fallback: application env override (used in tests).
   defp get_config_boolean(key) do
-    LemonGateway.Config.get_or_env(key, false) == true
+    LemonCore.GatewayConfig.get(key, false) == true
   end
 
   defp transport_enabled?("telegram"), do: get_config_boolean(:enable_telegram)
