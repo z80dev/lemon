@@ -4,6 +4,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   import ExUnit.CaptureLog
 
   alias LemonChannels.Adapters.Discord.Inbound
+  alias LemonChannels.Adapters.Discord.ThreadResolver
   alias LemonChannels.Adapters.Discord.Transport
   alias LemonChannels.Adapters.Discord.TriggerMode
   alias LemonChannels.Discord.KnownTargetStore
@@ -345,9 +346,10 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     channel_id = 1_475_727_417_372_049_419
     thread_id = 1_505_676_123_466_502_334
 
-    message =
-      discord_message("1503803470493257893", "index me", thread_id)
-      |> Map.put("channel", %{
+    message = discord_message("1503803470493257893", "index me", thread_id)
+
+    :ok =
+      ThreadResolver.observe_event(:THREAD_CREATE, %{
         "id" => Integer.to_string(thread_id),
         "parent_id" => Integer.to_string(channel_id),
         "name" => "deploys",
@@ -1246,9 +1248,12 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
         message =
           discord_message(Integer.to_string(message_id), "<@#{@bot_user_id}> typing", thread_id)
-          |> Map.put("thread", %{
+
+        :ok =
+          ThreadResolver.observe_event(:THREAD_CREATE, %{
             "id" => to_string(thread_id),
-            "parent_id" => to_string(channel_id)
+            "parent_id" => to_string(channel_id),
+            "type" => 11
           })
 
         assert {:noreply, state} =
@@ -1459,7 +1464,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
         scope = %LemonCore.ChatScope{
           transport: :discord,
-          chat_id: thread_id,
+          chat_id: parent_channel_id,
           topic_id: thread_id
         }
 
@@ -1474,6 +1479,14 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
             "thread free response now routes",
             thread_id
           )
+
+        # The %Message{} carries no parent; the gateway's THREAD_CREATE did.
+        :ok =
+          ThreadResolver.observe_event(:THREAD_CREATE, %{
+            id: thread_id,
+            parent_id: parent_channel_id,
+            type: 11
+          })
 
         assert {:noreply, routed_state} =
                  Transport.process_event(
@@ -1497,11 +1510,12 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         :ok =
           TriggerMode.clear_topic(
             "default",
-            thread_id,
+            parent_channel_id,
             thread_id
           )
 
-        refute run_request.meta.channel_id == parent_channel_id
+        assert run_request.session_key =~ ":#{parent_channel_id}:"
+        assert run_request.session_key =~ ":#{thread_id}"
       end)
     end)
   end
@@ -1536,18 +1550,19 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     refute_receive {:checkpoint_notice, _, _}
   end
 
+  # Discord sends interactions with a partial channel object; Nostrum keeps it
+  # under :channel.
   defp interaction(name, options, overrides \\ %{}) do
-    Map.merge(
-      %{
-        type: 2,
-        id: "1503803470493257999",
-        channel_id: "1475727417372049419",
-        guild_id: "1475727417372049000",
-        data: %{name: name, options: List.wrap(options)},
-        member: %{user: %{id: "1476753643834183691"}}
-      },
-      overrides
-    )
+    %{
+      type: 2,
+      id: "1503803470493257999",
+      channel_id: "1475727417372049419",
+      guild_id: "1475727417372049000",
+      data: %{name: name, options: List.wrap(options)},
+      member: %{user: %{id: "1476753643834183691"}}
+    }
+    |> Map.merge(overrides)
+    |> then(&Map.put_new(&1, :channel, %{id: &1.channel_id, type: 0}))
   end
 
   defp option(name, value) do
@@ -1571,6 +1586,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       id: "1503803470493258000",
       channel_id: "1475727417372049419",
       guild_id: "1475727417372049000",
+      channel: %{id: "1475727417372049419", type: 0},
       data: %{custom_id: custom_id},
       member: %{user: %{id: "1476753643834183691"}}
     }
@@ -1583,11 +1599,12 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
     with_discord_api(fn ->
       with_router_bridge(fn ->
+        parent_channel_id = 1_475_727_417_372_049_419 + System.unique_integer([:positive])
         thread_id = 1_505_676_123_466_502_334 + System.unique_integer([:positive])
 
         scope = %LemonCore.ChatScope{
           transport: :discord,
-          chat_id: thread_id,
+          chat_id: parent_channel_id,
           topic_id: thread_id
         }
 
@@ -1597,6 +1614,13 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           message_id = 1_503_803_470_493_300_000 + System.unique_integer([:positive])
 
           message = discord_message(Integer.to_string(message_id), text, thread_id)
+
+          :ok =
+            ThreadResolver.observe_event(:THREAD_CREATE, %{
+              id: thread_id,
+              parent_id: parent_channel_id,
+              type: 11
+            })
 
           assert {:noreply, routed_state} =
                    Transport.process_event(
@@ -1618,7 +1642,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
           :ok =
             TriggerMode.clear_topic(
               "default",
-              thread_id,
+              parent_channel_id,
               thread_id
             )
         end
@@ -1643,12 +1667,16 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     }
   end
 
+  # A Nostrum %Message{} has no channel object; the channel cache knows the
+  # channel from the gateway's GUILD_CREATE, as in production.
   defp discord_message(
          id,
          content,
          channel_id \\ 1_475_727_417_372_049_419,
          author \\ %{"id" => "1476753643834183691", "bot" => false}
        ) do
+    :ok = ThreadResolver.observe(%{id: channel_id, type: 0})
+
     %{
       "id" => id,
       "channel_id" => Integer.to_string(channel_id),
