@@ -197,6 +197,11 @@ export class ControlPlaneClient {
 		return this.#frameLog.slice(this.#frameLog.length - limit);
 	}
 
+	/** Record a client-side incident in the `/debug` log alongside the frames. */
+	note(line: string): void {
+		this.#log(`-- ${line}`);
+	}
+
 	/** True when the connected daemon advertises `method` (or before handshake). */
 	supports(method: string): boolean {
 		if (!this.#helloOk) return true;

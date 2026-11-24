@@ -491,6 +491,7 @@ export class AppShell {
 				await this.sessions.create(key, prompt);
 			},
 			closeSession: (key) => this.commandController.previewSessionDelete(key),
+			cwd: this.#cwd,
 			notice: (text, level) => this.events.notice(text, level),
 		});
 		this.appearance = new AppearanceController({
@@ -1553,6 +1554,22 @@ export class AppShell {
 		}
 	}
 
+	/**
+	 * A failure nothing awaited (a stray rejection): one fixed notice, plus a
+	 * `/debug` entry carrying only the error's class, never its message or stack.
+	 */
+	reportStrayFailure(error: unknown): void {
+		this.client.note(`unhandled ${error instanceof Error ? error.name : typeof error}`);
+		this.events.notice("an action failed unexpectedly; nothing was retried — see /debug", "error");
+	}
+
+	/** Run a picker callback whose failure must become a notice, never a stray rejection. */
+	#settle(callback: () => unknown): void {
+		void Promise.resolve()
+			.then(callback)
+			.catch((error: unknown) => this.reportStrayFailure(error));
+	}
+
 	/** A `sessions.reset` is in flight for `session`: nothing may be sent into the generation it deletes. */
 	#refuseDuringReset(session: SessionStore): boolean {
 		if (!session.resetPending) return false;
@@ -1955,7 +1972,7 @@ export class AppShell {
 					detail: () => spec.detail,
 					onSelect: (item) => {
 						this.selectors.close();
-						void spec.onSelect(item);
+						this.#settle(() => spec.onSelect(item));
 					},
 					onCancel: () => {
 						this.selectors.close();
@@ -2008,7 +2025,9 @@ export class AppShell {
 					},
 					onSelect: () => {
 						this.selectors.close();
-						void spec.onConfirm(sourceItems.filter((item) => selected.has(item.value)));
+						this.#settle(() =>
+							spec.onConfirm(sourceItems.filter((item) => selected.has(item.value))),
+						);
 					},
 					onCancel: () => {
 						this.selectors.close();

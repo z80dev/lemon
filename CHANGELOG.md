@@ -171,6 +171,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- TUI: the session switcher marks sessions started from another directory and
+  refuses to switch to them with a notice (focus unchanged, no empty session
+  left behind) instead of an unhandled rejection that could end the process;
+  failed switches and picker callbacks are reported, and one process-level
+  `unhandledRejection` handler turns any stray rejection into a notice and a
+  `/debug` entry (#666).
 - TUI: a request lost after it reached the socket now fails with an
   outcome-unknown `ConnectionLostError` instead of "not sent"; one
   `classifyMutationError` drives every mutation notice. Only explicit refusals
