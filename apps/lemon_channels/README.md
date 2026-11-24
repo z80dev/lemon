@@ -665,7 +665,7 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram.Markdown` | EarmarkParser-based AST renderer producing Telegram entity format with UTF-16 offsets |
 | `Telegram.ResumeIndexStore` | Typed wrapper for Telegram message-id session and resume indices; legacy vendor entries remain readable but are never selected for a top-level run |
 | `Telegram.StateStore` | Typed wrapper for Telegram per-session/per-topic preference state |
-| `Telegram.Truncate` | Truncates messages to 4096 chars while preserving native resume lines |
+| `Telegram.Truncate` | Splits/truncates messages so both the Markdown source and the rendered text fit 4096 UTF-16 units; never splits a code fence or table row that fits in one message (oversized fences/tables become several closed fences/tables, each table repeating its header) and keeps native resume lines on the last message |
 | `Telegram.TriggerMode` | Per-chat/topic `:all` vs `:mentions` mode (ETS-backed) |
 | `Telegram.OffsetStore` | Persists `getUpdates` offset via `LemonCore.Store` |
 | `Telegram.PollerLock` | Global + file-based lock to prevent duplicate pollers for the same account/token |
