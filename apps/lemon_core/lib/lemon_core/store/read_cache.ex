@@ -240,12 +240,25 @@ defmodule LemonCore.Store.ReadCache do
   def list(store \\ @default_store, domain)
 
   def list(store, domain) do
+    case fetch_all(store, domain) do
+      {:ok, entries} -> entries
+      :uncached -> []
+    end
+  end
+
+  @doc """
+  All cached entries for a domain, or `:uncached` when this store has no live
+  mirror for it (never mirrored, or its table died with a previous store
+  process). Unlike `list/2`, a missing mirror is not reported as an empty one.
+  """
+  @spec fetch_all(store() | tables(), atom()) :: {:ok, [{term(), term()}]} | :uncached
+  def fetch_all(store \\ @default_store, domain) do
     case resolve(store, domain) do
-      nil -> []
-      table -> :ets.tab2list(table)
+      nil -> :uncached
+      table -> {:ok, :ets.tab2list(table)}
     end
   rescue
-    ArgumentError -> []
+    ArgumentError -> :uncached
   end
 
   # -- Internals -----------------------------------------------------------

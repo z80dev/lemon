@@ -58,6 +58,9 @@ defmodule LemonCore.Store do
   writes only after the backend confirms, so the cache can never advertise a
   value the backend rejected. Consequences worth knowing:
 
+    * A table is published as cached only once its warm-up read succeeded.
+      A table whose warm-up failed stays uncached (reads reach the backend and
+      surface its error) until the next start or `register_cached_table/2`.
     * Generic writes (`put/4`, `delete/3`, `compare_and_swap/5`, ...) are
       synchronous, so a read taken after one returns cannot observe the
       previous value.
@@ -455,10 +458,12 @@ defmodule LemonCore.Store do
   """
   @spec list(server(), table :: atom()) :: [{term(), term()}]
   def list(server \\ __MODULE__, table) do
-    if cached_table?(server, table) do
-      ReadCache.list(server, table)
+    with true <- cached_table?(server, table),
+         {:ok, entries} <- ReadCache.fetch_all(server, table) do
+      entries
     else
-      safe_store_call(server, {:generic_list, table}, [], op: :list, table: table, key: :all)
+      _uncached ->
+        safe_store_call(server, {:generic_list, table}, [], op: :list, table: table, key: :all)
     end
   end
 
@@ -687,29 +692,27 @@ defmodule LemonCore.Store do
   # Server-side only: called from `init/1` and the register-cached-table call,
   # both of which run in the store process. It lives below this line because
   # everything that touches the cache does.
+  #
+  # Returns the tables whose complete contents now sit in the cache. A table
+  # whose backend read failed is left out: publishing it would make readers
+  # trust an empty mirror, so it stays uncached and its reads hit the backend.
   defp warm_cached_tables(backend, backend_state, read_cache, tables) do
-    Enum.reduce(tables, backend_state, fn table, acc_state ->
+    Enum.reduce(tables, {backend_state, []}, fn table, {acc_state, warmed} ->
       case backend.list(acc_state, table) do
         {:ok, entries, next_state} ->
           Enum.each(entries, fn {key, value} ->
             ReadCache.put(read_cache, table, key, value)
           end)
 
-          next_state
+          {next_state, warmed ++ [table]}
 
         {:error, reason} ->
-          Logger.warning(
-            "Store cache warm failed table=#{inspect(table)} reason=#{inspect(reason)}"
-          )
-
-          acc_state
+          log_backend_error(:warm_cache, table, :all, reason)
+          {acc_state, warmed}
 
         other ->
-          Logger.warning(
-            "Store cache warm failed table=#{inspect(table)} reason=#{inspect(other)}"
-          )
-
-          acc_state
+          log_backend_unexpected(:warm_cache, table, :all, other)
+          {acc_state, warmed}
       end
     end)
   end
@@ -720,11 +723,15 @@ defmodule LemonCore.Store do
     name = Keyword.get(opts, :name, __MODULE__)
     config = resolve_config(name, opts)
 
+    # A previous incarnation's list names mirrors that died with it. Until this
+    # one has warmed its own, readers must go to the backend.
+    Hooks.publish(name, :cached_tables, [])
+
     backend = Keyword.get(config, :backend, @default_backend)
     backend_opts = Keyword.get(config, :backend_opts, [])
     finalize_run_hooks = List.wrap(Keyword.get(config, :finalize_run_hooks, []))
 
-    cached_tables =
+    configured_tables =
       Enum.uniq(
         List.wrap(Keyword.get(config, :cached_tables, @default_cached_tables)) ++
           Hooks.registered(name, :cached_tables)
@@ -733,15 +740,14 @@ defmodule LemonCore.Store do
     case backend.init(backend_opts) do
       {:ok, backend_state} ->
         # Initialize this instance's read-through cache for high-traffic domains
-        read_cache = ReadCache.init(name, cached_tables)
+        read_cache = ReadCache.init(name, configured_tables)
 
-        backend_state =
-          warm_cached_tables(backend, backend_state, read_cache, cached_tables)
+        {backend_state, cached_tables} =
+          warm_cached_tables(backend, backend_state, read_cache, configured_tables)
 
-        # Published only once the tables hold the backend's contents: callers
-        # read this to decide whether to trust the cache, and between the
-        # publish and the warm a mirrored table would look authoritative while
-        # still being empty.
+        # Only tables that warmed are published, and only once they hold the
+        # backend's contents: callers read this to decide whether to trust the
+        # cache, and an unwarmed mirror would answer every read with nothing.
         Hooks.publish(name, :cached_tables, cached_tables)
 
         # Schedule periodic sweep for expired entries
@@ -857,10 +863,12 @@ defmodule LemonCore.Store do
       {:reply, :ok, state}
     else
       read_cache = ReadCache.add_table(state.name, state.read_cache, table)
-      cached_tables = state.cached_tables ++ [table]
 
-      backend_state =
+      # A failed warm leaves the table unpublished; registering it again retries.
+      {backend_state, warmed} =
         warm_cached_tables(state.backend, state.backend_state, read_cache, [table])
+
+      cached_tables = state.cached_tables ++ warmed
 
       # Publish after warming, for the reason given in `init/1`.
       Hooks.publish(state.name, :cached_tables, cached_tables)
@@ -1694,6 +1702,8 @@ defmodule LemonCore.Store do
 
   @impl true
   def terminate(_reason, state) do
+    # The mirrors die with this process; readers must not trust them meanwhile.
+    Hooks.publish(state.name, :cached_tables, [])
     if function_exported?(state.backend, :close, 1), do: state.backend.close(state.backend_state)
     :ok
   end

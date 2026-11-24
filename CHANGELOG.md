@@ -171,6 +171,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- The Store publishes a table as read-cached only after its warm-up read
+  succeeded, and clears the published list when a store starts or stops. A table
+  whose warm-up failed stays uncached, so reads reach the backend and surface
+  its error instead of an empty mirror (`RunStore.list_sessions`, channel known
+  targets and gateway progress no longer read as empty). SQLite table reads
+  decode every row and report the number of corrupt rows (#618).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

@@ -210,6 +210,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `LemonCore.Store` publishes a cached table only after its warm-up read
+  succeeded and clears the published list on start and stop, so a failed warm
+  no longer turns `list/2` into `[]`; `ReadCache.fetch_all/2` returns
+  `:uncached` for a missing mirror. `SqliteBackend.list/2` decodes past bad rows
+  and its `:sqlite_corrupt_data` context carries `:corrupt_rows` (#618).
 - `Durable.sync_file` no longer leaks a stray port `EXIT` message to its caller
   (#555).
 - Credential redaction classifies trailing separator-delimited and camelCase

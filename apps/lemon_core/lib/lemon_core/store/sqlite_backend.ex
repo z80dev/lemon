@@ -965,18 +965,27 @@ defmodule LemonCore.Store.SqliteBackend do
       {:error, reason}
   end
 
+  # Every row is decoded: an undecodable row is skipped rather than ending the
+  # scan, and the result is still one explicit corruption error, never a
+  # silently shortened table. The error names the first bad row and counts all
+  # of them (`:corrupt_rows`), so an operator sees the extent of the damage.
   defp decode_rows(rows, table) do
-    Enum.reduce_while(rows, {:ok, []}, fn [key_blob, value_blob], {:ok, acc} ->
-      with {:ok, key} <- decode(key_blob, table: table, field: :key),
-           {:ok, value} <- decode(value_blob, table: table, field: :value, key: key) do
-        {:cont, {:ok, [{key, value} | acc]}}
-      else
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, items} -> {:ok, Enum.reverse(items)}
-      {:error, reason} -> {:error, reason}
+    {items, corrupt, first_error} =
+      Enum.reduce(rows, {[], 0, nil}, fn [key_blob, value_blob], {acc, corrupt, first} ->
+        with {:ok, key} <- decode(key_blob, table: table, field: :key),
+             {:ok, value} <- decode(value_blob, table: table, field: :value, key: key) do
+          {[{key, value} | acc], corrupt, first}
+        else
+          {:error, reason} -> {acc, corrupt + 1, first || reason}
+        end
+      end)
+
+    case first_error do
+      nil ->
+        {:ok, Enum.reverse(items)}
+
+      {:sqlite_corrupt_data, context, message} ->
+        {:error, {:sqlite_corrupt_data, Map.put(context, :corrupt_rows, corrupt), message}}
     end
   end
 end
