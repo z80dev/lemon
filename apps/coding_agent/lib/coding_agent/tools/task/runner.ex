@@ -9,6 +9,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   """
 
   alias CodingAgent.Session
+  alias CodingAgent.Session.Presentation
   alias CodingAgent.Tools.Task.{Control, Restore, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
@@ -381,8 +382,8 @@ defmodule CodingAgent.Tools.Task.Runner do
         maybe_emit_action_update(
           on_update,
           description,
-          internal_tool_title(name, args),
-          internal_tool_kind(name),
+          Presentation.tool_title(name, args),
+          Presentation.tool_kind(name),
           "started",
           args
         )
@@ -410,8 +411,8 @@ defmodule CodingAgent.Tools.Task.Runner do
         maybe_emit_action_update(
           on_update,
           description,
-          internal_tool_title(name, args),
-          internal_tool_kind(name),
+          Presentation.tool_title(name, args),
+          Presentation.tool_kind(name),
           "updated",
           args
         )
@@ -446,7 +447,7 @@ defmodule CodingAgent.Tools.Task.Runner do
           on_update,
           description,
           "#{if is_error, do: "Failed", else: "Completed"}: #{name}",
-          internal_tool_kind(name),
+          Presentation.tool_kind(name),
           if(is_error, do: "error", else: "completed"),
           %{name: name, result: result}
         )
@@ -827,153 +828,4 @@ defmodule CodingAgent.Tools.Task.Runner do
 
     :ok
   end
-
-  defp internal_tool_kind(name) do
-    case String.downcase(name || "") do
-      "bash" -> :command
-      "read" -> :tool
-      "write" -> :file_change
-      "edit" -> :file_change
-      "glob" -> :tool
-      "grep" -> :tool
-      "websearch" -> :web_search
-      "webfetch" -> :web_search
-      "browser_" <> _ -> :browser
-      "task" -> :subagent
-      "agent" -> :subagent
-      "cron" -> :subagent
-      _ -> :tool
-    end
-  end
-
-  defp internal_tool_title(name, args) do
-    a = stringify_keys(args)
-
-    case String.downcase(name || "") do
-      "bash" ->
-        cmd = a["command"] || ""
-        cmd_preview = cmd |> String.split("\n") |> hd() |> String.slice(0, 60)
-        "`#{cmd_preview}`"
-
-      "read" ->
-        path = a["path"] || a["file_path"] || ""
-        "read: `#{path_label(path)}`"
-
-      "write" ->
-        path = a["path"] || a["file_path"] || ""
-        "write: `#{path_label(path)}`"
-
-      "edit" ->
-        path = a["path"] || a["file_path"] || ""
-        "edit: `#{path_label(path)}`"
-
-      "glob" ->
-        "glob: `#{a["pattern"] || ""}`"
-
-      "grep" ->
-        pattern = String.slice(a["pattern"] || "", 0, 30)
-        path = a["path"]
-
-        if is_binary(path) and path != "" do
-          "grep: `#{pattern}` in #{path_label(path)}"
-        else
-          "grep: `#{pattern}`"
-        end
-
-      "websearch" ->
-        "search: #{String.slice(a["query"] || "", 0, 50)}"
-
-      "webfetch" ->
-        "fetch: #{String.slice(a["url"] || "", 0, 50)}"
-
-      "browser_navigate" ->
-        "browser: #{String.slice(a["url"] || "", 0, 50)}"
-
-      "browser_click" ->
-        "browser click: #{String.slice(a["selector"] || "", 0, 50)}"
-
-      "browser_type" ->
-        "browser type: #{String.slice(a["selector"] || "", 0, 50)}"
-
-      "browser_hover" ->
-        "browser hover: #{String.slice(a["selector"] || "", 0, 50)}"
-
-      "browser_select_option" ->
-        "browser select option: #{String.slice(a["selector"] || "", 0, 50)}"
-
-      "browser_upload_file" ->
-        "browser upload file"
-
-      "browser_download" ->
-        "browser download"
-
-      "browser_press" ->
-        "browser key: #{String.slice(a["key"] || "", 0, 30)}"
-
-      "browser_scroll" ->
-        "browser scroll"
-
-      "browser_back" ->
-        "browser back"
-
-      "browser_events" ->
-        "browser events"
-
-      "browser_get_cookies" ->
-        "browser cookies"
-
-      "browser_set_cookies" ->
-        "browser set cookies"
-
-      "browser_clear_state" ->
-        "browser clear state"
-
-      "browser_snapshot" ->
-        "browser snapshot"
-
-      "browser_get_content" ->
-        "browser content"
-
-      "browser_wait_for_selector" ->
-        "browser wait"
-
-      "browser_evaluate" ->
-        "browser evaluate"
-
-      "browser_screenshot" ->
-        "browser screenshot"
-
-      "task" ->
-        "task: #{String.slice(a["description"] || a["prompt"] || "", 0, 50)}"
-
-      "agent" ->
-        "agent: #{String.slice(a["prompt"] || a["description"] || "", 0, 50)}"
-
-      "cron" ->
-        "cron: #{String.slice(a["prompt"] || "", 0, 50)}"
-
-      n ->
-        n
-    end
-  end
-
-  defp path_label(path) when is_binary(path) do
-    parts = Path.split(path)
-
-    case length(parts) do
-      n when n > 2 -> Path.join(Enum.take(parts, -2))
-      _ -> path
-    end
-  end
-
-  defp path_label(other), do: inspect(other)
-
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-      {k, v} -> {k, v}
-    end)
-  end
-
-  defp stringify_keys(_), do: %{}
 end

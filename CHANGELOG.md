@@ -459,6 +459,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   approvals now carry `command`, `path`, `plan` and an argument preview with
   `truncated`/`planTruncated` flags; a truncated card or plan cannot be approved
   until the full request loads (#654).
+- Each native task child now has its own supervised owner instead of one
+  node-wide coordinator: a child whose session shutdown blocks no longer stalls
+  any other child's cancel, message or completion, the worker sends its
+  completion followup before its owner sees the turn end (so a slow or
+  restarted owner can neither lose nor repeat it), a crashed owner adopts its
+  live worker and session (a second crash terminalizes the child), and terminal
+  children are pruned after five minutes (#634).
+- Task slots are re-entrant per lineage, so a child that waits on its own
+  descendants no longer deadlocks the eight-slot pool; `/bg` sessions use their
+  own `background_run_max_concurrency` pool; joins without a timeout yield after
+  `task_join_timeout_ms` (default 30 minutes) instead of waiting forever (#631).
 
 ### Removed
 

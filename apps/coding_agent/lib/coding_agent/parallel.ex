@@ -2,20 +2,25 @@ defmodule CodingAgent.Parallel do
   @moduledoc """
   Concurrency control utilities for task execution.
 
-  Native tasks and background sessions share the monitored TaskSemaphore.
+  Native task lineages share the monitored TaskSemaphore; background runs have
+  their own BackgroundRunSemaphore, so idle `/bg` sessions never block a task.
   """
 
   defmodule Semaphore do
     @moduledoc """
     A counting semaphore implemented as a GenServer.
 
-    Limits the number of concurrent operations. Callers block on `acquire/1`
+    Limits the number of concurrent operations. Callers block on `acquire`
     until a slot becomes available, then must call `release/1` when done.
 
     Slots belong to the acquiring process and are reclaimed when it exits.
-    Each acquisition consumes a slot, including repeated acquisitions by the
-    same caller; acquiring again when all slots are held blocks until another
-    caller releases a slot. Each successful acquisition needs its own release.
+    An anonymous acquisition (`acquire/1`) always consumes its own slot,
+    including repeated acquisitions by the same caller. A keyed acquisition
+    (`acquire/3`) is re-entrant along a lineage: when the caller's key or any
+    listed ancestor key already holds a slot, the caller joins that slot instead
+    of taking another. A slot is freed when its last holder releases or exits.
+    This lets a child block on its own descendants without deadlocking the pool.
+    Each successful acquisition needs its own release.
     """
 
     use GenServer
@@ -40,19 +45,26 @@ defmodule CodingAgent.Parallel do
     end
 
     @doc """
-    Acquire a semaphore slot. Blocks until a slot is available.
+    Acquire a slot of its own. Blocks until a slot is available.
     """
     @spec acquire(t()) :: :ok
-    def acquire(semaphore) do
+    def acquire(semaphore), do: acquire(semaphore, nil, [])
+
+    @doc """
+    Acquire a slot for `key`, joining the slot already held by `key` or by any
+    of its `lineage` keys (nearest ancestor first). Blocks until granted.
+    """
+    @spec acquire(t(), term(), [term()]) :: :ok
+    def acquire(semaphore, key, lineage) when is_list(lineage) do
       # Caller policy is to wait for capacity until release or caller death.
       # The server defers its reply and monitors waiters; a call timeout without
       # cancelling the queued acquisition could leak a subsequently granted slot.
-      GenServer.call(semaphore, :acquire, :infinity)
+      GenServer.call(semaphore, {:acquire, key, lineage}, :infinity)
     end
 
     @doc """
-    Release one slot held by the calling process, allowing a waiter to proceed.
-    Releases from processes that hold no slots are ignored.
+    Release one acquisition held by the calling process, allowing a waiter to
+    proceed. Releases from processes that hold nothing are ignored.
     """
     @spec release(t()) :: :ok
     def release(semaphore) do
@@ -71,28 +83,32 @@ defmodule CodingAgent.Parallel do
 
     @impl true
     def init(max) do
-      {:ok, %{max: max, current: 0, waiters: :queue.new(), holders: %{}, monitors: %{}}}
+      {:ok, %{max: max, waiters: :queue.new(), holders: %{}, monitors: %{}, slots: %{}}}
     end
 
     @impl true
-    def handle_call(:acquire, {pid, _tag} = from, state) do
+    def handle_call({:acquire, key, lineage}, {pid, _tag} = from, state) do
       ref = Process.monitor(pid)
+      # An anonymous acquisition is keyed by its own, never-shared reference.
+      key = if is_nil(key), do: ref, else: key
 
-      if state.current < state.max do
-        {:reply, :ok, grant(state, pid, ref)}
-      else
-        state = %{
-          state
-          | waiters: :queue.in(ref, state.waiters),
-            monitors: Map.put(state.monitors, ref, {:waiter, from})
-        }
+      case grantable(state, key, lineage) do
+        {:ok, slot} ->
+          {:reply, :ok, grant(state, pid, ref, slot)}
 
-        {:noreply, state}
+        :wait ->
+          state = %{
+            state
+            | waiters: :queue.in(ref, state.waiters),
+              monitors: Map.put(state.monitors, ref, {:waiter, from, key, lineage})
+          }
+
+          {:noreply, state}
       end
     end
 
     def handle_call(:available, _from, state) do
-      {:reply, max(state.max - state.current, 0), state}
+      {:reply, max(state.max - map_size(state.slots), 0), state}
     end
 
     @impl true
@@ -110,10 +126,10 @@ defmodule CodingAgent.Parallel do
     @impl true
     def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
       case Map.get(state.monitors, ref) do
-        {:holder, ^pid} ->
+        {:holder, ^pid, _slot} ->
           {:noreply, state |> remove_holder(pid, ref) |> drain_waiters()}
 
-        {:waiter, _from} ->
+        {:waiter, _from, _key, _lineage} ->
           {:noreply, %{state | monitors: Map.delete(state.monitors, ref)}}
 
         nil ->
@@ -121,56 +137,69 @@ defmodule CodingAgent.Parallel do
       end
     end
 
-    defp grant(state, pid, ref) do
+    defp grantable(state, key, lineage) do
+      cond do
+        slot = Enum.find([key | lineage], &Map.has_key?(state.slots, &1)) -> {:ok, slot}
+        map_size(state.slots) < state.max -> {:ok, key}
+        true -> :wait
+      end
+    end
+
+    defp grant(state, pid, ref, slot) do
       %{
         state
-        | current: state.current + 1,
+        | slots: Map.update(state.slots, slot, 1, &(&1 + 1)),
           holders: Map.update(state.holders, pid, [ref], &[ref | &1]),
-          monitors: Map.put(state.monitors, ref, {:holder, pid})
+          monitors: Map.put(state.monitors, ref, {:holder, pid, slot})
       }
     end
 
     defp remove_holder(state, pid, ref) do
+      {:holder, ^pid, slot} = Map.fetch!(state.monitors, ref)
+
       holders =
         case List.delete(Map.fetch!(state.holders, pid), ref) do
           [] -> Map.delete(state.holders, pid)
           refs -> Map.put(state.holders, pid, refs)
         end
 
-      %{
-        state
-        | current: state.current - 1,
-          holders: holders,
-          monitors: Map.delete(state.monitors, ref)
-      }
+      slots =
+        case Map.fetch!(state.slots, slot) do
+          1 -> Map.delete(state.slots, slot)
+          count -> Map.put(state.slots, slot, count - 1)
+        end
+
+      %{state | slots: slots, holders: holders, monitors: Map.delete(state.monitors, ref)}
     end
 
-    defp drain_waiters(%{current: current, max: max} = state) when current >= max,
-      do: state
-
+    # Waiters are granted in FIFO order. A waiter whose lineage already holds a
+    # slot needs no free slot, so it may be granted past a blocked head.
     defp drain_waiters(state) do
-      case :queue.out(state.waiters) do
-        {{:value, ref}, rest} ->
-          state = %{state | waiters: rest}
-
+      {waiters, state} =
+        state.waiters
+        |> :queue.to_list()
+        |> Enum.reduce({[], state}, fn ref, {kept, state} ->
           case Map.get(state.monitors, ref) do
-            {:waiter, {pid, _tag} = from} ->
-              if Process.alive?(pid) do
-                state = grant(state, pid, ref)
-                GenServer.reply(from, :ok)
-                drain_waiters(state)
-              else
-                Process.demonitor(ref, [:flush])
-                drain_waiters(%{state | monitors: Map.delete(state.monitors, ref)})
+            {:waiter, {pid, _tag} = from, key, lineage} ->
+              case {Process.alive?(pid), grantable(state, key, lineage)} do
+                {false, _grant} ->
+                  Process.demonitor(ref, [:flush])
+                  {kept, %{state | monitors: Map.delete(state.monitors, ref)}}
+
+                {true, {:ok, slot}} ->
+                  GenServer.reply(from, :ok)
+                  {kept, grant(state, pid, ref, slot)}
+
+                {true, :wait} ->
+                  {[ref | kept], state}
               end
 
-            nil ->
-              drain_waiters(state)
+            _ ->
+              {kept, state}
           end
+        end)
 
-        {:empty, _} ->
-          state
-      end
+      %{state | waiters: :queue.from_list(Enum.reverse(waiters))}
     end
   end
 

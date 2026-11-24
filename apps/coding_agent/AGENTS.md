@@ -70,6 +70,11 @@ history, compaction and supervised delegation. The loop/model runtime comes from
 - Supervisor admission failure terminalizes task/graph/budget/progress state.
   Worker/session death must end bounded waits. Completion followup failure does
   not turn a completed task into a failed worker.
+- Each task child has its own supervised owner (`TaskRuntime.Child`); never
+  reintroduce a node-wide coordinator that one child's blocking work can stall.
+  Exactly one of worker and owner finalizes a turn (its claim); the worker sends
+  the followup before the owner sees the turn end. Cross-child reads use the
+  owners' published projections, not calls.
 - Delegated router watcher timeout is tracking loss, not proof that the remote
   run failed. Preserve fixed task/run identity for reconciliation.
 - `BackgroundRun` gives `/bg` its own session without appending to a parent.

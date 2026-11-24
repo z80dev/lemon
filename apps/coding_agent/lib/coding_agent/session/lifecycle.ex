@@ -30,7 +30,7 @@ defmodule CodingAgent.Session.Lifecycle do
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
   alias CodingAgent.ToolPolicy
-  alias CodingAgent.Tools.Task.Params
+  alias CodingAgent.Tools.Task.InvocationAuthority
   alias CodingAgent.Workspace
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.ModelRuntime.StreamOptions
@@ -294,7 +294,7 @@ defmodule CodingAgent.Session.Lifecycle do
         (approval_context || %{})[:shared_memory_grant] == true
       )
       |> Keyword.merge(private_native_opts(approval_context))
-      |> Keyword.put(:native_managed_context, Params.named_messaging_managed?(opts))
+      |> Keyword.put(:native_managed_context, InvocationAuthority.named_messaging_managed?(opts))
       |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
       |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
       |> Keyword.put(:plan_gate, plan_gate)
@@ -750,7 +750,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.merge(private_native_opts(state.approval_context))
       |> Keyword.put(
         :native_managed_context,
-        Params.named_messaging_managed?(state.tool_opts)
+        InvocationAuthority.named_messaging_managed?(state.tool_opts)
       )
 
     lifecycle =
@@ -1017,7 +1017,7 @@ defmodule CodingAgent.Session.Lifecycle do
       Keyword.get(opts, :channel_identity, (approval_context || %{})[:channel_identity])
 
     native_managed? =
-      Params.managed_context?(Map.merge(Map.new(opts), approval_context || %{}))
+      InvocationAuthority.managed_context?(Map.merge(Map.new(opts), approval_context || %{}))
 
     invocation_context_key =
       LemonCore.MapHelpers.get_key(approval_context, :invocation_context_key) ||

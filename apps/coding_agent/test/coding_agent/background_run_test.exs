@@ -25,10 +25,10 @@ defmodule CodingAgent.BackgroundRunTest do
     %{tmp_dir: tmp_dir}
   end
 
-  test "background sessions share native task slots and reclaim a crashed holder" do
+  test "background sessions share their own slots and reclaim a crashed holder" do
     alias CodingAgent.Parallel.Semaphore
 
-    semaphore = Process.whereis(CodingAgent.TaskSemaphore)
+    semaphore = Process.whereis(CodingAgent.BackgroundRunSemaphore)
     slots = Semaphore.available(semaphore)
     assert slots > 0
     Enum.each(1..slots, fn _ -> Semaphore.acquire(semaphore) end)

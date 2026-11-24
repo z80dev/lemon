@@ -245,7 +245,7 @@ The busiest topic and the only one whose subscribers span the umbrella.
 | `:run_completed` (typed) | `LemonGateway.Run` (including admission failures); synthetic completions from `LemonRouter.RunProcess`, `RunProcess.Watchdog`, and `SessionCoordinator` | `Events.RunCompleted` wrapping `Events.Completion`; synthetic ones carry `meta.synthetic == true` |
 | `:run_failed` (typed) | `LemonRouter.RunProcess` (abnormal termination) | `Events.RunFailed` (`run_id`, `session_key`, `reason`) |
 | `:run_phase_changed` (typed) | `LemonRouter.PhasePublisher` (the only publisher; the gateway tracks phases but does not broadcast them) | `Events.RunPhaseChanged`, built with `RunPhaseChanged.build/1` |
-| `:engine_action` (typed) | `LemonGateway.Run`; `CodingAgent.Tools.Task.LiveBridge` and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
+| `:engine_action` (typed) | `LemonGateway.Run`; `CodingAgent.TaskRuntime.Child` (a task's owner) and `Task.Async` for projected child actions; `LemonCore.Event.engine_reasoning/1` | `Events.EngineAction` wrapping `Events.Action` |
 | `:engine_started`, `:engine_completed`, `:engine_event` | `LemonGateway.Run` (native executor events) | plain maps; `:engine_event` is the escape hatch for unrecognised native events (not registered) |
 | `:checkpoint_created` / `_restored` / `_deleted` | `LemonCore.Checkpoint`; remote ones relayed by `LemonGateway.Run` | map (checkpoint id/kind, tool, action, path counts) — also on `session:<key>` (not registered) |
 | `:task_started` / `_completed` / `_error` / `_timeout` / `_aborted` | `CodingAgent.Tools.Task.Async` | map (`task_id`, `run_id`, `parent_run_id`, `session_key`, `agent_id`, …); published to the child run and the parent run |
@@ -257,7 +257,7 @@ requests as direct request/reply calls, not bus events (`:no_client`, `:client_d
 `:timeout`).
 
 Subscribers include `LemonRouter.RunProcess` (also forwards run events to the session
-topic), `LemonRouter.AsyncTaskSurfaceSubscriber`, `CodingAgent.Tools.Task.LiveBridge`,
+topic), `LemonRouter.AsyncTaskSurfaceSubscriber`, `CodingAgent.TaskRuntime.Child`,
 `CodingAgent.Tools.Agent` (completion waits), the execution-node worker
 (`CodingAgent.ExecutionNode.Worker`), `LemonChannels.TypingIndicator`,
 `LemonChannels.UserPromptSurface`, the Discord/Telegram transports,
