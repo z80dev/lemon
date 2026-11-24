@@ -12,6 +12,11 @@
 
 ### Removed
 
+- **Breaking:** removed `CodingAgent.SessionIndex`, `SessionManager.list_sessions/1`
+  and `SessionEntry.session_info/2`; journal appends, checkpoints and
+  `save_to_file/2` take no lock and write no `.index.sqlite3`. Older journals'
+  `sessionInfo` entries are still read and preserved. `SessionMaintenance.execute`
+  is now arity 1 (#695).
 - Removed the unused `CodingAgent.Coordinator` and `ProcessManager.exec_sync/1`
   APIs. Native task execution and background `exec/1` with `poll/2` remain.
 

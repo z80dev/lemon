@@ -1242,8 +1242,9 @@ delete them.
 Active native sessions are never moved or deleted. Artifacts are retained while
 their native session has a live, active, or archived journal. Only managed spill
 directories for orphaned sessions can be swept; arbitrary external targets and
-symlinks are excluded. Native journal listing uses a metadata index that rebuilds
-automatically if missing or stale; no manual repair command is needed.
+symlinks are excluded. Native journals have no metadata index; an
+`.index.sqlite3` file left in a session directory by an older release is unused
+and can be deleted.
 
 The authenticated admin RPC `sessions.maintain` uses `olderThanMs`, `dryRun`
 (default `true`), and optional `confirmToken`. Reports use camelCase keys,

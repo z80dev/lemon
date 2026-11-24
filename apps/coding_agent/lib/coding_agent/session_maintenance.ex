@@ -1,7 +1,7 @@
 defmodule CodingAgent.SessionMaintenance do
   @moduledoc false
 
-  alias CodingAgent.{Config, SessionIndex, SessionRegistry}
+  alias CodingAgent.{Config, SessionRegistry}
   alias CodingAgent.Session.Ownership
 
   @root_lock {__MODULE__, :root_lock}
@@ -58,12 +58,12 @@ defmodule CodingAgent.SessionMaintenance do
 
   # Re-hash candidates before admission, then compare stat fingerprints (no
   # file content) while holding the exclusive root lock for the mutation.
-  def execute(%{root: root, older_than_ms: cutoff} = expected, opts \\ []) do
+  def execute(%{root: root, older_than_ms: cutoff} = expected) do
     guarded(fn ->
       with true <- root == root(),
            {:ok, hashed} <- snapshot(root, cutoff, true),
            true <- hashed == expected do
-        with_root_lock(fn -> execute_locked(root, cutoff, expected, opts) end, :exclusive)
+        with_root_lock(fn -> execute_locked(root, cutoff, expected) end, :exclusive)
       else
         {:error, _} = error -> error
         _ -> {:error, :confirmation_mismatch}
@@ -71,22 +71,17 @@ defmodule CodingAgent.SessionMaintenance do
     end)
   end
 
-  defp execute_locked(root, cutoff, expected, opts) do
+  defp execute_locked(root, cutoff, expected) do
     with {:ok, initial} <- snapshot(root, cutoff, false) do
       paths = Enum.map(initial.journals, & &1.path)
 
       with_files(Enum.sort(paths), fn ->
-        with_directories(initial.directories, fn ->
-          with {:ok, current} <- snapshot(root, cutoff, false),
-               true <- current == without_digests(expected) do
-            execute_candidates(
-              current,
-              Keyword.get(opts, :remove_index, &SessionIndex.remove/1)
-            )
-          else
-            _ -> {:error, :confirmation_mismatch}
-          end
-        end)
+        with {:ok, current} <- snapshot(root, cutoff, false),
+             true <- current == without_digests(expected) do
+          execute_candidates(current)
+        else
+          _ -> {:error, :confirmation_mismatch}
+        end
       end)
     end
   end
@@ -410,12 +405,12 @@ defmodule CodingAgent.SessionMaintenance do
 
   defp spill_name(id), do: Path.basename(Config.spill_dir("/", id))
 
-  defp execute_candidates(plan, remove_index) do
+  defp execute_candidates(plan) do
     initial = %{archived_count: 0, swept_count: 0, verified: false}
 
     result =
       Enum.reduce_while(plan.candidates, {:ok, initial}, fn candidate, {:ok, counts} ->
-        case guarded(fn -> mutate(plan.root, candidate, remove_index) end) do
+        case guarded(fn -> mutate(plan.root, candidate) end) do
           :ok ->
             key = if candidate.kind == :archive, do: :archived_count, else: :swept_count
             {:cont, {:ok, Map.update!(counts, key, &(&1 + 1))}}
@@ -435,7 +430,7 @@ defmodule CodingAgent.SessionMaintenance do
     end
   end
 
-  defp mutate(root, %{kind: :archive} = candidate, remove_index) do
+  defp mutate(root, %{kind: :archive} = candidate) do
     archive = Path.dirname(candidate.destination)
 
     with nil <- Ownership.owner(candidate.path),
@@ -448,8 +443,7 @@ defmodule CodingAgent.SessionMaintenance do
          :ok <- File.rename(candidate.path, candidate.destination) do
       result =
         guarded(fn ->
-          with :ok <- remove_index.(candidate.path),
-               {:error, :enoent} <- File.lstat(candidate.path),
+          with {:error, :enoent} <- File.lstat(candidate.path),
                {:ok, archived} <- revision(candidate.destination),
                # rename(2) keeps the inode and content; only ctime may move.
                true <- Map.delete(archived, :ctime) == Map.delete(revision, :ctime) do
@@ -463,7 +457,7 @@ defmodule CodingAgent.SessionMaintenance do
     end
   end
 
-  defp mutate(root, %{kind: :orphan_artifact} = candidate, _remove_index) do
+  defp mutate(root, %{kind: :orphan_artifact} = candidate) do
     with {:ok, entries} <- tree(root, candidate.path),
          true <- entries == candidate.entries do
       # Delete only the exact snapshotted files; never follow artifact index
@@ -504,11 +498,6 @@ defmodule CodingAgent.SessionMaintenance do
 
   defp with_files([path | rest], fun),
     do: Ownership.with_file(path, fn -> with_files(rest, fun) end)
-
-  defp with_directories([], fun), do: fun.()
-
-  defp with_directories([directory | rest], fun),
-    do: SessionIndex.with_directory_lock(directory, fn -> with_directories(rest, fun) end)
 
   defp collect(items, fun) do
     Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->

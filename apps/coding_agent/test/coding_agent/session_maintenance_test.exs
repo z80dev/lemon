@@ -5,7 +5,6 @@ defmodule CodingAgent.SessionMaintenanceTest do
     Artifacts,
     Config,
     ControlPlaneProvider,
-    SessionIndex,
     SessionMaintenance
   }
 
@@ -173,7 +172,7 @@ defmodule CodingAgent.SessionMaintenanceTest do
     assert_receive {:DOWN, ^monitor, :process, ^holder, :normal}, 5_000
   end
 
-  test "preview does not write journals, archive directories or an index", %{cwd: cwd} do
+  test "preview does not write journals or archive directories", %{cwd: cwd} do
     path = journal(cwd, "cold")
     before = File.read!(path)
     names = File.ls!(Config.sessions_dir(cwd))
@@ -191,13 +190,12 @@ defmodule CodingAgent.SessionMaintenanceTest do
     refute inspect(report) =~ cwd
   end
 
-  test "archives cold journals, removes their index row and retains archived artifacts", %{
+  test "archives cold journals and retains archived artifacts", %{
     cwd: cwd
   } do
     path = journal(cwd, "cold")
     {:ok, uri} = Artifacts.spill("keep archived output", cwd, session_id: "cold")
     {:ok, original_artifact} = Artifacts.resolve(uri, cwd, session_id: "cold")
-    assert {:ok, [_]} = SessionIndex.list(Config.sessions_dir(cwd))
     assert {:ok, report} = preview()
     assert {:ok, executed} = execute(report)
     assert executed.archived_count == 1
@@ -205,7 +203,6 @@ defmodule CodingAgent.SessionMaintenanceTest do
     assert executed.verified
     refute File.exists?(path)
     assert File.regular?(Path.join([Config.sessions_dir(cwd), "archive", "cold.jsonl"]))
-    assert {:ok, []} = SessionIndex.list(Config.sessions_dir(cwd))
     assert {:ok, ^original_artifact} = Artifacts.resolve(uri, cwd, session_id: "cold")
     assert {:ok, next} = preview()
     assert next.archive_count == 0
@@ -413,27 +410,24 @@ defmodule CodingAgent.SessionMaintenanceTest do
     assert File.dir?(Config.spill_dir(cwd, "orphan"))
   end
 
-  test "index mutation failure stops the pass without retrying or sweeping later candidates", %{
+  test "a failed mutation stops the pass without retrying or sweeping later candidates", %{
     cwd: cwd
   } do
-    path = journal(cwd, "cold")
-    {:ok, _} = Artifacts.spill("retain on failure", cwd, session_id: "orphan")
+    journal(cwd, "cold")
+    {:ok, _} = Artifacts.spill("undeletable", cwd, session_id: "orphan-a")
+    {:ok, _} = Artifacts.spill("retain on failure", cwd, session_id: "orphan-b")
+    locked = Config.spill_dir(cwd, "orphan-a")
+    File.chmod!(locked, 0o500)
+    on_exit(fn -> File.chmod(locked, 0o700) end)
     assert {:ok, plan} = SessionMaintenance.plan(@cutoff)
+    assert Enum.map(plan.candidates, & &1.kind) == [:archive, :orphan_artifact, :orphan_artifact]
 
-    assert {:error, {:partial_failure, report}} =
-             SessionMaintenance.execute(plan,
-               remove_index: fn removed ->
-                 send(self(), {:index_remove_attempt, removed})
-                 {:error, :injected_failure}
-               end
-             )
-
+    assert {:error, {:partial_failure, report}} = SessionMaintenance.execute(plan)
     refute report.verified
     assert report.archived_count == 1
     assert report.swept_count == 0
-    assert_received {:index_remove_attempt, ^path}
-    refute_received {:index_remove_attempt, _}
-    assert File.dir?(Config.spill_dir(cwd, "orphan"))
+    assert File.ls!(locked) != []
+    assert File.dir?(Config.spill_dir(cwd, "orphan-b"))
     assert File.regular?(Path.join([Config.sessions_dir(cwd), "archive", "cold.jsonl"]))
   end
 

@@ -172,4 +172,103 @@ defmodule CodingAgent.SessionJournalAppendTest do
     assert body =~ "generate_unique_id(session.by_id)"
     assert source =~ "Map.has_key?(existing_set, id)"
   end
+
+  test "append, checkpoint and save paths take no :global transaction and write no index", %{
+    tmp_dir: dir
+  } do
+    path = Path.join(dir, "unlocked.jsonl")
+    session = Journal.new(dir) |> Journal.persist(path)
+    :erlang.trace_pattern({:global, :_, :_}, true, [])
+    :erlang.trace(self(), true, [:call])
+
+    session =
+      try do
+        session = Journal.append_message(session, %{"role" => "user", "content" => "append"})
+        assert :ok = Journal.checkpoint(session)
+
+        assert :ok =
+                 Journal.append_to_file(
+                   path,
+                   Journal.SessionEntry.custom("lemon.test", %{}, id: "direct", parent_id: nil)
+                 )
+
+        assert :ok = Journal.save_to_file(Path.join(dir, "rewrite.jsonl"), session)
+        session
+      after
+        :erlang.trace(self(), false, [:call])
+        :erlang.trace_pattern({:global, :_, :_}, false, [])
+        Journal.close(session)
+      end
+
+    ref = :erlang.trace_delivered(self())
+    assert_receive {:trace_delivered, _, ^ref}
+    assert global_calls([]) == []
+    assert Journal.entry_count(session) == 1
+    assert File.ls!(dir) |> Enum.sort() == ["rewrite.jsonl", "unlocked.jsonl"]
+  end
+
+  test "a maintenance run holding its locks neither blocks nor crashes a live session append", %{
+    tmp_dir: dir
+  } do
+    {:ok, session} =
+      CodingAgent.Session.start_link(
+        cwd: dir,
+        model: LemonAgent.Test.Mocks.mock_model(),
+        stream_fn:
+          LemonAgent.Test.Mocks.mock_stream_fn_single(
+            LemonAgent.Test.Mocks.assistant_message("appended while maintenance held locks")
+          ),
+        system_prompt: "journal regression",
+        mcp_tools: [],
+        extension_inventory: {[], []}
+      )
+
+    Process.unlink(session)
+    on_exit(fn -> if Process.alive?(session), do: GenServer.stop(session) end)
+    path = CodingAgent.Session.get_state(session).session_file
+    parent = self()
+
+    # Everything SessionMaintenance.execute/1 holds while it mutates: the
+    # exclusive session-root lock and file admission for every journal.
+    maintenance =
+      spawn(fn ->
+        CodingAgent.SessionMaintenance.with_root_lock(
+          fn ->
+            CodingAgent.Session.Ownership.with_file(path, fn ->
+              send(parent, :maintenance_holding)
+
+              receive do
+                :release -> :ok
+              end
+            end)
+          end,
+          :exclusive
+        )
+      end)
+
+    on_exit(fn -> Process.exit(maintenance, :kill) end)
+    assert_receive :maintenance_holding, 10_000
+
+    CodingAgent.Session.subscribe(session)
+    assert :ok = CodingAgent.Session.prompt(session, "append during maintenance")
+    assert_receive {:session_event, _, {:agent_end, _}, _}, 10_000
+    assert :ok = CodingAgent.Session.save(session)
+    assert Process.alive?(session)
+    send(maintenance, :release)
+
+    assert {:ok, journal} = Journal.load_from_file(path)
+
+    assert Enum.any?(Journal.entries(journal), fn entry ->
+             entry.type == :message and
+               entry.message["content"] |> inspect() =~ "appended while maintenance held locks"
+           end)
+  end
+
+  defp global_calls(acc) do
+    receive do
+      {:trace, _, :call, {:global, function, _args}} -> global_calls([function | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
 end
