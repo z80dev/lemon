@@ -112,6 +112,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
   tab makes no service calls and kanban changes appear immediately (#687).
+- Media provider drivers (OpenAI image/TTS/STT/vision/video, Vertex Imagen/Veo,
+  Google TTS, ElevenLabs, Deepgram) moved from `lemon_skills` into `lemon_media`
+  behind `LemonMedia.Providers.run/1` with one shared retry helper; Google
+  service-account tokens are cached until expiry instead of re-signed per job.
+  Channel voice-note transcription and voice replies and the gateway voice
+  call's ElevenLabs synthesis now call the `lemon_media` clients;
+  transcription errors shown in chat carry a redacted provider error label
+  instead of the raw provider message (#722).
+- **Breaking:** media tools (`media_generate_image`, `media_generate_speech`,
+  `media_transcribe_audio`, `media_analyze_image`, `media_generate_video`) now
+  require `provider`; omitting it returns `provider is required` instead of a
+  fabricated local preview. Provider-backed calls get provider-sized default
+  timeouts (2–15 minutes) instead of the local-preview defaults (#664).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -289,6 +302,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   transport for the whole judge and continuation (or crash it on a call
   timeout): the chat gets an immediate acknowledgement and the verdict and run ID
   as a follow-up; a timeout is reported as an unknown outcome (#659).
+- Media jobs never outlive their tool call: a timeout, abort or caller exit kills
+  the job (cancelling its provider request) and records it `cancelled` instead
+  of leaving it `running` and billing after the tool reported failure; the wait
+  uses one fixed deadline that unrelated messages cannot extend, and the
+  timeout error names the job id (#664).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
