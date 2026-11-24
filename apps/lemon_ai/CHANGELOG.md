@@ -48,11 +48,22 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - Unused `RetryHelper.retryable_transport_reason?/1`,
   `OpenCodeGoSession.header_name/0` and the `LemonAi.ProviderSupervisor` wrapper
   module.
+- **Breaking (0.3.0):** opt-in request hedging (#567) is retired (#696): its
+  bounded live measurement showed no tail-latency win and nothing enabled it.
+  The `config :lemon_ai, LemonAi.CallDispatcher, hedging: %{...}` key is no
+  longer read, and `CallDispatcher.hedging_state/2`, the `:hedge_input_tokens`
+  dispatch option and the `[:lemon_ai, :dispatcher, :hedge_started |
+  :hedge_skipped]` telemetry are removed. Migration: delete the `:hedging`
+  key; there is no replacement.
+- **Breaking (0.3.0):** `LemonAi.CallDispatcher` is no longer a process
+  (`start_link/1` and its supervision child are removed). Provider failure
+  summaries for `last_error/1` live in an ETS table owned by `LemonAi.Supervisor`,
+  so model calls no longer make a synchronous call to a shared dispatcher process
+  (#696).
 
 ### Added
 
-- Provider preconnect and opt-in request hedging with dispatcher telemetry
-  (`hedge_started`, `hedge_skipped`) (#567).
+- Provider preconnect (`LemonAi.preconnect/1`) (#567).
 - Opt-in OpenAI Responses over WebSocket with `previous_response_id` chaining
   (`responses_websocket = true`) (#566).
 - Consolidated retry, rate-limit and dedupe seams under `LemonAi.Retry` (#592).

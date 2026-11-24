@@ -1,7 +1,7 @@
 defmodule LemonAi.StatusRedactionTest do
   use ExUnit.Case, async: true
 
-  for module <- [LemonAi.CallDispatcher, LemonAi.CircuitBreaker, LemonAi.EventStream] do
+  for module <- [LemonAi.CircuitBreaker, LemonAi.EventStream] do
     @server module
 
     test "#{module} redacts state, current message, crash reason and debug log" do
