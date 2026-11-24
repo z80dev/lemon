@@ -37,6 +37,8 @@
   its journal; a second crash terminalizes the child. Terminal owners exit after
   `:task_terminal_retention_ms` (default five minutes); broadcasts reserve every
   recipient's capacity before delivering to any (#634).
+- A parent's redirect signal (Redirect or stream-rule injection) no longer
+  cancels its task children or ends their joins; only an abort does (#633).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller
