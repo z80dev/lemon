@@ -16,6 +16,20 @@ defmodule LemonWeb.RpcTest do
     assert code in [:invalid_request, :invalid_params]
   end
 
+  test "connection: false reaches methods that otherwise require a registered socket" do
+    params = %{
+      "sessionKey" => "agent:web_rpc_events:main",
+      "cursor" => %{"version" => 1, "sessionId" => "s", "streamId" => "x", "seq" => 0}
+    }
+
+    assert {:error, %{code: :forbidden}} = Rpc.call("sessions.events", params)
+
+    refute match?(
+             {:error, %{code: :forbidden}},
+             Rpc.call("sessions.events", params, connection: false)
+           )
+  end
+
   test "internal error details never leak exception text" do
     assert %{code: :internal_error, details: nil} =
              Rpc.normalize_error({:internal_error, "Method execution failed", "secret path /x"})

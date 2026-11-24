@@ -190,6 +190,34 @@ defmodule LemonAutomation.Tools.CronTest do
     assert LemonAgent.get_text(result) =~ "prompt is required"
   end
 
+  test "out-of-range or non-integer numeric fields are rejected, not defaulted" do
+    tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
+    base = %{"action" => "add", "schedule" => "* * * * *", "prompt" => "bounded"}
+
+    for {key, value} <- [
+          {"retryBackoffMs", 5_000_000_000},
+          {"jitterSec", "soon"},
+          {"maxRetries", -1},
+          {"timeoutMs", 0}
+        ] do
+      result = call_tool(tool, Map.put(base, key, value))
+      assert %{error: true} = result.details
+      assert LemonAgent.get_text(result) =~ "Invalid job:"
+    end
+
+    assert LemonAutomation.CronManager.list() == []
+
+    added = call_tool(tool, Map.put(base, "jitterSec", "30"))
+    assert added.details["jitterSec"] == 30
+    id = added.details["id"]
+
+    result =
+      call_tool(tool, %{"action" => "update", "jobId" => id, "retryBackoffMs" => 86_400_001})
+
+    assert %{error: true} = result.details
+    assert LemonAgent.get_text(result) =~ "retry_backoff_ms must be an integer"
+  end
+
   test "returns an error for unknown actions" do
     tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
     result = call_tool(tool, %{"action" => "wat"})

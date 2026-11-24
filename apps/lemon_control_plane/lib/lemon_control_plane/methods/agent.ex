@@ -133,6 +133,7 @@ defmodule LemonControlPlane.Methods.Agent do
 
       prompt when is_binary(prompt) and byte_size(prompt) > 0 ->
         with :ok <- validate_context_options(params),
+             :ok <- validate_session_key(Map.get(params, "session_key")),
              {:ok, tool_policy} <- parse_optional_tool_policy(Map.get(params, "tool_policy")),
              :ok <- validate_project_memory_capture(params) do
           {:ok,
@@ -174,15 +175,31 @@ defmodule LemonControlPlane.Methods.Agent do
          {:error, Errors.invalid_params("session_mode must be coding|chat and persona a boolean")}
   end
 
+  # The router owns the session under this key; an empty, blank or malformed
+  # key is refused here, before any run ID or admission row exists.
+  defp validate_session_key(nil), do: :ok
+
+  defp validate_session_key(key) when is_binary(key) and byte_size(key) in 1..1024 do
+    if String.valid?(key) and String.trim(key) != "" and not String.match?(key, ~r/[[:cntrl:]]/u),
+      do: :ok,
+      else: invalid_session_key()
+  end
+
+  defp validate_session_key(_key), do: invalid_session_key()
+
+  defp invalid_session_key do
+    {:error,
+     Errors.invalid_params(
+       "session_key must be a nonblank string of at most 1024 bytes without control characters"
+     )}
+  end
+
   defp parse_optional_tool_policy(nil), do: {:ok, nil}
 
   defp parse_optional_tool_policy(policy) do
     case ToolPolicy.parse(policy) do
-      {:ok, policy} ->
-        {:ok, policy}
-
-      {:error, reason} ->
-        {:error, Errors.invalid_params("tool_policy is invalid", %{reason: inspect(reason)})}
+      {:ok, policy} -> {:ok, policy}
+      {:error, _reason} -> {:error, Errors.invalid_params("tool_policy is invalid")}
     end
   end
 
@@ -317,8 +334,11 @@ defmodule LemonControlPlane.Methods.Agent do
         {:error, :outcome_unknown,
          outcome_unknown("Run submission outcome is unknown", run_id, session_key)}
 
-      {:error, reason} ->
-        {:error, :rejected, Errors.internal_error("Failed to submit run", inspect(reason))}
+      {:error, :invalid_submission} ->
+        {:error, :rejected, Errors.invalid_params("Run submission is invalid")}
+
+      {:error, _reason} ->
+        {:error, :rejected, Errors.internal_error("Failed to submit run")}
     end
   end
 

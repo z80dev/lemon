@@ -130,6 +130,10 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     set_result(c, {:error, :cursor_expired})
     assert {:ok, result} = SessionsEvents.handle(params(c), ctx())
     assert Jason.decode!(Jason.encode!(result)) == fixture["expired"]
+
+    Agent.update(c.state, &%{&1 | snapshots: [native(cursor(2))]})
+    assert {:ok, snapshot} = SessionsSnapshot.handle(%{"sessionKey" => c.key}, ctx())
+    assert Jason.decode!(Jason.encode!(snapshot)) == fixture["snapshot"]
   end
 
   test "replay preserves order, identity, empty batches, and exact live projections", c do
@@ -375,7 +379,7 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     assert {:error, {:forbidden, _, _}} = Task.await(task)
   end
 
-  test "live snapshot exposes its cursor and cursor-only races preserve the double-read fence",
+  test "live snapshot exposes its cursor and a cursor-only race returns the newer cursor",
        c do
     assert {:ok, stable} = SessionsSnapshot.handle(%{"sessionKey" => c.key}, ctx())
     assert stable["consistency"]["eventCursor"] == c.cursor
@@ -383,6 +387,17 @@ defmodule LemonControlPlane.SessionEventReplayTest do
     refute stable["consistency"]["atomic"]
 
     Agent.update(c.state, &%{&1 | snapshots: [native(c.cursor), native(cursor(1))]})
+
+    # The cursor is read with the native projection in one owner call, so a live
+    # event between the two collections only advances it; the client replays.
+    assert {:ok, advanced} = SessionsSnapshot.handle(%{"sessionKey" => c.key}, ctx())
+    assert advanced["status"] == "ok"
+    assert advanced["consistency"]["eventCursor"] == cursor(1)
+    refute Map.has_key?(advanced, "eventCursor")
+
+    Agent.update(c.state, fn state ->
+      %{state | snapshots: [native(c.cursor), %{native(cursor(1)) | revision: "moved"}]}
+    end)
 
     assert {:ok, raced} = SessionsSnapshot.handle(%{"sessionKey" => c.key}, ctx())
     assert raced["status"] == "retry"

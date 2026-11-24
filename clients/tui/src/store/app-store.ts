@@ -1,9 +1,10 @@
 /**
  * Client-wide state: connection, sessions, models, approvals.
  *
- * Sessions are created lazily — an event for an unknown key materializes its
- * store, so background sessions accumulate transcript and unread counts without
- * anyone having switched to them yet (P6 renders that switcher).
+ * Only sessions this client opened (focused, switched to, sent to, or acted
+ * on) have a store. The daemon broadcasts every session's events to every
+ * operator connection, so events for any other key are ignored rather than
+ * materializing transcript, unread or busy state the operator never asked for.
  *
  * Coarse notifications go out on {@link AppStore.events}; fine-grained UI
  * updates are the controllers' business, not the store's.
@@ -34,6 +35,8 @@ export interface AppStoreEventMap {
 	"mode-changed": { mode: SubmissionMode };
 	/** A pending approval was answered, here or elsewhere. Follows `approvals-changed`. */
 	"approval-resolved": { approval: PendingApproval; decision?: string };
+	/** A session's store was dropped; per-session caches elsewhere follow it. */
+	"session-forgotten": { key: string };
 }
 
 /**
@@ -102,7 +105,7 @@ export class AppStore {
 		return this.session(this.#focusedKey);
 	}
 
-	/** Lazily materialize a session store. */
+	/** Open a session: materialize its store. Events never call this for unknown keys. */
 	session(key: string): SessionStore {
 		let store = this.sessions.get(key);
 		if (!store) {
@@ -217,5 +220,6 @@ export class AppStore {
 		// A backlog for a session that no longer exists would be sent at the next
 		// completion of a session that happens to reuse the key.
 		this.queue.clear(key);
+		this.events.emit("session-forgotten", { key });
 	}
 }

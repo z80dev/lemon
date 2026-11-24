@@ -11,7 +11,7 @@ defmodule CodingAgent.Tools.WriteArchive do
   Record.defrecordp(:file_info, Record.extract(:file_info, from_lib: "kernel/include/file.hrl"))
 
   alias CodingAgent.{FileReadTracker, MutationLock}
-  alias CodingAgent.Tools.{CheckpointGuard, FileValidation, Read, ReadArchive}
+  alias CodingAgent.Tools.{BoundedInflate, CheckpointGuard, FileValidation, Read, ReadArchive}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -27,7 +27,7 @@ defmodule CodingAgent.Tools.WriteArchive do
            :ok <- FileValidation.check_mutation_target(path, mutation_opts),
            :ok <- check_abort(signal),
            {:ok, identity, existing} <- existing_archive(path, mutation_opts),
-           {:ok, bytes} <- rewrite(path, existing, member, content),
+           {:ok, bytes} <- rewrite(path, existing, member, content, signal, opts),
            {:ok, checkpoint} <-
              CheckpointGuard.before_mutation([path], cwd, opts, %{
                tool: "write",
@@ -103,17 +103,29 @@ defmodule CodingAgent.Tools.WriteArchive do
   defp archive_error(reason, _path) when is_binary(reason), do: reason
   defp archive_error(reason, path), do: FileValidation.format_file_error(reason, path, "archive")
 
-  defp rewrite(path, existing, member, content) do
+  # Unrelated members are decoded through BoundedInflate under one
+  # :format_max_decoded_bytes budget; a lying or high-ratio member aborts the
+  # write before anything is replaced.
+  defp rewrite(path, existing, member, content, signal, opts) do
     if String.downcase(Path.extname(path)) == ".zip",
-      do: rewrite_zip(existing, member, content),
-      else: rewrite_tar(path, existing, member, content)
+      do: rewrite_zip(existing, member, content, signal, opts),
+      else: rewrite_tar(path, existing, member, content, signal, opts)
   end
 
-  defp rewrite_zip(existing, member, content) do
+  defp rewrite_zip(existing, member, content, signal, opts) do
     with {:ok, records} <- zip_records(existing),
+         :ok <- BoundedInflate.check_entries(length(records), opts),
          :ok <- file_target(records, member),
          :ok <- complete_content(records, member, content),
-         {:ok, files} <- zip_files(existing, records, member, content),
+         {:ok, files} <-
+           zip_files(
+             existing,
+             records,
+             member,
+             content,
+             signal,
+             BoundedInflate.max_decoded_bytes(opts)
+           ),
          {:ok, {_, bytes}} <- :zip.create(~c"archive.zip", files, [:memory]) do
       {:ok, bytes}
     else
@@ -129,8 +141,14 @@ defmodule CodingAgent.Tools.WriteArchive do
       {:ok, records} ->
         {:ok,
          for(
-           zip_file(name: name, info: info) <- records,
-           do: %{name: List.to_string(name), type: file_info(info, :type), info: info}
+           zip_file(name: name, info: info, offset: offset, comp_size: comp_size) <- records,
+           do: %{
+             name: List.to_string(name),
+             type: file_info(info, :type),
+             info: info,
+             offset: offset,
+             comp_size: comp_size
+           }
          )}
 
       _ ->
@@ -138,17 +156,50 @@ defmodule CodingAgent.Tools.WriteArchive do
     end
   end
 
-  defp zip_files(existing, records, member, content) do
-    extracted = if existing, do: :zip.extract(existing, [:memory]), else: {:ok, []}
+  defp zip_files(existing, records, member, content, signal, budget) do
+    pread = fn offset, length ->
+      if offset + length <= byte_size(existing),
+        do: {:ok, binary_part(existing, offset, length)},
+        else: :eof
+    end
 
-    with {:ok, entries} <- extracted do
-      data = Map.new(entries, fn {name, bytes} -> {List.to_string(name), bytes} end)
+    kept =
+      Enum.reduce_while(records, {:ok, [], budget}, fn
+        %{name: ^member}, acc ->
+          {:cont, acc}
 
-      files =
-        for record <- records, record.name != member do
-          {String.to_charlist(record.name), Map.get(data, record.name, ""), record.info}
-        end
+        %{type: :regular} = record, {:ok, files, remaining} ->
+          declared = file_info(record.info, :size)
 
+          case BoundedInflate.zip_member(
+                 pread,
+                 record.offset,
+                 record.comp_size,
+                 declared,
+                 remaining,
+                 signal
+               ) do
+            {:ok, bytes} ->
+              file = {String.to_charlist(record.name), bytes, record.info}
+              {:cont, {:ok, [file | files], remaining - byte_size(bytes)}}
+
+            {:error, :too_large} ->
+              {:halt,
+               {:error,
+                "Archive members exceed their declared sizes or the #{budget}-byte decoded limit (:format_max_decoded_bytes); nothing was written"}}
+
+            {:error, reason} when is_binary(reason) ->
+              {:halt, {:error, reason}}
+
+            {:error, _} ->
+              {:halt, {:error, "Cannot decode ZIP member #{record.name}; nothing was written"}}
+          end
+
+        record, {:ok, files, remaining} ->
+          {:cont, {:ok, [{String.to_charlist(record.name), "", record.info} | files], remaining}}
+      end)
+
+    with {:ok, files, _remaining} <- kept do
       replacement =
         case Enum.find(records, &(&1.name == member)) do
           nil ->
@@ -159,7 +210,7 @@ defmodule CodingAgent.Tools.WriteArchive do
              file_info(record.info, size: byte_size(content))}
         end
 
-      {:ok, files ++ [replacement]}
+      {:ok, Enum.reverse(files, [replacement])}
     end
   end
 
@@ -189,9 +240,10 @@ defmodule CodingAgent.Tools.WriteArchive do
 
   # Keep every unrelated TAR header, payload, link and extension record verbatim.
   # erl_tar validates the stream and supplies resolved PAX/GNU member names.
-  defp rewrite_tar(path, existing, member, content) do
-    with {:ok, raw} <- tar_bytes(path, existing),
+  defp rewrite_tar(path, existing, member, content, signal, opts) do
+    with {:ok, raw} <- tar_bytes(path, existing, signal, BoundedInflate.max_decoded_bytes(opts)),
          {:ok, table} <- :erl_tar.table({:binary, raw}, [:verbose]),
+         :ok <- BoundedInflate.check_entries(length(table), opts),
          records =
            Enum.map(table, fn {name, type, size, time, mode, uid, gid} ->
              %{
@@ -218,10 +270,30 @@ defmodule CodingAgent.Tools.WriteArchive do
     end
   end
 
-  defp tar_bytes(_path, nil), do: {:ok, :binary.copy(<<0>>, 1024)}
+  defp tar_bytes(_path, nil, _signal, _limit), do: {:ok, :binary.copy(<<0>>, 1024)}
 
-  defp tar_bytes(path, existing),
-    do: {:ok, if(compressed?(path), do: :zlib.gunzip(existing), else: existing)}
+  defp tar_bytes(path, existing, signal, limit) do
+    cond do
+      not compressed?(path) ->
+        {:ok, existing}
+
+      true ->
+        case BoundedInflate.gunzip(existing, limit, signal) do
+          {:ok, raw} ->
+            {:ok, raw}
+
+          {:error, :too_large} ->
+            {:error,
+             "Decompressed archive exceeds the #{limit}-byte limit (:format_max_decoded_bytes); nothing was written"}
+
+          {:error, reason} when is_binary(reason) ->
+            {:error, reason}
+
+          {:error, _} ->
+            {:error, "Cannot rewrite TAR archive: invalid gzip data"}
+        end
+    end
+  end
 
   defp compressed?(path), do: String.ends_with?(String.downcase(path), [".tar.gz", ".tgz"])
 

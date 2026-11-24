@@ -3,6 +3,7 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
   Inbound message normalization for Discord.
   """
 
+  alias LemonChannels.Adapters.Discord.ThreadResolver
   alias LemonCore.InboundMessage
 
   @doc "Download bounded CDN image attachments after authorization."
@@ -38,15 +39,24 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
   @spec normalize_message(map(), binary(), map()) :: {:ok, InboundMessage.t()} | {:error, term()}
   def normalize_message(message, account_id, raw)
       when is_map(message) and is_binary(account_id) do
-    thread_id = fetch_thread_id(message, raw)
-    channel_id = fetch_channel_id(message, raw, thread_id)
+    guild_id = fetch_id(message, :guild_id)
 
+    with {:ok, location} <- ThreadResolver.resolve(fetch_id(message, :channel_id), nil, guild_id) do
+      build_inbound(message, account_id, raw, guild_id, location)
+    end
+  end
+
+  def normalize_message(_, _, _), do: {:error, :unsupported_inbound}
+
+  defp build_inbound(message, account_id, raw, guild_id, %{
+         channel_id: channel_id,
+         thread_id: thread_id
+       }) do
     sender =
       message
       |> fetch_map(:author)
       |> to_sender()
 
-    guild_id = fetch_id(message, :guild_id)
     message_id = fetch_id(message, :id)
     reply_to_id = fetch_reply_to_id(message)
     peer_kind = if guild_id, do: :group, else: :dm
@@ -98,8 +108,6 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
     {:ok, inbound}
   end
 
-  def normalize_message(_, _, _), do: {:error, :unsupported_inbound}
-
   defp to_sender(author) when is_map(author) do
     id = fetch_id(author, :id)
 
@@ -121,46 +129,6 @@ defmodule LemonChannels.Adapters.Discord.Inbound do
     message
     |> fetch_map(:referenced_message)
     |> fetch_id(:id)
-  end
-
-  defp fetch_channel_id(message, raw, thread_id) do
-    channel = fetch_channel_context(message, raw)
-
-    case {thread_id, fetch_id(channel, :parent_id)} do
-      {id, parent_id} when is_integer(id) and is_integer(parent_id) -> parent_id
-      _ -> fetch_id(message, :channel_id)
-    end
-  end
-
-  defp fetch_thread_id(message, raw) do
-    case fetch_id(message, :thread_id) do
-      id when is_integer(id) ->
-        id
-
-      _ ->
-        thread = fetch_map(message, :thread)
-
-        case fetch_id(thread, :id) do
-          id when is_integer(id) ->
-            id
-
-          _ ->
-            channel = fetch_channel_context(message, raw)
-
-            case {fetch_id(message, :channel_id),
-                  Map.get(channel, :type) || Map.get(channel, "type")} do
-              {id, type} when is_integer(id) and type in [10, 11, 12] -> id
-              _ -> nil
-            end
-        end
-    end
-  end
-
-  defp fetch_channel_context(message, raw) do
-    case fetch_map(message, :channel) do
-      map when map != %{} -> map
-      _ -> fetch_map(raw, :channel)
-    end
   end
 
   defp fetch_timestamp(message) do

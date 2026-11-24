@@ -63,6 +63,7 @@ defmodule CodingAgent.Subagents do
   alias CodingAgent.{Config, ToolPolicy}
   alias CodingAgent.Tools.Task.StructuredOutput
   alias LemonCore.TrustedRoot
+  alias LemonSkills.Frontmatter
 
   @thinking_keys ~w(thinkingLevel thinking-level thinking_level thinking)
   @fields ~w(name description model role tools read_only spawns output) ++ @thinking_keys
@@ -395,64 +396,20 @@ defmodule CodingAgent.Subagents do
     end
   end
 
+  # Duplicate fields are refused so they cannot silently change security
+  # settings; see `LemonSkills.Frontmatter`.
   defp parse_frontmatter(content) do
     case Regex.run(~r/\A---\r?\n(.*?)^---(?:\r?\n|\z)(.*)\z/ms, content) do
-      [_, yaml, body] when byte_size(yaml) <= @max_frontmatter_bytes ->
-        case parse_yaml(yaml) do
+      [_, yaml, body] ->
+        case Frontmatter.parse_yaml(yaml, max_bytes: @max_frontmatter_bytes) do
           {:ok, fields} -> {:ok, fields, body}
-          {:error, _} = error -> error
+          {:error, :too_large} -> {:error, "frontmatter exceeds 16 KiB"}
+          {:error, reason} -> {:error, Frontmatter.describe_error(reason)}
         end
-
-      [_, _, _] ->
-        {:error, "frontmatter exceeds 16 KiB"}
 
       _ ->
         {:error, "expected YAML frontmatter enclosed by --- lines"}
     end
-  end
-
-  defp parse_yaml(yaml) do
-    # Preserve pairs so duplicate fields cannot silently change security settings,
-    # then map the same parsed document so nested output schemas keep their shape.
-    with {:ok, document} <- read_yaml(yaml),
-         pairs when is_list(pairs) <-
-           YamlElixir.Mapper.process(document, maps_as_keywords: true) do
-      cond do
-        not Enum.all?(pairs, &match?({key, _} when is_binary(key), &1)) ->
-          {:error, "frontmatter must be a mapping"}
-
-        length(Enum.uniq_by(pairs, &elem(&1, 0))) != length(pairs) ->
-          {:error, "duplicate frontmatter fields"}
-
-        true ->
-          case YamlElixir.Mapper.process(document, []) do
-            fields when is_map(fields) -> {:ok, fields}
-            _ -> {:error, "frontmatter must be a mapping"}
-          end
-      end
-    else
-      _ -> {:error, "malformed YAML frontmatter"}
-    end
-  rescue
-    _ -> {:error, "malformed YAML frontmatter"}
-  end
-
-  @yaml_options [
-    detailed_constr: true,
-    str_node_as_binary: true,
-    keep_duplicate_keys: true
-  ]
-
-  # YamlElixir.read_from_string/2 calls Application.start(:yamerl) on every
-  # read, a call into the application controller. Sessions parse these
-  # definitions in init, so a session starting while an application stops
-  # deadlocked: the controller waited on the session supervisor, which waited
-  # on this init. yamerl is already running as a yaml_elixir dependency, so
-  # parse with yamerl directly.
-  defp read_yaml(yaml) do
-    {:ok, yaml |> :yamerl_constr.string(@yaml_options) |> List.last()}
-  catch
-    _, _ -> {:error, :malformed}
   end
 
   defp definition_id(fields, file_id, :native) do

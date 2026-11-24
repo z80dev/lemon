@@ -240,6 +240,21 @@ every per-agent method, exactly as an unknown ID does.
 
 A missing runtime is `UNAVAILABLE`, never an empty roster.
 
+## Unreadable state
+
+A read whose store or runtime cannot answer returns `UNAVAILABLE`; it never
+reports empty, idle, disabled or not-found state it did not read. This covers
+`exec.approvals.get`, `config.get`, `logs.tail`, `sessions.preview`,
+`chat.history`, `session.detail`, `cron.runs`, `tasks.active.list` and
+`tasks.recent.list`, ACP `session/list` and session lookup, and A2A task reads
+(JSON-RPC `-32603`). An execution node whose durable registry entry cannot be
+read gets `UNAVAILABLE` at `connect` and retries, rather than `UNAUTHORIZED`
+with `node_not_found`, which would park it for re-authorization.
+
+`cron.status` stays a status projection: each section it cannot read (`jobs`,
+`runs`, `audit`) is listed in `unavailable`, its counters are `null` (unknown)
+rather than zero, and `enabled` is `null` when the job list itself is unreadable.
+
 ## `status`
 
 Scope: `operator.read`. Parameters: `{}`. Optional subsystem lookup failures do
@@ -316,6 +331,21 @@ Example additions (other counters omitted):
   "summary": {"version":"2026.10.10","providerCount":1,"providersMissingCredentials":1,"channelErrorCount":1}
 }
 ```
+
+## `browser.stop`
+
+Scope: `operator.admin` only. Parameters: `{}` (unknown/nonempty parameters are
+rejected). Stops the local browser driver behind the `local`, `relay` and `cdp`
+providers, and the Chrome it launched; a browser it only attached to keeps
+running. In-flight side-effecting browser actions report an unknown outcome. The
+next browser request starts a fresh driver. `lemon browser stop` calls it.
+
+```json
+{"type":"req","id":"browser-stop-1","method":"browser.stop","params":{}}
+```
+
+The result is `{"stopped": true}`. If the driver does not confirm in time the
+method fails with `TIMEOUT`; whether it stopped is then unknown.
 
 ## `system.restart` and `system.stop`
 

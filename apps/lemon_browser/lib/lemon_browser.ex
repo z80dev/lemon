@@ -67,6 +67,15 @@ defmodule LemonBrowser do
     Map.put(status, :provider_resolution, resolution)
   end
 
+  @doc """
+  Stops the local browser driver (used by the `local`, `relay` and `cdp`
+  providers) and the Chrome it launched. A browser it only attached to keeps
+  running. In-flight side-effecting requests reply `{:error, :outcome_unknown}`;
+  the next request starts a fresh driver with the current configuration.
+  """
+  @spec stop_local_driver() :: :ok | {:error, String.t()}
+  def stop_local_driver, do: LemonBrowser.LocalServer.stop_driver()
+
   defp resolve_backend(opts) do
     case Keyword.get(opts, :backend) do
       nil ->

@@ -45,6 +45,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
   @default_debounce_ms 1_000
+  @default_poller_lock_retry_ms 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -56,7 +57,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   @impl true
-  def handle_continue(:start, opts) do
+  def handle_continue(:start, opts), do: start_transport(opts, 0)
+
+  defp start_transport(opts, lock_attempt) do
     base = LemonCore.GatewayConfig.get(:telegram, %{})
 
     config =
@@ -157,11 +160,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           {:noreply, state}
 
         {:error, :locked} ->
-          Logger.warning(
-            "Telegram poller already running for account_id=#{inspect(account_id)}; refusing to start lemon_channels transport"
-          )
-
-          {:stop, :poller_locked, %{account_id: account_id, token: token}}
+          retry_ms = cfg_get(config, :poller_lock_retry_ms, @default_poller_lock_retry_ms)
+          await_poller_lock(opts, account_id, retry_ms, lock_attempt)
       end
     else
       {:stop, :telegram_not_configured, %{}}
@@ -169,6 +169,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   @impl true
+  # The transport has not started polling: it has no runtime state to update.
+  # The persisted allowlist is read when it acquires the lock and starts.
+  def handle_call({:update_allowlist, _op, _chat_id}, _from, %{awaiting_poller_lock: true} = st),
+    do: {:reply, :not_running, st}
+
+  def handle_call(:drain_pause, _from, %{awaiting_poller_lock: true} = st) do
+    if st.timer, do: Process.cancel_timer(st.timer)
+    {:reply, :ok, %{st | timer: nil, drain_paused?: true}}
+  end
+
   def handle_call({:update_allowlist, op, chat_id}, _from, state)
       when op in [:add, :remove] and is_integer(chat_id) do
     {:reply, :ok, LemonChannels.Pairing.put_allowlist("telegram", state, chat_id, op)}
@@ -206,6 +216,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   @impl true
+  def handle_info(:retry_poller_lock, %{awaiting_poller_lock: true, drain_paused?: true} = st),
+    do: {:noreply, st}
+
+  def handle_info(:retry_poller_lock, %{awaiting_poller_lock: true} = st),
+    do: start_transport(st.opts, st.attempt + 1)
+
+  def handle_info(_msg, %{awaiting_poller_lock: true} = st), do: {:noreply, st}
+
   def handle_info(:poll, %{drain_paused?: true} = state), do: {:noreply, state}
 
   def handle_info(:poll, %{poll_task: %Task{}} = state), do: {:noreply, state}
@@ -374,6 +392,27 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     if task = state[:poll_task], do: Task.shutdown(task, :brutal_kill)
     if state[:token], do: PollerLock.release(state.account_id, state.token)
     :ok
+  end
+
+  # Another runtime owns this bot token. Crashing would escalate through the
+  # adapter supervisors, so wait alive and retry with capped backoff instead.
+  defp await_poller_lock(opts, account_id, retry_ms, attempt) do
+    delay = min(LemonCore.Retry.exponential_backoff(retry_ms, min(attempt, 5)), retry_ms * 30)
+
+    Logger.warning(
+      "Telegram poller already running for account_id=#{inspect(account_id)}; retrying lock in #{delay}ms"
+    )
+
+    LemonChannels.Registry.record_status("telegram", {:error, :poller_locked})
+
+    {:noreply,
+     %{
+       awaiting_poller_lock: true,
+       opts: opts,
+       attempt: attempt,
+       drain_paused?: false,
+       timer: Process.send_after(self(), :retry_poller_lock, delay)
+     }}
   end
 
   defp dispatch_transport_event(event, state) do
@@ -1297,13 +1336,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       session_key = build_session_key(state, inbound, scope)
       args = Commands.telegram_command_args(inbound.message.text || "", "goal")
       agent_id = BindingResolver.resolve_agent_id(scope)
+      reply = &send_system_message(state, chat_id, thread_id, user_msg_id, &1)
 
       _ =
-        send_system_message(
-          state,
-          chat_id,
-          thread_id,
-          user_msg_id,
+        reply.(
           LemonChannels.GoalStatusMessage.handle(session_key, args,
             agent_id: agent_id,
             workspace: BindingResolver.resolve_cwd(scope),
@@ -1315,7 +1351,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               peer_id: inbound.peer.id,
               thread_id: inbound.peer.thread_id
             },
-            meta: %{transport: "telegram"}
+            meta: %{transport: "telegram"},
+            # Judge ticks and continuations run off this process; their
+            # result is posted to the chat when ready.
+            start_task: &start_async_task(state, &1),
+            deliver: reply
           )
         )
     end
@@ -1323,6 +1363,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     state
   rescue
     _ -> state
+  catch
+    :exit, _ -> state
   end
 
   defp handle_kanban_command(state, inbound) do

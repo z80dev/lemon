@@ -508,11 +508,17 @@ defmodule LemonWeb.Chat.Components do
 
   # ── Approvals ───────────────────────────────────────────────────────────
 
-  @doc "Display record for a pending approval (wire map from events or `exec.approvals.get`)."
+  @doc """
+  Display record for a pending approval: a wire map from an event,
+  `exec.approvals.get` or the `sessions.snapshot` projection. The snapshot
+  flags a bounded projection with `truncated` (and `planTruncated` for a
+  plan); such a card is not approvable until the full record loads.
+  """
   def approval_view(wire) do
     action = if is_map(wire["action"]), do: wire["action"], else: %{}
     tool = wire["tool"] || "tool"
     id = wire["approvalId"] || wire["id"]
+    plan_truncated? = wire["planTruncated"] == true
 
     %{
       id: id,
@@ -523,7 +529,14 @@ defmodule LemonWeb.Chat.Components do
       plan: if(is_binary(action["plan"]), do: action["plan"]),
       command: Enum.find_value(["command", "cmd"], &if(is_binary(action[&1]), do: action[&1])),
       path: Enum.find_value(["path", "file_path"], &if(is_binary(action[&1]), do: action[&1])),
-      action_text: action |> Map.drop(["plan"]) |> Tool.format(),
+      action_text:
+        if(is_binary(wire["argumentsPreview"]),
+          do: wire["argumentsPreview"],
+          else: action |> Map.drop(["plan"]) |> Tool.format()
+        ),
+      plan_truncated?: plan_truncated?,
+      truncated?: plan_truncated? or wire["truncated"] == true,
+      partial?: false,
       rationale: if(is_binary(wire["rationale"]), do: wire["rationale"]),
       requested_at_ms: wire["requestedAtMs"] || 0,
       expires_at_ms: if(is_integer(wire["expiresAtMs"]), do: wire["expiresAtMs"])
@@ -561,6 +574,15 @@ defmodule LemonWeb.Chat.Components do
       >
         {LemonWeb.Markdown.to_html(@approval.plan)}
       </div>
+      <p
+        :if={@approval.plan_truncated?}
+        id={"#{@approval.dom_id}-plan-truncated"}
+        role="alert"
+        class="flex flex-wrap items-center gap-2 border-t border-warning/30 bg-warning/[0.07] px-4 py-2 text-xs text-warning"
+      >
+        <span class="mr-auto">Only the start of this plan could be shown. Load the full plan before approving it.</span>
+        <.button size="sm" icon="refresh" phx-click="reload-approvals">Load the full plan</.button>
+      </p>
       <footer class="flex flex-wrap items-center gap-2 border-t border-line bg-surface-2/50 px-4 py-2.5">
         <p class="mr-auto text-xs text-muted">Approving ends plan mode and starts implementation.</p>
         <.button
@@ -577,6 +599,7 @@ defmodule LemonWeb.Chat.Components do
           variant="primary"
           icon="play"
           mutation
+          disabled={@approval.truncated?}
           phx-click="resolve-approval"
           phx-value-id={@approval.id}
           phx-value-decision="approve_once"
@@ -624,6 +647,15 @@ defmodule LemonWeb.Chat.Components do
         <p :if={@approval.rationale} class="text-xs text-muted">
           <span class="font-medium text-fg">Why:</span> {@approval.rationale}
         </p>
+        <p
+          :if={@approval.truncated?}
+          id={"#{@approval.dom_id}-truncated"}
+          role="alert"
+          class="flex flex-wrap items-center gap-2 text-xs text-warning"
+        >
+          <span class="mr-auto">Part of this request is not shown. Load it in full before approving.</span>
+          <.button size="sm" icon="refresh" phx-click="reload-approvals">Load the full request</.button>
+        </p>
       </div>
       <footer class="flex flex-wrap items-center gap-2 border-t border-line bg-surface-2/50 px-4 py-2.5">
         <.button
@@ -631,6 +663,7 @@ defmodule LemonWeb.Chat.Components do
           variant="primary"
           icon="check"
           mutation
+          disabled={@approval.truncated?}
           phx-click="resolve-approval"
           phx-value-id={@approval.id}
           phx-value-decision="approve_once"
@@ -640,6 +673,7 @@ defmodule LemonWeb.Chat.Components do
         <.button
           size="sm"
           mutation
+          disabled={@approval.truncated?}
           phx-click="resolve-approval"
           phx-value-id={@approval.id}
           phx-value-decision="approve_session"
@@ -650,6 +684,7 @@ defmodule LemonWeb.Chat.Components do
           size="sm"
           variant="ghost"
           mutation
+          disabled={@approval.truncated?}
           phx-click="resolve-approval"
           phx-value-id={@approval.id}
           phx-value-decision="approve_global"

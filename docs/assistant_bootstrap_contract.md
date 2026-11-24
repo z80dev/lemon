@@ -2,17 +2,18 @@
 
 This document defines the runtime contract for Lemon's assistant bootstrap context.
 
-## Execution Modes
+## Launchers and runtime profiles
 
-Lemon runs in one of three mutually exclusive execution modes. Later milestones (M1, M2) must remain consistent with these definitions.
+No "execution mode" is detected at boot. Two independent settings shape a
+running node, and the bootstrap context below is the same under both:
 
-| Mode | Description |
-| --- | --- |
-| `source_dev` | Running directly from source via `bin/lemon-tui` or `iex -S mix`. Used for local development. Configuration is read from `config/dev.exs` and Mix runtime. |
-| `release_runtime` | Running from a compiled Elixir release (`lemon_runtime_min` or `lemon_runtime_full`). Configuration is read from `config/runtime.exs` and environment variables only. No Mix tooling available. |
-| `attached_client` | A lightweight client (TUI or web) attached to a running release via the channel/gateway layer. The client does not execute agent logic directly; it submits requests and streams responses. |
+| Setting | Values | Set by | Effect |
+| --- | --- | --- | --- |
+| Launcher | `:source`, `:release` | `bin/lemon` exports `LEMON_CLI_LAUNCHER=source`; the packaged launcher exports `release`. Read by `LemonCli.CommandRegistry.launcher/0`. | Which CLI commands are offered: for example `lemon reload` is source-only, while `lemon remote`, `eval` and `rpc` are release-only. |
+| Runtime profile | `:runtime_min`, `:runtime_full` | `LemonCore.Runtime.Profile`; `LemonCore.Runtime.Boot.start/2` starts the profile's applications in order. The source launcher boots `:runtime_full`; a release exports `LEMON_RUNTIME_PROFILE` from its release name (`lemon_runtime_min` or `lemon_runtime_full`). | Which OTP applications run: `:runtime_full` adds automation, skills and the web UI to the minimal set. |
 
-These modes are detected at boot by `LemonCore.Runtime` (once extracted in M1-01). All boot-path decisions must be gated on mode rather than Mix environment atoms to avoid drift between source and release.
+Clients (the TUI, web UI, Lemon Bot and browser node) execute no agent logic;
+they attach to a running runtime through the control plane.
 
 ## Scope
 
@@ -65,6 +66,15 @@ Canonical files:
 - `MEMORY.md` (bounded curated quick facts and topic index, main sessions only)
 
 Daily memory files are expected under `memory/YYYY-MM-DD.md` and are read/written via tools.
+
+The first session that reads assistant-home bootstrap (chat/persona mode)
+seeds an empty workspace from the bundled templates and leaves a
+`.lemon-workspace-seeded` marker; later sessions never write templates, so a
+deleted `BOOTSTRAP.md`, `HEARTBEAT.md` or `memory/topics/TEMPLATE.md` stays
+deleted. A workspace that already holds any template is only marked. Coding
+sessions do not touch the workspace, and an unwritable workspace is logged, not
+a session start failure. `mix lemon.workspace init` restores missing templates
+on request.
 
 ### Placed profile sessions
 

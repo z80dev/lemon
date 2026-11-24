@@ -1,20 +1,26 @@
 # Lemon platform split — status
 
-Status as of 2026-11-13. This page replaced the August 2026 plan of record, which
-aimed to publish a dozen Hex packages and move the products into their own
-repositories. The boundary work survived and the package set was cut to five.
-The general product extraction was abandoned (D18); LemonSim alone later moved
-to its own repository (D19). Git history has the full plan.
+Status as of 2026-11-23 (Hex versions checked against the hex.pm API that day).
+This page replaced the August 2026 plan of record, which aimed to publish a
+dozen Hex packages and move the products into their own repositories. The
+boundary work survived and the package set was cut to five. The general product
+extraction was abandoned (D18); LemonSim alone later moved to its own repository
+(D19). The [decision log](#decision-log-historical) below is history, not a
+work list; the [remaining gaps](#known-gaps) are the open work.
 
 ## Published packages
 
-| Package | What it is | In repo | On Hex |
-|---|---|---|---|
-| `lemon_ai` | Provider-agnostic LLM client: providers, model registry, streaming, rate limiting, circuit breaking | 0.3.0 | 0.2.1 |
-| `lemon_core` | Bus and event envelope, pluggable Store, secrets, config, paths, boundary contracts | 0.3.0 | 0.2.0 |
-| `lemon_agent` | Agent loop, tool registry, subagents, model runtime, workspace stores | 0.3.0 | 0.2.0 |
-| `lemon_memory` | Durable memory: document schema, SQLite store, provider behaviour, ingest, search | 0.2.0 | 0.2.0 |
-| `lemon_platform_test` | Contract-test kit: `BackendCase`, `EventsCase`, `ProviderCase`, `FakeLLM` (and `PluginCase`, which needs the unpublished `lemon_channels`) | 0.2.0 | 0.2.0 |
+| Package | What it is | On Hex |
+|---|---|---|
+| `lemon_ai` | Provider-agnostic LLM client: providers, model registry, streaming, rate limiting, circuit breaking | 0.2.1 |
+| `lemon_core` | Bus and event envelope, pluggable Store, secrets, config, paths, boundary contracts | 0.2.0 |
+| `lemon_agent` | Agent loop, tool registry, subagents, model runtime, workspace stores | 0.2.0 |
+| `lemon_memory` | Durable memory: document schema, SQLite store, provider behaviour, ingest, search | 0.2.0 |
+| `lemon_platform_test` | Contract-test kit: `BackendCase`, `EventsCase`, `ProviderCase`, `FakeLLM` (and `PluginCase`, which needs the unpublished `lemon_channels`) | 0.2.0 |
+
+In-repo versions and the publish set are generated from each app's `mix.exs`
+in the [package map](architecture_boundaries.md#package-map); `mix lemon.quality`
+fails if that set and `scripts/verify_packages` disagree.
 
 The published releases are what `mix lemon.new` generates against. The 0.2 line is the
 first installable one: `lemon_core`, `lemon_agent`, `lemon_memory` and
@@ -39,13 +45,10 @@ break it shows up before it is released.
 ## In the repository only
 
 Everything else is the **reference runtime and its products**, built and released
-together as the umbrella (CalVer), not as packages: `lemon_router`,
-`lemon_gateway`, `lemon_channels`, `lemon_media`, `lemon_skills`, `lemon_browser`,
-`lemon_control_plane`, `lemon_automation`, `lemon_cli`, `lemon_web`,
-`lemon_lsp`, `lemon_mcp`, `lemon_honcho`, `lemon_evals`, `coding_agent`,
-plus the TypeScript clients under `clients/`. LemonSim (`lemon_sim`,
-`lemon_sim_ui`) is no longer here; it lives in
-[z80dev/lemon-sim](https://github.com/z80dev/lemon-sim).
+together as the umbrella (CalVer), not as packages: every app marked "no" in the
+generated [package map](architecture_boundaries.md#package-map), plus the
+TypeScript clients under `clients/`. LemonSim (`lemon_sim`, `lemon_sim_ui`) is no
+longer here; it lives in [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim).
 
 What still holds from the split, and is worth keeping whether or not anything is
 published:
@@ -66,7 +69,12 @@ published:
   [z80dev/lemon-sim](https://github.com/z80dev/lemon-sim); this umbrella has no
   sim wiring left (no sim UI port, release or config blocks).
 
-## Decision log
+## Decision log (historical)
+
+These 2026 decisions are a record, not actionable plan items. Superseded,
+reversed or abandoned decisions say so; D3, D8, D13 and D14 describe a
+repository layout that no longer exists (LemonSim and its bench moved out under
+D19, and nothing beyond the five packages is published under D18).
 
 | # | Date | Decision |
 |---|---|---|
@@ -144,8 +152,8 @@ tarballs so this class of break fails CI.
 
   Only the repo tooling (`quality/`, `update/`, repo-only `mix lemon.*` tasks)
   is kept out of the tarball.
-- **Elixir floor.** The packages declare `~> 1.15`; CI proves 1.19 and runs the
-  1.15 leg as advisory.
+- **Elixir floor.** The packages declare `~> 1.15`; the packaging workflow proves
+  Elixir 1.20.5 / OTP 29.1.2 and runs an advisory 1.15.8 / OTP 26.2 leg.
 - **`LemonChannels.Plugin.meta/0`** keeps its flag-map capability vocabulary;
   widening it to typed `Capability.spec()` lists waits for a consumer that needs
   sizes, features or rate limits.

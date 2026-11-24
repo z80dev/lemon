@@ -3,10 +3,11 @@ defmodule LemonChannels.Telegram.TransportShared do
 
   @channels_dedupe_table :lemon_channels_telegram_dedupe
 
+  # The table outlives a transport restart (its owner is a core dedupe worker)
+  # and its entries expire by TTL, so a restarted transport keeps recognising
+  # messages it already accepted instead of starting from an empty seen set.
   def init_dedupe do
-    :ok = LemonCore.Dedupe.Ets.init(@channels_dedupe_table)
-    _ = :ets.delete_all_objects(@channels_dedupe_table)
-    :ok
+    LemonCore.Dedupe.Ets.init(@channels_dedupe_table)
   end
 
   def check_and_mark_dedupe(key, ttl_ms) do

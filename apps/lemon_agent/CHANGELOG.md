@@ -10,6 +10,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `Workspace.KanbanStore.changed_topic/0` and `ring_changed/1`: every
+  operator-visible board/task write (not lease renewals) broadcasts the
+  content-free doorbell `{:kanban_changed, board_id}` on the `kanban` Bus topic (#687).
 - `LemonAgent.ModelRuntime.OmpBroker.url/0` and `default_url/0` expose the
   broker URL resolution without requiring a token.
 - `submit_result` structured subagent results (#602); task-tool action
@@ -114,6 +117,31 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Empty or whitespace-only streamed tool arguments decode as `{}`, and a
+  parameterless tool's raw arguments are not decoded, so no-argument calls no
+  longer fail as `malformed_tool_arguments` (#639).
+- `LemonAgent.StreamRules.feed/2` scans deltas of any size in bounded
+  1,024-byte chunks; `:delta_too_large` is no longer raised. A
+  `StreamRules.Error` during streaming fails the attempt as a non-retryable
+  error, cancels the provider stream and records its budget usage instead of
+  escaping the loop (#639).
+- `ModelRuntime.StreamOptions` puts resolved Azure settings only in
+  `provider_options.azure_openai_responses` and reads per-request overrides
+  from there; it no longer writes or reads `azure_*` keys in
+  `thinking_budgets` (**Breaking**, #680).
+- `LemonAgent.Agent` emits exactly one terminal event per run: when the loop
+  forwarder exits abnormally without forwarding one, the agent aborts the run
+  and broadcasts `{:error, {:loop_crashed, reason}, %{messages: [error]}}`
+  (`reason` is a bounded atom such as `:killed`), sets `error` and wakes
+  waiters. Forwarder exits are caught like exceptions, and late duplicate
+  terminal events are dropped (#638).
+- Tool lifetime is tied to the loop: a per-batch `LemonAgent.Loop.ToolReaper`
+  starts and tracks each tool task, owns the per-tool deadline (no longer a
+  timer in the loop mailbox), and on any loop exit, including `:kill`, aborts
+  the signal and terminates the tasks after a 250 ms grace. Every abnormal exit
+  of a tool batch or of either loop entry point aborts the signal before the
+  error is reported, and `Loop.agent_loop/5`, `agent_loop_continue/4`,
+  `stream/4` and `stream_continue/3` create a signal when given `nil` (#681).
 - OAuth credential resolution, including the Anthropic and Codex paths, adopts
   a login refreshed concurrently by another process instead of returning
   `:oauth_secret_changed` when that login is still fresh.

@@ -6,9 +6,14 @@ defmodule LemonSkills.Manifest.Parser do
   map and the remaining body string. Does not validate field semantics — see
   `LemonSkills.Manifest.Validator` for that.
 
-  YAML is parsed through `YamlElixir`, while TOML uses the small flat subset
-  historically supported by Lemon skill manifests.
+  YAML is parsed by `LemonSkills.Frontmatter` (duplicate keys and frontmatter
+  over 64 KiB are refused), while TOML uses the small flat subset historically
+  supported by Lemon skill manifests.
   """
+
+  alias LemonSkills.Frontmatter
+
+  @max_yaml_bytes 64 * 1024
 
   @type parse_result :: {:ok, map(), String.t()} | :error
 
@@ -105,9 +110,9 @@ defmodule LemonSkills.Manifest.Parser do
   # ---------------------------------------------------------------------------
 
   defp parse_yaml(text) do
-    case YamlElixir.read_from_string(text) do
-      {:ok, manifest} when is_map(manifest) -> {:ok, manifest}
-      _ -> :error
+    case Frontmatter.parse_yaml(text, max_bytes: @max_yaml_bytes) do
+      {:ok, manifest} -> {:ok, manifest}
+      {:error, _reason} -> :error
     end
   end
 

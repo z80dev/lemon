@@ -102,6 +102,10 @@ defmodule CodingAgent.ProcessManager do
 
         {:error, :identity_conflict} ->
           {:error, {:rejected, identity, :identity_conflict}}
+
+        # The registration write may have landed: never retry a new identity.
+        {:error, :store_unavailable} ->
+          {:error, {:outcome_unknown, identity}}
       end
     else
       {:error, :unknown_backend} ->

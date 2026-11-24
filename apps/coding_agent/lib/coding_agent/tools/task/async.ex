@@ -13,7 +13,6 @@ defmodule CodingAgent.Tools.Task.Async do
     Control,
     Execution,
     Followup,
-    LiveBridge,
     Projection,
     Result,
     Runner
@@ -27,39 +26,32 @@ defmodule CodingAgent.Tools.Task.Async do
   @spec run_async(String.t() | nil, String.t() | nil, (-> term()), map(), map()) ::
           :ok | {:error, launch_error()}
   def run_async(task_id, run_id, run_fun, followup_context, lifecycle_context) do
-    _ = maybe_start_live_bridge(run_id)
-
     supervisor = Map.get(lifecycle_context, :task_supervisor, CodingAgent.TaskSupervisor)
 
-    Control.register(
-      task_id,
-      lifecycle_context.signal,
-      lifecycle_context[:parent_signal],
-      lifecycle_context[:parent_session_pid],
-      fn reason ->
-        finalize_async(task_id, run_id, {:error, reason}, followup_context, lifecycle_context)
-      end,
-      lifecycle_context[:task_owner_pid]
-    )
+    turn =
+      turn(fn result ->
+        finalize_async(task_id, run_id, result, followup_context, lifecycle_context)
+      end)
 
-    Control.configure(task_id, %{
-      followup: followup_context,
-      lifecycle: lifecycle_context
-    })
+    spec = %{
+      signal: lifecycle_context.signal,
+      parent_signal: lifecycle_context[:parent_signal],
+      parent: lifecycle_context[:parent_session_pid],
+      owner_pid: lifecycle_context[:task_owner_pid],
+      claim: turn.claim,
+      finalize: turn.finalize,
+      continuation: %{followup: followup_context, lifecycle: lifecycle_context}
+    }
 
-    case LemonCore.TaskSupervisor.start_child(supervisor, fn ->
-           Logger.debug(
-             "Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}"
-           )
+    worker = fn ->
+      Logger.debug("Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}")
+      turn.finalize.(safe_run(task_id, run_id, run_fun, lifecycle_context))
+    end
 
-           with :ok <- Control.attach_worker(task_id) do
-             result = safe_run(task_id, run_id, run_fun, lifecycle_context)
-             finalize_async(task_id, run_id, result, followup_context, lifecycle_context)
-           end
-         end) do
-      {:ok, _pid} ->
-        :ok
-
+    with :ok <- Control.register(task_id, spec),
+         :ok <- Control.launch(task_id, supervisor, worker) do
+      :ok
+    else
       {:error, reason} ->
         launch_error = normalize_launch_error(reason)
 
@@ -68,44 +60,71 @@ defmodule CodingAgent.Tools.Task.Async do
             "run_id=#{inspect(run_id)} reason=#{inspect(reason)}"
         )
 
-        finalize_launch_failure(task_id, run_id, launch_error, lifecycle_context)
-        Control.complete(task_id)
+        # An unadmitted launch is this caller's to terminalize, unless an owner
+        # path already claimed the turn.
+        if :atomics.compare_exchange(turn.claim, 1, 0, 1) == :ok,
+          do: finalize_launch_failure(task_id, run_id, launch_error, lifecycle_context)
+
         {:error, launch_error}
     end
   end
 
-  @doc false
-  def resume(task_id, entry, text) do
-    context = entry.continuation
-    supervisor = context.lifecycle[:task_supervisor] || CodingAgent.TaskSupervisor
+  @doc """
+  A messaged child's next turn on its retained (or parked) session. Returns
+  the turn's claim and finalizer and the worker function for its owner to start.
+  """
+  def continuation(task_id, child, text) do
+    context = child.continuation
+    lifecycle = context.lifecycle
+    turn = turn(&finish_continuation(task_id, context, &1))
 
-    LemonCore.TaskSupervisor.start_child(supervisor, fn ->
-      with :ok <- Control.attach_worker(task_id) do
-        update = wrap_on_update(task_id, context.lifecycle, context.lifecycle[:on_update])
+    run = fn ->
+      update = wrap_on_update(task_id, lifecycle, lifecycle[:on_update])
 
-        result =
-          safe_run(
-            nil,
-            nil,
-            fn ->
-              Runner.resume_session(
-                entry.session,
-                entry.resume,
-                text,
-                entry.signal,
-                update
-              )
-              |> Execution.validate_output(context.lifecycle)
-            end,
-            context.lifecycle
-          )
+      result =
+        safe_run(
+          nil,
+          nil,
+          fn ->
+            Runner.resume_session(child.session, child.resume, text, child.signal, update)
+            |> Execution.validate_output(lifecycle)
+          end,
+          lifecycle
+        )
 
-        persist_continuation(task_id, result)
-        emit_terminal_update(task_id, context.lifecycle[:run_id], result, context.lifecycle)
-        Control.complete(task_id)
-        finish_continuation(task_id, context, result)
+      turn.finalize.(result)
+    end
+
+    Map.merge(turn, %{
+      run: run,
+      supervisor: lifecycle[:task_supervisor] || CodingAgent.TaskSupervisor
+    })
+  end
+
+  # Exactly one of the worker and the task's owner finalizes a turn: whoever
+  # claims it first persists the outcome and sends any followup.
+  defp turn(finalize) do
+    claim = :atomics.new(1, [])
+
+    %{
+      claim: claim,
+      finalize: fn result ->
+        if :atomics.compare_exchange(claim, 1, 0, 1) == :ok, do: finalize.(result)
+        :ok
       end
-    end)
+    }
+  end
+
+  defp finish_continuation(task_id, context, result) do
+    persist_continuation(task_id, result)
+    emit_terminal_update(task_id, context.lifecycle[:run_id], result, context.lifecycle)
+
+    maybe_send_async_followup(
+      Map.put(context.followup, :auto_followup, true),
+      task_id,
+      context.lifecycle[:run_id],
+      result
+    )
   end
 
   defp persist_continuation(task_id, {:ok, %AgentToolResult{} = result}),
@@ -116,18 +135,6 @@ defmodule CodingAgent.Tools.Task.Async do
 
   defp persist_continuation(task_id, {:error, reason}),
     do: TaskStore.fail(task_id, reason)
-
-  @doc false
-  def finish_continuation(task_id, context, result) do
-    persist_continuation(task_id, result)
-
-    maybe_send_async_followup(
-      Map.put(context.followup, :auto_followup, true),
-      task_id,
-      context.lifecycle[:run_id],
-      result
-    )
-  end
 
   @spec wrap_on_update(String.t() | nil, map(), (AgentToolResult.t() -> :ok) | nil) ::
           (AgentToolResult.t() -> :ok) | nil
@@ -194,7 +201,8 @@ defmodule CodingAgent.Tools.Task.Async do
     end
 
     try do
-      unless lifecycle_context[:orchestration_worker], do: maybe_acquire_task_semaphore()
+      unless lifecycle_context[:orchestration_worker],
+        do: maybe_acquire_task_semaphore(lifecycle_context)
 
       {:ok, wrapped.()}
     rescue
@@ -202,7 +210,8 @@ defmodule CodingAgent.Tools.Task.Async do
     catch
       kind, reason -> {:error, {kind, reason}}
     after
-      unless lifecycle_context[:orchestration_worker], do: maybe_release_task_semaphore()
+      unless lifecycle_context[:orchestration_worker],
+        do: maybe_release_task_semaphore(lifecycle_context)
     end
   end
 
@@ -235,21 +244,18 @@ defmodule CodingAgent.Tools.Task.Async do
         maybe_finish_run(run_id, tool_result)
         emit_task_terminal_event(task_id, run_id, {:ok, tool_result}, lifecycle_context)
         maybe_record_budget_completion(run_id, tool_result)
-        complete_control(task_id)
         maybe_send_async_followup(followup_context, task_id, run_id, {:ok, tool_result})
 
       {:ok, {:error, reason}} ->
         terminalize_error(task_id, run_id, reason)
         emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: reason})
-        complete_control(task_id)
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:error, reason} ->
         terminalize_error(task_id, run_id, reason)
         emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: reason})
-        complete_control(task_id)
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:ok, other} ->
@@ -257,7 +263,6 @@ defmodule CodingAgent.Tools.Task.Async do
         maybe_finish_run(run_id, other)
         emit_task_terminal_event(task_id, run_id, {:ok, other}, lifecycle_context)
         maybe_record_budget_completion(run_id, other)
-        complete_control(task_id)
         maybe_send_async_followup(followup_context, task_id, run_id, {:ok, other})
 
       other ->
@@ -265,13 +270,8 @@ defmodule CodingAgent.Tools.Task.Async do
         TaskStore.fail(task_id, other)
         emit_task_terminal_event(task_id, run_id, {:error, other}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: other})
-        complete_control(task_id)
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, other})
     end
-  end
-
-  defp complete_control(task_id) do
-    unless self() == Process.whereis(Control), do: Control.complete(task_id)
   end
 
   defp maybe_send_async_followup(followup_context, task_id, run_id, outcome) do
@@ -567,22 +567,32 @@ defmodule CodingAgent.Tools.Task.Async do
 
   defp aborted_reason?(_), do: false
 
-  defp maybe_acquire_task_semaphore do
-    case Process.whereis(CodingAgent.TaskSemaphore) do
-      nil -> :ok
-      _pid -> Parallel.Semaphore.acquire(CodingAgent.TaskSemaphore)
+  # Slots are re-entrant per lineage: a child blocked on its own descendants
+  # (a synchronous launch or a join) lends them its slot instead of
+  # deadlocking the pool. Lineage comes from the run graph's parent chain.
+  defp maybe_acquire_task_semaphore(lifecycle_context) do
+    semaphore = lifecycle_context[:task_semaphore] || CodingAgent.TaskSemaphore
+
+    if available_semaphore?(semaphore) do
+      run_id = lifecycle_context[:run_id]
+      Parallel.Semaphore.acquire(semaphore, run_id, lineage(run_id, 16))
     end
   end
 
-  defp maybe_release_task_semaphore do
-    case Process.whereis(CodingAgent.TaskSemaphore) do
-      nil -> :ok
-      _pid -> Parallel.Semaphore.release(CodingAgent.TaskSemaphore)
+  defp maybe_release_task_semaphore(lifecycle_context) do
+    semaphore = lifecycle_context[:task_semaphore] || CodingAgent.TaskSemaphore
+    if available_semaphore?(semaphore), do: Parallel.Semaphore.release(semaphore)
+  end
+
+  defp available_semaphore?(pid) when is_pid(pid), do: Process.alive?(pid)
+  defp available_semaphore?(name), do: is_pid(Process.whereis(name))
+
+  defp lineage(run_id, depth) when is_binary(run_id) and depth > 0 do
+    case RunGraph.get(run_id) do
+      {:ok, %{parent: parent}} when is_binary(parent) -> [parent | lineage(parent, depth - 1)]
+      _ -> []
     end
   end
 
-  defp maybe_start_live_bridge(run_id) when is_binary(run_id),
-    do: LiveBridge.start_for_child_run(run_id)
-
-  defp maybe_start_live_bridge(_), do: :ok
+  defp lineage(_run_id, _depth), do: []
 end

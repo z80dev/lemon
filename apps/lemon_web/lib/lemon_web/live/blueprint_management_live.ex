@@ -40,6 +40,7 @@ defmodule LemonWeb.BlueprintManagementLive do
      |> assign(:activation, nil)
      |> assign(:notice, nil)
      |> assign(:error, nil)
+     |> assign(:outcome_unknown, nil)
      |> refresh_catalog()}
   end
 
@@ -151,12 +152,14 @@ defmodule LemonWeb.BlueprintManagementLive do
                   do: "Exact activation preview is ready. No profile or schedule state changed.",
                   else: "Preview found a collision. Nothing changed."
 
+              # A fresh read of an uncertain target is what unlocks it.
               {:noreply,
                socket
                |> assign(:pending_preview, preview)
                |> assign(:activation, nil)
                |> assign(:notice, notice)
-               |> assign(:error, nil)}
+               |> assign(:error, nil)
+               |> unlock_target(bundle_id, profile_id)}
 
             :error ->
               {:noreply, operation_failed(socket, :preview)}
@@ -196,6 +199,9 @@ defmodule LemonWeb.BlueprintManagementLive do
     supplied = normalize_digest(params["confirmation_digest"])
 
     cond do
+      locked?(socket, preview) ->
+        {:noreply, assign(socket, :error, "Preview this target again before activating it.")}
+
       not preview.can_activate ->
         {:noreply,
          assign(socket, :error, "This preview contains a collision and cannot be activated.")}
@@ -257,6 +263,12 @@ defmodule LemonWeb.BlueprintManagementLive do
             <:actions>
               <.button size="sm" variant="ghost" icon="x" icon_only aria-label="Dismiss" phx-click="dismiss" />
             </:actions>
+          </.callout>
+          <.callout :if={@outcome_unknown} id="blueprint-outcome-unknown" tone="warning" title="Activation outcome unknown" class="mb-4">
+            Lemon could not confirm whether blueprint <code>{@outcome_unknown.bundle_id}</code> was
+            applied to profile <code>{@outcome_unknown.profile_id}</code>. It may have been applied and
+            was not retried. Preview the same target again to read its current state before
+            activating anything.
           </.callout>
         </div>
 
@@ -538,9 +550,34 @@ defmodule LemonWeb.BlueprintManagementLive do
              |> assign(:notice, notice)
              |> assign(:error, nil)}
 
+          # Applied by the owner, but the reply is not a well-formed receipt.
           :error ->
-            {:noreply, operation_failed(socket, :activate) |> clear_plan()}
+            {:noreply,
+             socket
+             |> clear_plan()
+             |> assign(:activation, nil)
+             |> assign(:error, nil)
+             |> assign(
+               :notice,
+               "Blueprint applied; details unavailable. It was not retried; the catalog was refreshed."
+             )
+             |> refresh_catalog()}
         end
+
+      # The call may have created the profile skills and schedule: never claim
+      # nothing changed, never retry, and lock the target until it is read again.
+      {:error, :outcome_unknown} ->
+        {:noreply,
+         socket
+         |> clear_plan()
+         |> assign(:activation, nil)
+         |> assign(:notice, nil)
+         |> assign(:error, nil)
+         |> assign(:outcome_unknown, %{
+           bundle_id: preview.bundle_id,
+           profile_id: preview.profile_id
+         })
+         |> refresh_catalog()}
 
       {:error, reason} ->
         {:noreply,
@@ -581,6 +618,9 @@ defmodule LemonWeb.BlueprintManagementLive do
     )
   end
 
+  # Only an explicit `{:error, {code, message}}` is a refusal. A raise, exit or
+  # non-conforming reply may follow a completed mutation, so it is
+  # `:outcome_unknown`, never "not applied".
   defp catalog_call(action, args) do
     result =
       case Application.get_env(:lemon_web, :blueprint_catalog_fun) do
@@ -590,13 +630,14 @@ defmodule LemonWeb.BlueprintManagementLive do
 
     case result do
       {:ok, payload} when is_map(payload) -> {:ok, payload}
+      {:error, {:outcome_unknown, _message}} -> {:error, :outcome_unknown}
       {:error, {_code, _message}} = error -> error
-      _ -> {:error, {:unavailable, "Blueprint operation failed"}}
+      _ -> {:error, :outcome_unknown}
     end
   rescue
-    _ -> {:error, {:unavailable, "Blueprint operation failed"}}
+    _ -> {:error, :outcome_unknown}
   catch
-    :exit, _ -> {:error, {:unavailable, "Blueprint operation failed"}}
+    :exit, _ -> {:error, :outcome_unknown}
   end
 
   defp blueprint_opts, do: Application.get_env(:lemon_web, :blueprint_opts, [])
@@ -851,12 +892,26 @@ defmodule LemonWeb.BlueprintManagementLive do
     end
   end
 
+  defp catalog_error(:outcome_unknown, operation), do: unconfirmed(operation)
   defp catalog_error(_, operation), do: operation_error(operation)
+
+  # Inspect, validate and preview are reads; their unconfirmed result is
+  # reported as such and they may simply be repeated.
+  defp unconfirmed(:inspect),
+    do: "Bundle inspection could not be confirmed. Refresh and try again."
+
+  defp unconfirmed(:validate),
+    do: "Bundle validation could not be confirmed. Refresh and try again."
+
+  defp unconfirmed(:preview),
+    do: "Activation preview could not be confirmed. Refresh and try again."
 
   defp operation_error(:inspect), do: "Bundle inspection is temporarily unavailable."
   defp operation_error(:validate), do: "Bundle validation is temporarily unavailable."
   defp operation_error(:preview), do: "Activation preview is temporarily unavailable."
-  defp operation_error(:activate), do: "Blueprint activation was refused. Nothing changed."
+
+  defp operation_error(:activate),
+    do: "Blueprint activation was refused. Preview the target again before retrying."
 
   defp operation_failed(socket, operation) do
     socket
@@ -865,6 +920,20 @@ defmodule LemonWeb.BlueprintManagementLive do
   end
 
   defp clear_plan(socket), do: assign(socket, :pending_preview, nil)
+
+  defp locked?(
+         %{assigns: %{outcome_unknown: %{bundle_id: bundle, profile_id: profile}}},
+         preview
+       ),
+       do: preview.bundle_id == bundle and preview.profile_id == profile
+
+  defp locked?(_socket, _preview), do: false
+
+  defp unlock_target(socket, bundle_id, profile_id) do
+    if locked?(socket, %{bundle_id: bundle_id, profile_id: profile_id}),
+      do: assign(socket, :outcome_unknown, nil),
+      else: socket
+  end
 
   defp preview_sentence(preview) do
     "#{length(preview.skills)} profile skill action(s) and one #{preview.automation.action} schedule action."

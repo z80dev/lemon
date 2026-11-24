@@ -5,7 +5,7 @@ defmodule LemonSkills.Tools.MediaCommon do
 
   alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
   alias LemonAgent.Tools.AbortHelpers
-  alias LemonMedia.MediaJobs
+  alias LemonMedia.{MediaJobSupervisor, MediaJobs}
 
   @default_openai_base_url "https://api.openai.com/v1"
 
@@ -118,26 +118,6 @@ defmodule LemonSkills.Tools.MediaCommon do
     end
   end
 
-  @doc """
-  Writes an artifact through an exclusive temporary file renamed over `path`,
-  so an existing symlink or hard link at `path` is replaced, never written
-  through: the inode it aliases is not modified.
-  """
-  @spec write_artifact(String.t(), iodata()) :: :ok | {:error, term()}
-  def write_artifact(path, bytes) do
-    dir = Path.dirname(path)
-    suffix = Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
-    temp = Path.join(dir, ".#{Path.basename(path)}.tmp-#{suffix}")
-
-    with :ok <- File.mkdir_p(dir) do
-      try do
-        with :ok <- File.write(temp, bytes, [:exclusive]), do: File.rename(temp, path)
-      after
-        File.rm(temp)
-      end
-    end
-  end
-
   defp sanitize_filename(value, format, prefix) when is_binary(value) do
     value
     |> Path.basename()
@@ -173,6 +153,32 @@ defmodule LemonSkills.Tools.MediaCommon do
     ]
   end
 
+  @doc """
+  The job runner for a validated media request: the provider driver in
+  `LemonMedia.Providers` with the tool's generation parameters, artifact path,
+  resolved runtime and local `input`.
+  """
+  def runner(generation, artifact_path, runtime, input \\ nil) do
+    fn attrs ->
+      LemonMedia.Providers.run(%{
+        provider: generation.provider,
+        attrs: attrs,
+        artifact_path: artifact_path,
+        generation: generation,
+        runtime: runtime,
+        input: input
+      })
+    end
+  end
+
+  @doc """
+  A deferred credential lookup for `runtime`, resolved inside the job so a
+  missing key is recorded as a failed job with the `missing` error kind.
+  """
+  def credential(runtime, missing, provider \\ :openai) do
+    fn -> provider_api_key(runtime, missing, provider) end
+  end
+
   def provider_api_key(runtime, missing, provider \\ :openai)
 
   def provider_api_key(%{api_key: key}, _missing, _provider) when is_binary(key) and key != "",
@@ -185,28 +191,85 @@ defmodule LemonSkills.Tools.MediaCommon do
     end
   end
 
-  def transient_status?(status) when status in [408, 409, 425, 429], do: true
-  def transient_status?(status) when is_integer(status) and status >= 500, do: true
-  def transient_status?(_status), do: false
+  @doc """
+  Resolves a non-OpenAI provider key (ElevenLabs, Deepgram): the explicit
+  `api_key`, then `env_var`, `config_api_key`, `api_key_secret` and the
+  `default_secret_names`.
+  """
+  def secret_api_key(%{api_key: key}, _missing) when is_binary(key) and key != "",
+    do: {:ok, key}
 
-  def wait_for_job(job_id, timeout_ms, signal) do
-    receive do
-      {:media_job, :completed, %{job_id: ^job_id} = job} ->
+  # Candidates are tried in order and only a definite miss advances: an
+  # unreadable secret must never be replaced by a weaker alias or env key.
+  def secret_api_key(runtime, missing) do
+    candidates =
+      [
+        {:value, System.get_env(runtime.env_var)},
+        {:value, runtime.config_api_key},
+        {:secret, runtime.api_key_secret}
+      ] ++ Enum.map(runtime.default_secret_names, &{:secret, &1})
+
+    Enum.reduce_while(candidates, {:error, missing}, fn candidate, acc ->
+      case api_key_candidate(candidate) do
+        {:ok, key} -> {:halt, {:ok, key}}
+        :miss -> {:cont, acc}
+        :error -> {:halt, {:error, :api_key_secret_unreadable}}
+      end
+    end)
+  end
+
+  defp api_key_candidate({:value, key}) when is_binary(key) and key != "", do: {:ok, key}
+  defp api_key_candidate({:value, _}), do: :miss
+
+  defp api_key_candidate({:secret, name}) when is_binary(name) and name != "" do
+    case Credentials.fetch_secret_api_key(name) do
+      {:ok, key} when is_binary(key) and key != "" -> {:ok, key}
+      {:ok, _blank} -> :miss
+      :miss -> :miss
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  defp api_key_candidate({:secret, _}), do: :miss
+
+  @doc """
+  Runs one media job under `LemonMedia.MediaJobSupervisor` and waits for it
+  against a single `timeout_ms` deadline, polling `signal` for abort.
+
+  A timed-out or aborted job is killed (cancelling its provider request) and
+  recorded `:cancelled`; the timeout error names the job id so the record
+  stays observable through `media_status`.
+  """
+  def run_job(attrs, job_opts, timeout_ms, signal) do
+    job_opts =
+      Keyword.merge(job_opts,
+        timeout_ms: timeout_ms,
+        aborted?: fn -> AbortHelpers.aborted?(signal) end
+      )
+
+    case MediaJobSupervisor.run_job(attrs, job_opts) do
+      {:ok, job} ->
         {:ok, job}
 
-      {:media_job, :failed, %{job_id: ^job_id} = job} ->
+      {:error, {:failed, job}} ->
         {:error, "media job failed: #{Map.get(job, :error_kind, "unknown")}"}
 
-      {:media_job, _event, %{job_id: ^job_id}} ->
-        case AbortHelpers.check_abort(signal) do
-          :ok -> wait_for_job(job_id, timeout_ms, signal)
-          {:error, reason} -> {:error, reason}
-        end
+      {:error, {:cancelled, :timeout, job}} ->
+        {:error,
+         "media job #{job.job_id} timed out after #{timeout_ms}ms and was cancelled; see media_status"}
 
-      _other ->
-        wait_for_job(job_id, timeout_ms, signal)
-    after
-      timeout_ms -> {:error, "media job timed out after #{timeout_ms}ms"}
+      {:error, {:cancelled, :aborted, _job}} ->
+        {:error, "Operation aborted"}
+
+      {:error, reason} when is_atom(reason) ->
+        {:error, "media job could not start: #{reason}"}
+
+      {:error, _reason} ->
+        {:error, "media job could not be recorded"}
     end
   end
 
@@ -304,37 +367,4 @@ defmodule LemonSkills.Tools.MediaCommon do
   end
 
   def bounded_integer(_value, min, _max), do: min
-
-  def reject_blank_values(map) do
-    Map.reject(map, fn {_key, value} -> is_nil(value) or value == "" end)
-  end
-
-  def provider_error_kind(%{"error" => error}) when is_map(error) do
-    {:safe_error_kind,
-     optional_string(error["type"]) || optional_string(error["status"]) ||
-       optional_string(error["code"]) || "provider_error"}
-  end
-
-  def provider_error_kind(%{error: error}) when is_map(error) do
-    provider_error_kind(%{
-      "error" => %{"type" => error[:type], "status" => error[:status], "code" => error[:code]}
-    })
-  end
-
-  def provider_error_kind(%{"detail" => detail}) when is_map(detail) do
-    {:safe_error_kind,
-     optional_string(detail["status"]) || optional_string(detail["type"]) ||
-       optional_string(detail["code"]) || "provider_error"}
-  end
-
-  def provider_error_kind(%{detail: detail}) when is_map(detail) do
-    provider_error_kind(%{
-      "detail" => %{"status" => detail[:status], "type" => detail[:type], "code" => detail[:code]}
-    })
-  end
-
-  def provider_error_kind(reason) when is_atom(reason),
-    do: {:safe_error_kind, Atom.to_string(reason)}
-
-  def provider_error_kind(_reason), do: {:safe_error_kind, "provider_error"}
 end

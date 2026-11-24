@@ -5,7 +5,23 @@ vi.mock('node:dns/promises', () => ({
   lookup: vi.fn().mockResolvedValue([{ address: '93.184.215.14', family: 4 }]),
 }));
 
-import { dispatchBrowserRequest } from './driver-dispatch.js';
+import { dispatchBrowserRequest, isReadOnlyBrowserMethod } from './driver-dispatch.js';
+
+describe('isReadOnlyBrowserMethod', () => {
+  it.each(['browser.tabs', 'screenshot', 'browser.snapshot', 'browser.getContent', 'browser.getCookies', 'browser.waitForSelector', 'browser.cdp', 'browser.events'])(
+    'treats %s as read-only',
+    (method) => expect(isReadOnlyBrowserMethod(method, {})).toBe(true),
+  );
+
+  it.each(['browser.click', 'type', 'browser.press', 'browser.navigate', 'browser.selectOption', 'browser.setInputFiles', 'browser.download', 'browser.hover', 'browser.scroll', 'browser.back', 'browser.evaluate', 'browser.setCookies', 'browser.clearState', 'browser.tabOpen', 'browser.tabActivate', 'browser.tabClose', 'browser.unknownFuture'])(
+    'treats %s as side-effecting',
+    (method) => expect(isReadOnlyBrowserMethod(method, {})).toBe(false),
+  );
+
+  it('treats an event read that clears the buffer as side-effecting', () => {
+    expect(isReadOnlyBrowserMethod('browser.events', { clear: true })).toBe(false);
+  });
+});
 
 describe('dispatchBrowserRequest', () => {
   it('routes tab lifecycle methods to the Chrome session', async () => {
@@ -42,7 +58,10 @@ describe('dispatchBrowserRequest', () => {
       url: 'https://example.com',
     });
 
-    expect(chrome.withPage).toHaveBeenCalledWith(expect.any(Function), 'tab-2');
+    // Navigation is side-effecting: a closed target never re-runs it.
+    expect(chrome.withPage).toHaveBeenCalledWith(expect.any(Function), 'tab-2', {
+      retryOnClosedTarget: false,
+    });
     expect(result).toEqual(expect.objectContaining({ url: 'https://example.com' }));
   });
 

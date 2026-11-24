@@ -128,7 +128,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     meta = request.meta || %{}
 
     meta =
-      if not CodingAgent.Tools.Task.Params.managed_metadata?(meta) and
+      if not CodingAgent.Tools.Task.InvocationAuthority.managed_metadata?(meta) and
            not Map.has_key?(meta, :invocation_context_key) and
            Map.has_key?(meta, "invocation_context_key"),
          do:
@@ -438,7 +438,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   defp merge_node_meta(meta, node) when is_map(meta) do
     meta
-    |> CodingAgent.Tools.Task.Params.sanitize_child_metadata()
+    |> CodingAgent.Tools.Task.InvocationAuthority.sanitize_child_metadata()
     |> Map.put(:node, node)
   end
 

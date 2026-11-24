@@ -185,6 +185,25 @@ defmodule CodingAgent.Session.BudgetLedgerTest do
     assert Session.get_state(allowed).budget_usage.tokens == 100_000
   end
 
+  test "a delegated run's reserved budget tightens the caps and stops the child", %{
+    tmp_dir: dir
+  } do
+    # The parent reserved 100 tokens; the next request would exceed them.
+    child =
+      start_session(dir, %{max_run_tokens: 200_000}, delegated_budget: %{max_run_tokens: 100})
+
+    assert budget_stop?(prompt(child), :run, 0)
+    refute_receive :provider_called
+    assert Session.get_state(child).budget_limits.max_run_tokens == 100
+
+    # A delegated reservation can never loosen the configured caps.
+    loosened =
+      start_session(dir, %{max_run_tokens: 0}, delegated_budget: %{"max_run_tokens" => 200_000})
+
+    assert budget_stop?(prompt(loosened), :run, 0)
+    refute_receive :provider_called
+  end
+
   test "run counters reset while session usage accumulates across prompts and durable resume", %{
     tmp_dir: dir
   } do

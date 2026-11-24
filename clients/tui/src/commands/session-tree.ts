@@ -1,5 +1,5 @@
 import { RewindSelectorComponent } from "@oh-my-pi/pi-tui/overlays/rewind-selector";
-import { ControlPlaneError, NotConnectedError } from "../protocol/errors.ts";
+import { ControlPlaneError, classifyMutationError, failureCode } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type {
 	SessionRewindPreview,
@@ -501,19 +501,11 @@ function errorCode(error: unknown): string {
 		if (typeof reason === "string" && /^[a-z_]{1,64}$/.test(reason))
 			return `${error.code}: ${reason}`;
 	}
-	return error instanceof ControlPlaneError || error instanceof NotConnectedError
-		? error.code
-		: "INVALID_RESPONSE";
+	return failureCode(error, "INVALID_RESPONSE");
 }
 
 function failure(ctx: CommandContext, operation: string, error: unknown, mutation = false): void {
-	const unsafe =
-		mutation &&
-		(!(error instanceof ControlPlaneError || error instanceof NotConnectedError) ||
-			(error instanceof ControlPlaneError &&
-				error.details &&
-				typeof error.details === "object" &&
-				(error.details as Record<string, unknown>).retrySafe === false));
+	const unsafe = mutation && classifyMutationError(error) === "unknown";
 	ctx.ui.notice(
 		`session ${operation} did not complete (${errorCode(error)}); no local history or draft was discarded${unsafe ? ". The remote outcome is uncertain; inspect /tree and the affected files before retrying." : ""}`,
 		"error",

@@ -18,12 +18,14 @@ defmodule LemonControlPlane.LogRingTest do
       Logger.warning("#{marker} warned")
     end)
 
-    entries = LogRing.get_logs(1_000, nil) |> Enum.filter(&(&1["message"] =~ marker))
+    assert {:ok, all} = LogRing.get_logs(1_000, nil)
+    entries = Enum.filter(all, &(&1["message"] =~ marker))
     assert [%{"level" => "error"} = error, %{"level" => "warning"}] = entries
     assert is_integer(error["timestampMs"])
     assert error["module"] == "LemonControlPlane.LogRingTest"
 
-    errors = LogRing.get_logs(1_000, "error") |> Enum.filter(&(&1["message"] =~ marker))
+    assert {:ok, error_entries} = LogRing.get_logs(1_000, "error")
+    errors = Enum.filter(error_entries, &(&1["message"] =~ marker))
     assert [%{"level" => "error"}] = errors
 
     assert {:ok, result} =
@@ -42,11 +44,11 @@ defmodule LemonControlPlane.LogRingTest do
       Logger.error("#{marker} big " <> String.duplicate("x", 5_000))
     end)
 
-    entries = LogRing.get_logs(5_000, nil)
+    assert {:ok, entries} = LogRing.get_logs(5_000, nil)
     assert length(entries) <= 1_000
     big = Enum.find(entries, &(&1["message"] =~ "#{marker} big"))
     assert byte_size(big["message"]) <= 2_048 + 3
     assert List.last(entries)["message"] =~ "#{marker} big"
-    assert LogRing.get_logs(3, nil) |> length() == 3
+    assert {:ok, [_, _, _]} = LogRing.get_logs(3, nil)
   end
 end

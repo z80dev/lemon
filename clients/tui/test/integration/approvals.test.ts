@@ -254,10 +254,8 @@ describe("approval flow", () => {
 		const frame = await server.waitForRequest("exec.approval.resolve");
 		expect(frame.params).toEqual({ approvalId: "ap-bg", decision: "approve_session" });
 		await waitFor(() => app.store.pendingApprovals === 0, { what: "the approval to clear" });
-		expect(approvalBlock(app, "someone-else")).toMatchObject({
-			status: "resolved",
-			decision: "approve_session",
-		});
+		// A session this client never opened keeps no transcript store for the record.
+		expect(app.store.sessions.has("someone-else")).toBe(false);
 	});
 
 	test("/deny answers through the same path", async () => {

@@ -28,7 +28,7 @@ defmodule LemonEvals.Evals.LiveModel do
   alias LemonCore.Env
   alias LemonEvals.Types
   alias LemonSkills.Curator
-  alias LemonSkills.Tools.{Recall, Remember}
+  alias LemonSkills.Tools.Remember
   alias LemonAi.Types.{Model, ModelCost, TextContent}
 
   @live_evals [
@@ -68,20 +68,14 @@ defmodule LemonEvals.Evals.LiveModel do
           File.mkdir_p!(project_dir)
           File.mkdir_p!(home_dir)
 
-          {:ok, search_calls} = Agent.start_link(fn -> [] end)
-
-          search_fn = fn query, opts ->
-            Agent.update(search_calls, &[{query, opts} | &1])
-
+          docs =
             [eval_memory_doc("prior-release-handoff", project_dir, home_dir)]
-          end
 
-          search_tool =
-            Recall.tool(project_dir,
+          {search_tool, search_calls} =
+            eval_recall_tool(project_dir, docs,
               workspace_dir: home_dir,
               agent_id: "eval",
-              session_scope: :main,
-              search_fn: search_fn
+              session_scope: :main
             )
 
           context =
@@ -151,19 +145,14 @@ defmodule LemonEvals.Evals.LiveModel do
           File.mkdir_p!(project_dir)
           File.mkdir_p!(home_dir)
 
-          {:ok, search_calls} = Agent.start_link(fn -> [] end)
-
-          search_fn = fn query, opts ->
-            Agent.update(search_calls, &[{query, opts} | &1])
+          docs =
             []
-          end
 
-          search_tool =
-            Recall.tool(project_dir,
+          {search_tool, search_calls} =
+            eval_recall_tool(project_dir, docs,
               workspace_dir: home_dir,
               agent_id: "live-model-remember-eval",
-              session_scope: :main,
-              search_fn: search_fn
+              session_scope: :main
             )
 
           tool_opts = [
@@ -273,19 +262,14 @@ defmodule LemonEvals.Evals.LiveModel do
             """
           )
 
-          {:ok, search_calls} = Agent.start_link(fn -> [] end)
-
-          search_fn = fn query, opts ->
-            Agent.update(search_calls, &[{query, opts} | &1])
+          docs =
             []
-          end
 
-          search_tool =
-            Recall.tool(project_dir,
+          {search_tool, search_calls} =
+            eval_recall_tool(project_dir, docs,
               workspace_dir: home_dir,
               agent_id: "eval",
-              session_scope: :main,
-              search_fn: search_fn
+              session_scope: :main
             )
 
           memory_tool =
@@ -658,20 +642,14 @@ defmodule LemonEvals.Evals.LiveModel do
           File.mkdir_p!(project_dir)
           File.mkdir_p!(home_dir)
 
-          {:ok, search_calls} = Agent.start_link(fn -> [] end)
-
-          search_fn = fn query, opts ->
-            Agent.update(search_calls, &[{query, opts} | &1])
-
+          docs =
             [eval_memory_doc("cron-rollup-prior-run", project_dir, home_dir)]
-          end
 
-          search_tool =
-            Recall.tool(project_dir,
+          {search_tool, search_calls} =
+            eval_recall_tool(project_dir, docs,
               workspace_dir: home_dir,
               agent_id: "eval",
-              session_scope: :main,
-              search_fn: search_fn
+              session_scope: :main
             )
 
           policy = %{blocked_tools: ["cron"]}

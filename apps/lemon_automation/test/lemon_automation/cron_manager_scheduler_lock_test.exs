@@ -151,6 +151,7 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
       due_job.id
       |> CronRun.new(:schedule)
       |> CronRun.start("router_stale_lock")
+      |> Map.put(:meta, %{submission_started: true})
 
     stale_run = %{stale_run | started_at_ms: LemonCore.Clock.now_ms() - 1_000}
     CronStore.put_run(stale_run)
@@ -196,6 +197,7 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
       due_job.id
       |> CronRun.new(:schedule)
       |> CronRun.start("router_restart_lock")
+      |> Map.put(:meta, %{submission_started: true})
 
     CronStore.put_run(existing_run)
 
@@ -235,6 +237,7 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
       stale_job.id
       |> CronRun.new(:schedule)
       |> CronRun.start("router_restart_stale")
+      |> Map.put(:meta, %{submission_started: true})
 
     stale_run = %{stale_run | started_at_ms: LemonCore.Clock.now_ms() - 1_000}
     CronStore.put_run(stale_run)

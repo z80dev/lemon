@@ -255,7 +255,8 @@ defmodule LemonChannels.OutboxDurabilityTest do
     refute_receive {:attempt, _, _, _}, 0
 
     second = payload(ctx, "queued-behind-failure", "two")
-    request = :gen_server.send_request(outbox, {:enqueue, second})
+    # Short content: the caller-side chunking of `second` is `[second]`.
+    request = :gen_server.send_request(outbox, {:enqueue, second, [second]})
     # This synchronous inspection is an explicit mailbox barrier: the second
     # admission has reserved its slot behind the first failed storage operation.
     assert Outbox.stats(outbox).queue_depth == 2

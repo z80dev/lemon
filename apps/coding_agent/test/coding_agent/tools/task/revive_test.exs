@@ -24,7 +24,7 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
     child = launch(cwd, idle_ttl_ms: 60_000, block_second: true)
     assert {:ok, session} = CodingAgent.lookup_session(child.session_id)
     TaskStore.suppress_auto_followup(child.id)
-    assert {{:timeout, {:park, child.id}}, :park} in active_timeouts()
+    assert {:state_timeout, :park} in active_timeouts(child.id)
 
     assert %AgentToolResult{details: %{delivery: "woken"}} =
              Write.execute(
@@ -47,7 +47,7 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
     assert inspect(context.messages) =~ "Remember the original assignment"
     assert_receive {:stream_blocked, producer}, 5_000
     assert entry(child.id).phase == :running
-    refute {{:timeout, {:park, child.id}}, :park} in active_timeouts()
+    refute {:state_timeout, :park} in active_timeouts(child.id)
     send(producer, :release_stream)
     assert_receive {:child_reply, reply}, 5_000
     assert inspect(reply.content) =~ "answer-2"
@@ -334,7 +334,7 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
 
     on_exit(fn ->
       Control.command(id, "cancel", nil, opts)
-      Control.complete(id)
+      CodingAgent.TaskRuntimeHelpers.stop(id)
       TaskStore.delete_task(id)
     end)
 
@@ -347,13 +347,11 @@ defmodule CodingAgent.Tools.Task.ReviveTest do
     }
   end
 
-  defp entry(id) do
-    {:ready, entries} = :sys.get_state(Control)
-    entries[id]
-  end
+  defp entry(id), do: CodingAgent.TaskRuntimeHelpers.entry(id)
 
-  defp active_timeouts do
-    {:status, _, _, [_, _, _, _, status]} = :sys.get_status(Control)
+  defp active_timeouts(id) do
+    {:status, _, _, [_, _, _, _, status]} =
+      :sys.get_status(CodingAgent.TaskRuntime.whereis(id))
 
     [{_count, timeouts}] =
       for {:data, fields} <- status, {~c"Time-outs", value} <- fields, do: value

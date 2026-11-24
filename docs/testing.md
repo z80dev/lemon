@@ -37,7 +37,7 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 | `fast` | `mix compile --warnings-as-errors`, then `mix test --exclude integration` (no coverage). |
 | `changed` | Selects the merge-base-to-working-tree diff (including untracked non-ignored files), compiles with warnings as errors, then runs affected apps and reverse dependencies excluding integration; full scope falls back to `fast`. Runs client, Lemon Bot and docs checks when selected. |
 | `premerge` | Changed-file format check, changed-file `mix credo` with quality's default configuration, skip-tag guard, changed changelog validation, then `changed --narrow`; stops at the first failure and prints step timings. |
-| `quality` | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix credo`, the skip-tag guard, `scripts/check_changelog`, `python3 scripts/test_changed_tests.py`, `shellcheck` on the test/install/update/launcher scripts, `scripts/test_lemon_tui_auth.sh`, `scripts/test_lemon_launcher_reuse.sh`, `scripts/test_lemonup.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the quality/eval-harness tests. |
+| `quality` | `mix compile --warnings-as-errors`, `mix format --check-formatted`, `mix credo`, the skip-tag guard, `scripts/check_changelog`, `python3 scripts/test_changed_tests.py`, the docs source-reference check (`scripts/check_docs_source_refs.mjs` and its tests), `shellcheck` on the test/install/update/launcher scripts, `scripts/test_lemon_tui_auth.sh`, `scripts/test_lemon_launcher_reuse.sh`, `scripts/test_lemonup.sh`, `mix lemon.skill.lint`, `mix lemon.quality`, and the quality/eval-harness tests. |
 | `clients` | `clients/tui`: `bun install --frozen-lockfile`, `bun run check`, `bun run lint`, `bun test`. `clients/lemon-browser-node`: `npm ci`, `typecheck`, `lint`, `build`, `npm test`. |
 | `lemon_bot` | Frozen Bun installs in `products/lemon_bot/backend` and `web`; backend `bun test`, then web `bun run build` and `bun run test`. |
 | `coverage` | `mix compile --warnings-as-errors`, then `mix test --exclude integration --cover` with each app's `test_coverage` threshold. |
@@ -53,7 +53,7 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 `LemonCore.Quality.ArchitecturePolicy`, and that no two test modules share a
 name. Add `--validate-config` to also validate the runtime config.
 
-`quality` needs `shellcheck` and `python3` on `PATH`. Client lanes reinstall
+`quality` needs `shellcheck`, `python3` and `node` on `PATH`. Client lanes reinstall
 dependencies; set `LEMON_TEST_REUSE_NODE_MODULES=1` to reuse existing
 `node_modules` in local loops.
 
@@ -436,7 +436,7 @@ for synchronization patterns that replace `Process.sleep/1`.
 Live runs must opt in to real credentials explicitly:
 
 ```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 scripts/test path apps/some_app/test --include integration
+LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 scripts/test path apps/<app>/test --include integration
 scripts/test live-eval
 ```
 

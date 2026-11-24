@@ -8,30 +8,24 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   opts, config, or secrets). Registered as a builtin tool in `CodingAgent.ToolRegistry`.
   """
 
-  alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
+  alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonAgent.Security.ExternalContent
   alias LemonAgent.Tools.AbortHelpers
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonCore.Config
   alias LemonSkills.Tools.MediaCommon
-  alias LemonMedia.MediaJobSupervisor
 
   import LemonSkills.Tools.MediaCommon,
     only: [
       bounded_integer: 3,
       optional_string: 1,
-      provider_config_value: 2,
-      provider_error_kind: 1,
-      reject_blank_values: 1,
-      stringify_atoms: 1,
-      transient_status?: 1,
-      wait_for_job: 3
+      provider_config_value: 2
     ]
 
-  @topic "media_jobs"
-  @default_timeout_ms 15_000
-  @max_timeout_ms 120_000
+  @local_timeout_ms 15_000
+  @provider_timeout_ms 180_000
+  @max_timeout_ms 600_000
   @max_audio_bytes 25 * 1024 * 1024
   @local_provider "local_transcript"
   @openai_provider "openai_transcribe"
@@ -133,7 +127,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
             "description" => "Maximum time to wait for the supervised media worker."
           }
         },
-        "required" => ["audioPath"]
+        "required" => ["audioPath", "provider"]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -146,7 +140,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   Reads from `params`:
 
   - `"audioPath"` (required) - local audio file path under `cwd`
-  - `"provider"` (default `"local_transcript"`) - `"local_transcript"`,
+  - `"provider"` (required) - `"local_transcript"`,
     `"openai_transcribe"`, or `"deepgram_transcribe"`
   - `"model"` (optional) - provider model override
   - `"language"` (optional) - input language hint
@@ -156,7 +150,8 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
     `"json"` or `"text"`
   - `"maxRetries"` (default `1`, clamped to 0-3) - transient provider retries
   - `"sendToChannel"` (default `false`) - request final Telegram/Discord delivery
-  - `"timeoutMs"` (default `15_000`, clamped to 100-120_000) - media worker wait
+  - `"timeoutMs"` (default `15_000` local or `180_000` provider-backed,
+    clamped to 100-600_000) - media worker wait
 
   Returns `%LemonAgent.Types.AgentToolResult{}` on success with `content` holding
   the pretty-printed JSON payload and `details` the payload map (job id/status/type,
@@ -171,12 +166,12 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
          {:ok, audio} <- audio_file(params, cwd),
          {:ok, provider} <- provider(params),
          {:ok, generation} <- generation(provider, params),
-         {:ok, timeout_ms} <- MediaCommon.timeout_ms(params, @default_timeout_ms, @max_timeout_ms),
+         {:ok, timeout_ms} <-
+           MediaCommon.timeout_ms(params, default_timeout_ms(provider), @max_timeout_ms),
          {:ok, artifact_path} <-
            MediaCommon.artifact_path(params, cwd, opts, generation.format, "media-transcript"),
-         :ok <- Phoenix.PubSub.subscribe(LemonCore.PubSub, @topic),
-         {:ok, _pid, queued_job} <-
-           MediaJobSupervisor.start_job(
+         {:ok, completed_job} <-
+           MediaCommon.run_job(
              %{
                type: :stt,
                provider: provider,
@@ -189,11 +184,13 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
                cwd,
                opts,
                artifact_path,
-               runner(cwd, opts, artifact_path, audio, generation)
-             )
-           ),
-         :ok <- AbortHelpers.check_abort(signal),
-         {:ok, completed_job} <- wait_for_job(queued_job.job_id, timeout_ms, signal) do
+               MediaCommon.runner(generation, artifact_path, runtime(cwd, opts, generation), %{
+                 audio: audio
+               })
+             ),
+             timeout_ms,
+             signal
+           ) do
       payload = payload(completed_job, artifact_path, params)
 
       %AgentToolResult{
@@ -251,7 +248,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   defp audio_size(_stat), do: {:error, "audio file must be 25MB or smaller"}
 
   defp provider(params) do
-    case Map.get(params, "provider", @local_provider) do
+    case Map.get(params, "provider") do
       @local_provider ->
         {:ok, @local_provider}
 
@@ -261,6 +258,9 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
       @deepgram_provider ->
         {:ok, @deepgram_provider}
 
+      nil ->
+        {:error, "provider is required"}
+
       other when is_binary(other) ->
         {:error, "unsupported media transcription provider: #{other}"}
 
@@ -268,6 +268,9 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
         {:error, "provider must be a string"}
     end
   end
+
+  defp default_timeout_ms(@local_provider), do: @local_timeout_ms
+  defp default_timeout_ms(_provider), do: @provider_timeout_ms
 
   defp generation(@local_provider, _params) do
     {:ok,
@@ -309,48 +312,9 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
     end
   end
 
-  defp runner(_cwd, _opts, artifact_path, audio, %{provider: @local_provider}) do
-    &run_local_transcript(&1, artifact_path, audio)
-  end
-
-  defp runner(cwd, opts, artifact_path, audio, %{provider: @openai_provider} = generation) do
-    runtime = openai_runtime(cwd, opts)
-    &run_openai_transcription(&1, artifact_path, audio, generation, runtime)
-  end
-
-  defp runner(cwd, opts, artifact_path, audio, %{provider: @deepgram_provider} = generation) do
-    runtime = deepgram_runtime(cwd, opts)
-    &run_deepgram_transcription(&1, artifact_path, audio, generation, runtime)
-  end
-
-  defp run_local_transcript(_attrs, artifact_path, audio) do
-    transcript = "local transcript preview for audio #{String.slice(audio.hash, 0, 12)}"
-
-    write_transcript_artifact(
-      artifact_path,
-      Jason.encode!(%{"text" => transcript}, pretty: true),
-      transcript
-    )
-  end
-
-  defp run_openai_transcription(_attrs, artifact_path, audio, generation, runtime) do
-    with {:ok, api_key} <-
-           MediaCommon.provider_api_key(runtime, :missing_openai_transcription_api_key),
-         {:ok, response} <- post_openai_transcription(audio, generation, runtime, api_key),
-         {:ok, transcript, content} <-
-           normalize_transcription_response(response, generation.format) do
-      write_transcript_artifact(artifact_path, content, transcript)
-    end
-  end
-
-  defp run_deepgram_transcription(_attrs, artifact_path, audio, generation, runtime) do
-    with {:ok, api_key} <- generic_api_key(runtime, :missing_deepgram_transcription_api_key),
-         {:ok, response} <- post_deepgram_transcription(audio, generation, runtime, api_key),
-         {:ok, transcript, content} <-
-           normalize_deepgram_response(response, generation.format) do
-      write_transcript_artifact(artifact_path, content, transcript)
-    end
-  end
+  defp runtime(_cwd, _opts, %{provider: @local_provider}), do: nil
+  defp runtime(cwd, opts, %{provider: @openai_provider}), do: openai_runtime(cwd, opts)
+  defp runtime(cwd, opts, %{provider: @deepgram_provider}), do: deepgram_runtime(cwd, opts)
 
   defp openai_runtime(cwd, opts) do
     config = Keyword.get_lazy(opts, :media_transcription_config, fn -> Config.load(cwd) end)
@@ -364,241 +328,34 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
         Keyword.get(opts, :openai_transcription_base_url)
       )
 
-    Map.put(
-      endpoint,
-      :http_post,
-      Keyword.get(opts, :media_transcription_http_post, &Req.post/2)
-    )
+    Map.merge(endpoint, %{
+      credential: MediaCommon.credential(endpoint, :missing_openai_transcription_api_key),
+      http_post: Keyword.get(opts, :media_transcription_http_post)
+    })
   end
 
   defp deepgram_runtime(cwd, opts) do
     config = Keyword.get_lazy(opts, :media_transcription_config, fn -> Config.load(cwd) end)
     voice_cfg = get_in(config.gateway, [:voice]) || %{}
 
-    %{
+    key_source = %{
       api_key: Keyword.get(opts, :deepgram_transcription_api_key),
       api_key_secret: provider_config_value(voice_cfg, :deepgram_api_key_secret),
       env_var: "DEEPGRAM_API_KEY",
       default_secret_names: ["DEEPGRAM_API_KEY", "deepgram_api_key"],
-      config_api_key: provider_config_value(voice_cfg, :deepgram_api_key),
+      config_api_key: provider_config_value(voice_cfg, :deepgram_api_key)
+    }
+
+    %{
+      credential: fn ->
+        MediaCommon.secret_api_key(key_source, :missing_deepgram_transcription_api_key)
+      end,
       base_url:
         Keyword.get(opts, :deepgram_transcription_base_url) ||
           optional_string(provider_config_value(voice_cfg, :deepgram_base_url)) ||
           @default_deepgram_base_url,
-      http_post: Keyword.get(opts, :media_transcription_http_post, &Req.post/2)
+      http_post: Keyword.get(opts, :media_transcription_http_post)
     }
-  end
-
-  defp post_openai_transcription(audio, generation, runtime, api_key) do
-    url = String.trim_trailing(runtime.base_url, "/") <> "/audio/transcriptions"
-    boundary = "lemon-media-#{System.unique_integer([:positive])}"
-
-    fields =
-      %{
-        "model" => generation.model,
-        "response_format" => generation.format,
-        "language" => generation.language,
-        "prompt" => generation.prompt
-      }
-      |> reject_blank_values()
-
-    request_opts = [
-      headers: [
-        {"authorization", "Bearer #{api_key}"},
-        {"content-type", "multipart/form-data; boundary=#{boundary}"}
-      ],
-      body: multipart_body(boundary, fields, audio),
-      receive_timeout: 300_000
-    ]
-
-    do_post_openai_transcription(runtime, url, request_opts, generation.max_retries)
-  end
-
-  defp do_post_openai_transcription(runtime, url, request_opts, remaining_retries) do
-    case runtime.http_post.(url, request_opts) do
-      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
-      {:ok, %{status: status, body: response_body}} ->
-        if transient_status?(status) and remaining_retries > 0 do
-          do_post_openai_transcription(runtime, url, request_opts, remaining_retries - 1)
-        else
-          {:error, {:openai_transcription_http_error, status, provider_error_kind(response_body)}}
-        end
-
-      {:error, _reason} when remaining_retries > 0 ->
-        do_post_openai_transcription(runtime, url, request_opts, remaining_retries - 1)
-
-      {:error, reason} ->
-        {:error, {:openai_transcription_request_failed, provider_error_kind(reason)}}
-    end
-  end
-
-  defp post_deepgram_transcription(audio, generation, runtime, api_key) do
-    query =
-      %{
-        "model" => generation.model,
-        "smart_format" => "true",
-        "language" => generation.language
-      }
-      |> reject_blank_values()
-      |> URI.encode_query()
-
-    url = String.trim_trailing(runtime.base_url, "/") <> "/listen?" <> query
-
-    request_opts = [
-      headers: [
-        {"authorization", "Token #{api_key}"},
-        {"content-type", audio.mime_type}
-      ],
-      body: audio.bytes,
-      receive_timeout: 300_000
-    ]
-
-    do_post_deepgram_transcription(runtime, url, request_opts, generation.max_retries)
-  end
-
-  defp do_post_deepgram_transcription(runtime, url, request_opts, remaining_retries) do
-    case runtime.http_post.(url, request_opts) do
-      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
-      {:ok, %{status: status, body: response_body}} ->
-        if transient_status?(status) and remaining_retries > 0 do
-          do_post_deepgram_transcription(runtime, url, request_opts, remaining_retries - 1)
-        else
-          {:error,
-           {:deepgram_transcription_http_error, status, provider_error_kind(response_body)}}
-        end
-
-      {:error, _reason} when remaining_retries > 0 ->
-        do_post_deepgram_transcription(runtime, url, request_opts, remaining_retries - 1)
-
-      {:error, reason} ->
-        {:error, {:deepgram_transcription_request_failed, provider_error_kind(reason)}}
-    end
-  end
-
-  defp multipart_body(boundary, fields, audio) do
-    field_parts =
-      Enum.map(fields, fn {name, value} ->
-        [
-          "--",
-          boundary,
-          "\r\ncontent-disposition: form-data; name=\"",
-          name,
-          "\"\r\n\r\n",
-          to_string(value),
-          "\r\n"
-        ]
-      end)
-
-    file_part = [
-      "--",
-      boundary,
-      "\r\ncontent-disposition: form-data; name=\"file\"; filename=\"",
-      audio.name,
-      "\"\r\ncontent-type: ",
-      audio.mime_type,
-      "\r\n\r\n",
-      audio.bytes,
-      "\r\n--",
-      boundary,
-      "--\r\n"
-    ]
-
-    IO.iodata_to_binary([field_parts, file_part])
-  end
-
-  defp normalize_transcription_response(response, "json") when is_map(response) do
-    text = optional_string(response["text"]) || optional_string(response[:text]) || ""
-    {:ok, text, Jason.encode!(stringify_atoms(response), pretty: true)}
-  end
-
-  defp normalize_transcription_response(response, "json") when is_binary(response) do
-    case Jason.decode(response) do
-      {:ok, decoded} when is_map(decoded) -> normalize_transcription_response(decoded, "json")
-      _ -> {:ok, response, Jason.encode!(%{"text" => response}, pretty: true)}
-    end
-  end
-
-  defp normalize_transcription_response(response, "text") when is_binary(response) do
-    {:ok, response, response}
-  end
-
-  defp normalize_transcription_response(response, "text") when is_map(response) do
-    text =
-      optional_string(response["text"]) || optional_string(response[:text]) ||
-        Jason.encode!(response)
-
-    {:ok, text, text}
-  end
-
-  defp normalize_deepgram_response(response, "json") when is_map(response) do
-    transcript = deepgram_transcript(response)
-
-    content =
-      response
-      |> stringify_atoms()
-      |> Map.put("text", transcript)
-      |> Jason.encode!(pretty: true)
-
-    {:ok, transcript, content}
-  end
-
-  defp normalize_deepgram_response(response, "json") when is_binary(response) do
-    case Jason.decode(response) do
-      {:ok, decoded} when is_map(decoded) -> normalize_deepgram_response(decoded, "json")
-      _ -> {:ok, response, Jason.encode!(%{"text" => response}, pretty: true)}
-    end
-  end
-
-  defp normalize_deepgram_response(response, "text") when is_map(response) do
-    transcript = deepgram_transcript(response)
-    {:ok, transcript, transcript}
-  end
-
-  defp normalize_deepgram_response(response, "text") when is_binary(response) do
-    case Jason.decode(response) do
-      {:ok, decoded} when is_map(decoded) -> normalize_deepgram_response(decoded, "text")
-      _ -> {:ok, response, response}
-    end
-  end
-
-  defp deepgram_transcript(response) do
-    get_in(response, [
-      "results",
-      "channels",
-      Access.at(0),
-      "alternatives",
-      Access.at(0),
-      "transcript"
-    ]) ||
-      get_in(response, [
-        :results,
-        :channels,
-        Access.at(0),
-        :alternatives,
-        Access.at(0),
-        :transcript
-      ]) ||
-      optional_string(response["text"]) ||
-      optional_string(response[:text]) ||
-      ""
-  end
-
-  defp write_transcript_artifact(artifact_path, content, transcript) when is_binary(content) do
-    with :ok <- MediaCommon.write_artifact(artifact_path, content),
-         {:ok, stat} <- File.stat(artifact_path) do
-      {:ok,
-       %{
-         artifact_path: artifact_path,
-         artifact_name: Path.basename(artifact_path),
-         mime_type: mime_type_from_path(artifact_path),
-         bytes: stat.size,
-         transcript: transcript
-       }}
-    end
   end
 
   defp payload(job, artifact_path, params) do
@@ -660,46 +417,6 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
       _ -> "text/plain"
     end
   end
-
-  defp generic_api_key(%{api_key: key}, _missing) when is_binary(key) and key != "",
-    do: {:ok, key}
-
-  # Candidates are tried in order and only a definite miss advances: an
-  # unreadable secret must never be replaced by a weaker alias or env key.
-  defp generic_api_key(runtime, missing) do
-    candidates =
-      [
-        {:value, System.get_env(runtime.env_var)},
-        {:value, runtime.config_api_key},
-        {:secret, runtime.api_key_secret}
-      ] ++ Enum.map(runtime.default_secret_names, &{:secret, &1})
-
-    Enum.reduce_while(candidates, {:error, missing}, fn candidate, acc ->
-      case api_key_candidate(candidate) do
-        {:ok, key} -> {:halt, {:ok, key}}
-        :miss -> {:cont, acc}
-        :error -> {:halt, {:error, :api_key_secret_unreadable}}
-      end
-    end)
-  end
-
-  defp api_key_candidate({:value, key}) when is_binary(key) and key != "", do: {:ok, key}
-  defp api_key_candidate({:value, _}), do: :miss
-
-  defp api_key_candidate({:secret, name}) when is_binary(name) and name != "" do
-    case Credentials.fetch_secret_api_key(name) do
-      {:ok, key} when is_binary(key) and key != "" -> {:ok, key}
-      {:ok, _blank} -> :miss
-      :miss -> :miss
-      _ -> :error
-    end
-  rescue
-    _ -> :error
-  catch
-    _, _ -> :error
-  end
-
-  defp api_key_candidate({:secret, _}), do: :miss
 
   defp hash(value) do
     :crypto.hash(:sha256, value)

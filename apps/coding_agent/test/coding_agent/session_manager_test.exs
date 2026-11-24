@@ -702,7 +702,12 @@ defmodule CodingAgent.SessionManagerTest do
         |> SessionManager.append_entry(SessionEntry.custom_message("prompt", "content"))
         |> SessionManager.append_entry(SessionEntry.branch_summary("id", "summary"))
         |> SessionManager.append_entry(SessionEntry.label("target", "my-label"))
-        |> SessionManager.append_entry(SessionEntry.session_info("session name"))
+        # Retired type: nothing writes it any more, but older journals keep theirs.
+        |> SessionManager.append_entry(%SessionEntry{
+          type: :session_info,
+          name: "session name",
+          timestamp: 1
+        })
         |> SessionManager.append_entry(SessionEntry.custom("custom_type", %{key: "value"}))
 
       :ok = SessionManager.save_to_file(path, session)
@@ -901,13 +906,6 @@ defmodule CodingAgent.SessionManagerTest do
       assert entry.type == :label
       assert entry.target_id == "target-id"
       assert entry.label == "important"
-    end
-
-    test "session_info/2 creates session info entry" do
-      entry = SessionEntry.session_info("My Session Name")
-
-      assert entry.type == :session_info
-      assert entry.name == "My Session Name"
     end
 
     test "custom/3 creates custom entry" do

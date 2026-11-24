@@ -70,14 +70,25 @@ defmodule LemonBrowser.UserProfileTest do
     assert File.read!(marker) == "fixture"
   end
 
-  test "profile identity changes fail closed for a running driver", %{server: server, dir: dir} do
-    System.put_env("LEMON_BROWSER_USER_DATA_DIR", Path.join(dir, "dedicated"))
+  test "a profile change recycles an idle driver onto the new profile", %{
+    server: server,
+    dir: dir
+  } do
+    data = Path.join(dir, "dedicated")
+    System.put_env("LEMON_BROWSER_USER_DATA_DIR", data)
     System.put_env("LEMON_BROWSER_PROFILE_DIRECTORY", "Default")
     first = LocalServer.status(server).driver_config.profile_identity_hash
-    assert {:ok, _} = LocalServer.request(server, "browser.tabs", %{}, 1_000)
+
+    assert {:ok, [_, ^data, _, "Default"]} =
+             LocalServer.request(server, "browser.tabs", %{}, 1_000)
+
+    first_pid = LocalServer.status(server).port.os_pid
     System.put_env("LEMON_BROWSER_PROFILE_DIRECTORY", "Profile 1")
-    assert {:error, error} = LocalServer.request(server, "browser.tabs", %{}, 1_000)
-    assert error =~ "identity changed"
+
+    assert {:ok, [_, ^data, _, "Profile 1"]} =
+             LocalServer.request(server, "browser.tabs", %{}, 1_000)
+
+    refute LocalServer.status(server).port.os_pid == first_pid
     System.put_env("LEMON_BROWSER_USER_DATA_DIR", Path.join(dir, "other"))
     {:ok, other} = LocalServer.start_link(name: nil)
     on_exit(fn -> LocalServer.stop(other) end)

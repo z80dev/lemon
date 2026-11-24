@@ -75,6 +75,9 @@ defmodule LemonCore.Application do
 
     config_cache_opts = Application.get_env(:lemon_core, LemonCore.ConfigCache, [])
     _ = LemonCore.ExecApprovalExpiry.init_runtime_id()
+    # Captures this OS process's identity once for every lock acquisition and
+    # logs an error when `ps` (needed to verify other holders) is missing.
+    _ = LemonCore.Service.Identity.boot_check()
 
     children =
       [

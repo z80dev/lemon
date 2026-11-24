@@ -64,7 +64,11 @@ but direct runtime callers bypass that protection. See the canonical
 Native executor death publishes an immediate structured `:executor_down`
 completion and releases the permit/claim. The native session runner monitors its
 event sink and aborts/saves/stops its owned session when that sink disappears.
-Terminal receipts are durable before their bus notification is emitted.
+Terminal receipts are durable before their bus notification is emitted. Every
+Run exit path publishes one: losing the permit authority completes waiting and
+running Runs with `:runtime_unavailable`, and an unreadable terminal fence with
+`:run_state_unavailable`. A Run registers its run ID before
+`submit_execution/1` returns, so the router monitors it while it waits for a permit.
 Cancellation of a running native session retains its slot until ordered terminal
 tool results and the agent's cancellation/error event have drained. The original
 cancellation reason wins even if the executor races with successful completion;

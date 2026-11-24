@@ -1,7 +1,7 @@
 defmodule LemonAi.Providers.ProviderParityTest do
   use ExUnit.Case, async: true
 
-  alias LemonAi.{EventStream, Providers.OpenAIResponsesShared, Providers.SSEParser}
+  alias LemonAi.{EventStream, Providers.OpenAIResponsesShared, Providers.StreamTransport}
   alias LemonAi.Types.{AssistantMessage, Cost, Model, ModelCost, Usage}
 
   test "parallel tool argument streams route by item ID and authoritative final arguments" do
@@ -94,7 +94,7 @@ defmodule LemonAi.Providers.ProviderParityTest do
     send(self(), {ref, :done})
 
     assert [%{"type" => "response.completed", "text" => "café"}] =
-             Enum.to_list(SSEParser.events(response, 100))
+             Enum.to_list(StreamTransport.sse_events(response, 100))
 
     assert_received {^other, {:data, "unrelated"}}
   end
@@ -112,19 +112,21 @@ defmodule LemonAi.Providers.ProviderParityTest do
 
     send(self(), {ref, {:data, "data: {\"type\":\"response.completed\"}"}})
     send(self(), {ref, :done})
-    assert [%{"type" => "response.completed"}] = Enum.to_list(SSEParser.events(response, 100))
 
-    assert {:stream_error, "Provider stream timed out"} =
-             catch_throw(Enum.to_list(SSEParser.events(response, 1)))
+    assert [%{"type" => "response.completed"}] =
+             Enum.to_list(StreamTransport.sse_events(response, 100))
+
+    assert [{:stream_error, %{category: :transient, retryable: true}}] =
+             Enum.to_list(StreamTransport.sse_events(response, 1))
   end
 
   test "Responses does not report a disconnected generation as successful" do
     {:ok, stream} = EventStream.start_link()
 
-    assert {:error, message} =
+    assert {:error, %{category: :transient, retryable: true, message: message}} =
              OpenAIResponsesShared.process_stream([], %AssistantMessage{}, stream, %Model{})
 
-    assert message =~ "Connection closed"
+    assert message =~ "closed before the response completed"
     EventStream.cancel(stream, :test_cleanup)
   end
 

@@ -121,7 +121,9 @@ defmodule CodingAgent.BackgroundRun.Worker do
       end
     end
 
-    semaphore = Process.whereis(CodingAgent.TaskSemaphore)
+    # `/bg` runs have their own pool so idle background sessions never hold
+    # the native task slots.
+    semaphore = Process.whereis(CodingAgent.BackgroundRunSemaphore)
     if semaphore, do: Semaphore.acquire(semaphore)
 
     try do

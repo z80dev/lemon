@@ -165,6 +165,136 @@ defmodule LemonGateway.SlotsTest do
     )
   end
 
+  describe "lending a blocked run's permit" do
+    test "two parents with sync children complete under cap 2", %{server: server} do
+      run_tree(server, "p1", 1, self())
+      run_tree(server, "p2", 1, self())
+
+      assert_receive {:done, "p1"}, 2_000
+      assert_receive {:done, "p2"}, 2_000
+      assert stats(server) == %{in_flight: 0, waitq: 0, max: 2}
+    end
+
+    test "depth-2 delegation does not deadlock, even under cap 1" do
+      start_supervised!({Slots, name: LemonGateway.SlotsTest.One, max: 1}, id: :one)
+      run_tree(LemonGateway.SlotsTest.One, "root", 2, self())
+
+      assert_receive {:done, "root"}, 2_000
+
+      assert eventually(fn ->
+               match?({:ok, %{in_flight: 0, waitq: 0}}, Slots.stats(LemonGateway.SlotsTest.One))
+             end)
+    end
+
+    test "a resumed run re-enters at the front of the queue", %{server: server} do
+      acquire(server, "a", owner(:a))
+      acquire(server, "x", owner(:x))
+      assert_receive {:a, {:slot_granted, _}}
+      assert_receive {:x, {:slot_granted, x_permit}}
+      acquire(server, "b", owner(:b))
+      acquire(server, "c", owner(:c))
+
+      assert {:ok, token} = Slots.suspend("a", server)
+      assert_receive {:b, {:slot_granted, b_permit}}
+      assert stats(server) == %{in_flight: 2, waitq: 1, max: 2}
+
+      resumed = Task.async(fn -> Slots.resume(token, :wait, server) end)
+      refute Task.yield(resumed, 50)
+
+      GenServer.cast(server, {:release, b_permit})
+      assert :ok = Task.await(resumed)
+      refute_receive {:c, {:slot_granted, _}}, 50
+      assert stats(server) == %{in_flight: 2, waitq: 1, max: 2}
+
+      GenServer.cast(server, {:release, x_permit})
+      assert_receive {:c, {:slot_granted, _}}
+    end
+
+    test "parallel suspensions of one run re-queue it once, after the last", %{server: server} do
+      acquire(server, "a", owner(:a))
+      assert_receive {:a, {:slot_granted, _}}
+      assert {:ok, first} = Slots.suspend("a", server)
+      assert {:ok, second} = Slots.suspend("a", server)
+      assert stats(server) == %{in_flight: 0, waitq: 0, max: 2}
+
+      assert :ok = Slots.resume(first, :wait, server)
+      assert stats(server) == %{in_flight: 0, waitq: 0, max: 2}
+      assert :ok = Slots.resume(second, :wait, server)
+      assert stats(server) == %{in_flight: 1, waitq: 0, max: 2}
+    end
+
+    test "holder death, nowait resume and run release end suspensions", %{server: server} do
+      acquire(server, "a", owner(:a))
+      assert_receive {:a, {:slot_granted, a_permit}}
+      parent = self()
+
+      holder =
+        spawn(fn ->
+          send(parent, {:suspended, Slots.suspend("a", server)})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:suspended, {:ok, _token}}
+      assert stats(server) == %{in_flight: 0, waitq: 0, max: 2}
+      stop_owner(holder)
+      # The authority observes the holder's death independently of this test.
+      assert eventually(fn -> stats(server) == %{in_flight: 1, waitq: 0, max: 2} end)
+
+      assert {:ok, token} = Slots.suspend("a", server)
+      :ok = Slots.resume(token, :nowait, server)
+      assert stats(server) == %{in_flight: 1, waitq: 0, max: 2}
+
+      assert {:ok, token} = Slots.suspend("a", server)
+      GenServer.cast(server, {:release, a_permit})
+      assert :ok = Slots.resume(token, :wait, server)
+      assert stats(server) == %{in_flight: 0, waitq: 0, max: 2}
+      assert {:monitors, []} = Process.info(server, :monitors)
+    end
+
+    test "only a run holding a permit can lend it", %{server: server} do
+      assert {:error, :not_holding} = Slots.suspend("unknown", server)
+      acquire(server, "a", owner(:a))
+      acquire(server, "b", owner(:b))
+      acquire(server, "waiting", owner(:waiting))
+      assert_receive {:a, {:slot_granted, _}}
+      assert {:error, :not_holding} = Slots.suspend("waiting", server)
+    end
+  end
+
+  # A Run that, once admitted, synchronously delegates a child chain of
+  # `depth` and lends its permit while it waits.
+  defp run_tree(server, run_id, depth, report_to) do
+    spawn_link(fn ->
+      GenServer.cast(server, {:acquire, run_id, self()})
+      permit = receive do: ({:slot_granted, permit} -> permit)
+
+      if depth > 0 do
+        child = run_id <> "/child"
+        run_tree(server, child, depth - 1, self())
+        {:ok, token} = Slots.suspend(run_id, server)
+        receive do: ({:done, ^child} -> :ok)
+        :ok = Slots.resume(token, :wait, server)
+      end
+
+      GenServer.cast(server, {:release, permit})
+      send(report_to, {:done, run_id})
+    end)
+  end
+
+  defp eventually(fun, attempts \\ 100) do
+    cond do
+      fun.() ->
+        true
+
+      attempts == 0 ->
+        false
+
+      true ->
+        Process.sleep(10)
+        eventually(fun, attempts - 1)
+    end
+  end
+
   defp acquire(server, run_id, pid), do: GenServer.cast(server, {:acquire, run_id, pid})
 
   defp stats(server) do

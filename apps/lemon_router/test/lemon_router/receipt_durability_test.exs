@@ -48,12 +48,8 @@ defmodule LemonRouter.ReceiptDurabilityTest do
       for _ <- 1..10 do
         assert {:ok, %{run_id: "run_receipt_durable"}} = RunReceiptStore.fetch(receipt.run_id)
 
-        assert {:reply, {:ok, _}, :snapshot_state} =
-                 RunOrchestrator.handle_call(
-                   :presence_snapshot,
-                   {self(), make_ref()},
-                   :snapshot_state
-                 )
+        assert {:ok, %{admissions: _, receipts: %{"run_receipt_durable" => _}}} =
+                 RunOrchestrator.presence_snapshot()
 
         refute_received {:sqlite_event, :checkpoint}
         refute_received {:sqlite_event, :durable_write}

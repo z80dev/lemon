@@ -6,7 +6,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Removed
+
+- **Breaking:** `ProviderCase` no longer probes `search/2` (the callback left `LemonMemory.Provider`); `hostile_queries/0`, the `:queries` option and the registry fan-out search test are removed. The suite checks the behaviour declaration, `put/2` and registration (#656).
 
 ## [0.2.0] - 2026-10-13
 

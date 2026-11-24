@@ -286,7 +286,7 @@ defmodule LemonRouter.CrashRecoveryTest do
         run_process_opts: %{}
       })
 
-    :ok = CrashRecovery.capture(submission)
+    :ok = CrashRecovery.capture(submission, true)
 
     :ok =
       RunReceiptStore.put(%{

@@ -5,7 +5,9 @@ defmodule Mix.Tasks.Lemon.Architecture.Docs do
 
   @shortdoc "Generate architecture boundary docs from policy"
   @moduledoc """
-  Regenerate the dependency policy section of docs/architecture_boundaries.md.
+  Regenerate the dependency policy and package map sections of
+  docs/architecture_boundaries.md. `--check` also fails when the Hex publish
+  set in `apps/*/mix.exs` differs from `scripts/verify_packages`.
 
   Usage:
     mix lemon.architecture.docs

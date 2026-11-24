@@ -787,6 +787,20 @@ boot_one_profile() {
 
       IO.puts("packaged MCP library contract passed: #{inspect(checks)}")
     '
+
+    # Nostrum (Discord) is an included application, so its own dependencies
+    # are only loaded; lemon_channels must list :gun so the boot script
+    # starts it before the Discord adapter (#670).
+    run_release eval '
+      apps = Application.spec(:lemon_channels, :applications) || []
+      loaded = Enum.map(Application.loaded_applications(), &elem(&1, 0))
+
+      unless :gun in apps and :gun in loaded do
+        raise "packaged runtime does not start :gun for the Discord adapter"
+      end
+
+      IO.puts("packaged gun contract passed")
+    '
   fi
 
   if [ -n "$expected_commit" ]; then

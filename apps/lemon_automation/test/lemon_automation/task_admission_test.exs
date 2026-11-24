@@ -3,13 +3,7 @@ defmodule LemonAutomation.TaskAdmissionTest do
 
   alias LemonAgent.Workspace.{GoalStore, KanbanStore}
 
-  alias LemonAutomation.{
-    GoalContinuationManager,
-    GoalLoopManager,
-    IntervalRunner,
-    KanbanDispatcher,
-    KanbanGitWorkflow
-  }
+  alias LemonAutomation.{GoalLoopManager, IntervalRunner, KanbanDispatcher, KanbanGitWorkflow}
 
   @supervisor LemonAutomation.TaskSupervisor
 
@@ -89,14 +83,6 @@ defmodule LemonAutomation.TaskAdmissionTest do
       }
 
       assert {:noreply, ^interval_state} = IntervalRunner.handle_cast(:tick, interval_state)
-      continuation_state = %{calls: %{}}
-
-      assert {:reply, {:error, ^reason}, ^continuation_state} =
-               GoalContinuationManager.handle_call(
-                 {:continue_once, session_key, []},
-                 {self(), make_ref()},
-                 continuation_state
-               )
 
       assert {:error, :goal_loop_unavailable} =
                GoalLoopManager.start_loop(session_key, name: manager, auto: true)

@@ -105,6 +105,30 @@ defmodule LemonAutomation.CronStoreTest do
       CronStore.delete_audit_event(older.id)
       assert CronStore.list_audit_events(action: :job_paused) == []
     end
+
+    test "audit retention keeps at most N newest events and reads page by timestamp" do
+      events =
+        for index <- 1..12 do
+          event = CronStore.record_audit(:retention_probe, %{job_id: "audit_retention"})
+          event = %{event | ts_ms: index}
+          :ok = Store.put(@audit_table, event.id, event)
+          event
+        end
+
+      assert :ok = CronStore.cleanup_audit_events(5)
+      assert {:ok, rows} = Store.fetch_all(@audit_table)
+      assert length(rows) == 5
+
+      assert Enum.map(CronStore.list_audit_events(limit: 100), & &1.ts_ms) == [12, 11, 10, 9, 8]
+
+      assert Enum.map(CronStore.list_audit_events(limit: 2, before_ts_ms: 11), & &1.ts_ms) == [
+               10,
+               9
+             ]
+
+      assert CronStore.audit_retention_max() >= 5
+      assert length(events) == 12
+    end
   end
 
   describe "run operations" do

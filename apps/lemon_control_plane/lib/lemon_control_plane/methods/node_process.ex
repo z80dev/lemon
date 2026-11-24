@@ -129,8 +129,8 @@ defmodule LemonControlPlane.Methods.NodeProcessSupport do
 
     states =
       if method == "node.process.get",
-        do: ~w(running completed cancelled outcome_unknown not_found),
-        else: ~w(running completed cancelled outcome_unknown)
+        do: ~w(running completed cancelled failed outcome_unknown not_found),
+        else: ~w(running completed cancelled failed outcome_unknown)
 
     limit = if method == "node.process.run", do: params["maxOutputBytes"], else: @max_bytes
 
@@ -156,7 +156,7 @@ defmodule LemonControlPlane.Methods.NodeProcessSupport do
   end
 
   defp valid_state?(%{"state" => state} = receipt)
-       when state in ["running", "outcome_unknown", "not_found"] do
+       when state in ["running", "failed", "outcome_unknown", "not_found"] do
     is_nil(receipt["exitCode"]) and is_nil(receipt["stdoutBase64"]) and
       is_nil(receipt["stderrBase64"]) and receipt["outputTruncated"] == true
   end

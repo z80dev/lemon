@@ -2,7 +2,7 @@ defmodule CodingAgent.Session.AddressingContext do
   @moduledoc false
 
   alias CodingAgent.{Config, Session, SessionManager}
-  alias CodingAgent.Tools.Task.Params
+  alias CodingAgent.Tools.Task.InvocationAuthority
   alias LemonCore.{ChatStateStore, ProfileStore, ResumeToken, RunStore, SessionKey}
 
   @max_directories 4_096
@@ -111,8 +111,8 @@ defmodule CodingAgent.Session.AddressingContext do
           (key in [:memory_context_verified, :shared_memory_grant] and value == false)
       end)
 
-    if Params.managed_context?(meaningful) or
-         Params.managed_metadata?(%{mcp_servers: servers}) do
+    if InvocationAuthority.managed_context?(meaningful) or
+         InvocationAuthority.managed_metadata?(%{mcp_servers: servers}) do
       {:error, :forbidden}
     else
       :ok
@@ -181,7 +181,8 @@ defmodule CodingAgent.Session.AddressingContext do
             recorded_key not in [nil, key] ->
               {:error, :context_unavailable}
 
-            field(meta, :native_managed_context) == true or Params.managed_metadata?(meta) ->
+            field(meta, :native_managed_context) == true or
+                InvocationAuthority.managed_metadata?(meta) ->
               {:error, :forbidden}
 
             true ->
