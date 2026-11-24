@@ -1020,9 +1020,15 @@ defmodule CodingAgent.SessionManager do
     |> Enum.reject(&is_nil/1)
   end
 
-  defp entry_to_message(%{type: :message, message: message}), do: message
+  @doc """
+  The journal message map an entry contributes to the model context, or nil for
+  entries that contribute none. Read it with
+  `CodingAgent.Session.MessageSerialization.deserialize_message/1`.
+  """
+  @spec entry_to_message(SessionEntry.t()) :: map() | nil
+  def entry_to_message(%{type: :message, message: message}), do: message
 
-  defp entry_to_message(%{type: :custom_message} = entry) do
+  def entry_to_message(%{type: :custom_message} = entry) do
     %{
       "role" => "custom",
       "custom_type" => entry.custom_type,
@@ -1033,7 +1039,7 @@ defmodule CodingAgent.SessionManager do
     }
   end
 
-  defp entry_to_message(%{type: :branch_summary} = entry) do
+  def entry_to_message(%{type: :branch_summary} = entry) do
     %{
       "role" => "branch_summary",
       "summary" => entry.summary,
@@ -1042,7 +1048,7 @@ defmodule CodingAgent.SessionManager do
     }
   end
 
-  defp entry_to_message(_), do: nil
+  def entry_to_message(_), do: nil
 
   defp extract_async_followup_messages(entries) do
     entries
@@ -1500,11 +1506,7 @@ defmodule CodingAgent.SessionManager do
     LemonAi.Types.ToolResultMessage,
     LemonAi.Types.Usage,
     LemonAi.Types.Cost,
-    CodingAgent.Messages.CustomMessage,
-    CodingAgent.Messages.TextContent,
-    CodingAgent.Messages.ThinkingContent,
-    CodingAgent.Messages.ImageContent,
-    CodingAgent.Messages.ToolCall
+    CodingAgent.Messages.CustomMessage
   ]
 
   defp json_safe(%_{} = term) do

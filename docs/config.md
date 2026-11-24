@@ -3274,9 +3274,10 @@ suppresses bootstrap even when resuming an assistant session.
   (the omp #2275 dead-loop recovery band). `keep_recent_tokens` is an upper
   target, reduced to fit that band including request overhead. A pass that
   misses the band escalates once through overflow compaction with a minimal
-  valid tail. If that still cannot fit, `compaction_recovery_band` is reported
-  and unchanged history is not compacted again each turn; reduce request
-  overhead, manually compact, or start a new session.
+  valid tail. If that still cannot fit, `compaction_recovery_band` ends the
+  prompt and unchanged history is not compacted again each turn; the session
+  stays free for `/compact` and new turns. Reduce request overhead, manually
+  compact, or start a new session.
   Before calling the summary model, Lemon spills old tool-result bodies to
   session-scoped `artifact://` handles. It protects the newest 40,000 estimated
   tokens and skips results below 50 tokens (omp's `docs/compaction.md` policy).

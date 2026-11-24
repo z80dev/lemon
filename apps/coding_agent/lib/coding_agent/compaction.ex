@@ -31,10 +31,12 @@ defmodule CodingAgent.Compaction do
   - Cut in the middle of a tool call/result pair
   - Cut at points that would lose critical context
 
-  Valid cut points are: user, assistant, custom, and bash_execution messages.
+  Valid cut points are: user, assistant, and custom messages.
   """
 
   alias CodingAgent.Messages
+  alias CodingAgent.Messages.BranchSummaryMessage
+  alias CodingAgent.Session.MessageSerialization
   alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
@@ -246,7 +248,6 @@ defmodule CodingAgent.Compaction do
   - `:user`
   - `:assistant` (only if not followed by tool_result)
   - `:custom`
-  - `:bash_execution`
 
   Cannot cut in the middle of a tool call/result pair.
   """
@@ -381,9 +382,6 @@ defmodule CodingAgent.Compaction do
         %{"role" => "custom"} ->
           true
 
-        %{"role" => "bash_execution"} ->
-          true
-
         _ ->
           false
       end
@@ -515,16 +513,21 @@ defmodule CodingAgent.Compaction do
   Estimate tokens for a message.
 
   Counts text, thinking, serialized tool arguments, and a fixed image allowance.
-  Uses the shared 4-characters-per-token heuristic for textual content.
+  Uses the shared 4-characters-per-token heuristic for textual content. Journal
+  maps (string keys) are read through the canonical
+  `MessageSerialization.deserialize_message/1`; roles it does not know cost
+  nothing because they never reach the provider.
   """
-  @spec estimate_message_tokens(Messages.message()) :: non_neg_integer()
-  def estimate_message_tokens(message) do
-    case message do
-      %{content: content} -> estimate_content_tokens(content)
-      %{"content" => content} -> estimate_content_tokens(content)
-      _ -> message |> convert_raw_message() |> Messages.get_text() |> estimate_text_tokens()
-    end
+  @spec estimate_message_tokens(Messages.message() | map() | nil) :: non_neg_integer()
+  def estimate_message_tokens(%{"role" => _} = message) do
+    message |> MessageSerialization.deserialize_message() |> estimate_message_tokens()
   end
+
+  def estimate_message_tokens(%BranchSummaryMessage{summary: summary}),
+    do: estimate_text_tokens(summary)
+
+  def estimate_message_tokens(%{content: content}), do: estimate_content_tokens(content)
+  def estimate_message_tokens(_message), do: 0
 
   @doc """
   Estimate tokens for a list of messages.
@@ -669,17 +672,8 @@ defmodule CodingAgent.Compaction do
     end
   end
 
-  defp estimate_entry_tokens(%SessionEntry{message: nil, type: type})
-       when type != :custom_message,
-       do: 0
-
-  # Handle custom_message entries which have content directly on the entry, not in a message field
-  defp estimate_entry_tokens(%SessionEntry{type: :custom_message, content: content}) do
-    estimate_content_tokens(content)
-  end
-
-  defp estimate_entry_tokens(%SessionEntry{message: msg}) when is_map(msg) do
-    estimate_message_tokens(msg)
+  defp estimate_entry_tokens(%SessionEntry{} = entry) do
+    entry |> SessionManager.entry_to_message() |> estimate_message_tokens()
   end
 
   # ============================================================================
@@ -904,7 +898,7 @@ defmodule CodingAgent.Compaction do
   @doc """
   Extract read/modified files from messages for compaction details.
 
-  Accepts both CodingAgent and LemonAi message structs. Scans read, write, edit,
+  Accepts deserialized messages. Scans read, write, edit,
   and patch tool calls, including patch additions, deletions, and both rename paths.
   Paths are recorded as supplied and deduplicated within each list. This tracks
   requested operations, not proof of successful execution; summaries must still
@@ -920,7 +914,7 @@ defmodule CodingAgent.Compaction do
   - `:read_files` - List of file paths targeted by read calls
   - `:modified_files` - List of file paths targeted by write, edit, or patch calls
   """
-  @spec extract_file_operations([Messages.message() | LemonAi.Types.message()]) :: %{
+  @spec extract_file_operations([Messages.message()]) :: %{
           read_files: [String.t()],
           modified_files: [String.t()]
         }
@@ -928,9 +922,12 @@ defmodule CodingAgent.Compaction do
     initial = %{read_files: [], modified_files: []}
 
     messages
-    |> Enum.reduce(initial, fn msg, acc ->
-      tool_calls = Messages.get_tool_calls(msg)
-      extract_ops_from_tool_calls(tool_calls, acc)
+    |> Enum.reduce(initial, fn
+      %LemonAi.Types.AssistantMessage{} = msg, acc ->
+        msg |> LemonAi.get_tool_calls() |> extract_ops_from_tool_calls(acc)
+
+      _msg, acc ->
+        acc
     end)
     |> Map.update!(:read_files, &Enum.uniq/1)
     |> Map.update!(:modified_files, &Enum.uniq/1)
@@ -1023,12 +1020,12 @@ defmodule CodingAgent.Compaction do
     messages =
       branch_entries
       |> Enum.filter(fn entry -> entry.type == :message end)
-      |> Enum.map(fn entry -> entry.message end)
+      |> Enum.map(&entry_message/1)
       |> Enum.reject(&is_nil/1)
 
     messages_text =
       messages
-      |> Enum.map(&format_raw_message_for_summary/1)
+      |> Enum.map(&format_branch_message_for_summary/1)
       |> Enum.join("\n\n---\n\n")
 
     # Same protected input as ordinary compaction: tool output in the branch is
@@ -1087,8 +1084,8 @@ defmodule CodingAgent.Compaction do
     end
   end
 
-  defp format_raw_message_for_summary(message) do
-    [convert_raw_message(message)]
+  defp format_branch_message_for_summary(message) do
+    [message]
     |> Messages.to_llm()
     |> Enum.map_join("\n", &format_message_for_summary/1)
   end
@@ -1319,7 +1316,7 @@ defmodule CodingAgent.Compaction do
     #{Jason.encode!(file_ops)}
     """
 
-    [%Messages.UserMessage{content: content, timestamp: 0} | messages]
+    [%LemonAi.Types.UserMessage{content: content, timestamp: 0} | messages]
   end
 
   defp merge_file_operations(file_ops, nil), do: file_ops
@@ -1334,135 +1331,21 @@ defmodule CodingAgent.Compaction do
   end
 
   defp get_messages_before(branch_entries, first_kept_id) do
-    # Get messages from the branch up to (but not including) the first kept entry
-    {messages_before, _} =
-      Enum.reduce(branch_entries, {[], false}, fn entry, {acc, found} ->
-        if found do
-          {acc, true}
-        else
-          if entry.id == first_kept_id do
-            {acc, true}
-          else
-            case entry do
-              %{type: :message, message: msg} when not is_nil(msg) ->
-                # Convert raw message to proper message struct
-                {[convert_raw_message(msg) | acc], false}
-
-              %{type: :custom_message} = custom_entry ->
-                # Convert custom_message entry to CustomMessage struct
-                {[entry_to_custom_message(custom_entry) | acc], false}
-
-              %{type: :branch_summary, summary: summary} ->
-                message = %Messages.UserMessage{
-                  content: "[Branch summary]\n#{summary}",
-                  timestamp: 0
-                }
-
-                {[message | acc], false}
-
-              _ ->
-                {acc, false}
-            end
-          end
-        end
-      end)
-
-    Enum.reverse(messages_before)
+    branch_entries
+    |> Enum.take_while(&(&1.id != first_kept_id))
+    |> Enum.map(&entry_message/1)
+    |> Enum.reject(&is_nil/1)
   end
 
-  defp entry_to_custom_message(%{type: :custom_message} = entry) do
-    %Messages.CustomMessage{
-      role: :custom,
-      custom_type: entry.custom_type,
-      content: entry.content,
-      display: if(is_nil(entry.display), do: true, else: entry.display),
-      details: entry.details,
-      timestamp: entry.timestamp
-    }
+  # Journal entries are read only through the canonical deserializer; messages
+  # held in memory as structs are already deserialized.
+  defp entry_message(entry) do
+    case SessionManager.entry_to_message(entry) do
+      %{"role" => _} = message -> MessageSerialization.deserialize_message(message)
+      %_{} = message -> message
+      _ -> nil
+    end
   end
-
-  defp convert_raw_message(%{"role" => "user", "content" => content} = msg) do
-    %Messages.UserMessage{
-      role: :user,
-      content: content,
-      timestamp: Map.get(msg, "timestamp", 0)
-    }
-  end
-
-  defp convert_raw_message(%{"role" => "assistant", "content" => content} = msg) do
-    %Messages.AssistantMessage{
-      role: :assistant,
-      content: convert_content_blocks(content),
-      provider: Map.get(msg, "provider", ""),
-      model: Map.get(msg, "model", ""),
-      api: Map.get(msg, "api", ""),
-      timestamp: Map.get(msg, "timestamp", 0)
-    }
-  end
-
-  defp convert_raw_message(%{"role" => "tool_result"} = msg) do
-    # Support both tool_call_id and tool_use_id for compatibility
-    tool_id = Map.get(msg, "tool_call_id") || Map.get(msg, "tool_use_id", "")
-
-    %Messages.ToolResultMessage{
-      role: :tool_result,
-      tool_use_id: tool_id,
-      content: convert_content_blocks(Map.get(msg, "content", [])),
-      is_error: Map.get(msg, "is_error", false),
-      timestamp: Map.get(msg, "timestamp", 0)
-    }
-  end
-
-  defp convert_raw_message(%{"role" => "bash_execution"} = msg) do
-    %Messages.BashExecutionMessage{
-      role: :bash_execution,
-      command: Map.get(msg, "command", ""),
-      output: Map.get(msg, "output", ""),
-      exit_code: Map.get(msg, "exit_code"),
-      cancelled: Map.get(msg, "cancelled", false),
-      truncated: Map.get(msg, "truncated", false),
-      timestamp: Map.get(msg, "timestamp", 0)
-    }
-  end
-
-  defp convert_raw_message(%{"role" => "custom"} = msg) do
-    %Messages.CustomMessage{
-      role: :custom,
-      custom_type: Map.get(msg, "custom_type", ""),
-      content: Map.get(msg, "content", ""),
-      display: Map.get(msg, "display", true),
-      details: Map.get(msg, "details"),
-      timestamp: Map.get(msg, "timestamp", 0)
-    }
-  end
-
-  defp convert_raw_message(msg), do: msg
-
-  defp convert_content_blocks(content) when is_list(content) do
-    Enum.map(content, &convert_content_block/1)
-  end
-
-  defp convert_content_blocks(content) when is_binary(content), do: content
-  defp convert_content_blocks(_), do: []
-
-  defp convert_content_block(%{"type" => "text", "text" => text}) do
-    %Messages.TextContent{type: :text, text: text}
-  end
-
-  defp convert_content_block(%{"type" => "tool_call", "id" => id, "name" => name} = tc) do
-    %Messages.ToolCall{
-      type: :tool_call,
-      id: id,
-      name: name,
-      arguments: Map.get(tc, "arguments", %{})
-    }
-  end
-
-  defp convert_content_block(%{"type" => "thinking", "thinking" => thinking}) do
-    %Messages.ThinkingContent{type: :thinking, thinking: thinking}
-  end
-
-  defp convert_content_block(block), do: block
 
   defp estimate_raw_context_tokens(messages) when is_list(messages) do
     estimate_context_tokens(messages)

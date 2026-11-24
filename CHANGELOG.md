@@ -623,6 +623,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Gateway cancellation is an asynchronous request that holds the permit and
   claim until the executor exits or the 15-second drain deadline passes, and
   completion persists before releasing them exactly once (#643).
+- Compaction (auto, manual and overflow recovery) works again after a
+  checkpoint/rewind or branch summary: journal entries are read through the
+  canonical message deserializer, so a `branch_summary` entry no longer crashes
+  token estimation, and compaction summaries keep each tool result's tool
+  name (#629).
+- Sessions no longer stay busy after overflow recovery or a compaction
+  recovery-band block: abort during recovery ends the run with `canceled`,
+  steering or follow-ups journaled while the summary runs no longer strand the
+  run, a recovery-band block releases the session for `/compact` and the next
+  executor turn, and a late terminal event from an earlier agent run can no
+  longer end (or let a second prompt overwrite) a newly accepted prompt (#630).
 
 ### Removed
 
@@ -659,6 +670,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `hedge_started`/`hedge_skipped` dispatcher telemetry is gone; delete the key.
   Model calls no longer make a synchronous call to a shared dispatcher process:
   provider failure summaries live in ETS.
+- **Breaking** (coding_agent): the compaction-only `CodingAgent.Messages`
+  user/assistant/tool-result/bash/compaction-summary and content structs,
+  `Messages.get_text/1`, `get_tool_calls/1` and `total_tokens/1`; coding
+  messages are `LemonAi.Types` structs plus `CustomMessage` and
+  `BranchSummaryMessage` (#629).
 
 ### Security
 
