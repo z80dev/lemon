@@ -207,6 +207,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   restarted owner can neither lose nor repeat it), a crashed owner adopts its
   live worker and session (a second crash terminalizes the child), and terminal
   children are pruned after five minutes (#634).
+- Task slots are re-entrant per lineage, so a child that waits on its own
+  descendants no longer deadlocks the eight-slot pool; `/bg` sessions use their
+  own `background_run_max_concurrency` pool; joins without a timeout yield after
+  `task_join_timeout_ms` (default 30 minutes) instead of waiting forever (#631).
 
 ### Removed
 

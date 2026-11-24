@@ -137,7 +137,8 @@ defmodule CodingAgent.Tools.Task.Execution do
           task_owner_pid: Keyword.get(opts, :task_owner_pid),
           orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
           direct_progress: Keyword.get(opts, :session_module, Session) == Session,
-          task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
+          task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor),
+          task_semaphore: Keyword.get(opts, :task_semaphore, CodingAgent.TaskSemaphore)
         }
 
         if run_id do
@@ -508,7 +509,10 @@ defmodule CodingAgent.Tools.Task.Execution do
 
   defp await_sync_result(execution, signal) do
     case Result.do_join(%{"task_ids" => [execution.task_id]}, signal) do
-      %LemonAgent.Types.AgentToolResult{details: %{status: "needs_parent_answer"}} = result ->
+      %LemonAgent.Types.AgentToolResult{details: %{status: status}} = result
+      when status in ["needs_parent_answer", "running"] ->
+        # A parent question or the join deadline: the child keeps running and
+        # can be joined again.
         result
 
       %LemonAgent.Types.AgentToolResult{} ->

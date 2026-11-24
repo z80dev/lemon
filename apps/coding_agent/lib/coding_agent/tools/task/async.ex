@@ -201,7 +201,8 @@ defmodule CodingAgent.Tools.Task.Async do
     end
 
     try do
-      unless lifecycle_context[:orchestration_worker], do: maybe_acquire_task_semaphore()
+      unless lifecycle_context[:orchestration_worker],
+        do: maybe_acquire_task_semaphore(lifecycle_context)
 
       {:ok, wrapped.()}
     rescue
@@ -209,7 +210,8 @@ defmodule CodingAgent.Tools.Task.Async do
     catch
       kind, reason -> {:error, {kind, reason}}
     after
-      unless lifecycle_context[:orchestration_worker], do: maybe_release_task_semaphore()
+      unless lifecycle_context[:orchestration_worker],
+        do: maybe_release_task_semaphore(lifecycle_context)
     end
   end
 
@@ -565,17 +567,32 @@ defmodule CodingAgent.Tools.Task.Async do
 
   defp aborted_reason?(_), do: false
 
-  defp maybe_acquire_task_semaphore do
-    case Process.whereis(CodingAgent.TaskSemaphore) do
-      nil -> :ok
-      _pid -> Parallel.Semaphore.acquire(CodingAgent.TaskSemaphore)
+  # Slots are re-entrant per lineage: a child blocked on its own descendants
+  # (a synchronous launch or a join) lends them its slot instead of
+  # deadlocking the pool. Lineage comes from the run graph's parent chain.
+  defp maybe_acquire_task_semaphore(lifecycle_context) do
+    semaphore = lifecycle_context[:task_semaphore] || CodingAgent.TaskSemaphore
+
+    if available_semaphore?(semaphore) do
+      run_id = lifecycle_context[:run_id]
+      Parallel.Semaphore.acquire(semaphore, run_id, lineage(run_id, 16))
     end
   end
 
-  defp maybe_release_task_semaphore do
-    case Process.whereis(CodingAgent.TaskSemaphore) do
-      nil -> :ok
-      _pid -> Parallel.Semaphore.release(CodingAgent.TaskSemaphore)
+  defp maybe_release_task_semaphore(lifecycle_context) do
+    semaphore = lifecycle_context[:task_semaphore] || CodingAgent.TaskSemaphore
+    if available_semaphore?(semaphore), do: Parallel.Semaphore.release(semaphore)
+  end
+
+  defp available_semaphore?(pid) when is_pid(pid), do: Process.alive?(pid)
+  defp available_semaphore?(name), do: is_pid(Process.whereis(name))
+
+  defp lineage(run_id, depth) when is_binary(run_id) and depth > 0 do
+    case RunGraph.get(run_id) do
+      {:ok, %{parent: parent}} when is_binary(parent) -> [parent | lineage(parent, depth - 1)]
+      _ -> []
     end
   end
+
+  defp lineage(_run_id, _depth), do: []
 end

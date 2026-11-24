@@ -16,14 +16,16 @@ defmodule CodingAgent.JoinAwait do
           | {:yield, :timeout | :interrupted}
           | {:error, term()}
   def await(run_ids, task_ids, mode, signal, opts \\ []) do
-    deadline =
+    # Caller policy: a join without an explicit timeout yields
+    # `{:yield, :timeout}` at `:task_join_timeout_ms` (default 30 minutes)
+    # instead of waiting forever; the children keep running.
+    timeout_ms =
       case Keyword.get(opts, :timeout_ms) do
-        milliseconds when is_integer(milliseconds) ->
-          System.monotonic_time(:millisecond) + milliseconds
-
-        _ ->
-          :infinity
+        milliseconds when is_integer(milliseconds) -> milliseconds
+        _ -> Application.get_env(:coding_agent, :task_join_timeout_ms, 30 * 60 * 1000)
       end
+
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     interrupted? = Keyword.get(opts, :interrupted?, fn -> false end)
 
@@ -62,7 +64,7 @@ defmodule CodingAgent.JoinAwait do
           interrupted?.() ->
             {:yield, :interrupted}
 
-          deadline != :infinity and System.monotonic_time(:millisecond) >= deadline ->
+          System.monotonic_time(:millisecond) >= deadline ->
             {:yield, :timeout}
 
           true ->
@@ -141,10 +143,7 @@ defmodule CodingAgent.JoinAwait do
   end
 
   defp wait_for_change(signal, deadline, monitors, owner_pids) do
-    timeout =
-      if deadline == :infinity,
-        do: :infinity,
-        else: max(0, deadline - System.monotonic_time(:millisecond))
+    timeout = max(0, deadline - System.monotonic_time(:millisecond))
 
     receive do
       {:lemon_abort, ^signal, _kind} ->
