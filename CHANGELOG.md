@@ -307,6 +307,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   of leaving it `running` and billing after the tool reported failure; the wait
   uses one fixed deadline that unrelated messages cannot extend, and the
   timeout error names the job id (#664).
+- Model streams no longer report a truncated response as finished: Chat
+  Completions, Responses, Codex, Bedrock and the Gemini providers fail a stream
+  that ends, disconnects, idles out or sends a malformed event before the
+  provider's terminal event with a retryable transient error, instead of
+  completing it — possibly as a tool call with half-written arguments. Gemini
+  events split across network frames are no longer dropped (#636).
+- A tool call streamed with an empty argument delta (Anthropic's no-argument
+  calls) is read as `{}` instead of spending a continuation on
+  `malformed_tool_arguments`, and stream rules scan a tool call that arrives
+  as one large delta (Gemini) instead of failing the run with
+  `delta_too_large`; a rule that cannot evaluate output now fails only that
+  attempt and still records its usage (#639).
+- Azure OpenAI Responses streams through the shared provider transport: it
+  retries 429/5xx and transport failures before the body per the provider
+  retry policy, reports classified errors without dumping the HTTP response,
+  cancels its response on every exit and no longer ends or fails on unrelated
+  `{ref, :done}`/`{:error, _}` messages. Azure settings are read only from
+  `provider_options.azure_openai_responses` (the resolved API key wins over
+  `api_key`); the `azure_*` keys in `thinking_budgets` are no longer set or
+  read — **Breaking** for callers that passed Azure overrides there (#680).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
