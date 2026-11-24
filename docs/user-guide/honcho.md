@@ -630,8 +630,8 @@ access log.
 **3. Whatever a memory tool call passes.** When the model calls `honcho_search` or
 `honcho_reasoning`, its query is sent; `honcho_conclude` sends the conclusion it was
 asked to record or the query it was asked to search; `honcho_profile` sends the profile
-lines it was asked to store. An ordinary `recall` call reaches Honcho too, since
-Honcho is a registered memory provider, and sends it the search query. That text is the
+lines it was asked to store. An ordinary `recall` call never reaches Honcho: it reads
+only Lemon's local memory index. That text is the
 model's own wording rather than yours, though in practice it is often a verbatim quote
 of what you just said. Setting `LEMON_HONCHO_SAVE_MESSAGES=false` stops the two that
 write.

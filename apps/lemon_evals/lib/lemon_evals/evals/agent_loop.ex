@@ -16,7 +16,6 @@ defmodule LemonEvals.Evals.AgentLoop do
   alias CodingAgent.Tools.{Grep, Patch, Read, ReadSkill, SkillManage}
   alias CodingAgent.Tools.Task, as: TaskTool
   alias LemonEvals.Types
-  alias LemonSkills.Tools.Recall
   alias LemonAi.Types.TextContent
 
   @spec agent_loop_learning_trace_contract_eval(String.t()) :: Types.eval_result()
@@ -205,20 +204,14 @@ defmodule LemonEvals.Evals.AgentLoop do
       File.mkdir_p!(project_dir)
       File.mkdir_p!(home_dir)
 
-      {:ok, search_calls} = Agent.start_link(fn -> [] end)
-
-      search_fn = fn query, opts ->
-        Agent.update(search_calls, &[{query, opts} | &1])
-
+      docs =
         [eval_memory_doc("prior-release-handoff", project_dir, home_dir)]
-      end
 
-      recall_tool =
-        Recall.tool(project_dir,
+      {recall_tool, search_calls} =
+        eval_recall_tool(project_dir, docs,
           workspace_dir: home_dir,
           agent_id: "eval",
-          session_scope: :main,
-          search_fn: search_fn
+          session_scope: :main
         )
 
       prompt =

@@ -17,7 +17,7 @@ agent platform. It is usable on its own — its only Lemon dependency is
 | `LemonMemory.Project` | Bounded repository/assistant-home/agent-scoped coding learnings in the same durable store |
 | `LemonMemory.ContextScope` | Admitted native ownership proof and explicit private/shared management selectors |
 | `LemonMemory.Preferences` | Full-byte private or intentionally shared user/memory notes in the existing Store |
-| `LemonMemory.Providers` | Fan-out registry — queries every registered provider, isolates failures and timeouts |
+| `LemonMemory.Providers` | Write fan-out registry — hands every finished run to each registered provider, isolating failures and timeouts |
 | `LemonMemory.Providers.Local` | The built-in provider over `LemonMemory.Store` |
 | `LemonMemory.Ingest` | Writes finished runs into memory, invoked from the store's finalize-run hook |
 | `LemonMemory.Safety` | Redaction and size limits applied before anything is persisted |
@@ -204,8 +204,9 @@ newline-separated UTF-8 bytes. Consolidation guidance appears strictly above
 `Project.read/2` combines only the exact private project and explicitly shared
 curated project namespace, within its existing fact/byte budget.
 `Project.search_history(context, query, requested_scope, opts)` searches local
-history with profile, private key, history kind, and optional repository filters
-before its limit; the existing `session_search` feature policy still applies.
+history with profile, owner (proven private key, or legacy for contexts with no
+ownership claim), history kind, and optional repository filters before its
+limit; unproven or partial claims are `{:error, :unproven_context}`; the existing `session_search` feature policy still applies.
 `:agent`, `:workspace`, and `:project` are supported; `:store` and `:limit` select
 the server and bounded result count. Recall uses that same owning API, full
 preference metadata before bounded rendering, and canonical shared bootstrap
@@ -258,10 +259,11 @@ LemonMemory.Providers.register_provider(%{
 })
 ```
 
-Searches then fan out to it alongside the local store. Read the behaviour's
-moduledoc first — it documents the contract in prose, including the rules that
-are easy to get wrong (`search/2` returns a bare list, must not raise on user
-input, and must ignore options it does not recognise).
+Every finished run's document is then handed to it alongside the local store.
+Providers are write targets only: recall reads the owned local index through
+`Project.search_history/4`, which filters ownership before its result limit, and
+never searches providers. Read the behaviour's moduledoc first — `put/2` returns
+`:ok` or `{:error, reason}` and must ignore options it does not recognise.
 
 Verify your provider against the platform's compliance suite:
 

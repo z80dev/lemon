@@ -220,6 +220,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
+  `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
+  recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.
+  Memory providers are write targets only (`put/2`). `recall` now filters ownership
+  in SQL before its result limit for legacy sessions too, so `scope: project` no
+  longer comes back empty when matches exist, and it never pays for a remote
+  provider search whose results it discarded (#656).
 - The unenforced `sandbox` tool-policy field; legacy input is ignored with a
   warning and never changes authority (#605).
 - `LemonCore.Store.JsonlBackend` (lemon_core 0.3.0). Run

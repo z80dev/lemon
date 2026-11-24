@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- `recall` filters ownership before its result limit for legacy sessions (via `Project.search_history/4`) and no longer searches memory providers; the `:search_fn` option is removed (**Breaking** for callers that injected it) (#656).
 - `ProfileMemoryTransfer.apply_transfer/2` passes definite failures
   (`:stale_destination`, `:destination_conflict`, `:transfer_conflict`, lock
   abort, verified rollback) through instead of collapsing them to
