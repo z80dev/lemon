@@ -20,6 +20,14 @@
   summary: journal entries are deserialized by the canonical serializer
   (`branch_summary` included), and compaction summaries keep tool names.
   `Rewind.collapse_context/5` journals retained messages in serialized form.
+- Runs that end without an agent terminal event (abort of an undispatched
+  prompt or during overflow recovery, failed or stale overflow recovery,
+  recovery-band blocks) share one terminal path that clears the pending prompt,
+  records `terminal_event`, broadcasts and completes streams once. Overflow
+  results still apply when only input was appended meanwhile, and input
+  accepted during recovery waits for it. Agent events before the accepted
+  prompt's `{:agent_start}` are fenced off, and `prompt/3` is busy while a
+  prompt is pending dispatch.
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

@@ -205,6 +205,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   canonical message deserializer, so a `branch_summary` entry no longer crashes
   token estimation, and compaction summaries keep each tool result's tool
   name (#629).
+- Sessions no longer stay busy after overflow recovery or a compaction
+  recovery-band block: abort during recovery ends the run with `canceled`,
+  steering or follow-ups journaled while the summary runs no longer strand the
+  run, a recovery-band block releases the session for `/compact` and the next
+  executor turn, and a late terminal event from an earlier agent run can no
+  longer end (or let a second prompt overwrite) a newly accepted prompt (#630).
 
 ### Removed
 
