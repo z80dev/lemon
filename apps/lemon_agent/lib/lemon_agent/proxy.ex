@@ -60,7 +60,7 @@ defmodule LemonAgent.Proxy do
             temperature: float() | nil,
             max_tokens: non_neg_integer() | nil,
             reasoning: thinking_level() | nil,
-            signal: reference() | nil
+            signal: LemonAgent.AbortSignal.t() | nil
           }
     defstruct auth_token: "",
               proxy_url: "",

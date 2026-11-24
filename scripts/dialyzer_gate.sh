@@ -29,12 +29,16 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 # `app_findings` below), so a finding in an app's `lib/mix/tasks/*.ex` or
 # `lib/<app>.ex` counts against it just like one under `lib/<app>/`.
 #
-# Apps that are Hex packages (docs/platform-split.md) are marked; keeping
-# those green is the headline "per-published-package" guarantee.
+# Apps that are Hex packages (docs/platform-split.md) are marked; all five
+# are gated, which is the headline "per-published-package" guarantee.
+# scripts/test_ci_gates.py pins that and the attribution below.
 GATED_APPS=(
-  lemon_media
+  lemon_core           # published
+  lemon_ai             # published
+  lemon_agent          # published
   lemon_memory         # published
   lemon_platform_test  # published
+  lemon_media
   lemon_browser
   lemon_web
   lemon_lsp

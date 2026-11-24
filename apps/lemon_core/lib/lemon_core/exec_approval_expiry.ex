@@ -143,7 +143,7 @@ defmodule LemonCore.ExecApprovalExpiry do
 
       {id, monitors} ->
         expire({:session, id})
-        if state.sessions[id] == pid, do: ExecApprovalStore.delete_session_owner(id)
+        _ = if state.sessions[id] == pid, do: ExecApprovalStore.delete_session_owner(id)
 
         sessions =
           if state.sessions[id] == pid, do: Map.delete(state.sessions, id), else: state.sessions

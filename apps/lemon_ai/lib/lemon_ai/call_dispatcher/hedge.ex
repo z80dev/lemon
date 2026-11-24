@@ -14,14 +14,15 @@ defmodule LemonAi.CallDispatcher.Hedge do
         EventStream.attach_task(output, worker)
         # The primary was created by the dispatch caller, not this worker. Its
         # owner monitor alone cannot cancel it when the output is abandoned.
-        Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
-          monitor = Process.monitor(worker)
+        _ =
+          Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
+            monitor = Process.monitor(worker)
 
-          receive do
-            {:DOWN, ^monitor, :process, ^worker, _} ->
-              EventStream.cancel(primary, :hedge_finished)
-          end
-        end)
+            receive do
+              {:DOWN, ^monitor, :process, ^worker, _} ->
+                EventStream.cancel(primary, :hedge_finished)
+            end
+          end)
 
         {:ok, output}
 

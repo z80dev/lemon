@@ -196,11 +196,11 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
       end
 
     headers =
-      Enum.reduce(model.headers || %{}, headers, fn {k, v}, acc ->
+      Enum.reduce(model.headers, headers, fn {k, v}, acc ->
         Map.put(acc, to_string(k), to_string(v))
       end)
 
-    Enum.reduce(opts.headers || %{}, headers, fn {k, v}, acc ->
+    Enum.reduce(opts.headers, headers, fn {k, v}, acc ->
       Map.put(acc, to_string(k), to_string(v))
     end)
   end

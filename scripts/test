@@ -289,6 +289,7 @@ run_quality() {
   check_skipped_tests
   scripts/check_changelog
   python3 scripts/test_changed_tests.py
+  python3 scripts/test_ci_gates.py
   run_shellcheck
   bash scripts/test_lemon_tui_auth.sh
   bash scripts/test_lemon_launcher_reuse.sh

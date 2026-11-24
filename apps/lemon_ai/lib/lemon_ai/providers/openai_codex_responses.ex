@@ -210,7 +210,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
     # Add tools if present
     body =
-      if context.tools && context.tools != [] do
+      if context.tools != [] do
         Map.put(
           body,
           "tools",
@@ -278,7 +278,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
     headers =
       base_headers
-      |> Map.merge(model.headers || %{})
+      |> Map.merge(model.headers)
       |> Map.merge(opts.headers || %{})
       |> Map.reject(fn {key, _} -> String.downcase(to_string(key)) in @controlled_headers end)
       |> Map.put("version", @client_version)

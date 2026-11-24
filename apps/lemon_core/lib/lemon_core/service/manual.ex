@@ -52,7 +52,9 @@ defmodule LemonCore.Service.Manual do
     case Command.run(
            "/bin/sh",
            ["-c", script, "lemon-service", spec.log, "env", "-i"] ++ env_args ++ spec.argv,
-           opts, cd: spec.home) do
+           opts,
+           cd: spec.home
+         ) do
       {output, 0} ->
         with {pid, ""} <- Integer.parse(String.trim(output)),
              {:ok, identity} <- Identity.capture(pid, opts) do
@@ -98,7 +100,7 @@ defmodule LemonCore.Service.Manual do
     case recorded_identity(spec, opts) do
       {:ok, identity} ->
         with :ok <- Identity.terminate(identity, opts) do
-          File.rm(record_path(spec, opts))
+          _ = File.rm(record_path(spec, opts))
           :ok
         end
 
@@ -117,7 +119,7 @@ defmodule LemonCore.Service.Manual do
 
   def uninstall(spec, opts) do
     with :ok <- stop(spec, opts) do
-      File.rm(record_path(spec, opts))
+      _ = File.rm(record_path(spec, opts))
 
       case File.rm(spec.path) do
         :ok -> :ok

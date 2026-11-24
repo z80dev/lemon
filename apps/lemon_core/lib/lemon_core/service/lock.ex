@@ -180,8 +180,8 @@ defmodule LemonCore.Service.Lock do
   end
 
   defp release(path, owner) do
-    File.rm(Path.join(path, owner))
-    File.rmdir(path)
+    _ = File.rm(Path.join(path, owner))
+    _ = File.rmdir(path)
     :ok
   end
 end

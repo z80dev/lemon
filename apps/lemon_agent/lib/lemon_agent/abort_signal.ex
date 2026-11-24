@@ -18,21 +18,25 @@ defmodule LemonAgent.AbortSignal do
 
   @registry LemonAgent.AbortSignal.Registry
 
-  @spec new() :: reference()
+  @typedoc "An abort signal created by `new/0`."
+  @type t :: :atomics.atomics_ref()
+
+  @spec new() :: t()
   def new, do: :atomics.new(2, signed: false)
 
-  @spec subscribe(reference() | nil) :: :ok
+  @spec subscribe(t() | nil) :: :ok
   def subscribe(nil), do: :ok
 
   def subscribe(ref) when is_reference(ref) do
-    unless ref in Registry.keys(@registry, self()) do
-      {:ok, _} = Registry.register(@registry, ref, nil)
-    end
+    _ =
+      unless ref in Registry.keys(@registry, self()) do
+        {:ok, _} = Registry.register(@registry, ref, nil)
+      end
 
     :ok
   end
 
-  @spec unsubscribe(reference() | nil) :: :ok
+  @spec unsubscribe(t() | nil) :: :ok
   def unsubscribe(nil), do: :ok
 
   def unsubscribe(ref) when is_reference(ref) do
@@ -40,32 +44,32 @@ defmodule LemonAgent.AbortSignal do
     :ok
   end
 
-  @spec abort(reference()) :: :ok
-  def abort(ref) when is_reference(ref) do
+  @spec abort(t()) :: :ok
+  def abort(ref) do
     :atomics.put(ref, 1, 1)
     notify(ref, :abort)
   end
 
-  @spec aborted?(reference() | nil) :: boolean()
+  @spec aborted?(t() | nil) :: boolean()
   def aborted?(nil), do: false
-  def aborted?(ref) when is_reference(ref), do: :atomics.get(ref, 1) == 1
+  def aborted?(ref), do: :atomics.get(ref, 1) == 1
 
-  @spec request_redirect(reference() | nil) :: :ok
+  @spec request_redirect(t() | nil) :: :ok
   def request_redirect(nil), do: :ok
 
-  def request_redirect(ref) when is_reference(ref) do
+  def request_redirect(ref) do
     :atomics.put(ref, 2, 1)
     notify(ref, :redirect)
   end
 
-  @spec redirect_requested?(reference() | nil) :: boolean()
+  @spec redirect_requested?(t() | nil) :: boolean()
   def redirect_requested?(nil), do: false
-  def redirect_requested?(ref) when is_reference(ref), do: :atomics.get(ref, 2) == 1
+  def redirect_requested?(ref), do: :atomics.get(ref, 2) == 1
 
-  @spec clear_redirect(reference() | nil) :: :ok
+  @spec clear_redirect(t() | nil) :: :ok
   def clear_redirect(nil), do: :ok
 
-  def clear_redirect(ref) when is_reference(ref) do
+  def clear_redirect(ref) do
     :atomics.put(ref, 2, 0)
     :ok
   end

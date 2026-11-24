@@ -54,9 +54,7 @@ defmodule LemonAi.Providers.GoogleShared do
         }
 
   @type function_declaration :: %{
-          name: String.t(),
-          description: String.t() | nil,
-          parameters: map()
+          required(String.t()) => String.t() | map()
         }
 
   @type tool_choice :: :auto | :none | :any
@@ -388,7 +386,7 @@ defmodule LemonAi.Providers.GoogleShared do
   @doc """
   Convert tools to Gemini function declarations format.
   """
-  @spec convert_tools([Tool.t()]) :: [%{functionDeclarations: [function_declaration()]}] | nil
+  @spec convert_tools([Tool.t()]) :: [%{required(String.t()) => [function_declaration()]}] | nil
   def convert_tools([]), do: nil
 
   def convert_tools(tools) do

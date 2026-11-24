@@ -8,6 +8,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Dialyzer-clean (#734): `Lemon.Reload` no longer reports a successful
+  code change as an error; extension manifests that are valid JSON but not an
+  object are rejected as such instead of as oversized; several public typespecs
+  (exec-approval store writes, `Update.Remote` check results, archive
+  preflight) now match the values returned. The crash-report stand-in
+  exception is named `LemonCore.StatusRedaction.RedactedCrashError` (#499).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,

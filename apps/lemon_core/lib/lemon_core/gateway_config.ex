@@ -42,10 +42,7 @@ defmodule LemonCore.GatewayConfig do
   # ---------------------------------------------------------------------------
 
   defp toml_base(cwd) do
-    case LemonCore.Config.cached(cwd) do
-      %{gateway: gateway} when is_map(gateway) -> gateway
-      _ -> %{}
-    end
+    LemonCore.Config.cached(cwd).gateway
   rescue
     _ -> %{}
   end

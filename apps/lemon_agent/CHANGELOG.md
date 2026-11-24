@@ -10,6 +10,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonAgent.AbortSignal.t()` (an `:atomics` reference); abort-signal,
+  loop-input and callback typespecs now use it, and the package is
+  Dialyzer-clean (#734). No runtime change.
 - `LemonAgent.ModelRuntime.OmpBroker.url/0` and `default_url/0` expose the
   broker URL resolution without requiring a token.
 - `submit_result` structured subagent results (#602); task-tool action

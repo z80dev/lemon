@@ -111,16 +111,12 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
     |> Enum.map(&Path.expand(&1, operator_root))
   end
 
-  defp configured_extension_paths(_), do: []
-
   defp configured_extension_path_count(%Config{agent: agent}) when is_map(agent) do
     agent
     |> map_value(:extension_paths)
     |> List.wrap()
     |> Enum.count(&is_binary/1)
   end
-
-  defp configured_extension_path_count(_), do: 0
 
   defp execution_policy(config) do
     auto_load? = auto_load_default_paths?(config)
@@ -142,16 +138,12 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
     |> truthy?()
   end
 
-  defp auto_load_default_paths?(_), do: false
-
   defp extensions_enabled?(%Config{agent: agent}) when is_map(agent) do
     agent
     |> map_value(:extensions)
     |> map_value(:enabled)
     |> enabled?()
   end
-
-  defp extensions_enabled?(_), do: true
 
   defp directory_status(path) do
     files = extension_files(path)
@@ -233,8 +225,6 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
     |> map_value(:enabled)
     |> truthy?()
   end
-
-  defp wasm_enabled?(_), do: false
 
   defp hash(value) do
     :crypto.hash(:sha256, to_string(value))

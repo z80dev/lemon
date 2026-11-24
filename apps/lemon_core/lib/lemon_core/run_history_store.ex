@@ -523,8 +523,6 @@ defmodule LemonCore.RunHistoryStore do
   defp normalize_run_id(id) when is_binary(id), do: id
   defp normalize_run_id(id), do: inspect(id)
 
-  defp blob_too_big?({:sqlite_bind_failed, :blob_too_big}), do: true
-
   defp blob_too_big?(reason) when is_binary(reason),
     do: String.contains?(String.downcase(reason), "too big")
 

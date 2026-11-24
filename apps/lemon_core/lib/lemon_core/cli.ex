@@ -20,6 +20,8 @@ defmodule LemonCore.CLI do
     end
   end
 
+  @spec fail!(String.t()) :: no_return()
+  @spec fail!(String.t(), non_neg_integer()) :: no_return()
   def fail!(message, exit_code \\ 1), do: raise(Error, message: message, exit_code: exit_code)
 
   def start!(app) do

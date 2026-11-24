@@ -68,7 +68,7 @@ defmodule LemonAgent.Agent do
              list(LemonAi.Types.message()) | {:ok, list(LemonAi.Types.message())})
 
   @type transform_context_fn ::
-          (list(Types.agent_message()), reference() | nil ->
+          (list(Types.agent_message()), AbortSignal.t() | nil ->
              {:ok, list(Types.agent_message())} | list(Types.agent_message()))
 
   @type stream_fn ::
@@ -83,15 +83,21 @@ defmodule LemonAgent.Agent do
           agent_state: AgentState.t(),
           stream_accumulator: StreamAccumulator.t() | nil,
           listeners: list({pid(), reference()}),
-          abort_ref: reference() | nil,
+          abort_ref: AbortSignal.t() | {:aborted, AbortSignal.t()} | nil,
           running_task: Task.t() | nil,
+          bound_input_ids: MapSet.t(),
           steering_queue: list(Types.agent_message()),
           follow_up_queue: list(Types.agent_message()),
+          queue_consumer: pid() | nil,
+          loop_closing: boolean(),
           convert_to_llm: convert_to_llm_fn(),
           transform_context: transform_context_fn() | nil,
+          tool_result_max_bytes: pos_integer() | nil,
           stream_fn: stream_fn() | nil,
           system_prompt_observer: pid() | nil,
           response_system_prompt: LemonAi.SystemPrompt.t(),
+          stream_rules: [map()] | (-> [map()]),
+          on_stream_rule: (map() -> :ok | {:error, term()}) | nil,
           session_id: String.t() | nil,
           get_api_key: get_api_key_fn() | nil,
           resolve_stream_options: AgentLoopConfig.resolve_stream_options_fn() | nil,
@@ -502,7 +508,7 @@ defmodule LemonAgent.Agent do
   end
 
   @doc "Non-consuming steering queue peek bound to the active invocation signal."
-  @spec has_steering_messages?(GenServer.server(), reference() | nil) :: boolean()
+  @spec has_steering_messages?(GenServer.server(), AbortSignal.t() | nil) :: boolean()
   def has_steering_messages?(agent, signal) do
     GenServer.call(agent, {:has_steering_messages, signal}, 1_000)
   end
@@ -1050,17 +1056,18 @@ defmodule LemonAgent.Agent do
             _ -> ""
           end
 
-        Introspection.record(
-          :agent_loop_started,
-          %{
-            model: model_id,
-            tool_count: length(new_agent_state.tools),
-            message_count: length(new_agent_state.messages),
-            is_continue: messages == nil
-          },
-          session_key: state.session_id,
-          provenance: :direct
-        )
+        _ =
+          Introspection.record(
+            :agent_loop_started,
+            %{
+              model: model_id,
+              tool_count: length(new_agent_state.tools),
+              message_count: length(new_agent_state.messages),
+              is_continue: messages == nil
+            },
+            session_key: state.session_id,
+            provenance: :direct
+          )
 
         {:ok,
          %{
@@ -1079,7 +1086,7 @@ defmodule LemonAgent.Agent do
     end
   end
 
-  @spec build_loop_config(state(), reference(), pid()) :: AgentLoopConfig.t()
+  @spec build_loop_config(state(), AbortSignal.t(), pid()) :: AgentLoopConfig.t()
   defp build_loop_config(state, abort_ref, agent_pid) do
     reasoning =
       if state.agent_state.thinking_level == :auto do
@@ -1185,9 +1192,9 @@ defmodule LemonAgent.Agent do
 
   @spec run_agent_loop(
           list(Types.agent_message()) | nil,
-          map(),
+          Types.AgentContext.t(),
           AgentLoopConfig.t(),
-          reference(),
+          AbortSignal.t(),
           pid(),
           stream_fn() | nil
         ) :: :ok | {:error, term()}
@@ -1339,14 +1346,15 @@ defmodule LemonAgent.Agent do
 
   defp handle_agent_event({:turn_end, message, _tool_results}, state) do
     # Emit introspection event for turn observation
-    Introspection.record(
-      :agent_turn_observed,
-      %{
-        has_error: match?(%{error_message: err} when is_binary(err) and err != "", message)
-      },
-      session_key: state.session_id,
-      provenance: :inferred
-    )
+    _ =
+      Introspection.record(
+        :agent_turn_observed,
+        %{
+          has_error: match?(%{error_message: err} when is_binary(err) and err != "", message)
+        },
+        session_key: state.session_id,
+        provenance: :inferred
+      )
 
     # Check for error in the message
     error =
@@ -1401,16 +1409,17 @@ defmodule LemonAgent.Agent do
   @spec handle_task_completion(term(), state()) :: state()
   defp handle_task_completion(_result, state) do
     # Emit introspection event for loop end
-    Introspection.record(
-      :agent_loop_ended,
-      %{
-        message_count: length(state.agent_state.messages),
-        had_error: state.agent_state.error != nil,
-        was_aborted: match?({:aborted, _}, state.abort_ref)
-      },
-      session_key: state.session_id,
-      provenance: :direct
-    )
+    _ =
+      Introspection.record(
+        :agent_loop_ended,
+        %{
+          message_count: length(state.agent_state.messages),
+          had_error: state.agent_state.error != nil,
+          was_aborted: match?({:aborted, _}, state.abort_ref)
+        },
+        session_key: state.session_id,
+        provenance: :direct
+      )
 
     # Clear streaming state
     new_agent_state = %{
@@ -1493,7 +1502,8 @@ defmodule LemonAgent.Agent do
 
   defp apply_redirect(state, message) do
     case {state.running_task, state.abort_ref} do
-      {task, abort_ref} when not is_nil(task) and is_reference(abort_ref) ->
+      {task, abort_ref}
+      when not is_nil(task) and not is_nil(abort_ref) and not is_tuple(abort_ref) ->
         # Enqueue the correction before raising the redirect flag so it is
         # already in the steering queue when the loop observes the flag and
         # drains steering. The abort_ref stays a plain reference: a redirect

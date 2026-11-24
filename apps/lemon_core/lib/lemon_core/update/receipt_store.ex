@@ -37,7 +37,7 @@ defmodule LemonCore.Update.ReceiptStore do
       catch
         _kind, _reason -> {:error, :update_operation_failed}
       after
-        File.close(io)
+        _ = File.close(io)
         File.rm(lock)
       end
     else

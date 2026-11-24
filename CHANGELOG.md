@@ -171,6 +171,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Source (`bin/lemon`) and packaged distributed runtimes start OTP's `rex`,
+  `global_name_server` and `global_group` again: `-kernel start_distribution
+  false` (#551) had dropped them, so every native session start failed on
+  `:global` and the weekly Product Smoke was red (#499).
+- `scripts/test quality` passes Credo again: the crash-report stand-in exception
+  is `LemonCore.StatusRedaction.RedactedCrashError` (#499).
+- The nightly offline latency lane names the failing boot and the probe's fixed
+  failure message (or only the exception module) instead of a bare "runtime
+  failed" (#499).
+- Dialyzer: the five published packages (`lemon_core`, `lemon_ai`,
+  `lemon_agent`, `lemon_memory`, `lemon_platform_test`) and the other gated apps
+  have zero findings; fixes include `Lemon.Reload` treating a successful code
+  change as an error and extension manifests reporting non-object JSON as
+  oversized (#499, #734).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
@@ -211,6 +225,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- The OSV dependency scan is a gate: it uses OSV-Scanner 2.7.1 (2.3.5 failed
+  against the current OSV API and reported "No issues found"), scans every
+  shipped lockfile including `apps/lemon_web/assets` and `products/lemon_bot`,
+  and fails on any finding not accepted, with a reason and expiry, in
+  `osv-scanner.toml` (#734).
 - Model file tools, browser and media outputs and checkpoint restore refuse
   Lemon operator state (`~/.lemon`, the agent directory, configured
   config/key/store/checkpoint/bot paths, extension roots) and the toolchain

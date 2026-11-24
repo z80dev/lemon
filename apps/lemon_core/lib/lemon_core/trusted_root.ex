@@ -101,9 +101,10 @@ defmodule LemonCore.TrustedRoot do
         :error
     after
       remaining ->
-        with {:os_pid, pid} when pid > 1 <- Port.info(port, :os_pid) do
-          LemonCore.ProcessGroup.terminate(pid, scope: :process)
-        end
+        _ =
+          with {:os_pid, pid} when pid > 1 <- Port.info(port, :os_pid) do
+            LemonCore.ProcessGroup.terminate(pid, scope: :process)
+          end
 
         if Port.info(port), do: Port.close(port)
         :error

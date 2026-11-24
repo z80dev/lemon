@@ -41,7 +41,7 @@ defmodule LemonAgent.Loop.ToolCalls do
           [LemonAgent.Types.agent_message()],
           [LemonAi.Types.ToolCall.t()],
           AgentLoopConfig.t(),
-          reference() | nil,
+          AbortSignal.t() | nil,
           EventStream.t()
         ) ::
           {[ToolResultMessage.t()], LemonAgent.Types.AgentContext.t(),
@@ -60,11 +60,12 @@ defmodule LemonAgent.Loop.ToolCalls do
         if signal, do: AbortSignal.abort(signal)
         {pending_by_ref, pending_by_mon} = Process.get(@pending_tools_key)
 
-        stop_aborted_tools(
-          pending_by_ref,
-          pending_by_mon,
-          config.tool_task_supervisor || LemonAgent.ToolTaskSupervisor
-        )
+        _ =
+          stop_aborted_tools(
+            pending_by_ref,
+            pending_by_mon,
+            config.tool_task_supervisor || LemonAgent.ToolTaskSupervisor
+          )
 
         throw(failure)
 
@@ -72,11 +73,12 @@ defmodule LemonAgent.Loop.ToolCalls do
         if signal, do: AbortSignal.abort(signal)
         {pending_by_ref, pending_by_mon} = Process.get(@pending_tools_key)
 
-        stop_aborted_tools(
-          pending_by_ref,
-          pending_by_mon,
-          config.tool_task_supervisor || LemonAgent.ToolTaskSupervisor
-        )
+        _ =
+          stop_aborted_tools(
+            pending_by_ref,
+            pending_by_mon,
+            config.tool_task_supervisor || LemonAgent.ToolTaskSupervisor
+          )
 
         exit(failure)
     after
@@ -343,7 +345,7 @@ defmodule LemonAgent.Loop.ToolCalls do
                     {pending_by_ref, pending_by_mon} =
                       drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
-                    Task.Supervisor.terminate_child(tool_task_supervisor, pid)
+                    _ = Task.Supervisor.terminate_child(tool_task_supervisor, pid)
 
                     LemonCore.Telemetry.emit(
                       [:lemon_agent, :tool_task, :error],
@@ -1216,7 +1218,7 @@ defmodule LemonAgent.Loop.ToolCalls do
   defp cancel_tool_timeout(nil), do: :ok
 
   defp cancel_tool_timeout(timeout_ref) do
-    Process.cancel_timer(timeout_ref)
+    _ = Process.cancel_timer(timeout_ref)
     :ok
   end
 
@@ -1236,7 +1238,7 @@ defmodule LemonAgent.Loop.ToolCalls do
       )
 
     Enum.each(remaining, fn {_ref, pending} ->
-      Task.Supervisor.terminate_child(supervisor, pending.pid)
+      _ = Task.Supervisor.terminate_child(supervisor, pending.pid)
       Process.demonitor(pending.mon_ref, [:flush])
     end)
 

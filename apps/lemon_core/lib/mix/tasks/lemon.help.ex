@@ -52,7 +52,7 @@ defmodule Mix.Tasks.Lemon.Help do
 
   @impl true
   def run(_args) do
-    Mix.Task.load_all()
+    _ = Mix.Task.load_all()
 
     count = @groups |> Enum.flat_map(fn {_t, tasks} -> tasks end) |> length()
 

@@ -10,13 +10,14 @@ defmodule LemonCore.Dedupe.Owner do
     # A restarted child receives the same name and recreates its empty cache.
     case :ets.whereis(table) do
       :undefined ->
-        :ets.new(table, [
-          :set,
-          :public,
-          :named_table,
-          read_concurrency: true,
-          write_concurrency: true
-        ])
+        _ =
+          :ets.new(table, [
+            :set,
+            :public,
+            :named_table,
+            read_concurrency: true,
+            write_concurrency: true
+          ])
 
         {:ok, table}
 

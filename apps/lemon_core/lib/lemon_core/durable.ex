@@ -45,19 +45,7 @@ defmodule LemonCore.Durable do
   end
 
   defp isolated_darwin_sync(path) do
-    {worker, monitor} =
-      spawn_monitor(fn ->
-        outcome =
-          try do
-            {:returned, darwin_sync(path, "file", :file_sync_unsupported)}
-          catch
-            kind, reason -> {:raised, kind, reason, __STACKTRACE__}
-          end
-
-        # Carry the outcome in the single monitor message: no reply or normal
-        # port EXIT can remain in the caller's mailbox after this receive.
-        exit({__MODULE__, outcome})
-      end)
+    {worker, monitor} = spawn_monitor(__MODULE__, :sync_worker, [path])
 
     receive do
       {:DOWN, ^monitor, :process, ^worker, {__MODULE__, {:returned, result}}} ->
@@ -69,6 +57,22 @@ defmodule LemonCore.Durable do
       {:DOWN, ^monitor, :process, ^worker, reason} ->
         exit(reason)
     end
+  end
+
+  @doc false
+  # Runs in the isolated process started by `isolated_darwin_sync/1`.
+  @spec sync_worker(Path.t()) :: no_return()
+  def sync_worker(path) do
+    outcome =
+      try do
+        {:returned, darwin_sync(path, "file", :file_sync_unsupported)}
+      catch
+        kind, reason -> {:raised, kind, reason, __STACKTRACE__}
+      end
+
+    # Carry the outcome in the single monitor message: no reply or normal
+    # port EXIT can remain in the caller's mailbox after this receive.
+    exit({__MODULE__, outcome})
   end
 
   defp darwin_sync(path, kind, unsupported) do

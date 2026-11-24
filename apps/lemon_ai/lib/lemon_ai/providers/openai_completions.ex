@@ -340,7 +340,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
   defp cache_routing_headers(_model, _opts), do: %{}
 
   defp build_copilot_headers(context) do
-    messages = context.messages || []
+    messages = context.messages
     last_message = List.last(messages)
 
     is_agent_call =
@@ -448,7 +448,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   defp maybe_add_max_tokens(params, model, opts, %{max_tokens_field: field}) do
     default_max_tokens =
-      if model.provider in [:zai, "zai"] or String.contains?(model.base_url || "", "api.z.ai"),
+      if model.provider in [:zai, "zai"] or String.contains?(model.base_url, "api.z.ai"),
         do: model.max_tokens
 
     max_tokens = opts.max_tokens || default_max_tokens
@@ -546,8 +546,6 @@ defmodule LemonAi.Providers.OpenAICompletions do
       params
     end
   end
-
-  defp maybe_add_openrouter_routing(params, _model, _compat), do: params
 
   defp has_tool_history?(messages) do
     Enum.any?(messages, fn
@@ -990,7 +988,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   defp detect_compat(model) do
     provider = model.provider
-    base_url = model.base_url || ""
+    base_url = model.base_url
 
     is_zai = provider in [:zai, "zai"] || String.contains?(base_url, "api.z.ai")
 

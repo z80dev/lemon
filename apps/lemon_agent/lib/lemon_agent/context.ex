@@ -318,7 +318,8 @@ defmodule LemonAgent.Context do
       }
   """
   @spec make_transform(keyword()) ::
-          ([Types.agent_message()], reference() | nil -> {:ok, [Types.agent_message()]})
+          ([Types.agent_message()], LemonAgent.AbortSignal.t() | nil ->
+             {:ok, [Types.agent_message()]})
   def make_transform(opts \\ []) do
     warn_on_truncation = Keyword.get(opts, :warn_on_truncation, true)
     truncate_opts = Keyword.drop(opts, [:warn_on_truncation])

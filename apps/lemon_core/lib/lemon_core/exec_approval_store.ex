@@ -31,7 +31,7 @@ defmodule LemonCore.ExecApprovalStore do
   def get_global_policy(tool, action_hash),
     do: Store.get(@global_policy_table, {tool, action_hash})
 
-  @spec put_global_policy(term(), term(), map()) :: :ok
+  @spec put_global_policy(term(), term(), map()) :: :ok | {:error, term()}
   def put_global_policy(tool, action_hash, value),
     do: Store.put(@global_policy_table, {tool, action_hash}, value)
 
@@ -42,7 +42,7 @@ defmodule LemonCore.ExecApprovalStore do
   def get_agent_policy(agent_id, tool, action_hash),
     do: Store.get(@agent_policy_table, {agent_id, tool, action_hash})
 
-  @spec put_agent_policy(term(), term(), term(), map()) :: :ok
+  @spec put_agent_policy(term(), term(), term(), map()) :: :ok | {:error, term()}
   def put_agent_policy(agent_id, tool, action_hash, value),
     do: Store.put(@agent_policy_table, {agent_id, tool, action_hash}, value)
 
@@ -53,7 +53,7 @@ defmodule LemonCore.ExecApprovalStore do
   def get_session_policy(session_key, tool, action_hash),
     do: Store.get(@session_policy_table, {session_key, tool, action_hash})
 
-  @spec put_session_policy(term(), term(), term(), map()) :: :ok
+  @spec put_session_policy(term(), term(), term(), map()) :: :ok | {:error, term()}
   def put_session_policy(session_key, tool, action_hash, value),
     do: Store.put(@session_policy_table, {session_key, tool, action_hash}, value)
 
