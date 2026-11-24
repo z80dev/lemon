@@ -4,6 +4,10 @@
 
 ### Changed
 
+- `CronManager` releases claims whose `submission_started` was never recorded
+  (restart, worker crash, startup reconcile, abort) as retryable failures;
+  `RunSubmitter` maps a pre-router `:exception`/`:exit` to a definite failure.
+  `:outcome_unknown` is kept only once submission started (#624).
 - `CronStore` is the sole owner of cron retention: `cleanup_old_runs/1` keeps
   active and outcome-unknown runs, new `cleanup_audit_events/1` caps the audit
   log (default `audit_retention_max/0`, 10,000 events) on the hourly tick, and

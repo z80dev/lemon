@@ -171,6 +171,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Cron: a scheduled run claimed but never submitted (restart during jitter,
+  worker crash before submit) is released as a retryable failure with a
+  `claim_released` audit instead of locking its job as `outcome_unknown`;
+  aborting such a run no longer calls the router (#624).
 - Cron history: the core store sweep no longer deletes cron runs after 48 hours,
   so running and outcome-unknown runs and pending retries survive;
   `automation.run_retention_per_job` is now the only run-history limit. The

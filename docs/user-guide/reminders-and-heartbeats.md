@@ -35,6 +35,13 @@ outcome is unknown and pending retries are never pruned, however old. Configure
 keeps the newest 10,000 events; `cron.audit` returns `nextBeforeMs` when more
 events exist, which you pass back as `beforeMs` to read the next page.
 
+A run whose result Lemon cannot confirm (the agent may still be working) stays
+running and blocks that job's later slots until it is reconciled or you abort
+it. A run that was claimed but never handed to the agent, for example because
+Lemon restarted during the job's jitter delay, is instead recorded as failed
+("cron run was never submitted"), retried if the job allows retries, and does
+not hold up the next slot.
+
 ---
 
 ## Where results go

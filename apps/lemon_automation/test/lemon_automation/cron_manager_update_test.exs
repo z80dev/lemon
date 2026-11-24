@@ -278,6 +278,7 @@ defmodule LemonAutomation.CronManagerUpdateTest do
   test "unknown abort remains owned, is sent once, and blocks submission claims", %{job: job} do
     :persistent_term.put({AbortRouter, :result}, {:error, :outcome_unknown})
     run = job.id |> CronRun.new(:schedule) |> CronRun.start("router_abort_unknown")
+    run = %{run | meta: %{submission_started: true}}
     CronStore.put_run(run)
 
     assert {:error, :outcome_unknown} = CronManager.abort_run(run.id)
@@ -289,6 +290,21 @@ defmodule LemonAutomation.CronManagerUpdateTest do
              CronStore.get_run(run.id)
 
     assert {:error, :aborted} =
+             GenServer.call(
+               CronManager,
+               {:claim_submission, run.id, run.run_id, "agent:default:main"}
+             )
+  end
+
+  test "aborting a never-submitted claim aborts locally without the router", %{job: job} do
+    :persistent_term.put({AbortRouter, :result}, {:error, :outcome_unknown})
+    run = job.id |> CronRun.new(:schedule) |> CronRun.start("router_abort_unsubmitted")
+    CronStore.put_run(run)
+
+    assert {:ok, %CronRun{status: :aborted}} = CronManager.abort_run(run.id)
+    refute_receive {:router_abort, _}, 50
+
+    assert {:error, :not_active} =
              GenServer.call(
                CronManager,
                {:claim_submission, run.id, run.run_id, "agent:default:main"}

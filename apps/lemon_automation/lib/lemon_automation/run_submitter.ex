@@ -66,8 +66,18 @@ defmodule LemonAutomation.RunSubmitter do
     result
   end
 
-  defp normalize_submit_result({:error, {:submit_failed, {kind, _}}}, run_id)
-       when kind in [:exception, :exit, :unexpected_submit_result],
+  # `RunCompletionWaiter` contains every router-call failure itself (as
+  # `:submission_outcome_unknown`), so an `:exception`/`:exit` reaching here was
+  # raised before the router call, by the submission claim: definitely not sent.
+  # An unexpected router reply may still mean the router accepted the run.
+  defp normalize_submit_result({:error, {:submit_failed, {kind, _}}}, _run_id)
+       when kind in [:exception, :exit],
+       do: {:error, "cron run was not submitted (#{kind} before router submission)"}
+
+  defp normalize_submit_result(
+         {:error, {:submit_failed, {:unexpected_submit_result, _}}},
+         run_id
+       ),
        do: {:error, {:outcome_unknown, run_id}}
 
   defp normalize_submit_result(result, _run_id), do: normalize_submit_result(result)

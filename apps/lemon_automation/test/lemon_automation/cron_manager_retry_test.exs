@@ -189,7 +189,8 @@ defmodule LemonAutomation.CronManagerRetryTest do
         session_key: job.session_key,
         job_name: job.name,
         retry_attempt: 0,
-        retry_root_id: root_id
+        retry_root_id: root_id,
+        submission_started: true
       })
       |> CronRun.start("router_#{root_id}")
       |> Map.put(:started_at_ms, LemonCore.Clock.now_ms() - 1_000)

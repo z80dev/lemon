@@ -35,6 +35,55 @@ defmodule LemonAutomation.CronManagerDowntimeTest do
     refute_receive {:submit_claimed_run, ^id, _}
   end
 
+  test "a claim never submitted before a restart is released and the next slot runs", %{id: id} do
+    job = store_job(id, schedule: "* * * * *", next_run_at_ms: LemonCore.Clock.now_ms() - 1_000)
+    {:ok, state} = initialized_manager()
+    state = %{state | jobs: Map.take(state.jobs, [id])}
+    assert {:noreply, _state} = CronManager.handle_cast(:tick, state)
+    # The manager "stops" before handling its own submit message.
+    assert_receive {:submit_claimed_run, ^id, claimed_id}
+    assert %CronRun{status: :running} = CronStore.get_run(claimed_id)
+
+    {:ok, state} = initialized_manager()
+    released = CronStore.get_run(claimed_id)
+    assert released.status == :failed
+    assert released.error == "cron run was never submitted"
+    refute released.meta[:outcome_unknown]
+    assert CronStore.active_runs(id) == []
+
+    assert Enum.any?(CronStore.list_audit_events(run_id: claimed_id), fn event ->
+             event.action == "claim_released"
+           end)
+
+    due = %{state.jobs[id] | next_run_at_ms: job.next_run_at_ms + 1}
+    state = %{state | jobs: %{id => due}}
+    assert {:noreply, _state} = CronManager.handle_cast(:tick, state)
+    assert_receive {:submit_claimed_run, ^id, next_id}
+    assert next_id != claimed_id
+
+    refute Enum.any?(CronStore.list_audit_events(job_id: id), fn event ->
+             event.action == "scheduled_run_suppressed"
+           end)
+  end
+
+  test "an unsubmitted claim without a worker is released once its jitter window passes", %{
+    id: id
+  } do
+    job = store_job(id, schedule: "* * * * *", next_run_at_ms: LemonCore.Clock.now_ms() - 1_000)
+    {:ok, state} = initialized_manager()
+
+    {:ok, run} =
+      CronStore.claim_scheduled_run(job, job.next_run_at_ms, "router_orphan_#{id}")
+
+    state = %{state | jobs: %{id => %{job | next_run_at_ms: nil}}}
+    assert {:noreply, state} = CronManager.handle_cast(:tick, state)
+    assert %CronRun{status: :running} = CronStore.get_run(run.id)
+
+    CronStore.put_run(%{run | started_at_ms: LemonCore.Clock.now_ms() - 10_000})
+    assert {:noreply, _state} = CronManager.handle_cast(:tick, state)
+    assert %CronRun{status: :failed} = CronStore.get_run(run.id)
+  end
+
   test "slots outside grace re-anchor with an audit", %{id: id} do
     store_job(id, next_run_at_ms: LemonCore.Clock.now_ms() - 7_200_001)
     {:ok, state} = initialized_manager()
