@@ -183,6 +183,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   as one large delta (Gemini) instead of failing the run with
   `delta_too_large`; a rule that cannot evaluate output now fails only that
   attempt and still records its usage (#639).
+- Azure OpenAI Responses streams through the shared provider transport: it
+  retries 429/5xx and transport failures before the body per the provider
+  retry policy, reports classified errors without dumping the HTTP response,
+  cancels its response on every exit and no longer ends or fails on unrelated
+  `{ref, :done}`/`{:error, _}` messages. Azure settings are read only from
+  `provider_options.azure_openai_responses` (the resolved API key wins over
+  `api_key`); the `azure_*` keys in `thinking_budgets` are no longer set or
+  read — **Breaking** for callers that passed Azure overrides there (#680).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

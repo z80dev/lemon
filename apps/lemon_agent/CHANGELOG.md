@@ -122,6 +122,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `StreamRules.Error` during streaming fails the attempt as a non-retryable
   error, cancels the provider stream and records its budget usage instead of
   escaping the loop (#639).
+- `ModelRuntime.StreamOptions` puts resolved Azure settings only in
+  `provider_options.azure_openai_responses` and reads per-request overrides
+  from there; it no longer writes or reads `azure_*` keys in
+  `thinking_budgets` (**Breaking**, #680).
 - OAuth credential resolution, including the Anthropic and Codex paths, adopts
   a login refreshed concurrently by another process instead of returning
   `:oauth_secret_changed` when that login is still fresh.

@@ -122,6 +122,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `extract_retry_delay/2`, `retryable_error?/2`, `extract_error_message/1` and
   `SSEParser.events/2` are removed; `GoogleShared.normalize_http_error_body/1,2`
   moved to `StreamTransport.error_body/1,2`.
+- `AzureOpenAIResponses` streams through `StreamTransport` (classified
+  `LemonAi.Retry` retries, own-ref consumption, cancel on every exit, no
+  `inspect/1` of response bodies). **Breaking:** Azure settings
+  (`api_key`, `base_url`, `resource_name`, `api_version`, `deployment_name`,
+  `deployment_name_map`) are read only from
+  `provider_options[:azure_openai_responses]`, whose `api_key` takes
+  precedence over `StreamOptions.api_key`; `thinking_budgets` `azure_*` keys
+  are ignored (#680).
 
 - `CircuitBreaker` no longer stores its default clock as a closure, so a
   running breaker survives a reload of its module (cover compilation or hot

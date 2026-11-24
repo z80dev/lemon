@@ -9,13 +9,15 @@ defmodule LemonAi.Providers.StreamTerminationTest do
   alias LemonAi.Test.StreamServer
 
   alias LemonAi.Providers.{
+    AzureOpenAIResponses,
     Bedrock,
     Google,
     GoogleGeminiCli,
     GoogleVertex,
     OpenAICodexResponses,
     OpenAICompletions,
-    OpenAIResponses
+    OpenAIResponses,
+    StreamTransport
   }
 
   alias LemonAi.Types.{AssistantMessage, Context, Model, ModelCost, StreamOptions, UserMessage}
@@ -27,7 +29,8 @@ defmodule LemonAi.Providers.StreamTerminationTest do
     :openai_completions,
     :openai_responses,
     :openai_codex_responses,
-    :bedrock
+    :bedrock,
+    :azure_openai_responses
   ]
 
   setup do
@@ -120,37 +123,101 @@ defmodule LemonAi.Providers.StreamTerminationTest do
     end
   end
 
-  test "unrelated async messages in the caller mailbox neither end nor fail a stream" do
-    test_pid = self()
+  for provider <- [:openai_completions, :azure_openai_responses] do
+    test "#{provider}: unrelated async messages in the caller mailbox neither end nor fail a stream" do
+      provider = unquote(provider)
+      test_pid = self()
+
+      server =
+        serve(fn _n ->
+          [:headers, {:chunk, partial(provider)}, {:sleep, 200}]
+          |> Kernel.++([{:chunk, terminal(provider)}, :finish])
+        end)
+
+      {:ok, stream} = start(provider, server, %{})
+
+      events =
+        stream
+        |> EventStream.events()
+        |> Enum.map(fn
+          {:text_delta, _, "Hel"} = event ->
+            task = :sys.get_state(stream).task_pid
+            send(task, {make_ref(), :done})
+            send(task, {:error, :boom})
+            send(task, {:DOWN, make_ref(), :process, test_pid, :normal})
+            event
+
+          event ->
+            event
+        end)
+
+      assert {:ok, %AssistantMessage{stop_reason: :stop} = message} =
+               EventStream.result(stream, 5_000)
+
+      assert LemonAi.get_text(message) == "Hello"
+      assert Enum.any?(events, &match?({:done, :stop, _}, &1))
+    end
+  end
+
+  test "a stalled response is canceled on idle timeout and early halt with no mailbox leftovers" do
+    server = serve(fn _n -> [:headers, {:chunk, partial(:openai_completions)}, :stall] end)
+    policy = LemonAi.Retry.policy(max_attempts: 1)
+
+    for {consume, n} <- [{&Enum.to_list/1, 0}, {&Enum.take(&1, 1), 1}] do
+      {:links, before} = Process.info(self(), :links)
+
+      assert {:ok, events} =
+               StreamTransport.post_sse(server.url, [], %{}, policy, idle_timeout: 300)
+
+      {:links, links} = Process.info(self(), :links)
+      [connection] = links -- before
+      items = consume.(events)
+
+      assert %{"choices" => _} = hd(items)
+      if n == 0, do: assert({:stream_error, %{category: :transient}} = List.last(items))
+      assert_receive {:stream_server, :client_closed, ^n}, 5_000
+      refute Process.alive?(connection)
+      {:messages, messages} = Process.info(self(), :messages)
+      refute Enum.any?(messages, &match?({{_pool, ^connection}, _}, &1))
+    end
+  end
+
+  test "Completions retries a stalled uncommitted response only after canceling it" do
+    parent = self()
 
     server =
-      serve(fn _n ->
-        [:headers, {:chunk, partial(:openai_completions)}, {:sleep, 200}]
-        |> Kernel.++([{:chunk, terminal(:openai_completions)}, :finish])
+      serve(fn
+        0 ->
+          [:headers, {:chunk, sse(%{"choices" => [%{"delta" => %{}}]})}, :stall]
+
+        _ ->
+          [
+            :headers,
+            {:chunk, partial(:openai_completions)},
+            {:chunk, terminal(:openai_completions)},
+            :finish
+          ]
       end)
 
-    {:ok, stream} = start(:openai_completions, server, %{})
+    # The retry wait runs in the provider task: report its mailbox there.
+    sleep = fn _ms ->
+      {:messages, messages} = Process.info(self(), :messages)
+      send(parent, {:retry_mailbox, messages})
+      :ok
+    end
 
-    events =
-      stream
-      |> EventStream.events()
-      |> Enum.map(fn
-        {:text_delta, _, "Hel"} = event ->
-          task = :sys.get_state(stream).task_pid
-          send(task, {make_ref(), :done})
-          send(task, {:error, :boom})
-          send(task, {:DOWN, make_ref(), :process, test_pid, :normal})
-          event
+    overrides = %{
+      stream_idle_timeout: 1_000,
+      provider_retry: %{max_attempts: 2, sleep_fun: sleep}
+    }
 
-        event ->
-          event
-      end)
+    {:ok, stream} = start(:openai_completions, server, overrides)
 
-    assert {:ok, %AssistantMessage{stop_reason: :stop} = message} =
-             EventStream.result(stream, 5_000)
-
-    assert LemonAi.get_text(message) == "Hello"
-    assert Enum.any?(events, &match?({:done, :stop, _}, &1))
+    assert {:ok, %AssistantMessage{stop_reason: :stop}} = EventStream.result(stream, 10_000)
+    assert_receive {:stream_server, :client_closed, 0}
+    assert_receive {:retry_mailbox, messages}
+    refute Enum.any?(messages, &match?({{Finch.HTTP1.Pool, _}, _}, &1))
+    assert_receive {:stream_server, :request, 1, _}
   end
 
   # ============================================================================
@@ -235,6 +302,20 @@ defmodule LemonAi.Providers.StreamTerminationTest do
      %StreamOptions{api_key: token}}
   end
 
+  defp request(:azure_openai_responses) do
+    opts = %StreamOptions{
+      provider_options: %{
+        azure_openai_responses: %{
+          api_key: "test-key",
+          base_url: "https://r.openai.azure.com/openai/v1"
+        }
+      }
+    }
+
+    {AzureOpenAIResponses, model(:azure_openai_responses, :"azure-openai-responses", "gpt-test"),
+     opts}
+  end
+
   defp request(:bedrock) do
     headers = %{
       "aws_access_key_id" => "AKIA_TEST",
@@ -259,7 +340,8 @@ defmodule LemonAi.Providers.StreamTerminationTest do
   defp partial(:openai_completions),
     do: sse(%{"choices" => [%{"delta" => %{"content" => "Hel"}}]})
 
-  defp partial(provider) when provider in [:openai_responses, :openai_codex_responses] do
+  defp partial(provider)
+       when provider in [:openai_responses, :openai_codex_responses, :azure_openai_responses] do
     sse(%{"type" => "response.output_item.added", "item" => %{"type" => "message", "id" => "m"}}) <>
       sse(%{"type" => "response.output_text.delta", "delta" => "Hel"})
   end
@@ -291,7 +373,8 @@ defmodule LemonAi.Providers.StreamTerminationTest do
       "data: [DONE]\n\n"
   end
 
-  defp terminal(provider) when provider in [:openai_responses, :openai_codex_responses] do
+  defp terminal(provider)
+       when provider in [:openai_responses, :openai_codex_responses, :azure_openai_responses] do
     sse(%{"type" => "response.output_text.delta", "delta" => "lo"}) <>
       sse(%{
         "type" => "response.output_item.done",
