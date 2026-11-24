@@ -41,7 +41,8 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
           send(sink, {:engine_event, run_ref, completed})
 
         :cancel ->
-          :ok
+          # A slow drain: tool results still arriving after the cancel request.
+          Process.sleep(:persistent_term.get({__MODULE__, :drain_ms}, 0))
       end
     end
   end
@@ -253,6 +254,48 @@ defmodule LemonRouter.RunLifecycleTerminalizationTest do
       assert_completed_ok(id, "done")
       assert_receive {:DOWN, ^router_monitor, :process, ^router, :normal}, 2_000
       refute_receive %Event{type: :run_completed, meta: %{run_id: ^id}}, 300
+    end
+
+    test "a watchdog stop waits for a slow-draining executor, then the next queued message runs",
+         %{run_supervisor: run_supervisor} do
+      :persistent_term.put({GatedExecutor, :drain_ms}, 300)
+      on_exit(fn -> :persistent_term.erase({GatedExecutor, :drain_ms}) end)
+      key = conversation()
+      [idle, next] = ids = Enum.map(1..2, fn _ -> run_id() end)
+      Enum.each(ids, &Bus.subscribe(Bus.run_topic(&1)))
+
+      watched = submission(key, idle, run_supervisor)
+
+      watched = %{
+        watched
+        | run_process_opts: Map.put(watched.run_process_opts, :run_watchdog_timeout_ms, 50)
+      }
+
+      :ok = SessionCoordinator.submit(key, watched)
+      :ok = SessionCoordinator.submit(key, submission(key, next, run_supervisor))
+      assert_receive {:executor_started, ^idle, _runner}, 2_000
+
+      # The idle run is cancelled with its real reason once its executor has drained.
+      assert_receive %Event{
+                       type: :run_completed,
+                       meta: %{run_id: ^idle} = meta,
+                       payload: %{
+                         completed: %{
+                           ok: false,
+                           error: :run_idle_watchdog_timeout,
+                           meta: %{cancelled: true, cancel_reason: :run_idle_watchdog_timeout}
+                         }
+                       }
+                     },
+                     3_000
+
+      refute Map.get(meta, :synthetic)
+
+      # The next message claims the engine session instead of failing busy.
+      complete(next, "next done")
+      assert_completed_ok(next, "next done")
+      refute_received %Event{type: :run_completed, meta: %{run_id: ^next}}
+      refute_received %Event{type: :run_completed, meta: %{run_id: ^idle}}
     end
   end
 

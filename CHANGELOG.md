@@ -282,6 +282,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   terminal evidence no longer drops the final answer; and a timed-out crash
   recovery or carryover replay call leaves only that run pending instead of
   skipping the rest of the boot's recovery (#641).
+- A watchdog stop or keep-alive cancel no longer lets the next queued message
+  fail with `:session_in_use` while the cancelled run's executor is still
+  draining: watchdog and keep-alive cancels take the normal abort path and wait
+  for the gateway's real completion, which reports the real reason in
+  `meta.cancel_reason` (`:run_idle_watchdog_timeout`, `:user_requested`) instead
+  of `:run_watchdog_timeout`. A busy engine session refuses the gateway start
+  synchronously and the router retries it within its pre-start deadline.
+  Gateway cancellation is an asynchronous request that holds the permit and
+  claim until the executor exits or the 15-second drain deadline passes, and
+  completion persists before releasing them exactly once (#643).
 
 ### Removed
 

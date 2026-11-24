@@ -15,7 +15,10 @@ Run directly under `RunSupervisor`; success acknowledges child existence, not
 executor start. A Run claims its engine session through `EngineSessionClaim`,
 checks the durable terminal fence, requests a permit, then rechecks terminal and
 cancellation state before invoking the executor. Claims fail immediately with
-`:session_in_use`, before capacity is consumed. Release is idempotent, and owner
+`:session_in_use` while the Run starts, before capacity is consumed, so
+`submit_execution/1` refuses the start synchronously and the router retries it
+within its pre-start deadline. Release happens once, after the terminal receipt
+persists and before it is published, and owner
 death releases Registry ownership and monitored permits.
 
 The old ThreadWorker, its supervisor/registry, Scheduler generation queue, and
