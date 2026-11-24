@@ -15,8 +15,16 @@
 - Register the platform cron tool with managed native-process ownership and assert its ownership-bearing registry entry.
 - Fence command cron launches through the native-process ledger before shell effects, failing closed when the configured ledger is unavailable.
 
+### Fixed
+
+- `KanbanDispatcher` `control_revision` ignores lease renewals and other
+  heartbeat-only task metadata, so it stays stable between ticks and an
+  operator stop bound to it succeeds (#658).
+
 ### Removed
 
+- `LemonAutomation.GoalContinuationManager`. One-shot continuations call
+  `GoalLoopManager.run_once(session_key, verdict: :continue)` (#659).
 - Unused top-level `LemonAutomation` delegates and the `LemonAutomation.Wake`
   wrapper/batch API. Call `LemonAutomation.CronManager` directly.
 - The ignored third argument to `CronCommandRunner.submit`; use `submit/2`.

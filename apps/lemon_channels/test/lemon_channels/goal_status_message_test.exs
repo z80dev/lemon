@@ -5,22 +5,16 @@ defmodule LemonChannels.GoalStatusMessageTest do
   alias LemonChannels.GoalStatusMessage
   alias LemonAgent.Workspace.GoalStore
 
-  defmodule FakeContinuation do
+  defmodule HangingLoop do
     @moduledoc false
 
-    def continue_once(session_key, opts) do
-      send(Process.get(:goal_status_message_test_pid), {:continue_once, session_key, opts})
+    # A judge that hangs until the manager call deadline exits the caller.
+    def run_once(session_key, opts) do
+      send(:persistent_term.get(:goal_status_message_test_pid), {:hang, session_key, self()})
 
-      {:ok,
-       %{
-         run_id: "run_channel_continue",
-         goal: %{
-           id: "goal_channel",
-           status: "active",
-           objective: "private objective",
-           continuation_count: 1
-         }
-       }}
+      receive do
+        :release -> exit({:timeout, {GenServer, :call, [__MODULE__, {:run_once, opts}]}})
+      end
     end
   end
 
@@ -28,7 +22,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
     @moduledoc false
 
     def run_once(session_key, opts) do
-      send(Process.get(:goal_status_message_test_pid), {:loop_once, session_key, opts})
+      send(:persistent_term.get(:goal_status_message_test_pid), {:loop_once, session_key, opts})
 
       {:ok,
        %{
@@ -44,12 +38,12 @@ defmodule LemonChannels.GoalStatusMessageTest do
     end
 
     def start_loop(session_key, opts) do
-      send(Process.get(:goal_status_message_test_pid), {:loop_start, session_key, opts})
+      send(:persistent_term.get(:goal_status_message_test_pid), {:loop_start, session_key, opts})
       {:ok, %{session_key: session_key, status: "running", max_ticks: opts[:max_ticks] || 3}}
     end
 
     def status(session_key) do
-      send(Process.get(:goal_status_message_test_pid), {:loop_status, session_key})
+      send(:persistent_term.get(:goal_status_message_test_pid), {:loop_status, session_key})
 
       {:ok,
        %{
@@ -60,7 +54,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
     end
 
     def stop_loop(session_key) do
-      send(Process.get(:goal_status_message_test_pid), {:loop_stop, session_key})
+      send(:persistent_term.get(:goal_status_message_test_pid), {:loop_stop, session_key})
 
       {:ok,
        %{
@@ -72,7 +66,8 @@ defmodule LemonChannels.GoalStatusMessageTest do
 
   setup do
     {:ok, _} = Application.ensure_all_started(:lemon_automation)
-    Process.put(:goal_status_message_test_pid, self())
+    :persistent_term.put(:goal_status_message_test_pid, self())
+    on_exit(fn -> :persistent_term.erase(:goal_status_message_test_pid) end)
     :ok
   end
 
@@ -167,28 +162,69 @@ defmodule LemonChannels.GoalStatusMessageTest do
     assert GoalStatusMessage.handle(session_key, "resume") == "No goal is set for this session."
   end
 
-  test "continues a goal through configured continuation module" do
+  test "continue submits one continuation off the caller and delivers the run id" do
     session_key = session_key()
 
     text =
       GoalStatusMessage.handle(
         session_key,
         "continue --max-continuations 4 --model worker-model",
-        [continuation_module: FakeContinuation] ++ chat_opts()
+        [loop_module: FakeLoop] ++ chat_opts()
       )
 
-    assert_receive {:continue_once, ^session_key,
+    assert text =~ "Goal Continuation Queued"
+
+    assert_receive {:loop_once, ^session_key,
                     [
+                      {:verdict, :continue},
                       {:starter, %{"grantedBy" => "channel", "root" => _}},
                       {:max_continuations, 4},
                       {:model, "worker-model"}
                     ]}
 
-    assert text =~ "Goal Continuation Submitted"
-    assert text =~ "Run id: run_channel_continue"
-    assert text =~ "Objective bytes: 17"
-    refute text =~ session_key
-    refute text =~ "private objective"
+    assert_receive {:goal_reply, delivered, worker}
+    refute worker == self()
+    assert delivered =~ "Goal Continuation Submitted"
+    assert delivered =~ "Run id: run_loop_once"
+    assert delivered =~ "Objective bytes: 17"
+    refute delivered =~ session_key
+    refute delivered =~ "private objective"
+  end
+
+  test "a hung judge never blocks the caller and reports an unknown outcome" do
+    session_key = session_key()
+    started = System.monotonic_time(:millisecond)
+
+    for args <- ["loop once", "continue"] do
+      assert GoalStatusMessage.handle(
+               session_key,
+               args,
+               [loop_module: HangingLoop] ++ chat_opts()
+             ) =~
+               "Queued"
+    end
+
+    assert System.monotonic_time(:millisecond) - started < 1_000
+
+    for _ <- 1..2 do
+      assert_receive {:hang, ^session_key, worker}
+      send(worker, :release)
+      assert_receive {:goal_reply, text, ^worker}
+      assert text =~ "outcome unknown"
+      assert text =~ "/goal loop status"
+    end
+  end
+
+  test "goal work without a background runner is refused, not run inline" do
+    text =
+      GoalStatusMessage.handle(
+        session_key(),
+        "loop once",
+        [loop_module: FakeLoop] ++ Keyword.drop(chat_opts(), [:start_task])
+      )
+
+    assert text =~ "Goal work unavailable"
+    refute_received {:loop_once, _, _}
   end
 
   test "runs goal loop controls through configured loop module" do
@@ -201,6 +237,8 @@ defmodule LemonChannels.GoalStatusMessageTest do
         [loop_module: FakeLoop] ++ chat_opts()
       )
 
+    assert once_text =~ "Goal Loop Tick Queued"
+
     assert_receive {:loop_once, ^session_key,
                     [
                       {:starter, %{"grantedBy" => "channel", "root" => _}},
@@ -208,7 +246,9 @@ defmodule LemonChannels.GoalStatusMessageTest do
                       {:judge_failure_policy, :continue_once}
                     ]}
 
+    assert_receive {:goal_reply, once_text, _worker}
     assert once_text =~ "Goal Loop Tick"
+    assert once_text =~ "Run id: run_loop_once"
     assert once_text =~ "Verdict: continue"
     assert once_text =~ "Reason: still open"
 
@@ -246,12 +286,13 @@ defmodule LemonChannels.GoalStatusMessageTest do
     for args <- ["continue", "loop once", "loop start"] do
       assert GoalStatusMessage.handle(session_key, args,
                agent_id: "agent-1",
-               continuation_module: FakeContinuation,
+               start_task: &start_task/1,
+               deliver: &deliver/1,
                loop_module: FakeLoop
              ) =~ "tool policy is unavailable"
     end
 
-    refute_received {:continue_once, _, _}
+    refute_received {:goal_reply, _, _}
     refute_received {:loop_once, _, _}
     refute_received {:loop_start, _, _}
   end
@@ -270,7 +311,14 @@ defmodule LemonChannels.GoalStatusMessageTest do
     [
       agent_id: "agent-1",
       workspace: System.tmp_dir!(),
-      channel_context: %{channel_id: "telegram", peer_kind: :dm, peer_id: "42"}
+      channel_context: %{channel_id: "telegram", peer_kind: :dm, peer_id: "42"},
+      start_task: &start_task/1,
+      deliver: &deliver/1
     ]
   end
+
+  defp start_task(fun), do: {:ok, spawn(fun)}
+
+  defp deliver(text),
+    do: send(:persistent_term.get(:goal_status_message_test_pid), {:goal_reply, text, self()})
 end

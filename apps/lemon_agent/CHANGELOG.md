@@ -10,6 +10,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `Workspace.KanbanStore.changed_topic/0` and `ring_changed/1`: every
+  operator-visible board/task write (not lease renewals) broadcasts the
+  content-free doorbell `{:kanban_changed, board_id}` on the `kanban` Bus topic (#687).
 - `LemonAgent.ModelRuntime.OmpBroker.url/0` and `default_url/0` expose the
   broker URL resolution without requiring a token.
 - `submit_result` structured subagent results (#602); task-tool action

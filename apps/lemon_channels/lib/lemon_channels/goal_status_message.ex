@@ -200,35 +200,72 @@ defmodule LemonChannels.GoalStatusMessage do
     end
   end
 
+  @doc """
+  Submits one continuation off the caller's process and returns the
+  acknowledgement at once. The result (run id or refusal) is handed to the
+  transport's `:deliver` callback from a task started with `:start_task`.
+  """
   @spec continue_text(binary(), keyword()) :: String.t()
   def continue_text(session_key, opts \\ []) when is_binary(session_key) do
-    case call_module(continuation_module(opts), :continue_once, [
-           session_key,
-           automation_opts(opts)
-         ]) do
-      {:ok, %{run_id: run_id, goal: goal}} ->
-        goal_run_text("Goal Continuation Submitted", goal, run_id)
+    run_off_transport("Goal Continuation Queued", opts, fn ->
+      args = [session_key, Keyword.put(automation_opts(opts), :verdict, :continue)]
 
-      {:error, :not_found} ->
-        "No goal is set for this session."
+      case call_module(loop_module(opts), :run_once, args) do
+        {:ok, %{run_id: run_id, goal: goal}} ->
+          goal_run_text("Goal Continuation Submitted", goal, run_id)
 
-      {:error, reason} ->
-        "Goal continuation failed: #{inspect(reason)}"
+        {:error, :not_found} ->
+          "No goal is set for this session."
+
+        {:error, reason} ->
+          "Goal continuation failed: #{inspect(reason)}"
+      end
+    end)
+  end
+
+  @doc "Runs one judge tick off the caller's process; see `continue_text/2`."
+  @spec loop_once_text(binary(), keyword()) :: String.t()
+  def loop_once_text(session_key, opts \\ []) when is_binary(session_key) do
+    run_off_transport("Goal Loop Tick Queued", opts, fn ->
+      case call_module(loop_module(opts), :run_once, [session_key, automation_opts(opts)]) do
+        {:ok, %{run_id: run_id, goal: goal, verdict: verdict}} ->
+          goal_loop_tick_text(goal, run_id, verdict)
+
+        {:error, :not_found} ->
+          "No goal is set for this session."
+
+        {:error, reason} ->
+          "Goal loop tick failed: #{inspect(reason)}"
+      end
+    end)
+  end
+
+  # The judge and continuation can take minutes and may wait on an approval in
+  # this same chat, so they never run in the transport process. A crash or call
+  # timeout is reported as an unknown outcome and never retried.
+  defp run_off_transport(title, opts, work) do
+    deliver = opts[:deliver]
+    start_task = opts[:start_task]
+
+    with true <- is_function(deliver, 1) and is_function(start_task, 1),
+         {:ok, _pid} <- start_task.(fn -> deliver.(guarded_work(work)) end) do
+      Enum.join([title, "The result will be posted here when it is ready."], "\n")
+    else
+      _ -> "Goal work unavailable: this chat cannot run goal work in the background."
     end
   end
 
-  @spec loop_once_text(binary(), keyword()) :: String.t()
-  def loop_once_text(session_key, opts \\ []) when is_binary(session_key) do
-    case call_module(loop_module(opts), :run_once, [session_key, automation_opts(opts)]) do
-      {:ok, %{run_id: run_id, goal: goal, verdict: verdict}} ->
-        goal_loop_tick_text(goal, run_id, verdict)
+  defp guarded_work(work) do
+    work.()
+  rescue
+    _ -> unknown_outcome_text()
+  catch
+    _, _ -> unknown_outcome_text()
+  end
 
-      {:error, :not_found} ->
-        "No goal is set for this session."
-
-      {:error, reason} ->
-        "Goal loop tick failed: #{inspect(reason)}"
-    end
+  defp unknown_outcome_text do
+    "Goal work outcome unknown: the goal service did not answer in time. " <>
+      "It may still be running and was not retried. Check /goal loop status."
   end
 
   @spec loop_start_text(binary(), keyword()) :: String.t()
@@ -646,15 +683,6 @@ defmodule LemonChannels.GoalStatusMessage do
     else
       _ -> {:error, :not_available}
     end
-  end
-
-  defp continuation_module(opts) do
-    opts[:continuation_module] ||
-      Application.get_env(
-        :lemon_channels,
-        :goal_continuation_module,
-        :"Elixir.LemonAutomation.GoalContinuationManager"
-      )
   end
 
   defp loop_module(opts) do

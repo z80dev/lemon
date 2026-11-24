@@ -108,6 +108,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- The web Automation page no longer rebuilds a full snapshot every three seconds
+  (about 77 service calls per open tab). It loads in a background task after the
+  connected mount and reloads only on kanban, goal and cron Bus events, so an idle
+  tab makes no service calls and kanban changes appear immediately (#687).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -278,6 +282,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   transcript keeps its newest 400 blocks, the duplicate per-run text buffer is
   gone, sealed runs beyond the newest 16 release their per-run state, and
   per-session caches are released with the session (#691).
+- Stopping a running kanban board from the web Automation page no longer fails as
+  stale on every attempt: the dispatcher's control revision now covers only
+  operator-visible board/task state, not the lease expiry it renews each tick (#658).
+- Telegram and Discord `/goal continue` and `/goal loop once` no longer block the
+  transport for the whole judge and continuation (or crash it on a call
+  timeout): the chat gets an immediate acknowledgement and the verdict and run ID
+  as a follow-up; a timeout is reported as an unknown outcome (#659).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

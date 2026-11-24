@@ -181,6 +181,9 @@ page says so.
   stop the exact active run, recent runs, create and edit (cron syntax or
   "every 15m", "weekdays at 09:30", with the next three run times shown).
 
+The page loads in the background and updates when a board, card, goal or cron
+job changes (no periodic polling); **Refresh** reloads it on demand.
+
 Every action previews against the current revision and is refused if the item
 changed. Prompts and objectives are write-only in the browser. An unknown
 outcome is never retried automatically.
