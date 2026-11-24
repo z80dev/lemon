@@ -143,7 +143,8 @@ export class EventController {
 			// Someone else answered: another client, or the daemon's own timeout.
 			const pending = this.#store.approvals.get(event.approvalId);
 			if (pending?.event.sessionKey && event.sessionKey !== pending.event.sessionKey) return;
-			this.#sessionFor(event.sessionKey).recoveryEventVersion += 1;
+			const owner = this.#sessionFor(event.sessionKey);
+			if (owner) owner.recoveryEventVersion += 1;
 			this.#approvalResolutions += 1;
 			this.resolveApproval(event.approvalId, event.decision);
 		});
@@ -297,7 +298,10 @@ export class EventController {
 
 	#onSessionEvent(event: SessionEvent): void {
 		if (typeof event?.sessionKey !== "string" || !event.sessionKey) return;
-		const session = this.#store.session(event.sessionKey);
+		// Sessions this client never opened get no store: the daemon fans every
+		// session's events out to every operator connection.
+		const session = this.#store.sessions.get(event.sessionKey);
+		if (!session) return;
 		let batch: SessionEventBatch;
 		try {
 			batch = parseSessionEventBatch(event, session.key);
@@ -404,6 +408,7 @@ export class EventController {
 		if (event?.type !== "delta") return;
 		const delta = event as ChatDeltaEvent;
 		const session = this.#sessionFor(delta.sessionKey);
+		if (!session) return;
 		if (!canonical && (session.eventCursor || session.snapshotRequired)) return;
 		session.recoveryEventVersion += 1;
 		if (
@@ -438,6 +443,7 @@ export class EventController {
 
 	#onAgent(event: AgentEvent, canonical = false): void {
 		const owner = this.#sessionFor(event.sessionKey);
+		if (!owner) return;
 		if (!canonical && (owner.eventCursor || owner.snapshotRequired)) return;
 		owner.recoveryEventVersion += 1;
 		// Spend is session-wide, not a projection: it counts once per run whether or
@@ -459,7 +465,7 @@ export class EventController {
 		switch (event.type) {
 			case "started": {
 				const started = event as AgentStartedEvent;
-				const session = this.#sessionFor(started.sessionKey);
+				const session = owner;
 				if (session.isRunTerminal(started.runId)) return;
 				session.activeRunId = started.runId;
 				session.busy = true;
@@ -481,7 +487,7 @@ export class EventController {
 			}
 			case "tool_use": {
 				const tool = taskProgressEvent(event as AgentToolUseEvent) ?? (event as AgentToolUseEvent);
-				const session = this.#sessionFor(tool.sessionKey);
+				const session = owner;
 				if (tool.action?.kind === "reasoning") {
 					const block = session.upsertReasoning(tool.action, toToolPhase(tool.phase), {
 						runId: tool.runId,
@@ -507,7 +513,7 @@ export class EventController {
 			}
 			case "completed": {
 				const completed = event as AgentCompletedEvent;
-				const session = this.#sessionFor(completed.sessionKey);
+				const session = owner;
 				const focused = session === this.#store.focused;
 				const advancesQueue =
 					!canonical ||
@@ -574,6 +580,13 @@ export class EventController {
 
 	#onApprovalRequested(event: ApprovalRequestedEvent): void {
 		const session = this.#sessionFor(event.sessionKey);
+		if (!session) {
+			// The decision stays reachable from the panel; the session's own
+			// transcript record is recovered when the operator opens it.
+			if (!this.#store.approvals.has(event.approvalId)) this.#store.addApproval(event);
+			this.#onStatusChanged?.();
+			return;
+		}
 		session.recoveryEventVersion += 1;
 		if (session.snapshotIdentity || !session.acceptsEvent(event.runId, event.identity)) {
 			this.#requestRecovery(session, true);
@@ -608,10 +621,9 @@ export class EventController {
 
 	// -- component mirroring -------------------------------------------------
 
-	#sessionFor(sessionKey: string | null | undefined): SessionStore {
-		// The bridge omits the key on session-less events (a run started from a
-		// channel); those belong to whatever is on screen.
-		return sessionKey ? this.#store.session(sessionKey) : this.#store.focused;
+	/** The opened session an event belongs to; session-less and unopened sessions have none. */
+	#sessionFor(sessionKey: string | null | undefined): SessionStore | undefined {
+		return sessionKey ? this.#store.sessions.get(sessionKey) : undefined;
 	}
 
 	#componentFor(blockId: string): Component | undefined {

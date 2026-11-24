@@ -16,6 +16,7 @@ import type {
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal } from "../helpers/memory-terminal.ts";
+import { runText } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const KEY = "tui-replay";
@@ -143,10 +144,10 @@ describe("session cursor replay through the real client and controllers", () => 
 		await push(app, server, delta(3, "C"));
 		await push(app, server, completed);
 		await push(app, server, delta(5, "D"));
-		expect(app.store.focused.bufferFor("run-1")).toBe("A");
+		expect(runText(app.store.focused, "run-1")).toBe("A");
 		first.resolve(page([delta(1, "B"), { cursor: cursor(2), events: [] }], 2, true));
 		await waitFor(() => server.requestsFor(METHOD.sessionsEvents).length === 2);
-		expect(app.store.focused.bufferFor("run-1")).toBe("AB");
+		expect(runText(app.store.focused, "run-1")).toBe("AB");
 		second.resolve(page([delta(3, "C"), completed], 4));
 		await waitFor(
 			() => app.store.focused.eventCursor?.seq === 5 && app.store.focused.sync.state === "live",
@@ -162,7 +163,7 @@ describe("session cursor replay through the real client and controllers", () => 
 			text: "duplicate legacy",
 		});
 		await legacy;
-		expect(app.store.focused.bufferFor("run-1")).toBe("ABCD");
+		expect(runText(app.store.focused, "run-1")).toBe("ABCD");
 		expect(app.store.focused.assistantFor("run-1")?.status).toBe("done");
 		expect(observed).toEqual(["completed"]);
 		expect(app.store.focused.sessionCostUsd).toBe(0.25);
@@ -177,10 +178,10 @@ describe("session cursor replay through the real client and controllers", () => 
 		server.onMethod(METHOD.sessionsEvents, () => release.promise);
 		await push(app, server, delta(2, "C"));
 		await waitFor(() => server.requestsFor(METHOD.sessionsEvents).length === 1);
-		expect(app.store.focused.bufferFor("run-1")).toBe("A");
+		expect(runText(app.store.focused, "run-1")).toBe("A");
 		release.resolve(page([delta(1, "B"), delta(2, "C")], 2));
 		await waitFor(() => app.store.focused.sync.state === "live");
-		expect(app.store.focused.bufferFor("run-1")).toBe("ABC");
+		expect(runText(app.store.focused, "run-1")).toBe("ABC");
 	});
 
 	test("expiry installs the snapshot cursor and deduplicates buffered events", async () => {
@@ -199,7 +200,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		release.resolve(snapshot(3, "ABC"));
 		await recovering;
 		expect(app.store.focused.eventCursor).toEqual(cursor(4));
-		expect(app.store.focused.bufferFor("run-1")).toBe("ABCD");
+		expect(runText(app.store.focused, "run-1")).toBe("ABCD");
 		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(1);
 	});
 
@@ -229,7 +230,7 @@ describe("session cursor replay through the real client and controllers", () => 
 			cursor: { ...cursor(1), version: 2 } as unknown as SessionEventCursor,
 		});
 		await waitFor(() => app.store.focused.eventCursor?.seq === 7);
-		expect(app.store.focused.bufferFor("run-1")).toBe("owner truth");
+		expect(runText(app.store.focused, "run-1")).toBe("owner truth");
 		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(0);
 	});
 
@@ -242,7 +243,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		server.respondWith(METHOD.sessionsSnapshot, snapshot(9, "supported snapshot"));
 		await app.sessions.resync();
 		expect(app.store.focused.eventCursor).toEqual(cursor(9));
-		expect(app.store.focused.bufferFor("run-1")).toBe("supported snapshot");
+		expect(runText(app.store.focused, "run-1")).toBe("supported snapshot");
 	});
 
 	test("an unsupported snapshot cursor never installs transcript or cursor", async () => {
@@ -253,7 +254,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		server.respondWith(METHOD.sessionsSnapshot, unsafe);
 		await app.sessions.resync();
 		expect(app.store.focused.eventCursor).toEqual(cursor(0));
-		expect(app.store.focused.bufferFor("run-1")).toBe("A");
+		expect(runText(app.store.focused, "run-1")).toBe("A");
 		expect(app.store.focused.syncing).toBe(true);
 	});
 
@@ -263,7 +264,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		server.respondWith(METHOD.sessionsSnapshot, snapshot(1, "new owner", "owner-2"));
 		await push(app, server, { ...delta(1, "unsafe"), cursor: cursor(1, "owner-2") });
 		await waitFor(() => app.store.focused.eventCursor?.streamId === "owner-2");
-		expect(app.store.focused.bufferFor("run-1")).toBe("new owner");
+		expect(runText(app.store.focused, "run-1")).toBe("new owner");
 		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(0);
 	});
 
@@ -273,7 +274,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		server.respondWith(METHOD.sessionsEvents, page([delta(1, "B"), delta(3, "gap")], 3));
 		await app.sessions.resync();
 		expect(app.store.focused.eventCursor).toEqual(cursor(0));
-		expect(app.store.focused.bufferFor("run-1")).toBe("A");
+		expect(runText(app.store.focused, "run-1")).toBe("A");
 		expect(app.store.focused.syncing).toBe(true);
 		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(snapshots);
 	});
@@ -364,7 +365,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		await push(app, server, delta(1, "B"));
 		await push(app, server, delta(2, "C"));
 		expect(app.store.focused.eventCursor).toEqual(cursor(2));
-		expect(app.store.focused.bufferFor("run-1")).toBe("ABC");
+		expect(runText(app.store.focused, "run-1")).toBe("ABC");
 		expect(app.store.focused.sync.state).toBe("live");
 		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(snapshots);
 		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(0);
@@ -390,7 +391,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		await waitFor(
 			() => app.store.focused.eventCursor?.seq === 3 && app.store.focused.sync.state === "live",
 		);
-		expect(app.store.focused.bufferFor("run-1")).toBe("new BCD");
+		expect(runText(app.store.focused, "run-1")).toBe("new BCD");
 		const cleared: boolean[] = [];
 		const requestRender = app.tui.requestRender.bind(app.tui);
 		app.tui.requestRender = (force = false, options?: { clearScrollback?: boolean }) => {
@@ -399,7 +400,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		};
 		await push(app, server, next(4, "E"));
 		await push(app, server, next(5, "F"));
-		expect(app.store.focused.bufferFor("run-1")).toBe("new BCDEF");
+		expect(runText(app.store.focused, "run-1")).toBe("new BCDEF");
 		expect(cleared).toEqual([]);
 		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(2);
 	});
@@ -439,7 +440,7 @@ describe("one sync state re-arms a stranded session", () => {
 		// Well before the scheduled retry: the live batch itself re-armed recovery.
 		await waitFor(() => app.store.focused.sync.state === "live", { timeoutMs: 400 });
 		expect(app.store.focused.eventCursor).toEqual(cursor(3));
-		expect(app.store.focused.bufferFor("run-1")).toBe("ABC");
+		expect(runText(app.store.focused, "run-1")).toBe("ABC");
 		await waitFor(() => server.requestsFor(METHOD.chatSend).length === 1);
 		expect(app.store.focused.activeRunId).toBe("next-run");
 		expect(app.store.queue.items(KEY)).toHaveLength(0);
@@ -474,5 +475,19 @@ describe("one sync state re-arms a stranded session", () => {
 		await push(app, server, completed(6));
 		await waitFor(() => server.requestsFor(METHOD.chatSend).length === 1);
 		expect(app.store.focused.activeRunId).toBe("next-run");
+	});
+});
+
+describe("per-session bookkeeping follows the store", () => {
+	test("forgetting a session releases its controller caches and later events open nothing", async () => {
+		const { app, server } = await boot();
+		app.store.session("tui-gone");
+		app.sessions.markHydrated("tui-gone");
+		app.store.forgetSession("tui-gone");
+		expect(app.sessions.hydratedKeys.has("tui-gone")).toBe(false);
+		const received = app.client.events.waitFor("session.event");
+		server.pushEvent("session.event", { sessionKey: "tui-gone", ...delta(1, "late") });
+		await received;
+		expect(app.store.sessions.has("tui-gone")).toBe(false);
 	});
 });

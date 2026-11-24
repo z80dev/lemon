@@ -183,6 +183,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   per-session sync state replaces the recovery flags, a failed attempt retries
   with bounded exponential backoff from the retained cursor, and the next live
   batch re-arms it immediately (#665).
+- The TUI keeps session stores only for sessions it opened (focused, switched
+  to, sent to or acted on): broadcast events for other sessions no longer
+  materialize transcripts, start snapshot recovery or inflate unread/busy
+  counts, and session-less events no longer land in the focused session.
+  Approvals from unopened sessions still reach the approval panel. Each
+  transcript keeps its newest 400 blocks, the duplicate per-run text buffer is
+  gone, sealed runs beyond the newest 16 release their per-run state, and
+  per-session caches are released with the session (#691).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

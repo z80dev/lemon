@@ -701,6 +701,11 @@ export class AppShell {
 			}),
 			this.store.events.on("mode-changed", () => this.#renderStatus()),
 			this.store.events.on("setup-changed", () => this.tui.requestRender()),
+			this.store.events.on("session-forgotten", ({ key }) => {
+				// An in-flight steer read for the forgotten session no longer matches and is dropped.
+				this.#steerVersions.delete(key);
+				this.#profileSessions.delete(key);
+			}),
 			this.store.events.on("session-changed", () => {
 				this.syncQueuePanel();
 				this.#palette.close();

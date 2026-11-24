@@ -76,6 +76,11 @@ export interface FinalizeOptions {
 	turn?: TurnSummary;
 }
 
+/** Transcript blocks a session retains, newest kept (lemon_web caps at the same 400). */
+export const MAX_TRANSCRIPT_BLOCKS = 400;
+/** Sealed runs whose delta fence and segment state are retained for late tails. */
+export const RETAINED_SEALED_RUNS = 16;
+
 /**
  * Per-session event sync: `live` applies batches as they arrive; `replaying`
  * pages `sessions.events` from the retained cursor; `snapshotting` waits for an
@@ -281,16 +286,17 @@ export class SessionStore {
 		return Boolean(runId && runId === current.runId && !this.isRunTerminal(runId));
 	}
 
-	/** runId -> accumulated delta text. */
-	readonly #buffers = new Map<string, string>();
+	/** Runs whose assistant text came from streamed deltas (not only the `answer` fallback). */
+	readonly #streamedRuns = new Set<string>();
 	/** runId -> highest delta seq accepted. */
 	readonly #deltaSeqs = new Map<string, number>();
 	/** runId -> the assistant block that run streams into. */
 	readonly #assistantByRun = new Map<string, AssistantBlock>();
 	/** A tool/thinking/user boundary sealed the current contiguous text segment. */
 	readonly #assistantNeedsSegment = new Set<string>();
+	/** Sealed runs, oldest first; only the newest {@link RETAINED_SEALED_RUNS} keep per-run state. */
 	readonly #finishedRuns = new Map<string, AssistantBlock["status"]>();
-	/** Runs whose buffer holds the server's truncated answer, not streamed text. */
+	/** Runs whose block holds the server's truncated answer, not streamed text. */
 	readonly #answerOnly = new Set<string>();
 
 	constructor(key: string) {
@@ -298,11 +304,6 @@ export class SessionStore {
 	}
 
 	// -- reads ---------------------------------------------------------------
-
-	/** Accumulated delta text for a run (empty string when nothing streamed). */
-	bufferFor(runId: string): string {
-		return this.#buffers.get(runId) ?? "";
-	}
 
 	assistantFor(runId: string): AssistantBlock | undefined {
 		return this.#assistantByRun.get(runId);
@@ -463,7 +464,7 @@ export class SessionStore {
 		this.blocks.length = 0;
 		this.byActionId.clear();
 		this.reasoningByActionId.clear();
-		this.#buffers.clear();
+		this.#streamedRuns.clear();
 		this.#deltaSeqs.clear();
 		this.#assistantByRun.clear();
 		this.#assistantNeedsSegment.clear();
@@ -566,14 +567,13 @@ export class SessionStore {
 		// summary instead of being appended to it.
 		if (amended && this.#answerOnly.has(runId)) {
 			this.#answerOnly.delete(runId);
-			this.#buffers.set(runId, "");
+			this.#streamedRuns.delete(runId);
 			block.text = "";
 		}
 		// Each delta is sanitized on its own: with every ESC/C1 introducer gone, a
 		// sequence split across deltas cannot be reassembled into a live one.
 		const clean = safeText(text ?? "");
-		const buffer = (this.#buffers.get(runId) ?? "") + clean;
-		this.#buffers.set(runId, buffer);
+		if (clean) this.#streamedRuns.add(runId);
 		block.text += clean;
 		this.revision += 1;
 		return { accepted: true, amended, block };
@@ -719,6 +719,7 @@ export class SessionStore {
 				runId,
 				options.interrupted ? "aborted" : options.ok === false ? "error" : "done",
 			);
+			this.#releaseSealedRuns();
 		}
 		if (this.activeRunId === runId) {
 			this.activeRunId = undefined;
@@ -741,14 +742,14 @@ export class SessionStore {
 		if (options.turn) block.turn = options.turn;
 		if (block.status !== "streaming" && alreadyFinished) return block;
 
-		const buffered = this.bufferFor(runId);
-		// The buffer wins: `answer` is truncated to 500 bytes server-side.
-		const text = buffered.length > 0 ? block.text : answer;
+		const streamed = this.#streamedRuns.has(runId);
+		// Streamed text wins: `answer` is truncated to 500 bytes server-side.
+		const text = streamed ? block.text : answer;
 		block.text = text;
-		if (buffered.length === 0) this.#buffers.set(runId, text);
+		if (!streamed && text) this.#streamedRuns.add(runId);
 		// Remember that this run's text is the server's summary rather than a
 		// stream, so a late delta replaces it instead of appending to it.
-		if (buffered.length === 0 && answer) this.#answerOnly.add(runId);
+		if (!streamed && answer) this.#answerOnly.add(runId);
 		if (options.interrupted) {
 			block.status = "aborted";
 		} else if (options.ok === false) {
@@ -784,10 +785,40 @@ export class SessionStore {
 			this.#assistantNeedsSegment.add(previous.runId);
 		}
 		this.blocks.push(block);
+		if (this.blocks.length > MAX_TRANSCRIPT_BLOCKS) this.#dropOldestBlocks();
 		this.revision += 1;
 		// The user's own message is never "unread" — they just typed it.
 		if (!this.focused && block.kind !== "user") this.unread += 1;
 		return block;
+	}
+
+	/** Keep the newest {@link MAX_TRANSCRIPT_BLOCKS}; indexes never point at dropped blocks. */
+	#dropOldestBlocks(): void {
+		const excess = this.blocks.length - MAX_TRANSCRIPT_BLOCKS;
+		const dropped = new Set<Block>(this.blocks.splice(0, excess));
+		for (const [id, tool] of this.byActionId) if (dropped.has(tool)) this.byActionId.delete(id);
+		for (const [id, reasoning] of this.reasoningByActionId)
+			if (dropped.has(reasoning)) this.reasoningByActionId.delete(id);
+		for (const [runId, assistant] of this.#assistantByRun)
+			if (dropped.has(assistant)) this.#assistantByRun.delete(runId);
+	}
+
+	/**
+	 * A sealed run keeps its delta fence and segment state while late tails and
+	 * redeliveries are plausible; beyond the newest {@link RETAINED_SEALED_RUNS}
+	 * its per-run maps are released.
+	 */
+	#releaseSealedRuns(): void {
+		for (const runId of this.#finishedRuns.keys()) {
+			if (this.#finishedRuns.size <= RETAINED_SEALED_RUNS) return;
+			if (runId === this.activeRunId) continue;
+			this.#finishedRuns.delete(runId);
+			this.#deltaSeqs.delete(runId);
+			this.#assistantByRun.delete(runId);
+			this.#assistantNeedsSegment.delete(runId);
+			this.#streamedRuns.delete(runId);
+			this.#answerOnly.delete(runId);
+		}
 	}
 }
 

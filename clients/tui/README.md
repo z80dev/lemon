@@ -264,8 +264,12 @@ on reconnect and when opening or changing models. Older daemons without
   across stored sessions, new-with-prompt, Ctrl+W delete preview — deleting
   still takes `/session delete <key> --confirm <key>` and a verified daemon
   deletion), per-session drafts, unread
-  badges, history hydration. Search results are not restricted to the initially
-  loaded recent sessions; failed searches never leave stale rows selectable.
+  badges, history hydration. Only sessions this client opened (focused, switched
+  to, sent to or acted on) keep a store; broadcast events for other sessions are
+  ignored and do not count toward unread/busy totals (their approvals still reach
+  the panel). Each transcript keeps its newest 400 blocks. Search results are not
+  restricted to the initially loaded recent sessions; failed searches never leave
+  stale rows selectable.
   Reconnect and overflow first page `sessions.events` from the last applied cursor.
   Canonical `session.event` batches apply exactly once in contiguous sequence order;
   empty projections advance the cursor too. Live batches are buffered during replay,

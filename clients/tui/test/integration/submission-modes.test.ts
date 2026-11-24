@@ -13,6 +13,7 @@ import { resetBlockIds } from "../../src/store/transcript-model.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
+import { runText } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const SESSION = "tui-modes";
@@ -316,7 +317,7 @@ describe("interrupt mode", () => {
 			text: "The first half of an essay",
 		});
 		const session = app.store.focused;
-		await waitFor(() => session.bufferFor("run-1").length > 0, { what: "the partial answer" });
+		await waitFor(() => runText(session, "run-1").length > 0, { what: "the partial answer" });
 
 		await app.submit("stop, do this instead");
 
@@ -373,7 +374,7 @@ describe("interrupt mode", () => {
 			text: "partial work",
 		});
 		const session = app.store.focused;
-		await waitFor(() => session.bufferFor("run-1").length > 0, { what: "the partial answer" });
+		await waitFor(() => runText(session, "run-1").length > 0, { what: "the partial answer" });
 
 		app.editor.handleInput("\x03");
 		await waitFor(() => session.assistantFor("run-1")?.status === "aborted", {

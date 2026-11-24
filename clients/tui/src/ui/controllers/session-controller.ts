@@ -126,6 +126,7 @@ export class SessionController {
 	#disposed = false;
 	/** Sessions whose gauge `sessions.context` already answered for (success or a definite no). */
 	readonly #contextSeeded = new Set<string>();
+	readonly #offForgotten: () => void;
 
 	constructor(options: SessionControllerOptions) {
 		this.#store = options.store;
@@ -138,6 +139,13 @@ export class SessionController {
 		this.#refreshStatus = options.refreshStatus;
 		this.#onSnapshot = options.onSnapshot;
 		this.#onTerminalRecovered = options.onTerminalRecovered;
+		// Per-session bookkeeping follows the store's lifetime.
+		this.#offForgotten = this.#store.events.on("session-forgotten", ({ key }) => {
+			this.#cancelRetry(key);
+			this.#hydrated.delete(key);
+			this.#contextSeeded.delete(key);
+			this.#snapshotStartedAt.delete(key);
+		});
 	}
 
 	/** Sessions this client has already hydrated (or minted, so never will). */
@@ -246,8 +254,6 @@ export class SessionController {
 	async forgetDeleted(key: string): Promise<void> {
 		if (key === this.#store.focusedKey) await this.switch(this.#nextFocusAfter(key));
 		this.#store.forgetSession(key);
-		this.#cancelRetry(key);
-		this.#hydrated.delete(key);
 		this.#refreshStatus?.();
 	}
 
@@ -439,6 +445,7 @@ export class SessionController {
 	/** Stop scheduled recovery retries (the shell is shutting down). */
 	dispose(): void {
 		this.#disposed = true;
+		this.#offForgotten();
 		for (const key of [...this.#retryTimers.keys()]) this.#cancelRetry(key);
 	}
 
