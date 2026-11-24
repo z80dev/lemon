@@ -200,6 +200,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- Each native task child now has its own supervised owner instead of one
+  node-wide coordinator: a child whose session shutdown blocks no longer stalls
+  any other child's cancel, message or completion, the worker sends its
+  completion followup before its owner sees the turn end (so a slow or
+  restarted owner can neither lose nor repeat it), a crashed owner adopts its
+  live worker and session (a second crash terminalizes the child), and terminal
+  children are pruned after five minutes (#634).
 
 ### Removed
 

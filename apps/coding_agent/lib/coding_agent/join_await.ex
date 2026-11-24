@@ -1,12 +1,12 @@
 defmodule CodingAgent.JoinAwait do
   @moduledoc """
   Message-driven task joins. Subscribe before reading authoritative state, then
-  wait on run/task/question changes, child monitors or cancellation. A single
-  absolute deadline bounds the whole join; notifications never extend it.
+  wait on run/task/question changes, child owner and worker monitors or
+  cancellation. A single absolute deadline bounds the whole join;
+  notifications never extend it.
   """
 
-  alias CodingAgent.{ParentQuestions, RunGraph, TaskStore}
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.{ParentQuestions, RunGraph, TaskRuntime, TaskStore}
   alias LemonAgent.AbortSignal
   alias LemonCore.Bus
 
@@ -47,10 +47,11 @@ defmodule CodingAgent.JoinAwait do
   end
 
   defp do_await(run_ids, task_ids, mode, signal, deadline, interrupted?) do
-    owners = [CodingAgent.TaskStoreServer, CodingAgent.RunGraphServer, Control]
+    owners = [CodingAgent.TaskStoreServer, CodingAgent.RunGraphServer]
     owner_pids = owners |> Enum.map(&Process.whereis/1) |> Enum.filter(&is_pid/1)
-    workers = Control.worker_pids(task_ids)
-    monitors = Map.new(Enum.uniq(owner_pids ++ workers), &{Process.monitor(&1), &1})
+    # A child's owner or worker exiting is a change to re-read, not a failure.
+    children = TaskRuntime.pids(task_ids)
+    monitors = Map.new(Enum.uniq(owner_pids ++ children), &{Process.monitor(&1), &1})
 
     outcome =
       try do

@@ -55,7 +55,7 @@ defmodule CodingAgent.Application do
       {LemonCore.TaskSupervisor, name: CodingAgent.TaskSupervisor},
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
       CodingAgent.AsyncFollowups,
-      CodingAgent.Tools.Task.Control,
+      CodingAgent.TaskRuntime,
       CodingAgent.Tools.Task.Speculation,
       {CodingAgent.TaskProgressBindingServer, name: CodingAgent.TaskProgressBindingServer},
       {CodingAgent.ParentQuestionStoreServer, name: CodingAgent.ParentQuestionStoreServer},
@@ -69,8 +69,7 @@ defmodule CodingAgent.Application do
       ]),
       LemonCore.Supervision.subtree(CodingAgent.SessionTree, [
         {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
-        CodingAgent.SessionSupervisor,
-        CodingAgent.Tools.Task.LiveBridgeSupervisor
+        CodingAgent.SessionSupervisor
       ]),
       {DynamicSupervisor, name: CodingAgent.AdvisorSupervisor, strategy: :one_for_one},
       LemonCore.Supervision.subtree(CodingAgent.BackgroundRun.Tree, [

@@ -128,6 +128,7 @@ Code.require_file("support/test_git_repo.ex", __DIR__)
 Code.require_file("support/async_helpers.ex", __DIR__)
 Code.require_file("support/session_cleanup.ex", __DIR__)
 Code.require_file("support/tool_intent_recorder.ex", __DIR__)
+Code.require_file("support/task_runtime_helpers.ex", __DIR__)
 
 # Load shared test support from the lemon_agent and lemon_ai apps. These are
 # required unconditionally on purpose: an `if File.exists?` guard turns a moved

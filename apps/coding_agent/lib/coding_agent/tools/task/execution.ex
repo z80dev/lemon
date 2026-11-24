@@ -11,6 +11,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     Async,
     Control,
     Followup,
+    InvocationAuthority,
     Params,
     Result,
     Runner,
@@ -167,7 +168,7 @@ defmodule CodingAgent.Tools.Task.Execution do
             run_orchestrator:
               Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
           }
-          |> Map.merge(Map.new(Keyword.take(opts, Params.private_native_fields())))
+          |> Map.merge(Map.new(Keyword.take(opts, InvocationAuthority.private_native_fields())))
 
         execution = %{
           description: description,

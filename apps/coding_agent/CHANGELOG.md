@@ -6,9 +6,23 @@
 
 - Removed the unused `CodingAgent.Coordinator` and `ProcessManager.exec_sync/1`
   APIs. Native task execution and background `exec/1` with `poll/2` remain.
+- **Breaking:** the node-wide `Tools.Task.Control` process, `Tools.Task.ChildInbox`,
+  `Tools.Task.LiveBridge` and `LiveBridgeSupervisor` are gone. Each task child is
+  owned by a supervised `CodingAgent.TaskRuntime.Child` (registry, journal and
+  dynamic supervisor under `CodingAgent.TaskRuntime`), which also holds its
+  pending messages and bridges its progress to the parent run. `Control` remains
+  the authenticated API; `register/6`, `attach_worker/1` and `complete/1` are
+  replaced by `register/2` and `launch/3` (#634).
 
 ### Fixed
 
+- A child whose session shutdown blocks no longer stalls other children's cancel,
+  message or completion. The worker persists its outcome and sends its followup
+  before its owner observes the turn end, and exactly one of worker and owner
+  finalizes each turn. A crashed owner adopts its live worker and session from
+  its journal; a second crash terminalizes the child. Terminal owners exit after
+  `:task_terminal_retention_ms` (default five minutes); broadcasts reserve every
+  recipient's capacity before delivering to any (#634).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller
