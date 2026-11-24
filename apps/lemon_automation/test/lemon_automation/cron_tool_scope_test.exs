@@ -185,6 +185,7 @@ defmodule LemonAutomation.CronToolScopeTest do
       for swap <- swaps do
         File.rm_rf!(owned)
         File.write!(owned, "original")
+        original = hold_inode(owned)
 
         before_open = fn ->
           File.rm!(owned)
@@ -192,6 +193,7 @@ defmodule LemonAutomation.CronToolScopeTest do
         end
 
         assert {:error, _} = CronMemory.read_confined(owned, before_open: before_open)
+        :ok = :file.close(original)
       end
 
       assert File.read!(secret) == "SECRET-CONTENT"
@@ -221,10 +223,12 @@ defmodule LemonAutomation.CronToolScopeTest do
         File.mkdir_p!(dir)
         File.write!(owned, "original")
         assert {:ok, "original", stat} = CronMemory.read_confined(owned)
+        original = hold_inode(owned)
 
         assert {:error, _} =
                  CronMemory.replace_confined(owned, "NEW", stat, before_rename: swap)
 
+        :ok = :file.close(original)
         assert File.read!(secret) == "SECRET-CONTENT"
         assert File.ls!(outside) == ["secret.md"]
       end
@@ -444,6 +448,14 @@ defmodule LemonAutomation.CronToolScopeTest do
     File.mkdir_p!(Path.dirname(secret))
     File.write!(secret, "SECRET-CONTENT")
     secret
+  end
+
+  # Identity is device and inode. Keep the substituted file's inode allocated
+  # so a replacement cannot reuse its number (Linux filesystems often hand a
+  # freed inode straight to the next file) and look like the same object.
+  defp hold_inode(path) do
+    {:ok, fd} = :file.open(path, [:read, :raw])
+    fd
   end
 
   defp call_tool(tool, params), do: tool.execute.("call_1", params, nil, nil)
