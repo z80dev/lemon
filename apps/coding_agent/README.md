@@ -1486,19 +1486,18 @@ Once `worker-1` is online, a model can route a delegated run through the
 
 An explicit abort cancels the registry invocation and sends
 `node.invoke.cancel` to the targeted worker. Node disconnects fail pending
-invocations. Steering and redirect operations are not supported across this
-remote boundary.
+invocations. Steer and redirect cross the boundary as `node.invoke.control`
+(text only, at most 16 KiB, bound to the live invocation and run); the controller
+reports them accepted only after the worker's `node.invoke.control.result`
+confirms that the destination session took the text, and fails closed on
+disconnect, timeout, or a terminal run.
 
 ## Dependencies
 
 ### Umbrella Dependencies
 
-| App | Purpose |
-|-----|---------|
-| `agent_core` | Core agent runtime, types (`AgentTool`, `AgentToolResult`), event loop, abort signals |
-| `ai` | AI model providers, LLM integration, message types, OAuth resolution |
-| `lemon_skills` | Skill discovery, loading, and relevance matching |
-| `lemon_core` | Shared primitives -- sessions, storage, bus (PubSub), exec approvals, secrets, config, telemetry, introspection |
+The direct umbrella dependencies are generated from `mix.exs` in
+[architecture boundaries](../../docs/architecture_boundaries.md#direct-dependency-policy).
 
 ### External Dependencies
 

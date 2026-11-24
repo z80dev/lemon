@@ -102,7 +102,7 @@ GenServer. Disconnect, replacement, timeout and caller death remain terminal;
 the authenticated connection generation and retained generation floor prevent
 stale frames or controls from crossing a reconnect. WebSocket/JSON is unchanged.
 
-Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
+Durable memory moved to `lemon_memory`, the workspace stores to `lemon_agent`,
 and provider credential-pool rotation to `lemon_agent`
 (`LemonAgent.ModelRuntime.ProviderPoolRotator`); each supervises its own
 processes.

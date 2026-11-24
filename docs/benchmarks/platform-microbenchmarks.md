@@ -90,7 +90,7 @@ it is low enough that it is rarely the reason an agent feels slow.
 A 3.79 µs durable write should look suspicious, and the explanation belongs
 next to the number: `SqliteBackend` opens with `journal_mode=WAL` and
 **`synchronous=NORMAL`**
-([`sqlite_backend.ex:340`](../../apps/lemon_core/lib/lemon_core/store/sqlite_backend.ex)).
+([`init_db/1`](../../apps/lemon_core/lib/lemon_core/store/sqlite_backend.ex) in `LemonCore.Store.SqliteBackend`).
 Under WAL with `NORMAL`, a commit does not `fsync` — it appends to the WAL and
 syncs at checkpoints. So this is "the write reached the OS", not "the write
 survived a power cut". A crash of the BEAM keeps the data; a sudden loss of
@@ -220,7 +220,7 @@ its coalescing ratio degraded to 1 dispatch per 13 deltas. This benchmark is
 what found it.
 
 `StreamCoalescer` caps its accumulated answer at 100,000 via `cap_full_text/1`
-([`stream_coalescer.ex:637`](../../apps/lemon_router/lib/lemon_router/stream_coalescer.ex)).
+([`LemonRouter.StreamCoalescer`](../../apps/lemon_router/lib/lemon_router/stream_coalescer.ex)).
 It used to trim like this:
 
 ```elixir

@@ -10,7 +10,7 @@ export const unlisted = new Map([
   ['mix-tasks.md', 'Source-development task catalog, linked from the hub.'],
   ['release/deployment_flows.md', 'Maintainer deployment procedures, linked from the hub.'],
   ['release/hex-packages.md', 'Maintainer package publication procedures, linked from the hub.'],
-  ['subagent-parent-questions.md', 'Internal design proposal, not a shipped user workflow.'],
+  ['subagent-parent-questions.md', 'Design record for the implemented ask_parent tools, linked from the hub.'],
   ['testing/deterministic-test-patterns.md', 'Contributor test invariants, linked from the hub.'],
 ])
 

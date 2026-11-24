@@ -90,6 +90,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   default stays off, and upstream identities are pinned in a hash manifest (#603).
 - `docs/omp-port-ledger.md` inventories omp/pi-mono ports, and the TUI moves to
   `@oh-my-pi` 18.20.2 packages (#609).
+- `scripts/check_docs_source_refs.mjs` runs in `scripts/test quality`,
+  `scripts/verify_docs_site` and the Docs Site workflow. It fails when a
+  telemetry catalog row's linked function does not emit that event, a cited
+  `function/arity` or `file.ex:N` line does not exist, or a docs shell command
+  references a missing repository path (#735).
+- `docs/architecture_boundaries.md` gains a generated package map (every app's
+  `mix.exs` version and Hex publish-set membership). `mix lemon.architecture.docs`
+  regenerates it and `mix lemon.quality` fails when it is stale or when the
+  publish set in `mix.exs` differs from `scripts/verify_packages` (#90).
+- Architecture docs reconciled with the code: package status reports the real
+  Hex versions (`lemon_ai` 0.2.1) and the CI Elixir legs, its decision log is
+  marked historical, the in-repo app list and per-app dependency tables point at
+  the generated tables, stale `agent_core`/`ai` app names are corrected, and the
+  coding_agent guide no longer claims steer/redirect are unsupported on named
+  nodes (#90).
 
 ### Changed
 
@@ -222,11 +237,27 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `LEMON_BROWSER_CDP_PORT`; the driver stops that Chrome when its runtime goes
   away (stdin EOF, stdout EPIPE), and an invalid executable fails the request
   instead of killing the driver (#689).
+- The telemetry catalog names the emitting function for every event instead of
+  stale line numbers, and now matches the code: `[:lemon, :run, :stop]` is also
+  emitted by the router for runs terminalized before an executor owns them,
+  `[:lemon_agent, :tool_task, :error]` lists its current reasons (including
+  `:skipped`), approvals resolve with `:cancelled` too, and the metrics example
+  uses the real `lemon_ai`/`lemon_agent` prefixes. The assistant bootstrap page
+  documents the real launchers (`source`/`release`) and runtime profiles
+  (`runtime_min`/`runtime_full`) instead of three execution modes that were
+  never implemented, and the long-running-harness validation command names
+  existing tests (#735).
+- Design records (model selection, omp port ledger) moved out of the
+  architecture navigation into a "Design records & history" section (#735).
 
 ### Removed
 
 - The unenforced `sandbox` tool-policy field; legacy input is ignored with a
   warning and never changes authority (#605).
+- `[:lemon, :control_plane, :event_bridge, :dropped]` and
+  `[:lemon_agent, :subagent, :end]` are no longer documented: no code emits
+  them. Attach to `[:lemon, :control_plane, :event_bridge, :broadcast]` for
+  control-plane fan-out (#735).
 - `LemonCore.Store.JsonlBackend` (lemon_core 0.3.0). Run
   `mix lemon.store.migrate_jsonl_to_sqlite` before upgrading a JSONL store (#608).
 - Obsolete Telegram `outbound_send_delay_ms` and poller stale-time settings (#580).

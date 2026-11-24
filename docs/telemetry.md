@@ -1,9 +1,9 @@
 # Telemetry
 
-Every event in this document was verified against its emit site on **2026-08-10**. Where
-an event name exists in code but nothing calls it, it is listed under
-[Known gaps](#known-gaps-and-inconsistencies) rather than in the catalog — a catalog entry
-here means the event actually fires.
+Every catalog row below names the function that emits the event and links its module.
+`scripts/check_docs_source_refs.mjs` (run by `scripts/test quality` and the docs-site
+gate) fails when a linked function no longer makes the telemetry call for its row's event,
+so a catalog entry here means the event actually fires.
 
 `:telemetry ~> 1.0` is the required observability dependency. `lemon_agent`
 also declares `opentelemetry_api` as **optional** for the default-off
@@ -51,11 +51,11 @@ do not use it as a permanent metrics collector.
 `LemonControlPlane.Methods.Registry` emits these events for every dispatch,
 including unknown methods and caught callback failures:
 
-| Event | Measurements | Metadata |
-| --- | --- | --- |
-| `[:lemon, :control_plane, :method, :start]` | `system_time` (native) | `method` |
-| `[:lemon, :control_plane, :method, :stop]` | `duration` (native) | `method`, `outcome: :ok \| :error \| :exception` |
-| `[:lemon, :control_plane, :method, :exception]` | `count: 1` | `method`, `class` (exception module or catch kind) |
+| Event | Measurements | Metadata | Emitter |
+| --- | --- | --- | --- |
+| `[:lemon, :control_plane, :method, :start]` | `system_time` (native) | `method` | [`emit_method/3`](../apps/lemon_control_plane/lib/lemon_control_plane/methods/registry.ex) |
+| `[:lemon, :control_plane, :method, :stop]` | `duration` (native) | `method`, `outcome: :ok \| :error \| :exception` | [`emit_method/3`](../apps/lemon_control_plane/lib/lemon_control_plane/methods/registry.ex) |
+| `[:lemon, :control_plane, :method, :exception]` | `count: 1` | `method`, `class` (exception module or catch kind) | [`LemonControlPlane.Methods.Registry.report_failure/2`](../apps/lemon_control_plane/lib/lemon_control_plane/methods/registry.ex) |
 
 Method labels are registered names of at most 128 bytes, or `:unknown`; arbitrary
 request method strings are never reflected into telemetry. Parameters, auth
@@ -65,14 +65,14 @@ killed during dispatch may have a start without a stop.
 
 ## OS-process lifecycle
 
-| Event | Measurements | Metadata |
-| --- | --- | --- |
-| `[:lemon, :process_group, :start]` | `count: 1` | `scope: :group \| :process` |
-| `[:lemon, :process_group, :stop]` | `count: 1`, `duration` (native) | `scope`, `outcome: :terminated \| :signaled` |
-| `[:lemon, :process_group, :failure]` | `count: 1`, `duration` (native) | `scope`, `outcome: :alive \| :unobservable` |
-| `[:lemon, :process_session, :start]` | `count: 1`, `duration` (native) | `mode: :managed \| :oneshot`, `outcome: :running` |
-| `[:lemon, :process_session, :failure]` | `count: 1`, `duration` (native) | `mode`, `outcome: :startup_failed` |
-| `[:lemon, :process_session, :stop]` | `count: 1`, `duration` (native) | `mode`, `outcome: :stopped \| :owner_failed` |
+| Event | Measurements | Metadata | Emitter |
+| --- | --- | --- | --- |
+| `[:lemon, :process_group, :start]` | `count: 1` | `scope: :group \| :process` | [`LemonCore.ProcessGroup.terminate/2`](../apps/lemon_core/lib/lemon_core/process_group.ex) |
+| `[:lemon, :process_group, :stop]` | `count: 1`, `duration` (native) | `scope`, `outcome: :terminated \| :signaled` | [`LemonCore.ProcessGroup.terminate/2`](../apps/lemon_core/lib/lemon_core/process_group.ex) |
+| `[:lemon, :process_group, :failure]` | `count: 1`, `duration` (native) | `scope`, `outcome: :alive \| :unobservable` | [`LemonCore.ProcessGroup.terminate/2`](../apps/lemon_core/lib/lemon_core/process_group.ex) |
+| `[:lemon, :process_session, :start]` | `count: 1`, `duration` (native) | `mode: :managed \| :oneshot`, `outcome: :running` | [`lifecycle_event/4`](../apps/coding_agent/lib/coding_agent/process_session.ex) in `CodingAgent.ProcessSession` |
+| `[:lemon, :process_session, :failure]` | `count: 1`, `duration` (native) | `mode`, `outcome: :startup_failed` | [`lifecycle_event/4`](../apps/coding_agent/lib/coding_agent/process_session.ex) |
+| `[:lemon, :process_session, :stop]` | `count: 1`, `duration` (native) | `mode`, `outcome: :stopped \| :owner_failed` | [`lifecycle_event/4`](../apps/coding_agent/lib/coding_agent/process_session.ex) |
 
 Process-group events describe termination attempts, not workload launches.
 Process-scoped `:signaled` means signal acknowledgement, not verified exit;
@@ -282,11 +282,13 @@ sequenceDiagram
 
 **The end-to-end run span is emitted from the gateway run process.**
 `[:lemon, :run, :start]`, `[:lemon, :run, :first_token]`, and `[:lemon, :run, :stop]` all
-fire directly from `LemonGateway.Run` through the matching `LemonCore.Telemetry`
+fire from `LemonGateway.Run` through the matching `LemonCore.Telemetry`
 helpers. `[:lemon, :run, :stop]` carries
 `duration_ms` and an `ok` boolean, so whole-run latency and success/failure are both readable
-from telemetry alone. The introspection layer's `:run_started` / `:run_completed` records
-remain available as a persisted, queryable alternative.
+from telemetry alone. A run the router terminalizes before an executor owns it emits its
+`:stop` from `LemonRouter.RunCompletion` instead. The introspection layer's
+`:run_started` / `:run_completed` records remain available as a persisted, queryable
+alternative.
 
 ## Event catalog
 
@@ -294,18 +296,18 @@ remain available as a persisted, queryable alternative.
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :run, :submit]` | `count: 1` | `session_key`, `origin`, `engine` | `LemonCore.Telemetry.run_submit/3`, called from [`run_orchestrator.ex:211`](../apps/lemon_router/lib/lemon_router/run_orchestrator.ex) when a submission is accepted |
-| `[:lemon, :run, :start]` | `ts_ms` | `run_id`, `session_key`, `engine`, `origin` | [`run.ex:259`](../apps/lemon_gateway/lib/lemon_gateway/run.ex) via `DependencyManager.emit_telemetry(:run_start, ...)`, when the gateway starts the engine run |
-| `[:lemon, :run, :first_token]` | `latency_ms` | `run_id` | [`run.ex:428`](../apps/lemon_gateway/lib/lemon_gateway/run.ex), on the first engine delta of the run |
-| `[:lemon, :run, :stop]` | `duration_ms`, `ok` (boolean) | `run_id` | [`run.ex:611`](../apps/lemon_gateway/lib/lemon_gateway/run.ex), at finalize; `ok` distinguishes success from `{:error, _}`. Not emitted if the run process crashes before finalize |
-| `[:lemon, :router, :run_abort_tombstone, :registered]` | `count: 1` | bounded `reason` label | `LemonRouter.RunOrchestrator`, when a fixed run ID is marked aborted at the serialized submission boundary |
-| `[:lemon, :router, :run_abort_tombstone, :submission_rejected]` | `count: 1` | bounded `reason` label | `LemonRouter.RunOrchestrator`, when a later submission is rejected by that tombstone |
+| `[:lemon, :run, :submit]` | `count: 1` | `session_key`, `origin`, `engine` | [`LemonCore.Telemetry.run_submit/3`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonRouter.RunOrchestrator`](../apps/lemon_router/lib/lemon_router/run_orchestrator.ex) when a submission is accepted |
+| `[:lemon, :run, :start]` | `ts_ms` | `run_id`, `session_key`, `engine`, `origin` | [`LemonCore.Telemetry.run_start/2`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonGateway.Run`](../apps/lemon_gateway/lib/lemon_gateway/run.ex) when the gateway starts the engine run |
+| `[:lemon, :run, :first_token]` | `latency_ms` | `run_id` | [`LemonCore.Telemetry.run_first_token/2`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonGateway.Run`](../apps/lemon_gateway/lib/lemon_gateway/run.ex) on the first engine delta of the run |
+| `[:lemon, :run, :stop]` | `duration_ms`, `ok` (boolean) | `run_id`; plus `session_key` and `engine` from the router path | [`LemonCore.Telemetry.run_stop/3`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonGateway.Run`](../apps/lemon_gateway/lib/lemon_gateway/run.ex) at finalize; `ok` distinguishes success from `{:error, _}`. Not emitted if the run process crashes before finalize. Runs terminalized before an executor owns them emit it from [`LemonRouter.RunCompletion.publish/2`](../apps/lemon_router/lib/lemon_router/run_completion.ex) |
+| `[:lemon, :router, :run_abort_tombstone, :registered]` | `count: 1` | bounded `reason` label | [`emit_abort_tombstone_telemetry/2`](../apps/lemon_router/lib/lemon_router/run_orchestrator.ex) in `LemonRouter.RunOrchestrator`, when a fixed run ID is marked aborted at the serialized submission boundary |
+| `[:lemon, :router, :run_abort_tombstone, :submission_rejected]` | `count: 1` | bounded `reason` label | [`emit_abort_tombstone_telemetry/2`](../apps/lemon_router/lib/lemon_router/run_orchestrator.ex), when a later submission is rejected by that tombstone |
 
 ### Cron — `[:lemon, :cron, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :cron, :tick]` | `job_count` | `%{}` (empty) | `LemonCore.Telemetry.cron_tick/1`, called from [`cron_manager.ex`](../apps/lemon_automation/lib/lemon_automation/cron_manager.ex) once per scheduler tick as a liveness heartbeat with the count of registered jobs |
+| `[:lemon, :cron, :tick]` | `job_count` | `%{}` (empty) | [`LemonCore.Telemetry.cron_tick/1`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonAutomation.CronManager`](../apps/lemon_automation/lib/lemon_automation/cron_manager.ex) once per scheduler tick as a liveness heartbeat with the count of registered jobs |
 
 Cron terminalization, retry reconstruction, and Kanban hard-stop lease reclaim
 do not add telemetry events. Their restart-safe
@@ -325,9 +327,9 @@ an outcome as long as its owning loop survives.
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon_agent, :tool_call, :start]` | `system_time`, `monotonic_time` (native) | `tool_name`, `is_error: false`, `timeout: false` | `LemonAgent.Loop.ToolCalls` before preparation/start |
-| `[:lemon_agent, :tool_call, :stop]` | `duration`, `monotonic_time` (native monotonic units) | `tool_name`, `is_error`, `timeout` | Tool return, validation error, cancellation or skipped call |
-| `[:lemon_agent, :tool_call, :exception]` | `duration`, `monotonic_time` (native monotonic units) | `tool_name`, `is_error: true`, `timeout` | Caught exception/throw/exit, worker crash, task-start failure or loop timeout |
+| `[:lemon_agent, :tool_call, :start]` | `system_time`, `monotonic_time` (native) | `tool_name`, `is_error: false`, `timeout: false` | [`tool_call_start/1`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) in `LemonAgent.Loop.ToolCalls`, before preparation/start |
+| `[:lemon_agent, :tool_call, :stop]` | `duration`, `monotonic_time` (native monotonic units) | `tool_name`, `is_error`, `timeout` | [`tool_call_finish/4`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex): tool return, validation error, cancellation or skipped call |
+| `[:lemon_agent, :tool_call, :exception]` | `duration`, `monotonic_time` (native monotonic units) | `tool_name`, `is_error: true`, `timeout` | [`tool_call_finish/4`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex): caught exception/throw/exit, worker crash, task-start failure or loop timeout |
 
 `timeout` is true for a loop deadline or a tool result with `timed_out: true`
 or `timedOut: true`. Returned error results use `:stop` with `is_error: true`.
@@ -421,22 +423,17 @@ This instrumentation does not change task defaults or remove/move actions.
 Two weeks of production usage, arena evidence, the posted usage report, and
 the per-action keep/move/delete decisions in #604 remain operator/user work.
 
-### Heartbeats — `[:lemon, :heartbeat, ...]`
-
-| Event | Measurements | Metadata | Emitter |
-|---|---|---|---|
-
 ### Channels — `[:lemon, :channels, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :channels, :inbound]` | `count: 1` | `channel_id`, `account_id`, `peer_kind`, `agent_id` | [`channels/runtime.ex:113`](../apps/lemon_channels/lib/lemon_channels/runtime.ex) and [`router.ex:92`](../apps/lemon_router/lib/lemon_router/router.ex), on each normalized inbound message |
-| `[:lemon, :channels, :dispatch]` | `count: 1`, `duration` (native) | `channel_id`, `account_id`, `kind`, `intent_id`, `run_id`, `session_key`, `ok` (boolean) | [`dispatcher.ex`](../apps/lemon_channels/lib/lemon_channels/dispatcher.ex), after every `LemonChannels.Dispatcher.dispatch/1` — fires for both success and `{:error, _}`, check `ok`. Its bus twin is the `:channel_delivery` event on the `channels` topic (see `docs/platform/bus-events.md` §10) |
-| `[:lemon, :channels, :outbox, :queue]` | `depth`, `max_queue_size`, `count: 1` | caller map plus `event` (`:enqueued`, and other queue transitions) | [`outbox.ex:742`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) |
-| `[:lemon, :channels, :outbox, :rejected]` | `count: 1`, `queue_depth`, `max_queue_size` | `reason: :queue_full`, `channel_id`, `account_id`, `chunk_count` | [`outbox.ex:97`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), when the bounded queue refuses work |
-| `[:lemon, :channels, :deliver, :start]` | `system_time` | `channel_id`, `account_id`, `chunk_index` | [`outbox.ex:574`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) |
-| `[:lemon, :channels, :deliver, :stop]` | `duration` (native) | delivery meta plus `ok` (boolean) | [`outbox.ex:608`](../apps/lemon_channels/lib/lemon_channels/outbox.ex); fires for both success and `{:error, _}` — check `ok` |
-| `[:lemon, :channels, :deliver, :exception]` | `duration` (native) | delivery meta plus `kind: :exception`, `reason`, `stacktrace` | [`outbox.ex:591`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), only when the plugin raises |
+| `[:lemon, :channels, :inbound]` | `count: 1` | `channel_id`, `account_id`, `peer_kind`, `agent_id` | [`LemonCore.Telemetry.channel_inbound/2`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonChannels.Runtime`](../apps/lemon_channels/lib/lemon_channels/runtime.ex) on each normalized inbound message |
+| `[:lemon, :channels, :dispatch]` | `count: 1`, `duration` (native) | `channel_id`, `account_id`, `kind`, `intent_id`, `run_id`, `session_key`, `ok` (boolean) | [`observe/3`](../apps/lemon_channels/lib/lemon_channels/dispatcher.ex), after every `LemonChannels.Dispatcher.dispatch/1` — fires for both success and `{:error, _}`, check `ok`. Its bus twin is the `:channel_delivery` event on the `channels` topic (see [bus events](platform/bus-events.md)) |
+| `[:lemon, :channels, :outbox, :queue]` | `depth`, `max_queue_size`, `count: 1` | caller map plus `event` (`:enqueued`, and other queue transitions) | [`emit_queue_depth_telemetry/3`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) in `LemonChannels.Outbox` |
+| `[:lemon, :channels, :outbox, :rejected]` | `count: 1`, `queue_depth`, `max_queue_size` | `reason: :queue_full`, `channel_id`, `account_id`, `chunk_count` | [`LemonChannels.Outbox.handle_call/3`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), when the bounded queue refuses work |
+| `[:lemon, :channels, :deliver, :start]` | `system_time` | `channel_id`, `account_id`, `chunk_index` | [`do_deliver/1`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) |
+| `[:lemon, :channels, :deliver, :stop]` | `duration` (native) | delivery meta plus `ok` (boolean) | [`do_deliver/1`](../apps/lemon_channels/lib/lemon_channels/outbox.ex); fires for both success and `{:error, _}` — check `ok` |
+| `[:lemon, :channels, :deliver, :exception]` | `duration` (native) | delivery meta plus `kind: :exception`, `reason`, `stacktrace` | [`do_deliver/1`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), only when the plugin raises |
 
 ### Gateway execution permits
 
@@ -452,35 +449,35 @@ Aggregate snapshots do not provide per-run wait latency. See the
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon_agent, :loop, :start]` | `system_time` | `prompt_count`, `message_count`, `tool_count`, `model` | [`loop.ex:305`](../apps/lemon_agent/lib/lemon_agent/loop.ex) (fresh loop) and `:352` (continue loop; `prompt_count` is always 0 there) |
-| `[:lemon_agent, :loop, :end]` | `duration` (native, **may be `nil`**), `system_time` | `message_count`, `model`, `status` (`:completed` \| `:early_exit`) | [`loop.ex:807`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
-| `[:lemon_agent, :loop, :state_transition]` | `system_time` | caller map plus `from`, `to` | [`loop.ex:754`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
-| `[:lemon_agent, :tool_schema_snapshot, :created]` | `system_time` | `snapshot_id`, `fingerprint`, `tool_count`, `tool_names` | [`loop.ex:399`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
-| `[:lemon_agent, :tool_task, :start]` | `system_time` | `tool_name`, `tool_call_id` | [`tool_calls.ex:551`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) |
-| `[:lemon_agent, :tool_task, :end]` | `system_time` | `tool_name`, `tool_call_id`, `is_error` | [`tool_calls.ex:211`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) |
-| `[:lemon_agent, :tool_task, :error]` | `system_time` | `tool_name`, `tool_call_id`, `reason` | six sites in [`tool_calls.ex`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) — `:137`/`:152` (`reason: :aborted`), `:309` (task crash), `:389` (`:timeout`), `:586` (`{:start_failed, reason}`), `:601` (prepare failure) |
-| `[:lemon_agent, :tool_result, :emit]` | `system_time` | `tool_name`, `tool_call_id`, `is_error`, `trust` | [`tool_calls.ex:692`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex). `trust` is normalized: only `:untrusted` stays untrusted, everything else becomes `:trusted` |
-| `[:lemon_agent, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`tool_calls.ex:747`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex), when a model-supplied tool name needed fuzzy matching |
-| `[:lemon_agent, :context, :size]` | `char_count`, `message_count` | `has_system_prompt` | [`context.ex:113`](../apps/lemon_agent/lib/lemon_agent/context.ex), on every `estimate_size/2` call |
-| `[:lemon_agent, :context, :warning]` | `char_count`, `threshold` | `level` (`:warning` \| `:critical`) | [`context.ex:206`](../apps/lemon_agent/lib/lemon_agent/context.ex) (critical) and `:222` (warning) |
-| `[:lemon_agent, :context, :truncated]` | `dropped_count`, `remaining_count` | `strategy` | [`context.ex:287`](../apps/lemon_agent/lib/lemon_agent/context.ex) |
+| `[:lemon_agent, :loop, :start]` | `system_time` | `prompt_count`, `message_count`, `tool_count`, `model` | [`run_agent_loop/6`](../apps/lemon_agent/lib/lemon_agent/loop.ex) (fresh loop) and [`run_continue_loop/5`](../apps/lemon_agent/lib/lemon_agent/loop.ex) (continue loop; `prompt_count` is always 0 there) in `LemonAgent.Loop` |
+| `[:lemon_agent, :loop, :end]` | `duration` (native, **may be `nil`**), `system_time` | `message_count`, `model`, `status` (`:completed` \| `:early_exit`) | [`emit_loop_end_telemetry/3`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
+| `[:lemon_agent, :loop, :state_transition]` | `system_time` | caller map plus `from`, `to` | [`transition_loop_state/3`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
+| `[:lemon_agent, :tool_schema_snapshot, :created]` | `system_time` | `snapshot_id`, `fingerprint`, `tool_count`, `tool_names` | [`emit_tool_schema_snapshot/2`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
+| `[:lemon_agent, :tool_task, :start]` | `system_time` | `tool_name`, `tool_call_id` | [`start_tool_tasks/10`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) in `LemonAgent.Loop.ToolCalls` |
+| `[:lemon_agent, :tool_task, :end]` | `system_time` | `tool_name`, `tool_call_id`, `is_error` | [`collect_parallel_tool_results/16`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex), including started tools stopped by an abort |
+| `[:lemon_agent, :tool_task, :error]` | `system_time` | `tool_name`, `tool_call_id`, `reason` | [`collect_parallel_tool_results/16`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) (task crash, `:timeout`), [`start_tool_tasks/10`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) (`{:start_failed, reason}`, prepare failure) and [`emit_tool_errors/6`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) (unstarted calls: `:aborted` after an abort, `:skipped` when steering arrives) |
+| `[:lemon_agent, :tool_result, :emit]` | `system_time` | `tool_name`, `tool_call_id`, `is_error`, `trust` | [`emit_tool_result/7`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex). `trust` is normalized: only `:untrusted` stays untrusted, everything else becomes `:trusted` |
+| `[:lemon_agent, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`find_tool/2`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex), when a model-supplied tool name needed fuzzy matching |
+| `[:lemon_agent, :context, :size]` | `char_count`, `message_count` | `has_system_prompt` | [`LemonAgent.Context.estimate_size/2`](../apps/lemon_agent/lib/lemon_agent/context.ex), on every call |
+| `[:lemon_agent, :context, :warning]` | `char_count`, `threshold` | `level` (`:warning` \| `:critical`) | [`LemonAgent.Context.check_size/3`](../apps/lemon_agent/lib/lemon_agent/context.ex) |
+| `[:lemon_agent, :context, :truncated]` | `dropped_count`, `remaining_count` | `strategy` | [`LemonAgent.Context.truncate/2`](../apps/lemon_agent/lib/lemon_agent/context.ex) |
 
 ### Providers — `[:lemon_ai, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon_ai, :dispatcher, :dispatch]` | `system_time` | `provider` | [`call_dispatcher.ex:79`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex), before breaker and rate-limit checks |
-| `[:lemon_ai, :dispatcher, :rejected]` | `duration`, `system_time` | `provider`, `reason`, `retry_after_ms` (circuit-open only) | [`call_dispatcher.ex:94`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex) (`:circuit_open`), `:127` (`:rate_limited`), `:140` (`:max_concurrency`) |
-| `[:lemon_ai, :dispatcher, :hedge_started]` | `duplicate_input_tokens` (prompt-size estimate, not vendor billing) | `provider`, `model` | Opt-in duplicate admitted after the model p90 first-content deadline. Transport model-call spans remain separate; the returned logical message includes the extra input estimate. |
-| `[:lemon_ai, :dispatcher, :hedge_skipped]` | none | `provider`, `model`, `reason` | Hedge attempted but rejected, including zero-wait admission rejection. No queue is created. |
-| `[:lemon_ai, :model_call, :start]` | `system_time`, `monotonic_time` | `provider`, `telemetry_span_context`, and `model` (id), `api`, `call_kind` (`:stream` \| `:complete`) when the caller labelled the call | [`model_call_telemetry.ex`](../apps/lemon_ai/lib/lemon_ai/model_call_telemetry.ex), emitted by `CallDispatcher.dispatch/3` after the breaker, concurrency slot and rate limiter admit the call. Rejected dispatches emit only `:rejected` — never a `:start` |
-| `[:lemon_ai, :model_call, :stop]` | `duration`, `monotonic_time` (native); `first_event_duration` (native, first text/thinking/tool-call delta, only when observed); `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` (only when the provider reported them) | start metadata plus `outcome` (`:ok` \| `:error` \| `:canceled` \| `:aborted`), `stop_reason` (when the final message has one), `error_category` (non-`:ok` outcomes; bounded atom — a `LemonAi.Error.classify/1` category, or `:canceled`/`:timeout`/`:idle_timeout`/`:owner_down`/`:shutdown`/`:aborted`/`:stream_exit`/`:stream_tracking_failed`/`:stream_tracking_exit`/`:unexpected_result`) | `CallDispatcher`. For streams it fires when the stream reaches its terminal event (done, error, cancel, idle/hard timeout) or the producer dies, from the existing stream tracker — not when `dispatch/3` returns. Prompts, messages, credentials, URLs and raw error terms are never in the metadata |
-| `[:lemon_ai, :model_call, :exception]` | `duration`, `monotonic_time` (native) | start metadata plus `kind` (`:error` \| `:throw` \| `:exit`), `reason` (exception module for `:error`, otherwise the kind) | `CallDispatcher`, when the dispatch callback raises, throws or exits. Exactly one `:stop` or `:exception` follows each `:start`, unless the stream tracker process is killed outright |
-| `[:lemon_ai, :circuit_breaker, :opened]` | `system_time` | `provider`, `failure_count`, `failure_threshold`, `reason` | [`circuit_breaker.ex:291`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
-| `[:lemon_ai, :circuit_breaker, :closed]` | `system_time` | `provider` | [`circuit_breaker.ex:258`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), recovery confirmed |
-| `[:lemon_ai, :circuit_breaker, :half_opened]` | `system_time` | `provider`, `recovery_timeout` | [`circuit_breaker.ex:370`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
-| `[:lemon_ai, :circuit_breaker, :reopened]` | `system_time` | `provider`, `reason` | [`circuit_breaker.ex:317`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), probe failed during half-open |
-| `[:lemon_ai, :prompt_diagnostics, :llm_call]` | `system_time` | `data`, `engine: "ai"`, `session_key`, `agent_id`, `run_id` | [`prompt_diagnostics.ex:158`](../apps/lemon_ai/lib/lemon_ai/prompt_diagnostics.ex). Correlation fields come from `x-lemon-*` request headers and are `nil` when absent |
+| `[:lemon_ai, :dispatcher, :dispatch]` | `system_time` | `provider` | [`LemonAi.CallDispatcher.dispatch/3`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex), before breaker and rate-limit checks |
+| `[:lemon_ai, :dispatcher, :rejected]` | `duration`, `system_time` | `provider`, `reason` (`:circuit_open` \| `:rate_limited` \| `:max_concurrency`), `retry_after_ms` (circuit-open only) | [`LemonAi.CallDispatcher.dispatch/3`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex) |
+| `[:lemon_ai, :dispatcher, :hedge_started]` | `duplicate_input_tokens` (prompt-size estimate, not vendor billing) | `provider`, `model` | [`launch/6`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher/hedge.ex) in `LemonAi.CallDispatcher.Hedge`: opt-in duplicate admitted after the model p90 first-content deadline. Transport model-call spans remain separate; the returned logical message includes the extra input estimate. |
+| `[:lemon_ai, :dispatcher, :hedge_skipped]` | none | `provider`, `model`, `reason` | [`race/6`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher/hedge.ex) and [`launch/6`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher/hedge.ex): hedge attempted but rejected, including zero-wait admission rejection. No queue is created. |
+| `[:lemon_ai, :model_call, :start]` | `system_time`, `monotonic_time` | `provider`, `telemetry_span_context`, and `model` (id), `api`, `call_kind` (`:stream` \| `:complete`) when the caller labelled the call | [`LemonAi.ModelCallTelemetry.start/2`](../apps/lemon_ai/lib/lemon_ai/model_call_telemetry.ex), called by `CallDispatcher.dispatch/3` after the breaker, concurrency slot and rate limiter admit the call. Rejected dispatches emit only `:rejected` — never a `:start` |
+| `[:lemon_ai, :model_call, :stop]` | `duration`, `monotonic_time` (native); `first_event_duration` (native, first text/thinking/tool-call delta, only when observed); `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` (only when the provider reported them) | start metadata plus `outcome` (`:ok` \| `:error` \| `:canceled` \| `:aborted`), `stop_reason` (when the final message has one), `error_category` (non-`:ok` outcomes; bounded atom — a `LemonAi.Error.classify/1` category, or `:canceled`/`:timeout`/`:idle_timeout`/`:owner_down`/`:shutdown`/`:aborted`/`:stream_exit`/`:stream_tracking_failed`/`:stream_tracking_exit`/`:unexpected_result`) | [`emit_stop/6`](../apps/lemon_ai/lib/lemon_ai/model_call_telemetry.ex), through `ModelCallTelemetry.stop_result/2`, `stop_stream/4` and `stop_failure/3`. For streams it fires when the stream reaches its terminal event (done, error, cancel, idle/hard timeout) or the producer dies, from the existing stream tracker — not when `dispatch/3` returns. Prompts, messages, credentials, URLs and raw error terms are never in the metadata |
+| `[:lemon_ai, :model_call, :exception]` | `duration`, `monotonic_time` (native) | start metadata plus `kind` (`:error` \| `:throw` \| `:exit`), `reason` (exception module for `:error`, otherwise the kind) | [`LemonAi.ModelCallTelemetry.exception/3`](../apps/lemon_ai/lib/lemon_ai/model_call_telemetry.ex), when the dispatch callback raises, throws or exits. Exactly one `:stop` or `:exception` follows each `:start`, unless the stream tracker process is killed outright |
+| `[:lemon_ai, :circuit_breaker, :opened]` | `system_time` | `provider`, `failure_count`, `failure_threshold`, `reason` | [`LemonAi.CircuitBreaker.handle_call/3`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
+| `[:lemon_ai, :circuit_breaker, :closed]` | `system_time` | `provider` | [`LemonAi.CircuitBreaker.handle_call/3`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), recovery confirmed |
+| `[:lemon_ai, :circuit_breaker, :half_opened]` | `system_time` | `provider`, `recovery_timeout` | [`maybe_transition_to_half_open/1`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
+| `[:lemon_ai, :circuit_breaker, :reopened]` | `system_time` | `provider`, `reason` | [`LemonAi.CircuitBreaker.handle_call/3`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), probe failed during half-open |
+| `[:lemon_ai, :prompt_diagnostics, :llm_call]` | `system_time` | `data`, `engine: "ai"`, `session_key`, `agent_id`, `run_id` | [`record_introspection/2`](../apps/lemon_ai/lib/lemon_ai/prompt_diagnostics.ex) in `LemonAi.PromptDiagnostics`. Correlation fields come from `x-lemon-*` request headers and are `nil` when absent |
 
 #### Prompt cache-read share measurement (#562)
 
@@ -611,49 +608,48 @@ callers must pass `StreamOptions.session_id`; the library does not invent one.
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :memory, :ingest, :ok]` | `duration_us` | `run_id`, `session_key`, `agent_id` | [`ingest.ex:114`](../apps/lemon_memory/lib/lemon_memory/ingest.ex) |
-| `[:lemon, :memory, :ingest, :failure]` | `count: 1`, `duration_us` | `run_id`, `error` (message string) | [`ingest.ex:129`](../apps/lemon_memory/lib/lemon_memory/ingest.ex) |
+| `[:lemon, :memory, :ingest, :ok]` | `duration_us` | `run_id`, `session_key`, `agent_id` | [`LemonMemory.Ingest.handle_cast/2`](../apps/lemon_memory/lib/lemon_memory/ingest.ex) |
+| `[:lemon, :memory, :ingest, :failure]` | `count: 1`, `duration_us` | `run_id`, `error` (message string) | [`LemonMemory.Ingest.handle_cast/2`](../apps/lemon_memory/lib/lemon_memory/ingest.ex) |
 
 ### Approvals — `[:lemon, :approvals, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :approvals, :requested]` | `count: 1` | `approval_id`, `tool`, `run_id`, `session_id`, `session_key`, `agent_id` | [`exec_approvals.ex:101`](../apps/lemon_core/lib/lemon_core/exec_approvals.ex) |
-| `[:lemon, :approvals, :resolved]` | `count: 1` | `approval_id`, `decision`, `tool`, `run_id` | [`exec_approvals.ex:161`](../apps/lemon_core/lib/lemon_core/exec_approvals.ex) (user decision), `decision: :timeout` and `decision: :expired` (run or session ended, `expire_owner/1`) |
+| `[:lemon, :approvals, :requested]` | `count: 1` | `approval_id`, `tool`, `run_id`, `session_id`, `session_key`, `agent_id` | [`LemonCore.Telemetry.approval_requested/3`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonCore.ExecApprovals`](../apps/lemon_core/lib/lemon_core/exec_approvals.ex) when a request is created |
+| `[:lemon, :approvals, :resolved]` | `count: 1` | `approval_id`, `decision`, `tool`, `run_id` | [`LemonCore.Telemetry.approval_resolved/3`](../apps/lemon_core/lib/lemon_core/telemetry.ex), called from [`LemonCore.ExecApprovals`](../apps/lemon_core/lib/lemon_core/exec_approvals.ex) for a user decision, `decision: :cancelled`, `decision: :timeout`, and `decision: :expired` (run or session ended) |
 
 ### Control plane fan-out — `[:lemon, :control_plane, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :control_plane, :event_bridge, :broadcast]` | `count: 1`, `recipients` | `event`, `recipients` | [`event_bridge.ex:290`](../apps/lemon_control_plane/lib/lemon_control_plane/event_bridge.ex) |
-| `[:lemon, :control_plane, :event_bridge, :dropped]` | `count: 1`, `recipients` | `event`, `reason` (inspected, truncated to 80 chars) | [`event_bridge.ex:328`](../apps/lemon_control_plane/lib/lemon_control_plane/event_bridge.ex) |
+| `[:lemon, :control_plane, :event_bridge, :broadcast]` | `count: 1`, `recipients` | `event`, `recipients` | [`dispatch_event/3`](../apps/lemon_control_plane/lib/lemon_control_plane/event_bridge.ex) in `LemonControlPlane.EventBridge`, once per fanned-out event before delivery to its recipients |
 
 ### Configuration and hot reload — `[:lemon, :config | :reload, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :config, :reload, :start]` | `system_time` | reload context | [`config_reloader.ex:178`](../apps/lemon_core/lib/lemon_core/config_reloader.ex) |
-| `[:lemon, :config, :reload, :stop]` | `duration`, `duration_ms` | context plus `changed_count`, `actions_count` | [`config_reloader.ex:212`](../apps/lemon_core/lib/lemon_core/config_reloader.ex) (no-change path, `changed_count: 0`) and `:273` |
-| `[:lemon, :config, :reload, :exception]` | `duration`, `duration_ms` | context plus `kind`, `reason`, `stacktrace` | [`config_reloader.ex:301`](../apps/lemon_core/lib/lemon_core/config_reloader.ex) |
-| `[:lemon, :reload, :start]` | `system_time` | reload context | [`reload.ex:463`](../apps/lemon_core/lib/lemon_core/reload.ex) |
-| `[:lemon, :reload, :stop]` | `duration_ms` | context plus `status` | [`reload.ex:471`](../apps/lemon_core/lib/lemon_core/reload.ex) |
-| `[:lemon, :reload, :exception]` | `duration_ms` | context plus `error`, `stacktrace` | [`reload.ex:482`](../apps/lemon_core/lib/lemon_core/reload.ex) (rescue) and `:493` (catch) |
+| `[:lemon, :config, :reload, :start]` | `system_time` | reload context | [`do_reload/2`](../apps/lemon_core/lib/lemon_core/config_reloader.ex) in `LemonCore.ConfigReloader` |
+| `[:lemon, :config, :reload, :stop]` | `duration`, `duration_ms` | context plus `changed_count`, `actions_count` | [`do_reload/2`](../apps/lemon_core/lib/lemon_core/config_reloader.ex), including the no-change path (`changed_count: 0`) |
+| `[:lemon, :config, :reload, :exception]` | `duration`, `duration_ms` | context plus `kind`, `reason`, `stacktrace` | [`do_reload/2`](../apps/lemon_core/lib/lemon_core/config_reloader.ex) |
+| `[:lemon, :reload, :start]` | `system_time` | reload context | [`telemetry_span/3`](../apps/lemon_core/lib/lemon_core/reload.ex) in `LemonCore.Reload` |
+| `[:lemon, :reload, :stop]` | `duration_ms` | context plus `status` | [`telemetry_span/3`](../apps/lemon_core/lib/lemon_core/reload.ex) |
+| `[:lemon, :reload, :exception]` | `duration_ms` | context plus `error`, `stacktrace` | [`telemetry_span/3`](../apps/lemon_core/lib/lemon_core/reload.ex), for both raised exceptions and caught throws/exits |
 
 ### Extension and WASM tools — `[:coding_agent, ...]` and `[:lemon, :wasm, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:coding_agent, :extension, :tool, :start]` | `count: 1` | tool identity | [`tool_registry.ex:392`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) |
-| `[:coding_agent, :extension, :tool, :stop]` | `count: 1`, `duration_us` | tool identity plus `status` | [`tool_registry.ex:399`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) |
-| `[:coding_agent, :extension, :tool, :exception]` | `count: 1`, `duration_us` | tool identity plus `kind`, `error_type` | [`tool_registry.ex:410`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) (rescue) and `:423` (catch); both re-raise |
-| `[:coding_agent, :wasm, :tool, :start]` | `count: 1` | tool identity | [`wasm/tool_factory.ex:58`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
-| `[:coding_agent, :wasm, :tool, :stop]` | `count: 1`, `duration_us` | tool identity plus `status` | [`wasm/tool_factory.ex:113`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
-| `[:coding_agent, :wasm, :tool, :exception]` | `count: 1`, `duration_us` | tool identity plus `kind`, `error_type` | [`wasm/tool_factory.ex:121`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
-| `[:coding_agent, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`tool_registry.ex:148`](../apps/coding_agent/lib/coding_agent/tool_registry.ex). Shares its metadata keys with the `[:lemon_agent, ...]` event of the same leaf name |
-| `[:lemon, :wasm, :discover, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash` | [`wasm/sidecar_session.ex:191`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
-| `[:lemon, :wasm, :discover, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash` | [`wasm/sidecar_session.ex:376`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
-| `[:lemon, :wasm, :invoke, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`wasm/sidecar_session.ex:220`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
-| `[:lemon, :wasm, :invoke, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`wasm/sidecar_session.ex:408`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
+| `[:coding_agent, :extension, :tool, :start]` | `count: 1` | tool identity | [`run_extension_tool/4`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) in `CodingAgent.ToolRegistry` |
+| `[:coding_agent, :extension, :tool, :stop]` | `count: 1`, `duration_us` | tool identity plus `status` | [`run_extension_tool/4`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) |
+| `[:coding_agent, :extension, :tool, :exception]` | `count: 1`, `duration_us` | tool identity plus `kind`, `error_type` | [`run_extension_tool/4`](../apps/coding_agent/lib/coding_agent/tool_registry.ex), for raised exceptions and caught throws/exits; both re-raise |
+| `[:coding_agent, :wasm, :tool, :start]` | `count: 1` | tool identity | [`build_execute_fun/3`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) in `CodingAgent.Wasm.ToolFactory` |
+| `[:coding_agent, :wasm, :tool, :stop]` | `count: 1`, `duration_us` | tool identity plus `status` | [`emit_stop/3`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
+| `[:coding_agent, :wasm, :tool, :exception]` | `count: 1`, `duration_us` | tool identity plus `kind`, `error_type` | [`emit_exception/4`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
+| `[:coding_agent, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`CodingAgent.ToolRegistry.get_tool/3`](../apps/coding_agent/lib/coding_agent/tool_registry.ex). Shares its metadata keys with the `[:lemon_agent, ...]` event of the same leaf name |
+| `[:lemon, :wasm, :discover, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash` | [`CodingAgent.Wasm.SidecarSession.handle_call/3`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
+| `[:lemon, :wasm, :discover, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash` | [`CodingAgent.Wasm.SidecarSession.discover/2`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
+| `[:lemon, :wasm, :invoke, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`CodingAgent.Wasm.SidecarSession.handle_call/3`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
+| `[:lemon, :wasm, :invoke, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`finish_invocation/2`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
 
 Session and cwd identifiers in the WASM events are hashed, not raw.
 
@@ -661,9 +657,9 @@ Session and cwd identifiers in the WASM events are hashed, not raw.
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:coding_agent, :session, :environment_capture]` | `count: 1` | `session_id` | [`session_manager.ex:531`](../apps/coding_agent/lib/coding_agent/session_manager.ex) |
-| `[:coding_agent, :session, :journal_load]` | `count: 1` | `session_id` | [`session_manager.ex:1354`](../apps/coding_agent/lib/coding_agent/session_manager.ex) |
-| `[:coding_agent, :tool_intent, :stop]` | `duration_us` (digest, owner queueing, append and sync; not tool execution) | `effect`, `status: :ok \| :error` | [`tool_intent.ex`](../apps/coding_agent/lib/coding_agent/tool_intent.ex) |
+| `[:coding_agent, :session, :environment_capture]` | `count: 1` | `session_id` | [`lifecycle_observation/2`](../apps/coding_agent/lib/coding_agent/session_manager.ex) in `CodingAgent.SessionManager` |
+| `[:coding_agent, :session, :journal_load]` | `count: 1` | `session_id` | [`lifecycle_observation/2`](../apps/coding_agent/lib/coding_agent/session_manager.ex) |
+| `[:coding_agent, :tool_intent, :stop]` | `duration_us` (digest, owner queueing, append and sync; not tool execution) | `effect`, `status: :ok \| :error` | [`record_locally/6`](../apps/coding_agent/lib/coding_agent/tool_intent.ex) in `CodingAgent.ToolIntent` |
 
 The session counters count actual captures/parses and carry no content.
 
@@ -671,22 +667,21 @@ The session counters count actual captures/parses and carry no content.
 
 The last segment is built at runtime.
 
-| Event | Suffix values | Measurements | Metadata |
-|---|---|---|---|
-| `[:coding_agent, :session, :overflow_recovery, <stage>]` | `:attempt`, `:success`, `:failure` | `count: 1` | recovery context including `duration_ms` ([`session/compaction_manager.ex:209`](../apps/coding_agent/lib/coding_agent/session/compaction_manager.ex)) |
+| Event | Suffix values | Measurements | Metadata | Emitter |
+|---|---|---|---|---|
+| `[:coding_agent, :session, :overflow_recovery, <stage>]` | `:attempt`, `:success`, `:failure` | `count: 1` | recovery context including `duration_ms` | [`CodingAgent.Session.CompactionManager.emit_overflow_recovery_telemetry/3`](../apps/coding_agent/lib/coding_agent/session/compaction_manager.ex) |
 
 ### Skills — `[:lemon_skills, :skill, ...]`
 
 All three carry `count: 1` and `system_time` measurements and are emitted through
-[`lemon_skills/telemetry.ex:61`](../apps/lemon_skills/lib/lemon_skills/telemetry.ex), which
-drops `nil` metadata values before emitting. Bodies of skills and file contents are never
-included.
+`LemonSkills.Telemetry`, which drops `nil` metadata values before emitting. Bodies of
+skills and file contents are never included.
 
-| Event | Fires when | Key metadata |
-|---|---|---|
-| `[:lemon_skills, :skill, :load]` | `read_skill` returns a skill or a not-found result | `result` (`ok` \| `not_found`), `key`, `name`, `source`, `path`, `view`, `section`, `file_path`, `tool_call_id`, `run_id`, `session_key`, `session_id`, `agent_id`, `cwd` |
-| `[:lemon_skills, :skill, :write]` | `skill_manage` accepts or rejects a write | `result`, `action` (`create` \| `edit` \| `patch` \| `delete` \| `write_file` \| `remove_file`), `name`, `scope`, `path`, `audit_status`, `replacements`, `reason`, plus correlation fields |
-| `[:lemon_skills, :skill, :prompt_render]` | prompt composition renders a skills block | `surface` (`available` \| `relevant`), `skill_count`, `skill_keys`, `active_count`, `not_ready_count`, `missing_count`, plus correlation fields |
+| Event | Fires when | Key metadata | Emitter |
+|---|---|---|---|
+| `[:lemon_skills, :skill, :load]` | `read_skill` returns a skill or a not-found result | `result` (`ok` \| `not_found`), `key`, `name`, `source`, `path`, `view`, `section`, `file_path`, `tool_call_id`, `run_id`, `session_key`, `session_id`, `agent_id`, `cwd` | [`LemonSkills.Telemetry.skill_load/1`](../apps/lemon_skills/lib/lemon_skills/telemetry.ex) |
+| `[:lemon_skills, :skill, :write]` | `skill_manage` accepts or rejects a write | `result`, `action` (`create` \| `edit` \| `patch` \| `delete` \| `write_file` \| `remove_file`), `name`, `scope`, `path`, `audit_status`, `replacements`, `reason`, plus correlation fields | [`LemonSkills.Telemetry.skill_write/1`](../apps/lemon_skills/lib/lemon_skills/telemetry.ex) |
+| `[:lemon_skills, :skill, :prompt_render]` | prompt composition renders a skills block | `surface` (`available` \| `relevant`), `skill_count`, `skill_keys`, `active_count`, `not_ready_count`, `missing_count`, plus correlation fields | [`LemonSkills.Telemetry.skill_prompt_render/1`](../apps/lemon_skills/lib/lemon_skills/telemetry.ex) |
 
 `LemonSkills.Application` attaches an introspection bridge at boot that projects these three
 into persisted `:skill_load_observed`, `:skill_write_observed`, and
@@ -816,11 +811,11 @@ def metrics do
     counter("lemon.channels.outbox.rejected.count", tags: [:channel_id, :reason]),
 
     # Provider health.
-    counter("ai.dispatcher.rejected.duration", tags: [:provider, :reason]),
-    counter("ai.circuit_breaker.opened.system_time", tags: [:provider]),
+    counter("lemon_ai.dispatcher.rejected.duration", tags: [:provider, :reason]),
+    counter("lemon_ai.circuit_breaker.opened.system_time", tags: [:provider]),
 
     # Tool reliability.
-    counter("agent_core.tool_task.error.system_time", tags: [:tool_name, :reason]),
+    counter("lemon_agent.tool_task.error.system_time", tags: [:tool_name]),
 
     # Latency. Note the three different units — see "Measurement units".
     distribution("lemon.channels.deliver.stop.duration",
@@ -839,20 +834,17 @@ def metrics do
 end
 ```
 
-Three things bite when you do this, all of them consequences of items in
-[Known gaps](#known-gaps-and-inconsistencies):
+Two things bite when you do this:
 
 - **Pick the unit per event, not per dashboard.** `duration` is native, `duration_us` is
   microseconds, `duration_ms` is milliseconds, and `[:lemon, :config, :reload, :stop]`
-  reports both `duration` and `duration_ms` where the former is synthesized from the latter.
+  reports both a native `duration` and its `duration_ms` conversion.
   A single `unit: {:native, :millisecond}` applied across the board silently produces
   numbers that are wrong by six orders of magnitude on the `_us` events.
-- **`counter/2` still needs a measurement key that exists.**
-  `[:coding_agent, :tool_call, :name_normalized]` emits an empty measurement map, so it
-  cannot be counted without first adding a measurement at the emit site.
 - **Runtime-suffixed events cannot be declared with a wildcard.** `Telemetry.Metrics` needs
-  a concrete event name, so each value of the five dynamic families has to be listed
-  individually; the known values are in the catalog above.
+  a concrete event name, so each suffix of a runtime-built family (for example
+  `overflow_recovery`) has to be listed individually; the known values are in the catalog
+  above.
 
 For an interactive view instead of a scrape endpoint, `phoenix_live_dashboard` consumes the
 same `metrics/0` list through its `:metrics` option. Neither path requires changing any
@@ -871,21 +863,8 @@ event. The known values are listed in the catalog above.
 reports `duration: nil` when the process-dictionary start time is missing.
 Gateway slot statistics are aggregate snapshots, not per-run wait spans.
 
-**Coverage gaps.** `[:lemon_agent, :subagent, :end]` fires only on explicit stop, so a
-crashed subagent produces a `:spawn` with no matching `:end`. There is no telemetry on the
-store, the Bus, or the router's session-coordinator queue transitions.
-
-**Previously documented events that do not exist.** An earlier revision of this file
-described ten events that were never in the code: `[:lemon_agent, :loop, :exception]`,
-`[:lemon_agent, :loop, :task_start_failed]`, `[:lemon_agent, :event_stream, :queue_depth]`,
-`[:lemon_agent, :event_stream, :dropped]`, `[:lemon_agent, :agent, :loop_error]`,
-`[:coding_agent, :session, :event_stream, :broadcast]`, `[:coding_agent, :session, :error]`,
-`[:lemon_ai, :dispatcher, :queue_depth]`, `[:lemon_ai, :dispatcher, :retry]`, and
-`[:lemon_ai, :stream, :error]`. It also described an `LemonAgent.TelemetryPoller` emitting periodic
-`[:vm, _]` stats; no such module exists and `telemetry_poller` is not a dependency. They are
-listed here so they are not reintroduced from memory. The same revision documented
-`loop_type` / `reason` metadata on the agent loop events and `duration` measurements on the
-tool-task events; the real shapes are in the catalog above.
+**Coverage gaps.** There is no telemetry on the store, the Bus, or the router's
+session-coordinator queue transitions.
 
 ## Introspection: the persisted layer
 

@@ -1,9 +1,11 @@
 name: Docs Site
 
-# Builds the VitePress docs site and checks for broken links.
+# Builds the VitePress docs site, checks for broken links, and checks that
+# source citations (telemetry emitters, `file.ex:N`, shell-command paths) still
+# match the code.
 #
-# On pull requests: build + link-check (no deploy).
-# On push to main:  build + link-check; deploy only when explicitly enabled.
+# On pull requests: build + checks (no deploy).
+# On push to main:  build + checks; deploy only when explicitly enabled.
 # workflow_dispatch: manual trigger for either environment.
 #
 # The docs site is OPTIONAL — it supplements but does not replace the
@@ -16,6 +18,8 @@ on:
       - "docs/**"
       - "scripts/generate_docs_llms.py"
       - "scripts/verify_docs_site"
+      - "scripts/check_docs_source_refs.mjs"
+      - "scripts/check_docs_source_refs.test.mjs"
       - ".github/workflows/docs-site.yml"
   push:
     branches:
@@ -24,6 +28,8 @@ on:
       - "docs/**"
       - "scripts/generate_docs_llms.py"
       - "scripts/verify_docs_site"
+      - "scripts/check_docs_source_refs.mjs"
+      - "scripts/check_docs_source_refs.test.mjs"
       - ".github/workflows/docs-site.yml"
   workflow_dispatch:
     inputs:
@@ -70,6 +76,11 @@ jobs:
       - name: Verify source links
         working-directory: docs
         run: npm test
+
+      - name: Verify source references
+        run: |
+          node --test scripts/check_docs_source_refs.test.mjs
+          node scripts/check_docs_source_refs.mjs
 
       - name: Build site
         working-directory: docs
