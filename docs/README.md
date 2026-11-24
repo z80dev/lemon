@@ -85,7 +85,7 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 - Releases: [deployment flows](release/deployment_flows.md),
   [release/support checklist](release/release_checklist_and_support_policy.md),
   [five-package status](platform-split.md) and [Hex publication](release/hex-packages.md)
-  — 0.2.0 is published; 0.1.0 is retired
+  — the 0.2 line is published (`lemon_ai` 0.2.1); 0.1.0 is retired
 - [Root contributor/app guide index](../AGENTS.md#ownership-and-app-guides)
 - Design records and history (the code is authoritative where they differ):
   [model selection design](model-selection-decoupling.md),

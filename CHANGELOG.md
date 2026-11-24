@@ -93,6 +93,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   telemetry catalog row's linked function does not emit that event, a cited
   `function/arity` or `file.ex:N` line does not exist, or a docs shell command
   references a missing repository path (#735).
+- `docs/architecture_boundaries.md` gains a generated package map (every app's
+  `mix.exs` version and Hex publish-set membership). `mix lemon.architecture.docs`
+  regenerates it and `mix lemon.quality` fails when it is stale or when the
+  publish set in `mix.exs` differs from `scripts/verify_packages` (#90).
+- Architecture docs reconciled with the code: package status reports the real
+  Hex versions (`lemon_ai` 0.2.1) and the CI Elixir legs, its decision log is
+  marked historical, the in-repo app list and per-app dependency tables point at
+  the generated tables, stale `agent_core`/`ai` app names are corrected, and the
+  coding_agent guide no longer claims steer/redirect are unsupported on named
+  nodes (#90).
 
 ### Changed
 
