@@ -29,6 +29,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   instead of `:not_found` in that case. New strict readers:
   `A2AStore.fetch_task/2`, `ExecApprovalStore.fetch_global_policies/0` and
   `fetch_global_policy_map/0`, which replaces `get_global_policy_map/0` (#619).
+  router monitors from acceptance (#641). `{:error, :session_in_use}` is
+  retried like runtime unavailability, and the documented cancellation reasons
+  are `:run_idle_watchdog_timeout` (was `:run_watchdog_timeout`),
+  `:user_requested`, `:runtime_restart` and `:run_process_terminated` (#643).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,

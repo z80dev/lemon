@@ -95,6 +95,9 @@
   inside session init. Repeated keys (also kebab/camel spellings of one key) and
   frontmatter over 16 KiB reject the rule with a warning; it still shadows
   lower-priority namesakes (#671).
+- `CodingAgent.Executor.cancel/1` (and the local and remote session runners'
+  `cancel/2`) is an asynchronous cast that returns `:ok` at once, so a gateway
+  Run never blocks on a busy session while cancelling (#643).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

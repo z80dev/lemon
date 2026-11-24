@@ -200,8 +200,12 @@ Stale markers and markers with no usable history clear eagerly. Prior run
 summaries are carried as JSONL with escaped envelope characters and are bounded
 by dropping complete oldest run entries rather than slicing through role data.
 
-`RunProcess` retries runtime unavailability only, until its pre-start deadline;
-definite gateway rejection terminalizes immediately rather than retrying admission.
+`RunProcess` retries runtime unavailability and a busy engine session (the
+previous run still draining its cancellation) only, until its pre-start
+deadline; definite gateway rejection terminalizes immediately rather than
+retrying admission. Watchdog expiry and keep-alive cancel go through the same
+abort path as a user abort: the run waits for the gateway's real completion or
+its exit, with `meta.cancel_reason` naming the real reason.
 Persistent unavailability emits one structured synthetic `:run_completed` event
 so the active conversation is released. From acceptance onward, including while
 the gateway run waits for an execution permit, `RunProcess` monitors it: a run

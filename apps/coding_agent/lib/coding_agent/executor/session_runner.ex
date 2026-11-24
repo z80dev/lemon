@@ -132,8 +132,10 @@ defmodule CodingAgent.Executor.SessionRunner do
     GenServer.start_link(__MODULE__, opts)
   end
 
+  # A cast: the gateway Run that requests cancellation never blocks on a busy
+  # session; it holds its permit until this runner exits or its drain deadline.
   def cancel(pid, reason \\ :user_requested) do
-    GenServer.call(pid, {:cancel, reason})
+    GenServer.cast(pid, {:cancel, reason})
   end
 
   def steer(pid, text) do
@@ -381,14 +383,15 @@ defmodule CodingAgent.Executor.SessionRunner do
     end
   end
 
-  def handle_call({:cancel, reason}, _from, state) do
+  @impl true
+  def handle_cast({:cancel, reason}, state) do
     translator = RunTranslator.mark_cancelled(state.translator, reason)
 
     if state.session do
       CodingAgent.Session.abort(state.session)
     end
 
-    {:reply, :ok, %{state | translator: translator}}
+    {:noreply, %{state | translator: translator}}
   end
 
   @impl true
