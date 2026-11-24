@@ -102,7 +102,10 @@ defmodule LemonRouter.CoalescerBackpressureTest do
     state = :sys.get_state(pid)
     assert state.actions["tool-1"].title == "Progress 1000"
     assert :ok = ToolStatusCoalescer.finalize_run(session, "telegram", "run-1", true)
-    assert %{phase: :completed, ok: true} = :sys.get_state(pid).actions["tool-1"]
+    assert_receive {:intent, %{kind: :tool_status_finalize, body: %{text: text}}}
+    assert text =~ "✓ Progress 1000"
+    assert %{finalized: true, actions: actions, order: []} = :sys.get_state(pid)
+    assert actions == %{}
   end
 
   test "status overflow finalizes known actions with a fixed recovery indication and no late revival" do
@@ -124,11 +127,10 @@ defmodule LemonRouter.CoalescerBackpressureTest do
     assert %{overflowed: true} = :sys.get_state(pid)
     assert :ok = ToolStatusCoalescer.finalize_run(session, "telegram", "run-1", false)
 
-    assert %{
-             finalized: true,
-             overflowed: false,
-             actions: %{"tool-1" => %{phase: :completed, ok: false}}
-           } = :sys.get_state(pid)
+    assert %{finalized: true, overflowed: false, actions: actions, order: []} =
+             :sys.get_state(pid)
+
+    assert actions == %{}
 
     assert_receive {:intent, %{kind: :tool_status_finalize, body: %{text: text}}}
 
@@ -138,8 +140,8 @@ defmodule LemonRouter.CoalescerBackpressureTest do
     send(pid, {:lemon_bus_delivery, old.gate, {:action, "run-1", action(9999), %{}}})
     ToolStatusCoalescer.ingest_action(session, "telegram", "run-1", action(10_000))
 
-    assert %{finalized: true, actions: %{"tool-1" => %{phase: :completed, ok: false}}} =
-             :sys.get_state(pid)
+    assert %{finalized: true, run_id: "run-1", order: []} = :sys.get_state(pid)
+    refute_received {:intent, _}
 
     ToolStatusCoalescer.ingest_action(session, "telegram", "run-2", action(1))
     current = :sys.get_state(pid)

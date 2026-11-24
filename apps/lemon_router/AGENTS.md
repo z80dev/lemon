@@ -96,6 +96,10 @@ revision alongside results; timings are host/filesystem-specific.
 - `SurfaceManager` coordinates answer/status/task surfaces; coalescers aggregate
   semantic output. Preserve parent/task IDs and safe failure metadata upstream,
   rather than reconstructing hierarchy in adapters.
+- Coalescers must stay retirable: never start one just to finalize or flush,
+  drop a run's retained text/actions when it finalizes, and keep retained
+  state within the named caps. Lifetime and bounds are in the
+  [admission inventory](../../docs/architecture/admission-gates.md).
 - Finalization is terminal for a stream and runs inside the coalescer's
   serialized loop: the final intent is queued behind every admitted delta, so it
   is the last write, and a finalized stream never flushes a late snapshot. Never

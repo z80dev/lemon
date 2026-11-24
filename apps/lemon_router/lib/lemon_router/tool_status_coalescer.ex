@@ -6,20 +6,50 @@ defmodule LemonRouter.ToolStatusCoalescer do
   run without producing output deltas, so we want a dedicated status surface.
 
   Channel-specific presentation is handled by `LemonChannels.Dispatcher`.
+
+  ## Lifetime and retention
+
+  A coalescer exists per surface only while it has work: finalizing a run
+  without one starts nothing, finalizing drops the run's actions, and an idle
+  coalescer whose run is finalized, never started or has no live producer
+  (`RunProcess` or async task-surface subscriber) stops normally after the
+  retirement grace (`LemonRouter.CoalescerIngress`). A segment retains at most
+  64 actions, keeping only the detail fields rendering needs.
   """
 
-  use GenServer
+  use GenServer, restart: :transient
 
   require Logger
 
   alias LemonChannels.Dispatcher
   alias LemonCore.DeliveryIntent
   alias LemonRouter.ChannelContext
+  alias LemonRouter.CoalescerIngress
   alias LemonRouter.DeliveryRouteResolver
 
   @default_idle_ms 400
   @default_max_latency_ms 1200
   @status_text_max_length 4096
+
+  # Retained actions per segment. A status message is one 4,096-character
+  # message (`@status_text_max_length`) of action lines titled up to 80
+  # characters, so it can display fewer than 64 lines; older lines are already
+  # summarized as "(N tools omitted)". Evicted actions keep counting there.
+  @max_retained_actions 64
+  # Failed-action result previews render at most 140 characters after
+  # whitespace collapsing; keep a bounded prefix instead of the whole result.
+  @retained_preview_chars 1_024
+  @failure_meta_keys [
+    :error_type,
+    :tool_name,
+    :reason,
+    :errors,
+    :timeout_ms,
+    :exit_code,
+    :exception,
+    :message,
+    :status
+  ]
 
   defstruct [
     :session_key,
@@ -39,6 +69,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
     :finalized,
     :run_started_at,
     :delivery,
+    :retire_after_ms,
+    :last_activity_ms,
+    omitted_actions: 0,
     overflowed: false
   ]
 
@@ -80,17 +113,18 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp start_action_coalescer(session_key, channel_id, run_id, action_event, meta, surface) do
-    case get_or_start_coalescer(session_key, channel_id, surface, meta) do
-      {:ok, _pid} ->
-        LemonRouter.CoalescerIngress.push(
-          LemonRouter.ToolStatusRegistry,
-          registry_key(session_key, channel_id, surface),
-          run_id,
-          {:action, run_id, action_event, meta}
-        )
-
+    case CoalescerIngress.push(
+           LemonRouter.ToolStatusRegistry,
+           registry_key(session_key, channel_id, surface),
+           run_id,
+           {:action, run_id, action_event, meta},
+           fn -> start_coalescer(session_key, channel_id, surface, meta) end
+         ) do
       {:error, reason} ->
         Logger.warning("Failed to start tool status coalescer: #{inspect(reason)}")
+
+      :ok ->
+        :ok
     end
   end
 
@@ -124,21 +158,12 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def flush(session_key, channel_id, opts \\ []) do
     surface = Keyword.get(opts, :surface, :status)
 
-    case Registry.lookup(
-           LemonRouter.ToolStatusRegistry,
-           registry_key(session_key, channel_id, surface)
-         ) do
-      [{_pid, _}] ->
-        LemonRouter.CoalescerIngress.push(
-          LemonRouter.ToolStatusRegistry,
-          registry_key(session_key, channel_id, surface),
-          nil,
-          :flush
-        )
-
-      _ ->
-        :ok
-    end
+    CoalescerIngress.push(
+      LemonRouter.ToolStatusRegistry,
+      registry_key(session_key, channel_id, surface),
+      nil,
+      :flush
+    )
   end
 
   defp equivalent_action_id(actions, data) when is_map(actions) and is_map(data) do
@@ -184,19 +209,16 @@ defmodule LemonRouter.ToolStatusCoalescer do
     meta = Keyword.get(opts, :meta, %{})
     surface = Keyword.get(opts, :surface, :status)
 
-    case get_or_start_coalescer(session_key, channel_id, surface, meta) do
-      {:ok, pid} ->
-        try do
-          GenServer.call(pid, {:anchor_segment, run_id, prefix_text, meta}, 2_000)
-        catch
-          :exit, _ -> :ok
-        end
+    _ =
+      call(
+        registry_key(session_key, channel_id, surface),
+        {:anchor_segment, run_id, prefix_text, meta},
+        fn -> start_coalescer(session_key, channel_id, surface, meta) end
+      )
 
-        :ok
-
-      _ ->
-        :ok
-    end
+    :ok
+  catch
+    :exit, _ -> :ok
   end
 
   def anchor_segment(_session_key, _channel_id, _run_id, _prefix_text, _opts), do: :ok
@@ -209,70 +231,44 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def commit_segment(session_key, channel_id, run_id, opts) when is_binary(run_id) do
     meta = Keyword.get(opts, :meta, %{})
     surface = Keyword.get(opts, :surface, :status)
-
-    case Registry.lookup(
-           LemonRouter.ToolStatusRegistry,
-           registry_key(session_key, channel_id, surface)
-         ) do
-      [{pid, _}] ->
-        try do
-          GenServer.call(pid, {:commit_segment, run_id, meta}, 2_000)
-        catch
-          :exit, _ -> :ok
-        end
-
-        :ok
-
-      _ ->
-        :ok
-    end
+    _ = call(registry_key(session_key, channel_id, surface), {:commit_segment, run_id, meta})
+    :ok
+  catch
+    :exit, _ -> :ok
   end
 
   def commit_segment(_session_key, _channel_id, _run_id, _opts), do: :ok
 
   @doc """
-  Finalize the tool status for a run by marking any still-running actions as completed.
+  Finalize the tool status for a run by marking any still-running actions as
+  completed. A surface without a coalescer has nothing to finalize and none is
+  started for it.
   """
   def finalize_run(session_key, channel_id, run_id, ok?, opts \\ [])
 
   def finalize_run(session_key, channel_id, run_id, ok?, opts) when is_binary(run_id) do
     meta = Keyword.get(opts, :meta, %{})
     surface = Keyword.get(opts, :surface, :status)
-
-    case get_or_start_coalescer(session_key, channel_id, surface, meta) do
-      {:ok, pid} ->
-        try do
-          GenServer.call(pid, {:finalize_run, run_id, ok?, meta}, 2_000)
-        catch
-          :exit, _ -> :ok
-        end
-
-        :ok
-
-      _ ->
-        :ok
-    end
+    _ = call(registry_key(session_key, channel_id, surface), {:finalize_run, run_id, ok?, meta})
+    :ok
+  catch
+    :exit, _ -> :ok
   end
 
   def finalize_run(_session_key, _channel_id, _run_id, _ok?, _opts), do: :ok
 
-  defp get_or_start_coalescer(session_key, channel_id, surface, meta) do
-    key = registry_key(session_key, channel_id, surface)
+  defp call(key, request, start \\ nil) do
+    CoalescerIngress.call(LemonRouter.ToolStatusRegistry, key, request, 2_000, start)
+  end
 
-    case Registry.lookup(LemonRouter.ToolStatusRegistry, key) do
-      [{pid, _}] ->
-        {:ok, pid}
+  defp start_coalescer(session_key, channel_id, surface, meta) do
+    spec =
+      {__MODULE__, session_key: session_key, channel_id: channel_id, surface: surface, meta: meta}
 
-      [] ->
-        spec =
-          {__MODULE__,
-           session_key: session_key, channel_id: channel_id, surface: surface, meta: meta}
-
-        case DynamicSupervisor.start_child(LemonRouter.ToolStatusSupervisor, spec) do
-          {:ok, pid} -> {:ok, pid}
-          {:error, {:already_started, pid}} -> {:ok, pid}
-          error -> error
-        end
+    case DynamicSupervisor.start_child(LemonRouter.ToolStatusSupervisor, spec) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -294,6 +290,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
         opts
       )
 
+    retire_after_ms = CoalescerIngress.retire_after_ms(opts)
+    CoalescerIngress.schedule_retire_check(retire_after_ms)
+
     state = %__MODULE__{
       session_key: session_key,
       channel_id: channel_id,
@@ -311,16 +310,20 @@ defmodule LemonRouter.ToolStatusCoalescer do
       seq: 0,
       finalized: false,
       delivery: delivery,
-      run_started_at: nil
+      run_started_at: nil,
+      retire_after_ms: retire_after_ms,
+      last_activity_ms: now_ms()
     }
 
     {:ok, state}
   end
 
   @impl true
-  def handle_cast({:action, _, _, _}, %{overflowed: true} = state), do: {:noreply, state}
+  def handle_cast(message, state), do: cast(message, touch(state))
 
-  def handle_cast({:action, run_id, action_event, meta}, state) do
+  defp cast({:action, _, _, _}, %{overflowed: true} = state), do: {:noreply, state}
+
+  defp cast({:action, run_id, action_event, meta}, state) do
     now = System.system_time(:millisecond)
 
     state =
@@ -339,6 +342,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
             flush_timer: nil,
             seq: 0,
             finalized: false,
+            omitted_actions: 0,
             meta: ChannelContext.compact_meta(meta),
             run_started_at: now
         }
@@ -358,14 +362,18 @@ defmodule LemonRouter.ToolStatusCoalescer do
             action_data
             |> expand_embedded_actions()
             |> Enum.filter(&chat_visible_action?(state.channel_id, &1))
-            |> Enum.reduce({state.actions, state.order}, fn data, {actions, order} ->
-              upsert_action(actions, order, data.id, data)
-            end)
-            |> then(fn {actions, order} ->
+            |> Enum.reduce(
+              {state.actions, state.order, state.omitted_actions},
+              fn data, {actions, order, omitted} ->
+                upsert_action(actions, order, omitted, data.id, data)
+              end
+            )
+            |> then(fn {actions, order, omitted} ->
               state = %{
                 state
                 | actions: actions,
                   order: order,
+                  omitted_actions: omitted,
                   first_event_ts: state.first_event_ts || now,
                   run_started_at: state.run_started_at || now
               }
@@ -378,16 +386,18 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  def handle_cast(:flush, state) do
+  defp cast(:flush, state) do
     state = do_flush(state)
     {:noreply, state}
   end
 
   @impl true
-  def handle_call({:anchor_segment, _, _, _}, _from, %{overflowed: true} = state),
+  def handle_call(request, from, state), do: handle_request(request, from, touch(state))
+
+  defp handle_request({:anchor_segment, _, _, _}, _from, %{overflowed: true} = state),
     do: {:reply, :ok, state}
 
-  def handle_call({:anchor_segment, run_id, prefix_text, meta}, _from, state) do
+  defp handle_request({:anchor_segment, run_id, prefix_text, meta}, _from, state) do
     state =
       cond do
         state.run_id == nil ->
@@ -424,10 +434,10 @@ defmodule LemonRouter.ToolStatusCoalescer do
     {:reply, :ok, state}
   end
 
-  def handle_call({:commit_segment, _, _}, _from, %{overflowed: true} = state),
+  defp handle_request({:commit_segment, _, _}, _from, %{overflowed: true} = state),
     do: {:reply, :ok, state}
 
-  def handle_call({:commit_segment, run_id, meta}, _from, state) do
+  defp handle_request({:commit_segment, run_id, meta}, _from, state) do
     state =
       if state.run_id == run_id do
         state
@@ -441,8 +451,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_call({:finalize_run, run_id, ok?, meta}, _from, state) do
+  defp handle_request({:finalize_run, run_id, ok?, meta}, _from, state) do
     if LemonRouter.CoalescerIngress.completed?(
          LemonRouter.ToolStatusRegistry,
          registry_key(state.session_key, state.channel_id, state.surface),
@@ -512,7 +521,22 @@ defmodule LemonRouter.ToolStatusCoalescer do
         run_id
       )
 
-    state = %{state | delivery: delivery, overflowed: false}
+    # The finalized run's actions are no longer needed once its final status is
+    # out; only the identity that fences late messages remains.
+    state = %{
+      state
+      | delivery: delivery,
+        overflowed: false,
+        actions: %{},
+        order: [],
+        omitted_actions: 0,
+        prefix_text: nil,
+        last_text: nil,
+        last_kind: nil,
+        first_event_ts: nil,
+        run_started_at: nil,
+        meta: %{}
+    }
 
     {:reply, :ok, state}
   end
@@ -537,9 +561,38 @@ defmodule LemonRouter.ToolStatusCoalescer do
     {:noreply, state}
   end
 
+  def handle_info(:retire_check, state) do
+    case CoalescerIngress.retire_check(
+           state,
+           LemonRouter.ToolStatusRegistry,
+           registry_key(state.session_key, state.channel_id, state.surface),
+           &retirable?/1
+         ) do
+      {:stop, state} -> {:stop, :normal, state}
+      {:keep, state, admitted} -> {:noreply, Enum.reduce(admitted, state, &cast_admitted/2)}
+    end
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
+  defp cast_admitted(message, state) do
+    {:noreply, state} = handle_cast(message, state)
+    state
+  end
+
   # ---- Internal ----
+
+  defp touch(state), do: %{state | last_activity_ms: now_ms()}
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
+
+  # Nothing a live producer still needs: the run is finalized, never started,
+  # or neither its RunProcess nor an async subscriber for this surface remains.
+  defp retirable?(%__MODULE__{run_id: nil}), do: true
+  defp retirable?(%__MODULE__{finalized: true}), do: true
+
+  defp retirable?(%__MODULE__{run_id: run_id, surface: surface}),
+    do: not CoalescerIngress.producer_alive?(run_id, surface)
 
   defp dispatcher do
     Application.get_env(:lemon_router, :dispatcher, Dispatcher)
@@ -566,7 +619,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
     opts = %{
       elapsed_ms: elapsed_since(state.run_started_at),
-      action_count: length(state.order)
+      action_count: length(state.order) + state.omitted_actions,
+      omitted_count: state.omitted_actions
     }
 
     text =
@@ -636,7 +690,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
         last_kind: nil,
         first_event_ts: nil,
         flush_timer: nil,
-        finalized: false
+        finalized: false,
+        omitted_actions: 0
     }
   end
 
@@ -1167,12 +1222,65 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp upsert_action(actions, order, id, data) do
+  defp upsert_action(actions, order, omitted, id, data) do
     id = equivalent_action_id(actions, data) || id
-    actions = Map.put(actions, id, data)
-    order = if id in order, do: order, else: order ++ [id]
-    {actions, order}
+    actions = Map.put(actions, id, Map.update(data, :detail, nil, &retained_detail(&1, data)))
+
+    if id in order,
+      do: {actions, order, omitted},
+      else: evict_overflow(actions, order ++ [id], omitted)
   end
+
+  # Evict the oldest completed action (else the oldest) beyond the cap; the
+  # renderer reports evicted actions as omitted.
+  defp evict_overflow(actions, order, omitted) when length(order) <= @max_retained_actions,
+    do: {actions, order, omitted}
+
+  defp evict_overflow(actions, order, omitted) do
+    victim = Enum.find(order, &completed_action?(Map.get(actions, &1))) || hd(order)
+    {Map.delete(actions, victim), List.delete(order, victim), omitted + 1}
+  end
+
+  defp completed_action?(action) when is_map(action),
+    do: map_value(action, :phase) in [:completed, "completed"]
+
+  defp completed_action?(_action), do: false
+
+  # Keep only what rendering, failure reporting and child-action matching read;
+  # args, partial results and full results are not retained.
+  defp retained_detail(detail, data) when is_map(detail) do
+    detail
+    |> Map.take([:parent_tool_use_id, "parent_tool_use_id", :child_run_id, "child_run_id"])
+    |> maybe_put(:result_preview, failure_preview(detail, data))
+    |> maybe_put(:result_meta, failure_meta(map_value(detail, :result_meta)))
+  end
+
+  defp retained_detail(detail, _data), do: detail
+
+  # The renderer shows a result preview only for a completed, failed action.
+  defp failure_preview(detail, data) do
+    with true <- data[:phase] in [:completed, "completed"] and data[:ok] != true,
+         preview when not is_nil(preview) <-
+           map_value(detail, :result_preview) || map_value(detail, :result),
+         text when is_binary(text) <- LemonRouter.ToolPreview.to_text(preview) do
+      String.slice(text, 0, @retained_preview_chars)
+    else
+      _ -> nil
+    end
+  end
+
+  defp failure_meta(meta) when is_map(meta) do
+    retained =
+      for key <- @failure_meta_keys,
+          value = map_value(meta, key),
+          not is_nil(value),
+          into: %{},
+          do: {key, value}
+
+    if retained == %{}, do: nil, else: retained
+  end
+
+  defp failure_meta(_meta), do: nil
 
   defp elapsed_since(nil), do: nil
 

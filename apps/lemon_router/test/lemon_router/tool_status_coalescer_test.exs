@@ -454,7 +454,21 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     assert state2.meta[:status_msg_id] == 111
   end
 
-  test "finalize_run marks running actions as completed" do
+  test "finalize_run marks running actions as completed and drops the run's actions" do
+    previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+    Application.put_env(:lemon_router, :dispatcher, ToolStatusIntentDispatcherStub)
+    :persistent_term.put({ToolStatusIntentDispatcherStub, :test_pid}, self())
+
+    on_exit(fn ->
+      :persistent_term.erase({ToolStatusIntentDispatcherStub, :test_pid})
+
+      if is_nil(previous_dispatcher) do
+        Application.delete_env(:lemon_router, :dispatcher)
+      else
+        Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+      end
+    end)
+
     session_key = "agent:finalize:telegram:bot:dm:321"
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
@@ -476,10 +490,12 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     assert :ok = ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true)
 
-    assert eventually(fn ->
-             state2 = :sys.get_state(pid)
-             state2.actions["a1"].phase == :completed and state2.actions["a1"].ok == true
-           end)
+    assert_receive {:dispatched_intent,
+                    %DeliveryIntent{run_id: ^run_id, kind: :tool_status_finalize, body: body}}
+
+    assert body.text =~ "✓ Test tool"
+    assert %{finalized: true, actions: actions, order: []} = :sys.get_state(pid)
+    assert actions == %{}
   end
 
   test "expands embedded task current_action into a child action" do

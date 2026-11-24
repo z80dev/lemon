@@ -176,7 +176,8 @@ defmodule LemonRouter.StreamCoalescerTest do
     end
   end
 
-  @answer_cap 100_000
+  # The coalescer's per-message ingress budget (`CoalescerIngress`).
+  @answer_cap 65_536
   @ingress_batch_size 64
 
   defp isolate_answer_dispatcher do
@@ -701,10 +702,11 @@ defmodule LemonRouter.StreamCoalescerTest do
           {session_key, channel_id}
         )
 
+      # Late deltas are fenced, and the finalized run's text is no longer held.
       state = :sys.get_state(pid)
       assert state.finalized == true
       assert state.last_seq == 1
-      assert state.full_text == "partial"
+      assert state.full_text == ""
     end
   end
 
@@ -1419,7 +1421,7 @@ defmodule LemonRouter.StreamCoalescerTest do
                      1_000
     end
 
-    test "telegram finalize switches run_id for consecutive no-delta runs" do
+    test "telegram finalize delivers consecutive no-delta runs without starting a coalescer" do
       session_key = "agent:test:telegram:bot:dm:12348"
       channel_id = "telegram"
       run_id_1 = "run_#{System.unique_integer([:positive])}"
@@ -1459,11 +1461,8 @@ defmodule LemonRouter.StreamCoalescerTest do
                       }},
                      1_000
 
-      [{pid, _}] =
-        Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
-
-      state = :sys.get_state(pid)
-      assert state.run_id == run_id_2
+      assert Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id}) ==
+               []
     end
 
     test "telegram finalize does not track pending resume index when enqueue returns duplicate" do

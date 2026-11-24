@@ -219,8 +219,9 @@ The 10,000-delta row above used to read **5,004 ms** — 500 µs per delta — a
 its coalescing ratio degraded to 1 dispatch per 13 deltas. This benchmark is
 what found it.
 
-`StreamCoalescer` caps its accumulated answer at 100,000 via `cap_full_text/1`
-([`stream_coalescer.ex:637`](../../apps/lemon_router/lib/lemon_router/stream_coalescer.ex)).
+`StreamCoalescer` capped its accumulated answer at 100,000 bytes via `cap_full_text/1`
+([`stream_coalescer.ex`](../../apps/lemon_router/lib/lemon_router/stream_coalescer.ex));
+since #685 the cap is the coalescer's 65,536-byte ingress message budget.
 It used to trim like this:
 
 ```elixir
@@ -356,9 +357,9 @@ including the Registry entry and the supervisor's child record.
 
 At that rate 10,000 concurrent conversations cost roughly 33 MB of process
 memory. This is measured on processes that have never received a message; a
-run that has streamed a long conversation carries its accumulated text on its
-own heap, and the coalescer cap above is a reminder that "its own heap" can be
-100,000 characters.
+streaming run carries its accumulated text on its own heap, up to the
+65,536-byte answer cap above, until it finalizes. Since #685 finalizing drops
+that text and idle coalescers retire, so this population tracks live runs.
 
 ## Why these are not in CI
 

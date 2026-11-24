@@ -248,25 +248,6 @@ defmodule LemonRouter.SurfaceManager do
     end
   end
 
-  @spec maybe_seed_final_answer(map(), Event.t()) :: :ok
-  def maybe_seed_final_answer(state, %Event{} = event) do
-    with false <- state.saw_delta,
-         answer when is_binary(answer) and answer != "" <-
-           CompactionTrigger.extract_completed_answer(event),
-         {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
-      StreamCoalescer.ingest_delta(
-        state.session_key,
-        channel_id,
-        state.run_id,
-        1,
-        answer,
-        meta: coalescer_meta(state)
-      )
-    end
-
-    :ok
-  end
-
   @spec fanout_final_answer(map(), Event.t()) :: :ok
   def fanout_final_answer(state, %Event{} = event) do
     with answer when is_binary(answer) <- CompactionTrigger.extract_completed_answer(event),

@@ -206,6 +206,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   finalize delivers the answer once instead of up to three times. A finalize
   that delivers nothing returns an error and records `:answer_finalize_failed`
   instead of reporting success (#644).
+- Router answer and tool-status coalescers no longer live for the VM lifetime:
+  a run that never streamed starts none, finalizing drops the run's text and
+  actions, and an idle coalescer whose run is finalized or gone stops after a
+  5-second grace (`:lemon_router, :coalescer_retire_after_ms`). Status surfaces
+  retain at most 64 actions (older ones are counted as omitted) without their
+  args or full results, and the streamed answer tail is capped at the
+  65,536-byte ingress message budget instead of 100,000 bytes. 500 sequential
+  runs in one conversation previously left 502 coalescer processes
+  (≈7.1 MB); they now return to zero (#685).
 
 ### Removed
 

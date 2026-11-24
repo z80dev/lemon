@@ -430,9 +430,6 @@ defmodule LemonRouter.RunProcess do
         provenance: :direct
       )
 
-      # If no streaming deltas were emitted, emit a final output chunk so channels respond.
-      SurfaceManager.maybe_seed_final_answer(state, event)
-
       # Optional fanout: forward the final answer text to additional destinations.
       SurfaceManager.fanout_final_answer(state, event)
     end
