@@ -365,6 +365,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     {:noreply, state}
   end
 
+  def process_event({:discord_prepared_message, %InboundMessage{} = inbound}, state) do
+    {:noreply, continue_message(state, inbound)}
+  rescue
+    error ->
+      Logger.warning("discord inbound message handling failed: #{inspect(error.__struct__)}")
+      {:noreply, state}
+  end
+
   def process_event(_msg, state), do: {:noreply, state}
 
   # ============================================================================
@@ -379,24 +387,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
          {:new, dedupe_ref} <- check_dedupe(inbound, state) do
       inbound = put_submission_dedupe_ref(inbound, dedupe_ref)
 
-      {inbound, voice_errors} = VoiceHandler.transcribe(inbound)
-
-      Enum.each(voice_errors, fn text ->
-        Outbound.send_with_components(
-          inbound.meta[:thread_id] || inbound.meta[:channel_id],
-          text,
-          [],
-          []
-        )
-      end)
-
-      inbound = Inbound.attach_images(inbound)
-
-      _ = maybe_index_known_target(state, inbound)
-
-      if LemonChannels.UserPromptSurface.capture(inbound) == true,
-        do: state,
-        else: handle_inbound_message(state, inbound)
+      if (inbound.meta[:attachments] || []) == [] do
+        continue_message(state, inbound)
+      else
+        prepare_media(inbound)
+        state
+      end
     else
       {:unauthorized, inbound} ->
         maybe_reply_pairing(inbound, state)
@@ -419,6 +415,42 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     error ->
       Logger.warning("discord inbound message handling failed: #{inspect(error)}")
       state
+  end
+
+  # Transcription and image downloads run beside the serial event queue; the
+  # prepared message comes back as its own event.
+  defp prepare_media(inbound) do
+    owner = Process.get(:discord_transport, self())
+
+    case start_task(fn ->
+           {inbound, voice_errors} = VoiceHandler.transcribe(inbound)
+
+           Enum.each(voice_errors, fn text ->
+             Outbound.send_with_components(
+               inbound.meta[:thread_id] || inbound.meta[:channel_id],
+               text,
+               [],
+               []
+             )
+           end)
+
+           send(owner, {:discord_prepared_message, Inbound.attach_images(inbound)})
+         end) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, _reason} ->
+        LemonChannels.Registry.record_status("discord", {:error, :event_failed})
+        :ok
+    end
+  end
+
+  defp continue_message(state, inbound) do
+    _ = maybe_index_known_target(state, inbound)
+
+    if LemonChannels.UserPromptSurface.capture(inbound) == true,
+      do: state,
+      else: handle_inbound_message(state, inbound)
   end
 
   defp authorize_message(inbound, state) do
@@ -2191,10 +2223,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     if is_nil(attachment) do
       respond_ephemeral(interaction, "Please attach a file to upload.")
     else
-      case FileOperations.handle_file_put(state, interaction, attachment, dest_path, force) do
-        {:ok, msg} -> respond_ephemeral(interaction, msg)
-        {:error, msg} -> respond_ephemeral(interaction, msg)
-      end
+      run_file_transfer(interaction, fn ->
+        FileOperations.handle_file_put(state, interaction, attachment, dest_path, force)
+      end)
     end
   end
 
@@ -2204,10 +2235,24 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     if is_nil(file_path) or file_path == "" do
       respond_ephemeral(interaction, "Please specify a file path.")
     else
-      case FileOperations.handle_file_get(state, interaction, file_path) do
-        {:ok, msg} -> respond_ephemeral(interaction, msg)
-        {:error, msg} -> respond_ephemeral(interaction, msg)
-      end
+      run_file_transfer(interaction, fn ->
+        FileOperations.handle_file_get(state, interaction, file_path)
+      end)
+    end
+  end
+
+  # Downloads, archives and uploads can take minutes; they run beside the
+  # serial event queue so other chats and interactions keep moving.
+  defp run_file_transfer(interaction, transfer) do
+    case start_task(fn ->
+           {_status, msg} = transfer.()
+           respond_ephemeral(interaction, msg)
+         end) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, _reason} ->
+        respond_ephemeral(interaction, "Lemon is busy right now. Try the file transfer again.")
     end
   end
 
@@ -2235,23 +2280,26 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     else
       respond_ephemeral(interaction, "Creating thread...")
 
-      # Try forum post first, fall back to regular thread
-      case create_thread_or_forum_post(channel_id, topic_name, initial_msg) do
-        {:ok, thread} ->
-          thread_id = map_get(thread, :id)
-          send_followup(interaction, "Created: <##{thread_id}>")
-          state
+      # Thread creation is platform I/O: run it beside the serial event queue.
+      _ =
+        start_task(fn ->
+          # Try forum post first, fall back to regular thread
+          case create_thread_or_forum_post(channel_id, topic_name, initial_msg) do
+            {:ok, thread} ->
+              thread_id = map_get(thread, :id)
+              send_followup(interaction, "Created: <##{thread_id}>")
 
-        {:error, reason} ->
-          Logger.warning("Discord thread creation failed: #{inspect(reason)}")
+            {:error, reason} ->
+              Logger.warning("Discord thread creation failed: #{inspect(reason)}")
 
-          send_followup(
-            interaction,
-            "Failed to create thread. Check that the bot can create threads in this channel, then try again."
-          )
+              send_followup(
+                interaction,
+                "Failed to create thread. Check that the bot can create threads in this channel, then try again."
+              )
+          end
+        end)
 
-          state
-      end
+      state
     end
   end
 
