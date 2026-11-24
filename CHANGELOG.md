@@ -168,6 +168,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Long-lived caches and tables (extension, web, capability, dedupe, auth) have
   supervised owners and survive their first caller; mutable `:persistent_term`
   use is removed (#595).
+- **Breaking:** `sessions.reset` is preview-first and confirmation-bound. A call
+  without `confirmToken` (or with `dryRun: true`) mutates nothing and returns a
+  redacted state digest (run-history count, chat state, session policy, ACP
+  metadata) plus a single-use server-side `confirmToken`; only `dryRun: false`
+  with that token resets, after re-verifying the live digest under the session
+  lifecycle fence. Each deletion is checked, and failures report
+  `retrySafe: false` without raw exception text. Clients that sent only
+  `sessionKey` must now preview and confirm. TUI `/reset` and `/session reset`
+  show the daemon preview in a confirmation modal that defaults to Cancel (#615).
 
 ### Fixed
 
@@ -200,19 +209,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
-- `sessions.reset` is preview-first and confirmation-bound: calling it without a
-  `confirmToken` (or with `dryRun: true`) mutates nothing and returns a redacted
-  state digest plus a single-use server-side `confirmToken`; confirmed resets
-  (`dryRun: false` + `confirmToken`) re-verify the live digest under the session
-  lifecycle fence and clear transient ACP run state. TUI `/reset` and
-  `/session reset` fetch the daemon preview and prompt with an interactive
-  confirmation modal defaulting to Cancel (#615).
-- Removed the shadow ACP session table and `restore_native_resume`
-  resurrection path from ACP: ACP session metadata now lives on the canonical
-  `SessionMetadataStore` record so `SessionLifecycle.delete/2` removes it,
-  post-reset ACP touches never recreate `ChatState`, and store write failures
-  after prompt submission return the run ID with `retrySafe: false` instead of
-  raising (#652).
+- ACP no longer keeps a shadow session table that wrote resume tokens back into
+  `ChatState`: ACP session metadata lives on the canonical
+  `SessionMetadataStore` record, so `SessionLifecycle.delete/2` removes it and
+  ACP touches after a reset never recreate chat state. A store write failure
+  after prompt submission returns the run ID with `retrySafe: false` instead of
+  raising. ACP sessions created before this release are not carried over;
+  start a new ACP session (#652).
 
 ### Removed
 

@@ -4,6 +4,7 @@ defmodule LemonCore.SessionLifecycleTest do
   alias LemonCore.{
     AgentIdentity,
     ChatStateStore,
+    LifecycleFenceStore,
     PolicyStore,
     RunStore,
     SessionLifecycle,
@@ -718,6 +719,59 @@ defmodule LemonCore.SessionLifecycleTest do
     after
       LemonCore.LifecycleFenceStore.release(key, gen)
     end
+  end
+
+  test "reset fails closed on an unreadable row: no preview, and a confirmation mutates nothing" do
+    key = "agent:reset_unreadable_#{unique_suffix()}:main"
+    seed_session(key, "run-reset-unreadable-#{unique_suffix()}", "hello", "world")
+    :ok = ChatStateStore.put(key, %{last_engine: "lemon", last_resume_token: "kept"})
+    :ok = PolicyStore.put_session(key, %{model: "kept-model"})
+    on_exit(fn -> cleanup_sessions([key]) end)
+
+    %{backend: LemonCore.Store.EtsBackend} = :sys.get_state(Store)
+    :sys.replace_state(Store, &%{&1 | backend: OneShotReadFault})
+
+    try do
+      # An unreadable row is never previewed as absent state.
+      OneShotReadFault.fail_next_get(:session_metadata_v1, key)
+      assert {:error, :session_store_unavailable} = SessionLifecycle.reset(key)
+
+      assert {:ok, %{confirm_token: token}} = SessionLifecycle.reset(key)
+      assert {:ok, %{generation: gen}} = LifecycleFenceStore.acquire(key, self(), :reset, "read")
+
+      try do
+        # The confirmation stops before consuming its token or mutating anything.
+        OneShotReadFault.fail_next_get(:session_metadata_v1, key)
+
+        assert {:error, :session_store_unavailable} =
+                 SessionLifecycle.reset(key,
+                   dry_run: false,
+                   confirm_token: token,
+                   fence_generation: gen
+                 )
+
+        assert {:ok, 1} = RunStore.fetch_history_count(key)
+        assert %{last_resume_token: "kept"} = ChatStateStore.get(key)
+        assert {:ok, %{model: "kept-model"}} = PolicyStore.fetch_session(key)
+
+        # The unconsumed token still confirms once the row reads again.
+        assert {:ok, %{verified: true}} =
+                 SessionLifecycle.reset(key,
+                   dry_run: false,
+                   confirm_token: token,
+                   fence_generation: gen
+                 )
+      after
+        LifecycleFenceStore.release(key, gen)
+      end
+    after
+      :persistent_term.erase({OneShotReadFault, :session_metadata_v1, key})
+      :sys.replace_state(Store, &%{&1 | backend: LemonCore.Store.EtsBackend})
+    end
+
+    assert {:ok, 0} = RunStore.fetch_history_count(key)
+    assert ChatStateStore.get(key) == nil
+    assert {:ok, nil} = PolicyStore.fetch_session(key)
   end
 
   defp seed_session(session_key, run_id, prompt, answer, events \\ [], updated_at_ms \\ nil) do

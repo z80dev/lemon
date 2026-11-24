@@ -52,6 +52,15 @@ All notable changes to `lemon_control_plane` are documented here.
   LAN deployments must explicitly configure `LEMON_CONTROL_PLANE_BIND_IP` and
   authentication. The separate node gateway defaults to `127.0.0.1:4044`;
   off-loopback OpenAI/ACP HTTP access requires explicit opt-in and dedicated tokens.
+- **Breaking:** `sessions.reset` delegates to `LemonCore.SessionLifecycle.reset/2`
+  and is preview-first. Without `confirmToken` (or with `dryRun: true`) it
+  mutates nothing and returns the state digest and a single-use `confirmToken`;
+  `dryRun: false` with that token resets under the session lifecycle fence.
+  Failures map to `unavailable`/`internal_error` with `retrySafe: false` and no
+  raw exception text (#615).
+- ACP session metadata is stored on the canonical `SessionMetadataStore` record
+  instead of a separate ACP table and is removed with the session; ACP sessions
+  created before this release are not carried over (#652).
 
 ### Fixed
 
@@ -60,6 +69,10 @@ All notable changes to `lemon_control_plane` are documented here.
   retry-safe unavailable reads, not uncertain mutations.
 - Register controller and named-node provider check/import handlers in the RPC
   method registry so clients can discover and invoke model-readiness capabilities.
+- ACP never writes a stored resume token back into `ChatState`, so a reset or
+  deleted session stays empty after a later ACP touch. Session store failures
+  fail closed, and a store write failure after prompt submission returns the
+  run ID with `retrySafe: false` instead of raising (#652).
 
 - Honor the configured HTTP/WebSocket listener IP, including isolated benchmark
   runtimes and explicitly exposed deployments.
