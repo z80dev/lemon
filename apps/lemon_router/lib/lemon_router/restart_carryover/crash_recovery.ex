@@ -18,13 +18,11 @@ defmodule LemonRouter.RestartCarryover.CrashRecovery do
   def table, do: @table
   def max_attempts, do: @max_attempts
 
-  def enabled? do
-    LemonCore.Config.Features.enabled?(LemonCore.Config.cached().features, :crash_resume)
-  end
-
   @doc false
-  def capture(%{request: %RunRequest{} = request, execution_request: command}) do
-    if enabled?(), do: capture_resumable(request, command), else: :ok
+  # `enabled?` is the `crash_resume` feature from the admission's config
+  # snapshot (`LemonRouter.SubmissionBuilder.admission_settings/0`).
+  def capture(%{request: %RunRequest{} = request, execution_request: command}, enabled?) do
+    if enabled?, do: capture_resumable(request, command), else: :ok
   end
 
   defp capture_resumable(%RunRequest{} = request, command) do

@@ -359,6 +359,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   terminal evidence no longer drops the final answer; and a timed-out crash
   recovery or carryover replay call leaves only that run pending instead of
   skipping the rest of the boot's recovery (#641).
+- A slow native follow-up issuer callback no longer stalls every router
+  submission and abort: the callback, durable-receipt compaction and presence
+  table reads run outside the run orchestrator's mailbox, and per-submission
+  routing-feedback config reads use the config cache instead of parsing TOML.
+  Callers fix run IDs before the call, and submit uses the same 20 s window as
+  abort, so a timed-out submit is outcome-unknown for that request only (#645).
+- A malformed run submission (empty or missing session key, unknown queue mode,
+  non-atom origin) or an unreadable config is refused with a definite
+  `:invalid_submission` / `:config_unavailable` before the durable admission
+  claim, instead of crashing the run orchestrator and restarting every queue.
+  The control-plane `agent` method rejects an empty or malformed `session_key`
+  as invalid params (#646).
+- `cron.run` and `cron.abort` report an unknown outcome (an unresolved earlier
+  run, or a scheduler call that timed out or exited) as `UNAVAILABLE` with
+  `RUN_OUTCOME_UNKNOWN`/`ABORT_OUTCOME_UNKNOWN`, the job or run ID and
+  `retrySafe: false`, instead of a retryable internal error, and log only a
+  bounded failure label (#620).
 
 ### Removed
 

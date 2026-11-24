@@ -136,9 +136,10 @@ defmodule LemonControlPlane.Methods.AgentIdempotencyTest do
     refute_receive {:submitted, _again}, 200
   end
 
-  @tag timeout: 60_000
+  # The coordinator outlasts the orchestrator's 20 s serialized call window.
+  @tag timeout: 90_000
   test "delayed router admission returns an unknown-outcome receipt with the fixed run id", ctx do
-    RecordingCoordinator.stall(6_000)
+    RecordingCoordinator.stall(21_000)
 
     assert {:error,
             {:unavailable, _message,
@@ -154,9 +155,9 @@ defmodule LemonControlPlane.Methods.AgentIdempotencyTest do
     refute_receive {:submitted, _again}, 300
   end
 
-  @tag timeout: 60_000
+  @tag timeout: 90_000
   test "delayed admission without an idempotency key still reports its run id", ctx do
-    RecordingCoordinator.stall(6_000)
+    RecordingCoordinator.stall(21_000)
     params = Map.delete(params(ctx), "idempotency_key")
 
     assert {:error,
