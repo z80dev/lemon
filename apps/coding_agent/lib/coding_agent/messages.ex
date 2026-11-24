@@ -1,182 +1,24 @@
 defmodule CodingAgent.Messages do
   @moduledoc """
-  Message structs and conversion functions for the coding agent.
+  Coding-agent message types and their conversion to `LemonAi.Types` messages.
 
-  This module defines the internal message types used by the coding agent
-  and provides functions to convert them to the format expected by the LemonAi library.
+  User, assistant and tool-result messages are the `LemonAi.Types` structs. The
+  coding agent adds two of its own:
 
-  ## Message Types
+  - `CustomMessage` - Extension-defined custom messages (async followups, plan
+    notices, recalled context carriers)
+  - `BranchSummaryMessage` - Summary of an abandoned branch or collapsed checkpoint
 
-  The coding agent uses several specialized message types beyond the standard
-  user/assistant/tool_result:
-
-  - `BashExecutionMessage` - Results from bash command execution
-  - `CustomMessage` - Extension-defined custom messages
-  - `BranchSummaryMessage` - Summary of git branch context
-  - `CompactionSummaryMessage` - Summary after context compaction
+  Journal maps (string keys) are turned into these structs only by
+  `CodingAgent.Session.MessageSerialization.deserialize_message/1`.
   """
 
-  # ============================================================================
-  # Content Types
-  # ============================================================================
-
-  defmodule TextContent do
-    @moduledoc "Plain text content block"
-    @type t :: %__MODULE__{
-            type: :text,
-            text: String.t()
-          }
-    defstruct type: :text, text: ""
-  end
-
-  defmodule ImageContent do
-    @moduledoc "Base64-encoded image content block"
-    @type t :: %__MODULE__{
-            type: :image,
-            data: String.t(),
-            mime_type: String.t()
-          }
-    defstruct type: :image, data: "", mime_type: "image/png"
-  end
-
-  defmodule ThinkingContent do
-    @moduledoc "Model reasoning/thinking content block"
-    @type t :: %__MODULE__{
-            type: :thinking,
-            thinking: String.t()
-          }
-    defstruct type: :thinking, thinking: ""
-  end
-
-  defmodule ToolCall do
-    @moduledoc "Tool/function call from the model"
-    @type t :: %__MODULE__{
-            type: :tool_call,
-            id: String.t(),
-            name: String.t(),
-            arguments: map()
-          }
-    defstruct type: :tool_call, id: "", name: "", arguments: %{}
-  end
-
-  @type content_block :: TextContent.t() | ImageContent.t() | ThinkingContent.t() | ToolCall.t()
-
-  # ============================================================================
-  # Usage Tracking
-  # ============================================================================
-
-  defmodule Usage do
-    @moduledoc "Token usage and cost tracking for a response"
-    @type t :: %__MODULE__{
-            input: non_neg_integer() | nil,
-            output: non_neg_integer() | nil,
-            cache_read: non_neg_integer() | nil,
-            cache_write: non_neg_integer() | nil,
-            total_tokens: non_neg_integer() | nil,
-            cost: float() | nil
-          }
-    defstruct input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0, cost: nil
-
-    @doc "Calculate total tokens only when every component is known"
-    @spec total_tokens(t()) :: non_neg_integer() | nil
-    def total_tokens(%__MODULE__{} = usage) do
-      counts = [usage.input, usage.output, usage.cache_read, usage.cache_write]
-      if Enum.all?(counts, &is_integer/1), do: Enum.sum(counts)
-    end
-  end
-
-  # ============================================================================
-  # Message Types
-  # ============================================================================
-
-  defmodule UserMessage do
-    @moduledoc "A message from the user"
-    alias CodingAgent.Messages.{ImageContent, TextContent}
-
-    @type content :: String.t() | [TextContent.t() | ImageContent.t()]
-    @type t :: %__MODULE__{
-            role: :user,
-            content: content(),
-            timestamp: integer()
-          }
-    defstruct role: :user, content: "", timestamp: 0
-  end
-
-  defmodule AssistantMessage do
-    @moduledoc "A message from the assistant/model"
-    alias CodingAgent.Messages.{TextContent, ThinkingContent, ToolCall, Usage}
-
-    @type content_block :: TextContent.t() | ThinkingContent.t() | ToolCall.t()
-    @type stop_reason :: :stop | :length | :tool_use | :error | :aborted | :redirected
-    @type t :: %__MODULE__{
-            role: :assistant,
-            content: [content_block()],
-            provider: String.t(),
-            model: String.t(),
-            api: String.t(),
-            usage: Usage.t() | nil,
-            stop_reason: stop_reason() | nil,
-            timestamp: integer()
-          }
-    defstruct role: :assistant,
-              content: [],
-              provider: "",
-              model: "",
-              api: "",
-              usage: nil,
-              stop_reason: nil,
-              timestamp: 0
-  end
-
-  defmodule ToolResultMessage do
-    @moduledoc "Result of a tool call"
-    alias CodingAgent.Messages.TextContent
-
-    @type t :: %__MODULE__{
-            role: :tool_result,
-            tool_use_id: String.t(),
-            content: [TextContent.t()],
-            trust: :trusted | :untrusted,
-            is_error: boolean(),
-            timestamp: integer()
-          }
-    defstruct role: :tool_result,
-              tool_use_id: "",
-              content: [],
-              trust: :untrusted,
-              is_error: false,
-              timestamp: 0
-  end
-
-  defmodule BashExecutionMessage do
-    @moduledoc "Result of a bash command execution"
-    @type t :: %__MODULE__{
-            role: :bash_execution,
-            command: String.t(),
-            output: String.t(),
-            exit_code: integer() | nil,
-            cancelled: boolean(),
-            truncated: boolean(),
-            full_output_path: String.t() | nil,
-            timestamp: integer(),
-            exclude_from_context: boolean()
-          }
-    defstruct role: :bash_execution,
-              command: "",
-              output: "",
-              exit_code: nil,
-              cancelled: false,
-              truncated: false,
-              full_output_path: nil,
-              timestamp: 0,
-              exclude_from_context: false
-  end
+  alias CodingAgent.Session.MessageSerialization
 
   defmodule CustomMessage do
     @moduledoc "Extension-defined custom message"
-    alias CodingAgent.Messages.{ImageContent, TextContent}
-
-    @type content :: String.t() | [TextContent.t() | ImageContent.t()]
+    @type content ::
+            String.t() | [LemonAi.Types.TextContent.t() | LemonAi.Types.ImageContent.t()]
     @type t :: %__MODULE__{
             role: :custom,
             id: String.t() | nil,
@@ -207,215 +49,45 @@ defmodule CodingAgent.Messages do
               timestamp: 0
   end
 
-  defmodule CompactionSummaryMessage do
-    @moduledoc "Summary after context compaction"
-    @type t :: %__MODULE__{
-            role: :compaction_summary,
-            summary: String.t(),
-            timestamp: integer()
-          }
-    defstruct role: :compaction_summary,
-              summary: "",
-              timestamp: 0
-  end
-
-  @type message ::
-          UserMessage.t()
-          | AssistantMessage.t()
-          | ToolResultMessage.t()
-          | BashExecutionMessage.t()
-          | CustomMessage.t()
-          | BranchSummaryMessage.t()
-          | CompactionSummaryMessage.t()
+  @type message :: LemonAi.Types.message() | CustomMessage.t() | BranchSummaryMessage.t()
 
   # ============================================================================
   # Conversion Functions
   # ============================================================================
 
   @doc """
-  Convert a list of agent messages to LLM-compatible format for the LemonAi library.
-
-  This function transforms CodingAgent message types into the standard
-  LemonAi.Types message format that can be sent to LLM providers.
+  Convert a list of agent messages to `LemonAi.Types` messages for a provider.
 
   ## Conversion Rules
 
-  - Messages with `exclude_from_context: true` are skipped
-  - `BashExecutionMessage` becomes a user message with formatted output
+  - `LemonAi.Types` user/assistant/tool-result messages pass through unchanged
   - `CustomMessage` becomes a user message
   - `CustomMessage{custom_type: "async_followup"}` becomes a user message with a provenance wrapper
-  - `BranchSummaryMessage` becomes a user message with summary in `<branch_summary>` tags
-  - `CompactionSummaryMessage` becomes a user message with summary in `<compaction_summary>` tags
-  - Standard user/assistant/tool_result messages are converted to their LemonAi.Types equivalents
+  - `BranchSummaryMessage` becomes a user message with the fenced summary in `<branch_summary>` tags
+  - Journal maps (string keys) go through `MessageSerialization.deserialize_message/1`;
+    roles it does not know are dropped, as they are on session restore
+  - Atom-keyed user/assistant/tool-result maps become their `LemonAi.Types` equivalents
   """
-  @spec to_llm([message()]) :: [LemonAi.Types.message()]
+  @spec to_llm([message() | map()]) :: [LemonAi.Types.message()]
   def to_llm(messages) when is_list(messages) do
-    messages
-    |> Enum.reject(&exclude_from_context?/1)
-    |> Enum.map(&convert_to_llm/1)
+    Enum.flat_map(messages, fn message ->
+      case convert_to_llm(message) do
+        nil -> []
+        converted -> [converted]
+      end
+    end)
   end
-
-  @doc """
-  Extract text content from a message.
-
-  Returns the concatenated text from all text content blocks in the message.
-  For simple string content, returns the string directly.
-  """
-  @spec get_text(message()) :: String.t() | nil
-  def get_text(%UserMessage{content: content}) when is_binary(content), do: content
-  def get_text(%UserMessage{content: nil}), do: nil
-
-  def get_text(%UserMessage{content: content}) when is_list(content) do
-    content
-    |> Enum.filter(&match?(%TextContent{}, &1))
-    |> Enum.map(& &1.text)
-    |> Enum.join("")
-  end
-
-  def get_text(%AssistantMessage{content: content}) do
-    content
-    |> Enum.filter(&match?(%TextContent{}, &1))
-    |> Enum.map(& &1.text)
-    |> Enum.join("")
-  end
-
-  def get_text(%ToolResultMessage{content: content}) do
-    content
-    |> Enum.filter(&match?(%TextContent{}, &1))
-    |> Enum.map(& &1.text)
-    |> Enum.join("")
-  end
-
-  def get_text(%BashExecutionMessage{output: output}), do: output
-
-  def get_text(%CustomMessage{content: content}) when is_binary(content), do: content
-
-  def get_text(%CustomMessage{content: content}) when is_list(content) do
-    content
-    |> Enum.filter(&match?(%TextContent{}, &1))
-    |> Enum.map(& &1.text)
-    |> Enum.join("")
-  end
-
-  def get_text(%BranchSummaryMessage{summary: summary}), do: summary
-  def get_text(%CompactionSummaryMessage{summary: summary}), do: summary
-
-  # Handle LemonAi.Types.UserMessage
-  def get_text(%LemonAi.Types.UserMessage{content: content}) when is_binary(content), do: content
-  def get_text(%LemonAi.Types.UserMessage{content: nil}), do: nil
-
-  def get_text(%LemonAi.Types.UserMessage{content: content}) when is_list(content) do
-    content
-    |> Enum.map(&extract_text_from_ai_content/1)
-    |> Enum.join("\n")
-  end
-
-  # Handle LemonAi.Types.AssistantMessage
-  def get_text(%LemonAi.Types.AssistantMessage{content: content}) when is_list(content) do
-    content
-    |> Enum.map(&extract_text_from_ai_content/1)
-    |> Enum.join("\n")
-  end
-
-  # Handle LemonAi.Types.ToolResultMessage
-  def get_text(%LemonAi.Types.ToolResultMessage{content: content}) when is_list(content) do
-    content
-    |> Enum.map(&extract_text_from_ai_content/1)
-    |> Enum.join("\n")
-  end
-
-  # Helper for LemonAi.Types content blocks
-  defp extract_text_from_ai_content(%LemonAi.Types.TextContent{text: text}), do: text
-  defp extract_text_from_ai_content(%LemonAi.Types.ThinkingContent{thinking: text}), do: text
-  defp extract_text_from_ai_content(%LemonAi.Types.ImageContent{}), do: "[image]"
-
-  defp extract_text_from_ai_content(%LemonAi.Types.ToolCall{name: name}),
-    do: "[tool_call: #{name}]"
-
-  defp extract_text_from_ai_content(_), do: ""
-
-  @doc """
-  Extract tool calls from an assistant message.
-
-  Supports both CodingAgent and LemonAi assistant messages, returning their
-  original tool-call structs in content order.
-  Returns an empty list for non-assistant messages.
-  """
-  @spec get_tool_calls(message() | LemonAi.Types.message()) ::
-          [ToolCall.t() | LemonAi.Types.ToolCall.t()]
-  def get_tool_calls(%AssistantMessage{content: content}) do
-    Enum.filter(content, &match?(%ToolCall{}, &1))
-  end
-
-  def get_tool_calls(%LemonAi.Types.AssistantMessage{} = message) do
-    LemonAi.get_tool_calls(message)
-  end
-
-  def get_tool_calls(_message), do: []
-
-  @doc """
-  Calculate total tokens from a Usage struct.
-
-  This is a convenience function that delegates to `Usage.total_tokens/1`.
-  """
-  @spec total_tokens(Usage.t()) :: non_neg_integer() | nil
-  def total_tokens(%Usage{} = usage), do: Usage.total_tokens(usage)
 
   # ============================================================================
   # Private Helpers
   # ============================================================================
 
-  defp exclude_from_context?(%BashExecutionMessage{exclude_from_context: true}), do: true
-  defp exclude_from_context?(_), do: false
+  defp convert_to_llm(nil), do: nil
 
   # Pass through LemonAi.Types messages unchanged - they're already in LLM format
   defp convert_to_llm(%LemonAi.Types.UserMessage{} = msg), do: msg
   defp convert_to_llm(%LemonAi.Types.AssistantMessage{} = msg), do: msg
   defp convert_to_llm(%LemonAi.Types.ToolResultMessage{} = msg), do: msg
-
-  # Convert CodingAgent.Messages types to LemonAi.Types
-  defp convert_to_llm(%UserMessage{} = msg) do
-    %LemonAi.Types.UserMessage{
-      role: :user,
-      content: convert_content(msg.content),
-      timestamp: msg.timestamp
-    }
-  end
-
-  defp convert_to_llm(%AssistantMessage{} = msg) do
-    %LemonAi.Types.AssistantMessage{
-      role: :assistant,
-      content: Enum.map(msg.content, &convert_content_block/1),
-      api: msg.api,
-      provider: msg.provider,
-      model: msg.model,
-      usage: convert_usage(msg.usage),
-      stop_reason: msg.stop_reason,
-      timestamp: msg.timestamp
-    }
-  end
-
-  defp convert_to_llm(%ToolResultMessage{} = msg) do
-    %LemonAi.Types.ToolResultMessage{
-      role: :tool_result,
-      tool_call_id: msg.tool_use_id,
-      tool_name: "",
-      content: Enum.map(msg.content, &convert_content_block/1),
-      trust: normalize_trust(msg.trust),
-      is_error: msg.is_error,
-      timestamp: msg.timestamp
-    }
-  end
-
-  defp convert_to_llm(%BashExecutionMessage{} = msg) do
-    formatted_output = format_bash_output(msg)
-
-    %LemonAi.Types.UserMessage{
-      role: :user,
-      content: formatted_output,
-      timestamp: msg.timestamp
-    }
-  end
 
   defp convert_to_llm(%CustomMessage{custom_type: "async_followup"} = msg) do
     %LemonAi.Types.UserMessage{
@@ -426,15 +98,9 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_to_llm(%CustomMessage{} = msg) do
-    content =
-      case msg.content do
-        c when is_binary(c) -> c
-        c when is_list(c) -> convert_content(c)
-      end
-
     %LemonAi.Types.UserMessage{
       role: :user,
-      content: content,
+      content: msg.content,
       timestamp: msg.timestamp
     }
   end
@@ -460,17 +126,14 @@ defmodule CodingAgent.Messages do
     }
   end
 
-  defp convert_to_llm(%CompactionSummaryMessage{} = msg) do
-    content = "<compaction_summary>\n#{msg.summary}\n</compaction_summary>"
-
-    %LemonAi.Types.UserMessage{
-      role: :user,
-      content: content,
-      timestamp: msg.timestamp
-    }
+  # Journal maps have exactly one deserializer.
+  defp convert_to_llm(%{"role" => _} = msg) do
+    msg
+    |> MessageSerialization.deserialize_message()
+    |> convert_to_llm()
   end
 
-  # Handle plain maps with "role" key for backward compatibility
+  # Atom-keyed maps built in memory by hooks and tests
   defp convert_to_llm(%{role: :user, content: content} = msg) do
     %LemonAi.Types.UserMessage{
       role: :user,
@@ -505,61 +168,8 @@ defmodule CodingAgent.Messages do
     }
   end
 
-  defp convert_to_llm(%{"role" => "user", "content" => content} = msg) do
-    %LemonAi.Types.UserMessage{
-      role: :user,
-      content: content,
-      timestamp: Map.get(msg, "timestamp", 0)
-    }
-  end
-
-  defp convert_to_llm(%{"role" => "assistant", "content" => content} = msg) do
-    %LemonAi.Types.AssistantMessage{
-      role: :assistant,
-      content: content,
-      api: Map.get(msg, "api"),
-      provider: Map.get(msg, "provider"),
-      model: Map.get(msg, "model", ""),
-      usage: Map.get(msg, "usage"),
-      stop_reason: Map.get(msg, "stop_reason"),
-      timestamp: Map.get(msg, "timestamp", 0)
-    }
-  end
-
-  defp convert_to_llm(%{"role" => "tool_result", "content" => content} = msg) do
-    %LemonAi.Types.ToolResultMessage{
-      role: :tool_result,
-      tool_call_id: Map.get(msg, "tool_call_id") || Map.get(msg, "tool_use_id", ""),
-      tool_name: Map.get(msg, "tool_name", ""),
-      content: content,
-      trust: :untrusted,
-      is_error: Map.get(msg, "is_error", false),
-      timestamp: Map.get(msg, "timestamp", 0)
-    }
-  end
-
-  defp convert_to_llm(%{"role" => "custom", "custom_type" => "async_followup"} = msg) do
-    convert_to_llm(%CustomMessage{
-      custom_type: "async_followup",
-      content: Map.get(msg, "content", ""),
-      display: Map.get(msg, "display", true),
-      details: Map.get(msg, "details"),
-      timestamp: Map.get(msg, "timestamp", 0)
-    })
-  end
-
-  defp convert_to_llm(%{"role" => "custom"} = msg) do
-    convert_to_llm(%CustomMessage{
-      custom_type: Map.get(msg, "custom_type", ""),
-      content: Map.get(msg, "content", ""),
-      display: Map.get(msg, "display", true),
-      details: Map.get(msg, "details"),
-      timestamp: Map.get(msg, "timestamp", 0)
-    })
-  end
-
   defp format_async_followup_for_llm(%CustomMessage{} = msg) do
-    content = get_text(msg) || ""
+    content = custom_text(msg.content)
     fence = markdown_code_fence(content)
     provenance = async_followup_provenance_lines(msg.details)
 
@@ -638,75 +248,14 @@ defmodule CodingAgent.Messages do
     String.duplicate("`", max(3, max_backticks + 1))
   end
 
-  defp convert_content(content) when is_binary(content), do: content
+  defp custom_text(content) when is_binary(content), do: content
 
-  defp convert_content(content) when is_list(content) do
-    Enum.map(content, &convert_content_block/1)
+  defp custom_text(content) when is_list(content) do
+    Enum.map_join(content, "", fn
+      %{type: :text, text: text} when is_binary(text) -> text
+      _ -> ""
+    end)
   end
 
-  defp convert_content_block(%TextContent{text: text}) do
-    %LemonAi.Types.TextContent{type: :text, text: text}
-  end
-
-  defp convert_content_block(%ImageContent{data: data, mime_type: mime_type}) do
-    %LemonAi.Types.ImageContent{type: :image, data: data, mime_type: mime_type}
-  end
-
-  defp convert_content_block(%ThinkingContent{thinking: thinking}) do
-    %LemonAi.Types.ThinkingContent{type: :thinking, thinking: thinking}
-  end
-
-  defp convert_content_block(%ToolCall{id: id, name: name, arguments: arguments}) do
-    %LemonAi.Types.ToolCall{type: :tool_call, id: id, name: name, arguments: arguments}
-  end
-
-  defp convert_usage(nil), do: nil
-
-  defp convert_usage(%Usage{} = usage) do
-    %LemonAi.Types.Usage{
-      input: usage.input,
-      output: usage.output,
-      cache_read: usage.cache_read,
-      cache_write: usage.cache_write,
-      total_tokens: usage.total_tokens,
-      cost: convert_cost(usage.cost)
-    }
-  end
-
-  defp convert_cost(nil), do: nil
-  defp convert_cost(cost) when is_float(cost), do: %LemonAi.Types.Cost{total: cost}
-
-  # Only an in-memory struct carrying the exact atom stays trusted.
-  defp normalize_trust(:trusted), do: :trusted
-  defp normalize_trust(_), do: :untrusted
-
-  defp format_bash_output(%BashExecutionMessage{} = msg) do
-    # Build list in reverse for O(n) performance, then reverse at end
-    parts = []
-
-    parts =
-      if msg.exit_code && msg.exit_code != 0 do
-        ["[exit code: #{msg.exit_code}]" | parts]
-      else
-        parts
-      end
-
-    parts =
-      cond do
-        msg.cancelled -> ["[cancelled]" | parts]
-        msg.truncated -> ["[truncated]" | parts]
-        true -> parts
-      end
-
-    parts =
-      if msg.output != "" do
-        [msg.output | parts]
-      else
-        parts
-      end
-
-    parts = ["$ #{msg.command}" | parts]
-
-    Enum.join(parts, "\n")
-  end
+  defp custom_text(_content), do: ""
 end

@@ -200,6 +200,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- Compaction (auto, manual and overflow recovery) works again after a
+  checkpoint/rewind or branch summary: journal entries are read through the
+  canonical message deserializer, so a `branch_summary` entry no longer crashes
+  token estimation, and compaction summaries keep each tool result's tool
+  name (#629).
 
 ### Removed
 
@@ -208,6 +213,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `LemonCore.Store.JsonlBackend` (lemon_core 0.3.0). Run
   `mix lemon.store.migrate_jsonl_to_sqlite` before upgrading a JSONL store (#608).
 - Obsolete Telegram `outbound_send_delay_ms` and poller stale-time settings (#580).
+- **Breaking** (coding_agent): the compaction-only `CodingAgent.Messages`
+  user/assistant/tool-result/bash/compaction-summary and content structs,
+  `Messages.get_text/1`, `get_tool_calls/1` and `total_tokens/1`; coding
+  messages are `LemonAi.Types` structs plus `CustomMessage` and
+  `BranchSummaryMessage` (#629).
 
 ### Security
 

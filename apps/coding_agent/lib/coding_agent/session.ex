@@ -2620,12 +2620,12 @@ defmodule CodingAgent.Session do
 
   def attach_recalled_context(%LemonAi.Types.UserMessage{content: content} = message, sections)
       when is_list(sections) do
-    %{message | content: append_recalled(content, sections, LemonAi.Types.TextContent)}
+    %{message | content: append_recalled(content, sections)}
   end
 
   def attach_recalled_context(%CustomMessage{content: content} = message, sections)
       when is_list(sections) do
-    %{message | content: append_recalled(content, sections, CodingAgent.Messages.TextContent)}
+    %{message | content: append_recalled(content, sections)}
   end
 
   def attach_recalled_context(message, _sections), do: message
@@ -2972,18 +2972,18 @@ defmodule CodingAgent.Session do
   defp recalled_begin(marker), do: "[lemon:recalled-context id=#{marker}]"
   defp recalled_end(marker), do: "[/lemon:recalled-context id=#{marker}]"
 
-  defp append_recalled(content, sections, _text_module) when is_binary(content) do
+  defp append_recalled(content, sections) when is_binary(content) do
     content <> @recalled_separator <> recalled_block(sections)
   end
 
-  defp append_recalled(content, sections, text_module) when is_list(content) do
-    content ++ [struct(text_module, type: :text, text: recalled_block(sections))]
+  defp append_recalled(content, sections) when is_list(content) do
+    content ++ [%LemonAi.Types.TextContent{type: :text, text: recalled_block(sections)}]
   end
 
   # Content that is neither a binary nor a list of blocks is a shape this module
   # did not build and cannot safely extend, so the turn goes out without the
   # attachment rather than with a message the provider will reject.
-  defp append_recalled(content, _sections, _text_module), do: content
+  defp append_recalled(content, _sections), do: content
 
   # Sections are rendered under their own headings, in the order the registry
   # returned them, inside one wrapper. One wrapper rather than one per section:

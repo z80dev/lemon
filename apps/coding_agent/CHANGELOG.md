@@ -6,9 +6,20 @@
 
 - Removed the unused `CodingAgent.Coordinator` and `ProcessManager.exec_sync/1`
   APIs. Native task execution and background `exec/1` with `poll/2` remain.
+- **Breaking:** removed the compaction-only `CodingAgent.Messages` structs
+  (`UserMessage`, `AssistantMessage`, `ToolResultMessage`, `BashExecutionMessage`,
+  `CompactionSummaryMessage`, `TextContent`, `ImageContent`, `ThinkingContent`,
+  `ToolCall`, `Usage`) and `Messages.get_text/1`, `get_tool_calls/1` and
+  `total_tokens/1`. Use the `LemonAi.Types` structs; `CustomMessage` and
+  `BranchSummaryMessage` remain. `Messages.to_llm/1` reads journal maps through
+  `MessageSerialization.deserialize_message/1` and drops unknown roles.
 
 ### Fixed
 
+- Compaction no longer fails permanently after a checkpoint/rewind or branch
+  summary: journal entries are deserialized by the canonical serializer
+  (`branch_summary` included), and compaction summaries keep tool names.
+  `Rewind.collapse_context/5` journals retained messages in serialized form.
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller
