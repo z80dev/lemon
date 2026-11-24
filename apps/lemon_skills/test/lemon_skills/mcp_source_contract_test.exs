@@ -23,14 +23,7 @@ defmodule LemonSkills.McpSourceContractTest do
        allow_tools: ["echo"],
        block_resources: ["secret://*"],
        ready_timeout_ms: 1_000,
-       timeout_ms: 2_000,
-       sampling_policy: [
-         mode: :reviewed_model,
-         reviewer: :ops_approval,
-         max_tokens: 100,
-         allowed_models: ["small"],
-         approval_timeout_ms: 500
-       ]},
+       timeout_ms: 2_000},
       {:http, "http://localhost:3000/mcp"},
       {:http, "http://localhost:3000/mcp", enabled_tools: []},
       {:http, "http://localhost:3000/mcp", enabled_tools: ["literal*", "echo"]},
@@ -75,24 +68,13 @@ defmodule LemonSkills.McpSourceContractTest do
     )
   end
 
-  test "rejects malformed filters, timeouts, and sampling policies" do
+  test "rejects malformed filters and timeouts" do
     invalid_cases = [
       {[allow_tools: [:echo]], "allow_tools must be a list of strings"},
       {[enabled_tools: nil], "enabled_tools must be a list of strings"},
       {[enabled_tools: [:echo]], "enabled_tools must be a list of strings"},
       {[ready_timeout_ms: 0], "ready_timeout_ms must be a positive integer"},
-      {[timeout_ms: "slow"], "timeout_ms must be a positive integer"},
-      {[sampling_policy: :deny], "sampling_policy must be a keyword list"},
-      {[sampling_policy: [mode: :unknown]],
-       "sampling_policy.mode must be model, reviewed_model, or deny"},
-      {[sampling_policy: [reviewer: :unknown]],
-       "sampling_policy.reviewer must be a function or ops_approval"},
-      {[sampling_policy: [max_tokens: 0]],
-       "sampling_policy.max_tokens must be a positive integer"},
-      {[sampling_policy: [allowed_models: [:small]]],
-       "sampling_policy.allowed_models must be a list of strings"},
-      {[sampling_policy: [approval_timeout_ms: 0]],
-       "sampling_policy.approval_timeout_ms must be a positive integer"}
+      {[timeout_ms: "slow"], "timeout_ms must be a positive integer"}
     ]
 
     Enum.each(invalid_cases, fn {opts, expected} ->

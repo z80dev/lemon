@@ -13,30 +13,37 @@ defmodule LemonMCP.Client.HTTP do
   and token exchanges. `:destination_pin` is a trusted, process-local option
   computed by the host before resolving credentials, never a server config field.
   Policy clients connect directly to the pinned address while retaining the
-  original Host and TLS identity. All requests reject redirects.
+  original Host and TLS identity. All requests reject redirects. OAuth
+  discovery, binding and grants are described in `LemonMCP.HTTP.OAuth`.
 
-  OAuth discovery is bound to the configured URL: the protected resource must
-  be that URL, the authorization-server `issuer` must equal the requested
-  issuer, and token/authorization endpoints must be HTTPS (or literal loopback)
-  on the issuer's origin unless an origin policy allowlists them. OAuth
-  connections are always DNS-pinned; without a policy only public addresses,
-  the server's own origin and (for a loopback server) loopback are allowed.
+  ## Requests
+
+  The handshake (including interactive OAuth) runs in `init/1`. After that the
+  client process holds only the session id, protocol version, grant and server
+  capabilities: every request runs in its own supervised worker and is
+  answered with `GenServer.reply/2`, so `state/1` and concurrent requests never
+  wait for a slow server. A request's deadline is the smaller of the caller's
+  timeout and `:timeout_ms`. When it expires the worker is killed before the
+  caller receives `{:error, :outcome_unknown}`: the request may have executed
+  and is never replayed. A caller that exits also stops its request.
+
+  A 401 on a request refreshes the grant once for all concurrent requests
+  (refresh token or client credentials) and retries each 401'd request once.
+  When only the interactive authorization-code flow could help, the request
+  fails fast with the auth-required error and authorization runs in the
+  background for later requests.
   """
 
   use GenServer
 
-  alias LemonMCP.Protocol
-  alias LemonMCP.HTTP.OriginPolicy
-
   require Logger
 
-  # Keys Lemon adds to discovered metadata; never accepted from a server.
-  @internal_metadata_keys [
-    "authorization_server_metadata",
-    "metadata_url",
-    "resource_metadata_url",
-    "www_authenticate"
-  ]
+  alias LemonMCP.HTTP.{OAuth, OriginPolicy, Transport}
+  alias LemonMCP.Protocol
+
+  # Local margin for the worker's transport deadline so the client's own
+  # deadline, which classifies the outcome, always fires first.
+  @transport_margin_ms 1_000
 
   @type client_state :: :disconnected | :initializing | :ready
 
@@ -51,31 +58,42 @@ defmodule LemonMCP.Client.HTTP do
 
   @spec list_tools(GenServer.server(), timeout()) ::
           {:ok, [Protocol.tool()]} | {:error, term()}
-  def list_tools(server, timeout \\ 30_000), do: GenServer.call(server, :list_tools, timeout)
+  def list_tools(server, timeout \\ 30_000),
+    do: request(server, :list_tools, Protocol.tool_list_request(), timeout)
 
   @spec call_tool(GenServer.server(), String.t(), map(), timeout()) ::
           {:ok, [Protocol.content_item()]} | {:error, term()}
   def call_tool(server, tool_name, arguments \\ %{}, timeout \\ 30_000) do
-    GenServer.call(server, {:call_tool, tool_name, arguments}, timeout)
+    request(
+      server,
+      :call_tool,
+      Protocol.tool_call_request(name: tool_name, arguments: arguments),
+      timeout
+    )
   end
 
   @spec list_resources(GenServer.server(), timeout()) :: {:ok, [map()]} | {:error, term()}
   def list_resources(server, timeout \\ 30_000),
-    do: GenServer.call(server, :list_resources, timeout)
+    do: request(server, :list_resources, Protocol.resource_list_request(), timeout)
 
   @spec read_resource(GenServer.server(), String.t(), timeout()) ::
           {:ok, [map()]} | {:error, term()}
-  def read_resource(server, uri, timeout \\ 30_000) do
-    GenServer.call(server, {:read_resource, uri}, timeout)
-  end
+  def read_resource(server, uri, timeout \\ 30_000),
+    do: request(server, :read_resource, Protocol.resource_read_request(uri: uri), timeout)
 
   @spec list_prompts(GenServer.server(), timeout()) :: {:ok, [map()]} | {:error, term()}
-  def list_prompts(server, timeout \\ 30_000), do: GenServer.call(server, :list_prompts, timeout)
+  def list_prompts(server, timeout \\ 30_000),
+    do: request(server, :list_prompts, Protocol.prompt_list_request(), timeout)
 
   @spec get_prompt(GenServer.server(), String.t(), map(), timeout()) ::
           {:ok, map()} | {:error, term()}
   def get_prompt(server, prompt_name, arguments \\ %{}, timeout \\ 30_000) do
-    GenServer.call(server, {:get_prompt, prompt_name, arguments}, timeout)
+    request(
+      server,
+      :get_prompt,
+      Protocol.prompt_get_request(name: prompt_name, arguments: arguments),
+      timeout
+    )
   end
 
   @spec close(GenServer.server()) :: :ok
@@ -87,6 +105,11 @@ defmodule LemonMCP.Client.HTTP do
   @spec server_capabilities(GenServer.server()) :: {:ok, map()} | {:error, :not_connected}
   def server_capabilities(server), do: GenServer.call(server, :server_capabilities)
 
+  # The client always answers at the request deadline, so the caller waits on
+  # the reply (or the client's exit) rather than a second local timer.
+  defp request(server, kind, request, timeout),
+    do: GenServer.call(server, {:request, kind, request, timeout}, :infinity)
+
   @impl true
   def init(opts) do
     config = %{
@@ -97,8 +120,7 @@ defmodule LemonMCP.Client.HTTP do
         Keyword.get(opts, :peer_owner, &LemonCore.LoopbackListener.peer_owned_by_self?/2),
       headers: Keyword.get(opts, :headers, []),
       oauth: Keyword.get(opts, :oauth, []),
-      oauth_token_cache:
-        Keyword.get(opts, :oauth_token_cache) || oauth_token_cache_from_opts(opts),
+      oauth_token_cache: Keyword.get(opts, :oauth_token_cache) || OAuth.token_cache(opts),
       client_name: Keyword.get(opts, :client_name, "lemon-mcp"),
       client_version: Keyword.get(opts, :client_version, "0.1.0"),
       capabilities: Keyword.get(opts, :capabilities, %{}),
@@ -106,30 +128,33 @@ defmodule LemonMCP.Client.HTTP do
       timeout_ms: Keyword.get(opts, :timeout_ms, 30_000)
     }
 
-    with :ok <- validate_oauth_config(config.oauth),
+    with :ok <- OAuth.validate_config(config.oauth),
          {:ok, pin} <-
            destination_pin(config.url, config.origin_policy, Keyword.get(opts, :destination_pin)),
-         :ok <- ensure_http_apps(),
+         :ok <- Transport.ensure_started(),
          {:ok, task_supervisor} <- Protocol.start_notification_supervisor(opts) do
       state =
         %{
           state: :initializing,
           task_supervisor: task_supervisor,
+          request_supervisor: nil,
           config: %{config | destination_pin: pin},
           server_info: nil,
           server_capabilities: nil,
           protocol_version: nil,
           session_id: nil,
-          oauth_access_token: nil,
-          oauth_refresh_token: nil,
-          oauth_metadata: nil,
-          oauth_issuer: nil
+          token_generation: 0,
+          requests: %{},
+          tasks: %{},
+          auth: nil
         }
-        |> load_oauth_token_cache()
+        |> Map.merge(OAuth.empty_tokens())
+        |> OAuth.load_tokens()
 
       with {:ok, state} <- initialize(state),
-           {:ok, state} <- send_initialized_notification(state) do
-        {:ok, %{state | state: :ready}}
+           {:ok, state} <- send_initialized_notification(state),
+           {:ok, request_supervisor} <- Task.Supervisor.start_link() do
+        {:ok, %{state | state: :ready, request_supervisor: request_supervisor}}
       else
         {:error, reason} ->
           Protocol.stop_notification_supervisor(task_supervisor)
@@ -142,224 +167,357 @@ defmodule LemonMCP.Client.HTTP do
 
   @impl true
   def terminate(_reason, state) do
+    state = abort_all(state)
     Protocol.stop_notification_supervisor(state.task_supervisor)
   end
 
   @impl true
-  def handle_call(:get_state, _from, state) do
-    {:reply, state.state, state}
+  def handle_call(:get_state, _from, state), do: {:reply, state.state, state}
+
+  def handle_call({:request, kind, request, timeout}, {pid, _} = from, %{state: :ready} = state) do
+    budget = min(timeout, state.config.timeout_ms)
+
+    entry = %{
+      kind: kind,
+      request: request,
+      from: from,
+      caller_ref: Process.monitor(pid),
+      deadline: System.monotonic_time(:millisecond) + budget,
+      timer: Process.send_after(self(), {:request_deadline, request.id}, budget),
+      task: nil,
+      generation: state.token_generation,
+      retried: false,
+      metadata: nil
+    }
+
+    {:noreply, dispatch(state, entry)}
   end
 
-  @impl true
-  def handle_call(:list_tools, _from, %{state: :ready} = state) do
-    {reply, state} =
-      request_response(state, Protocol.tool_list_request(), fn
-        %Protocol.ToolListResponse{result: result, error: nil} -> {:ok, result.tools}
-        other -> normalize_reply({:ok, other})
-      end)
+  def handle_call({:request, _kind, _request, _timeout}, _from, state),
+    do: {:reply, {:error, {:not_ready, state.state}}, state}
 
-    {:reply, normalize_reply(reply), state}
-  end
-
-  @impl true
-  def handle_call(:list_tools, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call({:call_tool, tool_name, arguments}, _from, %{state: :ready} = state) do
-    request = Protocol.tool_call_request(name: tool_name, arguments: arguments)
-
-    {reply, state} =
-      request_response(state, request, fn
-        %Protocol.ToolCallResponse{result: result, error: nil} ->
-          if result.isError do
-            {:error, {:tool_error, result.content}}
-          else
-            {:ok, result.content}
-          end
-
-        other ->
-          normalize_reply({:ok, other})
-      end)
-
-    {:reply, normalize_reply(reply), state}
-  end
-
-  @impl true
-  def handle_call({:call_tool, _tool_name, _arguments}, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call(:list_resources, _from, %{state: :ready} = state) do
-    {reply, state} =
-      request_response(state, Protocol.resource_list_request(), fn
-        %Protocol.ResourceListResponse{result: result, error: nil} -> {:ok, result.resources}
-        other -> normalize_reply({:ok, other})
-      end)
-
-    {:reply, normalize_reply(reply), state}
-  end
-
-  @impl true
-  def handle_call(:list_resources, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call({:read_resource, uri}, _from, %{state: :ready} = state) do
-    {reply, state} =
-      request_response(state, Protocol.resource_read_request(uri: uri), fn
-        %Protocol.ResourceReadResponse{result: result, error: nil} -> {:ok, result.contents}
-        other -> normalize_reply({:ok, other})
-      end)
-
-    {:reply, normalize_reply(reply), state}
-  end
-
-  @impl true
-  def handle_call({:read_resource, _uri}, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call(:list_prompts, _from, %{state: :ready} = state) do
-    {reply, state} =
-      request_response(state, Protocol.prompt_list_request(), fn
-        %Protocol.PromptListResponse{result: result, error: nil} -> {:ok, result.prompts}
-        other -> normalize_reply({:ok, other})
-      end)
-
-    {:reply, normalize_reply(reply), state}
-  end
-
-  @impl true
-  def handle_call(:list_prompts, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
-  def handle_call({:get_prompt, prompt_name, arguments}, _from, %{state: :ready} = state) do
-    request = Protocol.prompt_get_request(name: prompt_name, arguments: arguments)
-
-    {reply, state} =
-      request_response(state, request, fn
-        %Protocol.PromptGetResponse{result: result, error: nil} -> {:ok, result}
-        other -> normalize_reply({:ok, other})
-      end)
-
-    {:reply, normalize_reply(reply), state}
-  end
-
-  @impl true
-  def handle_call({:get_prompt, _prompt_name, _arguments}, _from, state) do
-    {:reply, {:error, {:not_ready, state.state}}, state}
-  end
-
-  @impl true
   def handle_call(:close, _from, state) do
+    state = abort_all(state)
     Protocol.stop_notification_supervisor(state.task_supervisor)
     {:reply, :ok, %{state | state: :disconnected}}
   end
 
-  @impl true
-  def handle_call(:server_info, _from, %{state: :ready, server_info: info} = state) do
-    {:reply, {:ok, info}, state}
-  end
+  def handle_call(:server_info, _from, %{state: :ready, server_info: info} = state),
+    do: {:reply, {:ok, info}, state}
+
+  def handle_call(:server_info, _from, state), do: {:reply, {:error, :not_connected}, state}
+
+  def handle_call(:server_capabilities, _from, %{state: :ready} = state),
+    do: {:reply, {:ok, state.server_capabilities || %{}}, state}
+
+  def handle_call(:server_capabilities, _from, state),
+    do: {:reply, {:error, :not_connected}, state}
 
   @impl true
-  def handle_call(:server_info, _from, state) do
-    {:reply, {:error, :not_connected}, state}
+  def handle_info({ref, result}, %{tasks: tasks} = state) when is_map_key(tasks, ref) do
+    Process.demonitor(ref, [:flush])
+    {id, tasks} = Map.pop(tasks, ref)
+    state = %{state | tasks: tasks}
+    entry = %{state.requests[id] | task: nil}
+    {:noreply, request_result(state, id, entry, result)}
   end
 
-  @impl true
-  def handle_call(
-        :server_capabilities,
-        _from,
-        %{state: :ready, server_capabilities: caps} = state
-      ) do
-    {:reply, {:ok, caps || %{}}, state}
+  def handle_info({ref, result}, %{auth: %{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, auth_result(%{state | auth: nil}, state.auth, result)}
   end
 
-  @impl true
-  def handle_call(:server_capabilities, _from, state) do
-    {:reply, {:error, :not_connected}, state}
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{tasks: tasks} = state)
+      when is_map_key(tasks, ref) do
+    {id, tasks} = Map.pop(tasks, ref)
+    {:noreply, finish(%{state | tasks: tasks}, id, {:error, :outcome_unknown})}
   end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{auth: %{ref: ref}} = state),
+    do: {:noreply, auth_result(%{state | auth: nil}, state.auth, :error)}
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    case Enum.find(state.requests, fn {_id, entry} -> entry.caller_ref == ref end) do
+      {id, entry} -> {:noreply, drop(state, id, entry)}
+      nil -> {:noreply, state}
+    end
+  end
+
+  def handle_info({:request_deadline, id}, state) do
+    case state.requests do
+      %{^id => %{task: {_ref, _pid}} = entry} ->
+        state = stop_task(state, entry)
+        {:noreply, finish(state, id, {:error, :outcome_unknown})}
+
+      %{^id => entry} ->
+        {:noreply, finish(state, id, {:error, OAuth.required_reason(state, entry.metadata)})}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
+
+  # ============================================================================
+  # Request workers
+  # ============================================================================
+
+  defp dispatch(state, entry) do
+    id = entry.request.id
+    remaining = max(entry.deadline - System.monotonic_time(:millisecond), 1)
+    ctx = worker_context(state, remaining + @transport_margin_ms)
+
+    task =
+      Task.Supervisor.async_nolink(state.request_supervisor, fn ->
+        run_request(entry.kind, entry.request, ctx)
+      end)
+
+    entry = %{entry | task: {task.ref, task.pid}, generation: state.token_generation}
+
+    %{
+      state
+      | requests: Map.put(state.requests, id, entry),
+        tasks: Map.put(state.tasks, task.ref, id)
+    }
+  end
+
+  defp worker_context(state, timeout_ms) do
+    state
+    |> Map.take([:config, :session_id, :protocol_version, :task_supervisor])
+    |> Map.merge(OAuth.tokens(state))
+    |> put_in([:config, :timeout_ms], timeout_ms)
+  end
+
+  defp run_request(kind, request, ctx) do
+    case post(request, ctx) do
+      {:ok, body, session_id} ->
+        reply =
+          with {:ok, response} <- decode_response_body(body, request.id),
+               do: Protocol.result(kind, response)
+
+        {:done, reply, session_id}
+
+      {:unauthorized, metadata} ->
+        {:unauthorized, metadata}
+
+      {:error, reason} ->
+        {:done, {:error, reason}, nil}
+    end
+  end
+
+  defp request_result(state, id, entry, {:done, reply, session_id}) do
+    state = put_session_id(state, session_id)
+    finish(%{state | requests: Map.put(state.requests, id, entry)}, id, reply)
+  end
+
+  defp request_result(state, id, entry, {:unauthorized, {:error, reason}}),
+    do: finish(%{state | requests: Map.put(state.requests, id, entry)}, id, {:error, reason})
+
+  defp request_result(state, id, entry, {:unauthorized, {:ok, metadata}}) do
+    entry = %{entry | metadata: metadata}
+    state = %{state | requests: Map.put(state.requests, id, entry)}
+
+    cond do
+      entry.retried or not OAuth.configured?(state) ->
+        finish(state, id, {:error, OAuth.required_reason(state, metadata)})
+
+      # A grant arrived after this request was sent: retry with it once.
+      entry.generation < state.token_generation ->
+        dispatch(state, %{entry | retried: true})
+
+      # Interactive authorization never runs on the request path.
+      match?(%{interactive: true}, state.auth) ->
+        finish(state, id, {:error, OAuth.required_reason(state, metadata)})
+
+      # One refresh serves every request that saw the 401.
+      is_nil(state.auth) ->
+        start_auth(state, metadata, false)
+
+      true ->
+        state
+    end
+  end
+
+  defp start_auth(state, metadata, interactive?) do
+    ctx = Map.merge(Map.take(state, [:config]), OAuth.tokens(state))
+
+    task =
+      Task.Supervisor.async_nolink(state.request_supervisor, fn ->
+        case OAuth.authorize(metadata, ctx, interactive?) do
+          {:ok, ctx} -> {:ok, OAuth.tokens(ctx)}
+          other -> other
+        end
+      end)
+
+    %{
+      state
+      | auth: %{ref: task.ref, pid: task.pid, interactive: interactive?, metadata: metadata}
+    }
+  end
+
+  defp auth_result(state, _auth, {:ok, tokens}) do
+    state = %{Map.merge(state, tokens) | token_generation: state.token_generation + 1}
+
+    Enum.reduce(parked(state), state, fn {_id, entry}, state ->
+      dispatch(state, %{entry | retried: true})
+    end)
+  end
+
+  defp auth_result(state, auth, :interactive_required) do
+    state = fail_parked(state, fn entry -> OAuth.required_reason(state, entry.metadata) end)
+    start_auth(state, auth.metadata, true)
+  end
+
+  defp auth_result(state, %{interactive: true}, _failed) do
+    Logger.warning("MCP OAuth background authorization did not complete")
+    state
+  end
+
+  defp auth_result(state, _auth, {:error, reason}), do: fail_parked(state, fn _ -> reason end)
+
+  defp auth_result(state, _auth, _failed),
+    do: fail_parked(state, fn entry -> OAuth.required_reason(state, entry.metadata) end)
+
+  defp parked(state), do: Enum.filter(state.requests, fn {_id, entry} -> is_nil(entry.task) end)
+
+  defp fail_parked(state, reason) do
+    Enum.reduce(parked(state), state, fn {id, entry}, state ->
+      finish(state, id, {:error, reason.(entry)})
+    end)
+  end
+
+  defp finish(state, id, reply) do
+    case Map.pop(state.requests, id) do
+      {nil, _requests} ->
+        state
+
+      {entry, requests} ->
+        Process.cancel_timer(entry.timer)
+        Process.demonitor(entry.caller_ref, [:flush])
+        GenServer.reply(entry.from, reply)
+        %{state | requests: requests}
+    end
+  end
+
+  defp drop(state, id, entry) do
+    state = stop_task(state, entry)
+    Process.cancel_timer(entry.timer)
+    %{state | requests: Map.delete(state.requests, id)}
+  end
+
+  # The worker is killed before its caller is answered, so nothing it would
+  # still send (a retry included) can run after the reply.
+  defp stop_task(state, %{task: {ref, pid}}) do
+    Process.exit(pid, :kill)
+    Process.demonitor(ref, [:flush])
+    %{state | tasks: Map.delete(state.tasks, ref)}
+  end
+
+  defp stop_task(state, _entry), do: state
+
+  defp abort_all(%{requests: requests} = state) do
+    state =
+      Enum.reduce(requests, state, fn {id, entry}, state ->
+        reply = if entry.task, do: :outcome_unknown, else: :connection_closed
+        state |> stop_task(entry) |> finish(id, {:error, reply})
+      end)
+
+    case state.auth do
+      %{ref: ref, pid: pid} ->
+        Process.exit(pid, :kill)
+        Process.demonitor(ref, [:flush])
+        %{state | auth: nil}
+
+      nil ->
+        state
+    end
+  end
+
+  defp abort_all(state), do: state
+
+  defp put_session_id(state, nil), do: state
+  defp put_session_id(state, session_id), do: %{state | session_id: session_id}
+
+  # ============================================================================
+  # Handshake (runs in init/1; interactive OAuth allowed)
+  # ============================================================================
 
   defp initialize(state) do
     request =
       Protocol.initialize_request(
         client_name: state.config.client_name,
         client_version: state.config.client_version,
-        capabilities: state.config.capabilities
+        capabilities: Protocol.client_capabilities(state.config.capabilities)
       )
 
-    case request_response(state, request, fn
-           %Protocol.InitializeResponse{result: result, error: nil} -> {:ok, result}
-           other -> normalize_reply({:ok, other})
-         end) do
-      {{:ok, result}, state} ->
-        {:ok,
-         %{
-           state
-           | server_info: result.serverInfo,
-             server_capabilities: result.capabilities,
-             protocol_version: result.protocolVersion
-         }}
-
-      {{:error, reason}, _state} ->
-        {:error, reason}
+    with {:ok, body, state} <- handshake_post(request, state, true),
+         {:ok, response} <- decode_response_body(body, request.id),
+         {:ok, result} <- Protocol.result(:initialize, response) do
+      {:ok,
+       %{
+         state
+         | server_info: result.serverInfo,
+           server_capabilities: result.capabilities,
+           protocol_version: result.protocolVersion
+       }}
     end
   end
 
   defp send_initialized_notification(state) do
-    notification = Protocol.initialized_notification()
-
-    case post_raw(notification, state) do
-      {:ok, _response, state} -> {:ok, state}
-      {:error, reason, _state} -> {:error, reason}
+    case handshake_post(Protocol.initialized_notification(), state, true) do
+      {:ok, _body, state} -> {:ok, state}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp request_response(state, request, mapper) do
-    with {:ok, body, state} <- post_raw(request, state),
-         {:ok, id} <- message_id(request),
-         {:ok, response} <- decode_response_body(body, id) do
-      {mapper.(response), state}
-    else
-      {:error, reason, state} -> {{:error, reason}, state}
-      {:error, reason} -> {{:error, reason}, state}
+  defp handshake_post(message, state, allow_oauth?) do
+    case post(message, state) do
+      {:ok, body, session_id} ->
+        {:ok, body, put_session_id(state, session_id)}
+
+      {:unauthorized, {:ok, metadata}} ->
+        case allow_oauth? and OAuth.authorize(metadata, state, true) do
+          {:ok, state} -> handshake_post(message, state, false)
+          {:error, reason} -> {:error, reason}
+          _ -> {:error, OAuth.required_reason(state, metadata)}
+        end
+
+      {:unauthorized, {:error, reason}} ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp post_raw(message, state) do
-    post_raw(message, state, true)
-  end
+  # ============================================================================
+  # One HTTP exchange
+  # ============================================================================
 
-  defp post_raw(message, state, allow_oauth_retry?) do
+  # `ctx` is the client state or a worker snapshot of it. Returns the response
+  # body (nil when empty) and any session id the server assigned.
+  defp post(message, ctx) do
     with {:ok, body} <- Protocol.encode(message) do
-      headers = request_headers(state)
-
-      case http_request(
+      case Transport.request(
              :post,
-             state.config.url,
-             headers,
+             ctx.config.url,
+             request_headers(ctx),
              {~c"application/json", to_charlist(body)},
-             state,
-             state.config.destination_pin
+             ctx.config,
+             ctx.config.destination_pin
            ) do
         {:ok, {{_version, status, _reason}, headers, response_body}} when status in 200..299 ->
-          state = capture_session_id(state, headers)
+          session_id = session_id(headers)
           normalized_body = String.trim(to_string(response_body))
-          content_type = response_header(headers, "content-type") || "application/json"
+          content_type = Transport.response_header(headers, "content-type") || "application/json"
 
           case Jason.decode(normalized_body) do
             {:ok, message} ->
               Protocol.dispatch_notification(
                 message,
-                state.config.notification_handler,
-                state.task_supervisor
+                ctx.config.notification_handler,
+                ctx.task_supervisor
               )
 
             _ ->
@@ -368,56 +526,29 @@ defmodule LemonMCP.Client.HTTP do
 
           cond do
             normalized_body in ["", "null"] ->
-              {:ok, nil, state}
+              {:ok, nil, session_id}
 
             String.contains?(content_type, "text/event-stream") ->
-              decode_sse_response(normalized_body, state)
+              with {:ok, data} <- decode_sse_response(normalized_body, ctx),
+                   do: {:ok, data, session_id}
 
             true ->
-              {:ok, normalized_body, state}
+              {:ok, normalized_body, session_id}
           end
 
         {:ok, {{_version, 401, reason}, headers, response_body}} ->
-          case auth_metadata(headers, state) do
-            {:ok, discovered_metadata} ->
-              metadata =
-                discovered_metadata ||
-                  state.oauth_metadata ||
-                  %{
-                    "status" => 401,
-                    "reason" => to_string(reason),
-                    "body" => to_string(response_body)
-                  }
-
-              case allow_oauth_retry? and maybe_authorize(metadata, state) do
-                {:ok, state} -> post_raw(message, state, false)
-                {:error, reason} -> {:error, reason, state}
-                :error -> {:error, auth_required_reason(state, metadata), state}
-                false -> {:error, auth_required_reason(state, metadata), state}
-              end
-
-            {:error, reason} ->
-              {:error, reason, state}
-          end
+          {:unauthorized, OAuth.challenge_metadata(headers, reason, response_body, ctx)}
 
         {:ok, {{_version, status, reason}, _headers, response_body}} ->
-          error =
-            if is_nil(state.config.origin_policy),
-              do: {:http_error, status, to_string(reason), to_string(response_body)},
-              else: :http_error
-
-          {:error, error, state}
+          if is_nil(ctx.config.origin_policy),
+            do: {:error, {:http_error, status, to_string(reason), to_string(response_body)}},
+            else: {:error, :http_error}
 
         {:error, reason} ->
-          {:error, reason, state}
+          {:error, reason}
       end
     end
   end
-
-  defp auth_required_reason(%{config: %{origin_policy: nil}}, metadata),
-    do: {:auth_required, metadata}
-
-  defp auth_required_reason(_state, _metadata), do: :auth_required
 
   defp decode_response_body(nil, _id), do: {:error, :missing_response_body}
 
@@ -434,7 +565,7 @@ defmodule LemonMCP.Client.HTTP do
     end
   end
 
-  defp decode_sse_response(body, state) do
+  defp decode_sse_response(body, ctx) do
     events =
       body
       |> parse_sse_events()
@@ -446,8 +577,8 @@ defmodule LemonMCP.Client.HTTP do
           {:ok, %{"method" => _} = message} when not is_map_key(message, "id") ->
             Protocol.dispatch_notification(
               message,
-              state.config.notification_handler,
-              state.task_supervisor
+              ctx.config.notification_handler,
+              ctx.task_supervisor
             )
 
             true
@@ -458,8 +589,8 @@ defmodule LemonMCP.Client.HTTP do
       end)
 
     case List.last(responses) do
-      %{data: data} -> {:ok, data, state}
-      nil -> {:error, :missing_sse_response, state}
+      %{data: data} -> {:ok, data}
+      nil -> {:error, :missing_sse_response}
     end
   end
 
@@ -470,29 +601,8 @@ defmodule LemonMCP.Client.HTTP do
     |> LemonMCP.Client.SSE.Stream.finalize()
   end
 
-  defp normalize_reply({:error, {:rpc_error, _error}} = error), do: error
-
-  defp normalize_reply({:error, reason}), do: {:error, reason}
-
-  defp normalize_reply({:ok, %{error: error}}) when not is_nil(error),
-    do: {:error, {:rpc_error, error}}
-
-  defp normalize_reply({:ok, value}), do: {:ok, value}
-
   defp response_id(%{id: id}), do: id
   defp response_id(_), do: nil
-
-  defp message_id(%{id: id}) when not is_nil(id), do: {:ok, id}
-  defp message_id(_), do: {:error, :missing_request_id}
-
-  defp ensure_http_apps do
-    with {:ok, _} <- Application.ensure_all_started(:inets),
-         {:ok, _} <- Application.ensure_all_started(:ssl) do
-      :ok
-    else
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   defp destination_pin(_url, nil, _pin), do: {:ok, nil}
   defp destination_pin(url, policy, nil), do: OriginPolicy.pin(url, policy)
@@ -523,1033 +633,30 @@ defmodule LemonMCP.Client.HTTP do
 
   defp destination_pin(_url, _policy, _pin), do: {:error, :invalid_destination_pin}
 
-  defp http_request(method, url, headers, body, state, pin) do
-    timeout = state.config.timeout_ms
-
-    response =
-      case pin do
-        nil -> legacy_request(method, url, headers, body, timeout)
-        pin -> pinned_request(method, url, headers, body, timeout, pin, state)
-      end
-
-    case response do
-      {:ok, {{_version, status, _reason}, _headers, _body}} when status in 300..399 ->
-        {:error, :redirect_forbidden}
-
-      {:error, :private_origin_not_owned} = error ->
-        error
-
-      {:error, reason} ->
-        if is_nil(state.config.origin_policy),
-          do: {:error, {:http_request_failed, reason}},
-          else: {:error, :http_request_failed}
-
-      response ->
-        response
-    end
-  end
-
-  # Operator networking without an origin policy keeps the default httpc
-  # profile (proxies, OS resolution) as before.
-  defp legacy_request(method, url, headers, body, timeout) do
-    request =
-      case body do
-        nil -> {to_charlist(url), headers}
-        {content_type, data} -> {to_charlist(url), headers, content_type, data}
-      end
-
-    :httpc.request(
-      method,
-      request,
-      [timeout: timeout, connect_timeout: timeout, autoredirect: false],
-      body_format: :binary
-    )
-  end
-
-  # The pin is the authorized destination: the request goes to its address on
-  # one unpooled connection while Host/TLS identity stay the pin's host.
-  defp pinned_request(method, url, headers, body, timeout, pin, state) do
-    uri = URI.parse(url)
-    url = URI.to_string(%{uri | scheme: pin.scheme, host: pin.host, port: pin.port})
-
-    headers =
-      Enum.map(headers, fn {key, value} -> {to_string(key), to_string(value)} end)
-      |> Enum.reject(fn {key, _} -> String.downcase(key) in ["host", "connection"] end)
-
-    # The body's type is authoritative, as with :httpc. A second content-type
-    # header joins into "application/json, application/json", which strict
-    # servers (Lemon Bot among them) reject as unsupported media.
-    {headers, data} =
-      case body do
-        nil ->
-          {headers, nil}
-
-        {type, data} ->
-          headers =
-            Enum.reject(headers, fn {key, _} -> String.downcase(key) == "content-type" end)
-
-          {[{"content-type", to_string(type)} | headers], data}
-      end
-
-    peer_check = if OriginPolicy.ownership_required?(pin), do: state.config.peer_owner
-
-    case LemonCore.Net.HTTP.request(method, url,
-           address: pin.address,
-           headers: headers,
-           body: data,
-           timeout_ms: timeout,
-           peer_check: peer_check
-         ) do
-      {:ok, %{status: status, headers: resp_headers, body: resp_body}} ->
-        resp_headers =
-          Enum.map(resp_headers, fn {k, v} -> {to_charlist(k), to_charlist(v)} end)
-
-        {:ok, {{~c"HTTP/1.1", status, ~c""}, resp_headers, resp_body}}
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp auth_metadata(headers, state) do
-    with header when is_binary(header) <- response_header(headers, "www-authenticate"),
-         metadata_url when is_binary(metadata_url) <- challenge_param(header, "resource_metadata"),
-         {:ok, metadata} <- fetch_resource_metadata(metadata_url, state) do
-      {:ok,
-       metadata
-       |> Map.put("www_authenticate", header)
-       |> Map.put("resource_metadata_url", metadata_url)}
-    else
-      {:error, reason} -> {:error, reason}
-      _ -> {:ok, nil}
-    end
-  end
-
-  defp fetch_resource_metadata(url, state) do
-    case fetch_metadata_json(url, state) do
-      {:ok, metadata} ->
-        # Server JSON never supplies Lemon's own enrichment fields: AS records
-        # are built only from validated discovery below.
-        metadata = Map.drop(metadata, @internal_metadata_keys)
-
-        with :ok <- validate_resource(metadata, state),
-             do: put_authorization_server_metadata(metadata, state)
-
-      {:error, metadata} when is_map(metadata) ->
-        {:ok, metadata}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  # RFC 9728 §3.3: the protected resource must be the configured MCP URL, so
-  # the server cannot choose the audience of the tokens Lemon requests.
-  defp validate_resource(%{"resource" => resource}, state) when is_binary(resource) do
-    if same_resource?(resource, state.config.url),
-      do: :ok,
-      else: {:error, :invalid_oauth_metadata}
-  end
-
-  defp validate_resource(_metadata, _state), do: {:error, :invalid_oauth_metadata}
-
-  defp same_resource?(resource, configured) do
-    with {:ok, origin} <- OriginPolicy.canonical_origin(resource),
-         {:ok, ^origin} <- OriginPolicy.canonical_origin(configured) do
-      resource_path(resource) == resource_path(configured)
-    else
-      _ -> false
-    end
-  end
-
-  defp resource_path(url) do
-    uri = URI.parse(url)
-    {if(uri.path in [nil, ""], do: "/", else: uri.path), uri.query}
-  end
-
-  defp put_authorization_server_metadata(%{"authorization_servers" => servers} = metadata, state)
-       when is_list(servers) do
-    servers
-    |> Enum.filter(&is_binary/1)
-    |> Enum.reduce_while({:ok, []}, fn issuer, {:ok, acc} ->
-      case fetch_authorization_server_metadata(issuer, state) do
-        {:ok, result} -> {:cont, {:ok, [result | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, results} ->
-        {:ok, Map.put(metadata, "authorization_server_metadata", Enum.reverse(results))}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp put_authorization_server_metadata(metadata, _state), do: {:ok, metadata}
-
-  defp fetch_authorization_server_metadata(issuer, state) do
-    with {:ok, metadata_url} <- authorization_server_metadata_url(issuer),
-         {:ok, metadata} <- fetch_metadata_json(metadata_url, state),
-         :ok <- validate_authorization_server_metadata(metadata, issuer, state) do
-      {:ok, Map.put(metadata, "metadata_url", metadata_url)}
-    else
-      {:error, metadata} when is_map(metadata) -> {:ok, Map.put(metadata, "issuer", issuer)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  # RFC 8414 §3: the issuer identifier has no query or fragment, and the
-  # returned `issuer` must be identical to the one requested.
-  defp authorization_server_metadata_url(issuer) when is_binary(issuer) do
-    uri = URI.parse(issuer)
-
-    with {:ok, _origin} <- OriginPolicy.canonical_origin(issuer),
-         nil <- uri.query,
-         nil <- uri.fragment do
-      path =
-        case uri.path do
-          nil -> ""
-          "" -> ""
-          "/" -> ""
-          path -> String.trim_trailing(path, "/")
-        end
-
-      {:ok,
-       %{uri | path: "/.well-known/oauth-authorization-server" <> path}
-       |> URI.to_string()}
-    else
-      _ -> {:error, :invalid_oauth_metadata}
-    end
-  end
-
-  defp authorization_server_metadata_url(_issuer), do: {:error, :invalid_oauth_metadata}
-
-  defp validate_authorization_server_metadata(metadata, issuer, state) do
-    with true <- Map.get(metadata, "issuer") === issuer || {:error, :invalid_oauth_metadata},
-         :ok <- validate_optional_endpoint(metadata, "token_endpoint", issuer, state) do
-      validate_optional_endpoint(metadata, "authorization_endpoint", issuer, state)
-    end
-  end
-
-  defp validate_optional_endpoint(metadata, key, issuer, state) do
-    case Map.fetch(metadata, key) do
-      :error -> :ok
-      {:ok, endpoint} -> validate_oauth_endpoint(endpoint, issuer, state)
-    end
-  end
-
-  # A token or authorization endpoint must be HTTPS (or literal loopback) and,
-  # without an operator allowlist, on the issuer's own origin; with one, its
-  # origin must be allowlisted. The authorization URL is opened by a browser,
-  # never pinned, so membership is checked here before it is exposed.
-  defp validate_oauth_endpoint(endpoint, issuer, state) when is_binary(endpoint) do
-    with {:ok, origin} <- oauth_origin(endpoint),
-         :ok <- require_secure_oauth_origin(origin),
-         {:ok, issuer_origin} <- oauth_origin(issuer) do
-      case state.config.origin_policy do
-        nil when origin == issuer_origin -> :ok
-        nil -> {:error, :origin_not_allowed}
-        policy -> OriginPolicy.authorize_origin(endpoint, policy)
-      end
-    end
-  end
-
-  defp validate_oauth_endpoint(_endpoint, _issuer, _state), do: {:error, :invalid_oauth_metadata}
-
-  defp oauth_origin(url) do
-    case OriginPolicy.canonical_origin(url) do
-      {:ok, origin} -> {:ok, origin}
-      {:error, _} -> {:error, :invalid_oauth_metadata}
-    end
-  end
-
-  defp require_secure_oauth_origin(origin) do
-    case URI.parse(origin) do
-      %URI{scheme: "https"} -> :ok
-      %URI{scheme: "http", host: host} -> loopback_or_insecure(host)
-      _ -> {:error, :insecure_oauth_endpoint}
-    end
-  end
-
-  defp loopback_or_insecure(host) do
-    if LemonCore.LoopbackListener.literal_loopback?(host),
-      do: :ok,
-      else: {:error, :insecure_oauth_endpoint}
-  end
-
-  # Every OAuth discovery and token connection is HTTPS (or literal loopback)
-  # and address-pinned. The operator policy applies when configured; otherwise
-  # destinations must be public, except the configured server's own origin and,
-  # for a literal-loopback server, other literal-loopback origins.
-  defp oauth_pin(url, state) do
-    with {:ok, origin} <- oauth_origin(url),
-         :ok <- require_secure_oauth_origin(origin) do
-      OriginPolicy.pin(url, state.config.origin_policy || implicit_oauth_policy(origin, state))
-    end
-  end
-
-  defp implicit_oauth_policy(origin, state) do
-    approved =
-      case OriginPolicy.canonical_origin(state.config.url) do
-        {:ok, ^origin} ->
-          [origin]
-
-        {:ok, server_origin} ->
-          if loopback_origin?(server_origin) and loopback_origin?(origin),
-            do: [origin],
-            else: []
-
-        _ ->
-          []
-      end
-
-    %{allowed_origins: [origin], approved_private_origins: approved}
-  end
-
-  defp loopback_origin?(origin),
-    do: LemonCore.LoopbackListener.literal_loopback?(URI.parse(origin).host)
-
-  defp oauth_http_request(method, url, headers, body, state) do
-    with {:ok, pin} <- oauth_pin(url, state) do
-      http_request(method, url, headers, body, state, pin)
-    end
-  end
-
-  defp fetch_metadata_json(url, state) do
-    headers = http_headers([{"accept", "application/json"}])
-
-    case oauth_http_request(:get, url, headers, nil, state) do
-      {:ok, {{_version, status, _reason}, _headers, body}} when status in 200..299 ->
-        case Jason.decode(to_string(body)) do
-          {:ok, metadata} when is_map(metadata) ->
-            {:ok, metadata}
-
-          _ ->
-            if is_nil(state.config.origin_policy),
-              do: {:error, %{"metadata_error" => "invalid_json"}},
-              else: {:error, :invalid_metadata}
-        end
-
-      {:ok, {{_version, status, reason}, _headers, _body}} ->
-        if is_nil(state.config.origin_policy),
-          do:
-            {:error,
-             %{"metadata_error" => "http_#{status}", "metadata_error_reason" => to_string(reason)}},
-          else: {:error, :metadata_http_error}
-
-      {:error, {:http_request_failed, reason}} ->
-        {:error, %{"metadata_error" => inspect(reason)}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp challenge_param(header, name) do
-    Regex.run(~r/(?:^|[, ])#{Regex.escape(name)}="([^"]+)"/, header, capture: :all_but_first)
-    |> case do
-      [value] -> value
-      _ -> nil
-    end
-  end
-
-  defp maybe_authorize(metadata, state) do
-    with {:ok, oauth} <- oauth_options(state.config.oauth),
-         {:ok, target} <- oauth_target(metadata, state),
-         :ok <- require_bound_issuer(target, state),
-         :ok <- require_operator_issuer(target, oauth, state) do
-      case maybe_fetch_refresh_token(target, oauth, state) do
-        {:ok, token} ->
-          {:ok, put_oauth_token(state, metadata, target, token)}
-
-        {:error, reason} ->
-          {:error, reason}
-
-        :error ->
-          fetch_new_token(target, metadata, oauth, state)
-      end
-    else
-      {:error, reason} -> {:error, reason}
-      _ -> :error
-    end
-  end
-
-  # Credentials obtained from one issuer are never sent to another: once a
-  # token is held, an issuer change fails before refresh or client secrets
-  # are used, and requires the operator to re-authorize (clear the cache).
-  defp require_bound_issuer(_target, %{oauth_issuer: nil}), do: :ok
-  defp require_bound_issuer(%{issuer: issuer}, %{oauth_issuer: issuer}), do: :ok
-  defp require_bound_issuer(_target, _state), do: {:error, :oauth_issuer_changed}
-
-  # Operator-supplied credentials go only to an issuer the operator chose: the
-  # configured `oauth.issuer` exactly, or, without one, an issuer on the
-  # configured server's own origin (client secrets only; a configured refresh
-  # token always requires `oauth.issuer`, enforced at startup).
-  defp require_operator_issuer(%{issuer: discovered}, oauth, state) do
-    case Keyword.get(oauth, :issuer) do
-      issuer when is_binary(issuer) ->
-        if discovered === issuer, do: :ok, else: {:error, :oauth_issuer_mismatch}
-
-      _ ->
-        if bearer_token?(Keyword.get(oauth, :client_secret)) and
-             OriginPolicy.canonical_origin(discovered) !=
-               OriginPolicy.canonical_origin(state.config.url),
-           do: {:error, :oauth_issuer_required},
-           else: :ok
-    end
-  end
-
-  defp validate_oauth_config(oauth) do
-    case oauth_options(oauth) do
-      {:ok, oauth} ->
-        case Keyword.get(oauth, :issuer) do
-          nil ->
-            if bearer_token?(Keyword.get(oauth, :refresh_token)),
-              do: {:error, :oauth_issuer_required},
-              else: :ok
-
-          issuer when is_binary(issuer) ->
-            case authorization_server_metadata_url(issuer) do
-              {:ok, _url} -> :ok
-              _ -> {:error, :invalid_oauth_issuer}
-            end
-
-          _ ->
-            {:error, :invalid_oauth_issuer}
-        end
-
-      :error ->
-        :ok
-    end
-  end
-
-  # Re-validates metadata at use, so cached metadata is held to the same
-  # binding as freshly discovered metadata. Endpoints come only from an
-  # issuer's authorization-server metadata, never the protected resource.
-  defp oauth_target(%{"resource" => _} = metadata, state) do
-    with :ok <- validate_resource(metadata, state),
-         %{"issuer" => issuer, "token_endpoint" => token_endpoint} = server <-
-           first_authorization_server(metadata),
-         :ok <- validate_oauth_endpoint(token_endpoint, issuer, state),
-         :ok <- validate_optional_endpoint(server, "authorization_endpoint", issuer, state) do
-      {:ok,
-       %{
-         issuer: issuer,
-         token_endpoint: token_endpoint,
-         authorization_endpoint: Map.get(server, "authorization_endpoint"),
-         resource: state.config.url
-       }}
-    else
-      nil -> :error
-      {:error, reason} -> {:error, reason}
-      _ -> {:error, :invalid_oauth_metadata}
-    end
-  end
-
-  defp oauth_target(_metadata, _state), do: :error
-
-  defp first_authorization_server(%{"authorization_server_metadata" => servers})
-       when is_list(servers) do
-    Enum.find(servers, &(is_map(&1) and Map.has_key?(&1, "token_endpoint")))
-  end
-
-  defp first_authorization_server(_metadata), do: nil
-
-  defp fetch_new_token(target, metadata, oauth, state) do
-    cond do
-      authorization_code_provider?(oauth) ->
-        case fetch_authorization_code_token(target, oauth, state) do
-          {:ok, token} -> {:ok, put_oauth_token(state, metadata, target, token)}
-          {:error, reason} -> {:error, reason}
-          :error -> :error
-        end
-
-      client_credentials_oauth?(oauth) ->
-        case fetch_client_credentials_token(target, oauth, state) do
-          {:ok, token} -> {:ok, put_oauth_token(state, metadata, target, token)}
-          {:error, reason} -> {:error, reason}
-          :error -> :error
-        end
-
-      true ->
-        :error
-    end
-  end
-
-  defp oauth_options(oauth) when is_map(oauth) do
-    oauth
-    |> Enum.map(fn {key, value} -> {normalize_oauth_key(key), value} end)
-    |> oauth_options()
-  end
-
-  defp oauth_options(oauth) when is_list(oauth) do
-    client_id = Keyword.get(oauth, :client_id)
-
-    if is_binary(client_id) and client_id != "" do
-      {:ok, oauth}
-    else
-      :error
-    end
-  end
-
-  defp oauth_options(_oauth), do: :error
-
-  defp oauth_token_cache_from_opts(opts) do
-    loader = Keyword.get(opts, :oauth_token_loader)
-    persister = Keyword.get(opts, :oauth_token_persister)
-
-    case {loader, persister} do
-      {load, save} when is_function(load, 0) and is_function(save, 1) ->
-        [load: load, save: save]
-
-      {load, nil} when is_function(load, 0) ->
-        [load: load]
-
-      {nil, save} when is_function(save, 1) ->
-        [save: save]
-
-      _ ->
-        nil
-    end
-  end
-
-  defp client_credentials_oauth?(oauth) do
-    bearer_token?(Keyword.get(oauth, :client_id)) and
-      bearer_token?(Keyword.get(oauth, :client_secret))
-  end
-
-  defp authorization_code_provider?(oauth) do
-    provider = authorization_code_provider(oauth)
-    is_function(provider, 1) or is_function(provider, 0)
-  end
-
-  defp authorization_code_provider(oauth) do
-    Keyword.get(oauth, :authorization_code_provider) || Keyword.get(oauth, :auth_code_provider)
-  end
-
-  defp normalize_oauth_key(key) when is_atom(key), do: key
-
-  defp normalize_oauth_key("client_id"), do: :client_id
-  defp normalize_oauth_key("client-secret"), do: :client_secret
-  defp normalize_oauth_key("client_secret"), do: :client_secret
-  defp normalize_oauth_key("redirect_uri"), do: :redirect_uri
-  defp normalize_oauth_key("redirect-uri"), do: :redirect_uri
-  defp normalize_oauth_key("scope"), do: :scope
-  defp normalize_oauth_key("issuer"), do: :issuer
-  defp normalize_oauth_key("scopes"), do: :scopes
-  defp normalize_oauth_key("refresh_token"), do: :refresh_token
-  defp normalize_oauth_key("refresh-token"), do: :refresh_token
-  defp normalize_oauth_key("token_auth_method"), do: :token_auth_method
-  defp normalize_oauth_key("token-auth-method"), do: :token_auth_method
-  defp normalize_oauth_key("authorization_code_provider"), do: :authorization_code_provider
-  defp normalize_oauth_key("authorization-code-provider"), do: :authorization_code_provider
-  defp normalize_oauth_key("auth_code_provider"), do: :auth_code_provider
-  defp normalize_oauth_key("auth-code-provider"), do: :auth_code_provider
-  defp normalize_oauth_key(key), do: key
-
-  defp fetch_client_credentials_token(target, oauth, state) do
-    params = %{
-      "grant_type" => "client_credentials",
-      "client_id" => Keyword.fetch!(oauth, :client_id)
-    }
-
-    case put_client_auth(params, oauth) do
-      {:ok, params, auth_headers} ->
-        body =
-          params
-          |> maybe_put_scope(oauth)
-          |> maybe_put_resource(target)
-          |> URI.encode_query()
-
-        headers =
-          http_headers(
-            [
-              {"accept", "application/json"},
-              {"content-type", "application/x-www-form-urlencoded"}
-            ] ++ auth_headers
-          )
-
-        case oauth_token_request(target.token_endpoint, headers, body, state) do
-          {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
-            decode_oauth_token(response_body)
-
-          {:error, reason} ->
-            {:error, reason}
-
-          _ ->
-            :error
-        end
-
-      :error ->
-        :error
-    end
-  end
-
-  defp fetch_authorization_code_token(target, oauth, state) do
-    with {:ok, authorization_request} <- build_authorization_request(target, oauth),
-         {:ok, code} <- request_authorization_code(oauth, authorization_request) do
-      params = %{
-        "grant_type" => "authorization_code",
-        "code" => code,
-        "client_id" => Keyword.fetch!(oauth, :client_id),
-        "code_verifier" => authorization_request.code_verifier
-      }
-
-      params =
-        case Keyword.get(oauth, :redirect_uri) do
-          uri when is_binary(uri) and uri != "" -> Map.put(params, "redirect_uri", uri)
-          _ -> params
-        end
-
-      case put_client_auth(params, oauth) do
-        {:ok, params, auth_headers} ->
-          body =
-            params
-            |> maybe_put_scope(oauth)
-            |> maybe_put_resource(target)
-            |> URI.encode_query()
-
-          headers =
-            http_headers(
-              [
-                {"accept", "application/json"},
-                {"content-type", "application/x-www-form-urlencoded"}
-              ] ++ auth_headers
-            )
-
-          case oauth_token_request(target.token_endpoint, headers, body, state) do
-            {:ok, {{_version, status, _reason}, _headers, response_body}}
-            when status in 200..299 ->
-              decode_oauth_token(response_body)
-
-            {:error, reason} ->
-              {:error, reason}
-
-            _ ->
-              :error
-          end
-
-        :error ->
-          :error
-      end
-    else
-      :error -> :error
-    end
-  end
-
-  defp build_authorization_request(target, oauth) do
-    with endpoint when is_binary(endpoint) <- target.authorization_endpoint,
-         {:ok, verifier, challenge} <- pkce_pair() do
-      state = authorization_state()
-
-      params = %{
-        "response_type" => "code",
-        "client_id" => Keyword.fetch!(oauth, :client_id),
-        "state" => state,
-        "code_challenge" => challenge,
-        "code_challenge_method" => "S256"
-      }
-
-      params =
-        case Keyword.get(oauth, :redirect_uri) do
-          uri when is_binary(uri) and uri != "" -> Map.put(params, "redirect_uri", uri)
-          _ -> params
-        end
-
-      params =
-        params
-        |> maybe_put_scope(oauth)
-        |> maybe_put_resource(target)
-
-      {:ok,
-       %{
-         authorization_url: endpoint <> "?" <> URI.encode_query(params),
-         authorization_endpoint: endpoint,
-         client_id: Keyword.fetch!(oauth, :client_id),
-         code_challenge: challenge,
-         code_challenge_method: "S256",
-         code_verifier: verifier,
-         redirect_uri: Keyword.get(oauth, :redirect_uri),
-         resource: target.resource,
-         scope: Map.get(params, "scope"),
-         state: state
-       }}
-    else
-      _ -> :error
-    end
-  end
-
-  defp request_authorization_code(oauth, authorization_request) do
-    provider = authorization_code_provider(oauth)
-
-    result =
-      cond do
-        is_function(provider, 1) -> provider.(authorization_request)
-        is_function(provider, 0) -> provider.()
-        true -> :error
-      end
-
-    normalize_authorization_code_result(result, authorization_request.state)
-  end
-
-  # The provider must echo the request state: a bare code is never accepted.
-  defp normalize_authorization_code_result({:ok, %{code: code, state: state}}, expected_state),
-    do: matched_authorization_code(code, state, expected_state)
-
-  defp normalize_authorization_code_result(
-         {:ok, %{"code" => code, "state" => state}},
-         expected_state
-       ),
-       do: matched_authorization_code(code, state, expected_state)
-
-  defp normalize_authorization_code_result(_result, _state), do: :error
-
-  defp matched_authorization_code(code, state, expected_state)
-       when is_binary(code) and code != "" and is_binary(state) and is_binary(expected_state) and
-              byte_size(state) == byte_size(expected_state) do
-    if :crypto.hash_equals(state, expected_state), do: {:ok, code}, else: :error
-  end
-
-  defp matched_authorization_code(_code, _state, _expected_state), do: :error
-
-  defp pkce_pair do
-    verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-
-    challenge =
-      :crypto.hash(:sha256, verifier)
-      |> Base.url_encode64(padding: false)
-
-    {:ok, verifier, challenge}
-  end
-
-  defp authorization_state do
-    :crypto.strong_rand_bytes(16)
-    |> Base.url_encode64(padding: false)
-  end
-
-  defp maybe_fetch_refresh_token(target, oauth, state) do
-    refresh_token =
-      cond do
-        bearer_token?(state.oauth_refresh_token) -> state.oauth_refresh_token
-        bearer_token?(Keyword.get(oauth, :refresh_token)) -> Keyword.get(oauth, :refresh_token)
-        true -> nil
-      end
-
-    if bearer_token?(refresh_token) do
-      fetch_refresh_token(target, oauth, refresh_token, state)
-    else
-      :error
-    end
-  end
-
-  defp fetch_refresh_token(target, oauth, refresh_token, state) do
-    params = %{
-      "grant_type" => "refresh_token",
-      "refresh_token" => refresh_token,
-      "client_id" => Keyword.fetch!(oauth, :client_id)
-    }
-
-    case put_client_auth(params, oauth) do
-      {:ok, params, auth_headers} ->
-        body =
-          params
-          |> maybe_put_scope(oauth)
-          |> maybe_put_resource(target)
-          |> URI.encode_query()
-
-        headers =
-          http_headers(
-            [
-              {"accept", "application/json"},
-              {"content-type", "application/x-www-form-urlencoded"}
-            ] ++ auth_headers
-          )
-
-        case oauth_token_request(target.token_endpoint, headers, body, state) do
-          {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
-            decode_oauth_token(response_body)
-
-          {:error, reason} ->
-            {:error, reason}
-
-          _ ->
-            :error
-        end
-
-      :error ->
-        :error
-    end
-  end
-
-  # The endpoint was validated against its issuer; this connection is pinned
-  # before any client credential is written. Pin and policy errors surface.
-  defp oauth_token_request(url, headers, body, state) do
-    case oauth_http_request(
-           :post,
-           url,
-           headers,
-           {~c"application/x-www-form-urlencoded", to_charlist(body)},
-           state
-         ) do
-      {:error, {:http_request_failed, _reason}} -> :error
-      response -> response
-    end
-  end
-
-  defp put_oauth_token(state, metadata, target, token) do
-    refresh_token =
-      case Map.get(token, :refresh_token) do
-        value when is_binary(value) and value != "" -> value
-        _ -> state.oauth_refresh_token
-      end
-
-    state = %{
-      state
-      | oauth_access_token: token.access_token,
-        oauth_refresh_token: refresh_token,
-        oauth_metadata: metadata,
-        oauth_issuer: target.issuer
-    }
-
-    # The fresh token is used for this connection either way; a failed save is
-    # reported so a rotated refresh token is not lost silently. Only the
-    # error's tag is logged: tokens and the server URL stay out of logs.
-    case persist_oauth_token_cache(state) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning(
-          "MCP OAuth token was refreshed but could not be saved to its token cache " <>
-            "(#{inspect(reason)}); the next connection may need to authorize again"
-        )
-    end
-
-    state
-  end
-
-  defp load_oauth_token_cache(state) do
-    case cache_load(state.config.oauth_token_cache) do
-      {:ok, token} -> apply_cached_oauth_token(state, token)
-      _ -> state
-    end
-  end
-
-  defp cache_load(nil), do: :error
-
-  defp cache_load(load) when is_function(load, 0),
-    do: normalize_cached_oauth_token(safe_call(load))
-
-  defp cache_load(cache) when is_list(cache) do
-    case Keyword.get(cache, :load) do
-      load when is_function(load, 0) -> cache_load(load)
-      _ -> :error
-    end
-  end
-
-  defp cache_load(_cache), do: :error
-
-  defp safe_call(fun) do
-    fun.()
-  rescue
-    _ -> :error
-  catch
-    _, _ -> :error
-  end
-
-  defp normalize_cached_oauth_token({:ok, token}), do: normalize_cached_oauth_token(token)
-
-  defp normalize_cached_oauth_token(token) when is_map(token) do
-    access_token = Map.get(token, :access_token) || Map.get(token, "access_token")
-    refresh_token = Map.get(token, :refresh_token) || Map.get(token, "refresh_token")
-    metadata = Map.get(token, :metadata) || Map.get(token, "metadata")
-    issuer = Map.get(token, :issuer) || Map.get(token, "issuer")
-    client_id = Map.get(token, :client_id) || Map.get(token, "client_id")
-
-    if bearer_token?(access_token) or bearer_token?(refresh_token) do
-      {:ok,
-       %{
-         access_token: access_token,
-         refresh_token: refresh_token,
-         metadata: if(is_map(metadata), do: metadata, else: nil),
-         issuer: issuer,
-         client_id: client_id
-       }}
-    else
-      :error
-    end
-  end
-
-  defp normalize_cached_oauth_token(_token), do: :error
-
-  # A cached grant is usable only with the issuer and client that issued it.
-  # An entry recorded for another client is ignored. One without a recorded
-  # issuer and client keeps only its access token (sent to the MCP server,
-  # never an issuer); its refresh token and metadata are not trusted.
-  defp apply_cached_oauth_token(state, token) do
-    client_id = configured_client_id(state)
-
-    cond do
-      not is_nil(token.client_id) and token.client_id != client_id ->
-        state
-
-      is_binary(client_id) and token.client_id == client_id and is_binary(token.issuer) and
-          token.issuer != "" ->
-        %{
-          state
-          | oauth_access_token: token.access_token,
-            oauth_refresh_token: token.refresh_token,
-            oauth_metadata: token.metadata,
-            oauth_issuer: token.issuer
-        }
-
-      true ->
-        %{state | oauth_access_token: token.access_token}
-    end
-  end
-
-  defp configured_client_id(state) do
-    case oauth_options(state.config.oauth) do
-      {:ok, oauth} -> Keyword.get(oauth, :client_id)
-      _ -> nil
-    end
-  end
-
-  defp persist_oauth_token_cache(%{config: %{oauth_token_cache: nil}}), do: :ok
-
-  defp persist_oauth_token_cache(state) do
-    payload = %{
-      access_token: state.oauth_access_token,
-      refresh_token: state.oauth_refresh_token,
-      metadata: state.oauth_metadata,
-      issuer: state.oauth_issuer,
-      client_id: configured_client_id(state)
-    }
-
-    case cache_save(state.config.oauth_token_cache, payload) do
-      :ok -> :ok
-      {:ok, _} -> :ok
-      :no_save -> :ok
-      {:error, reason} when is_atom(reason) -> {:error, reason}
-      _failed -> {:error, :token_cache_save_failed}
-    end
-  end
-
-  defp cache_save(save, payload) when is_function(save, 1),
-    do: safe_call(fn -> save.(payload) end)
-
-  defp cache_save(cache, payload) when is_list(cache) do
-    case Keyword.get(cache, :save) do
-      save when is_function(save, 1) -> cache_save(save, payload)
-      _ -> :no_save
-    end
-  end
-
-  defp cache_save(_cache, _payload), do: :no_save
-
-  defp put_client_auth(params, oauth) do
-    case token_auth_method(oauth) do
-      :client_secret_post ->
-        case Keyword.get(oauth, :client_secret) do
-          secret when is_binary(secret) and secret != "" ->
-            {:ok, Map.put(params, "client_secret", secret), []}
-
-          _ ->
-            {:ok, params, []}
-        end
-
-      :client_secret_basic ->
-        case Keyword.get(oauth, :client_secret) do
-          secret when is_binary(secret) and secret != "" ->
-            credentials = Base.encode64("#{Keyword.fetch!(oauth, :client_id)}:#{secret}")
-            {:ok, Map.delete(params, "client_id"), [{"authorization", "Basic " <> credentials}]}
-
-          _ ->
-            :error
-        end
-
-      :error ->
-        :error
-    end
-  end
-
-  defp token_auth_method(oauth) do
-    case Keyword.get(oauth, :token_auth_method, :client_secret_post) do
-      method when method in [:client_secret_post, "client_secret_post", "post"] ->
-        :client_secret_post
-
-      method when method in [:client_secret_basic, :basic, "client_secret_basic", "basic"] ->
-        :client_secret_basic
-
-      _ ->
-        :error
-    end
-  end
-
-  defp maybe_put_scope(params, oauth) do
-    scope =
-      cond do
-        is_binary(Keyword.get(oauth, :scope)) -> Keyword.get(oauth, :scope)
-        is_list(Keyword.get(oauth, :scopes)) -> Enum.join(Keyword.get(oauth, :scopes), " ")
-        true -> nil
-      end
-
-    if is_binary(scope) and scope != "", do: Map.put(params, "scope", scope), else: params
-  end
-
-  defp maybe_put_resource(params, %{resource: resource}),
-    do: Map.put(params, "resource", resource)
-
-  defp decode_oauth_token(response_body) do
-    with {:ok, %{"access_token" => token} = response} <- Jason.decode(to_string(response_body)),
-         true <- is_binary(token) and token != "",
-         token_type <- Map.get(response, "token_type", "Bearer"),
-         true <- String.downcase(to_string(token_type)) == "bearer" do
-      {:ok,
-       %{
-         access_token: token,
-         refresh_token: Map.get(response, "refresh_token")
-       }}
-    else
-      _ -> :error
-    end
-  end
-
-  defp request_headers(state) do
+  defp request_headers(ctx) do
     base = [
       {"accept", "application/json, text/event-stream"},
       {"content-type", "application/json"}
     ]
 
     base =
-      if state.protocol_version do
-        [{"mcp-protocol-version", state.protocol_version} | base]
-      else
-        base
-      end
+      if ctx.protocol_version,
+        do: [{"mcp-protocol-version", ctx.protocol_version} | base],
+        else: base
+
+    base = if ctx.session_id, do: [{"mcp-session-id", ctx.session_id} | base], else: base
+    configured_headers = ctx.config.headers
 
     base =
-      if state.session_id do
-        [{"mcp-session-id", state.session_id} | base]
-      else
-        base
-      end
-
-    configured_headers = state.config.headers
-
-    base =
-      if bearer_token?(state.oauth_access_token) and
+      if OAuth.bearer_token?(ctx.oauth_access_token) and
            not has_header?(configured_headers, "authorization") do
-        [{"authorization", "Bearer " <> state.oauth_access_token} | base]
+        [{"authorization", "Bearer " <> ctx.oauth_access_token} | base]
       else
         base
       end
 
-    http_headers(base ++ configured_headers)
+    Transport.headers(base ++ configured_headers)
   end
-
-  defp bearer_token?(token), do: is_binary(token) and token != ""
 
   defp has_header?(headers, name) do
     needle = String.downcase(name)
@@ -1560,29 +667,10 @@ defmodule LemonMCP.Client.HTTP do
     end)
   end
 
-  defp capture_session_id(state, headers) do
-    case response_header(headers, "mcp-session-id") do
-      nil -> state
-      "" -> state
-      session_id -> %{state | session_id: session_id}
+  defp session_id(headers) do
+    case Transport.response_header(headers, "mcp-session-id") do
+      "" -> nil
+      session_id -> session_id
     end
-  end
-
-  defp response_header(headers, name) do
-    needle = String.downcase(name)
-
-    Enum.find_value(headers, fn
-      {key, value} ->
-        if key |> to_string() |> String.downcase() == needle do
-          to_string(value)
-        end
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp http_headers(headers) do
-    Enum.map(headers, fn {key, value} -> {to_charlist(key), to_charlist(value)} end)
   end
 end

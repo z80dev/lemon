@@ -20,7 +20,7 @@ and [skills integration](../../docs/skills.md#mcp-model-context-protocol-server-
   Do not expose raw process output in public errors or confuse it with protocol
   success. Maintain bounded parsing and request identity.
 
-## Authentication and sampling
+## Authentication and server requests
 
 - HTTP OAuth discovers protected-resource/authorization metadata with
   metadata-only headers. Never forward configured MCP auth headers or bearer
@@ -44,12 +44,13 @@ and [skills integration](../../docs/skills.md#mcp-model-context-protocol-server-
   Lemon secret storage. Higher layers inject those services.
 - Tokens are process-local unless the caller supplies token-cache load/save
   callbacks. Persist successful exchanges/rotations through that boundary.
-- Stdio sampling is opt-in. Advertise it only when `sampling_policy` or an
-  explicit handler can answer requests. Prefer reviewed-model policy with local
-  model/token bounds and redacted review before a delegate sees raw params.
-- `LemonSkills.McpSource` may bridge review to `ExecApprovals`. Approval metadata
-  contains hashes, model/token/message counts and kinds, not raw request text.
-  A low-level `sampling_handler` caller owns equivalent review/policy itself.
+- Lemon answers no server-to-client request: `sampling/createMessage` and every
+  other server request get method-not-found, and no handshake advertises
+  `sampling`. Do not add a sampling path without a real delegate and tests.
+- HTTP/SSE requests run in per-request workers; the client process holds only
+  session/grant/capability state. A deadline kills the worker before replying
+  `:outcome_unknown`; a 401 refresh is single-flight and interactive re-auth
+  never runs on a request path.
 - Unsupported remote resources/prompts return protocol errors; do not fabricate
   support or silently reinterpret failures as valid empty results.
 
