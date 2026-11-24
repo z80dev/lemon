@@ -342,6 +342,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `automation.run_retention_per_job` is now the only run-history limit. The
   cron audit log is capped at the newest 10,000 events, pruned hourly, and
   `cron.audit` pages with `beforeMs`/`nextBeforeMs` (#675).
+- Channel replies that hit a sentence end near the chunk limit no longer crash
+  or hang the outbox: the chunker counts sentence breaks in graphemes, always
+  makes progress and rejects a non-positive chunk size, and the outbox splits
+  replies in the enqueueing process instead of its queue owner (#627).
+- Telegram replies are sized by their rendered UTF-16 length (and their
+  Markdown source), so padded tables and ZWJ emoji no longer exceed the
+  4096-unit limit and get rejected. Splitting never cuts a code fence or a
+  table row: oversized fences become several closed fences and oversized
+  tables repeat their header in every message (#651).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

@@ -88,7 +88,7 @@ affect a run. Scheduled runs and direct notifications do not start typing.
 
 **Semantic outbound**: Router emits `LemonCore.DeliveryIntent` values into `LemonChannels.Dispatcher`. Channel renderers decide truncation, send-vs-edit, buttons, media batching, and other platform UX details, while `LemonChannels.PresentationState` tracks message ids, pending creates/edits, deferred chunk sets, and post-edit follow-up chunks per `{route, run, surface}` so coalesced Telegram and Discord updates do not lose overflow chunks, leak superseded tails, detach long-answer follow-up chunks from the original prompt thread, enqueue long-answer tails before the final edit ack, or strand those tails or deferred final edits if the ack arrives before they finish staging. Discord streaming snapshots are truncated to one editable message; finalized Discord text is split at the safe 1,900-character outbound size and delivered as an edit plus ordered follow-ups, and repeated identical finals are suppressed when a newer sequence replays the same answer. Final idempotency includes auto-send file metadata so a later final with the same text but newly attached files still delivers those attachments.
 
-**Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), confirmed-delivery deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Plugin lookups use a persistent-term snapshot; token consumption uses ETS compare-and-replace and confirmed-key insertion uses `:ets.insert_new/2`, without synchronous calls into their owner processes. Messages are delivered by temporary supervised tasks with exponential-backoff retry on transient failures.
+**Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries, in the enqueueing process rather than the queue owner), confirmed-delivery deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Plugin lookups use a persistent-term snapshot; token consumption uses ETS compare-and-replace and confirmed-key insertion uses `:ets.insert_new/2`, without synchronous calls into their owner processes. Messages are delivered by temporary supervised tasks with exponential-backoff retry on transient failures.
 
 Delivery workers are temporary supervised tasks. Delivery is **at-least-once**
 for the channels whose adapters report an unknown outcome: an adapter exception, malformed adapter result, worker exit
@@ -342,7 +342,7 @@ Each adapter declares its capabilities in `meta/0`. The `LemonChannels.Capabilit
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `chunk_limit` | integer | `4096` | Maximum characters per message |
+| `chunk_limit` | integer | `4096` | Maximum graphemes per message (positive; invalid values fall back to 4096) |
 | `rate_limit` | integer or nil | `nil` | Messages per time window |
 | `edit_support` | boolean | `false` | Can edit sent messages |
 | `delete_support` | boolean | `false` | Can delete sent messages |
@@ -563,7 +563,7 @@ end
 
 | Module | Purpose |
 |--------|---------|
-| `Outbox.Chunker` | Splits long messages at sentence/word boundaries respecting per-channel `chunk_limit` |
+| `Outbox.Chunker` | Splits long messages at sentence/word boundaries respecting per-channel `chunk_limit` (graphemes); every split makes progress |
 | `Outbox.Dedupe` | ETS-based deduplication using idempotency keys with a 1-hour TTL and periodic cleanup |
 | `LemonCore.RateLimiter` | Shared ETS token bucket, supervised here as `LemonChannels.Outbox.RateLimiter`, per channel/account, default 30 msg/sec with burst of 5 |
 
@@ -682,7 +682,7 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram.Markdown` | EarmarkParser-based AST renderer producing Telegram entity format with UTF-16 offsets |
 | `Telegram.ResumeIndexStore` | Typed wrapper for Telegram message-id session and resume indices; legacy vendor entries remain readable but are never selected for a top-level run |
 | `Telegram.StateStore` | Typed wrapper for Telegram per-session/per-topic preference state |
-| `Telegram.Truncate` | Truncates messages to 4096 chars while preserving native resume lines |
+| `Telegram.Truncate` | Splits/truncates messages so both the Markdown source and the rendered text fit 4096 UTF-16 units; never splits a code fence or table row that fits in one message (oversized fences/tables become several closed fences/tables, each table repeating its header) and keeps native resume lines on the last message |
 | `Telegram.TriggerMode` | Per-chat/topic `:all` vs `:mentions` mode (ETS-backed) |
 | `Telegram.OffsetStore` | Persists `getUpdates` offset via `LemonCore.Store` |
 | `Telegram.PollerLock` | Global + file-based lock to prevent duplicate pollers for the same account/token |
