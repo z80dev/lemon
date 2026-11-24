@@ -177,6 +177,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   provider's terminal event with a retryable transient error, instead of
   completing it — possibly as a tool call with half-written arguments. Gemini
   events split across network frames are no longer dropped (#636).
+- A tool call streamed with an empty argument delta (Anthropic's no-argument
+  calls) is read as `{}` instead of spending a continuation on
+  `malformed_tool_arguments`, and stream rules scan a tool call that arrives
+  as one large delta (Gemini) instead of failing the run with
+  `delta_too_large`; a rule that cannot evaluate output now fails only that
+  attempt and still records its usage (#639).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

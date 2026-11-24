@@ -114,6 +114,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- Empty or whitespace-only streamed tool arguments decode as `{}`, and a
+  parameterless tool's raw arguments are not decoded, so no-argument calls no
+  longer fail as `malformed_tool_arguments` (#639).
+- `LemonAgent.StreamRules.feed/2` scans deltas of any size in bounded
+  1,024-byte chunks; `:delta_too_large` is no longer raised. A
+  `StreamRules.Error` during streaming fails the attempt as a non-retryable
+  error, cancels the provider stream and records its budget usage instead of
+  escaping the loop (#639).
 - OAuth credential resolution, including the Anthropic and Codex paths, adopts
   a login refreshed concurrently by another process instead of returning
   `:oauth_secret_changed` when that login is still fresh.
