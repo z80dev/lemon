@@ -171,6 +171,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- The `lsp` tool refuses a non-UTF-8 file with a clear error instead of crashing
+  the language-server session it shares with other leases, restarting it and
+  telling the model to retry. `LemonLsp.ServerManager` returns
+  `{:error, :invalid_document_encoding}` for such documents,
+  `{:error, :invalid_message_encoding}` for unencodable messages, and
+  `{:error, {:session_crashed, class}}` (never the raw exit reason) for any other
+  session exit during a call (#663).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

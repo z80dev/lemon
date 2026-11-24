@@ -508,6 +508,93 @@ defmodule LemonLsp.ServerManagerProtocolTest do
            end)
   end
 
+  test "a non-UTF-8 document is rejected without crashing the shared session", ctx do
+    latin1 = Path.join(ctx.tmp_dir, "latin1.ex")
+    valid = Path.join(ctx.tmp_dir, "valid.ex")
+    File.write!(latin1, <<"secret_caf", 0xE9, " = 1\n">>)
+    File.write!(valid, "valid = 1\n")
+
+    assert {:ok, session} =
+             ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, session_id: ctx.session_id)
+
+    sid = session.session_id
+    assert {:ok, _} = ServerManager.initialize_session(sid, %{}, timeout_ms: 5_000)
+    [{pid, _}] = Registry.lookup(LemonLsp.SessionRegistry, {:id, manager(), sid})
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        bad = Task.async(fn -> ServerManager.sync_file(sid, latin1, "elixir") end)
+        good = Task.async(fn -> ServerManager.sync_file(sid, valid, "elixir") end)
+        other = Task.async(fn -> ServerManager.request_session(sid, "fake/pid") end)
+
+        assert {:error, :invalid_document_encoding} = Task.await(bad)
+        assert {:ok, %{synced: :opened, version: 1}} = Task.await(good)
+        assert {:ok, %{"result" => %{"pid" => _}}} = Task.await(other)
+
+        assert {:error, :invalid_document_encoding} =
+                 ServerManager.open_document(sid, "file:///latin1.ex", "elixir", <<0xE9>>)
+
+        assert {:error, :invalid_document_encoding} =
+                 ServerManager.change_document(sid, "file:///valid.ex", <<0xE9>>, version: 2)
+
+        assert {:error, :invalid_document_uri} =
+                 ServerManager.close_document(sid, <<"file:///", 0xE9>>)
+      end)
+
+    refute log =~ "secret_caf"
+    assert Process.alive?(pid)
+    assert [{^pid, _}] = Registry.lookup(LemonLsp.SessionRegistry, {:id, manager(), sid})
+    assert {:ok, events} = ServerManager.request_session(sid, "fake/events")
+    assert [%{"method" => "textDocument/didOpen", "params" => params}] = events["result"]
+    assert params["textDocument"]["text"] == "valid = 1\n"
+  end
+
+  test "a transport encoding failure is an error reply, not a session crash", ctx do
+    assert {:ok, session} =
+             ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, session_id: ctx.session_id)
+
+    sid = session.session_id
+    [{pid, _}] = Registry.lookup(LemonLsp.SessionRegistry, {:id, manager(), sid})
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :invalid_message_encoding} =
+                 ServerManager.notify_session(sid, "fake/note", %{"text" => <<"secret", 0xFF>>})
+
+        assert {:error, :invalid_message_encoding} =
+                 ServerManager.request_session(sid, "fake/pid", %{"text" => <<"secret", 0xFF>>})
+      end)
+
+    refute log =~ "secret"
+    assert Process.alive?(pid)
+    assert ServerManager.status().pending_request_count == 0
+    assert {:ok, %{"result" => %{"pid" => _}}} = ServerManager.request_session(sid, "fake/pid")
+  end
+
+  test "any session exit during a call is an error reply without raw exit terms", ctx do
+    assert {:ok, session} =
+             ServerManager.start_session(:elixir_ls, cwd: ctx.tmp_dir, session_id: ctx.session_id)
+
+    sid = session.session_id
+    [{pid, _}] = Registry.lookup(LemonLsp.SessionRegistry, {:id, manager(), sid})
+    :ok = :sys.suspend(pid)
+
+    assert {:error, {:session_crashed, :timeout}} =
+             ServerManager.request_session(sid, "fake/pid", %{}, timeout_ms: 50)
+
+    call = Task.async(fn -> ServerManager.document_diagnostics(sid, "file:///x") end)
+    # The timed-out request is still queued; wait for the second call to join it.
+    assert wait_until(fn -> elem(Process.info(pid, :message_queue_len), 1) >= 2 end)
+    monitor = Process.monitor(pid)
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      :sys.terminate(pid, {:secret_reason, <<0xE9>>})
+      assert_receive {:DOWN, ^monitor, :process, ^pid, _}, 2_000
+    end)
+
+    assert {:error, {:session_crashed, :abnormal_exit}} = Task.await(call)
+  end
+
   test "crash fails every in-flight request and the next acquire starts a new process", ctx do
     owner = start_owner()
 
@@ -546,6 +633,8 @@ defmodule LemonLsp.ServerManagerProtocolTest do
     assert {:ok, after_restart} = ServerManager.request_session(restarted.session_id, "fake/pid")
     refute before["result"]["pid"] == after_restart["result"]["pid"]
   end
+
+  defp manager, do: Process.whereis(ServerManager)
 
   defp start_owner do
     parent = self()

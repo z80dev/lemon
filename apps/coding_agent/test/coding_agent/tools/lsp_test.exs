@@ -512,6 +512,16 @@ defmodule CodingAgent.Tools.LspTest do
     assert message =~ "is not installed. Install clangd and put it on PATH."
   end
 
+  test "a non-UTF-8 file is refused without restarting the shared server", ctx do
+    before = raw_result(ctx, "fake/pid")
+    File.write!(Path.join(ctx.tmp, "src/latin1.c"), <<"/* caf", 0xE9, " */ int x;\n">>)
+
+    assert {:error, message} = run(ctx, %{"action" => "diagnostics", "file" => "src/latin1.c"})
+    assert message =~ "src/latin1.c to the language server: the file is not valid UTF-8 text"
+    refute message =~ "retry"
+    assert raw_result(ctx, "fake/pid") == before
+  end
+
   test "servers stop when the owning session process exits", ctx do
     assert %AgentToolResult{} =
              run(ctx, %{"action" => "hover", "file" => "src/main.c", "line" => 1})

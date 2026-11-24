@@ -296,6 +296,15 @@ known document counts, redacted document URI hashes, diagnostic batch counts,
 and severity counts. It does not expose raw text, raw URIs, workspace paths,
 server logs, or diagnostic messages.
 
+Document text, URIs and language ids must be valid UTF-8 (JSON carries nothing
+else). `sync_file`, `open_document` and `change_document` refuse other text with
+`{:error, :invalid_document_encoding}` before anything reaches the server, and a
+message the transport cannot encode returns `{:error, :invalid_message_encoding}`;
+the shared session keeps serving its other documents. Every session exit during a
+call becomes an error reply: `{:error, {:session_crashed, :timeout | :abnormal_exit}}`
+carries only the exit class, never the raw reason, and its outcome is unknown, so
+the `lsp` tool reports it without retrying or suggesting a retry.
+
 Language-server stderr is discarded by the launcher so log writes can never
 interleave with JSON-RPC frames or leak private workspace paths to the caller
 console; the parser still discards non-LSP prefixes and only records redacted

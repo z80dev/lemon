@@ -23,8 +23,14 @@ defmodule LemonLsp.ServerManager do
   @name __MODULE__
 
   @type server :: GenServer.server()
-  @type request_result :: {:ok, map()} | {:error, atom()}
-  @type document_result :: {:ok, map()} | {:error, atom()}
+  @typedoc """
+  Session call failure. `{:session_crashed, class}` reports a session that
+  exited abnormally or did not answer in time; the call's outcome is unknown and
+  callers must not retry it automatically.
+  """
+  @type error_reason :: atom() | {:session_crashed, :timeout | :abnormal_exit}
+  @type request_result :: {:ok, map()} | {:error, error_reason()}
+  @type document_result :: {:ok, map()} | {:error, error_reason()}
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, @name)
@@ -69,7 +75,7 @@ defmodule LemonLsp.ServerManager do
     GenServer.call(@name, {:start_session, server_id, opts}, 5_000)
   end
 
-  @spec stop_session(String.t()) :: {:ok, map()} | {:error, :unknown_lsp_session}
+  @spec stop_session(String.t()) :: {:ok, map()} | {:error, error_reason()}
   def stop_session(session_id) when is_binary(session_id) do
     call_session(session_id, {:stop_session, session_id}, 5_000)
   end
@@ -225,7 +231,7 @@ defmodule LemonLsp.ServerManager do
   `{:lsp_diagnostics, session_id, uri}` whenever a batch is published.
   """
   @spec document_diagnostics(String.t(), String.t()) ::
-          {:ok, %{seq: non_neg_integer(), entry: map() | nil}} | {:error, atom()}
+          {:ok, %{seq: non_neg_integer(), entry: map() | nil}} | {:error, error_reason()}
   def document_diagnostics(session_id, uri) when is_binary(session_id) and is_binary(uri) do
     call_session(session_id, {:document_diagnostics, session_id, uri}, 5_000)
   end
@@ -256,7 +262,8 @@ defmodule LemonLsp.ServerManager do
     call_session(session_id, {:sync_file, session_id, path, language_id}, 5_000)
   end
 
-  @spec notify_session(String.t(), String.t(), map() | list() | nil) :: :ok | {:error, atom()}
+  @spec notify_session(String.t(), String.t(), map() | list() | nil) ::
+          :ok | {:error, error_reason()}
   def notify_session(session_id, method, params \\ %{})
       when is_binary(session_id) and is_binary(method) do
     call_session(session_id, {:notify_session, session_id, method, params}, 5_000)
@@ -430,13 +437,17 @@ defmodule LemonLsp.ServerManager do
     end
   end
 
+  # Every exit becomes an error reply: a session failure must not take its
+  # callers down. Crash reasons can embed protocol payloads, so only their
+  # class is reported.
   defp call_session(session_id, message, timeout \\ 5_000) do
     GenServer.call(session_target(session_id), message, timeout)
   catch
-    :exit, {:normal, _call} -> {:error, :unknown_lsp_session}
-    :exit, {:noproc, _call} -> {:error, :unknown_lsp_session}
-    :exit, {:shutdown, _call} -> {:error, :session_exited}
-    :exit, {:killed, _call} -> {:error, :session_exited}
+    :exit, {reason, _call} when reason in [:normal, :noproc] -> {:error, :unknown_lsp_session}
+    :exit, {reason, _call} when reason in [:shutdown, :killed] -> {:error, :session_exited}
+    :exit, {{:shutdown, _}, _call} -> {:error, :session_exited}
+    :exit, {:timeout, _call} -> {:error, {:session_crashed, :timeout}}
+    :exit, _reason -> {:error, {:session_crashed, :abnormal_exit}}
   end
 
   defp forward(pid, message, from), do: send(pid, {:forward, message, from})
