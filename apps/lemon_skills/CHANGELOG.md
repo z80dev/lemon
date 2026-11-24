@@ -17,3 +17,13 @@
   audit APIs; `BundleAudit` exclusively owns optional model review, preventing
   duplicate reviews and honoring per-call model overrides.
 - Remove the unused `LemonSkills.HttpClient.get/1` convenience wrapper.
+
+### Fixed
+
+- `ProfileMemoryTransfer.apply_transfer/2` passes definite failures
+  (`:stale_destination`, `:destination_conflict`, `:transfer_conflict`, lock
+  abort, verified rollback) through instead of collapsing them to
+  `:transfer_pending`, removes the `.memory-transfer-*` staging directory and
+  frees the mutation id. The receipt commit releases the frozen source snapshot
+  and previews held in the destination Store, and the new `release/5` releases a
+  source snapshot held elsewhere (#623).

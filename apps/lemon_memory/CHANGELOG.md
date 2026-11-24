@@ -17,9 +17,20 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   so retained installation facts remain readable, editable and deletable.
 - The memory doctor check reads `runtime:` instead of `external_runtime?` and
   skips, rather than warns, when a standalone CLI runs with no runtime at all.
+- `Store.transfer_import` returns definite pre-commit failures unchanged and
+  deletes exactly the operation's pending intent after a verified rollback or a
+  boundary that never ran, so the mutation id can be retried; unverified
+  rollback or cleanup stays `:transfer_pending`. Frozen transfer snapshots are
+  deleted with the documents they captured (single deletes, scope erasure,
+  retention and per-scope pruning, agent erasure) and expire after
+  `transfer_ttl_ms` (#623).
 
 ### Added
 
+- `Store.transfer_release/2`, a `:release` option for `Store.transfer_import`
+  (journal entries deleted in the receipt transaction), and the
+  `transfer_ttl_ms` Store setting (default 24 hours, capped at `retention_ms`);
+  the journal gains a `created_at_ms` column, backfilled on first start (#623).
 - Exact-first, unique-substring note/project patching and deletion, with atomic
   ambiguity rejection and normal safety/capacity checks on patched results.
 - Persistent backdoor and credential-exfiltration instruction screening, using

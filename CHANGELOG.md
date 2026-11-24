@@ -177,6 +177,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   call that got no answer reports that its outcome is unknown. Reads still retry
   transient failures, with a server's `Retry-After` capped at one second per
   pause and two seconds per call (#622).
+- A memory transfer whose apply fails definitely (the destination changed after
+  the preview, an identity conflict, the destination's preference lock was busy,
+  or any verified rollback) now reports that reason instead of
+  `transfer_pending`, removes its `.memory-transfer-*` staging directory from the
+  agent workspace and frees the mutation id, so the same transfer can be
+  previewed and applied again; only genuinely uncertain outcomes stay pending.
+  The transfer journal no longer keeps memory after it is gone: a frozen source
+  snapshot (summaries, preference facts, `USER.md`/`MEMORY.md` bytes) is deleted
+  once the receipt is recorded, when any document it captured is deleted, erased
+  by scope or aged out, and after the new `transfer_ttl_ms` Store setting
+  (default 24 hours, capped at `retention_ms`) (#623).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

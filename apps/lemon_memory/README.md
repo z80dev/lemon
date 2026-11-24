@@ -101,17 +101,28 @@ and preview truncation, so keywords beyond the displayed excerpt remain searchab
 
 Full profile copying uses `LemonSkills.ProfileMemoryTransfer`, not redacted
 lifecycle projections. Store's typed `transfer_snapshot/4`, `transfer_get/2`,
-`transfer_put_new/3`, and `transfer_import/8` (or `/9` with local boundary/rollback
-options) own its private durable journal and SQLite transaction. The Store process
+`transfer_put_new/3`, `transfer_release/2` and `transfer_import/8` (or `/9` with
+local boundary/rollback/release options) own its private durable journal and SQLite
+transaction. The Store process
 owns the filesystem boundary lock across publication, commit and known rollback.
 Import rechecks exact selected row revisions, rejects foreign identity collisions,
 replaces only the chosen agent/home scope, and commits the receipt together with
 the rows and FTS updates. A durable pending
 intent is never a successful import and must not be automatically replayed.
+A definite failure (a boundary that never ran, or a verified rollback of SQLite
+and publication) returns its reason unchanged and deletes exactly that pending
+intent, so the mutation id can be applied again; an unverified rollback or
+intent cleanup returns `:transfer_pending`.
 Transfer calls have a five-second deadline, including Store queueing. An import
 timeout returns `:transfer_pending`, not proof of rollback: queued publication or
 commit may still finish. Reconcile the same durable operation key and receipt;
 never automatically retry an uncertain journal mutation as a new operation.
+Frozen source snapshots (journal entries with a `snapshot`) carry memory content
+and are pruned with it: deleting a captured document deletes them in the same
+transaction, scope erasure, retention and per-scope pruning delete snapshots of
+the documents they removed (agent erasure deletes the agent's snapshots), and
+snapshots and previews expire after `transfer_ttl_ms` (default 24 hours, capped
+at `retention_ms`). Destination intents and receipts are never pruned.
 Snapshot callbacks execute in the capped `LemonMemory.TaskSupervisor`, over
 immutable documents rather than the SQLite connection. Store retains the
 transaction and queues ordinary operations until the callback completes;
