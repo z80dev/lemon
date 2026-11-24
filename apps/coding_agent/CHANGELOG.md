@@ -15,6 +15,13 @@
   `encode_*` functions take an optional byte budget. Deltas queued behind an
   outstanding acknowledgement coalesce (bounded by bytes), and the worker
   reports the run's own completed answer instead of accumulating deltas (#635).
+- `ExecutionNode.ProcessService` retires terminal receipts 24 hours after they
+  finish and counts only unresolved (`running`/`outcome_unknown`) receipts
+  against its 1,000 admission limit (20,000 retained in total), keeping a
+  durable per-node generation floor so superseded generations stay refused.
+  Provable pre-exec failures (the helper now reports `started:false`) are
+  recorded as `failed`. New preview-first `prune/2` removes receipts only with a
+  single-use confirmation token (#679).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

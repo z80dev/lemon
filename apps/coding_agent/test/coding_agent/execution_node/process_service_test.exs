@@ -132,7 +132,7 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
                ctx.opts
              )
 
-    assert {:ok, %{"state" => "outcome_unknown", "exitCode" => nil}} = get("no-exe", ctx.opts)
+    assert {:ok, %{"state" => "failed", "exitCode" => nil}} = get("no-exe", ctx.opts)
 
     assert {:error, :store_unavailable} =
              ProcessService.handle(
@@ -142,34 +142,66 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
              )
   end
 
-  test "receipts and active execution caps fail closed, without evicting uncertain IDs", ctx do
-    stop_supervised!(ProcessService)
-
-    for index <- 1..1_000 do
-      receipt = %{
-        node_id: "process-node",
-        process_id: "reserved-#{index}",
-        generation: 11,
-        invoke_id: "original-invocation",
-        state: "outcome_unknown",
-        exit_code: nil,
-        intent: Base.encode64(:crypto.hash(:sha256, "reserved-#{index}")),
-        created_at: 0
-      }
-
-      assert :ok =
-               Store.put(
-                 ctx.store,
-                 :node_process_receipts,
-                 {"process-node", receipt.process_id},
-                 receipt
-               )
-    end
-
+  test "unresolved receipt capacity fails closed, without evicting uncertain IDs", ctx do
+    seed_unknown(ctx, 1..1_000)
     start_service(ctx)
     assert {:error, :process_receipt_limit} = run(args(ctx, "over-limit", ["report"]), ctx.opts)
     assert {:error, :process_receipt_limit} = cancel("over-limit", ctx.opts)
     assert {:ok, %{"state" => "outcome_unknown"}} = get("reserved-1", ctx.opts)
+  end
+
+  test "more than 1,000 admissions keep admitting while unresolved receipts are preserved", ctx do
+    seed_unknown(ctx, 1..999)
+    start_service(ctx)
+
+    for index <- 1..1_001 do
+      assert {:ok, %{"state" => "cancelled"}} = cancel("tombstone-#{index}", ctx.opts)
+    end
+
+    assert {:ok, %{"state" => "completed", "exitCode" => 17}} =
+             run(args(ctx, "after-1001", ["report"]), ctx.opts)
+
+    assert map_size(:sys.get_state(ctx.server).receipts) == 999 + 1_001 + 1
+
+    for index <- [1, 500, 999] do
+      assert {:ok, %{"state" => "outcome_unknown"}} = get("reserved-#{index}", ctx.opts)
+    end
+
+    # A terminal ID still fences within its TTL.
+    marker = Path.join(ctx.root, "tombstone-ran")
+
+    assert {:ok, %{"state" => "cancelled"}} =
+             run(args(ctx, "tombstone-1", ["touch", marker]), ctx.opts)
+
+    refute File.exists?(marker)
+  end
+
+  test "a pre-exec spawn failure is failed, not unknown, and consumes no capacity", ctx do
+    seed_unknown(ctx, 1..999)
+    start_service(ctx)
+    missing = ["lemon-process-executable-that-does-not-exist"]
+
+    for index <- 1..3 do
+      id = "no-exe-#{index}"
+
+      assert {:error, :executable_not_found} =
+               run(Map.put(args(ctx, id, []), "argv", missing), ctx.opts)
+
+      assert {:ok, failed} = get(id, ctx.opts)
+      assert failed == unavailable(id, "failed")
+      # The fixed ID stays fenced: the same intent reads back, never relaunches.
+      assert {:ok, ^failed} = run(Map.put(args(ctx, id, []), "argv", missing), ctx.opts)
+    end
+
+    assert {:ok, %{state: "failed", exit_code: nil}} =
+             Store.fetch(ctx.store, :node_process_receipts, {"process-node", "no-exe-1"})
+
+    # 999 unresolved receipts plus three failures still leave one slot.
+    assert {:ok, %{"state" => "completed"}} = run(args(ctx, "still-room", ["report"]), ctx.opts)
+
+    stop_supervised!(ProcessService)
+    start_service(ctx)
+    assert {:ok, %{"state" => "failed"}} = get("no-exe-1", ctx.opts)
   end
 
   test "sixteen live processes bound admission; superseded generation cannot mutate", ctx do
@@ -191,7 +223,8 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
     assert {:ok, _} = get("cap-1", newer)
   end
 
-  test "spent receipts never expire or redispatch; only the output cache expires", ctx do
+  test "terminal fences retire after 24 hours; unknown outcomes and generation floors persist",
+       ctx do
     for index <- 1..17 do
       assert {:ok, %{"state" => "completed", "exitCode" => 17}} =
                run(args(ctx, "cached-#{index}", ["report"]), ctx.opts)
@@ -208,15 +241,18 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
               "outputTruncated" => true
             }} = get("cached-1", ctx.opts)
 
-    assert {:ok, newest} = get("cached-17", ctx.opts)
-    assert is_binary(newest["stdoutBase64"])
+    old = System.system_time(:millisecond) - 86_400_001
     key = {"process-node", "cached-17"}
     assert {:ok, receipt} = Store.fetch(ctx.store, :node_process_receipts, key)
-    old = System.system_time(:millisecond) - 86_400_001
+
+    # Age alone does not retire: a completed fence counts from when it finished.
     assert :ok = Store.put(ctx.store, :node_process_receipts, key, %{receipt | created_at: old})
     stop_supervised!(ProcessService)
     start_service(ctx)
     assert {:ok, %{"state" => "completed", "exitCode" => 17}} = get("cached-17", ctx.opts)
+
+    seed_unknown(ctx, 1..1)
+    assert {:ok, _} = Store.fetch(ctx.store, :node_process_receipts, key)
 
     assert :ok =
              Store.put(ctx.store, :node_process_receipts, key, %{
@@ -225,28 +261,47 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
                  finished_at: old
              })
 
-    stop_supervised!(ProcessService)
     start_service(ctx)
-    assert {:ok, restored} = get("cached-17", ctx.opts)
-    assert restored == Map.put(unavailable("cached-17", "completed"), "exitCode", 17)
-    assert {:ok, ^restored} = run(args(ctx, "cached-17", ["report"]), ctx.opts)
     assert {:ok, tombstone} = cancel("old-tombstone", ctx.opts)
-
-    assert {:ok, cancelled} =
-             Store.fetch(ctx.store, :node_process_receipts, {"process-node", "old-tombstone"})
+    tombstone_key = {"process-node", "old-tombstone"}
+    assert {:ok, cancelled} = Store.fetch(ctx.store, :node_process_receipts, tombstone_key)
+    marker = Path.join(ctx.root, "must-not-run-fresh-tombstone")
+    assert {:ok, ^tombstone} = run(args(ctx, "old-tombstone", ["touch", marker]), ctx.opts)
+    refute File.exists?(marker)
 
     assert :ok =
-             Store.put(ctx.store, :node_process_receipts, {"process-node", "old-tombstone"}, %{
+             Store.put(ctx.store, :node_process_receipts, tombstone_key, %{
                cancelled
-               | created_at: 0
+               | created_at: old
+             })
+
+    # A newer generation raised the durable floor; its only receipt is old.
+    newer = Keyword.put(ctx.opts, :session_generation, 12)
+    assert {:ok, _} = cancel("newer-generation", newer)
+    newer_key = {"process-node", "newer-generation"}
+    assert {:ok, newer_receipt} = Store.fetch(ctx.store, :node_process_receipts, newer_key)
+
+    assert :ok =
+             Store.put(ctx.store, :node_process_receipts, newer_key, %{
+               newer_receipt
+               | created_at: old
              })
 
     stop_supervised!(ProcessService)
     start_service(ctx)
-    marker = Path.join(ctx.root, "must-not-run-old-id")
-    assert {:ok, ^tombstone} = run(args(ctx, "old-tombstone", ["touch", marker]), ctx.opts)
-    assert {:ok, _} = run(args(ctx, "cache-expiry", ["report"]), ctx.opts)
-    refute File.exists?(marker)
+
+    # Retired terminal fences are gone from memory and the Store...
+    assert {:ok, %{"state" => "not_found"}} = get("cached-17", ctx.opts)
+    assert {:ok, nil} = Store.fetch(ctx.store, :node_process_receipts, key)
+    assert {:ok, %{"state" => "not_found"}} = get("old-tombstone", newer)
+    assert {:ok, %{"state" => "not_found"}} = get("newer-generation", newer)
+    # ...while an equally old unresolved receipt is never retired automatically.
+    assert {:ok, %{"state" => "outcome_unknown"}} = get("reserved-1", ctx.opts)
+    # Recent terminal fences still hold.
+    assert {:ok, %{"state" => "completed"}} = get("cached-16", ctx.opts)
+    # The superseded generation stays refused after its newer receipts retired.
+    assert {:error, :stale_generation} = run(args(ctx, "stale", ["report"]), ctx.opts)
+    assert {:ok, %{"state" => "completed"}} = run(args(ctx, "cache-expiry", ["report"]), newer)
 
     :sys.replace_state(ctx.server, fn state ->
       cache =
@@ -257,6 +312,79 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
 
     send(Process.whereis(ctx.server), :sweep)
     assert map_size(:sys.get_state(ctx.server).cache) == 0
+  end
+
+  test "operator prune previews, refuses without confirmation, then deletes exactly the preview",
+       ctx do
+    seed_unknown(ctx, 1..3)
+    start_service(ctx)
+    assert {:ok, _} = cancel("recent-tombstone", ctx.opts)
+    server = ctx.server
+
+    assert {:error, :invalid_older_than_ms} = ProcessService.prune([], server)
+
+    assert {:error, :invalid_states} =
+             ProcessService.prune([older_than_ms: 1, states: ["running"]], server)
+
+    assert {:ok, preview} = ProcessService.prune([older_than_ms: 60_000], server)
+    assert preview.count == 3
+    assert preview.truncated == false
+    assert is_binary(preview.token)
+
+    assert Enum.map(preview.process_ids, & &1["processId"]) ==
+             ~w(reserved-1 reserved-2 reserved-3)
+
+    # The preview, a missing token, a wrong token and a different filter delete nothing.
+    assert {:error, :confirmation_required} =
+             ProcessService.prune([older_than_ms: 60_000, dry_run: false], server)
+
+    assert {:error, :confirmation_mismatch} =
+             ProcessService.prune(
+               [older_than_ms: 60_000, dry_run: false, confirm_token: "forged"],
+               server
+             )
+
+    for index <- 1..3 do
+      assert {:ok, %{"state" => "outcome_unknown"}} = get("reserved-#{index}", ctx.opts)
+    end
+
+    assert {:ok, _} =
+             Store.fetch(ctx.store, :node_process_receipts, {"process-node", "reserved-1"})
+
+    assert {:error, :confirmation_mismatch} =
+             ProcessService.prune(
+               [older_than_ms: 1, dry_run: false, confirm_token: preview.token],
+               server
+             )
+
+    # Tokens are single use, so the mismatched attempt consumed this one.
+    assert {:ok, preview} = ProcessService.prune([older_than_ms: 60_000], server)
+    # A receipt that changes after the preview is skipped, not deleted.
+    :sys.replace_state(server, fn state ->
+      update_in(state.receipts[{"process-node", "reserved-3"}], &%{&1 | created_at: 1})
+    end)
+
+    assert {:ok, %{deleted: deleted, skipped: skipped}} =
+             ProcessService.prune(
+               [older_than_ms: 60_000, dry_run: false, confirm_token: preview.token],
+               server
+             )
+
+    assert Enum.map(deleted, & &1["processId"]) == ~w(reserved-1 reserved-2)
+    assert Enum.map(skipped, & &1["processId"]) == ~w(reserved-3)
+    assert {:ok, %{"state" => "not_found"}} = get("reserved-1", ctx.opts)
+
+    assert {:ok, nil} =
+             Store.fetch(ctx.store, :node_process_receipts, {"process-node", "reserved-1"})
+
+    assert {:ok, %{"state" => "outcome_unknown"}} = get("reserved-3", ctx.opts)
+    assert {:ok, %{"state" => "cancelled"}} = get("recent-tombstone", ctx.opts)
+
+    assert {:error, :confirmation_mismatch} =
+             ProcessService.prune(
+               [older_than_ms: 60_000, dry_run: false, confirm_token: preview.token],
+               server
+             )
   end
 
   test "real SQLite backend reload preserves intent, terminal exit and missing-cancel fences",
@@ -347,6 +475,31 @@ defmodule CodingAgent.ExecutionNode.ProcessServiceTest do
     assert {:error, :process_outcome_unknown} = Task.await(task, 5_000)
     assert {:ok, unknown} = get("invalid-packet", ctx.opts)
     assert unknown == unavailable("invalid-packet", "outcome_unknown")
+  end
+
+  defp seed_unknown(ctx, range) do
+    stop_supervised!(ProcessService)
+
+    for index <- range do
+      receipt = %{
+        node_id: "process-node",
+        process_id: "reserved-#{index}",
+        generation: 11,
+        invoke_id: "original-invocation",
+        state: "outcome_unknown",
+        exit_code: nil,
+        intent: Base.encode64(:crypto.hash(:sha256, "reserved-#{index}")),
+        created_at: 0
+      }
+
+      assert :ok =
+               Store.put(
+                 ctx.store,
+                 :node_process_receipts,
+                 {"process-node", receipt.process_id},
+                 receipt
+               )
+    end
   end
 end
 

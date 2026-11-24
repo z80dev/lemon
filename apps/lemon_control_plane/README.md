@@ -1534,8 +1534,9 @@ and actual version-1 descriptors for all three process methods before delivery;
 caller-supplied options cannot bypass this boundary.
 The broker supplies authenticated `nodeGeneration`, never a caller generation.
 
-The frozen seven-field receipt has state `running|completed|cancelled|outcome_unknown`
-(get additionally `not_found`). `exitCode` is an integer only for an observed
+The frozen seven-field receipt has state `running|completed|cancelled|failed|outcome_unknown`
+(get additionally `not_found`). `failed` means the destination proved the program
+never started (spawn or pre-exec validation failure); it has null exit/outputs. `exitCode` is an integer only for an observed
 OS exit, otherwise null. A `completed` receipt requires that observed integer
 exit, even when captured output is unavailable; null exit is not completion
 evidence. Output strings represent captured bytes; `""` means actually measured
@@ -1556,12 +1557,18 @@ a replacement worker cannot cancel its predecessor's job, although get can
 read its receipt. Timeout/overflow/cancellation clean up the process group and
 descendants where supported, without inventing an exit code.
 
-The narrow worker owner admits at most 16 active processes and retains at most
-1,000 durable fixed-ID fences across its destination service. Spent IDs and cancel
-tombstones do **not** expire: exhaustion returns `process_receipt_limit` before
-new execution, never deletes a fence to make an old ID runnable. Automated
-inspection/probe intents consume this capacity too; operators must provision a
-destination with available admission capacity rather than clear/reuse spent IDs.
+The narrow worker owner admits at most 16 active processes. Unresolved
+(`running`/`outcome_unknown`) fixed-ID fences never expire and at most 1,000 of
+them admit new work: exhaustion returns `process_receipt_limit` before new
+execution and never deletes an uncertain fence. Terminal (`completed`,
+`cancelled`, `failed`) fences hold their ID for 24 hours after they finish and
+are then retired, after which `get` returns `not_found`: reconcile within that
+window. `failed` receipts do not count toward the 1,000. At most 20,000 receipts
+are retained in total. A durable per-node generation floor keeps superseded
+generations refused after their receipts retire. Operators remove unresolved or
+terminal receipts only through the destination's preview-first
+`CodingAgent.ExecutionNode.ProcessService.prune/2` (dry run returns the affected
+IDs and a single-use ten-minute token; deletion requires that token).
 Captured output is volatile, limited to 16 completed receipts and a 24-hour cache
 lifetime; cache loss never erases original status/exit or allows redispatch.
 
