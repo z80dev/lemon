@@ -175,6 +175,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   call) now delivers exactly one terminal `{:error, {:loop_crashed, reason}, _}`
   event, stops the run and leaves the agent idle, so a coding session no longer
   stays `:session_busy` and router run streams complete (#638).
+- Tool tasks no longer outlive their agent loop: when the loop is killed,
+  raises, or its `Loop.stream/4` consumer stops, the run's abort signal is set
+  and pending tools (bash, writes, external calls) are terminated after a short
+  grace instead of running on unbounded. Per-tool deadlines are enforced even
+  when the loop is stalled (#681).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

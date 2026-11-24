@@ -120,6 +120,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   (`reason` is a bounded atom such as `:killed`), sets `error` and wakes
   waiters. Forwarder exits are caught like exceptions, and late duplicate
   terminal events are dropped (#638).
+- Tool lifetime is tied to the loop: a per-batch `LemonAgent.Loop.ToolReaper`
+  starts and tracks each tool task, owns the per-tool deadline (no longer a
+  timer in the loop mailbox), and on any loop exit, including `:kill`, aborts
+  the signal and terminates the tasks after a 250 ms grace. Every abnormal exit
+  of a tool batch or of either loop entry point aborts the signal before the
+  error is reported, and `Loop.agent_loop/5`, `agent_loop_continue/4`,
+  `stream/4` and `stream_continue/3` create a signal when given `nil` (#681).
 - OAuth credential resolution, including the Anthropic and Codex paths, adopts
   a login refreshed concurrently by another process instead of returning
   `:oauth_secret_changed` when that login is still fresh.
