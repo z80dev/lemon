@@ -20,10 +20,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   config. `lemon setup` offers it when omp is installed; `lemon setup omp
   status` and `disconnect` inspect and undo it.
 - Epic #543 wave 3 (additive, unless marked **Breaking**):
-  - Providers preconnect and offer opt-in request hedging, with
-    `hedge_started`/`hedge_skipped` dispatcher telemetry (#567); OpenAI
-    Responses over WebSocket with `previous_response_id` chaining is opt-in via
-    `responses_websocket = true` (#566).
+  - Providers preconnect (#567); OpenAI Responses over WebSocket with
+    `previous_response_id` chaining is opt-in via `responses_websocket = true`
+    (#566).
   - Subagents return structured results through a `submit_result` tool (#602);
     task-tool action usage is measured by telemetry only, with no behavior
     change (#604); idle subagent processes hibernate and completions are
@@ -634,6 +633,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   server `sampling` config entry is ignored, no client handshake advertises
   `sampling`, and a server's `sampling/createMessage` receives method-not-found
   (#703).
+- **Breaking (`lemon_ai` 0.3.0):** opt-in request hedging (#567) is retired
+  (#696, decided under epic #543): its bounded live measurement showed no
+  tail-latency win and nothing enabled it. `config :lemon_ai,
+  LemonAi.CallDispatcher, hedging: ...` is no longer read and the
+  `hedge_started`/`hedge_skipped` dispatcher telemetry is gone; delete the key.
+  Model calls no longer make a synchronous call to a shared dispatcher process:
+  provider failure summaries live in ETS.
 
 ### Security
 
