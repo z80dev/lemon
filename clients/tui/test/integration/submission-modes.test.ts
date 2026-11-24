@@ -235,7 +235,7 @@ describe("steer mode", () => {
 		const { app } = await boot({
 			onSend: (params) => {
 				if (params.queueMode === "steer") {
-					return errorResult("UNSUPPORTED", "this engine cannot be steered");
+					return errorResult("INVALID_REQUEST", "this engine cannot be steered");
 				}
 				return { runId: "run-1", sessionKey: params.sessionKey };
 			},
@@ -303,6 +303,44 @@ describe("redirect mode", () => {
 	});
 });
 
+describe("unknown outcomes", () => {
+	test("INTERNAL_ERROR on chat.send leaves the prompt unqueued and reports an unknown outcome", async () => {
+		const { app, server } = await boot({
+			onSend: () => errorResult("INTERNAL_ERROR", "Method execution failed"),
+		});
+
+		expect(await app.sendPrompt("maybe sent")).toBe("uncertain");
+
+		const items = app.store.queue.items(SESSION);
+		expect(items.map((item) => [item.text, item.state])).toEqual([["maybe sent", "needs-review"]]);
+		expect(items[0]?.submission).toBeDefined();
+		expect(transcript(app)).toContain("submission outcome unknown");
+		// Nothing is resent behind the user's back, and the next send waits for review.
+		expect(await app.sendPrompt("next")).toBe("uncertain");
+		expect(sends(server)).toHaveLength(1);
+	});
+
+	test("INTERNAL_ERROR on a redirect is never queued for an automatic send", async () => {
+		const { app, server } = await boot({
+			onSend: (params) =>
+				params.queueMode === "redirect"
+					? errorResult("INTERNAL_ERROR", "Method execution failed")
+					: { runId: "run-1", sessionKey: params.sessionKey },
+		});
+		app.store.setSubmissionMode("redirect");
+		await app.submit("first");
+		expect(await app.sendPrompt("redirect me")).toBe("uncertain");
+
+		expect(app.store.queue.items(SESSION).map((item) => item.state)).toEqual(["needs-review"]);
+		expect(transcript(app)).not.toContain("queued instead");
+		complete(server, "run-1");
+		await waitFor(() => !app.store.focused.busy, { what: "the run to finish" });
+		// A round-trip issued after the completion orders behind any drain send.
+		await app.client.request("health");
+		expect(sends(server).map((params) => params.prompt)).toEqual(["first", "redirect me"]);
+	});
+});
+
 describe("interrupt mode", () => {
 	test("the partial answer is kept, marked, and the new prompt lands under it", async () => {
 		const { app, server } = await boot();
@@ -345,7 +383,8 @@ describe("interrupt mode", () => {
 	test("a refused interrupt leaves the run alone", async () => {
 		const { app } = await boot({
 			onSend: (params) => {
-				if (params.queueMode === "interrupt") return errorResult("BUSY", "cannot interrupt now");
+				if (params.queueMode === "interrupt")
+					return errorResult("CONFLICT", "cannot interrupt now");
 				return { runId: "run-1", sessionKey: params.sessionKey };
 			},
 		});

@@ -371,7 +371,25 @@ defmodule LemonControlPlane.Methods.Registry do
       Map.put(metadata, :outcome, :exception)
     )
 
-    {:error, Errors.internal_error("Method execution failed")}
+    {:error, execution_failure(metadata.method)}
+  end
+
+  @doc """
+  The reply for a handler that raised, threw or exited. A method with any scope
+  beyond `:read` may already have mutated state, so its failure carries
+  `retrySafe: false` and is never presented as a safe-to-retry refusal.
+  """
+  @spec execution_failure(String.t() | atom()) :: Errors.error()
+  def execution_failure(method) do
+    case lookup(method) do
+      {:ok, module} ->
+        if Enum.any?(module.scopes(), &(&1 != :read)),
+          do: Errors.internal_error("Method execution failed", %{"retrySafe" => false}),
+          else: Errors.internal_error("Method execution failed")
+
+      {:error, :not_found} ->
+        Errors.internal_error("Method execution failed")
+    end
   end
 
   defp telemetry_method(method) do

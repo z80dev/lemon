@@ -23,6 +23,7 @@
 import type { TUI } from "@oh-my-pi/pi-tui/tui";
 import type { SubmissionDisposition } from "../../composer/drafts.ts";
 import {
+	ConnectionLostError,
 	ControlPlaneError,
 	NotConnectedError,
 	RequestTimeoutError,
@@ -353,7 +354,11 @@ export class SessionController {
 			session.seedPriorCost(usage.usage?.costUsd, !session.busy);
 			if (session.key === this.#store.focusedKey) this.#refreshStatus?.();
 		} catch (error) {
-			if (error instanceof NotConnectedError || error instanceof RequestTimeoutError) {
+			if (
+				error instanceof NotConnectedError ||
+				error instanceof ConnectionLostError ||
+				error instanceof RequestTimeoutError
+			) {
 				this.#contextSeeded.delete(session.key);
 			}
 		}
@@ -968,7 +973,12 @@ export function sessionKeyOf(summary: SessionSummary | undefined): string | unde
 
 function describeError(error: unknown): string {
 	if (error instanceof ControlPlaneError) return error.code;
-	if (error instanceof NotConnectedError || error instanceof RequestTimeoutError) return error.code;
+	if (
+		error instanceof NotConnectedError ||
+		error instanceof ConnectionLostError ||
+		error instanceof RequestTimeoutError
+	)
+		return error.code;
 	return "UNAVAILABLE";
 }
 

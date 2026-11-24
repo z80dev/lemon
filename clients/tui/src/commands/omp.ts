@@ -20,7 +20,9 @@ import {
 	ompUsageText,
 } from "../formatters/omp.ts";
 import {
+	ConnectionLostError,
 	ControlPlaneError,
+	classifyMutationError,
 	MethodUnavailableError,
 	NotConnectedError,
 	RequestTimeoutError,
@@ -59,32 +61,39 @@ export function ompUnavailableReason(
 }
 
 /**
- * A failed omp request in words the user can act on. A timed-out or
- * `retrySafe: false` mutation may already have taken effect.
+ * A failed omp request in words the user can act on. A mutation whose outcome
+ * {@link classifyMutationError} cannot rule out (lost connection, timeout,
+ * `retrySafe: false`, generic server failure) may already have taken effect;
+ * reads (`mutation: false`) only report the failure.
  */
-export function describeOmpError(error: unknown): string {
-	if (error instanceof NotConnectedError) return "offline — not sent; reconnect and retry";
+export function describeOmpError(error: unknown, mutation = true): string {
 	if (error instanceof MethodUnavailableError) {
 		return `this daemon does not support ${error.method}`;
 	}
-	if (error instanceof RequestTimeoutError) {
-		return `no reply within ${Math.round(error.timeoutMs / 1000)}s — outcome unknown; refresh before retrying`;
+	const outcome = classifyMutationError(error);
+	if (outcome === "not-sent") {
+		return error instanceof NotConnectedError
+			? "offline — not sent; reconnect and retry"
+			: `${safeLine(error instanceof Error ? error.message : String(error), 200)} — not sent`;
 	}
+	const unknown =
+		mutation && outcome === "unknown" ? " — outcome unknown; refresh before retrying" : "";
+	if (error instanceof RequestTimeoutError) {
+		return `no reply within ${Math.round(error.timeoutMs / 1000)}s${unknown}`;
+	}
+	if (error instanceof ConnectionLostError) return `connection lost before the reply${unknown}`;
 	if (ControlPlaneError.is(error)) {
 		const message = safeLine(error.message, 200);
 		const details = error.details as
-			| { retrySafe?: unknown; code?: unknown; applied?: unknown; failedStep?: unknown }
+			| { code?: unknown; applied?: unknown; failedStep?: unknown }
 			| null
 			| undefined;
 		if (details?.code === "OMP_PARTIALLY_APPLIED") {
 			return `${message} — partially applied (${Array.isArray(details.applied) ? details.applied.join(", ") : "unknown"}); failed at ${String(details.failedStep ?? "unknown")}; refresh before changing settings again`;
 		}
-		if (details?.retrySafe === false) {
-			return `${message} — outcome unknown; refresh before retrying`;
-		}
-		return message || error.code;
+		return `${message || error.code}${unknown}`;
 	}
-	return safeLine(error instanceof Error ? error.message : String(error), 200);
+	return `${safeLine(error instanceof Error ? error.message : String(error), 200)}${unknown}`;
 }
 
 /**
@@ -101,7 +110,7 @@ export async function syncOmp(
 		try {
 			store.setStatus(await methods.ompStatus());
 		} catch (error) {
-			problems.push(`omp.status: ${describeOmpError(error)}`);
+			problems.push(`omp.status: ${describeOmpError(error, false)}`);
 		}
 	}
 	if (methods.supports(METHOD.ompSessionsList)) {
@@ -112,7 +121,7 @@ export async function syncOmp(
 			});
 			store.applyList(sessions, sessions.length < OMP_LIST_LIMIT);
 		} catch (error) {
-			problems.push(`omp.sessions.list: ${describeOmpError(error)}`);
+			problems.push(`omp.sessions.list: ${describeOmpError(error, false)}`);
 		}
 	}
 	return problems.length > 0 ? problems.join("; ") : undefined;

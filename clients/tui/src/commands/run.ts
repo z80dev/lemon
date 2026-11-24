@@ -6,7 +6,7 @@
  * exposes and focuses the panel when there is one.
  */
 
-import { ControlPlaneError, NotConnectedError } from "../protocol/errors.ts";
+import { classifyMutationError, failureCode } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type {
 	SessionRewindPreview,
@@ -323,7 +323,7 @@ export const retryCommand: SlashCommand = {
 			await ctx.ui.reloadSession(key);
 		} catch (error) {
 			ctx.ui.notice(
-				`rewound, but the history reload failed (${errorCode(error)}) — the prompt is in the composer; use /resume to reload, then send it`,
+				`rewound, but the history reload failed (${failureCode(error, "INVALID_RESPONSE")}) — the prompt is in the composer; use /resume to reload, then send it`,
 				"warning",
 			);
 			return;
@@ -408,22 +408,10 @@ async function findLastUserEntry(
 	}
 }
 
-function errorCode(error: unknown): string {
-	return error instanceof ControlPlaneError || error instanceof NotConnectedError
-		? error.code
-		: "INVALID_RESPONSE";
-}
-
 function retryFailure(ctx: CommandContext, stage: string, error: unknown, mutation = false): void {
-	const uncertain =
-		mutation &&
-		(!(error instanceof ControlPlaneError || error instanceof NotConnectedError) ||
-			(error instanceof ControlPlaneError &&
-				typeof error.details === "object" &&
-				error.details !== null &&
-				(error.details as Record<string, unknown>).retrySafe === false));
+	const uncertain = mutation && classifyMutationError(error) === "unknown";
 	ctx.ui.notice(
-		`retry ${stage} did not complete (${errorCode(error)}); nothing was resent${uncertain ? ". The remote outcome is uncertain; inspect /tree before retrying." : "; no history was changed"}`,
+		`retry ${stage} did not complete (${failureCode(error, "INVALID_RESPONSE")}); nothing was resent${uncertain ? ". The remote outcome is uncertain; inspect /tree before retrying." : "; no history was changed"}`,
 		"error",
 	);
 }

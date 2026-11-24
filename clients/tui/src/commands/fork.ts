@@ -1,4 +1,4 @@
-import { NotConnectedError } from "../protocol/errors.ts";
+import { classifyMutationError, describeError } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
 
@@ -35,10 +35,13 @@ export async function forkSession(ctx: CommandContext, entryId?: string): Promis
 		});
 		childKey = result.sessionKey;
 	} catch (error) {
+		const outcome = classifyMutationError(error);
 		ctx.ui.notice(
-			error instanceof NotConnectedError
-				? "connect to the daemon before forking; nothing was queued"
-				: "session fork was not confirmed; inspect /sessions before trying again",
+			outcome === "not-sent"
+				? "connect to the daemon before forking; nothing was sent"
+				: outcome === "refused"
+					? `session fork was refused (${describeError(error)}); nothing was created`
+					: "session fork outcome unknown; inspect /sessions before trying again",
 			"error",
 		);
 		return;

@@ -171,6 +171,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- TUI: a request lost after it reached the socket now fails with an
+  outcome-unknown `ConnectionLostError` instead of "not sent"; one
+  `classifyMutationError` drives every mutation notice. Only explicit refusals
+  (or `retrySafe: true`) count as refused: `INTERNAL_ERROR` on a prompt becomes a
+  review item instead of an automatic queued resend, a failed `sessions.prompt.bind`
+  keeps the draft without wedging the session (the surface is bound once per
+  connection), and an unconfirmed steer the daemon no longer holds can be
+  dismissed with `d`. A crashed non-read control-plane method now answers
+  `INTERNAL_ERROR` with `retrySafe: false` (#616).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
