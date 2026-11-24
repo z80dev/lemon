@@ -9,6 +9,9 @@
 
 ### Fixed
 
+- `CodingAgent.Session.reset/1` waits longer than the session's own 5-second
+  abort wait, so a slow abort returns `:ok` or `{:error, :busy}` instead of
+  exiting the caller with a call timeout while the reset may still finish (#499).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

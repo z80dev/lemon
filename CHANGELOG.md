@@ -91,6 +91,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- `scripts/test coverage` runs each app in its own VM, so failures that only
+  appeared when one VM re-cover-compiled apps under running processes are
+  gone; paths select apps and other arguments go to every app's run (#499).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -174,6 +177,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Skill lockfile and audit-state writes wait up to ten seconds for their file
   lock instead of one, so concurrent skill installs in one runtime are no
   longer refused with `lock_timeout` while the lock is merely busy (#499).
+- Session reset no longer exits its caller with a call timeout when aborting
+  the active run takes most of the session's 5-second abort wait (#499).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
