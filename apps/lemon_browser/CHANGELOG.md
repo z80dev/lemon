@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** `LemonBrowser.Backends.Controller`, `LemonBrowser.ControllerBroker`,
+  `LemonBrowser.Backends.Hybrid`, `LemonBrowser.HybridRouter` and the
+  `LEMON_BROWSER_HYBRID_*` settings; neither backend was selectable (#702).
+
+### Fixed
+
+- `TernSession` monitors its Tern client and reconnects on the next request
+  after the client dies, keeping its block; a failed reconnect is a `:connect`
+  error so auto-selected panes can fall back (#661).
+
 ### Added
 
 - Opt-in durable tracking for local browser-driver launches, with external-work

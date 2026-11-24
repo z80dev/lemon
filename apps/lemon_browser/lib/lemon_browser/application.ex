@@ -14,9 +14,7 @@ defmodule LemonBrowser.Application do
       {DynamicSupervisor, strategy: :one_for_one, name: LemonBrowser.CamofoxSessionSupervisor},
       {Registry, keys: :unique, name: LemonBrowser.TernSessionRegistry},
       {DynamicSupervisor, strategy: :one_for_one, name: LemonBrowser.TernSessionSupervisor},
-      LemonBrowser.HybridRouter,
-      LemonBrowser.LocalServer,
-      LemonBrowser.ControllerBroker
+      LemonBrowser.LocalServer
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: LemonBrowser.Supervisor)

@@ -392,6 +392,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `CodeMode.enabled?/1`); a disabled `code_mode` profile stays on managed bash,
   and a missing `python3` returns a clear error instead of crashing the call.
   Code-mode remains opt-in per the #598 evaluation (#674).
+- A Tern browser pane reconnects to the daemon after its client dies (daemon
+  restart or socket error) instead of failing every later request with
+  `:closed`; an unopened pane whose daemon is gone falls back like any other
+  unavailable Tern connection (#661).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
@@ -551,6 +555,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   in SQL before its result limit for legacy sessions too, so `scope: project` no
   longer comes back empty when matches exist, and it never pays for a remote
   provider search whose results it discarded (#656).
+- **Breaking:** the unreachable `controller` and `hybrid` browser backends,
+  `ControllerBroker`, `HybridRouter`, their provider ids/status strings and the
+  `LEMON_BROWSER_HYBRID_LOCAL_BACKEND`/`LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`
+  settings. Configs naming them now fail validation instead of reporting a
+  backend that could never serve a request (#702).
 - The unenforced `sandbox` tool-policy field; legacy input is ignored with a
   warning and never changes authority (#605).
 - `[:lemon, :control_plane, :event_bridge, :dropped]` and

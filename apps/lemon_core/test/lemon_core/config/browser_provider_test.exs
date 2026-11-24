@@ -37,11 +37,21 @@ defmodule LemonCore.Config.BrowserProviderTest do
     assert LemonCore.Env.describe(:lemon_browser_provider).default == "auto"
   end
 
-  test "all supported provider strings validate, including legacy controller and hybrid" do
+  test "all supported provider strings validate" do
     for provider <- LemonCore.BrowserProvider.providers() do
       config = tools(%{"provider" => provider})
       assert config.browser.provider == provider
       assert Validator.validate_tools(config, []) == []
+    end
+  end
+
+  test "retired controller and hybrid providers are rejected" do
+    refute Enum.any?(LemonCore.BrowserProvider.providers(), &(&1 in ["controller", "hybrid"]))
+
+    for provider <- ["controller", "hybrid"] do
+      errors = tools(%{"provider" => provider}) |> Validator.validate_tools([])
+      assert Enum.any?(errors, &String.contains?(&1, "runtime.tools.browser.provider"))
+      assert LemonCore.BrowserProvider.resolve(provider: provider).provider == nil
     end
   end
 
@@ -79,8 +89,8 @@ defmodule LemonCore.Config.BrowserProviderTest do
   end
 
   test "provider override wins over file and legacy backend choices" do
-    System.put_env("LEMON_BROWSER_BACKEND", "controller")
-    Application.put_env(:lemon_browser, :backend, :hybrid)
+    System.put_env("LEMON_BROWSER_BACKEND", "camofox")
+    Application.put_env(:lemon_browser, :backend, :browserbase)
     System.put_env("LEMON_BROWSER_PROVIDER", "lcu")
     assert tools(%{"provider" => "relay"}).browser.provider == "lcu"
     assert Tools.resolve(%{}).browser.provider == "lcu"
@@ -109,7 +119,7 @@ defmodule LemonCore.Config.BrowserProviderTest do
       assert Tools.resolve(%{}).browser.provider == "auto"
     end
 
-    for backend <- [:controller, "hybrid"] do
+    for backend <- [:camofox, "browserbase"] do
       Application.put_env(:lemon_browser, :backend, backend)
       assert Tools.resolve(%{}).browser.provider == to_string(backend)
     end

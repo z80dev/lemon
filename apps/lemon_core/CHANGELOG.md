@@ -6,6 +6,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** the `controller` and `hybrid` ids from
+  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
+
 ### Changed
 
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a

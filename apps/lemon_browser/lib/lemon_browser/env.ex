@@ -15,32 +15,7 @@ defmodule LemonBrowser.Env do
       aliases: [],
       type: :string,
       default: "local",
-      doc:
-        "Browser backend id: local, controller, hybrid, browserbase, browser_use, firecrawl, or camofox.",
-      secret?: false,
-      required?: false,
-      area: :browser,
-      apps: [:lemon_browser]
-    },
-    %{
-      name: :lemon_browser_hybrid_local_backend,
-      env_var: "LEMON_BROWSER_HYBRID_LOCAL_BACKEND",
-      aliases: [],
-      type: :string,
-      default: "local",
-      doc: "Local/private backend selected by the hybrid browser router.",
-      secret?: false,
-      required?: false,
-      area: :browser,
-      apps: [:lemon_browser]
-    },
-    %{
-      name: :lemon_browser_hybrid_public_backend,
-      env_var: "LEMON_BROWSER_HYBRID_PUBLIC_BACKEND",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Explicit hosted backend selected by the hybrid router for public URLs.",
+      doc: "Browser backend id: local, tern, browserbase, browser_use, firecrawl, or camofox.",
       secret?: false,
       required?: false,
       area: :browser,
