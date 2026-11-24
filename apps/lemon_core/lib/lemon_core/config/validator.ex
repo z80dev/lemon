@@ -25,7 +25,7 @@ defmodule LemonCore.Config.Validator do
   - Logging: valid log levels, writable paths
   - Providers: valid API key formats
   - Tools: valid timeout values
-  - TUI: valid theme names
+  - TUI: a non-blank theme name (the terminal client owns the names)
 
   The generic scalar checks (`validate_boolean/3`, `validate_positive_integer/3`,
   `validate_ratio/3`, `env_var_reference?/1`, ...) are public so channel
@@ -37,8 +37,6 @@ defmodule LemonCore.Config.Validator do
   alias LemonCore.Config.Tools.Bash
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
-  @valid_themes [:default, :dark, :light, :high_contrast, :lemon]
-
   @doc """
   Validates a complete modular configuration.
 
@@ -1275,26 +1273,17 @@ defmodule LemonCore.Config.Validator do
     ["#{path}: must be a string" | errors]
   end
 
+  # The terminal client owns theme names (`/theme`, clients/tui): core only
+  # requires a non-blank name, so a value the client adds can never make config
+  # loading fail. See test/fixtures/tui_theme_values.json.
   defp validate_theme(errors, nil, _path), do: errors
-
-  defp validate_theme(errors, value, path) when is_atom(value) do
-    if value in @valid_themes do
-      errors
-    else
-      valid_themes = Enum.join(@valid_themes, ", ")
-      ["#{path}: invalid theme. Valid: #{valid_themes}" | errors]
-    end
-  end
+  defp validate_theme(errors, value, _path) when is_atom(value), do: errors
 
   defp validate_theme(errors, value, path) when is_binary(value) do
-    if String.downcase(value) in Enum.map(@valid_themes, &Atom.to_string/1),
-      do: errors,
-      else: ["#{path}: invalid theme. Valid: #{Enum.join(@valid_themes, ", ")}" | errors]
+    if String.trim(value) == "", do: ["#{path}: cannot be empty" | errors], else: errors
   end
 
-  defp validate_theme(errors, _value, path) do
-    ["#{path}: must be a valid theme" | errors]
-  end
+  defp validate_theme(errors, _value, path), do: ["#{path}: must be a string" | errors]
 
   defp validate_providers_map(errors, nil), do: errors
 

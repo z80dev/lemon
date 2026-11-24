@@ -766,18 +766,15 @@ defmodule LemonCore.Config.ValidatorTest do
   end
 
   describe "validate_tui/2" do
-    test "validates theme" do
-      valid_themes = [:default, :dark, :light, :high_contrast, :lemon]
-
-      for theme <- valid_themes do
-        errors = Validator.validate_tui(%{theme: theme}, [])
-
-        refute Enum.any?(errors, &String.contains?(&1, "tui.theme")),
-               "Theme #{theme} should be valid"
+    # #640: the terminal client owns theme names; core only rejects a blank or
+    # non-string value.
+    test "accepts any theme name and rejects blank or non-string values" do
+      for theme <- ["lemon", "dark", "auto", "system", "some-future-theme"] do
+        assert Validator.validate_tui(%{theme: theme}, []) == []
       end
 
-      errors = Validator.validate_tui(%{theme: :invalid}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "tui.theme"))
+      assert ["tui.theme: cannot be empty"] = Validator.validate_tui(%{theme: " "}, [])
+      assert ["tui.theme: must be a string"] = Validator.validate_tui(%{theme: 3}, [])
     end
 
     test "validates debug" do

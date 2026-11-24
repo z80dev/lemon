@@ -171,6 +171,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Config: `[tui] theme = "auto"` (what `/theme auto` writes) and `"system"` no
+  longer fail config validation and break every config read and the next
+  daemon start; the terminal client owns theme names and core only requires a
+  non-blank string (#640).
 - Config: after an invalid edit a running Lemon serves the last good config,
   logs the failure once and stops re-reading the file until it changes, instead
   of re-parsing and raising on every config read. Invalid `[features]` states,

@@ -1248,6 +1248,11 @@ Tern's settings; `bell` explicitly rings there too. Non-TTY, `TERM=dumb`, or
 `LEMON_TUI_TERMINAL_INTEGRATION=0` suppresses these side channels entirely.
 See `clients/tui/README.md` for copy commands and keyboard access.
 
+`theme` is owned by the terminal client: `/theme dark|light|auto` writes it,
+and the client also reads `system` (same as `auto`) and the palette names
+`lemon-dark`/`lemon-light`. Core config validation only requires a non-blank
+string, so any value the client writes loads.
+
 ### TUI keybindings
 
 Use `[tui.keys]` to replace any action's default keys. Quote action IDs (otherwise

@@ -1,0 +1,4 @@
+{
+  "description": "Every [tui] theme value the Bun terminal client persists or reads. lemon_core must load each one (LemonCore.Config.TuiThemeBoundaryTest); the TUI asserts every /theme value is listed here (clients/tui/test/commands/theme.test.ts).",
+  "values": ["dark", "light", "auto", "system", "lemon-dark", "lemon-light"]
+}

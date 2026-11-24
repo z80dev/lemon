@@ -210,6 +210,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `Validator.validate_tui/2` accepts any non-blank `[tui] theme` (including
+  `auto` and `system`); the terminal client owns theme names (#640).
 - `LemonCore.ConfigCache.get/2` serves the last good config when an implicit
   reload fails, records the failure (`last_error/1`), reports it once
   (`[:lemon, :config_cache, :reload_failed]`) and does not reload again until
