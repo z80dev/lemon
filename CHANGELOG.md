@@ -200,6 +200,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- Control-plane reads fail closed: an unreadable store or runtime makes
+  `exec.approvals.get`, `config.get`, `logs.tail`, `sessions.preview`,
+  `chat.history`, `session.detail`, `cron.runs`, the task lists, ACP session
+  listing/lookup and A2A task reads return `UNAVAILABLE` instead of empty or
+  not-found results; `cron.status` reports unreadable sections with `null`
+  counters and `enabled: null` instead of a disabled scheduler; and an execution
+  node whose registry read fails gets a retryable `UNAVAILABLE` instead of being
+  parked as `node_not_found` (#619).
 
 ### Removed
 

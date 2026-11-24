@@ -28,6 +28,28 @@ defmodule LemonControlPlane.WS.ConnectionTest do
     end
   end
 
+  defmodule NodeRegistryReadFailureBackend do
+    @moduledoc false
+    @behaviour LemonCore.Store.Backend
+
+    alias LemonCore.Store.EtsBackend
+
+    @impl true
+    defdelegate init(opts), to: EtsBackend
+    @impl true
+    defdelegate put(state, table, key, value), to: EtsBackend
+    @impl true
+    defdelegate put_new(state, table, key, value), to: EtsBackend
+    @impl true
+    defdelegate delete(state, table, key), to: EtsBackend
+    @impl true
+    defdelegate list(state, table), to: EtsBackend
+
+    @impl true
+    def get(_state, :nodes_registry, _key), do: {:error, :disk_read_failed}
+    def get(state, table, key), do: EtsBackend.get(state, table, key)
+  end
+
   defmodule InvalidResultHandler do
     @behaviour LemonControlPlane.Method
     @impl true
@@ -610,6 +632,51 @@ defmodule LemonControlPlane.WS.ConnectionTest do
       assert response["error"]["code"] == "UNAUTHORIZED"
       assert response["error"]["message"] == "Paired node was not found"
       assert response["error"]["details"] == %{"reason" => "node_not_found"}
+    end
+
+    test "an unreadable node registry is UNAVAILABLE, not an unauthorized missing node" do
+      node_id = "unreadable-node-#{System.unique_integer([:positive])}"
+      token = "unreadable-node-token-#{System.unique_integer([:positive])}"
+      original = :sys.get_state(LemonCore.Store)
+
+      :sys.replace_state(LemonCore.Store, fn state ->
+        {:ok, backend_state} = LemonCore.Store.EtsBackend.init([])
+        %{state | backend: NodeRegistryReadFailureBackend, backend_state: backend_state}
+      end)
+
+      on_exit(fn ->
+        :sys.replace_state(LemonCore.Store, fn current ->
+          Enum.each(current.backend_state, fn {_key, table} -> :ets.delete(table) end)
+          original
+        end)
+      end)
+
+      assert {:ok, _} =
+               LemonControlPlane.Auth.TokenStore.store(token, %{
+                 "type" => "node",
+                 "nodeId" => node_id
+               })
+
+      assert {:ok, state} = Connection.init([])
+
+      frame =
+        Jason.encode!(%{
+          "type" => "req",
+          "id" => "unreadable-connect",
+          "method" => "connect",
+          "params" => %{"auth" => %{"token" => token}}
+        })
+
+      assert {:push, {:text, response_text}, state} =
+               Connection.handle_in({frame, [opcode: :text]}, state)
+
+      response = Jason.decode!(response_text)
+      assert response["ok"] == false
+      # The execution-node worker treats UNAVAILABLE as transient and retries;
+      # UNAUTHORIZED would park it for re-authorization.
+      assert response["error"]["code"] == "UNAVAILABLE"
+      refute Map.has_key?(response["error"]["details"] || %{}, "reason")
+      refute state.connected
     end
 
     test "node name conflict returns CONFLICT with node_name_conflict reason" do

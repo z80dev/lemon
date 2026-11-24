@@ -18,6 +18,7 @@ defmodule LemonControlPlane.Methods.SystemMethodsTest do
       ]
       |> Enum.filter(fn log -> is_nil(level) or log["level"] == level end)
       |> Enum.take(limit)
+      |> then(&{:ok, &1})
     end
   end
 
@@ -59,20 +60,15 @@ defmodule LemonControlPlane.Methods.SystemMethodsTest do
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
 
-    test "returns empty summarized response when log ring is unavailable" do
+    test "reports unavailable instead of an empty tail when the log ring is missing" do
       Application.put_env(
         :lemon_control_plane,
         :log_ring_module,
         :"Elixir.LemonControlPlane.MissingLogRingForTest"
       )
 
-      {:ok, result} = LogsTail.handle(%{"limit" => -1}, @operator_ctx)
-
-      assert result["logs"] == []
-      assert result["total"] == 0
-      assert result["filters"]["limit"] == 100
-      assert result["summary"]["count"] == 0
-      assert result["summary"]["cleanup"]["includesLogMessages"] == true
+      assert {:error, {:unavailable, "Log tail is unavailable"}} =
+               LogsTail.handle(%{"limit" => -1}, @operator_ctx)
     end
   end
 end
