@@ -76,6 +76,17 @@ export interface FinalizeOptions {
 	turn?: TurnSummary;
 }
 
+/**
+ * Per-session event sync: `live` applies batches as they arrive; `replaying`
+ * pages `sessions.events` from the retained cursor; `snapshotting` waits for an
+ * owner snapshot; `failed` awaits a scheduled retry (or the next live batch) and
+ * resumes what it was doing. `retries` counts consecutive failed attempts.
+ */
+export type SessionSync =
+	| { state: "live" }
+	| { state: "replaying" | "snapshotting"; retries: number }
+	| { state: "failed"; resume: "replaying" | "snapshotting"; retries: number };
+
 export class SessionStore {
 	readonly key: string;
 	readonly blocks: Block[] = [];
@@ -190,9 +201,66 @@ export class SessionStore {
 	snapshotRunId: string | undefined;
 	ownedProcessStates: readonly Record<string, unknown>[] = [];
 	eventCursor: SessionEventCursor | undefined;
-	/** Pause live application until replay/snapshot and its buffered tail succeed. */
-	eventRecovery = false;
-	eventSnapshotRequired = false;
+	/**
+	 * The one recovery state. Live application pauses in every other state until
+	 * replay/snapshot and its buffered tail succeed; `failed` keeps the cursor and
+	 * names what the next attempt resumes, so a retry or the next live batch re-arms it.
+	 */
+	get sync(): SessionSync {
+		return this.#sync;
+	}
+	#sync: SessionSync = { state: "live" };
+
+	/** Live application is paused for replay, snapshot, or a failed attempt awaiting retry. */
+	get syncing(): boolean {
+		return this.#sync.state !== "live";
+	}
+
+	/** Only an owner snapshot can resynchronize this session (its cursor is absent or unusable). */
+	get snapshotRequired(): boolean {
+		const sync = this.#sync;
+		return (
+			sync.state === "snapshotting" || (sync.state === "failed" && sync.resume === "snapshotting")
+		);
+	}
+
+	/** Re-arm: a live session starts replay; a failed one resumes what it was doing. */
+	resumeSync(): void {
+		const sync = this.#sync;
+		if (sync.state === "live") this.#sync = { state: "replaying", retries: 0 };
+		else if (sync.state === "failed") this.#sync = { state: sync.resume, retries: sync.retries };
+	}
+
+	/** Cursor replay (also after a snapshot installed its cursor and the tail is applied). */
+	beginReplay(): void {
+		this.#sync = {
+			state: "replaying",
+			retries: this.#sync.state === "live" ? 0 : this.#sync.retries,
+		};
+	}
+
+	requireSnapshot(): void {
+		this.#sync = {
+			state: "snapshotting",
+			retries: this.#sync.state === "live" ? 0 : this.#sync.retries,
+		};
+	}
+
+	/** The attempt ended without catching up; the cursor and buffered tail are kept. */
+	syncFailed(): void {
+		const sync = this.#sync;
+		if (sync.state === "live") return;
+		this.#sync = {
+			state: "failed",
+			resume: sync.state === "failed" ? sync.resume : sync.state,
+			retries: sync.retries + 1,
+		};
+	}
+
+	syncLive(): void {
+		this.#sync = { state: "live" };
+	}
+
 	readonly pendingSessionEvents = new Map<number, SessionEventBatch>();
 	/** Delay queue advancement until all replay pages and live batches are applied. */
 	recoveredCompletion: AgentCompletedEvent | undefined;

@@ -178,6 +178,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   session at least 250 ms apart. `sessions.snapshot` no longer returns
   `snapshot_raced` when only the event cursor moved between its two owner reads
   (#628).
+- A TUI session whose replay or snapshot recovery failed no longer stays
+  stranded (frozen transcript, `busy` stuck, queued follow-ups never sent): one
+  per-session sync state replaces the recovery flags, a failed attempt retries
+  with bounded exponential backoff from the retained cursor, and the next live
+  batch re-arms it immediately (#665).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

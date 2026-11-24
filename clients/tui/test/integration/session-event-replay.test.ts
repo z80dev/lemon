@@ -149,7 +149,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		expect(app.store.focused.bufferFor("run-1")).toBe("AB");
 		second.resolve(page([delta(3, "C"), completed], 4));
 		await waitFor(
-			() => app.store.focused.eventCursor?.seq === 5 && !app.store.focused.eventRecovery,
+			() => app.store.focused.eventCursor?.seq === 5 && app.store.focused.sync.state === "live",
 		);
 		await push(app, server, delta(1, "B"));
 		await push(app, server, completed);
@@ -179,7 +179,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		await waitFor(() => server.requestsFor(METHOD.sessionsEvents).length === 1);
 		expect(app.store.focused.bufferFor("run-1")).toBe("A");
 		release.resolve(page([delta(1, "B"), delta(2, "C")], 2));
-		await waitFor(() => !app.store.focused.eventRecovery);
+		await waitFor(() => app.store.focused.sync.state === "live");
 		expect(app.store.focused.bufferFor("run-1")).toBe("ABC");
 	});
 
@@ -211,7 +211,7 @@ describe("session cursor replay through the real client and controllers", () => 
 			await app.sessions.resync();
 			expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(snapshots);
 			expect(app.store.focused.eventCursor).toEqual(cursor(0));
-			expect(app.store.focused.eventRecovery).toBe(true);
+			expect(app.store.focused.syncing).toBe(true);
 			expect(app.store.focused.busy).toBe(true);
 			expect(
 				app.store.focused.blocks.some(
@@ -254,7 +254,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		await app.sessions.resync();
 		expect(app.store.focused.eventCursor).toEqual(cursor(0));
 		expect(app.store.focused.bufferFor("run-1")).toBe("A");
-		expect(app.store.focused.eventRecovery).toBe(true);
+		expect(app.store.focused.syncing).toBe(true);
 	});
 
 	test("another owner incarnation forces a snapshot regardless of its seq", async () => {
@@ -274,7 +274,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		await app.sessions.resync();
 		expect(app.store.focused.eventCursor).toEqual(cursor(0));
 		expect(app.store.focused.bufferFor("run-1")).toBe("A");
-		expect(app.store.focused.eventRecovery).toBe(true);
+		expect(app.store.focused.syncing).toBe(true);
 		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(snapshots);
 	});
 
@@ -365,7 +365,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		await push(app, server, delta(2, "C"));
 		expect(app.store.focused.eventCursor).toEqual(cursor(2));
 		expect(app.store.focused.bufferFor("run-1")).toBe("ABC");
-		expect(app.store.focused.eventRecovery).toBe(false);
+		expect(app.store.focused.sync.state).toBe("live");
 		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(snapshots);
 		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(0);
 	});
@@ -388,7 +388,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		await push(app, server, next(3, "D"));
 		release.resolve(snapshot(2, "new BC", "owner-2"));
 		await waitFor(
-			() => app.store.focused.eventCursor?.seq === 3 && !app.store.focused.eventRecovery,
+			() => app.store.focused.eventCursor?.seq === 3 && app.store.focused.sync.state === "live",
 		);
 		expect(app.store.focused.bufferFor("run-1")).toBe("new BCD");
 		const cleared: boolean[] = [];
@@ -402,5 +402,77 @@ describe("session cursor replay through the real client and controllers", () => 
 		expect(app.store.focused.bufferFor("run-1")).toBe("new BCDEF");
 		expect(cleared).toEqual([]);
 		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(2);
+	});
+});
+
+describe("one sync state re-arms a stranded session", () => {
+	function completed(seq: number): SessionEventBatch {
+		return {
+			cursor: cursor(seq),
+			events: [
+				{
+					event: "agent",
+					payload: {
+						type: "completed",
+						sessionKey: KEY,
+						runId: "run-1",
+						ok: true,
+						answer: "done",
+						durationMs: 1,
+					},
+				},
+			],
+		};
+	}
+
+	test("a failed replay re-arms on the next live batch; busy clears and the follow-up is sent", async () => {
+		const { app, server } = await boot();
+		server.respondWith(METHOD.chatSend, { sessionKey: KEY, runId: "next-run" });
+		await app.submit("follow-up");
+		expect(app.store.queue.items(KEY)).toHaveLength(1);
+		server.failWith(METHOD.sessionsEvents, "UNAVAILABLE", "replay unavailable");
+		await push(app, server, delta(2, "C"));
+		await waitFor(() => app.store.focused.sync.state === "failed");
+		expect(app.store.focused.sync).toMatchObject({ state: "failed", resume: "replaying" });
+		server.onMethod(METHOD.sessionsEvents, () => page([delta(1, "B"), delta(2, "C")], 2));
+		await push(app, server, completed(3));
+		// Well before the scheduled retry: the live batch itself re-armed recovery.
+		await waitFor(() => app.store.focused.sync.state === "live", { timeoutMs: 400 });
+		expect(app.store.focused.eventCursor).toEqual(cursor(3));
+		expect(app.store.focused.bufferFor("run-1")).toBe("ABC");
+		await waitFor(() => server.requestsFor(METHOD.chatSend).length === 1);
+		expect(app.store.focused.activeRunId).toBe("next-run");
+		expect(app.store.queue.items(KEY)).toHaveLength(0);
+		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(2);
+	});
+
+	test("exhausted retry snapshots recover through the scheduled retry and terminal still fires", async () => {
+		const { app, server } = await boot();
+		server.respondWith(METHOD.chatSend, { sessionKey: KEY, runId: "next-run" });
+		await app.submit("follow-up");
+		server.respondWith(METHOD.sessionsEvents, { status: "cursor_expired", sessionKey: KEY });
+		const base = snapshot();
+		let calls = 0;
+		server.onMethod(METHOD.sessionsSnapshot, () =>
+			++calls <= 3
+				? {
+						status: "retry",
+						sessionKey: KEY,
+						identity: base.identity,
+						reason: "snapshot_raced",
+						retrySafe: true,
+					}
+				: snapshot(5, "AB"),
+		);
+		await app.sessions.resync();
+		expect(calls).toBe(3);
+		expect(app.store.focused.sync).toMatchObject({ state: "failed", resume: "snapshotting" });
+		// Nothing else arrives: only the scheduled retry can recover the session.
+		await waitFor(() => app.store.focused.sync.state === "live", { timeoutMs: 3000 });
+		expect(calls).toBe(4);
+		expect(app.store.focused.eventCursor).toEqual(cursor(5));
+		await push(app, server, completed(6));
+		await waitFor(() => server.requestsFor(METHOD.chatSend).length === 1);
+		expect(app.store.focused.activeRunId).toBe("next-run");
 	});
 });

@@ -688,7 +688,7 @@ export class AppShell {
 					if (
 						session !== this.store.focused &&
 						!session.eventCursor &&
-						!session.eventSnapshotRequired &&
+						!session.snapshotRequired &&
 						(!session.snapshotIdentity ||
 							!session.busy ||
 							this.store.queue.items(session.key)[0]?.state !== "queued-local")
@@ -768,6 +768,7 @@ export class AppShell {
 		this.#unregisterTerminalCleanup = undefined;
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.events.dispose();
+		this.sessions.dispose();
 		this.client.close();
 		this.#terminalIntegration.stop();
 		if (this.#started) this.tui.stop();
