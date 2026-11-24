@@ -54,8 +54,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportAsyncPollTest do
     {:noreply, polling} = Transport.handle_info(:poll, state)
     assert_receive {:poll_started, worker, 7}
 
-    assert {:reply, :ok, paused} =
-             Transport.handle_call(:drain_pause, {self(), make_ref()}, polling)
+    # The drain is answered by the event worker, never blocked by the poll.
+    tag = make_ref()
+    assert {:noreply, paused} = Transport.handle_call(:drain_pause, {self(), tag}, polling)
+    assert_receive {^tag, :ok}
+    {%Task{ref: drain_ref}, {:drain_flush, _from}} = paused.event_task
+    assert_receive {^drain_ref, drained}
+    assert {:noreply, paused} = Transport.handle_info({drain_ref, drained}, paused)
 
     send(worker, {:finish, {:ok, %{"ok" => true, "result" => [%{"update_id" => 9}]}}})
     ref = polling.poll_task.ref
@@ -198,5 +203,88 @@ defmodule LemonChannels.Adapters.Telegram.TransportAsyncPollTest do
     after
       PollerLock.release("first", token)
     end
+  end
+
+  defmodule VoiceAPI do
+    @chat_id 650_650
+
+    def chat_id, do: @chat_id
+
+    def get_updates(token, _offset, _timeout) do
+      if :persistent_term.get({__MODULE__, token}, false) do
+        {:ok, %{"ok" => true, "result" => []}}
+      else
+        :persistent_term.put({__MODULE__, token}, true)
+        {:ok, %{"ok" => true, "result" => [voice_update()]}}
+      end
+    end
+
+    defp voice_update do
+      %{
+        "update_id" => 1,
+        "message" => %{
+          "message_id" => 10,
+          "date" => 1,
+          "chat" => %{"id" => @chat_id, "type" => "private"},
+          "from" => %{"id" => 7, "is_bot" => false, "first_name" => "z"},
+          "voice" => %{"file_id" => "voice-1", "file_size" => 3, "mime_type" => "audio/ogg"}
+        }
+      }
+    end
+
+    def get_file(_token, _file_id),
+      do: {:ok, %{"ok" => true, "result" => %{"file_path" => "v.ogg"}}}
+
+    def download_file(_token, _path), do: {:ok, "ogg"}
+    def send_message(_token, _chat_id, _text, _opts, _parse_mode), do: {:ok, %{"ok" => true}}
+  end
+
+  defmodule SlowTranscriber do
+    def transcribe(_request) do
+      send(:persistent_term.get({__MODULE__, :owner}), {:transcribing, self()})
+
+      receive do
+        :release -> {:ok, "hello"}
+      end
+    end
+  end
+
+  test "allowlist updates and drain are answered while a voice note is transcribing" do
+    token = "voice-#{System.unique_integer([:positive])}"
+    :persistent_term.put({SlowTranscriber, :owner}, self())
+
+    on_exit(fn ->
+      :persistent_term.erase({SlowTranscriber, :owner})
+      :persistent_term.erase({VoiceAPI, token})
+    end)
+
+    state =
+      RuntimeState.new(%{
+        token: token,
+        account_id: "voice-test",
+        api_mod: VoiceAPI,
+        offset: 0,
+        poll_interval_ms: 60_000,
+        allowed_chat_ids: [VoiceAPI.chat_id()],
+        voice_transcription: true,
+        voice_transcriber: SlowTranscriber,
+        voice_transcription_api_key: "test-key",
+        voice_transcription_provider: "openai_transcribe",
+        voice_transcription_model: "m",
+        voice_transcription_base_url: nil,
+        voice_max_bytes: 1_000,
+        deny_unbound_chats: false
+      })
+
+    {:ok, server} = :proc_lib.start_link(__MODULE__, :start_loop, [state])
+    on_exit(fn -> if Process.alive?(server), do: GenServer.stop(server) end)
+    send(server, :poll)
+    assert_receive {:transcribing, transcriber}, 2_000
+
+    assert :ok = GenServer.call(server, {:update_allowlist, :add, 99}, 1_000)
+    assert :ok = GenServer.call(server, :drain_pause, 1_000)
+    assert 99 in :sys.get_state(server, 1_000).allowed_chat_ids
+    assert Process.alive?(transcriber)
+    send(transcriber, :release)
   end
 end

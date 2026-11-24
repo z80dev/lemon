@@ -168,6 +168,67 @@ defmodule LemonChannels.Adapters.Discord.Supervision581Test do
     assert :message_content in Application.get_env(:nostrum, :gateway_intents)
   end
 
+  test "a queued /file get is acknowledged on arrival, well inside Discord's 3 s window" do
+    parent = self()
+
+    Application.put_env(:lemon_channels, :discord_interaction_responder, fn interaction,
+                                                                            payload ->
+      send(
+        parent,
+        {:interaction_response, interaction.id, payload, System.monotonic_time(:millisecond)}
+      )
+
+      :ok
+    end)
+
+    on_exit(fn -> Application.delete_env(:lemon_channels, :discord_interaction_responder) end)
+
+    transport = start_supervised!({Transport, config: %{unauthorized_dm_behavior: "pair"}})
+
+    # Occupy the serial event queue with blocked platform I/O.
+    message = %{
+      "id" => "1503803470493257650",
+      "channel_id" => "1475727417372049650",
+      "content" => "pair me",
+      "author" => %{"id" => "1476753643834183650", "bot" => false}
+    }
+
+    send(transport, {:discord_event, {:MESSAGE_CREATE, message, nil}})
+    assert_receive {:event_blocked, worker, pairing_reply}, 1_000
+
+    sent_at = System.monotonic_time(:millisecond)
+
+    file_get = %{
+      id: "1503803470493257651",
+      type: 2,
+      token: "token",
+      application_id: "1",
+      channel_id: "1475727417372049651",
+      data: %{
+        name: "file",
+        options: [%{type: 1, name: "get", options: [%{name: "path", value: "a.txt"}]}]
+      },
+      user: %{id: "1476753643834183651"}
+    }
+
+    send(transport, {:discord_event, {:INTERACTION_CREATE, file_get, nil}})
+
+    assert_receive {:interaction_response, "1503803470493257651", %{type: 5, data: %{flags: 64}},
+                    acked_at},
+                   1_000
+
+    assert acked_at - sent_at < 3_000
+    # The ack did not wait for the blocked event.
+    assert Process.alive?(worker)
+
+    consume_pairing(pairing_reply)
+    send(worker, :release)
+
+    # The reply arrives later as an edit of the deferred response.
+    assert_receive {:interaction_response, "1503803470493257651", %{type: :edit_original}, _at},
+                   2_000
+  end
+
   defp consume_pairing(reply) do
     [_, code] = Regex.run(~r/Pairing code: ([A-HJ-NP-Z2-9]{8})/, reply)
     assert {:ok, _} = LemonChannels.Pairing.consume("discord", code)

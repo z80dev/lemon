@@ -198,6 +198,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   preferences act on the session the thread's runs use. Reactions and
   system replies land in the thread. A channel that cannot be looked up is
   not routed under a guessed key (#649).
+- One voice note or file transfer no longer stalls every chat on a channel
+  account. Telegram transcribes voice notes and downloads images in the poll
+  task and applies updates in a supervised worker, so pairing allowlist
+  updates and runtime drains are answered while a note transcribes. Discord
+  acknowledges slash commands and buttons on arrival (replies follow as edits
+  or follow-ups), so a queued command no longer misses the 3 s window, and
+  file transfers, thread creation and media preparation run beside the event
+  queue (#650).
 - Skill lockfile and audit-state writes wait up to ten seconds for their file
   lock instead of one, so concurrent skill installs in one runtime are no
   longer refused with `lock_timeout` while the lock is merely busy (#499).
