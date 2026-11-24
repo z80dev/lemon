@@ -77,6 +77,24 @@
   Provable pre-exec failures (the helper now reports `started:false`) are
   recorded as `failed`. New preview-first `prune/2` removes receipts only with a
   single-use confirmation token (#679).
+- `ResourceLoader`, `AtImports` and `Rules` read through the new bounded,
+  stat-validated per-session cache `ResourceLoader.SourceReader`, with
+  per-file and total limits (instructions 64/256 KiB, rules 64 KiB per file,
+  128 KiB always-apply, 256 files, 300-character descriptions), truncation
+  markers naming the path, and `[:coding_agent, :prompt_sources, :read |
+  :load]` telemetry. A turn with unchanged files performs no instruction or
+  rule file read (#693).
+- `Workspace.seed_workspace/1` seeds a workspace once (marker
+  `.lemon-workspace-seeded`); sessions call it only when they read bootstrap
+  files and never raise on an unwritable workspace. Deleted templates such as
+  `BOOTSTRAP.md` are not re-created; `ensure_workspace/1` (`mix lemon.workspace
+  init`) still restores missing templates explicitly. Templates are written via
+  temp file and rename (#672).
+- `CodingAgent.Rules` parses frontmatter through `LemonSkills.Frontmatter`
+  instead of `YamlElixir.read_from_string`, which started `:yamerl` on every read
+  inside session init. Repeated keys (also kebab/camel spellings of one key) and
+  frontmatter over 16 KiB reject the rule with a warning; it still shadows
+  lower-priority namesakes (#671).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

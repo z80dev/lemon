@@ -7,6 +7,9 @@
 - Prompt skill discovery can use shorter descriptions for coding sessions without
   hiding skill keys or truncating the metadata/instructions loaded by `read_skill`.
 - Route MCP stdio launches through the native-process seam and record unsupported whole-workload ownership before client startup and protocol dispatch. Preserve uncertainty after failures while leaving cached reads and proven pre-dispatch refusals unrecorded.
+- `LemonSkills.Frontmatter.parse_yaml/2`: the shared YAML frontmatter parser
+  (direct `:yamerl`, no `Application.start/1`; duplicate-key rejection and a
+  size cap) used by skill manifests, subagent definitions and rules (#671).
 
 ### Changed
 
@@ -18,6 +21,9 @@
 - **Breaking:** media tools require `provider`, use provider-specific default
   timeouts, and run jobs through `LemonMedia.MediaJobSupervisor.run_job/2`, which
   cancels timed-out or aborted jobs (#664).
+- **Breaking:** a YAML skill manifest that repeats a top-level key or exceeds
+  64 KiB of frontmatter no longer parses (`Manifest.Parser.parse/1` returns
+  `:error`) instead of resolving duplicates last-wins (#671).
 - Share media-tool job, artifact, credential, and response helpers, including
   recursive atom conversion inside lists in redacted job metadata.
 - Share skill-state file locking while preserving each store's retry budget.

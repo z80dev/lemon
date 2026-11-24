@@ -111,6 +111,18 @@ the existing gateway run `:start`, `:first_token` and `:stop` events. Consumers
 must keep synchronous handlers cheap; the benchmark only sends bounded timing
 messages to its owner and retains no session content.
 
+## Prompt source loading
+
+Instruction and rule loading runs on session start and on every turn's prompt
+refresh. `CodingAgent.ResourceLoader.SourceReader` emits
+`[:coding_agent, :prompt_sources, :read]` for every disk read of an instruction
+file, `@` import or rule file (stat-validated cache hits emit nothing), with
+`%{bytes: n}` and metadata `%{truncated: boolean}`, and
+`[:coding_agent, :prompt_sources, :load]` once per loader pass with
+`%{duration: native_time_units, reads: n, bytes: n}` and metadata
+`%{source: :instructions | :rules}`. No paths or content are included. A turn
+whose sources are unchanged reports `reads: 0`.
+
 ## Conventions
 
 ### Naming

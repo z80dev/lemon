@@ -41,14 +41,28 @@ defmodule CodingAgent.ResourceLoader do
   re-inlines another loaded instruction file, a file an earlier instruction
   file already imported, or an `:exclude`d file.
 
+  ## Limits
+
+  Instruction files are read through `CodingAgent.ResourceLoader.SourceReader`
+  (bounded, and cached per session by file stat). Each file contributes at
+  most 64 KiB of its own text and all instruction sections together at most
+  256 KiB: the per-file and total limits `AtImports` applies to imports and
+  `CodingAgent.Commands` to command files. The system prompt cannot be
+  compacted, so a generated or oversized guide must not crowd out the
+  conversation. Text beyond a limit is replaced by a marker naming the file so
+  the model can `read` the rest; a truncated read is logged.
+
   ## Example
 
       sections = CodingAgent.ResourceLoader.instruction_sections("/path/to/project")
   """
 
   alias CodingAgent.Config
+  alias CodingAgent.ResourceLoader.{AtImports, SourceReader}
   alias LemonCore.TrustedRoot
-  alias CodingAgent.ResourceLoader.AtImports
+
+  @max_instruction_file_bytes 64 * 1024
+  @max_instruction_total_bytes 256 * 1024
 
   # Instruction file names read from each directory itself
   @root_instruction_files ["CLAUDE.md", "AGENTS.md", "GEMINI.md", "CLAUDE.local.md"]
@@ -95,17 +109,23 @@ defmodule CodingAgent.ResourceLoader do
           %{category: atom(), label: String.t(), text: String.t()}
         ]
   def instruction_sections(cwd, opts \\ []) do
-    {root, dirs} =
-      case TrustedRoot.project(cwd) do
-        :none -> {nil, []}
-        project -> project
-      end
+    SourceReader.span(:instructions, fn ->
+      {root, dirs} =
+        case TrustedRoot.project(cwd) do
+          :none -> {nil, []}
+          project -> project
+        end
 
-    excluded = opts |> Keyword.get(:exclude, []) |> MapSet.new(&AtImports.identity/1)
+      excluded = opts |> Keyword.get(:exclude, []) |> MapSet.new(&AtImports.identity/1)
 
-    dirs
-    |> find_instruction_files(root, Keyword.get(opts, :foreign_globals, false) == true, excluded)
-    |> combined_sections(List.first(dirs) || Path.expand(cwd), excluded)
+      dirs
+      |> find_instruction_files(
+        root,
+        Keyword.get(opts, :foreign_globals, false) == true,
+        excluded
+      )
+      |> combined_sections(List.first(dirs) || Path.expand(cwd), excluded)
+    end)
   end
 
   @doc """
@@ -302,22 +322,25 @@ defmodule CodingAgent.ResourceLoader do
         MapSet.put(acc, AtImports.identity(read_path))
       end)
 
-    {files, _skip} =
-      Enum.flat_map_reduce(files, skip, fn {path, read_path, import_root}, skip ->
-        case read_instruction_file(read_path, home, import_root, skip) do
-          {"", skip} ->
-            {[], skip}
+    {files, _acc} =
+      Enum.flat_map_reduce(files, {skip, @max_instruction_total_bytes}, fn
+        {path, read_path, import_root}, {skip, remaining} ->
+          case read_instruction_file(read_path, home, import_root, skip) do
+            {"", skip} ->
+              {[], {skip, remaining}}
 
-          {content, skip} ->
-            {[
-               %{
-                 category: :context_files,
-                 label: "#{Path.basename(path)} (#{scope_label(path, global_dirs, cwd)})",
-                 text:
-                   "<!-- From: #{path} -->\nScope: #{instruction_scope(path, global_dirs)}\n\n#{content}"
-               }
-             ], skip}
-        end
+            {content, skip} ->
+              {content, remaining} = within_budget(content, path, remaining)
+
+              {[
+                 %{
+                   category: :context_files,
+                   label: "#{Path.basename(path)} (#{scope_label(path, global_dirs, cwd)})",
+                   text:
+                     "<!-- From: #{path} -->\nScope: #{instruction_scope(path, global_dirs)}\n\n#{content}"
+                 }
+               ], {skip, remaining}}
+          end
       end)
 
     case files do
@@ -361,26 +384,43 @@ defmodule CodingAgent.ResourceLoader do
     end
   end
 
-  # Read an instruction file with its `@path` imports expanded.
+  # Read an instruction file (at most the per-file limit of its own text) with
+  # its `@path` imports expanded.
   defp read_instruction_file(path, home, import_root, skip) do
-    case read_source(path, import_root) do
-      {:ok, content} ->
+    case SourceReader.read(path, import_root, max_bytes: @max_instruction_file_bytes) do
+      {:ok, %{content: content, truncated: truncated}} ->
         {text, skip} = AtImports.expand(content, path, home: home, root: import_root, skip: skip)
-        {String.trim(text), skip}
+        text = String.trim(text)
 
-      _ ->
+        text =
+          if truncated,
+            do:
+              text <>
+                "\n\n[... #{path} truncated at #{div(@max_instruction_file_bytes, 1024)} KiB; " <>
+                "read the file for the rest]",
+            else: text
+
+        {text, skip}
+
+      :error ->
         {"", skip}
     end
   end
 
-  # Directory files are read through `TrustedRoot.read/3` (validated realpath,
-  # identity re-checked); home-owned globals are read directly.
-  defp read_source(path, :unconfined), do: File.read(path)
+  # All instruction sections share one byte budget; a file past it is cut (or
+  # replaced) by a marker naming it, so the model can still read it.
+  defp within_budget(content, _path, remaining) when byte_size(content) <= remaining,
+    do: {content, remaining - byte_size(content)}
 
-  defp read_source(path, root) do
-    case TrustedRoot.read(path, root) do
-      {:ok, content, _real} -> {:ok, content}
-      :error -> :error
-    end
+  defp within_budget(content, path, remaining) do
+    kept = SourceReader.truncate_utf8(content, remaining)
+
+    marker =
+      "[... #{path} " <>
+        if(kept == "", do: "not loaded", else: "truncated") <>
+        ": the #{div(@max_instruction_total_bytes, 1024)} KiB instruction budget is " <>
+        "exhausted; read the file for the rest]"
+
+    {if(kept == "", do: marker, else: kept <> "\n\n" <> marker), 0}
   end
 end

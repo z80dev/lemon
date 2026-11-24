@@ -76,7 +76,10 @@ defmodule CodingAgent.Session.Lifecycle do
     register_session = Keyword.get(opts, :register, false)
     session_registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
 
-    Workspace.ensure_workspace(workspace_dir: workspace_dir)
+    # Only a session that reads assistant-home bootstrap seeds it, once per
+    # workspace; a read-only home never fails session start.
+    if persona and context_snapshot == nil,
+      do: Workspace.seed_workspace(workspace_dir: workspace_dir)
 
     stage_started = System.monotonic_time()
 

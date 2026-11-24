@@ -59,6 +59,87 @@ defmodule CodingAgent.WorkspaceTest do
     assert File.read!(Path.join(workspace_dir, "memory/topics/git.md")) == "TEMPLATE GIT NOTE"
   end
 
+  @seeded_templates ["BOOTSTRAP.md", "HEARTBEAT.md", "memory/topics/TEMPLATE.md"]
+
+  test "seed_workspace writes every template into a fresh workspace exactly once", %{
+    tmp_dir: tmp_dir
+  } do
+    workspace_dir = Path.join(tmp_dir, "workspace")
+    template_dir = Workspace.workspace_template_dir()
+    templates = template_files(template_dir)
+
+    assert :ok = Workspace.seed_workspace(workspace_dir: workspace_dir)
+
+    for relative <- templates do
+      assert File.read!(Path.join(workspace_dir, relative)) ==
+               File.read!(Path.join(template_dir, relative))
+    end
+
+    assert Enum.all?(@seeded_templates, &(&1 in templates))
+    assert template_files(workspace_dir) == templates
+
+    File.write!(Path.join(workspace_dir, "SOUL.md"), "edited")
+    assert :ok = Workspace.seed_workspace(workspace_dir: workspace_dir)
+    assert File.read!(Path.join(workspace_dir, "SOUL.md")) == "edited"
+    assert template_files(workspace_dir) == templates
+  end
+
+  test "seed_workspace never re-creates templates deleted from an existing workspace", %{
+    tmp_dir: tmp_dir
+  } do
+    seeded = Path.join(tmp_dir, "seeded")
+    assert :ok = Workspace.seed_workspace(workspace_dir: seeded)
+    Enum.each(@seeded_templates, &File.rm!(Path.join(seeded, &1)))
+    assert :ok = Workspace.seed_workspace(workspace_dir: seeded)
+    refute Enum.any?(@seeded_templates, &File.exists?(Path.join(seeded, &1)))
+
+    # A workspace from before the seed marker existed is only marked.
+    legacy = Path.join(tmp_dir, "legacy")
+    File.mkdir_p!(legacy)
+    File.write!(Path.join(legacy, "AGENTS.md"), "existing agents")
+    assert :ok = Workspace.seed_workspace(workspace_dir: legacy)
+    assert File.ls!(legacy) |> Enum.sort() == [".lemon-workspace-seeded", "AGENTS.md"]
+    assert File.read!(Path.join(legacy, "AGENTS.md")) == "existing agents"
+  end
+
+  test "a failed template copy leaves no partial file", %{tmp_dir: tmp_dir} do
+    workspace_dir = Path.join(tmp_dir, "workspace")
+    template_dir = Path.join(tmp_dir, "templates")
+    File.mkdir_p!(template_dir)
+    File.write!(Path.join(template_dir, "AGENTS.md"), "TEMPLATE AGENTS")
+    unreadable = Path.join(template_dir, "BOOTSTRAP.md")
+    File.write!(unreadable, "TEMPLATE BOOTSTRAP")
+    File.chmod!(unreadable, 0o000)
+    on_exit(fn -> File.chmod(unreadable, 0o644) end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :eacces} =
+                 Workspace.seed_workspace(
+                   workspace_dir: workspace_dir,
+                   template_dir: template_dir
+                 )
+      end)
+
+    assert log =~ "Assistant workspace was not seeded"
+    assert File.ls!(workspace_dir) == ["AGENTS.md"]
+
+    assert_raise RuntimeError, ~r/Failed to write .*BOOTSTRAP\.md: :eacces/, fn ->
+      Workspace.ensure_workspace(workspace_dir: workspace_dir, template_dir: template_dir)
+    end
+
+    assert File.ls!(workspace_dir) == ["AGENTS.md"]
+  end
+
+  defp template_files(dir) do
+    dir
+    |> Path.join("**")
+    |> Path.wildcard()
+    |> Enum.filter(&File.regular?/1)
+    |> Enum.map(&Path.relative_to(&1, dir))
+    |> Enum.sort()
+  end
+
   @tag :tmp_dir
   test "load_bootstrap_files marks missing required files", %{tmp_dir: tmp_dir} do
     workspace_dir = Path.join(tmp_dir, "workspace")

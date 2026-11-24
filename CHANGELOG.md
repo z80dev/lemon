@@ -408,6 +408,30 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   count toward the 1,000 limit, a spawn or pre-exec failure is reported as the
   new terminal state `failed` instead of `outcome_unknown`, and operators can
   prune receipts preview-first with `ProcessService.prune/2` (#679).
+- Instruction files, `@` imports and rule files are bounded and cached: each
+  instruction file contributes at most 64 KiB and all of them 256 KiB; rule files
+  are read up to 64 KiB, always-apply bodies share 128 KiB, at most 256 rule
+  files are read and rulebook descriptions are one line of at most 300
+  characters. Truncation leaves a marker naming the file and is logged.
+  Sessions no longer re-read every source on each turn: reads are cached per
+  session and revalidated by file stat, so an unchanged turn reads no
+  instruction or rule file and an edit still reaches the next turn.
+  `[:coding_agent, :prompt_sources, :read | :load]` telemetry reports loader
+  reads, bytes and time (#693).
+- The assistant workspace is seeded from its templates once, by the first
+  chat/persona session (marked by `.lemon-workspace-seeded`), instead of on
+  every session start: a deleted `BOOTSTRAP.md` (whose template asks to be
+  deleted when done), `HEARTBEAT.md` or `memory/topics/TEMPLATE.md` is no longer
+  re-created. Templates are copied via a temporary file and rename, so a failed
+  copy leaves no partial file; coding sessions no longer write the workspace, and
+  an unwritable assistant home no longer fails session start (#672).
+- Rule frontmatter (`.cursor/rules/*.mdc` and the other rule sources) is parsed
+  without `YamlElixir.read_from_string`, which called
+  `Application.start(:yamerl)` on every read and could deadlock session start
+  against a stopping application. Skills, subagents and rules now share one
+  parser (`LemonSkills.Frontmatter`); a rule or skill manifest that repeats a
+  frontmatter key, or a rule whose frontmatter exceeds 16 KiB (skills: 64 KiB),
+  is rejected with a warning instead of resolving last-wins (#671).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
