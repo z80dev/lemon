@@ -1782,17 +1782,23 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     }
 
     # Goal work runs later under this channel's channel-run authority; with no
-    # peer kind the router applies the group approval floor.
-    respond_ephemeral(
-      interaction,
-      LemonChannels.GoalStatusMessage.handle(session_key, args,
-        agent_id: BindingResolver.resolve_agent_id(scope),
-        workspace: BindingResolver.resolve_cwd(scope),
-        channel_context: %{channel_id: "discord", peer_id: map_get(interaction, :channel_id)},
-        meta: %{transport: "discord"}
-      )
-    )
+    # peer kind the router applies the group approval floor. Judge ticks and
+    # continuations run off this process and post their result as a follow-up.
+    text =
+      try do
+        LemonChannels.GoalStatusMessage.handle(session_key, args,
+          agent_id: BindingResolver.resolve_agent_id(scope),
+          workspace: BindingResolver.resolve_cwd(scope),
+          channel_context: %{channel_id: "discord", peer_id: map_get(interaction, :channel_id)},
+          meta: %{transport: "discord"},
+          start_task: &start_task/1,
+          deliver: &send_followup(interaction, &1)
+        )
+      catch
+        :exit, _ -> "Goal command failed: the goal service did not answer in time."
+      end
 
+    respond_ephemeral(interaction, text)
     state
   end
 

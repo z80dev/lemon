@@ -1297,13 +1297,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       session_key = build_session_key(state, inbound, scope)
       args = Commands.telegram_command_args(inbound.message.text || "", "goal")
       agent_id = BindingResolver.resolve_agent_id(scope)
+      reply = &send_system_message(state, chat_id, thread_id, user_msg_id, &1)
 
       _ =
-        send_system_message(
-          state,
-          chat_id,
-          thread_id,
-          user_msg_id,
+        reply.(
           LemonChannels.GoalStatusMessage.handle(session_key, args,
             agent_id: agent_id,
             workspace: BindingResolver.resolve_cwd(scope),
@@ -1315,7 +1312,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               peer_id: inbound.peer.id,
               thread_id: inbound.peer.thread_id
             },
-            meta: %{transport: "telegram"}
+            meta: %{transport: "telegram"},
+            # Judge ticks and continuations run off this process; their
+            # result is posted to the chat when ready.
+            start_task: &start_async_task(state, &1),
+            deliver: reply
           )
         )
     end
@@ -1323,6 +1324,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     state
   rescue
     _ -> state
+  catch
+    :exit, _ -> state
   end
 
   defp handle_kanban_command(state, inbound) do

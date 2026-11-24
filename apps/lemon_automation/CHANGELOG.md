@@ -23,6 +23,8 @@
 
 ### Removed
 
+- `LemonAutomation.GoalContinuationManager`. One-shot continuations call
+  `GoalLoopManager.run_once(session_key, verdict: :continue)` (#659).
 - Unused top-level `LemonAutomation` delegates and the `LemonAutomation.Wake`
   wrapper/batch API. Call `LemonAutomation.CronManager` directly.
 - The ignored third argument to `CronCommandRunner.submit`; use `submit/2`.

@@ -174,6 +174,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Stopping a running kanban board from the web Automation page no longer fails as
   stale on every attempt: the dispatcher's control revision now covers only
   operator-visible board/task state, not the lease expiry it renews each tick (#658).
+- Telegram and Discord `/goal continue` and `/goal loop once` no longer block the
+  transport for the whole judge and continuation (or crash it on a call
+  timeout): the chat gets an immediate acknowledgement and the verdict and run ID
+  as a follow-up; a timeout is reported as an unknown outcome (#659).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

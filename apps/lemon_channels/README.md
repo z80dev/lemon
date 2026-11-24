@@ -387,6 +387,11 @@ home) as the goal authority. `/goal continue`, `/goal loop once` and
 `/goal loop start` narrow it with the same chat policy. Later judge and
 continuation runs, including automatic restarts, run within that authority. A
 command without the transport's channel context cannot set or start goal work.
+`/goal continue` and `/goal loop once` reply at once and run the judge or
+continuation in the transport's background task supervisor, never in the
+transport process (it may wait on an approval in the same chat). The verdict
+and run ID follow as a separate message (a Discord follow-up); a call timeout is
+reported as an unknown outcome and is not retried.
 
 Remote buttons offer only **Approve once** and **Deny**. They carry the full
 approval ID plus a fingerprint of the authoritative pending snapshot. Callback
