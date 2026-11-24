@@ -120,6 +120,59 @@ defmodule LemonAutomation.CronManagerRetryTest do
            end)
   end
 
+  test "numeric fields are bounded and type-checked on add and update", %{job: job} do
+    base = %{
+      name: "bounds",
+      schedule: "* * * * *",
+      agent_id: "cron_bounds",
+      session_key: "agent:cron_bounds:main",
+      prompt: "bounded"
+    }
+
+    assert {:error, {:invalid_target, reason}} =
+             CronManager.add(Map.merge(base, %{max_retries: 1, retry_backoff_ms: 5_000_000_000}))
+
+    assert reason =~ "retry_backoff_ms"
+
+    for {field, value} <- [
+          jitter_sec: "3",
+          jitter_sec: 1.5,
+          jitter_sec: 86_401,
+          timeout_ms: 0,
+          max_retries: 11,
+          retry_backoff_ms: -1
+        ] do
+      assert {:error, {:invalid_target, _}} = CronManager.add(Map.put(base, field, value))
+      assert {:error, {:invalid_target, _}} = CronManager.update(job.id, %{field => value})
+    end
+
+    assert {:ok, %CronJob{jitter_sec: 86_400, retry_backoff_ms: 86_400_000}} =
+             CronManager.update(job.id, %{jitter_sec: 86_400, retry_backoff_ms: 86_400_000})
+
+    refute Enum.any?(CronManager.list(), &(&1.name == "bounds"))
+  end
+
+  test "a failed run with the maximum backoff arms a bounded retry timer", %{job: job} do
+    {:ok, job} = CronManager.update(job.id, %{retry_backoff_ms: 86_400_000})
+    replace_job_state(%{job | next_run_at_ms: LemonCore.Clock.now_ms() - 1_000})
+    CronManager.tick()
+
+    assert_receive {:cron_submit, submitter_pid, _job_id, first_run_id, :schedule, _meta}, 5_000
+    send(submitter_pid, {:release_cron_submit, first_run_id})
+
+    assert await(fn ->
+             match?(%CronRun{status: :failed}, CronStore.get_run(first_run_id))
+           end)
+
+    timer = :sys.get_state(CronManager).retry_timer
+    assert is_reference(timer)
+    remaining = Process.read_timer(timer)
+    assert is_integer(remaining) and remaining <= 300_000
+
+    assert CronStore.get_run(first_run_id).meta.retry_due_at_ms >
+             LemonCore.Clock.now_ms() + 300_000
+  end
+
   test "manual runs do not retry by default", %{job: job} do
     assert {:ok, %CronRun{id: run_id, triggered_by: :manual}} = CronManager.run_now(job.id)
 

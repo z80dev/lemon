@@ -440,6 +440,17 @@ Manual runs are single-shot. A timeout or lost acknowledgement is not proof of
 failure: Lemon retains the fixed run ID and reconciles completion rather than
 launching a duplicate coding session.
 
+Numeric job fields must be whole numbers within these ranges; anything else,
+including a number sent as non-numeric text, is rejected when the job is added
+or updated:
+
+| Field | Range |
+|---|---|
+| `jitterSec` | 0 – 86,400 (one day) |
+| `timeoutMs` | 1,000 – 3,600,000 (one hour) |
+| `maxRetries` | 0 – 10 |
+| `retryBackoffMs` | 0 – 86,400,000 (one day) |
+
 These jobs edit the target directory directly; they do not create or merge Git
 worktrees automatically. Point `cwd` at a dedicated worktree when other agents
 or people are editing the same repository.

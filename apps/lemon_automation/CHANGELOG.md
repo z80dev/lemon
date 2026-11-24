@@ -4,6 +4,11 @@
 
 ### Changed
 
+- **Breaking:** cron numeric fields are validated by the new shared
+  `CronJob.numeric_bounds/0` / `CronJob.validate_numeric/2` (add, update, the
+  `cron` tool and blueprints); out-of-range or non-integer values return
+  `{:error, {:invalid_target, reason}}`. Blueprint `retryBackoffMs` now allows
+  0. Timers derived from job data are capped at 300,000 ms (#657).
 - `CronManager` releases claims whose `submission_started` was never recorded
   (restart, worker crash, startup reconcile, abort) as retryable failures;
   `RunSubmitter` maps a pre-router `:exception`/`:exit` to a definite failure.

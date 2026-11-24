@@ -222,6 +222,24 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
              )
   end
 
+  test "cron.add rejects an out-of-range numeric field with the shared bounds" do
+    assert {:error, {:invalid_request, message, nil}} =
+             CronAdd.handle(
+               %{
+                 "name" => "unbounded backoff",
+                 "schedule" => "hourly",
+                 "agentId" => "cp_bounds",
+                 "sessionKey" => "agent:cp_bounds:main",
+                 "prompt" => "ping",
+                 "maxRetries" => 1,
+                 "retryBackoffMs" => 5_000_000_000
+               },
+               %{}
+             )
+
+    assert message == "retry_backoff_ms must be an integer from 0 to 86400000"
+  end
+
   test "cron.list redacts target text by default and exposes byte summaries", %{job: job} do
     assert {:ok, %{"jobs" => jobs, "summary" => summary}} = CronList.handle(%{}, @operator_ctx)
 

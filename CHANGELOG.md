@@ -171,6 +171,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Cron: `jitterSec`, `timeoutMs`, `maxRetries` and `retryBackoffMs` must be
+  integers within shared bounds (0–86,400 s; 1 s–1 h; 0–10; 0–1 day) on add and
+  update through the API, agent tool and blueprints; the agent tool rejects bad
+  values instead of silently using defaults. Retry and schedule timers are
+  capped at 5 minutes, so one bad job can no longer crash-loop the scheduler
+  (#657). **Breaking** for callers that sent values outside those ranges.
 - Cron: a scheduled run claimed but never submitted (restart during jitter,
   worker crash before submit) is released as a retryable failure with a
   `claim_released` audit instead of locking its job as `outcome_unknown`;

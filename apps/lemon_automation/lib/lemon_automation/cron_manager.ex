@@ -150,6 +150,9 @@ defmodule LemonAutomation.CronManager do
 
   @tick_interval_ms 60_000
   @call_timeout_ms 10_000
+  # Ceiling for every timer armed from job data (schedule recheck, retry tick);
+  # a later timer simply re-arms, so no job value can reach send_after's limit.
+  @max_job_timer_ms 300_000
   @not_submitted_error "cron run was never submitted"
   # Margin past a job's jitter window before an untracked, unsubmitted claim
   # counts as orphaned (its submit message can no longer be pending).
@@ -1069,7 +1072,7 @@ defmodule LemonAutomation.CronManager do
       if next do
         token = make_ref()
         # Bound rechecks after a failed claim; never busy-loop on an overdue slot.
-        delay = min(max(next - now, 100), 300_000)
+        delay = min(max(next - now, 100), @max_job_timer_ms)
         {Process.send_after(self(), {:scheduled_tick, token}, delay), token}
       end
 
@@ -1652,7 +1655,7 @@ defmodule LemonAutomation.CronManager do
       Logger.info("[CronManager] Skipping scheduled job #{job.id}: active run already exists")
       update_suppressed_scheduled_job(job, state)
     else
-      jitter_ms = if job.jitter_sec > 0, do: :rand.uniform(job.jitter_sec * 1000), else: 0
+      jitter_ms = jitter_delay_ms(job)
       scheduled_for_ms = job.next_run_at_ms || now || LemonCore.Clock.now_ms()
 
       catch_up = get_in(state, [:catch_up_slots, job.id]) == scheduled_for_ms
@@ -2070,16 +2073,27 @@ defmodule LemonAutomation.CronManager do
 
   defp orphan_window_elapsed?(%CronRun{started_at_ms: started}, job, now)
        when is_integer(started) and is_integer(now) do
-    jitter_ms =
-      case job do
-        %CronJob{jitter_sec: sec} when is_integer(sec) and sec > 0 -> sec * 1000
-        _ -> 0
-      end
-
-    now - started > jitter_ms + @orphan_claim_grace_ms
+    now - started > jitter_window_ms(job) + @orphan_claim_grace_ms
   end
 
   defp orphan_window_elapsed?(_run, _job, _now), do: false
+
+  # Jitter is validated against `CronJob.numeric_bounds/0` on add and update; a
+  # stored value outside them is clamped instead of raising in `:rand.uniform/1`
+  # or `Process.send_after/3`.
+  defp jitter_window_ms(%CronJob{jitter_sec: sec}) when is_integer(sec) and sec > 0 do
+    {_min, max} = CronJob.numeric_bounds().jitter_sec
+    min(sec, max) * 1000
+  end
+
+  defp jitter_window_ms(_job), do: 0
+
+  defp jitter_delay_ms(job) do
+    case jitter_window_ms(job) do
+      0 -> 0
+      window_ms -> :rand.uniform(window_ms)
+    end
+  end
 
   defp terminal_result(run, {:not_submitted, reason}), do: CronRun.fail(run, reason)
 
@@ -2301,7 +2315,7 @@ defmodule LemonAutomation.CronManager do
           cond do
             held? -> @tick_interval_ms
             due_at_ms <= now -> if(startup?, do: 0, else: 1_000)
-            true -> due_at_ms - now
+            true -> min(due_at_ms - now, @max_job_timer_ms)
           end
 
         %{state | retry_timer: Process.send_after(self(), :retry_tick, delay_ms)}
@@ -2620,6 +2634,7 @@ defmodule LemonAutomation.CronManager do
     with {:ok, params} <- validate_timezone_field(params, default_timezone),
          {:ok, params} <- validate_cwd(params),
          {:ok, params} <- validate_monitor_flags(params),
+         {:ok, params} <- validate_numeric_fields(params),
          {:ok, params} <- validate_profile_field(params, mode),
          {:ok, params} <- validate_model_field(params, mode),
          {:ok, params} <- validate_context_from(params, mode, job_id),
@@ -2745,6 +2760,20 @@ defmodule LemonAutomation.CronManager do
       {:ok, _value} ->
         {:invalid_target, "once must be a boolean"}
     end
+  end
+
+  defp validate_numeric_fields(params) do
+    CronJob.numeric_bounds()
+    |> Map.keys()
+    |> Enum.sort()
+    |> Enum.reduce_while({:ok, params}, fn field, acc ->
+      with {:ok, value} <- fetch_param(params, field),
+           {:error, reason} <- CronJob.validate_numeric(field, value) do
+        {:halt, {:invalid_target, reason}}
+      else
+        _ -> {:cont, acc}
+      end
+    end)
   end
 
   defp validate_monitor_flags(params) do

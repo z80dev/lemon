@@ -151,6 +151,34 @@ defmodule LemonAutomation.CronJob do
           meta: map() | nil
         }
 
+  # Inclusive bounds for every numeric job field. Add, update, the agent tool,
+  # the control-plane methods and automation blueprints all validate through
+  # `validate_numeric/2`; timers derived from these values stay far below
+  # `:erlang.send_after/3`'s 2^32 - 1 ms limit.
+  @numeric_bounds %{
+    jitter_sec: {0, 86_400},
+    timeout_ms: {1_000, 3_600_000},
+    max_retries: {0, 10},
+    retry_backoff_ms: {0, 86_400_000}
+  }
+
+  @doc "Inclusive `{min, max}` bounds for each numeric job field."
+  @spec numeric_bounds() :: %{atom() => {non_neg_integer(), pos_integer()}}
+  def numeric_bounds, do: @numeric_bounds
+
+  @doc """
+  Validate one numeric job field against `numeric_bounds/0`. Non-integers and
+  out-of-range values are rejected with a message naming the allowed range.
+  """
+  @spec validate_numeric(atom(), term()) :: :ok | {:error, binary()}
+  def validate_numeric(field, value) do
+    {min, max} = Map.fetch!(@numeric_bounds, field)
+
+    if is_integer(value) and value >= min and value <= max,
+      do: :ok,
+      else: {:error, "#{field} must be an integer from #{min} to #{max}"}
+  end
+
   @doc """
   Create a new CronJob with auto-generated ID and timestamps.
   """
