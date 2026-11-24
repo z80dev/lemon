@@ -168,6 +168,9 @@ defmodule LemonMCP.SkillsMcpSourceTest do
     state = %{
       disabled: false,
       invocations: %{},
+      workers: %{},
+      scopes: %{},
+      scope_used: %{},
       tool_cache: %{"safe" => %{server_name: "server", original_name: {:tool, "mutate"}}},
       servers: %{
         "server" => %{

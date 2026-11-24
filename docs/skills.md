@@ -912,15 +912,17 @@ Legacy HTTP+SSE entries use supervised `LemonMCP.Client.SSE` startup, open the S
 
 MCP tools are discovered through `LemonSkills.McpSource`, cached for performance, and surfaced through `CodingAgent.ToolRegistry`:
 
-- **Cache TTL**: 5 minutes (configurable via `:cache_ttl_ms`)
+- **Cache TTL**: 5 minutes (configurable via `:cache_ttl_ms`); a connected server's snapshot older than that is refreshed in the background
 - **Refresh Interval**: 1 minute (configurable via `:refresh_interval_ms`)
+- **Bounded session start**: discovery reloads the project's configuration and serves the committed snapshot. It waits at most 10 seconds (`config :lemon_skills, :mcp_discovery_wait_ms`) for servers that have no usable connection yet; one supervised worker per server keeps connecting slower servers in the background, and their tools appear in later sessions. `force_refresh: true` and `refresh/0` still wait for every server.
 - **Graceful Degradation**: If an MCP server is unavailable, tools from that server are skipped
 - **Model-facing names**: `mcp_<server>_<tool>_<identity>` names use a bounded readable prefix and a stable hash; different configurations of the same executable or URL remain distinct.
 - **Resource/prompt utilities**: capable stdio, Streamable HTTP, and legacy HTTP+SSE servers also expose `resources/list`, `resources/read`, `prompts/list`, and `prompts/get` through model-facing utility tools
 - **Exact filters**: stdio, Streamable HTTP, and legacy HTTP+SSE configs can constrain model-facing tools, resources, and prompts with exact allow/block lists before they enter the registry
-- **Project isolation**: discovery returns only the requesting project's configured inventory. Discovering another project or refreshing global configuration does not retarget previously returned tool closures.
+- **Project isolation**: discovery returns only the requesting project's configured inventory. Loading another project never invalidates this project's cached tools, and discovering another project or refreshing global configuration does not retarget previously returned tool closures.
+- **Project scopes**: a project's servers (stdio servers run in its directory) stay loaded while a session that discovered them is alive; when the last one exits, its clients close. At most 16 project scopes stay loaded (`config :lemon_skills, :mcp_max_project_scopes`); beyond that the least recently used project is unloaded and reloads on its next discovery.
 - **Live lists**: tools/resources/prompts `list_changed` notifications refresh the owning server's cached inventory through the same capability and exact-filter path. Notifications from retired connections are ignored.
-- **Recovery**: the host reconnects lost clients after 500/1000/2000/4000 ms and refreshes inventory on success. Exhausting the ladder or more than five client crashes within 30 seconds marks only that server unavailable with a fixed, redacted status reason. Discovery and periodic refresh cannot bypass the breaker; explicit `LemonSkills.McpSource.refresh/0` (or `refresh(source_pid)`) resets it. Failed startup and retired clients are closed.
+- **Recovery**: a failed startup, failed discovery or lost client retries with jittered exponential backoff (about 0.5, 1, 2 and 4 seconds) and refreshes inventory on success. Exhausting the ladder or more than five failures within 30 seconds marks only that server unavailable with a fixed, redacted status reason. Discovery and periodic refresh cannot bypass the backoff or breaker; explicit `LemonSkills.McpSource.refresh/0` (or `refresh(source_pid)`) resets it. Failed startup and retired clients are closed.
 - **Bounded calls**: tool execution does not occupy the discovery/status GenServer. Timeouts and disconnects return errors without replaying an in-flight invocation; a timed-out remote mutation may already have taken effect.
 - **External data**: MCP results remain untrusted. Stdio protocol buffering is limited to 8 MiB.
 

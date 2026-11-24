@@ -17,3 +17,15 @@
   audit APIs; `BundleAudit` exclusively owns optional model review, preventing
   duplicate reviews and honoring per-call model overrides.
 - Remove the unused `LemonSkills.HttpClient.get/1` convenience wrapper.
+- `LemonSkills.McpSource` replaces its single serialized discovery job with
+  per-scope configuration loads and per-server refresh workers. A project scope
+  is held by the processes that discovered it and evicted (closing the clients
+  no other scope uses) when the last one exits; `:max_project_scopes` (default
+  16, `config :lemon_skills, :mcp_max_project_scopes`) caps loaded project
+  scopes with least-recently-used eviction. A load replaces only its own
+  scope's servers and cached tools. `discover_tools/2` serves the committed
+  snapshot and waits at most `:discovery_wait_ms` (default 10 s,
+  `:mcp_discovery_wait_ms`) for servers without a usable connection.
+  Startup and discovery failures use the jittered exponential reconnect
+  backoff and crash-storm breaker; unconnected servers no longer make the
+  periodic refresh retry everything.

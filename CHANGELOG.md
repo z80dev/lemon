@@ -206,6 +206,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `:outcome_unknown` after the request worker is stopped, and a 401 refreshes
   the grant once in the background instead of freezing the client. OAuth moved
   to `LemonMCP.HTTP.OAuth` (#662).
+- The MCP source releases a project's MCP servers when the last session that
+  discovered them exits and keeps at most 16 project scopes loaded
+  (`:mcp_max_project_scopes`), so stdio subprocesses no longer accumulate per
+  directory. Opening a session elsewhere no longer clears other sessions'
+  cached MCP tools. Session start serves the cached snapshot and waits at most
+  10 seconds (`:mcp_discovery_wait_ms`) for servers still connecting, which now
+  connect in parallel; failed startups use the same jittered backoff and crash
+  breaker as lost connections instead of retrying on every tick (#688).
 
 ### Removed
 
