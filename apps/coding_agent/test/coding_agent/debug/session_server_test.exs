@@ -587,11 +587,17 @@ defmodule CodingAgent.Debug.SessionServerTest do
 
   test "an adapter-reported pid is never signalled when the adapter dies", ctx do
     # A foreign process leading its own process group, unrelated to the adapter.
-    foreign_port =
-      Port.open({:spawn_executable, @python}, [
-        :binary,
-        args: ["-c", "import os, time; os.setpgrp(); print('ready', flush=True); time.sleep(300)"]
-      ])
+    # Port children already lead their own session (and group); Linux refuses
+    # `setpgrp()` to a session leader with EPERM.
+    script = """
+    import os, time
+    if os.getpgrp() != os.getpid():
+        os.setpgrp()
+    print('ready', flush=True)
+    time.sleep(300)
+    """
+
+    foreign_port = Port.open({:spawn_executable, @python}, [:binary, args: ["-c", script]])
 
     assert_receive {^foreign_port, {:data, "ready" <> _}}, 5_000
     {:os_pid, foreign} = Port.info(foreign_port, :os_pid)

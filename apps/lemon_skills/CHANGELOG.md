@@ -17,3 +17,6 @@
   audit APIs; `BundleAudit` exclusively owns optional model review, preventing
   duplicate reviews and honoring per-call model overrides.
 - Remove the unused `LemonSkills.HttpClient.get/1` convenience wrapper.
+- Skill lockfile and audit-state writes wait up to ten seconds (was one) for
+  the metadata lock, so a burst of concurrent writers in one VM no longer gets
+  spurious `{:error, :lock_timeout}` refusals (#499).

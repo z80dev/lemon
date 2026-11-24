@@ -198,6 +198,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   preferences act on the session the thread's runs use. Reactions and
   system replies land in the thread. A channel that cannot be looked up is
   not routed under a guessed key (#649).
+- Skill lockfile and audit-state writes wait up to ten seconds for their file
+  lock instead of one, so concurrent skill installs in one runtime are no
+  longer refused with `lock_timeout` while the lock is merely busy (#499).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

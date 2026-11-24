@@ -135,8 +135,13 @@ defmodule LemonRouter.IntrospectionTest do
           assert evt.engine == "lemon"
           assert evt.payload.agent_id == "default"
 
-          # Clean up - abort the run
-          LemonRouter.RunProcess.abort(run_id, :test_cleanup)
+          # Clean up: abort the run and wait until it has left the run
+          # supervisor, so later tests never count it as active. The abort
+          # settles only once the gateway reports the cancelled execution.
+          assert_eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, run_id) != [] end)
+          [{run_pid, _}] = Registry.lookup(LemonRouter.RunRegistry, run_id)
+          LemonRouter.RunProcess.abort(run_pid, :test_cleanup)
+          assert_process_dead(run_pid, timeout: 15_000)
 
         {:error, _reason} ->
           # In test environments, orchestrator may not be fully started

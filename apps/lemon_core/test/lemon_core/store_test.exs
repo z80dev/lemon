@@ -168,6 +168,15 @@ defmodule LemonCore.StoreTest do
   defp run_id(token, name), do: "run_#{token}_#{name}"
   defp session_key(token), do: "agent:store_test_#{token}:main"
 
+  # Runs finalized with fixed early timestamps make their session the oldest in
+  # the shared Store; leaving it behind changes every later global session
+  # query (for example a prune preview's candidate set).
+  defp cleanup_session(session_key) do
+    on_exit(fn ->
+      assert {:ok, _} = LemonCore.TestSupport.SessionCleanup.delete(session_key)
+    end)
+  end
+
   defp introspection_event(token, name, ts_ms, attrs \\ %{}) do
     Map.merge(
       %{
@@ -219,6 +228,7 @@ defmodule LemonCore.StoreTest do
     test "RunHistoryStore orders finalized runs by newest started_at first" do
       token = unique_token()
       session_key = session_key(token)
+      cleanup_session(session_key)
 
       oldest = run_id(token, :oldest)
       middle = run_id(token, :middle)
@@ -245,6 +255,7 @@ defmodule LemonCore.StoreTest do
     test "applies ordering/limit consistently via RunHistoryStore" do
       token = unique_token()
       session_key = "agent:rhs_ordering_#{token}:main"
+      cleanup_session(session_key)
 
       older_run = run_id(token, :older)
       newer_run = run_id(token, :newer)
@@ -786,6 +797,7 @@ defmodule LemonCore.StoreTest do
     test "finalize_run writes history to RunHistoryStore" do
       token = unique_token()
       key = session_key(token)
+      cleanup_session(key)
       rid = run_id(token, :history_delegate)
 
       assert :ok =
