@@ -296,14 +296,72 @@ defmodule LemonWeb.Chat.PaneLive do
 
   defp load_approvals(key) do
     case Backend.pending_approvals(key) do
+      {:ok, pending} -> full_approvals(pending)
+      {:error, _} -> []
+    end
+  end
+
+  defp full_approvals(pending) do
+    pending
+    |> Enum.map(&Components.approval_view/1)
+    |> Enum.filter(&is_binary(&1.id))
+    |> Enum.sort_by(& &1.requested_at_ms)
+  end
+
+  @approvals_unavailable "Approval status is unavailable."
+
+  # The snapshot decides which approvals are pending (session, run lineage,
+  # expiry); each card keeps the full event or `exec.approvals.get` record with
+  # its command, path, arguments and plan. The snapshot's own projection is
+  # bounded, so an id without a full record, or a cut collection, rereads the
+  # full records; a card left with a truncated projection cannot be approved.
+  defp install_approvals(socket, %{"status" => "ok", "items" => items} = collection)
+       when is_list(items) do
+    full =
+      for %{partial?: false} = card <- socket.assigns.approvals, into: %{}, do: {card.id, card}
+
+    cards =
+      items
+      |> Enum.map(&Map.put(Components.approval_view(&1), :partial?, true))
+      |> Enum.filter(&is_binary(&1.id))
+      |> Enum.map(&Map.get(full, &1.id, &1))
+
+    notice = socket.assigns.approval_notice
+
+    socket =
+      assign(socket,
+        approvals: cards,
+        approval_notice: if(notice != @approvals_unavailable, do: notice)
+      )
+
+    if collection["truncated"] == true or Enum.any?(cards, & &1.partial?),
+      do: complete_approvals(socket, collection["truncated"] == true),
+      else: socket
+  end
+
+  # An unavailable approval owner must never preserve actionable cards.
+  defp install_approvals(socket, _collection),
+    do: assign(socket, approvals: [], approval_notice: @approvals_unavailable)
+
+  # Replaces bounded cards with their full records. `unlisted?` also adds
+  # pending approvals a cut snapshot collection could not list.
+  defp complete_approvals(socket, unlisted? \\ false) do
+    case Backend.pending_approvals(socket.assigns.session_key) do
       {:ok, pending} ->
-        pending
-        |> Enum.map(&Components.approval_view/1)
-        |> Enum.filter(&is_binary(&1.id))
-        |> Enum.sort_by(& &1.requested_at_ms)
+        full = Map.new(full_approvals(pending), &{&1.id, &1})
+        cards = socket.assigns.approvals
+        shown = MapSet.new(cards, & &1.id)
+
+        extra =
+          if unlisted?,
+            do: full |> Map.values() |> Enum.reject(&MapSet.member?(shown, &1.id)),
+            else: []
+
+        cards = Enum.map(cards, &Map.get(full, &1.id, &1)) ++ extra
+        assign(socket, :approvals, Enum.sort_by(cards, & &1.requested_at_ms))
 
       {:error, _} ->
-        []
+        socket
     end
   end
 
@@ -430,14 +488,34 @@ defmodule LemonWeb.Chat.PaneLive do
 
   # ── Events: approvals & plan ────────────────────────────────────────────
 
+  # Approving what the operator could not see in full is refused here too,
+  # not only by the disabled control; denying stays available.
   def handle_event("resolve-approval", %{"id" => id, "decision" => decision}, socket)
       when decision in ~w(approve_once approve_session approve_global deny) do
-    plan? = Enum.any?(socket.assigns.approvals, &(&1.id == id and &1.plan?))
-    text = if plan? and decision != "deny", do: "Plan approved. Lemon is implementing it."
-    {:noreply, resolve_approval(socket, id, decision, text)}
+    approval = Enum.find(socket.assigns.approvals, &(&1.id == id))
+
+    if decision != "deny" and match?(%{truncated?: true}, approval) do
+      {:noreply, assign(socket, :approval_notice, "Load the full request before approving it.")}
+    else
+      text =
+        if match?(%{plan?: true}, approval) and decision != "deny",
+          do: "Plan approved. Lemon is implementing it."
+
+      {:noreply, resolve_approval(socket, id, decision, text)}
+    end
   end
 
   def handle_event("resolve-approval", _params, socket), do: {:noreply, socket}
+
+  def handle_event("reload-approvals", _params, socket) do
+    socket = complete_approvals(socket)
+
+    if Enum.any?(socket.assigns.approvals, & &1.truncated?),
+      do:
+        {:noreply,
+         assign(socket, :approval_notice, "Lemon could not load the full request. Try again.")},
+      else: {:noreply, socket}
+  end
 
   def handle_event("refine-plan", %{"id" => id}, socket) do
     socket =
@@ -965,24 +1043,12 @@ defmodule LemonWeb.Chat.PaneLive do
   defp install_history(socket, {:error, message}), do: assign(socket, :history_error, message)
 
   defp install_snapshot(socket, {:ok, %{"identity" => identity, "snapshot" => snapshot} = result}) do
-    approvals =
-      case snapshot["approvals"] do
-        %{"status" => "ok", "items" => pending} when is_list(pending) ->
-          pending |> Enum.map(&Components.approval_view/1) |> Enum.filter(&is_binary(&1.id))
-
-        _ ->
-          # An unavailable approval owner must never preserve actionable cards.
-          []
-      end
-
     unknown? = not known_phase?(snapshot["phase"], identity["runId"])
 
     socket
     |> reduce_snapshot_run(snapshot["phase"], identity["runId"])
+    |> install_approvals(snapshot["approvals"])
     |> assign(
-      approvals: approvals,
-      approval_notice:
-        if(snapshot["approvals"]["status"] != "ok", do: "Approval status is unavailable."),
       todos: snapshot["todos"],
       processes: snapshot["processes"],
       subagents: Subagents.from_recovery(snapshot["children"]),

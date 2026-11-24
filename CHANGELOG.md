@@ -209,6 +209,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   survive it. `not_found`/`unknown` snapshots are explicit and never polled;
   failed reads back off. The Subagents tab shows the snapshot's child runs
   (#653).
+- Web chat approval cards keep their command, path, arguments and plan after
+  recovery: the snapshot decides which approvals are pending and each card keeps
+  (or rereads) the full `exec.approvals.get` record. `sessions.snapshot`
+  approvals now carry `command`, `path`, `plan` and an argument preview with
+  `truncated`/`planTruncated` flags; a truncated card or plan cannot be approved
+  until the full request loads (#654).
 
 ### Removed
 

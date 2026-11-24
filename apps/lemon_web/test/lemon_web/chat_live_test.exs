@@ -501,6 +501,138 @@ defmodule LemonWeb.ChatLiveTest do
     assert has_element?(pane, ".approval-notice", "answered elsewhere")
   end
 
+  test "approval cards keep command, path and arguments after a snapshot recovery", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("approval-recovery")
+    bash = "approval-bash-#{System.unique_integer([:positive])}"
+    edit = "approval-edit-#{System.unique_integer([:positive])}"
+    quiet = "approval-quiet-#{System.unique_integer([:positive])}"
+    bash_req = request(bash, k, "bash", %{"command" => "rm -rf ./build"})
+
+    edit_req =
+      request(edit, k, "edit", %{
+        "path" => "lib/app.ex",
+        "old_text" => "old line",
+        "new_text" => "NEW EDIT LINE"
+      })
+
+    eventually(fn ->
+      is_map(ExecApprovalStore.get_pending(bash)) and is_map(ExecApprovalStore.get_pending(edit))
+    end)
+
+    # The owner reports which approvals are pending; its projection need not
+    # carry what the card shows.
+    pending = fn ids ->
+      stub.("sessions.snapshot", fn _ ->
+        items =
+          for {id, tool} <- ids,
+              do: %{
+                "id" => id,
+                "sessionKey" => k,
+                "tool" => tool,
+                "action" => %{"cwdHash" => "h"}
+              }
+
+        {:ok,
+         k
+         |> recovery_snapshot(nil, "idle", [])
+         |> put_in(["snapshot", "approvals", "items"], items)}
+      end)
+    end
+
+    pending.([{bash, "bash"}, {edit, "edit"}])
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+
+    card_has? = fn id, text -> has_element?(pane, "[data-approval-id='#{id}']", text) end
+    assert card_has?.(bash, "rm -rf ./build")
+    assert card_has?.(edit, "lib/app.ex")
+    assert card_has?.(edit, "NEW EDIT LINE")
+
+    # A pending approval first seen through the snapshot (no event, not loaded
+    # at mount) is read in full before it is shown.
+    :ok =
+      ExecApprovalStore.put_pending(quiet, %{
+        id: quiet,
+        run_id: "run-quiet",
+        session_key: k,
+        tool: "write",
+        action: %{"path" => "notes/QUIET.md", "content" => "hello"},
+        requested_at_ms: System.system_time(:millisecond),
+        expires_at_ms: nil
+      })
+
+    on_exit(fn -> ExecApprovalStore.delete_pending(quiet) end)
+    pending.([{bash, "bash"}, {edit, "edit"}, {quiet, "write"}])
+    render_click(pane, "inspector-tab", %{"tab" => "subagents"})
+    _ = render_async(pane)
+    assert card_has?.(bash, "rm -rf ./build")
+    assert card_has?.(edit, "lib/app.ex")
+    assert card_has?.(quiet, "notes/QUIET.md")
+
+    for {id, req} <- [{bash, bash_req}, {edit, edit_req}] do
+      {:ok, %{decision: :deny}} = ExecApprovals.resolve(id, :deny)
+      Task.await(req)
+    end
+  end
+
+  test "a plan over the snapshot cap cannot be approved until the full plan loads", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("plan-cap")
+    id = "approval-plan-#{System.unique_integer([:positive])}"
+    full = "## Steps\n\n" <> String.duplicate("- step\n", 800) <> "FINAL STEP"
+
+    preview = %{
+      "id" => id,
+      "sessionKey" => k,
+      "tool" => "propose_plan",
+      "action" => %{"title" => "Big", "plan" => String.slice(full, 0, 4_096)},
+      "planTruncated" => true,
+      "truncated" => true
+    }
+
+    stub.(
+      "sessions.snapshot",
+      {:ok,
+       k
+       |> recovery_snapshot(nil, "idle", [])
+       |> put_in(["snapshot", "approvals", "items"], [preview])}
+    )
+
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    card = "[data-approval-id='#{id}']"
+    assert has_element?(pane, card <> " [id$=-plan-truncated]", "Load the full plan")
+    assert has_element?(pane, card <> " button[disabled]", "Approve & execute")
+    refute render(pane) =~ "FINAL STEP"
+
+    # The server refuses an approval of the truncated card, too.
+    render_click(pane, "resolve-approval", %{"id" => id, "decision" => "approve_once"})
+    assert has_element?(pane, ".approval-notice", "Load the full request before approving")
+    refute_received {:rpc, "exec.approval.resolve", _}
+
+    :ok =
+      ExecApprovalStore.put_pending(id, %{
+        id: id,
+        run_id: "run-plan",
+        session_key: k,
+        tool: "propose_plan",
+        action: %{"title" => "Big", "plan" => full},
+        requested_at_ms: System.system_time(:millisecond),
+        expires_at_ms: nil
+      })
+
+    on_exit(fn -> ExecApprovalStore.delete_pending(id) end)
+    pane |> element(card <> " button", "Load the full plan") |> render_click()
+    assert render(pane) =~ "FINAL STEP"
+    refute has_element?(pane, card <> " [id$=-plan-truncated]")
+    refute has_element?(pane, card <> " button[disabled]", "Approve & execute")
+  end
+
   test "plan mode toggles through sessions.plan and exiting with a plan asks first", %{
     conn: conn,
     stub: stub

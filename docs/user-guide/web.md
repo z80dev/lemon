@@ -107,7 +107,11 @@ A session opens at `/chat/<session-key>`:
   **Steer** (guidance for the current run; ⌘Enter) or **Redirect** (new direction,
   finished tool work kept), or **Stop**.
 - **Approvals** appear in the conversation: Approve once, for the session,
-  always, or Deny. Answers given in the TUI or another tab clear the card.
+  always, or Deny. Each card shows the command, target path and arguments it
+  authorizes, including after a reconnect. Answers given in the TUI or another
+  tab clear the card. If only part of a request (or of a long plan) could be
+  loaded, the card says so and approval stays disabled until **Load the full
+  request** succeeds; Deny is always available.
 - **Plan mode** (⌘⇧P) keeps the agent read-only. Its proposal appears as a plan
   card: **Approve & execute** runs it, **Refine** sends it back and focuses the
   composer for your feedback. Leaving plan mode never approves a plan.
