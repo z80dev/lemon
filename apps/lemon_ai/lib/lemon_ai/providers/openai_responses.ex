@@ -45,9 +45,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
   alias LemonAi.Providers.HttpTrace
   alias LemonAi.Providers.OpenAIResponsesShared
   alias LemonAi.Providers.RequestHeaders
-  alias LemonAi.Retry
-  alias LemonAi.Providers.SSEParser
   alias LemonAi.Providers.StreamingHelper
+  alias LemonAi.Providers.StreamTransport
   import LemonAi.Providers.AssistantMessageHelper
 
   # Providers that use OpenAI-style tool call IDs
@@ -95,16 +94,15 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
       EventStream.push_async(stream, {:start, output})
 
-      # Make streaming request (retries 429/5xx/transport failures in place)
+      # Retries pre-body 429/5xx/transport failures in place.
       case OpenAIResponsesShared.request_stream(opts, url, headers, body, fn ->
-             stream_request(
+             StreamTransport.post_sse(
                url,
                headers,
                body,
-               trace_id,
                LemonAi.Provider.retry_policy(opts),
-               0,
-               model.provider
+               provider: model.provider,
+               idle_timeout: StreamTransport.idle_timeout_for(opts.stream_idle_timeout)
              )
            end) do
         {:ok, event_stream} ->
@@ -407,114 +405,6 @@ defmodule LemonAi.Providers.OpenAIResponses do
       end
     else
       params
-    end
-  end
-
-  # ============================================================================
-  # HTTP Streaming
-  # ============================================================================
-
-  defp stream_request(url, headers, body, trace_id, policy, attempt, provider) do
-    headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
-    retry_allowed? = Retry.retry_allowed?(attempt, policy)
-
-    case Req.post(url,
-           json: body,
-           headers: headers_list,
-           into: :self,
-           retry: false,
-           receive_timeout: 300_000
-         ) do
-      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
-        {:ok, SSEParser.events(response)}
-
-      {:ok, %Req.Response{status: status, headers: response_headers} = response} ->
-        response_body = materialize_response_body(response.body)
-
-        HttpTrace.log_error("openai-responses", "http_error", %{
-          trace_id: trace_id,
-          status: status,
-          attempt: attempt + 1,
-          provider_request_id:
-            HttpTrace.response_header_value(response_headers, [
-              "x-request-id",
-              "request-id",
-              "openai-request-id"
-            ]),
-          body_bytes: HttpTrace.body_bytes(response_body),
-          body_preview: HttpTrace.body_preview(response_body),
-          model: Map.get(body, "model"),
-          input_items: count_input_items(Map.get(body, "input"))
-        })
-
-        retry_delay =
-          if retry_allowed? and LemonAi.Error.retryable_http_error?(status, response_body) do
-            Retry.http_retry_delay_ms(
-              attempt,
-              response_headers,
-              policy,
-              {:http_error, status, response_body}
-            )
-          else
-            :give_up
-          end
-
-        case retry_delay do
-          :give_up ->
-            error =
-              LemonAi.Error.parse_http_error(status, response_body, response_headers, provider)
-
-            {:error, error, Retry.retry_after_ms(response_headers)}
-
-          delay_ms ->
-            LemonAi.Provider.retry_sleep(delay_ms, policy)
-            stream_request(url, headers, body, trace_id, policy, attempt + 1, provider)
-        end
-
-      {:error, reason} ->
-        HttpTrace.log_error("openai-responses", "transport_error", %{
-          trace_id: trace_id,
-          attempt: attempt + 1,
-          error: inspect(reason, limit: 50, printable_limit: 8_000),
-          model: Map.get(body, "model"),
-          input_items: count_input_items(Map.get(body, "input"))
-        })
-
-        if retry_allowed? and LemonAi.Error.retryable_transport_error?(reason) do
-          LemonAi.Provider.retry_sleep(Retry.backoff_delay_ms(attempt, policy), policy)
-          stream_request(url, headers, body, trace_id, policy, attempt + 1, provider)
-        else
-          details = LemonAi.Error.to_error_details(reason)
-          {:error, %{details | message: LemonAi.Error.format_error(reason, provider)}, nil}
-        end
-    end
-  end
-
-  defp materialize_response_body(%Req.Response.Async{} = async) do
-    case collect_async_response_body(async, []) do
-      [] -> inspect(async)
-      chunks -> chunks |> Enum.reverse() |> IO.iodata_to_binary()
-    end
-  end
-
-  defp materialize_response_body(body), do: body
-
-  defp collect_async_response_body(%Req.Response.Async{ref: ref, pid: pid} = async, chunks) do
-    receive do
-      {^ref, {:data, chunk}} ->
-        collect_async_response_body(async, [chunk | chunks])
-
-      {^ref, :done} ->
-        chunks
-
-      {^ref, {:done, _}} ->
-        chunks
-
-      {:DOWN, ^ref, :process, ^pid, _reason} ->
-        chunks
-    after
-      5_000 ->
-        chunks
     end
   end
 

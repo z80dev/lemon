@@ -171,6 +171,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Model streams no longer report a truncated response as finished: Chat
+  Completions, Responses, Codex, Bedrock and the Gemini providers fail a stream
+  that ends, disconnects, idles out or sends a malformed event before the
+  provider's terminal event with a retryable transient error, instead of
+  completing it — possibly as a tool call with half-written arguments. Gemini
+  events split across network frames are no longer dropped (#636).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
