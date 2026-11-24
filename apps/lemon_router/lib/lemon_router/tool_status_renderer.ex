@@ -26,7 +26,8 @@ defmodule LemonRouter.ToolStatusRenderer do
   @keep_tail 4
 
   @doc """
-  Render with opts map supporting `:elapsed_ms` and `:action_count`.
+  Render with opts map supporting `:elapsed_ms`, `:action_count` and
+  `:omitted_count` (actions no longer retained, reported as omitted).
   """
   @spec render(String.t() | nil, map(), [String.t()], map()) :: String.t()
   def render(_channel_id, _actions, [], _opts) do
@@ -51,6 +52,7 @@ defmodule LemonRouter.ToolStatusRenderer do
 
     # Truncate if needed (nesting-aware)
     {omitted_count, display_lines} = truncate_tagged(tagged_lines, max_lines)
+    omitted_count = omitted_count + Map.get(opts, :omitted_count, 0)
 
     lines =
       case omitted_count do

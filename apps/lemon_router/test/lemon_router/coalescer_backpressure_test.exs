@@ -54,22 +54,26 @@ defmodule LemonRouter.CoalescerBackpressureTest do
     assert nil == StreamCoalescer.current_text(session, "telegram", "run-1")
 
     assert {:error, :resync_required} =
-             StreamCoalescer.finalize_run(session, "telegram", "run-1", dispatch?: false)
+             StreamCoalescer.finalize_run(session, "telegram", "run-1")
+
+    refute_received {:intent, %{kind: :stream_finalize}}
 
     assert :ok =
              StreamCoalescer.finalize_run(session, "telegram", "run-1",
-               final_text: "complete canonical answer",
-               dispatch?: false
+               final_text: "complete canonical answer"
              )
 
-    assert %{finalized: true, last_sent_text: "complete canonical answer", overflowed: false} =
-             :sys.get_state(pid)
+    assert_received {:intent,
+                     %{kind: :stream_finalize, body: %{text: "complete canonical answer"}}}
+
+    assert %{finalized: true, overflowed: false} = :sys.get_state(pid)
 
     # A message admitted by the old handle can race the resync marker. Its tag
     # must not mutate the recovered generation, even after another run starts.
     send(pid, {:lemon_bus_delivery, old.gate, {:delta, "run-1", 9999, "obsolete", %{}}})
     StreamCoalescer.ingest_delta(session, "telegram", "run-1", 10_000, "late API call")
-    assert %{finalized: true, last_sent_text: "complete canonical answer"} = :sys.get_state(pid)
+    assert %{finalized: true, run_id: "run-1"} = :sys.get_state(pid)
+    refute_received {:intent, _}
     StreamCoalescer.ingest_delta(session, "telegram", "run-2", 1, "current")
     send(pid, {:lemon_bus_delivery, old.gate, {:delta, "run-1", 10_001, "obsolete", %{}}})
     assert %{run_id: "run-2", full_text: "current", finalized: false} = :sys.get_state(pid)
@@ -77,8 +81,7 @@ defmodule LemonRouter.CoalescerBackpressureTest do
 
     assert :ok =
              StreamCoalescer.finalize_run(session, "telegram", "run-1",
-               final_text: "obsolete final answer",
-               dispatch?: false
+               final_text: "obsolete final answer"
              )
 
     assert :sys.get_state(pid) == current
@@ -99,7 +102,10 @@ defmodule LemonRouter.CoalescerBackpressureTest do
     state = :sys.get_state(pid)
     assert state.actions["tool-1"].title == "Progress 1000"
     assert :ok = ToolStatusCoalescer.finalize_run(session, "telegram", "run-1", true)
-    assert %{phase: :completed, ok: true} = :sys.get_state(pid).actions["tool-1"]
+    assert_receive {:intent, %{kind: :tool_status_finalize, body: %{text: text}}}
+    assert text =~ "✓ Progress 1000"
+    assert %{finalized: true, actions: actions, order: []} = :sys.get_state(pid)
+    assert actions == %{}
   end
 
   test "status overflow finalizes known actions with a fixed recovery indication and no late revival" do
@@ -121,11 +127,10 @@ defmodule LemonRouter.CoalescerBackpressureTest do
     assert %{overflowed: true} = :sys.get_state(pid)
     assert :ok = ToolStatusCoalescer.finalize_run(session, "telegram", "run-1", false)
 
-    assert %{
-             finalized: true,
-             overflowed: false,
-             actions: %{"tool-1" => %{phase: :completed, ok: false}}
-           } = :sys.get_state(pid)
+    assert %{finalized: true, overflowed: false, actions: actions, order: []} =
+             :sys.get_state(pid)
+
+    assert actions == %{}
 
     assert_receive {:intent, %{kind: :tool_status_finalize, body: %{text: text}}}
 
@@ -135,8 +140,8 @@ defmodule LemonRouter.CoalescerBackpressureTest do
     send(pid, {:lemon_bus_delivery, old.gate, {:action, "run-1", action(9999), %{}}})
     ToolStatusCoalescer.ingest_action(session, "telegram", "run-1", action(10_000))
 
-    assert %{finalized: true, actions: %{"tool-1" => %{phase: :completed, ok: false}}} =
-             :sys.get_state(pid)
+    assert %{finalized: true, run_id: "run-1", order: []} = :sys.get_state(pid)
+    refute_received {:intent, _}
 
     ToolStatusCoalescer.ingest_action(session, "telegram", "run-2", action(1))
     current = :sys.get_state(pid)
@@ -156,8 +161,7 @@ defmodule LemonRouter.CoalescerBackpressureTest do
                  session,
                  "telegram",
                  "run-#{n}",
-                 final_text: "canonical",
-                 dispatch?: false
+                 final_text: "canonical"
                )
     end
 

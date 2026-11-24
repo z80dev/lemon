@@ -908,7 +908,7 @@ Every atom below appears in a live `LemonCore.Introspection.record/3` call.
 |---|---|
 | `LemonRouter.RunProcess` | `:run_started`, `:run_completed`, `:run_failed` |
 | `LemonRouter.RunOrchestrator` | `:orchestration_started`, `:orchestration_resolved`, `:orchestration_failed` |
-| Router answer finalization | `:answer_finalize_started`, `:answer_finalize_dispatch`, `:answer_finalize_completed`, `:answer_artifact_finalize_failed`, `:answer_media_jobs_record_failed` |
+| Router answer finalization | `:answer_finalize_started`, `:answer_finalize_dispatch`, `:answer_finalize_failed`, `:answer_finalize_completed`, `:answer_artifact_finalize_failed`, `:answer_media_jobs_record_failed` |
 | `CodingAgent.Session` | `:session_started`, `:session_ended`, `:compaction_triggered` |
 | `CodingAgent.Session.EventHandler` | `:tool_call_dispatched`, `:engine_event_ignored` |
 | `LemonAgent.Agent` | `:agent_loop_started`, `:agent_turn_observed` (inferred), `:agent_loop_ended`, `:agent_progress_snapshot` |
