@@ -58,6 +58,7 @@ defmodule LemonAgent.Agent do
   alias LemonCore.Introspection
 
   @default_queue_call_timeout_ms :timer.minutes(30)
+  @forwarded_terminal_key {__MODULE__, :forwarded_terminal}
 
   # ============================================================================
   # Types
@@ -85,6 +86,7 @@ defmodule LemonAgent.Agent do
           listeners: list({pid(), reference()}),
           abort_ref: reference() | nil,
           running_task: Task.t() | nil,
+          terminal_seen: boolean(),
           steering_queue: list(Types.agent_message()),
           follow_up_queue: list(Types.agent_message()),
           convert_to_llm: convert_to_llm_fn(),
@@ -554,6 +556,7 @@ defmodule LemonAgent.Agent do
       listeners: [],
       abort_ref: nil,
       running_task: nil,
+      terminal_seen: false,
       bound_input_ids: MapSet.new(),
       steering_queue: [],
       follow_up_queue: [],
@@ -905,18 +908,23 @@ defmodule LemonAgent.Agent do
   end
 
   def handle_info({:agent_event, event}, state) do
-    # Event from the running task - update state and broadcast
-    if match?({:message_end, %LemonAi.Types.AssistantMessage{}}, event) and
-         is_pid(state.system_prompt_observer) do
-      send(
-        state.system_prompt_observer,
-        {:agent_system_prompt, self(), state.response_system_prompt}
-      )
-    end
+    if state.terminal_seen and terminal_event?(event) do
+      # A run delivers exactly one terminal event; drop late duplicates.
+      {:noreply, state}
+    else
+      # Event from the running task - update state and broadcast
+      if match?({:message_end, %LemonAi.Types.AssistantMessage{}}, event) and
+           is_pid(state.system_prompt_observer) do
+        send(
+          state.system_prompt_observer,
+          {:agent_system_prompt, self(), state.response_system_prompt}
+        )
+      end
 
-    new_state = handle_agent_event(event, state)
-    broadcast_event(new_state, event)
-    {:noreply, new_state}
+      new_state = handle_agent_event(event, state)
+      broadcast_event(new_state, event)
+      {:noreply, %{new_state | terminal_seen: state.terminal_seen or terminal_event?(event)}}
+    end
   end
 
   def handle_info({:task_complete, task_ref, result}, state) do
@@ -1071,7 +1079,8 @@ defmodule LemonAgent.Agent do
              abort_ref: abort_ref,
              queue_consumer: nil,
              loop_closing: false,
-             running_task: task
+             running_task: task,
+             terminal_seen: false
          }}
 
       {:error, reason} ->
@@ -1206,6 +1215,7 @@ defmodule LemonAgent.Agent do
       |> LemonAgent.EventStream.events()
       |> Enum.reduce(false, fn event, message_open? ->
         send(agent_pid, {:agent_event, event})
+        if terminal_event?(event), do: Process.put(@forwarded_terminal_key, true)
         track_message_open(event, message_open?)
       end)
 
@@ -1217,15 +1227,46 @@ defmodule LemonAgent.Agent do
     end
 
     :ok
-  rescue
-    error ->
-      # Persist the failed turn before terminal delivery can be fenced.
-      error_text = Exception.message(error)
-      error_msg = build_error_message(error_text, config, :error)
-      send(agent_pid, {:agent_event, {:message_end, error_msg}})
-      send(agent_pid, {:agent_event, {:error, error_text, %{messages: [error_msg]}}})
-      {:error, error}
+  catch
+    kind, reason ->
+      # Exits (a timed-out `get_state/1`, a dead stream) fail the run like
+      # exceptions. Stop the loop, then persist the failed turn before terminal
+      # delivery can be fenced, unless this run's terminal was already forwarded.
+      AbortSignal.abort(abort_ref)
+      {error_text, error_reason} = forwarder_failure(kind, reason, __STACKTRACE__)
+
+      unless Process.get(@forwarded_terminal_key, false) do
+        error_msg = build_error_message(error_text, config.model, :error)
+        send(agent_pid, {:agent_event, {:message_end, error_msg}})
+        send(agent_pid, {:agent_event, {:error, error_reason, %{messages: [error_msg]}}})
+      end
+
+      {:error, error_reason}
   end
+
+  defp forwarder_failure(:error, reason, stacktrace) do
+    error_text = :error |> Exception.normalize(reason, stacktrace) |> Exception.message()
+    {error_text, error_text}
+  end
+
+  defp forwarder_failure(_kind, reason, _stacktrace) do
+    reason = loop_crash_reason(reason)
+    {loop_crash_text(reason), {:loop_crashed, reason}}
+  end
+
+  # Crash reasons cross into projections: keep only a bounded atom class,
+  # never the raw exit term (stacktraces, arguments, paths).
+  defp loop_crash_reason(reason) when is_atom(reason), do: reason
+  defp loop_crash_reason({:shutdown, _}), do: :shutdown
+  defp loop_crash_reason({:timeout, _}), do: :timeout
+  defp loop_crash_reason(_reason), do: :abnormal
+
+  defp loop_crash_text(reason), do: "Agent loop crashed (#{reason})"
+
+  defp terminal_event?({:agent_end, _messages}), do: true
+  defp terminal_event?({:error, _reason, _partial}), do: true
+  defp terminal_event?({:canceled, _reason}), do: true
+  defp terminal_event?(_event), do: false
 
   defp aborted?(abort_ref), do: AbortSignal.aborted?(abort_ref)
 
@@ -1246,7 +1287,7 @@ defmodule LemonAgent.Agent do
     else
       # Check if aborted
       if aborted?(abort_ref) do
-        error_msg = build_error_message("Request was aborted", config, :aborted)
+        error_msg = build_error_message("Request was aborted", config.model, :aborted)
         send(agent_pid, {:agent_event, {:message_end, error_msg}})
       end
     end
@@ -1263,8 +1304,8 @@ defmodule LemonAgent.Agent do
 
   defp has_meaningful_content?(_), do: false
 
-  defp build_error_message(error_text, %AgentLoopConfig{} = config, stop_reason) do
-    model = config.model || %{}
+  defp build_error_message(error_text, model, stop_reason) do
+    model = model || %{}
 
     %LemonAi.Types.AssistantMessage{
       role: :assistant,
@@ -1399,7 +1440,9 @@ defmodule LemonAgent.Agent do
   defp handle_agent_event(_event, state), do: state
 
   @spec handle_task_completion(term(), state()) :: state()
-  defp handle_task_completion(_result, state) do
+  defp handle_task_completion(result, state) do
+    state = ensure_terminal_event(result, state)
+
     # Emit introspection event for loop end
     Introspection.record(
       :agent_loop_ended,
@@ -1441,6 +1484,38 @@ defmodule LemonAgent.Agent do
 
       %{next_state | waiters: []}
     end
+  end
+
+  # A forwarder that died (killed, linked exit) or returned without forwarding
+  # its run's terminal event leaves consumers busy forever. Stop the run and
+  # deliver one terminal error so every subscriber observes the end of the run.
+  defp ensure_terminal_event(_result, %{terminal_seen: true} = state), do: state
+
+  defp ensure_terminal_event(result, state) do
+    case state.abort_ref do
+      {:aborted, ref} -> AbortSignal.abort(ref)
+      ref when is_reference(ref) -> AbortSignal.abort(ref)
+      nil -> :ok
+    end
+
+    reason =
+      case result do
+        {:error, reason} -> loop_crash_reason(reason)
+        _ -> :event_stream_closed
+      end
+
+    error_msg = build_error_message(loop_crash_text(reason), state.agent_state.model, :error)
+
+    Enum.reduce(
+      [{:message_end, error_msg}, {:error, {:loop_crashed, reason}, %{messages: [error_msg]}}],
+      state,
+      fn event, acc ->
+        acc = handle_agent_event(event, acc)
+        broadcast_event(acc, event)
+        acc
+      end
+    )
+    |> Map.put(:terminal_seen, true)
   end
 
   @spec broadcast_event(state(), Types.agent_event()) :: :ok
@@ -1598,6 +1673,7 @@ defmodule LemonAgent.Agent do
   defp consume_queue([first | rest]), do: {[first], rest}
 
   defp normalize_error_reason({:budget_exceeded, %{message: message}}), do: message
+  defp normalize_error_reason({:loop_crashed, reason}), do: loop_crash_text(reason)
   defp normalize_error_reason(reason) when is_binary(reason), do: reason
   defp normalize_error_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp normalize_error_reason(reason), do: inspect(reason)

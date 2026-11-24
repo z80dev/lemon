@@ -171,6 +171,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- An agent run whose loop forwarder dies (killed, linked exit, failed state
+  call) now delivers exactly one terminal `{:error, {:loop_crashed, reason}, _}`
+  event, stops the run and leaves the agent idle, so a coding session no longer
+  stays `:session_busy` and router run streams complete (#638).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

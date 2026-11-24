@@ -114,6 +114,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `LemonAgent.Agent` emits exactly one terminal event per run: when the loop
+  forwarder exits abnormally without forwarding one, the agent aborts the run
+  and broadcasts `{:error, {:loop_crashed, reason}, %{messages: [error]}}`
+  (`reason` is a bounded atom such as `:killed`), sets `error` and wakes
+  waiters. Forwarder exits are caught like exceptions, and late duplicate
+  terminal events are dropped (#638).
 - OAuth credential resolution, including the Anthropic and Codex paths, adopts
   a login refreshed concurrently by another process instead of returning
   `:oauth_secret_changed` when that login is still fresh.
