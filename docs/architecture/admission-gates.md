@@ -98,7 +98,10 @@ Source anchors for review (paths relative to the repository root):
 - **#81 unknown outcomes:** the worker enqueue acknowledgement is gone. Router
   retries only runtime unavailability within its pre-start deadline; definite
   rejection terminalizes once. Durable admission/store uncertainty and external
-  executor effects still cannot be treated as definite non-execution.
+  executor effects still cannot be treated as definite non-execution. An
+  unknown submit outcome adopts the Run under its fixed ID; the router monitors
+  the Run from acceptance, so one that exits while waiting for a permit is
+  terminalized once rather than holding its conversation (#641).
 - **Named nodes:** a remote run still has one controller Run and one permit.
   Destination-local invocation uniqueness remains separate. Shared resume tokens
   across different session keys are protected by the fail-fast claim, not a

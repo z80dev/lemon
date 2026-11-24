@@ -7,6 +7,11 @@ defmodule LemonRouter.RestartCarryover.Replayer do
   `config :lemon_router, :restart_replay_after` (default: `:lemon_channels` and
   `:lemon_control_plane`) have started, for at most two minutes. Admissions are
   snapshotted before waiting, so newly accepted work is never a crash candidate.
+
+  A recovery or replay call that exits is an unknown outcome for that fixed run
+  ID alone: it stays pending for the next boot while the remaining admissions
+  and carried items proceed. Carryover replay still waits for reconciliation,
+  which abandons the carried items' interrupted sources first.
   """
 
   use Task, restart: :temporary

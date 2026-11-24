@@ -1581,7 +1581,9 @@ permanent and always prevent recovery. A run seen in both graceful carryover and
 the crash scan is dispatched only once. Unportable requests, invocation-bound
 capabilities and named-node executions are not automatically re-issued; they
 converge to interrupted/unknown instead. Graceful restart carryover still works
-independently of this flag.
+independently of this flag. A recovery or replay call that times out is an
+unknown outcome for that run ID alone: it stays pending for the next boot while
+the remaining runs and carried items are still recovered.
 
 From a local operator console,
 `LemonRouter.RestartCarryover.CrashRecovery.operator_view(limit: 20)` returns recent

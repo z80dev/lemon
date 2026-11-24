@@ -215,7 +215,7 @@ defmodule LemonGateway.Run do
             {:stop, :normal, %{state | completed: true}}
 
           :unavailable ->
-            {:stop, :run_state_unavailable, state}
+            finalize_start_failure(state, :run_state_unavailable)
         end
 
       {:error, :session_in_use} ->
@@ -314,7 +314,7 @@ defmodule LemonGateway.Run do
 
   defp finalize_start_failure(state, reason) do
     Logger.warning(
-      "Gateway run executor start failed run_id=#{inspect(state.run_id)} reason=#{inspect(reason)}"
+      "Gateway run start failed run_id=#{inspect(state.run_id)} reason=#{inspect(reason)}"
     )
 
     renderer_state = state.renderer_state || state.renderer.init(%{engine: @engine_provenance})
@@ -380,17 +380,26 @@ defmodule LemonGateway.Run do
         case terminal_fence(state) do
           :open -> start_executor(resolve_configured_executor(), state)
           :terminal -> {:stop, :normal, %{state | completed: true}}
-          :unavailable -> {:stop, :run_state_unavailable, state}
+          :unavailable -> finalize_start_failure(state, :run_state_unavailable)
         end
     end
   end
 
+  # The permit authority is gone with its FIFO: a waiting Run can never be
+  # granted, and a running one has lost its permit. Report the run instead of
+  # exiting silently, so its owner never waits for a completion that cannot come.
   def handle_info(
         {:DOWN, ref, :process, _pid, _reason},
         %{slots_monitor_ref: ref} = state
       )
       when is_reference(ref) do
-    {:stop, :runtime_unavailable, state}
+    state = %{state | slots_monitor_ref: nil, slot_ref: nil}
+
+    cond do
+      state.cancelled -> {:noreply, state}
+      state.executor -> begin_cancel(state, :runtime_unavailable)
+      true -> finalize_start_failure(state, :runtime_unavailable)
+    end
   end
 
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
@@ -585,16 +594,20 @@ defmodule LemonGateway.Run do
     if state.completed or state.cancelled do
       {:noreply, state}
     else
-      state = %{state | cancelled: true, cancel_reason: reason || :user_requested}
+      begin_cancel(state, reason || :user_requested)
+    end
+  end
 
-      if state.executor &&
-           safe_executor_control(state.executor, :cancel, state.control_ctx) == :ok &&
-           is_pid(state.executor_pid) do
-        timer = Process.send_after(self(), :cancel_timeout, @cancel_drain_timeout_ms)
-        {:noreply, %{state | cancel_timeout_ref: timer}}
-      else
-        finalize_cancel(state)
-      end
+  defp begin_cancel(state, reason) do
+    state = %{state | cancelled: true, cancel_reason: reason}
+
+    if state.executor &&
+         safe_executor_control(state.executor, :cancel, state.control_ctx) == :ok &&
+         is_pid(state.executor_pid) do
+      timer = Process.send_after(self(), :cancel_timeout, @cancel_drain_timeout_ms)
+      {:noreply, %{state | cancel_timeout_ref: timer}}
+    else
+      finalize_cancel(state)
     end
   end
 

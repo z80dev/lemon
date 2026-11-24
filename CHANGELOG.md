@@ -200,6 +200,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- A conversation no longer hangs when its gateway run dies before it starts
+  (killed while waiting for an execution permit, lost permit authority or
+  unreadable run state): the router monitors the run from acceptance,
+  terminalizes it once and starts the next queued message. An unknown
+  submission outcome keeps the run's event subscription and adopts the run
+  under its fixed ID instead of failing it; a store error while recording
+  terminal evidence no longer drops the final answer; and a timed-out crash
+  recovery or carryover replay call leaves only that run pending instead of
+  skipping the rest of the boot's recovery (#641).
 
 ### Removed
 
