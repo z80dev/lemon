@@ -387,6 +387,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and pending tools (bash, writes, external calls) are terminated after a short
   grace instead of running on unbounded. Per-tool deadlines are enforced even
   when the loop is stalled (#681).
+- `bash` selects the code-mode Python stream relay only when code-mode is
+  actually enabled (`enabled: true` and the `code_mode` profile, via
+  `CodeMode.enabled?/1`); a disabled `code_mode` profile stays on managed bash,
+  and a missing `python3` returns a clear error instead of crashing the call.
+  Code-mode remains opt-in per the #598 evaluation (#674).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
@@ -558,6 +563,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Security
 
+- Archive reads and in-place archive writes (`read`/`write` on `x.zip:member`,
+  `.tar`, `.tar.gz`, `.tgz`) and SVGZ decoding now inflate through one
+  streaming, abort-aware bound: members are rejected as soon as decoded bytes
+  pass their declared size or `:format_max_member_bytes`, compressed TARs and
+  write-side rebuilds stop at `:format_max_decoded_bytes` (256 MiB), and
+  archives over `:format_max_archive_entries` are refused, so a zip/gzip bomb
+  can no longer exhaust node memory (#678).
 - Model file tools, browser and media outputs and checkpoint restore refuse
   Lemon operator state (`~/.lemon`, the agent directory, configured
   config/key/store/checkpoint/bot paths, extension roots) and the toolchain

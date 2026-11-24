@@ -97,7 +97,12 @@ the existing flat/recursive listing behavior and ordering are unchanged.
 Selectors also work on archive members (`bundle.zip:src/a.ex:10-20`), rendered
 formats such as PDFs and notebooks, and internal references
 (`artifact://<id>:100+50`). They only apply when the literal path does not
-exist, so a file really named `notes:12` is still read as-is. A selector cannot
+exist, so a file really named `notes:12` is still read as-is. Archive
+decompression streams under hard bounds: a member's decoded bytes may not exceed
+its declared size or `:format_max_member_bytes` (32 MiB), a `.tar.gz`/`.tgz` may
+decode to at most `:format_max_decoded_bytes` (256 MiB), and an archive may list
+at most `:format_max_archive_entries` (65,536) entries. A member whose data
+inflates past its declared size is rejected while inflating. A selector cannot
 be combined with `offset`/`limit`. `:raw` output omits the snapshot tag, so use
 a numbered read before a snapshot-anchored `edit`.
 
@@ -334,7 +339,8 @@ slash-separated paths without empty, `.` or `..` segments; directories and links
 cannot be overwritten. Existing archives use the normal size, mutation lock,
 checkpoint, symlink and plan-mode guards. Replacing a member with truncated-read
 output is refused. A sibling temporary file is renamed over the archive only
-after the full replacement is ready.
+after the full replacement is ready. Unrelated members are decoded with the same
+streaming bounds as archive reads; exceeding them leaves the archive unchanged.
 
 Unchanged ZIP members retain their uncompressed bytes and file metadata (ZIP
 compression/layout may change). Unrelated TAR headers, data, links and extension

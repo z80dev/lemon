@@ -26,7 +26,9 @@ defmodule CodingAgent.Tools.Bash do
 
   Completed foreground results include structured `output`, `exit_code`,
   `stdout`, `stderr` and `output_combined` details. Local non-PTY code-mode
-  calls use a Python3 relay to capture streams separately (Python3 is required).
+  calls (`CodingAgent.Tools.CodeMode.enabled?/1`: `enabled: true` and the
+  `:code_mode` profile) use a Python3 relay to capture streams separately; a
+  missing `python3` fails the call before the command starts.
   Merged-output backends report null `stdout`/`stderr` (unavailable, not empty)
   and `output_combined: true`; `output` is the bounded capture without
   presentation notices. Launch receipts and failures need not contain captures.
@@ -370,14 +372,6 @@ defmodule CodingAgent.Tools.Bash do
 
   defp shell_quote(value), do: "'" <> String.replace(value, "'", "'\\''") <> "'"
 
-  defp code_mode?(opts) do
-    case Keyword.get(opts, :tool_disclosure) do
-      %{profile: profile} -> profile in [:code_mode, "code_mode"]
-      %{"profile" => profile} -> profile in [:code_mode, "code_mode"]
-      _ -> false
-    end
-  end
-
   defp resolve_timeout(params, opts) do
     default =
       Keyword.get(opts, :timeout_ms, Keyword.get(opts, :bash_timeout_ms, @default_timeout_ms))
@@ -401,14 +395,14 @@ defmodule CodingAgent.Tools.Bash do
         timeout: timeout_ms,
         pty: use_pty,
         env: env,
-        capture_streams: code_mode?(opts) and not use_pty
+        capture_streams: CodingAgent.Tools.CodeMode.enabled?(opts) and not use_pty
       ]
 
     executor =
       cond do
         use_pty -> BashExecutor
         Keyword.get(opts, :acp_client_terminal) == true -> CodingAgent.ACPTerminalExecutor
-        code_mode?(opts) -> BashExecutor
+        CodingAgent.Tools.CodeMode.enabled?(opts) -> BashExecutor
         true -> CodingAgent.Tools.Bash.Managed
       end
 
@@ -486,6 +480,21 @@ defmodule CodingAgent.Tools.Bash do
               exit_code: nil,
               background: true
             },
+            is_error: true
+          }
+
+        {:error, :python3_unavailable} ->
+          finish_capture(capture)
+
+          %AgentToolResult{
+            content: [
+              %TextContent{
+                text:
+                  "Error executing command: code-mode bash requires python3 on PATH for " <>
+                    "separated stream capture; install Python 3 or disable code-mode. " <>
+                    "The command was not started."
+              }
+            ],
             is_error: true
           }
 

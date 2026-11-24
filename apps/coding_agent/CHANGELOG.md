@@ -57,6 +57,13 @@
   return after initialization, with `{:error, reason}` and no linked exit on
   failure. `RootLifecycle` no longer calls a session while holding its lock,
   and `SessionMaintenance.plan/1` takes no root lock (#632).
+- `bash` uses the code-mode stream relay only when `CodeMode.enabled?/1`
+  holds; `BashExecutor` returns `{:error, :python3_unavailable}` instead of
+  raising when the relay lacks `python3` (#674).
+- Archive member reads and in-place archive writes bound decompression while
+  inflating (declared size, `:format_max_member_bytes`,
+  `:format_max_decoded_bytes`, `:format_max_archive_entries`) instead of
+  checking sizes after whole-archive extraction (#678).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller
