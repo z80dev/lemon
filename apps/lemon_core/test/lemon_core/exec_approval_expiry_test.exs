@@ -28,10 +28,12 @@ defmodule LemonCore.ExecApprovalExpiryTest do
 
     on_exit(fn ->
       stop_child(ExecApprovalExpiry)
+      stop_child(LemonCore.RuntimeOwner)
       stop_child(Store)
       :persistent_term.put({ExecApprovalExpiry, :runtime_id}, original_runtime)
       Application.put_env(:lemon_core, Store, original_config)
       restart_child(Store)
+      restart_child(LemonCore.RuntimeOwner)
       restart_child(ExecApprovalExpiry)
     end)
 
@@ -195,6 +197,60 @@ defmodule LemonCore.ExecApprovalExpiryTest do
       end,
       timeout: 2_000
     )
+  end
+
+  test "a runtime that does not own the store leaves another runtime's rows unchanged" do
+    owner = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> Process.exit(owner, :kill) end)
+    assert :ok = ExecApprovalExpiry.watch_session("owned-session", owner)
+    {task, id} = request("non-owner", session_id: "owned-session")
+
+    {:ok, rows} = Store.fetch_all(:exec_approvals_pending)
+    {:ok, owners} = ExecApprovalStore.fetch_session_owners()
+    {_backend, database} = Store.location()
+
+    # Another live runtime holds the store's ownership lock.
+    test = self()
+
+    holder =
+      spawn(fn ->
+        LemonCore.Service.Lock.with_lock_path(
+          LemonCore.RuntimeOwner.lock_path(database),
+          [],
+          fn ->
+            send(test, :held)
+            receive do: (:release -> :ok)
+          end
+        )
+      end)
+
+    assert_receive :held, 5_000
+
+    stop_child(LemonCore.RuntimeOwner)
+    restart_child(LemonCore.RuntimeOwner)
+    refute LemonCore.RuntimeOwner.owner?()
+
+    # This VM boots as a different incarnation that does not own the store.
+    stop_child(ExecApprovalExpiry)
+    :persistent_term.put({ExecApprovalExpiry, :runtime_id}, "follower-runtime")
+    restart_child(ExecApprovalExpiry)
+
+    assert {:ok, ^rows} = Store.fetch_all(:exec_approvals_pending)
+    assert {:ok, ^owners} = ExecApprovalStore.fetch_session_owners()
+    assert Task.yield(task, 50) == nil
+
+    # Once the owner is gone, the next owner reconciles the dead incarnation.
+    send(holder, :release)
+    ref = Process.monitor(holder)
+    assert_receive {:DOWN, ^ref, :process, ^holder, _}
+    stop_child(LemonCore.RuntimeOwner)
+    restart_child(LemonCore.RuntimeOwner)
+    assert LemonCore.RuntimeOwner.owner?()
+    stop_child(ExecApprovalExpiry)
+    restart_child(ExecApprovalExpiry)
+
+    assert {:ok, :denied} = Task.await(task)
+    assert_expired(id)
   end
 
   defp request(suffix, opts \\ []) do

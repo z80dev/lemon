@@ -29,7 +29,9 @@ defmodule Mix.Tasks.Lemon.Config do
 
   @impl true
   def run(args) do
-    Mix.Task.run("app.start")
+    # Read-only one-shot: never a second runtime beside a running daemon.
+    Mix.Task.run("loadpaths")
+    LemonCore.CLI.start!(:lemon_core, store: :read_only)
 
     {opts, rest, _invalid} =
       OptionParser.parse(args,

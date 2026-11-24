@@ -210,6 +210,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `config :lemon_core, :boot_mode` (`:runtime` default, `:client`,
+  `:read_only_client`; `LemonCore.Application.boot_mode/0`) selects a client
+  tree for one-shot commands without approval recovery, Store sweeps,
+  `RunHistoryStore`, `ConfigReloader`/`Watcher` or `Drain` (no SIGTERM trap).
+  `LemonCore.CLI.start/2` and `start!/2` (`store: :read_only`) boot it.
+  `LemonCore.Store` accepts `sweep: false` and `read_only: true` (mutations
+  return `{:error, :read_only}`). New `LemonCore.RuntimeOwner` holds a
+  `<database>.runtime.lock` for a file-backed store; `ExecApprovalExpiry`
+  reconciles other runtimes' approvals only while it owns the store, and
+  starts with `recover: false` in client mode (#667).
 - `LemonCore.ExecApprovals.expire_owner/1` reads only the owner's approvals
   through a new run/session owner index (`ExecApprovalStore.index_owner/2`,
   `fetch_owner_index/1`, `unindex_owner/2`). Terminal records carry an

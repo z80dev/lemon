@@ -48,9 +48,16 @@ defmodule LemonCore.Store do
 
   Values in `:chat`, `:openai_compat_run_owners` and `:exec_approvals_pending`
   (terminal approval receipts) that carry an integer `:expires_at` (epoch
-  milliseconds)
-  are removed by the periodic sweep once that time passes. Owners stamp the
-  field; the store only enforces it.
+  milliseconds) are removed by the periodic sweep once that time passes. Owners
+  stamp the field; the store only enforces it.
+
+  ## Client options
+
+  One-shot client VMs (see `LemonCore.Application` boot modes) start the store
+  with `sweep: false`, leaving sweeps to the runtime that owns the database, and
+  read-only commands add `read_only: true`: every mutation then returns
+  `{:error, :read_only}` without reaching the backend, and run/introspection
+  appends are dropped.
 
   ## Read cache coherence
 
@@ -745,8 +752,9 @@ defmodule LemonCore.Store do
         # still being empty.
         Hooks.publish(name, :cached_tables, cached_tables)
 
-        # Schedule periodic sweep for expired entries
-        schedule_sweep()
+        # Schedule periodic sweep for expired entries (client VMs leave it to
+        # the runtime that owns the store).
+        if Keyword.get(config, :sweep, true), do: schedule_sweep()
 
         {:ok,
          %{
@@ -756,7 +764,8 @@ defmodule LemonCore.Store do
            finalize_run_hooks: finalize_run_hooks,
            backend: backend,
            backend_state: backend_state,
-           introspection_retention_ms: @default_introspection_retention_ms
+           introspection_retention_ms: @default_introspection_retention_ms,
+           read_only: Keyword.get(config, :read_only, false) == true
          }}
 
       {:error, reason} ->
@@ -786,7 +795,9 @@ defmodule LemonCore.Store do
       :backend,
       :backend_opts,
       :cached_tables,
-      :finalize_run_hooks
+      :finalize_run_hooks,
+      :sweep,
+      :read_only
     ])
     |> then(&Keyword.merge(env_config, &1))
   end
@@ -822,7 +833,25 @@ defmodule LemonCore.Store do
 
   defp merge_runtime_override(config, _override), do: config
 
+  # A read-only store (a one-shot client VM beside a running runtime) refuses
+  # every mutation before it reaches the backend, so it is never a second writer.
+  @read_only_refused [
+    :generic_put,
+    :generic_put_new,
+    :generic_compare_and_swap,
+    :generic_compare_and_delete,
+    :generic_compare_and_delete_many,
+    :generic_delete,
+    :generic_take,
+    :durable_write,
+    :finalize_run
+  ]
+
   @impl true
+  def handle_call(request, _from, %{read_only: true} = state)
+      when is_tuple(request) and elem(request, 0) in @read_only_refused,
+      do: {:reply, {:error, :read_only}, state}
+
   def handle_call(:location, _from, state) do
     path =
       case state.backend_state do
@@ -1262,6 +1291,12 @@ defmodule LemonCore.Store do
   end
 
   @impl true
+  def handle_cast({:append_run_event, _run_id, _event}, %{read_only: true} = state),
+    do: {:noreply, state}
+
+  def handle_cast({:append_introspection_event, _event}, %{read_only: true} = state),
+    do: {:noreply, state}
+
   def handle_cast({:append_introspection_event, event}, state) do
     case normalize_introspection_event(event) do
       {:ok, event} ->

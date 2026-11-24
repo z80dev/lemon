@@ -535,6 +535,17 @@ owns that daemon. An explicitly configured
 without a credential; the launcher does not silently enable this compatibility
 mode.
 
+One-shot commands (`doctor`, `config`, `secrets`, `usage`, `context`, `learn`,
+`learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, ...) start the core
+services in client mode, so running them next to a daemon is safe: they never
+expire the daemon's pending approvals, sweep its store, run its config reloader
+or run history, or install a SIGTERM handler. `doctor`, `config show`/`validate`,
+`usage` and `secrets status`/`list`/`check` also open the store read-only.
+Commands that change stored state, such as `secrets set`, still write the shared
+store directly. Only the first runtime to open a store owns it
+(`<store>.runtime.lock`); a second runtime on the same store, such as a node
+worker, leaves the owner's approvals alone.
+
 ## Help and exit codes
 
 `lemon <launcher-command> --help` and `lemon help <command>` print help.

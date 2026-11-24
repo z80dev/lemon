@@ -171,6 +171,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- One-shot CLI commands (`lemon doctor`, `config`, `secrets`, `usage`, `context`,
+  `learn`, `learning`, `mcp`, `update`, `migrate`, `providers`, `setup`, and the
+  `mix lemon.secrets*`/`lemon.config`/`lemon.usage` tasks) boot the core in a
+  client mode that no longer expires a running daemon's pending approvals, sweeps
+  its store, starts a second config reloader or run-history store, or installs a
+  SIGTERM trap; read-only commands also open the store read-only. A runtime only
+  reconciles approvals while it holds the store's ownership lock
+  (`<store>.runtime.lock`), so a second runtime on the same store (for example a
+  node worker) leaves the owner's approvals alone. `lemon migrate hermes` confirms
+  every imported session document and reports unconfirmed writes as
+  `outcome_unknown` (#667).
 - Exec approvals are indexed by run and session, so run and session end read
   only that owner's approvals instead of the whole approval table. Terminal
   approval receipts are swept after 24 hours

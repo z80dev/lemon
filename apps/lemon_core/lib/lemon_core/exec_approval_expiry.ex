@@ -9,10 +9,14 @@ defmodule LemonCore.ExecApprovalExpiry do
 
   Pending records carry a private VM incarnation and native owner PID. Startup
   reconciles retained records (in `handle_continue/2`, before any call is
-  served): owners from an earlier runtime cannot still exist. A store that is
-  unavailable at startup never stops the worker or `:lemon_core`; reconciliation
-  is retried with exponential backoff, and until it succeeds `ensure_ready/0`
-  returns `{:error, :store_unavailable}`, so no approval can be resolved. An expiry-worker restart keeps the same
+  served): owners from an earlier runtime cannot still exist. Only the VM that
+  owns the store (`LemonCore.RuntimeOwner`) reconciles; a follower runtime
+  sharing the store restores its own monitors and leaves every other record
+  alone, and a one-shot client VM (`recover: false`) never recovers and refuses
+  resolution. A store that is unavailable at startup never stops the worker or
+  `:lemon_core`; recovery is retried with exponential backoff, and until it
+  succeeds `ensure_ready/0` returns `{:error, :store_unavailable}`, so no
+  approval can be resolved. An expiry-worker restart keeps the same
   incarnation, preserves live approvals and restores their session monitors.
   Resolution also checks this evidence, closing the startup/monitor-delivery race.
   Session ownership is retained separately in Store from session initialization,
@@ -100,16 +104,21 @@ defmodule LemonCore.ExecApprovalExpiry do
   defp notify(owner), do: GenServer.cast(__MODULE__, {:expire, owner})
 
   @impl true
-  def init(_opts) do
-    {:ok, %{sessions: %{}, monitors: %{}, ready: false, retry_ms: @retry_initial_ms},
-     {:continue, :reconcile}}
+  def init(opts) do
+    state = %{sessions: %{}, monitors: %{}, ready: false, retry_ms: @retry_initial_ms}
+
+    # A client VM never recovers, so it cannot expire another runtime's
+    # approvals, and it refuses resolution (`ensure_ready/0`).
+    if Keyword.get(opts, :recover, true),
+      do: {:ok, state, {:continue, :reconcile}},
+      else: {:ok, state}
   end
 
   @impl true
   def handle_continue(:reconcile, state), do: reconcile(state)
 
   defp reconcile(state) do
-    case recover(state) do
+    case recover(state, LemonCore.RuntimeOwner.owner?()) do
       {:ok, state} ->
         {:noreply, %{state | ready: true, retry_ms: @retry_initial_ms}}
 
@@ -123,21 +132,27 @@ defmodule LemonCore.ExecApprovalExpiry do
     end
   end
 
-  defp recover(state) do
-    with {:ok, _count} <- safely(&ExecApprovals.reconcile_runtime/0),
+  # Only the runtime that owns the store may assume every other incarnation is
+  # gone. A follower restores its own monitors and changes no other record.
+  defp recover(state, owner?) do
+    with {:ok, _count} <-
+           if(owner?, do: safely(&ExecApprovals.reconcile_runtime/0), else: {:ok, 0}),
          {:ok, owners} <- safely(&ExecApprovalStore.fetch_session_owners/0),
-         {:ok, state} <- restore_owners(owners, state),
+         {:ok, state} <- restore_owners(owners, state, owner?),
          {:ok, rows} <- safely(&ExecApprovalStore.fetch_pending_list/0) do
       {:ok, Enum.reduce(rows, state, &restore_pending/2)}
     end
   end
 
-  defp restore_owners(owners, state) do
+  defp restore_owners(owners, state, owner?) do
     runtime = runtime_id()
 
     Enum.reduce_while(owners, {:ok, state}, fn
       {id, %{runtime_id: ^runtime, pid: pid}}, {:ok, state} when is_pid(pid) ->
         {:cont, {:ok, monitor_session(state, id, pid)}}
+
+      {_id, _owner}, {:ok, state} when not owner? ->
+        {:cont, {:ok, state}}
 
       {id, _owner}, {:ok, state} ->
         case ExecApprovalStore.delete_session_owner(id) do
@@ -147,9 +162,12 @@ defmodule LemonCore.ExecApprovalExpiry do
     end)
   end
 
-  defp restore_pending({_id, %{session_id: id, owner_session_pid: pid}}, state)
-       when is_binary(id) and is_pid(pid),
-       do: monitor_session(state, id, pid)
+  defp restore_pending({_id, %{session_id: id, owner_session_pid: pid} = pending}, state)
+       when is_binary(id) and is_pid(pid) do
+    if Map.get(pending, :owner_runtime_id) == runtime_id(),
+      do: monitor_session(state, id, pid),
+      else: state
+  end
 
   defp restore_pending(_row, state), do: state
 

@@ -18,6 +18,8 @@ defmodule LemonCore.Application do
     surviving owners when it restarts
   - `LemonCore.Secrets.Usage` - Batched asynchronous secret usage metadata
   - `LemonCore.UsageLedger` - Serialized per-run usage/cost aggregation (finalize-run hook)
+  - `LemonCore.RuntimeOwner` - Holds the cross-VM ownership lock of a
+    file-backed store; only its holder reconciles other runtimes' records
   - `LemonCore.ExecApprovalExpiry` - Expires pending exec approvals whose run or
     session ended (finalize-run hook)
   - `LemonCore.Secrets.SourceTaskSupervisor` - Bounded external-source tasks
@@ -30,6 +32,20 @@ defmodule LemonCore.Application do
 
   The supervisor uses a :one_for_one strategy, meaning if a child process
   crashes, only that process will be restarted.
+
+  ## Boot modes
+
+  `config :lemon_core, :boot_mode` selects the tree; `children/1` lists it.
+
+  - `:runtime` (default) - the daemon, node workers and tests: everything above.
+  - `:client` - one-shot CLI commands (`LemonCore.CLI.start/2`): no
+    `RuntimeOwner`, approval recovery (`ExecApprovalExpiry` runs with
+    `recover: false` and refuses resolution), Store sweeps, `RunHistoryStore`,
+    `ConfigReloader`, `Watcher` or `Drain` (so no SIGTERM trap; `Drain.phase/0`
+    reads `:serving`). A client VM therefore never expires, sweeps or reloads
+    state owned by a running daemon.
+  - `:read_only_client` - `:client` whose Store also refuses every mutation
+    (`{:error, :read_only}`), for one-shot commands that only read.
 
   `LemonCore.RunHistoryStore` is only started when the optional `:exqlite`
   dependency is present. Durable memory lives in the `lemon_memory` app and
@@ -73,39 +89,67 @@ defmodule LemonCore.Application do
     # messages can be diagnosed even when stdout/stderr isn't persisted.
     _ = LemonCore.Logging.maybe_add_file_handler()
 
-    config_cache_opts = Application.get_env(:lemon_core, LemonCore.ConfigCache, [])
     _ = LemonCore.ExecApprovalExpiry.init_runtime_id()
-
-    children =
-      [
-        LemonCore.RuntimeCache,
-        LemonCore.RuntimeLatch,
-        {DynamicSupervisor, strategy: :one_for_one, name: LemonCore.Dedupe.Supervisor},
-        LemonCore.Bus.child_spec_for_backend(),
-        LemonCore.Drain,
-        LemonCore.ACPClientBridge,
-        LemonCore.NodeRegistry,
-        {LemonCore.ConfigCache, config_cache_opts},
-        LemonCore.Store,
-        LemonCore.SessionActivity,
-        LemonCore.Secrets.Usage,
-        LemonCore.UsageLedger,
-        LemonCore.ExecApprovalExpiry,
-        LemonCore.TaskSupervisor.child_spec(name: LemonCore.Secrets.SourceTaskSupervisor),
-        LemonCore.Secrets.SourceCache
-      ] ++
-        sqlite_children() ++
-        [
-          LemonCore.ConfigReloader,
-          LemonCore.ConfigReloader.Watcher
-        ]
+    mode = boot_mode()
 
     opts = [strategy: :one_for_one, name: LemonCore.Supervisor]
 
-    with {:ok, pid} <- Supervisor.start_link(children, opts) do
-      :ok = LemonCore.Drain.maybe_install_signal_trap()
+    with {:ok, pid} <- Supervisor.start_link(children(mode), opts) do
+      if mode == :runtime, do: :ok = LemonCore.Drain.maybe_install_signal_trap()
       {:ok, pid}
     end
+  end
+
+  @doc "The configured boot mode: `:runtime` unless a one-shot client chose otherwise."
+  @spec boot_mode() :: :runtime | :client | :read_only_client
+  def boot_mode do
+    case Application.get_env(:lemon_core, :boot_mode, :runtime) do
+      mode when mode in [:client, :read_only_client] -> mode
+      _ -> :runtime
+    end
+  end
+
+  @doc false
+  @spec children(:runtime | :client | :read_only_client) :: [
+          Supervisor.child_spec() | module() | tuple()
+        ]
+  def children(mode) when mode in [:runtime, :client, :read_only_client] do
+    runtime? = mode == :runtime
+    config_cache_opts = Application.get_env(:lemon_core, LemonCore.ConfigCache, [])
+
+    store =
+      case mode do
+        :runtime -> [LemonCore.Store]
+        :client -> [{LemonCore.Store, sweep: false}]
+        :read_only_client -> [{LemonCore.Store, sweep: false, read_only: true}]
+      end
+
+    [
+      LemonCore.RuntimeCache,
+      LemonCore.RuntimeLatch,
+      {DynamicSupervisor, strategy: :one_for_one, name: LemonCore.Dedupe.Supervisor},
+      LemonCore.Bus.child_spec_for_backend()
+    ] ++
+      if(runtime?, do: [LemonCore.Drain], else: []) ++
+      [
+        LemonCore.ACPClientBridge,
+        LemonCore.NodeRegistry,
+        {LemonCore.ConfigCache, config_cache_opts}
+      ] ++
+      store ++
+      if(runtime?, do: [LemonCore.RuntimeOwner], else: []) ++
+      [
+        LemonCore.SessionActivity,
+        LemonCore.Secrets.Usage,
+        LemonCore.UsageLedger,
+        {LemonCore.ExecApprovalExpiry, recover: runtime?},
+        LemonCore.TaskSupervisor.child_spec(name: LemonCore.Secrets.SourceTaskSupervisor),
+        LemonCore.Secrets.SourceCache
+      ] ++
+      if(runtime?,
+        do: sqlite_children() ++ [LemonCore.ConfigReloader, LemonCore.ConfigReloader.Watcher],
+        else: []
+      )
   end
 
   # RunHistoryStore needs the SQLite NIF. `:exqlite` is an optional dependency,
