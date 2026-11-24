@@ -44,10 +44,10 @@ defmodule LemonChannels.ApplicationTest do
       end
 
       assert :ok = Application.register_and_start_adapter(TestAdapter)
-      pid = Process.whereis(TestAdapter)
+      assert is_pid(Process.whereis(TestAdapter))
 
       on_exit(fn ->
-        DynamicSupervisor.terminate_child(LemonChannels.AdapterSupervisor, pid)
+        Application.stop_adapter(TestAdapter)
         LemonChannels.Registry.unregister(TestAdapter.id())
       end)
 

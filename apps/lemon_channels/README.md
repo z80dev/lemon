@@ -143,6 +143,13 @@ side effects. Internal routing, rendering, and state-write failures are not
 converted into successful deliveries or permissive authorization decisions.
 Pairing, binding, group/admin, and file-access checks remain fail-closed.
 
+Telegram confirms the `getUpdates` offset after each handled update, not after
+the whole batch, so a transport crash mid-batch re-polls only updates that were
+never handled. The inbound dedupe table survives a transport restart (entries
+expire by TTL), and every submission carries a run identity derived from the
+account, chat, thread and update id, so the router admits a re-polled update at
+most once.
+
 Telegram HTTP long polls run as monitored, unlinked tasks under the adapter's
 `AsyncSupervisor`, so live allowlist and drain calls do not wait for Telegram.
 Fetched updates are applied to the current state; drain discards an in-flight
@@ -236,22 +243,27 @@ LemonChannels.Application
 +-- WhatsApp.ModelPolicyAdapter           (GenServer - session-override ETS owner)
 +-- LemonChannels.InboundHttp             (Supervisor - optional HTTP listener)
 |   +-- InboundHttp.Routes                (GenServer - config registration only)
-+-- LemonChannels.AdapterSupervisor       (DynamicSupervisor)
-    +-- Telegram.Supervisor               (if configured)
-    |   +-- Telegram.AsyncSupervisor      (Task.Supervisor)
-    |   +-- Telegram.Transport            (GenServer - long-polling)
-    +-- Discord.Supervisor                (if configured)
-    |   +-- Nostrum.Supervisor             (included application)
-    |   +-- Discord.AsyncSupervisor       (Task.Supervisor)
-    |   +-- Discord.Transport             (GenServer - event lifecycle)
-    |   +-- Discord.Transport.Consumer    (Nostrum consumer)
-    +-- XMTP.Transport                    (if configured, GenServer + Port)
-    +-- WhatsApp.Supervisor               (if configured)
-        +-- WhatsApp.AsyncSupervisor      (Task.Supervisor)
-        +-- WhatsApp.Transport            (GenServer + Port)
++-- LemonChannels.AdapterSupervision      (Supervisor - rest_for_one)
+    +-- LemonChannels.AdapterSupervisor   (DynamicSupervisor)
+    |   +-- AdapterKeeper per adapter     (restarts its adapter with backoff)
+    |       +-- Telegram.Supervisor               (if configured)
+    |       |   +-- Telegram.AsyncSupervisor      (Task.Supervisor)
+    |       |   +-- Telegram.Transport            (GenServer - long-polling)
+    |       +-- Discord.Supervisor                (if configured)
+    |       |   +-- Nostrum.Supervisor             (included application)
+    |       |   +-- Discord.AsyncSupervisor       (Task.Supervisor)
+    |       |   +-- Discord.Transport             (GenServer - event lifecycle)
+    |       |   +-- Discord.Transport.Consumer    (Nostrum consumer)
+    |       +-- XMTP.Transport                    (if configured, GenServer + Port)
+    |       +-- WhatsApp.Supervisor               (if configured)
+    |           +-- WhatsApp.AsyncSupervisor      (Task.Supervisor)
+    |           +-- WhatsApp.Transport            (GenServer + Port)
+    +-- AdapterSupervision.Starter        (starts configured adapters)
 ```
 
-Adapters are selected from `config :lemon_channels, :adapters` during application boot. Each adapter runs under the `AdapterSupervisor` DynamicSupervisor; adapter modules may still no-op internally when credentials or transport-specific enablement are absent.
+Adapters are selected from `config :lemon_channels, :adapters`. `AdapterSupervision.Starter` starts them at boot and again whenever `AdapterSupervisor` restarts (`rest_for_one`), so a restart never leaves it empty. Each adapter runs behind an `AdapterKeeper`, which restarts that adapter with capped exponential backoff (`config :lemon_channels, :adapter_restart_backoff, base_backoff_ms: 1_000, max_backoff_ms: 60_000`), so one adapter's crash loop cannot exhaust the shared supervisor. Adapters registered at runtime with `register_and_start_adapter/2` get the same keeper but are not restarted by the starter. Adapter modules may still no-op internally when credentials or transport-specific enablement are absent.
+
+When another runtime holds a Telegram bot's poller lock, the Telegram transport stays alive, reports `error` health, and retries the lock with backoff (`poller_lock_retry_ms`, default 5 s, capped at 30x).
 
 Named volatile dedupe tables belong to `LemonCore.Dedupe.Owner` workers under
 the core dynamic supervisor, not short-lived callers or channel transports.
@@ -901,6 +913,19 @@ duplicate a run. A definite router rejection is left unacknowledged so polling
 can redeliver it. `XMTP.Transport` supplies the script name, event tag, and log
 label directly to the shared `LemonChannels.PortBridge` GenServer.
 
+XMTP persists a per-conversation inbound high-water mark (`sent_at_ns`) in
+`LemonCore.Store` (`xmtp_inbound_cursors`) when a message is acknowledged. Every
+poll sends those cursors to the bridge, which lists only later messages, and the
+transport drops any message at or below a cursor, so a restart, or a key evicted
+from the bounded in-memory seen set, never resubmits history. A definite router
+rejection holds the cursor below that message until it is accepted. An
+unreadable cursor store stops the transport instead of replaying the inbox.
+Submissions carry a run identity derived from the conversation and message, so
+the router admits a replayed message at most once. The bridge runs commands one
+at a time, so a reconnect never interleaves with an in-flight poll.
+Conversations without a stored cursor (including every conversation on the
+first start after upgrading) are read from the beginning once.
+
 Inbound messages are authorized before dedupe, placeholder replies or
 submission: the sender inbox id must be in `gateway.xmtp.allowed_inboxes`
 (empty or missing drops everything unless `allow_all = true`), and group
@@ -1103,7 +1128,7 @@ LemonChannels.Application.start_adapter(MyAdapter)
 LemonChannels.Application.stop_adapter(MyAdapter)
 ```
 
-Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
+Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor), each behind a `LemonChannels.AdapterKeeper`.
 
 ### Inbound HTTP registration
 

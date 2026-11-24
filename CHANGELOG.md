@@ -201,6 +201,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Skill lockfile and audit-state writes wait up to ten seconds for their file
   lock instead of one, so concurrent skill installs in one runtime are no
   longer refused with `lock_timeout` while the lock is merely busy (#499).
+- Channels: XMTP no longer replays its whole inbox after a restart. It persists
+  a per-conversation `sent_at_ns` high-water mark and polls only newer messages;
+  Telegram confirms its offset after each handled update instead of each batch
+  and keeps its dedupe table across transport restarts. Both pass a stable run
+  identity so the router admits a replayed message at most once, and the XMTP
+  bridge runs commands one at a time (#648).
+- Channels: a second runtime holding a Telegram bot's poller lock, or one
+  adapter's crash loop, no longer stops Discord, XMTP and Email until restart.
+  Telegram stays alive and retries the lock with backoff, each adapter restarts
+  behind its own keeper with backoff, and configured adapters are started again
+  whenever `AdapterSupervisor` restarts (#686).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
