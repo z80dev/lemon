@@ -93,13 +93,18 @@ defmodule CodingAgent.DurableTableContractTest do
 
       # Recovery is a projection, not a format migration. Even interrupted rows
       # retain their original disk representation until a domain mutation. The
-      # task store's restart outcome (:lost/:interrupted) is that mutation: it is
-      # persisted so crash resume (#556) cannot reopen it after another restart.
+      # task store's and run graph's boot outcomes (:lost/:interrupted) are that
+      # mutation: they are persisted so crash resume (#556) cannot reopen them
+      # and a join on them returns after another restart.
       Enum.each(ctx.fixtures[fixture], fn row ->
         expected =
           case :ets.lookup(state.table, elem(row, 0)) do
             [{_, %{status: status}, _} = restored]
             when module == TaskStoreServer and status in [:lost, :interrupted] ->
+              restored
+
+            [{_, %{status: :lost, error: :lost_on_restart}} = restored]
+            when module == RunGraphServer ->
               restored
 
             _ ->
@@ -184,12 +189,9 @@ defmodule CodingAgent.DurableTableContractTest do
 
   test "owner restart recovers unmanaged tails without inventing an admission charge", ctx do
     path = Path.join(ctx.tmp_dir, "restart.dets")
-    pid = start_supervised!({ProcessStoreServer, dets_path: path})
+    start_supervised!({ProcessStoreServer, dets_path: path})
 
-    :ok =
-      ProcessStoreServer.transaction(pid, fn ->
-        ProcessStore.insert_record("tail", %{id: "tail", status: :running}, ["two", "one"])
-      end)
+    :ok = ProcessStore.insert_record("tail", %{id: "tail", status: :running}, ["two", "one"])
 
     assert :ok = stop_supervised(ProcessStoreServer)
     recovered = start_supervised!({ProcessStoreServer, dets_path: path})
@@ -324,19 +326,17 @@ defmodule CodingAgent.DurableTableContractTest do
     on_exit(fn -> File.rm_rf!(output) end)
 
     :ok =
-      ProcessStoreServer.transaction(pid, fn ->
-        ProcessStore.insert_record(
-          "artifact",
-          %{
-            id: "artifact",
-            status: :completed,
-            completed_at: 1,
-            full_output_path: output,
-            output: %{finalized: true, artifact_capacity: 7}
-          },
-          []
-        )
-      end)
+      ProcessStore.insert_record(
+        "artifact",
+        %{
+          id: "artifact",
+          status: :completed,
+          completed_at: 1,
+          full_output_path: output,
+          output: %{finalized: true, artifact_capacity: 7}
+        },
+        []
+      )
 
     # rm of a directory fails, deterministically, without chmod/root behavior.
     assert {:ok, 0} = ProcessStoreServer.cleanup(pid, 60)

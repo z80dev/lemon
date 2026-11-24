@@ -9,6 +9,14 @@
 
 ### Fixed
 
+- Durable store owners get an ETS heir (`CodingAgent.RuntimeTables`): a crashed
+  owner's restart reclaims the live table, and restart normalization applies only
+  at boot. RunGraph normalizes `:queued` as well as `:running` runs at boot,
+  persists the outcome, and marks stale queued/running runs `:lost`
+  (`:run_graph_stale_ttl_seconds`). **Breaking:** `ProcessStoreServer.transaction/2`
+  is removed; `ProcessStore` mutations send data-only requests and may return
+  `{:error, :store_unavailable}`. `ProcessManager` now starts before
+  `ProcessStoreServer`. (#677)
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

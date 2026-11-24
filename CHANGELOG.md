@@ -171,6 +171,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Coding-agent durable stores (tasks, run graph, parent questions, processes)
+  keep their live table when their owner crashes: `CodingAgent.RuntimeTables`
+  is the ETS heir and the restarted owner reclaims it, so in-flight tasks stay
+  running and their later finishes are accepted. Restart normalization now
+  applies only at boot (first start, application restart or clean stop). The
+  run graph also marks `:queued` runs `:lost` at boot and persists it, so a join
+  returns instead of hanging, and marks queued/running runs idle for
+  `:run_graph_stale_ttl_seconds` (default 7 days) `:lost`. `ProcessStoreServer`
+  no longer runs caller closures, replies `{:error, :store_unavailable}` instead
+  of exiting on storage failure, and starts after `ProcessManager`, so a store
+  restart no longer kills running (including foreground) commands. (#677)
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

@@ -2,10 +2,22 @@ defmodule CodingAgent.TaskStoreServer do
   @moduledoc """
   GenServer that owns the TaskStore ETS table and manages DETS persistence.
 
-  This ensures the ETS table survives process crashes and is properly reloaded
-  from DETS on restart. All record, event, lifecycle, and followup-suppression
-  mutations pass through the server mailbox, so a mutation always reads the
-  latest tuple and writes one coherent ETS/DETS snapshot.
+  All record, event, lifecycle, and followup-suppression mutations pass
+  through the server mailbox, so a mutation always reads the latest tuple and
+  writes one coherent ETS/DETS snapshot.
+
+  ## Restart semantics
+
+  `CodingAgent.DurableTable` gives the mirror an ETS heir. A crashed owner's
+  restart reclaims the live table: queued and running tasks keep their status
+  and their workers' later finishes are accepted. Followup join reservations
+  are owner state, so reclaim drops their tokens; a join that observed the
+  owner going down returns an error and its completions follow up normally.
+
+  Only a boot (first start, application restart or a clean owner stop) loads
+  from DETS and normalizes: queued, running, tracking-lost and interrupted
+  tasks become `:lost` (or `:interrupted` when crash resume can continue
+  them), and that outcome is persisted.
   """
 
   use CodingAgent.DurableTable
@@ -142,6 +154,7 @@ defmodule CodingAgent.TaskStoreServer do
         dets_table: @dets_table,
         path: dets_path(opts),
         normalize: &__MODULE__.normalize_row/2,
+        reclaim: &__MODULE__.reclaim_row/2,
         after_load: &__MODULE__.persist_restored_rows/1,
         timestamp: &__MODULE__.expiry_timestamp/1,
         ttl_key: :task_store_ttl_seconds,
@@ -421,6 +434,16 @@ defmodule CodingAgent.TaskStoreServer do
 
   defp ensure_tables(state), do: DurableTable.ensure(state)
 
+  # Owner restart only: live task state stands; join reservations died with
+  # the previous owner.
+  @doc false
+  def reclaim_row({task_id, record, events}, _state) do
+    if Map.has_key?(record, :auto_followup_join_tokens),
+      do: {task_id, Map.delete(record, :auto_followup_join_tokens), events},
+      else: {task_id, record, events}
+  end
+
+  # Boot only: no worker survived, so non-terminal tasks are resolved.
   @doc false
   def normalize_row({task_id, record, events}, _state) do
     record =
