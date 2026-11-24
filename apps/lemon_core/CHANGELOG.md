@@ -18,6 +18,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   router monitors from acceptance (#641).
 - The `LemonCore.Store` expiry sweep no longer deletes `:cron_runs` rows by
   age; `LemonAutomation.CronStore` owns cron retention (#675).
+- **Breaking (0.3.0):** `LemonCore.A2AStore.list_tasks/2` returns
+  `{:ok, tasks}` or `{:error, :store_unavailable}` instead of `[]` on an
+  unreadable store; `update_task/3` returns `{:error, :store_unavailable}`
+  instead of `:not_found` in that case. New strict readers:
+  `A2AStore.fetch_task/2`, `ExecApprovalStore.fetch_global_policies/0` and
+  `fetch_global_policy_map/0`, which replaces `get_global_policy_map/0` (#619).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,

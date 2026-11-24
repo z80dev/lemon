@@ -532,15 +532,20 @@ defmodule LemonControlPlane.WS.Connection do
         {:error, Errors.unauthorized("Node identity is missing a node ID")}
 
       true ->
-        case NodeStore.get_node(node_id) do
-          nil ->
+        # An unreadable registry is transient: the worker retries instead of
+        # parking for re-authorization as it does for a node that is gone.
+        case NodeStore.fetch_node(node_id) do
+          {:ok, nil} ->
             {:error,
              Errors.error(:unauthorized, "Paired node was not found", %{
                "reason" => "node_not_found"
              })}
 
-          node ->
+          {:ok, node} when is_map(node) ->
             register_durable_node(node_id, node, auth, params)
+
+          _unavailable ->
+            {:error, Errors.unavailable("Node registry is unavailable")}
         end
     end
   end

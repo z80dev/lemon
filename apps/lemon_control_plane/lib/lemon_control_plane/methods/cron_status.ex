@@ -4,7 +4,10 @@ defmodule LemonControlPlane.Methods.CronStatus do
 
   Returns the overall status of the cron system, including the durable global
   pause (`paused`/`pausedAtMs`) and the independent startup-restoration hold
-  (`restorationPending`). Unknown state is represented by `nil`, not `false`.
+  (`restorationPending`). Unknown state is represented by `nil`, not `false`:
+  when the job list cannot be read `enabled` is `nil`, and each section the
+  store cannot answer (`jobs`, `runs`, `audit`) is listed in `unavailable` with
+  `nil` counters instead of zeros.
   """
 
   @behaviour LemonControlPlane.Method
@@ -21,38 +24,24 @@ defmodule LemonControlPlane.Methods.CronStatus do
     {:ok, Map.put(status, "summary", summary(status))}
   end
 
+  # Each section is read strictly: an unreadable section reports `nil` fields
+  # and is named in `unavailable`, never an empty or disabled scheduler.
   defp get_cron_status do
-    # Try LemonAutomation.CronManager if available
     if Code.ensure_loaded?(LemonAutomation.CronManager) do
-      jobs = LemonAutomation.CronManager.list()
-      all_runs = LemonAutomation.CronStore.list_all_runs(limit: 2_000)
-      active_runs = Enum.filter(all_runs, &LemonAutomation.CronRun.active?/1)
-      audit_events = LemonAutomation.CronStore.list_audit_events(limit: 2_000)
+      jobs = read_jobs()
 
-      %{
-        "enabled" => true,
-        "jobCount" => length(jobs),
-        "activeJobs" => Enum.count(jobs, & &1.enabled),
-        "failingJobs" => Enum.count(jobs, &(LemonAutomation.CronJob.failure_streak(&1) > 0)),
-        "nextRunAtMs" => get_next_run(jobs),
-        "activeRunCount" => length(active_runs),
-        "recentRunCount" => length(all_runs),
-        "failedRunCount" => Enum.count(all_runs, &(&1.status in [:failed, :timeout])),
-        "retryRunCount" => Enum.count(all_runs, &retry_run?/1),
-        "suppressedSlotCount" =>
-          Enum.count(audit_events, &(&1.action == "scheduled_run_suppressed")),
-        "staleRecoveryCount" => Enum.count(audit_events, &(&1.action == "stale_run_recovered")),
-        "retryScheduledCount" => Enum.count(audit_events, &(&1.action == "retry_scheduled")),
-        "runStatusCounts" => count_by(all_runs, &to_string(&1.status)),
-        "triggerCounts" => count_by(all_runs, &to_string(&1.triggered_by)),
-        "auditActionCounts" => count_by(audit_events, & &1.action),
-        "lastRunAtMs" =>
-          all_runs
-          |> Enum.map(& &1.started_at_ms)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.max(fn -> nil end)
-      }
+      runs =
+        LemonAutomation.CronStore.list_all_runs(limit: 2_000, strict: true) |> readable()
+
+      audit =
+        LemonAutomation.CronStore.list_audit_events(limit: 2_000, strict: true) |> readable()
+
+      %{"enabled" => if(is_list(jobs), do: true)}
+      |> Map.merge(job_fields(jobs))
+      |> Map.merge(run_fields(runs))
+      |> Map.merge(audit_fields(audit))
       |> Map.merge(pause_fields())
+      |> Map.put("unavailable", unavailable_sections(jobs: jobs, runs: runs, audit: audit))
     else
       %{
         "enabled" => false,
@@ -73,32 +62,85 @@ defmodule LemonControlPlane.Methods.CronStatus do
         "lastRunAtMs" => nil,
         "paused" => nil,
         "pausedAtMs" => nil,
-        "restorationPending" => nil
+        "restorationPending" => nil,
+        "unavailable" => []
       }
     end
-  rescue
-    _ ->
-      %{
-        "enabled" => false,
-        "jobCount" => 0,
-        "activeJobs" => 0,
-        "failingJobs" => 0,
-        "nextRunAtMs" => nil,
-        "activeRunCount" => 0,
-        "recentRunCount" => 0,
-        "failedRunCount" => 0,
-        "retryRunCount" => 0,
-        "suppressedSlotCount" => 0,
-        "staleRecoveryCount" => 0,
-        "retryScheduledCount" => 0,
-        "runStatusCounts" => %{},
-        "triggerCounts" => %{},
-        "auditActionCounts" => %{},
-        "lastRunAtMs" => nil,
-        "paused" => nil,
-        "pausedAtMs" => nil,
-        "restorationPending" => nil
-      }
+  end
+
+  defp read_jobs do
+    case LemonAutomation.CronManager.list() do
+      jobs when is_list(jobs) -> jobs
+      _unexpected -> :unavailable
+    end
+  catch
+    :exit, _reason -> :unavailable
+  end
+
+  defp readable({:ok, values}) when is_list(values), do: values
+  defp readable(_error), do: :unavailable
+
+  defp job_fields(:unavailable) do
+    %{"jobCount" => nil, "activeJobs" => nil, "failingJobs" => nil, "nextRunAtMs" => nil}
+  end
+
+  defp job_fields(jobs) do
+    %{
+      "jobCount" => length(jobs),
+      "activeJobs" => Enum.count(jobs, & &1.enabled),
+      "failingJobs" => Enum.count(jobs, &(LemonAutomation.CronJob.failure_streak(&1) > 0)),
+      "nextRunAtMs" => get_next_run(jobs)
+    }
+  end
+
+  defp run_fields(:unavailable) do
+    %{
+      "activeRunCount" => nil,
+      "recentRunCount" => nil,
+      "failedRunCount" => nil,
+      "retryRunCount" => nil,
+      "runStatusCounts" => nil,
+      "triggerCounts" => nil,
+      "lastRunAtMs" => nil
+    }
+  end
+
+  defp run_fields(runs) do
+    %{
+      "activeRunCount" => Enum.count(runs, &LemonAutomation.CronRun.active?/1),
+      "recentRunCount" => length(runs),
+      "failedRunCount" => Enum.count(runs, &(&1.status in [:failed, :timeout])),
+      "retryRunCount" => Enum.count(runs, &retry_run?/1),
+      "runStatusCounts" => count_by(runs, &to_string(&1.status)),
+      "triggerCounts" => count_by(runs, &to_string(&1.triggered_by)),
+      "lastRunAtMs" =>
+        runs
+        |> Enum.map(& &1.started_at_ms)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.max(fn -> nil end)
+    }
+  end
+
+  defp audit_fields(:unavailable) do
+    %{
+      "suppressedSlotCount" => nil,
+      "staleRecoveryCount" => nil,
+      "retryScheduledCount" => nil,
+      "auditActionCounts" => nil
+    }
+  end
+
+  defp audit_fields(events) do
+    %{
+      "suppressedSlotCount" => Enum.count(events, &(&1.action == "scheduled_run_suppressed")),
+      "staleRecoveryCount" => Enum.count(events, &(&1.action == "stale_run_recovered")),
+      "retryScheduledCount" => Enum.count(events, &(&1.action == "retry_scheduled")),
+      "auditActionCounts" => count_by(events, & &1.action)
+    }
+  end
+
+  defp unavailable_sections(sections) do
+    for {name, :unavailable} <- sections, do: Atom.to_string(name)
   end
 
   defp pause_fields do
@@ -146,19 +188,20 @@ defmodule LemonControlPlane.Methods.CronStatus do
 
   defp summary(status) do
     %{
-      "enabled" => status["enabled"] == true,
+      "enabled" => status["enabled"],
       "paused" => status["paused"],
       "restorationPending" => status["restorationPending"],
-      "jobCount" => status["jobCount"] || 0,
-      "activeJobCount" => status["activeJobs"] || 0,
-      "failingJobs" => status["failingJobs"] || 0,
-      "activeRunCount" => status["activeRunCount"] || 0,
-      "recentRunCount" => status["recentRunCount"] || 0,
-      "failedRunCount" => status["failedRunCount"] || 0,
-      "retryRunCount" => status["retryRunCount"] || 0,
-      "suppressedSlotCount" => status["suppressedSlotCount"] || 0,
-      "staleRecoveryCount" => status["staleRecoveryCount"] || 0,
-      "retryScheduledCount" => status["retryScheduledCount"] || 0,
+      "jobCount" => status["jobCount"],
+      "activeJobCount" => status["activeJobs"],
+      "failingJobs" => status["failingJobs"],
+      "activeRunCount" => status["activeRunCount"],
+      "recentRunCount" => status["recentRunCount"],
+      "failedRunCount" => status["failedRunCount"],
+      "retryRunCount" => status["retryRunCount"],
+      "suppressedSlotCount" => status["suppressedSlotCount"],
+      "staleRecoveryCount" => status["staleRecoveryCount"],
+      "retryScheduledCount" => status["retryScheduledCount"],
+      "unavailable" => status["unavailable"],
       "cleanup" => %{
         "includesPromptText" => false,
         "includesCommandText" => false,

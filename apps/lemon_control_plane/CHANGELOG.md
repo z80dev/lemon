@@ -71,6 +71,11 @@ All notable changes to `lemon_control_plane` are documented here.
   `argumentsPreview` and per-item `truncated`/`planTruncated` flags, so a
   recovered approval never renders as hashes only and a clipped plan is never
   presented as complete; the approvals budget is 16,384 bytes (#654).
+- Read methods fail closed on store and runtime failures (`UNAVAILABLE`, never
+  empty/idle/not-found); `cron.status` reports `null` counters, an
+  `unavailable` section list and `enabled: null` for an unreadable job list; a
+  node whose registry read fails gets a retryable `UNAVAILABLE` at `connect`.
+  `ConfigStore` and `LogRing` reads return tagged results (#619).
 - Timeouts, closed openers and unclassified failures of passive node inspections
   (`node.capabilities.get`, `node.runtime.features`, `node.host.info`) are
   retry-safe unavailable reads, not uncertain mutations.

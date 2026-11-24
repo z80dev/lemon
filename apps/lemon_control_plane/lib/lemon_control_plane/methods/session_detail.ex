@@ -72,28 +72,15 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   end
 
   defp do_handle(session_key, opts) do
-    all_runs =
-      fetch_run_history(session_key, opts.history_limit)
-      |> Enum.sort_by(&run_started_at/1, :desc)
-
-    case fetch_session_meta(session_key) do
-      {:ok, session_meta} ->
-        total_run_count = session_meta["runCount"] || length(all_runs)
-
-        runs =
-          all_runs
-          |> Enum.take(opts.limit)
-          |> Enum.map(&format_run(&1, opts))
-
-        {:ok, response(session_key, session_meta, runs, total_run_count, opts)}
-
-      {:error, _reason} ->
-        {:error, {:unavailable, "Session directory is unavailable", nil}}
+    with {:ok, history} <- fetch_run_history(session_key, opts.history_limit),
+         {:ok, session_meta} <- fetch_session_meta(session_key),
+         selected = history |> Enum.sort_by(&run_started_at/1, :desc) |> Enum.take(opts.limit),
+         {:ok, records} <- fetch_run_records(selected, opts) do
+      total_run_count = session_meta["runCount"] || length(history)
+      opts = Map.put(opts, :run_records, records)
+      runs = Enum.map(selected, &format_run(&1, opts))
+      {:ok, response(session_key, session_meta, runs, total_run_count, opts)}
     end
-  rescue
-    _ -> {:error, {:unavailable, "Session directory is unavailable", nil}}
-  catch
-    :exit, _ -> {:error, {:unavailable, "Session directory is unavailable", nil}}
   end
 
   defp response(session_key, session_meta, runs, total_run_count, opts) do
@@ -164,81 +151,108 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   end
 
   defp fetch_run_history(session_key, limit) do
-    LemonCore.RunStore.history(session_key, limit: limit)
-    |> Enum.map(fn {run_id, run_map} -> {to_string_safe(run_id), run_map || %{}} end)
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
+    case LemonCore.RunStore.fetch_history(session_key, limit: limit) do
+      {:ok, runs} ->
+        {:ok,
+         Enum.map(runs, fn {run_id, run_map} -> {to_string_safe(run_id), run_map || %{}} end)}
+
+      {:error, _reason} ->
+        {:error, {:unavailable, "Session history is unavailable", nil}}
+    end
+  end
+
+  # Run records are read only when requested, and strictly: an unreadable
+  # record fails the request instead of reporting the run as having none.
+  defp fetch_run_records(_runs, %{include_run_record: false}), do: {:ok, %{}}
+
+  defp fetch_run_records(runs, opts) do
+    Enum.reduce_while(runs, {:ok, %{}}, fn
+      {run_id, _run_map}, {:ok, acc} when is_binary(run_id) ->
+        case LemonCore.RunStore.fetch(run_id) do
+          {:ok, record} when is_map(record) ->
+            {:cont, {:ok, Map.put(acc, run_id, project_run_record(record, opts))}}
+
+          {:ok, _absent} ->
+            {:cont, {:ok, acc}}
+
+          {:error, _reason} ->
+            {:halt, {:error, {:unavailable, "Run records are unavailable", nil}}}
+        end
+
+      _run, acc ->
+        {:cont, acc}
+    end)
   end
 
   defp fetch_session_meta(session_key) do
+    with {:ok, sessions} <- list_agent_sessions(),
+         {:ok, lifecycle} <- fetch_lifecycle(session_key) do
+      sess = Enum.find(sessions, &(&1[:session_key] == session_key))
+
+      meta =
+        if sess do
+          %{
+            "sessionKey" => session_key,
+            "agentId" => sess[:agent_id],
+            "channelId" => sess[:channel_id],
+            "peerId" => sess[:peer_id],
+            "peerLabel" => sess[:peer_label],
+            "runCount" => sess[:run_count],
+            "active" => sess[:active?] == true,
+            "createdAtMs" => sess[:created_at_ms],
+            "updatedAtMs" => sess[:updated_at_ms],
+            "origin" => to_string_safe(sess[:origin] || :unknown)
+          }
+          |> Map.merge(routing_meta(session_key, sess[:agent_id]))
+        else
+          %{"sessionKey" => session_key}
+          |> Map.merge(routing_meta(session_key, nil))
+        end
+
+      {:ok, Map.merge(meta, lifecycle)}
+    end
+  end
+
+  defp list_agent_sessions do
     case LemonRouter.list_agent_sessions([]) do
-      sessions when is_list(sessions) ->
-        sess = Enum.find(sessions, &(&1[:session_key] == session_key))
+      sessions when is_list(sessions) -> {:ok, sessions}
+      _unavailable -> directory_unavailable()
+    end
+  catch
+    :exit, _reason -> directory_unavailable()
+  end
 
-        meta =
-          if sess do
-            %{
-              "sessionKey" => session_key,
-              "agentId" => sess[:agent_id],
-              "channelId" => sess[:channel_id],
-              "peerId" => sess[:peer_id],
-              "peerLabel" => sess[:peer_label],
-              "runCount" => sess[:run_count],
-              "active" => sess[:active?] == true,
-              "createdAtMs" => sess[:created_at_ms],
-              "updatedAtMs" => sess[:updated_at_ms],
-              "origin" => to_string_safe(sess[:origin] || :unknown)
-            }
-            |> Map.merge(routing_meta(session_key, sess[:agent_id]))
-          else
-            %{"sessionKey" => session_key}
-            |> Map.merge(routing_meta(session_key, nil))
-          end
+  defp fetch_lifecycle(session_key) do
+    case LemonCore.SessionLifecycle.fetch(session_key) do
+      {:ok, nil} ->
+        {:ok, %{}}
 
-        lifecycle_meta =
-          case LemonCore.SessionLifecycle.get(session_key) do
-            nil ->
-              %{}
-
-            session ->
-              %{
-                "title" => session.title,
-                "pinned" => session.pinned,
-                "archived" => session.archived,
-                "metadataUpdatedAtMs" => session.metadata_updated_at_ms
-              }
-          end
-
-        {:ok, Map.merge(meta, lifecycle_meta)}
+      {:ok, session} ->
+        {:ok,
+         %{
+           "title" => session.title,
+           "pinned" => session.pinned,
+           "archived" => session.archived,
+           "metadataUpdatedAtMs" => session.metadata_updated_at_ms
+         }}
 
       {:error, _reason} ->
-        {:error, :unavailable}
-
-      _unexpected ->
-        {:error, :unavailable}
+        directory_unavailable()
     end
-  rescue
-    _ -> {:error, :unavailable}
-  catch
-    :exit, _ -> {:error, :unavailable}
   end
+
+  defp directory_unavailable,
+    do: {:error, {:unavailable, "Session directory is unavailable", nil}}
 
   # `model`/`provider`/`contextWindow`/`thinkingLevel` — what this session's next run resolves
   # to, not what the last one used. `modelSource` says which layer supplied it, so a client can
   # tell a pinned model from an inherited default; `modelOverride` is the session's own pin, or
   # nil.
   defp routing_meta(session_key, agent_id) do
-    resolved = LemonControlPlane.SessionModel.resolve(session_key, agent_id)
-
-    resolved
+    session_key
+    |> LemonControlPlane.SessionModel.resolve(agent_id)
     |> Map.drop(["defaultEngine", "preferredEngine"])
     |> Map.put("modelOverride", LemonControlPlane.SessionModel.override(session_key))
-  rescue
-    _ -> %{}
-  catch
-    :exit, _ -> %{}
   end
 
   defp run_started_at({_run_id, run_map}) when is_map(run_map) do
@@ -323,7 +337,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
       opts.include_full_text and answer_raw != ""
     )
     |> maybe_put("events", build_raw_events(events, opts), opts.include_raw_events)
-    |> maybe_put("runRecord", fetch_run_record(run_id, opts), opts.include_run_record)
+    |> maybe_put("runRecord", Map.get(opts.run_records, run_id), opts.include_run_record)
   end
 
   defp count_by(rows, key) do
@@ -347,34 +361,19 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp present?(""), do: false
   defp present?(_), do: true
 
-  defp fetch_run_record(run_id, opts) when is_binary(run_id) do
-    case LemonCore.RunStore.get(run_id) do
-      nil ->
-        nil
+  defp project_run_record(record, opts) do
+    events = normalize_list(get_map(record, :events, []))
+    base = project(record, opts)
 
-      record when is_map(record) ->
-        events = normalize_list(get_map(record, :events, []))
-        base = project(record, opts)
+    base =
+      if opts.include_raw_events do
+        Map.put(base, "events", build_raw_events(events, opts))
+      else
+        Map.put(base, "events", [])
+      end
 
-        base =
-          if opts.include_raw_events do
-            Map.put(base, "events", build_raw_events(events, opts))
-          else
-            Map.put(base, "events", [])
-          end
-
-        Map.put(base, "eventCount", length(events))
-
-      _ ->
-        nil
-    end
-  rescue
-    _ -> nil
-  catch
-    :exit, _ -> nil
+    Map.put(base, "eventCount", length(events))
   end
-
-  defp fetch_run_record(_, _), do: nil
 
   defp get_answer(nil), do: ""
   defp get_answer(completed) when is_map(completed), do: get_map(completed, :answer, "") || ""
@@ -414,8 +413,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
 
   defp count_tool_calls(events) when is_list(events) do
     Enum.count(events, &action_event?/1)
-  rescue
-    _ -> 0
   end
 
   defp extract_tool_calls(events, max, content?) when is_list(events) do
@@ -423,14 +420,10 @@ defmodule LemonControlPlane.Methods.SessionDetail do
     |> Enum.filter(&action_event?/1)
     |> Enum.take(max)
     |> Enum.map(&format_tool_call(&1, content?))
-  rescue
-    _ -> []
   end
 
   defp action_event?(ev) when is_map(ev) do
     Map.get(ev, :__event__) == :action_event or is_map(get_map(ev, :action))
-  rescue
-    _ -> false
   end
 
   defp action_event?(_), do: false
@@ -453,8 +446,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
           "raw" => LemonCore.Redact.project(action)
         }),
       else: call
-  rescue
-    _ -> %{"kind" => nil, "ok" => nil, "phase" => nil}
   end
 
   defp format_tool_detail(nil), do: nil
@@ -519,8 +510,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
       true ->
         "event"
     end
-  rescue
-    _ -> "event"
   end
 
   defp event_type_name(_), do: "event"
@@ -562,8 +551,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
       true ->
         default
     end
-  rescue
-    _ -> default
   end
 
   defp get_map(_map, _key, default), do: default

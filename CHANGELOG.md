@@ -470,6 +470,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   descendants no longer deadlocks the eight-slot pool; `/bg` sessions use their
   own `background_run_max_concurrency` pool; joins without a timeout yield after
   `task_join_timeout_ms` (default 30 minutes) instead of waiting forever (#631).
+- Control-plane reads fail closed: an unreadable store or runtime makes
+  `exec.approvals.get`, `config.get`, `logs.tail`, `sessions.preview`,
+  `chat.history`, `session.detail`, `cron.runs`, the task lists, ACP session
+  listing/lookup and A2A task reads return `UNAVAILABLE` instead of empty or
+  not-found results; `cron.status` reports unreadable sections with `null`
+  counters and `enabled: null` instead of a disabled scheduler; and an execution
+  node whose registry read fails gets a retryable `UNAVAILABLE` instead of being
+  parked as `node_not_found` (#619).
 
 ### Removed
 

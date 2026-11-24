@@ -368,8 +368,9 @@ defmodule LemonAutomation.CronStore do
   - `:limit` - Maximum number of runs to return (default: 100)
   - `:status` - Filter by status atom
   - `:since_ms` - Only include runs started after this timestamp
+  - `:strict` - Return `{:ok, runs}` or a store error instead of collapsing failure to an empty list
   """
-  @spec list_all_runs(keyword()) :: [CronRun.t()]
+  @spec list_all_runs(keyword()) :: [CronRun.t()] | {:ok, [CronRun.t()]} | {:error, term()}
   def list_all_runs(opts \\ []) do
     query_runs(opts)
   end
@@ -520,8 +521,9 @@ defmodule LemonAutomation.CronStore do
   - `:job_id` - Filter by job ID
   - `:run_id` - Filter by cron run ID
   - `:action` - Filter by action string/atom
+  - `:strict` - Return `{:ok, events}` or a store error instead of collapsing failure to an empty list
   """
-  @spec list_audit_events(keyword()) :: [map()]
+  @spec list_audit_events(keyword()) :: [map()] | {:ok, [map()]} | {:error, term()}
   def list_audit_events(opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
     before = Keyword.get(opts, :before_ts_ms)
@@ -529,15 +531,22 @@ defmodule LemonAutomation.CronStore do
     run_id = Keyword.get(opts, :run_id)
     action = Keyword.get(opts, :action)
 
-    @audit_table
-    |> LemonCore.Store.list()
-    |> Enum.map(fn {_id, map} -> normalize_audit_attrs(map) end)
-    |> filter_audit(:job_id, job_id)
-    |> filter_audit(:run_id, run_id)
-    |> filter_audit(:action, normalize_optional_audit_value(action))
-    |> filter_before(before)
-    |> Enum.sort_by(&Map.get(&1, :ts_ms, 0), :desc)
-    |> Enum.take(limit)
+    project = fn records ->
+      records
+      |> Enum.map(fn {_id, map} -> normalize_audit_attrs(map) end)
+      |> filter_audit(:job_id, job_id)
+      |> filter_audit(:run_id, run_id)
+      |> filter_audit(:action, normalize_optional_audit_value(action))
+      |> filter_before(before)
+      |> Enum.sort_by(&Map.get(&1, :ts_ms, 0), :desc)
+      |> Enum.take(limit)
+    end
+
+    if opts[:strict] do
+      with {:ok, records} <- LemonCore.Store.fetch_all(@audit_table), do: {:ok, project.(records)}
+    else
+      project.(LemonCore.Store.list(@audit_table))
+    end
   end
 
   defp filter_before(events, before) when is_integer(before),
