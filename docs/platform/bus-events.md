@@ -335,9 +335,11 @@ topic subscriptions.
 | `profiles:changed` | `LemonCore.ProfileStore` (every create/clone/update/rename/delete) → `LemonRouter.AgentProfiles` | bare atom `:profiles_changed` — a doorbell; the router re-reads the profile config so no writer leaves its cache stale |
 | `a2a:task:<id>` | `LemonControlPlane.A2A.Runner` → A2A runner/router | tuple `{:a2a_task_terminal, task_id}` |
 | `lemon_web:runs` | `LemonWeb.ShellLive.RunEvents` → `ShellLive` | tuple `{:lemon_web_run, phase, info}` |
+| `kanban` | `LemonAgent.Workspace.KanbanStore` (every operator-visible board/task write, not lease renewals) and `LemonAutomation.KanbanDispatcher` (start/stop) → `LemonWeb.WorkManagementLive` | tuple `{:kanban_changed, board_id}` — a doorbell; the page re-reads the store (`KanbanStore.changed_topic/0`, `ring_changed/1`) |
 
-The `kanban*` broadcasts were deleted (zero subscribers; durable record is the
-`Introspection.record/3` call), and `logs` has never had a publisher.
+The typed `kanban*` broadcasts were deleted (the durable record is the
+`Introspection.record/3` call); the content-free `kanban` doorbell above replaced
+them (#687). `logs` has never had a publisher.
 
 ## 3. Contract vs app-internal
 

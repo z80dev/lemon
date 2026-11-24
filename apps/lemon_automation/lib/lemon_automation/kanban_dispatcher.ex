@@ -187,6 +187,7 @@ defmodule LemonAutomation.KanbanDispatcher do
               |> put_in([:boards, board_id], dispatcher)
               |> schedule_tick(board_id, 0)
 
+            KanbanStore.ring_changed(board_id)
             {:reply, {:ok, public_dispatcher(dispatcher)}, state}
         end
     end
@@ -334,6 +335,7 @@ defmodule LemonAutomation.KanbanDispatcher do
               do: Process.send_after(self(), {:reconcile_stopped, board_id}, 1_000)
 
             stopped = public_dispatcher(%{dispatcher | status: "stopped", running: %{}})
+            KanbanStore.ring_changed(board_id)
             {:reply, {:ok, Map.put(stopped, :aborts, aborts)}, state}
 
           {:error, reason} ->

@@ -5,8 +5,9 @@ defmodule LemonWeb.WorkManagementLive do
   All controls use canonical services through `LemonWeb.WorkProjection`.
   Confirmation retains only exact safe targets and opaque revisions
   server-side; stale previews never reach a mutation and unknown outcomes are
-  never retried. Cron/goal Bus events trigger a debounced refresh; a
-  connected-only three-second timer covers the dispatcher, which emits none.
+  never retried. The page never reads services on the dead render or a timer:
+  the connected mount loads a snapshot with `start_async/3`, and kanban, cron
+  and goal Bus events trigger a debounced async reload (one in flight at a time).
   Prompts and objectives typed into the create/edit forms are passed straight
   to the service and never stored in socket state.
   """
@@ -21,34 +22,38 @@ defmodule LemonWeb.WorkManagementLive do
     {:goals, "Goals", "target"},
     {:cron, "Cron", "calendar-clock"}
   ]
-  @tick_ms 3_000
   @event_debounce_ms 200
 
   @impl true
   def mount(_params, _session, socket) do
-    _ =
-      if connected?(socket) do
-        Bus.subscribe("cron")
-        Bus.subscribe("goals")
-        Process.send_after(self(), :work_tick, @tick_ms)
-      end
+    socket =
+      assign(socket,
+        nav: :automation,
+        page_title: "Automation · Lemon",
+        tab: :boards,
+        work: WorkProjection.loading(),
+        work_gen: 0,
+        work_loading: false,
+        work_dirty: false,
+        preview: nil,
+        uncertain: MapSet.new(),
+        filter: "",
+        runs_for: nil,
+        cron_form: nil,
+        goal_form: nil,
+        refresh_pending: false,
+        notice: nil,
+        error: nil
+      )
 
-    {:ok,
-     assign(socket,
-       nav: :automation,
-       page_title: "Automation · Lemon",
-       tab: :boards,
-       work: WorkProjection.snapshot(),
-       preview: nil,
-       uncertain: MapSet.new(),
-       filter: "",
-       runs_for: nil,
-       cron_form: nil,
-       goal_form: nil,
-       refresh_pending: false,
-       notice: nil,
-       error: nil
-     )}
+    if connected?(socket) do
+      Bus.subscribe("cron")
+      Bus.subscribe("goals")
+      Bus.subscribe(LemonAgent.Workspace.KanbanStore.changed_topic())
+      {:ok, load_work(socket)}
+    else
+      {:ok, socket}
+    end
   end
 
   @impl true
@@ -57,13 +62,29 @@ defmodule LemonWeb.WorkManagementLive do
   end
 
   @impl true
-  def handle_info(:work_tick, socket) do
-    Process.send_after(self(), :work_tick, @tick_ms)
-    {:noreply, refresh(socket)}
+  def handle_async(:work, {:ok, {gen, work}}, %{assigns: %{work_gen: gen}} = socket) do
+    {:noreply, socket |> assign(work: work, work_loading: false) |> reload_if_dirty()}
   end
 
+  def handle_async(:work, {:exit, _reason}, %{assigns: %{work_loading: true}} = socket) do
+    {:noreply,
+     socket
+     |> assign(
+       work: WorkProjection.unavailable_snapshot(socket.assigns.work),
+       work_loading: false
+     )
+     |> reload_if_dirty()}
+  end
+
+  # Superseded by a synchronous read for an operator action.
+  def handle_async(:work, _stale, socket), do: {:noreply, socket}
+
+  @impl true
   def handle_info(:event_refresh, socket),
-    do: {:noreply, socket |> assign(refresh_pending: false) |> refresh()}
+    do: {:noreply, socket |> assign(refresh_pending: false) |> load_work()}
+
+  def handle_info({:kanban_changed, _board_id}, socket),
+    do: {:noreply, schedule_refresh(socket)}
 
   def handle_info(%LemonCore.Event{} = event, socket) do
     case project(event) do
@@ -87,6 +108,22 @@ defmodule LemonWeb.WorkManagementLive do
     assign(socket, refresh_pending: true)
   end
 
+  # Service reads run in a task, never in this process. A change while a load
+  # is in flight marks the page dirty and reloads once that load lands.
+  defp load_work(%{assigns: %{work_loading: true}} = socket), do: assign(socket, work_dirty: true)
+
+  defp load_work(socket) do
+    previous = socket.assigns.work
+    gen = socket.assigns.work_gen + 1
+
+    socket
+    |> assign(work_gen: gen, work_loading: true, work_dirty: false)
+    |> start_async(:work, fn -> {gen, WorkProjection.snapshot(previous)} end)
+  end
+
+  defp reload_if_dirty(%{assigns: %{work_dirty: true}} = socket), do: load_work(socket)
+  defp reload_if_dirty(socket), do: socket
+
   @impl true
   def handle_event("tab", %{"tab" => tab}, socket) do
     case parse_tab(tab) do
@@ -101,7 +138,7 @@ defmodule LemonWeb.WorkManagementLive do
     end
   end
 
-  def handle_event("refresh", _, socket), do: {:noreply, refresh(socket)}
+  def handle_event("refresh", _, socket), do: {:noreply, load_work(socket)}
 
   def handle_event("filter", %{"filter" => value}, socket),
     do: {:noreply, assign(socket, filter: value |> to_string() |> String.slice(0, 96))}
@@ -540,6 +577,10 @@ defmodule LemonWeb.WorkManagementLive do
         </div>
 
         <section id={"work-panel-#{@tab}"} role="tabpanel" aria-label={tab_label(@tab)}>
+          <p :if={@work[@tab].state == :loading} id="work-loading" class="py-10 text-center text-[13px] text-muted">
+            Loading current state…
+          </p>
+
           <.callout
             :if={@work[@tab].state == :unavailable}
             id="work-unavailable"
@@ -1275,7 +1316,18 @@ defmodule LemonWeb.WorkManagementLive do
 
   # ── Helpers ───────────────────────────────────────────────────────────────
 
-  defp refresh(socket), do: assign(socket, work: WorkProjection.snapshot(socket.assigns.work))
+  # Operator actions (preview, confirm, form submits) bind to state read now,
+  # so they read synchronously; a background load still in flight is older and
+  # its result is discarded.
+  defp refresh(socket) do
+    assign(socket,
+      work: WorkProjection.snapshot(socket.assigns.work),
+      work_gen: socket.assigns.work_gen + 1,
+      work_loading: false,
+      work_dirty: false
+    )
+  end
+
   defp parse_kind(value), do: Enum.find([:boards, :goals, :cron], &(Atom.to_string(&1) == value))
   defp parse_tab(value), do: parse_kind(value)
 
@@ -1319,6 +1371,7 @@ defmodule LemonWeb.WorkManagementLive do
   end
 
   defp tab_count(%{state: :ready, items: items}), do: length(items)
+  defp tab_count(%{state: :loading}), do: "…"
   defp tab_count(_), do: "!"
 
   defp tab_label(key), do: Enum.find_value(@tabs, fn {k, label, _} -> k == key && label end)

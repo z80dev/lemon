@@ -57,6 +57,17 @@ defmodule LemonWeb.WorkProjection do
     end)
   end
 
+  @doc "The page before its first read: every section `:loading`, never empty."
+  def loading, do: Map.new(Map.keys(@limits), &{&1, %{state: :loading, items: []}})
+
+  @doc "Marks every section unavailable, retaining the last known rows without controls."
+  def unavailable_snapshot(%{} = previous) do
+    Map.new(Map.keys(@limits), fn kind ->
+      old = Map.get(previous, kind, %{items: []})
+      {kind, %{state: :unavailable, items: Enum.map(old.items, &unavailable/1)}}
+    end)
+  end
+
   defp unavailable(row) do
     row = Map.put(row, :last_runtime, Map.get(row, :last_runtime) || row.runtime)
     row = %{row | runtime: "unavailable"}
