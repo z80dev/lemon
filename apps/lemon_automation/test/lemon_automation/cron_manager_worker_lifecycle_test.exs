@@ -18,6 +18,16 @@ defmodule LemonAutomation.CronManagerWorkerLifecycleTest do
     end
   end
 
+  defmodule ClaimThenCrashSubmitter do
+    @moduledoc false
+
+    def submit(job, run, opts) do
+      :ok = Keyword.fetch!(opts, :on_submitting).(run.run_id, job.session_key)
+      send(:persistent_term.get({CrashingSubmitter, :test_pid}), {:submitter_claimed, run.id})
+      exit(:submitter_boom)
+    end
+  end
+
   defmodule AcceptedRouter do
     def submit(params) do
       send(:persistent_term.get({CrashingSubmitter, :test_pid}), {:router_submitted, params})
@@ -80,10 +90,29 @@ defmodule LemonAutomation.CronManagerWorkerLifecycleTest do
     {:ok, job: job}
   end
 
-  test "submitter crash retains router ownership for reconciliation", %{job: job} do
+  test "submitter crash before the submission claim releases the run", %{job: job} do
     assert {:ok, %CronRun{id: run_id}} = CronManager.run_now(job.id)
     assert_receive {:submitter_started, job_id, ^run_id}, 1_000
     assert job_id == job.id
+
+    assert eventually(fn -> match?(%CronRun{status: :failed}, CronStore.get_run(run_id)) end)
+
+    run = CronStore.get_run(run_id)
+    assert run.error == "cron run was never submitted"
+    refute run.meta[:outcome_unknown]
+    assert {:ok, %CronRun{id: next_id}} = CronManager.run_now(job.id)
+    assert next_id != run_id
+    assert Process.alive?(Process.whereis(CronManager))
+
+    assert Enum.any?(CronStore.list_audit_events(run_id: run_id), fn event ->
+             event.action == "claim_released"
+           end)
+  end
+
+  test "submitter crash after the submission claim retains router ownership", %{job: job} do
+    Application.put_env(:lemon_automation, :cron_run_submitter, ClaimThenCrashSubmitter)
+    assert {:ok, %CronRun{id: run_id}} = CronManager.run_now(job.id)
+    assert_receive {:submitter_claimed, ^run_id}, 1_000
 
     assert eventually(fn ->
              match?(
@@ -96,7 +125,6 @@ defmodule LemonAutomation.CronManagerWorkerLifecycleTest do
     assert run.error == "completion_outcome_unknown"
     assert is_binary(run.run_id)
     assert {:error, :outcome_unknown} = CronManager.run_now(job.id)
-    assert Process.alive?(Process.whereis(CronManager))
 
     assert Enum.any?(CronStore.list_audit_events(run_id: run_id), fn event ->
              event.action == "worker_down"

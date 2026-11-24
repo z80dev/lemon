@@ -43,6 +43,7 @@ defmodule LemonAutomation.CronStore do
   @global_pause_key :global_pause
   @failure_alert_table :cron_failure_alert_state
   @notices_table :cron_failure_notices
+  @audit_retention_max 10_000
 
   # ============================================================================
   # Job Operations
@@ -437,25 +438,53 @@ defmodule LemonAutomation.CronStore do
 
   @doc """
   Clean up old terminal runs, keeping the most recent N per job. Active runs
+  (including `outcome_unknown` runs, which stay `:running` until reconciled)
   and terminal runs with an undispatched retry are always retained.
+
+  `CronStore` is the only owner of cron run retention: the core store sweep
+  never deletes cron runs.
   """
-  @spec cleanup_old_runs(non_neg_integer()) :: :ok
+  @spec cleanup_old_runs(non_neg_integer()) :: :ok | {:error, term()}
   def cleanup_old_runs(keep_per_job \\ 100)
       when is_integer(keep_per_job) and keep_per_job >= 0 do
-    {:ok, rows} = LemonCore.Store.fetch_all(@runs_table)
+    with {:ok, rows} <- LemonCore.Store.fetch_all(@runs_table) do
+      rows
+      |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
+      |> Enum.filter(fn run -> CronRun.finished?(run) and not retry_undispatched?(run) end)
+      |> Enum.group_by(& &1.job_id)
+      |> Enum.each(fn {_job_id, runs} ->
+        runs
+        |> Enum.sort_by(& &1.started_at_ms, :desc)
+        |> Enum.drop(keep_per_job)
+        |> Enum.each(&delete_run(&1.id))
+      end)
+    end
+  end
 
-    rows
-    |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
-    |> Enum.filter(fn run -> CronRun.finished?(run) and not retry_undispatched?(run) end)
-    |> Enum.group_by(& &1.job_id)
-    |> Enum.each(fn {_job_id, runs} ->
-      runs
-      |> Enum.sort_by(& &1.started_at_ms, :desc)
-      |> Enum.drop(keep_per_job)
-      |> Enum.each(&delete_run(&1.id))
-    end)
+  @doc "Default number of cron audit events kept by `cleanup_audit_events/1`."
+  @spec audit_retention_max() :: pos_integer()
+  def audit_retention_max, do: @audit_retention_max
 
-    :ok
+  @doc """
+  Prune the cron audit log to the newest `max_events` events, bounding
+  `cron.audit`, `cron.status` and the doctor check.
+  """
+  @spec cleanup_audit_events(non_neg_integer()) :: :ok | {:error, term()}
+  def cleanup_audit_events(max_events \\ @audit_retention_max)
+      when is_integer(max_events) and max_events >= 0 do
+    with {:ok, rows} <- LemonCore.Store.fetch_all(@audit_table) do
+      if length(rows) > max_events do
+        rows
+        |> Enum.sort_by(
+          fn {id, map} -> {audit_integer(audit_get(map, :ts_ms)) || 0, id} end,
+          :desc
+        )
+        |> Enum.drop(max_events)
+        |> Enum.each(fn {id, _map} -> delete_audit_event(id) end)
+      end
+
+      :ok
+    end
   end
 
   # ============================================================================
@@ -482,11 +511,12 @@ defmodule LemonAutomation.CronStore do
   end
 
   @doc """
-  List durable cron lifecycle audit events.
+  List durable cron lifecycle audit events, newest first.
 
   ## Options
 
   - `:limit` - Maximum number of events to return (default: 100)
+  - `:before_ts_ms` - Page cursor: only events strictly older than this timestamp
   - `:job_id` - Filter by job ID
   - `:run_id` - Filter by cron run ID
   - `:action` - Filter by action string/atom
@@ -494,6 +524,7 @@ defmodule LemonAutomation.CronStore do
   @spec list_audit_events(keyword()) :: [map()]
   def list_audit_events(opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
+    before = Keyword.get(opts, :before_ts_ms)
     job_id = Keyword.get(opts, :job_id)
     run_id = Keyword.get(opts, :run_id)
     action = Keyword.get(opts, :action)
@@ -504,9 +535,15 @@ defmodule LemonAutomation.CronStore do
     |> filter_audit(:job_id, job_id)
     |> filter_audit(:run_id, run_id)
     |> filter_audit(:action, normalize_optional_audit_value(action))
+    |> filter_before(before)
     |> Enum.sort_by(&Map.get(&1, :ts_ms, 0), :desc)
     |> Enum.take(limit)
   end
+
+  defp filter_before(events, before) when is_integer(before),
+    do: Enum.filter(events, &(Map.get(&1, :ts_ms, 0) < before))
+
+  defp filter_before(events, _before), do: events
 
   @doc """
   Delete an audit event by ID.

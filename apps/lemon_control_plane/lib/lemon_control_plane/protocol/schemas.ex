@@ -723,6 +723,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "cronRunId" => :string,
         "action" => :string,
         "sinceMs" => :integer,
+        "beforeMs" => :integer,
         "limit" => :integer
       }
     },

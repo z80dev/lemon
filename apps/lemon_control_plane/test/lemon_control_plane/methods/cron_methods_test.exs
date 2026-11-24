@@ -222,6 +222,24 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
              )
   end
 
+  test "cron.add rejects an out-of-range numeric field with the shared bounds" do
+    assert {:error, {:invalid_request, message, nil}} =
+             CronAdd.handle(
+               %{
+                 "name" => "unbounded backoff",
+                 "schedule" => "hourly",
+                 "agentId" => "cp_bounds",
+                 "sessionKey" => "agent:cp_bounds:main",
+                 "prompt" => "ping",
+                 "maxRetries" => 1,
+                 "retryBackoffMs" => 5_000_000_000
+               },
+               %{}
+             )
+
+    assert message == "retry_backoff_ms must be an integer from 0 to 86400000"
+  end
+
   test "cron.list redacts target text by default and exposes byte summaries", %{job: job} do
     assert {:ok, %{"jobs" => jobs, "summary" => summary}} = CronList.handle(%{}, @operator_ctx)
 
@@ -650,5 +668,21 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
     assert summary["cleanup"]["includesCommandText"] == false
     assert summary["cleanup"]["includesOutputText"] == false
     assert summary["cleanup"]["includesErrorText"] == false
+  end
+
+  test "cron.audit pages with beforeMs and nextBeforeMs", %{job: job} do
+    for ts <- [100, 200, 300] do
+      event = CronStore.record_audit(:page_probe, %{job_id: job.id})
+      :ok = LemonCore.Store.put(:cron_audit_events, event.id, %{event | ts_ms: ts})
+    end
+
+    params = %{"jobId" => job.id, "action" => "page_probe", "limit" => 2}
+    assert {:ok, first} = CronAudit.handle(params, %{})
+    assert Enum.map(first["events"], & &1["tsMs"]) == [300, 200]
+    assert first["nextBeforeMs"] == 200
+
+    assert {:ok, second} = CronAudit.handle(Map.put(params, "beforeMs", 200), %{})
+    assert Enum.map(second["events"], & &1["tsMs"]) == [100]
+    assert second["nextBeforeMs"] == nil
   end
 end

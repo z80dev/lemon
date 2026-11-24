@@ -16,6 +16,8 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   malformed acknowledgement or `{:error, :outcome_unknown}` is adopted under the
   fixed run ID, and `run_pid/1` should return a queued run's owner, which the
   router monitors from acceptance (#641).
+- The `LemonCore.Store` expiry sweep no longer deletes `:cron_runs` rows by
+  age; `LemonAutomation.CronStore` owns cron retention (#675).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,
