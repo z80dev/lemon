@@ -10,6 +10,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Kimi Code parity with omp (#525): with a `kimi_coding` credential the model
+  picker lists the account's models from `/coding/v1/models` (name, context,
+  image input, effort levels, per-family output caps), and `websearch` gains a
+  `kimi` provider (`POST /coding/v1/search`) that uses the Kimi Code login,
+  omp login or API key. The `kimi` (API-key) K3 and `kimi-for-coding` models now
+  send adaptive thinking with effort, like `kimi_coding`.
 - `lemon browser stop` (admin control-plane method `browser.stop`) stops the
   local browser driver and the Chrome it launched (#660).
 - `lemon setup omp` reuses the provider logins and API keys omp already holds:

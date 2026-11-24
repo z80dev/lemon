@@ -42,6 +42,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- **Breaking:** catalog compat flag `anthropic_effort_only` (its last users, the
+  `kimi` K3/`kimi-for-coding` entries, now use `adaptive_thinking`) (#525).
+  Migration: declare `adaptive_thinking` with `reasoning_efforts` instead.
 - Unused `LemonAi.Models.supports_xhigh?/1`, `models_equal?/2`,
   `adjust_max_tokens_for_thinking/3,4` and `get_model_ids/1` helpers. Use
   `supports_xhigh/1` and `get_models/1` for supported model queries.
@@ -51,6 +54,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Added
 
+- `LemonAi.Models.KimiCodeDiscovery` lists a Kimi Code account's models from
+  `/v1/models` (efforts, context, image input, per-family output caps), cached
+  per account; `Models.list_models/1` takes `:discover_kimi_code` and
+  `:kimi_code_*` options (#525).
+- The `kimi` K3 and `kimi-for-coding` catalog entries declare
+  `adaptive_thinking` like `kimi_coding` (#525).
 - Provider preconnect and opt-in request hedging with dispatcher telemetry
   (`hedge_started`, `hedge_skipped`) (#567).
 - Opt-in OpenAI Responses over WebSocket with `previous_response_id` chaining

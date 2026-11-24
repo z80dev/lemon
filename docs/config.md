@@ -2567,7 +2567,8 @@ rename no longer changes it; if the file cannot be written, the derived id is
 used for that process.
 
 Kimi Code reasoning models (`k3`, `k3-256k`, `k3.1-pro`, `k3.1-pro-highspeed`,
-`kimi-for-coding`) are requested with `thinking: {type: "adaptive"}` plus
+`kimi-for-coding`), under both `kimi_coding` and `kimi` (API key), are
+requested with `thinking: {type: "adaptive"}` plus
 `output_config.effort` (`low`, `high` or `max`; other levels clamp) and the
 `effort-2025-11-24` beta; a forced tool choice sends effort `low` without
 thinking. `max_tokens` defaults to the model's maximum output (an explicit
@@ -2585,6 +2586,17 @@ provider's `base_url`), for example
 An access token that has already expired is not sent. `lemon doctor --live`
 checks `kimi_coding` against `/coding/v1/models` with the same authentication
 and fingerprint as model requests.
+
+With a `kimi_coding` credential, the model picker lists the models the account
+serves, from `GET https://api.kimi.com/coding/v1/models` (or the provider's
+`base_url`), refreshed every five minutes, instead of the bundled list. Each
+listed model takes its name, context window, image input, reasoning and effort
+levels from the listing; models with effort levels use adaptive thinking. The
+listing has no output limit, so `max_tokens` uses the documented per-family caps
+(`k3`/`k3-256k` 131072, `kimi-for-coding`/`-highspeed` 32768), then the bundled
+entry, then 32000. A model new to the listing can be selected by id
+(`kimi_coding:<id>`) once the picker has listed it. When the listing fails, the
+bundled models stay.
 
 If another Lemon process refreshes the same stored login at the same time, the
 refresh that loses the conditional write adopts the winner's stored token when
@@ -2906,6 +2918,11 @@ api_key = "<exa-api-key>"
 # TAVILY_API_KEY / KAGI_API_KEY / JINA_API_KEY / KEENABLE_API_KEY are used when unset.
 [runtime.tools.web.search.providers.tavily]
 api_key_secret = "TAVILY_API_KEY"
+
+# kimi takes the same shape plus an optional base_url; with no key it uses
+# KIMI_SEARCH_API_KEY / MOONSHOT_SEARCH_API_KEY, then the kimi_coding model credential.
+[runtime.tools.web.search.providers.kimi]
+base_url = "https://api.kimi.com/coding"
 
 [runtime.tools.web.fetch]
 enabled = true

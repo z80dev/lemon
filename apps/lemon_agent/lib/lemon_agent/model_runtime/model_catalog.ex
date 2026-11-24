@@ -43,8 +43,12 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
   Returns concrete, credential-enabled models for pickers and protocol clients.
 
   `:config` may provide a resolved config/settings map. Codex discovery uses the
-  same first healthy credential as native requests; the registry remains static
-  for other providers unless `:discover_openai` is explicitly enabled.
+  same first healthy credential as native requests. With a `kimi_coding`
+  credential, the account's Kimi Code `/v1/models` listing replaces the bundled
+  Kimi Code models (`LemonAi.Models.KimiCodeDiscovery`; the bundled list stays
+  when the listing fails; `:kimi_code_req_options` passes `Req` options). The
+  registry remains static for other providers unless `:discover_openai` is
+  explicitly enabled.
 
   Models defined under `[providers.<id>]` are included (see
   `LemonAgent.ModelRuntime.CustomProviders`); `discover_custom: false` skips
@@ -72,11 +76,15 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
       |> MapSet.new()
 
     codex_cfg = Map.get(configured, "openai-codex", %{})
+    kimi_cfg = Map.get(configured, "kimi-coding", %{})
+    get_api_key = Credentials.build_get_api_key(cfg)
 
     token =
       if MapSet.member?(enabled, "openai-codex") do
-        Credentials.build_get_api_key(cfg).(:openai_codex)
+        get_api_key.(:openai_codex)
       end
+
+    kimi_token = if MapSet.member?(enabled, "kimi-coding"), do: get_api_key.(:kimi_coding)
 
     LemonAi.Models.list_models(
       discover_openai: Keyword.get(opts, :discover_openai, false),
@@ -84,7 +92,12 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
       codex_access_token: token,
       codex_base_url: Map.get(codex_cfg, :base_url) || Map.get(codex_cfg, "base_url"),
       codex_force_refresh: Keyword.get(opts, :force_refresh, false),
-      codex_req_options: Keyword.get(opts, :codex_req_options, [])
+      codex_req_options: Keyword.get(opts, :codex_req_options, []),
+      discover_kimi_code: is_binary(kimi_token) and kimi_token != "",
+      kimi_code_access_token: kimi_token,
+      kimi_code_base_url: Map.get(kimi_cfg, :base_url) || Map.get(kimi_cfg, "base_url"),
+      kimi_code_force_refresh: Keyword.get(opts, :force_refresh, false),
+      kimi_code_req_options: Keyword.get(opts, :kimi_code_req_options, [])
     )
     |> Enum.reject(&LemonAi.Models.Presets.preset?(&1.provider))
     |> Kernel.++(preset_models(cfg, enabled, opts))
