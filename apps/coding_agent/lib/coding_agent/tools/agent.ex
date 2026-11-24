@@ -12,12 +12,38 @@ defmodule CodingAgent.Tools.Agent do
   content. Async runs can optionally auto-follow up into the current session
   when the delegated run completes. A submission whose outcome is unknown is
   tracked as `tracking_lost` under its fixed run id and never resubmitted.
+
+  ## Bounds
+
+  - Slots: a synchronous run or join lends the calling run's gateway permit
+    (`LemonGateway.Slots.suspend/2`) while it blocks and takes it back at the
+    front of the queue afterwards, so parents waiting on children (or a
+    delegation chain) never hold the capacity their children need.
+  - Deadline: synchronous runs and joins wait at most `timeout_ms` (default
+    120000). A synchronous run that times out is aborted.
+  - Budget: `CodingAgent.BudgetEnforcer` refuses a delegation when the
+    parent's budget is exhausted or its child limit is reached, reserves the
+    child against the parent, and sends the child's token/cost limits with the
+    request so the child session stops when it exceeds them. The child's
+    reported usage is charged to the parent on completion.
+  - Cancellation: aborting the run that delegated (or a synchronous timeout)
+    aborts the child through the run orchestrator (`RouterBridge.abort_run/2`);
+    the child then emits its own terminal event.
   """
 
   require Logger
 
   alias CodingAgent.AsyncFollowups
-  alias CodingAgent.{ModelProvenance, RunGraph, SettingsManager, Subagents, TaskStore}
+
+  alias CodingAgent.{
+    BudgetEnforcer,
+    ModelProvenance,
+    RunGraph,
+    SettingsManager,
+    Subagents,
+    TaskStore
+  }
+
   alias CodingAgent.Tools.Task.{Control, Params, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -32,6 +58,7 @@ defmodule CodingAgent.Tools.Agent do
   @default_sync_timeout_ms 120_000
   @default_watcher_timeout_ms 30 * 60 * 1000
   @default_reconciliation_timeout_ms 30 * 60 * 1000
+  @default_abort_grace_ms 30_000
   @default_run_orchestrator RouterBridge
 
   @doc """
@@ -108,7 +135,7 @@ defmodule CodingAgent.Tools.Agent do
           },
           "timeout_ms" => %{
             "type" => "integer",
-            "description" => "Synchronous wait timeout; default 120000"
+            "description" => "Synchronous run or join wait timeout; default 120000"
           },
           "task_id" => %{
             "type" => "string",
@@ -161,7 +188,7 @@ defmodule CodingAgent.Tools.Agent do
           do_join(params, signal, opts)
 
         "run" ->
-          do_run(params, cwd, opts)
+          do_run(params, signal, cwd, opts)
 
         other ->
           {:error, "Unsupported action: #{inspect(other)}"}
@@ -169,7 +196,7 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp do_run(params, cwd, opts) do
+  defp do_run(params, signal, cwd, opts) do
     opts =
       Keyword.merge(
         opts,
@@ -179,26 +206,32 @@ defmodule CodingAgent.Tools.Agent do
     with :ok <- Params.check_per_call_model(Map.take(params, ["model"]), cwd, opts),
          {:ok, validated} <- validate_run_params(params, cwd, opts),
          {:ok, delegated_session_key} <- resolve_delegated_session_key(validated, opts),
-         {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts) do
-      followup_opts = Keyword.put_new(opts, :cwd, cwd)
+         :ok <- check_spawn_budget(opts),
+         {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts),
+         {:ok, request} <- reserve_child(request, validated, delegated_session_key, opts) do
+      # The run that delegated owns the child's lifetime and budget: its abort
+      # signal cancels the child and the child's usage is charged to it.
+      opts =
+        opts
+        |> Keyword.put_new(:cwd, cwd)
+        |> Keyword.put(:delegation, %{
+          signal: signal,
+          reservation: request.run_id,
+          parent_scope: parent_budget_scope(opts)
+        })
 
       case submit_run(request, opts) do
         {:ok, run_id} when validated.async ->
-          handle_async_submission(
-            run_id,
-            validated,
-            delegated_session_key,
-            request,
-            followup_opts
-          )
+          handle_async_submission(run_id, validated, delegated_session_key, request, opts)
 
         {:ok, run_id} ->
-          wait_sync_completion(run_id, validated, delegated_session_key)
+          wait_sync_completion(run_id, validated, delegated_session_key, signal, opts)
 
         {:error, :outcome_unknown} ->
-          handle_unknown_submission(request, validated, delegated_session_key, followup_opts)
+          handle_unknown_submission(request, validated, delegated_session_key, opts)
 
-        {:error, _reason} = error ->
+        {:error, reason} = error ->
+          release_child(request.run_id, {:submission_failed, reason})
           error
       end
     end
@@ -255,9 +288,55 @@ defmodule CodingAgent.Tools.Agent do
         _ -> []
       end
 
-    with :ok <- authorize_task_ids(ids, opts) do
-      Result.do_join(params, signal)
+    timeout_ms = Map.get(params, "timeout_ms", @default_sync_timeout_ms)
+
+    if valid_timeout_ms?(timeout_ms) do
+      with :ok <- authorize_task_ids(ids, opts) do
+        with_parent_slot_lent(opts, signal, fn ->
+          Result.do_join(params, signal, timeout_ms: timeout_ms)
+        end)
+      end
+    else
+      {:error, "timeout_ms must be a non-negative integer"}
     end
+  end
+
+  # A blocked parent lends its gateway permit so the children it waits on (and
+  # their own delegations) can be admitted under the global cap. Abort paths
+  # re-queue without waiting so cancellation is never held behind admission.
+  defp with_parent_slot_lent(opts, signal, fun) do
+    case lend_parent_slot(opts) do
+      {:ok, server, token} ->
+        try do
+          fun.()
+        after
+          mode = if AbortSignal.aborted?(signal), do: :nowait, else: :wait
+          resume_parent_slot(server, token, mode)
+        end
+
+      :none ->
+        fun.()
+    end
+  end
+
+  defp lend_parent_slot(opts) do
+    server = Keyword.get(opts, :slots, LemonGateway.Slots)
+
+    with run_id when is_binary(run_id) <- Keyword.get(opts, :run_id),
+         pid when is_pid(pid) <- GenServer.whereis(server),
+         {:ok, token} <- LemonGateway.Slots.suspend(run_id, pid) do
+      {:ok, pid, token}
+    else
+      _ -> :none
+    end
+  catch
+    :exit, _reason -> :none
+  end
+
+  defp resume_parent_slot(server, token, mode) do
+    LemonGateway.Slots.resume(token, mode, server)
+  catch
+    :exit, _reason -> :ok
   end
 
   defp ensure_latest_task_state(task_id) do
@@ -376,10 +455,14 @@ defmodule CodingAgent.Tools.Agent do
         node: result_node(validated)
       })
 
-    :ok = register_delegated_run(run_id, task_id, validated, delegated_session_key, opts)
+    :ok = register_child_run(run_id, validated, delegated_session_key, opts)
+    :ok = RunGraph.update(run_id, &Map.put(&1, :task_id, task_id))
 
-    {task_id,
-     start_completion_watcher(task_id, run_id, validated, delegated_session_key, request, opts)}
+    watcher =
+      start_completion_watcher(task_id, run_id, validated, delegated_session_key, request, opts)
+
+    if watcher != :ok, do: release_child(delegation(opts, run_id).reservation, :untracked)
+    {task_id, watcher}
   end
 
   defp build_async_submission_result(:ok, task_id, run_id, validated, delegated_session_key) do
@@ -441,8 +524,10 @@ defmodule CodingAgent.Tools.Agent do
     }
   end
 
-  defp register_delegated_run(run_id, task_id, validated, delegated_session_key, opts) do
-    parent_run_id = Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
+  # Registered before submission so the budget reservation and the child's
+  # limits exist before the child can start; tracking adds its task id.
+  defp register_child_run(run_id, validated, delegated_session_key, opts) do
+    parent_run_id = parent_run_id(opts)
 
     case RunGraph.get(run_id) do
       {:ok, _record} ->
@@ -461,28 +546,175 @@ defmodule CodingAgent.Tools.Agent do
           parent_session_id: Keyword.get(opts, :session_id) || Keyword.get(opts, :parent_session),
           children: [],
           type: :agent,
-          task_id: task_id,
           agent_id: validated.agent_id,
           delegated_session_key: delegated_session_key,
           description: validated.description,
           node: result_node(validated)
         })
-    end
 
-    if is_binary(parent_run_id) and parent_run_id != "" and parent_run_id != run_id do
-      RunGraph.add_child(parent_run_id, run_id)
-    end
+        if is_binary(parent_run_id) and parent_run_id != "" and parent_run_id != run_id do
+          RunGraph.add_child(parent_run_id, run_id)
+        end
 
-    :ok
+        :ok
+    end
   end
 
-  defp wait_sync_completion(run_id, validated, delegated_session_key) do
-    timeout_ms = validated.timeout_ms
+  defp parent_run_id(opts), do: Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
 
-    case await_run_completion(run_id, timeout_ms) do
+  defp delegation(opts, run_id) do
+    Map.merge(
+      %{signal: nil, reservation: run_id, parent_scope: nil},
+      Keyword.get(opts, :delegation, %{})
+    )
+  end
+
+  # Refuse before submission when the parent's session budget is exhausted or
+  # its run-graph budget (tokens, cost or child count) leaves no room.
+  defp check_spawn_budget(opts) do
+    parent_run_id = parent_run_id(opts)
+
+    check =
+      case LemonAgent.BudgetScope.check(Keyword.get(opts, :budget_scope)) do
+        nil when is_binary(parent_run_id) -> BudgetEnforcer.check_subagent_spawn(parent_run_id)
+        nil -> :ok
+        details -> {:error, :budget_exceeded, details}
+      end
+
+    case check do
+      {:error, _reason, details} -> {:error, budget_message(parent_run_id, details)}
+      _ -> :ok
+    end
+  end
+
+  # Reserve the child against its parent and send its limits with the request:
+  # the child session enforces them itself and stops when it exceeds them.
+  defp reserve_child(%RunRequest{run_id: run_id} = request, validated, session_key, opts) do
+    :ok = register_child_run(run_id, validated, session_key, opts)
+    BudgetEnforcer.on_run_start(run_id)
+
+    reservation =
+      case parent_run_id(opts) do
+        parent when is_binary(parent) and parent != run_id ->
+          BudgetEnforcer.on_subagent_spawn(parent, run_id)
+
+        _ ->
+          :ok
+      end
+
+    case reservation do
+      :ok ->
+        meta = Map.drop(request.meta || %{}, [:delegated_budget, "delegated_budget"])
+
+        meta =
+          case BudgetEnforcer.delegated_limits(run_id) do
+            nil -> meta
+            limits -> Map.put(meta, :delegated_budget, limits)
+          end
+
+        {:ok, %{request | meta: meta}}
+
+      {:error, :budget_exceeded, details} ->
+        mark_delegated_run_failed(run_id, {:budget_exceeded, details})
+        {:error, budget_message(parent_run_id(opts), details)}
+
+      {:error, reason} ->
+        mark_delegated_run_failed(run_id, {:budget_reservation_failed, reason})
+        {:error, "Unable to reserve delegated run budget: #{inspect(reason)}"}
+    end
+  end
+
+  defp budget_message(run_id, details) do
+    {_action, message} = BudgetEnforcer.handle_budget_exceeded(run_id || "unknown", details)
+    message
+  end
+
+  # The child never ran (or is no longer tracked): free its parent slot.
+  defp release_child(run_id, reason) do
+    mark_delegated_run_failed(run_id, reason)
+    BudgetEnforcer.on_run_complete(run_id, %{})
+  end
+
+  # Charge a finished child's reported usage to the parent's run-graph budget
+  # and to the parent session's inclusive budget scope.
+  defp settle_child(run_id, completion, opts) do
+    %{reservation: reservation, parent_scope: scope} = delegation(opts, run_id)
+
+    case completion[:usage] do
+      usage when is_map(usage) ->
+        BudgetEnforcer.on_run_complete(reservation, %{usage: usage})
+        report_parent_usage(scope, reservation, usage)
+
+      _ ->
+        BudgetEnforcer.on_run_complete(reservation, %{})
+    end
+  end
+
+  defp parent_budget_scope(opts) do
+    case Keyword.get(opts, :budget_scope) do
+      scope when is_pid(scope) -> LemonAgent.BudgetScope.attachment(scope)
+      _ -> nil
+    end
+  catch
+    :exit, _reason -> nil
+  end
+
+  defp report_parent_usage(nil, _run_id, _usage), do: :ok
+
+  defp report_parent_usage(scope, run_id, usage) do
+    LemonAgent.BudgetScope.report(
+      scope,
+      run_id,
+      LemonAgent.Budget.usage_from_message(%{usage: usage})
+    )
+  catch
+    # The delegating session may have ended before an async child finished.
+    :exit, _reason -> :ok
+  end
+
+  # Cancel a child whose parent stopped waiting for it. The child's own run
+  # emits its terminal event; the router owns the cancellation.
+  defp stop_child(run_id, reason, opts) do
+    router = run_orchestrator(opts)
+
+    result =
+      if Code.ensure_loaded?(router) and function_exported?(router, :abort_run, 2),
+        do: router.abort_run(run_id, reason),
+        else: {:error, :abort_unsupported}
+
+    if result != :ok do
+      Logger.warning(
+        "Agent tool could not abort delegated run run_id=#{run_id} " <>
+          "reason=#{inspect(reason)} result=#{LemonCore.StatusRedaction.inspect_reason(result)}"
+      )
+    end
+
+    release_child(delegation(opts, run_id).reservation, reason)
+    result
+  rescue
+    _error ->
+      release_child(delegation(opts, run_id).reservation, reason)
+      {:error, :abort_failed}
+  catch
+    :exit, _reason ->
+      release_child(delegation(opts, run_id).reservation, reason)
+      {:error, :outcome_unknown}
+  end
+
+  defp wait_sync_completion(run_id, validated, delegated_session_key, signal, opts) do
+    mark_delegated_run_running(run_id)
+
+    result =
+      with_parent_slot_lent(opts, signal, fn ->
+        await_run_completion(run_id, validated.timeout_ms, signal: signal)
+      end)
+
+    case result do
       {:ok, completion} ->
+        settle_child(run_id, completion, opts)
+
         if completion.ok do
-          %AgentToolResult{
+          result = %AgentToolResult{
             content: [%TextContent{text: completion.answer}],
             details: %{
               status: "completed",
@@ -494,12 +726,21 @@ defmodule CodingAgent.Tools.Agent do
               node: result_node(validated)
             }
           }
+
+          mark_delegated_run_finished(run_id, result)
+          result
         else
+          mark_delegated_run_failed(run_id, completion.error)
           {:error, "Delegated run failed: #{format_error(completion.error)}"}
         end
 
+      {:error, :aborted} ->
+        stop_child(run_id, :parent_aborted, opts)
+        {:error, "Operation aborted; delegated run #{run_id} was cancelled"}
+
       {:error, :timeout} ->
-        {:error, "Timed out waiting for delegated run #{run_id}"}
+        stop_child(run_id, :delegation_timeout, opts)
+        {:error, "Timed out waiting for delegated run #{run_id}; it was cancelled"}
 
       {:error, reason} ->
         {:error, "Failed waiting for delegated run #{run_id}: #{inspect(reason)}"}
@@ -760,7 +1001,9 @@ defmodule CodingAgent.Tools.Agent do
         nil
       end
 
-    case await_run_completion(run_id, timeout_ms, on_subscribed: on_subscribed) do
+    signal = delegation(opts, run_id).signal
+
+    case await_run_completion(run_id, timeout_ms, on_subscribed: on_subscribed, signal: signal) do
       {:ok, completion} ->
         finalize_task_from_completion(task_id, completion, %{
           run_id: run_id,
@@ -770,8 +1013,30 @@ defmodule CodingAgent.Tools.Agent do
           node: result_node(validated)
         })
 
+        settle_child(run_id, completion, opts)
+
         if validated.auto_followup do
           maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts)
+        end
+
+      {:error, :aborted} ->
+        # The run that delegated was aborted: cancel the child and record the
+        # terminal event it emits. No followup goes to the aborted parent.
+        stop_child(run_id, :parent_aborted, opts)
+        grace_ms = Keyword.get(opts, :agent_tool_abort_grace_ms, @default_abort_grace_ms)
+
+        case await_run_completion(run_id, grace_ms) do
+          {:ok, completion} ->
+            finalize_task_from_completion(task_id, completion, %{
+              run_id: run_id,
+              agent_id: validated.agent_id,
+              delegated_session_key: delegated_session_key,
+              role: validated.role_id,
+              node: result_node(validated)
+            })
+
+          _ ->
+            TaskStore.fail(task_id, :parent_aborted)
         end
 
       {:error, :timeout} ->
@@ -787,13 +1052,13 @@ defmodule CodingAgent.Tools.Agent do
         )
 
       {:error, reason} ->
-        mark_delegated_run_failed(run_id, reason)
+        release_child(delegation(opts, run_id).reservation, reason)
         TaskStore.fail(task_id, reason)
     end
   rescue
     error ->
       Logger.warning("Agent tool watcher crashed for task_id=#{task_id}: #{inspect(error)}")
-      mark_delegated_run_failed(run_id, {:watcher_crash, error})
+      release_child(delegation(opts, run_id).reservation, {:watcher_crash, error})
       TaskStore.fail(task_id, {:watcher_crash, error})
   catch
     kind, reason ->
@@ -801,7 +1066,7 @@ defmodule CodingAgent.Tools.Agent do
         "Agent tool watcher exited for task_id=#{task_id}: #{inspect({kind, reason})}"
       )
 
-      mark_delegated_run_failed(run_id, {:watcher_crash, {kind, reason}})
+      release_child(delegation(opts, run_id).reservation, {:watcher_crash, {kind, reason}})
       TaskStore.fail(task_id, {:watcher_crash, {kind, reason}})
   end
 
@@ -828,6 +1093,8 @@ defmodule CodingAgent.Tools.Agent do
           delegated_session_key: delegated_session_key,
           role: validated.role_id
         })
+
+        settle_child(run_id, completion, opts)
 
         if validated.auto_followup do
           maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts)
@@ -891,35 +1158,42 @@ defmodule CodingAgent.Tools.Agent do
     Keyword.get(opts, :run_orchestrator, @default_run_orchestrator)
   end
 
+  # `signal` (the delegating run's abort signal) ends the wait with
+  # `{:error, :aborted}`; the caller cancels the child.
   defp await_run_completion(run_id, timeout_ms, opts \\ []) do
     # Subscribe before reading the durable summary so a completion between the
     # store check and entering the receive loop is still observable.
     topic = Bus.run_topic(run_id)
     :ok = Bus.subscribe(topic)
+    signal = Keyword.get(opts, :signal)
+    AbortSignal.subscribe(signal)
     on_subscribed = Keyword.get(opts, :on_subscribed)
 
     if is_function(on_subscribed, 0) do
       on_subscribed.()
     end
 
-    # Now check the store — if already complete, return immediately
-    case completion_from_store(run_id, "") do
-      {:ok, completion} ->
-        _ = Bus.unsubscribe(topic)
-        {:ok, completion}
+    try do
+      # Now check the store — if already complete, return immediately
+      case completion_from_store(run_id, "") do
+        {:ok, completion} ->
+          {:ok, completion}
 
-      :pending ->
-        deadline_ms = System.monotonic_time(:millisecond) + max(timeout_ms, 0)
-
-        try do
-          await_completion_loop(run_id, deadline_ms, "")
-        after
-          _ = Bus.unsubscribe(topic)
-        end
+        :pending ->
+          if AbortSignal.aborted?(signal) do
+            {:error, :aborted}
+          else
+            deadline_ms = System.monotonic_time(:millisecond) + max(timeout_ms, 0)
+            await_completion_loop(run_id, deadline_ms, "", signal)
+          end
+      end
+    after
+      AbortSignal.unsubscribe(signal)
+      _ = Bus.unsubscribe(topic)
     end
   end
 
-  defp await_completion_loop(run_id, deadline_ms, acc_answer) do
+  defp await_completion_loop(run_id, deadline_ms, acc_answer, signal) do
     remaining_ms = deadline_ms - System.monotonic_time(:millisecond)
 
     if remaining_ms <= 0 do
@@ -931,13 +1205,16 @@ defmodule CodingAgent.Tools.Agent do
       receive do
         %LemonCore.Event{type: :delta, payload: payload} ->
           delta = delta_text(payload)
-          await_completion_loop(run_id, deadline_ms, acc_answer <> delta)
+          await_completion_loop(run_id, deadline_ms, acc_answer <> delta, signal)
 
         %LemonCore.Event{type: :run_completed, payload: payload} ->
           {:ok, normalize_completion(Events.coerce(:run_completed, payload), acc_answer)}
 
+        {:lemon_abort, ^signal, :abort} ->
+          {:error, :aborted}
+
         _ ->
-          await_completion_loop(run_id, deadline_ms, acc_answer)
+          await_completion_loop(run_id, deadline_ms, acc_answer, signal)
       after
         remaining_ms ->
           case completion_from_store(run_id, acc_answer) do
@@ -1008,6 +1285,7 @@ defmodule CodingAgent.Tools.Agent do
       ok: ok != false,
       answer: normalize_answer(answer, acc_answer),
       error: map_get(completed, :error),
+      usage: map_get(completed, :usage),
       duration_ms: duration_ms
     }
   end

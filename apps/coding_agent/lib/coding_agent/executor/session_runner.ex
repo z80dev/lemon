@@ -251,6 +251,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         config_cwd: get_opt(run_opts, :config_cwd),
         channel_identity: LemonCore.MapHelpers.get_key(meta, :channel_identity),
         tern_pane: Map.get(meta, :tern_pane),
+        delegated_budget: LemonCore.MapHelpers.get_key(meta, :delegated_budget),
         invocation_context_key: LemonCore.MapHelpers.get_key(meta, :invocation_context_key),
         memory_context_key: LemonCore.MapHelpers.get_key(meta, :memory_context_key),
         memory_context_verified:

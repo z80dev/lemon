@@ -9,6 +9,12 @@
 
 ### Fixed
 
+- The `agent` tool lends the calling run's gateway permit while a sync run or
+  join waits, bounds joins by `timeout_ms`, applies `BudgetEnforcer` (refusal,
+  child reservation, `meta.delegated_budget` limits enforced by the child
+  session via the new `:delegated_budget` session option, usage charged back)
+  and aborts children when the delegating run aborts or a sync wait times out.
+  New `BudgetEnforcer.delegated_limits/1` and `apply_delegated_limits/2`. (#668)
 - Durable store owners get an ETS heir (`CodingAgent.RuntimeTables`): a crashed
   owner's restart reclaims the live table, and restart normalization applies only
   at boot. RunGraph normalizes `:queued` as well as `:running` runs at boot,

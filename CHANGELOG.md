@@ -171,6 +171,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- `agent` delegation is bounded: a synchronous run or join lends the calling
+  run's gateway permit while it waits (`LemonGateway.Slots.suspend/2`,
+  `resume/3`), so parents waiting on children and delegation chains no longer
+  stall admission under `[gateway].max_concurrent_runs`. Joins honour
+  `timeout_ms` (default 120000) instead of waiting forever. `BudgetEnforcer`
+  refuses delegations from an exhausted parent, reserves each child, sends its
+  token/cost limits with the request (the child session stops when it would
+  exceed them) and charges its usage back. Aborting the delegating run or a
+  synchronous timeout aborts the child through `RouterBridge.abort_run/2`. (#668)
 - Coding-agent durable stores (tasks, run graph, parent questions, processes)
   keep their live table when their owner crashes: `CodingAgent.RuntimeTables`
   is the ETS heir and the restarted owner reclaims it, so in-flight tasks stay
