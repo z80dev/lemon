@@ -56,6 +56,11 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Changed
 
+- `node.process.run`, `.get` and `.cancel` receipts accept the terminal state
+  `failed` (null exit and outputs): the destination proved the program never
+  started. Terminal receipts now retire on the destination 24 hours after they
+  finish; only unresolved receipts count toward its 1,000 limit (#679).
+
 - **Breaking security change:** HTTP/WebSocket listeners default to loopback.
   LAN deployments must explicitly configure `LEMON_CONTROL_PLANE_BIND_IP` and
   authentication. The separate node gateway defaults to `127.0.0.1:4044`;

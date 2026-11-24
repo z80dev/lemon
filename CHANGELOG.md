@@ -396,6 +396,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   restart or socket error) instead of failing every later request with
   `:closed`; an unopened pane whose daemon is gone falls back like any other
   unavailable Tern connection (#661).
+- Remote (named-node) runs no longer abort on event size, delta count or
+  delta rate: oversized tool actions (for example a 128 KiB `write`) and
+  checkpoint path lists are elided to the event budget, long deltas are split
+  at UTF-8 boundaries, deltas that queue behind a slow acknowledgement coalesce
+  (bounded by bytes), and the 10,000-delta cap is gone. The completed answer
+  is the run's own answer, not a concatenation of streamed deltas (#635).
+- Named-node `node.process.*` no longer stops admitting work after 1,000 runs:
+  terminal receipts (`completed`, `cancelled`, `failed`) fence their ID for 24
+  hours and then retire, only unresolved `running`/`outcome_unknown` receipts
+  count toward the 1,000 limit, a spawn or pre-exec failure is reported as the
+  new terminal state `failed` instead of `outcome_unknown`, and operators can
+  prune receipts preview-first with `ProcessService.prune/2` (#679).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the
