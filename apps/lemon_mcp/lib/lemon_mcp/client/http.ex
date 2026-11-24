@@ -448,7 +448,7 @@ defmodule LemonMCP.Client.HTTP do
       Protocol.initialize_request(
         client_name: state.config.client_name,
         client_version: state.config.client_version,
-        capabilities: state.config.capabilities
+        capabilities: Protocol.client_capabilities(state.config.capabilities)
       )
 
     with {:ok, body, state} <- handshake_post(request, state, true),

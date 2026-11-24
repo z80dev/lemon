@@ -15,6 +15,9 @@ defmodule LemonMCP.ClientRequestWorkersTest.HTTPFixture do
     auth = Map.new(conn.req_headers)["authorization"]
     send(test, {:mcp, request["method"], get_in(request, ["params", "name"]), auth})
 
+    if request["method"] == "initialize",
+      do: send(test, {:capabilities, get_in(request, ["params", "capabilities"])})
+
     cond do
       not authorized?(store, auth) ->
         conn
@@ -154,6 +157,9 @@ defmodule LemonMCP.ClientRequestWorkersTest.SSEFixture do
     %{stream: stream, test: test} = Agent.get(conn.assigns.store, & &1)
     send(test, {:mcp, request["method"], get_in(request, ["params", "name"]), nil})
 
+    if request["method"] == "initialize",
+      do: send(test, {:capabilities, get_in(request, ["params", "capabilities"])})
+
     case response(request) do
       nil ->
         :ok
@@ -233,6 +239,13 @@ defmodule LemonMCP.ClientRequestWorkersTest do
 
       send(holder, :release)
       assert {:ok, [%{"text" => "slow"}]} = Task.await(slow, 5_000)
+    end
+
+    test "the handshake never advertises sampling", ctx do
+      capabilities = %{"sampling" => %{}, "roots" => %{}}
+      start_supervised!({HTTP, url: ctx.url, capabilities: capabilities, timeout_ms: 10_000})
+      assert_received {:capabilities, %{"roots" => %{}} = advertised}
+      refute Map.has_key?(advertised, "sampling")
     end
 
     test "a timed-out call is an unknown outcome and its worker is gone first", ctx do
@@ -399,6 +412,13 @@ defmodule LemonMCP.ClientRequestWorkersTest do
       send(stream, {:sse_message, response})
       assert {:ok, [%{"text" => "echo"}]} = SSE.call_tool(client, "echo", %{}, 2_000)
       assert :ready = SSE.state(client)
+    end
+
+    test "the handshake never advertises sampling", ctx do
+      capabilities = %{sampling: %{}, roots: %{}}
+      start_supervised!({SSE, url: ctx.url, capabilities: capabilities, timeout_ms: 10_000})
+      assert_received {:capabilities, %{"roots" => %{}} = advertised}
+      refute Map.has_key?(advertised, "sampling")
     end
   end
 

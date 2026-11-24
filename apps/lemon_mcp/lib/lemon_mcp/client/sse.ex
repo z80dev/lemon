@@ -449,7 +449,7 @@ defmodule LemonMCP.Client.SSE do
       Protocol.initialize_request(
         client_name: state.config.client_name,
         client_version: state.config.client_version,
-        capabilities: state.config.capabilities
+        capabilities: Protocol.client_capabilities(state.config.capabilities)
       )
 
     with :ok <- post_raw(request, state.config, state.post_url),

@@ -1008,8 +1008,7 @@ defmodule LemonSkills.Config do
 
     opts =
       mcp_timeout_opts(config) ++
-        mcp_env_opts(config) ++
-        mcp_filter_opts(config) ++ sampling_config_opts(config) ++ mcp_metadata_opts(config)
+        mcp_env_opts(config) ++ mcp_filter_opts(config) ++ mcp_metadata_opts(config)
 
     if opts == [] do
       [{:stdio, command, args}]
@@ -1161,34 +1160,6 @@ defmodule LemonSkills.Config do
 
   defp oauth_config_opts(_config), do: []
 
-  defp sampling_config_opts(%{"sampling" => sampling}) when is_map(sampling) do
-    opts =
-      [
-        mode: Map.get(sampling, "mode"),
-        reviewer: sampling_reviewer(sampling),
-        max_tokens: Map.get(sampling, "max_tokens") || Map.get(sampling, "maxTokens"),
-        allowed_models: string_list(sampling, "allowed_models")
-      ]
-      |> Enum.reject(fn
-        {:allowed_models, []} -> true
-        {_key, nil} -> true
-        {_key, ""} -> true
-        _ -> false
-      end)
-
-    if opts == [], do: [], else: [sampling_policy: opts]
-  end
-
-  defp sampling_config_opts(_config), do: []
-
-  defp sampling_reviewer(%{"reviewer" => reviewer})
-       when reviewer in ["ops_approval", "approval"] do
-    :ops_approval
-  end
-
-  defp sampling_reviewer(%{"require_approval" => true}), do: :ops_approval
-  defp sampling_reviewer(_sampling), do: nil
-
   defp mcp_filter_opts(config) do
     filters =
       [
@@ -1281,9 +1252,8 @@ defmodule LemonSkills.Config do
          end) do
       nil ->
         with :ok <-
-               validate_positive_timeout(Keyword.get(opts, :ready_timeout_ms), "ready_timeout_ms"),
-             :ok <- validate_positive_timeout(Keyword.get(opts, :timeout_ms), "timeout_ms") do
-          validate_sampling_policy(Keyword.get(opts, :sampling_policy))
+               validate_positive_timeout(Keyword.get(opts, :ready_timeout_ms), "ready_timeout_ms") do
+          validate_positive_timeout(Keyword.get(opts, :timeout_ms), "timeout_ms")
         end
 
       {key, _value} ->
@@ -1297,42 +1267,6 @@ defmodule LemonSkills.Config do
   defp validate_positive_timeout(_value, name) do
     {:error, "#{name} must be a positive integer"}
   end
-
-  defp validate_sampling_policy(nil), do: :ok
-
-  defp validate_sampling_policy(policy) when is_list(policy) do
-    mode = Keyword.get(policy, :mode)
-    reviewer = Keyword.get(policy, :reviewer)
-    max_tokens = Keyword.get(policy, :max_tokens)
-    allowed_models = Keyword.get(policy, :allowed_models, [])
-    approval_timeout_ms = Keyword.get(policy, :approval_timeout_ms)
-
-    cond do
-      not is_nil(mode) and
-          mode not in [:model, :reviewed_model, :deny, "model", "reviewed_model", "deny"] ->
-        {:error, "sampling_policy.mode must be model, reviewed_model, or deny"}
-
-      not is_nil(reviewer) and
-          not (is_function(reviewer, 1) or
-                   reviewer in [:ops_approval, "ops_approval", :approval, "approval", true]) ->
-        {:error, "sampling_policy.reviewer must be a function or ops_approval"}
-
-      not is_nil(max_tokens) and (not is_integer(max_tokens) or max_tokens <= 0) ->
-        {:error, "sampling_policy.max_tokens must be a positive integer"}
-
-      not string_list?(allowed_models) ->
-        {:error, "sampling_policy.allowed_models must be a list of strings"}
-
-      not is_nil(approval_timeout_ms) and
-          (not is_integer(approval_timeout_ms) or approval_timeout_ms <= 0) ->
-        {:error, "sampling_policy.approval_timeout_ms must be a positive integer"}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_sampling_policy(_policy), do: {:error, "sampling_policy must be a keyword list"}
 
   defp string_list?(value), do: is_list(value) and Enum.all?(value, &is_binary/1)
 

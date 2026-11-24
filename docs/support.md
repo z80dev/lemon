@@ -381,9 +381,7 @@ Telegram and Discord are stable 1.0 remote chat channels for text-first agent
 runs. The TUI, Web UI, and control plane are stable first-party local
 interfaces. In control-plane mode, the TUI renders approval events as
 notifications; MCP OAuth approval requests include the authorization URL plus
-resource, scope, and redirect context, and MCP sampling approval requests
-include redacted request hash, model, token, message, role, and content-kind
-metadata. Operators can
+resource, scope, and redirect context. Operators can
 resolve pending approvals from the terminal
 with `/approve [n] [once|session|agent|global]` or `/deny [n]`; `/approvals`
 refreshes the current pending approval snapshot through `exec.approvals.get`.

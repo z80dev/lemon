@@ -31,8 +31,7 @@ end
 
 - `LemonMCP` - Main module with protocol version
 - `LemonMCP.Protocol` - MCP message types and JSON-RPC handling
-- `LemonMCP.Client` - Stdio MCP protocol client backed by `LemonCore.Rpc.Client`, including optional supervised `sampling/createMessage` callback or policy handling
-- `LemonMCP.Sampling` - Redacted policy wrapper for reviewed model-backed stdio sampling callbacks
+- `LemonMCP.Client` - Stdio MCP protocol client backed by `LemonCore.Rpc.Client`, with supervised notification callbacks
 - `LemonMCP.Transport.Stdio` - Raw-byte stdio transport and subprocess owner implementing `LemonCore.Rpc.Transport`
 - `LemonMCP.Framing.Stdio` - Bounded JSON-line framing that tolerates merged stderr log lines
 - `LemonMCP.Client.HTTP` - Streamable HTTP client for external MCP servers, including JSON responses, per-request SSE responses, session/protocol headers and supervised per-request workers; OAuth comes from `LemonMCP.HTTP.OAuth`
@@ -77,55 +76,15 @@ stops its private callback supervisor and RPC process, and terminates the server
 process group. Never replay a timed-out tool invocation automatically; the remote
 operation may already have taken effect.
 
-`sampling/createMessage` is disabled by default. Prefer a `sampling_policy`
-when requests should pass through redacted review and local limits before a
-model-backed delegate is called:
+Lemon answers no server-to-client request. Every one, `sampling/createMessage`
+included, receives a `-32601` method-not-found error, and no client (stdio,
+Streamable HTTP or legacy SSE) advertises the `sampling` capability, even when a
+caller passes it in `:capabilities`.
 
-```elixir
-{:ok, client} = LemonMCP.Client.start_link(
-  command: "node",
-  args: ["server.js"],
-  sampling_policy: [
-    mode: :reviewed_model,
-    max_tokens: 1_024,
-    allowed_models: ["lemon"],
-    reviewer: fn summary ->
-      # summary includes request_hash, message_count, roles, content_kinds,
-      # text_char_count, max_tokens, and requested_model, but not raw text.
-      :approve
-    end,
-    delegate: fn params, summary ->
-      call_model(params, summary)
-    end
-  ]
-)
-```
-
-Pass a raw `sampling_handler` function only for low-level integrations that
-already own review and policy checks. Either option advertises the sampling
-capability only when Lemon can answer server sampling requests:
-
-```elixir
-{:ok, client} = LemonMCP.Client.start_link(
-  command: "node",
-  args: ["server.js"],
-  sampling_handler: fn params ->
-    {:ok,
-     %{
-       "role" => "assistant",
-       "content" => %{"type" => "text", "text" => "sampled"},
-       "model" => "lemon",
-       "stopReason" => "endTurn"
-     }}
-  end
-)
-```
-
-Stdio server requests run in tasks under a private supervisor owned by that client.
-A slow sampling review or delegate cannot block ordinary responses, notifications,
-or request deadlines. A raised/thrown sampling failure becomes a redacted internal
-protocol error rather than terminating the connection. Sampling remains opt-in;
-unsupported server methods return `-32601` instead of reaching notification handlers.
+Stdio notification callbacks run in tasks under a private supervisor owned by
+that client. A slow callback cannot block ordinary responses, other
+notifications or request deadlines, and a raised/thrown callback failure does
+not terminate the connection. Server requests never reach notification handlers.
 
 HTTP and SSE clients also own private, capped notification task supervisors.
 Closing or killing the client terminates those callbacks. The per-client
@@ -133,13 +92,6 @@ Closing or killing the client terminates those callbacks. The per-client
 throughput limit); callbacks beyond the cap are dropped without blocking
 protocol responses or starting unsupervised work. Notification handlers are
 best-effort invalidation signals, not durable delivery.
-
-When sampling is configured through `LemonSkills.McpSource`, use
-`reviewer: :ops_approval` to route reviewed sampling through
-`LemonCore.ExecApprovals`. The source bridge creates redacted
-`mcp_<server>_sampling` approvals for approval surfaces before any delegate sees
-raw sampling params. Approval summaries include the safe request hash, model,
-token, message, role, and content-kind metadata.
 
 Configured Streamable HTTP sources with local PKCE redirect URIs also route
 authorization requests through `LemonCore.ExecApprovals` as `mcp_<server>_oauth`
@@ -363,9 +315,7 @@ When starting a client:
 - `:env` - Environment variables
 - `:client_name` - Client name for handshake (default: "lemon-mcp")
 - `:client_version` - Client version for handshake (default: "0.1.0")
-- `:capabilities` - Client capabilities map
-- `:sampling_policy` - `LemonMCP.Sampling` policy opts for reviewed model-backed sampling
-- `:sampling_handler` - low-level raw callback for `sampling/createMessage`
+- `:capabilities` - Client capabilities map (`sampling` is never advertised)
 - `:timeout_ms` - Maximum request and initialization timeout in milliseconds (default: 30000; `:infinity` disables the configured bound)
 
 ## Server notifications

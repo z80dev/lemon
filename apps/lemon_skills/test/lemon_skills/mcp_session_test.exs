@@ -54,8 +54,6 @@ defmodule LemonSkills.McpSessionTest do
           Map.put(config, "approval", "maybe"),
           Map.put(config, "tool_approvals", %{"echo" => "maybe"}),
           Map.put(config, "cwd", 42),
-          Map.put(config, "sampling", "invalid"),
-          Map.put(config, "sampling", %{"mode" => "invalid"}),
           %{
             "type" => "http",
             "name" => "http",
@@ -160,7 +158,7 @@ defmodule LemonSkills.McpSessionTest do
     assert McpSession.tools(context.id) == []
   end
 
-  test "preserves configured working directory and sampling policy", context do
+  test "preserves configured working directory and ignores a sampling entry", context do
     cwd = Path.join(context.root, "workspace")
     File.mkdir_p!(cwd)
 
@@ -175,7 +173,7 @@ defmodule LemonSkills.McpSessionTest do
     assert text(result) == "configured|#{cwd}"
     [server] = source(context.id) |> :sys.get_state() |> Map.fetch!(:servers) |> Map.values()
     assert {:stdio, _, _, opts} = server.config
-    assert opts[:sampling_policy] == [mode: "deny"]
+    refute Keyword.has_key?(opts, :sampling_policy)
   end
 
   test "explicit source configurations do not load global servers", context do

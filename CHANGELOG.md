@@ -222,6 +222,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `LemonCore.Store.JsonlBackend` (lemon_core 0.3.0). Run
   `mix lemon.store.migrate_jsonl_to_sqlite` before upgrading a JSONL store (#608).
 - Obsolete Telegram `outbound_send_delay_ms` and poller stale-time settings (#580).
+- **Breaking:** MCP sampling, which could never produce a result. `LemonMCP.Sampling`
+  and the `:sampling_policy`/`:sampling_handler` client options are gone, a
+  server `sampling` config entry is ignored, no client handshake advertises
+  `sampling`, and a server's `sampling/createMessage` receives method-not-found
+  (#703).
 
 ### Security
 

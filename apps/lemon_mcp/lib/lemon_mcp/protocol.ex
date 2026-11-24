@@ -20,7 +20,10 @@ defmodule LemonMCP.Protocol do
   - `ResourceReadRequest` / `ResourceReadResponse` - Read resource contents
   - `PromptListRequest` / `PromptListResponse` - List prompt templates
   - `PromptGetRequest` / `PromptGetResponse` - Render a prompt template
-  - `sampling/createMessage` - Server-to-client sampling request
+
+  Server-to-client requests, `sampling/createMessage` included, are answered
+  with a method-not-found error, and no client advertises the `sampling`
+  capability (see `client_capabilities/1`).
 
   ### Errors
   - `JSONRPCError` - JSON-RPC 2.0 error response
@@ -428,7 +431,7 @@ defmodule LemonMCP.Protocol do
   @doc false
   def start_notification_supervisor(opts) do
     # Caller policy: at most 32 concurrent notification callbacks per client,
-    # independently of request/sampling work; hosts can set a positive override.
+    # independently of request work; hosts can set a positive override.
     %{start: {module, function, args}} =
       LemonCore.TaskSupervisor.child_spec(
         max_children: Keyword.get(opts, :max_notification_tasks, 32)
@@ -466,6 +469,16 @@ defmodule LemonMCP.Protocol do
   end
 
   def dispatch_notification(_message, _handler, _supervisor), do: :ok
+
+  @doc """
+  The capabilities a client advertises in its initialize handshake.
+
+  Lemon answers no server-to-client request, so a caller-supplied `sampling`
+  entry is dropped rather than advertising a capability that cannot work.
+  """
+  @spec client_capabilities(map()) :: map()
+  def client_capabilities(capabilities) when is_map(capabilities),
+    do: Map.drop(capabilities, ["sampling", :sampling])
 
   @doc false
   # The client reply for a decoded response to a request of `kind`. Shared by

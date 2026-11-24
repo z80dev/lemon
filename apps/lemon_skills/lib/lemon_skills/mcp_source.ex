@@ -2091,7 +2091,7 @@ defmodule LemonSkills.McpSource do
         env: Keyword.get(source_opts, :env, []),
         port_open: &LemonCore.NativeProcess.open/2,
         timeout_ms: Keyword.get(source_opts, :timeout_ms, @client_request_timeout_ms)
-      ] ++ sampling_client_opts(command, source_opts) ++ notification_opts(server)
+      ] ++ notification_opts(server)
 
     with {:ok, client_mod} <- stdio_client_module(),
          executable when is_binary(executable) <- System.find_executable(command) do
@@ -2855,59 +2855,6 @@ defmodule LemonSkills.McpSource do
     }
   end
 
-  defp sampling_client_opts(command, opts) do
-    case Keyword.get(opts, :sampling_policy) || Keyword.get(opts, :sampling) do
-      policy when is_list(policy) ->
-        [sampling_policy: normalize_sampling_policy(command, policy)]
-
-      _ ->
-        []
-    end
-  end
-
-  defp normalize_sampling_policy(command, policy) do
-    policy
-    |> Keyword.update(:mode, :deny, &normalize_sampling_mode/1)
-    |> maybe_put_ops_approval_reviewer(command)
-    |> Keyword.drop([:approval_context, :approval_timeout_ms])
-  end
-
-  defp normalize_sampling_mode("model"), do: :model
-  defp normalize_sampling_mode("reviewed_model"), do: :reviewed_model
-  defp normalize_sampling_mode("deny"), do: :deny
-  defp normalize_sampling_mode(mode), do: mode
-
-  defp maybe_put_ops_approval_reviewer(policy, command) do
-    case Keyword.get(policy, :reviewer) do
-      reviewer when reviewer in [:ops_approval, "ops_approval", :approval, "approval", true] ->
-        Keyword.put(policy, :reviewer, sampling_approval_reviewer(command, policy))
-
-      _ ->
-        policy
-    end
-  end
-
-  defp sampling_approval_reviewer(command, policy) do
-    context = Keyword.get(policy, :approval_context, [])
-    timeout_ms = Keyword.get(policy, :approval_timeout_ms, 300_000)
-
-    fn summary ->
-      case LemonCore.ExecApprovals.request(%{
-             run_id: approval_context_value(context, :run_id, "mcp-sampling"),
-             session_key: approval_context_value(context, :session_key, "agent:mcp:main"),
-             agent_id: approval_context_value(context, :agent_id, nil),
-             tool: "mcp_#{server_slug(command)}_sampling",
-             action: sampling_approval_action(command, summary),
-             rationale: sampling_approval_rationale(command, summary),
-             expires_in_ms: timeout_ms
-           }) do
-        {:ok, :approved, _scope} -> :approve
-        {:ok, :denied} -> {:reject, :approval_denied}
-        {:error, reason} -> {:error, reason}
-      end
-    end
-  end
-
   defp approval_context_value(context, key, default) when is_list(context) do
     Keyword.get(context, key, default)
   end
@@ -2917,43 +2864,6 @@ defmodule LemonSkills.McpSource do
   end
 
   defp approval_context_value(_context, _key, default), do: default
-
-  defp sampling_approval_action(command, summary) do
-    %{
-      type: "mcp_sampling",
-      server: server_slug(command),
-      request_hash: Map.get(summary, :request_hash),
-      message_count: Map.get(summary, :message_count),
-      roles: Map.get(summary, :roles, []),
-      content_kinds: Map.get(summary, :content_kinds, %{}),
-      text_char_count: Map.get(summary, :text_char_count),
-      max_tokens: Map.get(summary, :max_tokens),
-      requested_model: Map.get(summary, :requested_model)
-    }
-  end
-
-  defp sampling_approval_rationale(command, summary) do
-    [
-      "MCP sampling request",
-      "server=#{server_slug(command)}",
-      "messages=#{Map.get(summary, :message_count, 0)}",
-      "roles=#{summary |> Map.get(:roles, []) |> Enum.join(",")}",
-      "content=#{summary |> Map.get(:content_kinds, %{}) |> format_content_kinds()}",
-      "text_chars=#{Map.get(summary, :text_char_count, 0)}",
-      "max_tokens=#{Map.get(summary, :max_tokens) || "unknown"}",
-      "model=#{Map.get(summary, :requested_model) || "unspecified"}",
-      "request=#{Map.get(summary, :request_hash)}"
-    ]
-    |> Enum.join("; ")
-  end
-
-  defp format_content_kinds(kinds) when is_map(kinds) do
-    kinds
-    |> Enum.sort_by(fn {kind, _count} -> to_string(kind) end)
-    |> Enum.map_join(",", fn {kind, count} -> "#{kind}:#{count}" end)
-  end
-
-  defp format_content_kinds(_), do: ""
 
   defp short_hash(value) when is_binary(value) do
     :crypto.hash(:sha256, value)
@@ -3118,9 +3028,8 @@ defmodule LemonSkills.McpSource do
     case Enum.find(opts, fn {key, value} -> key in allowed_keys and not string_list?(value) end) do
       nil ->
         with :ok <-
-               validate_positive_timeout(Keyword.get(opts, :ready_timeout_ms), "ready_timeout_ms"),
-             :ok <- validate_positive_timeout(Keyword.get(opts, :timeout_ms), "timeout_ms") do
-          validate_sampling_policy(Keyword.get(opts, :sampling_policy))
+               validate_positive_timeout(Keyword.get(opts, :ready_timeout_ms), "ready_timeout_ms") do
+          validate_positive_timeout(Keyword.get(opts, :timeout_ms), "timeout_ms")
         end
 
       {key, _value} ->
@@ -3134,42 +3043,6 @@ defmodule LemonSkills.McpSource do
   defp validate_positive_timeout(_value, name) do
     {:error, "#{name} must be a positive integer"}
   end
-
-  defp validate_sampling_policy(nil), do: :ok
-
-  defp validate_sampling_policy(policy) when is_list(policy) do
-    mode = Keyword.get(policy, :mode)
-    reviewer = Keyword.get(policy, :reviewer)
-    max_tokens = Keyword.get(policy, :max_tokens)
-    allowed_models = Keyword.get(policy, :allowed_models, [])
-    approval_timeout_ms = Keyword.get(policy, :approval_timeout_ms)
-
-    cond do
-      not is_nil(mode) and
-          mode not in [:model, :reviewed_model, :deny, "model", "reviewed_model", "deny"] ->
-        {:error, "sampling_policy.mode must be model, reviewed_model, or deny"}
-
-      not is_nil(reviewer) and
-          not (is_function(reviewer, 1) or
-                   reviewer in [:ops_approval, "ops_approval", :approval, "approval", true]) ->
-        {:error, "sampling_policy.reviewer must be a function or ops_approval"}
-
-      not is_nil(max_tokens) and (not is_integer(max_tokens) or max_tokens <= 0) ->
-        {:error, "sampling_policy.max_tokens must be a positive integer"}
-
-      not string_list?(allowed_models) ->
-        {:error, "sampling_policy.allowed_models must be a list of strings"}
-
-      not is_nil(approval_timeout_ms) and
-          (not is_integer(approval_timeout_ms) or approval_timeout_ms <= 0) ->
-        {:error, "sampling_policy.approval_timeout_ms must be a positive integer"}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_sampling_policy(_policy), do: {:error, "sampling_policy must be a keyword list"}
 
   defp string_list?(value), do: is_list(value) and Enum.all?(value, &is_binary/1)
 

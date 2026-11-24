@@ -11,6 +11,10 @@
 
 - Allow hosts to inject an arity-two `:port_open` callback into stdio clients and transports, defaulting to `Port.open/2`. Reject invalid callbacks/results and preserve host launch refusals without fallback; the library remains independent of umbrella applications.
 
+### Removed
+
+- **Breaking:** `LemonMCP.Sampling` and the stdio client's `:sampling_policy` / `:sampling_handler` options. No production caller supplied the required delegate, so sampling could never produce a result. Every server-to-client request, `sampling/createMessage` included, now receives method-not-found, and `LemonMCP.Protocol.client_capabilities/1` drops a caller-supplied `sampling` capability from every stdio, HTTP and SSE handshake.
+
 ### Fixed
 
 - Reject out-of-range HTTP destination ports that Elixir 1.20's URI parser discards instead of authorizing the default origin.
