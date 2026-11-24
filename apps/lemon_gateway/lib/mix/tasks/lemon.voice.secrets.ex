@@ -75,8 +75,8 @@ defmodule Mix.Tasks.Lemon.Voice.Secrets do
   defp start_lemon_core! do
     Mix.Task.run("loadpaths")
 
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _} -> :ok
+    case LemonCore.CLI.start(:lemon_core) do
+      :ok -> :ok
       {:error, {app, reason}} -> Mix.raise("Failed to start #{app}: #{inspect(reason)}")
     end
   end

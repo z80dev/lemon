@@ -1217,15 +1217,21 @@ defmodule CodingAgent.Session do
 
     maybe_subscribe_exec_approvals(state)
 
-    :ok = LemonCore.ExecApprovalExpiry.watch_session(state.session_manager.header.id, self())
-    advisor = Keyword.get(opts, :advisor, false)
+    # Without a recorded owner, approvals of this session could outlive it.
+    case LemonCore.ExecApprovalExpiry.watch_session(state.session_manager.header.id, self()) do
+      :ok ->
+        advisor = Keyword.get(opts, :advisor, false)
 
-    if is_list(advisor) do
-      cursor = CodingAgent.Session.EventLog.cursor(state.event_log)
-      send(self(), {:start_advisor, Keyword.put(advisor, :initial_cursor, cursor)})
+        if is_list(advisor) do
+          cursor = CodingAgent.Session.EventLog.cursor(state.event_log)
+          send(self(), {:start_advisor, Keyword.put(advisor, :initial_cursor, cursor)})
+        end
+
+        {:ok, state}
+
+      {:error, reason} ->
+        {:stop, {:exec_approval_watch_failed, reason}}
     end
-
-    {:ok, state}
   end
 
   @spec handle_call(term(), GenServer.from(), t()) ::

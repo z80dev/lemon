@@ -81,8 +81,8 @@ defmodule LemonCli.LearnCommand do
 
     result =
       LogSilencer.with_quiet_logs(json?, fn ->
-        case Application.ensure_all_started(:lemon_skills) do
-          {:ok, _} ->
+        case LemonCore.CLI.start(:lemon_skills) do
+          :ok ->
             service_opts = service_opts(opts)
 
             if action == "review",

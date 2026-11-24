@@ -102,10 +102,11 @@ apps; optional consumers register at runtime. See [README](README.md),
   resolution so clients clear pending UI. A pending approval expires at once
   (`decision: :expired`, no grace window) when its run (Store finalize-run hook)
   or native session (process monitor, including forced shutdown) ends, through
-  `ExecApprovalExpiry`. Recovery expires earlier-runtime pending records but
-  preserves live owners across expiry-worker restarts. Audit payloads contain
-  hashes/IDs/decisions, not
-  commands or prompt text.
+  `ExecApprovalExpiry`. Recovery expires earlier-runtime pending records only in
+  the VM holding `RuntimeOwner`'s store lock, never in client boot mode, and
+  preserves live owners across expiry-worker restarts. One-shot commands start
+  `:lemon_core` through `LemonCore.CLI.start/2`, never `ensure_all_started`.
+  Audit payloads contain hashes/IDs/decisions, not commands or prompt text.
 - Bus envelopes use millisecond wall-clock timestamps. In-memory dedupe TTL uses
   monotonic time; durable idempotency uses wall-clock time. Do not mix clocks.
 - `LemonCore.Drain` runs participants' `drain(:ingress, ctx)` then

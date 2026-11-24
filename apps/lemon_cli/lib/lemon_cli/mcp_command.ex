@@ -194,8 +194,8 @@ defmodule LemonCli.McpCommand do
     id = "mcp-test-" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
 
-    case Application.ensure_all_started(:lemon_skills) do
-      {:ok, _} ->
+    case LemonCore.CLI.start(:lemon_skills) do
+      :ok ->
         try do
           case McpSession.open(id, cwd, [entry], self(), project_trust: provenance) do
             :ok ->
