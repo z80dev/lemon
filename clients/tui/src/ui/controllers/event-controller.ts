@@ -91,6 +91,9 @@ export class EventController {
 	#renderScheduled = false;
 	#attached = false;
 	readonly #recoveryScheduled = new Set<SessionStore>();
+	#approvalResolutions = 0;
+	/** Sessions mid-way through one canonical batch: its completion waits for the cursor. */
+	readonly #applyingBatch = new Set<SessionStore>();
 
 	constructor(options: EventControllerOptions) {
 		this.#client = options.client;
@@ -140,7 +143,9 @@ export class EventController {
 			// Someone else answered: another client, or the daemon's own timeout.
 			const pending = this.#store.approvals.get(event.approvalId);
 			if (pending?.event.sessionKey && event.sessionKey !== pending.event.sessionKey) return;
-			this.#sessionFor(event.sessionKey).recoveryEventVersion += 1;
+			const owner = this.#sessionFor(event.sessionKey);
+			if (owner) owner.recoveryEventVersion += 1;
+			this.#approvalResolutions += 1;
 			this.resolveApproval(event.approvalId, event.decision);
 		});
 		on("shutdown", () => this.notice("daemon is shutting down", "warning"));
@@ -278,7 +283,9 @@ export class EventController {
 
 	// -- protocol handlers ---------------------------------------------------
 	#requestRecovery(session: SessionStore, snapshot = false): void {
-		if (snapshot) session.eventSnapshotRequired = true;
+		// A failed session re-arms here: the next live batch restarts its recovery.
+		if (snapshot) session.requireSnapshot();
+		else session.resumeSync();
 		if (this.#recoveryScheduled.has(session)) return;
 		this.#recoveryScheduled.add(session);
 		queueMicrotask(() => {
@@ -291,12 +298,14 @@ export class EventController {
 
 	#onSessionEvent(event: SessionEvent): void {
 		if (typeof event?.sessionKey !== "string" || !event.sessionKey) return;
-		const session = this.#store.session(event.sessionKey);
+		// Sessions this client never opened get no store: the daemon fans every
+		// session's events out to every operator connection.
+		const session = this.#store.sessions.get(event.sessionKey);
+		if (!session) return;
 		let batch: SessionEventBatch;
 		try {
 			batch = parseSessionEventBatch(event, session.key);
 		} catch (error) {
-			session.eventRecovery = true;
 			session.recoveryEventVersion += 1;
 			this.notice(
 				error instanceof Error ? error.message : "invalid session event",
@@ -308,42 +317,48 @@ export class EventController {
 		}
 		const current = session.eventCursor;
 		if (!current || !sameSessionEventStream(current, batch.cursor)) {
-			// A sequence from another incarnation is never comparable, even if lower.
-			session.pendingSessionEvents.clear();
-			session.eventRecovery = true;
-			session.recoveryEventVersion += 1;
+			// Keep the tail of the newest stream while the snapshot is read: the ones
+			// past its cursor are applied after it, not dropped. A sequence from
+			// another incarnation is never comparable, even if lower.
+			const buffered = session.pendingSessionEvents.values().next().value;
+			if (
+				(buffered && !sameSessionEventStream(buffered.cursor, batch.cursor)) ||
+				session.pendingSessionEvents.size >= MAX_PENDING_SESSION_EVENTS
+			)
+				session.pendingSessionEvents.clear();
+			session.pendingSessionEvents.set(batch.cursor.seq, batch);
 			this.#requestRecovery(session, true);
 			return;
 		}
 		if (batch.cursor.seq <= current.seq) return;
-		if (
-			!session.eventRecovery &&
-			!session.eventSnapshotRequired &&
-			batch.cursor.seq === current.seq + 1
-		) {
+		if (session.sync.state === "live" && batch.cursor.seq === current.seq + 1) {
 			this.applySessionBatch(session, batch);
 			return;
 		}
-		const recovering = session.eventRecovery;
-		session.eventRecovery = true;
 		if (session.pendingSessionEvents.size >= MAX_PENDING_SESSION_EVENTS) {
 			// Re-fetch from the retained cursor rather than keeping an unbounded live tail.
 			session.pendingSessionEvents.clear();
 			session.recoveryEventVersion += 1;
 		}
 		session.pendingSessionEvents.set(batch.cursor.seq, batch);
-		if (!recovering) this.#requestRecovery(session);
+		if (session.sync.state === "live" || session.sync.state === "failed")
+			this.#requestRecovery(session);
+	}
+
+	/** Bumped by every resolved approval; a snapshot read that raced one is stale. */
+	get approvalResolutions(): number {
+		return this.#approvalResolutions;
 	}
 
 	/** Replay and live events share the same contiguous, exactly-once application path. */
 	applySessionBatch(session: SessionStore, batch: SessionEventBatch): boolean {
 		const current = session.eventCursor;
-		if (!current || session.eventSnapshotRequired || !sameSessionEventStream(current, batch.cursor))
+		if (!current || session.snapshotRequired || !sameSessionEventStream(current, batch.cursor))
 			return false;
 		if (batch.cursor.seq <= current.seq) return true;
 		if (batch.cursor.seq !== current.seq + 1) return false;
-		const recovering = session.eventRecovery;
-		session.eventRecovery = true;
+		// Completions inside the batch wait until its cursor is installed.
+		this.#applyingBatch.add(session);
 		for (const projected of batch.events) {
 			const payload = { ...projected.payload, sessionKey: session.key };
 			if (projected.event === "chat") this.#onChat(payload as unknown as ChatEvent, true);
@@ -351,14 +366,14 @@ export class EventController {
 		}
 		session.eventCursor = batch.cursor;
 		session.recoveryEventVersion += 1;
-		session.eventRecovery = recovering;
-		if (!recovering) this.#flushRecoveredCompletion(session);
+		this.#applyingBatch.delete(session);
+		if (!session.syncing) this.#flushRecoveredCompletion(session);
 		return true;
 	}
 
 	/** Finish only after the entire live tail is contiguous with the recovered cursor. */
 	finishEventRecovery(session: SessionStore): boolean {
-		if (session.eventSnapshotRequired) return false;
+		if (session.snapshotRequired) return false;
 		for (const [seq, batch] of [...session.pendingSessionEvents].sort(([a], [b]) => a - b)) {
 			if (!session.eventCursor || !sameSessionEventStream(session.eventCursor, batch.cursor)) {
 				session.pendingSessionEvents.delete(seq);
@@ -367,7 +382,7 @@ export class EventController {
 			if (!this.applySessionBatch(session, batch)) return false;
 			session.pendingSessionEvents.delete(seq);
 		}
-		session.eventRecovery = false;
+		session.syncLive();
 		this.#flushRecoveredCompletion(session);
 		return true;
 	}
@@ -385,14 +400,16 @@ export class EventController {
 		}
 		if (event.type === "completed") session.recoveredCompletion = event;
 		this.#client.events.emit("agent-applied", event);
-		if (!session.eventRecovery) this.#flushRecoveredCompletion(session);
+		if (!session.syncing && !this.#applyingBatch.has(session))
+			this.#flushRecoveredCompletion(session);
 	}
 
 	#onChat(event: ChatEvent, canonical = false): void {
 		if (event?.type !== "delta") return;
 		const delta = event as ChatDeltaEvent;
 		const session = this.#sessionFor(delta.sessionKey);
-		if (!canonical && (session.eventCursor || session.eventSnapshotRequired)) return;
+		if (!session) return;
+		if (!canonical && (session.eventCursor || session.snapshotRequired)) return;
 		session.recoveryEventVersion += 1;
 		if (
 			!canonical &&
@@ -426,7 +443,8 @@ export class EventController {
 
 	#onAgent(event: AgentEvent, canonical = false): void {
 		const owner = this.#sessionFor(event.sessionKey);
-		if (!canonical && (owner.eventCursor || owner.eventSnapshotRequired)) return;
+		if (!owner) return;
+		if (!canonical && (owner.eventCursor || owner.snapshotRequired)) return;
 		owner.recoveryEventVersion += 1;
 		// Spend is session-wide, not a projection: it counts once per run whether or
 		// not the event passes the ownership fences below, and whether the session
@@ -447,7 +465,7 @@ export class EventController {
 		switch (event.type) {
 			case "started": {
 				const started = event as AgentStartedEvent;
-				const session = this.#sessionFor(started.sessionKey);
+				const session = owner;
 				if (session.isRunTerminal(started.runId)) return;
 				session.activeRunId = started.runId;
 				session.busy = true;
@@ -469,7 +487,7 @@ export class EventController {
 			}
 			case "tool_use": {
 				const tool = taskProgressEvent(event as AgentToolUseEvent) ?? (event as AgentToolUseEvent);
-				const session = this.#sessionFor(tool.sessionKey);
+				const session = owner;
 				if (tool.action?.kind === "reasoning") {
 					const block = session.upsertReasoning(tool.action, toToolPhase(tool.phase), {
 						runId: tool.runId,
@@ -495,7 +513,7 @@ export class EventController {
 			}
 			case "completed": {
 				const completed = event as AgentCompletedEvent;
-				const session = this.#sessionFor(completed.sessionKey);
+				const session = owner;
 				const focused = session === this.#store.focused;
 				const advancesQueue =
 					!canonical ||
@@ -562,6 +580,13 @@ export class EventController {
 
 	#onApprovalRequested(event: ApprovalRequestedEvent): void {
 		const session = this.#sessionFor(event.sessionKey);
+		if (!session) {
+			// The decision stays reachable from the panel; the session's own
+			// transcript record is recovered when the operator opens it.
+			if (!this.#store.approvals.has(event.approvalId)) this.#store.addApproval(event);
+			this.#onStatusChanged?.();
+			return;
+		}
 		session.recoveryEventVersion += 1;
 		if (session.snapshotIdentity || !session.acceptsEvent(event.runId, event.identity)) {
 			this.#requestRecovery(session, true);
@@ -596,10 +621,9 @@ export class EventController {
 
 	// -- component mirroring -------------------------------------------------
 
-	#sessionFor(sessionKey: string | null | undefined): SessionStore {
-		// The bridge omits the key on session-less events (a run started from a
-		// channel); those belong to whatever is on screen.
-		return sessionKey ? this.#store.session(sessionKey) : this.#store.focused;
+	/** The opened session an event belongs to; session-less and unopened sessions have none. */
+	#sessionFor(sessionKey: string | null | undefined): SessionStore | undefined {
+		return sessionKey ? this.#store.sessions.get(sessionKey) : undefined;
 	}
 
 	#componentFor(blockId: string): Component | undefined {

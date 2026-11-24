@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { AppShell } from "../../src/app.ts";
-import { DEFAULT_METHODS, FakeControlPlane } from "../../src/dev/fake-server.ts";
+import {
+	DEFAULT_METHODS,
+	FakeControlPlane,
+	sessionsSnapshotResult,
+} from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import { METHOD } from "../../src/protocol/methods.ts";
 import type {
@@ -12,6 +16,7 @@ import type {
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal } from "../helpers/memory-terminal.ts";
+import { runText } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const KEY = "tui-replay";
@@ -27,14 +32,13 @@ function cursor(seq: number, streamId = "owner-1"): SessionEventCursor {
 	return { version: 1, sessionId: "native-1", streamId, seq };
 }
 
+/** The daemon's production snapshot layout (pinned by the shared ExUnit fixture). */
 function snapshot(
 	seq = 0,
 	text = "A",
 	streamId = "owner-1",
 ): Extract<SessionsSnapshotResult, { status: "ok" }> {
-	return {
-		status: "ok",
-		sessionKey: KEY,
+	return sessionsSnapshotResult({
 		identity: {
 			sessionKey: KEY,
 			sessionId: "native-1",
@@ -44,20 +48,9 @@ function snapshot(
 			attempt: "run-1",
 		},
 		eventCursor: cursor(seq, streamId),
-		consistency: { boundary: "stable_owner_reads", atomic: false, eventCursor: null },
-		snapshot: {
-			phase: "running",
-			terminal: false,
-			answer: { text, canonical: false, truncated: false },
-			messages: [],
-			actions: [],
-			approvals: { status: "ok", items: [] },
-			children: { status: "ok", items: [] },
-			processes: { status: "ok", items: [] },
-			todos: { status: "ok", items: [] },
-			plan: { status: "ok", value: { mode: "code" } },
-		},
-	};
+		phase: "running",
+		answer: text,
+	});
 }
 
 function delta(seq: number, text: string): SessionEventBatch {
@@ -151,13 +144,13 @@ describe("session cursor replay through the real client and controllers", () => 
 		await push(app, server, delta(3, "C"));
 		await push(app, server, completed);
 		await push(app, server, delta(5, "D"));
-		expect(app.store.focused.bufferFor("run-1")).toBe("A");
+		expect(runText(app.store.focused, "run-1")).toBe("A");
 		first.resolve(page([delta(1, "B"), { cursor: cursor(2), events: [] }], 2, true));
 		await waitFor(() => server.requestsFor(METHOD.sessionsEvents).length === 2);
-		expect(app.store.focused.bufferFor("run-1")).toBe("AB");
+		expect(runText(app.store.focused, "run-1")).toBe("AB");
 		second.resolve(page([delta(3, "C"), completed], 4));
 		await waitFor(
-			() => app.store.focused.eventCursor?.seq === 5 && !app.store.focused.eventRecovery,
+			() => app.store.focused.eventCursor?.seq === 5 && app.store.focused.sync.state === "live",
 		);
 		await push(app, server, delta(1, "B"));
 		await push(app, server, completed);
@@ -170,7 +163,7 @@ describe("session cursor replay through the real client and controllers", () => 
 			text: "duplicate legacy",
 		});
 		await legacy;
-		expect(app.store.focused.bufferFor("run-1")).toBe("ABCD");
+		expect(runText(app.store.focused, "run-1")).toBe("ABCD");
 		expect(app.store.focused.assistantFor("run-1")?.status).toBe("done");
 		expect(observed).toEqual(["completed"]);
 		expect(app.store.focused.sessionCostUsd).toBe(0.25);
@@ -185,10 +178,10 @@ describe("session cursor replay through the real client and controllers", () => 
 		server.onMethod(METHOD.sessionsEvents, () => release.promise);
 		await push(app, server, delta(2, "C"));
 		await waitFor(() => server.requestsFor(METHOD.sessionsEvents).length === 1);
-		expect(app.store.focused.bufferFor("run-1")).toBe("A");
+		expect(runText(app.store.focused, "run-1")).toBe("A");
 		release.resolve(page([delta(1, "B"), delta(2, "C")], 2));
-		await waitFor(() => !app.store.focused.eventRecovery);
-		expect(app.store.focused.bufferFor("run-1")).toBe("ABC");
+		await waitFor(() => app.store.focused.sync.state === "live");
+		expect(runText(app.store.focused, "run-1")).toBe("ABC");
 	});
 
 	test("expiry installs the snapshot cursor and deduplicates buffered events", async () => {
@@ -207,7 +200,7 @@ describe("session cursor replay through the real client and controllers", () => 
 		release.resolve(snapshot(3, "ABC"));
 		await recovering;
 		expect(app.store.focused.eventCursor).toEqual(cursor(4));
-		expect(app.store.focused.bufferFor("run-1")).toBe("ABCD");
+		expect(runText(app.store.focused, "run-1")).toBe("ABCD");
 		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(1);
 	});
 
@@ -219,7 +212,7 @@ describe("session cursor replay through the real client and controllers", () => 
 			await app.sessions.resync();
 			expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(snapshots);
 			expect(app.store.focused.eventCursor).toEqual(cursor(0));
-			expect(app.store.focused.eventRecovery).toBe(true);
+			expect(app.store.focused.syncing).toBe(true);
 			expect(app.store.focused.busy).toBe(true);
 			expect(
 				app.store.focused.blocks.some(
@@ -237,7 +230,7 @@ describe("session cursor replay through the real client and controllers", () => 
 			cursor: { ...cursor(1), version: 2 } as unknown as SessionEventCursor,
 		});
 		await waitFor(() => app.store.focused.eventCursor?.seq === 7);
-		expect(app.store.focused.bufferFor("run-1")).toBe("owner truth");
+		expect(runText(app.store.focused, "run-1")).toBe("owner truth");
 		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(0);
 	});
 
@@ -250,28 +243,28 @@ describe("session cursor replay through the real client and controllers", () => 
 		server.respondWith(METHOD.sessionsSnapshot, snapshot(9, "supported snapshot"));
 		await app.sessions.resync();
 		expect(app.store.focused.eventCursor).toEqual(cursor(9));
-		expect(app.store.focused.bufferFor("run-1")).toBe("supported snapshot");
+		expect(runText(app.store.focused, "run-1")).toBe("supported snapshot");
 	});
 
 	test("an unsupported snapshot cursor never installs transcript or cursor", async () => {
 		const { app, server } = await boot();
 		server.respondWith(METHOD.sessionsEvents, { status: "cursor_expired", sessionKey: KEY });
-		server.respondWith(METHOD.sessionsSnapshot, {
-			...snapshot(9, "unsafe"),
-			eventCursor: { ...cursor(9), version: 2 },
-		});
+		const unsafe = snapshot(9, "unsafe");
+		unsafe.consistency.eventCursor = { ...cursor(9), version: 2 } as unknown as SessionEventCursor;
+		server.respondWith(METHOD.sessionsSnapshot, unsafe);
 		await app.sessions.resync();
 		expect(app.store.focused.eventCursor).toEqual(cursor(0));
-		expect(app.store.focused.bufferFor("run-1")).toBe("A");
-		expect(app.store.focused.eventRecovery).toBe(true);
+		expect(runText(app.store.focused, "run-1")).toBe("A");
+		expect(app.store.focused.syncing).toBe(true);
 	});
 
 	test("another owner incarnation forces a snapshot regardless of its seq", async () => {
 		const { app, server } = await boot();
-		server.respondWith(METHOD.sessionsSnapshot, snapshot(0, "new owner", "owner-2"));
+		// The owner already folded the batch that exposed it into the snapshot.
+		server.respondWith(METHOD.sessionsSnapshot, snapshot(1, "new owner", "owner-2"));
 		await push(app, server, { ...delta(1, "unsafe"), cursor: cursor(1, "owner-2") });
 		await waitFor(() => app.store.focused.eventCursor?.streamId === "owner-2");
-		expect(app.store.focused.bufferFor("run-1")).toBe("new owner");
+		expect(runText(app.store.focused, "run-1")).toBe("new owner");
 		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(0);
 	});
 
@@ -281,8 +274,8 @@ describe("session cursor replay through the real client and controllers", () => 
 		server.respondWith(METHOD.sessionsEvents, page([delta(1, "B"), delta(3, "gap")], 3));
 		await app.sessions.resync();
 		expect(app.store.focused.eventCursor).toEqual(cursor(0));
-		expect(app.store.focused.bufferFor("run-1")).toBe("A");
-		expect(app.store.focused.eventRecovery).toBe(true);
+		expect(runText(app.store.focused, "run-1")).toBe("A");
+		expect(app.store.focused.syncing).toBe(true);
 		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(snapshots);
 	});
 
@@ -299,7 +292,11 @@ describe("session cursor replay through the real client and controllers", () => 
 			sessionId: "native-2",
 			runId: "other-run",
 		};
-		other.eventCursor = { ...cursor(0), sessionId: "native-2", streamId: "other-owner" };
+		other.consistency.eventCursor = {
+			...cursor(0),
+			sessionId: "native-2",
+			streamId: "other-owner",
+		};
 		server.respondWith(METHOD.sessionsSnapshot, other);
 		await app.sessions.switch("tui-other");
 		app.editor.setText("other session draft");
@@ -360,5 +357,137 @@ describe("session cursor replay through the real client and controllers", () => 
 		expect(app.store.focused.activeRunId).toBe("run-2");
 		expect(server.requestsFor(METHOD.chatSend)).toHaveLength(0);
 		expect(app.store.queue.items(KEY)).toHaveLength(1);
+	});
+
+	test("the production snapshot shape arms the cursor: the first live batch applies with no snapshot", async () => {
+		const { app, server } = await boot();
+		const snapshots = server.requestsFor(METHOD.sessionsSnapshot).length;
+		await push(app, server, delta(1, "B"));
+		await push(app, server, delta(2, "C"));
+		expect(app.store.focused.eventCursor).toEqual(cursor(2));
+		expect(runText(app.store.focused, "run-1")).toBe("ABC");
+		expect(app.store.focused.sync.state).toBe("live");
+		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(snapshots);
+		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(0);
+	});
+
+	test("batches racing a snapshot apply past its cursor and later batches keep scrollback", async () => {
+		const { app, server } = await boot();
+		const release = deferred<SessionsSnapshotResult>();
+		const entered = deferred<void>();
+		server.onMethod(METHOD.sessionsSnapshot, () => {
+			entered.resolve();
+			return release.promise;
+		});
+		const next = (seq: number, text: string): SessionEventBatch => ({
+			...delta(seq, text),
+			cursor: cursor(seq, "owner-2"),
+		});
+		await push(app, server, next(1, "B"));
+		await entered.promise;
+		await push(app, server, next(2, "C"));
+		await push(app, server, next(3, "D"));
+		release.resolve(snapshot(2, "new BC", "owner-2"));
+		await waitFor(
+			() => app.store.focused.eventCursor?.seq === 3 && app.store.focused.sync.state === "live",
+		);
+		expect(runText(app.store.focused, "run-1")).toBe("new BCD");
+		const cleared: boolean[] = [];
+		const requestRender = app.tui.requestRender.bind(app.tui);
+		app.tui.requestRender = (force = false, options?: { clearScrollback?: boolean }) => {
+			if (options?.clearScrollback) cleared.push(true);
+			requestRender(force, options);
+		};
+		await push(app, server, next(4, "E"));
+		await push(app, server, next(5, "F"));
+		expect(runText(app.store.focused, "run-1")).toBe("new BCDEF");
+		expect(cleared).toEqual([]);
+		expect(server.requestsFor(METHOD.sessionsSnapshot)).toHaveLength(2);
+	});
+});
+
+describe("one sync state re-arms a stranded session", () => {
+	function completed(seq: number): SessionEventBatch {
+		return {
+			cursor: cursor(seq),
+			events: [
+				{
+					event: "agent",
+					payload: {
+						type: "completed",
+						sessionKey: KEY,
+						runId: "run-1",
+						ok: true,
+						answer: "done",
+						durationMs: 1,
+					},
+				},
+			],
+		};
+	}
+
+	test("a failed replay re-arms on the next live batch; busy clears and the follow-up is sent", async () => {
+		const { app, server } = await boot();
+		server.respondWith(METHOD.chatSend, { sessionKey: KEY, runId: "next-run" });
+		await app.submit("follow-up");
+		expect(app.store.queue.items(KEY)).toHaveLength(1);
+		server.failWith(METHOD.sessionsEvents, "UNAVAILABLE", "replay unavailable");
+		await push(app, server, delta(2, "C"));
+		await waitFor(() => app.store.focused.sync.state === "failed");
+		expect(app.store.focused.sync).toMatchObject({ state: "failed", resume: "replaying" });
+		server.onMethod(METHOD.sessionsEvents, () => page([delta(1, "B"), delta(2, "C")], 2));
+		await push(app, server, completed(3));
+		// Well before the scheduled retry: the live batch itself re-armed recovery.
+		await waitFor(() => app.store.focused.sync.state === "live", { timeoutMs: 400 });
+		expect(app.store.focused.eventCursor).toEqual(cursor(3));
+		expect(runText(app.store.focused, "run-1")).toBe("ABC");
+		await waitFor(() => server.requestsFor(METHOD.chatSend).length === 1);
+		expect(app.store.focused.activeRunId).toBe("next-run");
+		expect(app.store.queue.items(KEY)).toHaveLength(0);
+		expect(server.requestsFor(METHOD.sessionsEvents)).toHaveLength(2);
+	});
+
+	test("exhausted retry snapshots recover through the scheduled retry and terminal still fires", async () => {
+		const { app, server } = await boot();
+		server.respondWith(METHOD.chatSend, { sessionKey: KEY, runId: "next-run" });
+		await app.submit("follow-up");
+		server.respondWith(METHOD.sessionsEvents, { status: "cursor_expired", sessionKey: KEY });
+		const base = snapshot();
+		let calls = 0;
+		server.onMethod(METHOD.sessionsSnapshot, () =>
+			++calls <= 3
+				? {
+						status: "retry",
+						sessionKey: KEY,
+						identity: base.identity,
+						reason: "snapshot_raced",
+						retrySafe: true,
+					}
+				: snapshot(5, "AB"),
+		);
+		await app.sessions.resync();
+		expect(calls).toBe(3);
+		expect(app.store.focused.sync).toMatchObject({ state: "failed", resume: "snapshotting" });
+		// Nothing else arrives: only the scheduled retry can recover the session.
+		await waitFor(() => app.store.focused.sync.state === "live", { timeoutMs: 3000 });
+		expect(calls).toBe(4);
+		expect(app.store.focused.eventCursor).toEqual(cursor(5));
+		await push(app, server, completed(6));
+		await waitFor(() => server.requestsFor(METHOD.chatSend).length === 1);
+		expect(app.store.focused.activeRunId).toBe("next-run");
+	});
+});
+
+describe("per-session bookkeeping follows the store", () => {
+	test("forgetting a session releases its controller caches and later events open nothing", async () => {
+		const { app, server } = await boot();
+		app.store.session("tui-gone");
+		app.sessions.markHydrated("tui-gone");
+		app.store.forgetSession("tui-gone");
+		expect(app.sessions.hydratedKeys.has("tui-gone")).toBe(false);
+		const received = app.client.events.waitFor("session.event");
+		server.pushEvent("session.event", { sessionKey: "tui-gone", ...delta(1, "late") });
+		await received;
+		expect(app.store.sessions.has("tui-gone")).toBe(false);
 	});
 });

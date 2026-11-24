@@ -649,8 +649,12 @@ whether human or asynchronous; before it produces text, it is empty rather than
 the previous answer. Earlier turns' tools and messages are not reassigned to the
 current run.
 
-The server compares two complete owner-read collections. If they differ, it
-returns `status: "retry", reason: "snapshot_raced"` with no snapshot. Optional
+The server compares two complete owner-read collections. If they differ in
+anything but `consistency.eventCursor`, it returns `status: "retry", reason:
+"snapshot_raced"` with no snapshot. The cursor is read with the native
+projection in one owner call, so a live event between the collections only
+advances it: the second collection and its cursor are returned, and clients
+replay batches past it. `eventCursor` appears only under `consistency`. Optional
 `expectedIdentity` must contain the complete prior identity; mismatch returns
 `identity_changed`, also without a snapshot. There is no atomic cross-owner
 transaction or global durable cursor.

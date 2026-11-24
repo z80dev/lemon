@@ -258,6 +258,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   container; boot logs an error when `ps` is missing, and the image smoke test
   takes a lock. A lock acquisition no longer forks `ps`/`id`: the process's own
   identity and uid are captured once at boot (from `/proc/self` on Linux) (#684).
+- TUI live replay runs again on current daemons: the client reads the snapshot
+  cursor from `consistency.eventCursor` (validated; an unreadable cursor keeps
+  the session waiting for a snapshot), buffers `session.event` batches that race
+  a snapshot and applies those past its cursor, and spaces snapshot reads of a
+  session at least 250 ms apart. `sessions.snapshot` no longer returns
+  `snapshot_raced` when only the event cursor moved between its two owner reads
+  (#628).
+- A TUI session whose replay or snapshot recovery failed no longer stays
+  stranded (frozen transcript, `busy` stuck, queued follow-ups never sent): one
+  per-session sync state replaces the recovery flags, a failed attempt retries
+  with bounded exponential backoff from the retained cursor, and the next live
+  batch re-arms it immediately (#665).
+- The TUI keeps session stores only for sessions it opened (focused, switched
+  to, sent to or acted on): broadcast events for other sessions no longer
+  materialize transcripts, start snapshot recovery or inflate unread/busy
+  counts, and session-less events no longer land in the focused session.
+  Approvals from unopened sessions still reach the approval panel. Each
+  transcript keeps its newest 400 blocks, the duplicate per-run text buffer is
+  gone, sealed runs beyond the newest 16 release their per-run state, and
+  per-session caches are released with the session (#691).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

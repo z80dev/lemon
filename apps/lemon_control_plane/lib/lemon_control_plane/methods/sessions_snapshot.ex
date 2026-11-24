@@ -4,8 +4,10 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
   `status: "ok"` contains an opaque identity and a snapshot. `status: "retry"`
   contains no snapshot: an owner changed during collection, or expectedIdentity
-  no longer matches. Reconciliation compares two complete collections; it is not
-  a transaction across owners. The live native event cursor is owner-scoped, not
+  no longer matches. Reconciliation compares two complete collections (except
+  `consistency.eventCursor`); it is not a transaction across owners. The live
+  native event cursor is read with the native projection in one owner call and
+  returned only as `consistency.eventCursor`; it is owner-scoped, not
   durable/global. Clients must fence the selected session/request generation and
   replay subsequent sequenced events. Never append unsequenced text deltas to a
   replacement answer; refresh it from this authority.
@@ -74,7 +76,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
          {:ok, second} <- collect(key, cwd, limit, ctx, continuation),
          :ok <- authorize(ctx, key) do
       cond do
-        first != second ->
+        without_cursor(first) != without_cursor(second) ->
           retry(key, second["identity"], "snapshot_raced")
 
         params["expectedIdentity"] not in [nil, second["identity"]] ->
@@ -89,6 +91,10 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   catch
     _, _ -> unavailable()
   end
+
+  # The event cursor is read with the native projection in one owner call, so a
+  # live event between collections only advances it; clients replay past it.
+  defp without_cursor(result), do: put_in(result, ["consistency", "eventCursor"], nil)
 
   defp cwd(%{"cwd" => _} = params), do: NativeSessions.string(params, "cwd", 4096)
   defp cwd(_), do: {:ok, nil}

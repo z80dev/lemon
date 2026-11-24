@@ -705,7 +705,7 @@ export class AppShell {
 					if (
 						session !== this.store.focused &&
 						!session.eventCursor &&
-						!session.eventSnapshotRequired &&
+						!session.snapshotRequired &&
 						(!session.snapshotIdentity ||
 							!session.busy ||
 							this.store.queue.items(session.key)[0]?.state !== "queued-local")
@@ -718,6 +718,11 @@ export class AppShell {
 			}),
 			this.store.events.on("mode-changed", () => this.#renderStatus()),
 			this.store.events.on("setup-changed", () => this.tui.requestRender()),
+			this.store.events.on("session-forgotten", ({ key }) => {
+				// An in-flight steer read for the forgotten session no longer matches and is dropped.
+				this.#steerVersions.delete(key);
+				this.#profileSessions.delete(key);
+			}),
 			this.store.events.on("session-changed", () => {
 				this.syncQueuePanel();
 				this.#palette.close();
@@ -785,6 +790,7 @@ export class AppShell {
 		this.#unregisterTerminalCleanup = undefined;
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.events.dispose();
+		this.sessions.dispose();
 		this.client.close();
 		this.#terminalIntegration.stop();
 		if (this.#started) this.tui.stop();
