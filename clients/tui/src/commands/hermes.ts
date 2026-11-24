@@ -7,7 +7,7 @@
  * the handshake so an older daemon receives no speculative RPCs.
  */
 
-import { ControlPlaneError, NotConnectedError } from "../protocol/errors.ts";
+import { classifyMutationError, failureCode } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import {
 	asArray,
@@ -105,12 +105,11 @@ export const compressCommand: SlashCommand = {
 				...(after !== undefined ? { tokensAfter: after } : {}),
 			});
 		} catch (error) {
-			const code =
-				error instanceof ControlPlaneError || error instanceof NotConnectedError
-					? error.code
-					: "OUTCOME_UNKNOWN";
+			const code = failureCode(error, "OUTCOME_UNKNOWN");
 			ctx.ui.notice(
-				`compaction did not complete (${code}); inspect session status before retrying`,
+				classifyMutationError(error) === "unknown"
+					? `compaction outcome unknown (${code}); inspect session status before retrying`
+					: `compaction did not run (${code}); nothing was changed`,
 				"error",
 			);
 		}

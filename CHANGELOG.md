@@ -212,6 +212,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Telegram stays alive and retries the lock with backoff, each adapter restarts
   behind its own keeper with backoff, and configured adapters are started again
   whenever `AdapterSupervisor` restarts (#686).
+- TUI: the session switcher marks sessions started from another directory and
+  refuses to switch to them with a notice (focus unchanged, no empty session
+  left behind) instead of an unhandled rejection that could end the process;
+  failed switches and picker callbacks are reported, and one process-level
+  `unhandledRejection` handler turns any stray rejection into a notice and a
+  `/debug` entry (#666).
+- TUI: a request lost after it reached the socket now fails with an
+  outcome-unknown `ConnectionLostError` instead of "not sent"; one
+  `classifyMutationError` drives every mutation notice. Only explicit refusals
+  (or `retrySafe: true`) count as refused: `INTERNAL_ERROR` on a prompt becomes a
+  review item instead of an automatic queued resend, a failed `sessions.prompt.bind`
+  keeps the draft without wedging the session (the surface is bound once per
+  connection), and an unconfirmed steer the daemon no longer holds can be
+  dismissed with `d`. A crashed non-read control-plane method now answers
+  `INTERNAL_ERROR` with `retrySafe: false` (#616).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

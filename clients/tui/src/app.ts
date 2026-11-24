@@ -69,8 +69,8 @@ import { ControlPlaneClient, type RequestOptions } from "./protocol/client.ts";
 import {
 	AuthenticationError,
 	ControlPlaneError,
+	classifyMutationError,
 	describeError,
-	MethodUnavailableError,
 	offlineMessage,
 } from "./protocol/errors.ts";
 import { ControlPlaneMethods, METHOD } from "./protocol/methods.ts";
@@ -175,6 +175,9 @@ export interface AppShellOptions {
 	resources?: Omit<PaletteSourceOptions, "cwd">;
 }
 
+/** How a prompt reaches its session; `confirm` verifies and remembers a probed profile route. */
+type PromptRoute = { kind: "chat" } | { kind: "profile"; id: string; confirm: boolean };
+
 export class AppShell {
 	readonly tui: TUI;
 	readonly client: ControlPlaneClient;
@@ -251,6 +254,14 @@ export class AppShell {
 	 * are never persisted, and `profile.chat` revalidates the id on every send.
 	 */
 	readonly #profileSessions = new Map<string, string>();
+	/**
+	 * Sessions this connection is bound to as the question surface
+	 * (`sessions.prompt.bind`), keyed by session. A binding belongs to one
+	 * connection: every `hello-ok` starts an empty map and rebinds the sessions
+	 * the previous connection held. A failed bind is forgotten so the next
+	 * prompt binds again.
+	 */
+	#promptBindings = new Map<string, Promise<void>>();
 
 	constructor(options: AppShellOptions) {
 		this.#banner = new Banner(options.version ?? "dev");
@@ -480,6 +491,7 @@ export class AppShell {
 				await this.sessions.create(key, prompt);
 			},
 			closeSession: (key) => this.commandController.previewSessionDelete(key),
+			cwd: this.#cwd,
 			notice: (text, level) => this.events.notice(text, level),
 		});
 		this.appearance = new AppearanceController({
@@ -628,6 +640,11 @@ export class AppShell {
 				if (context === "handshake") this.events.notice(describeError(error), "error");
 			}),
 			this.client.events.on("hello-ok", () => {
+				// The question surface is bound per connection: restore what the
+				// previous connection held so a question asked mid-run still reaches us.
+				const bound = [...this.#promptBindings.keys()];
+				this.#promptBindings = new Map();
+				for (const key of bound) this.#bindPromptSurface(key).catch(() => {});
 				// Every handshake, resumed or not: plan mode may have moved while away.
 				// A pending startup request refreshes after it has picked the session.
 				if (!this.#startup) void this.refreshPlanMode();
@@ -1136,7 +1153,9 @@ export class AppShell {
 	editQueued(item: QueueItem): void {
 		if (item.steer) {
 			this.events.notice(
-				"accepted steers cannot be edited; d withdraws one if still unbound",
+				item.submission
+					? "an unconfirmed steer cannot be edited; d withdraws it if still pending, or dismisses it once the daemon reports it is not"
+					: "accepted steers cannot be edited; d withdraws one if still unbound",
 				"warning",
 			);
 			return;
@@ -1184,9 +1203,15 @@ export class AppShell {
 			this.store.queue.remove(sessionKey, item.id);
 			this.events.notice("steer withdrawn before binding", "info", session);
 		} catch (error) {
+			const notPending = ControlPlaneError.is(error, "NOT_FOUND");
+			// An unconfirmed steer the daemon does not hold as pending can no longer
+			// be withdrawn or bound later: the review is over, so dismiss it.
+			if (notPending && item.submission) this.store.queue.remove(sessionKey, item.id);
 			this.events.notice(
-				ControlPlaneError.is(error, "NOT_FOUND")
-					? "steer was not withdrawn: already bound, withdrawn, or no longer live"
+				notPending
+					? item.submission
+						? "unconfirmed steer is not pending (already bound or never accepted) — dismissed; check the transcript before sending it again"
+						: "steer was not withdrawn: already bound, withdrawn, or no longer live"
 					: `steer withdrawal not confirmed: ${describeError(error)} — inspect the queue before retrying`,
 				"warning",
 				session,
@@ -1281,7 +1306,10 @@ export class AppShell {
 			} else {
 				session.pendingSubmissions += 1;
 				try {
-					await this.#send(item.text, session);
+					// A refused send leaves the item reviewable, never silently dropped.
+					if ((await this.#send(item.text, session)) === "rejected") {
+						this.store.queue.restoreForReview(sessionKey, item);
+					}
 				} finally {
 					session.pendingSubmissions -= 1;
 				}
@@ -1485,15 +1513,19 @@ export class AppShell {
 		}
 		const priorRun = session.activeRunId;
 		const queueMode = session.busy && mode !== "queue" ? mode : undefined;
+		const route = await this.#preparePrompt(session);
+		// The reset fence is checked synchronously right before the prompt RPC.
+		if (!route || this.#refuseDuringReset(session)) return "rejected";
 		const requestId = crypto.randomUUID();
 		try {
-			const result = await this.#dispatchPrompt(session.key, text, queueMode, submission.images, {
-				requestId,
-				queueIfOffline: false,
-			});
-			if (typeof result?.runId !== "string" || !result.runId.trim()) {
-				throw new Error("unverified send receipt; inspect the session before retrying");
-			}
+			const result = await this.#dispatchPrompt(
+				session.key,
+				route,
+				text,
+				queueMode,
+				submission.images,
+				{ requestId, queueIfOffline: false },
+			);
 			if (queueMode === "interrupt" && priorRun) this.events.markInterrupted(priorRun, session);
 			this.events.addUserBlock(
 				[
@@ -1520,6 +1552,22 @@ export class AppShell {
 			);
 			return this.#submissionFailure(session, text, requestId, error, submission.attachments);
 		}
+	}
+
+	/**
+	 * A failure nothing awaited (a stray rejection): one fixed notice, plus a
+	 * `/debug` entry carrying only the error's class, never its message or stack.
+	 */
+	reportStrayFailure(error: unknown): void {
+		this.client.note(`unhandled ${error instanceof Error ? error.name : typeof error}`);
+		this.events.notice("an action failed unexpectedly; nothing was retried — see /debug", "error");
+	}
+
+	/** Run a picker callback whose failure must become a notice, never a stray rejection. */
+	#settle(callback: () => unknown): void {
+		void Promise.resolve()
+			.then(callback)
+			.catch((error: unknown) => this.reportStrayFailure(error));
 	}
 
 	/** A `sessions.reset` is in flight for `session`: nothing may be sent into the generation it deletes. */
@@ -1612,16 +1660,15 @@ export class AppShell {
 		queueMode?: QueueMode,
 		queueIfOffline?: boolean,
 	): Promise<SubmissionDisposition> {
+		const route = await this.#preparePrompt(session);
+		if (!route || this.#refuseDuringReset(session)) return "rejected";
 		this.events.addUserBlock(prompt, session);
 		const requestId = crypto.randomUUID();
 		try {
-			const result = await this.#dispatchPrompt(session.key, prompt, queueMode, undefined, {
+			const result = await this.#dispatchPrompt(session.key, route, prompt, queueMode, undefined, {
 				requestId,
 				queueIfOffline,
 			});
-			if (typeof result?.runId !== "string" || !result.runId.trim()) {
-				throw new Error("unverified send receipt; inspect the session before retrying");
-			}
 			this.events.noteRunStarted(result.runId, session);
 			return "accepted";
 		} catch (error) {
@@ -1654,15 +1701,14 @@ export class AppShell {
 			if (disposition !== undefined) return disposition;
 		}
 		const runId = session.activeRunId;
+		const route = await this.#preparePrompt(session);
+		if (!route || this.#refuseDuringReset(session)) return "rejected";
 		const requestId = crypto.randomUUID();
 		try {
-			const result = await this.#dispatchPrompt(session.key, prompt, mode, undefined, {
+			const result = await this.#dispatchPrompt(session.key, route, prompt, mode, undefined, {
 				requestId,
 				queueIfOffline,
 			});
-			if (typeof result?.runId !== "string" || !result.runId.trim()) {
-				throw new Error("unverified send receipt; inspect the session before retrying");
-			}
 			if (mode === "interrupt" && runId) this.events.markInterrupted(runId, session);
 			this.events.addUserBlock(prompt, session, { delivery: mode });
 			this.events.noteRunStarted(result.runId, session);
@@ -1670,6 +1716,7 @@ export class AppShell {
 		} catch (error) {
 			const disposition = this.#submissionFailure(session, prompt, requestId, error);
 			if (disposition === "uncertain") return disposition;
+			// Only a definite refusal (or a send that never left) may wait for an automatic send.
 			this.store.queue.push(session.key, prompt);
 			this.events.notice(
 				`${mode} refused (${describeError(error)}) — queued instead, ctrl+q to edit`,
@@ -1729,6 +1776,13 @@ export class AppShell {
 		return true;
 	}
 
+	/**
+	 * A failed prompt mutation (`chat.send`, `profile.chat`, `sessions.steer`).
+	 * A definite refusal, or a request that never left, is `rejected` and the
+	 * caller keeps the draft. Anything that may have taken effect becomes a
+	 * `needs-review` item that blocks further sends until it is reviewed; it is
+	 * never queued for an automatic send.
+	 */
 	#submissionFailure(
 		session: SessionStore,
 		prompt: string,
@@ -1737,19 +1791,11 @@ export class AppShell {
 		attachments: QueueItem["attachments"] = [],
 		steer?: QueueItem["steer"],
 	): SubmissionDisposition {
-		const details = error instanceof ControlPlaneError ? error.details : undefined;
-		const unsafe =
-			details !== null &&
-			typeof details === "object" &&
-			"retrySafe" in details &&
-			details.retrySafe === false;
-		if (
-			(error instanceof ControlPlaneError && !unsafe) ||
-			error instanceof MethodUnavailableError
-		) {
-			return "rejected";
-		}
-		const runId = pickString(details, "runId");
+		if (classifyMutationError(error) !== "unknown") return "rejected";
+		const runId = pickString(
+			error instanceof ControlPlaneError ? error.details : undefined,
+			"runId",
+		);
 		this.store.queue.restoreForReview(session.key, {
 			id: requestId,
 			text: prompt,
@@ -1766,59 +1812,110 @@ export class AppShell {
 		);
 		return "uncertain";
 	}
+
 	/**
-	 * Resolve canonical `agent:<id>:main` sessions through the profile API.
+	 * Everything a prompt needs before its mutation: the directory check, this
+	 * connection's question-surface binding and the session's route. A failure
+	 * here sent no prompt: it is reported and the caller keeps the draft.
 	 *
-	 * A remembered route can be queued while disconnected. An unremembered
-	 * canonical key is probed with `profiles.get` while online. Only that initial
-	 * probe may prove the key belongs to a legacy non-profile session and fall
-	 * back to `chat.send`. Once a profile route is confirmed, `profile.chat`
-	 * failures never bypass the profile boundary (including deletion races).
+	 * Canonical `agent:<id>:main` sessions resolve through the profile API. A
+	 * remembered route can be queued while disconnected. An unremembered
+	 * canonical key is probed with `profiles.get` while online; only that probe
+	 * may prove the key belongs to a legacy non-profile session and fall back to
+	 * `chat.send`. Once a profile route is confirmed, `profile.chat` failures
+	 * never bypass the profile boundary (including deletion races).
+	 */
+	async #preparePrompt(session: SessionStore): Promise<PromptRoute | undefined> {
+		const sessionKey = session.key;
+		try {
+			assertSessionDirectory(sessionKey, this.#cwd);
+			await this.#bindPromptSurface(sessionKey);
+			const remembered = this.#profileSessions.get(sessionKey);
+			if (remembered) return { kind: "profile", id: remembered, confirm: false };
+			const candidate = canonicalProfileId(sessionKey);
+			if (
+				!candidate ||
+				!this.methods.supports(METHOD.profilesGet) ||
+				!this.methods.supports(METHOD.profileChat)
+			) {
+				return { kind: "chat" };
+			}
+			if (this.client.online) {
+				try {
+					const result = await this.methods.profilesGet({ id: candidate });
+					if (!result.profile || result.profile.canonicalSessionKey !== sessionKey) {
+						throw new Error(`profile ${candidate} returned a non-canonical session`);
+					}
+				} catch (error) {
+					if (
+						!ControlPlaneError.is(error, "NOT_FOUND") &&
+						!ControlPlaneError.is(error, "METHOD_NOT_FOUND")
+					) {
+						throw error;
+					}
+					return { kind: "chat" };
+				}
+			}
+			return { kind: "profile", id: candidate, confirm: true };
+		} catch (error) {
+			this.events.notice(`prompt not sent: ${describeError(error)} — draft kept`, "error", session);
+			return undefined;
+		}
+	}
+
+	/** Bind this connection as `sessionKey`'s question surface once; concurrent prompts share the call. */
+	#bindPromptSurface(sessionKey: string): Promise<void> {
+		if (!this.client.online || !this.methods.supports(METHOD.userPromptBind)) {
+			return Promise.resolve();
+		}
+		const bindings = this.#promptBindings;
+		const existing = bindings.get(sessionKey);
+		if (existing) return existing;
+		const binding = this.methods.userPromptBind(sessionKey).then(() => undefined);
+		bindings.set(sessionKey, binding);
+		binding.catch(() => {
+			if (bindings.get(sessionKey) === binding) bindings.delete(sessionKey);
+		});
+		return binding;
+	}
+
+	/**
+	 * The prompt mutation itself, through a route from {@link #preparePrompt}.
+	 * Callers check the reset fence synchronously right before calling it.
+	 * Resolves only with a verified run receipt.
 	 */
 	async #dispatchPrompt(
 		sessionKey: string,
+		route: PromptRoute,
 		prompt: string,
 		queueMode?: QueueMode,
 		images?: readonly ImageContent[],
 		options: RequestOptions = {},
-	) {
-		assertSessionDirectory(sessionKey, this.#cwd);
-		this.#assertResetFence(sessionKey);
-		if (this.client.online && this.methods.supports(METHOD.userPromptBind)) {
-			await this.methods.userPromptBind(sessionKey);
-		}
+	): Promise<{ runId: string }> {
 		const media = images?.length ? { images } : undefined;
-		const pane = process.env.TERN_PANE;
-		const ternPane =
-			detectTerminalCapabilities().tern &&
-			pane !== undefined &&
-			/^\d+$/.test(pane) &&
-			Number.isSafeInteger(Number(pane))
-				? { ternPane: Number(pane) }
-				: undefined;
 		const requestOptions = { ...options, ...(media ? { queueIfOffline: false } : {}) };
-		const remembered = this.#profileSessions.get(sessionKey);
-		if (remembered) {
-			this.#assertResetFence(sessionKey);
-			return await this.methods.profileChat(
-				{
-					id: remembered,
-					prompt,
-					...media,
-					...(queueMode ? { queueMode } : {}),
-				},
+		let result: { runId?: unknown; sessionKey?: unknown } | undefined;
+		if (route.kind === "profile") {
+			result = await this.methods.profileChat(
+				{ id: route.id, prompt, ...media, ...(queueMode ? { queueMode } : {}) },
 				requestOptions,
 			);
-		}
-
-		const candidate = canonicalProfileId(sessionKey);
-		if (
-			!candidate ||
-			!this.methods.supports(METHOD.profilesGet) ||
-			!this.methods.supports(METHOD.profileChat)
-		) {
-			this.#assertResetFence(sessionKey);
-			return await this.methods.chatSend(
+			if (route.confirm) {
+				if (result?.sessionKey !== sessionKey) {
+					throw new Error(`profile ${route.id} routed to an unexpected session`);
+				}
+				this.#profileSessions.set(sessionKey, route.id);
+			}
+		} else {
+			const pane = process.env.TERN_PANE;
+			const ternPane =
+				detectTerminalCapabilities().tern &&
+				pane !== undefined &&
+				/^\d+$/.test(pane) &&
+				Number.isSafeInteger(Number(pane))
+					? { ternPane: Number(pane) }
+					: undefined;
+			result = await this.methods.chatSend(
 				{
 					sessionKey,
 					cwd: this.#cwd,
@@ -1830,62 +1927,10 @@ export class AppShell {
 				requestOptions,
 			);
 		}
-
-		if (this.client.online) {
-			try {
-				const result = await this.methods.profilesGet({ id: candidate });
-				if (!result.profile || result.profile.canonicalSessionKey !== sessionKey) {
-					throw new Error(`profile ${candidate} returned a non-canonical session`);
-				}
-			} catch (error) {
-				if (
-					!ControlPlaneError.is(error, "NOT_FOUND") &&
-					!ControlPlaneError.is(error, "METHOD_NOT_FOUND")
-				) {
-					throw error;
-				}
-				this.#assertResetFence(sessionKey);
-				return await this.methods.chatSend(
-					{
-						sessionKey,
-						prompt,
-						cwd: this.#cwd,
-						...media,
-						...ternPane,
-						...(queueMode ? { queueMode } : {}),
-					},
-					requestOptions,
-				);
-			}
+		if (typeof result?.runId !== "string" || !result.runId.trim()) {
+			throw new Error("unverified send receipt; inspect the session before retrying");
 		}
-
-		this.#assertResetFence(sessionKey);
-		const result = await this.methods.profileChat(
-			{
-				id: candidate,
-				prompt,
-				...media,
-				...(queueMode ? { queueMode } : {}),
-			},
-			requestOptions,
-		);
-		if (result.sessionKey !== sessionKey) {
-			throw new Error(`profile ${candidate} routed to an unexpected session`);
-		}
-		this.#profileSessions.set(sessionKey, candidate);
-		return result;
-	}
-
-	/**
-	 * Checked synchronously right before every prompt RPC, after each await of
-	 * the preparation (`user_prompt.bind`, `profiles.get`): a reset that started
-	 * meanwhile owns the session, and nothing may be sent into the generation it
-	 * deletes.
-	 */
-	#assertResetFence(sessionKey: string): void {
-		if (this.store.sessions.get(sessionKey)?.resetPending) {
-			throw new Error("a reset of this session is in flight; nothing was sent");
-		}
+		return { runId: result.runId };
 	}
 
 	/** Read and clear the one-shot Alt+Enter override. */
@@ -1927,7 +1972,7 @@ export class AppShell {
 					detail: () => spec.detail,
 					onSelect: (item) => {
 						this.selectors.close();
-						void spec.onSelect(item);
+						this.#settle(() => spec.onSelect(item));
 					},
 					onCancel: () => {
 						this.selectors.close();
@@ -1980,7 +2025,9 @@ export class AppShell {
 					},
 					onSelect: () => {
 						this.selectors.close();
-						void spec.onConfirm(sourceItems.filter((item) => selected.has(item.value)));
+						this.#settle(() =>
+							spec.onConfirm(sourceItems.filter((item) => selected.has(item.value))),
+						);
 					},
 					onCancel: () => {
 						this.selectors.close();

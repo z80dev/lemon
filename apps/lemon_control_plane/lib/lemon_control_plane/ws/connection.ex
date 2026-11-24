@@ -231,7 +231,7 @@ defmodule LemonControlPlane.WS.Connection do
 
       {token, task} ->
         Registry.report_failure(task.method, :exit)
-        result = {:error, Errors.internal_error("Method execution failed")}
+        result = {:error, Registry.execution_failure(task.method)}
         state = %{state | method_tasks: Map.delete(state.method_tasks, token)}
         {:push, {:text, encode_response(task.id, result)}, state}
     end

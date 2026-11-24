@@ -129,6 +129,49 @@ test("binds the live TUI surface before submitting a chat", async () => {
 	});
 });
 
+test("binds once per connection and rebinds what the previous connection held", async () => {
+	const { app, server } = await boot();
+	await app.submit("first");
+	server.pushEvent("agent", { type: "completed", runId: "run-1", sessionKey: SESSION, ok: true });
+	await waitFor(() => !app.store.focused.busy, { what: "the first run to finish" });
+	await app.submit("second");
+	expect(server.requestsFor("sessions.prompt.bind")).toHaveLength(1);
+	expect(server.requestsFor("chat.send")).toHaveLength(2);
+
+	await app.client.reconnect("test");
+	await waitFor(() => server.requestsFor("sessions.prompt.bind").length === 2, {
+		what: "the rebind on hello-ok",
+	});
+});
+
+test("a failed bind keeps the draft, creates no review item and leaves the next send free", async () => {
+	const { app, server, terminal } = await boot();
+	let failBind = true;
+	// An unconfirmed bind is a local failure, not a server refusal: before #616 it
+	// was misread as an uncertain prompt and wedged the session.
+	server.onMethod("sessions.prompt.bind", (params: { sessionKey: string; enabled: boolean }) => ({
+		sessionKey: params.sessionKey,
+		bound: failBind ? !params.enabled : params.enabled,
+	}));
+	await waitFor(() => app.editor.getExpandedText() === "" && app.store.focused.key === SESSION);
+	terminal.sendInput("keep this draft");
+	terminal.sendInput("\r");
+	await waitFor(
+		() =>
+			server.requestsFor("sessions.prompt.bind").length === 1 &&
+			app.editor.getExpandedText() === "keep this draft",
+		{ what: "the refused draft back in the composer" },
+	);
+	expect(server.requestsFor("chat.send")).toHaveLength(0);
+	expect(app.store.queue.items(SESSION)).toEqual([]);
+	expect(renderPlain(app.chatContainer.render(100))).toContain("prompt not sent");
+
+	failBind = false;
+	expect(await app.sendPrompt("keep this draft")).toBe("accepted");
+	expect(server.requestsFor("sessions.prompt.bind")).toHaveLength(2);
+	expect(server.requestsFor("chat.send")).toHaveLength(1);
+});
+
 test("a question renders inert text, owns focus, and sends only the explicitly selected answer", async () => {
 	const { app, server, terminal } = await boot();
 	server.pushEvent(
