@@ -171,6 +171,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Instruction files, `@` imports and rule files are bounded and cached: each
+  instruction file contributes at most 64 KiB and all of them 256 KiB; rule files
+  are read up to 64 KiB, always-apply bodies share 128 KiB, at most 256 rule
+  files are read and rulebook descriptions are one line of at most 300
+  characters. Truncation leaves a marker naming the file and is logged.
+  Sessions no longer re-read every source on each turn: reads are cached per
+  session and revalidated by file stat, so an unchanged turn reads no
+  instruction or rule file and an edit still reaches the next turn.
+  `[:coding_agent, :prompt_sources, :read | :load]` telemetry reports loader
+  reads, bytes and time (#693).
 - The assistant workspace is seeded from its templates once, by the first
   chat/persona session (marked by `.lemon-workspace-seeded`), instead of on
   every session start: a deleted `BOOTSTRAP.md` (whose template asks to be

@@ -9,6 +9,13 @@
 
 ### Fixed
 
+- `ResourceLoader`, `AtImports` and `Rules` read through the new bounded,
+  stat-validated per-session cache `ResourceLoader.SourceReader`, with
+  per-file and total limits (instructions 64/256 KiB, rules 64 KiB per file,
+  128 KiB always-apply, 256 files, 300-character descriptions), truncation
+  markers naming the path, and `[:coding_agent, :prompt_sources, :read |
+  :load]` telemetry. A turn with unchanged files performs no instruction or
+  rule file read (#693).
 - `Workspace.seed_workspace/1` seeds a workspace once (marker
   `.lemon-workspace-seeded`); sessions call it only when they read bootstrap
   files and never raise on an unwritable workspace. Deleted templates such as

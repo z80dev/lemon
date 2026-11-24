@@ -510,6 +510,67 @@ defmodule CodingAgent.RulesTest do
     end
   end
 
+  describe "limits" do
+    test "2,000 rule files are capped by count with a visible note", %{repo: repo} do
+      dir = Path.join(repo, ".cursor/rules")
+      File.mkdir_p!(dir)
+
+      for i <- 1..2_000 do
+        name = "r" <> String.pad_leading(Integer.to_string(i), 4, "0")
+        File.write!(Path.join(dir, name <> ".mdc"), "---\ndescription: rule #{i}\n---\nbody")
+      end
+
+      sections = Rules.sections(repo)
+
+      assert Enum.map(sections, & &1.label) == ["Rulebook (256 rules)", "Rule limit"]
+      assert List.last(sections).text =~ "only the first 256 rule files were loaded"
+      assert length(Rules.discover(repo)) == 256
+    end
+
+    test "a 1 MiB always-apply body is truncated at the per-file cap", %{repo: repo} do
+      path = Path.join(repo, ".lemon/rules/big.md")
+      write!(path, "---\nalwaysApply: true\n---\nbig head\n" <> String.duplicate("y", 1_048_576))
+
+      {sections, log} = with_log(fn -> Rules.sections(repo) end)
+      [_header, %{label: "rule big (project)", text: text}] = sections
+
+      assert text =~ "big head"
+      assert text =~ "[... rule truncated at 64 KiB; read #{path} for the rest]"
+      assert byte_size(text) < 64 * 1024 + 2048
+      assert log =~ "Truncated prompt source"
+    end
+
+    test "always-apply bodies share one budget; descriptions are one bounded line", %{
+      repo: repo
+    } do
+      for name <- ~w(a b c) do
+        write!(
+          Path.join(repo, ".lemon/rules/#{name}.md"),
+          "---\nalwaysApply: true\n---\n" <> String.duplicate(name, 60 * 1024)
+        )
+      end
+
+      write!(
+        Path.join(repo, ".lemon/rules/book.md"),
+        "---\ndescription: |\n  first line\n  second #{String.duplicate("d", 400)}\n---\nbody"
+      )
+
+      [_header, a, b, c, rulebook] = Rules.sections(repo)
+      c_path = Path.join(repo, ".lemon/rules/c.md")
+
+      assert a.text =~ String.duplicate("a", 60 * 1024)
+      assert b.text =~ String.duplicate("b", 60 * 1024)
+      assert c.text =~ "[... rule truncated: the 128 KiB always-apply rule budget is exhausted"
+      assert c.text =~ "read #{c_path} for the rest]"
+      assert byte_size(a.text <> b.text <> c.text) < 128 * 1024 + 1024
+
+      [entry_head | _] = rulebook.text |> String.split("\n") |> Enum.drop(2)
+      assert entry_head =~ "- book: first line second ddd"
+      assert String.length(entry_head) == String.length("- book: ") + 300
+      assert String.ends_with?(entry_head, "…")
+    end
+  end
+
   defp write!(path, content) do
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, content)

@@ -83,6 +83,20 @@ The session's environment block lists their paths (including `GEMINI.md`,
 `CLAUDE.local.md` and `.github/copilot-instructions.md`) so the model reads them
 before editing there.
 
+### Size limits
+
+The system prompt cannot be compacted, so instruction text is bounded. Each
+instruction file contributes at most 64 KiB of its own text, and all instruction
+files together at most 256 KiB (imports included). Text past a limit is replaced
+by a marker naming the file, for example
+`[... /repo/AGENTS.md truncated at 64 KiB; read the file for the rest]`, so the
+model can `read` the rest; a truncated file is logged. A file that is not UTF-8
+text is skipped.
+
+Sessions keep instruction files, imports and rule files cached between turns
+and re-read a file only when its size, timestamps or inode change, so editing
+any of them still changes the prompt on the next turn.
+
 ### The assistant home is not a project
 
 The assistant home (`~/.lemon/agent/workspace`, the default working directory
@@ -245,6 +259,16 @@ quotes to preserve backslashes; limits are integers, not quoted strings.
 
 Rules are sorted by name, so the prompt is byte-stable while the files are
 unchanged.
+
+Limits keep a large rule set from filling the context window:
+
+- At most 256 rule files are read, in the precedence order above (project
+  sources first). When more exist, the prompt notes that the rest were ignored.
+- A rule file is read up to 64 KiB; a longer body ends with a marker naming its
+  path, and the truncation is logged.
+- Always-apply bodies share a 128 KiB budget. A rule past it is cut, or replaced
+  by a marker naming its path so the model can `read` it.
+- A rulebook description is collapsed to one line of at most 300 characters.
 
 ### Streaming corrections
 

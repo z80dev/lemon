@@ -69,6 +69,46 @@ defmodule CodingAgent.ResourceLoaderTest do
       assert result =~ "Root config"
       assert result =~ "Agent config"
     end
+
+    test "a 5 MiB AGENTS.md is truncated with a marker naming it and a log line", %{
+      tmp_dir: tmp_dir
+    } do
+      path = Path.join(tmp_dir, "AGENTS.md")
+      File.write!(path, "head marker\n" <> String.duplicate("é", div(5 * 1024 * 1024, 2)))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          sections = ResourceLoader.instruction_sections(tmp_dir)
+          send(self(), {:sections, sections})
+        end)
+
+      assert_received {:sections, sections}
+      %{text: text} = List.last(sections)
+      assert text =~ "head marker"
+      assert text =~ "[... #{path} truncated at 64 KiB; read the file for the rest]"
+      assert byte_size(text) < 64 * 1024 + 2048
+      assert String.valid?(text)
+      assert log =~ "Truncated prompt source #{path}"
+    end
+
+    test "instruction files share one 256 KiB budget", %{tmp_dir: tmp_dir} do
+      parent = Path.join(tmp_dir, "repo")
+      cwd = Path.join(parent, "pkg")
+      CodingAgent.TestGitRepo.init!(parent)
+      File.mkdir_p!(cwd)
+
+      files =
+        for dir <- [parent, cwd], name <- ["AGENTS.md", "CLAUDE.md", "GEMINI.md"] do
+          path = Path.join(dir, name)
+          File.write!(path, String.duplicate("x", 60 * 1024))
+          path
+        end
+
+      texts = cwd |> ResourceLoader.instruction_sections() |> Enum.map(& &1.text)
+      assert byte_size(Enum.join(texts)) < 256 * 1024 + 6 * 1024
+      last = List.last(files)
+      assert List.last(texts) =~ "[... #{last} not loaded: the 256 KiB instruction budget"
+    end
   end
 
   describe "multi-tool instruction files" do
