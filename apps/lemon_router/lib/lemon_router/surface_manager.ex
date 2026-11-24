@@ -222,49 +222,25 @@ defmodule LemonRouter.SurfaceManager do
           |> Map.merge(extra_meta)
           |> Map.put(:terminal_answer, true)
 
-        if state[:saw_delta] == true do
-          resolved_final_text = streamed_final_text(state, channel_id, final_text)
+        # The coalescer serializes this finalize behind every delta it already
+        # admitted, so the final answer is the last write to the answer surface.
+        case stream_coalescer().finalize_run(
+               state.session_key,
+               channel_id,
+               state.run_id,
+               meta: meta,
+               final_text: final_text
+             ) do
+          :ok ->
+            record_finalize_dispatch(state, :coalescer_finalize)
+            :ok
 
-          record_finalize_dispatch(state, :direct_stream_finalize)
+          {:error, reason} ->
+            record_finalize_dispatch(state, :fallback_final_text, reason)
 
-          with :ok <- dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta) do
-            case stream_coalescer().finalize_run(state.session_key, channel_id, state.run_id,
-                   meta: meta,
-                   final_text: resolved_final_text,
-                   dispatch?: false
-                 ) do
-              :ok ->
-                :ok
-
-              {:error, reason} ->
-                record_finalize_dispatch(state, :fallback_stream_finalize)
-                dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta)
-
-                maybe_dispatch_fallback_final_text(
-                  state,
-                  channel_id,
-                  resolved_final_text,
-                  meta,
-                  reason
-                )
-            end
-          end
-        else
-          case stream_coalescer().finalize_run(
-                 state.session_key,
-                 channel_id,
-                 state.run_id,
-                 meta: meta,
-                 final_text: final_text
-               ) do
-            :ok ->
-              record_finalize_dispatch(state, :coalescer_finalize)
-              :ok
-
-            {:error, reason} ->
-              record_finalize_dispatch(state, :fallback_final_text)
-              dispatch_fallback_final_answer(state, channel_id, final_text, meta, reason)
-          end
+            state
+            |> dispatch_fallback_final_answer(channel_id, final_text, meta, reason)
+            |> record_finalize_failure(state)
         end
 
       :error ->
@@ -578,18 +554,13 @@ defmodule LemonRouter.SurfaceManager do
     Application.get_env(:lemon_router, :stream_coalescer, LemonRouter.StreamCoalescer)
   end
 
-  defp streamed_final_text(_state, _channel_id, final_text)
-       when is_binary(final_text) and final_text != "",
-       do: final_text
+  defp record_finalize_dispatch(state, mode, reason \\ nil) when is_atom(mode) do
+    payload = %{mode: mode, saw_delta: state[:saw_delta] == true}
+    payload = if reason, do: Map.put(payload, :error, finalize_error_label(reason)), else: payload
 
-  defp streamed_final_text(state, channel_id, _final_text) do
-    stream_coalescer().current_text(state.session_key, channel_id, state.run_id)
-  end
-
-  defp record_finalize_dispatch(state, mode) when is_atom(mode) do
     Introspection.record(
       :answer_finalize_dispatch,
-      %{mode: mode, saw_delta: state[:saw_delta] == true},
+      payload,
       run_id: state.run_id,
       session_key: state.session_key,
       engine: "lemon",
@@ -597,55 +568,36 @@ defmodule LemonRouter.SurfaceManager do
     )
   end
 
-  defp dispatch_direct_final_answer(_state, _channel_id, text, _meta)
-       when not (is_binary(text) and text != ""),
-       do: :ok
+  defp record_finalize_failure(:ok, _state), do: :ok
 
-  defp dispatch_direct_final_answer(state, channel_id, text, meta) do
-    case DeliveryRouteResolver.resolve(state.session_key, channel_id, meta) do
-      {:ok, route} ->
-        intent = %DeliveryIntent{
-          intent_id: "#{state.run_id}:streamed-finalize",
-          run_id: state.run_id,
-          session_key: state.session_key,
-          route: route,
-          kind: :stream_finalize,
-          body: %{text: text, seq: 0},
-          meta: Map.put(meta, :surface, :answer)
-        }
+  defp record_finalize_failure({:error, reason} = error, state) do
+    Introspection.record(
+      :answer_finalize_failed,
+      %{error: finalize_error_label(reason), saw_delta: state[:saw_delta] == true},
+      run_id: state.run_id,
+      session_key: state.session_key,
+      engine: "lemon",
+      provenance: :direct
+    )
 
-        case dispatcher().dispatch(intent) do
-          :ok ->
-            :ok
-
-          {:error, dispatch_reason} ->
-            Logger.warning(
-              "Streamed final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)}"
-            )
-
-            {:error, {:dispatch_failed, dispatch_reason}}
-        end
-
-      _ ->
-        Logger.warning(
-          "Streamed final route resolution failed for run_id=#{inspect(state.run_id)}"
-        )
-
-        {:error, :invalid_delivery_route}
-    end
+    error
   end
 
-  defp maybe_dispatch_fallback_final_text(_state, _channel_id, text, _meta, _reason)
-       when not (is_binary(text) and text != ""),
-       do: :ok
+  # Safe, bounded labels: finalize reasons may wrap dispatcher or exit terms.
+  defp finalize_error_label({:dispatch_failed, _}), do: :dispatch_failed
+  defp finalize_error_label({:finalize_call_failed, _}), do: :finalize_call_failed
 
-  defp maybe_dispatch_fallback_final_text(state, channel_id, text, meta, reason) do
-    dispatch_fallback_final_answer(state, channel_id, text, meta, reason)
-  end
+  defp finalize_error_label(reason)
+       when reason in [:resync_required, :build_intent_failed, :invalid_delivery_route],
+       do: reason
 
-  defp dispatch_fallback_final_answer(_state, _channel_id, text, _meta, _reason)
+  defp finalize_error_label(_reason), do: :unavailable
+
+  # Without authoritative text there is nothing to deliver: the coalescer's
+  # failure stands instead of being reported as a delivered answer.
+  defp dispatch_fallback_final_answer(_state, _channel_id, text, _meta, reason)
        when not (is_binary(text) and text != ""),
-       do: :ok
+       do: {:error, reason}
 
   defp dispatch_fallback_final_answer(state, channel_id, text, meta, reason) do
     case DeliveryRouteResolver.resolve(state.session_key, channel_id, meta) do
@@ -666,7 +618,8 @@ defmodule LemonRouter.SurfaceManager do
 
           {:error, dispatch_reason} ->
             Logger.warning(
-              "Fallback final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)} coalescer_reason=#{inspect(reason)}"
+              "Fallback final dispatch rejected for run_id=#{inspect(state.run_id)} " <>
+                "coalescer_reason=#{inspect(finalize_error_label(reason))}"
             )
 
             {:error, {:dispatch_failed, dispatch_reason}}
@@ -674,7 +627,8 @@ defmodule LemonRouter.SurfaceManager do
 
       _ ->
         Logger.warning(
-          "Fallback final route resolution failed for run_id=#{inspect(state.run_id)} coalescer_reason=#{inspect(reason)}"
+          "Fallback final route resolution failed for run_id=#{inspect(state.run_id)} " <>
+            "coalescer_reason=#{inspect(finalize_error_label(reason))}"
         )
 
         {:error, :invalid_delivery_route}

@@ -609,38 +609,37 @@ defmodule LemonRouter.StreamCoalescerTest do
                )
     end
 
-    test "finalize_run can mark the coalescer finalized without dispatching" do
-      previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
-      Application.put_env(:lemon_router, :dispatcher, FailingIntentDispatcherStub)
-
-      on_exit(fn ->
-        if is_nil(previous_dispatcher) do
-          Application.delete_env(:lemon_router, :dispatcher)
-        else
-          Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
-        end
-      end)
-
-      session_key = "agent:test:telegram:bot:group:12345:thread:777"
+    test "a finalized stream never flushes a late snapshot" do
+      isolate_answer_dispatcher()
+      session_key = "agent:test:telegram:bot:group:12346:thread:778"
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer([:positive])}"
+      ensure_answer_coalescer(session_key)
+
+      assert :ok = StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "partial")
 
       assert :ok =
                StreamCoalescer.finalize_run(session_key, channel_id, run_id,
-                 meta: %{user_msg_id: 9},
-                 final_text: "Final answer",
-                 dispatch?: false
+                 final_text: "Final answer"
                )
 
-      [{pid, _}] =
-        Registry.lookup(
-          Elixir.LemonRouter.CoalescerRegistry,
-          {session_key, channel_id}
-        )
+      assert_receive {:dispatched_intent,
+                      %DeliveryIntent{
+                        run_id: ^run_id,
+                        kind: :stream_finalize,
+                        body: %{text: "Final answer"}
+                      }}
 
-      state = :sys.get_state(pid)
-      assert state.finalized == true
-      assert state.last_sent_text == "Final answer"
+      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+
+      # Even with transient text left behind, neither the idle timer nor an
+      # explicit flush may deliver it after the final answer.
+      :sys.replace_state(pid, &%{&1 | buffer: "stale", full_text: "stale"})
+      send(pid, :idle_timeout)
+      assert :ok = StreamCoalescer.flush(session_key, channel_id)
+      :sys.get_state(pid)
+
+      refute_received {:dispatched_intent, %DeliveryIntent{kind: :stream_snapshot}}
     end
 
     test "late deltas after finalization do not mutate finalized stream state" do
@@ -706,7 +705,6 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert state.finalized == true
       assert state.last_seq == 1
       assert state.full_text == "partial"
-      assert state.last_sent_text == "Final answer"
     end
   end
 
@@ -1153,6 +1151,103 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert entry.last_text_hash == :erlang.phash2({expected_chunks, nil, []})
     end
 
+    test "a long streamed answer with a delta still queued at completion ends on the final answer" do
+      suffix = System.unique_integer([:positive])
+      session_key = "agent:test:telegram:bot:group:#{suffix}:thread:999"
+      channel_id = "telegram"
+      run_id = "run_queued_final_#{suffix}"
+      route = telegram_route("bot", :group, Integer.to_string(suffix), "999")
+
+      long_text =
+        Enum.map_join(1..520, "\n", fn i ->
+          "LINE-#{String.pad_leading(Integer.to_string(i), 4, "0")} abcdefghijklmnopqrstuvwxyz"
+        end) <> "\nEND-OF-LONG-REPLY"
+
+      {head, tail} = String.split_at(long_text, 1_000)
+      expected_chunks = Truncate.split_messages(long_text)
+      assert length(expected_chunks) > 1
+
+      assert :ok =
+               StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, head,
+                 meta: %{user_msg_id: 222}
+               )
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        kind: :text,
+                        meta: %{run_id: ^run_id, intent_kind: :stream_snapshot}
+                      }},
+                     1_000
+
+      assert eventually(fn ->
+               LemonChannels.PresentationState.get(route, run_id, :answer).platform_message_id ==
+                 101
+             end)
+
+      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+
+      # The last delta is admitted but not yet processed when the run completes.
+      :ok = :sys.suspend(pid)
+
+      assert :ok =
+               StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 2, tail,
+                 meta: %{user_msg_id: 222}
+               )
+
+      state = %{
+        run_id: run_id,
+        session_key: session_key,
+        saw_delta: true,
+        execution_request: %LemonCore.ExecutionCommand{
+          run_id: run_id,
+          session_key: session_key,
+          prompt: "long answer",
+          meta: %{user_msg_id: 222}
+        }
+      }
+
+      event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{completed: %{ok: true, answer: long_text}},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      finalize =
+        Task.async(fn -> LemonRouter.SurfaceManager.finalize_answer(state, event, %{}) end)
+
+      refute Task.yield(finalize, 100)
+      :ok = :sys.resume(pid)
+      assert :ok = Task.await(finalize, 5_000)
+
+      deliveries = collect_run_deliveries(run_id, [])
+
+      final_index =
+        Enum.find_index(deliveries, fn payload ->
+          payload.kind == :edit and payload.meta.intent_kind == :stream_finalize
+        end)
+
+      assert is_integer(final_index), "the final answer must edit the streamed message"
+      final_edit = Enum.at(deliveries, final_index)
+      assert final_edit.content.message_id in ["101", 101]
+      assert final_edit.content.text == hd(expected_chunks)
+
+      after_final = Enum.drop(deliveries, final_index + 1)
+
+      refute Enum.any?(after_final, &(&1.kind == :edit)),
+             "no edit may follow the final answer: " <>
+               inspect(Enum.map(after_final, & &1.meta.intent_kind))
+
+      assert Enum.map(after_final, & &1.content) == tl(expected_chunks)
+      assert Enum.all?(after_final, &(&1.meta.intent_kind == :stream_finalize))
+
+      refute Enum.any?(deliveries, &(&1.meta.intent_kind == :final_text)),
+             "a successful finalize must not deliver the answer again"
+
+      entry = LemonChannels.PresentationState.get(route, run_id, :answer)
+      assert entry.last_text_hash == :erlang.phash2({expected_chunks, nil, []})
+    end
+
     test "handles explicit nil final_text with no prior deltas" do
       session_key = "agent:test:telegram:bot:dm:12342"
       channel_id = "telegram"
@@ -1436,7 +1531,6 @@ defmodule LemonRouter.StreamCoalescerTest do
       state = :sys.get_state(pid)
       assert state.full_text == ""
       assert state.buffer == ""
-      assert state.last_sent_text == nil
       assert state.pending_clear == true
 
       # PresentationState is NOT cleared yet (deferred to avoid race with outbox)
@@ -1568,6 +1662,15 @@ defmodule LemonRouter.StreamCoalescerTest do
         collect_finalize_chunks(run_id, acc ++ [chunk], remaining - 1)
     after
       1_000 -> acc
+    end
+  end
+
+  defp collect_run_deliveries(run_id, acc) do
+    receive do
+      {:delivered, %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id}} = payload} ->
+        collect_run_deliveries(run_id, acc ++ [payload])
+    after
+      500 -> acc
     end
   end
 

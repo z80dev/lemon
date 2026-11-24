@@ -200,6 +200,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- Streamed answers finalize inside the answer coalescer's serialized loop, so a
+  delta still queued at completion can no longer edit a long (multi-message)
+  Telegram answer back to one truncated chunk after the final, and a successful
+  finalize delivers the answer once instead of up to three times. A finalize
+  that delivers nothing returns an error and records `:answer_finalize_failed`
+  instead of reporting success (#644).
 
 ### Removed
 

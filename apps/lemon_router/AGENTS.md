@@ -96,13 +96,15 @@ revision alongside results; timings are host/filesystem-specific.
 - `SurfaceManager` coordinates answer/status/task surfaces; coalescers aggregate
   semantic output. Preserve parent/task IDs and safe failure metadata upstream,
   rather than reconstructing hierarchy in adapters.
-- Finalization is terminal for a stream: late flushes must not overwrite the
-  final multi-chunk answer with an old truncated snapshot. If coalescer finalizing
-  fails, dispatch the final text directly. Already-streamed answers finalize the
-  existing answer surface before clearing coalescer state.
-- `SurfaceManager.finalize_answer/3` returns `{:error, {:dispatch_failed, reason}}`
-  on rejected final delivery; do not finalize the streamed coalescer after that
-  rejection. Best-effort artifact enrichment and termination cancellation must
+- Finalization is terminal for a stream and runs inside the coalescer's
+  serialized loop: the final intent is queued behind every admitted delta, so it
+  is the last write, and a finalized stream never flushes a late snapshot. Never
+  dispatch the final answer around the coalescer. Only when coalescer finalize
+  fails, dispatch the final text once as a `:final_text` fallback.
+- `SurfaceManager.finalize_answer/3` returns `{:error, reason}` when neither the
+  coalescer nor the fallback delivered the answer (including a failure with no
+  answer text) and records `:answer_finalize_failed`; never report it as
+  delivered. Best-effort artifact enrichment and termination cancellation must
   not prevent final-answer or terminal-event handling.
 - Artifact enrichment failure cannot block answer finalization. Files and
   `MEDIA:` directives reach channels only through checked `auto_send_files`:
