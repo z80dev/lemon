@@ -170,8 +170,69 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     {:noreply, state}
   end
 
+  # Discord drops an interaction not acknowledged within 3 s, so the ack is
+  # sent from its own task on arrival rather than behind queued events. The
+  # acknowledged interaction then joins the queue; its replies become edits
+  # and follow-ups.
+  def handle_info({:discord_event, {:INTERACTION_CREATE, interaction, ws}} = event, state) do
+    case defer_kind(interaction) do
+      nil -> {:noreply, dispatch_next(%{state | queue: :queue.in(event, state.queue)})}
+      kind -> {:noreply, start_ack(state, interaction, ws, kind)}
+    end
+  end
+
+  def handle_info({:discord_interaction_acked, interaction, ws}, state) do
+    event = {:discord_event, {:INTERACTION_CREATE, interaction, ws}}
+    {:noreply, dispatch_next(%{state | queue: :queue.in(event, state.queue)})}
+  end
+
   def handle_info(event, state) do
     {:noreply, dispatch_next(%{state | queue: :queue.in(event, state.queue)})}
+  end
+
+  defp defer_kind(interaction) do
+    case map_get(interaction, :type) do
+      2 -> :command
+      3 -> :component
+      _ -> nil
+    end
+  end
+
+  defp start_ack(state, interaction, ws, kind) do
+    owner = self()
+    ack = if kind == :command, do: %{type: 5, data: %{flags: 64}}, else: %{type: 6}
+
+    case LemonCore.TaskSupervisor.start_child(
+           LemonChannels.Adapters.Discord.AsyncSupervisor,
+           fn ->
+             case safe_interaction_response(interaction, ack) do
+               result when result in [:ok, {:ok}] or elem(result, 0) == :ok ->
+                 deferred = %{kind: kind, claim: :atomics.new(1, [])}
+
+                 send(
+                   owner,
+                   {:discord_interaction_acked, Map.put(interaction, :lemon_deferred, deferred),
+                    ws}
+                 )
+
+               _error ->
+                 LemonChannels.Registry.record_status(
+                   "discord",
+                   {:error, :interaction_ack_failed}
+                 )
+
+                 Logger.warning("discord interaction acknowledgement failed; not handled")
+             end
+           end
+         ) do
+      {:ok, _pid} ->
+        state
+
+      {:error, _reason} ->
+        LemonChannels.Registry.record_status("discord", {:error, :event_failed})
+        Logger.warning("discord interaction ack admission failed; not handled")
+        state
+    end
   end
 
   @impl true
@@ -2655,17 +2716,76 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp safe_interaction_response(interaction, payload) do
-    interaction = ThreadResolver.without_location(interaction)
-
-    case Application.get_env(:lemon_channels, :discord_interaction_responder) do
-      responder when is_function(responder, 2) -> responder.(interaction, payload)
-      {mod, fun} when is_atom(mod) and is_atom(fun) -> apply(mod, fun, [interaction, payload])
-      _ -> Interaction.create_response(interaction, payload)
+    case Map.get(interaction, :lemon_deferred) do
+      %{} = deferred -> deliver_deferred(interaction, deferred, payload)
+      nil -> interaction_call(interaction, payload)
     end
   rescue
     error ->
-      Logger.warning("discord interaction response failed: #{inspect(error)}")
-      {:error, {:discord_interaction_crashed, error}}
+      Logger.warning("discord interaction response failed: #{inspect(error.__struct__)}")
+      {:error, {:discord_interaction_crashed, error.__struct__}}
+  end
+
+  # The interaction was acknowledged on arrival (type 5 for commands, type 6
+  # for components), so replies become edits of the original response or
+  # follow-up messages. The first ephemeral command reply fills the deferred
+  # "thinking" message; a public one is posted as a follow-up and the
+  # placeholder removed.
+  defp deliver_deferred(_interaction, _deferred, %{type: 6}), do: {:ok}
+
+  defp deliver_deferred(interaction, _deferred, %{type: 7, data: data}),
+    do: interaction_call(interaction, %{type: :edit_original, data: data})
+
+  defp deliver_deferred(interaction, %{kind: :component}, %{type: 4, data: data}),
+    do: interaction_call(interaction, %{type: :followup, data: data})
+
+  defp deliver_deferred(interaction, %{kind: :command, claim: claim}, %{type: 4, data: data}) do
+    first? = :atomics.compare_exchange(claim, 1, 0, 1) == :ok
+    ephemeral? = Bitwise.band(Map.get(data, :flags, 0) || 0, 64) != 0
+
+    cond do
+      first? and ephemeral? ->
+        interaction_call(interaction, %{type: :edit_original, data: Map.delete(data, :flags)})
+
+      first? ->
+        result = interaction_call(interaction, %{type: :followup, data: data})
+        _ = interaction_call(interaction, %{type: :delete_original})
+        result
+
+      true ->
+        interaction_call(interaction, %{type: :followup, data: data})
+    end
+  end
+
+  defp deliver_deferred(interaction, _deferred, payload),
+    do: interaction_call(interaction, payload)
+
+  defp interaction_call(interaction, payload) do
+    interaction =
+      interaction |> ThreadResolver.without_location() |> Map.delete(:lemon_deferred)
+
+    app_id = map_get(interaction, :application_id)
+    token = map_get(interaction, :token)
+
+    case {Application.get_env(:lemon_channels, :discord_interaction_responder), payload} do
+      {responder, _} when is_function(responder, 2) ->
+        responder.(interaction, payload)
+
+      {{mod, fun}, _} when is_atom(mod) and is_atom(fun) ->
+        apply(mod, fun, [interaction, payload])
+
+      {_, %{type: :edit_original, data: data}} ->
+        Interaction.edit_response(app_id, token, data)
+
+      {_, %{type: :followup, data: data}} ->
+        Interaction.create_followup_message(app_id, token, data)
+
+      {_, %{type: :delete_original}} ->
+        Interaction.delete_response(app_id, token)
+
+      _ ->
+        Interaction.create_response(interaction, payload)
+    end
   end
 
   defp send_followup(interaction, content) do

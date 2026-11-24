@@ -20,6 +20,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations
   alias LemonChannels.Adapters.Telegram.Transport.InboundActions
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
+  alias LemonChannels.Adapters.Telegram.Transport.Owner
+
+  # Fields the shell owns while a worker runs on a snapshot of the rest.
+  @shell_keys [:allowed_chat_ids, :drain_paused?, :poll_task, :event_queue, :event_task]
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
   alias LemonChannels.Adapters.Telegram.Transport.ModelPicker
   alias LemonChannels.Adapters.Telegram.Transport.Normalize
@@ -184,21 +188,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {:reply, :ok, LemonChannels.Pairing.put_allowlist("telegram", state, chat_id, op)}
   end
 
-  # Runtime drain: hand every debounced message and media group to the router
-  # now, then stop fetching. Updates not yet fetched stay unconfirmed at
-  # Telegram, so the next runtime receives them from the persisted offset.
-  def handle_call(:drain_pause, _from, state) do
-    state =
-      Enum.reduce(state.buffers, state, fn {key, buffer}, acc ->
-        dispatch_transport_event({:debounce_flush, key, buffer.debounce_ref}, acc)
-      end)
-
-    state =
-      Enum.reduce(state.media_groups, state, fn {key, group}, acc ->
-        dispatch_transport_event({:media_group_flush, key, group.debounce_ref}, acc)
-      end)
-
-    {:reply, :ok, Map.put(state, :drain_paused?, true)}
+  # Runtime drain: stop fetching, then hand every debounced message and media
+  # group to the router. The flush runs in the event worker, after whatever it
+  # is doing now; the caller is answered when the flush has run. Updates not
+  # yet fetched stay unconfirmed at Telegram, so the next runtime receives
+  # them from the persisted offset.
+  def handle_call(:drain_pause, from, state) do
+    {:noreply, state |> Map.put(:drain_paused?, true) |> enqueue({:drain_flush, from})}
   end
 
   # Polling is an ongoing subscription, not an outbound delivery retry budget.
@@ -230,7 +226,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   def handle_info(:poll, state) do
     case LemonCore.TaskSupervisor.async_nolink(async_supervisor_name(), fn ->
-           Poller.fetch(state)
+           Poller.fetch_and_prepare(state, pipeline_callbacks())
          end) do
       {:ok, task} ->
         {:noreply, Map.put(state, :poll_task, task)}
@@ -238,22 +234,26 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       {:error, _reason} ->
         LemonChannels.Registry.record_status("telegram", {:error, :poll_unavailable})
         Logger.warning("telegram poll task admission failed")
-        Process.send_after(self(), :poll, state.poll_interval_ms)
+
+        Process.send_after(
+          LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
+          :poll,
+          state.poll_interval_ms
+        )
+
         {:noreply, state}
     end
   end
 
-  def handle_info({ref, result}, %{poll_task: %Task{ref: ref}} = state) do
+  # The poll task fetched and prepared (transcribed, downloaded) the batch;
+  # applying it runs in the event worker.
+  def handle_info({ref, {result, prepared}}, %{poll_task: %Task{ref: ref}} = state) do
     Process.demonitor(ref, [:flush])
     state = Map.delete(state, :poll_task)
 
-    state =
-      if state[:drain_paused?],
-        do: state,
-        else: Poller.apply_result(state, result, pipeline_callbacks())
-
-    Process.send_after(self(), :poll, poll_delay(state))
-    {:noreply, state}
+    if state[:drain_paused?],
+      do: {:noreply, state},
+      else: {:noreply, enqueue(state, {:poll_result, result, prepared})}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{poll_task: %Task{ref: ref}} = state) do
@@ -261,33 +261,142 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {:noreply, Map.delete(state, :poll_task)}
   end
 
-  def handle_info({:debounce_flush, scope_key, debounce_ref}, state) do
-    {:noreply, dispatch_transport_event({:debounce_flush, scope_key, debounce_ref}, state)}
+  def handle_info(
+        {ref, {:event_done, new_state}},
+        %{event_task: {%Task{ref: ref}, event}} = state
+      ) do
+    Process.demonitor(ref, [:flush])
+    # Shell-owned fields may have changed while the worker ran; keep them.
+    state = Map.merge(new_state, Map.take(state, @shell_keys)) |> Map.put(:event_task, nil)
+    after_event(event, state)
+    {:noreply, dispatch_next(state)}
   end
 
-  def handle_info({:media_group_flush, group_key, debounce_ref}, state) do
-    {:noreply, dispatch_transport_event({:media_group_flush, group_key, debounce_ref}, state)}
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{event_task: {%Task{ref: ref}, event}} = state
+      ) do
+    LemonChannels.Registry.record_status("telegram", {:error, :event_failed})
+    Logger.warning("telegram event task failed; event will not be replayed")
+    state = Map.put(state, :event_task, nil)
+
+    case event do
+      {:drain_flush, from} -> GenServer.reply(from, {:error, :drain_failed})
+      _ -> after_event(event, state)
+    end
+
+    {:noreply, dispatch_next(state)}
   end
 
-  def handle_info(%LemonCore.Event{type: :approval_requested, payload: payload}, state) do
-    {:noreply, dispatch_transport_event({:approval_requested, payload}, state)}
+  def handle_info({:telegram_bus, action, topic}, state) do
+    _ = apply(LemonCore.Bus, action, [topic])
+    {:noreply, state}
   end
 
   def handle_info(%LemonCore.Event{type: :approval_resolved}, state), do: {:noreply, state}
 
+  def handle_info(event, state) do
+    if worker_event?(event),
+      do: {:noreply, enqueue(state, event)},
+      else: {:noreply, state}
+  end
+
+  defp worker_event?({:debounce_flush, _scope_key, _ref}), do: true
+  defp worker_event?({:media_group_flush, _group_key, _ref}), do: true
+  defp worker_event?({:new_session_cleanup, _sk, _chat_id, _thread_id}), do: true
+  defp worker_event?({:model_picker_expired, _key, _token}), do: true
+
+  defp worker_event?(%LemonCore.Event{type: type}),
+    do: type in [:approval_requested, :run_completed]
+
+  defp worker_event?(_event), do: false
+
+  defp enqueue(state, event) do
+    queue = :queue.in(event, Map.get(state, :event_queue, :queue.new()))
+    dispatch_next(Map.put(state, :event_queue, queue))
+  end
+
+  # One event at a time, in arrival order, in a supervised worker: the shell
+  # itself never performs HTTP, file or provider work.
+  defp dispatch_next(state) do
+    with nil <- Map.get(state, :event_task),
+         {{:value, event}, queue} <- :queue.out(Map.get(state, :event_queue, :queue.new())) do
+      owner = self()
+      snapshot = Map.drop(state, @shell_keys -- [:allowed_chat_ids, :drain_paused?])
+
+      case LemonCore.TaskSupervisor.async_nolink(async_supervisor_name(), fn ->
+             :ok = Owner.put(owner)
+             {:event_done, run_event(event, snapshot)}
+           end) do
+        {:ok, task} ->
+          %{state | event_queue: queue} |> Map.put(:event_task, {task, event})
+
+        {:error, _reason} ->
+          LemonChannels.Registry.record_status("telegram", {:error, :event_failed})
+          Logger.warning("telegram event task admission failed; event will not be replayed")
+          state = Map.put(state, :event_queue, queue)
+
+          case event do
+            {:drain_flush, from} -> GenServer.reply(from, {:error, :drain_failed})
+            _ -> after_event(event, state)
+          end
+
+          dispatch_next(state)
+      end
+    else
+      _busy_or_empty -> state
+    end
+  end
+
+  # The next fetch starts only after a batch was applied (it advances offset).
+  defp after_event({:poll_result, _result, _prepared}, state),
+    do: Process.send_after(self(), :poll, poll_delay(state))
+
+  defp after_event(_event, _state), do: :ok
+
+  defp run_event({:poll_result, result, prepared}, state) do
+    if state[:drain_paused?],
+      do: state,
+      else: Poller.apply_result(state, result, pipeline_callbacks(), prepared)
+  end
+
+  defp run_event({:drain_flush, from}, state) do
+    state =
+      Enum.reduce(state.buffers, state, fn {key, buffer}, acc ->
+        dispatch_transport_event({:debounce_flush, key, buffer.debounce_ref}, acc)
+      end)
+
+    state =
+      Enum.reduce(state.media_groups, state, fn {key, group}, acc ->
+        dispatch_transport_event({:media_group_flush, key, group.debounce_ref}, acc)
+      end)
+
+    GenServer.reply(from, :ok)
+    state
+  end
+
+  defp run_event({:debounce_flush, _scope_key, _ref} = event, state),
+    do: dispatch_transport_event(event, state)
+
+  defp run_event({:media_group_flush, _group_key, _ref} = event, state),
+    do: dispatch_transport_event(event, state)
+
+  defp run_event(%LemonCore.Event{type: :approval_requested, payload: payload}, state),
+    do: dispatch_transport_event({:approval_requested, payload}, state)
+
+  defp run_event({:model_picker_expired, key, token}, state),
+    do: ModelPicker.expire_model_picker(state, key, token)
+
   # Best-effort second pass to clear chat state in case a late write races with the first delete.
-  def handle_info(
-        {:new_session_cleanup, session_key, chat_id, thread_id},
-        state
-      ) do
+  defp run_event({:new_session_cleanup, session_key, chat_id, thread_id}, state) do
     _ = safe_delete_chat_state(session_key)
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
     _ = safe_sweep_thread_message_indices(state, chat_id, thread_id, :all)
-    {:noreply, state}
+    state
   end
 
   # /new triggers an internal "memory reflection" run; only clear auto-resume after it completes.
-  def handle_info(%LemonCore.Event{type: :run_completed, meta: meta} = event, state) do
+  defp run_event(%LemonCore.Event{type: :run_completed, meta: meta} = event, state) do
     run_id = (meta || %{})[:run_id] || (meta || %{})["run_id"]
     session_key = (meta || %{})[:session_key] || (meta || %{})["session_key"]
 
@@ -306,13 +415,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
           # Store writes are async; do a second delete shortly after to win races.
           Process.send_after(
-            self(),
+            LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
             {:new_session_cleanup, sk, chat_id, thread_id},
             50
           )
 
           topic = LemonCore.Bus.run_topic(run_id)
-          _ = LemonCore.Bus.unsubscribe(topic)
+          _ = LemonChannels.Adapters.Telegram.Transport.Owner.bus(:unsubscribe, topic)
 
           ok? =
             case event.payload do
@@ -370,7 +479,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
           # Unsubscribe from session topic and remove from tracking
           topic = LemonCore.Bus.session_topic(session_key)
-          _ = LemonCore.Bus.unsubscribe(topic)
+          _ = LemonChannels.Adapters.Telegram.Transport.Owner.bus(:unsubscribe, topic)
 
           %{state | reaction_runs: Map.delete(state.reaction_runs, session_key)}
 
@@ -378,18 +487,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           state
       end
 
-    {:noreply, state}
+    state
   end
-
-  def handle_info({:model_picker_expired, key, token}, state) do
-    {:noreply, ModelPicker.expire_model_picker(state, key, token)}
-  end
-
-  def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
     if task = state[:poll_task], do: Task.shutdown(task, :brutal_kill)
+    with {%Task{} = task, _event} <- state[:event_task], do: Task.shutdown(task, :brutal_kill)
     if state[:token], do: PollerLock.release(state.account_id, state.token)
     :ok
   end
@@ -411,7 +515,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
        opts: opts,
        attempt: attempt,
        drain_paused?: false,
-       timer: Process.send_after(self(), :retry_poller_lock, delay)
+       timer:
+         Process.send_after(
+           LemonChannels.Adapters.Telegram.Transport.Owner.pid(),
+           :retry_poller_lock,
+           delay
+         )
      }}
   end
 
@@ -886,12 +995,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
     topic = LemonCore.Bus.session_topic(session_key)
-    _ = LemonCore.Bus.subscribe(topic)
+    _ = LemonChannels.Adapters.Telegram.Transport.Owner.bus(:subscribe, topic)
   end
 
   defp maybe_subscribe_to_run(run_id) do
     topic = LemonCore.Bus.run_topic(run_id)
-    _ = LemonCore.Bus.subscribe(topic)
+    _ = LemonChannels.Adapters.Telegram.Transport.Owner.bus(:subscribe, topic)
   end
 
   defp started_new_session_message(
