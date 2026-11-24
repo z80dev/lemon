@@ -317,6 +317,21 @@ Example additions (other counters omitted):
 }
 ```
 
+## `browser.stop`
+
+Scope: `operator.admin` only. Parameters: `{}` (unknown/nonempty parameters are
+rejected). Stops the local browser driver behind the `local`, `relay` and `cdp`
+providers, and the Chrome it launched; a browser it only attached to keeps
+running. In-flight side-effecting browser actions report an unknown outcome. The
+next browser request starts a fresh driver. `lemon browser stop` calls it.
+
+```json
+{"type":"req","id":"browser-stop-1","method":"browser.stop","params":{}}
+```
+
+The result is `{"stopped": true}`. If the driver does not confirm in time the
+method fails with `TIMEOUT`; whether it stopped is then unknown.
+
 ## `system.restart` and `system.stop`
 
 Scope: `operator.admin` only. Parameters: `{}` (unknown/nonempty parameters are

@@ -60,7 +60,21 @@ export class ChromeSession {
     };
   }
 
+  /**
+   * Launches or attaches to the browser. A failed start releases whatever it
+   * acquired (a launched Chrome, the egress proxy), so a later start begins
+   * from a clean session.
+   */
   async start(): Promise<void> {
+    try {
+      await this.connect();
+    } catch (err) {
+      await this.stop();
+      throw err;
+    }
+  }
+
+  private async connect(): Promise<void> {
     const endpoint = this.cfg.cdpEndpoint || `http://127.0.0.1:${this.cfg.cdpPort}`;
 
     const reachable = await isCdpReachable(endpoint, 600);

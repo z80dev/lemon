@@ -8,6 +8,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
+  fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
+  instead of launching a browser (#660).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,

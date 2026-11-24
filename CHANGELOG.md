@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `lemon browser stop` (admin control-plane method `browser.stop`) stops the
+  local browser driver and the Chrome it launched (#660).
 - `lemon setup omp` reuses the provider logins and API keys omp already holds:
   it starts omp's auth broker as the new `omp-broker` service
   (`lemon service install omp-broker`) when none is running, lists omp's
@@ -205,6 +207,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   tab. A side-effecting browser action (click, type, navigate, upload, ...)
   that did not confirm is reported to the model as an unknown outcome and is
   never retried (#625).
+- The local browser driver retries a failed browser start on the next request,
+  recycles itself when the selected provider, endpoint or profile changes while
+  idle (instead of failing with `Browser identity changed`), and the `local`
+  provider honours `LEMON_BROWSER_ATTACH_ONLY`: it is unavailable rather than
+  launching Chrome (#660).
 
 ### Removed
 

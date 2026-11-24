@@ -59,6 +59,20 @@ defmodule LemonBrowser.LocalServer do
     :exit, _ -> :ok
   end
 
+  @doc """
+  Stops the driver process and the Chrome it launched; a browser it only
+  attached to (relay, CDP endpoint) keeps running. In-flight requests reply as
+  if the driver exited. The next request starts a fresh driver; a hosted
+  session's server stops instead, since its endpoint is not retained.
+  """
+  @spec stop_driver(server()) :: :ok | {:error, String.t()}
+  def stop_driver(server \\ @name) do
+    GenServer.call(server, :stop_driver, 15_000)
+  catch
+    :exit, {:noproc, _} -> :ok
+    :exit, _ -> {:error, "Local browser driver stop did not confirm"}
+  end
+
   @spec request(String.t(), map(), pos_integer()) :: result()
   def request(method, args \\ %{}, timeout_ms \\ 30_000)
       when is_binary(method) and is_map(args) do
@@ -151,10 +165,10 @@ defmodule LemonBrowser.LocalServer do
   end
 
   # Process state never holds a CDP endpoint. Endpoints that come from
-  # configuration (env, relay token, explicit `cdp` provider) are resolved
-  # when the driver spawns. An endpoint passed as `:cdp_endpoint` (a hosted
-  # provider session) has no other source, so the driver spawns during init
-  # and the server stops when that driver exits.
+  # configuration (env, relay token, explicit `cdp` provider) are resolved per
+  # request and reach the driver only when it spawns. An endpoint passed as
+  # `:cdp_endpoint` (a hosted provider session) has no other source, so the
+  # driver spawns during init and the server stops when that driver exits.
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -180,23 +194,24 @@ defmodule LemonBrowser.LocalServer do
       last_error: nil,
       last_error_at: nil,
       driver_config: nil,
-      driver_opts: base
+      driver_opts: base,
+      endpoint_source: :env
     }
 
     case Keyword.get(opts, :cdp_endpoint) do
       endpoint when is_binary(endpoint) and endpoint != "" ->
-        state = put_endpoint_source(state, :explicit)
+        state = %{state | endpoint_source: :explicit}
 
         case spawn_port(state, Keyword.put(base, :cdp_endpoint, endpoint)) do
           {:ok, state} -> {:ok, state}
-          {:error, reason} -> {:stop, reason}
+          {:error, reason, _state} -> {:stop, reason}
         end
 
       "" ->
-        {:ok, put_endpoint_source(state, :local)}
+        {:ok, %{state | endpoint_source: {:provider, "local"}}}
 
       _ ->
-        {:ok, put_endpoint_source(state, :env)}
+        {:ok, state}
     end
   end
 
@@ -205,21 +220,31 @@ defmodule LemonBrowser.LocalServer do
     {:reply, status_from_state(state), state}
   end
 
-  def handle_call({:request, method, args, timeout_ms, opts}, from, state) do
-    state =
-      case Keyword.get(opts, :browser_provider) do
-        provider when provider in ["local", "relay", "cdp"] ->
-          put_endpoint_source(state, {:provider, provider})
+  def handle_call(:stop_driver, _from, state) do
+    state = shutdown_driver(state, "Local browser driver stopped")
 
-        _ ->
-          state
+    if state.endpoint_source == :explicit,
+      do: {:stop, :normal, :ok, state},
+      else: {:reply, :ok, state}
+  end
+
+  def handle_call({:request, method, args, timeout_ms, opts}, from, state) do
+    source =
+      case Keyword.get(opts, :browser_provider) do
+        provider when provider in ["local", "relay", "cdp"] -> {:provider, provider}
+        _ -> state.endpoint_source
       end
 
-    handle_call({:request, method, args, timeout_ms}, from, state)
+    request(method, args, timeout_ms, source, from, state)
   end
 
   def handle_call({:request, method, args, timeout_ms}, from, state) do
-    case ensure_port(state) do
+    request(method, args, timeout_ms, state.endpoint_source, from, state)
+  end
+
+  # `source` selects this request's browser identity; it is never stored.
+  defp request(method, args, timeout_ms, source, from, state) do
+    case ensure_port(state, source) do
       {:ok, state} ->
         id = Id.uuid()
 
@@ -250,7 +275,7 @@ defmodule LemonBrowser.LocalServer do
              last_request_at: now_iso8601()
          }}
 
-      {:error, reason} ->
+      {:error, reason, state} ->
         {:reply, {:error, reason}, remember_error(state, reason)}
     end
   end
@@ -272,11 +297,11 @@ defmodule LemonBrowser.LocalServer do
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
     Logger.warning("Local browser driver exited (status=#{status})")
     state = fail_all_pending(state, "Local browser driver exited")
-    state = %{state | port: nil, buffer: ""}
+    state = %{state | port: nil, buffer: "", driver_config: nil}
 
     # A hosted session endpoint was not retained, so this driver cannot be
     # respawned; the owner observes the exit and releases the session.
-    if resolve_driver_opts(state.driver_opts) == :explicit,
+    if state.endpoint_source == :explicit,
       do: {:stop, :normal, state},
       else: {:noreply, state}
   end
@@ -309,6 +334,7 @@ defmodule LemonBrowser.LocalServer do
 
   def terminate(_reason, _state), do: :ok
 
+  # Terminating the driver's group can close the port before `Port.close/1`.
   defp close_port(port) when is_port(port) do
     if Port.info(port) do
       port
@@ -317,6 +343,10 @@ defmodule LemonBrowser.LocalServer do
 
       Port.close(port)
     end
+
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   defp signal_os_process(pid) when is_integer(pid) do
@@ -329,27 +359,45 @@ defmodule LemonBrowser.LocalServer do
 
   defp signal_os_process(_pid), do: :ok
 
-  defp ensure_port(%{port: port} = state) when is_port(port) do
-    case resolve_driver_opts(state.driver_opts) do
-      :explicit ->
+  defp ensure_port(%{endpoint_source: :explicit, port: port} = state, _source)
+       when is_port(port),
+       do: {:ok, state}
+
+  defp ensure_port(%{endpoint_source: :explicit} = state, _source),
+    do: {:error, "Hosted browser driver exited", state}
+
+  # A request for another browser identity (provider, endpoint, profile)
+  # recycles an idle driver; while another request is in flight it is refused
+  # rather than reusing the wrong browser.
+  defp ensure_port(%{port: port} = state, source) when is_port(port) do
+    opts = resolve_driver_opts(state.driver_opts, source)
+
+    cond do
+      state.driver_config == driver_config_summary(opts) ->
         {:ok, state}
 
-      opts ->
-        if state.driver_config == driver_config_summary(opts) do
-          {:ok, state}
-        else
-          {:error,
-           "Browser identity changed; stop the local browser before changing its profile or CDP configuration"}
-        end
+      map_size(state.pending) == 0 ->
+        state
+        |> shutdown_driver("Local browser driver stopped")
+        |> spawn_port(opts)
+
+      true ->
+        {:error,
+         "Browser identity changed while another browser request is running; retry after it finishes",
+         state}
     end
   end
 
-  defp ensure_port(state) do
-    case resolve_driver_opts(state.driver_opts) do
-      :explicit -> {:error, "Hosted browser driver exited"}
-      opts -> spawn_port(state, opts)
-    end
+  defp ensure_port(state, source),
+    do: spawn_port(state, resolve_driver_opts(state.driver_opts, source))
+
+  defp shutdown_driver(%{port: port} = state, reason) when is_port(port) do
+    close_port(port)
+    state = if map_size(state.pending) > 0, do: fail_all_pending(state, reason), else: state
+    %{state | port: nil, buffer: "", driver_config: nil}
   end
+
+  defp shutdown_driver(state, _reason), do: state
 
   # `opts` carry the resolved endpoint only for the duration of the spawn.
   defp spawn_port(state, opts) do
@@ -377,29 +425,15 @@ defmodule LemonBrowser.LocalServer do
            last_error_at: nil,
            driver_config: driver_config_summary(opts)
        }}
+    else
+      {:error, reason} -> {:error, reason, state}
     end
   end
 
-  defp put_endpoint_source(state, source),
-    do: %{state | driver_opts: Keyword.put(state.driver_opts, :endpoint_source, source)}
+  defp resolve_driver_opts(base, :env), do: base
 
-  defp resolve_driver_opts(driver_opts) do
-    {source, opts} = Keyword.pop(driver_opts, :endpoint_source, :env)
-
-    case source do
-      :env ->
-        opts
-
-      :local ->
-        Keyword.merge(opts, cdp_endpoint: "", attach_only: false)
-
-      {:provider, provider} ->
-        Keyword.merge(opts, LemonBrowser.ProviderProbe.driver_options(provider))
-
-      :explicit ->
-        :explicit
-    end
-  end
+  defp resolve_driver_opts(base, {:provider, provider}),
+    do: Keyword.merge(base, LemonBrowser.ProviderProbe.driver_options(provider))
 
   # The endpoint reaches the driver only through its environment: argv is
   # readable by every local user through `ps` and `/proc/<pid>/cmdline`.
@@ -612,7 +646,7 @@ defmodule LemonBrowser.LocalServer do
       request_count: state.request_count,
       completed_count: state.completed_count,
       failed_count: state.failed_count,
-      driver_config: state.driver_config || status_config(state.driver_opts),
+      driver_config: state.driver_config || status_config(state),
       started_at: state.started_at,
       last_request_at: state.last_request_at,
       last_error: error_summary(state.last_error),
@@ -654,12 +688,10 @@ defmodule LemonBrowser.LocalServer do
     %{state | last_error: redact_urls(to_string(reason)), last_error_at: now_iso8601()}
   end
 
-  defp status_config(driver_opts) do
-    case resolve_driver_opts(driver_opts) do
-      :explicit -> nil
-      opts -> driver_config_summary(opts)
-    end
-  end
+  defp status_config(%{endpoint_source: :explicit}), do: nil
+
+  defp status_config(state),
+    do: driver_config_summary(resolve_driver_opts(state.driver_opts, state.endpoint_source))
 
   @url ~r/\b[a-zA-Z][a-zA-Z0-9+.\-]*:\/\/[^\s"'<>]+/
 

@@ -7,6 +7,8 @@
 - Opt-in durable tracking for local browser-driver launches, with external-work
   uncertainty recorded before browser dispatch and retained on request errors.
   Authorization and unavailable-backend refusals remain pre-dispatch decisions.
+- `LocalServer.stop_driver/1` and the `LemonBrowser.stop_local_driver/0`
+  facade stop the driver and the Chrome it launched on demand (#660).
 
 ### Changed
 
@@ -26,3 +28,10 @@
   (click, type, navigate, ...) answers `{:error, :outcome_unknown}` from
   `LocalServer.request/4,5` and is never retried; `LocalServer.read_only_method?/2`
   names the read-only set (#625).
+- A failed browser start (slow Chrome launch, briefly unreachable relay or CDP
+  endpoint) is retried on the next request instead of failing forever. Each
+  request resolves its provider identity without mutating server state; an
+  identity change recycles an idle driver and is refused while a request is in
+  flight. `ProviderProbe.driver_options("local")` no longer forces
+  `attach_only: false`, and `available?("local")` returns `:attach_only` when
+  `LEMON_BROWSER_ATTACH_ONLY` is set, so Lemon never launches Chrome then (#660).

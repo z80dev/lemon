@@ -240,6 +240,21 @@ function errorResponse(id: string, err: unknown): LocalDriverResponse {
   return { id, ok: false, error };
 }
 
+/**
+ * Shares one in-flight or successful start between requests. A failed start
+ * is forgotten, so the next request tries again instead of failing forever.
+ */
+export function startOnceRetryingFailures(start: () => Promise<void>): () => Promise<void> {
+  let started: Promise<void> | undefined;
+  return () => {
+    started ??= start().catch((err: unknown) => {
+      started = undefined;
+      throw err;
+    });
+    return started;
+  };
+}
+
 function writeLine(obj: unknown) {
   process.stdout.write(JSON.stringify(obj) + '\n');
 }
@@ -260,12 +275,11 @@ async function main() {
     attachOnly: config.attachOnly,
     allowUnenforcedEgress: config.allowUnenforcedEgress,
   });
-  let started: Promise<void> | undefined;
+  const ensureStarted = startOnceRetryingFailures(() => chrome.start());
 
   const queue = createDriverRequestQueue({
     invoke: async (method, methodArgs, begin) => {
-      started ??= chrome.start();
-      await started;
+      await ensureStarted();
       begin();
       return dispatchBrowserRequest(chrome, method, methodArgs);
     },

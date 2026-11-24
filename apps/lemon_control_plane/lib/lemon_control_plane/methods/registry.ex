@@ -62,6 +62,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SmsInboxClear,
     # Logs
     LemonControlPlane.Methods.LogsTail,
+    # Browser
+    LemonControlPlane.Methods.BrowserStop,
     # Channels
     LemonControlPlane.Methods.CommandsCatalog,
     LemonControlPlane.Methods.ChannelPairing,

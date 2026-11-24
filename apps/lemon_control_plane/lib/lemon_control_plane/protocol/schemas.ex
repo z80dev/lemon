@@ -28,6 +28,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "doctor.run" => %{optional: %{"botPublicUrl" => :string}},
     "doctor.bundle" => %{optional: %{}},
     "setup.status" => %{optional: %{}},
+    "browser.stop" => %{optional: %{}},
     "logs.tail" => %{
       optional: %{
         "limit" => :integer,

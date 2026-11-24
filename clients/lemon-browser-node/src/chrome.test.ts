@@ -83,6 +83,26 @@ describe('ChromeSession.withPage', () => {
   });
 });
 
+describe('ChromeSession.start', () => {
+  it('releases what a failed start acquired so the next start begins clean', async () => {
+    const session = new ChromeSession(TEST_CONFIG);
+    const connect = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Timed out waiting for CDP'))
+      .mockResolvedValueOnce(undefined);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    // Test seam: replace the connection steps on this instance.
+    Object.assign(session, { connect, stop });
+
+    await expect(session.start()).rejects.toThrow('Timed out waiting for CDP');
+    expect(stop).toHaveBeenCalledTimes(1);
+
+    await expect(session.start()).resolves.toBeUndefined();
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ChromeSession tab lifecycle', () => {
   it('lists tabs with stable target IDs and the active target', async () => {
     const session = new ChromeSession(TEST_CONFIG);

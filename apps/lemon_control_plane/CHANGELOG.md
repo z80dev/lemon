@@ -6,6 +6,8 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ### Added
 
+- Admin-only `browser.stop` stops the local browser driver and the Chrome it
+  launched; attached browsers keep running (#660).
 - `system.stop` drains active runs and carries queued work across the restart
   (`LemonCore.Drain`) before the VM stops.
 - Admin-only `system.reload_code` soft-loads changed code in launcher-managed

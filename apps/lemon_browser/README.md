@@ -18,7 +18,7 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 | `LemonBrowser.CamofoxSession` | Exact-session Camofox REST/Firefox adapter |
 | `LemonBrowser.TernSession` | Exact-session/run/pane native PiP ownership, adoption, and bounded cleanup |
 | `LemonBrowser.HybridRouter` | Per-session local/private versus public-provider route memory |
-| `LemonBrowser.LocalServer` | Supervised driver process: `request/3`, `status/0`, `stop/1` |
+| `LemonBrowser.LocalServer` | Supervised driver process: `request/3`, `status/0`, `stop_driver/1`, `stop/1` |
 | `LemonBrowser.ControllerBroker` | Single-use controller tickets, exact identity binding, capability checks, timeouts |
 | `LemonBrowser.RoutePolicy` | Navigation classification and guardrails: `validate_navigation/2`, `safe/1` |
 | `LemonBrowser.Artifacts` | Metadata over saved artifacts: `recent/1`, `summary/1`, `cleanup/1` |
@@ -171,7 +171,16 @@ If `node` is missing, or the driver path does not resolve, `request/3` answers
 `{:error, "node executable not found on PATH"}` or
 `{:error, "Local browser driver not found..."}`, the error is remembered in
 `status/0`, and the supervision tree stays up. If a running helper exits, only
-the requests in flight fail; the next request starts a fresh one.
+the requests in flight fail; the next request starts a fresh one. A browser
+start that fails (a slow Chrome launch, a relay or CDP endpoint that is briefly
+down) fails that request only; the next request tries the start again.
+
+Each request resolves its browser identity (provider, endpoint, profile)
+without changing the server's state. A different identity stops the idle
+helper and starts one for the new identity; while another request is in
+flight the change is refused. `LocalServer.stop_driver/1` (facade:
+`LemonBrowser.stop_local_driver/0`; CLI: `lemon browser stop`) stops the
+helper and the Chrome it launched on demand.
 
 ### Environment variables
 

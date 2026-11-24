@@ -126,8 +126,21 @@ diagnostics and model-facing tool availability consistent.
 Managed profile settings also accept application config
 `config :lemon_browser, user_data_dir: "/dedicated/chrome-data", profile_directory: "Profile 1"`;
 the environment variables take precedence. Leave both unset to retain the
-Lemon-owned profile. Stop the local browser before changing either setting:
-an active driver refuses identity changes rather than reusing another profile.
+Lemon-owned profile.
+
+The local driver serves one browser identity at a time: provider (`local`,
+`relay`, `cdp`), endpoint and profile. A request for a different identity
+(a changed profile setting, a rotated relay token, a fallback to another
+provider) stops the idle driver, and the Chrome it launched, and starts one
+for the new identity. While another browser request is still running, the
+change is refused with `Browser identity changed while another browser request
+is running`; retry once it finishes.
+
+To stop the driver yourself, run `lemon browser stop` (control-plane method
+`browser.stop`, admin scope; `LemonBrowser.stop_local_driver/0` in Elixir). It
+stops the driver and the Chrome it launched; a browser it only attached to
+(relay, CDP endpoint) keeps running. In-flight side-effecting actions report an
+unknown outcome, and the next browser request starts a fresh driver.
 
 Driver resolution failures are reported as `Local browser driver not found`
 or `node executable not found on PATH` and remembered in driver status; the
@@ -137,7 +150,9 @@ supervision tree stays up.
 
 - `local`: launches managed local Chrome/Chromium and connects over CDP on
   `127.0.0.1`. Unified `local` selection (including `auto` choosing local)
-  ignores attachment settings and does not attach to an existing browser.
+  ignores `LEMON_BROWSER_CDP_ENDPOINT` and never attaches to an existing
+  browser. With `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable rather
+  than launching Chrome: `auto` moves on and an explicit `local` fails closed.
 - `tern`: drives a native browser PiP over the bound Tern pane through the
   daemon browser channel. It does not launch Chrome or use the Node driver.
 - `cdp`: explicitly attaches to `LEMON_BROWSER_CDP_ENDPOINT`. It never launches

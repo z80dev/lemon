@@ -6,6 +6,7 @@ import { isReadOnlyBrowserMethod } from './driver-dispatch.js';
 import {
   createDriverRequestQueue,
   resolveLocalDriverConfig,
+  startOnceRetryingFailures,
   type LocalDriverResponse,
 } from './local-driver.js';
 
@@ -260,5 +261,62 @@ describe('createDriverRequestQueue', () => {
 
     gate.resolve();
     await queue.drained();
+  });
+});
+
+describe('startOnceRetryingFailures', () => {
+  it('retries a failed start on the next request and then reuses the started browser', async () => {
+    const start = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('Timed out waiting for CDP at http://127.0.0.1:18800'))
+      .mockResolvedValue(undefined);
+    const ensureStarted = startOnceRetryingFailures(start);
+
+    await expect(ensureStarted()).rejects.toThrow('Timed out waiting for CDP');
+    await expect(ensureStarted()).resolves.toBeUndefined();
+    await expect(ensureStarted()).resolves.toBeUndefined();
+
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares one in-flight start between concurrent callers', async () => {
+    let finish!: () => void;
+    const start = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    const ensureStarted = startOnceRetryingFailures(start);
+
+    const first = ensureStarted();
+    const second = ensureStarted();
+    finish();
+    await Promise.all([first, second]);
+
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a request after a failed start reach the browser through the queue', async () => {
+    const start = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('CDP attach failed'))
+      .mockResolvedValue(undefined);
+    const ensureStarted = startOnceRetryingFailures(start);
+    const replies: LocalDriverResponse[] = [];
+    const queue = createDriverRequestQueue({
+      invoke: async (method, _args, begin) => {
+        await ensureStarted();
+        begin();
+        return { method };
+      },
+      reply: (reply) => replies.push(reply),
+      isReadOnly: isReadOnlyBrowserMethod,
+      onWedged: () => undefined,
+    });
+
+    queue.submit(JSON.stringify({ id: 'a', method: 'browser.tabs' }));
+    queue.submit(JSON.stringify({ id: 'b', method: 'browser.tabs' }));
+    await queue.drained();
+
+    expect(replies).toEqual([
+      { id: 'a', ok: false, error: 'CDP attach failed' },
+      { id: 'b', ok: true, result: { method: 'browser.tabs' } },
+    ]);
   });
 });
