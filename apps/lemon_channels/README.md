@@ -143,6 +143,13 @@ side effects. Internal routing, rendering, and state-write failures are not
 converted into successful deliveries or permissive authorization decisions.
 Pairing, binding, group/admin, and file-access checks remain fail-closed.
 
+Telegram confirms the `getUpdates` offset after each handled update, not after
+the whole batch, so a transport crash mid-batch re-polls only updates that were
+never handled. The inbound dedupe table survives a transport restart (entries
+expire by TTL), and every submission carries a run identity derived from the
+account, chat, thread and update id, so the router admits a re-polled update at
+most once.
+
 Telegram HTTP long polls run as monitored, unlinked tasks under the adapter's
 `AsyncSupervisor`, so live allowlist and drain calls do not wait for Telegram.
 Fetched updates are applied to the current state; drain discards an in-flight
@@ -905,6 +912,19 @@ after router acceptance, or after an ambiguous outcome where retrying could
 duplicate a run. A definite router rejection is left unacknowledged so polling
 can redeliver it. `XMTP.Transport` supplies the script name, event tag, and log
 label directly to the shared `LemonChannels.PortBridge` GenServer.
+
+XMTP persists a per-conversation inbound high-water mark (`sent_at_ns`) in
+`LemonCore.Store` (`xmtp_inbound_cursors`) when a message is acknowledged. Every
+poll sends those cursors to the bridge, which lists only later messages, and the
+transport drops any message at or below a cursor, so a restart, or a key evicted
+from the bounded in-memory seen set, never resubmits history. A definite router
+rejection holds the cursor below that message until it is accepted. An
+unreadable cursor store stops the transport instead of replaying the inbox.
+Submissions carry a run identity derived from the conversation and message, so
+the router admits a replayed message at most once. The bridge runs commands one
+at a time, so a reconnect never interleaves with an in-flight poll.
+Conversations without a stored cursor (including every conversation on the
+first start after upgrading) are read from the beginning once.
 
 Inbound messages are authorized before dedupe, placeholder replies or
 submission: the sender inbox id must be in `gateway.xmtp.allowed_inboxes`
