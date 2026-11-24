@@ -200,6 +200,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- Web chat has one transcript pipeline: full-text `chat.history` once per open,
+  then sequenced `session.event` batches after the `sessions.snapshot` event
+  cursor, with `sessions.events` replay for gaps. Streaming no longer stops at
+  the first snapshot or resets every 2 s, long answers and edit diffs stay
+  complete after recovery, and the snapshot is state only (at most one read per
+  run) through the live run reducer, so **Stopping** and queued follow-ups
+  survive it. `not_found`/`unknown` snapshots are explicit and never polled;
+  failed reads back off. The Subagents tab shows the snapshot's child runs
+  (#653).
 
 ### Removed
 
