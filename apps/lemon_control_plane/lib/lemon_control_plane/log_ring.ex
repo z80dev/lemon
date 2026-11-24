@@ -8,7 +8,8 @@ defmodule LemonControlPlane.LogRing do
   formatted once, truncated to 2 KB and stored with their level, millisecond
   timestamp and module. Redaction happens in `logs.tail` on the way out.
 
-  `get_logs/2` returns the newest `limit` entries, oldest first. `level` is a
+  `get_logs/2` returns `{:ok, entries}` with the newest `limit` entries, oldest
+  first, or `{:error, :unavailable}` when the ring is not running. `level` is a
   minimum severity (`"warning"` returns warning, error, critical, alert and
   emergency); `nil` returns every level.
   """
@@ -34,26 +35,32 @@ defmodule LemonControlPlane.LogRing do
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   @doc "Newest `limit` entries at or above `level` (nil = all), oldest first."
-  @spec get_logs(pos_integer(), String.t() | nil) :: [map()]
+  @spec get_logs(pos_integer(), String.t() | nil) :: {:ok, [map()]} | {:error, :unavailable}
   def get_logs(limit, level) when is_integer(limit) and limit > 0 do
-    minimum = min_severity(level)
+    # The table is owned by the ring server; it is absent while that server is down.
+    if :ets.whereis(@table) == :undefined do
+      {:error, :unavailable}
+    else
+      minimum = min_severity(level)
 
-    @table
-    |> :ets.tab2list()
-    |> Enum.flat_map(fn
-      {{:slot, _}, seq, entry} -> [{seq, entry}]
-      _ -> []
-    end)
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.map(&elem(&1, 1))
-    |> Enum.filter(&(Map.get(@severity, &1.level, 0) >= minimum))
-    |> Enum.take(-limit)
-    |> Enum.map(&project/1)
-  rescue
-    ArgumentError -> []
+      entries =
+        @table
+        |> :ets.tab2list()
+        |> Enum.flat_map(fn
+          {{:slot, _}, seq, entry} -> [{seq, entry}]
+          _ -> []
+        end)
+        |> Enum.sort_by(&elem(&1, 0))
+        |> Enum.map(&elem(&1, 1))
+        |> Enum.filter(&(Map.get(@severity, &1.level, 0) >= minimum))
+        |> Enum.take(-limit)
+        |> Enum.map(&project/1)
+
+      {:ok, entries}
+    end
   end
 
-  def get_logs(_limit, _level), do: []
+  def get_logs(_limit, _level), do: {:ok, []}
 
   # -- :logger handler callbacks ---------------------------------------------
 

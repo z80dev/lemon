@@ -226,7 +226,16 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       )
 
     File.mkdir_p!(Path.join(tmp_dir, "docs"))
+    File.mkdir_p!(Path.join(tmp_dir, "scripts"))
     File.write!(Path.join(tmp_dir, "docs/README.md"), "# Docs\n")
+    File.write!(Path.join(tmp_dir, "scripts/verify_packages"), "PACKAGES=()\n")
+
+    ArchitecturePolicy.allowed_direct_deps()
+    |> Enum.each(fn {app, deps} ->
+      app_dir = Path.join(tmp_dir, "apps/#{app}")
+      File.mkdir_p!(app_dir)
+      File.write!(Path.join(app_dir, "mix.exs"), mix_file_for(app, deps))
+    end)
 
     File.write!(
       Path.join(tmp_dir, "docs/architecture_boundaries.md"),
@@ -239,16 +248,15 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       #{architecture_policy_section}
       <!-- architecture_policy:end -->
 
+      ## Package Map
+
+      <!-- package_map:start -->
+      #{ArchitectureDocs.render_package_map_markdown(tmp_dir)}
+      <!-- package_map:end -->
+
       ## Enforcement
       """
     )
-
-    ArchitecturePolicy.allowed_direct_deps()
-    |> Enum.each(fn {app, deps} ->
-      app_dir = Path.join(tmp_dir, "apps/#{app}")
-      File.mkdir_p!(app_dir)
-      File.write!(Path.join(app_dir, "mix.exs"), mix_file_for(app, deps))
-    end)
 
     tmp_dir
   end

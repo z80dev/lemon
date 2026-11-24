@@ -65,12 +65,14 @@ defmodule LemonControlPlane.A2A.Handler do
   defp list_tasks(params, peer_id) do
     limit = normalize_limit(params["pageSize"] || params["limit"])
 
-    tasks =
-      A2AStore.list_tasks(peer_id, limit: limit)
-      |> Enum.map(&Runner.reconcile/1)
-      |> Enum.map(&TaskView.render/1)
+    case A2AStore.list_tasks(peer_id, limit: limit) do
+      {:ok, tasks} ->
+        tasks = tasks |> Enum.map(&Runner.reconcile/1) |> Enum.map(&TaskView.render/1)
+        {:ok, %{"tasks" => tasks, "nextPageToken" => nil}}
 
-    {:ok, %{"tasks" => tasks, "nextPageToken" => nil}}
+      {:error, _reason} ->
+        task_store_unavailable()
+    end
   end
 
   defp cancel_task(params, peer_id) do
@@ -108,13 +110,16 @@ defmodule LemonControlPlane.A2A.Handler do
   end
 
   defp owned_task(id, peer_id) when is_binary(id) do
-    case A2AStore.get_task(id) do
-      %{peer_id: ^peer_id} = task -> {:ok, Runner.reconcile(task)}
-      _ -> {:error, -32_001, "Task not found"}
+    case A2AStore.fetch_task(id) do
+      {:ok, %{peer_id: ^peer_id} = task} -> {:ok, Runner.reconcile(task)}
+      {:ok, _absent_or_foreign} -> {:error, -32_001, "Task not found"}
+      {:error, _reason} -> task_store_unavailable()
     end
   end
 
   defp owned_task(_, _), do: {:error, -32_602, "task id is required"}
+
+  defp task_store_unavailable, do: {:error, -32_603, "Task store is temporarily unavailable"}
 
   defp normalize_limit(value) when is_integer(value), do: value |> min(100) |> max(1)
   defp normalize_limit(_), do: 50

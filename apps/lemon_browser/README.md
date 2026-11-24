@@ -12,14 +12,12 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 | Module | Purpose |
 |---|---|
 | `LemonBrowser` | Backend-neutral request/status facade |
-| `LemonBrowser.Backend` | Contract for local, paired-node, and controller backends |
+| `LemonBrowser.Backend` | Contract for local, Tern, and hosted backends |
 | `LemonBrowser.BackendRegistry` | Built-in-safe runtime backend registry |
 | `LemonBrowser.CloudSession` | Exact-session hosted CDP lifecycle and attach-only driver ownership |
 | `LemonBrowser.CamofoxSession` | Exact-session Camofox REST/Firefox adapter |
 | `LemonBrowser.TernSession` | Exact-session/run/pane native PiP ownership, adoption, and bounded cleanup |
-| `LemonBrowser.HybridRouter` | Per-session local/private versus public-provider route memory |
-| `LemonBrowser.LocalServer` | Supervised driver process: `request/3`, `status/0`, `stop/1` |
-| `LemonBrowser.ControllerBroker` | Single-use controller tickets, exact identity binding, capability checks, timeouts |
+| `LemonBrowser.LocalServer` | Supervised driver process: `request/3`, `status/0`, `stop_driver/1`, `stop/1` |
 | `LemonBrowser.RoutePolicy` | Navigation classification and guardrails: `validate_navigation/2`, `safe/1` |
 | `LemonBrowser.Artifacts` | Metadata over saved artifacts: `recent/1`, `summary/1`, `cleanup/1` |
 | `LemonBrowser.Env` | The app's environment-variable registry, aggregated by `LemonCore.Env` |
@@ -50,9 +48,23 @@ not a fabricated permission grant.
 
 `request/3` takes a method name, a map of arguments and an optional timeout in
 milliseconds (default `30_000`), and answers `{:ok, result}` or
-`{:error, reason}`. Requests are multiplexed over one helper process: each one
-carries an id, and a request that outlives its timeout answers
-`{:error, "Browser request timed out"}` without disturbing the others.
+`{:error, reason}`. One helper process runs the requests one at a time, in
+arrival order, across all sessions; the next request starts only after the
+previous one has actually finished, so a slow request delays the ones queued
+behind it. Each request carries an absolute deadline (its timeout from when it
+was sent), and the helper never starts a request after that deadline: a request
+still queued answers `{:error, "Browser request timed out before it started"}`
+and never ran. A request that started but did not finish answers
+`{:error, "Browser request timed out"}` when it only reads (tabs, snapshot,
+content, screenshot, cookies, events, wait-for-selector, allowlisted CDP) and
+`{:error, :outcome_unknown}` for anything else (click, type, press, navigate,
+select, upload, download, evaluate, cookie writes, tab changes, ...). The same
+holds when the helper exits or stops answering mid-request. An
+`:outcome_unknown` action may already have taken effect: inspect the page
+before acting again; Lemon never retries it. After a closed tab or lost
+connection the helper reconnects and re-runs read-only requests only. A request
+still unsettled 10 seconds after its deadline makes the helper stop itself and
+the Chrome it launched; the next request starts a fresh one.
 
 `LemonBrowser.LocalServer.status/0` reports whether the driver is available and
 running, the pending/completed/failed counts, the last error, and the resolved
@@ -66,12 +78,10 @@ facade. See [Choosing a browser provider](../../docs/tools/browser.md#choosing-a
 Runtime packages can implement `LemonBrowser.Backend` and register it with
 `LemonBrowser.BackendRegistry`; built-in backend IDs cannot be replaced.
 
-Built-ins are `local`, `tern`, `controller`, `hybrid`, `browserbase`, `browser_use`,
-`firecrawl`, and `camofox`. Hosted CDP sessions are created lazily, attached by
+Built-ins are `local`, `tern`, `browserbase`, `browser_use`, `firecrawl`, and
+`camofox`. Hosted CDP sessions are created lazily, attached by
 the Node/Playwright driver in attach-only mode, scoped to the exact Lemon
-session/profile/run, and explicitly released after bounded idle time. The
-hybrid backend requires an explicit public backend and never treats a hosted
-failure as permission to fall back to a different local identity.
+session/profile/run, and explicitly released after bounded idle time.
 
 When evaluation enables the core native-process ledger, the local driver is
 tracked before execution. Browser dispatch is separately recorded as uncertain:
@@ -157,7 +167,16 @@ If `node` is missing, or the driver path does not resolve, `request/3` answers
 `{:error, "node executable not found on PATH"}` or
 `{:error, "Local browser driver not found..."}`, the error is remembered in
 `status/0`, and the supervision tree stays up. If a running helper exits, only
-the requests in flight fail; the next request starts a fresh one.
+the requests in flight fail; the next request starts a fresh one. A browser
+start that fails (a slow Chrome launch, a relay or CDP endpoint that is briefly
+down) fails that request only; the next request tries the start again.
+
+Each request resolves its browser identity (provider, endpoint, profile)
+without changing the server's state. A different identity stops the idle
+helper and starts one for the new identity; while another request is in
+flight the change is refused. `LocalServer.stop_driver/1` (facade:
+`LemonBrowser.stop_local_driver/0`; CLI: `lemon browser stop`) stops the
+helper and the Chrome it launched on demand.
 
 ### Environment variables
 
@@ -168,12 +187,10 @@ the requests in flight fail; the next request starts a fresh one.
 | `LEMON_BROWSER_CDP_ENDPOINT` | — | CDP websocket endpoint to attach to instead of launching a browser |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Only attach to an existing browser, never launch one |
 | `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS` | `false` | Required to attach to a browser Lemon did not launch; such a browser bypasses the driver's egress proxy |
-| `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port for a managed browser (positive integers only) |
+| `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port for attach-only mode; a managed browser is launched on a free port and never adopts this one (positive integers only) |
 | `LEMON_BROWSER_RELAY_TOKEN` | — | Required shared secret for the loopback MV3 extension/CDP relay |
 | `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |
 | `LEMON_BROWSER_BACKEND` | `local` | Built-in browser backend id |
-| `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Hybrid route for local/private targets |
-| `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | — | Required hybrid route for public targets |
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | — | Browserbase hosted sessions |
 | `BROWSER_USE_API_KEY` | — | Browser Use Cloud hosted sessions |
 | `FIRECRAWL_API_KEY` | — | Firecrawl hosted browser sessions |

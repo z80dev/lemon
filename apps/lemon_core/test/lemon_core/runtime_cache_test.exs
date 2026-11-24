@@ -3,7 +3,7 @@ defmodule LemonCore.RuntimeCacheTest do
 
   import ExUnit.CaptureLog
 
-  alias LemonCore.{Bus, ExecApprovalExpiry, LoopbackListener, RuntimeCache}
+  alias LemonCore.{Bus, ExecApprovalExpiry, RuntimeCache}
   alias LemonCore.Store.Hooks
 
   setup do
@@ -68,30 +68,6 @@ defmodule LemonCore.RuntimeCacheTest do
 
     assert length(Regex.scan(~r/Logged once per module/, log)) == 1
     assert RuntimeCache.get(key) == true
-  end
-
-  test "loopback UID cache is retained after the first inspector exits" do
-    key = {LoopbackListener, :uid}
-    original = :ets.lookup(RuntimeCache, key)
-    :ets.delete(RuntimeCache, key)
-
-    on_exit(fn ->
-      :ets.delete(RuntimeCache, key)
-      :ets.insert(RuntimeCache, original)
-    end)
-
-    {caller, monitor} =
-      spawn_monitor(fn ->
-        # Unsupported inspection still resolves the real process UID first,
-        # without depending on a listening port or OS socket-table timing.
-        assert :unverifiable =
-                 LoopbackListener.owned_by_self?({{127, 0, 0, 1}, 4044}, os_type: {:win32, :nt})
-      end)
-
-    assert_receive {:DOWN, ^monitor, :process, ^caller, :normal}, 1_000
-    assert is_integer(RuntimeCache.get(key))
-    assert RuntimeCache.get(key) >= 0
-    assert :ets.info(RuntimeCache, :owner) == Process.whereis(RuntimeCache)
   end
 
   test "automatic bus detection does not lazily publish" do

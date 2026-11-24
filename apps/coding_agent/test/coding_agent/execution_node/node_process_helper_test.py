@@ -137,11 +137,11 @@ class NodeProcessHelperTest(unittest.TestCase):
         os.symlink(outside, os.path.join(self.root, "escape"))
         for cwd in ("escape", "../outside"):
             with self.subTest(cwd=cwd):
-                self.assertEqual(self.receive(self.launch(["report"], cwd=cwd)), {"error": "path_not_allowed"})
+                self.assertEqual(self.receive(self.launch(["report"], cwd=cwd)), {"error": "path_not_allowed", "started": False})
 
     def test_launch_failure_is_an_error_not_fabricated_exit(self):
         helper = self.launch([], argv=["lemon-native-executable-that-does-not-exist"])
-        self.assertEqual(self.receive(helper), {"error": "executable_not_found"})
+        self.assertEqual(self.receive(helper), {"error": "executable_not_found", "started": False})
 
 
 if __name__ == "__main__":

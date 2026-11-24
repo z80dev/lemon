@@ -2,8 +2,16 @@ defmodule CodingAgent.RunGraphServer do
   @moduledoc """
   GenServer that owns the RunGraph ETS table and manages DETS persistence.
 
-  This ensures the ETS table survives process crashes and is properly reloaded
-  from DETS on restart. Running runs are marked as :lost on restart.
+  ## Restart Semantics
+
+  `CodingAgent.DurableTable` gives the mirror an ETS heir. If this owner
+  crashes, its restart reclaims the live table unchanged: queued and running
+  runs keep their status and their workers' later transitions are accepted.
+
+  Only a boot (first start, application restart or a clean owner stop) loads
+  from DETS. Rows whose workers cannot have survived are then normalized:
+  `:queued` and `:running` become `:lost` with `:lost_on_restart`, and that
+  outcome is persisted so a waiting join returns instead of hanging.
 
   ## Serialized Writes
 
@@ -24,13 +32,17 @@ defmodule CodingAgent.RunGraphServer do
 
   DETS loading completes synchronously in `init/1`. `start_link/1` does not
   return, and no call can observe or mutate the ETS table, until the persisted
-  snapshot has been loaded and running records have been marked lost.
+  snapshot has been loaded and boot normalization has been persisted.
 
   ## Cleanup
 
   The shared `CodingAgent.DurableTable` owner sweeps its expiration index in
   this mailbox. Retained runs are not scanned and no background sweep task can
-  race a live update.
+  race a live update. Terminal runs expire after `:run_graph_ttl_seconds`.
+  A queued or running run without an update for
+  `:run_graph_stale_ttl_seconds` (default 7 days) is marked `:lost` with
+  `:stale` instead of being deleted, so joins on it return; the terminal row
+  then expires normally.
   """
 
   use CodingAgent.DurableTable
@@ -162,6 +174,7 @@ defmodule CodingAgent.RunGraphServer do
         path: dets_path(opts),
         row_arity: 2,
         normalize: &__MODULE__.normalize_row/2,
+        after_load: &__MODULE__.persist_restored_rows/1,
         timestamp: &__MODULE__.expiry_timestamp/1,
         ttl_key: :run_graph_ttl_seconds,
         interval_key: :run_graph_cleanup_interval_seconds
@@ -288,7 +301,7 @@ defmodule CodingAgent.RunGraphServer do
 
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
-    deleted_count = DurableTable.cleanup(state, ttl_seconds)
+    deleted_count = DurableTable.cleanup(state, ttl_seconds, &expire_run(state, &1))
     {:reply, {:ok, deleted_count}, state}
   end
 
@@ -303,7 +316,7 @@ defmodule CodingAgent.RunGraphServer do
   @impl true
   def handle_info(:cleanup, state) do
     state = ensure_tables(state)
-    DurableTable.periodic_cleanup(state)
+    DurableTable.periodic_cleanup(state, &expire_run(state, &1))
     {:noreply, state}
   end
 
@@ -374,10 +387,11 @@ defmodule CodingAgent.RunGraphServer do
 
   defp get_record_field(_record, _key), do: nil
 
+  # Boot only: a queued or running run's worker did not survive the restart.
   @doc false
   def normalize_row({run_id, record}, _state) do
     record =
-      if record[:status] == :running do
+      if RunGraph.normalize_status(record[:status]) in [:queued, :running] do
         record
         |> Map.put(:status, :lost)
         |> Map.put(:error, :lost_on_restart)
@@ -390,10 +404,80 @@ defmodule CodingAgent.RunGraphServer do
   end
 
   @doc false
-  def expiry_timestamp({_id, record}) do
-    if record[:status] in [:completed, :error, :lost, :killed, :cancelled],
-      do: DurableTable.terminal_timestamp(record)
+  def persist_restored_rows(state) do
+    :ets.foldl(
+      fn
+        {_id, %{status: :lost, error: :lost_on_restart}} = row, :ok ->
+          DurableTable.persist(state.table, row)
+
+        _row, :ok ->
+          :ok
+      end,
+      :ok,
+      state.table
+    )
+
+    :ok = DurableTable.sync(state.table)
+    state
   end
+
+  @doc false
+  def expiry_timestamp({_id, record}) do
+    if terminal?(record) do
+      DurableTable.terminal_timestamp(record)
+    else
+      # Offset so the shared sweep (cutoff = now - ttl) reaches a queued or
+      # running row once it has been idle for the stale TTL.
+      case DurableTable.terminal_timestamp(record) do
+        timestamp when is_integer(timestamp) ->
+          timestamp + (stale_ttl_seconds() - ttl_seconds()) * 1_000
+
+        nil ->
+          nil
+      end
+    end
+  end
+
+  defp terminal?(record),
+    do:
+      RunGraph.normalize_status(record[:status]) in [
+        :completed,
+        :error,
+        :lost,
+        :killed,
+        :cancelled
+      ]
+
+  # A stale non-terminal run becomes terminal (and re-indexed as such) rather
+  # than disappearing under a waiting join; only terminal rows are deleted.
+  defp expire_run(state, run_id) do
+    case :ets.lookup(state.table, run_id) do
+      [{^run_id, record}] ->
+        if terminal?(record) do
+          DurableTable.delete(state.table, run_id)
+        else
+          updated =
+            Map.merge(record, %{
+              status: :lost,
+              error: :stale,
+              completed_at: System.system_time(:second),
+              updated_at: System.system_time(:second)
+            })
+
+          do_insert_record(state, run_id, updated)
+          broadcast_state_change(run_id, updated, :status_changed)
+          :retained
+        end
+
+      [] ->
+        :ok
+    end
+  end
+
+  defp ttl_seconds, do: Application.get_env(:coding_agent, :run_graph_ttl_seconds, 86_400)
+
+  defp stale_ttl_seconds,
+    do: Application.get_env(:coding_agent, :run_graph_stale_ttl_seconds, 604_800)
 
   defp dets_path(opts) do
     Keyword.get(opts, :dets_path) ||

@@ -8,7 +8,7 @@
  * deliberately discarded before anything reaches TUI state or rendering.
  */
 
-import { ControlPlaneError } from "../protocol/errors.ts";
+import { ControlPlaneError, classifyMutationError } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type {
 	BlueprintActivationResult,
@@ -262,7 +262,11 @@ async function activateBlueprint(ctx: CommandContext, argv: string[]): Promise<v
 		]);
 	} catch (error) {
 		state.preview = undefined;
-		throw error;
+		if (classifyMutationError(error) !== "unknown") throw error;
+		ctx.ui.notice(
+			"activation outcome unknown · it may already be applied · inspect the profile before retrying · profile draft kept",
+			"warning",
+		);
 	}
 }
 

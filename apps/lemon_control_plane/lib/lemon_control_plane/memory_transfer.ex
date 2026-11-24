@@ -304,17 +304,39 @@ defmodule LemonControlPlane.MemoryTransfer do
 
   defp complete(operation, receipt, ctx) do
     with :ok <- validate_receipt(operation, receipt),
-         {:ok, _} <-
+         {:ok, completed} <-
            persist(
              operation,
              %{"state" => "completed", "receipt" => Map.take(receipt, @receipt_keys)},
              ctx
            ) do
+      release_source(completed, ctx)
       {:ok, Map.take(receipt, @receipt_keys)}
     else
       _ -> uncertain(operation)
     end
   end
+
+  # The frozen source snapshot holds the copied memory content and is no longer
+  # needed once the receipt is recorded. A local source drops it now; a remote
+  # source node's copy expires with that node's Store TTL. Best effort: the
+  # copy itself has already completed.
+  defp release_source(%{"sourceNodeId" => "local"} = operation, ctx) do
+    opts = Map.get(ctx, :memory_transfer_opts, Map.get(ctx, :memory_opts, []))
+
+    _ =
+      ProfileMemoryTransfer.release(
+        operation["profileId"],
+        operation["mutationId"],
+        operation["sourceNodeId"],
+        operation["nodeId"],
+        opts
+      )
+
+    :ok
+  end
+
+  defp release_source(_operation, _ctx), do: :ok
 
   defp fail(operation, reason, ctx) do
     _ = persist(operation, %{"state" => "failed", "error" => safe_reason(reason)}, ctx)

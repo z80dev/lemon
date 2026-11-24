@@ -261,7 +261,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
     assert opts.project == "env-project"
   end
 
-  test "azure stream options resolve api key, legacy thinking_budgets, and provider_options", %{
+  test "azure stream options resolve api key and settings only into provider_options", %{
     cwd: cwd
   } do
     assert {:ok, _} = Secrets.set("azure_api_key", "azure-key-from-secret")
@@ -285,10 +285,12 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
       )
 
     assert opts.api_key == "azure-key-from-secret"
-    assert opts.thinking_budgets.azure_base_url == "https://example.openai.azure.com"
-    assert opts.thinking_budgets.azure_api_version == "2024-12-01-preview"
-    assert opts.thinking_budgets.azure_resource_name == "azure-resource"
-    assert opts.thinking_budgets.azure_deployment_name_map == %{"gpt-5" => "gpt-5-deployment"}
+    refute Enum.any?(Map.keys(opts.thinking_budgets), &(to_string(&1) =~ "azure"))
+    assert opts.provider_options.azure_openai_responses.resource_name == "azure-resource"
+
+    assert opts.provider_options.azure_openai_responses.deployment_name_map == %{
+             "gpt-5" => "gpt-5-deployment"
+           }
 
     assert opts.provider_options.azure_openai_responses.base_url ==
              "https://example.openai.azure.com"

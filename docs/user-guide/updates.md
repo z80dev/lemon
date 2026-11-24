@@ -83,6 +83,11 @@ If validation fails after a pointer moves, Lemon restores the exact prior
 pointers — both of them when a backend is part of the plan. Downloads and
 partial directories are removed on every outcome.
 
+Only one update, backend install, or rollback runs at a time; another one
+reports `Another update operation is active.` The lock records its holder, so
+if `lemon update` is killed or the machine halts mid-operation, the next
+command recovers the lock and removes the stranded partial directories itself.
+
 ### Service update order (breaking change)
 
 Running worker units must stop **before** the controller restarts and start

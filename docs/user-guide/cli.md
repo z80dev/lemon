@@ -1238,16 +1238,24 @@ lemon sessions maintain \
 
 Confirmation rejects relative ages and dates: it requires the exact numeric
 cutoff returned by preview. Tokens remain server-side and bind the full candidate
-set and revisions. Newly created or changed journals/artifacts, changed active
-state, or an expired/missing preview invalidate confirmation. Run and review a
-fresh preview after a mismatch. Mutation failures are not automatically retried;
-partial failures report verified counts without claiming complete success.
+set: every journal and artifact by its file metadata (size, inode, timestamps,
+mode, link count) and each candidate's content by SHA-256. Newly created or
+changed journals/artifacts, changed active state, or an expired/missing preview
+invalidate confirmation. Run and review a fresh preview after a mismatch.
+Mutation failures are not automatically retried; partial failures report
+verified counts without claiming complete success.
+
+Preview takes no lock, so running sessions, session startups and artifact
+writes are never blocked by it. Confirmation re-hashes candidates first and
+holds the exclusive session-root lock only to re-check metadata and move or
+delete them.
 
 Active native sessions are never moved or deleted. Artifacts are retained while
 their native session has a live, active, or archived journal. Only managed spill
 directories for orphaned sessions can be swept; arbitrary external targets and
-symlinks are excluded. Native journal listing uses a metadata index that rebuilds
-automatically if missing or stale; no manual repair command is needed.
+symlinks are excluded. Native journals have no metadata index; an
+`.index.sqlite3` file left in a session directory by an older release is unused
+and can be deleted.
 
 The authenticated admin RPC `sessions.maintain` uses `olderThanMs`, `dryRun`
 (default `true`), and optional `confirmToken`. Reports use camelCase keys,
@@ -1905,6 +1913,24 @@ lemon logs [-n 50] [--level info|warning|error] [--follow] [--json]
 | `--json` | Emit JSON; follow emits one document per poll |
 
 Reads logs.tail while online, otherwise the launcher log. File reads are bounded to the last 1 MiB; unknown-level file lines are excluded with --level.
+
+### `lemon browser`
+
+Stop the local browser driver and the Chrome it launched.
+
+```text
+lemon browser stop [--json]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `stop` | Stop the local browser driver and the Chrome it launched |
+
+| Option | Purpose |
+| --- | --- |
+| `--json` | Emit the result as JSON |
+
+Stops the driver behind the local, relay and cdp providers. A browser it only attached to keeps running. In-flight browser actions report an unknown outcome; the next browser request starts a fresh driver.
 
 ### `lemon omp`
 

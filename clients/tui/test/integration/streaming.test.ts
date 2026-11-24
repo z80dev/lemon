@@ -14,7 +14,7 @@ import { resetBlockIds } from "../../src/store/transcript-model.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
-import { unfinalizedBlocks } from "../helpers/transcript.ts";
+import { runText, unfinalizedBlocks } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const SESSION = "tui-it";
@@ -152,7 +152,7 @@ describe("scripted conversation", () => {
 		expect(assistant?.status).toBe("done");
 		// The accumulated delta buffer is the source of truth for the final text.
 		expect(assistant?.text).toBe(DELTAS.join(""));
-		expect(session.bufferFor(RUN)).toBe(DELTAS.join(""));
+		expect(runText(session, RUN)).toBe(DELTAS.join(""));
 
 		const tool = session.blocks.find((block) => block.kind === "tool");
 		expect(tool).toMatchObject({ actionId: "act-1", phase: "completed", ok: true });
@@ -180,12 +180,15 @@ describe("scripted conversation", () => {
 			});
 		}
 		const session = app.store.focused;
-		await waitFor(() => session.bufferFor(RUN).length > 0, { what: "the delta buffer" });
-		expect(session.bufferFor(RUN)).toBe("first second ");
+		await waitFor(() => runText(session, RUN).length > 0, { what: "the delta buffer" });
+		expect(runText(session, RUN)).toBe("first second ");
 	});
 
-	test("events for another session land in that session, not the focused one", async () => {
+	test("events for another opened session land in that session, not the focused one", async () => {
 		const { app, server } = await boot();
+		// The operator opened it earlier; only opened sessions keep a store.
+		const other = app.store.session("someone-else");
+		const received = app.client.events.waitFor("chat");
 		server.pushEvent("chat", {
 			type: "delta",
 			runId: "other-run",
@@ -193,11 +196,40 @@ describe("scripted conversation", () => {
 			seq: 1,
 			text: "not mine",
 		});
-		await waitFor(() => app.store.sessions.has("someone-else"), { what: "the background session" });
-
-		expect(app.store.session("someone-else").bufferFor("other-run")).toBe("not mine");
+		await received;
+		expect(runText(other, "other-run")).toBe("not mine");
 		expect(app.store.totalUnread()).toBe(1);
 		expect(transcript(app)).not.toContain("not mine");
+	});
+
+	test("1000 foreign sessions per burst leave one store and no counters, burst after burst", async () => {
+		const { app, server } = await boot();
+		let seen = 0;
+		const off = app.client.events.on("agent", () => {
+			seen += 1;
+		});
+		const heap: number[] = [];
+		for (let burst = 1; burst <= 3; burst++) {
+			for (let index = 0; index < 1000; index++) {
+				const sessionKey = `foreign-${index}`;
+				server.pushEvent("chat", { type: "delta", runId: "r", sessionKey, seq: burst, text: "x" });
+				server.pushEvent("session.event", {
+					sessionKey,
+					cursor: { version: 1, sessionId: "n", streamId: "s", seq: burst },
+					events: [],
+				});
+				server.pushEvent("agent", { type: "started", runId: `r${burst}`, sessionKey });
+			}
+			await waitFor(() => seen === burst * 1000, { what: "the burst", timeoutMs: 10_000 });
+			expect([...app.store.sessions.keys()]).toEqual([app.store.focusedKey]);
+			Bun.gc(true);
+			heap.push(process.memoryUsage().heapUsed);
+		}
+		off();
+		// Nothing is retained per foreign session, so later bursts do not grow the heap.
+		expect(heap[2]! - heap[0]!).toBeLessThan(8 * 1024 * 1024);
+		expect(app.store.totalUnread()).toBe(0);
+		expect(app.store.busySessions()).toBe(0);
 	});
 
 	test("a failed run renders its error and clears busy", async () => {
@@ -266,7 +298,7 @@ describe("scripted conversation", () => {
 		});
 
 		const session = app.store.focused;
-		await waitFor(() => session.bufferFor(RUN).length > 0, { what: "the first delta" });
+		await waitFor(() => runText(session, RUN).length > 0, { what: "the first delta" });
 		app.chatContainer.render(80);
 		expect(unfinalizedBlocks(app.chatContainer).length).toBeGreaterThan(0);
 

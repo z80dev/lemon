@@ -1685,8 +1685,6 @@ defmodule LemonCore.Store do
 
   # 48 hours for idempotency entries
   @idempotency_retention_ms 48 * 60 * 60 * 1000
-  # 48 hours for cron run entries
-  @cron_runs_retention_ms 48 * 60 * 60 * 1000
 
   @impl true
   def handle_info(:sweep_expired, state) do
@@ -1703,8 +1701,7 @@ defmodule LemonCore.Store do
       Enum.map(@expiring_tables, &{&1, :expires_at, now}) ++
         introspection_sweeps ++
         [
-          {:idempotency, :inserted_at_ms, now - @idempotency_retention_ms},
-          {:cron_runs, :started_at_ms, now - @cron_runs_retention_ms}
+          {:idempotency, :inserted_at_ms, now - @idempotency_retention_ms}
         ]
 
     backend_state =

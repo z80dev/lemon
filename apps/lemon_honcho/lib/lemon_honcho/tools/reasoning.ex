@@ -136,6 +136,7 @@ defmodule LemonHoncho.Tools.Reasoning do
       {:error, :unproven_context} -> Common.unproven_context(@tool_name)
       {:error, {:invalid_input, message}} -> failure(message)
       {:error, {:withheld, parameter}} -> withheld(parameter)
+      {:error, :outcome_unknown} -> failure(Common.outcome_unknown_message("reasoning"))
       {:error, {:unauthorized, _body}} -> failure(Common.unauthorized_message())
       {:error, {:api_error, status, body}} -> failure(Common.api_message(status, body))
       {:error, reason} -> failure("Honcho reasoning failed: #{inspect(reason)}")

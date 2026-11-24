@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.ReadSvg do
   @moduledoc false
 
-  alias CodingAgent.Tools.{ReadFormatCommand, ReadFormats, ReadFormatText}
+  alias CodingAgent.Tools.{BoundedInflate, ReadFormatCommand, ReadFormats, ReadFormatText}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.ImageContent
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -49,41 +49,19 @@ defmodule CodingAgent.Tools.ReadSvg do
   end
 
   defp gunzip(bytes, signal, limit) do
-    z = :zlib.open()
-
-    try do
-      :ok = :zlib.inflateInit(z, 31)
-
-      with {:ok, content} <- inflate(z, bytes, signal, limit, []) do
-        :ok = :zlib.inflateEnd(z)
+    case BoundedInflate.gunzip(bytes, limit, signal) do
+      {:ok, content} ->
         {:ok, content}
-      end
-    rescue
-      ErlangError -> {:error, "Cannot decode SVGZ: invalid gzip data"}
-    after
-      :zlib.close(z)
-    end
-  end
 
-  defp inflate(z, bytes, signal, remaining, chunks) do
-    with :ok <- check_abort(signal) do
-      {status, output} = :zlib.safeInflate(z, bytes)
-      size = IO.iodata_length(output)
+      {:error, :too_large} ->
+        {:error,
+         "Decoded SVGZ exceeds the rich-read member size limit (:format_max_member_bytes)"}
 
-      cond do
-        size > remaining ->
-          {:error,
-           "Decoded SVGZ exceeds the rich-read member size limit (:format_max_member_bytes)"}
+      {:error, :invalid} ->
+        {:error, "Cannot decode SVGZ: invalid gzip data"}
 
-        status == :finished ->
-          {:ok, IO.iodata_to_binary(Enum.reverse([output | chunks]))}
-
-        size == 0 ->
-          {:error, "Cannot decode SVGZ: incomplete gzip data"}
-
-        true ->
-          inflate(z, <<>>, signal, remaining - size, [output | chunks])
-      end
+      {:error, _} = error ->
+        error
     end
   end
 

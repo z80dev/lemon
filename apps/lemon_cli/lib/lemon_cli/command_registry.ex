@@ -629,6 +629,18 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "browser",
+      summary: "Stop the local browser driver and the Chrome it launched",
+      usage: "lemon browser stop [--json]",
+      subcommands: [
+        %{name: "stop", summary: "Stop the local browser driver and the Chrome it launched"}
+      ],
+      options: [option("--json", ["--json"], "Emit the result as JSON")],
+      details: [
+        "Stops the driver behind the local, relay and cdp providers. A browser it only attached to keeps running. In-flight browser actions report an unknown outcome; the next browser request starts a fresh driver."
+      ]
+    },
+    %{
       name: "omp",
       summary: "Start, watch, and steer omp coding-agent sessions",
       usage: "lemon omp <command> [args] [options]",

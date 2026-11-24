@@ -8,7 +8,6 @@ defmodule LemonWeb.ChatLiveTest do
   import LemonWeb.Test.OperatorAuth
 
   alias LemonCore.{Event, ExecApprovals, ExecApprovalStore}
-  alias LemonCore.Events.{ApprovalPending, ApprovalRequested}
   alias LemonWeb.Chat.PaneLive
 
   defmodule BusyBackend do
@@ -61,8 +60,25 @@ defmodule LemonWeb.ChatLiveTest do
 
   defp default_stub("chat.history", _), do: {:ok, %{"messages" => []}}
 
-  defp default_stub("sessions.snapshot", _),
-    do: {:error, {:unavailable, "Recovery fixture is not configured", nil}}
+  # A live idle owner whose event stream has not moved yet (live batches
+  # start at seq 1 of "stream-1"), reporting the session's real pending
+  # approvals the way `sessions.snapshot` projects them.
+  defp default_stub("sessions.snapshot", %{"sessionKey" => key}) do
+    {:ok, pending} = ExecApprovalStore.fetch_pending_list()
+
+    items =
+      for {_id, approval} <- Enum.sort_by(pending, &elem(&1, 0)),
+          Map.get(approval, :session_key) == key,
+          do: LemonControlPlane.Methods.ExecApprovalsGet.format_pending(approval)
+
+    {:ok,
+     key
+     |> recovery_snapshot(nil, "idle", [])
+     |> put_in(["snapshot", "approvals", "items"], items)}
+  end
+
+  defp default_stub("sessions.events", _),
+    do: {:error, {:unavailable, "Replay fixture is not configured", nil}}
 
   defp default_stub("sessions.plan", %{"sessionKey" => key}),
     do:
@@ -239,11 +255,13 @@ defmodule LemonWeb.ChatLiveTest do
   test "streaming deltas coalesce into one reply and completion never duplicates it", %{
     conn: conn
   } do
-    {_view, pane} = open(conn, key("stream"))
+    k = key("stream")
+    {_view, pane} = open(conn, k)
 
-    send(pane.pid, delta("run-s", 1, "Hello"))
-    send(pane.pid, delta("run-s", 2, " world"))
-    send(pane.pid, delta("run-s", 2, " world"))
+    emit(pane, k, delta("run-s", 1, "Hello"))
+    emit(pane, k, delta("run-s", 2, " world"))
+    # A redelivered batch is at or behind the cursor and is applied once.
+    emit(pane, k, delta("run-s", 2, " world"), seq: 2)
 
     eventually(fn ->
       has_element?(pane, "[data-kind=assistant][data-streaming=true]", "Hello world")
@@ -251,7 +269,7 @@ defmodule LemonWeb.ChatLiveTest do
 
     refute render(pane) =~ "Hello world world"
 
-    send(pane.pid, completed("run-s", "Hello world"))
+    emit(pane, k, completed("run-s", "Hello world"))
 
     eventually(fn ->
       has_element?(pane, "[data-kind=assistant][data-streaming=false]", "Hello world")
@@ -260,17 +278,30 @@ defmodule LemonWeb.ChatLiveTest do
     assert count(pane, "[data-kind=assistant]") == 1
 
     # A run that streamed nothing appends its final answer once.
-    send(pane.pid, completed("run-quiet", "Quiet answer"))
+    emit(pane, k, completed("run-quiet", "Quiet answer"))
     eventually(fn -> has_element?(pane, "[data-kind=assistant]", "Quiet answer") end)
     assert count(pane, "[data-kind=assistant]") == 2
   end
 
-  test "a tool start splits the reply into segments around the card", %{conn: conn} do
-    {_view, pane} = open(conn, key("segments"))
-    send(pane.pid, delta("run-g", 1, "Let me look."))
+  test "unsequenced session-topic deltas and tools are never rendered", %{conn: conn} do
+    k = key("unsequenced")
+    {_view, pane} = open(conn, k)
+    send(pane.pid, delta("run-u", 1, "UNSEQUENCED TEXT"))
+    send(pane.pid, action("run-u", "c-u", :started, %{name: "bash", tool_call_id: "c-u"}))
+    emit(pane, k, delta("run-u", 1, "sequenced text"))
+    eventually(fn -> has_element?(pane, "[data-kind=assistant]", "sequenced text") end)
+    refute render(pane) =~ "UNSEQUENCED TEXT"
+    refute has_element?(pane, "details.tool-card")
+  end
 
-    send(
-      pane.pid,
+  test "a tool start splits the reply into segments around the card", %{conn: conn} do
+    k = key("segments")
+    {_view, pane} = open(conn, k)
+    emit(pane, k, delta("run-g", 1, "Let me look."))
+
+    emit(
+      pane,
+      k,
       action("run-g", "c-read", :started, %{
         name: "read",
         args: %{"path" => "mix.exs"},
@@ -278,8 +309,7 @@ defmodule LemonWeb.ChatLiveTest do
       })
     )
 
-    send(pane.pid, delta("run-g", 2, "Found it."))
-    send(pane.pid, completed("run-g", "Let me look.Found it."))
+    emit(pane, k, [delta("run-g", 2, "Found it."), completed("run-g", "Let me look.Found it.")])
     eventually(fn -> count(pane, "[data-kind=assistant]") == 2 end)
     html = render(pane)
     assert pos(html, "Let me look.") < pos(html, "mix.exs")
@@ -287,7 +317,8 @@ defmodule LemonWeb.ChatLiveTest do
   end
 
   test "tool cards render per tool type and update in place", %{conn: conn} do
-    {_view, pane} = open(conn, key("tools"))
+    k = key("tools")
+    {_view, pane} = open(conn, k)
 
     events = [
       {"c-bash", %{name: "bash", args: %{"command" => "ls -la"}},
@@ -319,15 +350,16 @@ defmodule LemonWeb.ChatLiveTest do
     ]
 
     for {id, detail, _} <- events,
-        do: send(pane.pid, action("run-t", id, :started, Map.put(detail, :tool_call_id, id)))
+        do: emit(pane, k, action("run-t", id, :started, Map.put(detail, :tool_call_id, id)))
 
     eventually(fn -> count(pane, "details.tool-card[data-status=running]") == 8 end)
     ids = attribute(pane, "details.tool-card", "id")
 
     for {id, detail, result} <- events,
         do:
-          send(
-            pane.pid,
+          emit(
+            pane,
+            k,
             action(
               "run-t",
               id,
@@ -359,10 +391,12 @@ defmodule LemonWeb.ChatLiveTest do
   test "cancelled, failed and unknown completions stay distinct and show only visible text", %{
     conn: conn
   } do
-    {_view, pane} = open(conn, key("cancel"))
+    k = key("cancel")
+    {_view, pane} = open(conn, k)
 
-    send(
-      pane.pid,
+    emit(
+      pane,
+      k,
       action(
         "run-c",
         "c1",
@@ -383,15 +417,17 @@ defmodule LemonWeb.ChatLiveTest do
       )
     )
 
-    send(
-      pane.pid,
+    emit(
+      pane,
+      k,
       action("run-c", "c2", :completed, %{name: "read", tool_call_id: "c2", result: "ENOENT"},
         ok: false
       )
     )
 
-    send(
-      pane.pid,
+    emit(
+      pane,
+      k,
       action(
         "run-c",
         "c3",
@@ -401,7 +437,7 @@ defmodule LemonWeb.ChatLiveTest do
       )
     )
 
-    send(pane.pid, action("run-c", "c4", :completed, %{name: "unknown", tool_call_id: "c4"}))
+    emit(pane, k, action("run-c", "c4", :completed, %{name: "unknown", tool_call_id: "c4"}))
 
     eventually(fn -> count(pane, "details.tool-card") == 4 end)
     assert has_element?(pane, "details[data-status=cancelled]", "STARTED partial")
@@ -463,6 +499,138 @@ defmodule LemonWeb.ChatLiveTest do
     Task.await(req)
     eventually(fn -> not has_element?(pane, "[data-approval-id='#{id}']") end)
     assert has_element?(pane, ".approval-notice", "answered elsewhere")
+  end
+
+  test "approval cards keep command, path and arguments after a snapshot recovery", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("approval-recovery")
+    bash = "approval-bash-#{System.unique_integer([:positive])}"
+    edit = "approval-edit-#{System.unique_integer([:positive])}"
+    quiet = "approval-quiet-#{System.unique_integer([:positive])}"
+    bash_req = request(bash, k, "bash", %{"command" => "rm -rf ./build"})
+
+    edit_req =
+      request(edit, k, "edit", %{
+        "path" => "lib/app.ex",
+        "old_text" => "old line",
+        "new_text" => "NEW EDIT LINE"
+      })
+
+    eventually(fn ->
+      is_map(ExecApprovalStore.get_pending(bash)) and is_map(ExecApprovalStore.get_pending(edit))
+    end)
+
+    # The owner reports which approvals are pending; its projection need not
+    # carry what the card shows.
+    pending = fn ids ->
+      stub.("sessions.snapshot", fn _ ->
+        items =
+          for {id, tool} <- ids,
+              do: %{
+                "id" => id,
+                "sessionKey" => k,
+                "tool" => tool,
+                "action" => %{"cwdHash" => "h"}
+              }
+
+        {:ok,
+         k
+         |> recovery_snapshot(nil, "idle", [])
+         |> put_in(["snapshot", "approvals", "items"], items)}
+      end)
+    end
+
+    pending.([{bash, "bash"}, {edit, "edit"}])
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+
+    card_has? = fn id, text -> has_element?(pane, "[data-approval-id='#{id}']", text) end
+    assert card_has?.(bash, "rm -rf ./build")
+    assert card_has?.(edit, "lib/app.ex")
+    assert card_has?.(edit, "NEW EDIT LINE")
+
+    # A pending approval first seen through the snapshot (no event, not loaded
+    # at mount) is read in full before it is shown.
+    :ok =
+      ExecApprovalStore.put_pending(quiet, %{
+        id: quiet,
+        run_id: "run-quiet",
+        session_key: k,
+        tool: "write",
+        action: %{"path" => "notes/QUIET.md", "content" => "hello"},
+        requested_at_ms: System.system_time(:millisecond),
+        expires_at_ms: nil
+      })
+
+    on_exit(fn -> ExecApprovalStore.delete_pending(quiet) end)
+    pending.([{bash, "bash"}, {edit, "edit"}, {quiet, "write"}])
+    render_click(pane, "inspector-tab", %{"tab" => "subagents"})
+    _ = render_async(pane)
+    assert card_has?.(bash, "rm -rf ./build")
+    assert card_has?.(edit, "lib/app.ex")
+    assert card_has?.(quiet, "notes/QUIET.md")
+
+    for {id, req} <- [{bash, bash_req}, {edit, edit_req}] do
+      {:ok, %{decision: :deny}} = ExecApprovals.resolve(id, :deny)
+      Task.await(req)
+    end
+  end
+
+  test "a plan over the snapshot cap cannot be approved until the full plan loads", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("plan-cap")
+    id = "approval-plan-#{System.unique_integer([:positive])}"
+    full = "## Steps\n\n" <> String.duplicate("- step\n", 800) <> "FINAL STEP"
+
+    preview = %{
+      "id" => id,
+      "sessionKey" => k,
+      "tool" => "propose_plan",
+      "action" => %{"title" => "Big", "plan" => String.slice(full, 0, 4_096)},
+      "planTruncated" => true,
+      "truncated" => true
+    }
+
+    stub.(
+      "sessions.snapshot",
+      {:ok,
+       k
+       |> recovery_snapshot(nil, "idle", [])
+       |> put_in(["snapshot", "approvals", "items"], [preview])}
+    )
+
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    card = "[data-approval-id='#{id}']"
+    assert has_element?(pane, card <> " [id$=-plan-truncated]", "Load the full plan")
+    assert has_element?(pane, card <> " button[disabled]", "Approve & execute")
+    refute render(pane) =~ "FINAL STEP"
+
+    # The server refuses an approval of the truncated card, too.
+    render_click(pane, "resolve-approval", %{"id" => id, "decision" => "approve_once"})
+    assert has_element?(pane, ".approval-notice", "Load the full request before approving")
+    refute_received {:rpc, "exec.approval.resolve", _}
+
+    :ok =
+      ExecApprovalStore.put_pending(id, %{
+        id: id,
+        run_id: "run-plan",
+        session_key: k,
+        tool: "propose_plan",
+        action: %{"title" => "Big", "plan" => full},
+        requested_at_ms: System.system_time(:millisecond),
+        expires_at_ms: nil
+      })
+
+    on_exit(fn -> ExecApprovalStore.delete_pending(id) end)
+    pane |> element(card <> " button", "Load the full plan") |> render_click()
+    assert render(pane) =~ "FINAL STEP"
+    refute has_element?(pane, card <> " [id$=-plan-truncated]")
+    refute has_element?(pane, card <> " button[disabled]", "Approve & execute")
   end
 
   test "plan mode toggles through sessions.plan and exiting with a plan asks first", %{
@@ -750,166 +918,403 @@ defmodule LemonWeb.ChatLiveTest do
     assert_patch(view, "/chat/" <> URI.encode_www_form("agent:default:fork:local:unknown:child1"))
   end
 
-  test "reconnected pane replaces completed tool and approval state from the shared authority", %{
+  # ── One transcript pipeline (#653) ──────────────────────────────────────
+
+  test "a run streaming after the first snapshot appends deltas and never replaces the transcript",
+       %{conn: conn, stub: stub} do
+    k = key("append")
+
+    stub.(
+      "chat.history",
+      {:ok,
+       %{
+         "messages" => [
+           %{"id" => "h1", "role" => "user", "content" => "Earlier question", "timestampMs" => 1},
+           %{
+             "id" => "h2",
+             "role" => "assistant",
+             "content" => "Earlier answer",
+             "timestampMs" => 2
+           }
+         ]
+       }}
+    )
+
+    stub.("sessions.active", {:ok, %{"sessionKey" => k, "runId" => "run-live"}})
+    stub.("chat.send", {:ok, %{"runId" => "submission"}})
+
+    # The snapshot's bounded transcript rows are never rendered.
+    snapshot =
+      recovery_snapshot(
+        k,
+        "run-live",
+        "running",
+        [%{"id" => "snap", "role" => "assistant", "content" => "SNAPSHOT PREVIEW"}],
+        seq: 7
+      )
+
+    stub.("sessions.snapshot", {:ok, snapshot})
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+
+    # A row that exists only in this pane: any transcript reset would drop it.
+    render_submit(pane, "send", %{"chat" => %{"prompt" => "LOCAL ONLY ROW", "mode" => "steer"}})
+    assert has_element?(pane, "[data-kind=user]", "LOCAL ONLY ROW")
+
+    # Batches at or before the snapshot cursor are already reflected.
+    emit(pane, k, delta("run-live", 1, "BEFORE CURSOR"), seq: 7)
+    for seq <- 8..57, do: emit(pane, k, delta("run-live", seq, "t#{seq} "), seq: seq)
+
+    eventually(fn -> render(pane) =~ "t57" end)
+    assert has_element?(pane, "[data-kind=assistant][data-streaming=true]", "t8 t9 t10")
+
+    # A state read during the run changes no transcript row.
+    render_click(pane, "inspector-tab", %{"tab" => "subagents"})
+    _ = render_async(pane)
+    for seq <- 58..60, do: emit(pane, k, delta("run-live", seq, "t#{seq} "), seq: seq)
+    emit(pane, k, completed("run-live", "unused"), seq: 61)
+
+    eventually(fn ->
+      has_element?(pane, "[data-kind=assistant][data-streaming=false]", "t60")
+    end)
+
+    html = render(pane)
+    assert html =~ "LOCAL ONLY ROW"
+    assert html =~ "Earlier question"
+    assert html =~ "Earlier answer"
+    refute html =~ "SNAPSHOT PREVIEW"
+    refute html =~ "BEFORE CURSOR"
+    assert count(pane, "[data-kind=assistant]") == 2
+    assert has_element?(pane, "[data-kind=assistant]", "t8 t9 t10")
+  end
+
+  test "long answers and edit diffs come from history in full after reload, recovery and reconnect",
+       %{conn: conn, stub: stub} do
+    k = key("full-text")
+    answer = String.duplicate("0123456789", 2_000) <> " END-OF-ANSWER"
+    new_text = Enum.map_join(1..300, "\n", &"replacement line #{&1}") <> "\nLAST-NEW-LINE"
+    path = "lib/" <> String.duplicate("deeply/nested/", 20) <> "target_file.ex"
+    assert byte_size(answer) > 20_000 and byte_size(new_text) > 4_096
+
+    stub.(
+      "chat.history",
+      {:ok,
+       %{
+         "messages" => [
+           %{"id" => "u1", "role" => "user", "content" => "Rewrite it", "timestampMs" => 1},
+           %{
+             "id" => "t1",
+             "role" => "tool_use",
+             "toolCallId" => "c-edit",
+             "toolName" => "edit",
+             "arguments" => %{"path" => path, "old_text" => "old line", "new_text" => new_text},
+             "phase" => "started",
+             "timestampMs" => 2
+           },
+           %{
+             "id" => "t2",
+             "role" => "tool_result",
+             "toolCallId" => "c-edit",
+             "toolName" => "edit",
+             "content" => "ok",
+             "phase" => "completed",
+             "ok" => true,
+             "timestampMs" => 3
+           },
+           %{"id" => "a1", "role" => "assistant", "content" => answer, "timestampMs" => 4}
+         ]
+       }}
+    )
+
+    # The snapshot carries only a bounded preview of the same turn.
+    bounded =
+      recovery_snapshot(k, "run-done", "completed", [
+        %{"id" => "a1", "role" => "assistant", "content" => String.slice(answer, 0, 4_096)}
+      ])
+      |> put_in(["snapshot", "messagesTruncated"], true)
+
+    stub.("sessions.snapshot", {:ok, bounded})
+
+    stub.("sessions.events", fn %{"cursor" => cursor} ->
+      {:ok,
+       %{
+         "status" => "ok",
+         "sessionKey" => k,
+         "entries" => [],
+         "cursor" => cursor,
+         "hasMore" => false
+       }}
+    end)
+
+    full? = fn pane ->
+      html = render(pane)
+
+      html =~ "END-OF-ANSWER" and html =~ "LAST-NEW-LINE" and html =~ "target_file.ex" and
+        count(pane, "[data-kind=assistant]") == 1 and count(pane, "details.tool-card") == 1
+    end
+
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    assert full?.(pane)
+    assert has_element?(pane, "details[data-tool=edit] [data-diff=add]", "+LAST-NEW-LINE")
+
+    # Recovery after lost delivery replays from the cursor: nothing replaced.
+    send(pane.pid, {:stream_resync, :overflow})
+    _ = render(pane)
+    _ = render_async(pane)
+    assert full?.(pane)
+
+    # A changed stream reloads history, still in full.
+    emit(pane, k, delta("run-next", 1, "unused"), stream: "stream-rewound", seq: 9)
+    _ = render(pane)
+    _ = render_async(pane)
+    eventually(fn -> full?.(pane) end)
+
+    # Reconnect.
+    {_view, again} = open(conn, k)
+    _ = render_async(again)
+    assert full?.(again)
+  end
+
+  test "history is read once per open, on the connected mount", %{conn: conn} do
+    {_view, pane} = open(conn, key("history-once"))
+    _ = render_async(pane)
+    assert rpc_count("chat.history") == 1
+  end
+
+  test "a cursor gap replays the missing batches in order before continuing", %{
     conn: conn,
     stub: stub
   } do
-    k = key("recovery-terminal")
-    run_id = "run-recovery"
+    k = key("gap")
 
-    call = %{
-      "id" => "call-row",
-      "role" => "tool_use",
-      "toolCallId" => "call-recovery",
-      "toolName" => "bash",
-      "phase" => "started",
-      "timestampMs" => 1
-    }
+    stub.("sessions.events", fn %{"cursor" => %{"seq" => 1} = from} ->
+      entries =
+        for {seq, text} <- [{2, "B"}, {3, "C"}] do
+          %{
+            "cursor" => Map.put(from, "seq", seq),
+            "eventId" => "stream-1:#{seq}",
+            "events" => [
+              %{
+                "event" => "chat",
+                "payload" => %{"type" => "delta", "runId" => "run-gap", "text" => text}
+              }
+            ]
+          }
+        end
 
-    pending = %{
-      "id" => "approval-recovery",
-      "approvalId" => "approval-recovery",
-      "sessionKey" => k,
-      "tool" => "bash",
-      "action" => %{}
-    }
-
-    active =
-      recovery_snapshot(k, run_id, "running", [call])
-      |> put_in(["snapshot", "approvals", "items"], [pending])
-
-    stub.("sessions.snapshot", {:ok, active})
-    {view, pane} = open(conn, k)
-    _ = render_async(pane)
-    assert has_element?(pane, "details.tool-card[data-status=running]")
-    assert has_element?(pane, "[id^=approvals-]", "Approve")
-    GenServer.stop(view.pid, :normal)
-
-    receipt =
-      Map.merge(call, %{
-        "id" => "result-row",
-        "role" => "tool_result",
-        "phase" => "completed",
-        "ok" => true,
-        "content" => "completed while disconnected",
-        "timestampMs" => 2
-      })
-
-    answer = %{
-      "id" => "answer-row",
-      "role" => "assistant",
-      "content" => "Canonical recovered answer",
-      "timestampMs" => 3
-    }
-
-    done = recovery_snapshot(k, run_id, "completed", [call, receipt, answer])
-    stub.("sessions.snapshot", {:ok, done})
-    {_view, recovered} = open(conn, k)
-    _ = render_async(recovered)
-
-    assert has_element?(
-             recovered,
-             "details.tool-card[data-status=done]",
-             "completed while disconnected"
-           )
-
-    refute has_element?(recovered, "details.tool-card[data-status=running]")
-    refute has_element?(recovered, "[id^=approvals-] button")
-    assert count(recovered, "[data-kind=assistant]") == 1
-    assert has_element?(recovered, "[data-kind=assistant]", "Canonical recovered answer")
-
-    # Delayed transient packets and a stale approval cannot revive owner truth.
-    send(recovered.pid, delta(run_id, 99, "late text"))
-    send(recovered.pid, action(run_id, "call-recovery", :started, %{name: "bash"}))
-    send(recovered.pid, completed(run_id, "duplicate answer"))
-
-    send(recovered.pid, approval_requested(pending["id"], k))
-
-    _ = render(recovered)
-    _ = render_async(recovered)
-    assert count(recovered, "[data-kind=assistant]") == 1
-    refute render(recovered) =~ "late text"
-    refute render(recovered) =~ "duplicate answer"
-    refute has_element?(recovered, "details.tool-card[data-status=running]")
-    refute has_element?(recovered, "[id^=approvals-] button")
-
-    # Even a late/regressed owner response for the same fixed attempt is not
-    # permitted to turn a terminal card back into active work.
-    stub.("sessions.snapshot", {:ok, active})
-    send(recovered.pid, {:stream_resync, :overflow})
-    _ = render(recovered)
-    _ = render_async(recovered)
-    assert has_element?(recovered, "[data-kind=assistant]", "Canonical recovered answer")
-    refute has_element?(recovered, "[id^=run-line-]")
-    refute has_element?(recovered, "details.tool-card[data-status=running]")
-  end
-
-  test "an event racing recovery discards the old branch snapshot and replaces todo plan and owned work",
+      {:ok,
        %{
-         conn: conn,
-         stub: stub
-       } do
-    k = key("recovery-race")
-    test_pid = self()
-
-    old =
-      recovery_snapshot(k, "abandoned-run", "running", [
-        %{"id" => "old-answer", "role" => "assistant", "content" => "Abandoned branch"}
-      ])
-
-    stub.("sessions.snapshot", fn _ ->
-      send(test_pid, {:snapshot_waiting, self()})
-
-      receive do
-        :release_snapshot -> {:ok, old}
-      end
+         "status" => "ok",
+         "sessionKey" => k,
+         "entries" => entries,
+         "cursor" => Map.put(from, "seq", 3),
+         "hasMore" => false
+       }}
     end)
 
     {_view, pane} = open(conn, k)
-    assert_receive {:snapshot_waiting, reader}
-    send(pane.pid, delta("abandoned-run", 1, "obsolete flushed text"))
-    send(pane.pid, :flush)
-    send(pane.pid, action("abandoned-run", "obsolete-call", :started, %{name: "bash"}))
-
-    send(pane.pid, approval_requested("obsolete-approval", k))
-
+    _ = rpc_count("chat.history")
+    emit(pane, k, delta("run-gap", 1, "A"), seq: 1)
+    emit(pane, k, delta("run-gap", 4, "D"), seq: 4)
+    emit(pane, k, delta("run-gap", 5, "E"), seq: 5)
     _ = render(pane)
-    assert render(pane) =~ "obsolete flushed text"
-    assert has_element?(pane, "details.tool-card[data-status=running]")
-    assert has_element?(pane, "[id^=approvals-] button")
+    _ = render_async(pane)
+    eventually(fn -> has_element?(pane, "[data-kind=assistant]", "ABCDE") end)
+    assert_received {:rpc, "sessions.events", %{"cursor" => %{"seq" => 1}}}
+    assert rpc_count("chat.history") == 0
+  end
 
-    assert has_element?(
-             pane,
-             ~s([data-approval-id="obsolete-approval"] button[phx-click="resolve-approval"])
-           )
+  test "a new owner stream continues without a reload; a rewound stream reloads history", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("streams")
+    {:ok, rows} = Agent.start_link(fn -> [] end)
+    stub.("chat.history", fn _ -> {:ok, %{"messages" => Agent.get(rows, & &1)}} end)
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    _ = rpc_count("chat.history")
 
-    # Hold an actual handler's coalesced tail until recovery installs its rows.
-    # Cancel inside the channel callback so no timer/render scheduling decides
-    # whether the stale text is already committed or still buffered.
-    :sys.replace_state(pane.pid, fn state ->
-      {:noreply, socket} =
-        PaneLive.handle_info(
-          delta("abandoned-run", 2, "obsolete live text"),
-          state.socket
-        )
+    emit(pane, k, [delta("run-1", 1, "first owner"), completed("run-1", "first owner")], seq: 1)
 
-      Process.cancel_timer(socket.assigns.flush_timer)
-      %{state | socket: socket}
+    # A restarted owner process starts its own stream at 1.
+    emit(pane, k, delta("run-2", 1, "second owner"), stream: "stream-restarted", seq: 1)
+    eventually(fn -> has_element?(pane, "[data-kind=assistant]", "second owner") end)
+    assert has_element?(pane, "[data-kind=assistant]", "first owner")
+    assert rpc_count("chat.history") == 0
+
+    # A branch change keeps counting in a new stream: history is reread.
+    Agent.update(rows, fn _ ->
+      [%{"id" => "r1", "role" => "assistant", "content" => "Rewound branch", "timestampMs" => 1}]
     end)
 
-    current =
+    emit(pane, k, delta("run-3", 1, "after rewind"), stream: "stream-rewound", seq: 40)
+    _ = render(pane)
+    _ = render_async(pane)
+    eventually(fn -> has_element?(pane, "[data-kind=assistant]", "Rewound branch") end)
+    refute render(pane) =~ "first owner"
+    assert rpc_count("chat.history") == 1
+  end
+
+  test "not_found is an empty idle session and unknown is explicit; neither polls", %{
+    conn: conn,
+    stub: stub
+  } do
+    stub.("sessions.snapshot", {:error, {:not_found, "Session not found", nil}})
+    {_view, pane} = open(conn, key("not-found"))
+    _ = render_async(pane)
+    refute has_element?(pane, "[id^=run-unavailable-]")
+    refute has_element?(pane, "[id^=state-notice-]")
+    render_click(pane, "inspector-tab", %{"tab" => "plan"})
+    assert has_element?(pane, "[id^=todo-recovery-]", "has not started yet")
+    assert :sys.get_state(pane.pid).socket.assigns.recovery.timer == nil
+
+    k = key("snapshot-unknown")
+    stub.("sessions.snapshot", {:ok, recovery_snapshot(k, nil, "unknown", [])})
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    assert rpc_count("sessions.snapshot") == 2
+    assert has_element?(pane, "[id^=run-unavailable-]")
+    assert has_element?(pane, "textarea[id^=composer-][disabled]")
+    assert has_element?(pane, "[id^=state-notice-]", "Current run state is unavailable.")
+    assert :sys.get_state(pane.pid).socket.assigns.recovery.timer == nil
+    # Longer than the first error backoff: nothing polls an explicit answer.
+    refute_receive {:rpc, "sessions.snapshot", _}, 1_200
+    assert rpc_count("sessions.snapshot") == 0
+    render_submit(pane, "send", %{"chat" => %{"prompt" => "nope", "mode" => "collect"}})
+    refute_received {:rpc, "chat.send", _}
+  end
+
+  test "a failed snapshot backs off instead of polling", %{conn: conn, stub: stub} do
+    stub.("sessions.snapshot", {:error, {:unavailable, "PRIVATE owner failure", nil}})
+    {_view, pane} = open(conn, key("backoff"))
+    _ = render_async(pane)
+    assert has_element?(pane, "[id^=state-notice-]", "Lemon will try again shortly")
+    refute render(pane) =~ "PRIVATE"
+    recovery = :sys.get_state(pane.pid).socket.assigns.recovery
+    assert recovery.failures == 1 and is_reference(recovery.timer)
+  end
+
+  test "a stopping run and queued follow-ups go through the run reducer on recovery", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("stopping")
+    {:ok, phase} = Agent.start_link(fn -> "running" end)
+    stub.("sessions.active", {:ok, %{"sessionKey" => k, "runId" => "run-a"}})
+    stub.("chat.send", {:ok, %{"runId" => "submission"}})
+    stub.("chat.abort", {:ok, %{"aborted" => true}})
+
+    stub.("sessions.snapshot", fn _ ->
+      {:ok, recovery_snapshot(k, "run-a", Agent.get(phase, & &1), [])}
+    end)
+
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    render_submit(pane, "send", %{"chat" => %{"prompt" => "later please", "mode" => "followup"}})
+    assert has_element?(pane, "[id^=queued-]", "later please")
+    render_click(pane, "stop")
+    assert has_element?(pane, "[id^=run-status-]", "Stopping")
+
+    render_click(pane, "inspector-tab", %{"tab" => "subagents"})
+    _ = render_async(pane)
+    assert has_element?(pane, "[id^=run-status-]", "Stopping")
+    assert has_element?(pane, "[id^=queued-]", "later please")
+
+    Agent.update(phase, fn _ -> "completed" end)
+    render_click(pane, "inspector-tab", %{"tab" => "subagents"})
+    _ = render_async(pane)
+    refute has_element?(pane, "[id^=queued-]")
+    refute has_element?(pane, "[id^=run-line-]")
+  end
+
+  test "a run that ends before reaching the native session completes from its unsequenced event",
+       %{conn: conn, stub: stub} do
+    k = key("pre-native")
+    stub.("chat.send", {:ok, %{"runId" => "run-pre"}})
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    render_submit(pane, "send", %{"chat" => %{"prompt" => "hello", "mode" => "collect"}})
+    assert has_element?(pane, "[id^=run-line-]")
+
+    send(
+      pane.pid,
+      Event.new(
+        :run_completed,
+        %{completed: %{ok: false, error: :runtime_unavailable}},
+        %{run_id: "run-pre", session_key: k}
+      )
+    )
+
+    eventually(fn -> not has_element?(pane, "[id^=run-line-]") end)
+    assert has_element?(pane, "[data-kind=notice]", "execution runtime is unavailable")
+  end
+
+  test "a fast token stream shows no recovery banner and reads state at most once per run", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("fast-stream")
+    run_id = "run-fast"
+    stub.("sessions.active", {:ok, %{"sessionKey" => k, "runId" => run_id}})
+
+    # Every owner read races the live output, as it does under streaming.
+    stub.(
+      "sessions.snapshot",
+      {:ok,
+       %{
+         "status" => "retry",
+         "sessionKey" => k,
+         "identity" => nil,
+         "reason" => "snapshot_raced",
+         "retrySafe" => true
+       }}
+    )
+
+    {_view, pane} = open(conn, k)
+    _ = render_async(pane)
+    assert rpc_count("sessions.snapshot") == 1
+
+    for seq <- 1..400 do
+      :ok =
+        LemonCore.Bus.broadcast(
+          "session_events",
+          batch(k, "stream-1", seq, delta(run_id, seq, "tok "))
+        )
+
+      if rem(seq, 20) == 0, do: Process.sleep(2)
+    end
+
+    eventually(fn -> count_text(pane, "tok") == 400 end)
+    during_run = rpc_count("sessions.snapshot")
+
+    :ok =
+      LemonCore.Bus.broadcast("session_events", batch(k, "stream-1", 401, completed(run_id, "x")))
+
+    eventually(fn -> not has_element?(pane, "[id^=run-line-]") end)
+    _ = render_async(pane)
+
+    assert during_run == 0
+    assert rpc_count("sessions.snapshot") == 1
+    refute has_element?(pane, "[id^=state-notice-]")
+    refute has_element?(pane, "[id^=run-unavailable-]")
+    assert count(pane, "[data-kind=assistant]") == 1
+  end
+
+  test "snapshot state replaces todos, processes, children and approvals, never text", %{
+    conn: conn,
+    stub: stub
+  } do
+    k = key("state")
+
+    snapshot =
       recovery_snapshot(k, "current-run", "completed", [
-        %{"id" => "current-answer", "role" => "assistant", "content" => "Current branch answer"}
+        %{"id" => "a", "role" => "assistant", "content" => "SNAPSHOT TEXT"}
       ])
-      |> put_in(["identity", "branchId"], "selected-branch")
-      |> put_in(["identity", "revision"], "selected-revision")
       |> put_in(["snapshot", "todos", "items"], [
         %{"id" => "current-todo", "content" => "Current branch todo", "status" => "pending"}
       ])
-      |> put_in(["snapshot", "plan", "value"], %{
-        "mode" => "plan",
-        "content" => "Current branch plan"
-      })
       |> put_in(["snapshot", "children", "items"], [
         %{
           "taskId" => "fixed-task",
@@ -928,35 +1333,18 @@ defmodule LemonWeb.ChatLiveTest do
       |> put_in(["snapshot", "todos", "truncated"], true)
       |> put_in(["snapshot", "children", "truncated"], true)
       |> put_in(["snapshot", "processes", "truncated"], true)
+      |> put_in(["snapshot", "approvals"], %{"status" => "unavailable"})
 
-    stub.("sessions.snapshot", {:ok, current})
-    send(reader, :release_snapshot)
+    stub.("sessions.snapshot", {:ok, snapshot})
+    {_view, pane} = open(conn, k)
     _ = render_async(pane)
-    assert has_element?(pane, "[data-kind=assistant]", "Current branch answer")
-    refute render(pane) =~ "Abandoned branch"
-    refute render(pane) =~ "obsolete live text"
-    refute render(pane) =~ "obsolete flushed text"
-    refute has_element?(pane, "details.tool-card[data-status=running]")
-    refute has_element?(pane, "[id^=approvals-] button")
-
-    # A timer packet already queued before cancellation and delayed old work
-    # cannot bring any part of the abandoned projection back.
-    send(pane.pid, :flush)
-    send(pane.pid, delta("abandoned-run", 3, "late obsolete text"))
-    send(pane.pid, action("abandoned-run", "obsolete-call", :started, %{name: "bash"}))
-
-    send(pane.pid, approval_requested("obsolete-approval", k))
-
-    _ = render(pane)
-    _ = render_async(pane)
-    refute render(pane) =~ "obsolete"
-    refute has_element?(pane, "details.tool-card[data-status=running]")
+    refute render(pane) =~ "SNAPSHOT TEXT"
+    assert has_element?(pane, ".approval-notice", "Approval status is unavailable.")
     refute has_element?(pane, "[id^=approvals-] button")
 
     render_click(pane, "inspector-tab", %{"tab" => "plan"})
     _ = render_async(pane)
     assert has_element?(pane, "[id^=todo-recovery-]", "Current branch todo")
-    assert has_element?(pane, "[id^=plan-content-]", "Current branch plan")
     assert has_element?(pane, "[id^=todo-recovery-]", "Todo snapshot truncated")
 
     render_click(pane, "inspector-tab", %{"tab" => "subagents"})
@@ -970,102 +1358,81 @@ defmodule LemonWeb.ChatLiveTest do
     assert has_element?(pane, "[id^=process-recovery-]", "Process snapshot truncated")
   end
 
-  test "overflow alone racing an in-flight recovery invalidates its pre-loss snapshot", %{
+  test "a history tool row without a receipt renders outcome unknown, never a spinner", %{
     conn: conn,
     stub: stub
   } do
-    k = key("recovery-overflow-race")
-    test_pid = self()
+    stub.(
+      "chat.history",
+      {:ok,
+       %{
+         "messages" => [
+           %{
+             "id" => "missing-receipt",
+             "role" => "tool_use",
+             "toolCallId" => "uncertain-call",
+             "toolName" => "write",
+             "phase" => "unknown"
+           }
+         ]
+       }}
+    )
 
-    before =
-      recovery_snapshot(k, "before-loss", "completed", [
-        %{"id" => "before-answer", "role" => "assistant", "content" => "PRE-LOSS ANSWER"}
-      ])
-
-    stub.("sessions.snapshot", fn _ ->
-      send(test_pid, {:snapshot_waiting, self()})
-
-      receive do
-        :release_snapshot -> {:ok, before}
-      end
-    end)
-
-    {_view, pane} = open(conn, k)
-    assert_receive {:snapshot_waiting, reader}
-    send(pane.pid, {:stream_resync, :overflow})
-    _ = render(pane)
-
-    current =
-      recovery_snapshot(k, "after-loss", "completed", [
-        %{"id" => "after-answer", "role" => "assistant", "content" => "Recovered after overflow"}
-      ])
-
-    stub.("sessions.snapshot", {:ok, current})
-    send(reader, :release_snapshot)
-    _ = render_async(pane)
-    assert has_element?(pane, "[data-kind=assistant]", "Recovered after overflow")
-    refute render(pane) =~ "PRE-LOSS ANSWER"
-    refute has_element?(pane, "[id^=run-line-]")
-  end
-
-  test "terminal recovery without a tool receipt renders outcome unknown, never a spinner", %{
-    conn: conn,
-    stub: stub
-  } do
-    k = key("recovery-unknown")
-
-    snapshot =
-      recovery_snapshot(k, "unknown-run", "completed", [
-        %{
-          "id" => "missing-receipt",
-          "role" => "tool_use",
-          "toolCallId" => "uncertain-call",
-          "toolName" => "write",
-          "phase" => "unknown"
-        }
-      ])
-
-    stub.("sessions.snapshot", {:ok, snapshot})
-    {_view, pane} = open(conn, k)
-    _ = render_async(pane)
+    {_view, pane} = open(conn, key("receipt-unknown"))
     assert has_element?(pane, "details.tool-card[data-status=unknown]", "outcome unknown")
     refute has_element?(pane, "details.tool-card[data-status=running]")
   end
 
-  test "unknown snapshot run authority remains unavailable instead of idle", %{
+  test "a suspended pane has bounded fanout and replays the owner's events after overflow", %{
     conn: conn,
     stub: stub
   } do
-    k = key("snapshot-unavailable")
-    stub.("sessions.snapshot", {:ok, recovery_snapshot(k, nil, "unknown", [])})
-    {_view, pane} = open(conn, k)
-    _ = render_async(pane)
-    assert has_element?(pane, "[id^=run-unavailable-]")
-    assert has_element?(pane, "textarea[id^=composer-][disabled]")
-    assert render(pane) =~ "Current run state is unavailable."
-    refute_received {:rpc, "chat.send", _}
-  end
-
-  test "a suspended pane has bounded fanout and recovers owner completion after overflow", %{
-    conn: conn,
-    stub: stub
-  } do
-    k = key("bounded-recovery")
+    k = key("bounded-replay")
     run_id = "burst-run"
+    last = 1_000
+    stub.("sessions.active", {:ok, %{"sessionKey" => k, "runId" => run_id}})
     stub.("sessions.snapshot", {:ok, recovery_snapshot(k, run_id, "running", [])})
+
+    projected = fn seq ->
+      if seq == last,
+        do: %{"type" => "completed", "runId" => run_id, "ok" => true, "answer" => "done"},
+        else: %{"type" => "delta", "runId" => run_id, "text" => "."}
+    end
+
+    stub.("sessions.events", fn %{"cursor" => %{"seq" => from} = cursor} ->
+      upto = min(from + 100, last)
+
+      entries =
+        for seq <- (from + 1)..upto//1 do
+          event = if seq == last, do: "agent", else: "chat"
+
+          %{
+            "cursor" => Map.put(cursor, "seq", seq),
+            "eventId" => "stream-1:#{seq}",
+            "events" => [%{"event" => event, "payload" => projected.(seq)}]
+          }
+        end
+
+      {:ok,
+       %{
+         "status" => "ok",
+         "sessionKey" => k,
+         "entries" => entries,
+         "cursor" => Map.put(cursor, "seq", upto),
+         "hasMore" => upto < last
+       }}
+    end)
+
     {_view, pane} = open(conn, k)
     _ = render_async(pane)
     :ok = :sys.suspend(pane.pid)
 
     try do
-      for seq <- 1..1_000 do
+      for seq <- 1..last do
         event =
-          Event.new(:delta, %{run_id: run_id, seq: seq, text: "bounded progress"}, %{
-            run_id: run_id,
-            session_key: k
-          })
+          if seq == last, do: completed(run_id, "done"), else: delta(run_id, seq, ".")
 
-        :ok = LemonCore.Bus.broadcast(LemonCore.Bus.session_topic(k), event)
+        :ok = LemonCore.Bus.broadcast("session_events", batch(k, "stream-1", seq, event))
       end
 
       {:message_queue_len, queued} = Process.info(pane.pid, :message_queue_len)
@@ -1078,28 +1445,23 @@ defmodule LemonWeb.ChatLiveTest do
                messages,
                &match?({:lemon_bus_delivery, _, {:stream_resync, :overflow}}, &1)
              ) == 1
-
-      # Owner completion is independent of the deliberately suspended UI.
-      done =
-        recovery_snapshot(k, run_id, "completed", [
-          %{"id" => "burst-answer", "role" => "assistant", "content" => "Owner completed"}
-        ])
-
-      stub.("sessions.snapshot", {:ok, done})
     after
       :ok = :sys.resume(pane.pid)
     end
 
-    _ = render(pane)
-    _ = render_async(pane)
-    assert has_element?(pane, "[data-kind=assistant]", "Owner completed")
+    eventually(fn ->
+      _ = render_async(pane)
+      not has_element?(pane, "[id^=run-line-]")
+    end)
+
+    assert has_element?(pane, "[data-kind=assistant]", String.duplicate(".", last - 1))
     assert count(pane, "[data-kind=assistant]") == 1
-    refute has_element?(pane, "[id^=run-line-]")
+    assert rpc_count("chat.history") == 1
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────────
 
-  defp recovery_snapshot(key, run_id, phase, messages) do
+  defp recovery_snapshot(key, run_id, phase, messages, opts \\ []) do
     answer =
       messages
       |> Enum.filter(&(&1["role"] == "assistant"))
@@ -1115,6 +1477,12 @@ defmodule LemonWeb.ChatLiveTest do
         "revision" => "revision",
         "runId" => run_id,
         "attempt" => run_id
+      },
+      "consistency" => %{
+        "boundary" => "stable_owner_reads",
+        "atomic" => false,
+        "eventCursor" => cursor("stream-1", Keyword.get(opts, :seq, 0)),
+        "runStatus" => "ok"
       },
       "snapshot" => %{
         "phase" => phase,
@@ -1133,6 +1501,42 @@ defmodule LemonWeb.ChatLiveTest do
         "plan" => %{"status" => "ok", "value" => %{"mode" => "code", "content" => nil}}
       }
     }
+  end
+
+  defp cursor(stream, seq),
+    do: %{"version" => 1, "sessionId" => "native-session", "streamId" => stream, "seq" => seq}
+
+  # A sequenced batch as the native owner broadcasts it on "session_events".
+  defp batch(key, stream, seq, events) do
+    events =
+      Enum.map(List.wrap(events), &%{&1 | meta: Map.put(&1.meta || %{}, :session_key, key)})
+
+    Event.new(
+      :session_event,
+      %{cursor: cursor(stream, seq), event_id: "#{stream}:#{seq}", events: events},
+      %{session_key: key}
+    )
+  end
+
+  # Delivers the next batch of `stream` (or `seq:`) straight to the pane.
+  defp emit(pane, key, events, opts \\ []) do
+    stream = Keyword.get(opts, :stream, "stream-1")
+    seq = Keyword.get_lazy(opts, :seq, fn -> Process.get({:seq, key, stream}, 0) + 1 end)
+    Process.put({:seq, key, stream}, max(seq, Process.get({:seq, key, stream}, 0)))
+    send(pane.pid, batch(key, stream, seq, events))
+  end
+
+  # Counts (and consumes) the stubbed calls of `method` received so far.
+  defp rpc_count(method, acc \\ 0) do
+    receive do
+      {:rpc, ^method, _} -> rpc_count(method, acc + 1)
+    after
+      0 -> acc
+    end
+  end
+
+  defp count_text(view, text) do
+    view |> render() |> :binary.matches(text) |> length()
   end
 
   defp open(conn, key) do
@@ -1163,15 +1567,6 @@ defmodule LemonWeb.ChatLiveTest do
     }
 
     Event.new(:engine_action, payload, %{run_id: run_id})
-  end
-
-  defp approval_requested(id, session_key) do
-    pending = ApprovalPending.new(%{id: id, session_key: session_key, tool: "bash", action: %{}})
-
-    Event.new(
-      :approval_requested,
-      ApprovalRequested.new(%{approval_id: id, pending: pending})
-    )
   end
 
   defp request(id, session_key, tool, action) do

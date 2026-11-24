@@ -90,6 +90,9 @@ defmodule LemonCore.Application do
     _ = LemonCore.Logging.maybe_add_file_handler()
 
     _ = LemonCore.ExecApprovalExpiry.init_runtime_id()
+    # Captures this OS process's identity once for every lock acquisition and
+    # logs an error when `ps` (needed to verify other holders) is missing.
+    _ = LemonCore.Service.Identity.boot_check()
     mode = boot_mode()
 
     opts = [strategy: :one_for_one, name: LemonCore.Supervisor]

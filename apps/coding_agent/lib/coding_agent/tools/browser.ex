@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.Browser do
   """
 
   alias CodingAgent.Tools.PathHelpers
+  alias LemonAgent.InterruptedToolResult
   alias LemonAgent.Security.ExternalContent
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{ImageContent, TextContent}
@@ -36,21 +37,14 @@ defmodule CodingAgent.Tools.Browser do
             opts
             |> Keyword.take([
               :browser_backend,
-              :browser_controller_id,
-              :browser_profile_id,
               :browser_provider_config,
-              :browser_hybrid_local_backend,
-              :browser_hybrid_public_backend,
               :session_id,
               :tern_pane,
               :run_id
             ])
             |> Enum.map(fn
               {:browser_backend, value} -> {:backend, value}
-              {:browser_controller_id, value} -> {:controller_id, value}
               {:browser_provider_config, value} -> {:provider_config, value}
-              {:browser_hybrid_local_backend, value} -> {:hybrid_local_backend, value}
-              {:browser_hybrid_public_backend, value} -> {:hybrid_public_backend, value}
               pair -> pair
             end)
             |> Keyword.put(:provider_resolution, resolution)
@@ -124,7 +118,11 @@ defmodule CodingAgent.Tools.Browser do
               "errorKind" => safe_error_kind(reason)
             })
 
-            error
+            # The action may already have taken effect; the model is told not
+            # to repeat it blindly, and nothing here retries it.
+            if reason == :outcome_unknown,
+              do: InterruptedToolResult.build(:timeout, details: %{tool: tool_name}),
+              else: error
         end
 
       {:error, reason} = error ->

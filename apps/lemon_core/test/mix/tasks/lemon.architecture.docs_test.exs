@@ -15,6 +15,8 @@ defmodule Mix.Tasks.Lemon.Architecture.DocsTest do
       )
 
     File.mkdir_p!(Path.join(tmp_dir, "docs"))
+    File.mkdir_p!(Path.join(tmp_dir, "scripts"))
+    File.write!(Path.join(tmp_dir, "scripts/verify_packages"), "PACKAGES=()\n")
 
     on_exit(fn ->
       Mix.Task.reenable("lemon.architecture.docs")
@@ -25,15 +27,7 @@ defmodule Mix.Tasks.Lemon.Architecture.DocsTest do
   end
 
   test "--check passes when architecture docs are current", %{tmp_dir: tmp_dir} do
-    write_architecture_doc(tmp_dir, """
-    # Architecture Boundaries
-
-    ## Direct Dependency Policy
-
-    <!-- architecture_policy:start -->
-    placeholder
-    <!-- architecture_policy:end -->
-    """)
+    write_architecture_doc(tmp_dir, "placeholder")
 
     capture_io(fn ->
       ArchitectureDocsTask.run(["--root", tmp_dir])
@@ -48,15 +42,7 @@ defmodule Mix.Tasks.Lemon.Architecture.DocsTest do
   end
 
   test "--check fails when architecture docs are stale", %{tmp_dir: tmp_dir} do
-    write_architecture_doc(tmp_dir, """
-    # Architecture Boundaries
-
-    ## Direct Dependency Policy
-
-    <!-- architecture_policy:start -->
-    stale
-    <!-- architecture_policy:end -->
-    """)
+    write_architecture_doc(tmp_dir, "stale")
 
     assert_raise Mix.Error, ~r/Architecture boundaries doc is stale/, fn ->
       capture_io(fn ->
@@ -65,7 +51,21 @@ defmodule Mix.Tasks.Lemon.Architecture.DocsTest do
     end
   end
 
-  defp write_architecture_doc(root, content) do
-    File.write!(Path.join(root, "docs/architecture_boundaries.md"), content)
+  defp write_architecture_doc(root, body) do
+    File.write!(Path.join(root, "docs/architecture_boundaries.md"), """
+    # Architecture Boundaries
+
+    ## Direct Dependency Policy
+
+    <!-- architecture_policy:start -->
+    #{body}
+    <!-- architecture_policy:end -->
+
+    ## Package Map
+
+    <!-- package_map:start -->
+    #{body}
+    <!-- package_map:end -->
+    """)
   end
 end

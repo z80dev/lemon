@@ -40,7 +40,9 @@ defmodule CodingAgent.Tools.ReadFormats do
   that source reference. `:max_lines` and `:max_bytes` match the ordinary reader
   defaults (2000 and 50 KiB). Input and decoded-member safety ceilings are
   configurable with `:format_max_input_bytes` (128 MiB) and
-  `:format_max_member_bytes` (32 MiB). Backend output is capped at 32 MiB and
+  `:format_max_member_bytes` (32 MiB); archives additionally honour
+  `:format_max_decoded_bytes` (256 MiB) and `:format_max_archive_entries`
+  (65,536). Backend output is capped at 32 MiB and
   subprocesses have bounded execution and cancellation checks.
   """
 

@@ -175,6 +175,8 @@ defmodule LemonChannels.Adapters.Discord.ComponentAuthorityTest do
   end
 
   defp submit_message(channel, user, text) do
+    :ok = LemonChannels.Adapters.Discord.ThreadResolver.observe(%{id: channel, type: 0})
+
     message = %{
       "id" => Integer.to_string(1_503_803_470_493_300_000 + System.unique_integer([:positive])),
       "channel_id" => Integer.to_string(channel),
@@ -238,6 +240,7 @@ defmodule LemonChannels.Adapters.Discord.ComponentAuthorityTest do
       id: Integer.to_string(1_503_803_470_493_258_000 + System.unique_integer([:positive])),
       channel_id: Integer.to_string(channel),
       guild_id: Integer.to_string(@guild_id),
+      channel: %{id: Integer.to_string(channel), type: 0},
       data: %{custom_id: custom_id, values: []},
       member: %{user: %{id: Integer.to_string(user)}}
     }
@@ -252,6 +255,7 @@ defmodule LemonChannels.Adapters.Discord.ComponentAuthorityTest do
       id: Integer.to_string(1_503_803_470_493_257_000 + System.unique_integer([:positive])),
       channel_id: Integer.to_string(channel),
       guild_id: Integer.to_string(@guild_id),
+      channel: %{id: Integer.to_string(channel), type: 0},
       data: %{name: name, options: options},
       member: %{user: %{id: Integer.to_string(user)}}
     }

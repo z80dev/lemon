@@ -231,11 +231,14 @@ defmodule LemonHoncho.ConfigTest do
     end
 
     test "resolves an encrypted secret reference", %{home: home} do
+      # The shared store may hold records and a key verifier written under
+      # another test's master key; this test owns the whole table meanwhile.
+      clear_secrets_table()
+      on_exit(&clear_secrets_table/0)
       key = Base.encode64(:binary.copy(<<10>>, 32))
       System.put_env("LEMON_SECRETS_MASTER_KEY", key)
       name = "honcho_config_test_#{System.unique_integer([:positive])}"
       assert {:ok, _} = LemonCore.Secrets.set(name, "hk-config-test", key_providers: [:env])
-      on_exit(fn -> LemonCore.Secrets.delete(name) end)
       path = Path.join(home, "config.toml")
       File.write!(path, "[honcho]\napi_key_secret = \"#{name}\"\n")
 
@@ -439,4 +442,12 @@ defmodule LemonHoncho.ConfigTest do
 
   defp restore_app_env({key, :error}), do: Application.delete_env(:lemon_honcho, key)
   defp restore_app_env({key, {:ok, value}}), do: Application.put_env(:lemon_honcho, key, value)
+
+  defp clear_secrets_table do
+    table = LemonCore.Secrets.table()
+
+    Enum.each(LemonCore.Store.list(table), fn {key, _value} ->
+      LemonCore.Store.delete(table, key)
+    end)
+  end
 end

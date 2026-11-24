@@ -1,17 +1,19 @@
 defmodule LemonMemory.Providers do
   @moduledoc """
-  Supervised registry and fan-out search boundary for memory providers.
+  Supervised registry and write fan-out for memory providers.
 
   Lemon always includes the local SQLite provider. Additional BEAM providers can
-  register at runtime and are queried through this module, which gives the agent
-  one stable memory-search surface while keeping external providers isolated by
-  timeout and exception handling.
+  register at runtime; every finished run's document is handed to each enabled
+  provider whose scopes include it (`put/2`). Providers are write targets only:
+  recall reads the owned local index (`LemonMemory.Project.search_history/4`),
+  which filters ownership before its limit, and never pays for a remote search
+  whose results it could not attribute to the requesting owner.
 
   ## Isolation
 
-  Memory is an accessory to a turn, never the point of one, so a provider must
-  not be able to slow a turn past its own declared budget or take the turn with
-  it when it fails. Each enabled provider therefore runs in its own process —
+  Memory is an accessory to a run, never the point of one, so a provider must
+  not be able to stall the registry past its own declared budget or take it
+  down when it fails. Each enabled provider therefore runs in its own process —
   spawned with a monitor and deliberately *without* a link — and is awaited
   against its own `:timeout_ms`:
 
@@ -24,40 +26,24 @@ defmodule LemonMemory.Providers do
       converted into a logged failure by the call wrapper. A provider process
       that dies for a reason the wrapper never sees — killed by a third party,
       or killed by an abnormal exit from something the provider itself linked to
-      — is observed through the monitor and logged the same way. Either way the
-      caller keeps every other provider's results.
+      — is observed through the monitor and logged the same way.
 
-  The missing link is the load-bearing part. `Task.async_stream/3` links its
-  tasks to the caller, so a provider process killed from outside would deliver
-  an exit signal to whoever ran the fan-out: an agent turn on the `search/2`
-  path, and this GenServer on the `put/2` path — where a restart would reset
-  `state.providers` and silently drop every runtime registration until the
-  owning application registered again. A monitor carries the same information
-  without that back-propagation.
+  The missing link is the load-bearing part. A linked provider process killed
+  from outside would deliver an exit signal to this GenServer, where a restart
+  would reset `state.providers` and silently drop every runtime registration
+  until the owning application registered again. A monitor carries the same
+  information without that back-propagation.
 
   ## Known gaps
-
-    * **Total search latency is still bounded by the slowest *enabled*
-      provider.** Fan-out is synchronous: `search/2` returns once every provider
-      has answered or hit its own deadline, so a provider that declares — and
-      uses — 5s makes that one search 5s even though it no longer changes any
-      other provider's deadline. Providers are expected to keep budgets small.
 
     * **A provider that misses its deadline is killed, not asked to stop.** The
       kill is untrappable, so a provider must be safe to abandon mid-call:
       anything that has to finish belongs behind the provider's own supervised
-      process, not in the search path.
+      process.
 
     * **`put/2` fan-out runs inside this GenServer.** Registration calls queue
       behind it for as long as the slowest enabled provider's timeout. That is a
       bounded stall rather than a failure, but it is why `put/2` budgets matter.
-
-    * **The caller enforces the deadline, so a caller that dies first orphans
-      its providers.** Abandon a turn mid-search — an abort, a crash — and the
-      provider processes it started keep running until they return on their own.
-      No link means they cannot take anything with them, and nothing waits on
-      them; a provider that never returns is the only way this leaks, which is
-      the same thing that would make its own deadline useless.
   """
 
   use GenServer
@@ -133,27 +119,6 @@ defmodule LemonMemory.Providers do
     :exit, _ -> :ok
   end
 
-  @doc """
-  Search enabled providers and return merged memory documents.
-
-  Each provider returns its documents best-first, and that order is kept: the
-  merged list takes each provider's first document in registration order (the
-  local store first), then each provider's second, and so on, dropping any
-  `doc_id` already taken. Relevance is never re-sorted by recency.
-  """
-  @spec search(binary(), keyword()) :: [Document.t()]
-  def search(query, opts \\ []) when is_binary(query) do
-    scope = Keyword.get(opts, :scope, :session)
-    limit = Keyword.get(opts, :limit, 5)
-    specs = Keyword.get(opts, :provider_specs) || provider_specs()
-
-    specs
-    |> Enum.filter(&provider_enabled_for_scope?(&1, scope))
-    |> run_providers(&call_provider(&1, query, opts))
-    |> Enum.map(&search_docs/1)
-    |> merge_results(limit)
-  end
-
   @impl true
   def init(_opts) do
     {:ok, %{providers: %{}}}
@@ -209,18 +174,6 @@ defmodule LemonMemory.Providers do
     ]
   end
 
-  defp search_docs({_spec, {:ok, {:ok, docs}}}), do: docs
-
-  defp search_docs({spec, {:ok, {:error, reason}}}) do
-    Logger.warning("[Providers] provider #{spec.id} failed: #{inspect(reason)}")
-    []
-  end
-
-  defp search_docs({spec, {:exit, reason}}) do
-    Logger.warning("[Providers] provider #{spec.id} task failed: #{inspect(reason)}")
-    []
-  end
-
   defp log_put_outcome({_spec, {:ok, :ok}}), do: :ok
 
   defp log_put_outcome({spec, {:ok, {:error, reason}}}) do
@@ -238,10 +191,10 @@ defmodule LemonMemory.Providers do
   # Each provider gets its own monitored, *unlinked* process. The monitor
   # reports a death the same way a link would but does not send the exit signal
   # onwards, which is what keeps a provider process killed from outside from
-  # taking down the agent turn (search) or this registry (put). Owning the wait
-  # here is also what makes `:timeout_ms` a real per-provider bound:
-  # `Task.async_stream/3` takes a single timeout for the whole stream, so the
-  # most generous registered provider quietly became everybody else's deadline.
+  # taking down this registry. Owning the wait here is also what makes
+  # `:timeout_ms` a real per-provider bound: `Task.async_stream/3` takes a single
+  # timeout for the whole stream, so the most generous registered provider
+  # quietly became everybody else's deadline.
   defp run_providers(specs, fun) when is_function(fun, 1) do
     started_at_ms = System.monotonic_time(:millisecond)
 
@@ -309,20 +262,6 @@ defmodule LemonMemory.Providers do
     end
   end
 
-  defp call_provider(spec, query, opts) do
-    module = spec.module
-    provider_opts = Keyword.put(opts, :provider_id, spec.id)
-
-    case module.search(query, provider_opts) do
-      docs when is_list(docs) -> {:ok, Enum.filter(docs, &match?(%Document{}, &1))}
-      other -> {:error, {:invalid_result, other}}
-    end
-  rescue
-    e -> {:error, Exception.message(e)}
-  catch
-    kind, reason -> {:error, {kind, reason}}
-  end
-
   defp call_provider_put(spec, %Document{} = doc, opts) do
     module = spec.module
     provider_opts = Keyword.put(opts, :provider_id, spec.id)
@@ -340,27 +279,6 @@ defmodule LemonMemory.Providers do
     e -> {:error, Exception.message(e)}
   catch
     kind, reason -> {:error, {kind, reason}}
-  end
-
-  # Round-robin across the per-provider ranked lists, so no provider's order is
-  # disturbed and none can crowd the others out of a small `limit`.
-  defp merge_results(ranked_lists, limit) do
-    ranked_lists
-    |> interleave([])
-    |> Enum.uniq_by(& &1.doc_id)
-    |> Enum.take(limit)
-  end
-
-  defp interleave(lists, acc) do
-    case Enum.reject(lists, &(&1 == [])) do
-      [] ->
-        Enum.reverse(acc)
-
-      active ->
-        heads = Enum.map(active, &hd/1)
-        tails = Enum.map(active, &tl/1)
-        interleave(tails, Enum.reverse(heads, acc))
-    end
   end
 
   defp provider_enabled_for_scope?(spec, scope) do

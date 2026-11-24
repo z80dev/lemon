@@ -289,8 +289,9 @@ not from request arguments.
 
 Every successful result has exactly
 `{processId,nodeId,state,exitCode,stdoutBase64,stderrBase64,outputTruncated}`.
-States are `running`, `completed`, `cancelled`, or `outcome_unknown`; get alone
-also permits `not_found`. `exitCode` is an integer only when an OS exit was
+States are `running`, `completed`, `cancelled`, `failed`, or `outcome_unknown`;
+get alone also permits `not_found`. `failed` means the destination proved the
+program never started (for example `executable_not_found` or a refused `cwd`). `exitCode` is an integer only when an OS exit was
 actually observed, otherwise null. Output base64 strings are actual captured
 bytes: `""` means known zero bytes. Unavailable outputs are **null**, never
 invented empty strings, and set `outputTruncated:true`.
@@ -329,13 +330,24 @@ they are neither absence nor proof that execution stopped. A broker failure
 does not synthesize an `outcome_unknown` success receipt; only the owning
 destination receipt can attest its state. Keep uncertainty until reconciled.
 
-The destination service permits 16 active runs and 1,000 retained fixed IDs,
-including automatic inspections/probes and cancellation tombstones. Spent IDs
-never expire or become runnable again. At capacity, `process_receipt_limit`
-rejects new admission without execution; operators need a destination with
-available capacity, not a spent-ID deletion/reuse workaround. Output is a
-separate volatile cache of at most 16 completed receipts for 24 hours: losing
-those bytes does not erase known status/exit or permit replay.
+The destination service permits 16 active runs. Up to 1,000 unresolved
+(`running` or `outcome_unknown`) fixed IDs admit new work; they never expire, and
+at that capacity `process_receipt_limit` rejects new admission without execution.
+Terminal IDs (`completed`, `cancelled` including tombstones, `failed`) stay fenced
+for 24 hours after they finish and are then retired: afterwards `get` returns
+`not_found` and the ID is admissible again, so reconcile uncertain work within
+that window. `failed` receipts do not use the 1,000 capacity. At most 20,000
+receipts are kept in total. A superseded node generation stays refused even
+after its receipts retire. Output is a separate volatile cache of at most 16
+completed receipts for 24 hours: losing those bytes does not erase known
+status/exit or permit replay.
+
+To clear receipts by hand (for example `outcome_unknown` work you reconciled
+another way), call `CodingAgent.ExecutionNode.ProcessService.prune/2` on the
+destination runtime. A dry run (`older_than_ms:`, optional `states:` and
+`node_id:`) lists the affected IDs and returns a single-use token valid for ten
+minutes; only `dry_run: false` with that token and the same filter deletes, and
+receipts that changed since the preview are skipped.
 
 ### Cancellation races
 

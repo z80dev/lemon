@@ -12,10 +12,13 @@ export {
 	type RequestOptions,
 } from "./client.ts";
 export {
+	ConnectionLostError,
 	ControlPlaneError,
+	classifyMutationError,
 	ERROR_CODES,
 	HandshakeError,
 	MethodUnavailableError,
+	type MutationOutcome,
 	NotConnectedError,
 	RequestTimeoutError,
 	type ServerErrorCode,

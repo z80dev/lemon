@@ -60,96 +60,72 @@ defmodule CodingAgent.ProcessStore do
   """
   @spec new_process(map()) :: process_id()
   def new_process(attrs \\ %{}) when is_map(attrs) do
-    ensure_table()
-
     process_id =
       case Map.get(attrs, :id) do
         id when is_binary(id) and id != "" -> id
         _ -> generate_id()
       end
 
-    owner = Map.get(attrs, :owner)
-    fingerprint = Map.get(attrs, :launch_fingerprint)
     now = System.system_time(:second)
 
-    result =
-      transaction(fn ->
-        case :ets.lookup(@table, process_id) do
-          [{^process_id, %{status: :cleared}, _}] ->
-            {:error, "process identity cleared"}
+    metadata =
+      attrs
+      |> Map.take([
+        :command,
+        :cwd,
+        :env,
+        :backend,
+        :terminal_capabilities,
+        :max_log_lines,
+        :full_output_path,
+        :timeout_ms,
+        :restarted_from,
+        :restart_generation
+      ])
+      |> Map.put_new(:log_line_count, 0)
+      |> Map.put_new(:total_lines, 0)
+      |> Map.put_new(:read_cursor, 0)
+      |> Map.put_new(:output, @empty_output)
 
-          [{^process_id, %{owner: ^owner, launch_fingerprint: ^fingerprint} = launch, logs}]
-          when is_binary(fingerprint) ->
-            metadata =
-              attrs
-              |> Map.take([
-                :command,
-                :cwd,
-                :env,
-                :backend,
-                :terminal_capabilities,
-                :max_log_lines,
-                :full_output_path,
-                :timeout_ms,
-                :restarted_from,
-                :restart_generation
-              ])
-              |> Map.put_new(:log_line_count, 0)
-              |> Map.put_new(:total_lines, 0)
-              |> Map.put_new(:read_cursor, 0)
-              |> Map.put_new(:output, @empty_output)
+    record =
+      Map.merge(
+        %{
+          id: process_id,
+          status: :queued,
+          inserted_at: now,
+          updated_at: now,
+          command: nil,
+          cwd: nil,
+          env: %{},
+          backend: :local,
+          terminal_capabilities: [],
+          max_log_lines: @max_log_lines,
+          timeout_ms: nil,
+          log_line_count: 0,
+          total_lines: 0,
+          read_cursor: 0,
+          restarted_from: nil,
+          restart_generation: 0,
+          owner: nil,
+          os_pid: nil,
+          exit_code: nil,
+          started_at: nil,
+          completed_at: nil,
+          output: @empty_output
+        },
+        attrs
+      )
 
-            record =
-              Enum.reduce(metadata, launch, fn {key, value}, record ->
-                Map.put_new(record, key, value)
-              end)
-              |> Map.put(:updated_at, now)
+    attachment = %{
+      owner: Map.get(attrs, :owner),
+      fingerprint: Map.get(attrs, :launch_fingerprint),
+      metadata: metadata
+    }
 
-            DurableTable.put(@table, {process_id, record, logs}, :sync)
-
-          [{^process_id, %{launch_fingerprint: existing}, _}] when is_binary(existing) ->
-            {:error, "process launch identity conflict"}
-
-          _ when is_binary(fingerprint) ->
-            {:error, "managed process launch missing"}
-
-          _ ->
-            record =
-              Map.merge(
-                %{
-                  id: process_id,
-                  status: :queued,
-                  inserted_at: now,
-                  updated_at: now,
-                  command: nil,
-                  cwd: nil,
-                  env: %{},
-                  backend: :local,
-                  terminal_capabilities: [],
-                  max_log_lines: @max_log_lines,
-                  timeout_ms: nil,
-                  log_line_count: 0,
-                  total_lines: 0,
-                  read_cursor: 0,
-                  restarted_from: nil,
-                  restart_generation: 0,
-                  owner: nil,
-                  os_pid: nil,
-                  exit_code: nil,
-                  started_at: nil,
-                  completed_at: nil,
-                  output: @empty_output
-                },
-                attrs
-              )
-
-            insert_record(process_id, record, [])
-        end
-      end)
-
-    case result do
+    case call({:new_process, process_id, attachment, record}) do
+      :ok -> process_id
+      {:error, :store_unavailable} -> exit(:store_unavailable)
       {:error, message} -> raise ArgumentError, message
-      _ -> process_id
     end
   end
 
@@ -222,32 +198,26 @@ defmodule CodingAgent.ProcessStore do
   @doc """
   Mark a process as running with its OS PID.
   """
-  @spec mark_running(process_id(), integer() | nil, map() | nil) :: :ok
+  @spec mark_running(process_id(), integer() | nil, map() | nil) ::
+          :ok | {:error, :store_unavailable}
   def mark_running(process_id, os_pid, workload_identity \\ nil)
       when is_binary(process_id) and (is_integer(os_pid) or is_nil(os_pid)) do
     update_record(
       process_id,
-      fn record ->
-        record
-        |> Map.put(:status, :running)
-        |> Map.put(:os_pid, os_pid)
-        |> Map.put(:workload_identity, workload_identity)
-        |> Map.put(:root_exited, false)
-        |> Map.put(:started_at, System.system_time(:second))
-      end,
+      %{
+        status: :running,
+        os_pid: os_pid,
+        workload_identity: workload_identity,
+        root_exited: false,
+        started_at: System.system_time(:second)
+      },
       true
     )
   end
 
   @doc false
   def update_workload_identity(process_id, identity, root_exited) do
-    update_record(
-      process_id,
-      fn record ->
-        Map.merge(record, %{workload_identity: identity, root_exited: root_exited})
-      end,
-      true
-    )
+    update_record(process_id, %{workload_identity: identity, root_exited: root_exited}, true)
   end
 
   @doc """
@@ -268,53 +238,27 @@ defmodule CodingAgent.ProcessStore do
   - `:total_lines` - absolute line total, including lines never retained
   - `:output` - capture statistics stored as the record's `:output`
   """
-  @spec append_logs(process_id(), [String.t()], keyword()) :: :ok
+  @spec append_logs(process_id(), [String.t()], keyword()) :: :ok | {:error, :store_unavailable}
   def append_logs(process_id, lines, opts \\ [])
 
   def append_logs(_process_id, [], []), do: :ok
 
   def append_logs(process_id, lines, opts)
       when is_binary(process_id) and is_list(lines) and is_list(opts) do
-    transaction(fn ->
-      case :ets.lookup(@table, process_id) do
-        [{^process_id, %{status: :cleared}, _}] ->
-          :ok
-
-        [{^process_id, record, logs}] ->
-          logs = Enum.reverse(lines, logs) |> Enum.take(Keyword.get(opts, :keep, @max_log_lines))
-          total = Map.get(record, :total_lines, 0) + length(lines)
-
-          record =
-            record
-            |> Map.put(:updated_at, System.system_time(:second))
-            |> Map.put(:log_line_count, length(logs))
-            |> Map.put(:total_lines, Keyword.get(opts, :total_lines, total))
-            |> Map.put(:output, Keyword.get(opts, :output, Map.get(record, :output)))
-            |> Map.put(:partial_line, Keyword.get(opts, :partial_line, ""))
-            |> Map.put(
-              :read_cursor,
-              Keyword.get(opts, :read_cursor, Map.get(record, :read_cursor, 0))
-            )
-
-          insert_record(process_id, record, logs)
-
-        _ ->
-          :ok
-      end
-    end)
+    call({:append_logs, process_id, lines, opts})
   end
 
   @doc """
   Replace a process's capture statistics.
   """
-  @spec put_output(process_id(), map()) :: :ok
+  @spec put_output(process_id(), map()) :: :ok | {:error, :store_unavailable}
   def put_output(process_id, output) when is_binary(process_id) and is_map(output) do
-    update_record(process_id, &Map.put(&1, :output, output))
+    update_record(process_id, %{output: output})
   end
 
   @doc false
   def put_service(process_id, service) do
-    update_record(process_id, &Map.put(&1, :service, service))
+    update_record(process_id, %{service: service})
   end
 
   @doc """
@@ -350,55 +294,47 @@ defmodule CodingAgent.ProcessStore do
   @doc """
   Record how many output lines (by `:total_lines` position) have been read.
   """
-  @spec put_read_cursor(process_id(), non_neg_integer()) :: :ok
+  @spec put_read_cursor(process_id(), non_neg_integer()) :: :ok | {:error, :store_unavailable}
   def put_read_cursor(process_id, cursor)
       when is_binary(process_id) and is_integer(cursor) and cursor >= 0 do
-    update_record(process_id, &Map.put(&1, :read_cursor, cursor))
+    update_record(process_id, %{read_cursor: cursor})
   end
 
   @doc """
   Mark a process as completed with exit code.
   """
-  @spec mark_completed(process_id(), integer()) :: :ok
+  @spec mark_completed(process_id(), integer()) :: :ok | {:error, :store_unavailable}
   def mark_completed(process_id, exit_code) when is_binary(process_id) do
-    update_record(process_id, fn record ->
-      record
-      |> Map.put(:status, :completed)
-      |> Map.put(:exit_code, exit_code)
-      |> Map.put(:completed_at, System.system_time(:second))
-    end)
+    update_record(process_id, %{
+      status: :completed,
+      exit_code: exit_code,
+      completed_at: System.system_time(:second)
+    })
   end
 
   @doc """
   Mark a process as killed.
   """
-  @spec mark_killed(process_id()) :: :ok
+  @spec mark_killed(process_id()) :: :ok | {:error, :store_unavailable}
   def mark_killed(process_id) when is_binary(process_id) do
-    update_record(process_id, fn record ->
-      record
-      |> Map.put(:status, :killed)
-      |> Map.put(:completed_at, System.system_time(:second))
-    end)
+    update_record(process_id, %{status: :killed, completed_at: System.system_time(:second)})
   end
 
   @doc false
   def mark_unknown(process_id) do
-    update_record(process_id, fn record ->
-      Map.merge(record, %{status: :lost, launch_classification: :outcome_unknown})
-    end)
+    update_record(process_id, %{status: :lost, launch_classification: :outcome_unknown})
   end
 
   @doc """
   Mark a process as failed with an error.
   """
-  @spec mark_error(process_id(), term()) :: :ok
+  @spec mark_error(process_id(), term()) :: :ok | {:error, :store_unavailable}
   def mark_error(process_id, error) when is_binary(process_id) do
-    update_record(process_id, fn record ->
-      record
-      |> Map.put(:status, :error)
-      |> Map.put(:error, error)
-      |> Map.put(:completed_at, System.system_time(:second))
-    end)
+    update_record(process_id, %{
+      status: :error,
+      error: error,
+      completed_at: System.system_time(:second)
+    })
   end
 
   @doc """
@@ -467,77 +403,9 @@ defmodule CodingAgent.ProcessStore do
              :process_alive
              | :process_not_terminal
              | :output_cleanup_failed
-             | :unmanaged_output_path}
-  def delete(process_id) when is_binary(process_id) do
-    transaction(fn ->
-      case :ets.lookup(@table, process_id) do
-        [{^process_id, %{status: :cleared}, _}] ->
-          :ok
-
-        [{^process_id, %{launch_fingerprint: fingerprint} = record, _}]
-        when is_binary(fingerprint) ->
-          delete_record(process_id, record)
-
-        [{^process_id, record, _}] ->
-          if capture_open?(process_id, record),
-            do: {:error, :process_alive},
-            else: delete_record(process_id, record)
-
-        [] ->
-          :ok
-      end
-    end)
-  end
-
-  defp delete_record(process_id, %{launch_fingerprint: fingerprint} = record)
-       when is_binary(fingerprint) do
-    held =
-      Map.get(
-        record,
-        :capacity_held,
-        Map.get(record, :status) in [:running, :starting, :killing, :lost]
-      ) and
-        not Map.get(record, :termination_confirmed, false)
-
-    unknown =
-      Map.get(record, :launch_classification) == :outcome_unknown and
-        not Map.get(record, :termination_confirmed, false)
-
-    pending = Map.get(record, :launch_classification) == :queued
-
-    if held or unknown or pending or capture_open?(process_id, record) do
-      {:error, :process_not_terminal}
-    else
-      with :ok <- remove_output(record) do
-        tombstone =
-          record
-          |> Map.take([
-            :id,
-            :owner,
-            :launch_fingerprint,
-            :launch_classification,
-            :launch_reason,
-            :inserted_at,
-            :updated_at,
-            :completed_at,
-            :termination_confirmed
-          ])
-          |> Map.put(:capacity_held, false)
-          |> Map.put(:launch_terminal_status, Map.get(record, :status))
-          |> Map.put(:status, :cleared)
-
-        :ok = DurableTable.put(@table, {process_id, tombstone, []}, :sync)
-        notify_change(process_id)
-      end
-    end
-  end
-
-  defp delete_record(process_id, record) do
-    with :ok <- remove_output(record) do
-      :ok = DurableTable.delete(@table, process_id)
-      notify_change(process_id)
-    end
-  end
+             | :unmanaged_output_path
+             | :store_unavailable}
+  def delete(process_id) when is_binary(process_id), do: call({:delete, process_id})
 
   @doc """
   Clear all processes (tests).
@@ -564,21 +432,11 @@ defmodule CodingAgent.ProcessStore do
   end
 
   @doc """
-  Insert or update a record directly (used by server during load).
+  Insert or replace a record unless its identity was cleared.
   """
-  @spec insert_record(process_id(), map(), [String.t()]) :: :ok
-  def insert_record(process_id, record, logs) do
-    transaction(fn ->
-      case :ets.lookup(@table, process_id) do
-        [{^process_id, %{status: :cleared}, _}] ->
-          :ok
-
-        _ ->
-          :ok = DurableTable.put(@table, {process_id, record, logs})
-          notify_change(process_id)
-      end
-    end)
-  end
+  @spec insert_record(process_id(), map(), [String.t()]) :: :ok | {:error, :store_unavailable}
+  def insert_record(process_id, record, logs),
+    do: call({:insert_record, process_id, record, logs})
 
   @doc """
   Check if DETS is available.
@@ -609,63 +467,29 @@ defmodule CodingAgent.ProcessStore do
 
   # Private Functions
 
-  # Keep record/log read-modify-writes in the reservation/cleanup owner's
-  # mailbox. Otherwise a cursor or status write can restore a reclaimed path
-  # or overwrite a concurrently granted capacity with its stale snapshot.
-  defp transaction(fun) do
-    if :ets.info(@table, :owner) == self() do
-      fun.()
-    else
-      ProcessStoreServer.transaction(CodingAgent.ProcessStoreServer, fun)
+  # Record/log read-modify-writes run in the reservation/cleanup owner's
+  # mailbox as data, never as caller closures. Otherwise a cursor or status
+  # write can restore a reclaimed path or overwrite a concurrently granted
+  # capacity with its stale snapshot.
+  defp call(request), do: GenServer.call(ProcessStoreServer, request, 30_000)
+
+  # A failed availability check is not an empty table: readers exit.
+  defp ensure_table do
+    case ProcessStoreServer.ensure_table(ProcessStoreServer) do
+      :ok -> :ok
+      {:error, reason} -> exit(reason)
     end
   end
 
-  defp ensure_table do
-    if :ets.info(@table, :owner) == self(),
-      do: :ok,
-      else: ProcessStoreServer.ensure_table(CodingAgent.ProcessStoreServer)
-  end
-
-  defp update_record(process_id, fun, durable \\ false) do
-    ensure_table()
-
-    transaction(fn ->
-      case :ets.lookup(@table, process_id) do
-        [{^process_id, %{status: :cleared}, _}] ->
-          :ok
-
-        [{^process_id, record, logs}] ->
-          updated =
-            record
-            |> fun.()
-            |> Map.put(:updated_at, System.system_time(:second))
-
-          if durable and is_binary(Map.get(updated, :launch_fingerprint)) do
-            # Owned workload provenance must survive a crash before the command
-            # is unblocked; do not publish a volatile identity before syncing it.
-            :ok = DurableTable.put(@table, {process_id, updated, logs}, :sync)
-            notify_change(process_id)
-          else
-            insert_record(process_id, updated, logs)
-          end
-
-          :ok
-
-        _ ->
-          :ok
-      end
-    end)
-  end
+  # `changes` merge into the current record; `durable` syncs owned workload
+  # provenance before the reply.
+  defp update_record(process_id, changes, durable \\ false),
+    do: call({:update_record, process_id, changes, durable})
 
   @doc false
   def notify_change(process_id) do
     LemonCore.Bus.broadcast("process_state:#{process_id}", {:process_state, :changed, process_id})
     :ok
-  end
-
-  defp capture_open?(process_id, record) do
-    CodingAgent.ProcessSession.alive?(process_id) and
-      get_in(record, [:output, :finalized]) != true
   end
 
   defp generate_id do

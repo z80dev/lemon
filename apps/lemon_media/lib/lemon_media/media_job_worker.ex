@@ -5,15 +5,8 @@ defmodule LemonMedia.MediaJobWorker do
 
   alias LemonMedia.MediaJobs
 
-  @topic "media_jobs"
-
-  @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
-  def start_link(opts) do
-    Task.start_link(__MODULE__, :run, [opts])
-  end
-
   @doc false
-  @spec run(keyword()) :: :ok
+  @spec run(keyword()) :: {:ok, map()} | {:error, {:failed, map()}}
   def run(opts) do
     attrs = opts |> Keyword.fetch!(:attrs) |> attrs_map()
     job_opts = Keyword.get(opts, :opts, [])
@@ -25,8 +18,7 @@ defmodule LemonMedia.MediaJobWorker do
       |> Map.put(:job_id, job_id)
       |> Map.put(:status, :running)
 
-    {:ok, running_job} = MediaJobs.record(running_attrs, record_opts)
-    _ = publish(:running, running_job)
+    {:ok, _running_job} = MediaJobs.record(running_attrs, record_opts)
 
     case run_media_job(Keyword.get(job_opts, :runner), running_attrs) do
       {:ok, updates} ->
@@ -35,9 +27,7 @@ defmodule LemonMedia.MediaJobWorker do
           |> Map.merge(attrs_map(updates))
           |> Map.put(:status, :completed)
 
-        {:ok, completed_job} = MediaJobs.record(completed_attrs, record_opts)
-        _ = publish(:completed, completed_job)
-        :ok
+        MediaJobs.record(completed_attrs, record_opts)
 
       {:error, reason} ->
         failed_attrs =
@@ -47,8 +37,7 @@ defmodule LemonMedia.MediaJobWorker do
           |> Map.put(:error_kind, error_kind(reason))
 
         {:ok, failed_job} = MediaJobs.record(failed_attrs, record_opts)
-        _ = publish(:failed, failed_job)
-        :ok
+        {:error, {:failed, failed_job}}
     end
   end
 
@@ -66,12 +55,6 @@ defmodule LemonMedia.MediaJobWorker do
   end
 
   defp run_media_job(_runner, _attrs), do: {:error, :missing_runner}
-
-  defp publish(event, job) do
-    Phoenix.PubSub.broadcast(LemonCore.PubSub, @topic, {:media_job, event, job})
-  rescue
-    _ -> :ok
-  end
 
   defp record_opts(opts) do
     opts

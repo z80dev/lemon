@@ -96,10 +96,11 @@ variable, falling back to the process working directory. Health extensions accep
 a list of `{name, zero_arity_function}` checks. Delivery metadata must specify a
 supported peer kind (`dm`, `group`, or `channel`); unknown kinds are not DM routes.
 
-`SurfaceManager.finalize_answer/3` dispatches `:stream_finalize` first for runs that already
-streamed answer deltas, then finalizes `StreamCoalescer` state so late flushes cannot overwrite
-the final. For non-streamed completions it still finalizes through `StreamCoalescer`, with a direct
-`:final_text` fallback if the coalescer finalize call exits or times out. Completion-time artifact
+`SurfaceManager.finalize_answer/3` finalizes every answer, streamed or not, through
+`StreamCoalescer`: the final `:stream_finalize` intent is queued behind every delta the
+coalescer already admitted, so it is the last write and a late snapshot cannot overwrite a
+multi-chunk final. A direct `:final_text` fallback is dispatched only if the coalescer
+finalize fails (rejected dispatch, resync without the owner's text, exit or timeout). Completion-time artifact
 metadata enrichment is best-effort and must not block the final answer path.
 `RunProcess.ArtifactTracker` also supports Hermes-style final-answer media
 directives: a line containing `MEDIA:<project-relative-path>` is converted into
@@ -202,7 +203,12 @@ by dropping complete oldest run entries rather than slicing through role data.
 `RunProcess` retries runtime unavailability only, until its pre-start deadline;
 definite gateway rejection terminalizes immediately rather than retrying admission.
 Persistent unavailability emits one structured synthetic `:run_completed` event
-so the active conversation is released. If a queued child
+so the active conversation is released. From acceptance onward, including while
+the gateway run waits for an execution permit, `RunProcess` monitors it: a run
+that exits without a completion is terminalized once after a short grace for a
+late real completion, and the next queued message starts. An unknown submit
+outcome (an exit or malformed acknowledgement) adopts the run under its fixed ID
+and never resubmits it. If a queued child
 cannot start later, `SessionCoordinator` emits the corresponding structured
 start-failure completion before cleaning up its event-bridge subscription and
 continues with the next queued submission. A child already registered after an
@@ -236,9 +242,10 @@ cannot accidentally enqueue the same fixed run ID twice. Definite pre-enqueue
 rejections still roll back the claim for retry.
 
 `SurfaceManager.finalize_answer/3` returns final-dispatch errors rather than
-acknowledging a rejected delivery, and does not mark streamed coalescer state
-finalized after that rejection. `StreamCoalescer` preserves explicit dispatch
-errors for retry and reports a crashed finalize call separately. Completion-time
+acknowledging a rejected delivery: when neither the coalescer nor the fallback delivered the
+answer it returns `{:error, reason}` and records `:answer_finalize_failed`. A rejected
+coalescer dispatch leaves the stream unfinalized but drops its pending transient text, and a
+crashed finalize call is reported separately. Completion-time
 artifact enrichment and termination-time cancellation remain best-effort so a
 secondary failure cannot suppress the final answer or terminal event.
 

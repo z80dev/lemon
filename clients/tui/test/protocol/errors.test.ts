@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
 	AuthenticationError,
+	ConnectionLostError,
 	ControlPlaneError,
+	classifyMutationError,
 	describeError,
+	HandshakeError,
 	MethodUnavailableError,
 	NotConnectedError,
 	RequestTimeoutError,
@@ -33,5 +36,37 @@ describe("user-facing protocol failures", () => {
 		expect(describeError(error)).toContain("~/.lemon/run/control-plane-<port>.token");
 		expect(describeError(error)).toContain("restart the TUI");
 		expect(describeError(error)).not.toContain("secret-token");
+	});
+});
+
+describe("classifyMutationError", () => {
+	const refusal = (code: string, details?: unknown) =>
+		new ControlPlaneError({ code, message: code, details });
+
+	test.each([
+		["the pre-send gate", new NotConnectedError("chat.send"), "not-sent"],
+		["an unadvertised method", new MethodUnavailableError("chat.send"), "not-sent"],
+		["a refused handshake", new HandshakeError("refused"), "not-sent"],
+		["a connection lost after dispatch", new ConnectionLostError("chat.send"), "unknown"],
+		["a timeout", new RequestTimeoutError("chat.send", 15_000), "unknown"],
+		["an unreadable receipt", new Error("unverified send receipt"), "unknown"],
+		["a generic server failure", refusal("INTERNAL_ERROR"), "unknown"],
+		["an unavailable service", refusal("UNAVAILABLE"), "unknown"],
+		["an unknown server code", refusal("SOMETHING_NEW"), "unknown"],
+		["retrySafe: false", refusal("CONFLICT", { retrySafe: false }), "unknown"],
+		["reason outcome_unknown", refusal("UNAVAILABLE", { reason: "outcome_unknown" }), "unknown"],
+		["retrySafe: true", refusal("UNAVAILABLE", { retrySafe: true }), "refused"],
+		["an allow-listed refusal", refusal("CONFLICT"), "refused"],
+		["invalid params", refusal("INVALID_PARAMS"), "refused"],
+	] as const)("%s is %s", (_label, error, outcome) => {
+		expect(classifyMutationError(error)).toBe(outcome);
+	});
+
+	test("a lost connection is reported as an unknown outcome, never as not sent", () => {
+		const message = describeError(new ConnectionLostError("chat.send", "connection closed (1006)"));
+		expect(message).toContain("outcome is unknown");
+		expect(message).not.toContain("nothing was sent");
+		expect(message).not.toMatch(/chat\.send|1006/);
+		expect(describeError(new NotConnectedError("chat.send"))).toContain("nothing was sent");
 	});
 });

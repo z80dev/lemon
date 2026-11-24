@@ -14,7 +14,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   alias CodingAgent.Session.Presentation
   alias CodingAgent.Session.RunTranslator
   alias CodingAgent.Tools.SendFile
-  alias CodingAgent.Tools.Task.Params
+  alias CodingAgent.Tools.Task.InvocationAuthority
   alias LemonGateway.ExecutionRequest
   alias LemonGateway.Tools.SmsClaimMessage
   alias LemonGateway.Tools.SmsGetInboxNumber
@@ -251,6 +251,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         config_cwd: get_opt(run_opts, :config_cwd),
         channel_identity: LemonCore.MapHelpers.get_key(meta, :channel_identity),
         tern_pane: Map.get(meta, :tern_pane),
+        delegated_budget: LemonCore.MapHelpers.get_key(meta, :delegated_budget),
         invocation_context_key: LemonCore.MapHelpers.get_key(meta, :invocation_context_key),
         memory_context_key: LemonCore.MapHelpers.get_key(meta, :memory_context_key),
         memory_context_verified:
@@ -259,7 +260,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         shared_memory_grant:
           Map.get(meta, :shared_memory_grant, Map.get(meta, "shared_memory_grant")) == true,
         invocation_mcp_servers: Map.get(meta, :mcp_servers),
-        native_managed_context: Params.managed_metadata?(meta),
+        native_managed_context: InvocationAuthority.managed_metadata?(meta),
         native_lineage_handle: Map.get(meta, :native_lineage_handle),
         native_lineage_run_id: Map.get(meta, :native_lineage_run_id),
         native_source_profile_id: Map.get(meta, :profile_id),
@@ -543,7 +544,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     with :ok <- CodingAgent.Session.save(session) do
       case LemonCore.RouterBridge.register_native_resume(run_id, token) do
         {:error, :unavailable} = error ->
-          if Params.managed_metadata?(meta), do: error, else: :ok
+          if InvocationAuthority.managed_metadata?(meta), do: error, else: :ok
 
         result ->
           result

@@ -1,4 +1,9 @@
-import type { SessionEventBatch, SessionEventCursor, SessionsEventsResult } from "./types.ts";
+import type {
+	SessionEventBatch,
+	SessionEventCursor,
+	SessionsEventsResult,
+	SessionsSnapshotResult,
+} from "./types.ts";
 
 /** An unsupported cursor cannot be interpreted as an older sequence scope. */
 export class SessionEventCursorError extends Error {}
@@ -65,4 +70,36 @@ export function parseSessionsEvents(value: unknown): SessionsEventsResult {
 	parseSessionEventCursor(result.cursor);
 	for (const entry of result.entries) parseSessionEventBatch(entry, result.sessionKey);
 	return result as SessionsEventsResult;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Validate a `sessions.snapshot` result before any of it is installed. The live
+ * cursor lives only at `consistency.eventCursor`; an unsupported cursor throws
+ * {@link SessionEventCursorError} so callers keep requiring a snapshot rather
+ * than reading it as "no cursor".
+ */
+export function parseSessionsSnapshot(value: unknown): SessionsSnapshotResult {
+	if (!isObject(value)) throw new Error("invalid sessions.snapshot response");
+	const { status, sessionKey, identity } = value;
+	if (
+		typeof sessionKey !== "string" ||
+		!isObject(identity) ||
+		typeof identity.sessionKey !== "string" ||
+		(status !== "ok" && status !== "retry")
+	)
+		throw new Error("invalid sessions.snapshot response");
+	if (status === "retry") return value as SessionsSnapshotResult;
+	const { consistency, snapshot } = value;
+	if (!isObject(consistency) || !("eventCursor" in consistency) || !isObject(snapshot))
+		throw new Error("invalid sessions.snapshot response");
+	if (consistency.eventCursor !== null) {
+		const cursor = parseSessionEventCursor(consistency.eventCursor);
+		if (cursor.sessionId !== identity.sessionId)
+			throw new SessionEventCursorError("snapshot event cursor belongs to another session");
+	}
+	return value as SessionsSnapshotResult;
 }

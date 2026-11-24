@@ -786,6 +786,109 @@ defmodule LemonRouter.NativeLineageTest do
     refute_receive {:native_dispatch, _}, 50
   end
 
+  # #645: the issuer callback runs off the admission mailbox, so it cannot stall
+  # unrelated submissions queued behind it.
+  @tag timeout: 60_000
+  test "a slow issuer callback does not delay unrelated submissions", ctx do
+    {_source, root} = admit_root(ctx)
+    fresh = fresh_request(ctx, "slow-issuer")
+
+    task =
+      Task.async(fn ->
+        RunOrchestrator.submit_native_followup(ctx.server, captured(root), fresh)
+      end)
+
+    assert_receive {:issuer_pending, issuer, id, _, _, _, _, _}, 2000
+
+    latencies_ms =
+      1..20
+      |> Enum.map(fn n ->
+        request = unrelated_request(ctx, n)
+
+        Task.async(fn ->
+          started = System.monotonic_time(:millisecond)
+          result = RunOrchestrator.submit(ctx.server, request)
+          {result, request.run_id, System.monotonic_time(:millisecond) - started}
+        end)
+      end)
+      |> Enum.map(&Task.await(&1, 15_000))
+      |> Enum.map(fn {result, run_id, elapsed_ms} ->
+        assert result == {:ok, run_id}
+        elapsed_ms
+      end)
+
+    p95_ms = latencies_ms |> Enum.sort() |> Enum.at(18)
+    # The issuer still holds its callback open while every submission returns.
+    assert p95_ms < 1_000, "unrelated submit p95 was #{p95_ms} ms behind a pending issuer"
+
+    send(issuer, {:issuer_reply, id, 200, approved(id)})
+    assert Task.await(task) == {:ok, id}
+  end
+
+  # #645: the mailbox owner performs no issuer HTTP, no per-submission config
+  # parse, no full-table read and no run-ID allocation.
+  test "admission keeps network, config and table-scan IO out of the orchestrator", ctx do
+    global = Process.whereis(RunOrchestrator)
+    traced = Enum.filter([ctx.server, global], &is_pid/1)
+
+    patterns = [
+      {Req, :post, 2},
+      {LemonCore.Config.Modular, :load, :_},
+      {LemonCore.Store, :fetch_all, :_},
+      {LemonCore.Store, :list, :_},
+      {LemonCore.Id, :run_id, 0}
+    ]
+
+    for pid <- traced, do: :erlang.trace(pid, true, [:call, {:tracer, self()}])
+    for pattern <- patterns, do: :erlang.trace_pattern(pattern, true, [:global])
+
+    on_exit(fn ->
+      for pattern <- patterns, do: :erlang.trace_pattern(pattern, false, [:global])
+
+      for pid <- traced, Process.alive?(pid) do
+        try do
+          :erlang.trace(pid, false, [:call])
+        rescue
+          ArgumentError -> :ok
+        end
+      end
+    end)
+
+    {_source, root} = admit_root(ctx)
+    fresh = fresh_request(ctx, "traced")
+
+    task =
+      Task.async(fn ->
+        RunOrchestrator.submit_native_followup(ctx.server, captured(root), fresh)
+      end)
+
+    assert_receive {:issuer_pending, issuer, id, _, _, _, _, _}, 2000
+    send(issuer, {:issuer_reply, id, 200, approved(id)})
+    assert Task.await(task) == {:ok, id}
+
+    unassigned = %{unrelated_request(ctx, 0) | run_id: nil}
+    assert {:ok, allocated} = RunOrchestrator.submit(ctx.server, unassigned)
+    assert is_binary(allocated)
+    assert {:ok, %{admissions: _, receipts: _}} = RunOrchestrator.presence_snapshot()
+
+    for pid <- traced do
+      :erlang.trace(pid, false, [:call])
+      ref = :erlang.trace_delivered(pid)
+      assert_receive {:trace_delivered, ^pid, ^ref}, 2000
+      refute_received {:trace, ^pid, :call, {_module, _function, _args}}
+    end
+  end
+
+  defp unrelated_request(ctx, n) do
+    RunRequest.new(%{
+      origin: :control_plane,
+      run_id: "#{ctx.prefix}-unrelated-#{n}",
+      session_key: "agent:default:main:sub:#{ctx.prefix}-unrelated-#{n}",
+      agent_id: "default",
+      prompt: "unrelated submission"
+    })
+  end
+
   test "denial and unavailable callbacks retain F without dispatch or another callback", ctx do
     {_source, root} = admit_root(ctx)
 

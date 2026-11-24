@@ -13,7 +13,8 @@ defmodule CodingAgent.Session.CompactionModelRolesTest do
           %LemonAi.Types.TextContent{
             text:
               inspect(
-                {model.provider, model.id, opts.api_key, opts.headers, opts.thinking_budgets}
+                {model.provider, model.id, opts.api_key, opts.headers,
+                 opts.provider_options[:azure_openai_responses]}
               )
           }
         ],
@@ -69,10 +70,9 @@ defmodule CodingAgent.Session.CompactionModelRolesTest do
     assert opts[:api_key] == "synthetic-summary-key"
     assert opts[:stream_options].api_key == "synthetic-summary-key"
 
-    assert opts[:stream_options].thinking_budgets[:azure_base_url] ==
-             "https://synthetic-azure.invalid"
-
-    assert opts[:stream_options].thinking_budgets[:azure_api_version] == "synthetic-version"
+    azure = opts[:stream_options].provider_options.azure_openai_responses
+    assert azure.base_url == "https://synthetic-azure.invalid"
+    assert azure.api_version == "synthetic-version"
     assert state.model.provider == :openai
     assert state.model.id == "gpt-4o"
   end

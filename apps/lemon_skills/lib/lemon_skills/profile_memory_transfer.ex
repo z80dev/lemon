@@ -10,6 +10,10 @@ defmodule LemonSkills.ProfileMemoryTransfer do
   staged preferences publish under their owning lock. The Store process owns
   that lock through commit and known rollback, even if the requesting caller dies.
   Uncertain publication/commit retains private backups and returns transfer_pending.
+  A definite failure (stale destination, conflict, lock abort, verified rollback)
+  returns its reason, removes staging and frees the mutation id for a retry.
+  The frozen source snapshot is deleted with the receipt (same Store) or by
+  `release/5`, and otherwise by the Store's TTL, scope erasure and retention.
 
   opts: profile_opts, store (Store server), and optional node_id. Portable records
   retain complete summary/fact bytes and explicitly allowed scoped metadata, not
@@ -66,6 +70,20 @@ defmodule LemonSkills.ProfileMemoryTransfer do
       with {:ok, context} <- context(profile, mutation, source, destination, opts),
            {:ok, envelope} <- Store.transfer_get(context.store, key("source", profile, mutation)) do
         bound(envelope, context)
+      end
+    end)
+  end
+
+  @doc """
+  Delete this mutation's frozen source snapshot once the destination receipt
+  exists. The snapshot holds the transferred memory content, so the controller
+  releases it as soon as it has recorded the receipt rather than leaving it
+  for the Store TTL. Releasing an absent snapshot succeeds.
+  """
+  def release(profile, mutation, source, destination, opts \\ []) do
+    protect(fn ->
+      with {:ok, context} <- context(profile, mutation, source, destination, opts) do
+        Store.transfer_release(context.store, [{:key, key("source", profile, mutation)}])
       end
     end)
   end
@@ -242,6 +260,11 @@ defmodule LemonSkills.ProfileMemoryTransfer do
     end
   end
 
+  # Outcomes: a receipt; `:transfer_pending` when publication or commit may have
+  # happened (staging and its backups are kept for reconciliation); or the
+  # definite reason the Store reported after a verified rollback or a boundary
+  # that never ran. A definite failure has already freed the intent in the
+  # Store, so staging is removed here and the same mutation id can be retried.
   defp commit_import(context, base, target, revisions, docs, stage, intent) do
     publication = :atomics.new(1, [])
     completed = Map.put(intent, "receipt", receipt(base)) |> Map.put("state", "complete")
@@ -279,18 +302,41 @@ defmodule LemonSkills.ProfileMemoryTransfer do
         end,
         rollback: fn ->
           if :atomics.get(publication, 1) == 1, do: Preferences.transfer_restore(stage), else: :ok
-        end
+        end,
+        release: released_entries(context)
       )
 
     case result do
-      {:ok, _} -> {:ok, receipt(base)}
-      {:error, :transfer_pending} -> {:error, :transfer_pending}
-      _ -> {:error, :transfer_pending}
+      {:ok, _} ->
+        {:ok, receipt(base)}
+
+      {:error, :transfer_pending} ->
+        {:error, :transfer_pending}
+
+      {:error, reason} ->
+        Preferences.transfer_cleanup(stage)
+        {:error, definite_reason(reason)}
+
+      _ ->
+        {:error, :transfer_pending}
     end
   rescue
     _ -> {:error, :transfer_pending}
   catch
     _, _ -> {:error, :transfer_pending}
+  end
+
+  defp definite_reason(reason) when is_atom(reason), do: reason
+  defp definite_reason(_reason), do: :memory_unavailable
+
+  # The frozen source snapshot and the previews of this mutation, when they
+  # live in the same Store as the receipt; a source on another node releases
+  # its own copy through `release/5`, and the Store TTL bounds both.
+  defp released_entries(context) do
+    [
+      {:key, key("source", context.profile, context.mutation)},
+      {:prefix, key("preview", context.profile, context.mutation) <> ":"}
+    ]
   end
 
   defp capture_target(context) do

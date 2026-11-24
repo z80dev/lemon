@@ -23,6 +23,11 @@ defmodule CodingAgent.SessionSupervisor do
   Uses `:one_for_one` strategy with `:temporary` restart. Sessions that
   crash are not automatically restarted - the session supervisor relies
   on the session registry for recovery.
+
+  The supervisor only runs journal ownership admission. `start_session/1`
+  validates (and preloads the journal) in the caller and waits there for the
+  session's deferred initialization, so a slow start (for example a profile
+  MCP connection) never delays other starts, stops or `list_sessions/0`.
   """
 
   use DynamicSupervisor
@@ -41,21 +46,26 @@ defmodule CodingAgent.SessionSupervisor do
   end
 
   @doc "Start a session under the application's supervisor."
-  @spec start_session(start_opts()) :: DynamicSupervisor.on_start_child()
+  @spec start_session(start_opts()) :: {:ok, pid()} | {:error, term()}
   def start_session(opts) do
     opts = Keyword.put_new(opts, :register, true)
-
     child_id = Keyword.get(opts, :session_id) || make_ref()
+    ref = make_ref()
 
-    child_spec = %{
-      id: {CodingAgent.Session, child_id},
-      start: {CodingAgent.Session, :start_link, [opts]},
-      restart: :temporary,
-      shutdown: 5_000,
-      type: :worker
-    }
+    with {:ok, opts} <- CodingAgent.Session.validate_execution_options(opts) do
+      child_spec = %{
+        id: {CodingAgent.Session, child_id},
+        start: {CodingAgent.Session, :start_owner, [opts, {self(), ref}]},
+        restart: :temporary,
+        shutdown: 5_000,
+        type: :worker
+      }
 
-    DynamicSupervisor.start_child(__MODULE__, child_spec)
+      case DynamicSupervisor.start_child(__MODULE__, child_spec) do
+        {:ok, pid} -> CodingAgent.Session.await_initialized(pid, ref)
+        {:error, _reason} = error -> error
+      end
+    end
   end
 
   @spec stop_session(pid() | String.t()) :: :ok | {:error, term()}

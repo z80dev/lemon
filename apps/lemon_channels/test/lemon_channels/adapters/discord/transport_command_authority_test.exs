@@ -245,6 +245,7 @@ defmodule LemonChannels.Adapters.Discord.TransportCommandAuthorityTest do
       id: Integer.to_string(1_503_803_470_493_257_999 + System.unique_integer([:positive])),
       channel_id: Integer.to_string(channel_id),
       guild_id: Integer.to_string(@guild_id),
+      channel: %{id: Integer.to_string(channel_id), type: 0},
       data: %{name: name, options: options},
       member: %{user: %{id: Integer.to_string(@user_id)}, permissions: permissions}
     }

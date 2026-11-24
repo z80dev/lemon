@@ -49,16 +49,21 @@ defmodule LemonRouter.RestartCarryoverTest do
   setup do
     {:ok, run_supervisor} = DynamicSupervisor.start_link(strategy: :one_for_one)
 
-    # Only this test's coordinators may take part in the drain.
+    # Only this test's coordinators may take part in the drain. Unlinked, so it
+    # outlives the test process: a linked supervisor exits with the test and
+    # drops the registered name while `on_exit` is restoring it.
     {:ok, coordinators} = DynamicSupervisor.start_link(strategy: :one_for_one)
+    Process.unlink(coordinators)
     original = Process.whereis(LemonRouter.SessionCoordinatorSupervisor)
     if original, do: Process.unregister(LemonRouter.SessionCoordinatorSupervisor)
     Process.register(coordinators, LemonRouter.SessionCoordinatorSupervisor)
     clear_carryover()
 
     on_exit(fn ->
-      if Process.whereis(LemonRouter.SessionCoordinatorSupervisor),
-        do: Process.unregister(LemonRouter.SessionCoordinatorSupervisor)
+      if Process.whereis(LemonRouter.SessionCoordinatorSupervisor) == coordinators do
+        Process.unregister(LemonRouter.SessionCoordinatorSupervisor)
+        DynamicSupervisor.stop(coordinators)
+      end
 
       if original && Process.alive?(original),
         do: Process.register(original, LemonRouter.SessionCoordinatorSupervisor)

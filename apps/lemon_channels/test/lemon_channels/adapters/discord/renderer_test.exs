@@ -183,6 +183,38 @@ defmodule LemonChannels.Adapters.Discord.RendererTest do
     assert first_chunk <> second_chunk == long_text
   end
 
+  test "dispatch/1 chunks a final reply whose chunk window ends at a sentence end" do
+    route = route("peer-sentence")
+    run_id = "run-#{System.unique_integer([:positive])}"
+    # The 1_900-grapheme window ends exactly at ". ": the old chunker computed a
+    # zero break point here and looped forever in the renderer.
+    first = String.duplicate("a", 1_898) <> ". "
+    second = String.duplicate("b", 600)
+
+    intent =
+      %DeliveryIntent{
+        intent_id: "#{run_id}:final",
+        run_id: run_id,
+        session_key: "agent:test:main",
+        route: route,
+        kind: :final_text,
+        body: %{text: first <> second, seq: 1}
+      }
+
+    task = Task.async(fn -> Renderer.dispatch(intent) end)
+    assert {:ok, :ok} = Task.yield(task, 2_000) || Task.shutdown(task, :brutal_kill)
+
+    for expected <- [first, second] do
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        kind: :text,
+                        content: ^expected,
+                        meta: %{run_id: ^run_id}
+                      }},
+                     1_000
+    end
+  end
+
   test "dispatch/1 suppresses repeated identical Discord final text with newer seq" do
     route = route("peer-repeat")
     run_id = "run-#{System.unique_integer([:positive])}"

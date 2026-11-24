@@ -291,8 +291,11 @@ defmodule CodingAgent.BackgroundRun do
       |> Keyword.merge(
         Map.to_list(
           Map.merge(
-            Map.take(inherited_context, CodingAgent.Tools.Task.Params.private_native_fields()),
-            Map.take(source, CodingAgent.Tools.Task.Params.private_native_fields())
+            Map.take(
+              inherited_context,
+              CodingAgent.Tools.Task.InvocationAuthority.private_native_fields()
+            ),
+            Map.take(source, CodingAgent.Tools.Task.InvocationAuthority.private_native_fields())
           )
         )
       )
@@ -407,7 +410,7 @@ defmodule CodingAgent.BackgroundRun do
     |> Map.merge(
       Map.take(
         state.approval_context || %{},
-        CodingAgent.Tools.Task.Params.private_native_fields()
+        CodingAgent.Tools.Task.InvocationAuthority.private_native_fields()
       )
     )
     |> then(&{:ok, &1})

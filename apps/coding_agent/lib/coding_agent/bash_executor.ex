@@ -68,7 +68,8 @@ defmodule CodingAgent.BashExecutor do
     * `:env` - Extra environment variables (`%{name => value}`) layered over the
       inherited environment (default: `%{}`)
     * `:capture_streams` - Use the private Python3 relay for authentic bounded
-      stdout/stderr on local non-PTY calls. Missing Python fails closed.
+      stdout/stderr on local non-PTY calls. Missing Python returns
+      `{:error, :python3_unavailable}` before anything is spawned.
 
   ## Returns
 
@@ -79,6 +80,17 @@ defmodule CodingAgent.BashExecutor do
   @spec execute(command :: String.t(), cwd :: String.t(), opts :: keyword()) ::
           {:ok, Result.t()} | {:error, term()}
   def execute(command, cwd, opts \\ []) do
+    capture_streams =
+      Keyword.get(opts, :capture_streams, false) and not Keyword.get(opts, :pty, false)
+
+    python = if capture_streams, do: System.find_executable("python3")
+
+    if capture_streams and is_nil(python),
+      do: {:error, :python3_unavailable},
+      else: do_execute(command, cwd, opts, capture_streams, python)
+  end
+
+  defp do_execute(command, cwd, opts, capture_streams, python) do
     on_chunk = Keyword.get(opts, :on_chunk)
     signal = Keyword.get(opts, :signal)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
@@ -92,13 +104,6 @@ defmodule CodingAgent.BashExecutor do
     {shell_path, shell_args} = get_shell_config()
 
     command = wrap_command_with_cwd(command, cwd)
-
-    capture_streams = Keyword.get(opts, :capture_streams, false) and not use_pty
-    python = if capture_streams, do: System.find_executable("python3")
-
-    if capture_streams and is_nil(python) do
-      raise "Python3 is required for separated shell stream capture"
-    end
 
     {spawn_path, spawn_args, pty_fallback} =
       if use_pty do

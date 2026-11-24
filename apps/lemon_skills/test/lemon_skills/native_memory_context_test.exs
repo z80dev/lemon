@@ -246,12 +246,7 @@ defmodule LemonSkills.NativeMemoryContextTest do
   end
 
   defp recall(context, store) do
-    opts =
-      Keyword.put(tool_opts(context, store), :search_fn, fn _, _ ->
-        flunk("private recall must not use the legacy provider path")
-      end)
-
-    tool = Recall.tool(context.cwd, opts)
+    tool = Recall.tool(context.cwd, tool_opts(context, store))
     tool.execute.("recall", %{"query" => "birthday gift", "scope" => "agent"}, nil, nil)
   end
 

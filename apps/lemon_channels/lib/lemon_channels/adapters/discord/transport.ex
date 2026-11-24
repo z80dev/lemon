@@ -20,6 +20,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     ModelPolicyAdapter,
     Outbound,
     SlashCommands,
+    ThreadResolver,
     TriggerMode,
     UserPrompt,
     VoiceHandler
@@ -112,6 +113,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     maybe_subscribe_exec_approvals()
     :ok = Ets.init(@dedupe_table)
+    :ok = ThreadResolver.init()
     _ = :ets.delete_all_objects(@dedupe_table)
 
     data = %{
@@ -297,7 +299,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
           scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
           msg = started_new_session_message(state, scope, sk, pending[:project], msg0)
-          _ = send_channel_message(channel_id, msg)
+          _ = send_channel_message(thread_id || channel_id, msg)
 
           topic = LemonCore.Bus.run_topic(run_id)
           _ = subscription(:unsubscribe, topic)
@@ -363,6 +365,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     {:noreply, state}
   end
 
+  def process_event({:discord_prepared_message, %InboundMessage{} = inbound}, state) do
+    {:noreply, continue_message(state, inbound)}
+  rescue
+    error ->
+      Logger.warning("discord inbound message handling failed: #{inspect(error.__struct__)}")
+      {:noreply, state}
+  end
+
   def process_event(_msg, state), do: {:noreply, state}
 
   # ============================================================================
@@ -377,24 +387,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
          {:new, dedupe_ref} <- check_dedupe(inbound, state) do
       inbound = put_submission_dedupe_ref(inbound, dedupe_ref)
 
-      {inbound, voice_errors} = VoiceHandler.transcribe(inbound)
-
-      Enum.each(voice_errors, fn text ->
-        Outbound.send_with_components(
-          inbound.meta[:thread_id] || inbound.meta[:channel_id],
-          text,
-          [],
-          []
-        )
-      end)
-
-      inbound = Inbound.attach_images(inbound)
-
-      _ = maybe_index_known_target(state, inbound, message)
-
-      if LemonChannels.UserPromptSurface.capture(inbound) == true,
-        do: state,
-        else: handle_inbound_message(state, inbound)
+      if (inbound.meta[:attachments] || []) == [] do
+        continue_message(state, inbound)
+      else
+        prepare_media(inbound)
+        state
+      end
     else
       {:unauthorized, inbound} ->
         maybe_reply_pairing(inbound, state)
@@ -404,6 +402,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         Logger.debug("discord: dropping duplicate message")
         state
 
+      {:error, :channel_unresolved} ->
+        # Routing under a guessed key would split the thread's session.
+        LemonChannels.Registry.record_status("discord", {:error, :channel_unresolved})
+        Logger.warning("discord message channel could not be resolved; message not routed")
+        state
+
       _ ->
         state
     end
@@ -411,6 +415,42 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     error ->
       Logger.warning("discord inbound message handling failed: #{inspect(error)}")
       state
+  end
+
+  # Transcription and image downloads run beside the serial event queue; the
+  # prepared message comes back as its own event.
+  defp prepare_media(inbound) do
+    owner = Process.get(:discord_transport, self())
+
+    case start_task(fn ->
+           {inbound, voice_errors} = VoiceHandler.transcribe(inbound)
+
+           Enum.each(voice_errors, fn text ->
+             Outbound.send_with_components(
+               inbound.meta[:thread_id] || inbound.meta[:channel_id],
+               text,
+               [],
+               []
+             )
+           end)
+
+           send(owner, {:discord_prepared_message, Inbound.attach_images(inbound)})
+         end) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, _reason} ->
+        LemonChannels.Registry.record_status("discord", {:error, :event_failed})
+        :ok
+    end
+  end
+
+  defp continue_message(state, inbound) do
+    _ = maybe_index_known_target(state, inbound)
+
+    if LemonChannels.UserPromptSurface.capture(inbound) == true,
+      do: state,
+      else: handle_inbound_message(state, inbound)
   end
 
   defp authorize_message(inbound, state) do
@@ -569,11 +609,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp handle_approval_message(state, inbound, command, args) do
     meta = inbound.meta
 
-    interaction = %{
-      channel_id: meta[:thread_id] || meta[:channel_id],
-      guild_id: meta[:guild_id],
-      channel: if(meta[:thread_id], do: %{parent_id: meta[:channel_id]}, else: %{})
-    }
+    interaction =
+      ThreadResolver.with_location(%{guild_id: meta[:guild_id]}, %{
+        channel_id: meta[:channel_id],
+        thread_id: meta[:thread_id]
+      })
 
     context = %{
       surface: "discord",
@@ -717,7 +757,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     case ResumeSelection.extract_explicit_resume_and_strip(inbound.message.text) do
       {:unsupported, engine} ->
-        _ = send_channel_message(channel_id, unsupported_resume_message(engine))
+        _ = send_channel_message(thread_id || channel_id, unsupported_resume_message(engine))
         {:handled, state}
 
       {%ResumeToken{engine: "lemon"} = explicit_resume, stripped_prompt} ->
@@ -732,7 +772,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         finish_submission(state, inbound, dedupe_refs)
 
       {%ResumeToken{engine: engine}, _stripped_prompt} ->
-        _ = send_channel_message(channel_id, unsupported_resume_message(engine))
+        _ = send_channel_message(thread_id || channel_id, unsupported_resume_message(engine))
         {:handled, state}
 
       {_explicit_resume, stripped_prompt} ->
@@ -769,10 +809,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     thread_id = meta[:thread_id]
     user_msg_id = meta[:user_msg_id]
     session_key = meta[:session_key]
+    # Reactions address the message where it was posted: the thread, if any.
+    message_channel_id = thread_id || channel_id
 
     reaction_added? =
-      if is_integer(channel_id) and is_integer(user_msg_id) do
-        match?({:ok, _}, Outbound.create_reaction(channel_id, user_msg_id, "👀"))
+      if is_integer(message_channel_id) and is_integer(user_msg_id) do
+        match?({:ok, _}, Outbound.create_reaction(message_channel_id, user_msg_id, "👀"))
       else
         false
       end
@@ -781,7 +823,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       maybe_subscribe_to_session(session_key)
 
       reaction_run = %{
-        channel_id: channel_id,
+        channel_id: message_channel_id,
         thread_id: thread_id,
         user_msg_id: user_msg_id,
         session_key: session_key
@@ -868,19 +910,34 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # ============================================================================
 
   defp maybe_handle_interaction(interaction, state) do
-    interaction_type = map_get(interaction, :type)
+    case ThreadResolver.put_location(interaction) do
+      {:ok, interaction} ->
+        dispatch_interaction(interaction, state)
 
-    case interaction_type do
+      {:error, :channel_unresolved} ->
+        Logger.warning("discord interaction channel could not be resolved; not handled")
+
+        respond_ephemeral(
+          interaction,
+          "I couldn't look up this channel on Discord, so nothing was done. Try again."
+        )
+
+        state
+    end
+  rescue
+    error ->
+      Logger.warning("discord interaction handling failed: #{inspect(error)}")
+      state
+  end
+
+  defp dispatch_interaction(interaction, state) do
+    case map_get(interaction, :type) do
       # Application Command (slash command)
       2 -> handle_slash_command(interaction, state)
       # Message Component (button, select menu)
       3 -> handle_component_interaction(interaction, state)
       _ -> state
     end
-  rescue
-    error ->
-      Logger.warning("discord interaction handling failed: #{inspect(error)}")
-      state
   end
 
   defp handle_slash_command(interaction, state) do
@@ -1232,7 +1289,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
       "info" ->
         session_key = interaction_session_key(interaction, state)
-        channel_id = interaction |> map_get(:channel_id) |> parse_id()
+        channel_id = interaction_channel_id(interaction)
         thread_id = interaction_thread_id(interaction)
         scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
 
@@ -1264,7 +1321,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp handle_new_session(interaction, state, project_selector) do
-    channel_id = interaction |> map_get(:channel_id) |> parse_id()
+    channel_id = interaction_channel_id(interaction)
     thread_id = interaction_thread_id(interaction)
     user_id = interaction_user_id(interaction)
     guild_id = interaction |> map_get(:guild_id) |> parse_id()
@@ -1386,7 +1443,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # ============================================================================
 
   defp handle_model_interaction(interaction, state) do
-    channel_id = interaction |> map_get(:channel_id) |> parse_id()
+    channel_id = interaction_channel_id(interaction)
     thread_id = interaction_thread_id(interaction)
     user_id = interaction_user_id(interaction)
     guild_id = interaction |> map_get(:guild_id) |> parse_id()
@@ -1427,7 +1484,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp handle_model_component(interaction, state, custom_id, values) do
-    channel_id = interaction |> map_get(:channel_id) |> parse_id()
+    channel_id = interaction_channel_id(interaction)
     thread_id = interaction_thread_id(interaction)
     user_id = interaction_user_id(interaction)
     guild_id = interaction |> map_get(:guild_id) |> parse_id()
@@ -1545,7 +1602,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # ============================================================================
 
   defp handle_thinking_interaction(interaction, state) do
-    channel_id = interaction |> map_get(:channel_id) |> parse_id()
+    channel_id = interaction_channel_id(interaction)
     thread_id = interaction_thread_id(interaction)
     account_id = state.account_id || "default"
     level_arg = option_value(interaction, "level") || "status"
@@ -1716,7 +1773,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp checkpoint_opts(interaction, state) do
     scope = %ChatScope{
       transport: :discord,
-      chat_id: interaction |> map_get(:channel_id) |> parse_id(),
+      chat_id: interaction_channel_id(interaction),
       topic_id: interaction_thread_id(interaction)
     }
 
@@ -1777,22 +1834,31 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     scope = %ChatScope{
       transport: :discord,
-      chat_id: interaction |> map_get(:channel_id) |> parse_id(),
+      chat_id: interaction_channel_id(interaction),
       topic_id: interaction_thread_id(interaction)
     }
 
     # Goal work runs later under this channel's channel-run authority; with no
-    # peer kind the router applies the group approval floor.
-    respond_ephemeral(
-      interaction,
-      LemonChannels.GoalStatusMessage.handle(session_key, args,
-        agent_id: BindingResolver.resolve_agent_id(scope),
-        workspace: BindingResolver.resolve_cwd(scope),
-        channel_context: %{channel_id: "discord", peer_id: map_get(interaction, :channel_id)},
-        meta: %{transport: "discord"}
-      )
-    )
+    # peer kind the router applies the group approval floor. Judge ticks and
+    # continuations run off this process and post their result as a follow-up.
+    text =
+      try do
+        LemonChannels.GoalStatusMessage.handle(session_key, args,
+          agent_id: BindingResolver.resolve_agent_id(scope),
+          workspace: BindingResolver.resolve_cwd(scope),
+          channel_context: %{
+            channel_id: "discord",
+            peer_id: interaction |> interaction_channel_id() |> maybe_to_string()
+          },
+          meta: %{transport: "discord"},
+          start_task: &start_task/1,
+          deliver: &send_followup(interaction, &1)
+        )
+      catch
+        :exit, _ -> "Goal command failed: the goal service did not answer in time."
+      end
 
+    respond_ephemeral(interaction, text)
     state
   end
 
@@ -1801,11 +1867,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     scope = %ChatScope{
       transport: :discord,
-      chat_id: interaction |> map_get(:channel_id) |> parse_id(),
+      chat_id: interaction_channel_id(interaction),
       topic_id: interaction_thread_id(interaction)
     }
 
-    channel_id = map_get(interaction, :channel_id)
+    channel_id = interaction |> interaction_channel_id() |> maybe_to_string()
 
     # Discord interactions carry no operator attestation, so kanban changes are
     # refused here; reads stay scoped to this channel's own session principal.
@@ -2069,7 +2135,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # ============================================================================
 
   defp handle_trigger_interaction(interaction, state) do
-    channel_id = interaction |> map_get(:channel_id) |> parse_id()
+    channel_id = interaction_channel_id(interaction)
     thread_id = interaction_thread_id(interaction)
     account_id = state.account_id || "default"
     mode_arg = option_value(interaction, "mode") || "status"
@@ -2104,7 +2170,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # ============================================================================
 
   defp handle_cwd_interaction(interaction, state) do
-    channel_id = interaction |> map_get(:channel_id) |> parse_id()
+    channel_id = interaction_channel_id(interaction)
     thread_id = interaction_thread_id(interaction)
     path_arg = option_value(interaction, "path")
     scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
@@ -2163,10 +2229,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     if is_nil(attachment) do
       respond_ephemeral(interaction, "Please attach a file to upload.")
     else
-      case FileOperations.handle_file_put(state, interaction, attachment, dest_path, force) do
-        {:ok, msg} -> respond_ephemeral(interaction, msg)
-        {:error, msg} -> respond_ephemeral(interaction, msg)
-      end
+      run_file_transfer(interaction, fn ->
+        FileOperations.handle_file_put(state, interaction, attachment, dest_path, force)
+      end)
     end
   end
 
@@ -2176,10 +2241,24 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     if is_nil(file_path) or file_path == "" do
       respond_ephemeral(interaction, "Please specify a file path.")
     else
-      case FileOperations.handle_file_get(state, interaction, file_path) do
-        {:ok, msg} -> respond_ephemeral(interaction, msg)
-        {:error, msg} -> respond_ephemeral(interaction, msg)
-      end
+      run_file_transfer(interaction, fn ->
+        FileOperations.handle_file_get(state, interaction, file_path)
+      end)
+    end
+  end
+
+  # Downloads, archives and uploads can take minutes; they run beside the
+  # serial event queue so other chats and interactions keep moving.
+  defp run_file_transfer(interaction, transfer) do
+    case start_task(fn ->
+           {_status, msg} = transfer.()
+           respond_ephemeral(interaction, msg)
+         end) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, _reason} ->
+        respond_ephemeral(interaction, "Lemon is busy right now. Try the file transfer again.")
     end
   end
 
@@ -2207,23 +2286,26 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     else
       respond_ephemeral(interaction, "Creating thread...")
 
-      # Try forum post first, fall back to regular thread
-      case create_thread_or_forum_post(channel_id, topic_name, initial_msg) do
-        {:ok, thread} ->
-          thread_id = map_get(thread, :id)
-          send_followup(interaction, "Created: <##{thread_id}>")
-          state
+      # Thread creation is platform I/O: run it beside the serial event queue.
+      _ =
+        start_task(fn ->
+          # Try forum post first, fall back to regular thread
+          case create_thread_or_forum_post(channel_id, topic_name, initial_msg) do
+            {:ok, thread} ->
+              thread_id = map_get(thread, :id)
+              send_followup(interaction, "Created: <##{thread_id}>")
 
-        {:error, reason} ->
-          Logger.warning("Discord thread creation failed: #{inspect(reason)}")
+            {:error, reason} ->
+              Logger.warning("Discord thread creation failed: #{inspect(reason)}")
 
-          send_followup(
-            interaction,
-            "Failed to create thread. Check that the bot can create threads in this channel, then try again."
-          )
+              send_followup(
+                interaction,
+                "Failed to create thread. Check that the bot can create threads in this channel, then try again."
+              )
+          end
+        end)
 
-          state
-      end
+      state
     end
   end
 
@@ -2288,7 +2370,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         account_id = state.account_id || "default"
 
         if is_integer(channel_id) do
-          trigger = resolve_trigger_mode(account_id, channel_id, thread_id)
+          trigger = TriggerMode.resolve(account_id, channel_id, thread_id)
           trigger.mode == :mentions and not explicit_mention?(state, inbound)
         else
           false
@@ -2297,22 +2379,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       _ ->
         false
     end
-  end
-
-  defp resolve_trigger_mode(account_id, channel_id, nil) do
-    primary = TriggerMode.resolve(account_id, channel_id, nil)
-
-    if primary.mode == :mentions do
-      fallback = TriggerMode.resolve(account_id, channel_id, channel_id)
-
-      if fallback.source == :topic, do: fallback, else: primary
-    else
-      primary
-    end
-  end
-
-  defp resolve_trigger_mode(account_id, channel_id, thread_id) do
-    TriggerMode.resolve(account_id, channel_id, thread_id)
   end
 
   defp explicit_mention?(state, inbound) do
@@ -2589,6 +2655,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp safe_interaction_response(interaction, payload) do
+    interaction = ThreadResolver.without_location(interaction)
+
     case Application.get_env(:lemon_channels, :discord_interaction_responder) do
       responder when is_function(responder, 2) -> responder.(interaction, payload)
       {mod, fun} when is_atom(mod) and is_atom(fun) -> apply(mod, fun, [interaction, payload])
@@ -2631,7 +2699,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # ============================================================================
 
   defp interaction_to_inbound(interaction, prompt, state) do
-    channel_id = interaction |> map_get(:channel_id) |> parse_id()
+    channel_id = interaction_channel_id(interaction)
     guild_id = interaction |> map_get(:guild_id) |> parse_id()
     interaction_id = interaction |> map_get(:id) |> parse_id()
     user_id = interaction_user_id(interaction)
@@ -2756,7 +2824,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp interaction_session_key(interaction, state) do
-    channel_id = interaction |> map_get(:channel_id) |> parse_id()
+    channel_id = interaction_channel_id(interaction)
     guild_id = interaction |> map_get(:guild_id) |> parse_id()
     user_id = interaction_user_id(interaction)
     thread_id = interaction_thread_id(interaction)
@@ -2783,22 +2851,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     member_user_id || interaction |> map_get(:user) |> map_get(:id) |> parse_id()
   end
 
-  defp interaction_thread_id(interaction) do
-    channel = map_get(interaction, :channel)
-
-    cond do
-      # Has thread metadata — this is a thread/forum post
-      match?(%{}, map_get(channel, :thread_metadata)) ->
-        interaction |> map_get(:channel_id) |> parse_id()
-
-      # Check if parent_id is set (forum threads have parent_id)
-      is_integer(map_get(channel, :parent_id) |> parse_id()) ->
-        interaction |> map_get(:channel_id) |> parse_id()
-
-      true ->
-        nil
-    end
-  end
+  # Every interaction passes through ThreadResolver.put_location/1 on entry,
+  # so these read the same {parent channel, thread} pair messages use.
+  defp interaction_channel_id(interaction), do: ThreadResolver.location!(interaction).channel_id
+  defp interaction_thread_id(interaction), do: ThreadResolver.location!(interaction).thread_id
 
   defp resolve_model_hint(state, session_key, channel_id, thread_id) do
     ModelPolicyAdapter.resolve_model_hint(
@@ -2861,7 +2917,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
   end
 
-  defp maybe_index_known_target(state, %InboundMessage{} = inbound, message) do
+  defp maybe_index_known_target(state, %InboundMessage{} = inbound) do
     account_id = state.account_id || inbound.account_id || "default"
     channel_id = inbound.meta[:channel_id] |> parse_id()
     thread_id = inbound.meta[:thread_id] |> parse_id()
@@ -2871,11 +2927,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       key = {account_id, channel_id, thread_id}
       existing = KnownTargetStore.get(key) || %{}
       now = System.system_time(:millisecond)
-
-      channel = map_get(message, :channel)
-      thread = map_get(message, :thread)
-      channel_type = map_get(channel, :type) |> parse_id()
-      thread_channel? = channel_type in [10, 11, 12]
 
       entry =
         %{
@@ -2887,18 +2938,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           discord_channel_id: channel_id,
           discord_thread_id: thread_id,
           guild_id: inbound.meta[:guild_id] |> parse_id(),
-          channel_name:
-            coalesce_text(
-              if(thread_channel?, do: nil, else: map_get(channel, :name)),
-              existing,
-              :channel_name
-            ),
-          thread_name:
-            coalesce_text(
-              map_get(thread, :name) || if(thread_channel?, do: map_get(channel, :name)),
-              existing,
-              :thread_name
-            ),
+          channel_name: coalesce_text(ThreadResolver.name(channel_id), existing, :channel_name),
+          thread_name: coalesce_text(ThreadResolver.name(thread_id), existing, :thread_name),
           updated_at_ms: now,
           first_seen_at_ms: field(existing, :first_seen_at_ms) || now
         }
@@ -3126,10 +3167,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     def handle_info(_message, state), do: {:noreply, state}
 
-    def handle_event({name, _payload, _ws_state} = event) do
+    def handle_event({name, payload, _ws_state} = event) do
       if name in [:READY, :RESUMED] do
         LemonChannels.Registry.record_status("discord", :connected)
       end
+
+      :ok = LemonChannels.Adapters.Discord.ThreadResolver.observe_event(name, payload)
 
       if pid = Process.whereis(@transport) do
         send(pid, {:discord_event, event})

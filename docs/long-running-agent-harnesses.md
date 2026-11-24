@@ -68,8 +68,8 @@ paths, or credential-bearing details.
 ## Validation commands
 
 ```bash
-mix test apps/coding_agent/test/coding_agent/tools/feature_requirements_test.exs \
+scripts/test path apps/coding_agent/test/coding_agent/tools/feature_requirements_test.exs \
   apps/coding_agent/test/coding_agent/tools/todo_store_test.exs \
-  apps/coding_agent/test/coding_agent/session/todos_test.exs \
+  apps/coding_agent/test/coding_agent/session/todo_journal_test.exs \
   apps/coding_agent/test/coding_agent/checkpoint_test.exs
 ```

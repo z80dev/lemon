@@ -78,7 +78,7 @@ admission reply does not prove that a task's side effects never began.
 
 | # | Child | Purpose |
 |---|-------|---------|
-| 1 | `LemonCore.RuntimeCache` | ETS owner for runtime registrations, cache metadata, warning flags and loopback UID |
+| 1 | `LemonCore.RuntimeCache` | ETS owner for runtime registrations, cache metadata and warning flags |
 | 2 | `LemonCore.Dedupe.Supervisor` | Dynamic supervisor for each named deduplication table's owner |
 | 3 | `Phoenix.PubSub` (name: `LemonCore.PubSub`), or a `Registry` | Backbone for the Bus; see `LemonCore.Bus` for which one is used |
 | 4 | `LemonCore.Drain` | Coordinated shutdown and directly readable phase ETS table |
@@ -108,7 +108,7 @@ GenServer. Disconnect, replacement, timeout and caller death remain terminal;
 the authenticated connection generation and retained generation floor prevent
 stale frames or controls from crossing a reconnect. WebSocket/JSON is unchanged.
 
-Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
+Durable memory moved to `lemon_memory`, the workspace stores to `lemon_agent`,
 and provider credential-pool rotation to `lemon_agent`
 (`LemonAgent.ModelRuntime.ProviderPoolRotator`); each supervises its own
 processes.

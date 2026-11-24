@@ -196,8 +196,7 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
 
     receipt = launch([task_node("a"), task_node("b", ["a"])], opts)
     assert_receive {:task_progress, "swarm-test", %AgentToolResult{details: %{swarm: _}}}, 2_000
-    {:ready, entries} = :sys.get_state(Control)
-    coordinator = entries[receipt.details.task_id].worker
+    [coordinator] = Control.worker_pids([receipt.details.task_id])
     assert_receive {:started, "a", _, _, context}, 2_000
     assert coordinator != parent
     Process.exit(coordinator, :kill)

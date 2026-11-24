@@ -1,5 +1,6 @@
 import { InvalidContextReceiptError } from "../protocol/context-usage.ts";
 import {
+	ConnectionLostError,
 	ControlPlaneError,
 	MethodUnavailableError,
 	NotConnectedError,
@@ -66,6 +67,12 @@ export function contextFailure(error: unknown): [string, NoticeLevel] {
 	}
 	if (error instanceof RequestTimeoutError) {
 		return ["Context usage did not answer in time; try /context again.", "warning"];
+	}
+	if (error instanceof ConnectionLostError) {
+		return [
+			"Context usage: the connection dropped before the reply; try /context again.",
+			"warning",
+		];
 	}
 	if (error instanceof MethodUnavailableError) {
 		return [`This daemon does not support ${METHOD.sessionsContext}.`, "warning"];

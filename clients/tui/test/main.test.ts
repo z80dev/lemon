@@ -167,3 +167,18 @@ describe("terminal requirement", () => {
 		);
 	});
 });
+
+describe("installRejectionHandler", () => {
+	test("a stray rejection is reported and the process keeps running", () => {
+		const script = `
+			import { installRejectionHandler } from ${JSON.stringify(`${import.meta.dir}/../src/main.ts`)};
+			const reported = [];
+			installRejectionHandler((error) => reported.push(String(error)));
+			void Promise.reject(new Error("stray"));
+			setTimeout(() => { console.log("alive " + reported.join(",")); process.exit(0); }, 20);
+		`;
+		const result = Bun.spawnSync([process.execPath, "-e", script], { stderr: "pipe" });
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout.toString()).toContain("alive Error: stray");
+	});
+});
