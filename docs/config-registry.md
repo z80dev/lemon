@@ -98,7 +98,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_BROWSER_ATTACH_ONLY` | boolean | `false` |  | `lemon_browser` | Whether the browser tool only attaches to an existing browser instead of launching one. |
 | `LEMON_BROWSER_BACKEND` | string | `local` |  | `lemon_browser` | Browser backend id: local, controller, hybrid, browserbase, browser_use, firecrawl, or camofox. |
 | `LEMON_BROWSER_CDP_ENDPOINT` | string | _(none)_ |  | `lemon_browser` | Chrome DevTools Protocol websocket endpoint to attach to instead of launching a browser. |
-| `LEMON_BROWSER_CDP_PORT` | integer | `18800` |  | `lemon_browser` | Local CDP port used when launching a managed browser instance. Only positive integers are accepted (0/negative/unparseable fall back to the default); resolved with a bespoke parser in LemonBrowser.LocalServer, not the standard :integer cast. |
+| `LEMON_BROWSER_CDP_PORT` | integer | `18800` |  | `lemon_browser` | Local CDP port the driver attaches to in attach-only mode without an endpoint. A managed (launched) browser always uses a free port it reports itself, never this one. Only positive integers are accepted (0/negative/unparseable fall back to the default); resolved with a bespoke parser in LemonBrowser.LocalServer, not the standard :integer cast. |
 | `LEMON_BROWSER_DRIVER_PATH` | string | _(none)_ |  | `lemon_browser` | Path to the browser automation driver binary. |
 | `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | string | `local` |  | `lemon_browser` | Local/private backend selected by the hybrid browser router. |
 | `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | string | _(none)_ |  | `lemon_browser` | Explicit hosted backend selected by the hybrid router for public URLs. |

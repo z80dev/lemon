@@ -92,6 +92,31 @@ defmodule CodingAgent.Tools.BrowserTest do
     assert result.details["networkPolicy"]["targetKind"] == "public_network"
   end
 
+  test "an unknown-outcome click is reported once as unknown, never retried" do
+    parent = self()
+
+    request = fn method, _args, _timeout_ms ->
+      send(parent, {:browser_request, method})
+      {:error, :outcome_unknown}
+    end
+
+    tool = browser_tool("browser_click", "/tmp", browser_request: request)
+
+    assert %AgentToolResult{is_error: true, details: details, content: content} =
+             tool.execute.("call-1", %{"selector" => "#buy"}, nil, nil)
+
+    assert details.outcome == :unknown
+    assert details.tool == "browser_click"
+
+    assert Enum.any?(
+             content,
+             &(&1.text =~ "Do not assume it did not run or automatically repeat it")
+           )
+
+    assert_received {:browser_request, "browser.click"}
+    refute_received {:browser_request, _}
+  end
+
   test "browser tab lifecycle tools expose and forward stable target IDs" do
     parent = self()
 

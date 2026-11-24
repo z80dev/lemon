@@ -84,7 +84,9 @@ defmodule LemonCore.BrowserProvider do
     driver_incompatible:
       "The local browser driver could not be loaded and is likely outdated or incomplete; reinstall Lemon, or in a source checkout run npm --prefix clients/lemon-browser-node install && npm --prefix clients/lemon-browser-node run build.",
     browser_missing:
-      "Chrome or Chromium was not found; install it or set LEMON_BROWSER_EXECUTABLE."
+      "Chrome or Chromium was not found; install it or set LEMON_BROWSER_EXECUTABLE.",
+    attach_only:
+      "LEMON_BROWSER_ATTACH_ONLY is set, so Lemon will not launch a local browser; unset it, or use relay or cdp to attach to an existing one."
   }
 
   @type resolution :: %{

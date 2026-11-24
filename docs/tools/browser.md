@@ -105,9 +105,9 @@ Environment variables read by `lemon_browser` (from
 | `LEMON_BROWSER_DRIVER_PATH` | unset | Path to the driver program. Otherwise the driver bundled in a release (`lemon_browser` `priv/driver`) is used, then `clients/lemon-browser-node/dist/local-driver.js` under the source checkout (`LEMON_PATH`). The working directory is not searched. |
 | `LEMON_BROWSER_CDP_ENDPOINT` | unset | CDP websocket endpoint to attach to instead of launching a browser. |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Attach only; never launch a browser. |
-| `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS` | `false` | Required to attach to a browser Lemon did not launch (CDP endpoint, attach-only, relay, or a Chrome already listening on the CDP port). Without it the driver refuses to attach. See "Egress enforcement". |
-| `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port for a managed browser. Only positive integers are accepted. |
-| `LEMON_BROWSER_USER_DATA_DIR` | unset | Opt in to a dedicated managed Chrome user-data directory, using its cookies/logins. Default browser data directories are refused. |
+| `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS` | `false` | Required to attach to a browser Lemon did not launch (CDP endpoint, attach-only, relay). Without it the driver refuses to attach. See "Egress enforcement". |
+| `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port to attach to in attach-only mode without an endpoint. A managed browser never uses it: Lemon launches it on a free port. Only positive integers are accepted. |
+| `LEMON_BROWSER_USER_DATA_DIR` | `~/.lemon/browser/default/user-data` | Chrome user-data directory for managed launches, using its cookies/logins. Default browser data directories are refused. |
 | `LEMON_BROWSER_PROFILE_DIRECTORY` | unset | Profile inside that data directory, e.g. `Default` or `Profile 1`. |
 | `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Backend for local/private targets under `hybrid`. |
 | `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | unset | Required under `hybrid`; backend for public targets. |
@@ -125,9 +125,35 @@ diagnostics and model-facing tool availability consistent.
 
 Managed profile settings also accept application config
 `config :lemon_browser, user_data_dir: "/dedicated/chrome-data", profile_directory: "Profile 1"`;
-the environment variables take precedence. Leave both unset to retain the
-Lemon-owned profile. Stop the local browser before changing either setting:
-an active driver refuses identity changes rather than reusing another profile.
+the environment variables take precedence. Leave both unset to use the
+Lemon-owned profile at `~/.lemon/browser/default/user-data` (the standalone
+driver takes `--browser-profile NAME` for `~/.lemon/browser/NAME/user-data`).
+No other product's profile is used or read.
+
+Lemon owns the managed Chrome it launches. It starts it with
+`--remote-debugging-port=0` and reads the port Chrome chose from
+`DevToolsActivePort` in the profile, so it never adopts a browser that happens
+to listen on `LEMON_BROWSER_CDP_PORT`. A profile already in use by a running
+Chrome is refused rather than shared. The driver stops that Chrome when its
+owner goes away (stdin closes, even after the runtime is killed, or stdout
+breaks), on SIGINT/SIGTERM, and on its own exit. A Chrome that cannot start
+(for example a wrong `LEMON_BROWSER_EXECUTABLE`) fails that request with
+`Chrome could not be started (...)`; the driver stays up and the next request
+tries again.
+
+The local driver serves one browser identity at a time: provider (`local`,
+`relay`, `cdp`), endpoint and profile. A request for a different identity
+(a changed profile setting, a rotated relay token, a fallback to another
+provider) stops the idle driver, and the Chrome it launched, and starts one
+for the new identity. While another browser request is still running, the
+change is refused with `Browser identity changed while another browser request
+is running`; retry once it finishes.
+
+To stop the driver yourself, run `lemon browser stop` (control-plane method
+`browser.stop`, admin scope; `LemonBrowser.stop_local_driver/0` in Elixir). It
+stops the driver and the Chrome it launched; a browser it only attached to
+(relay, CDP endpoint) keeps running. In-flight side-effecting actions report an
+unknown outcome, and the next browser request starts a fresh driver.
 
 Driver resolution failures are reported as `Local browser driver not found`
 or `node executable not found on PATH` and remembered in driver status; the
@@ -137,7 +163,9 @@ supervision tree stays up.
 
 - `local`: launches managed local Chrome/Chromium and connects over CDP on
   `127.0.0.1`. Unified `local` selection (including `auto` choosing local)
-  ignores attachment settings and does not attach to an existing browser.
+  ignores `LEMON_BROWSER_CDP_ENDPOINT` and never attaches to an existing
+  browser. With `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable rather
+  than launching Chrome: `auto` moves on and an explicit `local` fails closed.
 - `tern`: drives a native browser PiP over the bound Tern pane through the
   daemon browser channel. It does not launch Chrome or use the Node driver.
 - `cdp`: explicitly attaches to `LEMON_BROWSER_CDP_ENDPOINT`. It never launches
@@ -351,9 +379,9 @@ Notes:
 - **Every other browser is unprotected at egress**, so the driver refuses to
   attach to one unless the operator sets `LEMON_BROWSER_ALLOW_UNENFORCED_EGRESS=1`
   (or passes `--allow-unenforced-egress`). This covers an explicit `cdp`
-  endpoint, `LEMON_BROWSER_ATTACH_ONLY`, the extension `relay`, and a Chrome
-  that was already listening on the configured CDP port (even one a previous
-  driver run launched). Hosted provider sessions (Browserbase, Browser Use,
+  endpoint, `LEMON_BROWSER_ATTACH_ONLY` (including a Chrome listening on
+  `LEMON_BROWSER_CDP_PORT`) and the extension `relay`; managed mode never
+  attaches to a browser it did not launch. Hosted provider sessions (Browserbase, Browser Use,
   Firecrawl) set the opt-in themselves: their browsers egress from the
   provider's network, not this host. Camofox is a separate REST backend. With
   the opt-in, only the `RoutePolicy` and driver pre-checks of the requested
@@ -443,7 +471,14 @@ Notes:
 - `browser_download output path must be under the current project` /
   `must be a file path`: pass a file path inside the project, or omit `path`.
 - `Browser request timed out`: raise `timeoutMs` (max 120000) or check that the
-  page is reachable.
+  page is reachable. `... before it started` means the request waited behind
+  another one past its deadline and never ran: the local driver runs one request
+  at a time and never starts one after its deadline.
+- `:outcome_unknown`: a click, type, press, navigation, upload or other
+  side-effecting action did not confirm before its deadline, or its tab or driver
+  went away mid-action. It may have taken effect; Lemon never retries it. Take a
+  snapshot or screenshot before acting again. Read-only actions are the only ones
+  re-run after a lost tab.
 - Attach mode fails: confirm `LEMON_BROWSER_CDP_ENDPOINT` is reachable. Attach-only
   mode will not launch a replacement browser.
 - Hybrid requests fail: set `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` to a configured

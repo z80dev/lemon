@@ -1895,6 +1895,24 @@ lemon logs [-n 50] [--level info|warning|error] [--follow] [--json]
 
 Reads logs.tail while online, otherwise the launcher log. File reads are bounded to the last 1 MiB; unknown-level file lines are excluded with --level.
 
+### `lemon browser`
+
+Stop the local browser driver and the Chrome it launched.
+
+```text
+lemon browser stop [--json]
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `stop` | Stop the local browser driver and the Chrome it launched |
+
+| Option | Purpose |
+| --- | --- |
+| `--json` | Emit the result as JSON |
+
+Stops the driver behind the local, relay and cdp providers. A browser it only attached to keeps running. In-flight browser actions report an unknown outcome; the next browser request starts a fresh driver.
+
 ### `lemon omp`
 
 Start, watch, and steer omp coding-agent sessions.

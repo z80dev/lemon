@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `lemon browser stop` (admin control-plane method `browser.stop`) stops the
+  local browser driver and the Chrome it launched (#660).
 - `lemon setup omp` reuses the provider logins and API keys omp already holds:
   it starts omp's auth broker as the new `omp-broker` service
   (`lemon service install omp-broker`) when none is running, lists omp's
@@ -200,6 +202,26 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Discord's Nostrum client is supervised and configured at boot; WhatsApp has one
   reconnect authority whose give-up is visible to health checks (#581).
 - The hot-reload documentation describes the reload that ships (#607).
+- The local browser driver never starts a request after its deadline, never
+  overlaps an abandoned one and re-runs only read-only methods after a closed
+  tab. A side-effecting browser action (click, type, navigate, upload, ...)
+  that did not confirm is reported to the model as an unknown outcome and is
+  never retried (#625).
+- The local browser driver retries a failed browser start on the next request,
+  recycles itself when the selected provider, endpoint or profile changes while
+  idle (instead of failing with `Browser identity changed`), and the `local`
+  provider honours `LEMON_BROWSER_ATTACH_ONLY`: it is unavailable rather than
+  launching Chrome (#660).
+- **Breaking:** the managed local Chrome now uses Lemon's own profile,
+  `~/.lemon/browser/default/user-data`, instead of `~/.openclaw/browser/openclaw/user-data`
+  (`OPENCLAW_STATE_DIR`/`CLAWDBOT_STATE_DIR` and `--openclaw-profile` are no
+  longer read; the driver takes `--browser-profile NAME`). Sign-ins made in
+  the old profile do not carry over; point `LEMON_BROWSER_USER_DATA_DIR` at a
+  copy to keep them. Lemon launches it on a free DevTools port read from
+  `DevToolsActivePort` and never adopts a browser listening on
+  `LEMON_BROWSER_CDP_PORT`; the driver stops that Chrome when its runtime goes
+  away (stdin EOF, stdout EPIPE), and an invalid executable fails the request
+  instead of killing the driver (#689).
 
 ### Removed
 
