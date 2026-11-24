@@ -1,17 +1,28 @@
 defmodule CodingAgent.Session.PromptJournal do
   @moduledoc """
-  Branch-local system-prompt snapshots, embedded in each assistant journal entry.
+  Branch-local system-prompt snapshots for assistant journal entries.
 
   The digest covers the actual ordered provider blocks, including their directory
   boundary. Resume accepts a rebuilt prompt only when that digest agrees; otherwise
   the saved blocks remain authoritative until an explicit extension reload.
+
+  Each assistant entry's `"system-prompt-digest"` references its prompt by digest
+  and plan revision (version 2). The prompt itself is written once per digest on
+  a branch, as a `lemon.prompt_snapshot` custom entry appended just before the
+  first reply that used it; `"base_prompt"` is kept only when a plan overlay
+  makes it differ from the prompt. A reference resolves to the nearest snapshot
+  with its digest among the reply's ancestors, so branch-path copies (forks)
+  and full rewrites keep it. Version 1 entries from older journals embed the
+  prompt inline and are still read.
   """
 
   alias CodingAgent.Session.{Planning, PromptComposer}
   alias CodingAgent.SessionManager
+  alias CodingAgent.SessionManager.SessionEntry
   alias LemonAi.SystemPrompt
 
   @key "system-prompt-digest"
+  @snapshot_type "lemon.prompt_snapshot"
 
   @doc "Provider blocks for the current prompt, preserving a resumed snapshot verbatim."
   def blocks(state, prompt \\ nil) do
@@ -43,25 +54,41 @@ defmodule CodingAgent.Session.PromptJournal do
     end
   end
 
-  @doc "Attach the exact response prompt to the same atomic append as its reply."
-  def attach(message, state) do
+  @doc """
+  Append an assistant reply with a reference to the exact response prompt.
+
+  The prompt is journaled first, as a `lemon.prompt_snapshot` entry, only when
+  no ancestor on the selected branch already holds that digest.
+  """
+  def append_reply(%SessionManager.Session{} = session, message, state) do
     prompt =
       case Map.get(state, :response_system_prompt) || blocks(state) do
         text when is_binary(text) -> [%{text: text, directory_derived: false}]
         blocks -> blocks
       end
 
-    text = SystemPrompt.text(prompt)
-    overlay = Planning.system_prompt("", state.session_manager)
-    base = base_prompt(text, overlay, Map.get(state, :base_system_prompt))
+    digest = SystemPrompt.digest(prompt)
 
-    Map.put(message, @key, %{
-      "version" => 1,
-      "digest" => SystemPrompt.digest(prompt),
-      "prompt" => prompt,
-      "base_prompt" => base,
-      "plan_revision" => plan_revision(state.session_manager)
-    })
+    session =
+      if snapshot_entry(session.by_id, session.leaf_id, digest) do
+        session
+      else
+        text = SystemPrompt.text(prompt)
+        overlay = Planning.system_prompt("", session)
+        base = base_prompt(text, overlay, Map.get(state, :base_system_prompt))
+        data = %{"digest" => digest, "prompt" => prompt}
+        data = if base == text, do: data, else: Map.put(data, "base_prompt", base)
+        SessionManager.append_entry(session, SessionEntry.custom(@snapshot_type, data))
+      end
+
+    SessionManager.append_message(
+      session,
+      Map.put(message, @key, %{
+        "version" => 2,
+        "digest" => digest,
+        "plan_revision" => plan_revision(session)
+      })
+    )
   end
 
   defp base_prompt(text, "", _base), do: text
@@ -121,7 +148,7 @@ defmodule CodingAgent.Session.PromptJournal do
   def latest(%SessionManager.Session{} = session) do
     case latest_reply(session.by_id, session.leaf_id) do
       nil -> nil
-      entry -> decode(entry.message[@key])
+      entry -> decode(entry, session.by_id)
     end
   end
 
@@ -137,17 +164,55 @@ defmodule CodingAgent.Session.PromptJournal do
     end
   end
 
-  defp decode(nil), do: nil
+  defp snapshot_entry(_entries, nil, _digest), do: nil
 
-  defp decode(%{
-         "version" => 1,
-         "digest" => digest,
-         "prompt" => prompt,
-         "base_prompt" => base,
-         "plan_revision" => plan_revision
-       })
-       when is_binary(digest) and is_list(prompt) and is_binary(base) and
-              (is_binary(plan_revision) or is_nil(plan_revision)) do
+  defp snapshot_entry(entries, id, digest) do
+    case Map.get(entries, id) do
+      %{type: :custom, custom_type: @snapshot_type, data: %{"digest" => ^digest}} = entry ->
+        entry
+
+      %{parent_id: parent} ->
+        snapshot_entry(entries, parent, digest)
+
+      nil ->
+        nil
+    end
+  end
+
+  defp decode(%{message: message} = entry, entries) do
+    case message[@key] do
+      nil ->
+        nil
+
+      %{"version" => 2, "digest" => digest, "plan_revision" => plan_revision}
+      when is_binary(digest) and (is_binary(plan_revision) or is_nil(plan_revision)) ->
+        case snapshot_entry(entries, entry.parent_id, digest) do
+          %{data: %{"prompt" => prompt} = data} ->
+            decode_prompt(digest, prompt, Map.get(data, "base_prompt"), plan_revision)
+
+          nil ->
+            raise ArgumentError, "journaled system prompt snapshot is missing"
+        end
+
+      # Journals written before snapshots were shared embed the prompt inline.
+      %{
+        "version" => 1,
+        "digest" => digest,
+        "prompt" => prompt,
+        "base_prompt" => base,
+        "plan_revision" => plan_revision
+      }
+      when is_binary(digest) and is_binary(base) and
+             (is_binary(plan_revision) or is_nil(plan_revision)) ->
+        decode_prompt(digest, prompt, base, plan_revision)
+
+      _ ->
+        raise ArgumentError, "invalid journaled system prompt snapshot"
+    end
+  end
+
+  defp decode_prompt(digest, prompt, base, plan_revision)
+       when is_list(prompt) and (is_binary(base) or is_nil(base)) do
     blocks =
       Enum.map(prompt, fn
         %{text: text, directory_derived: directory}
@@ -165,10 +230,16 @@ defmodule CodingAgent.Session.PromptJournal do
     if SystemPrompt.digest(blocks) != digest,
       do: raise(ArgumentError, "journaled system prompt digest does not match its blocks")
 
-    %{digest: digest, prompt: blocks, base_prompt: base, plan_revision: plan_revision}
+    %{
+      digest: digest,
+      prompt: blocks,
+      base_prompt: base || SystemPrompt.text(blocks),
+      plan_revision: plan_revision
+    }
   end
 
-  defp decode(_), do: raise(ArgumentError, "invalid journaled system prompt snapshot")
+  defp decode_prompt(_digest, _prompt, _base, _plan_revision),
+    do: raise(ArgumentError, "invalid journaled system prompt snapshot")
 
   @doc "Content-free cache diagnostics for live and durable context reports."
   def cache_report(session, current \\ nil, restored \\ false) do
@@ -212,7 +283,7 @@ defmodule CodingAgent.Session.PromptJournal do
 
       entry ->
         previous = latest_reply(session.by_id, entry.parent_id)
-        {decode(entry.message[@key]), if(previous, do: decode(previous.message[@key]))}
+        {decode(entry, session.by_id), if(previous, do: decode(previous, session.by_id))}
     end
   end
 

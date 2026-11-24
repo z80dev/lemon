@@ -2,8 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Journal format: assistant entries' `system-prompt-digest` is now version 2, a
+  `{digest, plan_revision}` reference to a `lemon.prompt_snapshot` custom entry
+  written once per digest on the branch (`base_prompt` only when a plan overlay
+  makes it distinct). `PromptJournal.attach/2` is replaced by
+  `PromptJournal.append_reply/3`; version 1 inline snapshots are still read (#676).
+
 ### Removed
 
+- **Breaking:** removed `CodingAgent.SessionIndex`, `SessionManager.list_sessions/1`
+  and `SessionEntry.session_info/2`; journal appends, checkpoints and
+  `save_to_file/2` take no lock and write no `.index.sqlite3`. Older journals'
+  `sessionInfo` entries are still read and preserved. `SessionMaintenance.execute`
+  is now arity 1 (#695).
 - Removed the unused `CodingAgent.Coordinator` and `ProcessManager.exec_sync/1`
   APIs. Native task execution and background `exec/1` with `poll/2` remain.
 - **Breaking:** the node-wide `Tools.Task.Control` process, `Tools.Task.ChildInbox`,
@@ -37,6 +50,13 @@
   its journal; a second crash terminalizes the child. Terminal owners exit after
   `:task_terminal_retention_ms` (default five minutes); broadcasts reserve every
   recipient's capacity before delivering to any (#634).
+- `CodingAgent.SessionSupervisor.start_session/1` validates options and loads
+  the journal in the caller; `CodingAgent.Session.init/1` only admits journal
+  ownership and the rest of initialization (settings, extensions, WASM, profile
+  MCP) runs in `handle_continue/2`. `start_link/1` and `start_session/1` still
+  return after initialization, with `{:error, reason}` and no linked exit on
+  failure. `RootLifecycle` no longer calls a session while holding its lock,
+  and `SessionMaintenance.plan/1` takes no root lock (#632).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller

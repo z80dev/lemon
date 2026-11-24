@@ -3,15 +3,24 @@ defmodule CodingAgent.Session.Ownership do
 
   alias CodingAgent.{MutationLock, SessionManager}
 
-  # Startup holds admission from before loading the journal until its live owner
-  # is published. Stopped mutations decide and write under this same admission.
+  # Stopped mutations decide and write under this file admission. A starting
+  # session holds it only long enough to publish itself as the live owner; it
+  # loads the journal and runs slow initialization after releasing admission,
+  # so later mutations are routed to (and queue behind) that owner.
   def with_file(path, fun) do
     CodingAgent.SessionMaintenance.with_root_lock(fn ->
       MutationLock.with_lock({:native_session, Path.expand(path)}, fun)
     end)
   end
 
-  def initialize(opts, fun) do
+  @doc """
+  Publish the calling process as the live owner of the journal `opts` select.
+
+  Returns `{:ok, opts, path}` with a generated `:session_id` when neither a
+  file nor an ID was given, `{:error, {:already_started, pid}}` when another
+  process owns the journal, or the admission lock error.
+  """
+  def admit(opts) do
     {opts, path} =
       case Keyword.get(opts, :session_file) do
         nil ->
@@ -26,14 +35,8 @@ defmodule CodingAgent.Session.Ownership do
     with_file(path, fn ->
       case owner(path) do
         nil ->
-          case fun.(opts) do
-            {:ok, state} = result ->
-              :ok = publish(state.session_file)
-              result
-
-            result ->
-              result
-          end
+          :ok = publish(path)
+          {:ok, opts, path}
 
         pid ->
           # An admission refusal is not a crashing init. OTP returns this error

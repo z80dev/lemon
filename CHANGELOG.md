@@ -125,6 +125,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   require `provider`; omitting it returns `provider is required` instead of a
   fabricated local preview. Provider-backed calls get provider-sized default
   timeouts (2–15 minutes) instead of the local-preview defaults (#664).
+- Native session journals store the system prompt once per digest on a branch,
+  as a `lemon.prompt_snapshot` entry, instead of twice in every assistant entry;
+  assistant entries reference it by digest and plan revision. With a 56 KiB
+  prompt, 100 assistant messages now take 121 KB of journal instead of 11.5 MB.
+  Older journals with inline snapshots still resume unchanged (#676).
+- Native journal appends, checkpoints and rewrites no longer go through a
+  per-directory SQLite index and `:global` lock, so a maintenance run can no
+  longer crash a live session's append. `CodingAgent.SessionIndex` and
+  `SessionManager.list_sessions/1` (no callers) are removed; leftover
+  `.index.sqlite3` files in session directories are unused (#695).
 - Dependencies: Phoenix 1.8 (`lemon_web`), Sentry 14, exqlite 0.43 (SQLite
   3.54.1), plus in-range Hex updates; `req` is pinned to `~> 0.6.0` and
   `websockex` to `~> 0.5` across apps. With `SENTRY_DSN` set, Sentry 14
@@ -487,6 +497,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   counters and `enabled: null` instead of a disabled scheduler; and an execution
   node whose registry read fails gets a retryable `UNAVAILABLE` instead of being
   parked as `node_not_found` (#619).
+- A native session that is slow to start (for example while connecting its
+  profile MCP servers) no longer blocks other session starts, stops or listing:
+  the session supervisor only admits journal ownership and the session finishes
+  initializing in its own process. Root checkout locks only the registry lookup
+  and idle-cap decision, so a slow `prepare_root_turn` no longer times out other
+  conversations, and `lemon sessions maintain` previews take no lock; confirmed
+  runs hash candidates before taking the session-root lock (#632).
 
 ### Removed
 
