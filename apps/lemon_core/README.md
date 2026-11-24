@@ -260,7 +260,6 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.ConfinedFS` | Descriptor-bound file operations below a trusted root (port helper `priv/lemon_confined_fs`, built from `c_src/` during `mix compile`): no-follow directory walks (`openat2` `RESOLVE_BENEATH` on Linux), reads, exclusive creates, private-staging atomic replaces, appends, in-place overwrites, rename, unlink, tree removal and chmod relative to walked handles. Inside the Lemon umbrella (and therefore every release) the helper is required and `mix compile` fails without a C compiler and `make`. As a Hex dependency it is built when they are present; otherwise `ConfinedFS.available?/0` is `false` and every operation returns `{:error, :helper_unavailable}`, so confined callers (FileAccess, Checkpoint filesystem restore) fail closed instead of using path-based I/O |
 | `Lemon.Reload` | Published low-level BEAM/extension reload API; see its moduledoc for retained contracts |
 | `LemonCore.CodeReload` | Soft-loads changed BEAM files and invokes the configured session refresher for source-development reload |
-| `LemonCore.Testing` | Test harness builder (Harness, Case, Helpers) |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
 
 ### Quality
@@ -982,6 +981,9 @@ mix test --cover apps/lemon_core
 
 ### Test Harness
 
+The harness (`LemonCore.Testing*`) serves this repository's own test suites
+and is not part of the published Hex package.
+
 ```elixir
 defmodule MyTest do
   use LemonCore.Testing.Case, async: true
@@ -993,7 +995,7 @@ defmodule MyTest do
 end
 ```
 
-Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `unique_run_id/0`, `temp_file!/3`, `temp_dir!/2`, `clear_store_table/1`, `mock_home!/1`, `random_master_key/0`.
+Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `unique_run_id/0`, `temp_file!/3`, `temp_dir!/2`, `clear_store_table/1`, `mock_home!/1`, `random_master_key/0`. `use LemonCore.Testing.Case, with_store: true` (or `@tag with_store: true`) starts `LemonCore.Store` for the module (or test).
 
 ## Important Notes
 

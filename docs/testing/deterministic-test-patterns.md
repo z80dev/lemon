@@ -12,7 +12,7 @@ This guide captures the patterns Lemon uses to keep CI signal deterministic and 
 ## 2) Prefer explicit synchronization over `Process.sleep/1`
 
 - Use mailbox assertions (`assert_receive`/`refute_receive`) with clear timeouts.
-- Use latch/poll helpers when coordination is required: `LemonCore.Testing.AsyncHelpers` (`apps/lemon_core/lib/lemon_core/testing/async_helpers.ex`: `assert_eventually/2`, `assert_process_dead/2`, latches, barriers). `coding_agent` and `lemon_gateway` expose thin `AsyncHelpers` wrappers in their `test/support`.
+- Use latch/poll helpers when coordination is required: `LemonCore.Testing.AsyncHelpers` (`apps/lemon_core/lib/lemon_core/testing/async_helpers.ex`: `assert_eventually/2`, `assert_process_dead/2`, latches, barriers). `coding_agent` exposes a thin `AsyncHelpers` wrapper in its `test/support`; other apps import `LemonCore.Testing.AsyncHelpers` directly.
 - Wait for concrete state transitions/events, not elapsed time.
 - For transient LiveView states such as an async submit button's busy indicator,
   assert against the HTML returned by the triggering `render_submit` or
