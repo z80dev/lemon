@@ -69,7 +69,7 @@ this:
    supervisor reports, `Task` terminating reports, unexpected-`handle_info`
    reports and the emulator's "Error in process" exits:
    - reasons become an exit atom, `{tag, :redacted}`, or
-     `LemonCore.StatusRedaction.RedactedCrash` naming the original exception
+     `LemonCore.StatusRedaction.RedactedCrashError` naming the original exception
      module (its message is dropped);
    - stacktrace arguments (e.g. function-clause arguments) become arities and
      locations keep only file/line;

@@ -94,7 +94,7 @@ defmodule LemonMedia.MediaJobSupervisor do
       |> Map.put(:error_kind, Atom.to_string(reason))
 
     with {:ok, failed_job} <- MediaJobs.record(failed_attrs, record_opts) do
-      publish_start_failure(failed_job)
+      _ = publish_start_failure(failed_job)
       {:error, reason}
     end
   end

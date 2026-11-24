@@ -813,9 +813,9 @@ defmodule LemonLsp.Session do
   end
 
   defp terminate_port(session) do
-    if is_integer(session.os_pid) do
-      LemonCore.ProcessGroup.terminate(session.os_pid, grace_ms: 25)
-    end
+    _ =
+      if is_integer(session.os_pid),
+        do: LemonCore.ProcessGroup.terminate(session.os_pid, grace_ms: 25)
 
     if Process.alive?(session.rpc), do: GenServer.stop(session.rpc, :normal)
 

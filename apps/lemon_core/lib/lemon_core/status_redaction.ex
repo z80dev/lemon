@@ -15,7 +15,7 @@ defmodule LemonCore.StatusRedaction do
   stacktrace without call arguments) but drop every carried term.
   """
 
-  defmodule RedactedCrash do
+  defmodule RedactedCrashError do
     @moduledoc "Stand-in for an exception whose message may carry conversation content."
     defexception [:message]
   end
@@ -105,7 +105,7 @@ defmodule LemonCore.StatusRedaction do
   defp tagged(_reason), do: :redacted
 
   defp redacted_crash(module),
-    do: %RedactedCrash{message: "#{inspect(module)} (message redacted)"}
+    do: %RedactedCrashError{message: "#{inspect(module)} (message redacted)"}
 
   # Timer names and atom event contents are kept for diagnostics; any other
   # content may carry an event payload.

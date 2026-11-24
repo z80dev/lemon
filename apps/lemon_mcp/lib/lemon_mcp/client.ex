@@ -290,7 +290,7 @@ defmodule LemonMCP.Client do
             {:ok, state}
 
           {:error, reason} ->
-            do_close(state)
+            _ = do_close(state)
             {:stop, reason}
         end
 

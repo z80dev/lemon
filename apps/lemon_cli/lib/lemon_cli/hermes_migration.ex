@@ -2485,11 +2485,7 @@ defmodule LemonCli.HermesMigration do
     _ = if File.exists?(dest) and Keyword.get(opts, :overwrite, false), do: File.rm_rf!(dest)
     File.mkdir_p!(Path.dirname(dest))
 
-    if File.dir?(source) do
-      File.cp_r!(source, dest)
-    else
-      File.cp!(source, dest)
-    end
+    _ = if File.dir?(source), do: File.cp_r!(source, dest), else: File.cp!(source, dest)
 
     copy_mode!(source, dest)
   end
