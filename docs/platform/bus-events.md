@@ -77,6 +77,63 @@ authority. Recovered active answers remain replacement-only until canonical
 completion, avoiding duplication from delayed pre-snapshot deltas. See
 [the control-plane contract](https://github.com/z80dev/lemon/blob/main/apps/lemon_control_plane/README.md#session-snapshot-and-reconciliation).
 
+### Delivery class by event type
+
+Every type in `LemonCore.Events.registry/0` has exactly one delivery class. The
+class says what a consumer may conclude when it did not see the event.
+
+- **durable**: the owner commits the state change before it publishes the event.
+  `LemonRouter.RunCompletion` and `LemonGateway.Run` finalize the `:runs` summary
+  before broadcasting `:run_completed`; `ExecApprovals` writes the approval
+  record before `:approval_requested` and `:approval_resolved`; `CronStore` and
+  `GoalStore` write before emitting. The event only announces the change. A
+  consumer that missed it (overflow, reconnect, a late subscriber) re-reads the
+  authority below, so losing the event never loses the decision.
+- **transient**: bounded progress. Overflow fences the subscriber with an
+  explicit resync. Clients recover with `sessions.events` from their cursor and
+  fall back to `sessions.snapshot` on `cursor_expired`. The canonical answer is
+  the durable completion, never the concatenated deltas.
+- **best_effort**: notifications and telemetry. A lost event changes no
+  execution outcome and is not replayed.
+
+Admission and cancellation decisions are not Bus events. `submit` returns the
+admission synchronously and the router records it in `LemonRouter.RunReceiptStore`;
+an abort is a serialized `RunOrchestrator` call that persists an abort tombstone
+and ends in a durable terminal completion. A caller whose admission or abort
+reply is lost gets `{:error, :outcome_unknown}` and is never retried
+automatically.
+
+| Event type | Class | Authority / recovery |
+| --- | --- | --- |
+| `run_completed` | durable | `LemonCore.RunStore.fetch/1` |
+| `run_failed` | durable | `LemonCore.RunStore.fetch/1`. `run_failed` is a synthetic notice that the router run owner died; the terminal truth is the run's finalized summary |
+| `approval_requested` | durable | `LemonCore.ExecApprovalStore.fetch_pending/1` |
+| `approval_resolved` | durable | `LemonCore.ExecApprovalStore.fetch_record/1` |
+| `cron_job_created`, `cron_job_updated`, `cron_job_deleted` | durable | `LemonAutomation.CronStore.get_job/1` |
+| `cron_run_started`, `cron_run_completed` | durable | `LemonAutomation.CronStore.get_run/1` |
+| `cron_lifecycle_action` | durable | `LemonAutomation.CronStore.list_audit_events/1` |
+| `goal_set`, `goal_paused`, `goal_resumed`, `goal_completed`, `goal_cleared`, `goal_continuation_submitted`, `goal_loop_verdict`, `goal_loop_status` | durable | `LemonAgent.Workspace.GoalStore.get/1` |
+| `run_started` | transient | `sessions.events`, then `sessions.snapshot` (current run identity) |
+| `delta` | transient | `sessions.events`, then `sessions.snapshot` (answer state); final text from the run's completion |
+| `engine_action` | transient | `sessions.events`, then `sessions.snapshot` (actions and process receipts) |
+| `run_phase_changed` | best_effort | none; it has no consumer |
+| `cron_tick` | best_effort | none |
+| `heartbeat_alert`, `heartbeat_suppressed` | best_effort | the cron run record |
+| `config_reloaded`, `config_reload_failed` | best_effort | the configuration itself |
+| `secret_changed` | best_effort | the secrets store; the event never carries the value |
+| `talk_mode_changed` | best_effort | none; it has no publisher |
+| `routing_feedback` | best_effort | none; a lost sample is not replayed |
+| `channel_delivery` | best_effort | none; emitted after the send, and publish failures are rescued and logged |
+
+`apps/lemon_control_plane/test/lemon_control_plane/event_delivery_class_test.exs`
+fails when a registered type has no row, a class is unknown, a durable row's
+authority read is not exported, or a transient row names a recovery method that
+is not registered.
+
+Known gap: several `LemonAutomation.CronManager` paths ignore the result of
+`CronStore.put_job/1` or `CronStore.put_run/1` and still emit the cron event, so
+a failed write can be announced as committed.
+
 ### Remaining best-effort paths
 
 `Bus.subscribe/1` remains an unbounded raw subscription. In particular the
