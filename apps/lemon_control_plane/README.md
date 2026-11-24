@@ -1176,11 +1176,17 @@ without republishing; a gap is rejected. Supported envelopes:
 | `checkpoint_created`, `checkpoint_restored`, `checkpoint_deleted` | `checkpointId,checkpointKind,tool,action,pathCount,paths,restoredCount` |
 | `approval_requested` | `approvalId,tool,action,rationale,expiresAtMs` |
 
-Events are limited to 64 KiB JSON with the normal depth/item limits. Workers send
-one frame awaiting acknowledgement and retain at most 64 queued frames. An
-oversized event, exhausted queue, rejected frame or acknowledgement timeout cancels
-destination execution and returns a failed terminal result rather than dropping
-events. The terminal result waits for all live-frame acknowledgements. Disconnect,
+Events are limited to 64 KiB JSON (less when the controller's `maxPayload` is
+smaller) with the normal depth/item limits. Size never fails a run: workers split
+long deltas into several `delta` events at UTF-8 boundaries, and elide oversized
+display data (action titles, messages and `detail` such as tool args,
+`result_full` and `details`; checkpoint paths) with an omitted-bytes marker,
+keeping action identity. Approval requests are never elided; one that does not
+fit is refused. Workers send one frame awaiting acknowledgement; while it is
+outstanding, adjacent deltas coalesce into one queued entry (at most 4 MiB of
+pending delta text) and at most 64 other events queue. An exhausted queue,
+rejected frame or acknowledgement timeout cancels destination execution and
+returns a failed terminal result rather than dropping events. The terminal result waits for all live-frame acknowledgements. Disconnect,
 node replacement, invocation timeout or cancellation ends the invocation; reconnect
 does not resume/replay cancelled work, and old-session frames cannot revive it.
 Completed native runners may already have stopped while their final events await

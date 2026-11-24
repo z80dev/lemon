@@ -171,6 +171,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Remote (named-node) runs no longer abort on event size, delta count or
+  delta rate: oversized tool actions (for example a 128 KiB `write`) and
+  checkpoint path lists are elided to the event budget, long deltas are split
+  at UTF-8 boundaries, deltas that queue behind a slow acknowledgement coalesce
+  (bounded by bytes), and the 10,000-delta cap is gone. The completed answer
+  is the run's own answer, not a concatenation of streamed deltas (#635).
 - Bundled WASM tools keep shared and tool-specific WIT metadata sections distinct,
   preventing component-linker failures when building the command tools.
 - `kill_process` reports `killing` instead of `running` when the signal ends the

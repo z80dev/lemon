@@ -9,6 +9,12 @@
 
 ### Fixed
 
+- Named-node workers no longer abort runs on event size, delta count or delta
+  rate. `RemoteEventCodec` elides oversized action/checkpoint display data to
+  the event budget and splits deltas at UTF-8 boundaries (`take_delta/2`); the
+  `encode_*` functions take an optional byte budget. Deltas queued behind an
+  outstanding acknowledgement coalesce (bounded by bytes), and the worker
+  reports the run's own completed answer instead of accumulating deltas (#635).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller
