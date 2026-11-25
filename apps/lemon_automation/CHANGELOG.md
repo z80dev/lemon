@@ -4,6 +4,14 @@
 
 ### Changed
 
+- `CronManager` matches every `CronStore` write and delete result: a failed
+  write emits no event, leaves in-memory state unchanged and replies
+  `{:error, :store_unavailable}`, or `{:error, :outcome_unknown}` when the
+  write may have landed (`add`, `update`, `refresh_captured_model`, `remove`,
+  `run_now`, `wake`, `abort_run`). A run starts with one write and is
+  submitted only once it is confirmed. An unpersisted terminal is not
+  announced, delivered or retried, and `abort_run` replies
+  `{:error, :outcome_unknown}` for it; recovery finishes the run (#87).
 - **Breaking:** cron numeric fields are validated by the new shared
   `CronJob.numeric_bounds/0` / `CronJob.validate_numeric/2` (add, update, the
   `cron` tool and blueprints); out-of-range or non-integer values return
