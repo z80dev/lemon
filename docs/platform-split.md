@@ -152,8 +152,9 @@ tarballs so this class of break fails CI.
 
   Only the repo tooling (`quality/`, `update/`, repo-only `mix lemon.*` tasks)
   is kept out of the tarball.
-- **Elixir floor.** The packages declare `~> 1.15`; the packaging workflow proves
-  Elixir 1.20.5 / OTP 29.1.2 and runs an advisory 1.15.8 / OTP 26.2 leg.
+- **Elixir floor.** The packages declare `~> 1.17` (exqlite 0.43 requires it); the
+  packaging workflow requires both Elixir 1.20.5 / OTP 29.1.2 and the floor,
+  1.17.3 / OTP 26.2, to pass `scripts/verify_packages`.
 - **`LemonChannels.Plugin.meta/0`** keeps its flag-map capability vocabulary;
   widening it to typed `Capability.spec()` lists waits for a consumer that needs
   sizes, features or rate limits.

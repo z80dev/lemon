@@ -1,5 +1,11 @@
 defmodule LemonCore.Doctor.Checks.Runtime do
-  @moduledoc "Checks the supported Elixir toolchain, port availability and running apps."
+  @moduledoc """
+  Checks the build identity, control-plane port and `LEMON_PATH`.
+
+  The Lemon application's Elixir toolchain floor is not a lemon_core concern
+  (the package supports every Elixir its mix.exs declares); `lemon doctor`
+  reports it from `LemonCli.Doctor.Toolchain`.
+  """
 
   alias LemonCore.Doctor.Check
   alias LemonCore.Runtime.{Env, Health}
@@ -7,35 +13,14 @@ defmodule LemonCore.Doctor.Checks.Runtime do
   @doc """
   Returns a list of Check results covering runtime readiness.
 
-  Options: `:env` (a `LemonCore.Runtime.Env`, default `Env.resolve/0`) and
-  `:elixir_version` (default `System.version/0`).
+  Option: `:env` (a `LemonCore.Runtime.Env`, default `Env.resolve/0`).
   """
   @spec run(keyword()) :: [Check.t()]
   def run(opts \\ []) do
     env = Keyword.get_lazy(opts, :env, &Env.resolve/0)
 
-    [
-      Check.pass("runtime.build", LemonCore.Update.Version.describe()),
-      check_elixir(Keyword.get(opts, :elixir_version, System.version()))
-    ] ++ check_runtime(env) ++ [check_lemon_root(System.get_env("LEMON_PATH"))]
-  end
-
-  defp check_elixir(version) do
-    supported? =
-      case Version.parse(version) do
-        {:ok, parsed} -> Version.compare(parsed, "1.20.5") != :lt
-        :error -> false
-      end
-
-    if supported? do
-      Check.pass("runtime.elixir", "Elixir #{version} meets the minimum version 1.20.5.")
-    else
-      Check.fail(
-        "runtime.elixir",
-        "Elixir #{version} is unsupported; Lemon requires Elixir 1.20.5 or newer.",
-        "Upgrade Elixir to 1.20.5+ (with OTP 29.1.2+), then rerun `lemon doctor`."
-      )
-    end
+    [Check.pass("runtime.build", LemonCore.BuildInfo.describe())] ++
+      check_runtime(env) ++ [check_lemon_root(System.get_env("LEMON_PATH"))]
   end
 
   # One /healthz probe yields two checks: whether a Lemon control plane answers

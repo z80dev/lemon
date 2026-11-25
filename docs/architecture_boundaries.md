@@ -22,7 +22,7 @@ silent permissions.
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_media`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_mcp`, `lemon_media`, `lemon_memory`, `lemon_omp`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_core` | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* |
-| `lemon_gateway` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_ai` |
+| `lemon_gateway` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core` | `lemon_ai` |
 | `lemon_honcho` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_platform_test` | *(none)* |
 | `lemon_lsp` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_mcp` | `lemon_core`, `lemon_skills` | `lemon_core`, `lemon_skills` | *(none)* |
@@ -64,9 +64,9 @@ only inside the product releases.
 | `lemon_lsp` | 0.1.0 | no |
 | `lemon_mcp` | 0.1.0 | no |
 | `lemon_media` | 0.1.0 | no |
-| `lemon_memory` | 0.2.0 | yes |
+| `lemon_memory` | 0.3.0 | yes |
 | `lemon_omp` | 0.1.0 | no |
-| `lemon_platform_test` | 0.2.0 | yes |
+| `lemon_platform_test` | 0.3.0 | yes |
 | `lemon_router` | 0.1.0 | no |
 | `lemon_skills` | 0.1.0 | no |
 | `lemon_web` | 0.1.0 | no |

@@ -20,13 +20,21 @@
 # script builds from nothing but the tarballs:
 #
 #   1. `LEMON_HEX_PUBLISH=1 mix hex.build --unpack` each package into
-#      <tmp>/packages/<package> — exactly the files hex.pm would receive.
+#      <tmp>/packages/<package> — exactly the files hex.pm would receive —
+#      then inspect the tarballs: no packaged source names a module a tarball
+#      excludes, lemon_platform_test never names the unpublished
+#      lemon_channels, and every sibling requirement admits its sibling's 0.x
+#      minor and no other.
 #   2. A scratch consumer project depends on those directories by path (the
 #      packages' own sibling requirements are hex requirements, so the path deps
-#      carry `override: true`), fetches the rest from hex.pm, compiles, boots
-#      :lemon_agent with only lemon_core's `:core` service group (no runtime
-#      control processes start), and checks the repo-only tooling stayed out of
-#      lemon_core.
+#      carry `override: true`), fetches the rest from hex.pm, compiles (no
+#      dependency may require a newer Elixir), boots :lemon_agent on lemon_core's
+#      `:core` service group, checks that repo-only tooling stayed out of the
+#      packages and that no packaged module
+#      calls an undefined module of a published package or a function this
+#      Elixir/OTP lacks (xref), and runs the packaged doctor: the runtime check
+#      must pass on this toolchain and no doctor check may crash. CI runs it on
+#      the packages' declared Elixir floor as well as the current toolchain.
 #   3. The installer generates the base and --memory project shapes against the
 #      same unpacked packages (`--packages-path`), compiles them with
 #      --warnings-as-errors and runs their tests.
@@ -110,6 +118,70 @@ for pkg in "${PACKAGES[@]}"; do
   }
 done
 
+echo
+echo "==> packages: no packaged source names an excluded or unpublished module"
+# A module is excluded when its repo file is missing from the tarball (each
+# mix.exs's package exclude_patterns). Only top-level defmodules are taken:
+# nested ones are declared relative to their parent.
+EXCLUDED_LIST="$TMP/excluded_modules"
+: >"$EXCLUDED_LIST"
+for pkg in "${PACKAGES[@]}"; do
+  while IFS= read -r file; do
+    rel="${file#"$REPO_ROOT/apps/$pkg/"}"
+    [[ -f "$PKG_DIR/$pkg/$rel" ]] && continue
+    sed -n 's/^defmodule[[:space:]]\{1,\}\([A-Za-z0-9_.]*\).*/\1/p' "$file" >>"$EXCLUDED_LIST"
+  done < <(find "$REPO_ROOT/apps/$pkg/lib" -name '*.ex')
+done
+echo "excluded from the tarballs: $(wc -l <"$EXCLUDED_LIST" | tr -d ' ') modules"
+if grep -rnwF -f "$EXCLUDED_LIST" "${PACKAGES[@]/#/$PKG_DIR/}" --include='*.ex'; then
+  echo "packaged sources above name a module that no published package contains" >&2
+  exit 1
+fi
+# lemon_channels is not published, so the contract-test kit (whose modules
+# consumers compile into their own tests) must not name it at all.
+if grep -rnw 'LemonChannels' "$PKG_DIR/lemon_platform_test/lib"; then
+  echo "lemon_platform_test's package names the unpublished lemon_channels" >&2
+  exit 1
+fi
+
+echo "==> packages: sibling requirements stay on the sibling's 0.x minor"
+# Each 0.x minor may break, so `~> 0.3` (which admits 0.4) is refused; the
+# requirement must admit the sibling's patch releases and nothing else.
+PKG_DIR="$PKG_DIR" PACKAGES="${PACKAGES[*]}" elixir -e '
+  dir = System.fetch_env!("PKG_DIR")
+  packages = String.split(System.fetch_env!("PACKAGES"))
+
+  metadata =
+    Map.new(packages, fn pkg ->
+      {:ok, terms} = :file.consult(String.to_charlist(Path.join([dir, pkg, "hex_metadata.config"])))
+      {pkg, Map.new(terms)}
+    end)
+
+  errors =
+    for {pkg, meta} <- metadata,
+        req <- meta["requirements"],
+        req = Map.new(req),
+        req["name"] in packages do
+      sibling = Version.parse!(metadata[req["name"]]["version"])
+      %Version{major: major, minor: minor} = sibling
+      requirement = req["requirement"]
+
+      admits =
+        Enum.all?([sibling, "#{major}.#{minor}.99"], &Version.match?(&1, requirement))
+
+      others = ["#{major}.#{minor + 1}.0", "#{major + 1}.0.0"] ++
+        if(minor > 0, do: ["#{major}.#{minor - 1}.99"], else: [])
+
+      if admits and not Enum.any?(others, &Version.match?(&1, requirement)),
+        do: [],
+        else: ["#{pkg} requires #{req["name"]} #{requirement}; #{req["name"]} is #{sibling}"]
+    end
+    |> List.flatten()
+
+  errors == [] || raise Enum.join(["sibling requirements cross a 0.x minor:" | errors], "\n  ")
+  IO.puts("sibling requirements ok")
+'
+
 # ── 2. A consumer that depends on nothing but the tarballs ──────────────────
 
 CONSUMER="$TMP/consumer"
@@ -121,10 +193,11 @@ defmodule PackagesConsumer.MixProject do
   use Mix.Project
 
   def project do
-    [app: :packages_consumer, version: "0.1.0", elixir: "~> 1.15", deps: deps()]
+    [app: :packages_consumer, version: "0.1.0", elixir: "~> 1.17", deps: deps()]
   end
 
-  def application, do: [extra_applications: [:logger]]
+  # :tools provides :xref for the inspection below.
+  def application, do: [extra_applications: [:logger, :tools]]
 
   defp deps do
     [
@@ -153,7 +226,13 @@ echo "==> consumer: deps.get"
 (cd "$CONSUMER" && consumer mix deps.get >/dev/null)
 
 echo "==> consumer: compile"
-(cd "$CONSUMER" && consumer mix compile)
+(cd "$CONSUMER" && consumer mix compile 2>&1) | tee "$TMP/consumer_compile.log"
+# Mix only warns when a dependency requires a newer Elixir than the running
+# one; for the packages' declared floor that is a failure.
+if grep -n 'requires Elixir' "$TMP/consumer_compile.log"; then
+  echo "a dependency of the packages does not support Elixir $(elixir -e 'IO.write(System.version())')" >&2
+  exit 1
+fi
 
 echo "==> consumer: boot and inspect"
 (cd "$CONSUMER" && consumer mix run -e '
@@ -164,17 +243,20 @@ echo "==> consumer: boot and inspect"
   end
 
   # Repo-only tooling and the in-repo test harness are excluded from the
-  # lemon_core tarball (apps/lemon_core/mix.exs).
+  # lemon_core tarball (apps/lemon_core/mix.exs); PluginCase, whose target is
+  # unpublished, from lemon_platform_test.
   for module <- [
         LemonCore.Quality.ArchitectureCheck,
         LemonCore.Update.Version,
         Mix.Tasks.Lemon.Quality,
+        Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite,
         LemonCore.Testing,
         LemonCore.Testing.Case,
         LemonCore.Testing.HermeticEnv,
-        LemonCore.Testing.AsyncHelpers
+        LemonCore.Testing.AsyncHelpers,
+        LemonPlatformTest.PluginCase
       ] do
-    Code.ensure_loaded?(module) && raise "#{inspect(module)} leaked into the lemon_core package"
+    Code.ensure_loaded?(module) && raise "#{inspect(module)} leaked into the packages"
   end
 
   started = for {id, _pid, _type, _modules} <- Supervisor.which_children(LemonCore.Supervisor), do: id
@@ -184,7 +266,56 @@ echo "==> consumer: boot and inspect"
     runtime_control in started && raise "a [:core] consumer started #{inspect(runtime_control)}"
   end
 
-  IO.puts("consumer ok: packages compile, :lemon_agent boots on :core services, repo tooling excluded")
+  # No packaged module may call a module or function of a published package
+  # that the packages do not contain, nor a function the running Elixir/OTP
+  # lacks (String.replace_invalid/2 before Elixir 1.16): each is a raise
+  # waiting for a consumer. Calls into an absent optional dependency (Sentry,
+  # Phoenix.PubSub, ...) are guarded by the callers and are not counted.
+  published = [:lemon_ai, :lemon_core, :lemon_agent, :lemon_memory, :lemon_platform_test]
+  namespaces = ~w(LemonAi LemonCore LemonAgent LemonMemory LemonPlatformTest Mix.Tasks.Lemon)
+
+  {:ok, xref} = :xref.start(xref_mode: :functions)
+  :ok = :xref.set_default(xref, verbose: false, warnings: false)
+  :ok = :xref.set_library_path(xref, :code.get_path())
+  for app <- published, do: {:ok, ^app} = :xref.add_application(xref, :code.lib_dir(app))
+  {:ok, calls} = :xref.analyze(xref, :undefined_function_calls)
+  :xref.stop(xref)
+
+  ours? = fn module ->
+    name = inspect(module)
+    Enum.any?(namespaces, &(name == &1 or String.starts_with?(name, &1 <> ".")))
+  end
+
+  case for({from, {module, _, _} = to} <- calls, ours?.(module) or Code.ensure_loaded?(module), do: {from, to}) do
+    [] -> :ok
+    broken -> raise "packaged code calls what the packages or Elixir #{System.version()} do not provide:\n#{inspect(broken, pretty: true)}"
+  end
+
+  # The packaged doctor runs: its runtime check must pass on this toolchain
+  # (whatever Elixir the packages admit), and no doctor check may crash. A
+  # free port keeps a local Lemon runtime out of the control-port check.
+  {:ok, socket} = :gen_tcp.listen(0, [])
+  {:ok, port} = :inet.port(socket)
+  :ok = :gen_tcp.close(socket)
+  System.put_env("LEMON_CONTROL_PLANE_PORT", Integer.to_string(port))
+
+  runtime = LemonCore.Doctor.Checks.Runtime.run([])
+  for check <- runtime, do: IO.puts("  #{check.name}: #{check.status} — #{check.message}")
+
+  Enum.any?(runtime, &(&1.name == "runtime.build" and &1.status == :pass)) ||
+    raise "packaged doctor reported no build identity"
+
+  case Enum.filter(runtime, &(&1.status == :fail)) do
+    [] -> :ok
+    failed -> raise "packaged doctor runtime check failed on Elixir #{System.version()}: #{inspect(failed)}"
+  end
+
+  case Enum.filter(LemonCore.Doctor.checks(), &(&1.name == "doctor.check_failed")) do
+    [] -> :ok
+    crashed -> raise "packaged doctor checks crashed: #{inspect(crashed)}"
+  end
+
+  IO.puts("consumer ok: packages compile, :lemon_agent boots on :core services, repo tooling excluded, doctor runs")
 ')
 
 if [[ $GENERATOR -eq 0 ]]; then

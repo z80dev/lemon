@@ -90,6 +90,7 @@ config :lemon_core, :doctor_runtime,
 config :lemon_core, :doctor_checks, [
   LemonCli.Doctor.Providers,
   LemonCli.Doctor.BotAdmission,
+  LemonCli.Doctor.Toolchain,
   LemonControlPlane.Doctor.Checks.Listeners,
   LemonMemory.Doctor.Checks.Memory,
   LemonSkills.Doctor.Checks.Skills,

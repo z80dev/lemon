@@ -171,7 +171,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
 
     version =
       configured(:node_install_version, ["LEMON_NODE_INSTALL_VERSION", "LEMON_VERSION"]) ||
-        if(is_nil(source_root), do: LemonCore.Update.Version.current())
+        if(is_nil(source_root), do: LemonCore.BuildInfo.version())
 
     base_url =
       configured(:node_install_base_url, ["LEMON_NODE_INSTALL_BASE_URL", "LEMON_INSTALL_BASE_URL"]) ||

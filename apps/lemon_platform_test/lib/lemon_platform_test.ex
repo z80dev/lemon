@@ -23,13 +23,16 @@ defmodule LemonPlatformTest do
   That is the whole integration. The suite contributes its own tests; you can
   add your own tests to the same module alongside them.
 
-  ## The three suites
+  ## The suites
 
   | Behaviour | Case template | What you are building |
   |---|---|---|
   | `LemonCore.Store.Backend` | `LemonPlatformTest.BackendCase` | storage for the platform's key/value store |
-  | `LemonChannels.Plugin` | `LemonPlatformTest.PluginCase` | a chat/messaging channel (Telegram, Discord, …) |
   | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` | a long-term memory write target |
+  | `LemonCore.Events` payloads | `LemonPlatformTest.EventsCase` | typed bus events your extension publishes |
+
+  The lemon repository also carries a channel-adapter suite (`PluginCase`). Its
+  target app is not published to Hex, so the suite is not part of this package.
 
   Each case template's moduledoc is the reference guide for its behaviour: the
   contract in prose, a minimal worked implementation, and every option the suite
@@ -46,11 +49,10 @@ defmodule LemonPlatformTest do
 
   They are also deliberately **safe by default**: no suite will make a network
   call, deliver a real message, or invoke a runner unless you opt in by passing
-  a probe (see `LemonPlatformTest.PluginCase` `:deliver_probe`). Compliance
-  suites that accidentally post to your production Telegram bot are worse than
-  no suite.
+  a probe. Compliance suites that accidentally post to your production Telegram
+  bot are worse than no suite.
 
-  ## Options common to all three
+  ## Options common to the suites
 
     * `:async` — forwarded to `use ExUnit.Case`. Suites that exercise a global
       platform registry (`:registry` option) must run with `async: false`.
@@ -152,9 +154,12 @@ defmodule LemonPlatformTest do
   *consumer's* test module compiles — naming the missing package — rather than
   as an obscure `UndefinedFunctionError` at test time.
 
-      LemonPlatformTest.require_dep!("PluginCase", LemonChannels.Plugin, :lemon_channels)
+      LemonPlatformTest.require_dep!("ProviderCase", LemonMemory.Provider, :lemon_memory)
+
+  `dep` is a published sibling package, required on this kit's release line,
+  or a literal dependency line for a target that is not on Hex.
   """
-  @spec require_dep!(String.t(), module(), atom()) :: :ok
+  @spec require_dep!(String.t(), module(), atom() | String.t()) :: :ok
   def require_dep!(case_name, module, dep) do
     if Code.ensure_loaded?(module) do
       :ok
@@ -172,11 +177,12 @@ defmodule LemonPlatformTest do
     end
   end
 
-  # lemon_channels is the one case target that is not published to Hex.
-  defp dep_line(:lemon_channels) do
-    ~s|{:lemon_channels, path: "/path/to/lemon/apps/lemon_channels", only: :test}| <>
-      " (lemon_channels is not on Hex; point at a lemon checkout)"
-  end
+  # The published packages share one 0.x release line, and every 0.x minor may
+  # break, so a sibling is required at this kit's own major.minor.
+  @release_line (with {:ok, v} <- Version.parse(Mix.Project.config()[:version]) do
+                   "~> #{v.major}.#{v.minor}.0"
+                 end)
 
-  defp dep_line(dep), do: "{#{inspect(dep)}, \"~> 0.2\", only: :test}"
+  defp dep_line(line) when is_binary(line), do: line
+  defp dep_line(dep), do: "{#{inspect(dep)}, #{inspect(@release_line)}, only: :test}"
 end

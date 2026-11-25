@@ -313,7 +313,6 @@ default suggestions just because the upstream provider documents them.
 | `mix lemon.onboard.codex` | OpenAI Codex provider setup with OAuth and localhost callback capture |
 | `mix lemon.onboard.copilot` | GitHub Copilot provider setup with OAuth |
 | `mix lemon.quality` | Run all quality checks |
-| `mix lemon.store.migrate_jsonl_to_sqlite` | Migrate JSONL to SQLite |
 | `mix lemon.introspection` | Query introspection events |
 | `mix lemon.check_duplicate_tests` | Check for duplicate test names |
 
@@ -496,7 +495,9 @@ It is removed now (issue #608); SQLite is the supported durable backend.
 This is a breaking package change from 0.2.x.
 
 Before upgrading, stop runtime writers, back up the JSONL store directory,
-and run the migration using the old source checkout:
+and run the migration from the installation you are upgrading from
+(`lemon_core` 0.2.x or a Lemon release up to v2026.11.9), which still ships
+the task and the JSONL backend:
 
 ```bash
 mix lemon.store.migrate_jsonl_to_sqlite --jsonl-path /var/lib/lemon/store --sqlite-path /var/lib/lemon/store.sqlite3 --dry-run
@@ -508,9 +509,7 @@ Use a new target database; `--replace` deletes an existing target. Add
 and configure `ephemeral_tables: []` if SQLite must keep them after startup.
 Switch the Store configuration to SQLite as below, verify the migrated data,
 then upgrade. Keep the original backup until verification is complete.
-The migration task remains available in 0.3.0 with a private read-only legacy
-reader for recovery; it does not restore a JSONL runtime backend or modify the
-source journals. Only migrate trusted local journals.
+`lemon_core` 0.3.0 no longer includes the migration task (#730).
 
 ### Configuration
 

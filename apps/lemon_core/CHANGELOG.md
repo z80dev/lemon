@@ -38,6 +38,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   exception is named `LemonCore.StatusRedaction.RedactedCrashError` (#499).
 - `LemonCore.Config.Features`: `routing_feedback` now defaults to `:off`
   (`%Features{}` and `resolve/1` with no setting); enable it with `"on"` (#647).
+- **Breaking:** requires Elixir 1.17 (was `~> 1.15`, which the package did not
+  meet: it calls `String.replace_invalid/1`, Elixir 1.16, and its optional
+  exqlite 0.43 requires 1.17). CI proves the floor on Elixir 1.17.3 / OTP 26.2,
+  and `LemonCore.ConfinedFS.Stat` moved to its own file so the package compiles
+  there (#730).
 - **Breaking:** the test harness (`LemonCore.Testing`, `Testing.Case`,
   `Testing.HermeticEnv`, `Testing.AsyncHelpers`, `Testing.FileServerTap`) is no
   longer shipped in the Hex package; it serves the lemon repository's own
@@ -62,6 +67,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   cumulative counters. `LemonCore.UsageLedger` reads only the canonical names:
   `input_tokens`/`prompt_tokens`/`completion_tokens` and the
   `cache_*_input_tokens` spellings are no longer usage (#669).
+- The packaged doctor works: `LemonCore.Doctor.Checks.Runtime` called
+  `LemonCore.Update.Version.describe/0`, a module the package excludes, and
+  failed on any Elixir below 1.20.5 although the package declares `~> 1.15`.
+  The build identity now lives in `LemonCore.BuildInfo.version/0`,
+  `identity/0` and `describe/0`, and the runtime check no longer judges the
+  toolchain (`lemon doctor` reports the Lemon application's Elixir floor from
+  lemon_cli). `scripts/verify_packages` runs the packaged doctor (#730).
+- **Breaking:** `mix lemon.store.migrate_jsonl_to_sqlite` is removed with the
+  JSONL backend it migrated from; migrate with `lemon_core` 0.2.x before
+  upgrading (#730).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).

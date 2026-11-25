@@ -789,7 +789,7 @@ defmodule LemonCli.CLITest do
     test "version prints the current Lemon version" do
       output = capture_io(fn -> assert CLI.run(["version"]) == 0 end)
 
-      assert output == LemonCore.Update.Version.current() <> "\n"
+      assert output == LemonCore.BuildInfo.version() <> "\n"
     end
   end
 

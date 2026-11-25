@@ -1131,7 +1131,7 @@ defmodule LemonCore.Update.Remote do
   end
 
   defp running_version(opts),
-    do: Keyword.get(opts, :current_version) || Version.current()
+    do: Keyword.get(opts, :current_version) || LemonCore.BuildInfo.version()
 
   defp now_ms(opts), do: Keyword.get(opts, :now_ms, System.system_time(:millisecond))
 

@@ -34,8 +34,7 @@ defmodule Mix.Tasks.Lemon.Help do
         lemon.introspection lemon.feedback)},
     {"Quality & CI", ~w(lemon.quality lemon.architecture.docs lemon.check_duplicate_tests
         lemon.extension.validate lemon.eval lemon.help)},
-    {"Data, stores & messaging",
-     ~w(lemon.store.migrate_jsonl_to_sqlite lemon.memory lemon.policy lemon.send)},
+    {"Data, stores & messaging", ~w(lemon.memory lemon.policy lemon.send)},
     {"Skills", ~w(lemon.skill lemon.skill.lint)},
     {"Benchmarks (platform)", ~w(lemon.bench)}
   ]

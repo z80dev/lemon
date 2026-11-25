@@ -549,7 +549,8 @@ defmodule LemonCore.Update.ManagedInstall do
 
   defp safe_target?(_target), do: false
 
-  defp running_version(opts), do: Keyword.get(opts, :current_version) || Version.current()
+  defp running_version(opts),
+    do: Keyword.get(opts, :current_version) || LemonCore.BuildInfo.version()
 
   defp release_root(opts) do
     Keyword.get(opts, :release_root) || System.get_env("RELEASE_ROOT") ||
