@@ -710,9 +710,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `BranchSummaryMessage` (#629).
 - Uninvoked and broken proof scripts under `scripts/`: the offline named-agent,
   approval-recovery, multimodal-retry, task-worktree, provider-auth,
-  stopped-plan and probe-wrapper smokes, `scripts/verify_github_release_artifacts`
-  and unused LSP fixtures. Their probes now live in the consuming apps'
-  `test/support/probes`; ExUnit covers their scenarios.
+  stopped-plan and four duplicate probe-wrapper smokes,
+  `scripts/verify_github_release_artifacts` and unused LSP fixtures. Their
+  probes now live in the consuming apps' `test/support/probes`; ExUnit covers
+  their scenarios. The manual, loopback-only
+  `scripts/live_provider_ownership_smoke.exs` stays and loads its probe from there.
   `scripts/test quality` now runs every retained script self-test, the
   crash-model mutation-anchor check and a check that each umbrella module
   named by `scripts/*.exs` exists (#704).

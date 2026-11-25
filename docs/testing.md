@@ -479,8 +479,13 @@ See [omp verification](../apps/lemon_omp/AGENTS.md#verification) for overrides.
 
 The remaining manual smoke scripts are not run by CI:
 `scripts/live_telegram_matrix.py` (with `scripts/telegram_driver.py`),
-`scripts/live_discord_matrix.py`, `scripts/live_provider_fallback_smoke.exs`, and
-`scripts/live_cron_runtime_restart_smoke.exs`. MCP has no live smoke script: its
+`scripts/live_discord_matrix.py`, `scripts/live_provider_fallback_smoke.exs`,
+`scripts/live_provider_ownership_smoke.exs`, and
+`scripts/live_cron_runtime_restart_smoke.exs`. Despite its name,
+`live_provider_ownership_smoke.exs` uses fixture credentials and loopback HTTP
+only: it needs no provider login, approval or network call, and
+`apps/coding_agent/test/coding_agent/session/live_provider_ownership_test.exs`
+runs the same probe in the fast lane. MCP has no live smoke script: its
 client, transports and fixture server are covered by the deterministic
 `apps/lemon_mcp/test` suite (`scripts/test path apps/lemon_mcp/test`).
 

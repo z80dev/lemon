@@ -2522,7 +2522,9 @@ an isolated native session and loopback fixture endpoint, rejects the primary
 model with HTTP 503, and verifies the configured alternate model answers and
 the session is persisted. The smoke script is not part of the CI test lane.
 
-`scripts/test path apps/coding_agent/test/coding_agent/session/live_provider_ownership_test.exs`
+`MIX_ENV=test mix run --no-compile --no-start scripts/live_provider_ownership_smoke.exs`
+(or its ExUnit equivalent,
+`scripts/test path apps/coding_agent/test/coding_agent/session/live_provider_ownership_test.exs`)
 exercises public native Session and Agent model switches, missing-selected-login
 refusal (including plan-role selection), successful keyless transitions,
 switch-then-fallback header isolation and same-provider rebinding with no caller
