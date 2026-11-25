@@ -110,8 +110,8 @@ defmodule CodingAgent.Application do
       :ok ->
         :ok
 
-      other ->
-        Logger.debug("agent runtime provider not registered: #{inspect(other)}")
+      {:error, reason} ->
+        Logger.error("agent runtime provider not registered: #{reason}")
         :ok
     end
   end

@@ -1,13 +1,10 @@
 defmodule LemonControlPlane.Methods.BackgroundCommandSupport do
   @moduledoc false
 
-  alias LemonCore.AgentRuntime
   alias LemonRouter.ThinkingLevel
 
   @statuses ~w(queued running completed error lost killed cancelled tracking_lost)
   @max_id_bytes 256
-
-  def call(function, args), do: AgentRuntime.call(function, args, {:error, :unavailable})
 
   def opts(params) do
     []
@@ -82,6 +79,14 @@ defmodule LemonControlPlane.Methods.BackgroundCommandSupport do
   end
 
   def project_summary(_summary), do: {:error, :invalid_runtime_response}
+
+  # A start or cancel whose runtime call failed after being reached may already
+  # have applied: it is never a retryable rejection.
+  def error(_operation, :outcome_unknown) do
+    {:error,
+     {:unavailable, "Background run outcome is unknown; reconcile before retrying",
+      %{"code" => "OUTCOME_UNKNOWN", "retrySafe" => false}}}
+  end
 
   def error(operation, reason) do
     {rpc_code, message, public_code} = public_error(operation, reason)
@@ -195,6 +200,7 @@ defmodule LemonControlPlane.Methods.BackgroundStart do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.BackgroundCommandSupport, as: Support
+  alias LemonCore.AgentRuntime
 
   @impl true
   def name, do: "background.start"
@@ -205,18 +211,18 @@ defmodule LemonControlPlane.Methods.BackgroundStart do
   @impl true
   def handle(%{"prompt" => prompt} = params, _ctx) when is_binary(prompt) do
     with :ok <- Support.validate_thinking_level(params) do
-      case Support.call(:background_start, [prompt, Support.opts(params)]) do
+      case AgentRuntime.mutate(:background_start, [prompt, Support.opts(params)]) do
         {:ok, result} ->
           case Support.project_start(result) do
             {:ok, payload} -> {:ok, payload}
-            {:error, reason} -> Support.error(:start, reason)
+            {:error, _} -> Support.error(:start, :outcome_unknown)
           end
 
         {:error, reason} ->
           Support.error(:start, reason)
 
         _other ->
-          Support.error(:start, :invalid_runtime_response)
+          Support.error(:start, :outcome_unknown)
       end
     end
   end
@@ -229,6 +235,7 @@ defmodule LemonControlPlane.Methods.BackgroundList do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.BackgroundCommandSupport, as: Support
+  alias LemonCore.AgentRuntime
 
   @impl true
   def name, do: "background.list"
@@ -240,7 +247,7 @@ defmodule LemonControlPlane.Methods.BackgroundList do
   def handle(params, _ctx) do
     opts = if is_binary(params["status"]), do: [status: params["status"]], else: []
 
-    case Support.call(:background_list, [opts]) do
+    case AgentRuntime.query(:background_list, [opts]) do
       runs when is_list(runs) ->
         case Support.project_runs(runs) do
           {:ok, projected} -> {:ok, %{"runs" => projected, "total" => length(projected)}}
@@ -261,6 +268,7 @@ defmodule LemonControlPlane.Methods.BackgroundStatus do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.BackgroundCommandSupport, as: Support
+  alias LemonCore.AgentRuntime
 
   @impl true
   def name, do: "background.status"
@@ -270,7 +278,7 @@ defmodule LemonControlPlane.Methods.BackgroundStatus do
 
   @impl true
   def handle(%{"id" => id}, _ctx) when is_binary(id) do
-    case Support.call(:background_status, [id]) do
+    case AgentRuntime.query(:background_status, [id]) do
       {:ok, result} ->
         case Support.project_summary(result) do
           {:ok, payload} -> {:ok, payload}
@@ -298,6 +306,7 @@ defmodule LemonControlPlane.Methods.BackgroundResult do
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.BackgroundCommandSupport, as: Support
+  alias LemonCore.AgentRuntime
 
   @impl true
   def name, do: "background.result"
@@ -307,7 +316,7 @@ defmodule LemonControlPlane.Methods.BackgroundResult do
 
   @impl true
   def handle(%{"id" => id}, ctx) when is_binary(id) do
-    case Support.call(:background_result, [id]) do
+    case AgentRuntime.query(:background_result, [id]) do
       {:ok, answer} when is_binary(answer) ->
         {:ok, ready(id, answer, Authorize.content?(ctx))}
 
@@ -344,6 +353,7 @@ defmodule LemonControlPlane.Methods.BackgroundCancel do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.BackgroundCommandSupport, as: Support
+  alias LemonCore.AgentRuntime
 
   @impl true
   def name, do: "background.cancel"
@@ -353,10 +363,10 @@ defmodule LemonControlPlane.Methods.BackgroundCancel do
 
   @impl true
   def handle(%{"id" => id}, _ctx) when is_binary(id) do
-    case Support.call(:background_cancel, [id]) do
+    case AgentRuntime.mutate(:background_cancel, [id]) do
       :ok -> {:ok, %{"id" => id, "cancelled" => true}}
       {:error, reason} -> Support.error(:cancel, reason)
-      _other -> Support.error(:cancel, :invalid_runtime_response)
+      _other -> Support.error(:cancel, :outcome_unknown)
     end
   end
 
@@ -368,6 +378,7 @@ defmodule LemonControlPlane.Methods.SessionBtw do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.BackgroundCommandSupport, as: Support
+  alias LemonCore.AgentRuntime
 
   @impl true
   def name, do: "session.btw"
@@ -383,7 +394,7 @@ defmodule LemonControlPlane.Methods.SessionBtw do
     if is_binary(source) and source != "" and is_binary(question) and String.trim(question) != "" do
       opts = Support.opts(params)
 
-      case Support.call(:side_query, [source, question, opts]) do
+      case AgentRuntime.query(:side_query, [source, question, opts]) do
         {:ok, answer} when is_binary(answer) ->
           {:ok, %{"answer" => answer, "parentHistoryChanged" => false, "tools" => []}}
 

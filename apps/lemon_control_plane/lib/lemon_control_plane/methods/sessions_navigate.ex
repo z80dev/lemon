@@ -21,11 +21,7 @@ defmodule LemonControlPlane.Methods.SessionsNavigate do
     with {:ok, key, cwd} <- NativeSessions.target(params),
          {:ok, entry_id} <- NativeSessions.string(params, "entryId", 256),
          {:ok, summarize} <- NativeSessions.boolean(params, "summarize", false) do
-      case AgentRuntime.call(
-             :session_navigate,
-             [key, cwd, entry_id, [summarize: summarize]],
-             {:error, :outcome_unknown}
-           ) do
+      case AgentRuntime.mutate(:session_navigate, [key, cwd, entry_id, [summarize: summarize]]) do
         {:ok, result} when is_map(result) ->
           {:ok,
            result

@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.ProcessJobsSupport do
   @moduledoc false
 
   alias LemonControlPlane.Methods.NativeSessions
-  alias LemonCore.{AgentRuntime, Redact}
+  alias LemonCore.Redact
 
   @max_jobs 100
   @max_agents 100
@@ -29,18 +29,6 @@ defmodule LemonControlPlane.Methods.ProcessJobsSupport do
       error ->
         error
     end
-  end
-
-  def call(function, args), do: AgentRuntime.call(function, args, {:error, :unavailable})
-
-  # A mutation whose provider call raised or exited may already have taken effect.
-  def call_mutation(function, args) do
-    provider = AgentRuntime.provider()
-
-    if provider && Code.ensure_loaded?(provider) &&
-         function_exported?(provider, function, length(args)),
-       do: AgentRuntime.call(function, args, {:error, :outcome_unknown}),
-       else: {:error, :unavailable}
   end
 
   # Command text and output are content; without `operator.content` list and
@@ -263,6 +251,7 @@ defmodule LemonControlPlane.Methods.ProcessJobsList do
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.ProcessJobsSupport, as: Support
+  alias LemonCore.AgentRuntime
 
   @impl true
   def name, do: "process.jobs.list"
@@ -273,7 +262,7 @@ defmodule LemonControlPlane.Methods.ProcessJobsList do
   @impl true
   def handle(params, ctx) do
     with {:ok, key} <- Support.key(params) do
-      case Support.call(:session_jobs, [key]) do
+      case AgentRuntime.query(:session_jobs, [key]) do
         {:ok, result} ->
           case Support.project_list(key, result, Authorize.content?(ctx)) do
             {:ok, payload} -> {:ok, payload}
@@ -304,6 +293,7 @@ defmodule LemonControlPlane.Methods.ProcessJobsInspect do
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.NativeSessions
   alias LemonControlPlane.Methods.ProcessJobsSupport, as: Support
+  alias LemonCore.AgentRuntime
 
   @impl true
   def name, do: "process.jobs.inspect"
@@ -323,7 +313,7 @@ defmodule LemonControlPlane.Methods.ProcessJobsInspect do
              0,
              Support.max_tail_bytes()
            ) do
-      case Support.call(:session_job, [key, job_id, [tail_bytes: tail]]) do
+      case AgentRuntime.query(:session_job, [key, job_id, [tail_bytes: tail]]) do
         {:ok, result} ->
           case Support.project_detail(key, result, Authorize.content?(ctx)) do
             {:ok, payload} -> {:ok, payload}
@@ -351,6 +341,7 @@ defmodule LemonControlPlane.Methods.ProcessJobsCancel do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Methods.ProcessJobsSupport, as: Support
+  alias LemonCore.AgentRuntime
 
   @impl true
   def name, do: "process.jobs.cancel"
@@ -362,7 +353,7 @@ defmodule LemonControlPlane.Methods.ProcessJobsCancel do
   def handle(params, _ctx) do
     with {:ok, key} <- Support.key(params),
          {:ok, job_id} <- Support.job_id(params) do
-      case Support.call_mutation(:session_job_cancel, [key, job_id]) do
+      case AgentRuntime.mutate(:session_job_cancel, [key, job_id]) do
         {:ok, result} ->
           case Support.project_cancel(key, job_id, result) do
             {:ok, payload} -> {:ok, payload}

@@ -51,7 +51,7 @@ defmodule LemonControlPlane.Methods.SessionsContext do
   """
   @spec fetch(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def fetch(session_key, cwd) do
-    case AgentRuntime.call(:session_context_usage, [session_key, cwd], {:error, :unavailable}) do
+    case AgentRuntime.query(:session_context_usage, [session_key, cwd]) do
       {:ok, usage} when is_map(usage) -> project(session_key, usage)
       {:error, reason} -> NativeSessions.failure(reason)
       _ -> NativeSessions.failure(:unavailable)
