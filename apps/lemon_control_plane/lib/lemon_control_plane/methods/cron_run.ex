@@ -2,13 +2,15 @@ defmodule LemonControlPlane.Methods.CronRun do
   @moduledoc """
   Handler for the cron.run method.
 
-  Triggers an immediate run of a cron job.
+  Triggers an immediate run of a cron job. The cron run ID is allocated here,
+  before the scheduler is called, and the scheduler claims exactly that ID.
 
   When the outcome is unknown (an earlier run of the job is still unresolved, or
   the trigger call timed out or exited after reaching the scheduler) the method
   fails with code `UNAVAILABLE` and details
-  `%{"code" => "RUN_OUTCOME_UNKNOWN", "jobId" => id, "retrySafe" => false}`:
-  a run may exist, so reconcile with `cron.runs` instead of triggering again.
+  `%{"code" => "RUN_OUTCOME_UNKNOWN", "jobId" => id, "runId" => run_id,
+  "retrySafe" => false}`: that run may exist, so reconcile it with `cron.runs`
+  instead of triggering again.
   """
 
   @behaviour LemonControlPlane.Method
@@ -24,7 +26,9 @@ defmodule LemonControlPlane.Methods.CronRun do
   @impl true
   def handle(params, _ctx) do
     with {:ok, job_id} <- LemonControlPlane.Method.require_param(params, "id") do
-      case run_now(job_id) do
+      run_id = LemonCore.Id.run_id()
+
+      case run_now(job_id, run_id) do
         {:ok, run} ->
           {:ok,
            %{
@@ -40,8 +44,13 @@ defmodule LemonControlPlane.Methods.CronRun do
         {:error, :outcome_unknown} ->
           {:error,
            {:unavailable,
-            "The cron run's outcome is unknown. Check cron.runs before triggering it again.",
-            %{"code" => "RUN_OUTCOME_UNKNOWN", "jobId" => job_id, "retrySafe" => false}}}
+            "The cron run's outcome is unknown. Check cron.runs for runId before triggering it again.",
+            %{
+              "code" => "RUN_OUTCOME_UNKNOWN",
+              "jobId" => job_id,
+              "runId" => run_id,
+              "retrySafe" => false
+            }}}
 
         {:error, reason} ->
           Logger.warning("Could not start cron job reason=#{failure_label(reason)}")
@@ -56,8 +65,8 @@ defmodule LemonControlPlane.Methods.CronRun do
 
   # A trigger call that timed out or exited after reaching the scheduler may
   # already have started a run; only a missing scheduler is definite.
-  defp run_now(job_id) do
-    LemonAutomation.CronManager.run_now(job_id)
+  defp run_now(job_id, run_id) do
+    LemonAutomation.CronManager.run_now_with_id(job_id, run_id)
   catch
     :exit, {:noproc, _} -> {:error, :unavailable}
     :exit, _ -> {:error, :outcome_unknown}

@@ -158,6 +158,8 @@ All notable changes to `lemon_cli` are documented here.
 
 ### Fixed
 
+- `lemon print` renders a structured `agent.wait` error (`kind`, HTTP
+  `status`, `message`) instead of crashing on a non-text error (#620).
 - One-shot commands boot `:lemon_core` in client mode through
   `LemonCore.CLI.start/2` (context, learn, learning, mcp, update, migrate,
   providers and onboarding included), so they no longer expire a running

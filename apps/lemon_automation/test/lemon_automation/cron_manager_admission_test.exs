@@ -627,6 +627,29 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     refute_receive {:router_submitted, _}, 100
   end
 
+  # #620: cron.run allocates the cron run ID before calling the scheduler, so a
+  # lost reply still names the run. The scheduler claims exactly that ID, writes
+  # it durably before announcing it, and never overwrites an existing run.
+  test "run_now_with_id claims the caller's fixed run ID and refuses a reused one", ctx do
+    assert {:ok, job} = add_job(ctx)
+    job_id = job.id
+    run_id = "cron_fixed_#{System.unique_integer([:positive])}"
+    :ok = Bus.subscribe("cron")
+    on_exit(fn -> Bus.unsubscribe("cron") end)
+
+    assert {:ok, %CronRun{id: ^run_id, triggered_by: :manual}} =
+             CronManager.run_now_with_id(job.id, run_id)
+
+    assert_receive %Event{type: :cron_run_started, payload: %{cron_run_id: ^run_id}}, 5_000
+    assert %CronRun{id: ^run_id, job_id: ^job_id} = CronStore.get_run(run_id)
+    assert_receive {:submit_attempted, ^job_id, ^run_id}, 5_000
+    first = await_terminal(run_id)
+
+    assert {:error, :exists} = CronManager.run_now_with_id(job.id, run_id)
+    refute_receive {:submit_attempted, ^job_id, ^run_id}, 200
+    assert CronStore.get_run(run_id) == first
+  end
+
   defp owner_mcp_servers do
     [
       %{

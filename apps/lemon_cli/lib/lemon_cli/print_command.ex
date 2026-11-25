@@ -103,7 +103,7 @@ defmodule LemonCli.PrintCommand do
                     )
 
                   true ->
-                    IO.puts(:stderr, "Error: #{result["error"] || "Agent run failed"}")
+                    IO.puts(:stderr, "Error: " <> error_text(result["error"]))
                 end
 
               _ ->
@@ -252,4 +252,16 @@ defmodule LemonCli.PrintCommand do
 
     1
   end
+
+  # `agent.wait` returns text, or `%{"kind", "status", "message"}` for a
+  # structured failure such as a provider HTTP error.
+  defp error_text(error) when is_binary(error) and error != "", do: error
+
+  defp error_text(%{} = error) do
+    status = if is_integer(error["status"]), do: " (HTTP #{error["status"]})"
+    detail = if is_binary(error["message"]), do: ": " <> error["message"]
+    "#{error["kind"] || "error"}#{status}#{detail}"
+  end
+
+  defp error_text(_error), do: "Agent run failed"
 end

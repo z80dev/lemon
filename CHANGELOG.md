@@ -293,6 +293,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `agent.wait` returns `UNAVAILABLE` when the run store cannot be read instead
   of reporting a timeout, and no longer copies a raw exception message into its
   error details (#620).
+- `agent.wait` no longer `inspect`s a non-text run error onto the wire: it
+  returns `{"kind", "status", "message"}` (provider HTTP status kept, message
+  redacted and bounded), a non-text answer is `null`, and `lemon print` renders
+  that object. `cron.run` allocates its cron run ID before calling the
+  scheduler, which claims exactly that ID, so an unknown outcome names the
+  `runId` to reconcile (#620).
 - `bin/lemon start` now starts Honcho memory and computer-use tools when they
   are configured: the source runtime previously never started
   `lemon_honcho` or `lemon_computer_use` (#726).
