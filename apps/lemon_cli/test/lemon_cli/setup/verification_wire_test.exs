@@ -43,7 +43,7 @@ defmodule LemonCli.Setup.VerificationWireTest do
       end)
 
       restore_env(:paths, paths)
-      restore_env(Secrets, secrets_config)
+      restore_env(:secrets, secrets_config)
       File.rm_rf!(root)
     end)
 
