@@ -284,6 +284,58 @@ defmodule LemonCore.ConfinedFSTest do
       refute Enum.any?(File.ls!(root), &String.starts_with?(&1, ".lemon-stage-"))
     end
 
+    test "killing the staged credential writer leaves the previous file byte-identical",
+         %{hooked: fs, root: root, notify: notify} do
+      name = ".credentials.json"
+      target = Path.join(root, name)
+      original = ~s({ "claudeAiOauth": { "refreshToken": "fake-old" } }\n)
+      replacement = ~s({"claudeAiOauth":{"refreshToken":"fake-new"}})
+      File.write!(target, original)
+      File.chmod!(target, 0o644)
+
+      {helper, _owner_ref} = :sys.get_state(fs.server)
+      session_ref = Process.monitor(fs.server)
+
+      # A native reader can be killed even if the writer never opens the FIFO.
+      # Do not block an OTP file I/O worker on the FIFO's open or read.
+      reader =
+        Port.open({:spawn_executable, System.find_executable("cat")}, [
+          :binary,
+          :exit_status,
+          {:line, 256},
+          args: [notify]
+        ])
+
+      task =
+        Task.async(fn ->
+          ConfinedFS.replace(fs, :root, name, replacement,
+            mode: 0o600,
+            exact_mode: true,
+            sync: true
+          )
+        end)
+
+      try do
+        assert_receive {^reader, {:data, {:noeol, ".lemon-stage-" <> _ = stage}}}, 5_000
+        staged = Path.join([root, stage, "f"])
+        assert %File.Stat{type: :regular, mode: mode} = File.lstat!(staged)
+        assert Bitwise.band(mode, 0o777) == 0o600
+        assert File.read!(staged) == replacement
+        assert File.read!(target) == original
+
+        # Never open the resume FIFO. Kill the native writer rather than just
+        # its BEAM caller, which cannot interrupt an open inside the helper.
+        assert {"", 0} = kill_port_child(helper)
+        assert {:error, :helper_failed} = Task.await(task)
+        assert_receive {:DOWN, ^session_ref, :process, _, :normal}
+        assert File.read!(target) == original
+        assert Bitwise.band(File.stat!(target).mode, 0o777) == 0o644
+      after
+        kill_port_child(helper)
+        kill_port_child(reader)
+      end
+    end
+
     test "the final mode is applied before publication",
          %{hooked: fs, root: root, notify: notify, resume: resume} do
       task =
@@ -362,6 +414,16 @@ defmodule LemonCore.ConfinedFSTest do
     resume = Path.join(tmp, "resume-#{System.unique_integer([:positive])}")
     {_, 0} = System.cmd("mkfifo", [notify, resume])
     {notify, resume}
+  end
+
+  defp kill_port_child(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, pid} ->
+        System.cmd("kill", ["-KILL", Integer.to_string(pid)], stderr_to_stdout: true)
+
+      nil ->
+        :ok
+    end
   end
 
   defp await_stage(notify) do

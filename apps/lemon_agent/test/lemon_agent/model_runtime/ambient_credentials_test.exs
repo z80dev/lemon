@@ -79,9 +79,9 @@ defmodule LemonAgent.ModelRuntime.AmbientCredentialsTest do
       refute Enum.any?(File.ls!(Path.dirname(path)), &String.starts_with?(&1, ".lemon-stage-"))
     end
 
-    # The 0600-from-creation staging itself is LemonCore.ConfinedFS.replace/5's
-    # contract, observed mid-write in confined_fs_test.exs ("a private file's
-    # replacement is never readable by others while staged").
+    # The native writer interruption is exercised at ConfinedFS.replace/5's
+    # stage hook in confined_fs_test.exs; this case covers a setup failure
+    # through the Claude credential persistence entry point.
     test "a write that fails before publication keeps the previous file intact",
          %{home: home} do
       path = write_claude_credentials(home, "sk-ant-oat01-old", 3_600_000)
