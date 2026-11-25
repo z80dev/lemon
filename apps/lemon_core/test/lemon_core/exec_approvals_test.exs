@@ -69,7 +69,6 @@ defmodule LemonCore.ExecApprovalsTest do
       :exec_approvals_policy,
       :exec_approvals_policy_agent,
       :exec_approvals_policy_session,
-      :exec_approvals_policy_node,
       :introspection_log
     ]
     |> Enum.each(fn table ->
@@ -560,30 +559,24 @@ defmodule LemonCore.ExecApprovalsTest do
       end
     end
 
-    test "explicit global and node administrator grants remain distinct" do
-      for {scope, tool} <- [{:global, "global_tool"}, {:node, "node_tool"}] do
-        action = %{command: "admin-scoped-action"}
-        approval = %{approved: true, scope: scope}
+    test "an explicit global administrator grant is independent of invocation context" do
+      tool = "global_tool"
+      action = %{command: "admin-scoped-action"}
 
-        case scope do
-          :global ->
-            ExecApprovalStore.put_global_policy(tool, hash_action(action), approval)
+      ExecApprovalStore.put_global_policy(tool, hash_action(action), %{
+        approved: true,
+        scope: :global
+      })
 
-          :node ->
-            ExecApprovalStore.put_node_policy("admin-node", tool, hash_action(action), approval)
-        end
-
-        for context <- ["principal-A", "principal-B"] do
-          assert ExecApprovals.request(%{
-                   run_id: "admin_#{scope}_#{context}",
-                   session_key: "agent:team-bot:shared",
-                   agent_id: "team-bot",
-                   invocation_context_key: context,
-                   node_id: "admin-node",
-                   tool: tool,
-                   action: action
-                 }) == {:ok, :approved, scope}
-        end
+      for context <- ["principal-A", "principal-B"] do
+        assert ExecApprovals.request(%{
+                 run_id: "admin_global_#{context}",
+                 session_key: "agent:team-bot:shared",
+                 agent_id: "team-bot",
+                 invocation_context_key: context,
+                 tool: tool,
+                 action: action
+               }) == {:ok, :approved, :global}
       end
     end
   end

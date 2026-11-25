@@ -717,6 +717,28 @@ defmodule LemonControlPlane.Methods.SessionLifecycleAdmissionTest do
     assert {:ok, []} = RunHistoryStore.fetch(key, limit: 1)
   end
 
+  for method <- [SessionsReset, SessionsDelete] do
+    test "#{inspect(method)} removes every channel model and thinking override", %{key: key} do
+      alias LemonChannels.Adapters.Discord.ModelPolicyAdapter, as: DiscordModels
+      alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter, as: TelegramModels
+      alias LemonControlPlane.SessionModel
+
+      seed_session(key)
+      :ok = TelegramModels.put_session_model_override(key, "telegram-model")
+      assert SessionModel.override(key) == "telegram-model"
+      :ok = DiscordModels.put_session_model_override(key, "discord-model")
+      {:ok, _row} = PolicyStore.update_session(key, &Map.put(&1, :thinking_level, "high"))
+      assert SessionModel.overrides(key) == %{model: "discord-model", thinking_level: "high"}
+
+      assert {:ok, _result} = unquote(method).handle(%{"sessionKey" => key}, %{})
+
+      assert policy(key) == nil
+      assert SessionModel.overrides(key) == %{model: nil, thinking_level: nil}
+      assert TelegramModels.session_model_override(key) == nil
+      assert DiscordModels.session_model_override(key) == nil
+    end
+  end
+
   test "run admission for the session is refused while its deletion is in flight",
        %{key: key} do
     seed_session(key)

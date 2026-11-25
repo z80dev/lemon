@@ -33,8 +33,8 @@ defmodule LemonAutomation.Tools.Cron do
   operator-created jobs read as not found. `update` intersects the job's
   recorded policy with the caller's, and `run` executes within the triggering
   session's policy as well, so a job scheduled, rewritten or triggered from a
-  chat never runs with more authority than that chat: its channel policy,
-  group approval floor and session denials still apply at run time. A session
+  chat never runs with more authority than that chat: its group approval
+  floor and session denials still apply at run time. A session
   without an identity reaches nothing. Delivery routing for non-canonical ids
   still falls back to the agent's main session; that never grants ownership.
 

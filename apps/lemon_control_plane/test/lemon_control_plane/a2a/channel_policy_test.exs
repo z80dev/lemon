@@ -1,10 +1,9 @@
 defmodule LemonControlPlane.A2A.ChannelPolicyTest do
   @moduledoc """
   A token-authenticated A2A peer's message, sent over the real A2A plug, must
-  reach the router with `a2a` channel provenance derived from that peer. With
-  configuration alone (no `channel_policies` rows) its run gets the group
-  approval floor unless the operator marks the peer `trusted_automation`; an
-  operator `channel_policies["a2a"]` row also intersects the peer allow-list.
+  reach the router with `a2a` channel provenance derived from that peer. Its
+  run gets the group approval floor unless the operator marks the peer
+  `trusted_automation`, and the peer allow-list always intersects.
   """
   use ExUnit.Case, async: false
 
@@ -83,7 +82,6 @@ defmodule LemonControlPlane.A2A.ChannelPolicyTest do
       System.delete_env(secret_name)
       System.delete_env(trusted_secret_name)
       :persistent_term.erase({CapturingOrchestrator, :owner})
-      LemonCore.Store.delete(:channel_policies, "a2a")
     end)
 
     {:ok, peer_id: peer_id, token: token, trusted_token: trusted_token}
@@ -103,8 +101,6 @@ defmodule LemonControlPlane.A2A.ChannelPolicyTest do
   end
 
   test "by configuration alone an allowed mutating tool still requires approval", ctx do
-    assert LemonCore.PolicyStore.fetch_channel("a2a") == {:ok, nil}
-
     policy = ctx.token |> send_message("please run a command") |> build_policy()
 
     assert ToolPolicy.allowed?(policy, "bash")
@@ -140,19 +136,6 @@ defmodule LemonControlPlane.A2A.ChannelPolicyTest do
     assert peers["string"].trusted_automation == false
     assert peers["unset"].trusted_automation == false
     assert peers["literal"].trusted_automation == true
-  end
-
-  test "the a2a channel policy is intersected with the peer's allow-list", ctx do
-    :ok = LemonCore.PolicyStore.put_channel("a2a", %{blocked_tools: ["bash"]})
-
-    policy = ctx.trusted_token |> send_message("please run a command") |> build_policy()
-
-    refute ToolPolicy.allowed?(policy, "bash"),
-           "channel_policies[\"a2a\"] must block bash, got #{inspect(policy)}"
-
-    assert ToolPolicy.allowed?(policy, "read")
-    # The peer's own allow-list still applies on top of the channel policy.
-    refute ToolPolicy.allowed?(policy, "write")
   end
 
   defp send_message(token, text) do

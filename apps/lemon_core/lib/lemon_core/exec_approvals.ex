@@ -64,9 +64,8 @@ defmodule LemonCore.ExecApprovals do
   - `:agent_id` - Agent identifier (for agent-level approvals)
   - `:invocation_context_key` - Optional trusted private principal/policy context.
     Session and agent grants are isolated by this exact key; context-owned runs
-    never fall back to legacy shared-session/agent grants. Global/node admin
-    grants remain intentionally independent.
-  - `:node_id` - Optional node identifier (for node-level approvals)
+    never fall back to legacy shared-session/agent grants. Global grants
+    remain intentionally independent.
   - `:tool` - Tool name
   - `:action` - Action details map
   - `:rationale` - Optional rationale for the request
@@ -99,7 +98,6 @@ defmodule LemonCore.ExecApprovals do
     session_id = params[:session_id]
     session_key = params[:session_key]
     agent_id = params[:agent_id] || extract_agent_id(session_key)
-    node_id = params[:node_id]
     invocation_context_key = params[:invocation_context_key]
     tool = params[:tool]
     action = params[:action]
@@ -123,7 +121,6 @@ defmodule LemonCore.ExecApprovals do
             action,
             session_key,
             agent_id,
-            node_id,
             invocation_context_key
           )
 
@@ -972,31 +969,23 @@ defmodule LemonCore.ExecApprovals do
          action,
          session_key,
          agent_id,
-         node_id,
          invocation_context_key
        ) do
     action_hash = hash_action(action)
     session_scope = policy_identity(session_key, invocation_context_key)
     agent_scope = policy_identity(agent_id, invocation_context_key)
 
-    # Check scopes in priority order: global > node > agent > session
+    # Check scopes in priority order: global > agent > session
     checks = [
       {:global, fn -> ExecApprovalStore.get_global_policy(tool, action_hash) end,
        fn -> ExecApprovalStore.get_global_policy(tool, :any) end},
-      if(node_id,
-        do:
-          {:node, fn -> ExecApprovalStore.get_node_policy(node_id, tool, action_hash) end,
-           fn -> ExecApprovalStore.get_node_policy(node_id, tool, :any) end}
-      ),
       {:agent, fn -> ExecApprovalStore.get_agent_policy(agent_scope, tool, action_hash) end,
        fn -> ExecApprovalStore.get_agent_policy(agent_scope, tool, :any) end},
       {:session, fn -> ExecApprovalStore.get_session_policy(session_scope, tool, action_hash) end,
        fn -> ExecApprovalStore.get_session_policy(session_scope, tool, :any) end}
     ]
 
-    checks
-    |> Enum.reject(&is_nil/1)
-    |> Enum.find_value(:not_approved, fn {scope, exact_fn, wildcard_fn} ->
+    Enum.find_value(checks, :not_approved, fn {scope, exact_fn, wildcard_fn} ->
       check_approval_level(scope, exact_fn, wildcard_fn)
     end)
   end

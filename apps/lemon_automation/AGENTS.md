@@ -33,8 +33,8 @@ stores, not a second agent engine. See [README](README.md) and
   (owner) and effective tool policy on the job; agent-session `update`
   intersects the policy atomically (`CronManager.update_from_session/3`).
   Generic updates cannot set or clear `authority`. Every run also intersects,
-  for a channel peer base session, that chat's live channel policy, group
-  approval floor and session policy. A malformed record or unreadable layer
+  for a channel peer base session, that chat's group approval floor and live
+  session policy. A malformed record or unreadable layer
   fails the run, never runs it unrestricted.
 - The `cron` tool reaches only jobs its session principal owns; operator and
   other principals' jobs read as not found. The principal is exactly the

@@ -152,8 +152,8 @@ peers, or `allow_tools` on one peer to replace it for that peer (a non-empty
 peer list takes precedence). Tools that start local work, such as `kanban`, are
 never in the default list: name them explicitly for a peer you trust with them.
 A peer allowed `kanban` dispatches workers limited to its own allowlist. The
-allowlist is intersected with the operator's `a2a` channel policy row and
-every other policy layer; it can only narrow them, never widen them.
+allowlist is intersected with every other policy layer (session policy and
+agent profile); it can only narrow them, never widen them.
 
 A peer token proves which peer is calling, not that its content is yours, so
 inbound runs require approval for every `bash`, `write`, `edit`, `patch` and

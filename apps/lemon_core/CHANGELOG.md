@@ -32,6 +32,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 - **Breaking:** the `mix lemon.secrets.*` tasks; `lemon secrets` is the only
   secrets command-line interface (#717).
+- **Breaking:** `LemonCore.PolicyStore` agent, channel and runtime scopes
+  (`fetch_agent/1`, `put_agent/2`, `fetch_channel/1`, `put_channel/2`,
+  `fetch_runtime/0`, `put_runtime/1`, `delete_runtime/0`): they had no writer.
+  `LemonCore.ExecApprovalStore` node grants (`get_node_policy/3`,
+  `put_node_policy/4`), the policy maps (`fetch_global_policy_map/0`,
+  `put_global_policy_map/1`, `get_node_policy_map/1`, `put_node_policy_map/2`)
+  and the `list_global_policies/0`, `list_agent_policies/0`,
+  `list_session_policies/0`, `list_node_policies/0` helpers; `ExecApprovals.request/1`
+  ignores `:node_id`. The remaining approval rows are documented as approval
+  memory, not policy (#709).
 - **Breaking:** the `controller` and `hybrid` ids from
   `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 - **Breaking:** `LemonCore.Context`, `LemonCore.Context.Document` and
@@ -90,6 +100,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - **Breaking:** `mix lemon.store.migrate_jsonl_to_sqlite` is removed with the
   JSONL backend it migrated from; migrate with `lemon_core` 0.2.x before
   upgrading (#730).
+- `LemonCore.PolicyStore` gains chat rows (`:chat_policies`) for channel model
+  and thinking defaults: `chat_route/1`, `chat_route?/1`, `route_chain/1`,
+  `fetch_chat/1`, `fetch_chats/0`, `update_chat/2`, `delete_chat/1` and
+  `resolve_chat/1` (most specific row per field, fail closed). `lemon policy`
+  is now `LemonCore.PolicyStore.CLI` with its `mix lemon.policy` task (#714).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).

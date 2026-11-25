@@ -220,6 +220,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   fails when an `_edge_cases`, `_additional_edge_cases`, `_comprehensive`,
   `_extended` or `_consolidation` test file or module sits beside its
   canonical test.
+- **Breaking:** channel model and thinking preferences live in
+  `LemonCore.PolicyStore`. Telegram and Discord `/model` for this session writes
+  the session row (`:model`, as `sessions.patch` does), so web, TUI and the
+  control plane show the same model the channel run uses; `/model` for future
+  sessions and `/thinking` write `PolicyStore` chat rows (thread, chat, account
+  or channel). Channels no longer put `model`, `model_scope`, `thinking_level`
+  or `thinking_scope` into run meta: `LemonRouter.ModelSelection` decides
+  request > session row > chat row > profile > default (thinking: request >
+  session row > chat row) from the session key, and `session.detail` reports
+  `modelSource: "chat"` for a chat default. Session reset and delete remove
+  every model and thinking override with the session row. `lemon policy` writes
+  the same chat rows; `--peer` without `--account` now names the `default`
+  account (it used to write a key nothing read) and `--thread` requires
+  `--peer`. Preferences stored in the removed `:model_policies`,
+  `:telegram_session_model`, `:telegram_default_model`,
+  `:telegram_default_thinking` and `:discord_session_model` tables are not
+  read: set them again with `/model`, `/thinking` or `lemon policy` (#714).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle
@@ -982,6 +999,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   (`read <dir>` now points at `ls`), and `extensions_status` is status-only: its
   `reload` action, which a model turn could never run, is gone.
 
+- `LemonChannels.ModelPolicy`, `LemonChannels.ModelPolicyStore`,
+  `LemonChannels.ModelPolicy.Route`, `LemonChannels.ModelPolicy.CLI` (now
+  `LemonCore.PolicyStore.CLI`), the Telegram `StateStore` session-model,
+  default-model and default-thinking accessors, the Discord session-model table
+  and the WhatsApp session-model ETS owner (#714).
+- **Breaking:** the unwritten policy scopes. `LemonCore.PolicyStore` keeps only
+  the session row (`fetch_session/1`, `put_session/2`, `update_session/2`,
+  `delete_session/1`); `put_agent/2`, `fetch_agent/1`, `put_channel/2`,
+  `fetch_channel/1`, `put_runtime/1`, `fetch_runtime/0` and `delete_runtime/0`
+  are gone, and the router no longer reads `:agent_policies`,
+  `:channel_policies` or `:runtime_policy` (nothing ever wrote them). Admission
+  reads the session row once per run for model, thinking level and tool policy.
+  The exec-approval node grants (`get_/put_node_policy`), the global and node
+  policy maps (`fetch_global_policy_map/0`, `get_/put_node_policy_map`) and the
+  `list_*_policies/0` helpers are removed; `exec.approvals.get` drops its
+  always-empty `policy` field, `summary.policyCount` and
+  `summary.cleanup.includesPolicy`. A guard test fails when a policy table is
+  read without a production writer (#709).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

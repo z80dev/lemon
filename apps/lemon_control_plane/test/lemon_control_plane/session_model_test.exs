@@ -121,6 +121,73 @@ defmodule LemonControlPlane.SessionModelTest do
     end
   end
 
+  describe "channel /model preferences" do
+    alias LemonChannels.Adapters.Discord.ModelPolicyAdapter, as: DiscordModels
+    alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter, as: TelegramModels
+    alias LemonCore.{PolicyStore, SessionKey}
+
+    defp channel_session(channel, chat_id, thread_id) do
+      key =
+        SessionKey.channel_peer(%{
+          agent_id: "default",
+          channel_id: channel,
+          account_id: "default",
+          peer_kind: :group,
+          peer_id: to_string(chat_id),
+          thread_id: thread_id && to_string(thread_id)
+        })
+
+      on_exit(fn ->
+        PolicyStore.delete_session(key)
+
+        for thread <- [thread_id, nil],
+            do:
+              PolicyStore.delete_chat(
+                {channel, "default", to_string(chat_id), thread && to_string(thread)}
+              )
+      end)
+
+      key
+    end
+
+    for {channel, adapter} <- [{"telegram", TelegramModels}, {"discord", DiscordModels}] do
+      test "a #{channel} session override is the control plane's session model" do
+        adapter = unquote(adapter)
+        chat_id = System.unique_integer([:positive])
+        key = channel_session(unquote(channel), chat_id, nil)
+
+        :ok = adapter.put_session_model_override(key, "#{unquote(channel)}-session-model")
+
+        assert SessionModel.override(key) == "#{unquote(channel)}-session-model"
+        assert %{"modelSource" => "session"} = resolved = SessionModel.resolve(key)
+        assert resolved["model"] == "#{unquote(channel)}-session-model"
+      end
+
+      test "a #{channel} chat default reaches the control plane for that chat's thread sessions" do
+        adapter = unquote(adapter)
+        chat_id = System.unique_integer([:positive])
+        thread_id = System.unique_integer([:positive])
+        key = channel_session(unquote(channel), chat_id, thread_id)
+
+        # The channel's own route and the session key name the same chat route.
+        assert adapter.route_for("default", chat_id, thread_id) == PolicyStore.chat_route(key)
+
+        :ok = adapter.put_default_model_preference("default", chat_id, nil, "chat-model")
+        :ok = adapter.put_default_thinking_preference("default", chat_id, thread_id, "high")
+
+        assert SessionModel.override(key) == nil
+
+        assert %{"model" => "chat-model", "modelSource" => "chat", "thinkingLevel" => "high"} =
+                 SessionModel.resolve(key)
+
+        :ok = adapter.put_session_model_override(key, "pinned-model")
+
+        assert %{"model" => "pinned-model", "modelSource" => "session"} =
+                 SessionModel.resolve(key)
+      end
+    end
+  end
+
   describe "provider_for/1" do
     test "answers with just the provider" do
       assert SessionModel.provider_for("claude-sonnet-4-20250514") == "anthropic"

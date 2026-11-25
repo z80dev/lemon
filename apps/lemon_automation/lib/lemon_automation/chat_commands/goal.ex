@@ -160,9 +160,7 @@ defmodule LemonAutomation.ChatCommands.Goal do
     with %{} = context <- opts[:channel_context],
          {:ok, policy} <-
            LemonRouter.Policy.resolve_validated_for_run(%{
-             agent_id: opts[:agent_id],
              session_key: session_key,
-             origin: :channel,
              channel_context: context
            }) do
       {:ok, policy}

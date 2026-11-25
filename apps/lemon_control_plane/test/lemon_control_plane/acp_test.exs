@@ -1644,8 +1644,7 @@ defmodule LemonControlPlane.ACPTest do
           :exec_approvals_pending,
           :exec_approvals_policy,
           :exec_approvals_policy_agent,
-          :exec_approvals_policy_session,
-          :exec_approvals_policy_node
+          :exec_approvals_policy_session
         ],
         {key, _value} <- Store.list(table) do
       Store.delete(table, key)

@@ -130,7 +130,6 @@ defmodule LemonAutomation.ChatCommands.Kanban do
   # resolves a run from this chat. Unavailable resolution fails closed.
   defp chat_policy(principal, opts) do
     case LemonRouter.Policy.resolve_validated_for_run(%{
-           agent_id: principal.agent_id,
            session_key: principal.session_key,
            channel_context: opts[:channel_context]
          }) do

@@ -220,7 +220,13 @@ trusted invocation context, without changing any public session/profile identity
 Another principal or changed policy must obtain its own approval even for the
 same public bot session. This private field is not an RPC parameter and is absent
 from pending lists, approval events and resolution receipts. Explicit operator
-global/node grants remain independent.
+global grants remain independent.
+
+`exec.approvals.get` returns `approvals` (the grants remembered with
+`approve_global`: `tool`, `actionHash` (`"*"` for any action), `scope`,
+`approved`, `approvedAtMs`), the active `pending` requests and a `summary`.
+These rows are approval memory, not policy: tool policy is the
+`LemonCore.PolicyStore` session row intersected with the agent profile.
 
 Authenticated sockets receive an RFC WebSocket ping every 25 seconds. Browser,
 Bun and other conforming clients automatically pong, keeping long-running

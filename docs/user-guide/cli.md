@@ -2294,7 +2294,14 @@ lemon models [options]
 
 ### `lemon policy`
 
-Manage model policies.
+Manage chat model and thinking defaults.
+
+A default applies to every session of its route: a thread, a peer (chat), an
+account or a whole channel, the same rows Telegram and Discord `/model` (future
+sessions) and `/thinking` write. The most specific row that sets a value wins;
+a session's own model (`/model` for this session or `sessions.patch`) wins over
+all of them. `--peer` without `--account` names the `default` account;
+`--thread` requires `--peer`.
 
 ```text
 lemon policy <list|set|get|clear> [channel] [options]
@@ -2312,9 +2319,9 @@ lemon policy <list|set|get|clear> [channel] [options]
 | `--account ID`, `-a ID` | Channel account |
 | `--peer ID`, `-p ID` | Peer or chat |
 | `--thread ID`, `-t ID` | Thread or topic |
-| `--model MODEL`, `-m MODEL` | Model override |
-| `--thinking LEVEL` | Thinking override |
-| `--reason TEXT`, `-r TEXT` | Policy metadata reason |
+| `--model MODEL`, `-m MODEL` | Model default |
+| `--thinking LEVEL` | Thinking default |
+| `--reason TEXT`, `-r TEXT` | Reason stored with the row |
 | `--all` | Clear all policies for the channel |
 
 ### `lemon skill`

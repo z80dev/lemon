@@ -4,7 +4,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
   import ExUnit.CaptureLog
 
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
-  alias LemonChannels.Telegram.StateStore
   alias LemonCore.{ChatScope, ChatStateStore, RouterBridge, RunHistoryStore, RunRequest, RunStore}
 
   defmodule CapturingRouter do
@@ -42,12 +41,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
     account_id = "reflection-account-#{chat_id}"
     session_key = "telegram:reflection:#{chat_id}"
     history_run_id = "history-#{chat_id}"
-    thinking_key = {account_id, chat_id, thread_id}
 
     on_exit(fn ->
       RunStore.delete_history(session_key)
       ChatStateStore.delete(session_key)
-      StateStore.delete_default_thinking(thinking_key)
     end)
 
     :ok =
@@ -66,7 +63,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
       )
 
     :ok = ChatStateStore.put(session_key, %{last_engine: "claude"})
-    :ok = StateStore.put_default_thinking(thinking_key, "high")
 
     inbound = %{
       channel_id: "telegram",
@@ -84,11 +80,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
 
     callbacks = %{
       maybe_subscribe_to_run: fn run_id -> send(self(), {:subscribed, run_id}) end,
-      current_thread_generation: fn _state, ^chat_id, ^thread_id -> 4 end,
-      maybe_put: fn
-        map, _key, nil -> map
-        map, key, value -> Map.put(map, key, value)
-      end
+      current_thread_generation: fn _state, ^chat_id, ^thread_id -> 4 end
     }
 
     assert :ok =
@@ -111,7 +103,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
     assert request.agent_id == "research-agent"
     assert request.queue_mode == :collect
     assert request.session_key == MemoryReflection.reflection_session_key(session_key)
-    assert request.meta[:thinking_level] == "high"
+    # The router resolves thinking from the PolicyStore rows, not channel meta.
+    refute Map.has_key?(request.meta, :thinking_level)
     assert request.meta[:model] == "native-model"
     assert request.meta[:request_marker] == "preserve-me"
     assert request.meta[:record_memories] == true
@@ -160,8 +153,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
 
     callbacks = %{
       maybe_subscribe_to_run: fn run_id -> send(self(), {:subscribed, run_id}) end,
-      current_thread_generation: fn _state, _chat_id, _thread_id -> 0 end,
-      maybe_put: fn map, key, value -> Map.put(map, key, value) end
+      current_thread_generation: fn _state, _chat_id, _thread_id -> 0 end
     }
 
     log =
@@ -249,8 +241,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
 
     callbacks = %{
       maybe_subscribe_to_run: fn _ -> :ok end,
-      current_thread_generation: fn _state, _chat_id, _thread_id -> 0 end,
-      maybe_put: fn map, key, value -> Map.put(map, key, value) end
+      current_thread_generation: fn _state, _chat_id, _thread_id -> 0 end
     }
 
     submit = fn inbound ->

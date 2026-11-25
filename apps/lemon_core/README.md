@@ -220,7 +220,7 @@ truncating so partial credentials cannot escape.
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
 | `LemonCore.Store.ReadCache` | Public ETS read-through cache for hot domains |
-| `LemonCore.PolicyStore` | Typed policy API and metadata owner for the existing agent, channel, session, and runtime policy tables |
+| `LemonCore.PolicyStore` | The single policy plane: per-session rows (model, thinking level, tool-policy override) |
 | `LemonCore.ToolPolicy` | Strict validated tool authorization shared by every execution boundary |
 | `LemonCore.ExecutionContext` | Versioned identity, provenance, policy, workspace, capability, and limit authority for root and child runs |
 
@@ -576,15 +576,19 @@ Shared-domain callers should prefer typed wrappers:
   removes expired `:chat` entries. `fetch` reports an unreadable store as
   `{:error, :store_unavailable}` instead of "no state"
 - **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `fetch_history/2`, `fetch_sessions/1`, `get/1`
-- **Policies**: `LemonCore.PolicyStore.fetch_agent/1`, `fetch_channel/1`, `fetch_session/1`,
-  `fetch_runtime/0` (strict: `{:ok, nil}` only for a confirmed absent row,
-  `{:error, :store_unavailable}` otherwise; the router rejects admission with
-  `:policy_unavailable`), `update_session/2` (compare-and-swap merge),
-  `put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
+- **Policies**: `LemonCore.PolicyStore.fetch_session/1` (strict: `{:ok, nil}`
+  only for a confirmed absent row, `{:error, :store_unavailable}` otherwise;
+  the router rejects admission with `:policy_unavailable`),
+  `update_session/2` (compare-and-swap merge), `put_session/2`,
+  `delete_session/1`. Config supplies defaults; there is no agent, channel or
+  global runtime policy row. `LemonCore.PolicyTablesWriterGuardTest` fails
+  when a policy table is read without a production writer.
 - **Idempotency**: `LemonCore.IdempotencyStore.fetch/2`, `put_new/3`, `compare_and_swap/4`, `compare_and_delete/3`, `put/3`, `delete/2`
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `delete_override/1` (per-scope selection of an operator-configured project id; projects come only from config)
-- **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
+- **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, and the
+  approval memory (`get_/put_global_policy`, `get_/put_agent_policy`,
+  `get_/put_session_policy`): grants remembered by `exec.approval.resolve`, not policy
 
 `RunStore.finalize/2` returns `:ok` only after the immutable final summary and
 its session index are written. Retrying the same summary repairs a partial index

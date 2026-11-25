@@ -9,9 +9,11 @@ defmodule LemonControlPlane.SessionModel do
 
     * `override/1` — the value stored on the session by `sessions.patch`, and nothing else. One
       ETS read, safe to call per row in a listing.
-    * `resolve/2` — the same precedence chain `SubmissionBuilder` runs, minus the request-level
-      inputs it cannot know about (an explicit `model` on a `chat.send` still wins at run time).
-      This calls the `AgentProfiles` GenServer, so it is a per-session read, not a per-row one.
+    * `resolve/2` — the same precedence chain `SubmissionBuilder` runs (`LemonRouter.ModelSelection`:
+      session row, then the chat defaults of a channel session's route, then profile and default),
+      minus the request-level inputs it cannot know about (an explicit `model` on a `chat.send`
+      still wins at run time). This calls the `AgentProfiles` GenServer, so it is a per-session
+      read, not a per-row one.
 
   `describe/1` turns a model id into provider and context window via `LemonAi.Models`, stripping
   the `provider:` / `provider/` prefixes the session store accepts — the same candidate logic
@@ -56,28 +58,37 @@ defmodule LemonControlPlane.SessionModel do
   Resolve the model a session's next run would use, string-keyed for a JSON payload.
 
   Returns `model`, `provider`, `contextWindow`, `maxOutput`, `thinkingLevel`, `engine`
-  (always `"lemon"`) and `modelSource` (`"session"` | `"profile"` | `"default"` | nil) — the
-  last one so a client can tell a pinned model from an inherited one. Every key may be nil;
-  nothing here raises.
+  (always `"lemon"`) and `modelSource` (`"session"` | `"chat"` | `"profile"` | `"default"` |
+  nil) — the last one so a client can tell a pinned model from an inherited one. `"chat"` is a
+  channel `/model` default for the session's chat or thread. Every key may be nil; nothing here
+  raises.
   """
   @spec resolve(String.t() | nil, String.t() | nil) :: t()
   def resolve(session_key, agent_id \\ nil) do
     overrides = overrides(session_key)
+    chat = chat_defaults(session_key)
     profile_model = profile_field(agent_id, :model)
     default_model = default_model()
 
     selection =
       ModelSelection.resolve(%{
         session_model: overrides.model,
+        chat_model: chat.model,
         profile_model: profile_model,
         default_model: default_model
       })
 
     described = describe(selection.model)
 
+    thinking_level =
+      ModelSelection.thinking_level(%{
+        session_thinking_level: overrides.thinking_level,
+        chat_thinking_level: chat.thinking_level
+      })
+
     Map.merge(described, %{
-      "modelSource" => model_source(overrides.model, profile_model, default_model),
-      "thinkingLevel" => overrides.thinking_level,
+      "modelSource" => model_source([overrides.model, chat.model, profile_model, default_model]),
+      "thinkingLevel" => thinking_level,
       "engine" => "lemon"
     })
   end
@@ -162,13 +173,22 @@ defmodule LemonControlPlane.SessionModel do
     end
   end
 
-  defp model_source(session_model, profile_model, default_model) do
-    cond do
-      is_binary(session_model) -> "session"
-      is_binary(profile_model) -> "profile"
-      is_binary(default_model) -> "default"
-      true -> nil
+  defp model_source(candidates) do
+    ~w(session chat profile default)
+    |> Enum.zip(candidates)
+    |> Enum.find_value(fn {source, model} -> if is_binary(model), do: source end)
+  end
+
+  # Display only, like `session_policy/1`: an unreadable chat row reads as no default.
+  defp chat_defaults(session_key) do
+    case LemonCore.PolicyStore.resolve_chat(session_key) do
+      {:ok, defaults} -> defaults
+      {:error, _reason} -> %{model: nil, thinking_level: nil}
     end
+  rescue
+    _ -> %{model: nil, thinking_level: nil}
+  catch
+    :exit, _ -> %{model: nil, thinking_level: nil}
   end
 
   # Display only: an unreadable policy reads as "no override" here, while the
