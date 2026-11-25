@@ -7,7 +7,7 @@ defmodule LemonCore.Extensions.Manifest do
   @max_manifest_bytes 256 * 1024
   @name_pattern ~r/^[a-z0-9][a-z0-9._-]*$/
   @provider_types MapSet.new(["model", "memory", "tool_executor", "storage"])
-  @host_types MapSet.new(["beam", "wasm", "mcp", "external"])
+  @host_types MapSet.new(["beam", "mcp", "external"])
   @distribution_sources MapSet.new(["local", "git", "github", "registry", "archive"])
   @audit_statuses MapSet.new(["pending", "passed", "warn", "blocked", "unknown"])
 

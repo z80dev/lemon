@@ -24,6 +24,13 @@
 
 ### Removed
 
+- **Breaking:** the WASM sidecar stack (`CodingAgent.Wasm.*`,
+  `CodingAgent.Session.WasmBridge`, the `{:wasm_host_tool_invoke, ...}` session
+  calls, the `:wasm_tools`/`:wasm_status` registry options and the `wasm_*`
+  session fields) and the `tool_auth` tool (`CodingAgent.Tools.ToolAuth`) are
+  retired (#707). `ToolRegistry.tool_conflict_report/2` no longer returns
+  `wasm_count` or `wasm`, and `ControlPlaneProvider.wasm_sidecar_running?/0` is
+  gone.
 - **Breaking:** removed `CodingAgent.Advisor`, the `CodingAgent.AdvisorSupervisor`
   child and the session's internal `:advisor_context` call; `advisor:` session
   options are refused with `{:error, {:unsupported_option, :advisor}}` (#705).

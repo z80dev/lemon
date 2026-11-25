@@ -177,7 +177,6 @@ export default {
           { text: "Lemon in Tern", link: "/user-guide/tern" },
           { text: "ACP editor integration", link: "/tools/acp" },
           { text: "Extensions & MCP clients", link: "/extensions" },
-          { text: "WASM extensions", link: "/tools/wasm" },
           { text: "Delegating to omp", link: "/user-guide/omp" },
           { text: "Persistent A2A peers", link: "/user-guide/a2a-peers" },
           { text: "Honcho memory", link: "/user-guide/honcho" },

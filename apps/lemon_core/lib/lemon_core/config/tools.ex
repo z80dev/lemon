@@ -1,10 +1,10 @@
 defmodule LemonCore.Config.Tools do
   @moduledoc """
-  Tools configuration for web search, fetch, and WASM tools.
+  Tools configuration for web search, fetch, browser, disclosure and related tools.
 
   Inspired by Ironclaw's modular config pattern, this module handles
   tool-specific configuration including web search providers,
-  fetch settings, and WASM runtime configuration.
+  fetch settings, browser selection and progressive tool disclosure.
 
   ## Configuration
 
@@ -38,12 +38,7 @@ defmodule LemonCore.Config.Tools do
       declined_origins = []
       lasting_grant_apps = []
 
-      [runtime.tools.wasm]
-      enabled = false
-      auto_build = true
-      default_memory_limit = 10485760
-
-      # Hide the MCP/extension/WASM long tail behind tool_search/tool_invoke
+      # Hide the MCP/extension long tail behind tool_search/tool_invoke
       # once the catalog's estimated schema cost exceeds budget_tokens.
       # profile = "auto" uses coding for cwd-scoped sessions, legacy for chat.
       [runtime.tools.disclosure]
@@ -58,7 +53,6 @@ defmodule LemonCore.Config.Tools do
   - `LEMON_WEB_SEARCH_ENABLED`, `LEMON_WEB_SEARCH_PROVIDER`
   - `LEMON_WEB_FETCH_ENABLED`, `LEMON_WEB_FETCH_MAX_CHARS`
   - `LEMON_BROWSER_PROVIDER`, `LEMON_BROWSER_TERN`
-  - `LEMON_WASM_ENABLED`, `LEMON_WASM_AUTO_BUILD`
   - `LEMON_TOOL_DISCLOSURE_ENABLED`, `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS`,
     `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS`, `LEMON_TOOL_DISCLOSURE_PROFILE`
 
@@ -85,7 +79,6 @@ defmodule LemonCore.Config.Tools do
     :intent_tracing,
     :vendor_dialects,
     :web,
-    :wasm,
     :disclosure,
     :checkpoint,
     :semantic_find,
@@ -143,19 +136,6 @@ defmodule LemonCore.Config.Tools do
           max_entries: integer()
         }
 
-  @type wasm_config :: %{
-          enabled: boolean(),
-          auto_build: boolean(),
-          runtime_path: String.t(),
-          tool_paths: [String.t()],
-          default_memory_limit: integer(),
-          default_timeout_ms: integer(),
-          default_fuel_limit: integer(),
-          cache_compiled: boolean(),
-          cache_dir: String.t(),
-          max_tool_invoke_depth: integer()
-        }
-
   @type disclosure_config :: %{
           enabled: boolean(),
           budget_tokens: pos_integer(),
@@ -178,7 +158,6 @@ defmodule LemonCore.Config.Tools do
             fetch: web_fetch_config(),
             cache: web_cache_config()
           },
-          wasm: wasm_config(),
           disclosure: disclosure_config(),
           checkpoint: %{enabled: boolean()},
           semantic_find: %{
@@ -208,7 +187,6 @@ defmodule LemonCore.Config.Tools do
       intent_tracing: Map.get(tools_settings, "intent_tracing", true),
       vendor_dialects: Map.get(tools_settings, "vendor_dialects", false),
       web: resolve_web(tools_settings),
-      wasm: resolve_wasm(tools_settings),
       disclosure: resolve_disclosure(tools_settings),
       checkpoint: resolve_checkpoint(tools_settings),
       semantic_find: resolve_semantic_find(tools_settings),
@@ -491,57 +469,9 @@ defmodule LemonCore.Config.Tools do
     }
   end
 
-  defp resolve_wasm(settings) do
-    wasm = settings["wasm"] || %{}
-
-    %{
-      enabled:
-        Env.get(:lemon_wasm_enabled,
-          default: if(is_nil(wasm["enabled"]), do: false, else: wasm["enabled"])
-        ),
-      auto_build:
-        Env.get(:lemon_wasm_auto_build,
-          default: if(is_nil(wasm["auto_build"]), do: true, else: wasm["auto_build"])
-        ),
-      runtime_path: Env.get(:lemon_wasm_runtime_path, default: wasm["runtime_path"] || ""),
-      tool_paths: resolve_wasm_tool_paths(wasm),
-      default_memory_limit:
-        Env.get(:lemon_wasm_default_memory_limit,
-          default: wasm["default_memory_limit"] || 10_485_760
-        ),
-      default_timeout_ms:
-        Env.get(:lemon_wasm_default_timeout_ms, default: wasm["default_timeout_ms"] || 60_000),
-      default_fuel_limit:
-        Env.get(:lemon_wasm_default_fuel_limit,
-          default: wasm["default_fuel_limit"] || 10_000_000
-        ),
-      cache_compiled:
-        Env.get(:lemon_wasm_cache_compiled,
-          default: if(is_nil(wasm["cache_compiled"]), do: true, else: wasm["cache_compiled"])
-        ),
-      cache_dir: Env.get(:lemon_wasm_cache_dir, default: wasm["cache_dir"] || ""),
-      max_tool_invoke_depth:
-        Env.get(:lemon_wasm_max_tool_invoke_depth,
-          default: wasm["max_tool_invoke_depth"] || 4
-        )
-    }
-  end
-
-  defp resolve_wasm_tool_paths(wasm) do
-    # Note: intentionally not `Env.get/2` -- see the comment on
-    # `LemonCore.Config.Agent.resolve_extension_paths/1`.
-    env_paths = Env.list("LEMON_WASM_TOOL_PATHS")
-
-    if env_paths != [] do
-      env_paths
-    else
-      wasm["tool_paths"] || []
-    end
-  end
-
   # Progressive tool-schema disclosure: once the resolved catalog's schema cost
   # exceeds `budget_tokens`, `CodingAgent.ToolDisclosure` hides the
-  # MCP/extension/WASM long tail behind a `tool_search` / `tool_invoke` bridge
+  # MCP/extension long tail behind a `tool_search` / `tool_invoke` bridge
   # pair while built-in tools stay fully disclosed. `enabled` defaults to true
   # because the budget is the real gate: the built-in set is far under it, so a
   # setup without a large MCP catalog never activates disclosure and sees no
@@ -634,18 +564,6 @@ defmodule LemonCore.Config.Tools do
           "path" => nil,
           "max_entries" => 100
         }
-      },
-      "wasm" => %{
-        "enabled" => false,
-        "auto_build" => true,
-        "runtime_path" => "",
-        "tool_paths" => [],
-        "default_memory_limit" => 10_485_760,
-        "default_timeout_ms" => 60_000,
-        "default_fuel_limit" => 10_000_000,
-        "cache_compiled" => true,
-        "cache_dir" => "",
-        "max_tool_invoke_depth" => 4
       },
       "disclosure" => %{
         "enabled" => true,

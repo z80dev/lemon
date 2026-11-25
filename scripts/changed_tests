@@ -13,7 +13,7 @@ import sys
 FULL_FILES = {"mix.exs", "mix.lock", ".formatter.exs", ".credo.exs"}
 FULL_DIRS = {
     "config", "scripts", ".github", "bin", "rel", "installer", "examples",
-    "tools", "bench", "docker", "native",
+    "tools", "bench", "docker",
 }
 DATA_DIRS = {"docs", "clients", "products", "showcase"}
 DEPENDENCY = re.compile(r"\{\s*:([a-zA-Z0-9_]+)\s*,([^{}]*)\}", re.DOTALL)
@@ -145,7 +145,7 @@ def select(root, base="origin/main", focused=False, narrow=False, all_apps=False
     touched, readers = set(), set()
     reasons = ["--all: every app (full scope)"] if all_apps else [base_reason] if base_reason else []
     full = all_apps or bool(base_reason)
-    lanes = {"clients": False, "wasm": False, "docs": False, "apple": False, "lemon_bot": False}
+    lanes = {"clients": False, "docs": False, "apple": False, "lemon_bot": False}
     for path in files:
         parts = PurePosixPath(path).parts
         top = parts[0]
@@ -153,10 +153,6 @@ def select(root, base="origin/main", focused=False, narrow=False, all_apps=False
         lanes["docs"] |= top == "docs"
         lanes["apple"] |= path.startswith("products/lemon_bot/apple/")
         lanes["lemon_bot"] |= path.startswith("products/lemon_bot/") and not path.startswith("products/lemon_bot/apple/")
-        lanes["wasm"] |= (
-            top == "native" or path.startswith("apps/coding_agent/lib/coding_agent/wasm/")
-            or path == "apps/coding_agent/test/coding_agent/wasm_integration_test.exs"
-        )
         app = parts[1] if top == "apps" and len(parts) >= 3 else None
         global_app_file = app and (
             parts[2] in {"mix.exs", ".formatter.exs"} or parts[2] == "config"

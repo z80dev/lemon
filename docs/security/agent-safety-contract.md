@@ -28,10 +28,10 @@ classifies each platform tool's approval tier and its `:dangerous`,
 `:external` and `:delegation` capabilities. Restricted profiles fail closed: a
 tool the catalogue does not classify is denied. That includes satellite tools
 registered through `LemonAgent.ToolRegistry` (`omp`, `cua_js`, `cua_js_reset`,
-`honcho_*`) and every MCP, extension and WASM tool; full-access, orchestrator
+`honcho_*`) and every MCP and extension tool; full-access, orchestrator
 and custom policies grant them by name. A new built-in tool must be added to
 the catalogue to appear in a restricted profile. Satellites cannot register a
-catalogued name, and a WASM, extension or MCP tool that uses one is dropped, so
+catalogued name, and an extension or MCP tool that uses one is dropped, so
 no contribution inherits a platform tool's classification. Tool policy is not
 operating-system isolation, and invalid custom policies and unknown profiles
 still need their own validation.

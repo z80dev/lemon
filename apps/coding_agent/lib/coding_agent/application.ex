@@ -53,7 +53,6 @@ defmodule CodingAgent.Application do
         {DynamicSupervisor,
          name: CodingAgent.ExecutionNode.ToolSession.Supervisor, strategy: :one_for_one}
       ]),
-      CodingAgent.Wasm.SidecarSupervisor,
       {LemonCore.TaskSupervisor, name: CodingAgent.TaskSupervisor},
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
       CodingAgent.AsyncFollowups,

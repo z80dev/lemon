@@ -31,7 +31,7 @@ a version, it requires a green `ci.yml` run on the exact source commit (reused
 through `scripts/ci_verified_commit`, otherwise by calling `ci.yml`, which runs
 `scripts/test fast`, `quality`, `eval-fast` and `clients`,
 `scripts/verify_source_install` and `scripts/verify_install_script`, the
-Dialyzer gate and the WASM runtime lane). It validates
+Dialyzer gate). It validates
 version/changelog consistency and release notes, then builds and boot-verifies
 the published artifacts on native runners and re-verifies the assembled
 manifest. Do not repeat these manually for an ordinary release.
@@ -123,7 +123,7 @@ advisories without a release-blocking issue, an explicit mitigation, and a
 maintainer decision recorded in the launch ledger.
 
 `.github/workflows/osv-scanner.yml` scans every shipped lockfile (Mix, npm,
-Bun, Cargo and SwiftPM; `scripts/test_ci_gates.py` checks the list against
+Bun and SwiftPM; `scripts/test_ci_gates.py` checks the list against
 `git ls-files`) on pull requests and pushes that touch dependency manifests, on
 a weekly `main` schedule, and through manual dispatch. It uses Google's pinned
 reusable OSV scanner workflow and grants `security-events: write` for SARIF

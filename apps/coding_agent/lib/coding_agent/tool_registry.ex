@@ -5,9 +5,8 @@ defmodule CodingAgent.ToolRegistry do
   Precedence order is deterministic:
 
   1. Built-in tools
-  2. WASM tools
-  3. Extension tools
-  4. MCP (Model Context Protocol) tools
+  2. Extension tools
+  3. MCP (Model Context Protocol) tools
 
   Extension snapshots live in ETS owned by the supervised `CodingAgent.RuntimeTables`,
   not the session or tool task that first discovers an extension.
@@ -23,7 +22,6 @@ defmodule CodingAgent.ToolRegistry do
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools
   alias CodingAgent.Tools.OperatorState
-  alias CodingAgent.Wasm.Policy, as: WasmPolicy
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.Types.AgentTool
 
@@ -33,7 +31,6 @@ defmodule CodingAgent.ToolRegistry do
 
   @type tool_source ::
           :builtin
-          | {:wasm, source_meta()}
           | {:extension, module()}
           | {:mcp, source_meta() | atom()}
 
@@ -107,7 +104,6 @@ defmodule CodingAgent.ToolRegistry do
     {:agent, Tools.Agent},
     {:nodes, Tools.Nodes},
     {:parent_question, Tools.ParentQuestion},
-    {:tool_auth, Tools.ToolAuth},
     {:extensions_status, Tools.ExtensionsStatus}
   ]
   @builtin_tool_name_strings Enum.map(@builtin_tools, fn {name, _module} ->
@@ -205,7 +201,6 @@ defmodule CodingAgent.ToolRegistry do
     browser? = browser_wanted? and browser_tools_requested?(filters)
     builtin = builtin_tool_tuples(cwd, opts, browser?, resolution)
 
-    wasm_tools = normalize_wasm_tools(Keyword.get(opts, :wasm_tools, []))
     mcp_tools = mcp_tool_tuples(cwd, opts, include_mcp)
 
     extension_tools =
@@ -226,7 +221,7 @@ defmodule CodingAgent.ToolRegistry do
       end
 
     {resolved_tools, _conflicts} =
-      resolve_tools(builtin, wasm_tools, extension_tools, mcp_tools, true)
+      resolve_tools(builtin, extension_tools, mcp_tools, true)
 
     resolved_tools = drop_reserved_contributions(resolved_tools)
 
@@ -633,13 +628,13 @@ defmodule CodingAgent.ToolRegistry do
   A tool conflict report entry.
 
   - `:tool_name` - The conflicting tool name
-  - `:winner` - Source that won (`:builtin`, `{:wasm, name_or_path}`, or `{:extension, module()}`)
+  - `:winner` - Source that won (`:builtin` or `{:extension, module()}`)
   - `:shadowed` - List of shadowed sources
   """
   @type conflict_entry :: %{
           tool_name: String.t(),
-          winner: :builtin | {:wasm, String.t()} | {:extension, module()},
-          shadowed: [{:wasm, String.t()} | {:extension, module()}]
+          winner: :builtin | {:extension, module()},
+          shadowed: [{:extension, module()} | {:mcp, term()}]
         }
 
   @typedoc """
@@ -649,12 +644,10 @@ defmodule CodingAgent.ToolRegistry do
           conflicts: [conflict_entry()],
           total_tools: non_neg_integer(),
           builtin_count: non_neg_integer(),
-          wasm_count: non_neg_integer(),
           extension_count: non_neg_integer(),
           mcp_count: non_neg_integer(),
           shadowed_count: non_neg_integer(),
-          load_errors: [Extensions.load_error()],
-          wasm: map() | nil
+          load_errors: [Extensions.load_error()]
         }
 
   @doc """
@@ -673,7 +666,6 @@ defmodule CodingAgent.ToolRegistry do
     {resolution, opts} = Keyword.pop(opts, :browser_provider_resolution)
     browser? = browser_tools_requested?(tool_filters(opts))
     builtin = builtin_tool_tuples(cwd, opts, browser?, resolution)
-    wasm_tools = normalize_wasm_tools(Keyword.get(opts, :wasm_tools, []))
     mcp_tools = mcp_tool_tuples(cwd, opts, include_mcp)
 
     {extension_tools, load_errors} =
@@ -692,11 +684,10 @@ defmodule CodingAgent.ToolRegistry do
       end
 
     {resolved_tools, conflicts} =
-      resolve_tools(builtin, wasm_tools, extension_tools, mcp_tools, false)
+      resolve_tools(builtin, extension_tools, mcp_tools, false)
 
     resolved_tools = drop_reserved_contributions(resolved_tools)
 
-    wasm_count = source_count(resolved_tools, :wasm)
     builtin_count = source_count(resolved_tools, :builtin)
     extension_count = source_count(resolved_tools, :extension)
     mcp_count = source_count(resolved_tools, :mcp)
@@ -707,12 +698,10 @@ defmodule CodingAgent.ToolRegistry do
       conflicts: conflicts,
       total_tools: length(resolved_tools),
       builtin_count: builtin_count,
-      wasm_count: wasm_count,
       extension_count: extension_count,
       mcp_count: mcp_count,
       shadowed_count: shadowed_count,
-      load_errors: load_errors,
-      wasm: Keyword.get(opts, :wasm_status)
+      load_errors: load_errors
     }
   end
 
@@ -1120,11 +1109,10 @@ defmodule CodingAgent.ToolRegistry do
           [tool_tuple()],
           [tool_tuple()],
           [tool_tuple()],
-          [tool_tuple()],
           boolean()
         ) ::
           {[tool_tuple()], [conflict_entry()]}
-  defp resolve_tools(builtin_tools, wasm_tools, extension_tools, mcp_tools, log_conflicts?) do
+  defp resolve_tools(builtin_tools, extension_tools, mcp_tools, log_conflicts?) do
     initial_winners =
       builtin_tools
       |> Enum.map(fn {name, _tool, source} -> {name, source} end)
@@ -1132,7 +1120,7 @@ defmodule CodingAgent.ToolRegistry do
 
     {rev_resolved, _winners, conflicts} =
       Enum.reduce(
-        [wasm_tools, extension_tools, mcp_tools],
+        [extension_tools, mcp_tools],
         {Enum.reverse(builtin_tools), initial_winners, %{}},
         fn tools, {resolved_acc, winners_acc, conflicts_acc} ->
           Enum.reduce(tools, {resolved_acc, winners_acc, conflicts_acc}, fn {name, tool, source},
@@ -1193,19 +1181,7 @@ defmodule CodingAgent.ToolRegistry do
 
   defp serialize_source({:extension, mod}), do: {:extension, mod}
   defp serialize_source({:mcp, server_name}), do: {:mcp, server_name}
-
-  defp serialize_source({:wasm, meta}) do
-    {:wasm, wasm_identity(meta)}
-  end
-
   defp serialize_source(_), do: :builtin
-
-  defp wasm_identity(meta) when is_map(meta) do
-    Map.get(meta, :path) || Map.get(meta, "path") || Map.get(meta, :name) || Map.get(meta, "name") ||
-      "unknown"
-  end
-
-  defp wasm_identity(other), do: to_string(other)
 
   defp log_conflict(name, winner_source, shadowed_source) do
     Logger.warning(
@@ -1215,11 +1191,6 @@ defmodule CodingAgent.ToolRegistry do
 
   defp source_label(:builtin), do: "built-in"
   defp source_label({:extension, module}), do: "extension #{inspect(module)}"
-
-  defp source_label({:wasm, meta}),
-    do:
-      "wasm #{Map.get(meta, :path) || Map.get(meta, "path") || Map.get(meta, :name) || Map.get(meta, "name") || "unknown"}"
-
   defp source_label({:mcp, meta}) when is_map(meta), do: "mcp configured"
   defp source_label({:mcp, server_name}), do: "mcp #{server_name}"
 
@@ -1227,10 +1198,6 @@ defmodule CodingAgent.ToolRegistry do
 
   defp source_count(tools, :builtin) do
     Enum.count(tools, fn {_name, _tool, source} -> source == :builtin end)
-  end
-
-  defp source_count(tools, :wasm) do
-    Enum.count(tools, fn {_name, _tool, source} -> match?({:wasm, _}, source) end)
   end
 
   defp source_count(tools, :extension) do
@@ -1258,7 +1225,7 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   # A catalogued name belongs to its platform owner. When that owner is absent
-  # (an unavailable built-in, an executor extra tool), a WASM, extension or MCP
+  # (an unavailable built-in, an executor extra tool), an extension or MCP
   # tool must not take the name and inherit its policy classification.
   defp drop_reserved_contributions(tools) do
     Enum.reject(tools, fn {name, _tool, source} ->
@@ -1274,7 +1241,7 @@ defmodule CodingAgent.ToolRegistry do
 
   # The one approval gate for every session tool. Only registry-built tuples are
   # tagged `:builtin`; caller-supplied tools arrive as `:extra` (exec tier, no
-  # folder-read exemption), MCP/WASM/extension tools with their own source tags.
+  # folder-read exemption), MCP/extension tools with their own source tags.
   @doc false
   def gate_tuples(tools, tool_policy, approval_context) do
     Enum.map(tools, fn {name, tool, source} ->
@@ -1298,7 +1265,6 @@ defmodule CodingAgent.ToolRegistry do
 
         policy_required =
           ToolPolicy.requires_approval?(tool_policy, name, params, tier) or
-            wasm_default_requires_approval?(tool_policy, name, source) or
             mcp_requires_approval?(source)
 
         # Shell text naming Lemon operator state always needs a one-time human
@@ -1360,7 +1326,6 @@ defmodule CodingAgent.ToolRegistry do
     reviewed? =
       name in ["webfetch", "websearch"] or
         ToolPolicy.requires_approval?(tool_policy, name, %{}, tier) or
-        wasm_default_requires_approval?(tool_policy, name, source) or
         mcp_requires_approval?(source)
 
     if reviewed?, do: nil, else: on_stream
@@ -1386,37 +1351,6 @@ defmodule CodingAgent.ToolRegistry do
 
   defp mcp_requires_approval?({:mcp, %{approval: :always}}), do: true
   defp mcp_requires_approval?(_source), do: false
-
-  defp wasm_default_requires_approval?(tool_policy, tool_name, {:wasm, meta}) do
-    if is_nil(Map.get(tool_policy, :approval_mode, Map.get(tool_policy, "approval_mode"))),
-      do: WasmPolicy.requires_approval?(tool_policy, tool_name, meta),
-      else: false
-  end
-
-  defp wasm_default_requires_approval?(_tool_policy, _tool_name, _source), do: false
-
-  defp normalize_wasm_tools(nil), do: []
-
-  defp normalize_wasm_tools(tools) when is_list(tools) do
-    tools
-    |> Enum.flat_map(fn
-      {name, %AgentTool{} = tool, {:wasm, meta}} when is_binary(name) and is_map(meta) ->
-        [{name, tool, {:wasm, meta}}]
-
-      %{name: name, tool: %AgentTool{} = tool, metadata: meta}
-      when is_binary(name) and is_map(meta) ->
-        [{name, tool, {:wasm, meta}}]
-
-      _ ->
-        []
-    end)
-    # Keep tool ordering deterministic for stable prompts / prompt caching.
-    |> Enum.sort_by(fn {name, _tool, {:wasm, meta}} ->
-      {name, wasm_identity(meta)}
-    end)
-  end
-
-  defp normalize_wasm_tools(_), do: []
 
   defp sort_extensions(extensions) do
     Enum.sort_by(extensions, fn module -> Atom.to_string(module) end)

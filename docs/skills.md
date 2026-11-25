@@ -922,9 +922,8 @@ The external-tool import alone is controlled by `LEMON_MCP_EXTERNAL_DISCOVERY` /
 When tool names conflict, the precedence order is:
 
 1. Built-in tools (highest priority)
-2. WASM tools
-3. Extension tools
-4. MCP tools (lowest priority)
+2. Extension tools
+3. MCP tools (lowest priority)
 
 MCP tools with conflicting names will be shadowed by tools from other sources.
 

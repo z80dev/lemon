@@ -2,7 +2,7 @@ defmodule LemonCore.EnvTest do
   @moduledoc """
   Tests for the LemonCore.Env typed environment-variable registry.
 
-  This exercises real declared vars (e.g. LEMON_WASM_ENABLED,
+  This exercises real declared vars (e.g. LEMON_AUTO_RESIZE_IMAGES,
   LEMON_WEB_PORT) that other config test files also read via
   `LemonCore.Config.*`, so -- like every other test file in
   test/lemon_core/config/ that touches those same vars -- this must run
@@ -39,7 +39,8 @@ defmodule LemonCore.EnvTest do
     assert documented == declared
 
     for removed <-
-          ~w(LEMON_CLAUDE_YOLO LEMON_CODEX_AUTO_APPROVE LEMON_CODEX_EXTRA_ARGS LEMON_THEME) do
+          ~w(LEMON_CLAUDE_YOLO LEMON_CODEX_AUTO_APPROVE LEMON_CODEX_EXTRA_ARGS LEMON_THEME
+             LEMON_WASM_ENABLED LEMON_WASM_RUNTIME_PATH LEMON_WASM_TOOL_PATHS) do
       refute MapSet.member?(declared, removed)
     end
 
@@ -58,6 +59,18 @@ defmodule LemonCore.EnvTest do
         type: :float,
         default: 0.5,
         doc: "Float casting fixture.",
+        secret?: false,
+        required?: false,
+        area: :env_test,
+        apps: [:lemon_core]
+      },
+      %{
+        name: :env_test_size,
+        env_var: "ENV_TEST_SIZE",
+        aliases: [],
+        type: :bytes,
+        default: 1024,
+        doc: "Byte-size casting fixture.",
         secret?: false,
         required?: false,
         area: :env_test,
@@ -259,11 +272,11 @@ defmodule LemonCore.EnvTest do
     end
 
     test "casts booleans" do
-      System.put_env("LEMON_WASM_ENABLED", "true")
-      assert Env.get(:lemon_wasm_enabled) == true
+      System.put_env("LEMON_AUTO_RESIZE_IMAGES", "true")
+      assert Env.get(:lemon_auto_resize_images) == true
 
-      System.put_env("LEMON_WASM_ENABLED", "0")
-      assert Env.get(:lemon_wasm_enabled) == false
+      System.put_env("LEMON_AUTO_RESIZE_IMAGES", "0")
+      assert Env.get(:lemon_auto_resize_images) == false
     end
 
     test "casts floats" do
@@ -274,8 +287,10 @@ defmodule LemonCore.EnvTest do
     end
 
     test "casts byte sizes" do
-      System.put_env("LEMON_WASM_DEFAULT_MEMORY_LIMIT", "5MB")
-      assert Env.get(:lemon_wasm_default_memory_limit) == 5_242_880
+      with_test_registry(fn ->
+        System.put_env("ENV_TEST_SIZE", "5MB")
+        assert Env.get(:env_test_size) == 5_242_880
+      end)
     end
 
     test "raises ArgumentError for an undeclared name" do

@@ -69,7 +69,7 @@ references), `[secrets]` and external secret sources, `[gateway]` (including
 voice reply hosts and keys), web search/fetch hosts, keys and SSRF switches
 (`allow_private_network`, `allowed_hostnames`), `runtime.extension_paths` and
 `[runtime.extensions]`, `[runtime.shell]`, `runtime.git_path`, LSP server
-commands/args/env, WASM settings, `[runtime.provider_routing]` and credential
+commands/args/env, `[runtime.provider_routing]` and credential
 pools, `[logging]`, `[automation]`, update settings, and any key not listed
 above.
 
@@ -284,9 +284,8 @@ extension_paths = []
 # git_path = "/usr/bin/git"
 
 [runtime.extensions]
-# false: no session compiles an extension file, installs an extension hook,
-# registers an extension provider or starts the WASM runtime; manifest
-# diagnostics stay available.
+# false: no session compiles an extension file, installs an extension hook or
+# registers an extension provider; manifest diagnostics stay available.
 enabled = true
 # true also loads the global ~/.lemon/agent/extensions (never a project dir).
 # Like `enabled`, operator-only: ignored in a project .lemon/config.toml.
@@ -309,18 +308,6 @@ allowed_hostnames = []
 
 [runtime.tools.web.fetch.firecrawl]
 enabled = true
-
-[runtime.tools.wasm]
-enabled = false
-auto_build = true
-runtime_path = ""
-tool_paths = []
-default_memory_limit = 10485760
-default_timeout_ms = 60000
-default_fuel_limit = 10000000
-cache_compiled = true
-cache_dir = ""
-max_tool_invoke_depth = 4
 
 [tui]
 theme = "lemon"
@@ -1057,7 +1044,6 @@ place the shared server token in `VITE_*` configuration.
 - `LEMON_TUI_NOTIFICATIONS=auto|osc|bell|off` — overrides the Bun TUI's global `[tui] notifications`; legacy `0` means `off`, `1` means `auto`
 - `LEMON_SECRET_OBFUSCATION_ENABLED` — overrides `[runtime.secret_obfuscation] enabled`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`); local servers use `OLLAMA_BASE_URL`/`OLLAMA_HOST`, `LM_STUDIO_BASE_URL`, `LLAMA_CPP_BASE_URL` and `LITELLM_BASE_URL` only when config sets no `base_url` (see [OpenAI-Compatible Endpoints](#openai-compatible-endpoints))
-- `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
 - `LEMON_TERMINAL_BACKENDS_ALLOW`, `LEMON_TERMINAL_BACKENDS_DENY`, `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
 - `LEMON_DOCKER_TERMINAL_IMAGE`, `LEMON_DOCKER_TERMINAL_MEMORY`, `LEMON_DOCKER_TERMINAL_CPUS`, `LEMON_DOCKER_TERMINAL_PIDS_LIMIT`, `LEMON_DOCKER_TERMINAL_NETWORK`
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
@@ -2720,7 +2706,7 @@ approval_mode = "write" # ask | write | yolo
 Leaving the setting unset preserves existing behavior, including configured
 per-tool and source-specific approval requirements. Reads/search/web fetches
 are `read`; built-in file/state mutations are `write`; shell/process control,
-eval/debug, browser evaluation, MCP/WASM/extension and unknown tools are `exec`.
+eval/debug, browser evaluation, MCP, extension, and unknown tools are `exec`.
 LSP navigation and edit previews are `read`; applying edits, raw requests and
 server reloads are `exec`. A `write`, `edit` or `patch` call whose effective
 `diagnostics` or `format` option is on (the argument, or the host default when
@@ -2963,25 +2949,6 @@ reports only endpoint hashes in status surfaces. Backend/controller identity is
 explicit and fail-closed; an unavailable controller never falls back to a
 different browser profile. See [`docs/tools/web.md`](tools/web.md).
 
-## WASM Tools
-
-WASM tools are disabled by default and run in a per-session Rust sidecar.
-See [`docs/tools/wasm.md`](tools/wasm.md) for runtime behavior and troubleshooting.
-
-```toml
-[runtime.tools.wasm]
-enabled = false
-auto_build = true
-runtime_path = ""
-tool_paths = []
-default_memory_limit = 10485760
-default_timeout_ms = 60000
-default_fuel_limit = 10000000
-cache_compiled = true
-cache_dir = ""
-max_tool_invoke_depth = 4
-```
-
 ## Computer Use
 
 The explicit computer-use switch (`enabled`) defaults to off and is the only
@@ -3150,7 +3117,7 @@ pinned = []              # tool names that always stay directly exposed
 - **`auto`** (default): selects `coding` for cwd-scoped coding sessions (including
   local TUI, ACP, and `lemon -p`/`run`) and `legacy` for main assistant and messaging
   sessions. Explicit profile settings retain precedence over this inference.
-- **`legacy`**: built-in tools stay exposed. The MCP, extension and WASM tools
+- **`legacy`**: built-in tools stay exposed. MCP and extension tools
   are deferred only when the estimated schema cost of the whole catalog exceeds
   `budget_tokens`; below it the tool list is unchanged.
 - **`coding`**: only the coding core stays
@@ -3169,18 +3136,10 @@ as `extra_tools` always stay exposed, and sessions started with an explicit
 `tools` list skip disclosure. Names `tool_search` and `tool_invoke` are
 reserved; a real tool using either name is dropped while disclosure is active.
 
-WASM host aliases resolve from this same frozen, policy-authorized runtime
-catalog, not only the schemas currently shown to the model. A permitted optional
-built-in such as `browser_tabs` therefore remains a host capability under either
-profile. Host calls retain the catalog's wrapped implementation and the current
-plan-mode gate; reload replaces that inventory so removed authority is not kept
-alive by an old host lookup. Neither WASM tools nor the disclosure bridge tools
-can be host targets, preventing recursive calls through the deferred catalog.
-
-Target closures are wrapped before disclosure partitions the catalog. Direct,
-bridged and host execution restore secret arguments before target hooks and
-approval checks. Plan-mode bridge and host writes reuse the session's restricted
-write/edit wrappers, including the final directory check after hook replacement;
+Target closures are wrapped before disclosure partitions the catalog. Direct
+and deferred calls restore secret arguments before target hooks and approval
+checks. Deferred writes in plan mode reuse the session's restricted write/edit
+wrappers, including the final directory check after hook replacement;
 schema deferral does not create another execution authority.
 
 The tool list is computed at session start and on extension reload, never per
@@ -3236,7 +3195,6 @@ suppresses bootstrap even when resuming an assistant session.
 - `defaults`: global default provider, model, and thinking level for native execution.
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
-- `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
 - `runtime.tools.disclosure`: deferring tool schemas behind `tool_search` / `tool_invoke` (see [Tool Disclosure](#tool-disclosure)).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings. Automatic compaction runs when the request

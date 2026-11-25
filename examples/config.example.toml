@@ -403,15 +403,6 @@ allow_tools = []
 # enabled = false
 # declined_origins = []
 
-# --- WASM Tool Configuration ---
-
-# [runtime.tools.wasm]
-# enabled = false
-# auto_build = true
-# tool_paths = []
-# default_memory_limit = 10485760
-# default_timeout_ms = 60000
-
 # --- Discord Configuration ---
 
 # [gateway.discord]

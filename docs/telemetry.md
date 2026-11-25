@@ -132,7 +132,7 @@ Three prefix families coexist. This is descriptive, not a recommendation — see
 
 | Prefix | Meaning | Emitted via |
 |---|---|---|
-| `[:lemon, ...]` | Cross-cutting platform concerns: runs, channels, approvals, memory, scheduler, reload, WASM | `LemonCore.Telemetry.emit/3` and its named helpers |
+| `[:lemon, ...]` | Cross-cutting platform concerns: runs, channels, approvals, memory, scheduler, reload | `LemonCore.Telemetry.emit/3` and its named helpers |
 | `[:lemon_agent, ...]`, `[:coding_agent, ...]`, `[:lemon_ai, ...]` | App-local concerns, prefixed by OTP app | `LemonCore.Telemetry.emit/3` or `:telemetry.execute/3` directly |
 | `[:lemon_skills, ...]` | App-local, full app name as prefix | app-local helper module |
 
@@ -164,8 +164,8 @@ a consumer, check the table for the event you are attaching to:
 | Unit | Used by |
 |---|---|
 | `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:lemon_agent, :loop, :end]`, `[:lemon_ai, :dispatcher, :rejected]`, `[:lemon_ai, :model_call, :stop \| :exception]` (also `first_event_duration`), `[:lemon_agent, :tool_call, :stop \| :exception]` |
-| `duration_us` | `[:coding_agent, :extension, :tool, ...]`, `[:coding_agent, :wasm, :tool, ...]`, `[:lemon, :memory, :ingest, ...]` |
-| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]` |
+| `duration_us` | `[:coding_agent, :extension, :tool, ...]`, `[:lemon, :memory, :ingest, ...]` |
+| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]` |
 | both `duration` (native) and `duration_ms` | `[:lemon, :config, :reload, :stop]` and `:exception` — `duration` is a real monotonic native reading and `duration_ms` is derived from it via `System.convert_time_unit/3` |
 
 `LemonCore.Telemetry`'s moduledoc records the intended convention for **new** emitters:
@@ -226,7 +226,7 @@ converts to Unix timestamps for transport. No pairing registry, timeout,
 per-call allocation at `:start` or unfinished OTel span is needed. Parallel calls
 and cross-process streaming completion cannot mismatch. A process killed
 without a terminal event produces no span. Dispatcher rejections are not model
-calls; older `tool_task`, extension and WASM wrapper events are not exported
+calls; older `tool_task` and extension wrapper events are not exported
 again, avoiding duplicate tool spans.
 
 Spans are **standalone roots**, not whole-request traces: this attachment does
@@ -642,23 +642,14 @@ callers must pass `StreamOptions.session_id`; the library does not invent one.
 | `[:lemon, :reload, :stop]` | `duration_ms` | context plus `status` | [`telemetry_span/3`](../apps/lemon_core/lib/lemon_core/reload.ex) |
 | `[:lemon, :reload, :exception]` | `duration_ms` | context plus `error`, `stacktrace` | [`telemetry_span/3`](../apps/lemon_core/lib/lemon_core/reload.ex), for both raised exceptions and caught throws/exits |
 
-### Extension and WASM tools — `[:coding_agent, ...]` and `[:lemon, :wasm, ...]`
+### Extension tools — `[:coding_agent, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
 | `[:coding_agent, :extension, :tool, :start]` | `count: 1` | tool identity | [`run_extension_tool/4`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) in `CodingAgent.ToolRegistry` |
 | `[:coding_agent, :extension, :tool, :stop]` | `count: 1`, `duration_us` | tool identity plus `status` | [`run_extension_tool/4`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) |
 | `[:coding_agent, :extension, :tool, :exception]` | `count: 1`, `duration_us` | tool identity plus `kind`, `error_type` | [`run_extension_tool/4`](../apps/coding_agent/lib/coding_agent/tool_registry.ex), for raised exceptions and caught throws/exits; both re-raise |
-| `[:coding_agent, :wasm, :tool, :start]` | `count: 1` | tool identity | [`build_execute_fun/3`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) in `CodingAgent.Wasm.ToolFactory` |
-| `[:coding_agent, :wasm, :tool, :stop]` | `count: 1`, `duration_us` | tool identity plus `status` | [`emit_stop/3`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
-| `[:coding_agent, :wasm, :tool, :exception]` | `count: 1`, `duration_us` | tool identity plus `kind`, `error_type` | [`emit_exception/4`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
 | `[:coding_agent, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`CodingAgent.ToolRegistry.get_tool/3`](../apps/coding_agent/lib/coding_agent/tool_registry.ex). Shares its metadata keys with the `[:lemon_agent, ...]` event of the same leaf name |
-| `[:lemon, :wasm, :discover, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash` | [`CodingAgent.Wasm.SidecarSession.handle_call/3`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
-| `[:lemon, :wasm, :discover, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash` | [`CodingAgent.Wasm.SidecarSession.discover/2`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
-| `[:lemon, :wasm, :invoke, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`CodingAgent.Wasm.SidecarSession.handle_call/3`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
-| `[:lemon, :wasm, :invoke, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`finish_invocation/2`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
-
-Session and cwd identifiers in the WASM events are hashed, not raw.
 
 ### Session lifecycle counters and tool intents — `[:coding_agent, ...]`
 

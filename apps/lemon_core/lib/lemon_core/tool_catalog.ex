@@ -20,7 +20,7 @@ defmodule LemonCore.ToolCatalog do
   Restricted profiles are allow lists derived from this table, so they fail
   closed: a name it does not list is unclassified and denied by every restricted
   profile. That covers satellite registrations through `LemonAgent.ToolRegistry`
-  (omp, computer use, Honcho), MCP, extension, WASM and hand-assembled tools.
+  (omp, computer use, Honcho), MCP, extension and hand-assembled tools.
   Full-access, orchestrator and custom policies may still grant them by name.
 
   | Profile | Grants catalogued tools |
@@ -88,7 +88,6 @@ defmodule LemonCore.ToolCatalog do
     {"lsp_diagnostics", :exec, [:dangerous], []},
     # Routes tool calls to other machines.
     {"nodes", :read, [:dangerous], []},
-    {"tool_auth", :exec, [:dangerous], []},
     {"task", :exec, [:dangerous, :delegation], []},
     {"agent", :exec, [:dangerous, :delegation], []},
     {"goal", :write, [:dangerous, :delegation], [registry: true]},
@@ -224,7 +223,7 @@ defmodule LemonCore.ToolCatalog do
 
   @doc """
   True when `name` is catalogued and therefore reserved for its platform owner.
-  MCP, extension, WASM and satellite tools must not use a reserved name.
+  MCP, extension and satellite tools must not use a reserved name.
   """
   @spec reserved?(term()) :: boolean()
   def reserved?(name), do: is_binary(name) and Map.has_key?(@index, name)

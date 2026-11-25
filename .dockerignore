@@ -45,16 +45,13 @@ apps/lemon_core/priv/.lemon_confined_fs.platform
 *.db3-shm
 *.db3-wal
 
-# Not referenced by any prod compile path (checked: no @external_resource
-# anywhere in apps/, and native/ is a runtime-optional wasm toolchain resolved
-# from ~/.lemon at run time, not built by Mix)
+# Not referenced by any production compile path.
 bench
 bin
 clients
 docs
 examples
 installer
-native
 scripts
 showcase
 tools

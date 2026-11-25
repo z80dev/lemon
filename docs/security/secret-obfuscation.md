@@ -183,8 +183,8 @@ argument structs remain excluded.
 `CodingAgent.Security.SecretObfuscator` builds the session obfuscator, runs as
 a stage of the pre-LLM transform chain after the untrusted tool-output boundary,
 and wraps session targets before disclosure freezes its catalog, with restoration
-outside extension hooks and approval. Direct, deferred `tool_invoke` and WASM
-host calls therefore reach the same wrapped implementation, including after
+outside extension hooks and approval. Direct and deferred `tool_invoke` calls
+therefore reach the same wrapped implementation, including after
 reload; caller-supplied extra tools remain directly exposed. Private plan-mode
 file tools and plan proposals use the same restore/interception order and
 recheck the plan-directory boundary after hook argument replacement. Repeated

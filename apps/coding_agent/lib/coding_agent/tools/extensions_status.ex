@@ -117,7 +117,6 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         ),
         if(report.total_errors > 0, do: format_errors_section(report.load_errors)),
         if(report.tool_conflicts, do: format_conflicts_section(report.tool_conflicts)),
-        if(report[:wasm], do: format_wasm_section(report.wasm)),
         case report[:tool_disclosure] do
           disclosure when is_map(disclosure) ->
             format_tool_disclosure_section(disclosure, include_details)
@@ -134,7 +133,7 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
       else
         report
         |> Map.take([:total_loaded, :total_errors, :tool_conflicts])
-        |> Map.merge(%{wasm: report[:wasm], tool_disclosure: report[:tool_disclosure]})
+        |> Map.put(:tool_disclosure, report[:tool_disclosure])
       end
 
     %AgentToolResult{
@@ -279,7 +278,6 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
       "\n## Tool Registry\n" <>
         "- **Total tools:** #{conflicts.total_tools}\n" <>
         "- **Built-in:** #{conflicts.builtin_count}\n" <>
-        "- **From WASM:** #{Map.get(conflicts, :wasm_count, 0)}\n" <>
         "- **From extensions:** #{conflicts.extension_count}\n" <>
         "- **Shadowed:** #{conflicts.shadowed_count}\n"
 
@@ -295,31 +293,15 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
     winner =
       case conflict.winner do
         :builtin -> "built-in"
-        {:wasm, identity} -> "WASM `#{identity}`"
         {:extension, mod} -> "extension `#{inspect(mod)}`"
       end
 
     shadowed =
       Enum.map_join(conflict.shadowed, ", ", fn
         {:extension, mod} -> "`#{inspect(mod)}`"
-        {:wasm, identity} -> "`wasm:#{identity}`"
       end)
 
     "- **#{conflict.tool_name}**: winner is #{winner}, shadowed: #{shadowed}"
-  end
-
-  defp format_wasm_section(wasm) do
-    list = fn label, items ->
-      if items == [], do: "", else: "- **#{label}:** #{Enum.join(items, " | ")}\n"
-    end
-
-    "\n## WASM Runtime\n" <>
-      "- **Enabled:** #{Map.get(wasm, :enabled, false)}\n" <>
-      "- **Running:** #{Map.get(wasm, :running, false)}\n" <>
-      "- **Discovered tools:** #{Map.get(wasm, :tool_count, 0)}\n" <>
-      "- **Runtime path:** `#{Map.get(wasm, :runtime_path, "unknown")}`\n" <>
-      list.("Warnings", Map.get(wasm, :discover_warnings, [])) <>
-      list.("Errors", Map.get(wasm, :discover_errors, []))
   end
 
   defp format_loaded_at(ms) when is_integer(ms) do

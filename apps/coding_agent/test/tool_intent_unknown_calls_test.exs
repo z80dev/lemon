@@ -16,12 +16,12 @@ defmodule CodingAgent.ToolIntentUnknownCallsTest do
     path =
       journal(dir, [
         intent("eval", "eval"),
-        intent("eval/wasm/bash", "bash", %{"parentToolCallId" => "eval/wasm"}),
-        intent("eval/wasm", "wasm", %{"parentToolCallId" => "eval"}),
+        intent("eval/task/bash", "bash", %{"parentToolCallId" => "eval/task"}),
+        intent("eval/task", "task", %{"parentToolCallId" => "eval"}),
         result("eval")
       ])
 
-    assert {:ok, [%{id: "eval/wasm/bash", name: "bash"}, %{id: "eval/wasm", name: "wasm"}]} =
+    assert {:ok, [%{id: "eval/task/bash", name: "bash"}, %{id: "eval/task", name: "task"}]} =
              ToolIntent.unknown_calls(path)
   end
 

@@ -64,6 +64,3 @@ jobs:
 
       - name: Compile deps
         run: mix deps.compile
-
-      - name: Install WASM target
-        run: rustup target add wasm32-wasip2

@@ -143,13 +143,11 @@ take a NIF dependency on. Nx and Bumblebee are real and good, and they are not P
 your agent needs local inference, embeddings, or reranking, that work happens somewhere
 else.
 
-**Anything with a native or JS-only SDK becomes an OS process boundary.** WASM extensions
-run in a sidecar over a port protocol
-([`wasm/sidecar_session.ex`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex));
-browser automation shells out; the TypeScript packages under `clients/` exist because the
-browser is the browser. Ports are the correct answer — a crashing sidecar cannot corrupt
-the VM — but you pay a serialization boundary and a supervision tree for what Python would
-have solved with an import.
+**Anything with a native or JS-only SDK becomes an OS process boundary.**
+Browser automation shells out; the TypeScript packages under `clients/` exist
+because the browser is the browser. Ports keep a crashing subprocess from
+corrupting the VM, but you pay for serialization and supervision where Python
+would use an import.
 
 **NIFs are where the guarantees stop.** A NIF can crash the whole VM and can block a
 scheduler thread. Every isolation property above is a property of Erlang code, not of the
