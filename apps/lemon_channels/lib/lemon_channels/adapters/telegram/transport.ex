@@ -64,7 +64,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   def handle_continue(:start, opts), do: start_transport(opts, 0)
 
   defp start_transport(opts, lock_attempt) do
-    base = LemonChannels.GatewayConfig.get(:telegram, %{})
+    base = LemonCore.GatewayConfig.get(:telegram, %{})
 
     config =
       base

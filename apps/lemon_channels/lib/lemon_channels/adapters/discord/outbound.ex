@@ -5,7 +5,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
 
   require Logger
 
-  alias LemonChannels.GatewayConfig
+  alias LemonCore.GatewayConfig
   alias LemonChannels.OutboundPayload
   alias Nostrum.Api.Message, as: NostrumMessage
 

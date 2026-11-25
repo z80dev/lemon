@@ -10,16 +10,12 @@ defmodule LemonGateway.Transports.Webhook.Config do
 
   @spec enabled?() :: boolean()
   def enabled? do
-    LemonGateway.Config.get_or_env(:enable_webhook, false) == true
-  rescue
-    _ -> false
+    LemonCore.GatewayConfig.get(:enable_webhook, false) == true
   end
 
   @spec config() :: map()
   def config do
-    LemonGateway.Config.get_or_env(:webhook, %{}) |> normalize_map()
-  rescue
-    _ -> %{}
+    LemonCore.GatewayConfig.get(:webhook, %{}) |> normalize_map()
   end
 
   @spec integration_config(binary()) :: map() | nil

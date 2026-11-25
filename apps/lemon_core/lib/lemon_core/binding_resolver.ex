@@ -5,8 +5,8 @@ defmodule LemonCore.BindingResolver do
   Resolves bindings and settings for a given chat scope. Bindings map
   transport/chat/topic combinations to projects and queue modes.
 
-  Both `LemonGateway.BindingResolver` and `LemonChannels.BindingResolver`
-  delegate here after converting their local structs to `LemonCore` types.
+  `LemonChannels.BindingResolver` feeds it the live `[gateway]` bindings and
+  projects; it is the only resolver.
   """
 
   alias LemonCore.Binding
@@ -32,7 +32,7 @@ defmodule LemonCore.BindingResolver do
     topic_binding =
       if scope.topic_id do
         Enum.find(bindings, fn b ->
-          get_field(b, :transport) == scope.transport &&
+          same_transport?(get_field(b, :transport), scope.transport) &&
             get_field(b, :chat_id) == scope.chat_id &&
             get_field(b, :topic_id) == scope.topic_id
         end)
@@ -42,7 +42,7 @@ defmodule LemonCore.BindingResolver do
 
     chat_binding =
       Enum.find(bindings, fn b ->
-        get_field(b, :transport) == scope.transport &&
+        same_transport?(get_field(b, :transport), scope.transport) &&
           get_field(b, :chat_id) == scope.chat_id &&
           is_nil(get_field(b, :topic_id))
       end)
@@ -134,8 +134,10 @@ defmodule LemonCore.BindingResolver do
     projects =
       if is_function(config_provider, 0), do: config_provider.() || %{}, else: %{}
 
+    # TOML projects keep string keys; injected providers may use atoms.
     case Map.get(projects, project_id) do
       %{root: root} when is_binary(root) -> %{root: root}
+      %{"root" => root} when is_binary(root) -> %{root: root}
       _ -> nil
     end
   rescue
@@ -143,6 +145,16 @@ defmodule LemonCore.BindingResolver do
   end
 
   def lookup_project(_, _), do: nil
+
+  # Config bindings name transports as atoms (registered channels) or strings
+  # (anything else, so config never creates atoms); scopes use atoms.
+  defp same_transport?(nil, _scope_transport), do: false
+  defp same_transport?(transport, transport), do: true
+
+  defp same_transport?(binding, scope) when is_binary(binding) and is_atom(scope),
+    do: binding == Atom.to_string(scope)
+
+  defp same_transport?(_binding, _scope), do: false
 
   # Binding field access — handles both structs and plain maps
   defp get_field(%Binding{} = b, key), do: Map.get(b, key)

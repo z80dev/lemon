@@ -7,7 +7,8 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
   alias LemonChannels.Adapters.Xmtp.Bridge
   alias LemonChannels.Adapters.Xmtp.CursorStore
-  alias LemonChannels.{BindingResolver, GatewayConfig, PortBridge, SubmissionOutcome}
+  alias LemonChannels.{BindingResolver, PortBridge, SubmissionOutcome}
+  alias LemonCore.GatewayConfig
   alias LemonChannels.OutboundPayload
   alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, SessionKey}

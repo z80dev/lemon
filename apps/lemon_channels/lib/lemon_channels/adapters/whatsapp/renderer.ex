@@ -11,7 +11,8 @@ defmodule LemonChannels.Adapters.WhatsApp.Renderer do
   - No inline keyboards.
   """
 
-  alias LemonChannels.{GatewayConfig, OutboundPayload, Outbox, PresentationState}
+  alias LemonChannels.{OutboundPayload, Outbox, PresentationState}
+  alias LemonCore.GatewayConfig
   alias LemonCore.{DeliveryIntent, DeliveryRoute}
 
   @spec dispatch(DeliveryIntent.t()) :: :ok | {:error, term()}

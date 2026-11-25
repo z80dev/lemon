@@ -4,7 +4,8 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
   """
 
   alias LemonChannels.Adapters.Telegram.{FileBatcher, StatusRenderer}
-  alias LemonChannels.{GatewayConfig, OutboundPayload, Outbox, PresentationState}
+  alias LemonChannels.{OutboundPayload, Outbox, PresentationState}
+  alias LemonCore.GatewayConfig
   alias LemonChannels.Telegram.{ResumeIndexStore, Truncate}
   alias LemonCore.{DeliveryIntent, DeliveryRoute, ResumeToken}
 

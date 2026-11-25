@@ -1,10 +1,9 @@
 defmodule LemonCore.Config.Gateway do
   @moduledoc """
-  Gateway configuration: bindings, queueing, and per-platform channel sections.
+  Gateway configuration: bindings, projects, and per-platform channel sections.
 
   Inspired by Ironclaw's modular config pattern, this module handles
-  gateway-specific configuration including bindings, SMS and voice settings,
-  and queue management.
+  gateway-specific configuration including bindings, SMS and voice settings.
 
   Anything named after a specific chat platform is resolved by the application
   that implements it: the modules registered under
@@ -48,7 +47,6 @@ defmodule LemonCore.Config.Gateway do
     :projects,
     :bindings,
     :sms,
-    :queue,
     :enabled_channels,
     :channels,
     :email,
@@ -63,12 +61,6 @@ defmodule LemonCore.Config.Gateway do
           project: String.t() | nil,
           agent_id: String.t() | nil,
           queue_mode: String.t() | nil
-        }
-
-  @type queue_config :: %{
-          mode: String.t() | nil,
-          cap: integer() | nil,
-          drop: String.t() | nil
         }
 
   @type voice_config :: %{
@@ -100,7 +92,6 @@ defmodule LemonCore.Config.Gateway do
           projects: map(),
           bindings: [binding()],
           sms: map(),
-          queue: queue_config(),
           enabled_channels: %{optional(atom()) => boolean()},
           channels: %{optional(atom()) => map()},
           email: map(),
@@ -127,7 +118,6 @@ defmodule LemonCore.Config.Gateway do
       projects: resolve_projects(gateway_settings),
       bindings: resolve_bindings(gateway_settings),
       sms: resolve_sms(gateway_settings),
-      queue: resolve_queue(gateway_settings),
       enabled_channels: resolve_enabled_channels(gateway_settings, channels),
       channels: resolve_channels(gateway_settings, channels),
       email: resolve_passthrough(gateway_settings, "email"),
@@ -212,10 +202,11 @@ defmodule LemonCore.Config.Gateway do
 
   defp resolve_bindings(settings) do
     bindings = settings["bindings"] || []
+    transports = Map.new(Channel.ids(), &{Atom.to_string(&1), &1})
 
     Enum.map(bindings, fn binding ->
       %{
-        transport: if(binding["transport"], do: safe_to_atom(binding["transport"])),
+        transport: resolve_transport(binding["transport"], transports),
         chat_id: binding["chat_id"],
         topic_id: binding["topic_id"],
         project: binding["project"],
@@ -224,6 +215,14 @@ defmodule LemonCore.Config.Gateway do
       }
     end)
   end
+
+  # Registered channel ids map to their atoms; any other transport stays a
+  # string (matched by name in `LemonCore.BindingResolver`), so config input
+  # never creates atoms.
+  defp resolve_transport(transport, transports) when is_binary(transport),
+    do: Map.get(transports, transport, transport)
+
+  defp resolve_transport(transport, _transports), do: transport
 
   defp resolve_sms(settings) do
     case settings["sms"] || %{} do
@@ -244,16 +243,6 @@ defmodule LemonCore.Config.Gateway do
       other ->
         other
     end
-  end
-
-  defp resolve_queue(settings) do
-    queue = settings["queue"] || %{}
-
-    %{
-      mode: queue["mode"],
-      cap: queue["cap"],
-      drop: queue["drop"]
-    }
   end
 
   # Wrongly typed values are kept (only blank strings become nil) so
@@ -346,11 +335,6 @@ defmodule LemonCore.Config.Gateway do
       "projects" => %{},
       "bindings" => [],
       "sms" => %{},
-      "queue" => %{
-        "mode" => nil,
-        "cap" => nil,
-        "drop" => nil
-      },
       "email" => %{},
       "webhook" => %{},
       "voice" => %{}

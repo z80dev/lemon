@@ -177,22 +177,6 @@ defmodule LemonGateway.TransportRegistryTest do
     Supervisor.restart_child(supervisor, TransportRegistry)
   end
 
-  defp restart_config do
-    supervisor = Elixir.LemonGateway.Supervisor
-
-    case Supervisor.terminate_child(supervisor, Elixir.LemonGateway.Config) do
-      :ok -> :ok
-      {:error, :not_found} -> :ok
-    end
-
-    Supervisor.restart_child(supervisor, Elixir.LemonGateway.Config)
-  end
-
-  defp restart_config_and_registry do
-    {:ok, _} = restart_config()
-    restart_registry()
-  end
-
   setup do
     _ = Application.stop(:lemon_gateway)
 
@@ -207,7 +191,7 @@ defmodule LemonGateway.TransportRegistryTest do
     Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-    {:ok, _} = restart_config_and_registry()
+    {:ok, _} = restart_registry()
 
     on_exit(fn ->
       Application.stop(:lemon_gateway)
@@ -252,12 +236,10 @@ defmodule LemonGateway.TransportRegistryTest do
     assert TransportRegistry.get_transport("mock") == MockTransport
   end
 
-  test "immutable lookups do not call the registry or config processes" do
+  test "immutable lookups do not call the registry process" do
     Application.put_env(:lemon_gateway, :transports, [MockTransport, MockWebhookTransport])
     {:ok, registry} = restart_registry()
-    config = Process.whereis(LemonGateway.Config)
     :ok = :sys.suspend(registry)
-    :ok = :sys.suspend(config)
 
     try do
       task =
@@ -274,7 +256,6 @@ defmodule LemonGateway.TransportRegistryTest do
       assert Task.await(task, 1_000) ==
                {["mock", "webhook"], MockTransport, MockTransport, nil, [{"mock", MockTransport}]}
     after
-      :sys.resume(config)
       :sys.resume(registry)
     end
   end
@@ -320,7 +301,7 @@ defmodule LemonGateway.TransportRegistryTest do
       enable_telegram: false
     })
 
-    {:ok, _} = restart_config_and_registry()
+    {:ok, _} = restart_registry()
 
     enabled = TransportRegistry.enabled_transports()
     enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -341,7 +322,7 @@ defmodule LemonGateway.TransportRegistryTest do
       enable_telegram: true
     })
 
-    {:ok, _} = restart_config_and_registry()
+    {:ok, _} = restart_registry()
 
     enabled = TransportRegistry.enabled_transports()
     enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -364,7 +345,7 @@ defmodule LemonGateway.TransportRegistryTest do
 
     log =
       capture_log(fn ->
-        {:ok, _} = restart_config_and_registry()
+        {:ok, _} = restart_registry()
       end)
 
     enabled_ids =
@@ -393,7 +374,7 @@ defmodule LemonGateway.TransportRegistryTest do
 
     log =
       capture_log(fn ->
-        {:ok, _} = restart_config_and_registry()
+        {:ok, _} = restart_registry()
       end)
 
     enabled_ids =
@@ -415,7 +396,7 @@ defmodule LemonGateway.TransportRegistryTest do
 
     log =
       capture_log(fn ->
-        {:ok, _} = restart_config_and_registry()
+        {:ok, _} = restart_registry()
       end)
 
     assert log =~
@@ -435,7 +416,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: false
       })
 
-      {:ok, _} = restart_config_and_registry()
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -450,7 +431,7 @@ defmodule LemonGateway.TransportRegistryTest do
         max_concurrent_runs: 1
       })
 
-      {:ok, _} = restart_config_and_registry()
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -468,7 +449,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: true
       )
 
-      {:ok, _} = restart_config_and_registry()
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -484,7 +465,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: false
       )
 
-      {:ok, _} = restart_config_and_registry()
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -497,7 +478,7 @@ defmodule LemonGateway.TransportRegistryTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, max_concurrent_runs: 1)
 
-      {:ok, _} = restart_config_and_registry()
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -511,7 +492,7 @@ defmodule LemonGateway.TransportRegistryTest do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
 
-      {:ok, _} = restart_config_and_registry()
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -523,7 +504,7 @@ defmodule LemonGateway.TransportRegistryTest do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, [])
 
-      {:ok, _} = restart_config_and_registry()
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -637,7 +618,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: false
       })
 
-      {:ok, _} = restart_config_and_registry()
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -665,7 +646,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_webhook: false
       })
 
-      {:ok, _} = restart_config_and_registry()
+      {:ok, _} = restart_registry()
 
       enabled_ids =
         TransportRegistry.enabled_transports()
@@ -686,7 +667,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: true
       })
 
-      {:ok, _} = restart_config_and_registry()
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
