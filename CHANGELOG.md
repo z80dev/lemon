@@ -764,6 +764,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   control port instead of starting a second router and duplicate Telegram and
   Discord adapters, starts the full runtime when none is running, and no longer
   runs `mix deps.get` (#701).
+- **Breaking:** the WhatsApp channel adapter, its Node/Baileys bridge
+  (`whatsapp_bridge.mjs`), renderer, access-control helpers and model-policy
+  child, plus the router's `whatsapp` tool-status branches. It had no
+  `[gateway.whatsapp]` config path, so no deployment could start it, yet it was
+  registered and reported as a configured channel. Every remaining built-in
+  adapter is startable from canonical config; the shared Node port bridge keeps
+  only XMTP's automatic restart mode (#699).
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

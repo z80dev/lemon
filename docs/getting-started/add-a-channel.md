@@ -195,9 +195,8 @@ outbox message delivery only.
 
 Report an ambiguous write as outcome-unknown only where the message may already
 have been accepted. The built-in adapters draw the line like this: an SMTP
-connection lost once DATA was issued and a WhatsApp bridge `sendMessage`
-exception are unknown and are redelivered; an SMTP rejection, a connection lost
-before DATA and a WhatsApp failure before the send call stay terminal. The
+connection lost once DATA was issued is unknown and is redelivered; an SMTP
+rejection and a connection lost before DATA stay terminal. The
 outbox decides what counts as unknown with `LemonChannels.DeliveryError.outcome_unknown?/1`,
 and `outbox_adapter_contract_test.exs` asserts that every built-in adapter
 normalizes its ambiguous sends to it against a fake transport — extend it when
@@ -276,9 +275,11 @@ surface.
 
 ## Writing a real channel
 
-The built-in adapters (Telegram, Discord, WhatsApp, XMTP and email) are the
+The built-in adapters (Telegram, Discord, XMTP and email) are the
 worked examples; they are started from `config :lemon_channels, :adapters` in
-`config/config.exs`. `LemonPlatformTest.PluginCase`'s moduledoc is the contract
+`config/config.exs`, and each one is startable from its canonical
+`[gateway.<id>]` section. Do not ship an adapter without that config path.
+`LemonPlatformTest.PluginCase`'s moduledoc is the contract
 in prose. A new channel adapter is the ideal first contribution to Lemon. It can
 equally live in its own repository and register at runtime as shown above;
 vendor-specific social integrations such as X ship that way rather than in

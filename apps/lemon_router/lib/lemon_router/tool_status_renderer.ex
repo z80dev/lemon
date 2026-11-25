@@ -122,8 +122,7 @@ defmodule LemonRouter.ToolStatusRenderer do
   end
 
   defp max_tool_lines(channel_id) when is_binary(channel_id) do
-    if String.starts_with?(channel_id, "telegram") or
-         String.starts_with?(channel_id, "whatsapp") do
+    if String.starts_with?(channel_id, "telegram") do
       @max_tool_lines
     else
       # No truncation for other channels (discord, web, etc.)
