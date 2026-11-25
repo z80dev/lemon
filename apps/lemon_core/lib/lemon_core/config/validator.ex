@@ -471,6 +471,7 @@ defmodule LemonCore.Config.Validator do
     )
     |> validate_boolean(Map.get(gateway, :auto_resume), "gateway.auto_resume")
     |> validate_boolean(Map.get(gateway, :enable_webhook), "gateway.enable_webhook")
+    |> validate_ingress(Map.get(gateway, :ingress))
     |> validate_channel_flags(gateway)
     |> validate_channel_sections(gateway)
     |> validate_email_config(Map.get(gateway, :email))
@@ -478,6 +479,18 @@ defmodule LemonCore.Config.Validator do
     |> validate_voice_config(Map.get(gateway, :voice))
     |> validate_webhook_section(Map.get(gateway, :webhook))
   end
+
+  defp validate_ingress(errors, nil), do: errors
+
+  defp validate_ingress(errors, ingress) when is_map(ingress) do
+    errors = validate_boolean(errors, toml_value(ingress, :enabled), "gateway.ingress.enabled")
+
+    if Enum.all?(Map.keys(ingress), &(&1 in [:enabled, "enabled"])),
+      do: errors,
+      else: ["gateway.ingress: only the enabled key is supported" | errors]
+  end
+
+  defp validate_ingress(errors, _), do: ["gateway.ingress: must be a table" | errors]
 
   defp validate_webhook_section(errors, webhook) when is_nil(webhook) or is_map(webhook),
     do: errors
