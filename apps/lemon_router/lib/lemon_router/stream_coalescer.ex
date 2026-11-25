@@ -132,8 +132,11 @@ defmodule LemonRouter.StreamCoalescer do
   The final `:stream_finalize` intent is dispatched inside the coalescer's
   serialized loop, after every delta it already admitted, so it is the last
   write to the answer surface. A run that never streamed has no coalescer and
-  is finalized directly, without starting one. Returns `{:error, reason}` when
-  the final intent could not be built or the dispatcher rejected it.
+  is finalized directly, without starting one. While the coalescer remembers
+  a completed run, duplicate finalization returns `:ok` without dispatching,
+  changing the active stream, or extending the idle retirement grace.
+  Returns `{:error, reason}` when the final intent could not be built or the
+  dispatcher rejected it.
   """
   @spec finalize_run(
           session_key :: binary(),
@@ -378,9 +381,7 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   @impl true
-  def handle_call(request, from, state), do: handle_request(request, from, touch(state))
-
-  defp handle_request({:finalize, run_id, meta, final_text}, _from, state) do
+  def handle_call({:finalize, run_id, meta, final_text}, _from, state) do
     if LemonRouter.CoalescerIngress.completed?(
          LemonRouter.CoalescerRegistry,
          {state.session_key, state.channel_id},
@@ -388,9 +389,11 @@ defmodule LemonRouter.StreamCoalescer do
        ) do
       {:reply, :ok, state}
     else
-      finalize_run_state(run_id, meta, final_text, state)
+      finalize_run_state(run_id, meta, final_text, touch(state))
     end
   end
+
+  def handle_call(request, from, state), do: handle_request(request, from, touch(state))
 
   defp handle_request({:current_text, run_id}, _from, state) do
     state = LemonRouter.CoalescerIngress.observe_overflow(state)
