@@ -103,16 +103,25 @@ defmodule LemonControlPlane.Methods.CommandsListTest do
     assert {:ok, %{"commands" => []}} = CommandsList.handle(%{"cwd" => workspace}, @ctx)
   end
 
-  test "an unavailable agent runtime is UNAVAILABLE, not an empty list", %{workspace: workspace} do
-    previous = Application.get_env(:lemon_core, :agent_runtime_provider)
-    Application.put_env(:lemon_core, :agent_runtime_provider, __MODULE__.MissingRuntime)
+  defmodule FailingRuntime do
+    def slash_commands(_cwd), do: raise("private failure #{System.tmp_dir!()}")
+  end
 
-    try do
-      assert {:error, {:unavailable, _}} = CommandsList.handle(%{"cwd" => workspace}, @ctx)
-    after
-      if previous,
-        do: Application.put_env(:lemon_core, :agent_runtime_provider, previous),
-        else: Application.delete_env(:lemon_core, :agent_runtime_provider)
+  for {label, runtime} <- [missing: __MODULE__.MissingRuntime, failing: FailingRuntime] do
+    test "a #{label} agent runtime is UNAVAILABLE, not an empty list", %{workspace: workspace} do
+      previous = Application.get_env(:lemon_core, :agent_runtime_provider)
+      Application.put_env(:lemon_core, :agent_runtime_provider, unquote(runtime))
+
+      try do
+        assert {:error, {:unavailable, message}} =
+                 CommandsList.handle(%{"cwd" => workspace}, @ctx)
+
+        refute message =~ "private failure"
+      after
+        if previous,
+          do: Application.put_env(:lemon_core, :agent_runtime_provider, previous),
+          else: Application.delete_env(:lemon_core, :agent_runtime_provider)
+      end
     end
   end
 

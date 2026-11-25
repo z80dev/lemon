@@ -32,7 +32,7 @@ defmodule LemonControlPlane.Methods.CommandsList do
   @impl true
   def handle(params, _ctx) do
     with {:ok, cwd} <- cwd(params || %{}) do
-      case AgentRuntime.call(:slash_commands, [cwd], :unavailable) do
+      case AgentRuntime.query(:slash_commands, [cwd]) do
         commands when is_list(commands) ->
           {:ok,
            %{
@@ -40,6 +40,7 @@ defmodule LemonControlPlane.Methods.CommandsList do
              "truncated" => length(commands) > @max_commands
            }}
 
+        # `{:error, _}` from the seam; anything else breaks the callback contract.
         _unavailable ->
           {:error, Errors.unavailable("Slash commands are unavailable")}
       end
