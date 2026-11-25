@@ -114,6 +114,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   list (`HermeticEnv.credential_env_vars/0`, `scrub_unit_credentials!/1`,
   `:test_credential_env_vars`) is removed in favour of the single list in
   `scripts/test`; `LemonGateway.AsyncHelpers` is removed (#713).
+- **Breaking (Hex packages):** the published packages are self-consistent and
+  `scripts/verify_packages` proves it by running them: the packaged doctor's
+  runtime check no longer calls the excluded `LemonCore.Update.Version` (build
+  identity is `LemonCore.BuildInfo.version/0`, `identity/0`, `describe/0`) and
+  no longer fails below Elixir 1.20.5 (the application floor is
+  `LemonCli.Doctor.Toolchain`'s `runtime.elixir`); sibling requirements are
+  `~> 0.3.0`, derived from each package's version, so they cannot resolve
+  across a 0.x minor (lemon_memory and lemon_platform_test join the 0.3.0
+  line); `PluginCase` leaves the lemon_platform_test package; and
+  `mix lemon.store.migrate_jsonl_to_sqlite` is removed (#730).
 - The web Automation page no longer rebuilds a full snapshot every three seconds
   (about 77 service calls per open tab). It loads in a background task after the
   connected mount and reloads only on kanban, goal and cron Bus events, so an idle

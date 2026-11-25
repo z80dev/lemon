@@ -6,8 +6,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+**Release version: 0.3.0.**
+
 ### Changed
 
+- Requires `lemon_core ~> 0.3.0` (was `~> 0.2`), derived from this package's own
+  version: the published packages share one 0.x release line and every minor
+  may break, so a sibling on another minor no longer resolves (#730).
 - Remove unused `ContextScope.private_metadata/1` and atom-key provider specifications' unused label field.
 - Consolidate byte-budget text clipping while preserving session-search grapheme boundaries.
 

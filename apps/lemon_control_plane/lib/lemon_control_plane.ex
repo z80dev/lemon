@@ -80,7 +80,7 @@ defmodule LemonControlPlane do
   Returns the Lemon release CalVer (not this OTP application's package version).
   """
   @spec server_version() :: String.t()
-  def server_version, do: LemonCore.Update.Version.current()
+  def server_version, do: LemonCore.BuildInfo.version()
 
   @doc """
   Returns the git commit hash if available.

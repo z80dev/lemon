@@ -16,6 +16,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `HermeticEnv.credential_env_vars/0`, `scrub_unit_credentials!/1` and the
   `:test_credential_env_vars` setting are removed: `scripts/test` holds the one
   credential scrub list (#713).
+- The packaged doctor works: `LemonCore.Doctor.Checks.Runtime` called
+  `LemonCore.Update.Version.describe/0`, a module the package excludes, and
+  failed on any Elixir below 1.20.5 although the package declares `~> 1.15`.
+  The build identity now lives in `LemonCore.BuildInfo.version/0`,
+  `identity/0` and `describe/0`, and the runtime check no longer judges the
+  toolchain (`lemon doctor` reports the Lemon application's Elixir floor from
+  lemon_cli). `scripts/verify_packages` runs the packaged doctor (#730).
+- **Breaking:** `mix lemon.store.migrate_jsonl_to_sqlite` is removed with the
+  JSONL backend it migrated from; migrate with `lemon_core` 0.2.x before
+  upgrading (#730).
 - `LemonCore.BrowserProvider` maps a local probe's `:attach_only` reason to a
   fixed message: with `LEMON_BROWSER_ATTACH_ONLY` set, `local` is unavailable
   instead of launching a browser (#660).

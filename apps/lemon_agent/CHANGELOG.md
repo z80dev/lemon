@@ -59,6 +59,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- Sibling requirements are `~> 0.3.0` (`lemon_ai`, `lemon_core`), derived from
+  this package's own version: every 0.x minor may break, so a 0.4 sibling no
+  longer resolves (#730).
 - **Breaking (0.3.0):** agent events are delta-only (#571). Migration: handlers
   must accumulate deltas instead of expecting full partial messages on every
   event; `{:message_update, message, event}` becomes `{:message_update, event}`.

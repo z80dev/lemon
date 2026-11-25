@@ -254,12 +254,12 @@ defmodule LemonCli.CLI do
   defp run_command("uninstall", args), do: LemonCli.UninstallCommand.run(args)
 
   defp run_command("version", ["--verbose"]) do
-    IO.puts(LemonCore.Update.Version.describe())
+    IO.puts(LemonCore.BuildInfo.describe())
     @exit_ok
   end
 
   defp run_command("version", _args) do
-    IO.puts(LemonCore.Update.Version.current())
+    IO.puts(LemonCore.BuildInfo.version())
     @exit_ok
   end
 

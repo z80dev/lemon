@@ -19,7 +19,7 @@ defmodule CodingAgent.ExecutionNode.HostInfoTest do
           assert is_binary(snapshot[key]) and snapshot[key] != ""
         end
 
-        assert snapshot["lemonVersion"] == LemonCore.Update.Version.current()
+        assert snapshot["lemonVersion"] == LemonCore.BuildInfo.version()
 
       _ ->
         assert {:error, :host_metrics_unavailable} = HostInfo.get([])

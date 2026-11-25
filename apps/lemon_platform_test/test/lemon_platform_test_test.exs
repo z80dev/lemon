@@ -93,26 +93,32 @@ defmodule LemonPlatformTest.HelpersTest do
                LemonPlatformTest.require_dep!("BackendCase", LemonCore.Store.Backend, :lemon_core)
     end
 
-    test "names the missing Hex dependency and how to install it" do
+    test "requires a missing sibling package on the kit's own 0.x minor" do
       error =
         assert_raise RuntimeError, fn ->
           LemonPlatformTest.require_dep!("ProviderCase", No.Such.Provider, :lemon_memory)
         end
 
+      {:ok, kit} = Version.parse(to_string(Application.spec(:lemon_platform_test, :vsn)))
+      line = "~> #{kit.major}.#{kit.minor}.0"
+
       assert error.message =~ "LemonPlatformTest.ProviderCase needs No.Such.Provider"
-      assert error.message =~ ~s({:lemon_memory, "~> 0.2", only: :test})
+      assert error.message =~ ~s({:lemon_memory, "#{line}", only: :test})
       assert error.message =~ "mix deps.get"
     end
 
-    test "directs unpublished channel consumers to a checkout instead of Hex" do
+    test "prints a literal dependency line for a target that is not on Hex" do
       error =
         assert_raise RuntimeError, fn ->
-          LemonPlatformTest.require_dep!("PluginCase", No.Such.Plugin, :lemon_channels)
+          LemonPlatformTest.require_dep!(
+            "PluginCase",
+            No.Such.Plugin,
+            ~s|{:lemon_channels, path: "/path/to/lemon/apps/lemon_channels", only: :test}|
+          )
         end
 
       assert error.message =~ "LemonPlatformTest.PluginCase needs No.Such.Plugin"
       assert error.message =~ ~s(path: "/path/to/lemon/apps/lemon_channels")
-      assert error.message =~ "lemon_channels is not on Hex"
     end
   end
 

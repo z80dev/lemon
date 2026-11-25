@@ -95,7 +95,7 @@ defmodule Mix.Tasks.Lemon.Update do
   # ──────────────────────────────────────────────────────────────────────────
 
   defp run_version_check(check_only?, verbose?) do
-    version = Version.current()
+    version = LemonCore.BuildInfo.version()
     shell = Mix.shell()
 
     shell.info("Version: #{version}")
