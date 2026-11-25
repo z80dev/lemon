@@ -268,7 +268,7 @@ defmodule LemonRouter.SubmissionBuilder do
     with {:ok, base} <- Policy.resolve_validated_for_run(context),
          {:ok, profile} <-
            Policy.merge_validated(base, normalize_profile_tool_policy(agent_profile)) do
-      Policy.merge_validated(profile, override)
+      Policy.restrict_validated(profile, override)
     end
   end
 

@@ -151,6 +151,27 @@ defmodule LemonCore.ExecutionContextAuthorityPropertyTest do
     refute ToolPolicy.allowed?(decoded.tool_policy, "bash")
   end
 
+  test "a child request cannot enable a read exemption or waive an argument-dependent gate" do
+    {:ok, parent} =
+      ExecutionContext.new(run_id: "gated-parent", tool_policy: %{approval_mode: :write})
+
+    assert {:ok, child} =
+             ExecutionContext.child(parent, %{
+               tool_policy: %{workspace_read_exempt: true, approvals: %{"write" => :never}}
+             })
+
+    assert child.tool_policy.workspace_read_exempt == nil
+    assert ToolPolicy.requires_approval?(child.tool_policy, "write", %{"diagnostics" => true})
+    assert ExecutionContext.subset?(child, parent)
+
+    # An exempt parent keeps its exemption for an inheriting child.
+    {:ok, exempt} =
+      ExecutionContext.new(run_id: "exempt-parent", tool_policy: %{workspace_read_exempt: true})
+
+    assert {:ok, inherited} = ExecutionContext.child(exempt, %{tool_policy: %{allow: ["read"]}})
+    assert inherited.tool_policy.workspace_read_exempt == true
+  end
+
   defp assert_within(child, parent) do
     assert ExecutionContext.subset?(child, parent)
     assert capability_subset?(child.capabilities, parent.capabilities)
@@ -160,9 +181,13 @@ defmodule LemonCore.ExecutionContextAuthorityPropertyTest do
       assert ToolPolicy.allowed?(parent.tool_policy, tool)
       assert capability?(parent.capabilities, tool)
 
-      if ToolPolicy.requires_approval?(parent.tool_policy, tool),
-        do: assert(ToolPolicy.requires_approval?(child.tool_policy, tool))
+      for tier <- [:read, :write, :exec],
+          ToolPolicy.requires_approval?(parent.tool_policy, tool, %{}, tier),
+          do: assert(ToolPolicy.requires_approval?(child.tool_policy, tool, %{}, tier))
     end
+
+    if parent.tool_policy.workspace_read_exempt != true,
+      do: refute(child.tool_policy.workspace_read_exempt)
 
     for {key, value} <- parent.limits do
       assert Map.fetch!(child.limits, key) <= value
@@ -236,7 +261,8 @@ defmodule LemonCore.ExecutionContextAuthorityPropertyTest do
           require_approval <- tool_set(3),
           never <- tool_set(2),
           approval_mode <- member_of([nil, :ask, :write, :yolo]),
-          max_file_size <- one_of([constant(nil), positive_integer()])
+          max_file_size <- one_of([constant(nil), positive_integer()]),
+          read_exempt <- member_of([nil, true, false])
         ) do
       ToolPolicy.custom(
         allow: allow,
@@ -244,7 +270,8 @@ defmodule LemonCore.ExecutionContextAuthorityPropertyTest do
         require_approval: require_approval,
         approvals: Map.new(never, &{&1, :never}),
         approval_mode: approval_mode,
-        max_file_size: max_file_size
+        max_file_size: max_file_size,
+        workspace_read_exempt: read_exempt
       )
     end
   end

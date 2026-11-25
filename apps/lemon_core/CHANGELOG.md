@@ -8,6 +8,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Changed
 
+- `LemonCore.ToolPolicy.restrict/2` keeps a merged per-tool `never` approval
+  only when neither side gates that tool at any tier, and no longer lets the
+  requested side enable `workspace_read_exempt` the parent lacks. The new
+  `LemonCore.ToolPolicy.layer/2` intersects trusted operator layers with the
+  previous neutral handling of an unset exemption; `intersect/2` uses it.
+  `subset?/2` compares approval gates per tier, so `dangerous` and `always`
+  are equivalent (#71, #72, #73).
 - `LemonCore.ProcessGroup.terminate/2` is the one process-group kill path for
   OS processes (#586).
 - **Breaking (0.3.0):** removed `LemonCore.ProcessGroup.signal_group/2`,

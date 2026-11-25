@@ -16,7 +16,7 @@ defmodule LemonRouter.Policy do
         # Approval requirements per tool
         approvals: %{
           "bash" => :always,        # always require approval
-          "write" => :dangerous,    # require for dangerous actions
+          "write" => :dangerous,    # enforced like :always
           "read" => :never          # never require approval
         },
         # Blocked tools (cannot be used at all)
@@ -34,11 +34,13 @@ defmodule LemonRouter.Policy do
   alias LemonCore.ToolPolicy
 
   @doc """
-  Intersect two tool policies.
+  Intersect two operator-configured tool policy layers.
 
-  The result cannot authorize more than either input. Invalid input returns a
-  deny-all policy; execution admission uses `merge_validated/2` to retain the
-  explicit validation error.
+  The result cannot grant a tool or waive an approval gate that either layer
+  applies; an unset `workspace_read_exempt` is neutral between layers. Invalid
+  input returns a deny-all policy; execution admission uses `merge_validated/2`
+  to retain the explicit validation error. Request overrides use
+  `restrict_validated/2`.
   """
   @spec merge(term(), term()) :: ToolPolicy.t()
   def merge(policy_a, policy_b) do
@@ -48,16 +50,31 @@ defmodule LemonRouter.Policy do
     end
   end
 
-  @doc "Strict policy intersection used by execution admission."
+  @doc "Strict operator-layer intersection used by execution admission."
   @spec merge_validated(term(), term()) :: {:ok, ToolPolicy.t()} | {:error, term()}
   def merge_validated(policy_a, policy_b) do
-    with {:ok, policy_a} <-
-           ToolPolicy.resolve(policy_a, ToolPolicy.from_profile(:full_access)),
-         {:ok, policy_b} <-
-           ToolPolicy.resolve(policy_b, ToolPolicy.from_profile(:full_access)) do
-      ToolPolicy.restrict(policy_a, policy_b)
+    with {:ok, policy_a} <- resolve_layer(policy_a),
+         {:ok, policy_b} <- resolve_layer(policy_b) do
+      ToolPolicy.layer(policy_a, policy_b)
     end
   end
+
+  @doc """
+  Strictly narrows resolved operator authority with a request override.
+
+  An absent override inherits `policy`; a supplied override can only narrow it
+  and cannot enable a read exemption `policy` lacks.
+  """
+  @spec restrict_validated(term(), term()) :: {:ok, ToolPolicy.t()} | {:error, term()}
+  def restrict_validated(policy, override) do
+    with {:ok, policy} <- resolve_layer(policy),
+         {:ok, override} <- ToolPolicy.resolve(override, policy) do
+      ToolPolicy.restrict(policy, override)
+    end
+  end
+
+  defp resolve_layer(policy),
+    do: ToolPolicy.resolve(policy, ToolPolicy.from_profile(:full_access))
 
   @doc """
   Resolve the effective tool policy for a run.
@@ -108,7 +125,7 @@ defmodule LemonRouter.Policy do
 
   Returns:
   - `:always` - Always require approval
-  - `:dangerous` - Require approval only for dangerous actions
+  - `:dangerous` - Require approval (enforced like `:always`)
   - `:never` - Never require approval
   - `:default` - Use tool's default behavior
   """
