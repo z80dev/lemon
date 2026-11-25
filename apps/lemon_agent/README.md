@@ -6,7 +6,7 @@ Trusted in-process completion tools may set `AgentToolResult.terminate_turn`
 to end a turn without a further model request. This additive published-package
 API is honored only for `AgentTool.trusted_terminal: true`, a capability the
 host registry must attest, never infer from result details. CodingAgent strips
-this capability from MCP, extension, WASM and unmanaged tools; its built-in
+this capability from MCP, extension and unmanaged tools; its built-in
 `submit_result` is the sole approved completion tool.
 
 Agent processes use OTP `hibernate_after: 5_000` to reclaim idle heaps between
@@ -243,9 +243,9 @@ The same applies to external omp waits, media workers, A2A peer requests, MCP
 calls, SMS verification, computer-use cells and configurable Honcho requests.
 These exemptions disable only the generic wrapper timer, not the tool/client's
 own deadline. Goal/kanban/cron dispatch and local management tools still inherit
-the default; they enqueue work rather than wait for its execution. WASM invokes
-retain their existing 120-second sidecar bound. Extension wrappers preserve the
-extension's declared `AgentTool.timeout_ms`, otherwise inheriting the default.
+the default; they enqueue work rather than wait for its execution. Extension
+wrappers preserve the extension's declared `AgentTool.timeout_ms`, otherwise
+inheriting the default.
 
 `AgentTool.effect` (also accepted by `LemonAgent.new_tool/1`) defaults to
 `:external`; use `:none` only for read-only operations or `:idempotent` for

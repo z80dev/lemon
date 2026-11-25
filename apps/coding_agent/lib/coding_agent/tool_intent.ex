@@ -29,7 +29,7 @@ defmodule CodingAgent.ToolIntent do
   @doc """
   Lists effectful calls whose journal contains no known durable result.
 
-  Reads all journal entries, including inactive branches and scoped eval/WASM
+  Reads all journal entries, including inactive branches and scoped eval
   intents. Returns only IDs and tool names, never arguments or digests. Operator
   and recovery-prompt projections are capped at the first 100 distinct unresolved
   IDs in journal order; this is not an authorization to retry any call.
@@ -139,9 +139,6 @@ defmodule CodingAgent.ToolIntent do
         else: Process.put(@scope_key, previous)
     end
   end
-
-  @doc false
-  def current_parent_scope, do: Process.get(@scope_key)
 
   @doc false
   def inherit_parent_scope(%AgentTool{} = tool, {id, owner, live}) do

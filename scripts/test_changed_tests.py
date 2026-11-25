@@ -202,14 +202,6 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(result["scope"], "full")
         self.assertIn("no-such-ref", result["reasons"][0])
 
-    def test_wasm_flags(self):
-        self.put("apps/coding_agent/lib/coding_agent/wasm/runtime.ex")
-        self.assertTrue(self.selection()["lanes"]["wasm"])
-        self.put("native/runtime/src/lib.rs")
-        result = self.selection()
-        self.assertTrue(result["lanes"]["wasm"])
-        self.assertEqual(result["scope"], "full")
-
     def test_focused_paths_exist_and_handle_spaces(self):
         self.put("apps/lemon_skills/lib/sample.ex")
         self.put("apps/lemon_skills/test/space name_test.exs")
@@ -225,7 +217,7 @@ class SelectorTest(unittest.TestCase):
         output.write_text("existing=value\n")
         with patch.dict(os.environ, GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary)):
             selector.github(self.selection())
-        self.assertEqual(output.read_text(), "existing=value\nscope=none\napps=\ntest_paths=\nclients=false\nwasm=false\ndocs=false\napple=false\nlemon_bot=false\n")
+        self.assertEqual(output.read_text(), "existing=value\nscope=none\napps=\ntest_paths=\nclients=false\ndocs=false\napple=false\nlemon_bot=false\n")
         self.assertIn("**none**", summary.read_text())
 
     def run_lane(self, *args, fail_command=""):

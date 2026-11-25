@@ -27,7 +27,6 @@ defmodule CodingAgent.Session.ToolIntentRecoveryTest do
          tool_opts: [],
          pending_tool_intents: %{},
          is_streaming: true,
-         wasm_host_calls: %{},
          parent: parent
        }}
     end

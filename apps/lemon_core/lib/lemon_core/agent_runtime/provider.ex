@@ -286,9 +286,6 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc "Tool-name conflict report for a working directory."
   @callback tool_conflicts(Path.t(), keyword()) :: map()
 
-  @doc "Whether the WASM sidecar supervisor is running."
-  @callback wasm_sidecar_running?() :: boolean()
-
   @doc """
   Read at most 100 unresolved tool intent IDs/names from a native resume journal.
   Unknown outcomes remain unresolved; this read never executes or retries tools.
@@ -352,6 +349,5 @@ defmodule LemonCore.AgentRuntime.Provider do
                       load_extensions: 1,
                       extension_providers: 1,
                       extension_info: 1,
-                      tool_conflicts: 2,
-                      wasm_sidecar_running?: 0
+                      tool_conflicts: 2
 end

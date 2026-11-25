@@ -136,11 +136,9 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.Rewind
   alias CodingAgent.Session.State
   alias CodingAgent.Session.Todos
-  alias CodingAgent.Session.WasmBridge
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
   alias CodingAgent.Tools.Task.Control
-  alias CodingAgent.Wasm.SidecarSupervisor
   alias CodingAgent.WorkspaceReads
   alias LemonAgent.ContextRegistry
   alias LemonAgent.ModelRuntime.SessionPins
@@ -213,9 +211,6 @@ defmodule CodingAgent.Session do
     :extensions,
     :hooks,
     :extension_status_report,
-    :wasm_sidecar_pid,
-    :wasm_tool_names,
-    :wasm_status,
     :plan_gate,
     :terminal_event,
     :bot_folder_root,
@@ -226,7 +221,6 @@ defmodule CodingAgent.Session do
     recovery_requests: %{},
     todo_projection: {:ok, []},
     tool_started_at: %{},
-    wasm_host_calls: %{},
     pending_tool_intents: %{},
     auto_compaction: %CompactionLifecycle.State{},
     manual_operation: nil,
@@ -310,9 +304,6 @@ defmodule CodingAgent.Session do
           extensions: [module()],
           hooks: keyword([function()]),
           extension_status_report: Extensions.extension_status_report() | nil,
-          wasm_sidecar_pid: pid() | nil,
-          wasm_tool_names: [String.t()],
-          wasm_status: map() | nil,
           plan_gate: :atomics.atomics_ref() | nil,
           terminal_event:
             {:agent_end, list()}
@@ -326,7 +317,6 @@ defmodule CodingAgent.Session do
           branch_generation: non_neg_integer(),
           todo_projection: {:ok, [map()]} | {:error, term()},
           tool_started_at: %{String.t() => integer()},
-          wasm_host_calls: %{reference() => map()},
           auto_compaction: CompactionLifecycle.State.t(),
           manual_operation: ManualOperation.State.t() | nil,
           overflow_recovery: OverflowRecovery.State.t(),
@@ -430,7 +420,7 @@ defmodule CodingAgent.Session do
   without sending an abnormal linked exit to the caller.
 
   `init/1` only admits the process as the journal's live owner. Journal load,
-  settings, extensions, WASM and profile MCP connection run in
+  settings, extensions and profile MCP connection run in
   `handle_continue/2`, so a supervisor starting this process is never blocked
   by them. `start_link/1` (and `CodingAgent.SessionSupervisor.start_session/1`)
   still return only after initialization finished, with `{:error, reason}` and
@@ -1349,8 +1339,9 @@ defmodule CodingAgent.Session do
   # Called from the todo tools; this process is the only journal writer.
   def handle_call(:todos, _from, state), do: {:reply, Todos.read(state), state}
 
-  def handle_call({:write_todos, todos, revision}, from, state) do
-    if WasmBridge.host_mutation_allowed?(state, from) do
+  def handle_call({:write_todos, todos, revision}, {caller, _tag}, state) do
+    # A killed or timed-out tool task may already have queued its journal call.
+    if Process.alive?(caller) do
       case Todos.write(state, todos, revision) do
         {:ok, todos, revision, state} -> {:reply, {:ok, todos, revision}, state}
         {:error, _} = error -> {:reply, error, state}
@@ -1529,21 +1520,6 @@ defmodule CodingAgent.Session do
     {:reply, state.extension_status_report, state}
   end
 
-  def handle_call({:wasm_host_tool_invoke, tool_name, params_json}, from, state) do
-    context = %{
-      deadline: System.monotonic_time(:millisecond) + 120_000,
-      owner: elem(from, 0),
-      signal: nil
-    }
-
-    WasmBridge.start_host_call(state, from, tool_name, params_json, context)
-  end
-
-  def handle_call({:wasm_host_tool_invoke, tool_name, params_json, context}, from, state)
-      when is_map(context) do
-    WasmBridge.start_host_call(state, from, tool_name, params_json, context)
-  end
-
   def handle_call({:eval_bridge_tool, name}, _from, state) do
     {:reply, lookup_bridge_tool(state, name, self()), state}
   end
@@ -1572,10 +1548,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:reset, _from, state) do
-    state =
-      state
-      |> ManualOperation.cancel(:aborted)
-      |> WasmBridge.cancel_host_calls(:aborted)
+    state = ManualOperation.cancel(state, :aborted)
 
     case Lifecycle.reset(state, @reset_abort_wait_ms) do
       {:ok, new_state} ->
@@ -1871,7 +1844,6 @@ defmodule CodingAgent.Session do
     state =
       state
       |> ManualOperation.cancel(:aborted)
-      |> WasmBridge.cancel_host_calls(:aborted)
       |> CompactionManager.cancel_overflow_recovery(:aborted)
 
     Control.cancel_parent(self())
@@ -2192,17 +2164,8 @@ defmodule CodingAgent.Session do
     {:noreply, settle_lifecycle_activity(new_state)}
   end
 
-  def handle_info({ref, result}, state) when is_map_key(state.wasm_host_calls, ref) do
-    {:noreply, WasmBridge.finish_host_call(state, ref, result)}
-  end
-
-  def handle_info({:wasm_host_check, ref}, state) do
-    {:noreply, WasmBridge.check_host_call(state, ref)}
-  end
-
   def handle_info({:lemon_abort, signal, _kind}, state) do
-    state = CodingAgent.Session.ToolIntentGate.cancel_signal(state, signal)
-    {:noreply, WasmBridge.abort_host_calls(state, signal)}
+    {:noreply, CodingAgent.Session.ToolIntentGate.cancel_signal(state, signal)}
   end
 
   def handle_info({:tool_intent_wait_expired, ref}, state) do
@@ -2212,14 +2175,6 @@ defmodule CodingAgent.Session do
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
       when is_map_key(state.pending_tool_intents, ref) do
     {:noreply, CodingAgent.Session.ToolIntentGate.cancel(state, ref, :caller_down)}
-  end
-
-  def handle_info({:DOWN, ref, :process, pid, reason}, state)
-      when map_size(state.wasm_host_calls) > 0 do
-    case WasmBridge.host_call_down(state, ref) do
-      {:handled, state} -> {:noreply, state}
-      :unhandled -> handle_session_down(ref, pid, reason, state)
-    end
   end
 
   def handle_info({:DOWN, ref, :process, pid, reason}, state) do
@@ -2438,7 +2393,6 @@ defmodule CodingAgent.Session do
   def terminate(_reason, {:starting, _opts, _reply_to, _path}), do: :ok
 
   def terminate(reason, state) do
-    _ = WasmBridge.cancel_host_calls(state, :session_unavailable)
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
     _ = ManualOperation.cancel(state, :session_terminated)
     close_browser_session(state.tool_opts || [])
@@ -2478,10 +2432,6 @@ defmodule CodingAgent.Session do
     # Stop the underlying agent when the session terminates
     if state.agent && Process.alive?(state.agent) do
       GenServer.stop(state.agent, :normal)
-    end
-
-    if state.wasm_sidecar_pid && Process.alive?(state.wasm_sidecar_pid) do
-      _ = SidecarSupervisor.stop_sidecar(state.wasm_sidecar_pid)
     end
 
     if state.session_manager do

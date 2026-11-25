@@ -129,7 +129,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.Config.Secrets` | Exact configuration for explicitly enabled external secret sources |
 | `LemonCore.Config.Agent` | Agent behavior settings sub-module |
 | `LemonCore.Config.Gateway` | Gateway settings sub-module |
-| `LemonCore.Config.Tools` | Web tools and WASM config sub-module |
+| `LemonCore.Config.Tools` | Web tool configuration |
 | `LemonCore.Config.TUI` | Terminal UI theme and debug sub-module |
 | `LemonCore.Config.Logging` | Log file and rotation sub-module |
 | `LemonCore.Config.Automation` | `[automation]` cron catch-up/retention and `[cron]` failure-alert sub-module |
@@ -382,10 +382,6 @@ verification remains in `lemon_cli` and doctor diagnostics.
 | `LEMON_TUI_THEME` | `tui.theme` |
 | `LEMON_LOG_FILE` | `logging.file` |
 | `LEMON_LOG_LEVEL` | `logging.level` |
-| `LEMON_WASM_ENABLED` | `runtime.tools.wasm.enabled` |
-| `LEMON_WASM_RUNTIME_PATH` | `runtime.tools.wasm.runtime_path` |
-| `LEMON_WASM_TOOL_PATHS` | `runtime.tools.wasm.tool_paths` |
-| `LEMON_WASM_AUTO_BUILD` | `runtime.tools.wasm.auto_build` |
 | `LEMON_BROWSER_DRIVER_PATH` | Path to local browser driver JS file |
 | `ANTHROPIC_API_KEY` | `providers.anthropic.api_key` |
 | `ANTHROPIC_TOKEN` | Ambient Anthropic OAuth token when `providers.anthropic.auth_source = "oauth"` |

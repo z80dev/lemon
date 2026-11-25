@@ -1,16 +1,16 @@
 # CodingAgent
 
-A full-featured AI coding agent runtime built on top of `LemonAgent`. This OTP application provides session management, 40+ tools, JSONL persistence with branching, budget tracking, context compaction, WASM tool support, extensions, and subagent orchestration for building interactive coding workflows.
+A full-featured AI coding agent runtime built on top of `LemonAgent`. This OTP application provides session management, 40+ tools, JSONL persistence with branching, budget tracking, context compaction, extensions, and subagent orchestration for building interactive coding workflows.
 
 ## Overview
 
 CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns the lower-level `LemonAgent` event loop into a complete coding assistant by adding:
 
 - **Session lifecycle management** -- GenServer sessions with persistence, branching, steering, and follow-up queues
-- **Tool execution pipeline** -- Registry with precedence resolution (builtin > WASM > extension), approval gating, and policy profiles
+- **Tool execution pipeline** -- Registry with precedence resolution (builtin > extension > MCP), approval gating, and policy profiles
 - **Context compaction** -- Automatic summarization when conversations exceed the model's context window, with overflow recovery
 - **Budget enforcement** -- Token and cost tracking per run with parent/child inheritance via a persistent run graph
-- **Extension system** -- Dynamic tool and hook injection from Elixir modules or WASM sidecars
+- **Extension system** -- Dynamic tool and hook injection from Elixir modules
 - **Subagent orchestration** -- Concurrent native subagent sessions via the task tool with timeout management
 - **Named execution nodes** -- Native delegated sessions can run on an authenticated destination selected by name, with destination-local credentials and working-directory defaults
 - **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, and project-local CLAUDE.md/AGENTS.md
@@ -96,7 +96,6 @@ CodingAgent.Supervisor (one_for_one)
   +-- ExecutionNode.ToolSession.Tree (rest_for_one)
   |     +-- ExecutionNode.ToolSession.Registry
   |     +-- ExecutionNode.ToolSession.Supervisor (DynamicSupervisor)
-  +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (bounded Task.Supervisor)
   +-- TaskStoreServer, AsyncFollowups
   +-- TaskRuntime.Tree (rest_for_one)
@@ -178,7 +177,6 @@ startup/config-registration operations (`init`, `reset`, `register`,
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
 | `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
 | `CodingAgent.Session.PromptComposer` | Composes the final system prompt by layering the stable base prompt and available-skill metadata, prompt templates, an explicit system prompt, resource-loader instructions and rule sections; turn relevance stays outside the prompt |
-| `CodingAgent.Session.WasmBridge` | Bridges WASM sidecar tools into the session tool set |
 | `CodingAgent.SessionManager` | JSONL persistence engine with tree-structured entries (branching, compaction, labels), atomic writes, append-only incremental saves, and version migrations (v1-v3) |
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes with health check and list capabilities |
 | `CodingAgent.SessionRegistry` | Registry wrapper for session lookup by ID |
@@ -201,7 +199,7 @@ startup/config-registration operations (`init`, `reset`, `register`,
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.ToolRegistry` | The session tool set: `@builtin_tools` plus non-colliding satellite registrations, resolved with precedence (builtin > WASM > extension > MCP); `get_tools/2`, `get_tool/3`, ETS extension cache, conflict reporting. Assistant-platform tools are implemented in `LemonSkills.Tools` and listed here by name |
+| `CodingAgent.ToolRegistry` | The session tool set: `@builtin_tools` plus non-colliding satellite registrations, resolved with precedence (builtin > extension > MCP); `get_tools/2`, `get_tool/3`, ETS extension cache, conflict reporting. Assistant-platform tools are implemented in `LemonSkills.Tools` and listed here by name |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper; integrates with `LemonCore.ExecApprovals` |
 | `CodingAgent.ToolPolicy` | Policy profiles (`full_access`, `read_only`, `safe_mode`, `subagent_restricted`, `no_external`, `minimal_core`) with allow/deny lists and router-style approval maps |
 
@@ -216,7 +214,7 @@ startup/config-registration operations (`init`, `reset`, `register`,
 | Execution | `bash`, `bash_output`, `kill_process`, `process_input` (see [shell and background processes](../../docs/tools/shell.md)), `debug` (DAP debugger; see [debugger](../../docs/tools/debug.md)) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md), `kanban` |
-| System | `tool_auth`, `extensions_status`, [`report_issue`](../../docs/tools/report-issue.md) (bounded local tool-misbehavior notes) |
+| System | `extensions_status`, [`report_issue`](../../docs/tools/report-issue.md) (bounded local tool-misbehavior notes) |
 
 Telegram and Discord channel sessions also get `send_file`
 (`CodingAgent.Tools.SendFile`), which queues an existing file for delivery to
@@ -537,20 +535,13 @@ transition/debounced persistence cadence are unchanged.
 | `CodingAgent.ResourceLoader` | Loads global then ancestor root→cwd instruction files (CLAUDE.md, AGENTS.md, GEMINI.md, CLAUDE.local.md, `.github/copilot-instructions.md` and other agents' config dirs) with directory scope, local precedence and `@path` imports; physical-file aliases appear once. Also loads prompts, themes, and skills |
 | `CodingAgent.Rules` | Discovers Cursor, Windsurf, Cline, GitHub Copilot, `.agent(s)` and `.lemon/rules` rule files; injects always-apply rules and lists the rest in a rulebook index the model reads on demand. See [instruction files and rules](../../docs/user-guide/context-files.md) |
 
-### Extensions and WASM
+### Extensions
 
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Extensions` | Extension loading, validation, tool/hook extraction from `~/.lemon/agent/extensions/` and `<cwd>/.lemon/extensions/` |
 | `CodingAgent.Extensions.Extension` | Behaviour defining `name/0`, `version/0`, `tools/1`, `hooks/0`, `capabilities/0`, `config_schema/0`, `providers/0` |
 | `CodingAgent.ExtensionLifecycle` | Runtime extension load/reload without session restart |
-| `CodingAgent.Wasm.ToolFactory` | Builds `AgentTool` structs from WASM modules |
-| `CodingAgent.Wasm.SidecarSession` | GenServer managing a single WASM sidecar process |
-| `CodingAgent.Wasm.SidecarSupervisor` | Supervisor for WASM sidecar sessions |
-| `CodingAgent.Wasm.Policy` | WASM-specific tool approval policies |
-| `CodingAgent.Wasm.Builder` | WASM module compilation and loading |
-| `CodingAgent.Wasm.Config` | WASM configuration and discovery |
-| `CodingAgent.Wasm.Protocol` | Wire protocol for WASM tool communication |
 
 ### Concurrency and Background Work
 
@@ -1060,19 +1051,6 @@ Neither a read/progress result nor a global checkpoint is legacy write evidence.
 Unsupported or malformed journal entries can be replaced by a complete new write,
 but are never silently skipped in favor of an older list.
 
-WASM host calls use the same wrapped session tools, including todo's journal
-owner; they execute in supervised, Session-linked workers rather than inside
-the Session's request handler. The host request inherits the invoking task,
-abort signal and absolute invocation deadline (at most 120 seconds for one host
-call). Caller death, timeout, abort, reset and Session shutdown cancel the worker,
-release their monitors/timer and discard late results without clearing the
-invoker-owned signal. A queued todo mutation rechecks ownership and deadline
-before journaling. Tool-error
-results stay errors over the host protocol, including plan/approval refusals;
-host routing never constructs an unwrapped tool or makes ETS authoritative.
-Cancellation is not a rollback of effects already committed before it was
-accepted; reconcile the selected journal before attempting a new write.
-
 Focused regression coverage lives in
 [`session/todo_journal_test.exs`](test/coding_agent/session/todo_journal_test.exs):
 
@@ -1085,7 +1063,6 @@ Focused regression coverage lives in
 | Persistence failure and stale revisions | Failed journal append and prepared writes invalidated by list changes or switch-away-and-back |
 | Spend, policy and external-effect invariants | Charged real loop, current restricted policy on resume, and externally changed file bytes retained through restoration |
 | Legacy and version behavior | Branch-scoped successful-write evidence, ignored read/error results, and fail-closed unknown/malformed entries |
-| WASM host journal ownership and cancellation | Live host read/progress/actionable/write, durable branch restart, approval-wait timeout/abort/disposal, and production sidecar callback ownership/signal propagation without compiling WASM |
 
 In plan mode every tool still appears, but a shared gate blocks execution of
 anything outside `read`, `read_skill`, `recall`, `grep`, `find`, `ls`,
@@ -1156,7 +1133,7 @@ errors rather than being hidden behind stale accounting.
 
 ### Tool Execution
 
-Tools follow a pipeline: the LLM requests a tool call, `ToolRegistry` resolves it by name (checking builtin, then WASM, then extensions), `ToolPolicy` checks allow/deny, `ToolExecutor` gates on approval if required, and the tool module's `execute/4` closure runs with abort signal support.
+Tools follow a pipeline: the LLM requests a tool call, `ToolRegistry` resolves it by name (checking builtin tools, then extensions, then MCP), `ToolPolicy` checks allow/deny, `ToolExecutor` gates on approval if required, and the tool module's `execute/4` closure runs with abort signal support.
 
 Each tool module exposes `tool(cwd, opts)` returning an `%LemonAgent.Types.AgentTool{}` struct whose `execute` field is a 4-arity closure capturing `cwd` and `opts`.
 
@@ -1232,7 +1209,7 @@ Budgets track token and cost usage per run. The `RunGraph` maintains parent/chil
 
 ### Extensions
 
-Extensions provide additional tools and lifecycle hooks. They are discovered from `~/.lemon/agent/extensions/` (global) and `<cwd>/.lemon/extensions/` (project). Each extension implements the `CodingAgent.Extensions.Extension` behaviour. WASM extensions run as sidecar processes.
+Extensions provide additional tools and lifecycle hooks. They are discovered from `~/.lemon/agent/extensions/` (global) and `<cwd>/.lemon/extensions/` (project). Each extension implements the `CodingAgent.Extensions.Extension` behaviour.
 
 ## Configuration
 
@@ -1546,7 +1523,7 @@ mix test apps/coding_agent/test/coding_agent/tools/read_test.exs:46
 mix test --include integration apps/coding_agent
 ```
 
-The test suite covers 90+ test files including unit tests for all tools, session management, budget tracking, extensions, WASM integration, and coordinator orchestration. Tests use temporary directories and direct `start_link` (not supervised).
+The test suite covers 90+ test files including unit tests for all tools, session management, budget tracking, extensions, and coordinator orchestration. Tests use temporary directories and direct `start_link` (not supervised).
 
 Project-memory capture workers intentionally outlive their submitting sessions
 and share eight VM-wide admission slots. The capacity scenarios wait for earlier

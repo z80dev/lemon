@@ -152,16 +152,6 @@ defmodule LemonCore.Config.ToolsTest do
         "LEMON_WEB_CACHE_PERSISTENT",
         "LEMON_WEB_CACHE_PATH",
         "LEMON_WEB_CACHE_MAX_ENTRIES",
-        "LEMON_WASM_ENABLED",
-        "LEMON_WASM_AUTO_BUILD",
-        "LEMON_WASM_RUNTIME_PATH",
-        "LEMON_WASM_TOOL_PATHS",
-        "LEMON_WASM_DEFAULT_MEMORY_LIMIT",
-        "LEMON_WASM_DEFAULT_TIMEOUT_MS",
-        "LEMON_WASM_DEFAULT_FUEL_LIMIT",
-        "LEMON_WASM_CACHE_COMPILED",
-        "LEMON_WASM_CACHE_DIR",
-        "LEMON_WASM_MAX_TOOL_INVOKE_DEPTH",
         "LEMON_TOOL_DISCLOSURE_ENABLED",
         "LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS",
         "LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS",
@@ -188,7 +178,6 @@ defmodule LemonCore.Config.ToolsTest do
       assert config.web.search.enabled == true
       assert config.web.search.provider == "brave"
       assert config.web.fetch.enabled == true
-      assert config.wasm.enabled == false
       assert config.checkpoint.enabled == false
     end
 
@@ -222,7 +211,6 @@ defmodule LemonCore.Config.ToolsTest do
       System.put_env("LEMON_AUTO_RESIZE_IMAGES", "false")
       System.put_env("LEMON_WEB_SEARCH_PROVIDER", "perplexity")
       System.put_env("LEMON_WEB_FETCH_MAX_CHARS", "100000")
-      System.put_env("LEMON_WASM_ENABLED", "true")
 
       settings = %{
         "tools" => %{
@@ -234,9 +222,6 @@ defmodule LemonCore.Config.ToolsTest do
             "fetch" => %{
               "max_chars" => 50_000
             }
-          },
-          "wasm" => %{
-            "enabled" => false
           }
         }
       }
@@ -246,7 +231,6 @@ defmodule LemonCore.Config.ToolsTest do
       assert config.auto_resize_images == false
       assert config.web.search.provider == "perplexity"
       assert config.web.fetch.max_chars == 100_000
-      assert config.wasm.enabled == true
     end
   end
 
@@ -516,76 +500,6 @@ defmodule LemonCore.Config.ToolsTest do
     end
   end
 
-  describe "wasm configuration" do
-    test "uses default wasm settings" do
-      config = Tools.resolve(%{})
-
-      assert config.wasm.enabled == false
-      assert config.wasm.auto_build == true
-      assert config.wasm.default_memory_limit == 10_485_760
-      assert config.wasm.default_timeout_ms == 60_000
-      assert config.wasm.default_fuel_limit == 10_000_000
-      assert config.wasm.cache_compiled == true
-      assert config.wasm.max_tool_invoke_depth == 4
-    end
-
-    test "uses wasm settings from config" do
-      settings = %{
-        "tools" => %{
-          "wasm" => %{
-            "enabled" => true,
-            "auto_build" => false,
-            "default_memory_limit" => 20_971_520,
-            "max_tool_invoke_depth" => 8
-          }
-        }
-      }
-
-      config = Tools.resolve(settings)
-
-      assert config.wasm.enabled == true
-      assert config.wasm.auto_build == false
-      assert config.wasm.default_memory_limit == 20_971_520
-      assert config.wasm.max_tool_invoke_depth == 8
-    end
-
-    test "environment variables override wasm settings" do
-      System.put_env("LEMON_WASM_ENABLED", "true")
-      System.put_env("LEMON_WASM_AUTO_BUILD", "false")
-      System.put_env("LEMON_WASM_DEFAULT_MEMORY_LIMIT", "20MB")
-      System.put_env("LEMON_WASM_DEFAULT_TIMEOUT_MS", "120000")
-      System.put_env("LEMON_WASM_DEFAULT_FUEL_LIMIT", "20000000")
-      System.put_env("LEMON_WASM_CACHE_COMPILED", "false")
-      System.put_env("LEMON_WASM_MAX_TOOL_INVOKE_DEPTH", "8")
-
-      config = Tools.resolve(%{})
-
-      assert config.wasm.enabled == true
-      assert config.wasm.auto_build == false
-      assert config.wasm.default_memory_limit == 20_971_520
-      assert config.wasm.default_timeout_ms == 120_000
-      assert config.wasm.default_fuel_limit == 20_000_000
-      assert config.wasm.cache_compiled == false
-      assert config.wasm.max_tool_invoke_depth == 8
-    end
-
-    test "environment variable overrides wasm tool paths" do
-      System.put_env("LEMON_WASM_TOOL_PATHS", "/path/one,/path/two")
-
-      settings = %{
-        "tools" => %{
-          "wasm" => %{
-            "tool_paths" => ["./tools"]
-          }
-        }
-      }
-
-      config = Tools.resolve(settings)
-
-      assert config.wasm.tool_paths == ["/path/one", "/path/two"]
-    end
-  end
-
   describe "tool disclosure configuration" do
     test "auto defaults preserve an explicit legacy opt-out" do
       assert Tools.resolve(%{}).disclosure.profile == "auto"
@@ -678,17 +592,12 @@ defmodule LemonCore.Config.ToolsTest do
                Tools.resolve(%{}).disclosure
     end
 
-    test "a non-map disclosure value raises, matching the other tool sections" do
+    test "a non-map disclosure value raises" do
       # TOML settings are always string-keyed maps; a scalar here means a
-      # malformed config file. Pinned so the failure mode stays uniform with
-      # `[runtime.tools.wasm]`/`[runtime.tools.web]` rather than silently
+      # malformed config file. Pinned so it fails rather than silently
       # disclosing every tool.
       assert_raise FunctionClauseError, fn ->
         Tools.resolve(%{"tools" => %{"disclosure" => 5}})
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        Tools.resolve(%{"tools" => %{"wasm" => 5}})
       end
     end
   end

@@ -178,8 +178,7 @@ defmodule CodingAgent.Session.PromptCacheWireTest do
     settings = %SettingsManager{
       compaction_enabled: false,
       retry_enabled: false,
-      providers: %{Atom.to_string(provider) => %{auth_source: "api_key", api_key: token}},
-      tools: %{wasm: %{enabled: false}}
+      providers: %{Atom.to_string(provider) => %{auth_source: "api_key", api_key: token}}
     }
 
     model = %Model{

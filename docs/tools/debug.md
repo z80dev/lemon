@@ -69,9 +69,7 @@ Every action accepts `timeout` in seconds (default 30, clamped to 5..300). Execu
 actions that do not stop within the timeout return "still running" rather than
 an error; use `pause` to interrupt.
 
-Debug waits also stop when the originating invocation worker exits. A WASM host
-deadline therefore releases the debug server promptly without cancelling the
-parent run or other host invocations, even after its local abort flag is reclaimed.
+Debug waits also stop when the originating invocation worker exits.
 
 `status` / `sessions` include a recursive `children` list with session `id` and
 `parent_id`. Pass `debug_session_id` to any action to target that session;

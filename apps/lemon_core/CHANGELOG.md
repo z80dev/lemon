@@ -8,6 +8,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- **Breaking:** retired WASM tool support (#707): `LemonCore.Config.Tools`
+  has no `wasm` field and no longer reads `[runtime.tools.wasm]`, the
+  `LEMON_WASM_*` declarations and the `:tools_wasm` area are gone, extension
+  manifests reject a `wasm` host type, doctor diagnostics report no `wasm`
+  host, `tool_auth` is no longer a catalogued tool, and the optional
+  `AgentRuntime.Provider.wasm_sidecar_running?/0` callback is removed.
 - **Breaking:** the `controller` and `hybrid` ids from
   `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 

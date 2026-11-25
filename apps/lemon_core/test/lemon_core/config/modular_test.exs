@@ -382,7 +382,7 @@ defmodule LemonCore.Config.ModularTest do
       assert is_map(config.tools.web)
       assert is_map(config.tools.web.search)
       assert is_map(config.tools.web.fetch)
-      assert is_map(config.tools.wasm)
+      refute Map.has_key?(config.tools, :wasm)
     end
 
     test "gateway config is resolved correctly" do

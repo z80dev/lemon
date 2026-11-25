@@ -124,9 +124,9 @@ This is a **quick pre-check, not a substitute for the affected-app run**; it can
 find no matching tests. Selected client/Lemon Bot/docs checks still run.
 Preview the selection with `scripts/changed_tests --focused`; `--format json`
 is machine-readable. `--format github` appends `scope`, `apps`, `test_paths`,
-`clients`, `wasm`, `docs`, `apple`, and `lemon_bot` to `$GITHUB_OUTPUT`, and a selection summary to
-`$GITHUB_STEP_SUMMARY` when set. WASM and Apple flags are for CI's dedicated
-toolchains; `changed` itself does not invoke them.
+`clients`, `docs`, `apple`, and `lemon_bot` to `$GITHUB_OUTPUT`, and a selection
+summary to `$GITHUB_STEP_SUMMARY` when set. The `apple` flag selects CI's
+dedicated Apple lane; `changed` does not invoke it.
 
 Keep `quality` for repository-wide checks. `scripts/check_changelog` checks
 root/app/installer changelogs by default, or named files; Unreleased must be the
@@ -136,14 +136,14 @@ Version headings must consistently include or omit dates within each file.
 
 Diff checks do not replace the full suite on main after merge, nightly coverage
 and repeated regression/eval runs, or release assembly/boot/package checks.
-Dialyzer, install verification, and the dedicated WASM lane remain CI
-responsibilities. No live provider calls are needed for `premerge` or `changed`.
+Dialyzer and install verification remain CI responsibilities.
+No live provider calls are needed for `premerge` or `changed`.
 
 ## CI mapping
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| `ci.yml` | every PR and push to `main`; called by `release.yml` and `nightly.yml`; dispatch | `changes` → `scripts/changed_tests` (PRs: `--base origin/<base>`; other events: `--all`); `check` → `scripts/test quality` + `eval-fast` (PRs: `quality --base origin/<base>`, which formats and credo-checks only changed files unless the diff is full scope; Credo's cross-file checks are authoritative on `main`'s full run); `test (n/N)` → `scripts/test fast --partitions N [selected app test dirs]`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `wasm-runtime`; `history` (PRs only); `CI result` (the one status to require; summarizes failures) |
+| `ci.yml` | every PR and push to `main`; called by `release.yml` and `nightly.yml`; dispatch | `changes` → `scripts/changed_tests` (PRs: `--base origin/<base>`; other events: `--all`); `check` → `scripts/test quality` + `eval-fast` (PRs: `quality --base origin/<base>`, which formats and credo-checks only changed files unless the diff is full scope; Credo's cross-file checks are authoritative on `main`'s full run); `test (n/N)` → `scripts/test fast --partitions N [selected app test dirs]`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `history` (PRs only); `CI result` (the one status to require; summarizes failures) |
 | `nightly.yml` | daily + dispatch | the full `ci.yml`; `scripts/test coverage` over every app; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations; the `nightly-red` issue |
 | `product-smoke.yml` | PRs touching `apps/**`, weekly, dispatch | Boots a `lemon_runtime_full` release against a local deterministic provider |
 | `release-smoke.yml` | release paths, weekly, dispatch | Release assembly and boot matrix |
@@ -158,7 +158,7 @@ In `ci.yml`, pull requests run only what their diff can affect, chosen by
 `scripts/changed_tests --base origin/<base>` (see above): the `test` job runs the
 selected apps' test directories (one shard for small selections, four when
 `coding_agent` or more than six apps are selected, or for full scope); no
-selected app skips `test`, `dialyzer` and `install`; `clients`, `lemon_bot`, `apple` and `wasm-runtime` follow their lanes.
+selected app skips `test`, `dialyzer` and `install`; `clients`, `lemon_bot`, and `apple` follow their lanes.
 `check` always runs. Every other event (pushes to `main`, release preflight,
 nightly, dispatch) runs every job over every app, which is what
 lets a release reuse a main commit's green run. Cross-app effects that only

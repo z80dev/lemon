@@ -326,7 +326,7 @@ defmodule CodingAgent.Session.Planning do
   end
 
   @doc """
-  Apply the current plan gate to one authorized WASM host target.
+  Apply the current plan gate to one authorized eval bridge target.
 
   Unlike `tools/3`, this does not add plan-only tools or proposal capabilities
   to the host inventory; it only reuses the normal target's execution guard.

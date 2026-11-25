@@ -33,7 +33,7 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
       distribution_source_counts: count_manifest_values(manifests, & &1.distribution_sources),
       audit_status_counts: count_manifest_values(manifests, & &1.audit_statuses),
       execution: execution,
-      host_runtime: host_runtime(config, host_type_counts, execution),
+      host_runtime: host_runtime(host_type_counts, execution),
       cleanup: %{
         includes_raw_source_paths: false,
         includes_file_contents: false,
@@ -45,14 +45,14 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
     }
   end
 
-  defp host_runtime(config, host_type_counts, execution) do
+  defp host_runtime(host_type_counts, execution) do
     invalid_hosts =
-      ["beam", "wasm", "mcp", "external"]
+      ["beam", "mcp", "external"]
       |> Map.new(fn host ->
         {host,
          %{
            configured_count: Map.get(host_type_counts, host, 0),
-           status: host_status(host, config, host_type_counts, execution),
+           status: host_status(host, host_type_counts, execution),
            diagnostics_loads_host_code: false
          }}
       end)
@@ -67,7 +67,7 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
     }
   end
 
-  defp host_status("beam", _config, host_type_counts, execution) do
+  defp host_status("beam", host_type_counts, execution) do
     cond do
       execution.enabled == false -> "disabled"
       Map.get(host_type_counts, "beam", 0) == 0 -> "not_configured"
@@ -77,15 +77,7 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
     end
   end
 
-  defp host_status("wasm", config, host_type_counts, _execution) do
-    cond do
-      Map.get(host_type_counts, "wasm", 0) == 0 -> "not_configured"
-      wasm_enabled?(config) -> "configured"
-      true -> "disabled"
-    end
-  end
-
-  defp host_status(host, _config, host_type_counts, _execution)
+  defp host_status(host, host_type_counts, _execution)
        when host in ["mcp", "external"] do
     if Map.get(host_type_counts, host, 0) > 0, do: "manifest_only", else: "not_configured"
   end
@@ -225,16 +217,6 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
 
   defp enabled?(value) when value in [false, "false", 0], do: false
   defp enabled?(_), do: true
-
-  defp wasm_enabled?(%Config{agent: agent}) when is_map(agent) do
-    agent
-    |> map_value(:tools)
-    |> map_value(:wasm)
-    |> map_value(:enabled)
-    |> truthy?()
-  end
-
-  defp wasm_enabled?(_), do: false
 
   defp hash(value) do
     :crypto.hash(:sha256, to_string(value))

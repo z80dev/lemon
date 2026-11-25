@@ -224,14 +224,6 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
       end
 
     sections =
-      if report[:wasm] != nil do
-        wasm_section = format_wasm_section(report.wasm)
-        [wasm_section | sections]
-      else
-        sections
-      end
-
-    sections =
       case report[:tool_disclosure] do
         disclosure when is_map(disclosure) ->
           [format_tool_disclosure_section(disclosure, include_details) | sections]
@@ -262,7 +254,6 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         total_loaded: report.total_loaded,
         total_errors: report.total_errors,
         tool_conflicts: report.tool_conflicts,
-        wasm: report[:wasm],
         tool_disclosure: report[:tool_disclosure]
       }
     }
@@ -316,14 +307,6 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
       end
 
     sections =
-      if report[:wasm] != nil do
-        wasm_section = format_wasm_section(report.wasm)
-        [wasm_section | sections]
-      else
-        sections
-      end
-
-    sections =
       case report[:tool_disclosure] do
         disclosure when is_map(disclosure) ->
           [format_tool_disclosure_section(disclosure, include_details) | sections]
@@ -353,7 +336,6 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         total_loaded: report.total_loaded,
         total_errors: report.total_errors,
         tool_conflicts: report.tool_conflicts,
-        wasm: report[:wasm],
         tool_disclosure: report[:tool_disclosure]
       }
     }
@@ -500,7 +482,6 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
       "\n## Tool Registry\n" <>
         "- **Total tools:** #{conflicts.total_tools}\n" <>
         "- **Built-in:** #{conflicts.builtin_count}\n" <>
-        "- **From WASM:** #{Map.get(conflicts, :wasm_count, 0)}\n" <>
         "- **From extensions:** #{conflicts.extension_count}\n" <>
         "- **Shadowed:** #{conflicts.shadowed_count}\n"
 
@@ -512,7 +493,6 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
              winner =
                case c.winner do
                  :builtin -> "built-in"
-                 {:wasm, identity} -> "WASM `#{identity}`"
                  {:extension, mod} -> "extension `#{inspect(mod)}`"
                end
 
@@ -520,7 +500,6 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
                c.shadowed
                |> Enum.map(fn
                  {:extension, mod} -> "`#{inspect(mod)}`"
-                 {:wasm, identity} -> "`wasm:#{identity}`"
                end)
                |> Enum.join(", ")
 
@@ -569,39 +548,6 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
       end
 
     sections |> Enum.reverse() |> Enum.join("\n")
-  end
-
-  @spec format_wasm_section(map()) :: String.t()
-  defp format_wasm_section(wasm) when is_map(wasm) do
-    enabled = Map.get(wasm, :enabled, false)
-    running = Map.get(wasm, :running, false)
-    tool_count = Map.get(wasm, :tool_count, 0)
-    runtime_path = Map.get(wasm, :runtime_path, "unknown")
-    warnings = Map.get(wasm, :discover_warnings, [])
-    errors = Map.get(wasm, :discover_errors, [])
-
-    base =
-      "\n## WASM Runtime\n" <>
-        "- **Enabled:** #{enabled}\n" <>
-        "- **Running:** #{running}\n" <>
-        "- **Discovered tools:** #{tool_count}\n" <>
-        "- **Runtime path:** `#{runtime_path}`\n"
-
-    warning_lines =
-      if warnings == [] do
-        ""
-      else
-        "- **Warnings:** #{Enum.join(warnings, " | ")}\n"
-      end
-
-    error_lines =
-      if errors == [] do
-        ""
-      else
-        "- **Errors:** #{Enum.join(errors, " | ")}\n"
-      end
-
-    base <> warning_lines <> error_lines
   end
 
   @spec format_fallback_title([map()], map(), [map()], String.t()) :: String.t()

@@ -935,10 +935,6 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   def tool_conflicts(cwd, opts), do: CodingAgent.ToolRegistry.tool_conflict_report(cwd, opts)
 
-  def wasm_sidecar_running? do
-    is_pid(Process.whereis(CodingAgent.Wasm.SidecarSupervisor))
-  end
-
   defp normalize_background_list_opts(opts) do
     case Keyword.get(opts, :status) do
       status

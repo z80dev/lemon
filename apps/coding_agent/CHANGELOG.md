@@ -12,6 +12,13 @@
 
 ### Removed
 
+- **Breaking:** the WASM sidecar stack (`CodingAgent.Wasm.*`,
+  `CodingAgent.Session.WasmBridge`, the `{:wasm_host_tool_invoke, ...}` session
+  calls, the `:wasm_tools`/`:wasm_status` registry options and the `wasm_*`
+  session fields) and the `tool_auth` tool (`CodingAgent.Tools.ToolAuth`) are
+  retired (#707). `ToolRegistry.tool_conflict_report/2` no longer returns
+  `wasm_count` or `wasm`, and `ControlPlaneProvider.wasm_sidecar_running?/0` is
+  gone.
 - **Breaking:** removed `CodingAgent.SessionIndex`, `SessionManager.list_sessions/1`
   and `SessionEntry.session_info/2`; journal appends, checkpoints and
   `save_to_file/2` take no lock and write no `.index.sqlite3`. Older journals'

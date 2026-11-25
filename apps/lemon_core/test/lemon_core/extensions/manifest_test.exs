@@ -69,6 +69,21 @@ defmodule LemonCore.Extensions.ManifestTest do
     assert "audit.status is not supported" in validation.errors
   end
 
+  test "rejects the retired wasm host type" do
+    tmp_dir = tmp_dir()
+    manifest_path = Path.join(tmp_dir, "extension.json")
+
+    File.write!(
+      manifest_path,
+      Jason.encode!(%{schema_version: 1, name: "wasm-ext", version: "1.0.0", host: "wasm"})
+    )
+
+    validation = Manifest.validate_file(manifest_path)
+
+    refute validation.valid?
+    assert "host is not supported" in validation.errors
+  end
+
   defp tmp_dir do
     path =
       Path.join(System.tmp_dir!(), "lemon_manifest_test_#{System.unique_integer([:positive])}")

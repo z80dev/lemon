@@ -8,7 +8,6 @@ defmodule LemonCore.AgentRuntimeTest do
     def list_tasks, do: [{"task-1", %{status: :running}}]
     def get_task("task-1"), do: {:ok, %{status: :running}, []}
     def get_task(_), do: :not_found
-    def wasm_sidecar_running?, do: true
   end
 
   defmodule PartialProvider do
@@ -17,7 +16,7 @@ defmodule LemonCore.AgentRuntimeTest do
 
   defmodule RaisingProvider do
     def list_tasks, do: raise("boom")
-    def wasm_sidecar_running?, do: exit(:dead)
+    def run_graph(_run_id), do: exit(:dead)
   end
 
   setup do
@@ -73,7 +72,6 @@ defmodule LemonCore.AgentRuntimeTest do
 
       assert AgentRuntime.call(:list_tasks, [], []) == []
       assert AgentRuntime.call(:get_task, ["task-1"], :unavailable) == :unavailable
-      assert AgentRuntime.call(:wasm_sidecar_running?, [], false) == false
     end
 
     test "falls back for a callback the provider does not implement" do
@@ -92,7 +90,7 @@ defmodule LemonCore.AgentRuntimeTest do
     test "falls back when the provider exits" do
       use_provider(RaisingProvider)
 
-      assert AgentRuntime.call(:wasm_sidecar_running?, [], false) == false
+      assert AgentRuntime.call(:run_graph, ["run-1"], :unavailable) == :unavailable
     end
   end
 end

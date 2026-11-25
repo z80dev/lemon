@@ -256,7 +256,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_LOG_FILE` | string | _(none)_ |  | `lemon_core` | Path to the log file (nil disables file logging). |
 | `LEMON_LOG_FILESYNC_REPEAT_INTERVAL` | integer | _(none)_ |  | `lemon_core` | Log file sync interval, in milliseconds. |
 | `LEMON_LOG_LEVEL` | string | _(none)_ |  | `lemon_core` | Global log level override (debug/info/notice/warning/error/critical/alert/emergency). |
-| `LEMON_LOG_MAX_NO_BYTES` | integer | _(none)_ |  | `lemon_core` | Log file rotation size threshold, in bytes. Plain integer only -- unlike LEMON_WASM_DEFAULT_MEMORY_LIMIT, this one does not accept "10MB"-style suffixes. |
+| `LEMON_LOG_MAX_NO_BYTES` | integer | _(none)_ |  | `lemon_core` | Log file rotation size threshold, in bytes. Plain integer only; "10MB"-style suffixes are not accepted. |
 | `LEMON_LOG_MAX_NO_FILES` | integer | _(none)_ |  | `lemon_core` | Number of rotated log files retained. |
 
 ### Omp
@@ -406,21 +406,6 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
 | `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate under the selected profile. |
 | `LEMON_TOOL_DISCLOSURE_PROFILE` | string | `auto` |  | `lemon_core` | Tool disclosure profile: auto selects coding for cwd-scoped sessions and legacy for chat; legacy defers the over-budget long tail; coding also defers optional built-ins. |
-
-### Tools wasm
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `LEMON_WASM_AUTO_BUILD` | boolean | `true` |  | `lemon_core` | Whether WASM tools are auto-built from source on load. |
-| `LEMON_WASM_CACHE_COMPILED` | boolean | `true` |  | `lemon_core` | Whether compiled WASM modules are cached on disk. |
-| `LEMON_WASM_CACHE_DIR` | string | `` |  | `lemon_core` | Directory used for the compiled WASM module cache. |
-| `LEMON_WASM_DEFAULT_FUEL_LIMIT` | integer | `10000000` |  | `lemon_core` | Default WASM interpreter fuel (execution-step) limit. |
-| `LEMON_WASM_DEFAULT_MEMORY_LIMIT` | bytes (B/KB/MB/GB) | `10485760` |  | `lemon_core` | Default WASM tool memory limit (accepts B/KB/MB/GB suffixes). |
-| `LEMON_WASM_DEFAULT_TIMEOUT_MS` | integer | `60000` |  | `lemon_core` | Default WASM tool execution timeout, in milliseconds. |
-| `LEMON_WASM_ENABLED` | boolean | `false` |  | `lemon_core` | Whether the WASM tool runtime is enabled. |
-| `LEMON_WASM_MAX_TOOL_INVOKE_DEPTH` | integer | `4` |  | `lemon_core` | Maximum nested WASM tool invocation depth. |
-| `LEMON_WASM_RUNTIME_PATH` | string | `` |  | `lemon_core` | Path to the WASM runtime executable/library. |
-| `LEMON_WASM_TOOL_PATHS` | list (comma-separated) | `[]` |  | `lemon_core` | Comma-separated extra directories to search for WASM tools. |
 
 ### Tools web
 

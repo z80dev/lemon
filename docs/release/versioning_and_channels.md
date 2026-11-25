@@ -42,7 +42,7 @@ gh workflow run release.yml --ref main -f channel=stable -f draft=false
 The workflow serializes release cuts and performs the complete operation:
 
 1. The full `ci.yml` gate set (fast x4, quality, deterministic eval, install,
-   clients, Dialyzer gate, WASM) gates the dispatch's exact source
+   clients, Dialyzer gate) gates the dispatch's exact source
    commit **before** any version/changelog mutation, release commit, tag or
    push. A green `ci.yml` push run of that commit is reused through
    `scripts/ci_verified_commit`, which also waits up to 30 minutes for one that

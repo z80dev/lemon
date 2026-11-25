@@ -52,7 +52,7 @@ defmodule LemonCore.ToolPolicyTest do
     end
 
     for tool <-
-          ~w(bash process_input kill_process eval debug lsp_diagnostics browser_evaluate mcp_server_tool wasm_echo unknown) do
+          ~w(bash process_input kill_process eval debug lsp_diagnostics browser_evaluate mcp_server_tool extension_echo unknown) do
       assert ToolPolicy.tier(tool) == :exec
     end
 

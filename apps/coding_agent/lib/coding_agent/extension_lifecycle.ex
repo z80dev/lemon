@@ -32,7 +32,6 @@ defmodule CodingAgent.ExtensionLifecycle do
           extension_status_report: Extensions.extension_status_report(),
           extension_paths: [String.t()],
           provider_registration: Extensions.provider_registration_report(),
-          wasm_status: map() | nil,
           tool_disclosure: ToolDisclosure.report()
         }
 
@@ -48,8 +47,6 @@ defmodule CodingAgent.ExtensionLifecycle do
     tool_opts = Keyword.get(opts, :tool_opts, [])
     custom_tools = Keyword.get(opts, :custom_tools)
     extra_tools = Keyword.get(opts, :extra_tools, [])
-    wasm_tools = Keyword.get(opts, :wasm_tools, [])
-    wasm_status = Keyword.get(opts, :wasm_status)
     tool_policy = session_policy(opts, tool_opts)
 
     approval_context =
@@ -72,8 +69,6 @@ defmodule CodingAgent.ExtensionLifecycle do
       |> Keyword.put(:config_cwd, config_cwd)
       |> Keyword.put(:extension_paths, extension_paths)
       |> Keyword.put(:extension_inventory, {extensions, load_errors})
-      |> Keyword.put(:wasm_tools, wasm_tools)
-      |> Keyword.put(:wasm_status, wasm_status)
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
       # Tools and the conflict report share one browser provider probe.
@@ -107,7 +102,6 @@ defmodule CodingAgent.ExtensionLifecycle do
         tool_conflict_report: tool_conflict_report,
         provider_registration: provider_registration
       )
-      |> maybe_attach_wasm_status(wasm_status)
       |> Map.put(:tool_disclosure, disclosure_report)
 
     %{
@@ -118,7 +112,6 @@ defmodule CodingAgent.ExtensionLifecycle do
       extension_status_report: extension_status_report,
       extension_paths: extension_paths,
       provider_registration: provider_registration,
-      wasm_status: wasm_status,
       tool_disclosure: disclosure_report
     }
   end
@@ -138,8 +131,6 @@ defmodule CodingAgent.ExtensionLifecycle do
     tool_opts = Keyword.get(opts, :tool_opts, [])
     custom_tools = Keyword.get(opts, :custom_tools)
     extra_tools = Keyword.get(opts, :extra_tools, [])
-    wasm_tools = Keyword.get(opts, :wasm_tools, [])
-    wasm_status = Keyword.get(opts, :wasm_status)
     tool_policy = session_policy(opts, tool_opts)
 
     approval_context =
@@ -172,11 +163,6 @@ defmodule CodingAgent.ExtensionLifecycle do
       |> Keyword.put(:config_cwd, config_cwd)
       |> Keyword.put(:extension_paths, extension_paths)
       |> Keyword.put(:extension_inventory, {extensions, load_errors})
-      |> Keyword.put(:wasm_tools, wasm_tools)
-      |> Keyword.put(:wasm_status, wasm_status)
-
-    tool_opts =
-      tool_opts
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
       |> ToolRegistry.put_browser_provider_resolution()
@@ -209,7 +195,6 @@ defmodule CodingAgent.ExtensionLifecycle do
         tool_conflict_report: tool_conflict_report,
         provider_registration: provider_registration
       )
-      |> maybe_attach_wasm_status(wasm_status)
       |> Map.put(:tool_disclosure, disclosure_report)
 
     %{
@@ -220,7 +205,6 @@ defmodule CodingAgent.ExtensionLifecycle do
       extension_status_report: extension_status_report,
       extension_paths: extension_paths,
       provider_registration: provider_registration,
-      wasm_status: wasm_status,
       tool_disclosure: disclosure_report
     }
   end
@@ -251,8 +235,6 @@ defmodule CodingAgent.ExtensionLifecycle do
       |> Keyword.put(:config_cwd, config_cwd)
       |> Keyword.put(:extension_paths, extension_paths(settings_manager))
       |> Keyword.put(:extension_inventory, {Keyword.fetch!(opts, :extensions), []})
-      |> Keyword.put(:wasm_tools, Keyword.get(opts, :wasm_tools, []))
-      |> Keyword.put(:wasm_status, Keyword.get(opts, :wasm_status))
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
       |> ToolRegistry.put_browser_provider_resolution()
@@ -438,7 +420,4 @@ defmodule CodingAgent.ExtensionLifecycle do
       }
     )
   end
-
-  defp maybe_attach_wasm_status(report, nil), do: report
-  defp maybe_attach_wasm_status(report, wasm_status), do: Map.put(report, :wasm, wasm_status)
 end

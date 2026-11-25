@@ -359,8 +359,8 @@ defmodule LemonCore.Env.Declarations do
       type: :integer,
       default: nil,
       doc:
-        "Log file rotation size threshold, in bytes. Plain integer only -- unlike " <>
-          "LEMON_WASM_DEFAULT_MEMORY_LIMIT, this one does not accept \"10MB\"-style suffixes.",
+        "Log file rotation size threshold, in bytes. Plain integer only; " <>
+          "\"10MB\"-style suffixes are not accepted.",
       secret?: false,
       required?: false,
       area: :logging,
@@ -935,126 +935,6 @@ defmodule LemonCore.Env.Declarations do
       secret?: false,
       required?: false,
       area: :tools_disclosure,
-      apps: [:lemon_core]
-    },
-    %{
-      name: :lemon_wasm_auto_build,
-      env_var: "LEMON_WASM_AUTO_BUILD",
-      aliases: [],
-      type: :boolean,
-      default: true,
-      doc: "Whether WASM tools are auto-built from source on load.",
-      secret?: false,
-      required?: false,
-      area: :tools_wasm,
-      apps: [:lemon_core]
-    },
-    %{
-      name: :lemon_wasm_cache_compiled,
-      env_var: "LEMON_WASM_CACHE_COMPILED",
-      aliases: [],
-      type: :boolean,
-      default: true,
-      doc: "Whether compiled WASM modules are cached on disk.",
-      secret?: false,
-      required?: false,
-      area: :tools_wasm,
-      apps: [:lemon_core]
-    },
-    %{
-      name: :lemon_wasm_cache_dir,
-      env_var: "LEMON_WASM_CACHE_DIR",
-      aliases: [],
-      type: :string,
-      default: "",
-      doc: "Directory used for the compiled WASM module cache.",
-      secret?: false,
-      required?: false,
-      area: :tools_wasm,
-      apps: [:lemon_core]
-    },
-    %{
-      name: :lemon_wasm_default_fuel_limit,
-      env_var: "LEMON_WASM_DEFAULT_FUEL_LIMIT",
-      aliases: [],
-      type: :integer,
-      default: 10_000_000,
-      doc: "Default WASM interpreter fuel (execution-step) limit.",
-      secret?: false,
-      required?: false,
-      area: :tools_wasm,
-      apps: [:lemon_core]
-    },
-    %{
-      name: :lemon_wasm_default_memory_limit,
-      env_var: "LEMON_WASM_DEFAULT_MEMORY_LIMIT",
-      aliases: [],
-      type: :bytes,
-      default: 10_485_760,
-      doc: "Default WASM tool memory limit (accepts B/KB/MB/GB suffixes).",
-      secret?: false,
-      required?: false,
-      area: :tools_wasm,
-      apps: [:lemon_core]
-    },
-    %{
-      name: :lemon_wasm_default_timeout_ms,
-      env_var: "LEMON_WASM_DEFAULT_TIMEOUT_MS",
-      aliases: [],
-      type: :integer,
-      default: 60_000,
-      doc: "Default WASM tool execution timeout, in milliseconds.",
-      secret?: false,
-      required?: false,
-      area: :tools_wasm,
-      apps: [:lemon_core]
-    },
-    %{
-      name: :lemon_wasm_enabled,
-      env_var: "LEMON_WASM_ENABLED",
-      aliases: [],
-      type: :boolean,
-      default: false,
-      doc: "Whether the WASM tool runtime is enabled.",
-      secret?: false,
-      required?: false,
-      area: :tools_wasm,
-      apps: [:lemon_core]
-    },
-    %{
-      name: :lemon_wasm_max_tool_invoke_depth,
-      env_var: "LEMON_WASM_MAX_TOOL_INVOKE_DEPTH",
-      aliases: [],
-      type: :integer,
-      default: 4,
-      doc: "Maximum nested WASM tool invocation depth.",
-      secret?: false,
-      required?: false,
-      area: :tools_wasm,
-      apps: [:lemon_core]
-    },
-    %{
-      name: :lemon_wasm_runtime_path,
-      env_var: "LEMON_WASM_RUNTIME_PATH",
-      aliases: [],
-      type: :string,
-      default: "",
-      doc: "Path to the WASM runtime executable/library.",
-      secret?: false,
-      required?: false,
-      area: :tools_wasm,
-      apps: [:lemon_core]
-    },
-    %{
-      name: :lemon_wasm_tool_paths,
-      env_var: "LEMON_WASM_TOOL_PATHS",
-      aliases: [],
-      type: :list,
-      default: [],
-      doc: "Comma-separated extra directories to search for WASM tools.",
-      secret?: false,
-      required?: false,
-      area: :tools_wasm,
       apps: [:lemon_core]
     },
     %{

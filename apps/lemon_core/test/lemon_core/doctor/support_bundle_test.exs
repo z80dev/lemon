@@ -299,7 +299,7 @@ defmodule LemonCore.Doctor.SupportBundleTest do
             endpoint: "https://secret.example.invalid/memory"
           }
         ],
-        hosts: [%{type: "beam"}, %{type: "wasm"}, %{type: "mcp"}],
+        hosts: [%{type: "beam"}, %{type: "external"}, %{type: "mcp"}],
         distribution: %{
           source: "git",
           url: "https://token@example.invalid/private/plugin.git"
@@ -542,7 +542,7 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert extensions["capability_counts"]["memory_provider"] >= 1
     assert extensions["provider_type_counts"]["memory"] >= 1
     assert extensions["host_type_counts"]["beam"] >= 1
-    assert extensions["host_type_counts"]["wasm"] >= 1
+    assert extensions["host_type_counts"]["external"] >= 1
     assert extensions["host_type_counts"]["mcp"] >= 1
     assert extensions["distribution_source_counts"]["git"] >= 1
     assert extensions["audit_status_counts"]["pending"] >= 1
@@ -553,8 +553,9 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert extensions["execution"]["diagnostics_loads_extension_code"] == false
     assert extensions["host_runtime"]["hosts"]["beam"]["status"] == "loadable"
     assert extensions["host_runtime"]["hosts"]["beam"]["configured_count"] >= 1
-    assert extensions["host_runtime"]["hosts"]["wasm"]["status"] in ["disabled", "configured"]
-    assert extensions["host_runtime"]["hosts"]["wasm"]["configured_count"] >= 1
+    refute Map.has_key?(extensions["host_runtime"]["hosts"], "wasm")
+    assert extensions["host_runtime"]["hosts"]["external"]["status"] == "manifest_only"
+    assert extensions["host_runtime"]["hosts"]["external"]["configured_count"] >= 1
     assert extensions["host_runtime"]["hosts"]["mcp"]["status"] == "manifest_only"
     assert extensions["host_runtime"]["hosts"]["mcp"]["configured_count"] >= 1
     assert extensions["host_runtime"]["degraded_host_count"] == 0

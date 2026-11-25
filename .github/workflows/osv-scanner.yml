@@ -1,6 +1,6 @@
 name: OSV Scanner
 
-# The single dependency-vulnerability surface for Mix, npm, Bun, and Cargo lockfiles.
+# The single dependency-vulnerability surface for Mix, npm, and Bun lockfiles.
 # Other workflows do not run `npm audit`; add new lockfiles here instead.
 
 on:
@@ -17,15 +17,6 @@ on:
       - "apps/lemon_channels/priv/package-lock.json"
       - "docs/package.json"
       - "docs/package-lock.json"
-      - "native/lemon-wasm-runtime/Cargo.lock"
-      - "native/wasm-tools/cast-call/Cargo.lock"
-      - "native/wasm-tools/cast-send/Cargo.lock"
-      - "native/wasm-tools/cast-wallet-address/Cargo.lock"
-      - "native/wasm-tools/cast-wallet-sign/Cargo.lock"
-      - "native/wasm-tools/common/Cargo.lock"
-      - "native/wasm-tools/forge-create/Cargo.lock"
-      - "native/wasm-tools/forge-script/Cargo.lock"
-      - "native/wasm-tools/json-transform/Cargo.lock"
       - ".github/workflows/osv-scanner.yml"
   push:
     branches: [main]
@@ -40,15 +31,6 @@ on:
       - "apps/lemon_channels/priv/package-lock.json"
       - "docs/package.json"
       - "docs/package-lock.json"
-      - "native/lemon-wasm-runtime/Cargo.lock"
-      - "native/wasm-tools/cast-call/Cargo.lock"
-      - "native/wasm-tools/cast-send/Cargo.lock"
-      - "native/wasm-tools/cast-wallet-address/Cargo.lock"
-      - "native/wasm-tools/cast-wallet-sign/Cargo.lock"
-      - "native/wasm-tools/common/Cargo.lock"
-      - "native/wasm-tools/forge-create/Cargo.lock"
-      - "native/wasm-tools/forge-script/Cargo.lock"
-      - "native/wasm-tools/json-transform/Cargo.lock"
       - ".github/workflows/osv-scanner.yml"
   schedule:
     - cron: "0 9 * * 1"
@@ -74,13 +56,4 @@ jobs:
         --lockfile=clients/lemon-browser-node/package-lock.json
         --lockfile=apps/lemon_channels/priv/package-lock.json
         --lockfile=docs/package-lock.json
-        --lockfile=native/lemon-wasm-runtime/Cargo.lock
-        --lockfile=native/wasm-tools/cast-call/Cargo.lock
-        --lockfile=native/wasm-tools/cast-send/Cargo.lock
-        --lockfile=native/wasm-tools/cast-wallet-address/Cargo.lock
-        --lockfile=native/wasm-tools/cast-wallet-sign/Cargo.lock
-        --lockfile=native/wasm-tools/common/Cargo.lock
-        --lockfile=native/wasm-tools/forge-create/Cargo.lock
-        --lockfile=native/wasm-tools/forge-script/Cargo.lock
-        --lockfile=native/wasm-tools/json-transform/Cargo.lock
       fail-on-vuln: false

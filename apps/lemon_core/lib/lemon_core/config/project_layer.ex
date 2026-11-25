@@ -8,7 +8,7 @@ defmodule LemonCore.Config.ProjectLayer do
   preferences and policy narrowings in this module's allowlist; every other key
   is operator authority. That covers credential destinations and selectors
   (`providers.*`, web tool hosts and secrets, gateway sections), secret sources,
-  executable and extension paths, LSP/WASM/shell settings, SSRF switches,
+  executable and extension paths, LSP/shell settings, SSRF switches,
   logging destinations, credential pools and any policy widening. An ignored
   key is reported, never silently honoured.
 
@@ -60,7 +60,7 @@ defmodule LemonCore.Config.ProjectLayer do
   @type rejection :: {String.t(), reason()}
 
   @per_call_mode_rank %{"off" => 0, "on" => 1}
-  # Unset sits between `yolo` (skips even WASM capability approvals) and `write`.
+  # Unset sits between `yolo` and `write`.
   @approval_rank %{"yolo" => 0, nil => 1, "write" => 2, "ask" => 3}
   @disclosure_profiles ~w(auto coding legacy)
   @profile_preferences ~w(name description avatar)

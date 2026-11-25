@@ -47,7 +47,7 @@ Underneath, Elixir/OTP supplies process isolation and supervision. See the
 - **User experience:** Lemon provides a terminal UI and local browser interface.
   It does not provide a managed hosted assistant service or a native desktop app.
 - **Advanced tools:** browser automation, generated media, LSP, checkpoints, API
-  compatibility, ACP, MCP, and WASM have documented preview boundaries. Check the
+  compatibility, ACP, and MCP have documented preview boundaries. Check the
   [support guide](support.md) for the feature you need.
 - **Automation:** cron, heartbeats, goals, and related runtime controls exist;
   production scheduling guarantees are outside the current stable boundary.

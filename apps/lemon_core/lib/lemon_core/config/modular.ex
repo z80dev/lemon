@@ -37,7 +37,7 @@ defmodule LemonCore.Config.Modular do
   ## Sub-modules
 
   - `LemonCore.Config.Agent` - Agent behavior settings
-  - `LemonCore.Config.Tools` - Web tools and WASM configuration
+  - `LemonCore.Config.Tools` - Tool configuration (web, browser, disclosure)
   - `LemonCore.Config.Gateway` - Engine bindings, queueing, channel sections
   - `LemonCore.Config.Logging` - Log file and rotation settings
   - `LemonCore.Config.TUI` - Terminal UI theme and debug

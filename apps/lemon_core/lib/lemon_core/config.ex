@@ -269,7 +269,6 @@ defmodule LemonCore.Config do
       lsp: tools.lsp,
       intent_tracing: tools.intent_tracing,
       web: tools.web,
-      wasm: tools.wasm,
       disclosure: tools.disclosure,
       checkpoint: tools.checkpoint,
       semantic_find: tools.semantic_find,

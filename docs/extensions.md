@@ -15,11 +15,11 @@ either explicit `extension_paths` configuration or
 `auto_load_default_paths = true` for the global `~/.lemon/agent/extensions/`.
 Both are operator-only: a project `.lemon/config.toml` cannot set them.
 Set `[runtime.extensions] enabled = false` to stop all extension code execution
-(BEAM extensions and WASM tools: no compilation, hooks, providers or WASM
-runtime) while keeping manifest diagnostics and support-bundle visibility.
+(no compilation, hooks, or providers) while keeping manifest diagnostics and
+support-bundle visibility.
 
-A repository's `.lemon/extensions/` (and `.lemon/wasm-tools/`) is never loaded,
-for any session: a repository you open is not trusted to run code in the
+A repository's `.lemon/extensions/` is never loaded in any session: opening a
+repository does not grant it permission to run code in the
 controller. To run a project's extensions, add the directory's absolute path to
 `extension_paths` in the global config. A relative `extension_paths` entry is
 resolved against the global config directory (`~/.lemon`), never against the
@@ -167,7 +167,7 @@ including nested effects of an interrupted eval, must not be retried blindly.
 
 Effectful tools lose `on_stream`: pre-dispatch speculative work must not bypass
 the intent gate. Do not mutate from a stream callback. The gate also covers
-custom, extra, WASM and MCP tools, deferred `tool_invoke` calls, and remote-node
+custom, extra, and MCP tools, deferred `tool_invoke` calls, and remote-node
 dispatch. Standalone registry execution of effectful tools requires a live
 persisted Session owner (`session_pid`); without one it fails closed.
 Remote calls record on the controller before transmission; the destination
@@ -261,7 +261,7 @@ contracts apply to Elixir extension handlers only.
 ### Intercepting Tool Calls
 
 Two hooks can change what a tool does. They wrap every session tool —
-built-in, extension, MCP, WASM and custom tools, in main and subagent
+built-in, extension, MCP, and custom tools, in main and subagent
 sessions, including tools reached through `tool_invoke` — outside approval
 checks, so a blocked call never asks for approval. Sessions with no
 `on_tool_call`/`on_tool_result` hook leave tools unwrapped. Wrapped tools no
@@ -609,9 +609,9 @@ Supported manifest fields:
 `extension_diagnostics.json` exposes only aggregate manifest
 shape: valid/invalid counts, capability counts, provider-type counts, host-type
 counts, distribution source counts, audit-status counts, and a redacted
-host-runtime summary. The host-runtime summary distinguishes BEAM extension
-loading, WASM sidecar configuration, and manifest-only MCP/external hosts, and
-reports degraded or manifest-only counts without starting default-directory
+host-runtime summary. It distinguishes BEAM extension loading from manifest-only
+MCP/external hosts and reports degraded or manifest-only counts without starting
+default-directory
 plugin code. Raw manifest contents, source paths, plugin names, provider names,
 distribution URLs, load-error messages, and file contents are not included in
 support diagnostics.
@@ -635,9 +635,13 @@ a list of non-empty strings. Optional metadata is limited to these values:
 | Field | Allowed values |
 |-------|----------------|
 | `providers[].type` (with a `name`) | `model`, `memory`, `tool_executor`, `storage` |
-| `host` / `hosts[]` (string or `{"type": ...}`) | `beam`, `wasm`, `mcp`, `external` |
+| `host` / `hosts[]` (string or `{"type": ...}`) | `beam`, `mcp`, `external` |
 | `distribution` (`source`) | `local`, `git`, `github`, `registry`, `archive` |
 | `audit` (`status`) | `pending`, `passed`, `warn`, `blocked`, `unknown` |
+
+WASM tool hosting and the `tool_auth` tool were retired in #707, an explicit
+decision recorded against epic #543's opt-in outcomes (see the changelog);
+extension manifests no longer accept a `wasm` host type.
 
 Manifest provider types are package metadata and are separate from the Elixir
 `providers/0` types (`:model`, `:memory`, `:search`).
@@ -690,21 +694,21 @@ end
 
 ## Tool Precedence
 
-All tools (built-in, WASM, extension and MCP) are assembled through `CodingAgent.ToolRegistry`, which provides:
+All tools (built-in, extension, and MCP) are assembled through `CodingAgent.ToolRegistry`, which provides:
 - Centralized conflict detection
 - Per-session enable/disable via `:disabled` and `:enabled_only` options
 - Extension path customization via `:extension_paths` option
 
 When multiple tools share the same name, the following precedence rules apply:
 
-1. **Built-in tools always win** - Core tools (read, write, edit, bash, etc.) take priority over WASM, extension and MCP tools
-2. **Then WASM, then extension, then MCP tools** - a lower-precedence tool with an already-taken name is shadowed
+1. **Built-in tools always win** - Core tools (read, write, edit, bash, etc.) take priority over extension and MCP tools
+2. **Then extension, then MCP tools** - a lower-precedence tool with an already-taken name is shadowed
 3. **First loaded extension wins** - Extensions are sorted alphabetically by module name, so earlier modules take precedence
 
 When a conflict is detected, a warning is logged that includes:
 - The conflicting tool name
 - The source that was shadowed
-- The source that won (built-in, WASM, or an extension module)
+- The source that won
 
 Example warning:
 ```
@@ -763,9 +767,8 @@ report = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
 #       shadowed: [{:extension, ExtensionB}]
 #     }
 #   ],
-#   total_tools: 14,
+#   total_tools: 13,
 #   builtin_count: 11,
-#   wasm_count: 1,
 #   extension_count: 1,
 #   mcp_count: 1,
 #   shadowed_count: 2,
@@ -782,17 +785,16 @@ report = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
 The report includes:
 - `conflicts` - List of conflict entries, each containing:
   - `tool_name` - The conflicting tool name
-  - `winner` - Source that won (`:builtin`, `{:wasm, name_or_path}` or `{:extension, module()}`)
-  - `shadowed` - List of `{:wasm, name_or_path}` or `{:extension, module()}` tuples that were shadowed
+  - `winner` - Source that won: `:builtin`, `{:extension, module()}`, or `{:mcp, term()}`
+  - `shadowed` - List of shadowed `{:extension, module()}` or `{:mcp, term()}` sources
 - `total_tools` - Total number of tools available after conflict resolution
 - `builtin_count` - Number of built-in tools available (excludes unavailable optional tools)
-- `wasm_count`, `extension_count`, `mcp_count` - Number of WASM, extension and MCP tools after shadowing
+- `extension_count`, `mcp_count` - Number of extension and MCP tools after shadowing
 - `shadowed_count` - Total number of shadowed tools
 - `load_errors` - List of extension load errors, each containing:
   - `source_path` - Path to the file that failed to load
   - `error` - The error exception/term
   - `error_message` - Human-readable error message
-- `wasm` - WASM runtime status passed in with the `:wasm_status` option, or `nil`
 
 This is useful for:
 - Debugging why a custom tool isn't appearing
@@ -807,14 +809,6 @@ Extension tool execution also emits redacted telemetry through
 BEAM host label, tool name, hashed extension identity, hashed tool-call id,
 status, duration, and redacted exception type. It does not include raw params,
 raw call ids, source paths, or extension file contents.
-
-WASM tool wrappers emit the matching redacted host telemetry through
-`[:coding_agent, :wasm, :tool, :start]`,
-`[:coding_agent, :wasm, :tool, :stop]`, and
-`[:coding_agent, :wasm, :tool, :exception]`. Metadata is bounded to the WASM
-host label, tool name, hashed WASM path, hashed tool-call id, status, duration,
-and redacted exception type.
-
 
 ## Extension Status Report
 
@@ -873,9 +867,8 @@ end
   # Tool conflict report from ToolRegistry (see "Tool Conflict Report API")
   tool_conflicts: %{
     conflicts: [...],
-    total_tools: 14,
+    total_tools: 13,
     builtin_count: 11,
-    wasm_count: 1,
     extension_count: 1,
     mcp_count: 1,
     shadowed_count: 0,
@@ -897,9 +890,7 @@ end
   total_errors: 1,
   loaded_at: 1706745600000,
 
-  # Added by the session: WASM runtime status (when WASM tools are configured)
-  # and the tool-disclosure report (active profile, exposed/deferred tools)
-  wasm: %{...},
+  # Added by the session: tool-disclosure report (active profile, exposed/deferred tools)
   tool_disclosure: %{...}
 }
 ```
@@ -985,7 +976,6 @@ The tool returns a markdown-formatted report including:
 ## Tool Registry
 - **Total tools:** 17
 - **Built-in:** 16
-- **From WASM:** 0
 - **From extensions:** 1
 - **Shadowed:** 0
 
@@ -994,9 +984,8 @@ The tool returns a markdown-formatted report including:
 - **Estimated schema tokens:** 12000 (budget 40000)
 ```
 
-Conflicts are listed under a `### Conflicts` heading in the Tool Registry section,
-and a `## WASM Runtime` section appears when WASM status is available. The Tool
-Disclosure section shows whether tool disclosure is active (see
+Conflicts are listed under a `### Conflicts` heading in the Tool Registry section.
+The Tool Disclosure section shows whether tool disclosure is active (see
 [Tool Disclosure](config.md#tool-disclosure)); with `include_details: true` and
 active disclosure it also lists the disclosed and hidden tool names. A `reload`
 action returns the same sections under an `# Extensions Reloaded` heading with a
