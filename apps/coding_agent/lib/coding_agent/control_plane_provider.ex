@@ -26,9 +26,8 @@ defmodule CodingAgent.ControlPlaneProvider do
   alias CodingAgent.Session.Rewind
   alias CodingAgent.Session.Todos
   alias CodingAgent.Session.UserPrompt
-  alias CodingAgent.Tools.FeatureRequirements
   alias CodingAgent.Tools.Task.Hub
-  alias CodingAgent.Tools.TodoStore
+  alias CodingAgent.Tools.Todo
 
   @doc "Read bounded unresolved intents without starting or resuming the session."
   def interrupted_tool_calls(cwd, %LemonCore.ResumeToken{engine: "lemon", value: id})
@@ -104,8 +103,11 @@ defmodule CodingAgent.ControlPlaneProvider do
     case session_todos(session_key, nil) do
       {:ok, todos, _revision} ->
         todos
-        |> TodoStore.progress()
-        |> Map.put(:actionable_count, length(TodoStore.actionable(todos)))
+        |> Todo.progress()
+        |> Map.put(:actionable_count, length(Todo.actionable(todos)))
+
+      {:error, :introspection_unavailable} = error ->
+        error
 
       {:error, _} ->
         nil
@@ -217,8 +219,6 @@ defmodule CodingAgent.ControlPlaneProvider do
         {:error, :session_not_found}
     end
   end
-
-  def feature_progress(cwd), do: FeatureRequirements.get_progress(cwd)
 
   def compact_session(session_key, opts) do
     case compact_sessions(session_key) do

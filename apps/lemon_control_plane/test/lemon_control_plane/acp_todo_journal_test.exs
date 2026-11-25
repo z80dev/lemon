@@ -3,7 +3,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
 
   alias CodingAgent.{ControlPlaneProvider, Session, SessionManager}
   alias CodingAgent.SessionManager.SessionEntry
-  alias CodingAgent.Tools.{TodoStore, TodoWrite}
+  alias CodingAgent.Tools.Todo
   alias LemonControlPlane.ACP
   alias LemonCore.Store
   alias LemonAi.Types.{Model, ModelCost}
@@ -45,7 +45,6 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
       Store.delete(:acp_sessions, id)
       LemonCore.ChatStateStore.delete(session.session_key)
       LemonCore.RunStore.delete_session(session.session_key)
-      TodoStore.delete(native_id)
       File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
     end)
 
@@ -115,7 +114,6 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
       })
 
     :ok = SessionManager.save_to_file(path, manager)
-    TodoStore.delete(native_id)
 
     for method <- ["session/load", "session/resume"] do
       updates = invoke(method, %{"sessionId" => id, "cwd" => cwd})
@@ -182,10 +180,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
 
     id = Session.get_state(pid).session_manager.header.id
 
-    on_exit(fn ->
-      TodoStore.delete(id)
-      File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
-    end)
+    on_exit(fn -> File.rm_rf!(CodingAgent.Config.sessions_dir(cwd)) end)
 
     Session.subscribe(pid)
     refute_receive {:session_event, ^id, _, _}
@@ -291,7 +286,6 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
            tools: []}
         )
 
-      on_exit(fn -> TodoStore.delete(manager.header.id) end)
       Session.subscribe(pid)
 
       assert_receive {:session_event, _, {:todos_unavailable, :unsupported_todo_entry} = initial,
@@ -395,10 +389,7 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
 
     id = Session.get_state(pid).session_manager.header.id
 
-    on_exit(fn ->
-      TodoStore.delete(id)
-      File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
-    end)
+    on_exit(fn -> File.rm_rf!(CodingAgent.Config.sessions_dir(cwd)) end)
 
     Session.subscribe(pid)
     refute_receive {:session_event, ^id, {:todos_changed, []}, _}
@@ -462,7 +453,13 @@ defmodule LemonControlPlane.ACP.TodoJournalTest do
   defp write(pid, content) do
     assert %LemonAgent.Types.AgentToolResult{} =
              result =
-             TodoWrite.execute("write", %{"todos" => [%{"content" => content}]}, nil, nil, pid)
+             Todo.execute(
+               "write",
+               %{"action" => "write", "todos" => [%{"content" => content}]},
+               nil,
+               nil,
+               pid
+             )
 
     result
   end

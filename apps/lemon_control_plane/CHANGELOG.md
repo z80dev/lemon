@@ -4,6 +4,12 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- `sessions.active.list` harness snapshots no longer include `requirements`
+  (feature-requirement progress had no writer); an unreadable stopped-session
+  todo history still fails the request explicitly (#706).
+
 ### Fixed
 
 - A method with any scope beyond `:read` that raises, throws or whose async task

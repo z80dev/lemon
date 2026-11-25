@@ -90,7 +90,7 @@ CodingAgent.Supervisor (one_for_one)
   +-- Search.Supervisor (rest_for_one)
   |     +-- Search.TaskSupervisor (bounded Task.Supervisor)
   |     +-- Search.SingleFlight
-  +-- Tools.TodoStoreOwner, Tools.Bash.ShellState, Session.UserPrompt
+  +-- Tools.Bash.ShellState, Session.UserPrompt
   +-- MutationLock, FileReadTracker, WorkspaceReads, ConflictStore
   +-- ExecutionNode.FileService, ExecutionNode.ProcessService
   +-- ExecutionNode.ToolSession.Tree (rest_for_one)
@@ -146,7 +146,6 @@ These caches survive requesting-process exits, but are disposable on owner
 restart. Web entries reload from their configured disk cache; extension inventory
 and capability results repopulate on demand. The fallback placeholder key is
 runtime-ephemeral and changes after owner restart; persisted keys are unaffected.
-`TodoStoreOwner` owns the todo projection without a caller-created fallback.
 Direct tool/store callers must start the `coding_agent` application.
 Pre-boot Python feature checks may run uncached without starting the application
 or creating a table, preserving CLI capability inspection before worker setup.
@@ -216,7 +215,7 @@ startup/config-registration operations (`init`, `reset`, `register`,
 | Execution | `bash`, `bash_output`, `kill_process`, `process_input` (see [shell and background processes](../../docs/tools/shell.md)), `debug` (DAP debugger; see [debugger](../../docs/tools/debug.md)) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, [`todo`](../../docs/tools/todo.md), `kanban` |
-| System | `tool_auth`, `extensions_status`, [`report_issue`](../../docs/tools/report-issue.md) (bounded local tool-misbehavior notes) |
+| System | `tool_auth`, `extensions_status` (read-only status report) |
 
 Telegram and Discord channel sessions also get `send_file`
 (`CodingAgent.Tools.SendFile`), which queues an existing file for delivery to
@@ -254,10 +253,11 @@ editing remains available for a uniquely matched region; ambiguous matches repor
 their line locations and never choose an occurrence silently. Read-only internal
 references and transformed formats do not advertise editing snapshots.
 
-**Rich reads.** `read` also accepts directories, ZIP/TAR/TAR.GZ/TGZ archives,
+**Rich reads.** `read` also accepts ZIP/TAR/TAR.GZ/TGZ archives,
 `bundle.zip:member/path`, PDFs, notebooks, and native images. Archive members are
-read in memory, not extracted into the workspace. `offset`/`limit` select displayed
-lines; follow `next_offset` for bounded directory/member/document output.
+read in memory, not extracted into the workspace. Directories are refused in
+favour of `ls`. `offset`/`limit` select displayed
+lines; follow `next_offset` for bounded member/document output.
 PDFs support `page`/`page_limit`; notebooks support `cell`/`cell_limit` and include
 source, execution counts, text outputs, and errors. PDF extraction requires
 `pdftotext`, `mutool`, or Python with `pypdf`/PyMuPDF on the operator's absolute
@@ -492,7 +492,7 @@ that should outlive one session. Kanban-dispatched worker runs block the
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
-**Internal helpers (not exposed as tools):** `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
+**Internal helpers (not exposed as tools):** `Tools.WebCache`, `Tools.WebGuard`.
 
 Internal task runs infer a restrictive `tool_policy` and verification guardrail when the prompt says `use ... tools only`, so tool-constrained subtasks have to verify against tool output instead of guessing. For internal bash-only tasks, the runner accepts both backticked commands and plain phrasings like `Run this exact command and return the output: ...`, which keeps provider-generated shell subtasks on the normal child-session path.
 
@@ -856,8 +856,7 @@ The first definition for an ID wins, searching project `.lemon/agents/`, project
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Checkpoint` | Compatibility wrapper over `LemonCore.Checkpoint` with coding-agent todo/requirement resume state |
-| `CodingAgent.Tools.FeatureRequirements` | Persists `FEATURE_REQUIREMENTS.json` with dependency-aware progress tracking |
+| `CodingAgent.Checkpoint` | Compatibility wrapper over `LemonCore.Checkpoint` with coding-agent todo resume state |
 | `LemonEvals.Harness` | Evaluation harness for automated agent testing; includes deterministic tool contracts, read/edit workflow checks, remember/recall contracts, and relevant-skill prompt progressive-disclosure checks |
 
 The eval harness is intentionally lightweight and deterministic. It should catch harness-contract drift before behavioral/LLM evals run: default tool registry coverage, stable builtin tool ordering, basic file workflow viability, memory recall scope, and skill prompt guidance that points agents to `read_skill` and `skill_manage` without inlining full skill bodies.
@@ -884,7 +883,6 @@ shell history.
 | `CodingAgent.Messages` | Message type definitions and LLM format conversion |
 | `CodingAgent.BashExecutor` | Streaming shell command execution |
 | `CodingAgent.InternalUrls` | Internal URL protocol handling |
-| `CodingAgent.InternalUrls.NotesProtocol` | `notes://` protocol handler |
 | `CodingAgent.Progress` | Progress reporting utilities |
 | `CodingAgent.Utils.Http` | HTTP utility functions |
 
@@ -1046,9 +1044,8 @@ versioned `"lemon.todo"` entry with the complete list on each successful write
 (`CodingAgent.Session.Todos`); a write that cannot be journaled, or that was
 prepared before a branch switch, reports failure. Startup/resume (including
 forked files), rewind, tree navigation and reset all restore plan mode and todos
-through `CodingAgent.Session.BranchState.restore/1`; `Tools.TodoStore` is only an
-ETS projection, not a recovery source. Live and stopped-session progress readers
-materialize the journal rather than treating a missing cache as an empty list.
+through `CodingAgent.Session.BranchState.restore/1`. Live and stopped-session
+progress readers materialize the journal.
 Branches saved before the journal
 use their latest successful todo-write result; otherwise they start empty, and
 an unsupported entry version makes reads fail rather than show older state.

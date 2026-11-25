@@ -949,7 +949,7 @@ treat it, and every other Lemon credential file, as off limits:
 
 Lemon keeps no MCP OAuth token cache on disk. `LemonCore.CredentialPaths` is
 the single check every model-reachable reader consults before it opens a file:
-file tools (`read`, including JSON, SQLite and archive selectors, `write`,
+file tools (`read`, including SQLite and archive selectors, `write`,
 `edit`, `patch`, `ls`, `grep`, `find`, `ast_grep`), `semantic_find`, LSP
 document synchronization and location excerpts, media analysis and
 transcription inputs, and browser `file:` navigation, content reads, captures

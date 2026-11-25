@@ -11,8 +11,6 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
 
   alias LemonCore.AgentRuntime
 
-  alias LemonCore.Introspection
-
   @impl true
   def name, do: "sessions.active.list"
 
@@ -29,21 +27,19 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
 
     case LemonRouter.list_agent_sessions(agent_id: agent_id, route: route, limit: limit) do
       sessions when is_list(sessions) ->
-        sessions =
-          sessions
-          |> Enum.filter(&(&1[:active?] == true))
-          |> Enum.reduce_while([], fn session, acc ->
-            case format_session(session) do
-              {:ok, formatted} -> {:cont, [formatted | acc]}
-              {:error, _} = error -> {:halt, error}
-            end
-          end)
-
-        case sessions do
+        sessions
+        |> Enum.filter(&(&1[:active?] == true))
+        |> Enum.reduce_while([], fn session, acc ->
+          case format_session(session) do
+            {:ok, formatted} -> {:cont, [formatted | acc]}
+            {:error, _} = error -> {:halt, error}
+          end
+        end)
+        |> case do
           {:error, _} ->
             {:error, {:unavailable, "Active session details are unavailable", nil}}
 
-          sessions when is_list(sessions) ->
+          sessions ->
             sessions = Enum.reverse(sessions)
 
             filters = %{
@@ -135,19 +131,17 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
     end
   end
 
+  # A todo read that could not reach workspace history is a failure, not an
+  # empty plan.
   defp harness_snapshot(session_key) when is_binary(session_key) do
-    todos = todo_progress(session_key)
-    checkpoints = checkpoint_progress(session_key)
-
-    case requirements_progress(session_key) do
+    case todo_progress(session_key) do
       {:error, _} = error ->
         error
 
-      requirements ->
+      todos ->
         %{}
         |> maybe_put("todos", todos)
-        |> maybe_put("checkpoints", checkpoints)
-        |> maybe_put("requirements", requirements)
+        |> maybe_put("checkpoints", checkpoint_progress(session_key))
         |> case do
           harness when map_size(harness) == 0 -> nil
           harness -> harness
@@ -167,6 +161,9 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
         |> stringify_map_keys()
         |> Map.put("actionableCount", actionable_count)
 
+      {:error, :introspection_unavailable} = error ->
+        error
+
       _ ->
         nil
     end
@@ -182,55 +179,9 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
     :exit, _ -> nil
   end
 
-  defp requirements_progress(session_key) do
-    with {:ok, cwd} <- latest_session_cwd(session_key),
-         {:ok, progress} <- AgentRuntime.call(:feature_progress, [cwd], :unavailable) do
-      progress
-      |> stringify_map_keys()
-      |> Map.put("cwd", cwd)
-    else
-      {:error, :introspection_unavailable} = error ->
-        error
-
-      _ ->
-        nil
-    end
-  rescue
-    _ -> nil
-  catch
-    :exit, _ -> nil
-  end
-
-  defp latest_session_cwd(session_key) when is_binary(session_key) do
-    case Introspection.list(session_key: session_key, event_type: :session_started, limit: 1) do
-      [event | _] ->
-        cwd = event |> map_get(:payload) |> map_get(:cwd) |> normalize_optional_binary()
-
-        if is_binary(cwd) and cwd != "" do
-          {:ok, cwd}
-        else
-          {:error, :not_found}
-        end
-
-      {:error, _} ->
-        {:error, :introspection_unavailable}
-
-      [] ->
-        {:error, :not_found}
-    end
-  rescue
-    _ -> {:error, :introspection_unavailable}
-  catch
-    :exit, _ -> {:error, :introspection_unavailable}
-  end
-
-  defp latest_session_cwd(_), do: {:error, :invalid_session_key}
-
   defp stringify_map_keys(map) when is_map(map) do
     Map.new(map, fn {key, value} -> {to_string(key), value} end)
   end
-
-  defp stringify_map_keys(_), do: %{}
 
   defp target_from_session(session) do
     channel_id = session[:channel_id]

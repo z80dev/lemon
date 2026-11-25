@@ -663,6 +663,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- **Breaking:** write-only and unreachable tool features (#706): the
+  `report_issue` tool, `read file.json?q=` JSON queries, `write` into archive
+  members (`bundle.zip:member`) and SQLite tables (`app.db:table`), the
+  `notes://` URL scheme, `FEATURE_REQUIREMENTS.json` progress (the `requirements`
+  block of `sessions.active.list` harness snapshots) and the write-only todo ETS
+  projection. `todo` is the only todo tool, `ls` the only directory listing
+  (`read <dir>` now points at `ls`), and `extensions_status` is status-only: its
+  `reload` action, which a model turn could never run, is gone.
+
 - **Breaking:** the `LemonMemory.Provider.search/2` callback, `LemonMemory.Providers.search/2`,
   `LemonMemory.SessionSearch.search/2`, `LemonHoncho.MemoryProvider.search/2`, the
   recall tool's `:search_fn` option and the `ProviderCase` search compliance tests.

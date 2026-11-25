@@ -520,7 +520,7 @@ defmodule CodingAgent.Session.PlanningTest do
     parent = self()
 
     tools =
-      for name <- ["todo", "todoread", "tool_invoke"] do
+      for name <- ["todo", "tool_invoke"] do
         %{
           writer()
           | name: name,
@@ -544,9 +544,7 @@ defmodule CodingAgent.Session.PlanningTest do
 
     guarded = Map.new(Planning.tools(tools, manager, context), &{&1.name, &1})
 
-    reads =
-      [{"todoread", %{}}] ++
-        Enum.map(["read", "progress", "actionable"], &{"todo", %{"action" => &1}})
+    reads = Enum.map(["read", "progress", "actionable"], &{"todo", %{"action" => &1}})
 
     for {target, args} <- reads do
       assert %AgentToolResult{is_error: false} =
@@ -606,17 +604,6 @@ defmodule CodingAgent.Session.PlanningTest do
 
     assert %AgentToolResult{is_error: true} =
              run(tools["write"], Path.join(plan_dir, "x.txt"), "x")
-
-    assert %AgentToolResult{is_error: true} =
-             run(tools["write"], Path.join(plan_dir, "bundle.zip:plan.md"), "blocked")
-
-    database = Path.join(plan_dir, "app.db")
-    {:ok, conn} = Exqlite.Sqlite3.open(database)
-    :ok = Exqlite.Sqlite3.execute(conn, "CREATE TABLE \"plan.md\" (name TEXT)")
-    :ok = Exqlite.Sqlite3.close(conn)
-
-    assert %AgentToolResult{is_error: true} =
-             run(tools["write"], database <> ":plan.md", ~s({"name":"blocked"}))
 
     refute File.exists?(Path.join(root, "a.md"))
 

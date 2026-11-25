@@ -8,6 +8,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Removed
 
+- **Breaking:** the `feature_progress/1` agent-runtime provider callback and the
+  `report_issue`, `todoread` and `todowrite` tool-catalogue entries (#706).
+
 - **Breaking:** the `controller` and `hybrid` ids from
   `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 

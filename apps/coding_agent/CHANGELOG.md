@@ -12,6 +12,14 @@
 
 ### Removed
 
+- **Breaking:** removed `Tools.FeatureRequirements`, `InternalUrls.NotesProtocol`,
+  `Tools.TodoStore`/`TodoStoreOwner`, `Tools.TodoRead`/`TodoWrite`,
+  `Tools.ReportIssue`, `Tools.ReadJson`, `Tools.WriteArchive` and
+  `Tools.WriteSqlite`; the pure todo views are `Tools.Todo.progress/1`,
+  `actionable/1`, `result_details/1` and `normalize/1`. `read` refuses
+  directories (use `ls`); `extensions_status` drops its `action`/`reload`
+  parameter; `Progress.snapshot/2` drops `features` (#706).
+
 - **Breaking:** removed `CodingAgent.SessionIndex`, `SessionManager.list_sessions/1`
   and `SessionEntry.session_info/2`; journal appends, checkpoints and
   `save_to_file/2` take no lock and write no `.index.sqlite3`. Older journals'

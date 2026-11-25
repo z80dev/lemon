@@ -39,7 +39,7 @@ Source modules and tests define implementation APIs. LemonSim lives in
 - Built-in tools: [file and search](tools/files-and-search.md),
   [shell and background processes](tools/shell.md), [user questions](tools/ask.md),
   [checkpoints/rewind](tools/checkpoint.md), [todo plans](tools/todo.md),
-  [local tool issue reports](tools/report-issue.md), [Web/browser](tools/web.md),
+  [Web/browser](tools/web.md),
   [browser tool](tools/browser.md), [Firecrawl](tools/firecrawl.md), [media](tools/media.md),
   [LSP](tools/lsp.md), [eval kernels](tools/eval.md), [debugger](tools/debug.md),
   [omp delegate](tools/omp.md) and [computer use](tools/computer-use.md)

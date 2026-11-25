@@ -13,7 +13,6 @@ defmodule CodingAgent.StateStorageContractTest do
     "coding_agent/file_read_tracker.ex" => CodingAgent.FileReadTracker,
     "coding_agent/runtime_tables.ex" => CodingAgent.RuntimeTables,
     "coding_agent/task_progress_binding_server.ex" => CodingAgent.TaskProgressBindingServer,
-    "coding_agent/tools/todo_store_owner.ex" => CodingAgent.Tools.TodoStoreOwner,
     "coding_agent/workspace_reads.ex" => CodingAgent.WorkspaceReads
   }
   # These owners delegate their named-table creation to DurableTable.open/3.

@@ -56,12 +56,12 @@ defmodule LemonCore.AgentRuntime.Provider do
   @doc """
   Task-list progress for a session, including an `:actionable_count` key.
 
-  Returns `nil` when the session has no task-list state.
+  Returns `nil` when the session has no task-list state, and
+  `{:error, :introspection_unavailable}` when a stopped session's workspace
+  history could not be read (a failed read, not an empty list).
   """
-  @callback todo_progress(session_key()) :: map() | nil
-
-  @doc "Feature-requirement progress for a working directory."
-  @callback feature_progress(Path.t()) :: {:ok, map()} | term()
+  @callback todo_progress(session_key()) ::
+              map() | nil | {:error, :introspection_unavailable}
 
   @doc "Compacts a live session. `{:error, :session_not_found}` when it is not running."
   @callback compact_session(session_key(), keyword()) :: :ok | {:error, term()}
@@ -307,7 +307,6 @@ defmodule LemonCore.AgentRuntime.Provider do
                       subagent_send: 3,
                       subagent_cancel: 2,
                       todo_progress: 1,
-                      feature_progress: 1,
                       compact_session: 2,
                       native_session_owner: 1,
                       session_history: 2,
