@@ -105,8 +105,9 @@ defmodule CodingAgent.Tools.Task.WaitTest do
     assert Enum.all?(rows, &(is_binary(&1.error) and &1.error != ""))
     assert observed?(failed_id)
     assert observed?(cancelled_id)
-    refute TaskStore.auto_followup_suppressed?(failed_id)
-    refute TaskStore.auto_followup_suppressed?(cancelled_id)
+    # A returned result, whatever its status, does not wake the parent again.
+    assert TaskStore.auto_followup_suppressed?(failed_id)
+    assert TaskStore.auto_followup_suppressed?(cancelled_id)
     assert {:error, @no_tasks} = Wait.execute(%{}, nil, @opts)
   end
 

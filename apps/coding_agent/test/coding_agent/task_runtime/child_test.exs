@@ -174,7 +174,7 @@ defmodule CodingAgent.TaskRuntime.ChildTest do
              end)
 
     assert_receive {:finalized, {:ok, "done"}}
-    assert_eventually(fn -> phase(id) == :aborted end)
+    assert_eventually(fn -> phase(id) == :completed end)
     refute_received {:finalized, _}
   end
 
@@ -204,6 +204,32 @@ defmodule CodingAgent.TaskRuntime.ChildTest do
     assert {:ok, %{status: :cancelled, agent_state: :killed}} = TaskStore.get_record(id)
   end
 
+  test "a cancel before launch finalizes the turn at once and never starts a worker",
+       context do
+    test = self()
+    id = child(context, finalize: &send(test, {:finalized, &1}))
+
+    assert :ok = Control.command(id, "cancel", nil, context.opts)
+    assert_receive {:finalized, {:error, "Task aborted"}}
+    assert_eventually(fn -> phase(id) == :killed end)
+    assert :ok = TaskRuntimeHelpers.launch(id, fn -> send(test, :worker_ran) end)
+    assert Control.worker_pids([id]) == []
+    refute_receive :worker_ran, 100
+    refute_received {:finalized, _}
+    assert {:ok, %{status: :cancelled, agent_state: :killed}} = TaskStore.get_record(id)
+  end
+
+  test "a parent aborted before registration finalizes the turn", context do
+    test = self()
+    signal = LemonAgent.AbortSignal.new()
+    LemonAgent.AbortSignal.abort(signal)
+    id = child(context, parent_signal: signal, finalize: &send(test, {:finalized, &1}))
+
+    assert_receive {:finalized, {:error, "Task aborted"}}
+    assert_eventually(fn -> phase(id) == :killed end)
+    assert {:ok, %{status: :cancelled}} = TaskStore.get_record(id)
+  end
+
   test "a replaced session's stale monitor cannot mark its replacement dead", context do
     id = child(context)
     first = session()
@@ -222,7 +248,9 @@ defmodule CodingAgent.TaskRuntime.ChildTest do
     {parent, monitor} = spawn_monitor(fn -> :ok end)
     assert_receive {:DOWN, ^monitor, :process, ^parent, :normal}
 
-    id = child(%{context | parent: parent})
+    test = self()
+    id = child(%{context | parent: parent}, finalize: &send(test, {:finalized, &1}))
+    assert_receive {:finalized, {:error, "Task aborted"}}
     assert_eventually(fn -> TaskRuntime.whereis(id) == nil end)
     assert Control.hub_state([id]) == %{}
     assert {:error, "Task aborted"} = Control.configure(id, %{})
@@ -252,13 +280,14 @@ defmodule CodingAgent.TaskRuntime.ChildTest do
     :ok = Control.configure(second, %{configured: true})
     assert %{status: :idle} = Control.hub_state([second])[second]
 
+    # With no worker to wait for, cancelling an idle child finalizes at once.
     :ok = Control.command(first, "cancel", nil, context.opts)
-    assert phase(first) == :cancelling
-    assert [{:state_timeout, :force_cancel}] = timeouts(first)
+    assert_eventually(fn -> phase(first) == :killed end)
+    assert [{:state_timeout, :prune}] = timeouts(first)
     assert [{:state_timeout, :park}] = timeouts(second)
 
     :ok = Control.command(first, "cancel", nil, context.opts)
-    assert [{:state_timeout, :force_cancel}] = timeouts(first)
+    assert phase(first) == :killed
   end
 
   test "zero TTL schedules no park timeout", context do

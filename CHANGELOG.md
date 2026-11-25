@@ -766,6 +766,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `task_join_timeout_ms` (default 30 minutes) instead of waiting forever (#631).
 - A Redirect or stream-rule injection no longer cancels the children launched in
   that run or aborts its task joins; only an abort does (#633).
+- A task cancelled before it started (or whose parent died) now terminalizes its
+  run graph, budget and progress binding too, so a later join returns at once;
+  completion notices come from the stored task record ("was cancelled" when a
+  cancellation won), a child cancelled by its parent's abort sends none, joins
+  suppress the notice of every task they returned, and a completed child shows
+  "completed" in the Agent Hub after a restart instead of "failed" (#673).
 - Control-plane reads fail closed: an unreadable store or runtime makes
   `exec.approvals.get`, `config.get`, `logs.tail`, `sessions.preview`,
   `chat.history`, `session.detail`, `cron.runs`, the task lists, ACP session

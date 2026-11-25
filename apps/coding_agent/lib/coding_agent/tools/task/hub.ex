@@ -183,25 +183,39 @@ defmodule CodingAgent.Tools.Task.Hub do
     }
   end
 
-  # Control's live phase wins; a task without a control entry (for example after a
-  # runtime restart) falls back to its persisted record and can no longer be woken.
+  # A live messageable phase or pending cancellation wins. Otherwise the stored
+  # terminal record is authoritative: an owner that exited, restarted or kept a
+  # completed but unresumable child never turns a completed result into "failed".
   defp status(record, live) do
     case live && live.status do
-      phase when phase in [:queued, :running, :idle, :parked] -> Atom.to_string(phase)
-      phase when phase in [:cancelled, :killed] -> "cancelled"
-      phase when phase in [:error, :aborted, :dead, :lost, :missing, :timeout] -> "failed"
+      phase when phase in [:queued, :running, :idle, :parked] ->
+        Atom.to_string(phase)
+
+      phase when phase in [:cancelled, :killed] ->
+        "cancelled"
+
+      phase ->
+        terminal_status(record) ||
+          if(phase in [:error, :aborted, :dead, :lost, :missing, :timeout],
+            do: "failed",
+            else: record_status(record)
+          )
+    end
+  end
+
+  defp terminal_status(record) do
+    case record[:status] do
       :completed -> "completed"
-      _ -> record_status(record)
+      :cancelled -> "cancelled"
+      status when status in [:error, :lost, :timeout] -> "failed"
+      _ -> nil
     end
   end
 
   defp record_status(record) do
     case {record[:status], record[:agent_state]} do
-      {:cancelled, _} -> "cancelled"
       {_, :killed} -> "cancelled"
-      {status, _} when status in [:error, :lost, :timeout] -> "failed"
       {_, :aborted} -> "failed"
-      {:completed, _} -> "completed"
       {:running, _} -> "running"
       {:queued, _} -> "queued"
       _ -> "failed"

@@ -138,6 +138,13 @@
 - Execution nodes advertise `memory.transfer.release`, bound to the source node,
   so the controller deletes a node's frozen memory-transfer snapshot once the
   destination receipt is recorded rather than waiting for the Store TTL (#623).
+- Early cancellation (before launch, by parent abort or on parent death) runs
+  the turn's finalizer at once, terminalizing TaskStore, RunGraph, budget and
+  progress binding. Followup notices derive from the stored terminal record
+  (failure reasons bounded to 1,000 characters) and are skipped for
+  parent-abort cancellations; joins and `wait` suppress every returned task's
+  notice. A completed but unresumable child has a `:completed` owner phase, and
+  `Tools.Task.Hub` prefers a terminal stored status (#673).
 - Named-node `node.capabilities.get` no longer runs its multi-second host probes
   inside the worker mailbox. At most one supervised probe runs per connection;
   reads that arrive during it share the next probe, so concurrent controller
