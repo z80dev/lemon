@@ -6,11 +6,6 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
-### Removed
-
-- **Breaking:** the `controller` and `hybrid` ids from
-  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
-
 ### Changed
 
 - `LemonCore.Config.Features`: `routing_feedback` now defaults to `:off`
@@ -388,6 +383,9 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   10 MiB/file, 50 MiB aggregate, 10,000 entries, depth 128 per capture.
 
 ### Removed
+
+- **Breaking:** the `controller` and `hybrid` ids from
+  `LemonCore.BrowserProvider.providers/0` and their status strings (#702).
 
 - **Breaking (0.3.0):** `[gateway.queue]` (`Config.Gateway` `:queue`,
   `Validator.validate_queue_config/2`); the section is ignored with a

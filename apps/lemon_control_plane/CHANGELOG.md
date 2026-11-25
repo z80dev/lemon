@@ -4,12 +4,6 @@ All notable changes to `lemon_control_plane` are documented here.
 
 ## [Unreleased]
 
-### Fixed
-
-- A method with any scope beyond `:read` that raises, throws or whose async task
-  dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
-  never retry a mutation that may already have applied (#616).
-
 ### Added
 
 - Admin-only `browser.stop` stops the local browser driver and the Chrome it
@@ -67,6 +61,10 @@ All notable changes to `lemon_control_plane` are documented here.
   off-loopback OpenAI/ACP HTTP access requires explicit opt-in and dedicated tokens.
 
 ### Fixed
+
+- A method with any scope beyond `:read` that raises, throws or whose async task
+  dies now answers `INTERNAL_ERROR` with `details.retrySafe: false`, so clients
+  never retry a mutation that may already have applied (#616).
 
 - `sessions.snapshot` compares its two owner collections without
   `consistency.eventCursor`: a live event between them returns the newer
