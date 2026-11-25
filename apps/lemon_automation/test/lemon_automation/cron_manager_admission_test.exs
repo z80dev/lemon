@@ -650,6 +650,33 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     assert CronStore.get_run(run_id) == first
   end
 
+  # #620: an earlier run with an unknown outcome blocks the trigger before the
+  # fixed ID is claimed, so the refusal names that earlier run, never the new ID.
+  test "run_now_with_id names the earlier unresolved run and never claims its own ID", ctx do
+    assert {:ok, job} = add_job(ctx)
+    job_id = job.id
+
+    prior =
+      job.id
+      |> CronRun.new(:manual)
+      |> CronRun.start("router_prior_#{System.unique_integer([:positive])}")
+      |> Map.put(:meta, %{outcome_unknown: true})
+
+    :ok = CronStore.put_run(prior)
+    prior_id = prior.id
+    run_id = "cron_blocked_#{System.unique_integer([:positive])}"
+
+    assert {:error, {:prior_run_unresolved, ^prior_id}} =
+             CronManager.run_now_with_id(job.id, run_id)
+
+    assert CronStore.get_run(run_id) == nil
+    refute_receive {:admission_checked, %{id: ^job_id}, _}, 200
+    refute_receive {:submit_attempted, ^job_id, _}, 100
+
+    # The ID-less trigger keeps its existing contract.
+    assert {:error, :outcome_unknown} = CronManager.run_now(job.id)
+  end
+
   defp owner_mcp_servers do
     [
       %{

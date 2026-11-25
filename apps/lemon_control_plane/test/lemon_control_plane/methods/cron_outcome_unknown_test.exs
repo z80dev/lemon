@@ -35,6 +35,33 @@ defmodule LemonControlPlane.Methods.CronOutcomeUnknownTest do
     )
   end
 
+  # #620: a trigger refused before claim because an earlier run is unresolved
+  # names that earlier run, never the never-used new ID, and stays retry-unsafe.
+  test "cron.run names an earlier unresolved run instead of its own unused ID" do
+    with_cron_manager(fn _request -> {:error, {:prior_run_unresolved, "cron_prior_1"}} end, fn ->
+      assert {:error, {:unavailable, _message, details}} =
+               CronRun.handle(%{"id" => "job-3"}, %{})
+
+      assert details == %{
+               "code" => "PRIOR_RUN_OUTCOME_UNKNOWN",
+               "jobId" => "job-3",
+               "priorRunId" => "cron_prior_1",
+               "retrySafe" => false
+             }
+    end)
+
+    with_cron_manager(fn _request -> {:error, {:prior_run_unresolved, nil}} end, fn ->
+      assert {:error, {:unavailable, _message, details}} =
+               CronRun.handle(%{"id" => "job-4"}, %{})
+
+      assert details == %{
+               "code" => "PRIOR_RUN_OUTCOME_UNKNOWN",
+               "jobId" => "job-4",
+               "retrySafe" => false
+             }
+    end)
+  end
+
   test "a scheduler that dies after receiving the call is an unknown outcome" do
     test_pid = self()
 
